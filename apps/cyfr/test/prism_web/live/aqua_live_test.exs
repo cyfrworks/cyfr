@@ -313,6 +313,46 @@ defmodule PrismWeb.AquaLiveTest do
                URI.decode_query(URI.parse(path).query)
     end
 
+    # Set up shows the person's running terminal of the row when one runs,
+    # whichever open started it (the install's is the same open of the
+    # same person's), so the kept folder never runs a second of the program
+    # from here; once that terminal has ended, Set up opens one of its own.
+    test "Set up shows the program's running terminal, and opens one only when none runs",
+         %{conn: conn, ctx: ctx} do
+      fake = backends!()
+
+      row =
+        program_row!(ctx, "claude", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323")
+
+      home = row.id
+      set_up = ~s(#aqua-card-claude-code [data-test="set-up-program"])
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      view |> element(set_up) |> render_click()
+      first = set_up_terminal!(view)
+      assert opened(home) == [first]
+
+      # Set up again shows the same terminal and opens none.
+      {view, _html} = mount_athanor(conn, "/aqua")
+      view |> element(set_up) |> render_click()
+      assert set_up_terminal!(view) == first
+      assert opened(home) -- [first] == []
+
+      Cyfr.Test.ScriptedBackends.end_sessions(fake, home)
+
+      Prima.Test.Wait.wait_until(
+        fn -> Registry.lookup(Opus.Programs.Registry, {:terminal, first}) == [] end,
+        5_000,
+        "the first terminal to end"
+      )
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      view |> element(set_up) |> render_click()
+      second = set_up_terminal!(view)
+      refute second == first
+      assert second in opened(home)
+    end
+
     test "a refused Set up says why on the card and stays there", %{conn: conn, ctx: ctx} do
       soul_runs_claude!(ctx)
 
@@ -2254,6 +2294,29 @@ defmodule PrismWeb.AquaLiveTest do
     |> LazyHTML.from_fragment()
     |> LazyHTML.query(~s(#aqua-card-#{name}-mode [role=radio][aria-checked="true"]))
     |> Enum.flat_map(&LazyHTML.attribute(&1, "phx-value-mode"))
+  end
+
+  # The terminal sessions opened in `home`'s folder so far, by their key,
+  # each once.
+  defp opened(home, keys \\ []) do
+    receive do
+      {:session, "open", %{"home_id" => ^home, "mode" => "terminal", "key" => key}, _fields} ->
+        opened(home, keys ++ [key])
+    after
+      500 -> Enum.uniq(keys)
+    end
+  end
+
+  # The terminal Set up showed: the Programs page it went to, which names
+  # the session, with the way back here.
+  defp set_up_terminal!(view) do
+    {path, _flash} = assert_redirect(view, 5_000)
+    assert URI.parse(path).path =~ ~r{/programs$}
+
+    assert %{"terminal" => "trm_" <> _ = terminal, "from" => "aqua"} =
+             URI.decode_query(URI.parse(path).query)
+
+    terminal
   end
 
   # Each model the setup's picker offers under `member`'s plan, as its value

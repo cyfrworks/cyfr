@@ -488,10 +488,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # Set up on the card is the person's start of the program: it opens
+  # Set up on the card is the person's start of the program: it shows the
+  # person's own running terminal of the row of that name, the one its
+  # install opened among them, so one kept folder never runs two of the
+  # program at once from here; only when none runs does it open one,
   # through the gate like the Programs page's Open, at a default size the
-  # frame corrects when it attaches, and shows the running terminal with
-  # the way back here. A refusal stays on the card in the gate's words.
+  # frame corrects when it attaches. Either way it shows the terminal
+  # with the way back here. A refusal stays on the card in the gate's
+  # words.
   def handle_event("set_up_program", %{"program" => program}, socket)
       when is_binary(program) do
     CyfrWeb.ContextGuard.guard(socket, fn
@@ -508,9 +512,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
            :set_up_program,
            fn ->
              {tag, program,
-              PrismWeb.Ops.run_to_end(fn ->
-                PrismWeb.Ops.call_tool(ctx, "mcp_servers/open", params)
-              end)}
+              running_terminal(ctx, program) ||
+                PrismWeb.Ops.run_to_end(fn ->
+                  PrismWeb.Ops.call_tool(ctx, "mcp_servers/open", params)
+                end)}
            end,
            supervisor: Prism.TaskSupervisor
          )}
@@ -518,6 +523,22 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       socket ->
         {:noreply, socket}
     end)
+  end
+
+  # The person's own running terminal of the row named `program`, the
+  # oldest, as the open that started it answers; nil when none runs or
+  # the sessions cannot be read, and then Set up opens one.
+  defp running_terminal(ctx, program) do
+    case Opus.Programs.running(ctx) do
+      {:ok, sessions} ->
+        Enum.find_value(sessions, fn
+          %{by: :person, name: ^program, session: session} -> {:ok, %{session: session}}
+          _other -> nil
+        end)
+
+      {:error, _unread} ->
+        nil
+    end
   end
 
   @impl true
