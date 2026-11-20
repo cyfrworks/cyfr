@@ -335,7 +335,7 @@ defmodule Opus.ProgramsMountsTest do
       refute_receive {:control, "home", %{"home_id" => ^kept_id}, _fields}, 200
     end
 
-    # A database that ran the Claude Code catalyst is recreated, not
+    # A database that ran an adapter catalyst is recreated, not
     # cleaned: the box still holds the homes its rows kept, a catalyst's
     # sessions and its sign-in among them, under ids and an athanor this
     # database never had. The periodic sweep, run while the reconciler

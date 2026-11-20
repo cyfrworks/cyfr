@@ -295,8 +295,9 @@ WORKDIR /app
 
 COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 # The MCP stdio server a harness the backends service runs reaches CYFR's
-# tools through (catalyst:local.claude-code): it answers each call from the
-# answer CYFR puts in the call's input, and holds nothing.
+# tools through (Claude Code, which its brain driver cyfr-claude-code sets
+# it up for): it answers each call from the answer CYFR puts in the call's
+# input, and holds nothing.
 COPY --from=keeper /out/cyfr-stub /usr/local/bin/cyfr-stub
 # Aqua's browser: the command of a person's browser row, which the backends
 # service runs on a terminal in the row's kept home. It fetches Chrome for

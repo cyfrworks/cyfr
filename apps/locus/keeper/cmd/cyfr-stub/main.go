@@ -2,9 +2,10 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Command cyfr-stub is the MCP stdio server through which a harness that
-// CYFR drives (catalyst:local.claude-code) sees CYFR's tools. It runs
-// nothing and holds nothing: CYFR runs every call through its gate before
-// the stub is asked, and the call's input carries the answer.
+// CYFR drives (Claude Code, under its brain driver cyfr-claude-code) sees
+// CYFR's tools. It runs nothing and holds nothing: CYFR runs every call
+// through its gate before the stub is asked, and the call's input carries
+// the answer.
 //
 //	cyfr-stub <tool>…
 //
