@@ -270,30 +270,36 @@ defmodule Arca.BrainForgetStorageTest do
   end
 
   describe "the row a session is stored with" do
-    test "a catalyst's session, one stored with a row that keeps no folder or is gone, owe nothing",
+    test "a session stored with a row that keeps no folder or is gone owes nothing, and a " <>
+           "session stored with no row is no home's",
          %{actor: actor, room: room} do
       {:ok, scratch} = Arca.Test.Days.thread(actor)
       {:ok, gone} = Arca.Test.Days.thread(actor)
-      held!(actor, scratch, brain_row!(actor, %{home: "scratch"}), "aqua", "a-session")
+      scratch_row = brain_row!(actor, %{home: "scratch"})
+      held!(actor, scratch, scratch_row, "aqua", "a-session")
       vanished = brain_row!(actor)
       held!(actor, gone, vanished, "aqua", "a-session")
 
       {1, _} =
         Arca.Repo.delete_all(from(r in Arca.Schemas.McpServer, where: r.id == ^vanished.id))
 
-      # The room's session is a catalyst's: kept with no row.
+      # The room's session is kept with no row.
       addressed!(actor, room, "aqua")
       keep!(room, "a-session")
 
-      assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
+      assert {:ok, []} = Threads.forget_sessions(actor, scratch_row.id)
+      assert {:ok, []} = Threads.forget_sessions(actor, vanished.id)
       assert owed(actor) == []
 
-      for thread <- [room, scratch, gone],
+      for thread <- [scratch, gone],
           do:
             assert(
               {:ok, %{brain_session: nil, brain_generation: 1}} =
                 Threads.get(actor, thread.id)
             )
+
+      assert {:ok, %{brain_session: "a-session", brain_generation: 0}} =
+               Threads.get(actor, room.id)
     end
 
     test "names the session's own row, neither a start admitted after it nor a new driver's",
@@ -325,7 +331,7 @@ defmodule Arca.BrainForgetStorageTest do
       held!(actor, room, row, "aqua", "6f1e2d3c-0000-4968-8776-000000000001")
 
       assert {:ok, [%{thread_id: id, generation: 0}]} =
-               Threads.forget_sessions(actor, ["aqua"])
+               Threads.forget_sessions(actor, row.id)
 
       assert id == room.id
       assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, room.id)
@@ -335,7 +341,7 @@ defmodule Arca.BrainForgetStorageTest do
 
       # A session kept under the raised generation is its own removal.
       held!(actor, room, row, "aqua", "6f1e2d3c-0000-4968-8776-000000000002", 1)
-      assert {:ok, [%{generation: 1}]} = Threads.forget_sessions(actor, ["aqua"])
+      assert {:ok, [%{generation: 1}]} = Threads.forget_sessions(actor, row.id)
 
       assert owed(actor) ==
                sorted([
@@ -344,14 +350,15 @@ defmodule Arca.BrainForgetStorageTest do
                ])
 
       # A forget with no session left owes nothing more.
-      assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
+      assert {:ok, []} = Threads.forget_sessions(actor, row.id)
       assert length(owed(actor)) == 2
     end
 
     test "a session kept after the forget, under the generation it left, is not kept and owes nothing",
          %{actor: actor, room: room, row: row} do
-      addressed!(actor, room, "aqua")
-      assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
+      # An open turn pinned to the row, whose start has kept no session yet.
+      running!(actor, room, row)
+      assert {:ok, []} = Threads.forget_sessions(actor, row.id)
 
       # A batch of the generation the forget left keeps nothing it names.
       assert {:error, :generation_moved} =
@@ -429,7 +436,7 @@ defmodule Arca.BrainForgetStorageTest do
       # The old row is gone: its home's retirement removes the transcript,
       # so nothing is owed. The pinned start is fenced: its batch keeps
       # nothing under the generation it began with.
-      assert {:ok, []} = Threads.forget_sessions(actor, [], old.id)
+      assert {:ok, []} = Threads.forget_sessions(actor, old.id)
       assert %{brain_session: nil, brain_generation: 1} = whole(actor, room)
       assert %{brain_session: nil, brain_generation: 1} = whole(actor, pinned)
       assert owed(actor) == []
@@ -455,7 +462,7 @@ defmodule Arca.BrainForgetStorageTest do
       held!(actor, elsewhere, brain_row!(actor), "coder", "6f1e2d3c-0000-4968-8776-000000000002")
       kept = whole(actor, elsewhere)
 
-      assert {:ok, [%{thread_id: id, generation: 0}]} = Threads.forget_sessions(actor, [], row.id)
+      assert {:ok, [%{thread_id: id, generation: 0}]} = Threads.forget_sessions(actor, row.id)
       assert id == room.id
       assert owed(actor) == [record(actor, room, row, session, 0)]
       assert %{brain_session: nil, brain_generation: 1} = whole(actor, room)

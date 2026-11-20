@@ -2297,38 +2297,6 @@ defmodule Opus.ProgramsTest do
                })
     end
 
-    # The session a member's brain kept lived in the home: after a reset its
-    # next request resumes nothing that is gone. A thread whose agent's
-    # brain runs elsewhere keeps its own. The home is the program row's,
-    # named by the id the head binds for the need
-    # (`Sanctum.Mount.agents_mounting/2`).
-    test "a reset forgets the brain session of every thread whose agent's brain mounts the home",
-         %{ctx: ctx, row: row} do
-      entry = row.id
-      ctx = harness_member!(ctx, entry)
-      actor = Sanctum.Context.actor(ctx)
-      {:ok, room} = Arca.Test.Days.thread(actor)
-      {:ok, member} = Arca.ThreadStorage.crew_thread(actor, room.id, "harness")
-      {:ok, other} = Arca.ThreadStorage.crew_thread(actor, room.id, "elsewhere")
-      keep_session!(member, "claude-session-1")
-      keep_session!(other, "other-session-1")
-
-      assert :ok = Programs.home(ctx.athanor_id, entry, :reset)
-
-      assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry}, _}, 2_000
-
-      # The next request reads the thread's session (`Aqua.Loop`), and there
-      # is none.
-      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
-      assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
-
-      # A retire forgets it too.
-      keep_session!(member, "claude-session-2")
-      assert :ok = Programs.home(ctx.athanor_id, entry, :retire)
-      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
-      assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
-    end
-
     # A brain that is a program names its row by name, with no consent
     # edge to it: the threads its sessions lived in are the ones that store
     # the row's id with their session, whatever the member's name answers

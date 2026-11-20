@@ -456,7 +456,6 @@ defmodule Cyfr.Boundaries do
         Sanctum Sanctum.ApiKey Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.IdentityFreshness
-        Sanctum.Mount
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy
         Sanctum.Questions Sanctum.Refusals
         Sanctum.Session Sanctum.Shares Sanctum.SharedThreads Sanctum.Tenancy
@@ -468,9 +467,7 @@ defmodule Cyfr.Boundaries do
           "the policy record of every admission. The programs controller " <>
           "(`Opus.Programs`) posts to the backends service through `Sanctum.Egress` and " <>
           "checks a program's env templates from the vault's metadata " <>
-          "(`Sanctum.Vault.disclosed?/2`) before it unseals any, and a reset or " <>
-          "retired home forgets the sessions of the agents whose catalyst runs " <>
-          "there (`Sanctum.Mount.agents_mounting/2`). " <>
+          "(`Sanctum.Vault.disclosed?/2`) before it unseals any. " <>
           "`Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, and `build_tincture_context/2` is a tincture " <>
@@ -2015,7 +2012,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.IdentityFreshness" => [sweep: 1],
     "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
-    "Sanctum.Mount" => [agents_mounting: 2, granted_to: 2, orphaned_homes: 1],
+    "Sanctum.Mount" => [granted_to: 2, orphaned_homes: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [setup_open: 1],
     "Sanctum.Pairing" => [actions: 0, can_confirm?: 1, restore_checklist: 1],

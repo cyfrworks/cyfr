@@ -3055,7 +3055,7 @@ defmodule Arca.TurnStorage do
   Forget the brain's session of the turn's thread, which its program
   reported gone or the turn's program row no longer runs (`Aqua.Program`):
   `brain_session` is cleared and `brain_generation` raised in one
-  statement, as `Arca.ThreadStorage.forget_sessions/3` forgets a home's,
+  statement, as `Arca.ThreadStorage.forget_sessions/2` forgets a home's,
   and only while the thread is at `:generation`, the one the turn read.
   `attrs`: `:fence` (the turn's) and `:generation`, both required.
   Answers the generation the turn keeps a session under from here: the
@@ -5837,7 +5837,7 @@ defmodule Arca.TurnStorage do
   # The program's native session a batch's `started` names, kept on the
   # thread for its next start. `commit_brain/3` holds the thread's lock and
   # has refused a batch whose generation moved, so a forget committed since
-  # the turn read the thread (`Arca.ThreadStorage.forget_sessions/3`,
+  # the turn read the thread (`Arca.ThreadStorage.forget_sessions/2`,
   # `forget_session/3`) refused the batch before this write.
   # arca:db-raise-ok inside the caller's transaction
   defp keep_session!(athanor_id, %Thread{id: thread_id, brain_session: current}, session) do

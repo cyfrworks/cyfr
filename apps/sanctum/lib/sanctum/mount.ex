@@ -17,13 +17,8 @@ defmodule Sanctum.Mount do
   at its definition's digest, read again at the commit (`program/2`); a
   share is never offered for it.
 
-  `agents_mounting/2` and `orphaned_homes/1` are the reads the programs
-  controller makes of the same rows: the agents whose catalyst runs in a
-  home it resets or retires through their consent, and the homes a box
-  holds that no kept row holds any more. A program brain names its row by
-  name, which a deleted row no longer answers and a replacement answers
-  again, so the threads a home's sessions lived in are found by the row
-  the threads store instead (`Arca.ThreadStorage.forget_sessions/3`).
+  `orphaned_homes/1` is the read the programs controller makes of the
+  same rows: the homes a box holds that no kept row holds any more.
   """
 
   alias Sanctum.Context
@@ -53,41 +48,6 @@ defmodule Sanctum.Mount do
   @spec program(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def program(%Context{} = ctx, row_id) when is_binary(row_id),
     do: Arca.McpServerStorage.get_by_id(Context.actor(ctx), row_id)
-
-  @doc """
-  The names of the agents of `athanor_id`, the soul's included, whose
-  catalyst brain runs in the kept home of the program row `row_id`
-  through their consent: one whose agent's head binds the row on its own
-  edge to its brain (the catalyst its index row names), or selects there
-  a profile of that brain whose own ingress binds it
-  (`Arca.ConsentStorage.head_edges_binding/2`). An edge to a hand is no
-  brain's. A brain that is a program is not among them: its threads are
-  found by the row they store (`Arca.ThreadStorage.forget_sessions/3`).
-  `{:error, :unavailable}` when the store cannot answer.
-  """
-  @spec agents_mounting(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, :unavailable}
-  def agents_mounting(athanor_id, row_id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
-    actor = Prima.Actor.in_athanor(athanor_id)
-
-    with {:ok, edges} <- Arca.ConsentStorage.head_edges_binding(actor, row_id),
-         {:ok, agents} <- Arca.AgentStorage.list(actor) do
-      {:ok, for(%{name: name} = agent <- agents, runs_in?(agent, edges), do: name)}
-    else
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
-
-  defp runs_in?(%{name: name, catalyst_ref: brain}, edges) when is_binary(brain) do
-    source = Prima.AgentRef.ref(name)
-
-    case Prima.ComponentRef.to_name_ref(brain) do
-      {:ok, brain} -> {source, source, brain} in edges
-      _unparsed -> false
-    end
-  end
-
-  defp runs_in?(_agent, _edges), do: false
 
   @doc """
   The grants that stand on the row `row` (`%{id, name}`) of `athanor_id`:
