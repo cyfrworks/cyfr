@@ -140,9 +140,9 @@ defmodule Opus.Attempt do
   read transaction that takes no write lock
   (`Arca.Repo.read_transaction/1`): a storage read, list or exists, an
   artifact fetch, `take_rate` — the checkpoint of every HTTP request
-  and stream the guest opens, whatever its rate — a further input's read
-  or report, whose mark its supplier settles under its own lock
-  (`Opus.Inputs`), and the masking of a
+  and stream the guest opens, whatever its rate — an ask's check
+  (`{:question, texts}`), whose question `Sanctum.Questions` records in a
+  transaction of its own, and the masking of a
   value attached to one (`{:attached, value}`). Every other effect is
   checked in a locking transaction (`Arca.Repo.locking_transaction/2`):
   attach and the vault fields it projects, a keyed child's re-handed
@@ -233,7 +233,6 @@ defmodule Opus.Attempt do
                 :charge,
                 :assignment,
                 :grant,
-                :inputs,
                 :run_deadline,
                 :release_digest,
                 declared_needs: [],
@@ -252,7 +251,6 @@ defmodule Opus.Attempt do
   @typedoc "An operation a runner calls on its attempt once it has attached."
   @type op ::
           :chain
-          | :inputs
           | {:complete, Outcome.t()}
           | {:fail, Outcome.t()}
           | {:push_deltas, [Delta.t()]}
@@ -341,8 +339,7 @@ defmodule Opus.Attempt do
   assignment is signed from, `t:Opus.Assignments.admitted/0`,
   which `admitted/2` answers to the runner holding the claim), `:grant`
   (the `Prima.ExecutionGrant` the run was admitted under; without one,
-  every effect is refused) and `:inputs` (the process that supplies the
-  run's further inputs, `Opus.Inputs`; none by default).
+  every effect is refused).
 
   Answers `{:error, {:already_started, pid}}` when the execution already
   has an open attempt.
@@ -506,13 +503,9 @@ defmodule Opus.Attempt do
     (`Arca.ExecutionAttempts.live?/4`): a row with a cancel asked of it, or
     whose execution is no longer running, is `:lost` without stopping the
     attempt.
-  - `:inputs` answers `{:ok, supplier, invocation}`: the process that
-    supplies the run's further inputs (nil when none was named) and the
-    run's trusted identity (`t:Opus.Inputs.invocation/0`), under the same
-    live row `:chain` needs, checked in a read transaction: the supplier
-    settles a mark under its own lock.
   - `{:question, texts}` answers what a run's ask is decided under
-    (`t:question/0`), under the same live row `:inputs` needs. With the
+    (`t:question/0`), under the same live row `:chain` needs, checked in
+    a read transaction: `Sanctum.Questions` records the ask. With the
     ask's `texts` (its `summary` and `operation`) it also masks them with
     the attempt's masking set and takes one ask from the root's allowance
     (`Prima.RateLimiter`, #{@asks_per_window} a minute under every run of
@@ -709,7 +702,6 @@ defmodule Opus.Attempt do
       charge: Keyword.get(opts, :charge),
       assignment: Keyword.get(opts, :assignment),
       grant: Keyword.get(opts, :grant),
-      inputs: supplier(Keyword.get(opts, :inputs)),
       held_invoke: take_over_invoke(Keyword.get(opts, :held_invoke, false), authority, owner)
     }
 
@@ -723,10 +715,6 @@ defmodule Opus.Attempt do
     do: Sanctum.Authority.take_over_invoke(authority, owner) == :ok
 
   defp take_over_invoke(false, _authority, _owner), do: false
-
-  # A supplier is a process (`Opus.Inputs`); anything else names none.
-  defp supplier(pid) when is_pid(pid), do: pid
-  defp supplier(nil), do: nil
 
   # A row can end before its attempt is registered, where no `stop_ended/1`
   # finds it: a parent's cascade waits on the lock its child's admission
@@ -1333,11 +1321,10 @@ defmodule Opus.Attempt do
   # Every effect but a failure is admitted under the run's grant, in the
   # same transaction as the hold: a grant that no longer stands is a hold
   # that is gone.
-  # A further input's read or report writes no row of the attempt's: the
-  # supplier settles a mark under its own lock (`Opus.Inputs.held!/1`), so
-  # the check takes no write lock, as the effects that write no row are
-  # checked.
-  defp held(state, caller, :inputs) do
+  # An ask writes no row of the attempt's: `Sanctum.Questions` records it
+  # in a transaction of its own, so the check takes no write lock, as the
+  # effects that write no row are checked.
+  defp held(state, caller, {:question, _texts}) do
     case Arca.ExecutionAttempts.live?(
            Prima.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
@@ -1350,8 +1337,6 @@ defmodule Opus.Attempt do
       refused -> refused(refused)
     end
   end
-
-  defp held(state, caller, {:question, _texts}), do: held(state, caller, :inputs)
 
   defp held(state, caller, :chain) do
     case Arca.ExecutionAttempts.live?(
@@ -1430,18 +1415,6 @@ defmodule Opus.Attempt do
     }
 
     {:reply, {:ok, chain}, state}
-  end
-
-  defp run(:inputs, state) do
-    invocation = %{
-      athanor_id: state.ctx.athanor_id,
-      execution_id: state.execution_id,
-      attempt: state.attempt,
-      fence: state.fence,
-      grant: state.grant
-    }
-
-    {:reply, {:ok, state.inputs, invocation}, state}
   end
 
   defp run({:question, texts}, state) do

@@ -89,11 +89,6 @@ defmodule Aqua.Loop do
   # the same key again.
   @setup ~w(secret_denied)
   @refused_key "authentication"
-  # The refusal of a session the brain no longer holds (`Prima.Model`). A
-  # step the turn forgot its thread's session on closes with this type as
-  # its error, as a retried step closes with its own, so a continued turn
-  # reads from its steps that it forgot one (`forgot_session?/1`).
-  @session_gone "unknown_session"
   # A note flush offers this action alone, and keeps a note this large at most.
   @flush_tool "notes"
   @flush_action "keep"
@@ -111,17 +106,10 @@ defmodule Aqua.Loop do
       :spec,
       :claim,
       :turn,
-      # The brain's session for the thread, as its last response named it.
-      :session,
-      # The thread's session generation the turn keeps a session under: as
-      # the turn was built, so a forget since (a reset program home) keeps
-      # out what the brain answers with, or as the turn's own forget raised
-      # it (`Arca.TurnStorage`).
+      # The thread's session generation as the turn was built, which a
+      # program brain's work keeps when the thread cannot be read again
+      # (`program_work/2`).
       :generation,
-      # The turn forgot its thread's session once, on its brain's word that
-      # the session was gone: the next such refusal ends it. A continued
-      # turn reads it from its steps, as it reads their count (`settle/1`).
-      forgot_session?: false,
       steps: 0,
       usage: %{input: 0, output: 0},
       activity: [],
@@ -376,7 +364,6 @@ defmodule Aqua.Loop do
           program: spec.program,
           claim: claim,
           turn: turn,
-          session: spec.thread.brain_session,
           generation: spec.thread.brain_generation,
           since: now(),
           active_ms: turn.active_ms
@@ -607,7 +594,6 @@ defmodule Aqua.Loop do
            spec: Turn.with_turn(spec, started),
            claim: claim,
            turn: started,
-           session: spec.thread.brain_session,
            generation: spec.thread.brain_generation,
            since: now(),
            active_ms: started.active_ms
@@ -1018,7 +1004,6 @@ defmodule Aqua.Loop do
       tools: spec.tools,
       capabilities: spec.capabilities,
       offers_search?: offers_search?(spec),
-      session: state.session,
       options: spec.brain_options
     )
   end
@@ -1120,10 +1105,7 @@ defmodule Aqua.Loop do
     do: rows |> Tape.writing_turns() |> Enum.reject(&(&1 == turn.id))
 
   defp ask_model(%State{} = state, step, request, retained, retries) do
-    answer = model_call(state, step, request, retained, true)
-    forget? = forgets?(state, request, answer)
-
-    case answer do
+    case model_call(state, step, request, retained, true) do
       {:ok, data} ->
         on_response(state, step, data)
 
@@ -1136,39 +1118,18 @@ defmodule Aqua.Loop do
       {:error, :superseded} ->
         {:halt, :cancelled, state}
 
-      # The retry continues the session the refusal named, as the next
-      # turn would.
-      {:error, %{"type" => type} = error}
+      {:error, %{"type" => type}}
       when type in @recoverable and retries < length(@retry_delays_ms) ->
-        closed = refused(state, error, type)
-        _ = Tape.close_step(guest(state), state.turn, step, "error", closed)
+        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: type})
         Process.sleep(Enum.at(@retry_delays_ms, retries))
-        state = %{state | session: closed[:session] || state.session}
-        request = continued(request, closed[:session])
-        retained = retained && continued(retained, closed[:session])
 
         case open_model_step(state, "chat") do
           {:ok, again, state} -> ask_model(state, again, request, retained, retries + 1)
           {:error, reason} -> {:halt, {:failed, reason}, state}
         end
 
-      # The brain no longer holds the session the request named, and
-      # refused before it took anything of the request (`Prima.Model`), so
-      # asking again repeats nothing. A refusal of that type the turn does
-      # not forget on (`forgets?/3`) ends it as any other does, the thread's
-      # session left as it is.
-      {:error, %{"type" => @session_gone} = error} when forget? ->
-        ask_without_session(state, step, error, request, retained, retries)
-
       {:error, %{"type" => type} = error} when type in @setup ->
-        _ =
-          Tape.close_step(
-            guest(state),
-            state.turn,
-            step,
-            "error",
-            refused(state, error, error["message"])
-          )
+        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error["message"]})
 
         announce(state, :consent_required, %{
           ref: state.spec.catalyst,
@@ -1178,21 +1139,13 @@ defmodule Aqua.Loop do
         {:halt, {:failed, :setup_required}, state}
 
       {:error, %{"type" => @refused_key} = error} ->
-        _ =
-          Tape.close_step(
-            guest(state),
-            state.turn,
-            step,
-            "error",
-            refused(state, error, error["message"])
-          )
+        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error["message"]})
 
         _ = system_row(state, refused_key_line(error))
         {:halt, {:failed, refused_key_line(error)}, state}
 
-      {:error, %{"type" => _type, "message" => message} = error} ->
-        _ =
-          Tape.close_step(guest(state), state.turn, step, "error", refused(state, error, message))
+      {:error, %{"type" => _type, "message" => message}} ->
+        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: message})
 
         _ = system_row(state, "The model could not answer: #{message}")
         {:halt, {:failed, message}, state}
@@ -1204,66 +1157,6 @@ defmodule Aqua.Loop do
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: text})
         _ = system_row(state, "The model could not be reached: #{text}")
         {:halt, {:failed, reason}, state}
-    end
-  end
-
-  defp continued(request, nil), do: request
-  defp continued(request, session), do: Map.put(request, "session", session)
-
-  # Whether the turn forgets its thread's session on this answer and asks
-  # again, once in a turn: the brain refused the session the request named
-  # as one it no longer holds, by a refusal that holds to the contract (one
-  # that names a session is off it, `Prima.Model`), and the turn has not
-  # forgotten a session before. A retry may have put a newer session into
-  # the request, so the turn's own mark decides, not the request.
-  defp forgets?(
-         %State{forgot_session?: false},
-         %{"session" => _named},
-         {:error, %{"type" => @session_gone} = error}
-       ),
-       do: Prima.Model.response_session(error) == {:ok, nil}
-
-  defp forgets?(%State{}, _request, _answer), do: false
-
-  # A step the turn forgot its thread's session on, as its row tells it.
-  defp forgot_session?(%{kind: "model", purpose: "chat", outcome: "error", error: @session_gone}),
-    do: true
-
-  defp forgot_session?(_step), do: false
-
-  # The refused step closes with the mark that the turn forgot a session
-  # (`@session_gone`), the thread forgets the session its brain no longer
-  # holds, and the same request is asked once more without it, which opens
-  # a new session. Each write is required before the next: a mark that was
-  # not written forgets nothing and asks nothing, since a continued turn
-  # would find no mark and forget again. The turn keeps the new session
-  # under the generation its forget answers: the raised one, or the one it
-  # read when the thread was forgotten from outside meanwhile, under which
-  # nothing it answers with is kept (`Arca.TurnStorage.forget_session/3`).
-  defp ask_without_session(%State{} = state, step, error, request, retained, retries) do
-    marked = refused(state, error, @session_gone)
-
-    with {:ok, _closed} <- Tape.close_step(guest(state), state.turn, step, "error", marked),
-         {:ok, generation} <- Tape.forget_session(guest(state), state.turn, state.generation),
-         forgot = %{state | session: nil, generation: generation, forgot_session?: true},
-         {:ok, again, asking} <- open_model_step(forgot, "chat") do
-      request = Map.delete(request, "session")
-      ask_model(asking, again, request, retained && Map.delete(retained, "session"), retries)
-    else
-      {:error, :superseded} -> {:halt, :cancelled, state}
-      {:error, reason} -> {:halt, {:failed, reason}, state}
-    end
-  end
-
-  # A refused model step closes with the brain's session its refusal
-  # names, kept on the thread as a response's is (`Prima.Model`), so the
-  # next request continues it, under the thread's generation the turn
-  # keeps a session under (`State`). A session off the contract is not
-  # kept, and the refusal ends the turn as it would.
-  defp refused(%State{} = state, error, text) do
-    case Prima.Model.response_session(error) do
-      {:ok, session} -> %{error: text, session: session, generation: state.generation}
-      {:error, _invalid} -> %{error: text}
     end
   end
 
@@ -1398,17 +1291,14 @@ defmodule Aqua.Loop do
     {resolved, tool_calls} = resolve_calls(state, step, content)
     usage = data["usage"] || %{}
 
-    with {:ok, session} <- Prima.Model.response_session(data),
-         {:ok, %{calls: recorded}} <-
+    with {:ok, %{calls: recorded}} <-
            Tape.record_response(guest(state), state.turn, step, %{
              text: if(text == "", do: nil, else: text),
              usage: usage,
              stop_reason: data["stop_reason"],
-             session: session,
-             generation: state.generation,
              tool_calls: tool_calls
            }) do
-      state = count_usage(%{state | session: session || state.session}, usage)
+      state = count_usage(state, usage)
 
       items =
         Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
@@ -2762,7 +2652,6 @@ defmodule Aqua.Loop do
         state
         | restricted?: open != [] or Tape.restricted?(guest, state.turn),
           steps: Enum.count(steps, &(&1.kind == "model")),
-          forgot_session?: Enum.any?(steps, &forgot_session?/1),
           model?: not opened_on_call?(state) and not answered?(steps)
       }
 
@@ -2936,27 +2825,20 @@ defmodule Aqua.Loop do
   end
 
   # The reply's text is not the turn's and is not recorded; its calls are.
-  # The flush continues the brain's session, so the session its answer or
-  # its refusal names is kept as a chat round's is (`on_response/3`,
-  # `refused/3`), and the next request continues it: a brain that counts
-  # its usage against the session it is handed counts the flush once.
   defp keep_notes(%State{} = state, step, request) do
     case model_call(state, step, request, nil) do
       {:ok, data} ->
         {resolved, tool_calls} = resolve_calls(state, step, List.wrap(data["content"]))
         usage = data["usage"] || %{}
 
-        with {:ok, session} <- Prima.Model.response_session(data),
-             {:ok, %{calls: recorded}} <-
+        with {:ok, %{calls: recorded}} <-
                Tape.record_response(guest(state), state.turn, step, %{
                  text: nil,
                  usage: usage,
                  stop_reason: data["stop_reason"],
-                 session: session,
-                 generation: state.generation,
                  tool_calls: tool_calls
                }) do
-          state = count_usage(%{state | session: session || state.session}, usage)
+          state = count_usage(state, usage)
 
           Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
             keep_note(state, call_step, call)
@@ -2978,9 +2860,8 @@ defmodule Aqua.Loop do
         superseded
 
       {:error, %{"type" => _} = error} ->
-        closed = refused(state, error, describe(error))
-        _ = Tape.close_step(guest(state), state.turn, step, "error", closed)
-        {:skipped, %{state | session: closed[:session] || state.session}}
+        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: describe(error)})
+        {:skipped, state}
 
       {failure, reason} when failure in [:error, :exit] ->
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: describe(reason)})

@@ -499,10 +499,8 @@ defmodule Aqua.Loop.RequestTest do
                )
     end
 
-    # A brain that keeps a session rebuilds a new one from the request
-    # alone: the thread's projection rides every request whole, with a session or
-    # without, and its last message is the current ask. The shared vectors'
-    # case is this thread, so the rule reads what the loop sends.
+    # The thread's projection rides every request whole, and its last
+    # message is the current ask.
     test "a crew member's thread rides every request whole, its last message the current ask" do
       call = fn seq, step, id, name, arguments ->
         row(seq, "tool_call", @agent, name, %{
@@ -544,21 +542,102 @@ defmodule Aqua.Loop.RequestTest do
 
       messages = Request.messages(rows, %{}, me: "claude-code")
 
-      %{"cases" => [_alone, thread | _]} =
-        "../../../../../tests/fixtures/session_context.json"
-        |> Path.expand(__DIR__)
-        |> File.read!()
-        |> Jason.decode!()
-
-      assert messages == thread["messages"]
+      assert messages == [
+               %{
+                 "content" => [
+                   %{
+                     "text" =>
+                       "[Summary of the thread so far]\nThe person wants the todo list kept short.",
+                     "type" => "text"
+                   },
+                   %{
+                     "text" =>
+                       "[aqua asked claude-code (request msg_3, answered)]\nTidy notes/todo.md.",
+                     "type" => "text"
+                   }
+                 ],
+                 "role" => "user"
+               },
+               %{
+                 "content" => [
+                   %{"text" => "I will read it first.", "type" => "text"},
+                   %{
+                     "arguments" => %{"action" => "read", "path" => "notes/todo.md"},
+                     "id" => "call_1",
+                     "name" => "files",
+                     "type" => "tool_call"
+                   }
+                 ],
+                 "role" => "assistant"
+               },
+               %{
+                 "content" => [
+                   %{
+                     "content" => "1: buy milk\n2: call Ana",
+                     "is_error" => false,
+                     "name" => "files",
+                     "tool_call_id" => "call_1",
+                     "type" => "tool_result"
+                   }
+                 ],
+                 "role" => "tool"
+               },
+               %{
+                 "content" => [
+                   %{
+                     "arguments" => %{"action" => "write", "path" => "notes/todo.md"},
+                     "id" => "call_2",
+                     "name" => "files",
+                     "type" => "tool_call"
+                   },
+                   %{
+                     "arguments" => %{"action" => "get", "url" => "https://example.com"},
+                     "id" => "call_3",
+                     "name" => "http",
+                     "type" => "tool_call"
+                   }
+                 ],
+                 "role" => "assistant"
+               },
+               %{
+                 "content" => [
+                   %{
+                     "content" => "written",
+                     "is_error" => false,
+                     "name" => "files",
+                     "tool_call_id" => "call_2",
+                     "type" => "tool_result"
+                   },
+                   %{
+                     "content" => "Refused by the person.",
+                     "is_error" => true,
+                     "name" => "http",
+                     "tool_call_id" => "call_3",
+                     "type" => "tool_result"
+                   }
+                 ],
+                 "role" => "tool"
+               },
+               %{
+                 "content" => [%{"text" => "Done: two items are left.", "type" => "text"}],
+                 "role" => "assistant"
+               },
+               %{
+                 "content" => [
+                   %{
+                     "text" =>
+                       "[aqua asked claude-code (request msg_12, pending)]\nAnd add the dentist.",
+                     "type" => "text"
+                   }
+                 ],
+                 "role" => "user"
+               }
+             ]
 
       assert %{"role" => "user", "content" => [%{"text" => "[aqua asked claude-code" <> _}]} =
                List.last(messages)
 
-      fresh = Request.build(model: "m", messages: messages)
-      continued = Request.build(model: "m", messages: messages, session: "s1")
-      assert fresh["messages"] == messages
-      assert continued == Map.put(fresh, "session", "s1")
+      assert Request.build(model: "m", messages: messages)["messages"] == messages
     end
 
     test "a request the reader made still shows once a compaction summarized its call away, while it waits" do
@@ -726,7 +805,7 @@ defmodule Aqua.Loop.RequestTest do
     assert Request.build(model: "m", messages: [])["max_tokens"] == 16_384
   end
 
-  test "a session rides the request, and an option rides only when the brain declares it, of its kind" do
+  test "an option rides the request only when the brain declares it, of its kind" do
     effort = %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]}
     caps = %{options: [effort]}
 
@@ -735,11 +814,9 @@ defmodule Aqua.Loop.RequestTest do
         model: "m",
         messages: [],
         capabilities: caps,
-        session: "s1",
         options: %{"effort" => "high"}
       )
 
-    assert request["session"] == "s1"
     assert request["options"] == %{"effort" => "high"}
 
     for {options, member} <- [
@@ -760,7 +837,6 @@ defmodule Aqua.Loop.RequestTest do
     end
 
     request = Request.build(model: "m", messages: [], options: %{})
-    refute Map.has_key?(request, "session")
     refute Map.has_key?(request, "options")
   end
 

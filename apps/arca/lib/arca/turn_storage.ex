@@ -2853,10 +2853,7 @@ defmodule Arca.TurnStorage do
   Persist a model response before any of its calls run: the model step
   closes with its usage, the reply and every tool call become message
   rows, every call becomes a `proposed` step, and one event records it.
-  `response`: `:text`, `:usage`, `:stop_reason`, `:session` (the
-  brain's session, kept on the thread as `brain_session` for its next
-  request) with `:generation` (the thread's `brain_generation` the turn
-  read; required with a session), `:tool_calls` — each
+  `response`: `:text`, `:usage`, `:stop_reason`, `:tool_calls` — each
   `%{tool_call_id, name, tool, action, arguments, provider_data, kind,
   recovery, child_execution_id}`; `:fence`. The model step must be a
   `model` step of this turn (`{:error, :step_not_found}` otherwise), and
@@ -2894,7 +2891,6 @@ defmodule Arca.TurnStorage do
 
           thread = thread!(athanor_id, turn.thread_id)
           now = DateTime.utc_now()
-          keep_session!(athanor_id, thread, response)
 
           text =
             case Map.get(response, :text) do
@@ -3031,11 +3027,9 @@ defmodule Arca.TurnStorage do
   step that produced none), `:execution_id`, `:error`,
   `:fence`, `:threads`, the ids of the threads whose posts the result
   carries, joined into the turn's read threads in the same transaction
-  and recorded on the result row as its payload's `threads`, and
-  `:session`, the brain's session a model step's refusal named, with
-  `:generation`, kept on the thread as `record_response/4` keeps a
-  response's. A step closes from `dispatched`, or from `proposed` for
-  `denied` and `skipped`.
+  and recorded on the result row as its payload's `threads`. A step
+  closes from `dispatched`, or from `proposed` for `denied` and
+  `skipped`.
   """
   @spec close_step(Prima.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, %{step: map(), result: map() | nil}} | {:error, term()}
@@ -3058,19 +3052,19 @@ defmodule Arca.TurnStorage do
   def close_step(%Prima.Actor{}, _step_id, _outcome, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  Forget the brain's session of the turn's thread, which its brain
-  reported it no longer holds (`Prima.Model`'s `unknown_session`):
+  Forget the brain's session of the turn's thread, which its program
+  reported gone or the turn's program row no longer runs (`Aqua.Program`):
   `brain_session` is cleared and `brain_generation` raised in one
   statement, as `Arca.ThreadStorage.forget_sessions/3` forgets a home's,
   and only while the thread is at `:generation`, the one the turn read.
   `attrs`: `:fence` (the turn's) and `:generation`, both required.
   Answers the generation the turn keeps a session under from here: the
-  raised one, so the session its next request opens is kept, or the one
+  raised one, so the session its next start opens is kept, or the one
   it read when the thread was forgotten meanwhile, under which nothing it
   answers with is kept.
 
-  The brain's word speaks for the folder of the row it ran on, the
-  turn's `program` (none for an adapter catalyst). A session stored with
+  The program's word speaks for the folder of the row it ran on, the
+  turn's `program`. A session stored with
   another row (`brain_progress`'s `row`), its agent's program moved
   since, may still have its transcript there, and is owed its removal
   first, in the same transaction (`Arca.ThreadStorage.owe_forgets!/2`);
@@ -4333,8 +4327,11 @@ defmodule Arca.TurnStorage do
 
         thread = locked_thread!(athanor_id, thread_id)
         if turn && turn.thread_id != thread.id, do: Arca.Repo.rollback(:wrong_turn)
+        # Strict, so a generation of another type (0.0 for 0) is refused
+        # here: the session's write after it holds to no generation of its
+        # own (`keep_session!/3`).
         generation = Map.fetch!(attrs, :generation)
-        if thread.brain_generation != generation, do: Arca.Repo.rollback(:generation_moved)
+        if thread.brain_generation !== generation, do: Arca.Repo.rollback(:generation_moved)
         progress = progress(thread)
         owner!(progress, attrs)
 
@@ -4378,11 +4375,8 @@ defmodule Arca.TurnStorage do
 
   # arca:db-raise-ok inside the caller's transaction
   defp committed!(actor, athanor_id, thread, turn, progress, attrs) do
-    generation = attrs.generation
     session = Map.get(attrs, :session)
-
-    if session,
-      do: keep_session!(athanor_id, thread, %{session: session, generation: generation})
+    keep_session!(athanor_id, thread, session)
 
     said =
       if turn, do: Enum.map(Map.get(attrs, :said, []), &said!(actor, thread, turn, &1)), else: []
@@ -5031,9 +5025,6 @@ defmodule Arca.TurnStorage do
       )
 
     if count != 1, do: Arca.Repo.rollback(:not_open)
-
-    if Map.get(attrs, :session),
-      do: keep_session!(athanor_id, thread!(athanor_id, turn.thread_id), attrs)
 
     _turn = join_threads!(athanor_id, turn, threads)
 
@@ -5843,30 +5834,16 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # The brain's own session, kept on the thread for its next request only
-  # under the generation the turn read (`:generation`): a turn whose
-  # session was forgotten meanwhile (`Arca.ThreadStorage.forget_sessions/3`
-  # raises the generation) keeps nothing it answers with afterwards, the
-  # session it resumed or one it opened in the home the forget emptied. A
-  # turn that forgot the session itself writes under the generation that
-  # forget answered (`forget_session/3`). A session without a generation
-  # is refused, as a write without a fence is.
+  # The program's native session a batch's `started` names, kept on the
+  # thread for its next start. `commit_brain/3` holds the thread's lock and
+  # has refused a batch whose generation moved, so a forget committed since
+  # the turn read the thread (`Arca.ThreadStorage.forget_sessions/3`,
+  # `forget_session/3`) refused the batch before this write.
   # arca:db-raise-ok inside the caller's transaction
-  defp keep_session!(athanor_id, %Thread{id: thread_id, brain_session: current}, attrs) do
-    session = Map.get(attrs, :session)
-    generation = Map.get(attrs, :generation)
-
-    if session != nil and not is_integer(generation),
-      do: Arca.Repo.rollback(:generation_required)
-
+  defp keep_session!(athanor_id, %Thread{id: thread_id, brain_session: current}, session) do
     if is_binary(session) and session != "" and session != current do
-      # The comparison is the statement's own, so a forget committed after
-      # the thread was read still holds.
-      {_kept_or_not, _} =
-        from(c in Thread,
-          where: c.athanor_id == ^athanor_id and c.id == ^thread_id,
-          where: c.brain_generation == ^generation
-        )
+      {_kept, _} =
+        from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread_id)
         |> Arca.Repo.update_all(set: [brain_session: session])
     end
 

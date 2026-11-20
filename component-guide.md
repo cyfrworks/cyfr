@@ -216,7 +216,6 @@ world catalyst {
     export run;
     import cyfr:process/pipe@0.1.0;
     import cyfr:emit/events@0.1.0;
-    import cyfr:model/inputs@0.1.0;
 }
 ```
 
@@ -976,7 +975,7 @@ A catalyst drives a program its `login` need names (see [`needs` Section](#needs
 | `recv(session, after, max-wait-ms) -> result<recv-result, string>` | `recv-result { lines: list<line { seq, text }>, dropped, running }` |
 | `close(session) -> result<_, string>` | nothing |
 
-- **`open`** names the login need (its key in the manifest, never an entry) and `key`, the catalyst's name for the session: a chat request's `session`, or a fresh id. `argv` is appended to the program's command, as the admin defined it on the Programs page; it shapes only what runs inside the box. A session belongs to the program and the key, not to one run: a later run opening the same key attaches to it while its program runs (`resumed: true`). When the program had ended (it exits, or no line went either way for the program's idle period) the open starts it again with this `argv` and answers `resumed: false`: a catalyst that speaks a protocol over the session starts that protocol again, and passes in `argv` what resumes its work. A repeat open by the same run answers as the first did. Keys are the component's own: another component bound to the same program never reaches its sessions. Each run opens before it sends, reads or closes.
+- **`open`** names the login need (its key in the manifest, never an entry) and `key`, the catalyst's name for the session. `argv` is appended to the program's command, as the admin defined it on the Programs page; it shapes only what runs inside the box. A session belongs to the program and the key, not to one run: a later run opening the same key attaches to it while its program runs (`resumed: true`). When the program had ended (it exits, or no line went either way for the program's idle period) the open starts it again with this `argv` and answers `resumed: false`: a catalyst that speaks a protocol over the session starts that protocol again, and passes in `argv` what resumes its work. A repeat open by the same run answers as the first did. Keys are the component's own: another component bound to the same program never reaches its sessions. Each run opens before it sends, reads or closes.
 - **`send`** writes each line, in order, with its newline. A line has no newline or NUL, is at most 1 MiB, and one call's lines fit the component's `max_request_size`. A send is never repeated by the host: one whose answer was lost, between the runner and CYFR or between CYFR and the program's box, is `lost`, and its lines may have arrived.
 - **`recv`** answers the lines past `after` (0 for the first read), waiting at most `max-wait-ms` (at most 20 000) for one when there is none. A line is kept until a later call names an `after` at or past it, so asking again with the same `after` answers the same lines; an answer carries as many lines as fit, and the next read names the last `seq` it got. A reader that falls behind loses the oldest lines past the session's buffer (8 MiB), counted in `dropped`. `running: false` says the program ended; a session no longer held answers no lines and `running: false`.
 - **`close`** ends the session and its program; a repeat is harmless.
@@ -995,28 +994,6 @@ An error is a code:
 | `too_large` | A line no answer can carry, or lines past `max_request_size` |
 | `unavailable` | CYFR or the box could not answer, and nothing was done; asking again later is safe |
 | `lost` | The run is no longer current; or a send's answer was lost on its way back, so its lines may have reached the program: read what the program wrote before sending them again, never send them again blind |
-
-### `cyfr:model/inputs` — a running call's further messages
-
-A catalyst whose `chat` runs for long, such as a harness adapter, may hand its harness the messages that arrive after the call began: whoever started the call supplies them, and a call nobody supplies reads none. Only this run's inputs are read and reported; a run that is stopped, replaced or cancelled reads none and reports nothing.
-
-| Function | Answers |
-|---|---|
-| `next() -> result<option<input>, string>` | `input { id, content }`, or none |
-| `sent(id) -> result<_, string>` | nothing |
-
-- **`next`** answers the run's next input not yet reported sent: its `id` and its `content`, the JSON of a user message's content (a string, or `text`, `image` and `document` blocks, an attachment's `data` in base64; see [the contract](#model-catalysts-the-modelchat1-contract)). It answers none only when nobody supplies the call or its supplier has nothing to hand; a supplier that could not answer is `unavailable`. It answers the same input until it is reported, so a read moves nothing and asking again is safe. Ask between your own waits, not in a loop: at most once a second, and never while an input you were handed is not yet written and reported. When your harness takes a message, and whether the call still answers within its time, is the harness's business: a message handed in near the call's end can keep it from answering in time.
-- **`sent`** reports that the input `id` was handed on, once the harness accepted it (a write the pipe took, or the harness's own acknowledgement). A report repeated after a lost answer marks it once. `sent` promises nothing of the harness: when its model reads the input, and whether it answers, is the harness's business. An input whose write may have reached the harness is never written again, reported or not; one you cannot write (a block your harness does not take, a line past the pipe's bound) is neither written nor reported, and reaches the next call as an ordinary message. An input handed over cannot be recalled.
-
-An error is a code:
-
-| Code | What it means |
-|---|---|
-| `lost` | The run is no longer current: it was stopped, replaced or cancelled |
-| `unavailable` | The call's supplier could not answer a read, nobody recorded a report, or CYFR could not answer; nothing moved, and the bundled adapters ask no more in that call |
-| `invalid_request` | The input the run was handed does not read; the code names no content |
-
-A catalyst that never imports the interface is unchanged by it.
 
 ### `cyfr:question/ask` — asking before an action
 
@@ -1407,7 +1384,7 @@ A refusal is typed, with the provider's own body beside it when the refusal is t
 {"status": 429, "error": {"type": "rate_limited", "message": "…", "provider": {"…": "the provider's body"}}}
 ```
 
-`type` is one of `invalid_request` (the request is off the contract — refused before any request is made — or the provider rejected it), `secret_denied` (answered when the read is refused by a catalyst that reads its own key, one whose need it reads itself — no `attach`, or `disclose: true`; the shipped model catalysts read no key, since CYFR attaches it), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer; the assistant retries it, as it does `rate_limited` and `overloaded`), `unknown_model`, `unknown_operation`, `unknown_session` (a brain that keeps a session of its own no longer holds the one the request named; `Prima.Model`'s documentation holds the detail).
+`type` is one of `invalid_request` (the request is off the contract — refused before any request is made — or the provider rejected it), `secret_denied` (answered when the read is refused by a catalyst that reads its own key, one whose need it reads itself — no `attach`, or `disclose: true`; the shipped model catalysts read no key, since CYFR attaches it), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer; the assistant retries it, as it does `rate_limited` and `overloaded`), `unknown_model` or `unknown_operation`.
 
 **Streaming.** While `chat` runs, the catalyst streams the answer as events on its execution's event stream through `cyfr:emit/events.emit`, then answers the whole response as above:
 
@@ -1422,8 +1399,6 @@ A refusal is typed, with the provider's own body beside it when the refusal is t
 | `error` | `error` — `type` and `message`, as the refusal answered |
 
 Deltas are batched: a batch goes out when it reaches 256 bytes, when it has been held 50 ms, when a read of the provider's stream finds nothing new, and before any other event. The host masks every credential the execution was handed out of each event, holding back the tail of streamed text so a credential split across two deltas is masked whole, and counts every event against the execution's emit budget (3000 a minute); a refused event never stops the run. A held tail goes out when its stream ends — a call's arguments ahead of that call's `tool_call.end`, the answer's text ahead of `stop` or `error` — so other events can pass it: a subscriber may see `usage`, or a `tool_call.start`, before the last few characters of text that were emitted ahead of it. The text is complete by `stop`, or by the run's end when the catalyst sends none. The assistant shows a chat step's `text.delta` events as the answer arrives and keeps the whole response as the step's rows; tool-call fragments are not shown.
-
-**Further messages.** A `chat` that runs for long may be handed the messages that arrive after it began, through [`cyfr:model/inputs`](#cyfrmodelinputs--a-running-calls-further-messages): ask between your reads, write each into your harness's running session as its own native input, and report it sent once the harness accepted it. A catalyst that does not ask is unchanged, and the host carries a message it never took into the next call.
 
 To ship a model catalyst of your own: declare the contract, answer the three operations, and cover the mapping with host-target unit tests (`cargo test` in `src/`, as the bundled ones do). A request that does not parse is refused as `invalid_request` before any request is made; `describe` answers without a key; `chat` and `models` never answer provider-shaped data.
 

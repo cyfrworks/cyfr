@@ -15,14 +15,12 @@ defmodule Prima.Model do
       {tool_call_id, name, content, is_error?}`), `tools?` (`name`,
       `description`, `parameters`), `provider_tools?` (names the catalyst
       offers, e.g. `web_search`), `max_tokens?`, `temperature?`,
-      `session?` (a non-empty opaque string a response answered, continuing
-      that session on the brain), `options?` (an object of the options
-      `describe` declares, by name, each value of its option's kind).
+      `options?` (an object of the options `describe` declares, by name,
+      each value of its option's kind).
       Response: `model`, `content` (`text` and `tool_call` blocks),
       `stop_reason` (`end_turn | tool_call | max_tokens | content_filter |
       other`), `usage` (`input_tokens`, `output_tokens`,
-      `cache_read_tokens`, `cache_write_tokens`), `session?` (a non-empty
-      opaque string naming the brain's session). A `tool_call`'s
+      `cache_read_tokens`, `cache_write_tokens`). A `tool_call`'s
       `provider_data` carries what the catalyst needs to continue from it.
     * `describe` — what the catalyst can do, answered without a key:
       `contracts`, `provider`, `tools`, `provider_tools`, `media_types`,
@@ -41,67 +39,25 @@ defmodule Prima.Model do
   arguments}`, `tool_call.end {index}`, `usage {usage}`, `stop
   {stop_reason}`, `error {error}` — and still answers the whole response.
 
-  While `chat` runs, the catalyst may ask for the call's further messages
-  (`cyfr:model/inputs`, `c:Prima.HostAPI.input_next/1`): each an input
-  (`t:input/0`), a message that arrived after the call began, which the
-  catalyst writes into its harness's running session and reports sent
-  once the harness accepted it (`c:Prima.HostAPI.input_sent/2`). When the
-  harness's model reads it is the harness's business: a report promises
-  neither an answer nor that a tool under way stops. An input is held to
-  `check_input/1` before the catalyst is handed it, and the catalyst
-  writes only the block kinds its harness takes.
-
-  A refusal is `{"status": N, "error": {"type", "message", "provider"?,
-  "session"?}}` with `type` one of `invalid_request`, `secret_denied`,
+  A refusal is `{"status": N, "error": {"type", "message", "provider"?}}`
+  with `type` one of `invalid_request`, `secret_denied`,
   `authentication`, `rate_limited`, `overloaded`, `provider_error`,
   `incomplete_stream` (the provider's stream ended before its closing
-  signal), `unknown_model`, `unknown_operation`, `unknown_session` (the
-  brain reports that the session the request named no longer exists, and
-  refused before it took anything of the request). A refusal's `session`
-  is a response's: the brain's session once it exists, such as a chat
-  interrupted after it opened one, which the host keeps as it keeps a
-  response's, so the next request continues it. An `unknown_session`
-  refusal carries none, since the session is gone: the host forgets the
-  one it kept, and the same request without `session` opens a new one.
+  signal), `unknown_model` or `unknown_operation`.
 
   The provider's HTTP call and the key stay in the catalyst. This module
   names the contract, says whether a manifest declares it, reads the
-  envelope, and checks the members a caller sets per brain (`options/1`,
-  `check_chat_request/2`, `response_session/1`); running a catalyst is
-  the assistant's (`Aqua.Models`). The shared vectors are
-  `tests/fixtures/model_chat.json`. A catalyst that declares no options
-  ignores a request's `session` and `options`, and the host sends none it
-  did not declare (`Aqua.Loop.Request.build/1` refuses an option it does
-  not know).
+  envelope, and checks the options a caller sets per brain (`options/1`,
+  `check_chat_request/2`); running a catalyst is the assistant's
+  (`Aqua.Models`). The shared vectors are `tests/fixtures/model_chat.json`.
+  A catalyst that declares no options ignores a request's `options`, and
+  the host sends none it did not declare (`Aqua.Loop.Request.build/1`
+  refuses an option it does not know).
   """
 
   @chat "model/chat@1"
   @option_kinds ~w(enum string integer boolean)
   @option_members ~w(name kind values default)
-
-  @input_id ~r/\A[A-Za-z0-9_.:-]{1,128}\z/
-  # A member a refusal may name: a plain word. Any other key is the
-  # supplier's own bytes, and is named by the member that holds it.
-  @member_name ~r/\A[a-z_]{1,32}\z/
-  # The most blocks one input carries: a bound of the input's own meaning
-  # (ARCHITECTURE.md §5.8), beside the line bound its bytes are held to.
-  @max_input_blocks 32
-  @media_types %{
-    "image" => ~w(image/jpeg image/png image/gif image/webp),
-    "document" => ~w(application/pdf)
-  }
-
-  @typedoc """
-  A further message of a running `chat` (`c:Prima.HostAPI.input_next/1`):
-  its `id`, which its supplier knows it by (`valid_input_id?/1`), and its
-  `content`, a user message's content: a non-empty string, or 1 to
-  `max_input_blocks/0` blocks, each `{"type": "text", "text"}` or an
-  attachment `{"type": "image" | "document", "media_type", "data"}` whose
-  data is base64 of a media type `input_media_types/0` names. A block
-  carries no other member, so nothing in it is a path or an address to
-  fetch, and the input's JSON is at most `max_input_bytes/0`.
-  """
-  @type input :: %{String.t() => String.t() | [map()]}
 
   @typedoc """
   One option `describe` declares, as the wire carries it: `"name"` (a
@@ -229,21 +185,14 @@ defmodule Prima.Model do
   defp of_kind?(%{"kind" => "boolean"}, value), do: is_boolean(value)
 
   @doc """
-  Whether a `chat` request's `session` and `options` hold to the
-  contract under `declared` (`options/1`): a session is a non-empty
-  string, and every option the request sets is one `declared` names,
-  with a value of its kind. The other members are the catalyst's to read.
+  Whether a `chat` request's `options` hold to the contract under
+  `declared` (`options/1`): every option the request sets is one
+  `declared` names, with a value of its kind. The other members are the
+  catalyst's to read.
   """
   @spec check_chat_request(map(), [option()]) :: :ok | {:error, invalid()}
-  def check_chat_request(request, declared) when is_map(request) and is_list(declared) do
-    with :ok <- session(request) do
-      set_options(request, Map.new(declared, &{&1["name"], &1}))
-    end
-  end
-
-  defp session(%{"session" => session}) when is_binary(session) and session != "", do: :ok
-  defp session(%{"session" => _other}), do: invalid("session")
-  defp session(%{}), do: :ok
+  def check_chat_request(request, declared) when is_map(request) and is_list(declared),
+    do: set_options(request, Map.new(declared, &{&1["name"], &1}))
 
   defp set_options(%{"options" => set}, declared) when is_map(set) do
     set
@@ -261,141 +210,6 @@ defmodule Prima.Model do
 
   defp set_options(%{"options" => _other}, _declared), do: invalid("options")
   defp set_options(%{}, _declared), do: :ok
-
-  @doc """
-  The session a `chat` answer names, a response's data or a refusal's
-  `error`: `{:ok, nil}` when it names none, refused when its `session` is
-  not a non-empty string, or when an `unknown_session` refusal names one.
-  """
-  @spec response_session(map()) :: {:ok, String.t() | nil} | {:error, invalid()}
-  def response_session(%{"type" => "unknown_session", "session" => _any}), do: invalid("session")
-
-  def response_session(%{"session" => session}) when is_binary(session) and session != "",
-    do: {:ok, session}
-
-  def response_session(%{"session" => _other}), do: invalid("session")
-  def response_session(%{}), do: {:ok, nil}
-
-  @doc "Whether `id` is an input's id: 1 to 128 characters of `[A-Za-z0-9_.:-]`."
-  @spec valid_input_id?(term()) :: boolean()
-  def valid_input_id?(id) when is_binary(id), do: Regex.match?(@input_id, id)
-  def valid_input_id?(_id), do: false
-
-  @doc """
-  The most bytes an input's JSON may be: one line to a program's session
-  (`Prima.LocusBackends.max_line_bytes/0`), which the catalyst writes it
-  into; the catalyst holds the line it writes to the same bound.
-  """
-  @spec max_input_bytes() :: pos_integer()
-  def max_input_bytes, do: Prima.LocusBackends.max_line_bytes()
-
-  @doc "The most blocks an input's content carries."
-  @spec max_input_blocks() :: pos_integer()
-  def max_input_blocks, do: @max_input_blocks
-
-  @doc "The media types an input's attachment may be, by block kind."
-  @spec input_media_types() :: %{String.t() => [String.t()]}
-  def input_media_types, do: @media_types
-
-  @doc """
-  Whether `input` holds to `t:input/0`, or the member that breaks it:
-  `id`, `content`, `content[i]` for a block, `content[i].<member>` for one
-  of its members (an unknown one by its own name when that is a plain
-  word of lowercase letters and underscores, else by the block's), an
-  unknown member of the input by its name, `input` for one that is not an
-  object or names a member that is no plain word, and `content` for an
-  input whose JSON, or whose attachments' decoded bytes, are past
-  `max_input_bytes/0`. Text is UTF-8. What a member holds is never named.
-  """
-  @spec check_input(term()) :: :ok | {:error, invalid()}
-  def check_input(%{} = input) when not is_struct(input) do
-    cond do
-      (unknown = Map.keys(input) -- ["id", "content"]) != [] ->
-        invalid(named(unknown, "input"))
-
-      not valid_input_id?(input["id"]) ->
-        invalid("id")
-
-      true ->
-        with :ok <- content(input["content"]), do: sized(input)
-    end
-  end
-
-  def check_input(_input), do: invalid("input")
-
-  defp content(text) when is_binary(text), do: if(text?(text), do: :ok, else: invalid("content"))
-
-  defp content([_ | _] = blocks) when length(blocks) <= @max_input_blocks do
-    blocks
-    |> Enum.with_index()
-    |> Enum.find_value(:ok, fn {block, index} ->
-      case block(block, "content[#{index}]") do
-        :ok -> nil
-        refused -> refused
-      end
-    end)
-  end
-
-  defp content(_other), do: invalid("content")
-
-  defp block(%{"type" => "text"} = block, at), do: members(block, at, %{"text" => &text?/1})
-
-  defp block(%{"type" => kind} = block, at) when is_map_key(@media_types, kind) do
-    members(block, at, %{
-      "media_type" => &(&1 in Map.fetch!(@media_types, kind)),
-      "data" => &base64?/1
-    })
-  end
-
-  defp block(%{"type" => _other}, at), do: invalid(at <> ".type")
-  defp block(_other, at), do: invalid(at)
-
-  # A block's members are exactly `type` and its kind's, each held to its
-  # check, in the order of their names.
-  defp members(block, at, checks) do
-    case Map.keys(block) -- ["type" | Map.keys(checks)] do
-      [_ | _] = unknown ->
-        invalid(named(unknown, at, at <> "."))
-
-      [] ->
-        checks
-        |> Enum.sort()
-        |> Enum.find_value(:ok, fn {name, check?} ->
-          if Map.has_key?(block, name) and check?.(block[name]),
-            do: nil,
-            else: invalid("#{at}.#{name}")
-        end)
-    end
-  end
-
-  # The first of `keys` by name, when every one is a plain word, else the
-  # member that holds them.
-  defp named(keys, holder, prefix \\ "") do
-    if Enum.all?(keys, &(is_binary(&1) and Regex.match?(@member_name, &1))),
-      do: prefix <> hd(Enum.sort(keys)),
-      else: holder
-  end
-
-  defp text?(text), do: is_binary(text) and text != "" and String.valid?(text)
-
-  defp base64?(data) when is_binary(data) and data != "",
-    do: match?({:ok, _bytes}, Base.decode64(data))
-
-  defp base64?(_data), do: false
-
-  defp sized(%{"content" => content} = input) do
-    decoded =
-      if is_list(content),
-        do: Enum.reduce(content, 0, &(&2 + decoded_bytes(&1))),
-        else: 0
-
-    if byte_size(Jason.encode!(input)) <= max_input_bytes() and decoded <= max_input_bytes(),
-      do: :ok,
-      else: invalid("content")
-  end
-
-  defp decoded_bytes(%{"data" => data}), do: data |> Base.decode64!() |> byte_size()
-  defp decoded_bytes(_text), do: 0
 
   defp invalid(member), do: {:error, {:invalid, member}}
 
