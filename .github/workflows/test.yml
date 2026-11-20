@@ -1172,9 +1172,9 @@ jobs:
         run: docker logs minio
 
   # Dockerfile.locus built once per run, for every job that runs the image:
-  # builder-image, locus-runtime-image, locus-backends-image and the
-  # browser-tincture job's tincture proof each load this build under their
-  # own tag.
+  # builder-image, locus-runtime-image, locus-backends-image,
+  # app-image-locus-suites and the browser-tincture job's tincture proof
+  # each load this build under their own tag.
   locus-image:
     name: The Locus image, built once for this run
     runs-on: ubuntu-latest
@@ -1210,6 +1210,49 @@ jobs:
         with:
           name: locus-image
           path: ${{ runner.temp }}/locus-image/cyfr-locus.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+          overwrite: true
+
+  # Dockerfile built once per run, beside the Locus image, for every job
+  # that runs it: the app-image-suites and app-image-locus-suites jobs'
+  # groups each load this build.
+  app-image:
+    name: The app image, built once for this run
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The image's upgrade layer refreshes once a UTC day and is shared
+      # within it (Dockerfile's APT_REFRESH), as the Locus image's does.
+      - name: The UTC date the upgrade layer refreshes on
+        id: apt-refresh
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the app image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          build-args: |
+            APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
+          load: true
+          tags: cyfr:push
+          cache-from: type=gha,scope=cyfr-push
+          cache-to: type=gha,scope=cyfr-push,mode=max
+      - name: Save the app image
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/app-image"
+          docker save cyfr:push | zstd -T0 -q -o "$RUNNER_TEMP/app-image/cyfr.tar.zst"
+      # Already compressed, and read only by this run's jobs. A re-run of
+      # this job replaces it.
+      - name: Upload the app image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: app-image
+          path: ${{ runner.temp }}/app-image/cyfr.tar.zst
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -1427,21 +1470,13 @@ jobs:
   # run here, in the workflow release.yml calls before it publishes, so the
   # release gates on them.
   locus-backends-image:
-    name: Backends image (end to end, isolation, refusals, residue, memory bound) and the Compose proof
+    name: Backends image (isolation, refusals, residue, memory bound, kept homes, Aqua's browser, brain drivers, network list)
     runs-on: ubuntu-latest
-    # The Compose proof's eight cases bring the stack up and switch its access mode
-    # some twenty times between them.
-    timeout-minutes: 100
+    # The longest of these suites, Aqua's browser, takes about two minutes.
+    timeout-minutes: 45
     needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The Compose proof drives the stack through the `cyfr` command line
-      # it builds from apps/codex, and builds the Tailscale stand-in, a Go
-      # module of its own.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: apps/codex/go.mod
-          cache-dependency-path: apps/codex/go.sum
       # The service bounds every backend with a cgroup of its own, which
       # needs the security option writable-cgroups=true: Docker Engine 28 or
       # later on a cgroup v2 host. Without either every case below fails for
@@ -1473,23 +1508,6 @@ jobs:
           set -euo pipefail
           zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
           docker tag cyfr-locus:ci cyfr-locus:backends
-      # The image's upgrade layer refreshes once a UTC day and is shared
-      # within it (Dockerfile's APT_REFRESH), as the Locus image's does.
-      - name: The UTC date the upgrade layer refreshes on
-        id: apt-refresh
-        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build the app image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: Dockerfile
-          build-args: |
-            APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
-          load: true
-          tags: cyfr:push
-          cache-from: type=gha,scope=cyfr-push
-          cache-to: type=gha,scope=cyfr-push,mode=max
 
       # Every suite drives docker-compose.yml's locus-backends service with
       # its own settings (layered with
@@ -1498,12 +1516,6 @@ jobs:
       # scripted control plane that signs as CYFR does
       # (tests/locus-backends-image/harness.py, checked against
       # tests/fixtures/locus_backends.json before any container starts).
-
-      # A backend synced, called and listed, its sealed credential masked in
-      # every result, error and stderr tail, retired once idle with its
-      # tools still listed, and woken by its next call.
-      - name: End to end
-        run: python3 tests/locus-backends-image/e2e.py cyfr-locus:backends
 
       # Each backend under its own pooled uid, alone in its group, in a 0700
       # home, with an environment of its sealed block alone; none can read
@@ -1560,14 +1572,6 @@ jobs:
       - name: Aqua's browser
         run: python3 tests/locus-backends-image/browser.py cyfr-locus:backends
 
-      # A program's pipe: a pipe row's cat in a kept home under the home's
-      # uid, attached to by its key, a read replayed by its after, retired
-      # once idle and started again (resumed: false), its oldest lines
-      # dropped and counted past the buffer, ended with its home; and,
-      # driven by cyfr, a session ended by its login entry's revoke.
-      - name: A program's pipe
-        run: python3 tests/locus-backends-image/pipe.py cyfr-locus:backends
-
       # Claude Code's brain driver beside a fake harness in a kept folder,
       # spoken to over the brain wire as its holder speaks it: hello, the
       # harness's listing, a start with its flags, a work's tools on the
@@ -1612,6 +1616,114 @@ jobs:
       - name: A program's network list
         run: python3 tests/locus-backends-image/egress.py cyfr-locus:backends
 
+  # The suites that run the app image this run built (the app-image job),
+  # in groups, each a runner of its own: a step runs in the group whose
+  # `cases` name it, and loads the Locus image where its `images` name it.
+  # The group that also runs the Locus image is the app-image-locus-suites
+  # job below, on these steps; these groups need the app image alone.
+  # Each Compose proof case makes its own project, command line and
+  # stand-in, so a group holds whole cases: a mode switch, an interrupted
+  # operation and its recovery stay inside the case that makes them.
+  app-image-suites:
+    name: App image (${{ matrix.title }})
+    runs-on: ubuntu-latest
+    # The longest group runs about four minutes of cases. A hang is cut
+    # here.
+    timeout-minutes: 60
+    needs: app-image
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: a
+            title: the Compose proof's interrupt, restore and restore-person cases, the setup proof and the image's scan
+            images: [app]
+            cases: [interrupt, restore, restore-person, setup, scan]
+          - group: b
+            title: the Compose proof's modes and shutdown cases
+            images: [app]
+            cases: [modes, shutdown]
+          - group: c
+            title: the Compose proof's bind and restore-identity cases
+            images: [app]
+            cases: [bind, restore-identity]
+    steps: &app-image-steps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The Compose proof drives the stack through the `cyfr` command line
+      # it builds from apps/codex, and builds the Tailscale stand-in, a Go
+      # module of its own.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+      # The service bounds every backend with a cgroup of its own, which
+      # needs the security option writable-cgroups=true: Docker Engine 28 or
+      # later on a cgroup v2 host. Without either every case below fails for
+      # a reason the suite does not name, so this names it first.
+      - name: Docker Engine 28 or later on cgroup v2
+        run: |
+          set -euo pipefail
+          version="$(docker version --format '{{.Server.Version}}')"
+          cgroup="$(docker info --format '{{.CgroupVersion}}')"
+          echo "Docker Engine $version on cgroup v$cgroup"
+          fail=0
+          if [ "${version%%.*}" -lt 28 ]; then
+            echo "::error::Docker Engine $version is older than 28: writable-cgroups=true, which bounds every backend, needs Docker Engine 28 or later"
+            fail=1
+          fi
+          if [ "$cgroup" != "2" ]; then
+            echo "::error::this runner's Docker Engine runs on cgroup v$cgroup: writable-cgroups=true, which bounds every backend, needs a cgroup v2 host"
+            fail=1
+          fi
+          exit "$fail"
+      # The Locus image this run built once (the locus-image job).
+      - name: Fetch the Locus image
+        if: contains(matrix.images, 'locus')
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: locus-image
+          path: ${{ runner.temp }}/locus-image
+      - name: Load the Locus image
+        if: contains(matrix.images, 'locus')
+        run: |
+          set -euo pipefail
+          zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
+          docker tag cyfr-locus:ci cyfr-locus:backends
+      # The app image this run built once (the app-image job).
+      - name: Fetch the app image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-image
+          path: ${{ runner.temp }}/app-image
+      - name: Load the app image
+        run: |
+          set -euo pipefail
+          zstd -dc "$RUNNER_TEMP/app-image/cyfr.tar.zst" | docker load
+
+      # Every suite drives docker-compose.yml's locus-backends service with
+      # its own settings (layered with
+      # tests/locus-backends-image/compose.locus-backends.yml for the image
+      # under test, a loopback port and the probe backend) through a
+      # scripted control plane that signs as CYFR does
+      # (tests/locus-backends-image/harness.py, checked against
+      # tests/fixtures/locus_backends.json before any container starts).
+
+      # A backend synced, called and listed, its sealed credential masked in
+      # every result, error and stderr tail, retired once idle with its
+      # tools still listed, and woken by its next call.
+      - name: End to end
+        if: contains(matrix.cases, 'e2e')
+        run: python3 tests/locus-backends-image/e2e.py cyfr-locus:backends
+
+      # A program's pipe: a pipe row's cat in a kept home under the home's
+      # uid, attached to by its key, a read replayed by its after, retired
+      # once idle and started again (resumed: false), its oldest lines
+      # dropped and counted past the buffer, ended with its home; and,
+      # driven by cyfr, a session ended by its login entry's revoke.
+      - name: A program's pipe
+        if: contains(matrix.cases, 'pipe')
+        run: python3 tests/locus-backends-image/pipe.py cyfr-locus:backends
+
       # The Compose proof (tests/compose-proof/run.sh) on the app image
       # built above, as the proof's own build would make it: the shipped
       # docker-compose.yml brought up as a project of its own by the `cyfr`
@@ -1650,6 +1762,142 @@ jobs:
       # the keys `cyfr init` wrote, and the app image carries the pinned
       # cosign. Each run fails when its teardown leaves the project behind,
       # which the teardown's stand-in cases hold.
+      - name: The Compose proof's image
+        run: docker tag cyfr:push cyfr:compose-proof
+      - name: The Compose proof (bind)
+        if: contains(matrix.cases, 'bind')
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case bind
+      - name: The Compose proof (modes)
+        if: contains(matrix.cases, 'modes')
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case modes
+      - name: The Compose proof (interrupt)
+        if: contains(matrix.cases, 'interrupt')
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case interrupt
+      - name: The Compose proof (restore-identity)
+        if: contains(matrix.cases, 'restore-identity')
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case restore-identity
+      - name: The Compose proof (shutdown)
+        if: contains(matrix.cases, 'shutdown')
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case shutdown
+      - name: The Compose proof (restore)
+        if: contains(matrix.cases, 'restore')
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case restore
+      - name: The Compose proof (restore-person)
+        if: contains(matrix.cases, 'restore-person')
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case restore-person
+      - name: The Compose proof (runtime)
+        if: contains(matrix.cases, 'runtime')
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case runtime --locus-image cyfr-locus:backends
+      # The update cases: cyfr update between two releases made from the
+      # tree (the script's header), on main's push run, the tag's and the
+      # nightly, not on a pull request. Their releases' images are named by
+      # digest from the local store, which only the containerd image store
+      # gives a loaded or built image; the runner's daemon uses it.
+      - name: The Compose proof (update)
+        if: contains(matrix.cases, 'update') && github.event_name != 'pull_request'
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case update --locus-image cyfr-locus:backends
+      - name: The Compose proof (update-refused)
+        if: contains(matrix.cases, 'update-refused') && github.event_name != 'pull_request'
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case update-refused --locus-image cyfr-locus:backends
+      - name: The Compose proof (update-fail)
+        if: contains(matrix.cases, 'update-fail') && github.event_name != 'pull_request'
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case update-fail --locus-image cyfr-locus:backends
+      - name: The Compose proof (update-interrupt)
+        if: contains(matrix.cases, 'update-interrupt') && github.event_name != 'pull_request'
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case update-interrupt --locus-image cyfr-locus:backends
+      # The setup proof (tests/setup-proof/run.sh) on the same image:
+      # `cyfr setup`'s pages at the 720×720 handheld in Chromium, through
+      # the browser harness, ask nothing, set up a CYFR reached from this
+      # device and move to its setup link, whose page sends the browser to
+      # the account pages with CYFR's request, and say the next step for a
+      # project whose .env exists.
+      # The setup proof's teardown on a run that fails while its browser
+      # and its cyfr setup run: the browser's container stopped, both
+      # awaited, the scratch gone.
+      - name: The setup proof's teardown
+        if: contains(matrix.cases, 'setup')
+        env:
+          SETUP_PROOF_IMAGE: cyfr:compose-proof
+        run: tests/setup-proof/cleanup-test.sh
+      - name: The setup proof
+        if: contains(matrix.cases, 'setup')
+        env:
+          SETUP_PROOF_SKIP_BUILD: '1'
+          SETUP_PROOF_IMAGE: cyfr:compose-proof
+        run: tests/setup-proof/run.sh
+
+      # The app image as this job loaded it, the one push-time build of it,
+      # so a finding stops the commit that brought it in rather than a
+      # release; the cases' group alone scans it, after its steps passed,
+      # so a red scan hides no proof. Same scan release.yml runs before
+      # publishing it. The Locus image is scanned in builder-image.
+      - name: Scan the app image
+        if: contains(matrix.cases, 'scan')
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.75.0
+          image-ref: cyfr:push
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+
+  # The app-image-suites job's group that runs the Locus image too, on its
+  # steps, once both images are built.
+  app-image-locus-suites:
+    name: App image (${{ matrix.title }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [locus-image, app-image]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: both
+            title: end to end, a program's pipe, and the Compose proof's runtime and update cases, with the Locus image
+            images: [locus, app]
+            cases: [e2e, pipe, runtime, update, update-refused, update-fail, update-interrupt]
+    steps: *app-image-steps
+
+  # The Compose proof's own checks, which need no image of the run's.
+  compose-proof-checks:
+    name: The Compose proof's teardown, predicates and Tailscale stand-in
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The Tailscale stand-in is a Go module of its own.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+      # Each run of the Compose proof fails when its teardown leaves the
+      # project behind, which the teardown's stand-in cases hold.
       - name: The Compose proof's teardown against stand-ins
         run: bash tests/compose-proof/cleanup-test.sh
       # The Compose proof's whole-object predicates on canned objects: each
@@ -1664,98 +1912,6 @@ jobs:
       # broken on purpose failing this proof.
       - name: The Tailscale stand-in's own proof
         run: tests/compose-proof/tailscale-standin/proof.sh
-      - name: The Compose proof's image
-        run: docker tag cyfr:push cyfr:compose-proof
-      - name: The Compose proof (bind)
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case bind
-      - name: The Compose proof (modes)
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case modes
-      - name: The Compose proof (interrupt)
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case interrupt
-      - name: The Compose proof (restore-identity)
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case restore-identity
-      - name: The Compose proof (shutdown)
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case shutdown
-      - name: The Compose proof (restore)
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case restore
-      - name: The Compose proof (restore-person)
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case restore-person
-      - name: The Compose proof (runtime)
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case runtime --locus-image cyfr-locus:backends
-      # The update cases: cyfr update between two releases made from the
-      # tree (the script's header), on main's push run, the tag's and the
-      # nightly, not on a pull request. Their releases' images are named by
-      # digest from the local store, which only the containerd image store
-      # gives a loaded or built image; the runner's daemon uses it.
-      - name: The Compose proof (update)
-        if: github.event_name != 'pull_request'
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case update --locus-image cyfr-locus:backends
-      - name: The Compose proof (update-refused)
-        if: github.event_name != 'pull_request'
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case update-refused --locus-image cyfr-locus:backends
-      - name: The Compose proof (update-fail)
-        if: github.event_name != 'pull_request'
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case update-fail --locus-image cyfr-locus:backends
-      - name: The Compose proof (update-interrupt)
-        if: github.event_name != 'pull_request'
-        env:
-          COMPOSE_PROOF_SKIP_BUILD: '1'
-        run: tests/compose-proof/run.sh --case update-interrupt --locus-image cyfr-locus:backends
-      # The setup proof (tests/setup-proof/run.sh) on the same image:
-      # `cyfr setup`'s pages at the 720×720 handheld in Chromium, through
-      # the browser harness, ask nothing, set up a CYFR reached from this
-      # device and move to its setup link, whose page sends the browser to
-      # the account pages with CYFR's request, and say the next step for a
-      # project whose .env exists.
-      # The setup proof's teardown on a run that fails while its browser
-      # and its cyfr setup run: the browser's container stopped, both
-      # awaited, the scratch gone.
-      - name: The setup proof's teardown
-        env:
-          SETUP_PROOF_IMAGE: cyfr:compose-proof
-        run: tests/setup-proof/cleanup-test.sh
-      - name: The setup proof
-        env:
-          SETUP_PROOF_SKIP_BUILD: '1'
-          SETUP_PROOF_IMAGE: cyfr:compose-proof
-        run: tests/setup-proof/run.sh
-
-      # The app image is built here, and this is the one push-time build of
-      # it — so it is scanned here, where a finding stops the commit that
-      # brought it in rather than a release. Same scan release.yml runs
-      # before publishing it. The Locus image is scanned in builder-image.
-      - name: Scan the app image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          version: v0.75.0
-          image-ref: cyfr:push
-          format: table
-          exit-code: '1'
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          trivyignores: .trivyignore.yaml
 
   # A release boots on each database. The `cyfr` release, built as
   # Dockerfile builds it (MIX_ENV=prod, the adapter chosen at compile time),
@@ -1828,14 +1984,18 @@ jobs:
   # behind the harness's HTTPS front, driven by the official Playwright
   # image, pinned by digest in tests/browser/harness.sh, so no browser binary
   # is fetched here; Playwright's library comes from
-  # tests/browser/package-lock.json, JavaScript only. The proofs run in four
+  # tests/browser/package-lock.json, JavaScript only. The proofs run in eight
   # shards, each a runner of its own: a step runs in the shard whose
   # `proofs` name it, in the order below. A shard's first release-backed
   # proof (its `build`) builds the release, and every later proof, and a
   # proof's second viewport, reuses it (RELEASE_BOOT_SKIP_BUILD); the grant,
   # share, approval and file-offer proofs only reuse one, so each
-  # shard opens with a proof that builds, and the markdown proof starts no
-  # release. Three
+  # shard opens with a proof that builds or with the release's own build
+  # (`build: release`), and the markdown proof starts no release. The
+  # canvas and approval proofs run one viewport a shard (its `viewport`):
+  # the canvas proof's budget needs the runner to itself
+  # (tests/canvas-proof/README.md), and either at both viewports in turn
+  # would be the run's longest job. Three
   # browsers run where the engine decides the answer (the frame facts, the
   # containment proof, the multi-home smoke and the canvas proof) and
   # Chromium alone elsewhere; a proof that uses a passkey drives Chromium's
@@ -1843,8 +2003,8 @@ jobs:
   browser:
     name: Browser harness (${{ matrix.title }})
     runs-on: ubuntu-latest
-    # The longest shard, the approval and file-offer proofs at both
-    # viewports, takes about a quarter of this. A hang is cut here.
+    # The longest shard, the canvas proof at one viewport, takes about a
+    # sixth of this. A hang is cut here.
     timeout-minutes: 60
     # Shard a, whose tincture proof needs the Locus image, is the
     # browser-tincture job below, on these steps; these shards start at once.
@@ -1857,13 +2017,33 @@ jobs:
             proofs: [identity, join]
             build: identity
           - shard: c
-            title: pairing, approval and file-offer proofs
-            proofs: [pairing, approval, file-offer]
+            title: pairing and file-offer proofs
+            proofs: [pairing, file-offer]
             build: pairing
           - shard: d
-            title: multi-home smoke, grant, share and canvas proofs, HSTS
-            proofs: [multi-home-smoke, grant, share, canvas, hsts]
+            title: multi-home smoke, grant and share proofs, HSTS
+            proofs: [multi-home-smoke, grant, share, hsts]
             build: multi-home-smoke
+          - shard: e
+            title: approval proof, desktop
+            proofs: [approval]
+            build: release
+            viewport: desktop
+          - shard: f
+            title: approval proof, 720x720
+            proofs: [approval]
+            build: release
+            viewport: 720x720
+          - shard: g
+            title: canvas proof, desktop
+            proofs: [canvas]
+            build: release
+            viewport: desktop
+          - shard: h
+            title: canvas proof, 720x720
+            proofs: [canvas]
+            build: release
+            viewport: 720x720
     steps: &browser-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cache deps and the prod build
@@ -1880,6 +2060,11 @@ jobs:
         run: |
           scripts/ci/retry.sh mix deps.get
           scripts/fetch-prebuilt-binaries.sh
+      # The SQLite release the shard's proofs reuse, for a shard that opens
+      # with a proof that only reuses one.
+      - name: Build the SQLite release
+        if: matrix.build == 'release'
+        run: tests/release-boot/build.sh sqlite
       # What each browser allows a sandboxed frame, recorded; it fails only
       # when it could not observe an attempt.
       - name: The frame-facts experiment
@@ -1976,16 +2161,13 @@ jobs:
             VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/share/$viewport" tests/share-proof/run.sh
             export RELEASE_BOOT_SKIP_BUILD=1
           done
-      - name: The approval proof (Chromium, desktop and 720x720)
+      - name: The approval proof (Chromium, at the shard's viewport)
         if: contains(matrix.proofs, 'approval')
         env:
           RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'approval' && '1' || '' }}
-        run: |
-          set -euo pipefail
-          for viewport in desktop 720x720; do
-            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/approval/$viewport" tests/approval-proof/run.sh
-            export RELEASE_BOOT_SKIP_BUILD=1
-          done
+          VAULT_PROOF_VIEWPORT: ${{ matrix.viewport }}
+          PROOF_OUT: ${{ runner.temp }}/proofs/approval/${{ matrix.viewport }}
+        run: tests/approval-proof/run.sh
       - name: The file-offer proof (Chromium, desktop and 720x720)
         if: contains(matrix.proofs, 'file-offer')
         env:
@@ -1998,17 +2180,14 @@ jobs:
           done
       # The runner is the GitHub-hosted host class, held to its own canvas
       # budget (tests/canvas-proof/README.md).
-      - name: The canvas proof (desktop and 720x720)
+      - name: The canvas proof (at the shard's viewport)
         if: contains(matrix.proofs, 'canvas')
         env:
           RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'canvas' && '1' || '' }}
           CANVAS_PROOF_HOST_CLASS: github-hosted
-        run: |
-          set -euo pipefail
-          for viewport in desktop 720x720; do
-            CANVAS_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/canvas/$viewport" tests/canvas-proof/run.sh
-            export RELEASE_BOOT_SKIP_BUILD=1
-          done
+          CANVAS_PROOF_VIEWPORT: ${{ matrix.viewport }}
+          PROOF_OUT: ${{ runner.temp }}/proofs/canvas/${{ matrix.viewport }}
+        run: tests/canvas-proof/run.sh
       # The shard's records, under proofs/<proof>, or
       # proofs/<proof>/<viewport> for a proof run at each viewport, kept so a
       # failed run's can be read, and a canvas record checked again with
