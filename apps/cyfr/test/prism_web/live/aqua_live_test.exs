@@ -1725,12 +1725,12 @@ defmodule PrismWeb.AquaLiveTest do
         lists!(fake, row, fn -> plan_choices(view, member) != [] end, listing)
 
         assert plan_choices(view, member) == [
-                 {"program::#{program}::#{model}", "The model"},
-                 {"program::#{program}::other", "Other"}
+                 {"::program::#{program}::#{model}", "The model"},
+                 {"::program::#{program}::other", "Other"}
                ]
 
         view
-        |> form("#aqua-setup-pick", %{"value" => "program::#{program}::#{model}"})
+        |> form("#aqua-setup-pick", %{"value" => "::program::#{program}::#{model}"})
         |> render_change()
 
         assert get_agent(ctx, "aqua") ==
@@ -1758,6 +1758,78 @@ defmodule PrismWeb.AquaLiveTest do
 
         Cyfr.Test.Sandbox.end_views()
       end
+    end
+
+    test "a catalyst called program keeps its model containing the picker separator",
+         %{conn: conn, ctx: ctx} do
+      publish_brain!(ctx, "program", %{})
+      grant!(ctx, "catalyst:local.program", %{bindings: []})
+
+      remember_catalogue!(
+        %{"program" => ["vendor::model"]},
+        %{"program" => "catalyst:local.program:0.1.0"}
+      )
+
+      {:ok, before} = get_agent(ctx, "aqua")
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      assert has_element?(
+               view,
+               ~s(#aqua-setup-pick option[value="program::vendor::model"])
+             )
+
+      view
+      |> form("#aqua-setup-pick", %{"value" => "program::vendor::model"})
+      |> render_change()
+
+      assert get_agent(ctx, "aqua") ==
+               {:ok,
+                %{before | "catalyst_ref" => "catalyst:local.program", "model" => "vendor::model"}}
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "picking a plan preserves the named member's absent install suggestion",
+         %{conn: conn, ctx: ctx} do
+      fake = backends!()
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "aaa",
+          "title" => "AAA",
+          "program" => "claude",
+          "model" => "opus"
+        })
+
+      {:ok, named} = get_agent(ctx, "aaa")
+      assert named["install"] == nil
+      {:ok, later} = get_agent(ctx, "claude-code")
+      assert is_binary(later["install"])
+      row = program_row!(ctx, "claude", later["install"])
+      {:ok, before} = get_agent(ctx, "aqua")
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      assert has_element?(view, "#aqua-setup-plan-aaa")
+      refute has_element?(view, "#aqua-setup-plan-claude-code")
+      lists!(fake, row, fn -> plan_choices(view, "aaa") != [] end)
+
+      view
+      |> form("#aqua-setup-pick", %{"value" => "::program::claude::opus"})
+      |> render_change()
+
+      assert get_agent(ctx, "aqua") ==
+               {:ok,
+                %{
+                  before
+                  | "program" => "claude",
+                    "install" => nil,
+                    "model" => "opus",
+                    "catalyst_ref" => nil
+                }}
+
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "picking a connected brain for Aqua asks for its consent again at once",

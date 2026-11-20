@@ -63,7 +63,14 @@ defmodule PrismWeb.AquaLive do
   @behaviour PrismWeb.SystemLayer.Hook
   on_mount PrismWeb.SystemLayer.Hook
 
-  alias PrismWeb.AquaLive.{AgentsComponent, NotesComponent, RestoreComponent, ScrollsComponent}
+  alias PrismWeb.AquaLive.{
+    AgentsComponent,
+    Catalog,
+    NotesComponent,
+    RestoreComponent,
+    ScrollsComponent
+  }
+
   alias PrismWeb.SystemLayer
 
   # Each section reloads on its own message, so a write refreshes what it
@@ -775,12 +782,12 @@ defmodule PrismWeb.AquaLive do
             <option value="-" selected>Choose a connected brain</option>
             <%= for {provider, models} <- @models_by_provider, models != [] do %>
               <optgroup label={provider}>
-                <option :for={m <- models} value={"#{provider}::#{m}"}>{m}</option>
+                <option :for={m <- models} value={Catalog.model_choice(provider, m)}>{m}</option>
               </optgroup>
             <% end %>
             <%= for {plan, models} <- @listed do %>
               <optgroup label={plan.member}>
-                <option :for={m <- models} value={"program::#{plan.program}::#{m.id}"}>
+                <option :for={m <- models} value={Catalog.program_choice(plan.program, m.id)}>
                   {m.name}
                 </option>
               </optgroup>
