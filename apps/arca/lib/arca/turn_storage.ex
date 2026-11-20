@@ -2853,10 +2853,7 @@ defmodule Arca.TurnStorage do
   Persist a model response before any of its calls run: the model step
   closes with its usage, the reply and every tool call become message
   rows, every call becomes a `proposed` step, and one event records it.
-  `response`: `:text`, `:usage`, `:stop_reason`, `:session` (the
-  brain's session, kept on the thread as `brain_session` for its next
-  request) with `:generation` (the thread's `brain_generation` the turn
-  read; required with a session), `:tool_calls` — each
+  `response`: `:text`, `:usage`, `:stop_reason`, `:tool_calls` — each
   `%{tool_call_id, name, tool, action, arguments, provider_data, kind,
   recovery, child_execution_id}`; `:fence`. The model step must be a
   `model` step of this turn (`{:error, :step_not_found}` otherwise), and
@@ -2894,7 +2891,6 @@ defmodule Arca.TurnStorage do
 
           thread = thread!(athanor_id, turn.thread_id)
           now = DateTime.utc_now()
-          keep_session!(athanor_id, thread, response)
 
           text =
             case Map.get(response, :text) do
@@ -3031,11 +3027,9 @@ defmodule Arca.TurnStorage do
   step that produced none), `:execution_id`, `:error`,
   `:fence`, `:threads`, the ids of the threads whose posts the result
   carries, joined into the turn's read threads in the same transaction
-  and recorded on the result row as its payload's `threads`, and
-  `:session`, the brain's session a model step's refusal named, with
-  `:generation`, kept on the thread as `record_response/4` keeps a
-  response's. A step closes from `dispatched`, or from `proposed` for
-  `denied` and `skipped`.
+  and recorded on the result row as its payload's `threads`. A step
+  closes from `dispatched`, or from `proposed` for `denied` and
+  `skipped`.
   """
   @spec close_step(Prima.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, %{step: map(), result: map() | nil}} | {:error, term()}
@@ -3058,19 +3052,19 @@ defmodule Arca.TurnStorage do
   def close_step(%Prima.Actor{}, _step_id, _outcome, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  Forget the brain's session of the turn's thread, which its brain
-  reported it no longer holds (`Prima.Model`'s `unknown_session`):
+  Forget the brain's session of the turn's thread, which its program
+  reported gone or the turn's program row no longer runs (`Aqua.Program`):
   `brain_session` is cleared and `brain_generation` raised in one
   statement, as `Arca.ThreadStorage.forget_sessions/3` forgets a home's,
   and only while the thread is at `:generation`, the one the turn read.
   `attrs`: `:fence` (the turn's) and `:generation`, both required.
   Answers the generation the turn keeps a session under from here: the
-  raised one, so the session its next request opens is kept, or the one
+  raised one, so the session its next start opens is kept, or the one
   it read when the thread was forgotten meanwhile, under which nothing it
   answers with is kept.
 
-  The brain's word speaks for the folder of the row it ran on, the
-  turn's `program` (none for an adapter catalyst). A session stored with
+  The program's word speaks for the folder of the row it ran on, the
+  turn's `program`. A session stored with
   another row (`brain_progress`'s `row`), its agent's program moved
   since, may still have its transcript there, and is owed its removal
   first, in the same transaction (`Arca.ThreadStorage.owe_forgets!/2`);
@@ -5007,9 +5001,6 @@ defmodule Arca.TurnStorage do
 
     if count != 1, do: Arca.Repo.rollback(:not_open)
 
-    if Map.get(attrs, :session),
-      do: keep_session!(athanor_id, thread!(athanor_id, turn.thread_id), attrs)
-
     _turn = join_threads!(athanor_id, turn, threads)
 
     event!(athanor_id, turn, "step.closed", step.id, %{
@@ -5818,7 +5809,7 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # The brain's own session, kept on the thread for its next request only
+  # The program's native session, kept on the thread for its next start only
   # under the generation the turn read (`:generation`): a turn whose
   # session was forgotten meanwhile (`Arca.ThreadStorage.forget_sessions/3`
   # raises the generation) keeps nothing it answers with afterwards, the

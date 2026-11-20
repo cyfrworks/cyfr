@@ -15,14 +15,12 @@ defmodule Prima.Model do
       {tool_call_id, name, content, is_error?}`), `tools?` (`name`,
       `description`, `parameters`), `provider_tools?` (names the catalyst
       offers, e.g. `web_search`), `max_tokens?`, `temperature?`,
-      `session?` (a non-empty opaque string a response answered, continuing
-      that session on the brain), `options?` (an object of the options
-      `describe` declares, by name, each value of its option's kind).
+      `options?` (an object of the options `describe` declares, by name,
+      each value of its option's kind).
       Response: `model`, `content` (`text` and `tool_call` blocks),
       `stop_reason` (`end_turn | tool_call | max_tokens | content_filter |
       other`), `usage` (`input_tokens`, `output_tokens`,
-      `cache_read_tokens`, `cache_write_tokens`), `session?` (a non-empty
-      opaque string naming the brain's session). A `tool_call`'s
+      `cache_read_tokens`, `cache_write_tokens`). A `tool_call`'s
       `provider_data` carries what the catalyst needs to continue from it.
     * `describe` — what the catalyst can do, answered without a key:
       `contracts`, `provider`, `tools`, `provider_tools`, `media_types`,
@@ -41,28 +39,20 @@ defmodule Prima.Model do
   arguments}`, `tool_call.end {index}`, `usage {usage}`, `stop
   {stop_reason}`, `error {error}` — and still answers the whole response.
 
-  A refusal is `{"status": N, "error": {"type", "message", "provider"?,
-  "session"?}}` with `type` one of `invalid_request`, `secret_denied`,
+  A refusal is `{"status": N, "error": {"type", "message", "provider"?}}`
+  with `type` one of `invalid_request`, `secret_denied`,
   `authentication`, `rate_limited`, `overloaded`, `provider_error`,
   `incomplete_stream` (the provider's stream ended before its closing
-  signal), `unknown_model`, `unknown_operation`, `unknown_session` (the
-  brain reports that the session the request named no longer exists, and
-  refused before it took anything of the request). A refusal's `session`
-  is a response's: the brain's session once it exists, such as a chat
-  interrupted after it opened one, which the host keeps as it keeps a
-  response's, so the next request continues it. An `unknown_session`
-  refusal carries none, since the session is gone: the host forgets the
-  one it kept, and the same request without `session` opens a new one.
+  signal), `unknown_model` or `unknown_operation`.
 
   The provider's HTTP call and the key stay in the catalyst. This module
   names the contract, says whether a manifest declares it, reads the
-  envelope, and checks the members a caller sets per brain (`options/1`,
-  `check_chat_request/2`, `response_session/1`); running a catalyst is
-  the assistant's (`Aqua.Models`). The shared vectors are
-  `tests/fixtures/model_chat.json`. A catalyst that declares no options
-  ignores a request's `session` and `options`, and the host sends none it
-  did not declare (`Aqua.Loop.Request.build/1` refuses an option it does
-  not know).
+  envelope, and checks the options a caller sets per brain (`options/1`,
+  `check_chat_request/2`); running a catalyst is the assistant's
+  (`Aqua.Models`). The shared vectors are `tests/fixtures/model_chat.json`.
+  A catalyst that declares no options ignores a request's `options`, and
+  the host sends none it did not declare (`Aqua.Loop.Request.build/1`
+  refuses an option it does not know).
   """
 
   @chat "model/chat@1"
@@ -195,21 +185,14 @@ defmodule Prima.Model do
   defp of_kind?(%{"kind" => "boolean"}, value), do: is_boolean(value)
 
   @doc """
-  Whether a `chat` request's `session` and `options` hold to the
-  contract under `declared` (`options/1`): a session is a non-empty
-  string, and every option the request sets is one `declared` names,
-  with a value of its kind. The other members are the catalyst's to read.
+  Whether a `chat` request's `options` hold to the contract under
+  `declared` (`options/1`): every option the request sets is one
+  `declared` names, with a value of its kind. The other members are the
+  catalyst's to read.
   """
   @spec check_chat_request(map(), [option()]) :: :ok | {:error, invalid()}
-  def check_chat_request(request, declared) when is_map(request) and is_list(declared) do
-    with :ok <- session(request) do
-      set_options(request, Map.new(declared, &{&1["name"], &1}))
-    end
-  end
-
-  defp session(%{"session" => session}) when is_binary(session) and session != "", do: :ok
-  defp session(%{"session" => _other}), do: invalid("session")
-  defp session(%{}), do: :ok
+  def check_chat_request(request, declared) when is_map(request) and is_list(declared),
+    do: set_options(request, Map.new(declared, &{&1["name"], &1}))
 
   defp set_options(%{"options" => set}, declared) when is_map(set) do
     set
@@ -227,20 +210,6 @@ defmodule Prima.Model do
 
   defp set_options(%{"options" => _other}, _declared), do: invalid("options")
   defp set_options(%{}, _declared), do: :ok
-
-  @doc """
-  The session a `chat` answer names, a response's data or a refusal's
-  `error`: `{:ok, nil}` when it names none, refused when its `session` is
-  not a non-empty string, or when an `unknown_session` refusal names one.
-  """
-  @spec response_session(map()) :: {:ok, String.t() | nil} | {:error, invalid()}
-  def response_session(%{"type" => "unknown_session", "session" => _any}), do: invalid("session")
-
-  def response_session(%{"session" => session}) when is_binary(session) and session != "",
-    do: {:ok, session}
-
-  def response_session(%{"session" => _other}), do: invalid("session")
-  def response_session(%{}), do: {:ok, nil}
 
   defp invalid(member), do: {:error, {:invalid, member}}
 

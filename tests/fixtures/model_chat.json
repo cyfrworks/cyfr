@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning what model/chat@1 lets a caller set per brain (Prima.Model): the options describe declares, a chat request's session and options, and a chat response's session. option_kinds are the kinds an option may be. valid_describes are describe answers whose options read as they are (absent reads as none); invalid_describes are refused naming member, the first member that breaks the option shape (options[i] for the entry, options[i].<member> for one of its members, an unknown member by its own name). valid_chat_requests and invalid_chat_requests are requests checked against declared, the options a describe declared; a request's other members are the catalyst's to read and are not checked here. valid_chat_responses are chat answers, a response's data or a refusal's error object, and answer session (null for none); invalid_chat_responses are refused naming member, an unknown_session refusal that names a session among them. Read by apps/prima/test/prima/model_test.exs.",
+  "comment": "The vectors pinning what model/chat@1 lets a caller set per brain (Prima.Model): the options describe declares and a chat request's options. option_kinds are the kinds an option may be. valid_describes are describe answers whose options read as they are (absent reads as none); invalid_describes are refused naming member, the first member that breaks the option shape (options[i] for the entry, options[i].<member> for one of its members, an unknown member by its own name). valid_chat_requests and invalid_chat_requests are requests checked against declared, the options a describe declared; a request's other members are the catalyst's to read and are not checked here. Read by apps/prima/test/prima/model_test.exs.",
   "option_kinds": ["enum", "string", "integer", "boolean"],
   "valid_describes": [
     {
@@ -65,14 +65,9 @@
   ],
   "valid_chat_requests": [
     {
-      "why": "neither session nor options",
+      "why": "no options",
       "declared": [],
       "request": {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
-    },
-    {
-      "why": "a session",
-      "declared": [],
-      "request": {"model": "m", "messages": [], "session": "4f7c2a9e-session"}
     },
     {
       "why": "an empty options object",
@@ -80,7 +75,7 @@
       "request": {"model": "m", "messages": [], "options": {}}
     },
     {
-      "why": "every kind set, with a session",
+      "why": "every kind set",
       "declared": [
         {"name": "effort", "kind": "enum", "values": ["low", "high"], "default": "low"},
         {"name": "prefix", "kind": "string"},
@@ -90,7 +85,6 @@
       "request": {
         "model": "m",
         "messages": [],
-        "session": "s1",
         "options": {"effort": "high", "prefix": "", "budget": -1, "verbose": true}
       }
     },
@@ -104,9 +98,6 @@
     }
   ],
   "invalid_chat_requests": [
-    {"why": "an empty session", "declared": [], "request": {"model": "m", "messages": [], "session": ""}, "member": "session"},
-    {"why": "a session that is not a string", "declared": [], "request": {"model": "m", "messages": [], "session": 7}, "member": "session"},
-    {"why": "a null session", "declared": [], "request": {"model": "m", "messages": [], "session": null}, "member": "session"},
     {"why": "options that is not an object", "declared": [], "request": {"model": "m", "messages": [], "options": ["effort"]}, "member": "options"},
     {"why": "a null options", "declared": [], "request": {"model": "m", "messages": [], "options": null}, "member": "options"},
     {
@@ -144,50 +135,6 @@
       "declared": [{"name": "prefix", "kind": "string"}],
       "request": {"model": "m", "messages": [], "options": {"prefix": null}},
       "member": "options.prefix"
-    },
-    {
-      "why": "an invalid session is named before an invalid option",
-      "declared": [],
-      "request": {"model": "m", "messages": [], "session": "", "options": {"x": 1}},
-      "member": "session"
-    }
-  ],
-  "valid_chat_responses": [
-    {
-      "why": "no session",
-      "response": {"model": "m", "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}},
-      "session": null
-    },
-    {
-      "why": "a session",
-      "response": {"model": "m", "content": [], "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 0}, "session": "4f7c2a9e-session"},
-      "session": "4f7c2a9e-session"
-    },
-    {
-      "why": "a refusal with no session",
-      "response": {"type": "provider_error", "message": "The turn failed."},
-      "session": null
-    },
-    {
-      "why": "a refusal with a session",
-      "response": {"type": "provider_error", "message": "The session was interrupted mid-turn.", "session": "4f7c2a9e-session"},
-      "session": "4f7c2a9e-session"
-    },
-    {
-      "why": "a refusal of a session the brain no longer holds names none",
-      "response": {"type": "unknown_session", "message": "The brain no longer holds this session."},
-      "session": null
-    }
-  ],
-  "invalid_chat_responses": [
-    {"why": "an empty session", "response": {"model": "m", "content": [], "session": ""}, "member": "session"},
-    {"why": "a session that is not a string", "response": {"model": "m", "content": [], "session": ["s"]}, "member": "session"},
-    {"why": "a null session", "response": {"model": "m", "content": [], "session": null}, "member": "session"},
-    {"why": "a refusal with an empty session", "response": {"type": "provider_error", "message": "The turn failed.", "session": ""}, "member": "session"},
-    {
-      "why": "a refusal of a session the brain no longer holds that names one",
-      "response": {"type": "unknown_session", "message": "The brain no longer holds this session.", "session": "4f7c2a9e-session"},
-      "member": "session"
     }
   ]
 }

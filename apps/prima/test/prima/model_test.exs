@@ -9,8 +9,8 @@ defmodule Prima.ModelTest do
   members a caller sets per brain hold to the shared vectors
   (`tests/fixtures/model_chat.json`): every valid describe's options read
   as the vector says, every invalid one is refused naming its member, and
-  so are chat requests and responses; the file carries exactly the
-  categories this test reads, none empty.
+  so are chat requests; the file carries exactly the categories this test
+  reads, none empty.
   """
 
   # Synchronous: one test asserts the log stays empty, and `capture_log/1`
@@ -27,7 +27,7 @@ defmodule Prima.ModelTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @categories ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)
+  @categories ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests)
 
   describe "the vectors" do
     test "carry exactly the categories this test reads, none empty" do
@@ -71,20 +71,6 @@ defmodule Prima.ModelTest do
         assert Model.check_chat_request(request, declared) == {:error, {:invalid, member}}, why
       end
     end
-
-    test "every valid chat response names its session, or none" do
-      for %{"why" => why, "response" => response, "session" => session} <-
-            @vectors["valid_chat_responses"] do
-        assert Model.response_session(response) == {:ok, session}, why
-      end
-    end
-
-    test "every invalid chat response is refused, naming its member" do
-      for %{"why" => why, "response" => response, "member" => member} <-
-            @vectors["invalid_chat_responses"] do
-        assert Model.response_session(response) == {:error, {:invalid, member}}, why
-      end
-    end
   end
 
   test "a manifest speaks the contract when it declares it, by name" do
@@ -100,15 +86,6 @@ defmodule Prima.ModelTest do
 
   test "reading a manifest that does not decode says nothing in the log" do
     assert capture_log(fn -> refute Model.speaks_chat?("{not json") end) == ""
-  end
-
-  test "a refusal's session survives the envelope and reads as a response's" do
-    error = %{"type" => "provider_error", "message" => "interrupted", "session" => "s-1"}
-
-    assert {:error, ^error} = Model.decode_envelope(%{"status" => 502, "error" => error})
-    assert Model.response_session(error) == {:ok, "s-1"}
-
-    assert Model.response_session(%{error | "session" => ""}) == {:error, {:invalid, "session"}}
   end
 
   test "a 2xx envelope decodes to its data, from a run result, a map or JSON" do
