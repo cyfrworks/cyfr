@@ -2196,6 +2196,162 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
+  describe "the delete" do
+    @delete ~s([id$="-menu"] button[phx-click="delete"])
+
+    test "a daily thread's menu asks first, saying what goes and what stays, and a yes " <>
+           "removes it and its crew threads through thread.delete; the list shows neither",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      actor = Sanctum.Context.actor(here)
+      {:ok, explorer} = Threads.crew_thread(actor, room.id, "explorer")
+      {:ok, reviewer} = Threads.crew_thread(actor, room.id, "reviewer")
+      {:ok, kept} = Arca.Test.Days.thread(actor)
+      pane = open_pane(conn, athanor, room)
+      # As the pane left them, its read mark moved on open.
+      listed = Threads.list(actor)
+
+      question =
+        "Delete this thread? Its posts and everything done in it go, with explorer's and " <>
+          "reviewer's threads under it, and any record a program keeps of them. A program's " <>
+          "sign-in and every other thread stay. This cannot be undone."
+
+      assert has_element?(pane, ~s(#{@delete}[data-confirm="#{question}"]), "Delete")
+      # Asked and not said yes to, nothing was sent: every thread stands.
+      assert Threads.list(actor) == listed
+
+      pane |> element(@delete) |> render_click()
+
+      assert [_] =
+               Arca.Repo.all(
+                 from(l in Arca.Schemas.McpLog,
+                   where: l.tool == "thread" and l.action == "delete",
+                   select: l.input
+                 )
+               )
+
+      gone = [room.id, explorer.id, reviewer.id]
+      for id <- gone, do: assert({:error, :not_found} = Threads.get(actor, id))
+      assert Threads.list(actor) == Enum.reject(listed, &(&1.id in gone))
+      assert Enum.any?(Threads.list(actor), &(&1.id == kept.id))
+      assert :sys.get_state(pane.pid).socket.assigns.flash == %{}
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a crew member's thread asks without threads under it, and a thread with work " <>
+           "running says that work stops",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, explorer} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+      pane = open_pane(conn, athanor, explorer)
+
+      alone =
+        "Delete this thread? Its posts and everything done in it go, and any record a " <>
+          "program keeps of it. A program's sign-in and every other thread stay. " <>
+          "This cannot be undone."
+
+      assert has_element?(pane, ~s(#{@delete}[data-confirm="#{alone}"]))
+
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: explorer.athanor_id,
+        thread_id: explorer.id,
+        kind: :turn_starting,
+        data: here.user_id
+      })
+
+      running =
+        "Delete this thread? The work running in it stops. Its posts and everything done in " <>
+          "it go, and any record a program keeps of it. A program's sign-in and every other " <>
+          "thread stay. This cannot be undone."
+
+      assert has_element?(pane, ~s(#{@delete}[data-confirm="#{running}"]))
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a program member's thread owes the removal of its session from the program's " <>
+           "folder; the member's other thread and the program's row are untouched",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      actor = Sanctum.Context.actor(here)
+      row = program_row!(actor)
+      {:ok, other_room} = Arca.Test.Days.thread(actor)
+      {:ok, mine} = Threads.crew_thread(actor, room.id, "claude-code")
+      {:ok, other} = Threads.crew_thread(actor, other_room.id, "claude-code")
+      held!(mine, row, "session-mine")
+      held!(other, row, "session-other")
+      {:ok, other_before} = Threads.get(actor, other.id)
+      {:ok, row_before} = Arca.McpServerStorage.get(actor, row.name)
+      {:ok, mine_before} = Threads.get(actor, mine.id)
+      pane = open_pane(conn, athanor, mine)
+
+      pane |> element(@delete) |> render_click()
+
+      assert {:error, :not_found} = Threads.get(actor, mine.id)
+
+      assert {:ok, [owed]} = Arca.Outbox.pending(actor, "brain_cleanup", "brain_forget")
+
+      assert owed ==
+               Prima.OutboxRecord.brain_forget(%{
+                 athanor_id: actor.athanor_id,
+                 thread_id: mine.id,
+                 row_id: row.id,
+                 session: "session-mine",
+                 generation: mine_before.brain_generation
+               })
+
+      assert {:ok, ^other_before} = Threads.get(actor, other.id)
+      assert {:ok, ^row_before} = Arca.McpServerStorage.get(actor, row.name)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a screen still on a thread deleted elsewhere shows the tool's refusal and removes nothing",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      actor = Sanctum.Context.actor(here)
+      pane = open_pane(conn, athanor, room)
+      {:ok, _} = Aqua.Tape.delete_thread(here, room.id)
+      listed = Threads.list(actor)
+
+      pane |> element(@delete) |> render_click()
+
+      assert :sys.get_state(pane.pid).socket.assigns.flash["error"] ==
+               "Could not delete it: " <>
+                 PrismWeb.Ops.error_message({:not_found, "thread", room.id})
+
+      assert Threads.list(actor) == listed
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # A program row a brain runs on, driven in a kept folder.
+  defp program_row!(actor) do
+    {:ok, row} =
+      Arca.McpServerStorage.insert(actor, %{
+        cap: 0,
+        name: "claude-code",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        memory_bytes: 1_073_741_824,
+        config_json:
+          Jason.encode!(%{
+            "command" => "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
+            "env" => %{}
+          })
+      })
+
+    row
+  end
+
+  # `session` held on `thread` as a driver's batch stores it, with its row.
+  defp held!(thread, row, session) do
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+        set: [brain_session: session, brain_progress: Jason.encode!(%{"row" => row.id})]
+      )
+  end
+
   describe "the crew" do
     test "a room shows a request with the reply under it, by the member's name and its outcome",
          %{conn: conn, athanor: athanor, here: here, thread: room} do

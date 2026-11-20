@@ -54,7 +54,10 @@ defmodule PrismWeb.ThreadPaneLive do
   A room lists its crew members' threads; a member's thread names its
   member, leads back to its room and, while it stands, can be archived
   (`thread.archive`). The pane opens neither: it asks its host to open
-  the thread, `{:open_thread, id}`.
+  the thread, `{:open_thread, id}`. Any thread it shows is deleted from
+  its menu (`thread.delete`), a room with its crew threads, once the
+  person says yes to what goes and what stays; the host leaves a thread
+  the person's list announces removed.
 
   The pane sits beside the shared thread the chat overlay shows, when it
   shows one (`PrismWeb.RoomFeed`, the session's `room_feed` and `room`):
@@ -643,6 +646,29 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   def handle_event("archive", _params, socket), do: {:noreply, socket}
+
+  # The person's delete of the thread shown, and with a room the crew
+  # threads under it (`thread.delete`), asked first by the menu's
+  # question. The tool refuses a thread whose turn still runs, so work the
+  # pane sees running is the person's stop first (`thread.stop`). The
+  # removal reaches every screen as the person's list announces it, and
+  # each host leaves the thread there, this one included.
+  def handle_event("delete", _params, %{assigns: %{thread: %{id: id}}} = socket) do
+    stopped =
+      if socket.assigns.running,
+        do: PrismWeb.Ops.call_tool(socket, "thread/stop", %{"thread" => id}),
+        else: {:ok, :idle}
+
+    with {:ok, _} <- stopped,
+         {:ok, _} <- PrismWeb.Ops.call_tool(socket, "thread/delete", %{"thread" => id}) do
+      {:noreply, socket}
+    else
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not delete it: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("delete", _params, socket), do: {:noreply, socket}
 
   # Beside a shared thread: whether each send reads it.
   def handle_event("toggle_read_room", _params, socket) do
@@ -1677,12 +1703,15 @@ defmodule PrismWeb.ThreadPaneLive do
               else: assistant_label(current_assistant(@assistant, @roster))}
           </span>
         </div>
-        <div :if={room?(@thread)} class="aqua-panel-menu-row">
-          <span :if={@thread.archived_at} title="New work here takes it out of the archive">
+        <div :if={@thread} class="aqua-panel-menu-row">
+          <span
+            :if={room?(@thread) and @thread.archived_at}
+            title="New work here takes it out of the archive"
+          >
             Archived
           </span>
           <button
-            :if={is_nil(@thread.archived_at)}
+            :if={room?(@thread) and is_nil(@thread.archived_at)}
             id={@dom <> "-archive"}
             type="button"
             phx-click="archive"
@@ -1690,6 +1719,16 @@ defmodule PrismWeb.ThreadPaneLive do
             class="rounded px-1.5 py-0.5 text-text-secondary hover:bg-surface-base hover:text-text-primary"
           >
             Archive
+          </button>
+          <button
+            id={@dom <> "-delete"}
+            type="button"
+            phx-click="delete"
+            data-confirm={delete_question(@children, @running)}
+            title="Its posts and everything done in it are removed"
+            class="rounded px-1.5 py-0.5 text-text-secondary hover:bg-surface-base hover:text-text-primary"
+          >
+            Delete
           </button>
         </div>
         <div class="aqua-panel-menu-row">
@@ -2464,6 +2503,30 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The room a crew thread works under: a daily thread by its day's date,
   # a workspace thread by its title.
+  # What the menu's Delete asks before anything goes: what a delete
+  # removes (`Arca.ThreadStorage.delete/3`) and what it leaves, the crew
+  # threads under a room named, and the stop the pane makes first when it
+  # sees work running.
+  defp delete_question(children, running) do
+    stops = if running, do: " The work running in it stops.", else: ""
+
+    {under, of} =
+      case Enum.map(children, &"#{&1.agent}'s") do
+        [] -> {"", "it"}
+        [one] -> {", with #{one} thread under it", "them"}
+        many -> {", with #{and_list(many)} threads under it", "them"}
+      end
+
+    "Delete this thread?#{stops} Its posts and everything done in it go#{under}, " <>
+      "and any record a program keeps of #{of}. " <>
+      "A program's sign-in and every other thread stay. This cannot be undone."
+  end
+
+  defp and_list(names) do
+    {init, [last]} = Enum.split(names, -1)
+    Enum.join(init, ", ") <> " and " <> last
+  end
+
   defp room_name(%{kind: "daily", day: %Date{} = day}), do: day_name(day)
   defp room_name(%{title: title}) when is_binary(title), do: title
   defp room_name(_none), do: "its thread"
