@@ -117,30 +117,29 @@ defmodule Locus.Runtime.ModelsCatalogueTest do
   test "a brain whose program row is not bound is not run, and one bound is", %{ctx: ctx} do
     install!(ctx)
     ctx = %{ctx | origin: :interactive}
-    ref = "catalyst:local.claude-code"
+    ref = "catalyst:local.openai-codex"
 
     assert {:ok, catalogue} = Aqua.models(ctx)
     assert executions(ctx) == []
-    assert catalogue["errors"]["claude-code"] == Prima.Refusal.message(:connection_not_granted)
+    assert catalogue["errors"]["openai-codex"] == Prima.Refusal.message(:connection_not_granted)
 
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
-        name: "claude",
+        name: "openai-codex",
         transport: "program",
         mark: "driven",
         url: nil,
         home: "kept",
-        config_json: Jason.encode!(%{"command" => "claude", "env" => %{}})
+        config_json: Jason.encode!(%{"command" => "codex", "env" => %{}})
       })
 
-    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: row.id}]})
+    commit!(ctx, ref, %{bindings: [%{need: "openai-codex", entry_id: row.id}]})
 
     assert {:ok, catalogue} = Aqua.models(ctx)
     assert [reference] = Enum.map(executions(ctx), & &1.reference)
     assert reference =~ ref
-    refute catalogue["errors"]["claude-code"] == Prima.Refusal.message(:connection_not_granted)
-    assert catalogue["errors"]["openai-codex"] == Prima.Refusal.message(:connection_not_granted)
+    refute catalogue["errors"]["openai-codex"] == Prima.Refusal.message(:connection_not_granted)
   end
 
   # The seed's model catalysts and its files catalyst (which speaks no
