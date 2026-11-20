@@ -842,9 +842,11 @@ defmodule Aqua.Loop do
       {Aqua.Program, ^turn_id, {:native, native}} ->
         state |> native(native) |> attending(monitor)
 
+      # The attendant told the native turn's end first (`native/2`), which
+      # settled the program's own tools.
       {Aqua.Program, ^turn_id, :idle} ->
         Process.demonitor(monitor, [:flush])
-        {:halt, :completed, settle_own(state)}
+        {:halt, :completed, state}
 
       {Aqua.Program, ^turn_id, {:ended, {:failed, sentence}}} ->
         Process.demonitor(monitor, [:flush])
@@ -3153,8 +3155,10 @@ defmodule Aqua.Loop do
 
   # What a program brain's attendant tells of the open work while the
   # turn waits on it or on a call (`Aqua.Program`): its own tools as they
-  # start and end, and the session's end, after which none of them runs.
+  # start and end, and the native turn's end and the session's, after
+  # either of which none of them runs.
   defp native(%State{} = state, {:own, name, phase}), do: own_activity(state, name, phase)
+  defp native(%State{} = state, :idle), do: settle_own(state)
   defp native(%State{} = state, :session_ended), do: settle_own(state)
 
   # A program brain's own tool, by the name its attendant gives, running

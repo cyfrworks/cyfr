@@ -38,8 +38,8 @@ defmodule Aqua.Program do
   the session's. Its own tools of the open work, by the name it gives,
   are told to the turn's loop as they start and end, which shows them in
   the one list of what runs (`Aqua.Loop`); nothing of them is stored. The
-  session's end is told too, and the loop settles what still shows
-  running then, as it does at the native turn's `idle`.
+  native turn's `idle` and the session's end are told the same way, and
+  the loop settles what still shows running then, while a call runs too.
 
   It writes a command when a row says one is owed, one at a time: a closed
   ask's result as its `answer`, then each post of the open turn that
@@ -792,11 +792,14 @@ defmodule Aqua.Program do
       else: state
   end
 
-  # The native turn ended: the loop finds whether its turn is done.
+  # The native turn ended: none of its own tools runs any more, which the
+  # loop settles wherever it waits (`{:native, :idle}`), and the loop finds
+  # whether its turn is done.
   defp on_idle(%{work: work} = state, %{idle: %{} = idle}) do
     case {open_turn(work), idle["work"]} do
       {%{id: id}, id} ->
         state = withdraw(state)
+        state = tell(state, {__MODULE__, id, {:native, :idle}})
 
         if idle["stop"] == "end_turn",
           do: tell(state, {__MODULE__, id, :idle}),

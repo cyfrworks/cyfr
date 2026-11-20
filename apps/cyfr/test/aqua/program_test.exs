@@ -723,6 +723,38 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
+    test "native idle settles its own tool while a CYFR call is still waiting",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work in parallel")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      opening = held_start!(fake, row, turn, "ask-1")
+      on_exit(fn -> send(opening, :go) end)
+      assert activity!() == [start_entry(:done), start_entry(:running)]
+      say(fake, row, own(turn, "Bash", "start"))
+
+      assert activity!() ==
+               [start_entry(:done), start_entry(:running), own_entry("Bash", :running)]
+
+      say(fake, row, idle(turn, [input.id]))
+
+      assert activity!() ==
+               [start_entry(:done), start_entry(:running), own_entry("Bash", :done)]
+
+      assert Process.alive?(opening)
+
+      send(opening, :go)
+      _answer = accept_next!(fake, row)
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
     test "an own tool still shown running is done at the native turn's end",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       watch!(ctx, thread)
