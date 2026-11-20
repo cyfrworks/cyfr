@@ -434,7 +434,6 @@ defmodule Arca.CrewStorageTest do
       assert reply.snapshot["text"] == "the room was deleted"
     end
 
-
     test "decides before any byte goes: a refusal keeps every blob",
          %{actor: actor, room: room} do
       {:ok, planner} = Threads.crew_thread(actor, room.id, "planner")
