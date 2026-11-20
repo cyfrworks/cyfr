@@ -568,6 +568,75 @@ defmodule Aqua.ProgramTest do
              ]
     end
 
+    test "an own tool is shown while a CYFR call the program asked for still runs",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work in parallel")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      # The program's start of a terminal, a call that runs alone, is held.
+      opening = held_start!(fake, row, turn, "ask-1")
+      on_exit(fn -> send(opening, :go) end)
+      assert activity!() == [start_entry(:done), start_entry(:running)]
+      say(fake, row, own(turn, "Bash", "start"))
+
+      assert activity!() ==
+               [start_entry(:done), start_entry(:running), own_entry("Bash", :running)]
+
+      send(opening, :go)
+      assert activity!() == [start_entry(:done), start_entry(:done), own_entry("Bash", :running)]
+      _answer = accept_next!(fake, row)
+      say(fake, row, own(turn, "Bash", "end"))
+      assert activity!() == [start_entry(:done), start_entry(:done), own_entry("Bash", :done)]
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "an own tool is shown while CYFR reads the program asked for still run",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "run and watch")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      # A terminal of another row, which no line of the driver's reaches.
+      cli = terminal_row!(ctx)
+      say(fake, row, ask(turn, "ask-start", "program", start_args(cli)))
+      started = accept_next!(fake, row)
+      session = Jason.decode!(started["content"])["session"]
+
+      assert [activity!(), activity!()] == [
+               [start_entry(:done), start_entry(:running)],
+               [start_entry(:done), start_entry(:done)]
+             ]
+
+      [{terminal, _}] = running_sessions(fake, cli)
+
+      # A read that waits for the terminal's output runs among the reads.
+      wait = %{"action" => "wait", "session" => session, "after" => 0, "ms" => 30_000}
+      say(fake, row, ask(turn, "ask-wait", "program", wait))
+      waited = entry("program", Aqua.Steps.sentence("program", "wait", "brain"))
+      before = [start_entry(:done), start_entry(:done)]
+      assert activity!() == before ++ [waited.(:running)]
+      say(fake, row, own(turn, "Read", "start"))
+      assert activity!() == before ++ [waited.(:running), own_entry("Read", :running)]
+
+      Scripted.write_raw(fake, terminal, "ready\r\n")
+      assert activity!() == before ++ [waited.(:done), own_entry("Read", :running)]
+      _answer = accept_next!(fake, row)
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
     test "an own tool's name past the wire's bound or not printable shows a fixed word",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       watch!(ctx, thread)
@@ -2129,6 +2198,23 @@ defmodule Aqua.ProgramTest do
             "command" => "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
             "env" => %{}
           })
+      })
+
+    row
+  end
+
+  # A program row with no driver, run only on a terminal.
+  defp terminal_row!(ctx) do
+    {:ok, row} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "notes-cli",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        memory_bytes: 1_073_741_824,
+        config_json: Jason.encode!(%{"command" => "npx -y notes-cli@1.0.0", "env" => %{}})
       })
 
     row

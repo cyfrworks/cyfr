@@ -694,7 +694,7 @@ defmodule Aqua.Program do
   # of them is stored.
   defp own(state, owns) do
     Enum.reduce(owns, state, fn {_seq, %{"name" => name, "phase" => phase}}, state ->
-      tell(state, {__MODULE__, state.work.turn.id, {:own, own_name(name), phase}})
+      tell(state, {__MODULE__, state.work.turn.id, {:native, {:own, own_name(name), phase}}})
     end)
   end
 
