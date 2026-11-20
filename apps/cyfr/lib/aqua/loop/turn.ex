@@ -546,15 +546,20 @@ defmodule Aqua.Loop.Turn do
   def file_blocks(%Context{} = ctx, row, media_types) do
     ctx
     |> Aqua.Attachments.load(row.thread_id, Aqua.Attachments.attachments_of([row]))
-    |> Enum.map(&attachment_block(&1, media_types))
+    |> Enum.map(&file_block(&1, media_types))
   end
 
-  # A file goes inline, as the image or document block its media type
-  # makes, only when the brain declares that type (its capabilities'
-  # `media_types`); a text file it does not take goes as a text block
-  # under its name; any other file is named as attached and not readable
-  # by this brain. No request carries a block the brain refuses.
-  defp attachment_block(%{"media_type" => media, "data" => data, "filename" => name}, types) do
+  @doc """
+  One loaded file (`Aqua.Attachments.load/3`) as the block a brain
+  declaring `media_types` takes. It goes inline, as the image or document
+  block its media type makes, only when the brain declares that type (its
+  capabilities' `media_types`, or the media types a program's wire
+  carries); a text file it does not take goes as a text block under its
+  name; any other file is named as attached and not readable by this
+  brain. No request carries a block the brain refuses.
+  """
+  @spec file_block(map(), [String.t()]) :: map()
+  def file_block(%{"media_type" => media, "data" => data, "filename" => name}, types) do
     cond do
       media in types ->
         %{
