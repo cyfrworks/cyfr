@@ -5,11 +5,14 @@
 # Regression cases for scripts/ci/seed-guard.sh, scripts/ci/config-seam.sh,
 # scripts/ci/retry.sh, scripts/ci/world-checks.sh,
 # scripts/ci/self-test-scope.sh, scripts/ci/storage-diagrams.py,
+# scripts/ci/cluster-cell.sh,
 # scripts/ci/main-run.py and scripts/ci/reds.py (the last two against a
 # stand-in gh, the last with the workflow that runs it),
 # scripts/ci/release-binary-check.sh (against real builds of the command
-# line, so it needs go and the module's dependencies), and for
-# scripts/release.sh's use of the seed guard.
+# line, so it needs go and the module's dependencies), for
+# scripts/release.sh's use of the seed guard, and for test.yml's jobs
+# divided between runners: the two-node suite's cells and the partition
+# runner test's groups (it reads test.yml through PyYAML).
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -841,6 +844,177 @@ for event in ("push", "pull_request"):
 PY
 code=$?
 if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+
+# --- test.yml's jobs divided between runners ---
+
+# cluster_cells WORKFLOW SCRIPT: the cluster job's matrix is the cells a
+# and b alone; its selection step is exactly SCRIPT's call with the
+# matrix's cell, and its suite step exactly the run of the files that
+# step gave; no other step names either script. SCRIPT, run in this
+# checkout, gives each file of the suite to one cell, and, run in a
+# scratch copy of the suite with two files added, gives a what it gave
+# here and b the added files besides. Each error is a line.
+cluster_cells() {
+  python3 -I - "$1" "$root" "$2" "$scratch/cells-copy" <<'PY'
+import os, shutil, subprocess, sys, yaml
+wf, root, script, copy = sys.argv[1:]
+job = yaml.safe_load(open(wf))["jobs"]["cluster"]
+errors = []
+matrix = job.get("strategy", {}).get("matrix", {})
+if matrix != {"cell": ["a", "b"]}:
+    errors.append(f"the cluster matrix is {matrix}, not the cells a and b alone")
+want = [
+    {"name": "The cell's files", "id": "cell", "env": {"CELL": "${{ matrix.cell }}"},
+     "run": 'files=$(scripts/ci/cluster-cell.sh "$CELL")\necho "files=$files" >> "$GITHUB_OUTPUT"\n'},
+    {"name": "Run the two-node suite",
+     "env": {"MIX_BUILD_PATH": "_build/test", "CELL_FILES": "${{ steps.cell.outputs.files }}"},
+     "run": "scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster $CELL_FILES"},
+]
+for w in want:
+    got = [s for s in job["steps"] if s.get("name") == w["name"]]
+    if got != [w]:
+        errors.append(f"the cluster job's step {w['name']!r} is {got}, not {w}")
+others = [s.get("name") for s in job["steps"] if s not in want
+          and any(n in str(s.get("run", "")) for n in ("cluster-cell.sh", "test-partitioned.sh"))]
+if others:
+    errors.append(f"the cluster job's steps {others} also select or run the suite")
+def cells(where):
+    out = {}
+    for cell in ("a", "b"):
+        r = subprocess.run(["bash", script, cell], cwd=where, capture_output=True, text=True,
+                           env={"PATH": os.environ["PATH"]})
+        if r.returncode != 0:
+            errors.append(f"cell {cell}'s selection in {'this checkout' if where == root else 'the copy'} failed: {r.stderr.strip()}")
+            return None
+        out[cell] = r.stdout.split()
+    return out
+def suite(where):
+    found = set()
+    for d, _, names in os.walk(os.path.join(where, "apps/cyfr/test/cluster")):
+        found |= {os.path.relpath(os.path.join(d, n), where) for n in names if n.endswith("_test.exs")}
+    return found
+here = cells(root)
+if here:
+    if set(here["a"]) & set(here["b"]) or sorted(here["a"] + here["b"]) != sorted(suite(root)):
+        errors.append(f"the cells do not hold each file of the suite once: a {here['a']}, b {here['b']}")
+    shutil.rmtree(copy, ignore_errors=True)
+    for f in suite(root):
+        os.makedirs(os.path.dirname(os.path.join(copy, f)), exist_ok=True)
+        open(os.path.join(copy, f), "w").close()
+    added = ["apps/cyfr/test/cluster/added_test.exs", "apps/cyfr/test/cluster/nested/added_test.exs"]
+    for f in added:
+        os.makedirs(os.path.dirname(os.path.join(copy, f)), exist_ok=True)
+        open(os.path.join(copy, f), "w").close()
+    there = cells(copy)
+    if there and (there["a"] != here["a"] or sorted(there["b"]) != sorted(here["b"] + added)):
+        errors.append(f"with two files added the cells are a {there['a']}, b {there['b']}: the added files are not b's alone")
+for e in errors:
+    print(e)
+PY
+}
+cell_script="$root/scripts/ci/cluster-cell.sh"
+label="test.yml: the two-node suite runs in the cells a and b, a its listed files and b every other"
+cluster_cells "$root/.github/workflows/test.yml" "$cell_script" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+# Planted: a third cell, both runners on cell a, cell b's files restated
+# in the step, cell b's files restated in the script, and a listed file
+# the suite does not have, each named.
+plant_cells() { # KIND: writes cells.yml and cells.sh, one of them planted
+  python3 -I - "$root/.github/workflows/test.yml" "$cell_script" "$scratch" "$1" "$root" <<'PY'
+import subprocess, sys
+wf, script, out, kind, root = sys.argv[1:]
+w, s = open(wf).read(), open(script).read()
+b = subprocess.run(["bash", script, "b"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+edits = {
+    "third": ("w", "        cell: [a, b]\n", "        cell: [a, b, c]\n"),
+    "constant": ("w", "          CELL: ${{ matrix.cell }}\n", "          CELL: a\n"),
+    "restated": ("w", '          files=$(scripts/ci/cluster-cell.sh "$CELL")\n',
+                 f'          files=$(scripts/ci/cluster-cell.sh "$CELL")\n          [ "$CELL" = a ] || files="{b}"\n'),
+    "listed": ("s", "  b) files=$(LC_ALL=C comm -23", f'  b) files="{b}"; : $(LC_ALL=C comm -23'),
+    "absent": ("s", "cell_a=(\n", "cell_a=(\n  apps/cyfr/test/cluster/planted_test.exs\n"),
+}
+where, old, new = edits[kind]
+target = w if where == "w" else s
+assert target.count(old) == 1, old
+target = target.replace(old, new)
+open(f"{out}/cells.yml", "w").write(target if where == "w" else w)
+open(f"{out}/cells.sh", "w").write(target if where == "s" else s)
+PY
+}
+while IFS='|' read -r kind want; do
+  label="test.yml: the cluster check refuses $kind ($want)"
+  plant_cells "$kind"
+  cluster_cells "$scratch/cells.yml" "$scratch/cells.sh" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qF "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+third|the cluster matrix is {'cell': ['a', 'b', 'c']}, not the cells a and b alone
+constant|the cluster job's step "The cell's files" is
+restated|the cluster job's step "The cell's files" is
+listed|the added files are not b's alone
+absent|cell a lists files the suite does not have: apps/cyfr/test/cluster/planted_test.exs
+CASES
+
+# partition_groups WORKFLOW SCRIPT: the harness-tests-partitions matrix is
+# the groups SCRIPT names (--groups), and the job's one step that runs
+# the partition runner's test is exactly its run with the matrix's group.
+partition_groups() {
+  python3 -I - "$1" "$(bash "$2" --groups)" <<'PY'
+import sys, yaml
+wf, groups = sys.argv[1], sys.argv[2].split()
+job = yaml.safe_load(open(wf))["jobs"]["harness-tests-partitions"]
+matrix = job.get("strategy", {}).get("matrix", {})
+if matrix != {"group": groups}:
+    print(f"the partitions matrix is {matrix}, and the test's groups are {' '.join(groups)}")
+want = {"name": "The partition runner's cases of this group", "env": {"GROUP": "${{ matrix.group }}"},
+        "run": 'bash tests/test-partitioned-test.sh "$GROUP"'}
+runs = [s for s in job["steps"] if "test-partitioned-test.sh" in str(s.get("run", ""))]
+if runs != [want]:
+    print(f"the partitions job runs the test in {runs}, not once in {want}")
+PY
+}
+label="test.yml: the partitions matrix is the partition runner test's groups, each run alone"
+partition_groups "$root/.github/workflows/test.yml" "$root/tests/test-partitioned-test.sh" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+# Planted: a group the matrix alone gained, one the test alone gained, the
+# group only in a comment, a second run without it in the same step, and
+# a second step that runs the whole test.
+plant_groups() { # KIND: writes groups.yml and groups-test.sh, one of them planted
+  python3 -I - "$root/.github/workflows/test.yml" "$root/tests/test-partitioned-test.sh" "$scratch" "$1" <<'PY'
+import sys
+wf, script, out, kind = sys.argv[1:]
+w, s = open(wf).read(), open(script).read()
+run = '        run: bash tests/test-partitioned-test.sh "$GROUP"\n'
+edits = {
+    "matrix": ("w", "        group: [report, rest]\n", "        group: [report, rest, more]\n"),
+    "test": ("s", "TEST_GROUPS='report rest'\n", "TEST_GROUPS='report rest more'\n"),
+    "comment": ("w", run, '        run: |\n          bash tests/test-partitioned-test.sh # "$GROUP"\n'),
+    "second": ("w", run, '        run: |\n          bash tests/test-partitioned-test.sh "$GROUP"\n          bash tests/test-partitioned-test.sh\n'),
+    "step": ("w", run, run + "      - name: The whole test\n        run: bash tests/test-partitioned-test.sh\n"),
+}
+where, old, new = edits[kind]
+target = w if where == "w" else s
+assert target.count(old) == 1, old
+target = target.replace(old, new)
+open(f"{out}/groups.yml", "w").write(target if where == "w" else w)
+open(f"{out}/groups-test.sh", "w").write(target if where == "s" else s)
+PY
+}
+while IFS='|' read -r kind want; do
+  label="test.yml: the partitions check refuses $kind ($want)"
+  plant_groups "$kind"
+  partition_groups "$scratch/groups.yml" "$scratch/groups-test.sh" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qF "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+matrix|the partitions matrix is {'group': ['report', 'rest', 'more']}, and the test's groups are report rest
+test|the partitions matrix is {'group': ['report', 'rest']}, and the test's groups are report rest more
+comment|the partitions job runs the test in
+second|the partitions job runs the test in
+step|the partitions job runs the test in
+CASES
 
 # --- retry ---
 

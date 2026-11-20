@@ -235,6 +235,31 @@ defmodule PrismWeb.WorkspaceLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "what a workspace thread made stays in its results behind 500 of a turn's own rows",
+       %{conn: conn, mine: mine, me: me, daily: daily} do
+    {workspace, chart, ref} = charted!(me, daily)
+
+    for n <- 1..500 do
+      {:ok, _} =
+        Threads.append(actor(me), workspace.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "tool_call",
+          content: "call #{n}"
+        })
+    end
+
+    {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
+    on_thread!(child!(view, "workspace-pane"), workspace.id)
+    src = PrismWeb.ThreadPaneLive.attachment_path(route(mine), chart, ref["stored_name"])
+
+    wait_until(fn -> has_element?(view, ~s(#workspace-results img[src="#{src}"])) end)
+    assert has_element?(view, ~s(#workspace-results a[href="https://example.com/moon"]))
+    refute has_element?(view, "#workspace-results-window")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "a thread longer than the pane reads says its results are what the latest posts hold, and lists no earlier one",
        %{conn: conn, mine: mine, me: me, daily: daily} do
     workspace = open!(me, daily, "Long one")

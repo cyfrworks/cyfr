@@ -142,10 +142,12 @@ defmodule Aqua.Program do
   @doc """
   Attend `work`'s turn, for the loop `loop`: open the session if none is
   held, start the harness or resume its native session, and set the
-  turn's work. Answers once the driver took the work, or `{:error,
+  turn's work. Answers once the driver took the work: `{:ok, :started}`
+  when the driver started a new native session for it, `{:ok, :went_on}`
+  when it resumed the session or its process already ran; or `{:error,
   sentence}`, the reason the turn ends.
   """
-  @spec attend(work(), pid()) :: :ok | {:error, String.t()}
+  @spec attend(work(), pid()) :: {:ok, :started | :went_on} | {:error, String.t()}
   def attend(%{ctx: %Context{athanor_id: athanor_id}} = work, loop) when is_pid(loop) do
     key = {athanor_id, work.turn.thread_id, work.agent}
 
@@ -247,6 +249,7 @@ defmodule Aqua.Program do
        waiting: [],
        outstanding: nil,
        fresh?: false,
+       how: :went_on,
        recovering?: false,
        pending: [],
        timer: nil,
@@ -264,7 +267,7 @@ defmodule Aqua.Program do
 
     case state.phase do
       :closed -> {:noreply, open(state)}
-      :ready -> {:noreply, write_work(state)}
+      :ready -> {:noreply, write_work(%{state | how: :went_on})}
       _starting -> {:noreply, state}
     end
   end
@@ -531,6 +534,19 @@ defmodule Aqua.Program do
   # ---------------------------------------------------------------------------
   # Lines
 
+  # What the open turn has used, as its start step stores it once the
+  # batch's usage is committed, told to the thread as the API path tells
+  # its own (`:usage`, `Aqua.Tape.usage/2`): the models the program ran
+  # and their tokens, and whether the accounting is partial or
+  # unavailable, which is unknown and never zero.
+  defp tell_usage(state, [], _open_turn), do: state
+  defp tell_usage(state, _usage, nil), do: state
+
+  defp tell_usage(%{work: work} = state, _usage, _open_turn) do
+    Tape.announce(work.guest, state.thread_id, :usage, Tape.usage(work.guest, state.thread_id))
+    state
+  end
+
   defp batch(%{work: work} = state, boot, lines) do
     {last, _event} = List.last(lines)
     events = Enum.map(lines, &elem(&1, 1))
@@ -561,6 +577,7 @@ defmodule Aqua.Program do
             state
             |> stream(of_work(lines, "text", open_turn), effects.commit.said)
             |> own(of_work(lines, "own", open_turn))
+            |> tell_usage(effects.commit.usage, open_turn)
             |> act(effects, committed)
             |> arm()
 
@@ -791,8 +808,14 @@ defmodule Aqua.Program do
 
   defp on_started(%{phase: :starting} = state, %{gone?: true}), do: start_over(state)
 
+  # The driver's `fresh` says whether the session is new, which is how the
+  # turn's start is worded (`attend/2`).
   defp on_started(%{phase: :starting} = state, %{started: %{} = started}) do
-    state = %{state | phase: :started}
+    state = %{
+      state
+      | phase: :started,
+        how: if(started["fresh"] == true, do: :started, else: :went_on)
+    }
 
     case reconcile(state, started) do
       {:ok, state} -> write_work(state)
@@ -824,7 +847,7 @@ defmodule Aqua.Program do
     Enum.reduce(ids, state, fn id, state ->
       cond do
         state.phase == :working and id == work.start ->
-          reply_waiting(%{state | phase: :ready, recovering?: false}, :ok)
+          reply_waiting(%{state | phase: :ready, recovering?: false}, {:ok, state.how})
 
         match?(%{id: ^id}, state.outstanding) ->
           %{state | outstanding: nil}
@@ -1137,22 +1160,26 @@ defmodule Aqua.Program do
 
   defp renotice(state, %{row: row_id}), do: notice(state, "answer", row_id)
 
+  # Each says what the work is known to have reached, never why it was
+  # interrupted: the driver's end, a lost line and CYFR's restart read
+  # alike here.
   defp notice_text(_work, "post", _row),
     do:
-      "CYFR restarted while you were working on the last message, which you already have. " <>
+      "Your work on the last message was interrupted, and you already have that message. " <>
         "Go on with it, or say where it stands."
 
   defp notice_text(_work, "fresh", _row),
     do:
-      "CYFR restarted and you no longer had your record of this thread, so the thread so " <>
-        "far is above, with what your calls in this work answered; they are not run again. " <>
-        "Go on with the last message, or say where it stands."
+      "Your work was interrupted and you no longer had your record of this thread, so the " <>
+        "thread so far is above, with what your calls in this work answered; they are not " <>
+        "run again. Go on with the last message, or say where it stands."
 
   defp notice_text(_work, _answer, row) do
     payload = Tape.payload(row)
 
-    "CYFR restarted while your call #{payload["name"]} (#{payload["tool_call_id"]}) ran, so " <>
-      "its answer comes as this message instead. It answered" <>
+    "Your work was interrupted before your call #{payload["name"]} " <>
+      "(#{payload["tool_call_id"]}) was answered, so its answer comes as this message " <>
+      "instead. It answered" <>
       if(payload["is_error"], do: " with an error: ", else: ": ") <>
       (row.content || "")
   end

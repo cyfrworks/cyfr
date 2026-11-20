@@ -323,10 +323,13 @@ func errorKind(err string) string {
 
 // errorSentence is the driver's own words for an error of the harness's:
 // the harness's words (a sign-in prompt among them) never leave the box.
+// An account's error says only what the type tells: the account or key
+// the program ran with was refused, its sign-in or a key in its
+// environment, never which one; the Codex driver says it alike.
 func errorSentence(kind string) string {
 	switch kind {
 	case "authentication":
-		return "Claude Code is not signed in to an account that can run this; sign in on the program's terminal."
+		return "The account or key Claude Code used was refused; check its sign-in on the program's terminal, or a key in its settings."
 	case "rate_limited":
 		return "Claude Code reported a rate limit; ask again later."
 	case "overloaded":

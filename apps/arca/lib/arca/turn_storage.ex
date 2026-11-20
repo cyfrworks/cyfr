@@ -4870,6 +4870,31 @@ defmodule Arca.TurnStorage do
 
   def step(%Prima.Actor{}, _step_id), do: {:error, :no_athanor}
 
+  @doc """
+  The newest turn of a thread that has started, running, paused or over,
+  or nil when none has. A turn that started holds the recovery limit only
+  its start writes (`start/3`); one still waiting behind another, or
+  cancelled while it waited, never started.
+  """
+  @spec latest(Prima.Actor.t(), String.t()) :: {:ok, map() | nil} | {:error, term()}
+  def latest(%Prima.Actor{athanor_id: athanor_id}, thread_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.latest", fn ->
+      {:ok,
+       Arca.Repo.one(
+         from(t in Turn,
+           where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
+           where: not is_nil(t.recovery_limit),
+           order_by: [desc: t.accepted_at, desc: t.id],
+           limit: 1
+         )
+       )}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def latest(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
+
   @doc "The open turns of a thread (accepted, running or paused), oldest first."
   @spec open_turns(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def open_turns(%Prima.Actor{athanor_id: athanor_id}, thread_id)

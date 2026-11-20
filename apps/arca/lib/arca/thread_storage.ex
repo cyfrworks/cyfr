@@ -106,6 +106,10 @@ defmodule Arca.ThreadStorage do
   @spec post?(map()) :: boolean()
   def post?(%{kind: kind}), do: kind in @post_kinds
 
+  @doc "The kinds of the rows a person reads as posts (`post?/1`)."
+  @spec post_kinds() :: [String.t()]
+  def post_kinds, do: @post_kinds
+
   @doc """
   The athanor's threads, most recently active first. `opts`: `:limit`
   (200 by default), `:kind` (one of `Arca.Schemas.Thread.kinds/0`, or a
@@ -1617,23 +1621,36 @@ defmodule Arca.ThreadStorage do
   end
 
   @doc """
-  The newest `n` messages of a thread, in ascending order.
+  The newest `n` messages of a thread, in ascending order. `opts`:
+  `:kinds`, a list of kinds: the newest `n` rows of those kinds, whatever
+  rows of other kinds stand between them.
 
   The console's transcript view: `messages/3`'s `:limit` takes the OLDEST
   rows (it bounds windowed turn assembly), which is the wrong end for a
   reader opening a long-lived thread.
   """
-  @spec latest_messages(Prima.Actor.t(), String.t(), pos_integer()) ::
+  @spec latest_messages(Prima.Actor.t(), String.t(), pos_integer(), keyword()) ::
           [map()] | {:error, term()}
-  def latest_messages(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, n)
+  def latest_messages(actor, thread_id, n, opts \\ [])
+
+  def latest_messages(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, n, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and is_integer(n) and
-             n > 0 do
+             n > 0 and is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.latest_messages", fn ->
-      from(m in Message,
-        where: m.thread_id == ^thread_id,
-        order_by: [desc: m.seq],
-        limit: ^n
-      )
+      query =
+        from(m in Message,
+          where: m.thread_id == ^thread_id,
+          order_by: [desc: m.seq],
+          limit: ^n
+        )
+
+      query =
+        case Keyword.get(opts, :kinds) do
+          nil -> query
+          kinds when is_list(kinds) -> from(m in query, where: m.kind in ^kinds)
+        end
+
+      query
       |> QueryHelpers.where_tenant(actor)
       |> Repo.all()
       |> Enum.reverse()
@@ -1641,7 +1658,7 @@ defmodule Arca.ThreadStorage do
     |> Arca.Data.project()
   end
 
-  def latest_messages(%Prima.Actor{}, _thread_id, _n), do: {:error, :no_athanor}
+  def latest_messages(%Prima.Actor{}, _thread_id, _n, _opts), do: {:error, :no_athanor}
 
   @doc "One message of the context's athanor."
   @spec get_message(Prima.Actor.t(), String.t()) ::
