@@ -12,8 +12,8 @@ defmodule Opus.Programs.Box do
   An **owner** is one `mcp_servers` row of one athanor whose transport is
   `program` — the pair `(athanor_id, mcp_servers.id)` — held by one or
   more **holders**: the processes that speak over its sessions (an
-  `Emissary.External.Server` for an `mcp` program, a pipe holder
-  (`Opus.Programs.Pipe`) or a terminal (`Opus.Programs.Terminal`), each of
+  `Emissary.External.Server` for an `mcp` program, a brain's holder
+  (`Opus.Brain`) or a terminal (`Opus.Programs.Terminal`), each of
   whose sessions the box records and closes should the holder die). The service
   runs an owner's programs at a version `(g, e)`: `g` is this member's
   control-plane generation (`Arca.ControlPlane.generation/0`; a member that
@@ -117,8 +117,8 @@ defmodule Opus.Programs.Box do
 
   ## Sessions
 
-  The box owns every session its holders open, a `run` session of a pipe
-  (`Opus.Programs.Pipe`) or a `terminal` one (`Opus.Programs.Terminal`).
+  The box owns every session its holders open, a `run` session of a
+  brain's (`Opus.Brain`) or a `terminal` one (`Opus.Programs.Terminal`).
   An open is recorded here, with its row, home, key, holder and deadline,
   before the backend is asked, and the box makes it itself, in a process
   it monitors whose wait reaches past the deadline; so whatever the

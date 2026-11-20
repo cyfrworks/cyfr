@@ -17,14 +17,10 @@ defmodule Locus.Runtime.ComponentType do
   | `wasi:clocks/wall-clock`      | ✅        | ✅       | ✅       |
   | `wasi:random/random`          | ✅        | ✅       | ✅       |
   | `cyfr:vault/read`           | ✅*       | ❌       | ❌       |
-  | `cyfr:process/pipe`         | ✅‡       | ❌       | ❌       |
   | `cyfr:question/ask`         | ✅¶       | ❌       | ❌       |
 
   *`cyfr:vault/read` resolves fields from the Vault entry a consent edge binds
   †`cyfr:oauth/token` resolves a token from the Vault OAuth entry a consent edge binds
-  ‡`cyfr:process/pipe` is a session on the program a `login` need is bound to: each
-  call is a host call (`c:Prima.HostAPI.pipe_open/4` and the rest), and CYFR decides
-  the need, the binding and the session
   ¶`cyfr:question/ask` asks the run's person before an action the manifest declares
   under `asks`, and waits: each call is a `c:Prima.HostAPI.question_ask/3` host call,
   waited on in `c:Prima.HostAPI.question_wait/3` calls. A reagent does nothing outside

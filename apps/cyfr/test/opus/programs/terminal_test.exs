@@ -1077,16 +1077,6 @@ defmodule Opus.Programs.TerminalTest do
 
       assert sentence =~ "Aqua's browser"
 
-      # Nor as a catalyst's pipe.
-      assert {:error, {:invalid_argument, _sentence}} =
-               Programs.pipe_open(
-                 browser,
-                 "key",
-                 [],
-                 "opener",
-                 System.system_time(:millisecond) + 5_000
-               )
-
       refute_received {:session, "open", _message, _fields}
     end
 

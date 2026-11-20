@@ -5,9 +5,8 @@ defmodule Opus.Programs.Words do
   @moduledoc """
   The words a program is started with after its pinned command: what a
   person typed after it (a password, a sign-in code, whatever the program
-  takes), or what a catalyst passes its session. They are wrapped where
-  they enter: the gate's open wraps a person's, and a catalyst's pipe its
-  own as it asks the box to open. They travel wrapped through the
+  takes). They are wrapped where they enter, the gate's open, and travel
+  wrapped through the
   terminal, the box's open and every message between them, so
   a status, a debug log or a crash report that prints one prints how many
   words there are and none of them. They are unwrapped in one place, where

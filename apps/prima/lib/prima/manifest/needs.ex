@@ -203,10 +203,7 @@ defmodule Prima.Manifest.Needs do
 
   @doc """
   Whether a normalized needs list (`from_manifest/1`, or a setup plan's
-  needs, which carry the same `kind`) holds a login need: the one way a
-  component runs a program itself, since the pipe opens only the program
-  its own login need is bound to (`Opus.Host.Pipe`). A component with
-  none runs no program, so every call it makes is CYFR's to decide.
+  needs, which carry the same `kind`) holds a login need.
   """
   @spec login?([map()] | nil) :: boolean()
   def login?(needs) when is_list(needs), do: Enum.any?(needs, &(Map.get(&1, :kind) == @login))

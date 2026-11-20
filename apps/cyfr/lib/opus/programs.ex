@@ -40,18 +40,6 @@ defmodule Opus.Programs do
   the brain sessions threads kept for the home are forgotten, so a member
   whose brain ran there starts a new one.
 
-  ## Pipes
-
-  `pipe_open/5` opens, for an attempt of a catalyst whose login need the
-  caller resolved (`Opus.Host.Pipe`), a `run` session of a program row in
-  the row's kept home under a key, held by an `Opus.Programs.Pipe` process
-  that belongs to the row and the key, never to the attempt: a later
-  attempt opening the same key attaches to the session while its program
-  runs. `pipe_send/5`, `pipe_recv/6` and `pipe_close/4` carry it for an
-  attempt that opened it, each in the caller's process. A session no
-  attempt uses for the box's idle period ends, and so does every session
-  of a row that is deleted (`end_mounts/2`).
-
   ## Terminals
 
   `start/3` runs a program row's command, with the words its caller gives
@@ -96,13 +84,12 @@ defmodule Opus.Programs do
 
   use Supervisor
 
-  alias Opus.Programs.{Box, Pipe, Session, Terminal}
+  alias Opus.Programs.{Box, Session, Terminal}
 
   @registry Opus.Programs.Registry
   # The refusals of a session route that say its owner, and so its
   # session, is not on the service any more.
   @stale [:stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
-  @ended %{lines: [], dropped: 0, running: false}
   # The margin an open's holder needs to answer past the deadline that it
   # passed.
   @answer_margin_ms 1_000
@@ -130,7 +117,7 @@ defmodule Opus.Programs do
   `:root` (the local box's service URL and 32-byte key) and `:cluster`
   (true: no box). With either of the first two absent or invalid the local
   box's start answers `:ignore` and there is no box. The registry comes
-  first, then the supervisor of pipe holders and terminals, then the box: a box that dies restarts
+  first, then the supervisor of terminals, then the box: a box that dies restarts
   alone, and its holders, refused by the service once its lease lapses,
   hold their owners again.
   """
@@ -297,11 +284,10 @@ defmodule Opus.Programs do
   # ============================================================================
 
   @doc """
-  End every running terminal, pipe and brain session of the athanor's
-  program row `row_id`: the row was changed or deleted, so nothing runs as
-  it was defined any more. Answers at once; each terminal and each brain
-  holder (`Opus.Brain`) ends `:row_changed`, and each pipe holder closes
-  its session and releases its owner.
+  End every running terminal and brain session of the athanor's program
+  row `row_id`: the row was changed or deleted, so nothing runs as it was
+  defined any more. Answers at once; each terminal and each brain holder
+  (`Opus.Brain`) ends `:row_changed`.
   """
   @spec end_mounts(String.t(), String.t()) :: :ok
   def end_mounts(athanor_id, row_id) when is_binary(athanor_id) and is_binary(row_id) do
@@ -993,79 +979,14 @@ defmodule Opus.Programs do
   defp typed({:error, _unanswered}), do: {:error, :unavailable}
 
   # ============================================================================
-  # Pipes
+  # A holder's sessions
   # ============================================================================
 
   @doc """
-  Open, for the attempt `opener`, the `run` session of the program row
-  `row` (a stored `mcp_servers` program row with a kept home) in its kept
-  home under `key`, starting its program with `argv` appended unless it
-  runs for the key. Answers the session and whether it
-  was running (`resumed`); a repeat by the same opener while the session
-  is the same answers as the first did. Everything, the owner's
-  acquisition and a retry included, fits `deadline` (Unix milliseconds):
-  past it the open answers
-  `{:error, :deadline}` and leaves nothing it started open. Aqua's
-  browser's row is refused (an `:invalid_argument` saying so): it runs
-  only for its owner, never as a catalyst's pipe. Refused otherwise as
-  `hold/2` and the session route refuse.
-  """
-  @spec pipe_open(map(), String.t(), [String.t()], String.t(), integer()) ::
-          {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
-  def pipe_open(row, key, argv, opener, deadline)
-      when is_binary(key) and is_list(argv) and is_binary(opener) and is_integer(deadline) do
-    if Opus.Programs.Definition.browser?(row),
-      do: {:error, @browser_row},
-      else: pipe_open(row, key, argv, opener, deadline, 1)
-  end
-
-  # A holder that ended as it was found (its idle period ran out) is
-  # started afresh, once. The call is awaited past the deadline by the
-  # margin the holder needs to answer that it passed.
-  defp pipe_open(row, key, argv, opener, deadline, tries) do
-    with {:ok, pid} <- pipe_holder(row, key) do
-      wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
-      GenServer.call(pid, {:open, opener, argv, deadline}, wait)
-    end
-  catch
-    :exit, {reason, _} when reason in [:noproc, :normal] and tries > 0 ->
-      pipe_open(row, key, argv, opener, deadline, tries - 1)
-
-    :exit, {:timeout, _} ->
-      {:error, :deadline}
-
-    :exit, _ ->
-      {:error, :backends_unavailable}
-  end
-
-  defp left(deadline), do: max(deadline - System.system_time(:millisecond), 1)
-
-  defp pipe_holder(row, key) do
-    owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch}
-
-    args = [
-      name:
-        {:via, Registry,
-         {@registry, {:pipe, owner.athanor_id, owner.server_id, owner.epoch, key}}},
-      owner: owner,
-      key: key
-    ]
-
-    case DynamicSupervisor.start_child(@relays, {Pipe, args}) do
-      {:ok, pid} -> {:ok, pid}
-      {:error, {:already_started, pid}} -> {:ok, pid}
-      {:error, {:shutdown, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
-    end
-  catch
-    :exit, _ -> {:error, :backends_not_configured}
-  end
-
-  @doc """
-  The box's open of a session for the holder `holder` of `owner` (a pipe,
-  `Opus.Programs.Pipe`, or a terminal, `Opus.Programs.Terminal`), with
-  `params` (`program`, `home_id`, `key`, `argv`, and a terminal's `mode`,
-  `rows` and `cols`): recorded in the box before the backend is asked, so whatever
+  The box's open of a session for the holder `holder` of `owner` (a brain
+  session, `Opus.Brain`, or a terminal, `Opus.Programs.Terminal`), with
+  `params` (`program`, `home_id`, `key`, `argv`, its `mode`, `:run` unless
+  it names one, and a terminal's `rows` and `cols`): recorded in the box before the backend is asked, so whatever
   the backend answers under the key is the box's, and answered by
   `deadline` (Unix milliseconds). Answers the session the box gave the
   key, `{:error, :deadline}` past it, or the refusal.
@@ -1098,126 +1019,6 @@ defmodule Opus.Programs do
          ) do
       :ok -> :ok
       {:error, _unanswered} -> {:error, :unanswered}
-    end
-  end
-
-  @doc """
-  Write `lines` to the pipe session `session` of the athanor, for the
-  attempt `opener` that opened it, within `deadline` (as `pipe_open/6`'s).
-  `{:error, :ended}` once its program no longer runs, or when no holder
-  holds the session any more; `{:error, :denied}` for a session the opener
-  did not open; `{:error, :uncertain}` when the box's answer did not come
-  back, since the lines may have reached the program.
-  """
-  @spec pipe_send(String.t(), String.t(), String.t(), [String.t()], integer()) ::
-          :ok | {:error, term()}
-  def pipe_send(athanor_id, opener, session, lines, deadline)
-      when is_list(lines) and is_integer(deadline) do
-    case use_pipe(athanor_id, opener, session) do
-      {:ok, grant} ->
-        case Session.send(grant, session, lines, left(deadline)) do
-          {:ok, :running} ->
-            :ok
-
-          {:ok, :ended} ->
-            {:error, :ended}
-
-          {:error, {:refused, code, _boot}} when code in [:unknown_session | @stale] ->
-            {:error, :ended}
-
-          {:error, reason} ->
-            {:error, sent(reason)}
-        end
-
-      :none ->
-        {:error, :ended}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # What a send's failure says of its lines. An answer the box gave
-  # refused them before they were written; one that did not arrive, did
-  # not read, or says the box failed inside, may follow their writing.
-  defp sent(:backends_unavailable), do: :uncertain
-  defp sent({:unreadable, _error}), do: :uncertain
-  defp sent({:refused, :internal, _boot}), do: :uncertain
-  defp sent(reason), do: reason
-
-  @doc """
-  The lines of the pipe session `session` of the athanor past `after_seq`,
-  for the attempt `opener` that opened it, waiting up to `max_wait_ms` and
-  awaiting the answer until `deadline` (as `pipe_open/6`'s). A session no
-  holder holds any more answers no lines and `running: false`, and so does
-  one the service no longer knows.
-  """
-  @spec pipe_recv(
-          String.t(),
-          String.t(),
-          String.t(),
-          non_neg_integer(),
-          non_neg_integer(),
-          integer()
-        ) ::
-          {:ok,
-           %{lines: [Prima.LocusBackends.line()], dropped: non_neg_integer(), running: boolean()}}
-          | {:error, term()}
-  def pipe_recv(athanor_id, opener, session, after_seq, max_wait_ms, deadline)
-      when is_integer(deadline) do
-    case use_pipe(athanor_id, opener, session) do
-      {:ok, grant} ->
-        slack = max(left(deadline) - max_wait_ms, 1)
-
-        case Session.recv(grant, session, after_seq, max_wait_ms, slack) do
-          {:ok, answer} ->
-            {:ok, Map.take(answer, [:lines, :dropped, :running])}
-
-          {:error, {:refused, code, _boot}} when code in [:unknown_session | @stale] ->
-            {:ok, @ended}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      :none ->
-        {:ok, @ended}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  End the pipe session `session` of the athanor, for the attempt `opener`
-  that opened it: its program ended and its owner released. A session no
-  holder holds any more answers `:ok`.
-  """
-  @spec pipe_close(String.t(), String.t(), String.t(), integer()) :: :ok | {:error, term()}
-  def pipe_close(athanor_id, opener, session, deadline) when is_integer(deadline) do
-    case pipe_pid(session) do
-      nil -> :ok
-      pid -> GenServer.call(pid, {:close, athanor_id, opener, session}, left(deadline))
-    end
-  catch
-    :exit, _ -> :ok
-  end
-
-  defp use_pipe(athanor_id, opener, session) do
-    case pipe_pid(session) do
-      nil -> :none
-      pid -> GenServer.call(pid, {:use, athanor_id, opener, session}, 5_000)
-    end
-  catch
-    :exit, _ -> :none
-  end
-
-  defp pipe_pid(session) when is_binary(session) do
-    if Process.whereis(@registry) do
-      case Registry.lookup(@registry, {:pipe_session, session}) do
-        [{pid, _}] -> pid
-        [] -> nil
-      end
     end
   end
 end
