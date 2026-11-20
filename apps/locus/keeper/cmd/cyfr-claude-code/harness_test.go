@@ -61,9 +61,9 @@ func TestAnAnswerCarriesTheCallsArgumentsAndNoAnswerTheModelWrote(t *testing.T) 
 }
 
 // Every error the harness types an account's sign-in or standing with is
-// the wire's `authentication`, said in the driver's words, which name both
-// things the program can run with, since a refused key in its environment
-// types the same as a sign-in that is gone.
+// the wire's `authentication`, said in the driver's words: the account or
+// key the program used was refused, never which, since a refused key in
+// its environment types the same as a sign-in that is gone.
 func TestAnAccountsErrorIsTypedAuthenticationInTheDriversWords(t *testing.T) {
 	for _, harness := range []string{"authentication_failed", "oauth_org_not_allowed", "account_on_hold",
 		"verification_required", "billing_error", "cloud_credential_error"} {
@@ -71,7 +71,7 @@ func TestAnAccountsErrorIsTypedAuthenticationInTheDriversWords(t *testing.T) {
 			t.Fatalf("%s is an account's error: %s", harness, kind)
 		}
 	}
-	if errorSentence("authentication") != "Claude Code has no sign-in or key that its provider accepts; check its sign-in on the program's terminal, or a key in its settings." {
+	if errorSentence("authentication") != "The account or key Claude Code used was refused; check its sign-in on the program's terminal, or a key in its settings." {
 		t.Fatalf("an account's error is said in the driver's words: %q", errorSentence("authentication"))
 	}
 }
