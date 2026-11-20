@@ -1109,10 +1109,16 @@ defmodule Arca.ThreadStorage do
       # that hold them.
       forgotten = owe_forgets_of!(actor, ids ++ Enum.map(readers, &elem(&1, 0)))
 
-      cancel = Map.put_new(attrs, :error, "the room was deleted")
+      gone = if thread.kind == "crew", do: "the thread was deleted", else: "the room was deleted"
+      cancel = Map.put_new(attrs, :error, gone)
 
+      # A turn asked from a thread that survives the delete answers it;
+      # one whose asker goes with it answers nobody.
       cancelled =
-        Enum.flat_map(ids, &Arca.TurnStorage.cancel_open!(actor, &1, cancel, :silent))
+        Enum.flat_map(
+          ids,
+          &Arca.TurnStorage.cancel_open!(actor, &1, cancel, {:silent_to, ids})
+        )
 
       stopped = forget!(actor, ids, readers, attrs)
 

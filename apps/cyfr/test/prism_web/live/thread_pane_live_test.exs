@@ -2432,6 +2432,80 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   describe "the delete" do
     @delete ~s([id$="-menu"] button[phx-click="delete"])
 
+    test "deleting a member's queued job answers the request in its surviving room",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      actor = Sanctum.Context.actor(here)
+      {:ok, child} = Threads.crew_thread(actor, room.id, "explorer")
+      pane = open_pane(conn, athanor, child)
+
+      {:ok, %{message: request}} =
+        Arca.TurnStorage.accept_message(actor, room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "aqua",
+            addressee: "explorer",
+            status: "pending",
+            content: "read the plan"
+          },
+          request: %{
+            member: "explorer",
+            task: "read the plan",
+            tools: nil,
+            options: %{},
+            person_id: here.user_id,
+            origin: :interactive
+          }
+        })
+
+      {:ok, %{turn: turn}} =
+        Arca.TurnStorage.accept_message(actor, child.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "aqua",
+            addressee: "explorer",
+            content: request.content,
+            payload: %{"request_id" => request.id}
+          },
+          turn: %{agent: "explorer", requested_by: here.user_id, origin: :interactive},
+          reply_address: %{asking_thread_id: room.id, request_id: request.id}
+        })
+
+      assert turn.status == "accepted"
+      refute :sys.get_state(pane.pid).socket.assigns.running
+      assert {:ok, %{status: "accepted"}} = Aqua.Tape.turn(here, turn.id)
+      assert {:ok, []} = Arca.Outbox.pending(actor, "crew_delivery", "crew_reply")
+      before = Threads.get(actor, room.id)
+
+      pane |> element(@delete) |> render_click()
+
+      assert {:error, :not_found} = Threads.get(actor, child.id)
+      assert Threads.get(actor, room.id) == before
+      assert {:ok, [reply]} = Arca.Outbox.pending(actor, "crew_delivery", "crew_reply")
+      assert reply.snapshot["request_ids"] == [request.id]
+      assert reply.snapshot["outcome"] == "cancelled"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a pane that cannot read a foreign thread offers no Delete and ignores a forged event",
+         %{conn: conn, athanor: athanor, here: here} do
+      other_user = test_user()
+      other_athanor = Sanctum.Test.People.athanor!(other_user.user_id)
+
+      other_actor = %{
+        Sanctum.Context.actor(here)
+        | athanor_id: other_athanor.id,
+          user_id: other_user.user_id
+      }
+
+      {:ok, foreign} = Arca.Test.Days.thread(other_actor)
+      before = Threads.list(other_actor)
+      pane = open_pane(conn, athanor, foreign)
+      refute has_element?(pane, @delete)
+      render_click(pane, "delete", %{"thread" => foreign.id})
+      assert Threads.list(other_actor) == before
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "a daily thread's menu asks first, saying what goes and what stays, and a yes " <>
            "removes it and its crew threads through thread.delete; the list shows neither",
          %{conn: conn, athanor: athanor, here: here, thread: room} do
