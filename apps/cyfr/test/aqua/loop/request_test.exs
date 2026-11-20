@@ -500,7 +500,7 @@ defmodule Aqua.Loop.RequestTest do
     end
 
     # The thread's projection rides every request whole, and its last
-    # message is the current ask (`tests/fixtures/session_context.json`).
+    # message is the current ask.
     test "a crew member's thread rides every request whole, its last message the current ask" do
       call = fn seq, step, id, name, arguments ->
         row(seq, "tool_call", @agent, name, %{
@@ -542,13 +542,97 @@ defmodule Aqua.Loop.RequestTest do
 
       messages = Request.messages(rows, %{}, me: "claude-code")
 
-      %{"messages" => expected} =
-        "../../../../../tests/fixtures/session_context.json"
-        |> Path.expand(__DIR__)
-        |> File.read!()
-        |> Jason.decode!()
-
-      assert messages == expected
+      assert messages == [
+               %{
+                 "content" => [
+                   %{
+                     "text" =>
+                       "[Summary of the thread so far]\nThe person wants the todo list kept short.",
+                     "type" => "text"
+                   },
+                   %{
+                     "text" =>
+                       "[aqua asked claude-code (request msg_3, answered)]\nTidy notes/todo.md.",
+                     "type" => "text"
+                   }
+                 ],
+                 "role" => "user"
+               },
+               %{
+                 "content" => [
+                   %{"text" => "I will read it first.", "type" => "text"},
+                   %{
+                     "arguments" => %{"action" => "read", "path" => "notes/todo.md"},
+                     "id" => "call_1",
+                     "name" => "files",
+                     "type" => "tool_call"
+                   }
+                 ],
+                 "role" => "assistant"
+               },
+               %{
+                 "content" => [
+                   %{
+                     "content" => "1: buy milk\n2: call Ana",
+                     "is_error" => false,
+                     "name" => "files",
+                     "tool_call_id" => "call_1",
+                     "type" => "tool_result"
+                   }
+                 ],
+                 "role" => "tool"
+               },
+               %{
+                 "content" => [
+                   %{
+                     "arguments" => %{"action" => "write", "path" => "notes/todo.md"},
+                     "id" => "call_2",
+                     "name" => "files",
+                     "type" => "tool_call"
+                   },
+                   %{
+                     "arguments" => %{"action" => "get", "url" => "https://example.com"},
+                     "id" => "call_3",
+                     "name" => "http",
+                     "type" => "tool_call"
+                   }
+                 ],
+                 "role" => "assistant"
+               },
+               %{
+                 "content" => [
+                   %{
+                     "content" => "written",
+                     "is_error" => false,
+                     "name" => "files",
+                     "tool_call_id" => "call_2",
+                     "type" => "tool_result"
+                   },
+                   %{
+                     "content" => "Refused by the person.",
+                     "is_error" => true,
+                     "name" => "http",
+                     "tool_call_id" => "call_3",
+                     "type" => "tool_result"
+                   }
+                 ],
+                 "role" => "tool"
+               },
+               %{
+                 "content" => [%{"text" => "Done: two items are left.", "type" => "text"}],
+                 "role" => "assistant"
+               },
+               %{
+                 "content" => [
+                   %{
+                     "text" =>
+                       "[aqua asked claude-code (request msg_12, pending)]\nAnd add the dentist.",
+                     "type" => "text"
+                   }
+                 ],
+                 "role" => "user"
+               }
+             ]
 
       assert %{"role" => "user", "content" => [%{"text" => "[aqua asked claude-code" <> _}]} =
                List.last(messages)

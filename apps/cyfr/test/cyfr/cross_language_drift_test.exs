@@ -592,9 +592,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/model_test.exs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests)}
     ],
-    "session_context.json" => [
-      {"apps/cyfr/test/aqua/loop/request_test.exs", ~w(messages)}
-    ],
     "access_modes.json" => [
       {"apps/codex/internal/access/head_test.go", ~w(derive boot profiles names words)},
       {"apps/codex/internal/access/refusals_test.go", ~w(refusals)},
