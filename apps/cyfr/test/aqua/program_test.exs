@@ -188,11 +188,16 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
-    # The member Aqua runs on is a worker too, in a thread of its own: on
-    # one row, one folder and one sign-in, the two hold a session each,
-    # and forgetting Aqua's thread forgets its session alone.
-    test "Aqua and the member it runs on hold a session each on one row; forgetting Aqua's " <>
-           "thread leaves the member's and the sign-in",
+    # The member Aqua runs on is a worker too, in a thread of its own, on
+    # the same row: each thread stores the session of its own. Aqua's is
+    # made by a real turn, the member's job's is written as a turn on the
+    # row would leave it (its turn completed by hand). Deleting Aqua's
+    # thread owes the forgetting of Aqua's stored session alone, and
+    # leaves the member's thread, its stored session and the row whole.
+    # It proves the stored records apart, never two sessions held live at
+    # once: that is the real Claude Code's recheck.
+    test "deleting Aqua's thread forgets its stored session alone, leaving the member's on " <>
+           "the same row and the row",
          %{ctx: ctx, thread: thread, fake: fake} do
       seat!(ctx, "claude-code")
       row = brain_row!(ctx, "claude")
