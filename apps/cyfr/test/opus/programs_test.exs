@@ -2267,7 +2267,8 @@ defmodule Opus.ProgramsTest do
          %{fake: fake, row: row, admin: admin} do
       # A live owner answers the terminal's hold at once, with the grant of
       # the boot it was synced under.
-      assert {:ok, %{session: _}} = Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
+      holder = box_holder(row)
+      assert {:ok, %{session: _}} = box_open(holder, "k")
       Scripted.restart(fake, "bb_second")
 
       assert {:ok, %{session: _session}} =
@@ -2399,6 +2400,266 @@ defmodule Opus.ProgramsTest do
 
     assert first == :close, "the owner's release outran the session's close"
     assert_released(row, 1)
+  end
+
+  # A holder of its own, as `Opus.Brain` and a terminal are: it holds the
+  # row's owner, opens and closes its keys' sessions through the box
+  # (`Opus.Programs.box_open/4`, `box_close/3`) and tells the test what the
+  # box answered and anything else it heard. Its way out closes what it
+  # opened, then releases the owner, as theirs does.
+  defp box_holder(row) do
+    test = self()
+    owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch}
+
+    holder =
+      spawn(fn ->
+        {:ok, _grant} = Programs.hold(owner)
+        send(test, {:holding, self()})
+        holding(test, owner, [])
+      end)
+
+    assert_receive {:holding, ^holder}, 3_000
+    holder
+  end
+
+  defp holding(test, owner, keys) do
+    receive do
+      {:open, key, deadline} ->
+        params = %{
+          program: Opus.Programs.Definition.program_name(),
+          home_id: owner.server_id,
+          key: key,
+          mode: :run,
+          argv: Opus.Programs.Words.new([])
+        }
+
+        send(test, {:opened, self(), key, Programs.box_open(owner, self(), params, deadline)})
+        holding(test, owner, Enum.uniq([key | keys]))
+
+      {:close, key} ->
+        send(test, {:closed, self(), key, Programs.box_close(owner, owner.server_id, key)})
+        holding(test, owner, List.delete(keys, key))
+
+      :stop ->
+        for key <- keys, do: Programs.box_close(owner, owner.server_id, key)
+        Programs.release(owner)
+
+      heard ->
+        send(test, {:heard, self(), heard})
+        holding(test, owner, keys)
+    end
+  end
+
+  # The holder's open of `key`, awaited.
+  defp box_open(holder, key, deadline \\ soon()) do
+    send(holder, {:open, key, deadline})
+    assert_receive {:opened, ^holder, ^key, answer}, 5_000
+    answer
+  end
+
+  describe "a holder's sessions" do
+    setup %{ctx: ctx} do
+      row = driven_row(ctx, "claude")
+      {:ok, row: row, home: row.id}
+    end
+
+    test "a second open of a running key attaches to its session, and one that ended starts again",
+         %{fake: fake, row: row, home: home} do
+      start_controller(fake)
+      holder = box_holder(row)
+
+      assert {:ok, %{session: first, resumed: false}} = box_open(holder, "k1")
+
+      assert_receive {:session, "open", %{"mode" => "run", "home_id" => ^home, "key" => "k1"}, _},
+                     2_000
+
+      assert {:ok, %{session: ^first, resumed: true}} = box_open(holder, "k1")
+
+      Scripted.end_sessions(fake, row.id)
+      assert {:ok, %{session: second, resumed: false}} = box_open(holder, "k1")
+      refute second == first
+    end
+
+    test "a holder that ends on its own closes its sessions before its owner is released",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(holder, "k")
+
+      send(holder, :stop)
+      assert_closed_then_released(row, session)
+    end
+
+    test "a holder killed has its session closed by the box, its row's other holder untouched",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      killed = box_holder(row)
+      kept = box_holder(row)
+      assert {:ok, %{session: first}} = box_open(killed, "a")
+      assert {:ok, %{session: second}} = box_open(kept, "b")
+      flush_sessions()
+
+      # Killed, it closes nothing itself: the box closes its program, and
+      # keeps the owner for the other.
+      Process.exit(killed, :kill)
+      assert_receive {:session, "close", %{"session" => ^first}, _}, 2_000
+      refute_receive {:control, "release", _message, _fields}, 300
+      assert %{^second => %{running: true}} = Scripted.sessions(fake, row.id)
+    end
+
+    test "a holder killed before it hears the box's answer leaves the box its session to close",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      kept = box_holder(row)
+      assert {:ok, %{session: sibling}} = box_open(kept, "b")
+      killed = box_holder(row)
+      flush_sessions()
+      Scripted.hold(fake, "opened")
+
+      # The backend's session stands; its answer is on its way when the
+      # holder that asked is killed.
+      send(killed, {:open, "a", soon()})
+      assert_receive {:held, "opened", answer}, 2_000
+      Process.exit(killed, :kill)
+      send(answer, :go)
+
+      assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
+      refute closed == sibling
+      refute_receive {:control, "release", _message, _fields}, 300
+      assert %{^sibling => %{running: true}} = Scripted.sessions(fake, row.id)
+    end
+
+    # A close the box owes for an open whose holder died settles on the
+    # service's `unknown_owner` once the owner it named is gone, where a
+    # `lapsed` keeps it owed for the drain.
+    test "a late close settles after its backend owner expires", %{fake: fake, row: row} do
+      controller = start_controller(fake, lease_ms: 500)
+      kept = box_holder(row)
+      assert {:ok, %{session: _sibling}} = box_open(kept, "b")
+      killed = box_holder(row)
+      Scripted.hold(fake, "opened")
+
+      send(killed, {:open, "a", soon()})
+      assert_receive {:held, "opened", answer}, 2_000
+      Process.exit(killed, :kill)
+
+      eventually(
+        fn ->
+          Agent.get(fake.agent, fn st ->
+            Enum.any?(st.leases, fn {_key, until} ->
+              until <= System.monotonic_time(:millisecond)
+            end)
+          end)
+        end,
+        "the backend owner's lease to expire"
+      )
+
+      send(answer, :go)
+
+      eventually(
+        fn ->
+          state = :sys.get_state(controller)
+
+          state.opens == %{} and
+            Enum.all?(state.closing, fn {_id, record} -> not record.inflight end)
+        end,
+        "the late open and its first close to settle"
+      )
+
+      for _ <- 1..3, do: tick(controller)
+
+      eventually(
+        fn -> :sys.get_state(controller).closing == %{} end,
+        "the gone owner to confirm the late close"
+      )
+    end
+
+    test "a close refused once is owed by the box past its holder's release, and lands on the sweep",
+         %{fake: fake, row: row} do
+      controller = start_controller(fake)
+      kept = box_holder(row)
+      assert {:ok, %{session: _sibling}} = box_open(kept, "b")
+      closing = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(closing, "a")
+      flush_sessions()
+      Scripted.refuse_once(fake, "close", "unavailable")
+
+      # The holder closes and releases; the box's close is refused.
+      send(closing, {:close, "a"})
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      assert_receive {:closed, ^closing, "a", {:error, :unanswered}}, 3_000
+      send(closing, :stop)
+      refute_receive {:control, "release", _message, _fields}, 300
+
+      # The sweep sends it again, and the program ends.
+      tick(controller)
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      assert %{^session => %{running: false}} = Scripted.sessions(fake, row.id)
+    end
+
+    test "a late first answer never closes the session a second open of the key was given",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, %{session: _sibling}} = box_open(holder, "b")
+      flush_sessions()
+
+      # The first open's session stands at the backend, its answer held
+      # past its caller's deadline.
+      Scripted.hold(fake, "opened")
+      deadline = System.system_time(:millisecond) + 1_000
+      send(holder, {:open, "a", deadline})
+      assert_receive {:held, "opened", answer}, 2_000
+      assert_receive {:opened, ^holder, "a", {:error, :deadline}}, 3_000
+
+      # A second open of the key is given the session.
+      assert {:ok, %{session: session}} = box_open(holder, "a")
+      flush_sessions()
+
+      # The first answer, late, closes nothing of it.
+      send(answer, :go)
+      refute_receive {:session, "close", %{"session" => ^session}, _}, 1_000
+      assert %{^session => %{running: true}} = Scripted.sessions(fake, row.id)
+    end
+
+    test "a success queued before the deadline and handled after it is closed, never given",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, %{session: sibling}} = box_open(holder, "b")
+      flush_sessions()
+      box = GenServer.whereis(Programs.via("local"))
+
+      Scripted.hold(fake, "opened")
+      deadline = System.system_time(:millisecond) + 1_500
+      send(holder, {:open, "a", deadline})
+      assert_receive {:held, "opened", answer}, 2_000
+
+      # The answer reaches the box before the deadline, and is handled
+      # only after it.
+      :sys.suspend(box)
+      send(answer, :go)
+      # sleep-ok: the box is held 300 ms past the open's deadline under test, so the answer is
+      # handled late
+      Process.sleep(max(deadline - System.system_time(:millisecond), 0) + 300)
+      :sys.resume(box)
+
+      assert_receive {:opened, ^holder, "a", {:error, :deadline}}, 3_000
+      assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
+      refute closed == sibling
+    end
+
+    test "a row that is disabled stands its holders down", %{ctx: ctx, fake: fake, row: row} do
+      controller = start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, %{session: _session}} = box_open(holder, "k")
+
+      {:ok, _} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "claude", %{enabled: false})
+
+      tick(controller)
+      assert_receive {:heard, ^holder, {Opus.Programs, :stand_down, _key}}, 3_000
+    end
   end
 
   # The pipe holders running on this member.
@@ -2560,27 +2821,6 @@ defmodule Opus.ProgramsTest do
       assert_received {:session, "send", %{"lines" => ["once"]}, _}
     end
 
-    test "a holder killed has its session closed by the box, its row's other holder untouched",
-         %{ctx: ctx, fake: fake, row: row} do
-      start_controller(fake)
-
-      assert {:ok, %{session: first}} =
-               Programs.pipe_open(row, "pipe-a", [], "att_1", soon())
-
-      assert {:ok, %{session: second}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
-
-      [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, first})
-      flush_sessions()
-
-      # Killed, it runs no terminate/2: well before the idle period, the box
-      # closes its program all the same, and keeps the owner for the other.
-      Process.exit(pid, :kill)
-      assert_receive {:session, "close", %{"session" => ^first}, _}, 2_000
-      refute_receive {:control, "release", _message, _fields}, 300
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", second, ["still here"], soon())
-    end
-
     test "one deadline covers the owner's acquisition and the open; nothing of a late open runs",
          %{fake: fake, row: row} do
       start_controller(fake)
@@ -2611,201 +2851,6 @@ defmodule Opus.ProgramsTest do
       # No holder keeps it, and the owner is released with it.
       assert_released(row, 1)
       assert pipe_holders() == []
-    end
-
-    test "a holder killed before it hears the box's answer leaves the box its session to close",
-         %{ctx: ctx, fake: fake, row: row} do
-      start_controller(fake)
-
-      assert {:ok, %{session: sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
-
-      flush_sessions()
-      Scripted.hold(fake, "opened")
-
-      opening =
-        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", soon()) end)
-
-      # The backend's session stands; its answer is on its way when the
-      # holder that asked is killed.
-      assert_receive {:held, "opened", answer}, 2_000
-      key = {:pipe, row.athanor_id, row.id, row.epoch, "pipe-a"}
-      [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
-      Process.exit(holder, :kill)
-      send(answer, :go)
-      assert {:error, _} = Task.await(opening, 5_000)
-
-      assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
-      refute closed == sibling
-      refute_receive {:control, "release", _message, _fields}, 300
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", sibling, ["still here"], soon())
-    end
-
-    # A close the box owes for an open whose holder died settles on the
-    # service's `unknown_owner` once the owner it named is gone, where a
-    # `lapsed` keeps it owed for the drain.
-    test "a late pipe close settles after its backend owner expires", %{
-      fake: fake,
-      row: row,
-      home: _home
-    } do
-      controller = start_controller(fake, lease_ms: 500)
-
-      assert {:ok, %{session: _sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
-
-      Scripted.hold(fake, "opened")
-
-      opening =
-        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", soon()) end)
-
-      assert_receive {:held, "opened", answer}, 2_000
-      key = {:pipe, row.athanor_id, row.id, row.epoch, "pipe-a"}
-      [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
-      Process.exit(holder, :kill)
-
-      eventually(
-        fn ->
-          Agent.get(fake.agent, fn st ->
-            Enum.any?(st.leases, fn {_key, until} ->
-              until <= System.monotonic_time(:millisecond)
-            end)
-          end)
-        end,
-        "the backend owner's lease to expire"
-      )
-
-      send(answer, :go)
-      assert {:error, _} = Task.await(opening, 5_000)
-
-      eventually(
-        fn ->
-          state = :sys.get_state(controller)
-
-          state.opens == %{} and
-            Enum.all?(state.closing, fn {_id, record} -> not record.inflight end)
-        end,
-        "the late open and its first close to settle"
-      )
-
-      for _ <- 1..3, do: tick(controller)
-
-      eventually(
-        fn -> :sys.get_state(controller).closing == %{} end,
-        "the gone owner to confirm the late close"
-      )
-    end
-
-    test "a close refused once is owed by the box past its holder's release, and lands on the sweep",
-         %{ctx: ctx, fake: fake, row: row} do
-      controller = start_controller(fake)
-
-      assert {:ok, %{session: _sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
-
-      assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, "pipe-a", [], "att_1", soon())
-
-      flush_sessions()
-      Scripted.refuse_once(fake, "close", "unavailable")
-
-      # The holder closes and releases; the box's close is refused.
-      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session, soon())
-      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
-      refute_receive {:control, "release", _message, _fields}, 300
-
-      # The sweep sends it again, and the program ends.
-      tick(controller)
-      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
-      assert %{^session => %{running: false}} = Scripted.sessions(fake, row.id)
-    end
-
-    test "a late first answer never closes the session a second open of the key was given",
-         %{ctx: ctx, fake: fake, row: row} do
-      start_controller(fake)
-
-      assert {:ok, %{session: _sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_0", soon())
-
-      flush_sessions()
-
-      # The first open's session stands at the backend, its answer held
-      # past its caller's deadline.
-      Scripted.hold(fake, "opened")
-      deadline = System.system_time(:millisecond) + 1_000
-
-      first =
-        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", deadline) end)
-
-      assert_receive {:held, "opened", answer}, 2_000
-      assert {:error, :deadline} = Task.await(first, 3_000)
-
-      # A second open of the key is given the session.
-      assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, "pipe-a", [], "att_2", soon())
-
-      flush_sessions()
-
-      # The first answer, late, closes nothing of it.
-      send(answer, :go)
-      refute_receive {:session, "close", %{"session" => ^session}, _}, 1_000
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", session, ["intact"], soon())
-    end
-
-    test "a success queued before the deadline and handled after it is closed, never given",
-         %{fake: fake, row: row} do
-      start_controller(fake)
-
-      assert {:ok, %{session: sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_0", soon())
-
-      flush_sessions()
-      box = GenServer.whereis(Programs.via("local"))
-
-      Scripted.hold(fake, "opened")
-      deadline = System.system_time(:millisecond) + 1_500
-
-      opening =
-        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", deadline) end)
-
-      assert_receive {:held, "opened", answer}, 2_000
-
-      # The answer reaches the box before the deadline, and is handled
-      # only after it.
-      :sys.suspend(box)
-      send(answer, :go)
-      # sleep-ok: the box is held 300 ms past the pipe-open deadline under test, so the answer is
-      # handled late
-      Process.sleep(max(deadline - System.system_time(:millisecond), 0) + 300)
-      :sys.resume(box)
-
-      assert {:error, :deadline} = Task.await(opening, 3_000)
-      assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
-      refute closed == sibling
-    end
-
-    test "a row that is disabled stands its sessions down", %{
-      ctx: ctx,
-      fake: fake,
-      row: row,
-      home: _home
-    } do
-      controller = start_controller(fake)
-
-      assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
-
-      [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, session})
-      monitor = Process.monitor(pid)
-
-      {:ok, _} =
-        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "claude", %{enabled: false})
-
-      tick(controller)
-      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 3_000
-
-      assert {:ok, %{lines: [], running: false}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0, soon())
     end
   end
 
@@ -3080,11 +3125,12 @@ defmodule Opus.ProgramsTest do
     assert_receive {:control, "sync", %{"athanor_memory_bytes" => 268_435_456}, _}, 2_000
   end
 
-  test "a pipe open waits for the sync that carries a changed ceiling", %{ctx: ctx, fake: fake} do
+  test "an open waits for the sync that carries a changed ceiling", %{ctx: ctx, fake: fake} do
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 2_147_483_648)
     controller = start_controller(fake)
-    row = driven_row(ctx, "ceiling-pipe")
-    assert {:ok, _} = Programs.pipe_open(row, "before", [], "att_before", soon())
+    row = driven_row(ctx, "ceiling-open")
+    holder = box_holder(row)
+    assert {:ok, _} = box_open(holder, "before")
     assert_receive {:session, "open", %{"key" => "before"}, _}, 2_000
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 1)
     Scripted.hold(fake, "sync")
@@ -3093,8 +3139,7 @@ defmodule Opus.ProgramsTest do
     on_exit(fn -> send(held, :go) end)
     assert :sys.get_state(controller).athanor_memory_bytes == 1
 
-    opening =
-      Task.async(fn -> Programs.pipe_open(row, "after", [], "att_after", soon()) end)
+    send(holder, {:open, "after", soon()})
 
     overtook =
       receive do
@@ -3104,7 +3149,7 @@ defmodule Opus.ProgramsTest do
       end
 
     send(held, :go)
-    assert {:ok, _} = Task.await(opening, 5_000)
+    assert_receive {:opened, ^holder, "after", {:ok, _}}, 5_000
     await_idle(controller)
     refute overtook, "an open reached the service while its new ceiling sync was held"
   end
