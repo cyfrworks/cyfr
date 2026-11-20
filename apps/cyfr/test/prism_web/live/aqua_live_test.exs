@@ -259,6 +259,39 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, conn: conn, ctx: ctx, athanor: athanor}
     end
 
+    # Aqua on a member whose program is not installed: Aqua's card says so
+    # in the sentence Aqua's turn is refused with, naming the member, whose
+    # own card offers the install once and says nothing of it twice.
+    test "Aqua's card says its chosen member's program is missing", %{conn: conn, ctx: ctx} do
+      on_exit(fn ->
+        Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => nil})
+      end)
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "aqua",
+          "member" => "claude-code"
+        })
+
+      {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+      assert Aqua.Models.model_status(ctx, roster)["aqua"] == {:program_missing, "claude"}
+      {view, _html} = mount_athanor(conn, "/aqua")
+      sentence = Prima.Refusal.message({:crew_unready, "Claude Code", :program_missing})
+
+      assert has_element?(view, ~s(#aqua-card-aqua [data-test="program-refused"]), sentence)
+      refute has_element?(view, ~s(#aqua-card-aqua [data-test="install-program"]))
+
+      assert has_element?(
+               view,
+               ~s(#aqua-card-claude-code [data-test="install-program"]),
+               "install claude"
+             )
+
+      refute has_element?(view, ~s(#aqua-card-claude-code [data-test="program-refused"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     # A new athanor's Aqua runs on no one; the card names who it runs on and,
     # while that member does not stand, says why in the sentence Aqua's
     # turn is refused with (`Prima.Refusal`). A member in read-only whose

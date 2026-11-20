@@ -593,6 +593,24 @@ defmodule Aqua.SeatTest do
     assert system_lines(ctx, room) == [sentence]
   end
 
+  # A member whose brain is a program not installed here refuses Aqua's
+  # turn in the sentence Aqua's card says, naming the member, whose own
+  # card installs it.
+  test "Aqua on a member whose program is not installed refuses with that member's sentence",
+       %{ctx: ctx, room: room} do
+    script!([])
+    :ok = aqua!(ctx, %{"member" => "claude-code"})
+    consent!(ctx, @soul, [])
+
+    turn = accept!(ctx, room, "hello?")
+    reason = {:crew_unready, "Claude Code", :program_missing}
+    assert {:failed, ^reason} = run(ctx, turn)
+    sentence = Prima.Refusal.message(reason)
+    assert {:ok, %{status: "failed", error: ^sentence}} = Tape.turn(ctx, turn.id)
+    assert system_lines(ctx, room) == [sentence]
+    assert chats("aqua") == []
+  end
+
   # No old key is read: Aqua's file naming a brain of its own refuses
   # Aqua, on the page and as the thread's line.
   test "Aqua's file with a brain of its own is refused with the sentence that says what to delete",

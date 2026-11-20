@@ -836,6 +836,22 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp moved_grant(%{"member" => name}, name), do: Prima.AgentRef.soul_ref()
   defp moved_grant(_soul, name), do: Prima.AgentRef.ref(name)
 
+  # Whether the card says its program's state in the sentence a turn on it
+  # is refused with: a row that stands but cannot run, on every card, and
+  # a program not installed on Aqua's alone, the member's own card offering
+  # its install instead.
+  defp program_said?({state, _}, _soul?) when state in [:program_disabled, :program_unfit],
+    do: true
+
+  defp program_said?({:program_missing, _}, soul?), do: soul?
+  defp program_said?(_status, _soul?), do: false
+
+  # Whose brain a card's states are: Aqua's are the member's it runs on.
+  defp brain_title(%{"member" => member}, crew, true) when is_binary(member),
+    do: Enum.find_value(crew, member, &(&1["name"] == member && &1["title"]))
+
+  defp brain_title(agent, _crew, _soul?), do: agent["title"] || agent["name"]
+
   # Aqua runs in its member's mode: a member in read-only whose brain CYFR
   # cannot keep read-only leaves Aqua unable to run, in the member's
   # sentence (`Aqua.read_only_unheld/3`).
@@ -1505,16 +1521,19 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:missing, _}, @model_status)} class="text-amber-300">
           The model's catalyst is not installed here yet
         </span>
-        <%!-- A program row of the member's program's name that stands
-             but is no brain's is never one to install: it is said as a
-             turn on it is refused (`Prima.Refusal`), with the row to open
-             on the Programs page. --%>
+        <%!-- A program's state is said as a turn on it is refused
+             (`Prima.Refusal`), naming whose brain it is: on Aqua's card the
+             member it runs on. A row that stands but is no brain's is never
+             one to install: its row opens on the Programs page. A missing
+             program is installed from the member's own card, which offers
+             it above; Aqua's card says why Aqua cannot run. --%>
         <span
-          :if={match?({state, _} when state in [:program_disabled, :program_unfit], @model_status)}
+          :if={program_said?(@model_status, @is_soul)}
+          data-test="program-refused"
           class="text-amber-300"
         >
           {Prima.Refusal.message(
-            {:crew_unready, @agent["title"] || @agent["name"], elem(@model_status, 0)}
+            {:crew_unready, brain_title(@agent, @crew, @is_soul), elem(@model_status, 0)}
           )}
         </span>
         <.link

@@ -323,13 +323,16 @@ defmodule Aqua.Loop.Turn do
          do: {:ok, {nil, Map.delete(program, :driver)}, turn.model || agent["model"]}
   end
 
+  # A program row that does not stand is said as the member's card says
+  # it, naming whose brain it is: Aqua's is its member's, whose card
+  # installs or opens it.
   defp program_model(_turn, agent, {:error, {state, _name}}),
-    do: {:error, {:crew_unready, title(agent), state}}
+    do: {:error, {:crew_unready, brain_title(agent), state}}
 
   defp program_model(_turn, _agent, {:error, :unavailable}), do: {:error, :unavailable}
 
   defp program_model(_turn, agent, {:error, state}),
-    do: {:error, {:crew_unready, title(agent), state}}
+    do: {:error, {:crew_unready, brain_title(agent), state}}
 
   defp catalyst_model(ctx, turn, agent) do
     listing =
@@ -356,13 +359,14 @@ defmodule Aqua.Loop.Turn do
   defp holds(%{agent_mode: "read-only"}, agent, brain, name) do
     if Aqua.Models.holds_read_only?(brain),
       do: :ok,
-      else: {:error, {:read_only_unheld, moded(agent), name}}
+      else: {:error, {:read_only_unheld, brain_title(agent), name}}
   end
 
   defp holds(_auto, _agent, _brain, _name), do: :ok
 
-  defp moded(%{"holder" => %{title: title}}) when is_binary(title), do: title
-  defp moded(agent), do: title(agent)
+  # Whose brain and mode the agent's are: Aqua's are its member's.
+  defp brain_title(%{"holder" => %{title: title}}) when is_binary(title), do: title
+  defp brain_title(agent), do: title(agent)
 
   defp title(agent), do: agent["title"] || agent["name"]
 
