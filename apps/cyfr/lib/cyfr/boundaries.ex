@@ -471,7 +471,7 @@ defmodule Cyfr.Boundaries do
           "(`Sanctum.Vault.disclosed?/2`) before it unseals any; a " <>
           "catalyst's pipe mounts its login need through `Sanctum.Mount.resolve/4` " <>
           "(`Opus.Host.Pipe`), and a reset or retired home forgets the sessions of the " <>
-          "agents whose brain runs there (`Sanctum.Mount.agents_mounting/2`). " <>
+          "agents whose catalyst runs there (`Sanctum.Mount.agents_mounting/2`). " <>
           "`Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, and `build_tincture_context/2` is a tincture " <>

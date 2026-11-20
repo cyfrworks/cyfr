@@ -1422,7 +1422,9 @@ defmodule PrismWeb.ThreadPaneLive do
   # exists but is damaged, could not be read, or no longer covers what the
   # soul runs on, is said as such: no model is offered to connect over a
   # consent that exists. One that waits on the person's grant alone says
-  # so.
+  # so. A soul on a program the athanor has no row of, or whose row is
+  # disabled or no brain's, says which, as a turn on it is refused
+  # (`Prima.Refusal`).
   # An agents list that could not be read is not a room with no model.
   defp model_ready(_ctx, :unread), do: :agents_unavailable
 
@@ -1438,7 +1440,8 @@ defmodule PrismWeb.ThreadPaneLive do
   # who can be addressed and carries no model, so a model's status read
   # from it would always be none. Whether Aqua can answer is the soul's to
   # say, so the crew is left out. The soul is put in the roster's
-  # string-keyed projection, which `Aqua.model_status/2` reads. A list
+  # string-keyed projection, its catalyst or the name of its program,
+  # which `Aqua.model_status/2` reads. A list
   # that cannot be read is `:unread`, never no agents.
   defp agents(ctx) do
     soul = Compendium.agent_soul_type()
@@ -1446,7 +1449,12 @@ defmodule PrismWeb.ThreadPaneLive do
     case PrismWeb.Ops.call_tool(ctx, "aqua", %{"action" => "list", "detail" => true}) do
       {:ok, %{guides: guides}} when is_list(guides) ->
         for %{type: ^soul} = guide <- guides do
-          %{"name" => guide.name, "type" => guide.type, "catalyst_ref" => guide[:catalyst_ref]}
+          %{
+            "name" => guide.name,
+            "type" => guide.type,
+            "catalyst_ref" => guide[:catalyst_ref],
+            "program" => guide[:program]
+          }
         end
 
       _unread ->
@@ -1462,9 +1470,16 @@ defmodule PrismWeb.ThreadPaneLive do
       Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
       Enum.any?(statuses, &match?({:model_unavailable, _}, &1)) -> :model_unavailable
       Enum.any?(statuses, &match?({:needs_grant, _}, &1)) -> :needs_grant
+      program = Enum.find_value(statuses, &program_state/1) -> program
       true -> :no_key
     end
   end
+
+  defp program_state({state, _program})
+       when state in [:program_missing, :program_disabled, :program_unfit],
+       do: {:program, state}
+
+  defp program_state(_status), do: nil
 
   # What to call the athanor: the person's own is "your Aqua" — the one
   # their row names as theirs.
@@ -1778,6 +1793,12 @@ defmodule PrismWeb.ThreadPaneLive do
                 >
                   Connect one on your Aqua page.
                 </.link>
+              <% match?({:program, _}, @model_ready) -> %>
+                <span data-test="model-program">
+                  {Prima.Refusal.message(
+                    {:crew_unready, athanor_label(@athanor, @context), elem(@model_ready, 1)}
+                  )}
+                </span>
               <% @model_ready == :needs_grant -> %>
                 <%!-- A model with nothing left to set up waits on the
                      person's grant alone, given in Aqua's setup. --%>

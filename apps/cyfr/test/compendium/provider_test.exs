@@ -1705,6 +1705,7 @@ defmodule Compendium.ProviderTest do
                tools: soul.tools,
                catalyst_ref: nil,
                program: nil,
+               install: nil,
                model: nil,
                options: %{},
                disabled: false,

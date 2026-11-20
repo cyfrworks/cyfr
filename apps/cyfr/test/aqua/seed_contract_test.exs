@@ -145,7 +145,10 @@ defmodule Aqua.SeedContractTest do
     for member <- crew do
       assert member.tools == [], member.name
       assert Compendium.AquaAgent.under_soul(member, soul.tools).tools == @shipped_tools
-      assert is_binary(member.catalyst_ref) and is_binary(member.model), member.name
+
+      assert is_binary(member.catalyst_ref || member.program) and is_binary(member.model),
+             member.name
+
       assert member.description != "" and member.avoid != "", member.name
 
       {:ok, meta, _body} =
@@ -154,6 +157,15 @@ defmodule Aqua.SeedContractTest do
       refute Map.has_key?(meta, "tools"), member.name
       refute Map.has_key?(meta, "tool_policy"), member.name
     end
+
+    # Claude Code's brain is the program row of its name, with the command
+    # its install form is prefilled with, and a model the program lists.
+    assert %{
+             catalyst_ref: nil,
+             program: "claude",
+             install: "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
+             model: "opus"
+           } = Enum.find(crew, &(&1.name == "claude-code"))
   end
 
   test "the shipped soul is offered its crew, and the search gate passes through as written" do

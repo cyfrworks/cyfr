@@ -17,8 +17,8 @@ defmodule Aqua.Crew do
   `crew.list`: each member whose brain is ready (`Aqua.Models.model_status/2`),
   by name, brain, what it is good at and what to avoid. A member whose
   brain is not installed, has no key bound or whose program is not signed
-  in, or whose brain is a program row that does not stand as a brain's,
-  is left out, and every way a job reaches a member holds it to the
+  in, or whose brain is a program with no row of its name that stands
+  as a brain's, is left out, and every way a job reaches a member holds it to the
   same readiness (`ready/2`): `crew.ask` and a person's `@name` are
   refused `{:crew_unready, member, reason}` before anything is written,
   and a request whose member became unready while it waited is answered
@@ -399,11 +399,11 @@ defmodule Aqua.Crew do
   defp unready({:program_unfit, _}), do: :program_unfit
   defp unready({_unread, _}), do: :unavailable
 
-  # A brain as a reader names it: its program row's name, which its ready
+  # A brain as a reader names it: its program's name, which its ready
   # status carries, or its catalyst's name, and the model.
-  defp brain(%{"program" => id, "model" => model}, {:ready, row_name})
-       when is_binary(id) and id != "",
-       do: with_model(row_name, model)
+  defp brain(%{"program" => program, "model" => model}, {:ready, name})
+       when is_binary(program) and program != "",
+       do: with_model(name, model)
 
   defp brain(%{"catalyst_ref" => ref, "model" => model}, _status) do
     catalyst =

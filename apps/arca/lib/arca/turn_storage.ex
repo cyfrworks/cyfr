@@ -3061,7 +3061,7 @@ defmodule Arca.TurnStorage do
   Forget the brain's session of the turn's thread, which its brain
   reported it no longer holds (`Prima.Model`'s `unknown_session`):
   `brain_session` is cleared and `brain_generation` raised in one
-  statement, as `Arca.ThreadStorage.forget_sessions/2` forgets a home's,
+  statement, as `Arca.ThreadStorage.forget_sessions/3` forgets a home's,
   and only while the thread is at `:generation`, the one the turn read.
   `attrs`: `:fence` (the turn's) and `:generation`, both required.
   Answers the generation the turn keeps a session under from here: the
@@ -5820,7 +5820,7 @@ defmodule Arca.TurnStorage do
 
   # The brain's own session, kept on the thread for its next request only
   # under the generation the turn read (`:generation`): a turn whose
-  # session was forgotten meanwhile (`Arca.ThreadStorage.forget_sessions/2`
+  # session was forgotten meanwhile (`Arca.ThreadStorage.forget_sessions/3`
   # raises the generation) keeps nothing it answers with afterwards, the
   # session it resumed or one it opened in the home the forget emptied. A
   # turn that forgot the session itself writes under the generation that

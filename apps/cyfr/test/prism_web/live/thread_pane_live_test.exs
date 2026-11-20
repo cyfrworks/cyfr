@@ -1488,6 +1488,109 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
       Cyfr.Test.Sandbox.end_views()
     end
+
+    # A soul whose brain is a program names its row by name: the pane reads
+    # the row of that name, and one that stands as a brain's is a model
+    # ready, never no model.
+    test "a soul whose brain is a program reads ready on the row of its name",
+         %{conn: conn, athanor: athanor, here: here} do
+      actor = Sanctum.Context.actor(here)
+
+      :ok =
+        Arca.put(
+          actor,
+          Compendium.AquaPath.soul_file(),
+          "---\ntitle: Aqua\nprogram: claude\nmodel: opus\n---\n\nsoul\n"
+        )
+
+      {:ok, _} = Compendium.AgentIndex.sync(here)
+
+      {:ok, _row} =
+        Arca.McpServerStorage.insert(actor, %{
+          cap: 0,
+          name: "claude",
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          home: "kept",
+          config_json: Jason.encode!(%{"command" => "cyfr-claude-code claude", "env" => %{}})
+        })
+
+      pane = empty_pane(conn, athanor)
+      refute render(pane) =~ "has no model yet"
+      refute render(pane) =~ @connect
+      assert render(pane) =~ "anything."
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # The row of the soul's program's name that the athanor lacks, or that
+    # stands disabled or as no brain's, is said as a turn on it is refused,
+    # never as no model to connect.
+    test "a soul whose program is not installed, disabled or unfit says which, never no model",
+         %{conn: conn, athanor: athanor, here: here} do
+      actor = Sanctum.Context.actor(here)
+
+      :ok =
+        Arca.put(
+          actor,
+          Compendium.AquaPath.soul_file(),
+          "---\ntitle: Aqua\nprogram: claude\nmodel: opus\n---\n\nsoul\n"
+        )
+
+      {:ok, _} = Compendium.AgentIndex.sync(here)
+
+      said = fn ->
+        pane = empty_pane(conn, athanor)
+        html = render(pane)
+        refute html =~ "has no model yet"
+        refute html =~ @connect
+
+        [line] =
+          html
+          |> LazyHTML.from_fragment()
+          |> LazyHTML.query(~s([data-test="model-program"]))
+          |> Enum.map(&String.trim(LazyHTML.text(&1)))
+
+        Cyfr.Test.Sandbox.end_views()
+        line
+      end
+
+      row! = fn command, enabled ->
+        {:ok, _row} =
+          Arca.McpServerStorage.insert(actor, %{
+            cap: 0,
+            name: "claude",
+            transport: "program",
+            mark: "driven",
+            url: nil,
+            home: "kept",
+            enabled: enabled,
+            config_json: Jason.encode!(%{"command" => command, "env" => %{}})
+          })
+      end
+
+      missing = said.()
+      _off = row!.("cyfr-claude-code claude", false)
+      disabled = said.()
+      {:ok, _} = Arca.McpServerStorage.delete(actor, "claude")
+      _bare = row!.("npx -y claude", true)
+      unfit = said.()
+
+      assert [missing, disabled, unfit] == [
+               "your Aqua's program is not installed here — install it from its card on the " <>
+                 "Aqua page",
+               "your Aqua's program is disabled — enable it on the Programs page",
+               "your Aqua's program is not one a brain can run in — on the Programs page, make " <>
+                 "it a driven program with a kept folder whose command starts with its driver"
+             ]
+
+      assert [missing, disabled, unfit] ==
+               for(
+                 state <- [:program_missing, :program_disabled, :program_unfit],
+                 do: Prima.Refusal.message({:crew_unready, "your Aqua", state})
+               )
+    end
   end
 
   # The athanor as a fill leaves it, its soul's model connected

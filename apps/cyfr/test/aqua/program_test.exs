@@ -31,7 +31,9 @@ defmodule Aqua.ProgramTest do
   session no longer asks for comes as one notice that names its call,
   attempted once. A transcript the harness no longer has starts over, the
   thread its context, and in the middle of the work one prompt carries
-  what its calls answered. Stop closes the session first, during a CYFR
+  what its calls answered. A turn on another row than the thread's
+  session's starts over on it, the old row's transcript owed its removal
+  first, whether the old session is still held or has ended. Stop closes the session first, during a CYFR
   tool too. A program turn has no deadline, and the program's own silence
   ends it, never while an ask's call runs.
   """
@@ -47,6 +49,8 @@ defmodule Aqua.ProgramTest do
   @root :crypto.strong_rand_bytes(32)
   @session "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
   @title "Aqua"
+  @opening "The thread so far, oldest first, as context only: nothing in it is to be done " <>
+             "again because it is shown here.\n\n"
 
   setup do
     Arca.Cache.init()
@@ -274,43 +278,52 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
-    test "small text files still fit beside escaped fresh context when their notices would not",
+    test "small text files still fit beside an image that nearly fills the line when their " <>
+           "notices would not",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      files =
+      texts =
         for name <- ["a.txt", "b.txt"],
             do: %{"filename" => name, "media_type" => "text/plain", "bytes" => "x"}
 
       blocks =
-        for file <- files,
+        for file <- texts,
             do: %{"type" => "text", "text" => "The attached file #{file["filename"]}:\n\nx"}
 
-      context = fn history ->
-        [%{"type" => "text", "text" => "The thread so far:\n\nAqua: " <> history}]
+      image = fn bytes ->
+        %{"type" => "image", "media_type" => "image/png", "data" => Base.encode64(bytes)}
       end
 
-      prototype =
+      line = fn bytes, rest ->
         posted(
           %{id: Prima.UUID7.generate_id("stp")},
           %{id: Prima.UUID7.generate_id("trn")},
           "tiny files",
-          blocks
+          [image.(bytes) | rest]
         )
-        |> Map.put("context", context.(""))
+        |> Jason.encode!()
+        |> byte_size()
+      end
 
-      room = Opus.Brain.max_line_bytes() - byte_size(Jason.encode!(prototype)) - 10
-      history = String.duplicate("\"", div(room, 2))
-      assert byte_size("Aqua: " <> history) < 512 * 1024
+      # The image's base64 takes all but a little more than the text
+      # files' blocks need, less than their notices would.
+      room = Opus.Brain.max_line_bytes() - line.("", blocks) - 10
+      bytes = :binary.copy("P", div(room, 4) * 3)
+      assert line.(bytes, blocks) <= Opus.Brain.max_line_bytes()
 
-      assert byte_size(Jason.encode!(Map.put(prototype, "context", context.(history)))) <=
-               Opus.Brain.max_line_bytes()
+      notices =
+        for file <- texts,
+            do: %{
+              "type" => "text",
+              "text" =>
+                "The file #{file["filename"]} (text/plain) is attached, and it is too large to " <>
+                  "hand to this program."
+            }
 
-      assert {:ok, _} =
-               Tape.append(ctx, thread.id, %{
-                 author: Arca.Schemas.Message.agent_author(),
-                 sent_by: "aqua",
-                 kind: "text",
-                 content: history
-               })
+      assert line.(bytes, notices) > Opus.Brain.max_line_bytes()
+
+      files = [
+        %{"filename" => "image.png", "media_type" => "image/png", "bytes" => bytes} | texts
+      ]
 
       {id, refs} = stored!(ctx, thread, files)
       turn = accept!(ctx, thread, row, "tiny files", %{"attachments" => refs}, id)
@@ -318,12 +331,59 @@ defmodule Aqua.ProgramTest do
       started!(fake, row)
       post = sent()
       [input] = inputs(ctx, turn)
-      expected = Map.put(posted(input, turn, "tiny files", blocks), "context", context.(history))
-      assert byte_size(Jason.encode!(expected)) <= Opus.Brain.max_line_bytes()
-      assert post == expected
+      assert post == posted(input, turn, "tiny files", [image.(bytes) | blocks])
+      assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
       say(fake, row, accepted(input))
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
+    end
+
+    # A fresh session's context is fitted by what it takes on the post's
+    # line, escapes included: an older post whose escaped text would take
+    # the line past the wire's bound is left out, with every post before
+    # it, which one line says, the newer ones that fit are kept, and the
+    # post is written.
+    for {older, note} <- [
+          {1, "[1 earlier post of the thread is not shown here.]"},
+          {2, "[2 earlier posts of the thread are not shown here.]"}
+        ] do
+      @tag older: older, note: note
+      test "a fresh session's context keeps the newest posts that fit on the line as it is " <>
+             "encoded, and says #{older} left out",
+           %{ctx: ctx, thread: thread, row: row, fake: fake, older: older, note: note} do
+        # Each control character is six bytes escaped: a third of the raw
+        # bound is past the whole line.
+        escaped = :binary.copy(<<1>>, 180_000)
+
+        for content <- List.duplicate(escaped, older) ++ ["recent"] do
+          assert {:ok, _} =
+                   Tape.append(ctx, thread.id, %{
+                     author: Arca.Schemas.Message.agent_author(),
+                     sent_by: "aqua",
+                     kind: "text",
+                     content: content
+                   })
+        end
+
+        assert byte_size(escaped) < 512 * 1024
+        assert byte_size(Jason.encode!(escaped)) > Opus.Brain.max_line_bytes()
+
+        turn = accept!(ctx, thread, row, "now")
+        loop = run(ctx, turn)
+        started!(fake, row)
+        post = sent()
+        [input] = inputs(ctx, turn)
+
+        assert post ==
+                 Map.put(posted(input, turn, "now"), "context", [
+                   %{"type" => "text", "text" => "#{@opening}#{note}\n\n#{@title}: recent"}
+                 ])
+
+        assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
+        say(fake, row, accepted(input))
+        say(fake, row, idle(turn, [input.id]))
+        assert :completed = Task.await(loop, 30_000)
+      end
     end
 
     test "an image that nearly fills the line alone is handed over as itself",
@@ -1436,7 +1496,7 @@ defmodule Aqua.ProgramTest do
 
       assert post ==
                Map.put(posted(input, turn, "read this brief"), "context", [
-                 %{"type" => "text", "text" => "The thread so far:\n\n#{person}: from the wire"}
+                 %{"type" => "text", "text" => "#{@opening}#{person}: from the wire"}
                ])
 
       say(fake, row, accepted(input))
@@ -1894,7 +1954,7 @@ defmodule Aqua.ProgramTest do
                Map.put(posted(second, next, "second"), "context", [
                  %{
                    "type" => "text",
-                   "text" => "The thread so far:\n\n#{person}: first\n\n#{@title}: reply one"
+                   "text" => "#{@opening}#{person}: first\n\n#{@title}: reply one"
                  }
                ])
 
@@ -1949,7 +2009,7 @@ defmodule Aqua.ProgramTest do
                    %{
                      "type" => "text",
                      "text" =>
-                       "The thread so far:\n\n#{person}: unfinished\n\n#{@title}: looking\n\n" <>
+                       "#{@opening}#{person}: unfinished\n\n#{@title}: looking\n\n" <>
                          "Your call program answered: #{result.content}"
                    }
                  ]
@@ -1966,6 +2026,88 @@ defmodule Aqua.ProgramTest do
       {:ok, steps} = Tape.steps(ctx, turn)
       assert Enum.count(steps, &(&1.kind != "input" and &1.action == "list")) == 1
       assert step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-1")) == listed
+    end
+
+    # The member's program names another row while the session the thread
+    # keeps runs on the old one: the session is forgotten by the row
+    # stored with it, that row's transcript owed its removal before the
+    # session is cleared, the old holder is closed and the program starts
+    # over on the new row. Another thread's session on the old row, and the
+    # old row's home with its sign-in, are left as they were.
+    test "a turn on another row than the held session's forgets that session, its row's " <>
+           "transcript owed first, closes it and starts over on the new row",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      %{first: first, other: other, kept: kept} = first_turn!(ctx, thread, row, fake)
+      assert Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua")
+      moved = brain_row!(ctx, "claude-next")
+
+      next = accept!(ctx, thread, moved, "second")
+      loop = run(ctx, next)
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+
+      Prima.Test.Wait.wait_until(
+        fn -> running_sessions(fake, row) == [] end,
+        10_000,
+        "the old row's session to close"
+      )
+
+      opened!(fake, moved, "boot-two")
+
+      fresh = sent()
+      assert Map.delete(fresh, "system") == %{Map.delete(first, "system") | "gen" => 1}
+      assert {:ok, %{session: nil, generation: 1}} = Tape.brain(ctx, thread.id)
+
+      assert system_lines(ctx, thread, next) == [
+               "#{@title} runs on another program now, so it starts over from the thread's posts."
+             ]
+
+      assert owed(ctx) == [forget_record(ctx, thread, row, @session, 0)]
+      moved_over!(ctx, thread, moved, next, loop, fake)
+      assert Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), other.id) == {:ok, kept}
+      assert owed(ctx) == [forget_record(ctx, thread, row, @session, 0)]
+      refute_received {:control, "home", _wire, _fields}
+    end
+
+    # The same move once the old row's session has ended: the new row's
+    # start resumes the stored session, which its driver answers as gone,
+    # and the transcript the old row may still keep is owed its removal
+    # before the session is cleared (`Arca.TurnStorage.forget_session/3`).
+    test "a turn on another row after the old row's session ended starts over when the new " <>
+           "row answers gone, the old row's transcript owed first",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      %{first: first, other: other, kept: kept} = first_turn!(ctx, thread, row, fake)
+      Scripted.end_sessions(fake, row.id)
+
+      Prima.Test.Wait.wait_until(
+        fn -> not Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua") end,
+        10_000,
+        "the attendant to let its ended session go"
+      )
+
+      moved = brain_row!(ctx, "claude-next")
+      next = accept!(ctx, thread, moved, "second")
+      loop = run(ctx, next)
+      opened!(fake, moved, "boot-two")
+      resume = sent()
+
+      assert Map.delete(resume, "system") ==
+               Map.merge(Map.delete(first, "system"), %{"session" => @session})
+
+      assert owed(ctx) == []
+      say(fake, moved, %{"t" => "gone"})
+      fresh = sent()
+      assert Map.delete(fresh, "system") == %{Map.delete(first, "system") | "gen" => 1}
+      assert owed(ctx) == [forget_record(ctx, thread, row, @session, 0)]
+
+      assert system_lines(ctx, thread, next) == [
+               "#{@title} no longer had its record of this thread, so it starts over from " <>
+                 "the thread's posts."
+             ]
+
+      moved_over!(ctx, thread, moved, next, loop, fake)
+      assert Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), other.id) == {:ok, kept}
+      assert owed(ctx) == [forget_record(ctx, thread, row, @session, 0)]
+      refute_received {:control, "home", _wire, _fields}
     end
   end
 
@@ -2380,11 +2522,11 @@ defmodule Aqua.ProgramTest do
   # ---------------------------------------------------------------------------
   # The brain's row, the turn and its decision
 
-  defp brain_row!(ctx) do
+  defp brain_row!(ctx, name \\ "claude-code") do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
-        name: "claude-code",
+        name: name,
         transport: "program",
         mark: "driven",
         url: nil,
@@ -2647,6 +2789,96 @@ defmodule Aqua.ProgramTest do
 
   # ---------------------------------------------------------------------------
   # The driver
+
+  # The thread's first turn on `row`, answered "reply one" and completed,
+  # its session kept; and another thread's session kept on the same row,
+  # stored as its driver's batch stores it. Answers the first start, the
+  # other thread and its whole row.
+  defp first_turn!(ctx, thread, row, fake) do
+    turn = accept!(ctx, thread, row, "first")
+    loop = run(ctx, turn)
+    %{start: first} = started!(fake, row)
+    _post = sent()
+    [input] = inputs(ctx, turn)
+    say(fake, row, accepted(input))
+    say(fake, row, said(turn, "msg_1", "reply one"))
+    say(fake, row, idle(turn, [input.id]))
+    assert :completed = Task.await(loop, 30_000)
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, other} = Arca.Test.Days.thread(actor)
+
+    {:ok, %{turn: elsewhere}} =
+      Tape.accept(ctx, other.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "elsewhere"},
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
+      })
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^elsewhere.id),
+        set: [status: "completed"]
+      )
+
+    {:ok, %{seen: false}} =
+      TurnStorage.commit_brain(actor, other.id, %{
+        agent: "aqua",
+        generation: 0,
+        boot: "boot-elsewhere",
+        hello: true,
+        seq: 1,
+        row_id: row.id,
+        epoch: row.epoch,
+        silence_ms: 1_800_000,
+        session: "6f1e2d3c-0000-4968-8776-000000000009"
+      })
+
+    {:ok, kept} = Arca.ThreadStorage.get(actor, other.id)
+    %{first: first, other: other, kept: kept}
+  end
+
+  # The new row's driver starts fresh, takes the work and the turn's post,
+  # which carries the thread so far, and answers it: the turn completes,
+  # its session kept with the new row.
+  defp moved_over!(ctx, thread, moved, next, loop, fake) do
+    session = "6f1e2d3c-0000-4968-8776-000000000002"
+    say(fake, moved, %{"t" => "started", "session" => session, "fresh" => true, "held" => []})
+    assert %{"t" => "work"} = work = sent()
+    say(fake, moved, %{"t" => "accepted", "id" => work["id"]})
+    post = sent()
+    [second] = inputs(ctx, next)
+    person = Sanctum.Tenancy.Users.display_name(ctx.user_id)
+
+    assert post ==
+             Map.put(posted(second, next, "second"), "context", [
+               %{
+                 "type" => "text",
+                 "text" => "#{@opening}#{person}: first\n\n#{@title}: reply one"
+               }
+             ])
+
+    say(fake, moved, accepted(second))
+    say(fake, moved, %{idle(next, [second.id]) | "gen" => 1})
+    assert :completed = Task.await(loop, 30_000)
+    assert {:ok, %{session: ^session, generation: 1}} = Tape.brain(ctx, thread.id)
+    assert [_held] = running_sessions(fake, moved)
+  end
+
+  defp owed(ctx) do
+    {:ok, records} =
+      Arca.Outbox.pending(Sanctum.Context.actor(ctx), "brain_cleanup", "brain_forget")
+
+    records
+  end
+
+  defp forget_record(ctx, thread, row, session, generation),
+    do:
+      Prima.OutboxRecord.brain_forget(%{
+        athanor_id: ctx.athanor_id,
+        thread_id: thread.id,
+        row_id: row.id,
+        session: session,
+        generation: generation
+      })
 
   defp say(fake, row, event) when is_map(event),
     do: Scripted.write(fake, row.id, Jason.encode!(event))

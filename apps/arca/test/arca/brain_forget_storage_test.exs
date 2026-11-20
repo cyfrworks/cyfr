@@ -202,6 +202,12 @@ defmodule Arca.BrainForgetStorageTest do
 
   defp sorted(records), do: Enum.sort_by(records, & &1.source_id)
 
+  # The thread's whole row as the store holds it.
+  defp whole(actor, thread) do
+    {:ok, row} = Threads.get(actor, thread.id)
+    row
+  end
+
   describe "a deletion" do
     test "records the room's session, each child's and each reader's before their rows go", %{
       actor: actor,
@@ -353,6 +359,89 @@ defmodule Arca.BrainForgetStorageTest do
 
       assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, room.id)
       assert owed(actor) == []
+    end
+  end
+
+  # A program brain names its row by name, which a deleted row no longer
+  # answers and a replacement answers again: the threads a home's reset or
+  # retirement reaches are found by the row's id the threads store, the
+  # session's row and an open turn's pin, never by a member's name.
+  describe "a home's threads, found by the row they store" do
+    test "a delayed retirement reaches the old row's session and its pinned start, " <>
+           "never the replacement's of the same name",
+         %{actor: actor, room: room, row: old} do
+      {:ok, pinned} = Arca.Test.Days.thread(actor)
+      {:ok, successor} = Arca.Test.Days.thread(actor)
+      {:ok, other} = Arca.Test.Days.thread(actor)
+      held!(actor, room, old, "coder", "6f1e2d3c-0000-4968-8776-000000000001")
+      started = running!(actor, pinned, old)
+      held!(actor, other, brain_row!(actor), "writer", "6f1e2d3c-0000-4968-8776-000000000003")
+
+      # The row is deleted and replaced under its name; the member's next
+      # turn keeps its session with the replacement before the old home's
+      # retirement comes.
+      {1, _} = Arca.Repo.delete_all(from(r in Arca.Schemas.McpServer, where: r.id == ^old.id))
+      replacement = brain_row!(actor, %{name: old.name})
+      held!(actor, successor, replacement, "coder", "6f1e2d3c-0000-4968-8776-000000000002")
+      before = for t <- [successor, other], into: %{}, do: {t.id, whole(actor, t)}
+
+      # The old row is gone: its home's retirement removes the transcript,
+      # so nothing is owed. The pinned start is fenced: its batch keeps
+      # nothing under the generation it began with.
+      assert {:ok, []} = Threads.forget_sessions(actor, [], old.id)
+      assert %{brain_session: nil, brain_generation: 1} = whole(actor, room)
+      assert %{brain_session: nil, brain_generation: 1} = whole(actor, pinned)
+      assert owed(actor) == []
+
+      assert {:error, :generation_moved} =
+               batch(actor, pinned, old, "aqua", 0, %{
+                 session: "late",
+                 turn: %{id: started.id, fence: started.fence}
+               })
+
+      assert %{brain_session: nil, brain_generation: 1} = whole(actor, pinned)
+      assert for(t <- [successor, other], into: %{}, do: {t.id, whole(actor, t)}) == before
+    end
+
+    test "a reset records the session stored with its row before it clears it, " <>
+           "and fences an open turn pinned to it whose start has not committed",
+         %{actor: actor, room: room, row: row} do
+      {:ok, pinned} = Arca.Test.Days.thread(actor)
+      {:ok, elsewhere} = Arca.Test.Days.thread(actor)
+      session = "6f1e2d3c-0000-4968-8776-000000000001"
+      held!(actor, room, row, "coder", session)
+      started = running!(actor, pinned, row)
+      held!(actor, elsewhere, brain_row!(actor), "coder", "6f1e2d3c-0000-4968-8776-000000000002")
+      kept = whole(actor, elsewhere)
+
+      assert {:ok, [%{thread_id: id, generation: 0}]} = Threads.forget_sessions(actor, [], row.id)
+      assert id == room.id
+      assert owed(actor) == [record(actor, room, row, session, 0)]
+      assert %{brain_session: nil, brain_generation: 1} = whole(actor, room)
+      assert %{brain_session: nil, brain_generation: 1} = whole(actor, pinned)
+
+      assert {:error, :generation_moved} =
+               batch(actor, pinned, row, "aqua", 0, %{
+                 session: "late",
+                 turn: %{id: started.id, fence: started.fence}
+               })
+
+      assert whole(actor, elsewhere) == kept
+      assert owed(actor) == [record(actor, room, row, session, 0)]
+    end
+
+    test "two members on one row: deleting one's thread owes its transcript alone, " <>
+           "and the other's session stays",
+         %{actor: actor, room: room, row: row} do
+      {:ok, writer} = Arca.Test.Days.thread(actor)
+      coder_session = "6f1e2d3c-0000-4968-8776-000000000001"
+      held!(actor, room, row, "coder", coder_session)
+      held!(actor, writer, row, "writer", "6f1e2d3c-0000-4968-8776-000000000002")
+      kept = whole(actor, writer)
+
+      assert {:ok, %{}} = Threads.delete(actor, room.id)
+      assert owed(actor) == [record(actor, room, row, coder_session, 0)]
+      assert whole(actor, writer) == kept
     end
   end
 

@@ -335,6 +335,36 @@ defmodule Opus.ProgramsMountsTest do
       refute_receive {:control, "home", %{"home_id" => ^kept_id}, _fields}, 200
     end
 
+    # A database that ran the Claude Code catalyst is recreated, not
+    # cleaned: the box still holds the homes its rows kept, a catalyst's
+    # sessions and its sign-in among them, under ids and an athanor this
+    # database never had. The periodic sweep, run while the reconciler
+    # holds the control plane, retires each such home whole, under no
+    # athanor ("-"), and keeps the home of the new row the recreated
+    # install made under the same name.
+    test "the periodic sweep retires a recreated database's old home under no athanor, and " <>
+           "keeps the new row's of the same name",
+         %{ctx: ctx, fake: fake} do
+      old_home = "mcp_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+      assert {:ok, [{^old_home, nil}]} = Sanctum.Mount.orphaned_homes([old_home])
+      live = driven_row(ctx, "claude")
+      Scripted.set(fake, :homes, MapSet.new([old_home, live.id]))
+      assert Arca.ControlPlane.held?()
+
+      reconciler = start_reconciler()
+      send(reconciler, :sweep)
+
+      assert_receive {:control, "home", %{"op" => "retire", "home_id" => ^old_home} = retire, _},
+                     3_000
+
+      assert retire["athanor"] == "-"
+      live_id = live.id
+      refute_receive {:control, "home", %{"home_id" => ^live_id}, _fields}, 300
+
+      assert {:ok, %{id: ^live_id, home: "kept"}} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "claude")
+    end
+
     test "a store that cannot answer retires nothing", %{fake: fake} do
       Scripted.set(fake, :homes, MapSet.new(["mcp_no-row-left"]))
 

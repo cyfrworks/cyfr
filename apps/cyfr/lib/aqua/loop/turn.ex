@@ -277,22 +277,34 @@ defmodule Aqua.Loop.Turn do
   # The model
   # ---------------------------------------------------------------------------
 
-  # The catalyst release a turn runs on: once its row pins one, exactly
-  # that release; before, the agent's catalyst resolved against the working
-  # athanor's listing. It must be installed and speak `model/chat@1`. A
-  # switch of the agent's catalyst reaches the next turn; what a turn
-  # already sent to its provider stays that provider's.
-  defp model(ctx, turn, agent) do
-    case Map.get(turn, :program) || agent["program"] do
-      row_id when is_binary(row_id) ->
-        with {:ok, program} <- program(ctx, row_id),
-             :ok <- holds(turn, agent, {:driver, program.driver}, program.name),
-             do: {:ok, {nil, Map.delete(program, :driver)}, turn.model || agent["model"]}
+  # The brain a turn runs on. A program brain: once the turn's row pins a
+  # program row, exactly that row, read by its id, in recovery too; before,
+  # the row of the name the agent names, resolved once here and pinned
+  # after (`Aqua.Loop`), so a row replaced under that name is the next
+  # turn's and never a pinned one's. A catalyst brain: once its row pins
+  # one, exactly that release; before, the agent's catalyst resolved
+  # against the working athanor's listing. It must be installed and speak
+  # `model/chat@1`. A switch of the agent's brain reaches the next turn;
+  # what a turn already sent to its provider stays that provider's.
+  defp model(ctx, %{program: row_id} = turn, agent) when is_binary(row_id),
+    do: program_model(turn, agent, Aqua.Models.pinned_program(ctx, row_id))
 
-      nil ->
-        catalyst_model(ctx, turn, agent)
-    end
+  defp model(ctx, turn, %{"program" => name} = agent) when is_binary(name),
+    do: program_model(turn, agent, Aqua.Models.program(ctx, name))
+
+  defp model(ctx, turn, agent), do: catalyst_model(ctx, turn, agent)
+
+  # The program row a program brain runs on, as it stands now: its epoch
+  # is the one the turn's `program.start` names, which `Opus.Brain` holds
+  # every write to. A program brain names its harness's model, if any, as
+  # the agent's `model`; the harness's default stands for none.
+  defp program_model(turn, agent, {:ok, program}) do
+    with :ok <- holds(turn, agent, {:driver, program.driver}, program.name),
+         do: {:ok, {nil, Map.delete(program, :driver)}, turn.model || agent["model"]}
   end
+
+  defp program_model(_turn, _agent, {:error, {state, _name}}), do: {:error, state}
+  defp program_model(_turn, _agent, {:error, state}), do: {:error, state}
 
   defp catalyst_model(ctx, turn, agent) do
     listing =
@@ -331,20 +343,6 @@ defmodule Aqua.Loop.Turn do
     case Prima.ComponentRef.parse(catalyst) do
       {:ok, %{name: name}} when is_binary(name) -> name
       _unread -> catalyst
-    end
-  end
-
-  # The program row a program brain runs on, as it stands now
-  # (`Aqua.Models.program/2`): its epoch is the one the turn's
-  # `program.start` names, which `Opus.Brain` holds every write to. A
-  # program brain names its harness's model, if any, as the agent's
-  # `model`; the harness's default stands for none.
-  defp program(ctx, row_id) do
-    case Aqua.Models.program(ctx, row_id) do
-      {:ok, program} -> {:ok, program}
-      {:error, :unavailable} -> {:error, :unavailable}
-      {:error, {state, _name}} -> {:error, state}
-      {:error, state} -> {:error, state}
     end
   end
 

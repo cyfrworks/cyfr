@@ -348,27 +348,26 @@ defmodule Sanctum.MountTest do
       assert {:ok, ["lent"]} = Mount.agents_mounting(ctx.athanor_id, elsewhere.id)
     end
 
-    # A brain that is a program names its row on the agent's index row,
-    # with no consent edge to it: it runs in that row's home and no other.
-    test "agents_mounting/2 names the agents whose brain is the row, and not another row's",
+    # A brain that is a program names its row by name on the agent's index
+    # row, with no consent edge to it: a name a deleted row no longer
+    # answers and a replacement answers again, so it names no agent here.
+    # The threads its sessions lived in are found by the row they store
+    # (`Arca.ThreadStorage.forget_sessions/3`).
+    test "agents_mounting/2 names no agent whose brain is a program, by the row's name or id",
          %{ctx: ctx} do
       entry = row!(ctx, %{name: "claude"})
-      elsewhere = row!(ctx, %{name: "codex"})
 
-      agent!(ctx, "coder", nil, entry.id)
-      agent!(ctx, "reviewer", nil, entry.id)
-      agent!(ctx, "writer", nil, elsewhere.id)
+      agent!(ctx, "coder", nil, "claude")
+      agent!(ctx, "stale", nil, entry.id)
       agent!(ctx, "plain", "catalyst:local.brain")
 
-      assert {:ok, names} = Mount.agents_mounting(ctx.athanor_id, entry.id)
-      assert Enum.sort(names) == ["coder", "reviewer"]
-      assert {:ok, ["writer"]} = Mount.agents_mounting(ctx.athanor_id, elsewhere.id)
+      assert {:ok, []} = Mount.agents_mounting(ctx.athanor_id, entry.id)
       assert {:ok, []} = Mount.agents_mounting(ctx.athanor_id, "mcp_none")
     end
   end
 
   # The agent `name`'s index row, its brain `catalyst_ref` or the program
-  # row `program`.
+  # `program` it names.
   defp agent!(ctx, name, catalyst_ref, program \\ nil) do
     Arca.Repo.insert!(%Arca.Schemas.Agent{
       id: "agt_#{System.unique_integer([:positive])}",

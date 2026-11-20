@@ -70,7 +70,10 @@ defmodule Aqua.Program do
   the thread says the program starts over, and it does, with the thread's
   posts as its context; in the middle of the work, one recorded prompt
   carries the thread so far and what the work's calls answered, none of
-  which runs again.
+  which runs again. A turn whose member's program is now another row than
+  the held session's forgets that session, the old row's transcript owed
+  its removal first, closes its holder, and starts over on the new row
+  from the thread's posts, which the thread is told.
 
   ## Silence
 
@@ -89,9 +92,16 @@ defmodule Aqua.Program do
 
   @registry Aqua.Program.Registry
   @sessions Aqua.Program.Sessions
-  # The most bytes of the thread's posts a fresh session is given as its
-  # context: the newest that fit, under the wire's line bound.
+  # The most bytes a fresh session's context takes on its post's line, as
+  # the line's JSON measures them, escapes included: the newest posts that
+  # fit. A post a sender writes is at most 32 KiB, at most six times that
+  # escaped, so its line with this context and its files' notices stays
+  # within the wire's bound (`Opus.Brain.max_line_bytes/0`).
   @context_bytes 512 * 1024
+  # How a fresh session's context opens, and what separates two posts.
+  @context_opening "The thread so far, oldest first, as context only: nothing in it is to be " <>
+                     "done again because it is shown here.\n\n"
+  @context_separator "\n\n"
   # The kinds of row a fresh session's context carries: the thread's posts.
   @context_kinds ~w(text opening report)
 
@@ -244,6 +254,7 @@ defmodule Aqua.Program do
 
   @impl true
   def handle_call({:attend, work, loop}, from, state) do
+    {state, work} = moved(state, work)
     state = subscribe(%{state | work: work, loop: monitor(state, loop)})
     state = %{state | waiting: state.waiting ++ [from]}
 
@@ -350,6 +361,37 @@ defmodule Aqua.Program do
 
   # ---------------------------------------------------------------------------
   # The session
+
+  # A turn whose member's program is now another row than the one the held
+  # session runs on: the session is forgotten, the old row's transcript
+  # owed its removal first by the row stored with it
+  # (`Arca.TurnStorage.forget_session/3`), its holder closed, and the
+  # program starts over on the new row from the thread's posts, which the
+  # thread is told. A forget that does not answer leaves the session as it
+  # is stored: the holder is closed, and the new row's start resumes it,
+  # which its driver answers as gone (`start_over/1`).
+  defp moved(
+         %{brain: brain, work: %{program: %{row: held}}} = state,
+         %{program: %{row: row}} = work
+       )
+       when brain != nil and held != row do
+    case Tape.forget_session(work.guest, work.turn, work.generation) do
+      {:ok, generation} ->
+        _ =
+          system_row(
+            work,
+            "#{work.title} runs on another program now, so it starts over from the " <>
+              "thread's posts."
+          )
+
+        {shut(state), %{work | generation: generation}}
+
+      {:error, _unanswered} ->
+        {shut(state), work}
+    end
+  end
+
+  defp moved(state, work), do: {state, work}
 
   defp open(%{work: work} = state) do
     case Opus.Brain.open(bound(work)) do
@@ -1141,38 +1183,51 @@ defmodule Aqua.Program do
   # The thread so far for a fresh session, the newest that fit: its posts
   # before a post (`{:before, seq}`), or every post and the result rows
   # of the open work's asks (`{:all, ids}`), for one started anew in the
-  # middle of it.
+  # middle of it. It opens saying it is context only, and when older posts
+  # are left out one line says how many, in room kept for it.
   defp context(work, bound) do
     case Tape.projection(work.guest, work.turn) do
       {:ok, rows} ->
-        read =
-          rows
-          |> Enum.filter(&read?(work, &1, bound))
-          |> Enum.reverse()
+        readable = rows |> Enum.filter(&read?(work, &1, bound)) |> Enum.reverse()
+
+        room =
+          @context_bytes - encoded_bytes(@context_opening) -
+            encoded_bytes(left_out(length(readable)) <> @context_separator)
+
+        kept =
+          readable
           |> Enum.reduce_while({[], 0}, fn read, {kept, size} ->
             line = line(work, read)
+            taken = size + encoded_bytes(line) + encoded_bytes(@context_separator)
 
-            if size + byte_size(line) > @context_bytes,
+            if taken > room,
               do: {:halt, {kept, size}},
-              else: {:cont, {[{read, line} | kept], size + byte_size(line)}}
+              else: {:cont, {[{read, line} | kept], taken}}
           end)
           |> elem(0)
 
-        case read do
-          [] ->
-            {nil, []}
-
-          read ->
-            text = read |> Enum.map(&elem(&1, 1)) |> Enum.join("\n\n")
-
-            {[%{"type" => "text", "text" => "The thread so far:\n\n" <> text}],
-             Enum.map(read, &elem(&1, 0))}
-        end
+        context_of(readable, kept)
 
       {:error, _} ->
         {nil, []}
     end
   end
+
+  defp context_of([], _kept), do: {nil, []}
+
+  defp context_of(readable, kept) do
+    lines =
+      case length(readable) - length(kept) do
+        0 -> Enum.map(kept, &elem(&1, 1))
+        dropped -> [left_out(dropped) | Enum.map(kept, &elem(&1, 1))]
+      end
+
+    {[%{"type" => "text", "text" => @context_opening <> Enum.join(lines, @context_separator)}],
+     Enum.map(kept, &elem(&1, 0))}
+  end
+
+  defp left_out(1), do: "[1 earlier post of the thread is not shown here.]"
+  defp left_out(n), do: "[#{n} earlier posts of the thread are not shown here.]"
 
   defp read?(_work, row, {:before, seq}), do: context_row?(row, seq)
 
@@ -1193,6 +1248,10 @@ defmodule Aqua.Program do
         []
     end
   end
+
+  # The bytes `text` takes inside a JSON string on the line, as the wire
+  # encodes it: escaping is the characters' own, so a text's parts add up.
+  defp encoded_bytes(text), do: byte_size(Jason.encode!(text)) - 2
 
   defp line(_work, %{kind: "tool_result"} = row),
     do: "Your call #{Tape.payload(row)["name"]} answered: #{row.content}"

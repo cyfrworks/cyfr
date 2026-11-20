@@ -409,6 +409,149 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-card-harness button[phx-click=open_consent]")
     end
 
+    # A crew member whose brain is a program names the row by its name.
+    # While the athanor has no row of that name, its card offers to install
+    # it, through the Programs page's form prefilled from the member's file;
+    # once the row stands as a brain's, to set it up, where the person signs
+    # it in. Either way it offers no other brain, and its models and
+    # efforts are the ones its program lists, read from the row's driver;
+    # before the row is there the member's own model stands alone.
+    test "a crew member on a program brain offers its install, then its set up, " <>
+           "with the models and efforts its program lists",
+         %{conn: conn, ctx: ctx} do
+      fake = backends!()
+      install = "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "coder",
+          "title" => "Coder",
+          "program" => "claude",
+          "install" => install,
+          "model" => "opus",
+          "content" => "# Coder"
+        })
+
+      card = "#aqua-card-coder"
+      {view, _html} = mount_athanor(conn, "/aqua")
+      assert has_element?(view, card <> ~s( a[data-test="install-program"]), "install claude")
+      assert has_element?(view, card, "Its brain runs a program you have not installed")
+
+      [href] =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(card <> ~s( a[data-test="install-program"]))
+        |> LazyHTML.attribute("href")
+
+      assert URI.parse(href).path == athanor_path("/programs")
+
+      assert URI.decode_query(URI.parse(href).query) == %{
+               "install_for" => "coder",
+               "from" => "aqua"
+             }
+
+      refute has_element?(view, card <> ~s( [data-test="set-up-program"]))
+      refute has_element?(view, card <> ~s( [data-test="connect"]))
+      refute has_element?(view, card <> " button[phx-click=open_consent]")
+      assert model_choices(view, "coder") == [{"", "The program's default"}, {"opus", "opus"}]
+      refute has_element?(view, "#aqua-card-coder-options")
+      refute_received {:session, "open", _open, _fields}
+
+      row = program_row!(ctx, "claude", install)
+      send_update_agents(view, load: true)
+      refute has_element?(view, card <> ~s( a[data-test="install-program"]))
+      assert has_element?(view, card <> ~s( [data-test="set-up-program"]), "Set up claude")
+      refute has_element?(view, card <> " button[phx-click=open_consent]")
+
+      # The row's driver lists its program's models, for the person here:
+      # each listing the page asks for is answered, until the card shows it.
+      listed = [
+        {"", "The program's default"},
+        {"default", "Default (recommended)"},
+        {"opus", "Opus"},
+        {"haiku", "Haiku"}
+      ]
+
+      lists!(fake, row, fn -> model_choices(view, "coder") == listed end)
+
+      assert texts(view, "#aqua-card-coder-option-effort option") == [
+               "default",
+               "low",
+               "high",
+               "max"
+             ]
+
+      # A model it lists is the member's model, and only its model.
+      view
+      |> element("#aqua-card-coder-model")
+      |> render_change(%{"name" => "coder", "brain" => "program", "value" => "haiku"})
+
+      assert {:ok,
+              %{
+                "program" => "claude",
+                "catalyst_ref" => nil,
+                "model" => "haiku",
+                "install" => ^install
+              }} =
+               Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => "coder"})
+    end
+
+    # A row of the member's program's name that stands but is no brain's,
+    # disabled or not one a brain runs in (a bare harness among them), is
+    # never read as not installed: no install is offered over it, and the
+    # card says what to change on the Programs page.
+    test "a program member whose row of that name stands disabled or unfit says so and offers no install",
+         %{conn: conn, ctx: ctx} do
+      {:ok, _idle} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "idle-claude",
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          home: "kept",
+          enabled: false,
+          config_json: Jason.encode!(%{"command" => "cyfr-claude-code claude", "env" => %{}})
+        })
+
+      _bare = program_row!(ctx, "bare-claude", "npx -y @anthropic-ai/claude-code")
+
+      for {name, program} <- [{"idle", "idle-claude"}, {"bare", "bare-claude"}] do
+        {:ok, _} =
+          Cyfr.Test.AquaTool.call(ctx, %{
+            "action" => "create",
+            "name" => name,
+            "program" => program,
+            "install" => "cyfr-claude-code claude",
+            "content" => "# #{name}"
+          })
+      end
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      for {name, program, state} <- [
+            {"idle", "idle-claude", :program_disabled},
+            {"bare", "bare-claude", :program_unfit}
+          ] do
+        card = "#aqua-card-" <> name
+        assert has_element?(view, card, Prima.Refusal.message({:crew_unready, name, state}))
+        refute has_element?(view, card <> ~s( a[data-test="install-program"]))
+        refute has_element?(view, card <> ~s( [data-test="set-up-program"]))
+        refute has_element?(view, card, "not installed")
+
+        [href] =
+          view
+          |> render()
+          |> LazyHTML.from_fragment()
+          |> LazyHTML.query(card <> ~s( a[data-test="open-program"]))
+          |> LazyHTML.attribute("href")
+
+        assert URI.decode_query(URI.parse(href).query) == %{"name" => program}
+      end
+    end
+
     test "the soul offers no Delete; a shipped crew member is disabled and enabled from its card",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")
@@ -1760,8 +1903,8 @@ defmodule PrismWeb.AquaLiveTest do
         {"planner", "Planner", %{"catalyst_ref" => "catalyst:local.planned"}},
         {"by-hand", "By Hand", %{"catalyst_ref" => "catalyst:local.planned"}},
         {"keyed", "Keyed", %{"catalyst_ref" => "catalyst:local.keyed"}},
-        {"coder", "Coder", %{"program" => codex.id}},
-        {"held", "Held", %{"program" => claude.id}}
+        {"coder", "Coder", %{"program" => codex.name}},
+        {"held", "Held", %{"program" => claude.name}}
       ]
 
       for {name, title, brain} <- members do
@@ -2006,6 +2149,72 @@ defmodule PrismWeb.AquaLiveTest do
     |> LazyHTML.from_fragment()
     |> LazyHTML.query(~s(#aqua-card-#{name}-mode [role=radio][aria-checked="true"]))
     |> Enum.flat_map(&LazyHTML.attribute(&1, "phx-value-mode"))
+  end
+
+  # Each choice of a member's Model, as its value and the words it shows.
+  defp model_choices(view, name) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(#aqua-card-#{name}-model select option))
+    |> Enum.map(fn option ->
+      {option |> LazyHTML.attribute("value") |> List.first(),
+       option |> LazyHTML.text() |> String.trim()}
+    end)
+  end
+
+  defp say(fake, row, event),
+    do: Cyfr.Test.ScriptedBackends.write(fake, row.id, Jason.encode!(event))
+
+  # Plays the driver of `row` for every listing a page asks of it, a new
+  # driver process each, until `shown` holds: its hello once the session
+  # stands, then the models and efforts its program lists.
+  defp lists!(fake, row, shown, deadline \\ System.monotonic_time(:millisecond) + 10_000) do
+    home = row.id
+
+    cond do
+      shown.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("the card did not show its program's listing")
+
+      true ->
+        receive do
+          {:session, "open", %{"mode" => "run", "home_id" => ^home}, _fields} ->
+            :ok
+
+          {:session, "recv", %{"after" => 0}, _fields} ->
+            say(fake, row, %{
+              "t" => "hello",
+              "v" => Opus.Brain.Wire.version(),
+              "driver" => "cyfr-claude-code",
+              "boot" => "b#{System.unique_integer([:positive])}"
+            })
+
+          {:session, "send", %{"lines" => [line]}, _fields} ->
+            case Jason.decode!(line) do
+              %{"t" => "models", "id" => id} ->
+                say(fake, row, %{
+                  "t" => "models",
+                  "id" => id,
+                  "models" => [
+                    %{"id" => "default", "name" => "Default (recommended)"},
+                    %{"id" => "opus", "name" => "Opus"},
+                    %{"id" => "haiku", "name" => "Haiku"}
+                  ],
+                  "efforts" => ["low", "high", "max"]
+                })
+
+              _another ->
+                :ok
+            end
+        after
+          100 -> :ok
+        end
+
+        lists!(fake, row, shown, deadline)
+    end
   end
 
   # The text of each element `selector` finds, trimmed.

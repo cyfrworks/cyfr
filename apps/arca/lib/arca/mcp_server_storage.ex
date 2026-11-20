@@ -319,7 +319,7 @@ defmodule Arca.McpServerStorage do
   its home from kept is `{:error, :folder_kept}`; neither writes
   anything. The records the folder holds of the brain's sessions are that
   driver's harness's, which a removal owed for one of them asks that
-  driver to remove (`Arca.ThreadStorage.forget_sessions/2`), and the
+  driver to remove (`Arca.ThreadStorage.forget_sessions/3`), and the
   folder goes only with the row's deletion or its home's reset. A bare
   command that gains a driver, and a change after the driver's word,
   write as any other.
