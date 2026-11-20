@@ -759,17 +759,23 @@ defmodule Aqua.ProgramTest do
       # The program's start of a terminal, a call that runs alone, is held.
       opening = held_start!(fake, row, turn, "ask-1")
       on_exit(fn -> send(opening, :go) end)
-      assert activity!() == [start_entry(:done), start_entry(:running)]
+      assert activity!() == [start_entry(:done), ask_start_entry(:running)]
       say(fake, row, own(turn, "Bash", "start"))
 
       assert activity!() ==
-               [start_entry(:done), start_entry(:running), own_entry("Bash", :running)]
+               [start_entry(:done), ask_start_entry(:running), own_entry("Bash", :running)]
 
       send(opening, :go)
-      assert activity!() == [start_entry(:done), start_entry(:done), own_entry("Bash", :running)]
+
+      assert activity!() == [
+               start_entry(:done),
+               ask_start_entry(:done),
+               own_entry("Bash", :running)
+             ]
+
       _answer = accept_next!(fake, row)
       say(fake, row, own(turn, "Bash", "end"))
-      assert activity!() == [start_entry(:done), start_entry(:done), own_entry("Bash", :done)]
+      assert activity!() == [start_entry(:done), ask_start_entry(:done), own_entry("Bash", :done)]
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
     end
@@ -792,8 +798,8 @@ defmodule Aqua.ProgramTest do
       session = Jason.decode!(started["content"])["session"]
 
       assert [activity!(), activity!()] == [
-               [start_entry(:done), start_entry(:running)],
-               [start_entry(:done), start_entry(:done)]
+               [start_entry(:done), ask_start_entry(:running)],
+               [start_entry(:done), ask_start_entry(:done)]
              ]
 
       [{terminal, _}] = running_sessions(fake, cli)
@@ -802,7 +808,7 @@ defmodule Aqua.ProgramTest do
       wait = %{"action" => "wait", "session" => session, "after" => 0, "ms" => 30_000}
       say(fake, row, ask(turn, "ask-wait", "program", wait))
       waited = entry("program", Aqua.Steps.sentence("program", "wait", "brain"))
-      before = [start_entry(:done), start_entry(:done)]
+      before = [start_entry(:done), ask_start_entry(:done)]
       assert activity!() == before ++ [waited.(:running)]
       say(fake, row, own(turn, "Read", "start"))
       assert activity!() == before ++ [waited.(:running), own_entry("Read", :running)]
@@ -860,16 +866,16 @@ defmodule Aqua.ProgramTest do
 
       opening = held_start!(fake, row, turn, "ask-1")
       on_exit(fn -> send(opening, :go) end)
-      assert activity!() == [start_entry(:done), start_entry(:running)]
+      assert activity!() == [start_entry(:done), ask_start_entry(:running)]
       say(fake, row, own(turn, "Bash", "start"))
 
       assert activity!() ==
-               [start_entry(:done), start_entry(:running), own_entry("Bash", :running)]
+               [start_entry(:done), ask_start_entry(:running), own_entry("Bash", :running)]
 
       say(fake, row, idle(turn, [input.id]))
 
       assert activity!() ==
-               [start_entry(:done), start_entry(:running), own_entry("Bash", :done)]
+               [start_entry(:done), ask_start_entry(:running), own_entry("Bash", :done)]
 
       assert Process.alive?(opening)
 
@@ -941,19 +947,19 @@ defmodule Aqua.ProgramTest do
 
       opening = held_start!(fake, row, turn, "ask-1")
       on_exit(fn -> send(opening, :go) end)
-      assert activity!() == [start_entry(:done), start_entry(:running)]
+      assert activity!() == [start_entry(:done), ask_start_entry(:running)]
       say(fake, row, own(turn, "program", "start"))
       mine = own_entry("program", :running)
-      assert activity!() == [start_entry(:done), start_entry(:running), mine]
+      assert activity!() == [start_entry(:done), ask_start_entry(:running), mine]
 
       # The call's end marks the call done, not the program's tool of its name.
       send(opening, :go)
-      assert activity!() == [start_entry(:done), start_entry(:done), mine]
+      assert activity!() == [start_entry(:done), ask_start_entry(:done), mine]
       _answer = accept_next!(fake, row)
       say(fake, row, idle(turn, [input.id]))
 
       assert activity!() ==
-               [start_entry(:done), start_entry(:done), own_entry("program", :done)]
+               [start_entry(:done), ask_start_entry(:done), own_entry("program", :done)]
 
       assert :completed = Task.await(loop, 30_000)
     end
@@ -1470,6 +1476,54 @@ defmodule Aqua.ProgramTest do
              ]
 
       refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "a turn's start says the program started for a new session and went on for a held " <>
+           "or resumed one, and its live entry is the work's hand-over",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+
+      # A new native session.
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+
+      assert_receive %Cyfr.Bus.ThreadEvent{
+                       kind: :tool_activity,
+                       data: [%{tool: "Work handed to #{@title}", status: :done}]
+                     },
+                     10_000
+
+      handed!(fake, row, ctx, turn, loop)
+      assert start_said(ctx, turn) == "#{@title} started"
+
+      # The same process takes the next turn's work.
+      next = accept!(ctx, thread, row, "second")
+      loop = run(ctx, next)
+      work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      handed!(fake, row, ctx, next, loop)
+      assert start_said(ctx, next) == "#{@title} went on"
+
+      # A new process resumes the session.
+      Scripted.end_sessions(fake, row.id)
+
+      Prima.Test.Wait.wait_until(
+        fn -> not Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua") end,
+        10_000,
+        "the attendant to let its ended session go"
+      )
+
+      third = accept!(ctx, thread, row, "third")
+      loop = run(ctx, third)
+      opened!(fake, row, "boot-two")
+      assert %{"t" => "start", "session" => @session} = sent()
+      say(fake, row, %{"t" => "started", "session" => @session, "fresh" => false, "held" => []})
+      work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      handed!(fake, row, ctx, third, loop)
+      assert start_said(ctx, third) == "#{@title} went on"
     end
 
     test "a session left from the turn before takes the next turn's work, then its posts, one " <>
@@ -3273,6 +3327,29 @@ defmodule Aqua.ProgramTest do
 
   defp accepted(input), do: %{"t" => "accepted", "id" => input.id}
 
+  # The turn's post, written once its work is taken, answered and idle.
+  defp handed!(fake, row, ctx, turn, loop) do
+    post = sent()
+    [input] = inputs(ctx, turn)
+
+    assert post ==
+             posted(
+               input,
+               turn,
+               Tape.message(ctx, turn.message_id) |> elem(1) |> Map.get(:content)
+             )
+
+    say(fake, row, accepted(input))
+    say(fake, row, idle(turn, [input.id]))
+    assert :completed = Task.await(loop, 30_000)
+  end
+
+  # What the turn's host start said, as its result row keeps it.
+  defp start_said(ctx, turn) do
+    {:ok, said} = Tape.message(ctx, start_step(ctx, turn).result_message_id)
+    said.content
+  end
+
   # The usage the thread was told next.
   defp told_usage do
     assert_receive %Cyfr.Bus.ThreadEvent{kind: :usage, data: usage}, 10_000
@@ -3324,8 +3401,14 @@ defmodule Aqua.ProgramTest do
   defp entry(tool, sentence),
     do: fn status -> %{tool: tool, sentence: sentence, status: status, preview: nil} end
 
-  # The host's start of the program, an entry of the turn's list.
+  # The host's start of the program, an entry of the turn's list, labelled
+  # as the hand-over of its work.
   defp start_entry(status),
+    do:
+      entry("Work handed to #{@title}", Aqua.Steps.sentence("program", "start", "brain")).(status)
+
+  # A start of a terminal the program asked for, labelled as its call's tool.
+  defp ask_start_entry(status),
     do: entry("program", Aqua.Steps.sentence("program", "start", "brain")).(status)
 
   # The program's own tool, worded as a tool no step names.

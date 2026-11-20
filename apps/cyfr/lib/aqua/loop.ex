@@ -1878,7 +1878,8 @@ defmodule Aqua.Loop do
        when call.tool == "program" and call.action == "start" do
     if host_start?(state, step) do
       case Aqua.Program.attend(program_work(state, step.id), holder(state.turn.id) || self()) do
-        :ok -> {:ok, "#{program_title(state)} started"}
+        {:ok, :started} -> {:ok, "#{program_title(state)} started"}
+        {:ok, :went_on} -> {:ok, "#{program_title(state)} went on"}
         {:error, sentence} -> {:error, sentence}
       end
     else
@@ -3132,8 +3133,11 @@ defmodule Aqua.Loop do
         purpose = item[:step] && item.step.purpose
 
         case call do
-          {:ok, call} -> {call.model_name, Aqua.Steps.sentence(call.tool, call.action, purpose)}
-          _unbound -> {"tool", Aqua.Steps.sentence(nil, nil, purpose)}
+          {:ok, call} ->
+            {label(state, item, call), Aqua.Steps.sentence(call.tool, call.action, purpose)}
+
+          _unbound ->
+            {"tool", Aqua.Steps.sentence(nil, nil, purpose)}
         end
       end)
 
@@ -3152,6 +3156,17 @@ defmodule Aqua.Loop do
     announce(state, :tool_activity, activity)
     %{state | activity: activity}
   end
+
+  # An entry's label is its call's tool, but for a program brain's host
+  # start, which ends once the program has taken the work: it is labelled
+  # as that hand-over, so its end reads true while the program works.
+  defp label(state, %{step: %{} = step}, call) do
+    if host_start?(state, step),
+      do: "Work handed to #{program_title(state)}",
+      else: call.model_name
+  end
+
+  defp label(_state, _item, call), do: call.model_name
 
   # What a program brain's attendant tells of the open work while the
   # turn waits on it or on a call (`Aqua.Program`): its own tools as they

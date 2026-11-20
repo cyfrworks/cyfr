@@ -142,10 +142,12 @@ defmodule Aqua.Program do
   @doc """
   Attend `work`'s turn, for the loop `loop`: open the session if none is
   held, start the harness or resume its native session, and set the
-  turn's work. Answers once the driver took the work, or `{:error,
+  turn's work. Answers once the driver took the work: `{:ok, :started}`
+  when the driver started a new native session for it, `{:ok, :went_on}`
+  when it resumed the session or its process already ran; or `{:error,
   sentence}`, the reason the turn ends.
   """
-  @spec attend(work(), pid()) :: :ok | {:error, String.t()}
+  @spec attend(work(), pid()) :: {:ok, :started | :went_on} | {:error, String.t()}
   def attend(%{ctx: %Context{athanor_id: athanor_id}} = work, loop) when is_pid(loop) do
     key = {athanor_id, work.turn.thread_id, work.agent}
 
@@ -247,6 +249,7 @@ defmodule Aqua.Program do
        waiting: [],
        outstanding: nil,
        fresh?: false,
+       how: :went_on,
        recovering?: false,
        pending: [],
        timer: nil,
@@ -264,7 +267,7 @@ defmodule Aqua.Program do
 
     case state.phase do
       :closed -> {:noreply, open(state)}
-      :ready -> {:noreply, write_work(state)}
+      :ready -> {:noreply, write_work(%{state | how: :went_on})}
       _starting -> {:noreply, state}
     end
   end
@@ -828,8 +831,14 @@ defmodule Aqua.Program do
 
   defp on_started(%{phase: :starting} = state, %{gone?: true}), do: start_over(state)
 
+  # The driver's `fresh` says whether the session is new, which is how the
+  # turn's start is worded (`attend/2`).
   defp on_started(%{phase: :starting} = state, %{started: %{} = started}) do
-    state = %{state | phase: :started}
+    state = %{
+      state
+      | phase: :started,
+        how: if(started["fresh"] == true, do: :started, else: :went_on)
+    }
 
     case reconcile(state, started) do
       {:ok, state} -> write_work(state)
@@ -861,7 +870,7 @@ defmodule Aqua.Program do
     Enum.reduce(ids, state, fn id, state ->
       cond do
         state.phase == :working and id == work.start ->
-          reply_waiting(%{state | phase: :ready, recovering?: false}, :ok)
+          reply_waiting(%{state | phase: :ready, recovering?: false}, {:ok, state.how})
 
         match?(%{id: ^id}, state.outstanding) ->
           %{state | outstanding: nil}
