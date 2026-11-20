@@ -1001,9 +1001,10 @@ defmodule Arca.ThreadStorage do
   child threads, read under the athanor's lock a child's creation takes
   (`crew_thread/3`), so a child made during the deletion is in it or made
   after it, when its room is gone. Its open turns and the children's
-  are cancelled in the same transaction, recording no reply since the
-  room they would answer is going (`Arca.TurnStorage.cancel_open!/4`,
-  under the root's grant `attrs` carry), and answered for the caller's
+  are cancelled in the same transaction (`Arca.TurnStorage.cancel_open!/4`,
+  under the root's grant `attrs` carry): one asked from a thread that
+  survives the delete answers its asker, and one whose asker goes with it,
+  or that has none, stays silent. They are answered for the caller's
   runtime to stop.
 
   What other threads kept of it goes in the same transaction: the
