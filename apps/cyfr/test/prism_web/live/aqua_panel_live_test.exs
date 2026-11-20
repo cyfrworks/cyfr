@@ -1759,4 +1759,69 @@ defmodule PrismWeb.AquaPanelLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
   end
+
+  describe "deleting a thread from its menu" do
+    @delete ~s([id$="-menu"] button[phx-click="delete"])
+
+    test "work running in it is stopped first, the thread goes, and the panel and another " <>
+           "screen on it land on the blank slate today's thread is made from, with no error",
+         %{conn: conn, mine: mine, me: me} do
+      # The model is held mid-answer, so the turn runs until it is stopped.
+      Cyfr.Test.ScriptedWorker.script([:hang])
+      {panel, _html} = open_panel(desktop!(conn))
+      {pane, today} = panel_thread(panel, me, "and you?")
+
+      wait_until(
+        fn -> length(model_requests()) == 1 end,
+        30_000,
+        "the panel's model to be called"
+      )
+
+      assert Runner.turn_running?(%{me | athanor_id: mine.id}, today.id)
+
+      # Another screen of the person's, its panel on the same thread: kept
+      # open from the first, or opened.
+      other = child!(desktop!(conn), "aqua-panel")
+
+      if is_nil(find_live_child(other, "aqua-panel-pane")),
+        do: other |> element("#aqua-panel-button") |> render_click()
+
+      other_pane = on_thread!(child!(other, "aqua-panel-pane"), today.id)
+      render(pane)
+
+      pane |> element(@delete) |> render_click()
+
+      assert {:error, :not_found} = Threads.get(Sanctum.Context.actor(me), today.id)
+      assert {:ok, []} = Aqua.Tape.open_turns(me, today.id)
+      wait_until(fn -> not Runner.turn_running?(%{me | athanor_id: mine.id}, today.id) end)
+
+      for {panel, pane} <- [{panel, pane}, {other, other_pane}] do
+        wait_until(fn -> is_nil(thread_of(pane)) end)
+        assert has_element?(panel, "#aqua-panel-today", "Today")
+        refute has_element?(panel, "#aqua-panel-day-name")
+        assert :sys.get_state(pane.pid).socket.assigns.flash == %{}
+      end
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a crew member's thread goes alone and the panel lands on its room",
+         %{conn: conn, me: me} do
+      actor = Sanctum.Context.actor(me)
+      today = today!(me)
+      {:ok, explorer} = Threads.crew_thread(actor, today.id, "explorer")
+      {:ok, room} = Threads.get(actor, today.id)
+      {panel, _html} = open_panel(desktop!(conn))
+      pane = show!(panel, explorer.id)
+
+      pane |> element(@delete) |> render_click()
+
+      assert {:error, :not_found} = Threads.get(actor, explorer.id)
+      on_thread!(pane, today.id)
+      assert {:ok, ^room} = Threads.get(actor, today.id)
+      assert has_element?(panel, "#aqua-panel-day-name")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
 end
