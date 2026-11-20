@@ -1380,6 +1380,37 @@ func TestAReadOnlyStartStillShowsCYFRsToolsAsAsks(t *testing.T) {
 // A read-only start that also names a permission mode or the harness's
 // own tools is no start the driver can honour: it ends with 2 and starts
 // no harness.
+// A start naming a permission mode under which the harness would run
+// CYFR's tools without asking the driver ends it before any harness runs,
+// saying why; each of the three it asks under starts as named.
+func TestAStartNamingAPermissionModeThatAsksNothingEndsTheDriver(t *testing.T) {
+	for _, mode := range []string{"bypassPermissions", "dontAsk", "auto"} {
+		s := startDriver(t)
+		s.expect("hello")
+		s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"permission_mode": mode}})
+		if status := s.end(); status != 2 {
+			t.Fatalf("%s: the driver ends with 2: %d", mode, status)
+		}
+		if !strings.Contains(s.stderr.String(), "cyfr-claude-code: "+unaskingMode+"\n") {
+			t.Fatalf("%s: the driver says why: %q", mode, s.stderr.String())
+		}
+		if matches, _ := filepath.Glob(filepath.Join(s.home, ".claude", "projects", "*", "*")); len(matches) != 0 {
+			t.Fatalf("%s: no harness ran: %v", mode, matches)
+		}
+	}
+	for _, mode := range []string{"default", "acceptEdits", "plan"} {
+		s := startDriver(t)
+		session := startFresh(s, map[string]any{"permission_mode": mode})
+		work(s, "stp_work", []any{})
+		argv, _ := modesOf(t, s, "stp_post")
+		want := append(strs(baseArgv...), strs("--session-id", session, "--permission-mode", mode)...)
+		if !reflect.DeepEqual(argv, want) {
+			t.Fatalf("%s starts as named:\n%v\nnot\n%v", mode, want, argv)
+		}
+		s.end()
+	}
+}
+
 func TestAReadOnlyStartNamingAPermissionModeOrToolsEndsTheDriver(t *testing.T) {
 	for name, config := range map[string]map[string]any{
 		"a permission mode":   {"read_only": true, "permission_mode": "plan"},

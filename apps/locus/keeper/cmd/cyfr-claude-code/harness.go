@@ -81,6 +81,17 @@ var readOnlyArgv = []string{"--permission-mode", "default", "--setting-sources",
 // readOnlyTools are a read-only start's own tools.
 var readOnlyTools = []string{"Read", "Grep", "Glob"}
 
+// permissionModes are the permission modes a start may name
+// (`--permission-mode`), which the harness lists nowhere: the ones under
+// which it still asks the driver before it runs one of CYFR's tools.
+// Under `bypassPermissions`, `dontAsk` or `auto` it would call the stub
+// unasked, which answers such a call as an error, so every call of CYFR's
+// would fail.
+var permissionModes = map[string]bool{"default": true, "acceptEdits": true, "plan": true}
+
+// unaskingMode is what the person reads when a start names any other mode.
+const unaskingMode = "The crew member's permission mode is not one CYFR runs Claude Code in (default, acceptEdits or plan), so nothing ran."
+
 // harnessOptions are the arguments of the row's command that are the
 // harness's own, not its launcher's. The command is either the program's
 // name alone, and then every argument after it is the harness's; or
