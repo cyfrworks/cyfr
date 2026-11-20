@@ -343,13 +343,20 @@ func errorKind(raw json.RawMessage) string {
 	return "provider_error"
 }
 
+// signedOutSentence refuses a post while Codex has no sign-in and no key
+// it can run with, as its account read answers.
+const signedOutSentence = "OpenAI Codex has no sign-in or key it can use; sign it in on the program's terminal, or set a key in its settings."
+
 // errorSentence is the driver's own words for an error of Codex's: its
 // words, which name its account, its endpoint or a sign-in, never leave the
-// box.
+// box. An account's error says only what the type tells: the account or
+// key Codex ran with was refused, never which one, as the Claude Code
+// driver says it. A post while Codex has neither is refused as that
+// (`signedOutSentence`).
 func errorSentence(kind string) string {
 	switch kind {
 	case "authentication":
-		return "OpenAI Codex is not signed in to an account that can run this; sign in on the program's terminal."
+		return "The account or key OpenAI Codex used was refused; check its sign-in on the program's terminal, or a key in its settings."
 	case "rate_limited":
 		return "OpenAI Codex reported a usage or rate limit; ask again later."
 	case "overloaded":

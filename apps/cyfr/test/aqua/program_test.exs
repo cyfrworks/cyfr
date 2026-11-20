@@ -72,7 +72,7 @@ defmodule Aqua.ProgramTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
-    {:ok, ctx: ctx, fake: fake, thread: thread, row: brain_row!(ctx)}
+    {:ok, ctx: ctx, fake: fake, thread: thread, row: brain_row!(ctx), user: user}
   end
 
   describe "a crew member on a program brain" do
@@ -253,6 +253,54 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "a turn on a program brain" do
+    test "tells the thread what the turn used as its start step stores it: the models it " <>
+           "ran, their tokens, and whether its accounting is partial or unavailable",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+      turn = accept!(ctx, thread, row, "count it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      unavailable = %{
+        "t" => "usage",
+        "gen" => 0,
+        "work" => turn.id,
+        "result" => "result-0",
+        "accounting" => "unavailable"
+      }
+
+      say(fake, row, unavailable)
+      assert told_usage() == %{input: 0, output: 0, models: [], accounting: :unavailable}
+
+      say(fake, row, usage(turn, "result-1"))
+      assert told_usage() == %{input: 10, output: 4, models: ["m"], accounting: :partial}
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a turn whose every result was counted tells its accounting complete",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+      turn = accept!(ctx, thread, row, "count it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, usage(turn, "result-1"))
+      assert told_usage() == %{input: 10, output: 4, models: ["m"], accounting: :complete}
+      say(fake, row, usage(turn, "result-2"))
+      assert told_usage() == %{input: 20, output: 8, models: ["m"], accounting: :complete}
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
     test "opens with the host's start, which asks nothing, and completes on the idle that answers its post",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "what is in notes.md?")
@@ -891,17 +939,23 @@ defmodule Aqua.ProgramTest do
       # The program's start of a terminal, a call that runs alone, is held.
       opening = held_start!(fake, row, turn, "ask-1")
       on_exit(fn -> send(opening, :go) end)
-      assert activity!() == [start_entry(:done), start_entry(:running)]
+      assert activity!() == [start_entry(:done), ask_start_entry(:running)]
       say(fake, row, own(turn, "Bash", "start"))
 
       assert activity!() ==
-               [start_entry(:done), start_entry(:running), own_entry("Bash", :running)]
+               [start_entry(:done), ask_start_entry(:running), own_entry("Bash", :running)]
 
       send(opening, :go)
-      assert activity!() == [start_entry(:done), start_entry(:done), own_entry("Bash", :running)]
+
+      assert activity!() == [
+               start_entry(:done),
+               ask_start_entry(:done),
+               own_entry("Bash", :running)
+             ]
+
       _answer = accept_next!(fake, row)
       say(fake, row, own(turn, "Bash", "end"))
-      assert activity!() == [start_entry(:done), start_entry(:done), own_entry("Bash", :done)]
+      assert activity!() == [start_entry(:done), ask_start_entry(:done), own_entry("Bash", :done)]
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
     end
@@ -924,8 +978,8 @@ defmodule Aqua.ProgramTest do
       session = Jason.decode!(started["content"])["session"]
 
       assert [activity!(), activity!()] == [
-               [start_entry(:done), start_entry(:running)],
-               [start_entry(:done), start_entry(:done)]
+               [start_entry(:done), ask_start_entry(:running)],
+               [start_entry(:done), ask_start_entry(:done)]
              ]
 
       [{terminal, _}] = running_sessions(fake, cli)
@@ -934,7 +988,7 @@ defmodule Aqua.ProgramTest do
       wait = %{"action" => "wait", "session" => session, "after" => 0, "ms" => 30_000}
       say(fake, row, ask(turn, "ask-wait", "program", wait))
       waited = entry("program", Aqua.Steps.sentence("program", "wait", "brain"))
-      before = [start_entry(:done), start_entry(:done)]
+      before = [start_entry(:done), ask_start_entry(:done)]
       assert activity!() == before ++ [waited.(:running)]
       say(fake, row, own(turn, "Read", "start"))
       assert activity!() == before ++ [waited.(:running), own_entry("Read", :running)]
@@ -992,16 +1046,16 @@ defmodule Aqua.ProgramTest do
 
       opening = held_start!(fake, row, turn, "ask-1")
       on_exit(fn -> send(opening, :go) end)
-      assert activity!() == [start_entry(:done), start_entry(:running)]
+      assert activity!() == [start_entry(:done), ask_start_entry(:running)]
       say(fake, row, own(turn, "Bash", "start"))
 
       assert activity!() ==
-               [start_entry(:done), start_entry(:running), own_entry("Bash", :running)]
+               [start_entry(:done), ask_start_entry(:running), own_entry("Bash", :running)]
 
       say(fake, row, idle(turn, [input.id]))
 
       assert activity!() ==
-               [start_entry(:done), start_entry(:running), own_entry("Bash", :done)]
+               [start_entry(:done), ask_start_entry(:running), own_entry("Bash", :done)]
 
       assert Process.alive?(opening)
 
@@ -1073,19 +1127,19 @@ defmodule Aqua.ProgramTest do
 
       opening = held_start!(fake, row, turn, "ask-1")
       on_exit(fn -> send(opening, :go) end)
-      assert activity!() == [start_entry(:done), start_entry(:running)]
+      assert activity!() == [start_entry(:done), ask_start_entry(:running)]
       say(fake, row, own(turn, "program", "start"))
       mine = own_entry("program", :running)
-      assert activity!() == [start_entry(:done), start_entry(:running), mine]
+      assert activity!() == [start_entry(:done), ask_start_entry(:running), mine]
 
       # The call's end marks the call done, not the program's tool of its name.
       send(opening, :go)
-      assert activity!() == [start_entry(:done), start_entry(:done), mine]
+      assert activity!() == [start_entry(:done), ask_start_entry(:done), mine]
       _answer = accept_next!(fake, row)
       say(fake, row, idle(turn, [input.id]))
 
       assert activity!() ==
-               [start_entry(:done), start_entry(:done), own_entry("program", :done)]
+               [start_entry(:done), ask_start_entry(:done), own_entry("program", :done)]
 
       assert :completed = Task.await(loop, 30_000)
     end
@@ -1604,6 +1658,54 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
+    test "a turn's start says the program started for a new session and went on for a held " <>
+           "or resumed one, and its live entry is the work's hand-over",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+
+      # A new native session.
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+
+      assert_receive %Cyfr.Bus.ThreadEvent{
+                       kind: :tool_activity,
+                       data: [%{tool: "Work handed to #{@title}", status: :done}]
+                     },
+                     10_000
+
+      handed!(fake, row, ctx, turn, loop)
+      assert start_said(ctx, turn) == "#{@title} started"
+
+      # The same process takes the next turn's work.
+      next = accept!(ctx, thread, row, "second")
+      loop = run(ctx, next)
+      work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      handed!(fake, row, ctx, next, loop)
+      assert start_said(ctx, next) == "#{@title} went on"
+
+      # A new process resumes the session.
+      Scripted.end_sessions(fake, row.id)
+
+      Prima.Test.Wait.wait_until(
+        fn -> not Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua") end,
+        10_000,
+        "the attendant to let its ended session go"
+      )
+
+      third = accept!(ctx, thread, row, "third")
+      loop = run(ctx, third)
+      opened!(fake, row, "boot-two")
+      assert %{"t" => "start", "session" => @session} = sent()
+      say(fake, row, %{"t" => "started", "session" => @session, "fresh" => false, "held" => []})
+      work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      handed!(fake, row, ctx, third, loop)
+      assert start_said(ctx, third) == "#{@title} went on"
+    end
+
     test "a session left from the turn before takes the next turn's work, then its posts, one " <>
            "written before the work is taken among them, and opens nothing again",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
@@ -1780,8 +1882,11 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "open", _wire, _fields}
     end
 
-    test "a startup option the harness does not take is refused before anything is written",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+    test "a startup option the harness does not take is refused before anything is written, " <>
+           "and the thread says why, live and opened again",
+         %{conn: conn, ctx: ctx, thread: thread, row: row, fake: fake, user: user} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
       turn = accept!(ctx, thread, row, "warm")
       options!(turn, %{"temperature" => "0.2"})
       loop = run(ctx, turn)
@@ -1793,10 +1898,92 @@ defmodule Aqua.ProgramTest do
 
       assert {:failed, ^line} = Task.await(loop, 30_000)
       assert {:ok, %{status: "failed", error: ^line}} = Tape.turn(ctx, turn.id)
+
+      assert [said] =
+               for(
+                 %{kind: "system"} = row <-
+                   Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id),
+                 do: row
+               )
+
+      assert {said.content, said.turn_id} == {line, turn.id}
+      # Live, the thread hears the line as the pane draws a row it hears;
+      # opened again, the pane draws it.
+      said_id = said.id
+
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :message, data: %{id: ^said_id} = heard}
+      assert {heard.kind, heard.content} == {"system", line}
+
+      conn = log_in_user(conn, user, athanor_id: ctx.athanor_id)
+      assert has_element?(pane!(conn, ctx, thread), ~s([id$="-m-#{said.id}"]), line)
       assert %{dispatch_state: "closed", error: ^line} = start_step(ctx, turn)
       assert_receive {:session, "close", _wire, _fields}, 10_000
       assert inputs(ctx, turn) == []
       refute_received {:session, "send", _wire, _fields}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a turn that counted nothing reads unknown in the thread's menu, live as it ends and " <>
+           "opened again, never zero",
+         %{conn: conn, ctx: ctx, thread: thread, row: row, fake: fake, user: user} do
+      turn = accept!(ctx, thread, row, "warm")
+      options!(turn, %{"temperature" => "0.2"})
+      conn = log_in_user(conn, user, athanor_id: ctx.athanor_id)
+      # The pane's runner takes the turn from the rows and runs it; its
+      # start is refused before the program counted anything.
+      pane = pane!(conn, ctx, thread)
+      opened!(fake, row, "boot-one")
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?({:ok, %{status: "failed"}}, Tape.turn(ctx, turn.id)) end,
+        10_000,
+        "the turn to fail"
+      )
+
+      Prima.Test.Wait.wait_until(
+        fn -> menu_text(pane) =~ "Tokens unknown" end,
+        10_000,
+        "the live menu to say the tokens are unknown"
+      )
+
+      assert menu_text(pane!(conn, ctx, thread)) =~ "Tokens unknown"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the pane's Stop while the program has counted nothing reads unknown in that pane's " <>
+           "menu, never zero",
+         %{conn: conn, ctx: ctx, thread: thread, row: row, fake: fake, user: user} do
+      turn = accept!(ctx, thread, row, "work on it")
+      conn = log_in_user(conn, user, athanor_id: ctx.athanor_id)
+      # The pane's runner takes the turn from the rows; the program takes
+      # its post and has told no usage yet.
+      pane = pane!(conn, ctx, thread)
+      started!(fake, row)
+      _post = sent()
+      stop = ~s(button[phx-click="stop"])
+
+      Prima.Test.Wait.wait_until(
+        fn -> has_element?(pane, stop) end,
+        10_000,
+        "the pane's Stop"
+      )
+
+      assert menu_text(pane) =~ "Tokens 0 in · 0 out"
+      pane |> element(stop) |> render_click()
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?({:ok, %{status: "cancelled"}}, Tape.turn(ctx, turn.id)) end,
+        10_000,
+        "the turn to be stopped"
+      )
+
+      Prima.Test.Wait.wait_until(
+        fn -> menu_text(pane) =~ "Tokens unknown" end,
+        10_000,
+        "the pane's menu to say the tokens are unknown"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "a scheduled turn starts its program with nothing asked and runs as any turn of its mode",
@@ -1854,8 +2041,8 @@ defmodule Aqua.ProgramTest do
                posted(
                  noticed,
                  turn,
-                 "CYFR restarted while you were working on the last message, which you " <>
-                   "already have. Go on with it, or say where it stands."
+                 "Your work on the last message was interrupted, and you already have that " <>
+                   "message. Go on with it, or say where it stands."
                )
 
       assert step_fields(noticed) == input_fields("notice", turn.message_id, nil, "0:notice:")
@@ -2196,9 +2383,10 @@ defmodule Aqua.ProgramTest do
                  posted(
                    continued,
                    turn,
-                   "CYFR restarted and you no longer had your record of this thread, so the " <>
-                     "thread so far is above, with what your calls in this work answered; they " <>
-                     "are not run again. Go on with the last message, or say where it stands."
+                   "Your work was interrupted and you no longer had your record of this " <>
+                     "thread, so the thread so far is above, with what your calls in this work " <>
+                     "answered; they are not run again. Go on with the last message, or say " <>
+                     "where it stands."
                  ),
                  "context",
                  [
@@ -2717,6 +2905,63 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
+    test "after Stop during a CYFR tool, the next turn hands the program its post and no " <>
+           "prompt about the stopped call",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "run it")
+      tasks = start_supervised!(Task.Supervisor)
+
+      loop =
+        Task.Supervisor.async_nolink(tasks, fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+
+      %{start: first} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      Scripted.hold(fake, "open", 30_000)
+      args = %{"action" => "start", "program" => row.id, "epoch" => row.epoch}
+      say(fake, row, ask(turn, "ask-1", "program", args))
+      assert_receive {:held, "open", opening}, 10_000
+
+      {:ok, open} = Tape.turn(ctx, turn.id)
+      assert {:ok, aborted} = Aqua.Loop.abort(ctx, open, "stopped")
+      assert_receive {:DOWN, _ref, :process, pid, _reason} when pid == loop.pid, 10_000
+      {:ok, _} = Tape.finish(ctx, aborted, "cancelled", %{error: "stopped"})
+      send(opening, :go)
+
+      Prima.Test.Wait.wait_until(
+        fn ->
+          Opus.Programs.running(ctx) == {:ok, []} and
+            not Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua")
+        end,
+        10_000,
+        "the stopped turn's terminal and session to end"
+      )
+
+      # The next turn resumes the session the stopped one held, and the
+      # program is handed that turn's post alone.
+      next = accept!(ctx, thread, row, "next one")
+      loop = run(ctx, next)
+      opened!(fake, row, "boot-two")
+
+      assert sent() |> Map.delete("system") ==
+               resume_of(Map.delete(first, "system"), %{"session" => @session})
+
+      say(fake, row, %{"t" => "started", "session" => @session, "fresh" => false, "held" => []})
+      assert %{"t" => "work"} = work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+
+      handed = sent()
+      [post] = inputs(ctx, next)
+      assert handed == posted(post, next, "next one")
+      say(fake, row, accepted(post))
+      say(fake, row, idle(next, [post.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_receive {:session, "send", _wire, _fields}, 500
+    end
+
     test "a program turn has no deadline: one whose active time is past its turn's keeps running",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "take your time")
@@ -3132,6 +3377,27 @@ defmodule Aqua.ProgramTest do
       })
 
     :ok
+  end
+
+  # The thread's pane, as the person has it open.
+  defp pane!(conn, ctx, thread) do
+    {:ok, pane, _html} =
+      live_isolated(conn, PrismWeb.ThreadPaneLive,
+        session: %{"athanor_id" => ctx.athanor_id, "thread_id" => thread.id}
+      )
+
+    pane
+  end
+
+  # The thread menu's words, spaced as a person reads them.
+  defp menu_text(pane) do
+    pane
+    |> element(~s([id$="-menu"]))
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.text()
+    |> String.split()
+    |> Enum.join(" ")
   end
 
   defp brain_row!(ctx, name \\ "claude-code") do
@@ -3565,6 +3831,35 @@ defmodule Aqua.ProgramTest do
 
   defp accepted(input), do: %{"t" => "accepted", "id" => input.id}
 
+  # The turn's post, written once its work is taken, answered and idle.
+  defp handed!(fake, row, ctx, turn, loop) do
+    post = sent()
+    [input] = inputs(ctx, turn)
+
+    assert post ==
+             posted(
+               input,
+               turn,
+               Tape.message(ctx, turn.message_id) |> elem(1) |> Map.get(:content)
+             )
+
+    say(fake, row, accepted(input))
+    say(fake, row, idle(turn, [input.id]))
+    assert :completed = Task.await(loop, 30_000)
+  end
+
+  # What the turn's host start said, as its result row keeps it.
+  defp start_said(ctx, turn) do
+    {:ok, said} = Tape.message(ctx, start_step(ctx, turn).result_message_id)
+    said.content
+  end
+
+  # The usage the thread was told next.
+  defp told_usage do
+    assert_receive %Cyfr.Bus.ThreadEvent{kind: :usage, data: usage}, 10_000
+    usage
+  end
+
   # The next command written, taken by the driver.
   defp accept_next!(fake, row) do
     command = sent()
@@ -3575,14 +3870,14 @@ defmodule Aqua.ProgramTest do
   # The recovery prompt that continues a post the transcript holds.
   defp post_notice,
     do:
-      "CYFR restarted while you were working on the last message, which you already have. " <>
+      "Your work on the last message was interrupted, and you already have that message. " <>
         "Go on with it, or say where it stands."
 
   # The recovery prompt that carries an answer the session no longer asks for.
   defp answer_notice(name, ask, content),
     do:
-      "CYFR restarted while your call #{name} (#{ask}) ran, so its answer comes as this " <>
-        "message instead. It answered: " <> content
+      "Your work was interrupted before your call #{name} (#{ask}) was answered, so its " <>
+        "answer comes as this message instead. It answered: " <> content
 
   defp said(turn, message, text),
     do: %{"t" => "said", "gen" => 0, "work" => turn.id, "message" => message, "text" => text}
@@ -3610,8 +3905,14 @@ defmodule Aqua.ProgramTest do
   defp entry(tool, sentence),
     do: fn status -> %{tool: tool, sentence: sentence, status: status, preview: nil} end
 
-  # The host's start of the program, an entry of the turn's list.
+  # The host's start of the program, an entry of the turn's list, labelled
+  # as the hand-over of its work.
   defp start_entry(status),
+    do:
+      entry("Work handed to #{@title}", Aqua.Steps.sentence("program", "start", "brain")).(status)
+
+  # A start of a terminal the program asked for, labelled as its call's tool.
+  defp ask_start_entry(status),
     do: entry("program", Aqua.Steps.sentence("program", "start", "brain")).(status)
 
   # The program's own tool, worded as a tool no step names.

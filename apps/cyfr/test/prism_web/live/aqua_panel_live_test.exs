@@ -1128,7 +1128,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     other_pane = on_thread!(child!(other, "aqua-panel-pane"), you_thread.id)
     assert render(other_pane) =~ "hello from me"
     assert render(other_pane) =~ "Hi there"
-    refute render(other_pane) =~ "is asking"
+    refute render(other_pane) =~ "asking…"
 
     sender = on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
     wait_until(fn -> render(sender) =~ "Hi there" end, 5_000, "the reply in the sender's pane")

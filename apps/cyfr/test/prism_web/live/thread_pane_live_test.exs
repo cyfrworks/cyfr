@@ -105,6 +105,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   # The pane on `thread`, mounted on its own; `session` adds to what its
   # host names.
+  # What an empty thread shows in place of posts, whichever words its
+  # model's state gives it.
+  @empty_state ~s([phx-hook="ScrollBottom"] > div.justify-center)
+
   defp open_pane(conn, athanor, thread, session \\ %{}) do
     {:ok, pane, _} =
       live_isolated(conn, PrismWeb.ThreadPaneLive,
@@ -337,6 +341,51 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "a workspace thread's card opened again behind 500 of a turn's own rows says its state as it is now and keeps Open",
+       %{conn: conn, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, %{workspace: _workspace}} =
+      Arca.TurnStorage.open_workspace(actor, %{
+        daily_id: thread.id,
+        id: Prima.UUID7.generate_id("thread"),
+        title: "Moon report",
+        opening: %{
+          id: Prima.UUID7.generate_id("msg"),
+          author: here.user_id,
+          content: "write the moon report",
+          payload: %{"ask" => "write the moon report"}
+        },
+        pointer: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          content: "Moon report",
+          payload: %{"workspace" => "w", "title" => "Moon report"}
+        },
+        files: fn _thread, _message -> {:ok, []} end,
+        person_id: here.user_id,
+        origin: :interactive
+      })
+
+    [pointer] = Enum.filter(Threads.messages(actor, thread.id), &(&1.kind == "pointer"))
+
+    for n <- 1..500 do
+      {:ok, _} =
+        Threads.append(actor, thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "tool_call",
+          content: "call #{n}"
+        })
+    end
+
+    {_panel, pane} = panel_pane(conn, thread)
+    card = ~s([id$="-m-#{pointer.id}"])
+    assert has_element?(pane, ~s(#{card} [data-state="open"]), "Working")
+    assert has_element?(pane, ~s(#{card} button[phx-click="open_thread"]))
+    refute render(pane) =~ "was deleted"
+  end
+
   test "a card whose workspace thread cannot be found has no Open",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)
@@ -402,6 +451,290 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     for kind <- ~w(page_call page_result tool_call tool_result),
         do: refute(has_element?(pane, ~s([id$="-m-msg_#{kind}"])))
+  end
+
+  test "the menu shows the model a program's turn ran and its tokens, saying when they are " <>
+         "partial or unknown",
+       %{conn: conn, athanor: athanor, thread: thread} do
+    pane = open_pane(conn, athanor, thread)
+
+    told = fn usage ->
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: athanor.id,
+        thread_id: thread.id,
+        kind: :usage,
+        data: usage
+      })
+
+      menu = pane |> element(~s([id$="-menu"])) |> render()
+      menu |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.split() |> Enum.join(" ")
+    end
+
+    assert told.(%{input: 0, output: 0, models: [], accounting: :unavailable}) =~
+             "Model default"
+
+    assert told.(%{input: 0, output: 0, models: [], accounting: :unavailable}) =~
+             "Tokens unknown"
+
+    menu = told.(%{input: 12, output: 3, models: ["claude-opus-5-5"], accounting: :partial})
+    assert menu =~ "claude-opus-5-5"
+    assert menu =~ "Tokens 12 in · 3 out, partial"
+
+    menu = told.(%{input: 20, output: 5, models: ["claude-opus-5-5"], accounting: :complete})
+    assert menu =~ "Tokens 20 in · 5 out"
+    refute menu =~ "partial"
+
+    # An API brain's turn tells its tokens alone.
+    assert told.(%{input: 7, output: 2}) =~ "Model default"
+    assert told.(%{input: 7, output: 2}) =~ "Tokens 7 in · 2 out"
+  end
+
+  test "the line a stopped turn leaves is drawn as it lands, as the thread draws it on open, " <>
+         "as the server's and never as the person's",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    pane = open_pane(conn, athanor, thread)
+
+    {:ok, stopped} =
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
+        author: Prima.Author.system(),
+        sent_by: "aqua",
+        kind: "turn_aborted",
+        content: "stopped"
+      })
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: athanor.id,
+      thread_id: thread.id,
+      kind: :message,
+      data: stopped
+    })
+
+    landed = ~s([id$="-m-#{stopped.id}"])
+    Prima.Test.Wait.wait_until(fn -> has_element?(pane, landed, "stopped") end)
+
+    for pane <- [pane, open_pane(conn, athanor, thread)] do
+      assert has_element?(pane, landed <> " .italic", "stopped")
+      refute has_element?(pane, landed <> " .bg-indigo-600")
+      refute has_element?(pane, landed <> " .items-end")
+    end
+  end
+
+  test "a thread opened again draws what the live thread drew: a turn's calls, their results " <>
+         "and its compaction are no posts",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, said} =
+      Threads.append(actor, thread.id, %{
+        author: Prima.Author.agent(),
+        sent_by: "aqua",
+        content: "a post"
+      })
+
+    kept =
+      for kind <- ~w(tool_call tool_result page_call page_result compaction) do
+        {:ok, row} =
+          Threads.append(actor, thread.id, %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: kind,
+            content: "#{kind} words"
+          })
+
+        row
+      end
+
+    pane = open_pane(conn, athanor, thread)
+    assert has_element?(pane, ~s([id$="-m-#{said.id}"]))
+
+    for row <- kept do
+      refute has_element?(pane, ~s([id$="-m-#{row.id}"]))
+      refute render(pane) =~ row.content
+    end
+  end
+
+  test "a thread opened again draws its latest posts, however many of a turn's own rows follow them",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, said} =
+      Threads.append(actor, thread.id, %{
+        author: Prima.Author.agent(),
+        sent_by: "aqua",
+        content: "a post"
+      })
+
+    for n <- 1..500 do
+      {:ok, _} =
+        Threads.append(actor, thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "tool_call",
+          content: "call #{n}"
+        })
+    end
+
+    pane = open_pane(conn, athanor, thread)
+    assert has_element?(pane, ~s([id$="-m-#{said.id}"] [data-raw-content="a post"]))
+    refute has_element?(pane, @empty_state)
+  end
+
+  test "a thread holding only a turn's own rows opens as an empty thread",
+       %{conn: conn, athanor: athanor, here: here} do
+    actor = Sanctum.Context.actor(here)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
+    assert has_element?(open_pane(conn, athanor, thread), @empty_state)
+
+    for kind <- ~w(tool_call tool_result compaction) do
+      {:ok, _} =
+        Threads.append(actor, thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: kind,
+          content: "#{kind} words"
+        })
+    end
+
+    assert has_element?(open_pane(conn, athanor, thread), @empty_state)
+  end
+
+  describe "the menu's tokens, opened again" do
+    # A turn of the thread, over, whose model step told `usage`: no runner
+    # holds what it counted.
+    defp counted_turn!(here, thread, usage) do
+      actor = Sanctum.Context.actor(here)
+      turn = turn!(here, thread)
+
+      {:ok, model} =
+        Arca.TurnStorage.put_step(actor, turn.id, %{kind: "model", fence: turn.fence})
+
+      {:ok, _} =
+        Arca.TurnStorage.record_response(actor, turn.id, model.id, %{
+          fence: turn.fence,
+          text: "done",
+          usage: usage
+        })
+
+      ended!(turn)
+    end
+
+    # A turn of the thread on a program, over: its `program.start` step,
+    # keyed as the loop keys it, holds `usage` as the program's counts
+    # store it, or none.
+    defp program_turn!(here, thread, usage) do
+      turn = turn!(here, thread)
+
+      {:ok, step} =
+        Arca.TurnStorage.put_step(Sanctum.Context.actor(here), turn.id, %{
+          kind: "tool",
+          purpose: "brain",
+          tool: "program",
+          action: "start",
+          idempotency_key: Arca.TurnStorage.brain_start_key(turn.id),
+          fence: turn.fence
+        })
+
+      if usage,
+        do:
+          {1, _} =
+            Arca.Repo.update_all(from(s in Arca.Schemas.TurnStep, where: s.id == ^step.id),
+              set: [usage: Jason.encode!(usage)]
+            )
+
+      ended!(turn)
+    end
+
+    defp turn!(here, thread) do
+      {:ok, %{turn: turn}} =
+        Arca.TurnStorage.accept_message(Sanctum.Context.actor(here), thread.id, %{
+          message: %{author: here.user_id, sent_by: "person", content: "count it"},
+          turn: %{agent: "aqua", requested_by: here.user_id, origin: :interactive}
+        })
+
+      # Started as `Arca.TurnStorage.start/3` starts it: running, with
+      # the recovery limit only a start writes.
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [status: "running", recovery_limit: 1]
+        )
+
+      turn
+    end
+
+    defp ended!(turn, status \\ "completed") do
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [status: status]
+        )
+
+      turn
+    end
+
+    defp menu_text(pane) do
+      pane
+      |> element(~s([id$="-menu"]))
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.text()
+      |> String.split()
+      |> Enum.join(" ")
+    end
+
+    test "an API brain's counted turn reads its stored tokens",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      counted_turn!(here, thread, %{"input_tokens" => 40, "output_tokens" => 9})
+      assert menu_text(open_pane(conn, athanor, thread)) =~ "Tokens 40 in · 9 out"
+    end
+
+    test "a program's counted turn reads its stored model and tokens",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      program_turn!(here, thread, %{
+        "models" => %{
+          "claude-opus-5-5" => %{"input_tokens" => 120, "output_tokens" => 30}
+        },
+        "results" => 1,
+        "partial" => 0,
+        "unknown" => 0
+      })
+
+      menu = menu_text(open_pane(conn, athanor, thread))
+      assert menu =~ "claude-opus-5-5"
+      assert menu =~ "Tokens 120 in · 30 out"
+    end
+
+    test "a turn stopped while it waited behind a counted one never ran: the menu reads the counted turn's",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      counted =
+        program_turn!(here, thread, %{
+          "models" => %{
+            "claude-opus-5-5" => %{"input_tokens" => 120, "output_tokens" => 30}
+          },
+          "results" => 1,
+          "partial" => 0,
+          "unknown" => 0
+        })
+
+      # A Stop cancels the running turn and the one queued behind it.
+      ended!(counted, "cancelled")
+
+      {:ok, %{turn: queued}} =
+        Arca.TurnStorage.accept_message(Sanctum.Context.actor(here), thread.id, %{
+          message: %{author: here.user_id, sent_by: "person", content: "and then"},
+          turn: %{agent: "aqua", requested_by: here.user_id, origin: :interactive}
+        })
+
+      ended!(queued, "cancelled")
+
+      menu = menu_text(open_pane(conn, athanor, thread))
+      assert menu =~ "claude-opus-5-5"
+      assert menu =~ "Tokens 120 in · 30 out"
+    end
+
+    test "a program's turn that counted nothing reads unknown, never zero",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      program_turn!(here, thread, nil)
+      assert menu_text(open_pane(conn, athanor, thread)) =~ "Tokens unknown"
+    end
   end
 
   test "a nudge, the server's line to the thread's Aqua, is drawn as the server's as it lands",
@@ -731,7 +1064,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     html = render(pane)
 
     for drawn <- [
-          "is asking",
+          "You are asking…",
           "2 queued",
           "files.read",
           "send it again",
@@ -748,6 +1081,33 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, ~s(button.min-h-6[phx-click="dismiss_restart"]))
     assert has_element?(pane, "a.min-h-6.text-xs[download]", "notes.md")
     assert has_element?(pane, "span.text-xs", "kept-elsewhere.txt")
+  end
+
+  test "the person a running turn is for is named with the verb that agrees with them", %{
+    conn: conn,
+    user: user,
+    athanor: athanor,
+    thread: thread
+  } do
+    pane = open_pane(conn, athanor, thread)
+    other = "usr_" <> Ecto.UUID.generate()
+
+    starting = fn user_id ->
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: thread.athanor_id,
+        thread_id: thread.id,
+        kind: :turn_starting,
+        data: user_id
+      })
+
+      render(pane)
+    end
+
+    html = starting.(user.user_id)
+    assert html =~ "You are asking…"
+    refute html =~ "You is asking"
+
+    assert starting.(other) =~ "#{PrismWeb.People.label(other, nil)} is asking…"
   end
 
   test "a screenshot Aqua posted is drawn in place, opens large, and its address gives the picture",
