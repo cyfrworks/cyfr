@@ -94,7 +94,7 @@ defmodule Arca.FilesTest do
     crew = Path.join([seed, "aqua", "crew"])
     File.mkdir_p!(crew)
     File.write!(Path.join([seed, "aqua", "aqua.md"]), "---\ntitle: A\n---\n\nsoul\n")
-    File.write!(Path.join(crew, "scribe.md"), "---\ntitle: Scribe\n---\n\nscribe\n")
+    File.write!(Path.join(crew, "scribe.md"), "---\ntitle: Scribe\n---\n")
 
     on_exit(fn ->
       Application.put_env(:arca, :base_path, prev_base)
@@ -758,7 +758,7 @@ defmodule Arca.FilesTest do
     actor: actor
   } do
     assert {:ok, _} =
-             Files.write(actor, "aqua/crew/courier.md", "---\ntitle: Courier\n---\n\ncourier\n")
+             Files.write(actor, "aqua/crew/courier.md", "---\ntitle: Courier\n---\n")
 
     assert {:ok, rows} = Compendium.AgentIndex.list(ctx)
     courier = Enum.find(rows, &(&1.name == "courier"))
@@ -768,7 +768,7 @@ defmodule Arca.FilesTest do
              Files.write(
                actor,
                "aqua/crew/courier.md",
-               "---\ntitle: Courier\ndisabled: true\n---\n\ncourier\n"
+               "---\ntitle: Courier\ndisabled: true\n---\n"
              )
 
     assert {:ok, rows} = Compendium.AgentIndex.list(ctx)
@@ -780,13 +780,12 @@ defmodule Arca.FilesTest do
     assert {:ok, %{tier: :shaped, entries: entries}} = Files.list(actor, "aqua")
     assert Enum.map(entries, & &1.name) == ["crew", "aqua.md"]
 
-    assert {:ok, %{content: "---\ntitle: Scribe\n---\n\nscribe\n"}} =
+    assert {:ok, %{content: "---\ntitle: Scribe\n---\n"}} =
              Files.read(actor, "aqua/crew/scribe.md")
 
-    assert {:ok, _} =
-             Files.write(actor, "aqua/crew/scribe.md", "---\ntitle: Scribe\n---\n\nours\n")
+    assert {:ok, _} = Files.write(actor, "aqua/crew/scribe.md", "---\ntitle: Ours\n---\n")
 
-    assert {:ok, %{content: "---\ntitle: Scribe\n---\n\nours\n"}} =
+    assert {:ok, %{content: "---\ntitle: Ours\n---\n"}} =
              Files.read(actor, "aqua/crew/scribe.md")
 
     assert {:error, {:invalid_argument, msg}} = Files.write(actor, "aqua/crew/notes.txt", "x")
@@ -799,7 +798,7 @@ defmodule Arca.FilesTest do
     assert msg =~ "ships with the server"
 
     # The athanor's own crew member and scroll go by the same door.
-    assert {:ok, _} = Files.write(actor, "aqua/crew/mine.md", "---\ntitle: Mine\n---\n\nmine\n")
+    assert {:ok, _} = Files.write(actor, "aqua/crew/mine.md", "---\ntitle: Mine\n---\n")
 
     assert {:ok, _} =
              Files.write(actor, "aqua/skills/pdf/SKILL.md", "---\nname: pdf\n---\n\npdf\n")

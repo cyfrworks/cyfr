@@ -138,6 +138,24 @@ func TestRenderAquaList(t *testing.T) {
 	}
 }
 
+// A crew member has no prompt: get shows its line and what to avoid, never
+// an empty prompt; the soul's prompt prints as it is.
+func TestRenderAquaAgent(t *testing.T) {
+	member := map[string]any{
+		"name": "explorer", "title": "Explorer", "type": "crew",
+		"description": "Deep web research", "avoid": "Changing files",
+	}
+	if out := captureStdout(t, func() { renderAquaAgent(member) }); out !=
+		"  explorer  Explorer — Deep web research\n  Avoid: Changing files\n" {
+		t.Errorf("a crew member should print its line and what to avoid, got:\n%q", out)
+	}
+
+	soul := map[string]any{"name": "aqua", "type": "soul", "content": "# Aqua\n\nYou are Aqua."}
+	if out := captureStdout(t, func() { renderAquaAgent(soul) }); out != "# Aqua\n\nYou are Aqua.\n" {
+		t.Errorf("the soul should print its prompt, got:\n%q", out)
+	}
+}
+
 func TestRenderAquaList_NoScrolls(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{

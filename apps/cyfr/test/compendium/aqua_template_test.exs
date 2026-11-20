@@ -54,13 +54,12 @@ defmodule Compendium.AquaTemplateTest do
     soul prompt #{marker}
     """)
 
+    # A crew member has no prompt: its line says which copy is read.
     File.write!(Path.join(crew, "scribe.md"), """
     ---
     title: Scribe
-    description: writes things
+    description: writes things #{marker}
     ---
-
-    scribe prompt #{marker}
     """)
   end
 
@@ -109,7 +108,7 @@ defmodule Compendium.AquaTemplateTest do
       Arca.put(
         Sanctum.Context.actor(ctx),
         AquaPath.agent_file("scribe"),
-        AquaAgent.serialize(%{scribe | prompt: "ours"})
+        AquaAgent.serialize(%{scribe | description: "ours"})
       )
 
     # The operator's mount moves (a new release, a live edit): nothing in
@@ -117,14 +116,14 @@ defmodule Compendium.AquaTemplateTest do
     write_seed!(template, "v2")
 
     assert {:ok, %{prompt: "soul prompt v1"}} = AquaAgent.get(ctx, "aqua")
-    assert {:ok, %{prompt: "ours"}} = AquaAgent.get(ctx, "scribe")
+    assert {:ok, %{description: "ours"}} = AquaAgent.get(ctx, "scribe")
 
     # A reset restores every copy that differs from what NOW ships — the
     # edited crew member and the soul the release changed alike.
     assert {:ok, %{reverted: ["aqua/aqua.md", "aqua/crew/scribe.md"], kept: []}} =
              AquaTemplate.reset(ctx)
 
-    assert {:ok, %{prompt: "scribe prompt v2"}} = AquaAgent.get(ctx, "scribe")
+    assert {:ok, %{description: "writes things v2"}} = AquaAgent.get(ctx, "scribe")
     assert {:ok, %{prompt: "soul prompt v2"}} = AquaAgent.get(ctx, "aqua")
   end
 
@@ -163,7 +162,7 @@ defmodule Compendium.AquaTemplateTest do
       Arca.put(
         Sanctum.Context.actor(ctx),
         AquaPath.agent_file("scribe"),
-        AquaAgent.serialize(%{scribe | prompt: "ours"})
+        AquaAgent.serialize(%{scribe | description: "ours"})
       )
 
     :ok =
@@ -174,7 +173,7 @@ defmodule Compendium.AquaTemplateTest do
       )
 
     # A crew member the seed ships later is not the athanor's until pulled.
-    File.write!(Path.join([template, "crew", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
+    File.write!(Path.join([template, "crew", "later.md"]), "---\ntitle: Later\n---\n")
 
     assert {:ok,
             [
@@ -196,7 +195,7 @@ defmodule Compendium.AquaTemplateTest do
       Arca.put(
         Sanctum.Context.actor(ctx),
         AquaPath.agent_file("scribe"),
-        AquaAgent.serialize(%{scribe | prompt: "ours"})
+        AquaAgent.serialize(%{scribe | description: "ours"})
       )
 
     :ok =
@@ -206,7 +205,7 @@ defmodule Compendium.AquaTemplateTest do
         AquaAgent.serialize(%{scribe | name: "mine"})
       )
 
-    File.write!(Path.join([template, "crew", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
+    File.write!(Path.join([template, "crew", "later.md"]), "---\ntitle: Later\n---\n")
 
     assert {:ok,
             %{
@@ -214,8 +213,8 @@ defmodule Compendium.AquaTemplateTest do
               kept: ["aqua/crew/mine.md"]
             }} = AquaTemplate.reset(ctx)
 
-    assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
-    assert {:ok, %{prompt: "later"}} = AquaAgent.get(ctx, "later")
+    assert {:ok, %{description: "writes things v1"}} = AquaAgent.get(ctx, "scribe")
+    assert {:ok, %{title: "Later"}} = AquaAgent.get(ctx, "later")
     assert {:ok, _} = AquaAgent.get(ctx, "mine")
   end
 
@@ -229,7 +228,7 @@ defmodule Compendium.AquaTemplateTest do
       Arca.put(
         Sanctum.Context.actor(ctx),
         AquaPath.agent_file("scribe"),
-        AquaAgent.serialize(%{scribe | prompt: "ours"})
+        AquaAgent.serialize(%{scribe | description: "ours"})
       )
 
     :ok =
@@ -242,7 +241,7 @@ defmodule Compendium.AquaTemplateTest do
     assert {:ok, %{reverted: reverted, kept: []}} = AquaTemplate.reset(ctx, all: true)
     assert Enum.sort(reverted) == ["aqua/crew/mine.md", "aqua/crew/scribe.md"]
 
-    assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
+    assert {:ok, %{description: "writes things v1"}} = AquaAgent.get(ctx, "scribe")
     assert {:error, :not_found} = AquaAgent.get(ctx, "mine")
     assert {:ok, [_, _]} = Arca.list_recursive(Sanctum.Context.actor(ctx), ["aqua"])
   end
@@ -257,7 +256,7 @@ defmodule Compendium.AquaTemplateTest do
       Arca.put(
         Sanctum.Context.actor(ctx),
         AquaPath.agent_file("mine"),
-        "---\ntitle: Mine\n---\n\nmine\n"
+        "---\ntitle: Mine\n---\n"
       )
 
     # The install loses its template: reset must refuse and leave the

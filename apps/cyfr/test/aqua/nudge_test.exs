@@ -827,7 +827,7 @@ defmodule Aqua.NudgeTest do
         actor(ctx),
         Compendium.AquaPath.crew_file(name),
         "---\ntitle: #{name}\ndescription: Plans.\navoid: Building.\n" <>
-          "catalyst_ref: #{@model}\nmodel: claude-sonnet-5-5\n---\n\nYou are the #{name}.\n"
+          "catalyst_ref: #{@model}\nmodel: claude-sonnet-5-5\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)

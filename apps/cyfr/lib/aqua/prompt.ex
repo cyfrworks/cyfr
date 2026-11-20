@@ -9,8 +9,14 @@ defmodule Aqua.Prompt do
 
   ## Inputs
 
-    * `agent` — the resolved agent: its authored prompt (under
-      `"prompt"`, required) and its policy.
+    * `agent` — the resolved agent and its policy: the soul's authored
+      prompt under `"prompt"`; a crew member has none (nil there), and its
+      prompt opens with CYFR's briefing instead (`briefing/2`).
+    * `program?` — whether a crew member's brain is a program row, whose
+      own tools act in a folder of its own; false for a model's brain.
+    * `search?` — whether a crew member's requests offer its provider's
+      own search (`Aqua.Loop.Request.offers_search?/3`), the one fact of a
+      brain the briefing says only where it is true.
     * `authority` — what the consent edge grants. The only source for what
       the prompt may claim the agent can reach.
     * `crew` — the crew index (`Aqua.Crew.index/2`): the members the
@@ -24,7 +30,7 @@ defmodule Aqua.Prompt do
       (`Aqua.Notes.thread_notes/1`); none for a crew member's thread.
 
   Orders stable sections before the clock to preserve a reusable prompt
-  prefix: authored prompt, granted capabilities, tool prelude, scroll
+  prefix: authored prompt or briefing, granted capabilities, tool prelude, scroll
   index, athanor notes, the crew index and where the turn is; then the
   open requests, whose ages move. A room excerpt is never part of it: the request carries it as a
   transient block (`Aqua.Loop.Request`).
@@ -44,6 +50,8 @@ defmodule Aqua.Prompt do
 
   @type opts :: [
           agent: map(),
+          program?: boolean(),
+          search?: boolean(),
           authority: term() | nil,
           crew: [map()],
           requests: [map()],
@@ -61,20 +69,30 @@ defmodule Aqua.Prompt do
   @doc """
   Compose the system prompt for a turn.
 
-  `:agent` is required and carries its authored prompt under `"prompt"`;
-  everything else narrows what the prompt claims.
+  `:agent` is required: the soul's carries its authored prompt under
+  `"prompt"`, a crew member's nil there, whose prompt opens with
+  `briefing/2` for its brain (`:program?`, `:search?`); everything else
+  narrows what the prompt claims.
   A nil `:authority` means the caller could not resolve one — the prompt
   then claims no capabilities at all, which is the fail-closed reading.
   """
   @spec compose(Context.t(), opts()) :: composed()
   def compose(%Context{} = ctx, opts) do
-    %{"prompt" => prompt} = Keyword.fetch!(opts, :agent)
+    opening =
+      case Keyword.fetch!(opts, :agent) do
+        %{"prompt" => prompt} when is_binary(prompt) ->
+          prompt
+
+        %{"prompt" => nil} ->
+          briefing(Keyword.get(opts, :program?, false), Keyword.get(opts, :search?, false))
+      end
+
     authority = Keyword.get(opts, :authority)
     where = Keyword.get(opts, :where)
 
     text =
       IO.iodata_to_binary([
-        prompt,
+        opening,
         "\n\n---\n\n## Runtime Context\n\n",
         file_paths(authority),
         Aqua.Prelude.system_prelude(),
@@ -87,6 +105,43 @@ defmodule Aqua.Prompt do
       ])
 
     %{text: text}
+  end
+
+  # What every crew member is told whatever its job, and what a program's
+  # brain is told besides. CYFR's words, never a file's: the job comes from
+  # whoever asked, and how a kind of job is done from the scroll it names.
+  @briefing "## Crew member\n\nYou are a crew member of this athanor's Aqua. A job arrives " <>
+              "as a task in your thread; your reply goes back to whoever asked, so end with " <>
+              "what you did, what you verified and anything left open.\n\n" <>
+              "- Read the scroll a job names before doing it (`aqua.skill_get`).\n" <>
+              "- Never ask for a secret in your reply: a component that needs one is set up " <>
+              "through `request_setup`."
+
+  @program_briefing "\n- Your own tools work in your folder, the program's folder this " <>
+                      "athanor keeps for you: read, edit and run there as you would anywhere.\n" <>
+                      "- The athanor's files, components and stored state are reached through " <>
+                      "CYFR's tools only. A call your mode does not run comes back with a " <>
+                      "sentence that says so; carry on with what does not depend on it."
+
+  @search_briefing "\n- You have native search: use it when a job needs the web searched."
+
+  @doc """
+  CYFR's briefing for a crew member, the same for every member on the
+  same kind of brain: how a job arrives and where its reply goes, that
+  the scroll a job names is read first and that a secret goes through
+  setup. A member whose brain is a program (`program?`) is told besides
+  that its own tools act in its own folder and that the athanor is
+  reached through CYFR's tools, which its mode decides; a member whose
+  requests offer its provider's own search (`search?`) is told it has
+  it. A member on a model's brain is told nothing of a folder.
+  """
+  @spec briefing(boolean(), boolean()) :: String.t()
+  def briefing(program?, search?) when is_boolean(program?) and is_boolean(search?) do
+    IO.iodata_to_binary([
+      @briefing,
+      if(program?, do: @program_briefing, else: []),
+      if(search?, do: @search_briefing, else: [])
+    ])
   end
 
   # ---------------------------------------------------------------------------

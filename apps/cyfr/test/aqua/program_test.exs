@@ -72,6 +72,57 @@ defmodule Aqua.ProgramTest do
     {:ok, ctx: ctx, fake: fake, thread: thread, row: brain_row!(ctx), user: user}
   end
 
+  describe "a crew member on a program brain" do
+    # CYFR's words for every member, then what a program's brain is told
+    # besides: its own tools work in its own folder (`Aqua.Prompt.briefing/2`).
+    @briefing "## Crew member\n\nYou are a crew member of this athanor's Aqua. A job arrives " <>
+                "as a task in your thread; your reply goes back to whoever asked, so end with " <>
+                "what you did, what you verified and anything left open.\n\n" <>
+                "- Read the scroll a job names before doing it (`aqua.skill_get`).\n" <>
+                "- Never ask for a secret in your reply: a component that needs one is set up " <>
+                "through `request_setup`.\n" <>
+                "- Your own tools work in your folder, the program's folder this athanor " <>
+                "keeps for you: read, edit and run there as you would anywhere.\n" <>
+                "- The athanor's files, components and stored state are reached through " <>
+                "CYFR's tools only. A call your mode does not run comes back with a sentence " <>
+                "that says so; carry on with what does not depend on it."
+
+    test "starts briefed by CYFR, told of its folder, with the scroll list and its job apart",
+         %{ctx: ctx, thread: thread, fake: fake} do
+      row = brain_row!(ctx, "claude")
+      turn = accept!(ctx, thread, row, "tidy notes.md", nil, nil, "claude-code")
+      loop = run(ctx, turn)
+
+      %{start: start} = started!(fake, row)
+      spec = spec!(ctx, turn)
+
+      assert Map.delete(start, "system") == %{
+               "t" => "start",
+               "gen" => 0,
+               "config" => %{"model" => "opus", "read_only" => false},
+               "tools" => json(spec.tools)
+             }
+
+      [opening, context] =
+        String.split(start["system"], "\n\n---\n\n## Runtime Context\n\n", parts: 2)
+
+      assert opening == @briefing
+      assert without_clock(start["system"]) == without_clock(spec.system)
+      assert context =~ "\n\n---\n\n## Scrolls\n\nProcedures this athanor has learned."
+      assert context =~ "\n- research — "
+      refute start["system"] =~ "tidy notes.md"
+
+      # The job is the post the program is handed, never its prompt.
+      post = sent()
+      [input] = inputs(ctx, turn)
+      assert post == posted(input, turn, "tidy notes.md")
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "Tidied."))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+  end
+
   describe "a turn on a program brain" do
     test "tells the thread what the turn used as its start step stores it: the models it " <>
            "ran, their tokens, and whether its accounting is partial or unavailable",
@@ -3005,9 +3056,10 @@ defmodule Aqua.ProgramTest do
     row
   end
 
-  # A turn of the soul on `row`'s brain: the person's post, and the
-  # program row pinned before the loop builds it (`Aqua.Loop.Turn`).
-  defp accept!(ctx, thread, row, text, payload \\ nil, id \\ nil) do
+  # A turn of the soul (or of `agent`) on `row`'s brain: the person's
+  # post, and the program row pinned before the loop builds it
+  # (`Aqua.Loop.Turn`).
+  defp accept!(ctx, thread, row, text, payload \\ nil, id \\ nil, agent \\ "aqua") do
     message =
       %{author: ctx.user_id, sent_by: "person", content: text}
       |> then(&if(payload, do: Map.put(&1, :payload, payload), else: &1))
@@ -3016,7 +3068,7 @@ defmodule Aqua.ProgramTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: message,
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: agent, requested_by: ctx.user_id}
       })
 
     {:ok, turn} =
@@ -3121,7 +3173,7 @@ defmodule Aqua.ProgramTest do
     {:ok, turn} = Tape.turn(ctx, turn.id)
 
     {:ok, authority} =
-      Opus.authority_for(ctx, {:id, turn.profile_id}, Prima.AgentRef.soul_ref(),
+      Opus.authority_for(ctx, {:id, turn.profile_id}, Prima.AgentRef.ref(turn.agent),
         budget_id: turn.budget_id
       )
 

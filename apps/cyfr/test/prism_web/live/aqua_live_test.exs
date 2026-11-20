@@ -67,8 +67,7 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.AquaTool.call(mine_ctx, %{
         "action" => "create",
         "name" => "tom",
-        "title" => "Tom",
-        "content" => "# Tom"
+        "title" => "Tom"
       })
 
     refute Arca.exists?(Sanctum.Context.actor(their_ctx), Compendium.AquaPath.agent_file("tom"))
@@ -418,7 +417,7 @@ defmodule PrismWeb.AquaLiveTest do
         Arca.put(
           actor,
           Compendium.AquaPath.crew_file("harness"),
-          "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n\nYou run the harness.\n"
+          "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n"
         )
 
       {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -469,8 +468,7 @@ defmodule PrismWeb.AquaLiveTest do
           "title" => "Coder",
           "program" => "claude",
           "install" => install,
-          "model" => "opus",
-          "content" => "# Coder"
+          "model" => "opus"
         })
 
       card = "#aqua-card-coder"
@@ -564,8 +562,7 @@ defmodule PrismWeb.AquaLiveTest do
             "action" => "create",
             "name" => name,
             "program" => program,
-            "install" => "cyfr-claude-code claude",
-            "content" => "# #{name}"
+            "install" => "cyfr-claude-code claude"
           })
       end
 
@@ -643,8 +640,7 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "create",
-          "name" => "scout",
-          "content" => "# S"
+          "name" => "scout"
         })
 
       {view, html} = mount_athanor(conn, "/aqua")
@@ -666,8 +662,7 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "create",
-          "name" => "scout",
-          "content" => "# S"
+          "name" => "scout"
         })
 
       {view, _html} = mount_athanor(conn, "/aqua")
@@ -704,12 +699,17 @@ defmodule PrismWeb.AquaLiveTest do
         Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.crew_file("scout"))
 
       refute bytes =~ "tools:"
+      # Nor a prompt: its file is its frontmatter alone.
+      assert bytes == "---\ntitle: scout\nmode: auto\n---\n"
 
       # Its card says what it is good at and what to avoid, and edits no
-      # capabilities: those are the soul's.
+      # capabilities, which are the soul's, and no prompt, which only the
+      # soul has.
       settled(fn -> has_element?(view, "#aqua-card-scout") end, "the scout card")
       assert has_element?(view, "#aqua-card-scout-description")
       assert has_element?(view, "#aqua-card-scout-avoid")
+      refute has_element?(view, "#aqua-card-scout [phx-click=editor_edit_prompt]")
+      assert has_element?(view, "#aqua-card-aqua [phx-click=editor_edit_prompt]", "Edit prompt")
 
       assert has_element?(
                view,
@@ -1602,8 +1602,7 @@ defmodule PrismWeb.AquaLiveTest do
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "create",
           "name" => "tidy",
-          "title" => "Tidy",
-          "content" => "# Tidy"
+          "title" => "Tidy"
         })
 
       {view, _html} = mount_athanor(conn, "/aqua")
@@ -1801,8 +1800,7 @@ defmodule PrismWeb.AquaLiveTest do
           "name" => "aaa",
           "title" => "AAA",
           "program" => "claude",
-          "model" => "opus",
-          "content" => "Work on the job."
+          "model" => "opus"
         })
 
       {:ok, named} = get_agent(ctx, "aaa")
@@ -1949,34 +1947,60 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#prompt-editor")
     end
 
-    test "the prompt editor saves the prompt it opened, and refuses to save over another " <>
+    test "the prompt editor saves the soul's prompt it opened, and refuses to save over another " <>
            "member's edit made since",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")
       agents = with_target(view, "#aqua-agents")
 
-      render_click(agents, "editor_edit_prompt", %{"name" => "explorer"})
+      render_click(agents, "editor_edit_prompt", %{"name" => "aqua"})
       html = view |> form("#prompt-editor form", %{"content" => "# Mine"}) |> render_submit()
 
       refute html =~ "Save failed"
-      assert {:ok, %{"content" => "# Mine"}} = get_agent(ctx, "explorer")
+      assert {:ok, %{"content" => "# Mine"}} = get_agent(ctx, "aqua")
       refute has_element?(view, "#prompt-editor")
 
-      render_click(agents, "editor_edit_prompt", %{"name" => "explorer"})
+      render_click(agents, "editor_edit_prompt", %{"name" => "aqua"})
       assert has_element?(view, "#prompt-editor textarea[name=content]", "# Mine")
 
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "update",
-          "name" => "explorer",
+          "name" => "aqua",
           "content" => "# Theirs"
         })
 
       html = view |> form("#prompt-editor form", %{"content" => "# Again"}) |> render_submit()
 
       assert html =~ "The prompt changed since you opened it"
-      assert {:ok, %{"content" => "# Theirs"}} = get_agent(ctx, "explorer")
+      assert {:ok, %{"content" => "# Theirs"}} = get_agent(ctx, "aqua")
       assert has_element?(view, "#prompt-editor textarea[name=content]")
+    end
+
+    # Nothing runs a prompt CYFR no longer shows: a crew file that still
+    # holds one stands on the page as the sentence that says what to do.
+    test "a crew member whose file still holds a prompt is shown as what to change, in place of its card",
+         %{conn: conn, ctx: ctx} do
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          Compendium.AquaPath.agent_file("explorer"),
+          "---\ntitle: Explorer\n---\n\nYou are the explorer.\n"
+        )
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      settled(fn -> has_element?(view, "#aqua-refused-explorer") end, "the explorer's sentence")
+
+      assert has_element?(
+               view,
+               "#aqua-refused-explorer[data-test=crew-refused]",
+               Compendium.AquaAgent.prompt_refused("explorer")
+             )
+
+      refute has_element?(view, "#aqua-card-explorer")
+      assert has_element?(view, "#aqua-card-claude-code")
+      Cyfr.Test.Sandbox.end_views()
     end
 
     # A box ticked offers the soul the tool, and every crew member with
@@ -2132,8 +2156,7 @@ defmodule PrismWeb.AquaLiveTest do
               %{
                 "action" => "create",
                 "name" => name,
-                "title" => title,
-                "content" => "# #{title}"
+                "title" => title
               },
               brain
             )

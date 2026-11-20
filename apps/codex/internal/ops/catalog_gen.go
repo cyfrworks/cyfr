@@ -376,8 +376,6 @@ type AquaCreateArgs struct {
 	Mode Field[string] `json:"mode,omitzero"`
 	// The options this agent's brain is asked with on every request — names and values its describe declares (create/update)
 	Options Field[map[string]any] `json:"options,omitzero"`
-	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
-	Content Field[string] `json:"content,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -421,7 +419,7 @@ func (args AquaGetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaListArgs carries arguments for aqua.list.
 type AquaListArgs struct {
-	// For list: include each agent's full fields (model, catalyst_ref, program, install, options, avoid, mode, tools, content, disabled) — one call instead of a get per agent
+	// For list: include each agent's full fields (model, catalyst_ref, program, install, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent
 	Detail Field[bool] `json:"detail,omitzero"`
 	// For list: include crew members set aside with disabled: true, which the roster otherwise leaves out
 	IncludeDisabled Field[bool] `json:"include_disabled,omitzero"`
@@ -459,7 +457,7 @@ type AquaSkillCreateArgs struct {
 	Name string `json:"name"`
 	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description string `json:"description"`
-	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
+	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)
 	Content string `json:"content"`
 }
 
@@ -536,7 +534,7 @@ type AquaSkillUpdateArgs struct {
 	Name string `json:"name"`
 	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description Field[string] `json:"description,omitzero"`
-	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
+	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)
 	Content Field[string] `json:"content,omitzero"`
 }
 
@@ -592,11 +590,11 @@ type AquaUpdateArgs struct {
 	ToolsAdd Field[[]string] `json:"tools_add,omitzero"`
 	// update only: tools to take off the soul's list as it is when the write lands. Not with tools.
 	ToolsRemove Field[[]string] `json:"tools_remove,omitzero"`
-	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
+	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)
 	Content Field[string] `json:"content,omitzero"`
 	// Take a crew member out of the crew without deleting its file (for update; shipped members cannot be deleted — disable them instead)
 	Disabled Field[*bool] `json:"disabled,omitzero"`
-	// update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one edit never writes over another.
+	// update only: the content_digest that get answered for the soul's prompt being edited. The update is refused as a conflict when the prompt has changed since, so one edit never writes over another.
 	ExpectedDigest Field[string] `json:"expected_digest,omitzero"`
 }
 
