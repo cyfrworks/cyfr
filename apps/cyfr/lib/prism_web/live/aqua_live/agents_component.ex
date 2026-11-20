@@ -1504,7 +1504,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             <optgroup label={provider}>
               <option
                 :for={m <- models}
-                value={"#{provider}::#{m}"}
+                value={Catalog.model_choice(provider, m)}
                 selected={@agent["model"] == m and @current_provider == provider}
               >
                 {m}

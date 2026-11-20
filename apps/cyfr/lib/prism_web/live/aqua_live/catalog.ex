@@ -120,30 +120,39 @@ defmodule PrismWeb.AquaLive.Catalog do
 
   def existing_atom(_), do: nil
 
-  # Decode the model dropdown's combined "provider::model" value back into a
-  # provider+model pair. "" = inherit from parent. Anything else = noop.
   @doc """
-  Decode the model dropdown's combined `"provider::model"` value, or the
-  setup's `"program::<name>::<model>"`: a plan, the program row of that
-  name with a model its program lists (`{:program, name, model}`).
+  The model pickers' value for a catalyst's model: `"provider::model"`.
+  """
+  def model_choice(provider, model), do: provider <> "::" <> model
+
+  @doc """
+  The setup's value for a plan's model: the program row of that name with
+  a model its program lists. It opens with the separator, which no
+  `model_choice/2` value does, since a catalyst's name is never empty: a
+  catalyst choice is never read as a plan, whatever its names hold.
+  """
+  def program_choice(program, model), do: "::program::" <> program <> "::" <> model
+
+  @doc """
+  Decode a picker's value: `model_choice/2`'s as `{:model, provider,
+  model}`, `program_choice/2`'s as `{:program, name, model}`, and `""` as
+  inherit from the parent. Anything else is a noop.
   """
   def decode_model_choice(""), do: {:inherit}
 
-  def decode_model_choice("program::" <> rest = value) do
+  def decode_model_choice("::program::" <> rest) do
     case String.split(rest, "::", parts: 2) do
       [program, model] when program != "" and model != "" -> {:program, program, model}
-      _ -> decode_catalyst_choice(value)
+      _ -> :noop
     end
   end
 
-  def decode_model_choice(value) when is_binary(value), do: decode_catalyst_choice(value)
-
-  def decode_model_choice(_), do: :noop
-
-  defp decode_catalyst_choice(value) do
+  def decode_model_choice(value) when is_binary(value) do
     case String.split(value, "::", parts: 2) do
       [provider, model] when provider != "" and model != "" -> {:model, provider, model}
       _ -> :noop
     end
   end
+
+  def decode_model_choice(_), do: :noop
 end
