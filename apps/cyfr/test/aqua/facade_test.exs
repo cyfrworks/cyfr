@@ -27,6 +27,7 @@ defmodule Aqua.FacadeTest do
     note_pinned?: 1,
     pin_max_bytes: 0,
     pinned_note_page: 1,
+    program_listing: 2,
     providers: 1,
     put_time_zone: 2,
     read_only_unheld: 3,
