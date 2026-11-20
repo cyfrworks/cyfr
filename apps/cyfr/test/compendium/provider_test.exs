@@ -2102,7 +2102,7 @@ defmodule Compendium.ProviderTest do
       # The shipped scrolls are read in place from the seed.
       {:ok, shipped} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
 
-      assert ~w(artisan browser builder canvas capability-acquisition planner web) ==
+      assert ~w(artisan browser builder canvas capability-acquisition planner research web) ==
                Enum.map(shipped.skills, & &1.name)
 
       by_name = Map.new(shipped.skills, &{&1.name, &1.description})
@@ -2111,6 +2111,24 @@ defmodule Compendium.ProviderTest do
       assert by_name["builder"] =~ "WASM component"
       assert by_name["browser"] =~ "your own Chrome"
       refute Map.has_key?(shipped, :hint)
+
+      # The research method a member is handed by name, as instructions for
+      # whoever does the job.
+      assert {:ok,
+              %{
+                name: "research",
+                title: "research",
+                description: description,
+                format: "markdown",
+                content: method,
+                resources: []
+              }} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "research"})
+
+      assert description == by_name["research"]
+      assert description =~ "Find, verify and synthesize information on the web"
+      assert method =~ "## Research Method\n\n1. **Multiple queries**"
+      assert method =~ "- **Confidence** — high/medium/low from source quality and agreement"
+      refute method =~ "You are"
 
       {:ok, %{created: "pdf"}} =
         Provider.handle("aqua", ctx, %{
@@ -2131,7 +2149,7 @@ defmodule Compendium.ProviderTest do
       {:ok, listing} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
 
       assert Enum.map(listing.skills, & &1.name) ==
-               ~w(artisan browser builder canvas capability-acquisition pdf planner web)
+               ~w(artisan browser builder canvas capability-acquisition pdf planner research web)
 
       {:ok, skill} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
       assert skill.description == "fills PDF forms"

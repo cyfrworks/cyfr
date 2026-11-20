@@ -202,6 +202,7 @@ var shippedScrolls = map[string]bool{
 	"canvas":                 true,
 	"capability-acquisition": true,
 	"planner":                true,
+	"research":               true,
 	"web":                    true,
 }
 
