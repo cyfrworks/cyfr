@@ -15,7 +15,8 @@ defmodule Aqua.Models do
       connected asked for its models;
     * `model_status/2` — whether each agent's brain is ready: installed,
       and bound to a key or a program the agent runs it with, or, for a
-      brain that is a program, its program row standing (`t:status/0`);
+      brain that is a program, the program row of its name standing
+      (`t:status/0`);
     * `providers/1` — every brain the athanor can connect, with what it
       needs and how it stands, which Aqua's setup offers;
     * `models/2` — one brain asked for its models, the answer connecting
@@ -55,15 +56,17 @@ defmodule Aqua.Models do
       or its setup plan was refused for any other reason, so whether it is
       installed is not known.
 
-  A brain that is a program (the agent's `"program"`, a program row's id)
-  reads on its row alone, since each of its turns is admitted by that
-  turn's own `program.start` step: `:ready` when the row stands as a
-  brain's (the athanor's own, a driven program with a kept folder, not
-  Aqua's browser, enabled), `:program_unfit` when it is not a program a
-  brain runs in and `:program_disabled` when it is turned off, each
-  carrying the row's name; `:program_missing` when the athanor holds no
-  such row and `:model_unavailable` when the store could not answer, each
-  carrying the id the agent names.
+  A brain that is a program (the agent's `"program"`, the name of one of
+  the athanor's program rows) reads on the row of that name alone, since
+  each of its turns is admitted by that turn's own `program.start` step:
+  `:ready` when the row stands as a brain's (the athanor's own, a driven
+  program with a kept folder whose command starts with a brain's driver,
+  enabled), which is signed in when the program says so;
+  `:program_unfit` when it is not a program a brain runs in (Aqua's
+  browser and a bare harness among them), `:program_disabled` when it is
+  turned off, `:program_missing` when the athanor has no row of that
+  name, the one state its install is offered in, and `:model_unavailable`
+  when the store could not answer; each carries the name the agent names.
   """
   @type status ::
           {:ready
@@ -579,55 +582,72 @@ defmodule Aqua.Models do
     end
   end
 
-  # The brain an agent names: its program row, or its catalyst. A file
-  # names one at most (`Compendium.AquaAgent.check_brain/1`), and a map
-  # that carries no program names its catalyst.
-  defp brain_of(%{"program" => id}) when is_binary(id) and id != "", do: {:program, id}
+  # The brain an agent names: its program, by the row's name, or its
+  # catalyst. A file names one at most (`Compendium.AquaAgent.check_brain/1`),
+  # and a map that carries no program names its catalyst.
+  defp brain_of(%{"program" => name}) when is_binary(name) and name != "",
+    do: {:program, name}
+
   defp brain_of(%{"catalyst_ref" => ref}) when is_binary(ref) and ref != "", do: {:catalyst, ref}
   defp brain_of(_agent), do: nil
 
-  defp program_status(ctx, id) do
-    case program(ctx, id) do
-      {:ok, %{name: name}} -> {:ready, name}
-      {:error, {state, name}} when state in [:program_disabled, :program_unfit] -> {state, name}
-      {:error, :program_missing} -> {:program_missing, id}
-      {:error, :unavailable} -> {:model_unavailable, id}
+  # Every status names the program as the agent does: a row of that name
+  # that stands unfit, disabled or unread is never one that is missing.
+  defp program_status(ctx, name) do
+    case program(ctx, name) do
+      {:ok, _row} -> {:ready, name}
+      {:error, {state, _name}} -> {state, name}
+      {:error, :program_missing} -> {:program_missing, name}
+      {:error, :unavailable} -> {:model_unavailable, name}
     end
   end
 
   @doc """
-  The program row a program brain names, as it stands now: `{:ok, %{row,
-  epoch, name}}` for an enabled driven program with a kept folder, else
-  `{:error, {:program_disabled | :program_unfit, name}}`,
-  `{:error, :program_missing}` or `{:error, :unavailable}`. The holder
-  checks the row again as it writes, and refuses Aqua's browser's rows
-  there (`Opus.Brain`).
+  The program row a program brain's configuration names, by its name,
+  unique in the athanor, as it stands now (`suited/1`): what a turn
+  resolves once before it pins the row's id, and what every reader of
+  an agent's readiness reads. `{:error, :program_missing}` when the
+  athanor has no row of that name, which is the one state that offers
+  to install it; `{:error, :unavailable}` when the store cannot answer.
   """
   @spec program(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def program(%Context{} = ctx, id) when is_binary(id) do
-    case Arca.McpServerStorage.get_by_id(Context.actor(ctx), id) do
-      {:ok, %{transport: "program", mark: "driven", home: "kept", enabled: true} = row} ->
-        {:ok,
-         %{
-           row: row.id,
-           epoch: row.epoch,
-           name: row.name,
-           driver: Arca.McpServerStorage.driver(row)
-         }}
+  def program(%Context{} = ctx, name) when is_binary(name),
+    do: suited(Arca.McpServerStorage.get(Context.actor(ctx), name))
 
-      {:ok, %{transport: "program", mark: "driven", home: "kept"} = row} ->
-        {:error, {:program_disabled, row.name}}
+  @doc """
+  The program row a turn pinned, by its id (`Arca.TurnStorage.pin_program/4`),
+  as it stands now (`suited/1`): a pinned turn, recovery included, reads
+  its row by this and never resolves its agent's program name again, so
+  a row replaced under the same name is the next turn's.
+  """
+  @spec pinned_program(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def pinned_program(%Context{} = ctx, row_id) when is_binary(row_id),
+    do: suited(Arca.McpServerStorage.get_by_id(Context.actor(ctx), row_id))
 
-      {:ok, row} ->
+  # A row a brain runs in: `{:ok, %{row, epoch, name, driver}}` for an
+  # enabled driven program with a kept folder whose command starts with a
+  # brain's driver (`Arca.McpServerStorage.driver/1`); else
+  # `{:error, {:program_unfit, name}}` for any other row, Aqua's browser
+  # and a bare harness among them, `{:error, {:program_disabled, name}}`
+  # for a fit one that is disabled, `{:error, :program_missing}` or
+  # `{:error, :unavailable}`. The holder checks the row again as it writes
+  # (`Opus.Brain`).
+  defp suited({:ok, %{transport: "program", mark: "driven", home: "kept"} = row}) do
+    case {Arca.McpServerStorage.driver(row), row.enabled} do
+      {nil, _enabled} ->
         {:error, {:program_unfit, row.name}}
 
-      {:error, :not_found} ->
-        {:error, :program_missing}
+      {driver, true} ->
+        {:ok, %{row: row.id, epoch: row.epoch, name: row.name, driver: driver}}
 
-      {:error, _unanswered} ->
-        {:error, :unavailable}
+      {_driver, _disabled} ->
+        {:error, {:program_disabled, row.name}}
     end
   end
+
+  defp suited({:ok, row}), do: {:error, {:program_unfit, row.name}}
+  defp suited({:error, :not_found}), do: {:error, :program_missing}
+  defp suited({:error, _unanswered}), do: {:error, :unavailable}
 
   # A brain is ready when its own profile binds what it needs AND the
   # agent's consent selects that profile on its edge to the catalyst —
@@ -763,8 +783,9 @@ defmodule Aqua.Models do
   (`holds_read_only?/1`), by name, with the sentence the Aqua page shows
   beneath its closed read-only choice (`unheld_sentence/2`): a catalyst
   whose setup plan in `plans` (by its ref) holds a login need, named by
-  its own name, or a program row whose driver cannot start its harness
-  read-only, read once each, named by the row's name. A plan or a row
+  its own name, or the program row of the name it names, read once each
+  by that name, whose driver cannot start its harness read-only. A plan
+  or a row
   that cannot be read leaves the member out; its turn checks the brain
   again before anything runs (`Aqua.Loop.Turn`).
   """
@@ -774,11 +795,11 @@ defmodule Aqua.Models do
   def read_only_unheld(%Context{} = ctx, members, plans)
       when is_list(members) and is_map(plans) do
     rows =
-      for id <- members |> Enum.map(& &1[:program]) |> Enum.uniq(),
-          is_binary(id) and id != "",
-          {:ok, row} <- [program(ctx, id)],
+      for name <- members |> Enum.map(& &1[:program]) |> Enum.uniq(),
+          is_binary(name) and name != "",
+          {:ok, row} <- [program(ctx, name)],
           into: %{},
-          do: {id, row}
+          do: {name, row}
 
     for member <- members,
         brain <- List.wrap(unheld_brain(member, plans, rows)),
@@ -786,8 +807,8 @@ defmodule Aqua.Models do
         do: {member.name, unheld_sentence(member[:title] || member.name, brain)}
   end
 
-  defp unheld_brain(%{program: id}, _plans, rows) when is_binary(id) do
-    with %{name: name, driver: driver} <- rows[id],
+  defp unheld_brain(%{program: program}, _plans, rows) when is_binary(program) do
+    with %{name: name, driver: driver} <- rows[program],
          false <- holds_read_only?({:driver, driver}) do
       name
     else

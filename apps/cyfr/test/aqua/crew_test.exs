@@ -354,16 +354,18 @@ defmodule Aqua.CrewTest do
   end
 
   # A brain that is a program is admitted per turn by its program.start
-  # step, so its readiness is its row's alone: the athanor's own, a driven
-  # program with a kept folder, enabled. It is named by the row, and a row
-  # that fails says what to do about it. Aqua's browser's rows the holder
-  # refuses as it writes (`Opus.Brain`).
-  test "a member whose brain is a program is ready on its row alone, named by the row",
+  # step, so its readiness is the row of its name's alone: the athanor's
+  # own, a driven program with a kept folder whose command starts with a
+  # brain's driver, enabled. Each state names the program as the member
+  # does, and a row of that name that stands unfit or disabled is never
+  # one that is not installed. Aqua's browser's rows the holder refuses
+  # as it writes too (`Opus.Brain`).
+  test "a member whose brain is a program is ready on the row of its name alone, in its own athanor",
        %{ctx: ctx, room: room} do
-    row! = fn name, over ->
+    row! = fn actor, name, over ->
       {:ok, row} =
         Arca.McpServerStorage.insert(
-          actor(ctx),
+          actor,
           Map.merge(
             %{
               cap: 0,
@@ -381,32 +383,41 @@ defmodule Aqua.CrewTest do
       row
     end
 
+    bare = Jason.encode!(%{"command" => "npx -y @anthropic-ai/claude-code", "env" => %{}})
+
     rows = %{
-      "coder" => row!.("claude", %{}),
-      "idle" => row!.("idle-claude", %{enabled: false}),
-      "scratchy" => row!.("scratch-claude", %{home: "scratch"}),
-      "served" => row!.("served-claude", %{mark: "mcp"})
+      "coder" => row!.(actor(ctx), "claude", %{}),
+      "idle" => row!.(actor(ctx), "idle-claude", %{enabled: false}),
+      "scratchy" => row!.(actor(ctx), "scratch-claude", %{home: "scratch"}),
+      "served" => row!.(actor(ctx), "served-claude", %{mark: "mcp"}),
+      "bare" => row!.(actor(ctx), "bare-claude", %{config_json: bare})
     }
 
-    named =
-      Map.put(Map.new(rows, fn {member, row} -> {member, row.id} end), "orphan", "mcp_gone")
+    # Another athanor's row of a name this one has none of: the same name
+    # names only this athanor's row, so it is not installed here.
+    {other_ctx, other} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+    elsewhere = Sanctum.Test.People.athanor!(other)
+    _theirs = row!.(actor(%{other_ctx | athanor_id: elsewhere.id}), "their-claude", %{})
 
-    for {member, id} <- named do
+    named =
+      rows
+      |> Map.new(fn {member, row} -> {member, row.name} end)
+      |> Map.merge(%{"orphan" => "gone-claude", "stranger" => "their-claude"})
+
+    for {member, program} <- named do
       :ok =
         Arca.put(
           actor(ctx),
           Compendium.AquaPath.crew_file(member),
           "---\ntitle: #{member}\ndescription: Codes.\navoid: Nothing.\n" <>
-            "program: #{id}\nmodel: claude-opus-5-5\n---\n\nYou are the #{member}.\n"
+            "program: #{program}\nmodel: opus\n---\n\nYou are the #{member}.\n"
         )
     end
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, roster} = Aqua.AgentConfig.roster(ctx)
 
-    coder = rows["coder"].id
-
-    assert %{"program" => ^coder, "catalyst_ref" => nil} =
+    assert %{"program" => "claude", "catalyst_ref" => nil} =
              Enum.find(roster, &(&1["name"] == "coder"))
 
     assert Map.take(Aqua.Models.model_status(ctx, roster), Map.keys(named)) == %{
@@ -414,14 +425,18 @@ defmodule Aqua.CrewTest do
              "idle" => {:program_disabled, "idle-claude"},
              "scratchy" => {:program_unfit, "scratch-claude"},
              "served" => {:program_unfit, "served-claude"},
-             "orphan" => {:program_missing, "mcp_gone"}
+             "bare" => {:program_unfit, "bare-claude"},
+             "orphan" => {:program_missing, "gone-claude"},
+             "stranger" => {:program_missing, "their-claude"}
            }
 
     unready = %{
       "idle" => {:program_disabled, "enable it on the Programs page"},
       "scratchy" => {:program_unfit, "a driven program with a kept folder"},
       "served" => {:program_unfit, "a driven program with a kept folder"},
-      "orphan" => {:program_missing, "no longer on the Programs page"}
+      "bare" => {:program_unfit, "whose command starts with its driver"},
+      "orphan" => {:program_missing, "install it from its card on the Aqua page"},
+      "stranger" => {:program_missing, "install it from its card on the Aqua page"}
     }
 
     refusals =
@@ -429,7 +444,7 @@ defmodule Aqua.CrewTest do
         {member, {:error, {:crew_unready, member, reason}}}
       end)
 
-    assert Map.new(named, fn {member, _id} -> {member, Crew.ready(ctx, member)} end) ==
+    assert Map.new(named, fn {member, _program} -> {member, Crew.ready(ctx, member)} end) ==
              Map.put(refusals, "coder", :ok)
 
     assert {:ok, index} = Crew.index(ctx, roster)
@@ -437,7 +452,7 @@ defmodule Aqua.CrewTest do
     assert for(%{"name" => name} = member <- index, Map.has_key?(named, name), do: member) == [
              %{
                "name" => "coder",
-               "brain" => "claude (claude-opus-5-5)",
+               "brain" => "claude (opus)",
                "description" => "Codes.",
                "avoid" => "Nothing."
              }
