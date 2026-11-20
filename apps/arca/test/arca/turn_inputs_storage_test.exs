@@ -418,6 +418,55 @@ defmodule Arca.TurnInputsStorageTest do
     assert progress(daily)["unattributed"] == once
   end
 
+  test "each complete result of one work adds its counts to the work's usage, by model and " <>
+         "by count, within a batch and across batches",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    a = %{
+      "input_tokens" => 1177,
+      "output_tokens" => 19,
+      "cache_read_tokens" => 649,
+      "cache_write_tokens" => 3427
+    }
+
+    b = %{
+      "input_tokens" => 12,
+      "output_tokens" => 340,
+      "cache_read_tokens" => 0,
+      "cache_write_tokens" => 81
+    }
+
+    usage = fn result, models ->
+      %{
+        "t" => "usage",
+        "gen" => 0,
+        "work" => turn.id,
+        "result" => result,
+        "accounting" => "complete",
+        "models" => models
+      }
+    end
+
+    haiku = &%{"model" => "claude-haiku-5-5", "counts" => &1}
+    opus = &%{"model" => "claude-opus-5-5", "counts" => &1}
+
+    assert {:ok, _} =
+             commit(actor, daily, turn, %{
+               usage: [usage.("r1", [haiku.(a)]), usage.("r2", [haiku.(b), opus.(a)])]
+             })
+
+    assert {:ok, _} = commit(actor, daily, turn, %{usage: [usage.("r3", [haiku.(a)])]})
+
+    assert Jason.decode!(step(start.id).usage) == %{
+             "models" => %{
+               "claude-haiku-5-5" => Map.new(a, fn {name, n} -> {name, 2 * n + b[name]} end),
+               "claude-opus-5-5" => a
+             },
+             "results" => 3,
+             "partial" => 0,
+             "unknown" => 0
+           }
+  end
+
   # ---- nudges ---------------------------------------------------------------
 
   test "a nudge its post step carried is answered by the idle that names it, never by its " <>

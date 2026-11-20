@@ -29,7 +29,11 @@ defmodule Aqua.ProgramTest do
   posts whose delivery its transcript says: one it holds is continued by
   one notice, one it does not ends the turn, and an answer the resumed
   session no longer asks for comes as one notice that names its call,
-  attempted once. A transcript the harness no longer has starts over, the
+  attempted once. A line lost unread and a post's write whose answer is
+  lost resume the same way, and usage counted before counts once. A
+  driver that ends while the harness starts ends the turn, never started
+  again by itself; an error the harness reports ends the turn in its
+  words, and the next turn resumes the session. A transcript the harness no longer has starts over, the
   thread its context, and in the middle of the work one prompt carries
   what its calls answered. A turn on another row than the thread's
   session's starts over on it, the old row's transcript owed its removal
@@ -628,10 +632,19 @@ defmodule Aqua.ProgramTest do
       # the start's is the open work's.
       assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 9}, "mine")
       assert activity!() == [start_entry(:done), own_entry("Read", :running)]
+      say(fake, row, %{said(turn, "msg_other", "said for other work") | "work" => "trn_other"})
+      say(fake, row, Map.delete(said(turn, "msg_none", "said for no work"), "work"))
       say(fake, row, said(turn, "msg_1", "mine"))
       say(fake, row, idle(turn, [input.id]))
       assert activity!() == [start_entry(:done), own_entry("Read", :done)]
       assert :completed = Task.await(loop, 30_000)
+
+      # What the program said for other work, or for none, is no post.
+      assert said_rows(ctx, thread, turn) == [
+               {Arca.Schemas.Message.agent_author(), "aqua", "text", "mine",
+                %{"brain_message" => "msg_1"}}
+             ]
+
       refute_received %Cyfr.Bus.ThreadEvent{kind: :delta}
       refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
       refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
@@ -2109,6 +2122,147 @@ defmodule Aqua.ProgramTest do
       assert owed(ctx) == [forget_record(ctx, thread, row, @session, 0)]
       refute_received {:control, "home", _wire, _fields}
     end
+
+    test "a driver that ends while the harness starts ends the turn saying it could not start, " <>
+           "and opens nothing again",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      assert %{"t" => "start"} = sent()
+      # A line after the hello commits only once the start's write has
+      # returned, so the driver ends while the harness starts.
+      say(fake, row, text(turn, "msg_0", "starting", :none))
+      committed!(ctx, thread, 2)
+      Scripted.end_sessions(fake, row.id)
+
+      line = "#{@title} could not start."
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert {:ok, %{status: "failed", error: ^line}} = Tape.turn(ctx, turn.id)
+      assert %{dispatch_state: "closed", error: ^line} = start_step(ctx, turn)
+      assert inputs(ctx, turn) == []
+      refute_receive {:session, "open", _wire, _fields}, 1_000
+      refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "a line lost unread ends the session, and the work resumes it naming its post, " <>
+           "nothing of the answer that told the loss taken",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      %{start: first, work: work} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      Scripted.set(fake, :dropped, 1)
+      say(fake, row, said(turn, "msg_1", "after the loss"))
+      opened!(fake, row, "boot-two")
+      assert sent() == Map.merge(first, %{"session" => @session, "pending" => [input.id]})
+      say(fake, row, started([input.id]))
+      assert sent() == work
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+
+      notice = accept_next!(fake, row)
+      [_post, noticed] = inputs(ctx, turn)
+      assert notice == posted(noticed, turn, post_notice())
+      say(fake, row, said(turn, "msg_2", "where it stands"))
+      say(fake, row, idle(turn, [noticed.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert said_rows(ctx, thread, turn) == [
+               {Arca.Schemas.Message.agent_author(), "aqua", "text", "where it stands",
+                %{"brain_message" => "msg_2"}}
+             ]
+
+      refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "usage committed before the driver's death counts once after the resume, though the " <>
+           "resumed driver hands its result again, and a later result's is added",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      %{work: work} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, usage(turn, "result-1"))
+      committed!(ctx, thread, 5)
+
+      Scripted.end_sessions(fake, row.id)
+      opened!(fake, row, "boot-two")
+      assert %{"t" => "start", "pending" => [pending]} = sent()
+      assert pending == input.id
+      say(fake, row, started([input.id]))
+      assert sent() == work
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      notice = accept_next!(fake, row)
+      [_post, noticed] = inputs(ctx, turn)
+      assert notice == posted(noticed, turn, post_notice())
+
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [noticed.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert Jason.decode!(start_step(ctx, turn).usage) == usage_of(2)
+    end
+
+    test "a post whose write is uncertain is never written again: the resume names it, the " <>
+           "transcript that holds it continues it by one notice, and usage before it counts once",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      %{start: first_start, work: work} = started!(fake, row)
+      _post = sent()
+      [first] = inputs(ctx, turn)
+      say(fake, row, accepted(first))
+      say(fake, row, usage(turn, "result-1"))
+      committed!(ctx, thread, 5)
+
+      # The connection resets once the post's send has arrived, before any
+      # answer: the write may have reached the driver.
+      Scripted.set(fake, :reset_send, true)
+      steer = steer!(ctx, thread, turn, "and this")
+      steered_post = sent()
+      [_first, steered] = inputs(ctx, turn)
+      assert steered_post == posted(steered, turn, "and this")
+
+      opened!(fake, row, "boot-two")
+
+      assert sent() ==
+               Map.merge(first_start, %{
+                 "session" => @session,
+                 "pending" => [first.id, steered.id]
+               })
+
+      say(fake, row, started([first.id, steered.id]))
+      assert sent() == work
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      held = for _ <- 1..2, do: accept_next!(fake, row)
+      [_first, _steered, noticed_first, noticed_steer] = inputs(ctx, turn)
+
+      assert held == [
+               posted(noticed_first, turn, post_notice()),
+               posted(noticed_steer, turn, post_notice())
+             ]
+
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [noticed_first.id, noticed_steer.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok"),
+               input_fields("post", steer.id, "ok"),
+               input_fields("notice", turn.message_id, "ok", "0:notice:"),
+               input_fields("notice", steer.id, "ok", "0:notice:")
+             ]
+
+      assert Jason.decode!(start_step(ctx, turn).usage) == usage_of(2)
+      refute_received {:session, "send", _wire, _fields}
+    end
   end
 
   describe "its end" do
@@ -2342,6 +2496,65 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
       assert {progress["owed"], progress["busy"]} == {[], true}
       assert is_binary(progress["clock"]["since"])
+    end
+
+    test "an error the harness reports ends the turn in its words and closes the session, which " <>
+           "the next turn resumes with nothing of the failed turn's written again",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      %{start: first_start, work: first_work} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      say(fake, row, %{
+        "t" => "error",
+        "gen" => 0,
+        "work" => turn.id,
+        "type" => "rate_limited",
+        "message" => "The provider's rate limit was reached."
+      })
+
+      line = "#{@title} could not answer: The provider's rate limit was reached."
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == [line]
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+      assert running_sessions(fake, row) == []
+      assert {:ok, %{session: @session, generation: 0}} = Tape.brain(ctx, thread.id)
+
+      next = accept!(ctx, thread, row, "second")
+      loop = run(ctx, next)
+      opened!(fake, row, "boot-two")
+      start = sent()
+
+      assert Map.delete(start, "system") ==
+               first_start |> Map.delete("system") |> Map.put("session", @session)
+
+      assert without_clock(start["system"]) == without_clock(first_start["system"])
+      say(fake, row, %{"t" => "started", "session" => @session, "fresh" => false, "held" => []})
+      work = sent()
+
+      assert work == %{
+               first_work
+               | "id" => start_step(ctx, next).id,
+                 "work" => next.id,
+                 "tools" => json(spec!(ctx, next).tools)
+             }
+
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      post = sent()
+      [second] = inputs(ctx, next)
+      assert post == posted(second, next, "second")
+      say(fake, row, accepted(second))
+      say(fake, row, idle(next, [second.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok")
+             ]
+
+      refute_received {:session, "send", _wire, _fields}
     end
 
     test "an attendant that ends while its turn waits on it ends the turn, saying so",
@@ -3057,6 +3270,15 @@ defmodule Aqua.ProgramTest do
       "result" => result,
       "accounting" => "complete",
       "models" => [%{"model" => "m", "counts" => counts()}]
+    }
+
+  # The usage of `results` complete results of the work, each `usage/2`'s.
+  defp usage_of(results),
+    do: %{
+      "models" => %{"m" => Map.new(counts(), fn {name, n} -> {name, n * results} end)},
+      "results" => results,
+      "partial" => 0,
+      "unknown" => 0
     }
 
   defp idle(turn, answered),
