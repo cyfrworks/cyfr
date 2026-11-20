@@ -470,6 +470,40 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
+  test "a thread opened again draws what the live thread drew: a turn's calls, their results " <>
+         "and its compaction are no posts",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, said} =
+      Threads.append(actor, thread.id, %{
+        author: Prima.Author.agent(),
+        sent_by: "aqua",
+        content: "a post"
+      })
+
+    kept =
+      for kind <- ~w(tool_call tool_result page_call page_result compaction) do
+        {:ok, row} =
+          Threads.append(actor, thread.id, %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: kind,
+            content: "#{kind} words"
+          })
+
+        row
+      end
+
+    pane = open_pane(conn, athanor, thread)
+    assert has_element?(pane, ~s([id$="-m-#{said.id}"]))
+
+    for row <- kept do
+      refute has_element?(pane, ~s([id$="-m-#{row.id}"]))
+      refute render(pane) =~ row.content
+    end
+  end
+
   test "a nudge, the server's line to the thread's Aqua, is drawn as the server's as it lands",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)

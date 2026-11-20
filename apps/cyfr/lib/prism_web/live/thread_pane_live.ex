@@ -315,7 +315,9 @@ defmodule PrismWeb.ThreadPaneLive do
             {:error, _} -> []
           end
 
-        {shown, requests} = file_replies(rows)
+        # What the thread drew live is what it draws opened again
+        # (`drawn?/1`); every row still names the pane's results.
+        {shown, requests} = rows |> Enum.filter(&drawn?/1) |> file_replies()
 
         tell_host(
           socket,
@@ -2492,9 +2494,11 @@ defmodule PrismWeb.ThreadPaneLive do
       "focus-visible:opacity-100 max-md:opacity-100 min-h-6 text-xs text-gray-500 hover:text-gray-300 px-1"
   end
 
-  # A post, a line of the server's to the thread's Aqua (`Aqua.Nudge`),
-  # which is drawn as the server's and is no post, and the line a stopped
-  # turn leaves (`turn_aborted`), which the thread draws on open too.
+  # The one rule of what the pane draws, as a row lands and when the thread
+  # is opened: a post, a line of the server's to the thread's Aqua
+  # (`Aqua.Nudge`), which is drawn as the server's and is no post, and the
+  # line a stopped turn leaves (`turn_aborted`). What a turn writes for
+  # itself, its calls, their results and its compaction, is none.
   defp drawn?(row), do: Threads.post?(row) or row.kind in ["nudge", "turn_aborted"]
 
   defp role_of(%{kind: "error"}), do: "error"
