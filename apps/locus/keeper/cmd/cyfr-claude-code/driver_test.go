@@ -496,6 +496,115 @@ func TestAnotherControlRequestIsRefusedToTheHarness(t *testing.T) {
 	}
 }
 
+// A post written while the harness's turn runs is taken at once, and one
+// result that answers it and the post before it names both: the harness's
+// plural field, never its singular, which names the first alone.
+func TestAResultAnsweringTwoPostsNamesBothAndAPostDuringATurnIsTakenAtOnce(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{})
+	postText(s, "stp_first", "together")
+	postText(s, "stp_second", "and this")
+	got := s.until("idle")
+	idle := got[len(got)-1]
+	if !reflect.DeepEqual(idle["answered"], []any{"stp_first", "stp_second"}) || idle["stop"] != "end_turn" {
+		t.Fatalf("the result answers both posts: %v", idle)
+	}
+}
+
+// A subagent's lines, those of a tool use's own session, are not the
+// member's reply: none of its text is streamed or said, and its tools are
+// not the member's.
+func TestASubagentsLinesAreNotTheReply(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{})
+	postText(s, "stp_post", "subagent")
+	var said []string
+	for _, e := range s.until("idle") {
+		switch e["t"] {
+		case "said":
+			said = append(said, e["text"].(string))
+		case "own":
+			t.Fatalf("a subagent's tool is not the member's: %v", e)
+		}
+	}
+	if !reflect.DeepEqual(said, []string{"the main reply"}) || strings.Contains(s.output(), "SUBAGENT-WORDS") {
+		t.Fatalf("only the main session's reply is said: %q", said)
+	}
+}
+
+// A message whose text is split by a call of CYFR's is said once, its
+// text whole around the call.
+func TestAMessagesTextAroundACallIsSaidWhole(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{})
+	postText(s, "stp_post", "around")
+	var said []string
+	for _, e := range s.until("idle") {
+		if e["t"] == "said" {
+			said = append(said, e["text"].(string))
+		}
+	}
+	if !reflect.DeepEqual(said, []string{"before the call, after it"}) {
+		t.Fatalf("the message's text is said whole: %q", said)
+	}
+}
+
+// A line of the harness's that is no JSON, of a type the driver does not
+// read, or an event that does not read, is passed over: the turn goes on
+// and ends as any other.
+func TestALineTheDriverCannotReadIsPassedOver(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{})
+	postText(s, "stp_post", "noise")
+	got := s.until("idle")
+	var said []string
+	for _, e := range got {
+		if e["t"] == "said" {
+			said = append(said, e["text"].(string))
+		}
+	}
+	if idle := got[len(got)-1]; !reflect.DeepEqual(said, []string{"still here"}) || !reflect.DeepEqual(idle["answered"], []any{"stp_post"}) {
+		t.Fatalf("the turn goes on past what does not read: %q %v", said, idle)
+	}
+}
+
+// A fresh session's context, the thread so far, reaches the harness in the
+// post's own line, before the post's content.
+func TestAPostsContextComesBeforeItsContentInOneLine(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{})
+	s.send(map[string]any{"t": "post", "id": "stp_post", "work": "trn_1",
+		"context": []any{map[string]any{"type": "text", "text": "Earlier: a post."}},
+		"content": []any{map[string]any{"type": "text", "text": "hello"}}})
+	if e := s.expect("accepted"); e["id"] != "stp_post" {
+		t.Fatalf("the post is accepted: %v", e)
+	}
+	s.until("idle")
+	raw, err := os.ReadFile(filepath.Join(s.home, ".claude", "projects", "-fake", session+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, entry)
+	}
+	want := []map[string]any{{"type": "user", "uuid": brainwire.PostUUID("stp_post"), "message": map[string]any{"role": "user", "content": []any{
+		map[string]any{"type": "text", "text": "Earlier: a post."},
+		map[string]any{"type": "text", "text": "hello"}}}}}
+	if !reflect.DeepEqual(lines, want) {
+		t.Fatalf("the context and then the content, in the post's one line: %v", lines)
+	}
+}
+
 func TestDeliveriesBeforeAStartAndToolsPastTheirBoundsAreRefused(t *testing.T) {
 	s := startDriver(t)
 	s.expect("hello")
@@ -511,6 +620,17 @@ func TestDeliveriesBeforeAStartAndToolsPastTheirBoundsAreRefused(t *testing.T) {
 	s.send(map[string]any{"t": "work", "id": "w1", "work": "trn_1", "tools": []any{big}})
 	if e := s.expect("refused"); !strings.Contains(e["reason"].(string), "huge") {
 		t.Fatalf("a tool past one argument is refused by name: %v", e)
+	}
+	// Each within one argument, the tools together past one line to the
+	// harness: a quote is two bytes in the work and four in the line that
+	// sets them, each tool there a string of its own JSON.
+	quoted := []any{}
+	for i := 0; i < 5; i++ {
+		quoted = append(quoted, map[string]any{"name": fmt.Sprintf("quoted%d", i), "description": strings.Repeat(`"`, 60000), "parameters": map[string]any{}})
+	}
+	s.send(map[string]any{"t": "work", "id": "w2", "work": "trn_1", "tools": quoted})
+	if e := s.expect("refused"); !strings.Contains(e["reason"].(string), "as one line to the harness") {
+		t.Fatalf("tools past one line to the harness are refused: %v", e)
 	}
 }
 
