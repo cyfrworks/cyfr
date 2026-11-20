@@ -532,7 +532,8 @@ func TestDeliveriesBeforeAStartAreRefused(t *testing.T) {
 }
 
 // A block Codex does not take, a PDF's, is one line of text in its place,
-// and the post is written with the rest.
+// an image it takes is its data URL, and the post is written with the
+// rest, in its order.
 func TestABlockCodexDoesNotTakeIsNamedAndThePostWritten(t *testing.T) {
 	s := startDriver(t)
 	s.expect("hello")
@@ -540,6 +541,7 @@ func TestABlockCodexDoesNotTakeIsNamedAndThePostWritten(t *testing.T) {
 	work(s, "w1", "trn_1")
 	s.send(map[string]any{"t": "post", "id": "p1", "work": "trn_1", "content": []any{
 		map[string]any{"type": "document", "media_type": "application/pdf", "data": "JVBERi0="},
+		map[string]any{"type": "image", "media_type": "image/png", "data": "iVBORw0KGgo="},
 		map[string]any{"type": "text", "text": "echo what you were given"},
 	}})
 	if e := s.expect("accepted"); e["id"] != "p1" {
@@ -547,24 +549,160 @@ func TestABlockCodexDoesNotTakeIsNamedAndThePostWritten(t *testing.T) {
 	}
 	want, _ := json.Marshal([]any{
 		map[string]any{"type": "text", "text": "A file of type application/pdf was attached; OpenAI Codex takes text and images, so it is not handed over.", "text_elements": []any{}},
+		map[string]any{"type": "image", "url": "data:image/png;base64,iVBORw0KGgo="},
 		map[string]any{"type": "text", "text": "echo what you were given", "text_elements": []any{}},
 	})
 	if said := saidOf(s.until("idle")); said != string(want) {
-		t.Fatalf("Codex is given a line in the document's place, then the post's text: %q", said)
+		t.Fatalf("Codex is given a line in the document's place, the image, then the post's text: %q", said)
+	}
+}
+
+// A post's context, the thread so far, reaches Codex in the post's own
+// turn, before the post's content.
+func TestAPostsContextComesBeforeItsContentInOneTurn(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	s.send(map[string]any{"t": "post", "id": "stp_post", "work": "trn_1",
+		"context": []any{map[string]any{"type": "text", "text": "Earlier: a post."}},
+		"content": []any{map[string]any{"type": "text", "text": "echo what you were given"}}})
+	if e := s.expect("accepted"); e["id"] != "stp_post" {
+		t.Fatalf("the post is accepted: %v", e)
+	}
+	got := s.until("idle")
+	want, _ := json.Marshal([]any{
+		map[string]any{"type": "text", "text": "Earlier: a post.", "text_elements": []any{}},
+		map[string]any{"type": "text", "text": "echo what you were given", "text_elements": []any{}},
+	})
+	if said := saidOf(got); said != string(want) || fmt.Sprint(got[len(got)-1]["answered"]) != "[stp_post]" {
+		t.Fatalf("the context and then the content, in the post's one turn: %q %v", said, got[len(got)-1])
+	}
+}
+
+// sent posts `params` and answers what Codex read: the thread's start or
+// resume and the post's turn's start.
+func sent(s *wireSession, id, turn string) map[string]any {
+	s.t.Helper()
+	postText(s, id, turn, "params")
+	var read map[string]any
+	if err := json.Unmarshal([]byte(saidOf(s.until("idle"))), &read); err != nil {
+		s.t.Fatal(err)
+	}
+	return read
+}
+
+// A start that names no model and no effort leaves both to Codex: the
+// thread's start names no model, and the turn's no effort.
+func TestAStartNamingNoModelOrEffortSendsNeither(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	want := map[string]any{
+		"thread": map[string]any{"approvalPolicy": "never", "sandbox": "danger-full-access", "developerInstructions": "be brief",
+			"dynamicTools": []any{map[string]any{"type": "function", "name": "files", "description": "Read the athanor's files", "inputSchema": map[string]any{"type": "object"}}}},
+		"turn": map[string]any{"threadId": session, "clientUserMessageId": brainwire.PostUUID("stp_post"),
+			"input": []any{map[string]any{"type": "text", "text": "params", "text_elements": []any{}}}},
+	}
+	if got := sent(s, "stp_post", "trn_1"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("no model and no effort are sent: %v", got)
+	}
+}
+
+// Two calls of CYFR's tools Codex holds at once are two asks, and each
+// answer, in whatever order, reaches Codex under its own call's request.
+func TestTwoCallsHeldAtOnceAreEachAnsweredUnderTheirOwnRequest(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_post", "trn_1", "pair")
+	asks := []map[string]any{s.next(), s.next()}
+	ask := func(call, path string) map[string]any {
+		return map[string]any{"t": "ask", "gen": float64(3), "work": "trn_1", "ask": call, "name": "files", "arguments": map[string]any{"path": path}}
+	}
+	if want := []map[string]any{ask("call_a", "a.txt"), ask("call_b", "b.txt")}; !reflect.DeepEqual(asks, want) {
+		t.Fatalf("two calls held at once are two asks: %v", asks)
+	}
+	for _, answer := range []map[string]any{
+		{"t": "answer", "id": "stp_b", "ask": "call_b", "content": "for b", "is_error": true},
+		{"t": "answer", "id": "stp_a", "ask": "call_a", "content": "for a", "is_error": false},
+	} {
+		s.send(answer)
+		if e := s.expect("accepted"); e["id"] != answer["id"] {
+			t.Fatalf("each answer is taken: %v", e)
+		}
+	}
+	got := s.until("idle")
+	if said := saidOf(got); said != `call_a answered "for a", success true; call_b answered "for b", success false` ||
+		fmt.Sprint(got[len(got)-1]["answered"]) != "[stp_post]" {
+		t.Fatalf("each answer reaches Codex under its own call's request, a refusal as a call not run: %q", said)
+	}
+}
+
+// Two messages of one turn are each said under its own id, in the order
+// Codex wrote them.
+func TestTwoMessagesOfATurnAreSaidEachUnderItsOwnID(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_post", "trn_1", "twice")
+	var got []map[string]any
+	for _, e := range s.until("idle") {
+		if e["t"] == "text" || e["t"] == "said" {
+			got = append(got, e)
+		}
+	}
+	event := func(kind, message, member, value string) map[string]any {
+		return map[string]any{"t": kind, "gen": float64(3), "work": "trn_1", "message": message, member: value}
+	}
+	want := []map[string]any{
+		event("text", "msg_one", "delta", "On"), event("text", "msg_one", "delta", "e."), event("said", "msg_one", "text", "One."),
+		event("text", "msg_two", "delta", "Tw"), event("text", "msg_two", "delta", "o."), event("said", "msg_two", "text", "Two."),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("each message streams and is said under its own id, in order: %v", got)
+	}
+}
+
+// A line of Codex's that is no JSON, or JSON cut short, is passed over:
+// the turn goes on and ends as any other.
+func TestALineTheDriverCannotReadIsPassedOver(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_post", "trn_1", "noise")
+	got := s.until("idle")
+	text := ""
+	var said []string
+	for _, e := range got {
+		switch e["t"] {
+		case "text":
+			text += e["delta"].(string)
+		case "said":
+			said = append(said, e["text"].(string))
+		}
+	}
+	idle := map[string]any{"t": "idle", "gen": float64(3), "work": "trn_1", "answered": []any{"stp_post"}, "stop": "end_turn"}
+	if text != "still here" || !reflect.DeepEqual(said, []string{"still here"}) || !reflect.DeepEqual(got[len(got)-1], idle) {
+		t.Fatalf("the turn goes on past what does not read: %q %q %v", text, said, got[len(got)-1])
 	}
 }
 
 // A start Codex cannot honour ends the driver before anything starts: a
 // read-only one, since Codex's read-only sandbox cannot start in the box,
 // a permission mode, the harness's own tools, a tool name Codex does not
-// take, or one named twice.
+// take, its own `mcp` and `mcp__…` among them, or one named twice.
 func TestAStartCodexCannotHonourEndsTheDriver(t *testing.T) {
+	tool := func(name string) []any {
+		return []any{map[string]any{"name": name, "description": "", "parameters": map[string]any{}}}
+	}
 	for name, start := range map[string]map[string]any{
 		"read-only":           {"t": "start", "gen": 0, "config": map[string]any{"read_only": true}},
 		"read-only resumed":   {"t": "start", "gen": 0, "session": "019a0000-0000-7000-8000-00000000aaaa", "config": map[string]any{"read_only": true}},
 		"a permission mode":   {"t": "start", "gen": 0, "config": map[string]any{"permission_mode": "plan"}},
 		"the harness's tools": {"t": "start", "gen": 0, "config": map[string]any{"harness_tools": []any{}}},
-		"a tool name":         {"t": "start", "gen": 0, "config": map[string]any{}, "tools": []any{map[string]any{"name": "files.read", "description": "", "parameters": map[string]any{}}}},
+		"a tool name":         {"t": "start", "gen": 0, "config": map[string]any{}, "tools": tool("files.read")},
+		"the name mcp":        {"t": "start", "gen": 0, "config": map[string]any{}, "tools": tool("mcp")},
+		"a name under mcp__":  {"t": "start", "gen": 0, "config": map[string]any{}, "tools": tool("mcp__files")},
 		"a tool named twice":  {"t": "start", "gen": 0, "config": map[string]any{}, "tools": []any{filesTool, filesTool}},
 	} {
 		s := startDriver(t)
@@ -617,9 +755,89 @@ func TestAResumeOfAThreadCodexHoldsNoRolloutOfIsGoneThenAFreshStartRuns(t *testi
 	}
 }
 
+// A thread whose rollout is empty, as a program ended before the
+// thread's first turn started leaves it, cannot be resumed: it is gone,
+// and a fresh start runs in the same driver.
+func TestAResumeOfAThreadWhoseRolloutIsEmptyIsGoneThenAFreshStartRuns(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	s.end()
+	rollouts, _ := filepath.Glob(filepath.Join(s.home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+session+".jsonl"))
+	if len(rollouts) != 1 {
+		t.Fatalf("the thread has its rollout: %v", rollouts)
+	}
+	if err := os.Truncate(rollouts[0], 0); err != nil {
+		t.Fatal(err)
+	}
+
+	again := startDriverIn(t, s.home)
+	again.expect("hello")
+	again.send(map[string]any{"t": "start", "gen": 2, "session": session, "config": map[string]any{}})
+	again.expect("gone")
+	again.send(map[string]any{"t": "start", "gen": 3, "config": map[string]any{}})
+	if e := again.expect("started"); e["fresh"] != true || e["session"] == session {
+		t.Fatalf("after gone, a fresh thread starts in the same driver: %v", e)
+	}
+}
+
+// A session that is no thread id of Codex's, a lowercase uuid, has no
+// transcript: it is gone, and no harness starts for it.
+func TestAResumeOfASessionThatIsNoThreadIDIsGoneAndStartsNothing(t *testing.T) {
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(map[string]any{"t": "start", "gen": 1, "session": "019A0000-0000-7000-8000-00000000AAAA", "config": map[string]any{}})
+	s.expect("gone")
+	codex := filepath.Join(s.home, ".codex")
+	if _, err := os.Stat(codex); !os.IsNotExist(err) || strings.Contains(s.stderr.String(), stderrCanary) {
+		t.Fatalf("no harness started: %v %q", err, s.stderr.String())
+	}
+	started(s, map[string]any{})
+	s.end()
+	if _, err := os.Stat(codex); err != nil || !strings.Contains(s.stderr.String(), stderrCanary) {
+		t.Fatalf("a harness that started leaves both signs (a positive control for the check above): %v %q", err, s.stderr.String())
+	}
+}
+
+// A resume Codex refuses in words other than a missing rollout's is no
+// proof the thread is gone: the driver ends, writes no `gone`, and the
+// thread is there for the next start to resume.
+func TestAResumeCodexRefusesOtherwiseEndsTheDriverAndLeavesTheThread(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_post", "trn_1", "hello")
+	s.until("idle")
+	s.end()
+
+	t.Setenv("FAKE_RESUME_FAIL", "1")
+	refused := startDriverIn(t, s.home)
+	refused.expect("hello")
+	refused.send(map[string]any{"t": "start", "gen": 4, "session": session, "config": map[string]any{}})
+	select {
+	case e, ok := <-refused.events:
+		if ok {
+			t.Fatalf("a resume refused in other words writes no gone, nor anything else: %v", e)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the driver did not end")
+	}
+	if status := <-refused.done; status != 1 || !strings.Contains(refused.stderr.String(), "cyfr-codex: OpenAI Codex refused to start the session\n") {
+		t.Fatalf("the driver ends with 1, saying why: %d %q", status, refused.stderr.String())
+	}
+
+	t.Setenv("FAKE_RESUME_FAIL", "")
+	again := startDriverIn(t, s.home)
+	again.expect("hello")
+	again.send(map[string]any{"t": "start", "gen": 5, "session": session, "config": map[string]any{}})
+	if e := again.expect("started"); e["fresh"] != false || e["session"] != session {
+		t.Fatalf("the thread is left for the next start to resume: %v", e)
+	}
+}
+
 // A resumed thread repeats its last total, naming the turn before it,
 // which no work started in this process: its usage names no work. Then it
-// repeats nothing more.
+// repeats nothing more. It runs under the box's policy, as a new thread
+// does, with the start's system prompt.
 func TestAResumeNamesThePendingPostsItsRolloutHoldsAndRepeatsOnlyItsTotal(t *testing.T) {
 	s := startDriver(t)
 	session := startFresh(s, map[string]any{})
@@ -630,7 +848,7 @@ func TestAResumeNamesThePendingPostsItsRolloutHoldsAndRepeatsOnlyItsTotal(t *tes
 
 	again := startDriverIn(t, s.home)
 	again.expect("hello")
-	again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": map[string]any{}, "pending": []any{"stp_held", "stp_never"}})
+	again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": map[string]any{}, "system": "be brief", "pending": []any{"stp_held", "stp_never"}})
 	started := again.expect("started")
 	if started["fresh"] != false || started["session"] != session || fmt.Sprint(started["held"]) != "[stp_held]" {
 		t.Fatalf("a resume names the posts the rollout holds, and only those: %v", started)
@@ -643,6 +861,10 @@ func TestAResumeNamesThePendingPostsItsRolloutHoldsAndRepeatsOnlyItsTotal(t *tes
 	again.send(map[string]any{"t": "work", "id": "w2", "work": "trn_2", "tools": []any{}})
 	if e := again.next(); e["t"] != "accepted" {
 		t.Fatalf("the resumed thread repeats nothing else before its next work: %v", e)
+	}
+	resumed := map[string]any{"threadId": session, "approvalPolicy": "never", "sandbox": "danger-full-access", "excludeTurns": true, "developerInstructions": "be brief"}
+	if got := sent(again, "stp_after", "trn_2")["thread"]; !reflect.DeepEqual(got, resumed) {
+		t.Fatalf("the thread resumes under the box's policy with the start's system prompt: %v", got)
 	}
 }
 

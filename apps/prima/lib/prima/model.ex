@@ -72,8 +72,7 @@ defmodule Prima.Model do
   `tests/fixtures/model_chat.json`. A catalyst that declares no options
   ignores a request's `session` and `options`, and the host sends none it
   did not declare (`Aqua.Loop.Request.build/1` refuses an option it does
-  not know); the vectors' Rust consumers are the catalyst versions that
-  implement options.
+  not know).
   """
 
   @chat "model/chat@1"

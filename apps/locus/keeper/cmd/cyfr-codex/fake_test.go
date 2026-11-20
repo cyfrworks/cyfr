@@ -38,13 +38,20 @@ import (
 //	none      sends usage with no total, then replies
 //	missing   sends a total missing a count, then replies
 //	big       replies with 2 MiB of text
+//	echo      replies with the whole input the turn was given
+//	pair      calls CYFR's `files` twice at once and replies with each answer
+//	twice     replies in two messages
+//	params    replies with what the thread was started or resumed with and the turn's start
+//	noise     writes a line that is no JSON and one cut short, then replies
 //	die       ends the process with status 3
 //
 // It refuses to start without `app-server` last, answers nothing before
 // `initialize`, writes a canary to its standard error, which the driver
 // must never pass on, and keeps a sign-in, `auth.json`, while
 // FAKE_SIGNED_OUT is unset. A resume sends the thread's last total again
-// unless FAKE_NO_REPEAT is set.
+// unless FAKE_NO_REPEAT is set, and is refused in words other than a
+// missing rollout's while FAKE_RESUME_FAIL is set. A thread whose rollout
+// file is empty is refused in Codex's words for it.
 const fakeEnv = "CYFR_FAKE_CODEX"
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
@@ -70,18 +77,23 @@ func fakeCodex() int {
 
 	out := bufio.NewWriter(os.Stdout)
 	var mu sync.Mutex
-	write := func(v any) {
+	raw := func(line []byte) {
 		mu.Lock()
 		defer mu.Unlock()
-		line, _ := json.Marshal(v)
 		out.Write(append(line, '\n'))
 		out.Flush()
+	}
+	write := func(v any) {
+		line, _ := json.Marshal(v)
+		raw(line)
 	}
 	notify := func(method string, params map[string]any) { write(map[string]any{"method": method, "params": params}) }
 	answers := map[string]chan json.RawMessage{}
 	var answersMu sync.Mutex
 	asked := 0
-	ask := func(method string, params map[string]any) json.RawMessage {
+	// call writes a request of the fake's and answers where its answer
+	// arrives; ask waits for it.
+	call := func(method string, params map[string]any) chan json.RawMessage {
 		answersMu.Lock()
 		asked++
 		id := asked
@@ -89,8 +101,9 @@ func fakeCodex() int {
 		answers[fmt.Sprint(id)] = ch
 		answersMu.Unlock()
 		write(map[string]any{"method": method, "id": id, "params": params})
-		return <-ch
+		return ch
 	}
+	ask := func(method string, params map[string]any) json.RawMessage { return <-call(method, params) }
 
 	var thread struct {
 		sync.Mutex
@@ -100,6 +113,7 @@ func fakeCodex() int {
 		active                                   string
 		steered                                  chan string
 		total                                    map[string]int
+		opened                                   map[string]any
 	}
 	rolloutOf := func(id string) string {
 		matches, _ := filepath.Glob(filepath.Join(sessions, "rollout-*-"+id+".jsonl"))
@@ -133,14 +147,16 @@ func fakeCodex() int {
 		notify("thread/tokenUsage/updated", map[string]any{"threadId": thread.id, "turnId": turn,
 			"tokenUsage": map[string]any{"total": total, "last": map[string]any{"inputTokens": input, "outputTokens": output}}})
 	}
-	reply := func(turn, text string) {
-		message := fmt.Sprintf("msg_%s_%d", turn, len(text))
+	say := func(turn, message, text string) {
 		notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": map[string]any{"type": "agentMessage", "id": message, "text": ""}})
 		half := len(text) / 2
 		for _, piece := range []string{text[:half], text[half:]} {
 			notify("item/agentMessage/delta", map[string]any{"threadId": thread.id, "turnId": turn, "itemId": message, "delta": piece})
 		}
 		notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": map[string]any{"type": "agentMessage", "id": message, "text": text}})
+	}
+	reply := func(turn, text string) {
+		say(turn, fmt.Sprintf("msg_%s_%d", turn, len(text)), text)
 		usage(turn, 10, len(text)%97)
 	}
 	complete := func(turn, status string, errorInfo any) {
@@ -155,11 +171,12 @@ func fakeCodex() int {
 		}
 		notify("turn/completed", map[string]any{"threadId": thread.id, "turn": t})
 	}
-	runTurn := func(turn, words string, config map[string]any) {
+	// runTurn runs a turn of `words`, `params` its `turn/start`'s.
+	runTurn := func(turn, words string, params map[string]any) {
 		switch {
 		case strings.Contains(words, "hello"):
 			reply(turn, fmt.Sprintf("Hello from the fake Codex: policy %s/%s, tools %s, model %s, effort %v, instructions %q",
-				thread.policy, thread.sandbox, strings.Join(thread.tools, ","), thread.model, config["effort"], thread.instructions))
+				thread.policy, thread.sandbox, strings.Join(thread.tools, ","), thread.model, params["effort"], thread.instructions))
 		case strings.Contains(words, "slow"):
 			notify("item/agentMessage/delta", map[string]any{"threadId": thread.id, "turnId": turn, "itemId": "msg_cut", "delta": "Starting"})
 			select {
@@ -172,18 +189,23 @@ func fakeCodex() int {
 			args := json.RawMessage(`{"action":"read","path":"notes.txt","count":12345678901234567890}`)
 			notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": map[string]any{"type": "dynamicToolCall", "id": "call_read", "tool": "files"}})
 			answered := ask("item/tool/call", map[string]any{"threadId": thread.id, "turnId": turn, "callId": "call_read", "tool": "files", "arguments": args})
-			var a struct {
-				Result struct {
-					ContentItems []struct{ Text string } `json:"contentItems"`
-					Success      bool                    `json:"success"`
-				} `json:"result"`
-			}
-			_ = json.Unmarshal(answered, &a)
-			text := ""
-			for _, item := range a.Result.ContentItems {
-				text += item.Text
-			}
-			reply(turn, fmt.Sprintf("The tool answered %q, success %v", text, a.Result.Success))
+			reply(turn, "The tool answered "+toolResult(answered))
+		case strings.Contains(words, "pair"):
+			// Two calls held at once: each answer is the one under its own
+			// request's id.
+			first := call("item/tool/call", map[string]any{"threadId": thread.id, "turnId": turn, "callId": "call_a", "tool": "files", "arguments": map[string]any{"path": "a.txt"}})
+			second := call("item/tool/call", map[string]any{"threadId": thread.id, "turnId": turn, "callId": "call_b", "tool": "files", "arguments": map[string]any{"path": "b.txt"}})
+			reply(turn, fmt.Sprintf("call_a answered %s; call_b answered %s", toolResult(<-first), toolResult(<-second)))
+		case strings.Contains(words, "twice"):
+			say(turn, "msg_one", "One.")
+			say(turn, "msg_two", "Two.")
+		case strings.Contains(words, "params"):
+			given, _ := json.Marshal(map[string]any{"thread": thread.opened, "turn": params})
+			reply(turn, string(given))
+		case strings.Contains(words, "noise"):
+			raw([]byte("a line that is no JSON"))
+			raw([]byte(`{"method":"item/agentMessage/delta","params":{"threadId":"` + thread.id + `","turnId":"` + turn + `","itemId":"msg_cut","delta":"CUT`))
+			reply(turn, "still here")
 		case strings.Contains(words, "own"):
 			command := map[string]any{"type": "commandExecution", "id": "cmd_1", "command": "/bin/bash -lc 'cat secret-of-the-folder'", "status": "inProgress"}
 			notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": command})
@@ -254,7 +276,7 @@ func fakeCodex() int {
 			reply(turn, strings.Repeat("x", 2<<20))
 		case strings.Contains(words, "echo"):
 			// The whole input the turn was given, as Codex read it.
-			given, _ := json.Marshal(config["input"])
+			given, _ := json.Marshal(params["input"])
 			reply(turn, string(given))
 		default:
 			reply(turn, "ok")
@@ -313,6 +335,7 @@ func fakeCodex() int {
 					}, "nextCursor": nil})
 				}
 			case m.Method == "thread/start" || m.Method == "thread/resume":
+				thread.opened = m.Params
 				thread.policy, thread.sandbox = str("approvalPolicy"), str("sandbox")
 				thread.instructions = str("developerInstructions")
 				thread.model = "fake-sol"
@@ -333,9 +356,18 @@ func fakeCodex() int {
 					_ = os.WriteFile(filepath.Join(snapshots, thread.id+".1.sh"), []byte("declare -x SECRET=FAKE-FOLDER-CANARY\n"), 0o600)
 				} else {
 					id := str("threadId")
+					if os.Getenv("FAKE_RESUME_FAIL") != "" {
+						fail(-32603, "failed to read thread: thread-store internal error: permission denied")
+						continue
+					}
 					path := rolloutOf(id)
 					if path == "" {
 						fail(-32600, noRolloutWords+" "+id)
+						continue
+					}
+					if info, err := os.Stat(path); err == nil && info.Size() == 0 {
+						fail(-32603, "failed to read thread: thread-store internal error: failed to read session metadata "+
+							path+": rollout at "+path+" is empty")
 						continue
 					}
 					thread.id = id
@@ -366,12 +398,12 @@ func fakeCodex() int {
 					return 3
 				}
 				ok(map[string]any{"turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress"}})
-				config := map[string]any{"effort": m.Params["effort"], "input": input}
+				params := m.Params
 				uuid := str("clientUserMessageId")
 				go func() {
 					notify("turn/started", map[string]any{"threadId": thread.id, "turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress"}})
 					userMessage(turn, uuid, words)
-					runTurn(turn, words, config)
+					runTurn(turn, words, params)
 				}()
 			case m.Method == "turn/steer":
 				thread.Lock()
@@ -412,6 +444,23 @@ func fakeCodex() int {
 			return 0
 		}
 	}
+}
+
+// toolResult is an `item/tool/call`'s answer as the fake reads it: its
+// text and whether CYFR ran the call.
+func toolResult(answered json.RawMessage) string {
+	var a struct {
+		Result struct {
+			ContentItems []struct{ Text string } `json:"contentItems"`
+			Success      bool                    `json:"success"`
+		} `json:"result"`
+	}
+	_ = json.Unmarshal(answered, &a)
+	text := ""
+	for _, item := range a.Result.ContentItems {
+		text += item.Text
+	}
+	return fmt.Sprintf("%q, success %v", text, a.Result.Success)
 }
 
 var fakeThreads = 0

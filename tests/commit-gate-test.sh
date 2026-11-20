@@ -1702,7 +1702,7 @@ has_line '^locus_island=0$' "$scratch/close.log/islands.summary" &&
   fail "the close did not run test.yml's Locus step: $(grep -i locus "$scratch/close.log/islands.summary" "$ct/mix.calls" 2>&1 | head -5)"
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml app-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
-  'backends_image: test.yml locus-backends-image: 12 steps' 'app_both: test.yml app-image-locus-suites group=both: 11 steps' \
+  'backends_image: test.yml locus-backends-image: 11 steps' 'app_both: test.yml app-image-locus-suites group=both: 11 steps' \
   'app_a: test.yml app-image-suites group=a: 9 steps' 'app_b: test.yml app-image-suites group=b: 5 steps' \
   'app_c: test.yml app-image-suites group=c: 5 steps' 'compose_checks: test.yml compose-proof-checks: 3 steps' \
   'browser_a: test.yml browser-tincture shard=a: 6 steps' \
@@ -1735,7 +1735,6 @@ python3 tests/locus-backends-image/kept_home.py NS/cyfr-locus:backends|prefix=PR
 python3 tests/locus-backends-image/browser.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/brain_claude_code.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/brain_openai_codex.py NS/cyfr-locus:backends|prefix=PREFIX
-python3 tests/locus-backends-image/openai_codex.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/egress.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/e2e.py NS/cyfr-locus:backends|prefix=PREFIX app=NS/cyfr:push
 python3 tests/locus-backends-image/pipe.py NS/cyfr-locus:backends|prefix=PREFIX app=NS/cyfr:push
