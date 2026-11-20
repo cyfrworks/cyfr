@@ -309,6 +309,149 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  describe "what the program writes as it works" do
+    test "its text of the open work streams to the thread's viewers as it is written, under " <>
+           "the turn's fence: its said row settles it, and a message no row lands is withdrawn " <>
+           "at the native turn's end",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "what is in notes.md?")
+      loop = run(ctx, turn)
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :turn_fence, data: announced}, 10_000
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
+
+      # The fence a viewer keeps the streamed text under is announced.
+      assert announced == %{turn_id: turn.id, fence: fence}
+
+      say(fake, row, accepted(input))
+      say(fake, row, text(turn, "msg_1", "notes.md "))
+      say(fake, row, text(turn, "msg_1", "holds three lines."))
+      first = delta!()
+      second = delta!()
+
+      assert [first, second] == [
+               streamed(turn, fence, "msg_1", 0, {0, 5}, "notes.md "),
+               streamed(turn, fence, "msg_1", 0, {0, 6}, "holds three lines.")
+             ]
+
+      viewer = Aqua.Loop.Stream.new() |> Aqua.Loop.Stream.advance(fence)
+      viewer = viewer |> Aqua.Loop.Stream.add(first) |> Aqua.Loop.Stream.add(second)
+
+      assert Aqua.Loop.Stream.texts(viewer) == [
+               %{step_id: "msg_1", role: nil, text: "notes.md holds three lines."}
+             ]
+
+      say(fake, row, said(turn, "msg_1", "notes.md holds three lines."))
+
+      assert_receive %Cyfr.Bus.ThreadEvent{
+                       kind: :message,
+                       data: %{kind: "text", sent_by: "aqua"} = landed
+                     },
+                     10_000
+
+      assert Aqua.Loop.Stream.texts(Aqua.Loop.Stream.landed(viewer, landed)) == []
+
+      say(fake, row, text(turn, "msg_2", "and then"))
+      assert delta!() == streamed(turn, fence, "msg_2", 1, {0, 8}, "and then")
+      say(fake, row, idle(turn, [input.id]))
+
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned, data: abandoned}, 10_000
+      assert abandoned == marker(turn, fence, "msg_2", 1)
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta}
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+    end
+
+    test "text that lands no row is withdrawn when Stop closes the session",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      tasks = start_supervised!(Task.Supervisor)
+
+      loop =
+        Task.Supervisor.async_nolink(tasks, fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, text(turn, "msg_1", "Starting"))
+      {:ok, open} = Tape.turn(ctx, turn.id)
+      assert delta!() == streamed(turn, open.fence, "msg_1", 0, {0, 5}, "Starting")
+
+      stop = fn ->
+        monitor = Process.monitor(loop.pid)
+
+        receive do
+          {:DOWN, ^monitor, :process, _pid, _reason} -> :ok
+        after
+          10_000 -> :ok
+        end
+      end
+
+      assert {:ok, aborted} = Aqua.Loop.abort(ctx, open, "stopped", stop)
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned, data: abandoned}, 10_000
+      assert abandoned == marker(turn, open.fence, "msg_1", 0)
+      {:ok, _} = Tape.finish(ctx, aborted, "cancelled", %{error: "stopped"})
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+    end
+
+    test "text that lands no row is withdrawn when the turn fails",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, text(turn, "msg_1", "Starting"))
+      {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
+      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 5}, "Starting")
+
+      say(fake, row, %{
+        "t" => "error",
+        "gen" => 0,
+        "work" => turn.id,
+        "type" => "provider_error",
+        "message" => "The provider failed."
+      })
+
+      line = "#{@title} could not answer: The provider failed."
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned, data: abandoned}, 10_000
+      assert abandoned == marker(turn, fence, "msg_1", 0)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+    end
+
+    test "text of other work, or of none, is not streamed",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, text(turn, "msg_other", "for other work", "trn_other"))
+      say(fake, row, text(turn, "msg_none", "for no work", :none))
+      say(fake, row, text(turn, "msg_1", "mine"))
+      {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
+
+      # One process announces in order, so the first delta is the first
+      # one announced.
+      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 7}, "mine")
+      say(fake, row, said(turn, "msg_1", "mine"))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta}
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+    end
+  end
+
   describe "the program's asks" do
     test "an ask of the open turn is a step the loop decides and runs, answered with its result; one of a tool not offered is refused",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
@@ -2164,6 +2307,32 @@ defmodule Aqua.ProgramTest do
 
   defp said(turn, message, text),
     do: %{"t" => "said", "gen" => 0, "work" => turn.id, "message" => message, "text" => text}
+
+  # A text event of `turn`'s work, of `work` when one is named, or of
+  # none (`:none`).
+  defp text(turn, message, delta, work \\ nil) do
+    %{"t" => "text", "gen" => 0, "message" => message, "delta" => delta}
+    |> then(&if(work == :none, do: &1, else: Map.put(&1, "work", work || turn.id)))
+  end
+
+  # The thread's events reach the test as they reach a viewer.
+  defp watch!(ctx, thread) do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+  end
+
+  defp delta! do
+    assert_receive %Cyfr.Bus.ThreadEvent{kind: :delta, data: delta}, 10_000
+    delta
+  end
+
+  # A delta of the program's native message `message` in `turn`, as a
+  # viewer keeps it (`Aqua.Loop.Stream`): the soul's role is nil.
+  defp streamed(turn, fence, message, ordinal, seq, text),
+    do: Map.merge(marker(turn, fence, message, ordinal), %{role: nil, seq: seq, text: text})
+
+  defp marker(turn, fence, message, ordinal),
+    do: %{turn_id: turn.id, fence: fence, source: turn.id, step_id: message, ordinal: ordinal}
 
   defp ask(turn, ask, name, arguments, work \\ nil),
     do: %{

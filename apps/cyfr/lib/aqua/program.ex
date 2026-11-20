@@ -31,6 +31,12 @@ defmodule Aqua.Program do
   ends saying why. What the program says with no
   work open stays out of the thread.
 
+  Its text of the open work is announced to the thread's viewers as it is
+  written, never stored (`Aqua.Loop.Stream`), once its batch committed:
+  each native message streams as a step of its own, settled by its `said`
+  row and withdrawn when no row will land, at its native turn's end or
+  the session's.
+
   It writes a command when a row says one is owed, one at a time: a closed
   ask's result as its `answer`, then each post of the open turn that
   waits, each first recorded as an `input` step (`carry/3`) whose id the
@@ -226,7 +232,9 @@ defmodule Aqua.Program do
        recovering?: false,
        pending: [],
        timer: nil,
-       subscribed?: false
+       subscribed?: false,
+       streams: %{},
+       ordinal: 0
      }}
   end
 
@@ -275,7 +283,7 @@ defmodule Aqua.Program do
     do: {:noreply, batch(state, boot, lines)}
 
   def handle_info({Opus.Brain, ref, {:ended, reason}}, %{brain: {_pid, ref}} = state),
-    do: ended(%{state | brain: nil, boot: nil, outstanding: nil}, reason)
+    do: ended(withdraw(%{state | brain: nil, boot: nil, outstanding: nil}), reason)
 
   def handle_info({Opus.Brain, _stale, _message}, state), do: {:noreply, state}
 
@@ -441,11 +449,11 @@ defmodule Aqua.Program do
   defp write_failed(%{work: work} = state, _refused),
     do: fail(shut(state), "#{work.title} could not be given this work.")
 
-  defp shut(%{brain: nil} = state), do: state
+  defp shut(%{brain: nil} = state), do: withdraw(state)
 
   defp shut(%{brain: brain} = state) do
     Opus.Brain.close(brain)
-    %{state | brain: nil, boot: nil, phase: :closed, outstanding: nil}
+    withdraw(%{state | brain: nil, boot: nil, phase: :closed, outstanding: nil})
   end
 
   # ---------------------------------------------------------------------------
@@ -477,7 +485,11 @@ defmodule Aqua.Program do
 
         if effects.foreign?,
           do: state |> foreign() |> arm(),
-          else: state |> act(effects, committed) |> arm()
+          else:
+            state
+            |> stream(of_work(lines, "text", open_turn), effects.commit.said)
+            |> act(effects, committed)
+            |> arm()
 
       {:error, reason} when reason in [:superseded, :generation_moved, :row_changed, :not_open] ->
         # The session is no longer this work's: its writes end here. A
@@ -490,6 +502,13 @@ defmodule Aqua.Program do
         shut(state)
     end
   end
+
+  # The batch's events of type `t` that are the open work's, each with
+  # its line's number.
+  defp of_work(lines, t, %{id: work_id}),
+    do: for({seq, %{"t" => ^t, "work" => ^work_id} = event} <- lines, do: {seq, event})
+
+  defp of_work(_lines, _t, nil), do: []
 
   # The turn the session works for while it is open, as the loop last said.
   defp open_turn(%{turn: %{status: status} = turn}) when status in ["running", "paused"], do: turn
@@ -573,7 +592,7 @@ defmodule Aqua.Program do
     do: %{acc | errors: acc.errors ++ [event]}
 
   # Text streamed, the harness's own tools, late prose and asks of other
-  # work: nothing is written of them.
+  # work: nothing is written of them (`stream/3`).
   defp effect(_event, acc, _work, _work_id, _outstanding), do: acc
 
   defp put_commit(acc, key, value),
@@ -613,6 +632,58 @@ defmodule Aqua.Program do
           })
       }
     }
+  end
+
+  # The open work's text, announced as it is written (`Aqua.Loop.Stream`),
+  # each native message a step of its own, under the turn's fence as it
+  # stands now: a message this batch said lands its row now, which settles
+  # it, so none of its text is announced, and one said later is settled by
+  # its row then.
+  defp stream(state, texts, said) do
+    said = MapSet.new(said, & &1.message)
+    state = %{state | streams: Map.drop(state.streams, MapSet.to_list(said))}
+
+    Enum.reduce(texts, state, fn {seq, %{"message" => message, "delta" => delta}}, state ->
+      if delta == "" or MapSet.member?(said, message) do
+        state
+      else
+        state = streaming(state, message)
+        Aqua.Loop.Stream.announce(state.work.guest, streamed(state, message), {0, seq}, delta)
+        state
+      end
+    end)
+  end
+
+  # A message first streamed takes the next ordinal, so a later message
+  # outranks it while both are kept.
+  defp streaming(%{streams: streams} = state, message) when is_map_key(streams, message),
+    do: state
+
+  defp streaming(state, message),
+    do: %{
+      state
+      | streams: Map.put(state.streams, message, state.ordinal),
+        ordinal: state.ordinal + 1
+    }
+
+  defp streamed(%{work: work} = state, message),
+    do: %{
+      thread_id: state.thread_id,
+      turn_id: work.turn.id,
+      fence: work.turn.fence,
+      source: work.turn.id,
+      step_id: message,
+      ordinal: Map.fetch!(state.streams, message),
+      role: if(Prima.AgentRef.soul?(work.agent), do: nil, else: work.agent)
+    }
+
+  # What streamed for messages no row will land is withdrawn: the open
+  # work's native turn ended, or the session did.
+  defp withdraw(%{streams: streams} = state) when map_size(streams) == 0, do: state
+
+  defp withdraw(%{work: work, streams: streams} = state) do
+    Enum.each(Map.keys(streams), &Aqua.Loop.Stream.abandon(work.guest, streamed(state, &1)))
+    %{state | streams: %{}}
   end
 
   # What this process does once a batch is committed.
@@ -686,6 +757,8 @@ defmodule Aqua.Program do
   defp on_idle(%{work: work} = state, %{idle: %{} = idle}) do
     case {open_turn(work), idle["work"]} do
       {%{id: id}, id} ->
+        state = withdraw(state)
+
         if idle["stop"] == "end_turn",
           do: tell(state, {__MODULE__, id, :idle}),
           else: fail(state, "#{work.title} stopped before it finished (#{idle["stop"]}).")
