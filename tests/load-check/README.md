@@ -110,7 +110,7 @@ this check does not hold.
 `subjects.tsv` is the one list, each subject by its own entry point as the
 workflow step or its README runs it. Its `expect` column is the median
 time of the passing runs this host recorded before the quarters, doubled for
-the four subjects that also run on the whole machine.
+the three subjects that also run on the whole machine.
 
 | Subjects | Quarters | Also | Warmed |
 |---|---|---|---|

@@ -13,9 +13,10 @@
 # scripts/release.sh's use of the seed guard, for test.yml's jobs divided
 # between runners: the two-node suite's cells, the partition runner test's
 # groups, the Elixir shards, the browser shards' viewports and the app
-# image's groups (it reads test.yml through PyYAML), for every workflow's
-# trivy pin, and for the run prefix the proof scripts name what they make
-# under.
+# image's groups (it reads test.yml through PyYAML), for what lets a check
+# pass in every workflow (a trivy scan's pin and inputs, continue-on-error,
+# the MinIO image's digest, the npm audit's lockfiles), and for the run
+# prefix the proof scripts name what they make under.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -1166,44 +1167,326 @@ a case no step runs|            cases: [interrupt, restore, restore-person, setu
 a job without a producer|    needs: [locus-image, app-image]\n|    needs: app-image\n|group both runs the images locus, app, and its job app-image-locus-suites needs app-image
 CASES
 
-# trivy_pins WORKFLOW_DIR: every aquasecurity/trivy-action step of every
-# workflow pins its trivy release (`version: vX.Y.Z`), all the same one;
-# a step with no version installs whatever trivy is latest.
-trivy_pins() {
+# --- what lets a check pass ---
+
+# fixture_workflow NAME: writes $scratch/fixture/NAME.yml from stdin, in a
+# directory holding that one workflow (rm'd first), for the planted cases.
+fixture_workflow() {
+  rm -rf "$scratch/fixture" && mkdir -p "$scratch/fixture" && cat > "$scratch/fixture/$1.yml"
+}
+
+# trivy_scans WORKFLOW_DIR: every aquasecurity/trivy-action step of every
+# workflow pins its trivy release (`version: vX.Y.Z`), all the same one (a
+# step with no version installs whatever trivy is latest), fails on a
+# finding (exit-code 1) and reads only inputs this check knows. An image
+# scan (image-ref) fails on CRITICAL and HIGH, fixed or not yet fixable
+# alike (ignore-unfixed), past .trivyignore.yaml's exceptions alone; a
+# repository scan (scan-type fs) reads the whole tree, a secret scan
+# failing on any secret and a misconfiguration scan on CRITICAL and HIGH
+# past .trivyignore.yaml's exceptions. Each error is a line.
+trivy_scans() {
   python3 -I - "$1" <<'PY'
 import glob, os, re, sys, yaml
+INPUTS = {"version", "image-ref", "scan-type", "scan-ref", "scanners", "format", "exit-code", "severity",
+          "ignore-unfixed", "trivyignores"}
+IMAGE = {"severity": "CRITICAL,HIGH", "ignore-unfixed": "true", "trivyignores": ".trivyignore.yaml"}
+FS = {"secret": {}, "misconfig": {"severity": "CRITICAL,HIGH", "trivyignores": ".trivyignore.yaml"}}
 pins = set()
 for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml"))):
     for job, body in (yaml.safe_load(open(path)).get("jobs") or {}).items():
         for step in body.get("steps") or []:
             if str(step.get("uses", "")).split("@")[0] != "aquasecurity/trivy-action":
                 continue
-            version = str((step.get("with") or {}).get("version", ""))
+            where = f"{os.path.basename(path)} {job}: '{step.get('name', 'a trivy-action step')}'"
+            given = {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in (step.get("with") or {}).items()}
+            version = given.get("version", "")
             if re.fullmatch(r"v\d+\.\d+\.\d+", version):
                 pins.add(version)
             else:
-                print(f"{os.path.basename(path)} {job}: '{step.get('name', 'a trivy-action step')}' pins {version or 'no version'}, not one vX.Y.Z")
+                print(f"{where} pins {version or 'no version'}, not one vX.Y.Z")
+            for k in sorted(set(given) - INPUTS):
+                print(f"{where} sets {k}, an input this check does not read")
+            if given.get("exit-code") != "1":
+                print(f"{where} exits {given.get('exit-code', 'with no exit-code')} on a finding, not 1")
+            if "image-ref" in given:
+                want = IMAGE
+                if given.get("scan-type", "image") != "image" or "scanners" in given:
+                    print(f"{where} scans an image as {given.get('scan-type')} {given.get('scanners', '')}".rstrip())
+            elif given.get("scan-type") == "fs" and given.get("scanners") in FS:
+                want = FS[given["scanners"]]
+                if given.get("scan-ref", ".") != ".":
+                    print(f"{where} scans {given['scan-ref']}, not the whole tree")
+            else:
+                print(f"{where} is neither an image scan nor a secret or misconfiguration scan of the tree")
+                continue
+            for k in ("severity", "ignore-unfixed", "trivyignores"):
+                if given.get(k) != want.get(k):
+                    print(f"{where} sets {k} to {given.get(k, 'nothing')}, not {want.get(k, 'nothing')}")
 if len(pins) > 1:
     print(f"the trivy-action steps pin {', '.join(sorted(pins))}, not one release")
 if not pins:
     print("no trivy-action step pins a release")
 PY
 }
-label="workflows: every trivy-action step pins one trivy release"
-trivy_pins "$root/.github/workflows" > "$scratch/out" 2> "$scratch/err"
+label="workflows: every trivy scan pins one release, fails on a finding, and reads what it should"
+trivy_scans "$root/.github/workflows" > "$scratch/out" 2> "$scratch/err"
 code=$?
 if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
-while IFS='|' read -r kind old new want; do
-  label="workflows: the trivy pin check refuses $kind ($want)"
-  rm -rf "$scratch/pins" && mkdir -p "$scratch/pins" && cp "$root"/.github/workflows/*.yml "$scratch/pins/"
-  plant security.yml "$old" "$new"
-  mv "$scratch/planted.yml" "$scratch/pins/security.yml"
-  trivy_pins "$scratch/pins" > "$scratch/out" 2> "$scratch/err"
+# trivy_fixture [EDIT]: a workflow of one image scan, one secret scan and
+# one misconfiguration scan, each as the check wants it, with EDIT (a sed
+# expression) applied.
+trivy_fixture() {
+  fixture_workflow scans <<'YML'
+jobs:
+  image:
+    steps:
+      - name: Scan the image
+        uses: aquasecurity/trivy-action@0000000000000000000000000000000000000000
+        with:
+          version: v1.2.3
+          image-ref: fixture:ci
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+  repo:
+    steps:
+      - name: Secret scan
+        uses: aquasecurity/trivy-action@0000000000000000000000000000000000000000
+        with:
+          version: v1.2.3
+          scan-type: fs
+          scanners: secret
+          format: table
+          exit-code: '1'
+      - name: Misconfiguration scan
+        uses: aquasecurity/trivy-action@0000000000000000000000000000000000000000
+        with:
+          version: v1.2.3
+          scan-type: fs
+          scanners: misconfig
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          trivyignores: .trivyignore.yaml
+YML
+  [ -z "${1:-}" ] || sed -i -e "$1" "$scratch/fixture/scans.yml"
+}
+label="workflows: the trivy check passes the fixture's three scans"
+trivy_fixture
+trivy_scans "$scratch/fixture" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+while IFS='|' read -r kind edit want; do
+  label="workflows: the trivy check refuses $kind ($want)"
+  trivy_fixture "$edit"
+  trivy_scans "$scratch/fixture" > "$scratch/out" 2> "$scratch/err"
   code=$?
   if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
 done <<'CASES'
-a step with no version|      - name: Secret scan (enforced)\n        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0\n        with:\n          version: v0.75.0\n|      - name: Secret scan (enforced)\n        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0\n        with:\n|security.yml repo-scan: 'Secret scan (enforced)' pins no version, not one vX.Y.Z
-a second release|          version: v0.75.0\n          scan-type: fs\n          scanners: misconfig\n|          version: v0.76.0\n          scan-type: fs\n          scanners: misconfig\n|the trivy-action steps pin v0.75.0, v0.76.0, not one release
+a step with no version|0,/version: v1.2.3/{/version: v1.2.3/d}|scans.yml image: 'Scan the image' pins no version, not one vX.Y.Z
+a second release|/name: Misconfiguration scan/,/version:/s/version: v1.2.3/version: v1.2.4/|the trivy-action steps pin v1.2.3, v1.2.4, not one release
+a scan that passes on a finding|0,/exit-code: '1'/s/exit-code: '1'/exit-code: '0'/|scans.yml image: 'Scan the image' exits 0 on a finding, not 1
+an image scan that lets HIGH through|0,/severity: CRITICAL,HIGH/s/severity: CRITICAL,HIGH/severity: CRITICAL/|scans.yml image: 'Scan the image' sets severity to CRITICAL, not CRITICAL,HIGH
+an image scan that drops the unfixed|/ignore-unfixed: true/d|scans.yml image: 'Scan the image' sets ignore-unfixed to nothing, not true
+a secret scan given a floor|/scanners: secret/a\          severity: CRITICAL|scans.yml repo: 'Secret scan' sets severity to CRITICAL, not nothing
+a misconfiguration scan with another ignore file|$s/trivyignores: .trivyignore.yaml/trivyignores: other.yaml/|scans.yml repo: 'Misconfiguration scan' sets trivyignores to other.yaml, not .trivyignore.yaml
+a repository scan of one directory|/scanners: secret/a\          scan-ref: apps|scans.yml repo: 'Secret scan' scans apps, not the whole tree
+an input the check does not read|/scanners: secret/a\          skip-dirs: apps|scans.yml repo: 'Secret scan' sets skip-dirs, an input this check does not read
+CASES
+
+# advisory_steps WORKFLOW_DIR: no job sets continue-on-error, and a step
+# sets it only as an advisory check does, informational exactly when
+# scripts/ci/world-checks.sh says so (WORLD below, in a job that runs that
+# script in an earlier step with id world), or as the one step that
+# publishes and checks nothing, release.yml's Homebrew cask. Any other
+# continue-on-error lets a failed check pass. Each error is a line.
+advisory_steps() {
+  python3 -I - "$1" <<'PY'
+import glob, os, sys, yaml
+WORLD = "${{ steps.world.outputs.informational == 'true' }}"
+PUBLISHES = {("release.yml", "release", "Publish Homebrew cask to tap"): True}
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml"))):
+    wf = os.path.basename(path)
+    for job, body in (yaml.safe_load(open(path)).get("jobs") or {}).items():
+        if "continue-on-error" in body:
+            print(f"{wf} {job}: the job sets continue-on-error")
+        world = False
+        for step in body.get("steps") or []:
+            where = f"{wf} {job}: '{step.get('name', step.get('uses', 'a step'))}'"
+            if "continue-on-error" in step:
+                value = step["continue-on-error"]
+                if (wf, job, step.get("name")) in PUBLISHES and value == PUBLISHES[(wf, job, step.get("name"))]:
+                    pass
+                elif value != WORLD:
+                    print(f"{where} sets continue-on-error: {value}")
+                elif not world:
+                    print(f"{where} is advisory with no world-checks step before it")
+            if step.get("id") == "world" and str(step.get("run", "")).strip() == "scripts/ci/world-checks.sh":
+                world = True
+PY
+}
+label="workflows: a failed check fails its job, save an advisory check the world checks release"
+advisory_steps "$root/.github/workflows" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+# advisory_fixture [EDIT]: a job whose scan is advisory after its world
+# step, and the release job's Homebrew cask, with EDIT applied.
+advisory_fixture() {
+  fixture_workflow release <<'YML'
+jobs:
+  image:
+    steps:
+      - name: Whether the advisory checks block this run
+        id: world
+        run: scripts/ci/world-checks.sh
+      - name: Scan the image
+        continue-on-error: ${{ steps.world.outputs.informational == 'true' }}
+        run: "true"
+      - name: Run the suite
+        run: "true"
+  release:
+    steps:
+      - name: Publish Homebrew cask to tap
+        continue-on-error: true
+        run: "true"
+YML
+  [ -z "${1:-}" ] || sed -i -e "$1" "$scratch/fixture/release.yml"
+}
+label="workflows: the advisory check passes the fixture's advisory scan and the cask"
+advisory_fixture
+advisory_steps "$scratch/fixture" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+while IFS='|' read -r kind edit want; do
+  label="workflows: the advisory check refuses $kind ($want)"
+  advisory_fixture "$edit"
+  advisory_steps "$scratch/fixture" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+a scan that always passes|s/continue-on-error: \${{ steps.world.outputs.informational == 'true' }}/continue-on-error: true/|release.yml image: 'Scan the image' sets continue-on-error: True
+a suite that may fail|/name: Run the suite/a\        continue-on-error: true|release.yml image: 'Run the suite' sets continue-on-error: True
+an advisory step with no world step|/id: world/d|release.yml image: 'Scan the image' is advisory with no world-checks step before it
+a job that may fail|/^  image:/a\    continue-on-error: true|release.yml image: the job sets continue-on-error
+another publishing step that may fail|s/name: Publish Homebrew cask to tap/name: Publish the notes/|release.yml release: 'Publish the notes' sets continue-on-error: True
+CASES
+
+# minio_digest WORKFLOW: the cluster job and the S3 adapter's job start the
+# object store from one pinned image: every pgsty/silo reference in
+# WORKFLOW names one sha256 digest, and both jobs hold it. Each error is a
+# line.
+minio_digest() {
+  python3 -I - "$1" <<'PY'
+import re, sys, yaml
+text = open(sys.argv[1]).read()
+jobs = yaml.safe_load(text)["jobs"]
+refs = re.findall(r"pgsty/silo[@:][^\s\"']*", text)
+pinned = sorted({r for r in refs if re.fullmatch(r"pgsty/silo@sha256:[0-9a-f]{64}", r)})
+for r in sorted(set(refs) - set(pinned)):
+    print(f"test.yml names the MinIO image unpinned: {r}")
+if len(pinned) != 1:
+    print(f"test.yml names the MinIO image by {len(pinned)} digests, not one: {' '.join(pinned)}")
+for job in ("cluster", "s3-minio"):
+    if not any(p in yaml.safe_dump(jobs.get(job, {}), width=1000) for p in pinned):
+        print(f"the {job} job starts no MinIO image of the pinned digest")
+PY
+}
+label="test.yml: the cluster and S3 jobs start MinIO from one pinned digest"
+minio_digest "$root/.github/workflows/test.yml" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+# minio_plant KIND: test.yml with the S3 job's digest changed (other) or
+# the cluster job's image unpinned (tag), to $scratch/planted.yml.
+minio_plant() {
+  python3 -I - "$root/.github/workflows/test.yml" "$scratch/planted.yml" "$1" <<'PY'
+import re, sys
+src, dst, kind = sys.argv[1:]
+s = open(src).read()
+spans = [m.span() for m in re.finditer(r"pgsty/silo@sha256:[0-9a-f]{64}", s)]
+assert len(spans) >= 2, spans
+start, end = spans[-1] if kind == "other" else spans[0]
+new = s[start:end - 1] + ("0" if s[end - 1] != "0" else "1") if kind == "other" else "pgsty/silo:latest"
+open(dst, "w").write(s[:start] + new + s[end:])
+PY
+}
+while IFS='|' read -r kind want; do
+  label="test.yml: the MinIO check refuses $kind ($want)"
+  minio_plant "$kind"
+  minio_digest "$scratch/planted.yml" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+other|test.yml names the MinIO image by 2 digests, not one:
+tag|test.yml names the MinIO image unpinned: pgsty/silo:latest
+CASES
+
+# npm_audit SCRIPT TREE: security.yml's audit step, its script SCRIPT run
+# in TREE with a stand-in for scripts/security-scan.sh, audits every
+# package-lock.json under TREE/seed/components outside node_modules once,
+# each with an audit level no laxer than high, and fails when one audit
+# fails; with no lockfile it fails. Each error is a line.
+NPM_STEP='Audit every shipped lockfile'
+npm_audit_script() { # WORKFLOW: the npm-audit job's audit step's script
+  python3 -I - "$1" "$NPM_STEP" <<'PY'
+import sys, yaml
+job = yaml.safe_load(open(sys.argv[1]))["jobs"]["npm-audit"]
+print(next(s["run"] for s in job["steps"] if s.get("name") == sys.argv[2]))
+PY
+}
+npm_audit() {
+  local script=$1 tree=$2 ws="$scratch/npm-ws" want got status
+  rm -rf "$ws" && mkdir -p "$ws/scripts"
+  printf '#!/usr/bin/env bash\necho "$PWD|$*" >> "%s/calls"\n[ "${NPM_FAIL:-}" != "$PWD" ]\n' "$ws" > "$ws/scripts/security-scan.sh"
+  want=$(cd "$tree" && find seed/components -name package-lock.json -not -path '*/node_modules/*' | sort | sed "s|^|$tree/|; s|/package-lock.json$||")
+  [ -n "$want" ] || { echo "$tree holds no shipped lockfile"; return 0; }
+  status=0; (cd "$tree" && GITHUB_WORKSPACE="$ws" bash -c "$script") >/dev/null 2>&1 || status=$?
+  [ "$status" = 0 ] || echo "the audit step exited $status with every audit passing"
+  got=$(cut -d'|' -f1 "$ws/calls" 2>/dev/null | sort)
+  [ "$got" = "$want" ] || echo "the audit step audited $(printf '%s' "$got" | grep -c .) of $(printf '%s\n' "$want" | grep -c .) lockfiles"
+  while IFS='|' read -r dir args; do
+    case "$args " in
+      "npm audit "*"--audit-level=critical "* | "npm audit "*"--audit-level critical "* | "npm audit "*"--audit-level=none "* | \
+        "npm audit "*"--audit-level none "*) echo "$dir is audited at a laxer level: $args" ;;
+      "npm audit "*) ;;
+      *) echo "$dir is audited by something other than npm audit: $args" ;;
+    esac
+  done < "$ws/calls"
+  rm -f "$ws/calls"
+  status=0; (cd "$tree" && NPM_FAIL="$(printf '%s\n' "$want" | head -n 1)" GITHUB_WORKSPACE="$ws" bash -c "$script") >/dev/null 2>&1 || status=$?
+  [ "$status" != 0 ] || echo "the audit step passed with an audit failing"
+  mkdir -p "$scratch/npm-empty/seed/components"
+  status=0; (cd "$scratch/npm-empty" && GITHUB_WORKSPACE="$ws" bash -c "$script") >/dev/null 2>&1 || status=$?
+  [ "$status" != 0 ] || echo "the audit step passed with no lockfile to read"
+}
+npm_audit_script "$root/.github/workflows/security.yml" > "$scratch/npm-step.sh" || fail "security.yml has no npm-audit step '$NPM_STEP'"
+label="security.yml: the npm audit reads every shipped lockfile and fails on a failed audit"
+npm_audit "$(cat "$scratch/npm-step.sh")" "$root" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+# A tree of two shipped lockfiles and one under node_modules, and the
+# step's script with a protection taken out.
+mkdir -p "$scratch/npm-tree/seed/components/a/1.0.0" "$scratch/npm-tree/seed/components/b/2.0.0/x" \
+  "$scratch/npm-tree/seed/components/b/2.0.0/node_modules/dep"
+for d in a/1.0.0 b/2.0.0/x b/2.0.0/node_modules/dep; do echo '{}' > "$scratch/npm-tree/seed/components/$d/package-lock.json"; done
+while IFS='#' read -r kind old new want; do
+  label="security.yml: the npm audit check refuses $kind ($want)"
+  python3 -I - "$scratch/npm-step.sh" "$old" "$new" > "$scratch/npm-planted.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old, new = sys.argv[2].replace("\\n", "\n"), sys.argv[3].replace("\\n", "\n")
+assert s.count(old) == 1, old
+print(s.replace(old, new), end="")
+PY
+  npm_audit "$(cat "$scratch/npm-planted.sh")" "$scratch/npm-tree" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+a step that audits one lockfile#for lock in "${locks[@]}"; do#for lock in "${locks[0]}"; do#the audit step audited 1 of 2 lockfiles
+a step at a laxer level#--audit-level=high#--audit-level=critical#is audited at a laxer level
+a step that passes on a failed audit#) || status=1#) || :#the audit step passed with an audit failing
+a step that passes with no lockfile#  exit 1\n#  exit 0\n#the audit step passed with no lockfile to read
 CASES
 
 # --- the proofs' run prefix ---
@@ -1214,22 +1497,25 @@ CASES
 # named cyfr-... without the prefix before it. Each error is a line. Read
 # as text, it passes a new `docker run` or `docker create` with no --name
 # under the prefix, whose container then outlives a killed run.
-PREFIX_FILES='tests/compose-proof/run.sh tests/compose-proof/tailscale-standin/proof.sh tests/setup-proof/run.sh tests/setup-proof/cleanup-test.sh tests/identity-proof/front.sh tests/proxy-hsts/run.sh tests/release-boot/boot.sh tests/browser/harness.sh tests/imagesuite.py'
+# FILE:EXPRESSION, each a script and the expression that names what it makes.
+PREFIX_SPECS=(
+  'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-'
+  'tests/compose-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:'
+  'tests/setup-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-proof-'
+  'tests/setup-proof/cleanup-test.sh:CONTAINER="${PROOF_RUN_PREFIX:-}cyfr-setup-cleanup-test-'
+  'tests/compose-proof/tailscale-standin/proof.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-'
+  'tests/compose-proof/tailscale-standin/proof.sh:IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:'
+  'tests/identity-proof/front.sh:name="${PROOF_RUN_PREFIX:-}cyfr-identity-front-'
+  'tests/proxy-hsts/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-'
+  'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-ns"}'
+  'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-reserve"}'
+  'tests/browser/harness.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-'
+  'tests/imagesuite.py:PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")'
+  'tests/imagesuite.py:tempfile.mkdtemp(prefix=PROJECT_PREFIX + prefix)'
+)
 run_prefixes() {
   local spec f want unprefixed
-  for spec in 'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-' \
-    'tests/compose-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
-    'tests/setup-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-proof-' \
-    'tests/setup-proof/cleanup-test.sh:CONTAINER="${PROOF_RUN_PREFIX:-}cyfr-setup-cleanup-test-' \
-    'tests/compose-proof/tailscale-standin/proof.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-' \
-    'tests/compose-proof/tailscale-standin/proof.sh:IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
-    'tests/identity-proof/front.sh:name="${PROOF_RUN_PREFIX:-}cyfr-identity-front-' \
-    'tests/proxy-hsts/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-' \
-    'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-ns"}' \
-    'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-reserve"}' \
-    'tests/browser/harness.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-' \
-    'tests/imagesuite.py:PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")' \
-    'tests/imagesuite.py:tempfile.mkdtemp(prefix=PROJECT_PREFIX + prefix)'; do
+  for spec in "${PREFIX_SPECS[@]}"; do
     f=${spec%%:*} want=${spec#*:}
     grep -qF -- "$want" "$1/$f" || echo "$f names what it makes without the run prefix: no $want"
   done
@@ -1243,7 +1529,7 @@ if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
 # Planted, in a repository holding the scripts' copies: the HSTS proof's
 # run named under no prefix, and a script making an unprefixed directory.
 new_repo
-for f in $PREFIX_FILES; do mkdir -p "$(dirname "$f")" && cp "$root/$f" "$f"; done
+for spec in "${PREFIX_SPECS[@]}"; do f=${spec%%:*}; mkdir -p "$(dirname "$f")" && cp "$root/$f" "$f"; done
 sed -i 's/RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-/RUN="cyfr-proxy-hsts-/' tests/proxy-hsts/run.sh
 printf 'd=$(mktemp -d "${TMPDIR:-/tmp}/%s")\n' cyfr-planted.XXXXXX > tests/planted.sh
 commit planted
