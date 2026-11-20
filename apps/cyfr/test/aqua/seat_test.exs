@@ -529,7 +529,7 @@ defmodule Aqua.SeatTest do
   # Each way the member can fail to stand, said as the turn refuses it
   # and as Aqua's card says it (`aqua.get`'s `member_refusal`), one
   # sentence (`Prima.Refusal`).
-  test "a member that is unnamed, gone, disabled or refused refuses Aqua's turn with its card's sentence",
+  test "a member that is unnamed, misnamed, gone, disabled or refused refuses Aqua's turn with its card's sentence",
        %{ctx: ctx, room: room, holder: holder} do
     script!([])
     file = Compendium.AquaPath.crew_file(holder)
@@ -553,7 +553,17 @@ defmodule Aqua.SeatTest do
       {fn ->
          :ok = Arca.put(actor(ctx), file, bytes <> "\nYou are Claude.\n")
          {:ok, _} = Compendium.AgentIndex.sync(ctx)
-       end, {:aqua_runs_on, :refused, holder}}
+       end, {:aqua_runs_on, :refused, holder}},
+      # Written by hand in Files, a name no crew member can have: the
+      # tool refuses to write one, so only the file can name it.
+      {fn ->
+         soul_file = Compendium.AquaPath.soul_file()
+         {:ok, soul} = Arca.get(actor(ctx), soul_file)
+         named = String.replace(soul, "\nmember: #{holder}\n", "\nmember: Claude Code\n")
+         refute named == soul
+         :ok = Arca.put(actor(ctx), soul_file, named)
+         {:ok, _} = Compendium.AgentIndex.sync(ctx)
+       end, {:aqua_runs_on, :invalid, "Claude Code"}}
     ]
 
     for {make, reason} <- cases do

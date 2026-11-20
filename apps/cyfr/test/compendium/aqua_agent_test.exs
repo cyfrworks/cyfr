@@ -249,10 +249,17 @@ defmodule Compendium.AquaAgentTest do
     assert {:ok, %{member: nil}} =
              AquaAgent.parse("aqua", "---\ntitle: Aqua\nmember: \"\"\n---\n\nprompt\n")
 
-    for invalid <- ["aqua", "Not A Name", 7] do
-      assert {:error, {:member_invalid, ^invalid}} =
+    # A name no crew member can have is kept as written, for Aqua's card to
+    # say so (`seated/2`); a value that is not text is no name at all.
+    for invalid <- ["aqua", "Not A Name"] do
+      assert {:ok, %{member: ^invalid}} =
                AquaAgent.parse("aqua", "---\nmember: #{Jason.encode!(invalid)}\n---\n\nprompt\n")
+
+      refute AquaAgent.member_name?(invalid)
     end
+
+    assert {:error, {:member_invalid, 7}} =
+             AquaAgent.parse("aqua", "---\nmember: 7\n---\n\nprompt\n")
 
     assert Prima.AgentRef.seat_has_brain() =~ "aqua/aqua.md"
     assert Prima.AgentRef.seat_has_brain() =~ "choose the crew member Aqua runs on"
@@ -281,6 +288,13 @@ defmodule Compendium.AquaAgentTest do
 
     assert AquaAgent.seated(soul(%{member: nil}), :none) ==
              %{unheld | member: nil, holder: %{name: nil, title: nil, state: :none}}
+
+    assert AquaAgent.seated(soul(%{member: "Not A Name"}), :invalid) ==
+             %{
+               unheld
+               | member: "Not A Name",
+                 holder: %{name: "Not A Name", title: nil, state: :invalid}
+             }
 
     assert AquaAgent.seated(soul(), :missing) ==
              %{unheld | holder: %{name: "scribe", title: nil, state: :missing}}

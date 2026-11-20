@@ -1264,7 +1264,7 @@ defmodule Compendium.Providers.Aqua do
   # The member the soul runs on is named as the tree names a crew
   # member's file, and is never the soul itself.
   defp validate_member(name, %{"member" => member}) when is_binary(member) do
-    if AquaPath.soul?(name) and AquaPath.valid_name?(member) and not AquaPath.soul?(member),
+    if AquaPath.soul?(name) and AquaAgent.member_name?(member),
       do: :ok,
       else: {:error, {:invalid_argument, "member names a crew member, by its file's name"}}
   end

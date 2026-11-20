@@ -57,11 +57,11 @@ defmodule Compendium.AquaAgent do
   soul runs with (`resolve/3`, `seated/2`). A soul file that names a
   brain, a model, options, an install or a mode of its own is refused
   (`:seat_has_brain`), with the sentence `Prima.AgentRef.seat_has_brain/0`
-  says, and so is a `member` that cannot be a crew member's file name
-  (`{:member_invalid, value}`). A seat that names no member, or one
-  whose member is gone, disabled or refused, still resolves, with no
-  brain and its holder's state, which a turn refuses with its sentence
-  (`Prima.Refusal`).
+  says, and so is a `member` that is not text (`{:member_invalid,
+  value}`). A seat that names no member, a name no crew member can have
+  (`member_name?/1`), or a member that is gone, disabled or refused,
+  still resolves, with no brain and its holder's state, which a turn
+  refuses with its sentence and Aqua's card says (`Prima.Refusal`).
 
   A crew member is offered the soul's tools (`under_soul/2`), narrowed
   only by the request that asks it, so a `tools` list in a crew file
@@ -109,14 +109,15 @@ defmodule Compendium.AquaAgent do
   Who a resolved soul runs on (`seated/2`): the crew member its file
   names, by name and title, and how that member stands — `:held` when it
   supplies the soul's brain, `:none` when the file names no one,
-  `:missing` when no crew file has that name, `:disabled` when the member
-  is out of the crew, `:refused` when its file does not parse. Nil on a
-  crew member and on a soul as it is parsed.
+  `:invalid` when the name is one no crew member can have
+  (`member_name?/1`), `:missing` when no crew file has that name,
+  `:disabled` when the member is out of the crew, `:refused` when its
+  file does not parse. Nil on a crew member and on a soul as it is parsed.
   """
   @type holder :: %{
           name: String.t() | nil,
           title: String.t() | nil,
-          state: :held | :none | :missing | :disabled | :refused
+          state: :held | :none | :invalid | :missing | :disabled | :refused
         }
 
   @typedoc "What of its offered tools a member runs: reads alone, or all of them."
@@ -137,7 +138,7 @@ defmodule Compendium.AquaAgent do
   (`<name>.md`), never from the frontmatter — the tree is the roster. A
   `tool_policy` in any file (`:tool_policy_retired`), a brain, model,
   options, install or mode in the soul's file (`:seat_has_brain`), a
-  soul's `member` that cannot name a crew file (`{:member_invalid, value}`),
+  soul's `member` that is not text (`{:member_invalid, value}`),
   a `mode` that is
   neither `read-only` nor `auto` (`{:mode_invalid, value}`), a `tools`
   list outside the grammar (`check_tools/1`), a `tools` list in a crew
@@ -227,14 +228,15 @@ defmodule Compendium.AquaAgent do
 
   @doc """
   The soul seated on its member, as `holder` read it: `{:ok, member}`, the
-  member's file parsed, or `:none`, `:missing` or `{:refused, reason}`. A
+  member's file parsed, or `:none`, `:invalid`, `:missing` or
+  `{:refused, reason}`. A
   member in the crew gives the soul its brain (a catalyst or a program),
   model, options and mode; its install stays the member's. Anything else
   leaves the soul with no brain, in `auto`, and says why in its
   `holder` (`t:holder/0`). The soul keeps its own title, prompt and tools.
   Pure, so the seed's soul and an athanor's resolve alike.
   """
-  @spec seated(t(), {:ok, t()} | :none | :missing | {:refused, term()}) :: t()
+  @spec seated(t(), {:ok, t()} | :none | :invalid | :missing | {:refused, term()}) :: t()
   def seated(%{name: name} = soul, holder) do
     true = AquaPath.soul?(name)
     unheld = %{soul | catalyst_ref: nil, program: nil, model: nil, options: %{}, mode: "auto"}
@@ -257,6 +259,9 @@ defmodule Compendium.AquaAgent do
       :none ->
         %{unheld | holder: %{name: nil, title: nil, state: :none}}
 
+      :invalid ->
+        %{unheld | holder: %{name: soul.member, title: nil, state: :invalid}}
+
       :missing ->
         %{unheld | holder: %{name: soul.member, title: nil, state: :missing}}
 
@@ -265,11 +270,23 @@ defmodule Compendium.AquaAgent do
     end
   end
 
-  # The member a soul names, as the tree holds it now: a store that
-  # cannot answer is the soul's refusal, never a seat with no holder.
+  @doc """
+  Whether `name` can be the crew member the soul runs on: a crew file's
+  name, never the soul's own.
+  """
+  @spec member_name?(term()) :: boolean()
+  def member_name?(name), do: AquaPath.valid_name?(name) and not AquaPath.soul?(name)
+
+  # The member a soul names, as the tree holds it now: a name no crew
+  # member can have is never read as a path, and a store that cannot
+  # answer is the soul's refusal, never a seat with no holder.
   defp holder_read(_ctx, nil), do: {:ok, :none}
 
   defp holder_read(ctx, member) do
+    if member_name?(member), do: member_read(ctx, member), else: {:ok, :invalid}
+  end
+
+  defp member_read(ctx, member) do
     case Arca.get(Sanctum.Context.actor(ctx), AquaPath.agent_file(member)) do
       {:ok, bytes} ->
         case parse(member, bytes) do
@@ -563,8 +580,10 @@ defmodule Compendium.AquaAgent do
       else: :ok
   end
 
-  # The crew member the soul runs on, by its file's name; a blank line
-  # names no one. Read on the soul alone.
+  # The crew member the soul runs on, by its file's name, kept as written:
+  # a name no crew member can have seats the soul on no one, said as
+  # Aqua's card says it (`seated/2`), so the card that puts it right still
+  # shows. A blank line names no one. Read on the soul alone.
   defp member_of(name, meta) do
     case {AquaPath.soul?(name), meta["member"]} do
       {false, _any} ->
@@ -574,9 +593,7 @@ defmodule Compendium.AquaAgent do
         {:ok, nil}
 
       {true, member} when is_binary(member) ->
-        if AquaPath.valid_name?(member) and not AquaPath.soul?(member),
-          do: {:ok, member},
-          else: {:error, {:member_invalid, member}}
+        {:ok, member}
 
       {true, other} ->
         {:error, {:member_invalid, other}}

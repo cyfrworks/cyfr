@@ -264,6 +264,10 @@ defmodule Compendium.AquaTemplate do
   defp seed_holder(_ctx, %{member: nil}), do: :none
 
   defp seed_holder(ctx, %{member: member}) do
+    if AquaAgent.member_name?(member), do: seed_named(ctx, member), else: :invalid
+  end
+
+  defp seed_named(ctx, member) do
     case seed_member(ctx, member) do
       {:ok, parsed} -> {:ok, parsed}
       {:error, :not_found} -> :missing
