@@ -299,12 +299,11 @@ defmodule Aqua.Loop.Request do
 
   @doc """
   The request: `model`, `system`, `messages`, `tools`, `provider_tools`
-  and `max_tokens`, and `session` and `options` when given. `opts`:
-  `:model`, `:system`, `:tools`, `:messages`, `:capabilities` (for the
-  output ceiling, the provider tools and the options the brain declares),
-  `:offers_search?` (`offers_search?/3`),
-  `:max_tokens`, `:session` (the brain's session a response named) and
-  `:options` (the brain options a crew request set). An option the brain
+  and `max_tokens`, and `options` when given. `opts`: `:model`,
+  `:system`, `:tools`, `:messages`, `:capabilities` (for the output
+  ceiling, the provider tools and the options the brain declares),
+  `:offers_search?` (`offers_search?/3`), `:max_tokens` and `:options`
+  (the brain options a crew request set). An option the brain
   does not declare, or a value not of its kind, is refused
   (`Prima.Model.check_chat_request/2`), never sent or dropped: the
   request raises, and the turn fails on it.
@@ -320,7 +319,6 @@ defmodule Aqua.Loop.Request do
         :capabilities,
         :offers_search?,
         :max_tokens,
-        :session,
         :options
       ])
 
@@ -338,7 +336,6 @@ defmodule Aqua.Loop.Request do
         "provider_tools" => provider_tools,
         "max_tokens" => max_tokens
       }
-      |> Prima.MapUtil.put_present("session", Keyword.get(opts, :session))
       |> put_options(Keyword.get(opts, :options))
 
     case Prima.Model.check_chat_request(request, Map.get(caps, :options) || []) do

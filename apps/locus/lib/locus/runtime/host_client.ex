@@ -73,10 +73,6 @@ defmodule Locus.Runtime.HostClient do
   CYFR's refusal of a need, a binding or a session that is not the
   caller's.
 
-  `input_next/1` and `input_sent/2` carry a catalyst's further inputs: the
-  next one its run was handed while it runs, and the report that it handed
-  one on (`c:Prima.HostAPI.input_next/1`).
-
   `question_ask/5` and `question_wait/3` carry a catalyst's ask, keyed by
   its attempt and number (`c:Prima.HostAPI.question_ask/3`); each is one
   call, and the import's loop is the caller's (`Locus.Runtime.Engine`).
@@ -580,44 +576,6 @@ defmodule Locus.Runtime.HostClient do
   end
 
   defp pipe_received(_wire), do: :error
-
-  @doc """
-  The attempt's next input not yet reported sent, its wire shape
-  (`t:Prima.Model.input/0`), or `{:ok, nil}` when there is none;
-  `{:error, :unavailable}` when the run's supplier could not answer.
-  Idempotent: a lost answer is asked once more, and answers the same
-  input. An answer that is not an input `Prima.Model.check_input/1` admits
-  is lost.
-  """
-  @spec input_next(t()) :: {:ok, Prima.Model.input() | nil} | {:error, term()}
-  def input_next(%__MODULE__{} = client) do
-    case request(client, :input_next, %{}) do
-      {:ok, nil} ->
-        {:ok, nil}
-
-      {:ok, %{} = input} ->
-        if Prima.Model.check_input(input) == :ok, do: {:ok, input}, else: {:error, :lost}
-
-      {:ok, _other} ->
-        {:error, :lost}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  Report that the attempt's guest handed the input `id` on. Idempotent: a
-  lost answer is asked once more, and the input is marked once.
-  """
-  @spec input_sent(t(), String.t()) :: :ok | {:error, term()}
-  def input_sent(%__MODULE__{} = client, id) when is_binary(id) do
-    case request(client, :input_sent, %{"id" => id}) do
-      {:ok, true} -> :ok
-      {:ok, _other} -> {:error, :lost}
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   @doc """
   Ask the attempt's ask `ask_no` before `action`, with its `summary` and

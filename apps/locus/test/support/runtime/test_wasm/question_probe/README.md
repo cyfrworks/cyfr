@@ -55,5 +55,5 @@ is the one pin of the toolchain.
 ```
 src/lib.rs          sha256:3aefab417cab1ecf83c694599c8c32c9ae9f9179c0e0f626ad55e7ef6d714d46
 Cargo.lock          sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-question_probe.wasm sha256:977f0c21c37167a57daaef74cdde51fd5841bdc46390c6a1e1b4e487dc272fdf
+question_probe.wasm sha256:f89f4034c1d70b0f349af6d69cf7ab60c6ee114d3aa3236139966155cafe15e1
 ```

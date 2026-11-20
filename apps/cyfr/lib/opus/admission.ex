@@ -314,8 +314,7 @@ defmodule Opus.Admission do
   (that worker service's `Prima.WorkerAPI` module) and `:held_invoke` (true
   when the calling
   process holds the charged invoke-budget slot of a spawned child, with
-  `:charge` naming its row) and `:inputs` (the process that supplies the
-  run's further inputs, `Opus.Inputs`).
+  `:charge` naming its row).
 
   Answers `{:ok, admitted}`. A reference that cannot be resolved or typed
   answers `{:error, reason}` with no row. A row an admission barrier
@@ -935,7 +934,6 @@ defmodule Opus.Admission do
         release_digest: run.component["release_digest"],
         held_invoke: run.opts[:held_invoke] == true,
         charge: if(run.opts[:held_invoke] == true, do: run.opts[:charge]),
-        inputs: run.opts[:inputs],
         # What the attempt's assignment is signed from, kept so a child
         # admitted under a key can be handed to its runner again.
         assignment: assignment(run, input)
