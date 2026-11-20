@@ -7,7 +7,8 @@ defmodule Compendium.Providers.Aqua do
   crew, the scrolls, and the documentation guides.
 
   The soul and its crew are the athanor's own: one frontmatter-markdown
-  file each — `aqua/aqua.md` and `aqua/crew/<name>.md`
+  file each — `aqua/aqua.md` and `aqua/crew/<name>.md`, the soul's
+  carrying its prompt and a crew member's its frontmatter alone
   (`Compendium.AquaAgent` is the format, `Compendium.AquaPath` the
   layout) — served through the seed overlay: shipped files read through
   until edited, edited ones shadow only themselves, and deleting an
@@ -94,7 +95,7 @@ defmodule Compendium.Providers.Aqua do
           [
             Arg.new("detail", :boolean,
               description:
-                "For list: include each agent's full fields (model, catalyst_ref, program, install, options, avoid, mode, tools, content, disabled) — one call instead of a get per agent"
+                "For list: include each agent's full fields (model, catalyst_ref, program, install, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent"
             ),
             Arg.new("include_disabled", :boolean,
               description:
@@ -161,11 +162,6 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("options", {:map, Arg.new(nil, :json)},
               description:
                 "The options this agent's brain is asked with on every request — names and values its describe declares (create/update)"
-            ),
-            Arg.new("content", :string,
-              bulk: true,
-              description:
-                "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
             )
           ],
           kind: :write,
@@ -245,7 +241,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("content", :string,
               bulk: true,
               description:
-                "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
+                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)"
             ),
             Arg.new("disabled", :boolean,
               nullable: true,
@@ -254,7 +250,7 @@ defmodule Compendium.Providers.Aqua do
             ),
             Arg.new("expected_digest", :string,
               description:
-                "update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one edit never writes over another."
+                "update only: the content_digest that get answered for the soul's prompt being edited. The update is refused as a conflict when the prompt has changed since, so one edit never writes over another."
             )
           ],
           kind: :write,
@@ -340,7 +336,7 @@ defmodule Compendium.Providers.Aqua do
               required: true,
               bulk: true,
               description:
-                "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
+                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)"
             )
           ],
           kind: :write,
@@ -365,7 +361,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("content", :string,
               bulk: true,
               description:
-                "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
+                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)"
             )
           ],
           kind: :write,
@@ -444,7 +440,9 @@ defmodule Compendium.Providers.Aqua do
     # file's other reads refuse it (`passthrough_or_unavailable/2`):
     # answering the guides without the agents the store holds would read
     # as an athanor with no assistant. A crew member that could not be read
-    # stays out of the crew.
+    # stays out of the crew; one refused for instructions below its
+    # frontmatter is named under `refused` with the sentence that says what
+    # to change, so the person can act on it.
     with {:ok, agents, errors} <- AquaAgent.list(ctx),
          :ok <- soul_read(errors) do
       # The detail flag widens the projection of the already-loaded agents.
@@ -466,7 +464,8 @@ defmodule Compendium.Providers.Aqua do
           }
 
           if detail? do
-            Map.merge(base, %{
+            base
+            |> Map.merge(%{
               model: agent.model,
               catalyst_ref: agent.catalyst_ref,
               program: agent.program,
@@ -475,9 +474,11 @@ defmodule Compendium.Providers.Aqua do
               avoid: agent.avoid,
               mode: agent.mode,
               tools: agent.tools,
-              content: agent.prompt,
               disabled: agent.disabled
             })
+            |> then(
+              &if(is_binary(agent.prompt), do: Map.put(&1, :content, agent.prompt), else: &1)
+            )
           else
             base
           end
@@ -486,7 +487,11 @@ defmodule Compendium.Providers.Aqua do
       # The soul first, then the crew, then the guides.
       all = agent_guides ++ doc_guides
 
-      {:ok, %{guides: all, count: length(all)}}
+      refused =
+        for {name, :crew_has_no_prompt} <- errors,
+            do: %{name: name, reason: AquaAgent.prompt_refused(name)}
+
+      {:ok, %{guides: all, count: length(all), refused: refused}}
     else
       {:error, reason} -> passthrough_or_unavailable(reason, "aqua.list")
     end
@@ -511,11 +516,18 @@ defmodule Compendium.Providers.Aqua do
 
     with :ok <- validate_name(name),
          {:ok, agent} <- AquaAgent.get(ctx, name) do
+      # The soul's prompt and its digest, which an editor names to save
+      # over it; a crew member has no prompt to show or edit.
+      prompt =
+        case agent.prompt do
+          nil -> %{}
+          prompt -> %{content: prompt, content_digest: content_digest(prompt)}
+        end
+
       {:ok,
-       %{
+       Map.merge(prompt, %{
          name: agent.name,
          format: "markdown",
-         content: agent.prompt,
          type: AquaAgent.type_of(agent),
          title: agent.title,
          description: agent.description,
@@ -527,12 +539,14 @@ defmodule Compendium.Providers.Aqua do
          install: agent.install,
          model: agent.model,
          options: agent.options,
-         disabled: agent.disabled,
-         content_digest: content_digest(agent.prompt)
-       }}
+         disabled: agent.disabled
+       })}
     else
       {:error, :not_found} ->
         {:error, {:not_found, "Soul, crew member or guide", name}}
+
+      {:error, :crew_has_no_prompt} ->
+        {:error, {:conflict, AquaAgent.prompt_refused(name)}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -550,6 +564,7 @@ defmodule Compendium.Providers.Aqua do
     with :ok <- validate_name(name),
          :ok <- refute_reserved(name),
          :ok <- no_crew_tools(name, args),
+         :ok <- no_crew_prompt(name, args),
          :ok <- validate_mode(args["mode"]),
          :ok <- validate_options(args["options"]),
          :ok <- one_brain(%{catalyst_ref: args["catalyst_ref"], program: args["program"]}) do
@@ -584,6 +599,7 @@ defmodule Compendium.Providers.Aqua do
 
     with :ok <- validate_name(name),
          :ok <- no_crew_tools(name, args),
+         :ok <- no_crew_prompt(name, args),
          :ok <- one_tools_argument(args),
          :ok <- validate_mode(args["mode"]),
          :ok <- validate_tools(args["tools"]),
@@ -599,6 +615,9 @@ defmodule Compendium.Providers.Aqua do
     else
       {:error, :not_found} ->
         {:error, {:not_found, "Soul or crew member", name}}
+
+      {:error, :crew_has_no_prompt} ->
+        {:error, {:conflict, AquaAgent.prompt_refused(name)}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -951,7 +970,7 @@ defmodule Compendium.Providers.Aqua do
       options: args["options"] || %{},
       mode: args["mode"] || "auto",
       tools: [],
-      prompt: Map.get(args, "content", "")
+      prompt: nil
     }
 
     # A crew member is a file unit: the one atomic put IS the unit commit
@@ -1023,7 +1042,8 @@ defmodule Compendium.Providers.Aqua do
     do: ((tools || []) ++ (add || [])) -- (remove || [])
 
   # `nil` for an updatable field removes it; an absent key leaves it
-  # alone. `content` swaps the prompt body.
+  # alone. `content` swaps the soul's prompt (`no_crew_prompt/2` refuses
+  # it for a crew member).
   defp apply_updates(agent, args) do
     agent
     |> maybe_update(args, "title", :title, agent.name)
@@ -1174,6 +1194,19 @@ defmodule Compendium.Providers.Aqua do
          {:error,
           {:invalid_argument,
            "A crew member is offered the soul's tools and has none of its own — edit the soul's"}},
+       else: :ok
+  end
+
+  # A crew member has no prompt (`Compendium.AquaAgent`): a write that
+  # gives one is refused, never dropped, with where its words belong.
+  defp no_crew_prompt(name, args) do
+    if not AquaPath.soul?(name) and
+         Enum.any?(["content", "expected_digest"], &(not is_nil(args[&1]))),
+       do:
+         {:error,
+          {:invalid_argument,
+           "A crew member has no prompt: the job it is handed says what to do, and how a " <>
+             "kind of job is done is a scroll — write one with skill_create"}},
        else: :ok
   end
 

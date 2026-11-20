@@ -10,7 +10,7 @@ check a URL. Any URL works, including localhost and internal services.
 This only reads: a request that changes anything (POST, PUT, PATCH or
 DELETE) is no read, which a read-only member is refused and an auto one
 sends, so send one only when the job asks for it. Research that
-needs a search engine is the explorer's.
+needs a search engine follows the `research` scroll.
 
 ## Working Style
 

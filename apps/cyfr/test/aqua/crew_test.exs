@@ -73,7 +73,8 @@ defmodule Aqua.CrewTest do
     {:ok, ctx: ctx, room: room}
   end
 
-  defp script!(items), do: start_supervised!({ScriptedWorker, ref: @model, script: items})
+  defp script!(items, opts \\ []),
+    do: start_supervised!({ScriptedWorker, [ref: @model, script: items] ++ opts})
 
   defp reply(text),
     do: %{
@@ -173,15 +174,15 @@ defmodule Aqua.CrewTest do
   end
 
   # A crew member the athanor made, on the scripted model: it is offered
-  # the soul's tools, in auto as a file naming no mode is, and a member
-  # the athanor made is the person's to consent to.
+  # the soul's tools, in auto as a file naming no mode is, has no prompt,
+  # and a member the athanor made is the person's to consent to.
   defp member!(ctx, name) do
     :ok =
       Arca.put(
         actor(ctx),
         Compendium.AquaPath.crew_file(name),
         "---\ntitle: #{name}\ndescription: Plans.\navoid: Building.\n" <>
-          "catalyst_ref: #{@model}\nmodel: claude-sonnet-5-5\n---\n\nYou are the #{name}.\n"
+          "catalyst_ref: #{@model}\nmodel: claude-sonnet-5-5\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -330,7 +331,7 @@ defmodule Aqua.CrewTest do
         actor(ctx),
         Compendium.AquaPath.crew_file("coder"),
         "---\ntitle: coder\ndescription: Codes.\navoid: Planning.\n" <>
-          "catalyst_ref: catalyst:local.openai-codex\nmodel: default\n---\n\nYou code.\n"
+          "catalyst_ref: catalyst:local.openai-codex\nmodel: default\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -424,7 +425,7 @@ defmodule Aqua.CrewTest do
           actor(ctx),
           Compendium.AquaPath.crew_file(member),
           "---\ntitle: #{member}\ndescription: Codes.\navoid: Nothing.\n" <>
-            "program: #{program}\nmodel: opus\n---\n\nYou are the #{member}.\n"
+            "program: #{program}\nmodel: opus\n---\n"
         )
     end
 
@@ -493,7 +494,7 @@ defmodule Aqua.CrewTest do
         actor(ctx),
         Compendium.AquaPath.crew_file("planner"),
         "---\ntitle: planner\ndescription: Plans.\navoid: Building.\n" <>
-          "catalyst_ref: #{@model}\nmodel: claude-opus-5-5\n---\n\nYou are the planner.\n"
+          "catalyst_ref: #{@model}\nmodel: claude-opus-5-5\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -619,6 +620,92 @@ defmodule Aqua.CrewTest do
     # Room content: the person's own request's answer opens no turn.
     assert room_turns(ctx, room) == []
     assert pending_records(ctx) == []
+  end
+
+  # CYFR's words for a member on a model's brain, with nothing of a folder,
+  # and the line a brain that searches adds (`Aqua.Prompt.briefing/2`).
+  @briefing "## Crew member\n\nYou are a crew member of this athanor's Aqua. A job arrives " <>
+              "as a task in your thread; your reply goes back to whoever asked, so end with " <>
+              "what you did, what you verified and anything left open.\n\n" <>
+              "- Read the scroll a job names before doing it (`aqua.skill_get`).\n" <>
+              "- Never ask for a secret in your reply: a component that needs one is set up " <>
+              "through `request_setup`."
+  @searches "\n- You have native search: use it when a job needs the web searched."
+  @context "\n\n---\n\n## Runtime Context\n\n"
+
+  # The scroll list every turn's prompt carries, from the athanor's own
+  # index of its scrolls.
+  defp scroll_list(ctx) do
+    {:ok, %{entries: [_ | _] = entries, more: 0}} =
+      Compendium.skills_index(ctx, Compendium.skills_index_limit())
+
+    "\n\n---\n\n## Scrolls\n\nProcedures this athanor has learned. Read one with " <>
+      "`aqua.skill_get` before doing what it describes; propose `aqua.skill_create` when a " <>
+      "procedure worth repeating has just worked.\n" <>
+      Enum.map_join(entries, fn %{name: name, description: line} -> "- #{name} — #{line}\n" end)
+  end
+
+  defp member_chats(name) do
+    Enum.filter(
+      ScriptedWorker.calls(),
+      &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == Prima.AgentRef.ref(name))
+    )
+  end
+
+  # A member has no prompt: CYFR briefs it, the scroll list follows in the
+  # runtime context, and the job is the turn's message, never its prompt.
+  test "a member with no prompt is briefed by CYFR, handed its job apart, and its reply goes back to whoever asked",
+       %{ctx: ctx, room: room} do
+    script!([reply("Plan: read, then write.")])
+
+    assert {:ok, %{admitted: :request, message_id: request_id}} =
+             Runner.send_message(ctx, room.id, "@planner plan the move with the planner scroll")
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    turn_id = delivered_turn(ctx, child!(ctx, room, "planner"), request_id)
+    await_status(ctx, turn_id, "completed")
+
+    assert [%{input: %{"operation" => "chat", "params" => params}}] = member_chats("planner")
+
+    assert Enum.sort(Map.keys(params)) ==
+             ~w(max_tokens messages model provider_tools system tools)
+
+    assert %{"model" => "claude-sonnet-5-5", "provider_tools" => [], "max_tokens" => max} =
+             params
+
+    assert is_integer(max) and max > 0
+    assert [_ | _] = params["tools"]
+
+    [opening, context] = String.split(params["system"], @context, parts: 2)
+    assert opening == @briefing
+    assert context =~ scroll_list(ctx)
+    refute params["system"] =~ "folder"
+    refute params["system"] =~ "plan the move"
+
+    assert [%{"role" => "user", "content" => content}] = params["messages"]
+    assert Jason.encode!(content) =~ "plan the move with the planner scroll"
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+    assert %{sent_by: "planner", addressee: "person", outcome: "done"} =
+             Enum.find(rows(ctx, room.id), &(&1.reply_to == request_id))
+  end
+
+  # Native search is a fact of the brain whose requests offer it, the
+  # same test that decides the request's provider tools.
+  test "a member whose requests offer its provider's search is told so", %{ctx: ctx, room: room} do
+    script!([reply("Found it.")], provider_tools: ["web_search"])
+
+    assert {:ok, %{message_id: request_id}} =
+             Runner.send_message(ctx, room.id, "@planner find the fares")
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    await_status(ctx, delivered_turn(ctx, child!(ctx, room, "planner"), request_id), "completed")
+
+    assert [%{input: %{"params" => %{"provider_tools" => ["web_search"], "system" => system}}}] =
+             member_chats("planner")
+
+    assert [@briefing <> @searches, _context] = String.split(system, @context, parts: 2)
   end
 
   test "a request committed by a runner that died before it broadcast is delivered by the tick",

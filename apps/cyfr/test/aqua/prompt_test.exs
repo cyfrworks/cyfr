@@ -120,6 +120,76 @@ defmodule Aqua.PromptTest do
     end
   end
 
+  describe "a crew member's briefing" do
+    # CYFR's words for every member, the same for every member on one kind
+    # of brain: a crew member has no prompt of its own.
+    @briefing "## Crew member\n\nYou are a crew member of this athanor's Aqua. A job arrives " <>
+                "as a task in your thread; your reply goes back to whoever asked, so end with " <>
+                "what you did, what you verified and anything left open.\n\n" <>
+                "- Read the scroll a job names before doing it (`aqua.skill_get`).\n" <>
+                "- Never ask for a secret in your reply: a component that needs one is set up " <>
+                "through `request_setup`."
+
+    @program "\n- Your own tools work in your folder, the program's folder this athanor " <>
+               "keeps for you: read, edit and run there as you would anywhere.\n" <>
+               "- The athanor's files, components and stored state are reached through " <>
+               "CYFR's tools only. A call your mode does not run comes back with a sentence " <>
+               "that says so; carry on with what does not depend on it."
+
+    @search "\n- You have native search: use it when a job needs the web searched."
+
+    @context "\n\n---\n\n## Runtime Context\n\n"
+
+    defp member(name), do: %{"name" => name, "title" => String.capitalize(name), "prompt" => nil}
+
+    defp opening(ctx, opts) do
+      [opening, _context] = String.split(Prompt.compose(ctx, opts).text, @context, parts: 2)
+      opening
+    end
+
+    test "a member on a model's brain is briefed by CYFR and told nothing of a folder",
+         %{ctx: ctx} do
+      prompt = Prompt.compose(ctx, agent: member("planner"), authority: nil).text
+
+      assert opening(ctx, agent: member("planner"), authority: nil) == @briefing
+      refute prompt =~ "folder"
+
+      # The same words for every member on that kind of brain.
+      assert opening(ctx, agent: member("scribe"), authority: nil) == @briefing
+    end
+
+    test "a member on a program's brain is told its own tools work in its folder", %{ctx: ctx} do
+      assert opening(ctx, agent: member("coder"), program?: true, authority: nil) ==
+               @briefing <> @program
+    end
+
+    # Native search is a fact of the brain the request offers it on
+    # (`Aqua.Loop.Request.offers_search?/3`), said only where it is so.
+    test "native search is said only to a member whose requests offer it", %{ctx: ctx} do
+      assert opening(ctx, agent: member("explorer"), search?: true, authority: nil) ==
+               @briefing <> @search
+
+      refute Prompt.compose(ctx, agent: member("explorer"), authority: nil).text =~
+               "native search"
+    end
+
+    test "the soul opens with its own prompt and is given no briefing", %{ctx: ctx} do
+      assert opening(ctx, agent: agent(), program?: true, search?: true, authority: nil) ==
+               "You are Aqua."
+    end
+
+    test "the briefing comes before the runtime context, the scroll list in it", %{ctx: ctx} do
+      [opening, context] =
+        String.split(Prompt.compose(ctx, agent: member("planner"), authority: nil).text, @context,
+          parts: 2
+        )
+
+      assert opening == @briefing
+      assert context =~ "\n## Scrolls\n\nProcedures this athanor has learned."
+      assert context =~ "\n- planner — "
+    end
+  end
+
   test "the console prelude is part of the one composition, and lists no approvals", %{ctx: ctx} do
     prompt = Prompt.compose(ctx, agent: agent(%{"component.pull" => "ask"}), authority: nil).text
 

@@ -44,7 +44,7 @@ defmodule Arca.RevisionStoreReservedTest do
     crew = Path.join([seed, "aqua", "crew"])
     File.mkdir_p!(crew)
     File.write!(Path.join([seed, "aqua", "aqua.md"]), "---\ntitle: A\n---\n\nsoul\n")
-    File.write!(Path.join(crew, "scribe.md"), "---\ntitle: Scribe\n---\n\nscribe\n")
+    File.write!(Path.join(crew, "scribe.md"), "---\ntitle: Scribe\n---\n")
 
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)

@@ -6,7 +6,9 @@ defmodule Compendium.AquaAgentTest do
   The agent file format: frontmatter round-trips byte-stably, a disabled
   crew member leaves the crew without leaving the tree, every member has
   a mode of its own, and a crew file holds no tools of its own: a member
-  is offered the soul's. A file still holding the retired `tool_policy`
+  is offered the soul's. A crew file is its frontmatter alone: the soul
+  has a prompt, and a crew file with one is refused with the sentence
+  that says where its words go. A file still holding the retired `tool_policy`
   is refused whole. Which file is the soul is the tree's to say, never
   the frontmatter's.
   """
@@ -30,7 +32,7 @@ defmodule Compendium.AquaAgentTest do
         options: %{"effort" => "high", "budget" => 8, "thinking" => true, "label" => "true"},
         mode: "read-only",
         tools: [],
-        prompt: "You are the scribe.\n\n## Style\n\n- terse"
+        prompt: nil
       },
       overrides
     )
@@ -43,7 +45,8 @@ defmodule Compendium.AquaAgentTest do
           name: "aqua",
           avoid: "",
           mode: "auto",
-          tools: ["files.read", "github:search", "native_search", "web.fetch"]
+          tools: ["files.read", "github:search", "native_search", "web.fetch"],
+          prompt: "You are Aqua.\n\n## Style\n\n- terse"
         },
         overrides
       )
@@ -86,7 +89,7 @@ defmodule Compendium.AquaAgentTest do
   end
 
   test "a portable minimal file parses — frontmatter defaults fill in" do
-    minimal = "---\ndescription: does things\n---\n\nYou are minimal.\n"
+    minimal = "---\ndescription: does things\n---\n"
 
     assert {:ok, parsed} = AquaAgent.parse("min", minimal)
     assert parsed.title == "min"
@@ -94,7 +97,35 @@ defmodule Compendium.AquaAgentTest do
     assert parsed.options == %{}
     assert parsed.mode == "auto"
     assert parsed.tools == []
-    assert parsed.prompt == "You are minimal."
+    assert parsed.prompt == nil
+  end
+
+  # Only the soul has a prompt: the job a member is handed says what to do,
+  # and how a kind of job is done is a scroll. A crew file still holding
+  # words below its frontmatter is refused, never run with them unseen.
+  test "a crew file is its frontmatter alone: a body is refused with its sentence, the soul's is its prompt" do
+    for body <- ["You are the scribe.", "\n\n# Scribe\n\nWrite.\n"] do
+      assert {:error, :crew_has_no_prompt} =
+               AquaAgent.parse("scribe", "---\ntitle: Scribe\n---\n" <> body)
+    end
+
+    # Blank lines after the fence are framing, not a prompt.
+    assert {:ok, %{prompt: nil}} = AquaAgent.parse("scribe", "---\ntitle: Scribe\n---\n\n\n")
+
+    assert {:ok, %{prompt: "You are Aqua."}} =
+             AquaAgent.parse("aqua", "---\ntitle: Aqua\n---\n\nYou are Aqua.\n")
+
+    # A crew member's file is written with no body, whatever its map holds.
+    written = AquaAgent.serialize(member(%{prompt: "You are the scribe."}))
+    assert written == AquaAgent.serialize(member())
+    assert String.ends_with?(written, "\n  thinking: true\n---\n")
+
+    assert AquaAgent.prompt_refused("scribe") ==
+             "scribe can't take a job: aqua/crew/scribe.md still holds instructions below " <>
+               "its header, and a crew member has none now. Keep what you want of them as a " <>
+               "new scroll under Scrolls on Aqua's page, which Aqua names in the jobs it hands " <>
+               "out, then in Files delete everything after the header's closing `---`. " <>
+               "Nothing else in the file needs to change."
   end
 
   # A brain is named once: a catalyst or a program row by its name, whose
@@ -122,23 +153,23 @@ defmodule Compendium.AquaAgentTest do
     assert {:ok, ^plain} = AquaAgent.parse("scribe", AquaAgent.serialize(plain))
 
     assert {:ok, %{program: "claude", install: nil}} =
-             AquaAgent.parse("scribe", "---\nprogram: claude\ninstall: \"\"\n---\n\nprompt\n")
+             AquaAgent.parse("scribe", "---\nprogram: claude\ninstall: \"\"\n---\n")
 
     assert {:error, :catalyst_and_program} =
              AquaAgent.parse(
                "scribe",
-               "---\ncatalyst_ref: catalyst:local.claude\nprogram: claude\n---\n\nprompt\n"
+               "---\ncatalyst_ref: catalyst:local.claude\nprogram: claude\n---\n"
              )
 
     # A blank one names none, as a blank catalyst does.
     assert {:ok, %{catalyst_ref: "catalyst:local.claude", program: nil}} =
              AquaAgent.parse(
                "scribe",
-               "---\ncatalyst_ref: catalyst:local.claude\nprogram: \"\"\n---\n\nprompt\n"
+               "---\ncatalyst_ref: catalyst:local.claude\nprogram: \"\"\n---\n"
              )
 
     assert {:ok, %{catalyst_ref: nil, program: nil}} =
-             AquaAgent.parse("scribe", "---\ntitle: X\n---\n\nprompt\n")
+             AquaAgent.parse("scribe", "---\ntitle: X\n---\n")
   end
 
   test "a file without frontmatter is a typed refusal" do
@@ -165,11 +196,11 @@ defmodule Compendium.AquaAgentTest do
   test "every member has a mode of its own: read-only or auto, a file without one auto" do
     for mode <- ["read-only", "auto"], name <- ["aqua", "scribe"] do
       assert {:ok, %{mode: ^mode}} =
-               AquaAgent.parse(name, "---\nmode: #{mode}\n---\n\nprompt\n")
+               AquaAgent.parse(name, "---\nmode: #{mode}\n---\n")
     end
 
     assert {:error, {:mode_invalid, "manual"}} =
-             AquaAgent.parse("scribe", "---\nmode: manual\n---\n\nprompt\n")
+             AquaAgent.parse("scribe", "---\nmode: manual\n---\n")
 
     assert {:error, {:mode_invalid, true}} =
              AquaAgent.parse("aqua", "---\nmode: true\n---\n\nprompt\n")
@@ -187,7 +218,7 @@ defmodule Compendium.AquaAgentTest do
              )
 
     assert {:error, :crew_has_no_tools} =
-             AquaAgent.parse("scribe", "---\ntools:\n  - files.read\n---\n\nprompt\n")
+             AquaAgent.parse("scribe", "---\ntools:\n  - files.read\n---\n")
 
     # A crew member's file carries no tools, whatever its map holds.
     binary = AquaAgent.serialize(member(%{tools: ["files.read"]}))
@@ -216,7 +247,7 @@ defmodule Compendium.AquaAgentTest do
   test "a file still holding tool_policy is refused whole, soul or crew, with one sentence" do
     for name <- ["aqua", "scribe"] do
       assert {:error, :tool_policy_retired} =
-               AquaAgent.parse(name, "---\ntool_policy:\n  files.read: auto\n---\n\nprompt\n")
+               AquaAgent.parse(name, "---\ntool_policy:\n  files.read: auto\n---\n")
     end
 
     assert {:error, :tool_policy_retired} =
@@ -231,13 +262,13 @@ defmodule Compendium.AquaAgentTest do
 
   test "options are a flat map of strings, integers and booleans" do
     assert {:error, :options_invalid} =
-             AquaAgent.parse("x", "---\noptions: high\n---\n\nprompt\n")
+             AquaAgent.parse("x", "---\noptions: high\n---\n")
 
     assert {:error, :options_invalid} =
-             AquaAgent.parse("x", "---\noptions:\n  effort:\n    level: high\n---\n\nprompt\n")
+             AquaAgent.parse("x", "---\noptions:\n  effort:\n    level: high\n---\n")
 
     assert {:ok, %{options: %{"effort" => "high", "budget" => 4}}} =
-             AquaAgent.parse("x", "---\noptions:\n  effort: high\n  budget: 4\n---\n\nprompt\n")
+             AquaAgent.parse("x", "---\noptions:\n  effort: high\n  budget: 4\n---\n")
   end
 
   test "a crew member is offered the soul's tools and keeps its own mode, the soul as it is" do
