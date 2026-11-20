@@ -309,20 +309,19 @@ defmodule PrismWeb.ThreadPaneLive do
         # own turn assembly stays windowed separately.
         ctx = socket.assigns.context
 
-        read = fn opts ->
-          case Threads.latest_messages(Sanctum.Context.actor(ctx), thread.id, @window, opts) do
+        # What the thread drew live is what it draws opened again: the
+        # newest rows it draws (`drawn_kinds/0`), however many of a turn's
+        # own rows stand between them. Its cards and results are posts
+        # too, read with them.
+        rows =
+          case Threads.latest_messages(Sanctum.Context.actor(ctx), thread.id, @window,
+                 kinds: drawn_kinds()
+               ) do
             rows when is_list(rows) -> Enum.map(rows, &files_kept(&1, ctx))
             {:error, _} -> []
           end
-        end
 
-        # What the thread drew live is what it draws opened again: the
-        # newest rows it draws (`drawn_kinds/0`), however many of a turn's
-        # own rows stand between them. The pane's results and cards are
-        # read from every row, the kinds they are in.
-        drawn = read.(kinds: drawn_kinds())
-        rows = read.([])
-        {shown, requests} = file_replies(drawn)
+        {shown, requests} = file_replies(rows)
 
         tell_host(
           socket,
@@ -334,10 +333,10 @@ defmodule PrismWeb.ThreadPaneLive do
         |> hold_cards(rows)
         |> stream(:messages, shown, reset: true)
         |> assign(:requests, requests)
-        |> assign(:any_messages, drawn != [])
+        |> assign(:any_messages, rows != [])
         |> apply_live(live)
         |> relatives(thread)
-        |> seen(drawn |> Enum.map(& &1.seq) |> Enum.max(fn -> nil end))
+        |> seen(rows |> Enum.map(& &1.seq) |> Enum.max(fn -> nil end))
 
       _ ->
         socket

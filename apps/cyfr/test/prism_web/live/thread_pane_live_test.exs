@@ -341,6 +341,51 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "a workspace thread's card opened again behind 500 of a turn's own rows says its state as it is now and keeps Open",
+       %{conn: conn, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, %{workspace: _workspace}} =
+      Arca.TurnStorage.open_workspace(actor, %{
+        daily_id: thread.id,
+        id: Prima.UUID7.generate_id("thread"),
+        title: "Moon report",
+        opening: %{
+          id: Prima.UUID7.generate_id("msg"),
+          author: here.user_id,
+          content: "write the moon report",
+          payload: %{"ask" => "write the moon report"}
+        },
+        pointer: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          content: "Moon report",
+          payload: %{"workspace" => "w", "title" => "Moon report"}
+        },
+        files: fn _thread, _message -> {:ok, []} end,
+        person_id: here.user_id,
+        origin: :interactive
+      })
+
+    [pointer] = Enum.filter(Threads.messages(actor, thread.id), &(&1.kind == "pointer"))
+
+    for n <- 1..500 do
+      {:ok, _} =
+        Threads.append(actor, thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "tool_call",
+          content: "call #{n}"
+        })
+    end
+
+    {_panel, pane} = panel_pane(conn, thread)
+    card = ~s([id$="-m-#{pointer.id}"])
+    assert has_element?(pane, ~s(#{card} [data-state="open"]), "Working")
+    assert has_element?(pane, ~s(#{card} button[phx-click="open_thread"]))
+    refute render(pane) =~ "was deleted"
+  end
+
   test "a card whose workspace thread cannot be found has no Open",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)
