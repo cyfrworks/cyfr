@@ -166,7 +166,8 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       mode!(ctx, "aqua", "auto")
       again = accept_on!(ctx, room, row, "what is in notes.md?")
       loop = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: again.id) end)
-      assert Map.delete(played!(fake, row, again), "system") == start(ctx, false)
+      {played, work} = played!(fake, row, again)
+      assert Map.delete(played, "system") == start(ctx, false, work)
       assert Task.await(loop, 30_000) == :completed
       started!(ctx, room, again, "auto", row)
     end
@@ -189,7 +190,8 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       row = program_row!(ctx, "claude-code", "cyfr-claude-code npx -y @anthropic-ai/claude-code")
       turn = accept_on!(ctx, room, row, "what is in notes.md?")
       loop = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
-      assert Map.delete(played!(fake, row, turn), "system") == start(ctx, true)
+      {played, work} = played!(fake, row, turn)
+      assert Map.delete(played, "system") == start(ctx, true, work)
       assert Task.await(loop, 30_000) == :completed
       started!(ctx, room, turn, "read-only", row)
     end
@@ -428,11 +430,18 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
     assert ScriptedWorker.calls() == []
   end
 
-  # The start the holder writes for the soul: its model, and the mode the
-  # turn's row stored as `read_only`.
-  defp start(ctx, read_only?) do
+  # The start the holder writes for the soul: its model, the mode the
+  # turn's row stored as `read_only`, and, since it opens a new native
+  # session, the work's tools.
+  defp start(ctx, read_only?, work) do
     {:ok, soul} = Compendium.AquaAgent.get(ctx, "aqua")
-    %{"t" => "start", "gen" => 0, "config" => %{"model" => soul.model, "read_only" => read_only?}}
+
+    %{
+      "t" => "start",
+      "gen" => 0,
+      "config" => %{"model" => soul.model, "read_only" => read_only?},
+      "tools" => work["tools"]
+    }
   end
 
   defp row(turn),
@@ -485,7 +494,8 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
 
   # The driver's session opens for `row` and says hello once it stands;
   # the holder's start is taken, then the turn's work and its post, and
-  # the idle that answers the post ends the turn. Answers the start.
+  # the idle that answers the post ends the turn. Answers the start and
+  # the work as the holder wrote them.
   defp played!(fake, row, turn) do
     assert_receive {:session, "open", %{"mode" => "run", "home_id" => home}, _fields}, 10_000
     assert home == row.id
@@ -506,8 +516,8 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
     start = sent()
     assert %{"t" => "start"} = start
     say(fake, row, %{"t" => "started", "session" => @session, "fresh" => true, "held" => []})
-    assert %{"t" => "work", "id" => work} = sent()
-    say(fake, row, %{"t" => "accepted", "id" => work})
+    assert %{"t" => "work", "id" => id} = work = sent()
+    say(fake, row, %{"t" => "accepted", "id" => id})
     assert %{"t" => "post", "id" => input} = sent()
     say(fake, row, %{"t" => "accepted", "id" => input})
 
@@ -519,6 +529,6 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       "stop" => "end_turn"
     })
 
-    start
+    {start, work}
   end
 end
