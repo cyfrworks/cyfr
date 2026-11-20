@@ -31,9 +31,14 @@ defmodule Compendium.AquaAgent do
   The keys: `title`; `description`, what the member is good at, which the
   soul reads when it hands a job; `avoid`, what to hand it never; the
   brain its turns run on, named once, as a catalyst (`catalyst_ref`) or
-  as a program (`program`, the id of the athanor's program row it runs
-  in), and `model`, the model it asks for (for a program, its harness's
-  model name); `options`, the brain options its every request sets (a
+  as a program (`program`, the name of the athanor's program row it runs
+  in, unique in the athanor, so a shipped file names the same row in
+  every athanor), and `model`, the model it asks for (for a program, one
+  its harness lists); `install`, beside a program, the command the
+  Programs page's install form is prefilled with while the athanor has
+  no row of that name: a suggestion the person confirms or changes as
+  any program's definition, which runs nothing itself and is outside the
+  capability (`to_manifest/1`); `options`, the brain options its every request sets (a
   flat map of strings, integers and booleans, which the brain's
   `describe` declares); `disabled: true`, how a shipped member is taken
   out of the crew (shipped files revert, they don't delete); `mode`,
@@ -72,6 +77,7 @@ defmodule Compendium.AquaAgent do
           disabled: boolean(),
           catalyst_ref: String.t() | nil,
           program: String.t() | nil,
+          install: String.t() | nil,
           model: String.t() | nil,
           options: %{String.t() => option_value()},
           mode: mode(),
@@ -119,6 +125,7 @@ defmodule Compendium.AquaAgent do
            disabled: meta["disabled"] == true,
            catalyst_ref: blank_to_nil(meta["catalyst_ref"]),
            program: blank_to_nil(meta["program"]),
+           install: blank_to_nil(meta["install"]),
            model: blank_to_nil(meta["model"]),
            options: options,
            mode: mode,
@@ -207,6 +214,7 @@ defmodule Compendium.AquaAgent do
         {"avoid", blank_to_nil(Map.get(agent, :avoid))},
         {"catalyst_ref", agent.catalyst_ref},
         {"program", Map.get(agent, :program)},
+        {"install", Map.get(agent, :install)},
         {"model", agent.model},
         {"mode", Map.get(agent, :mode) || "auto"},
         {"disabled", if(agent.disabled, do: true)}
@@ -344,9 +352,11 @@ defmodule Compendium.AquaAgent do
   The security-relevant subset of an agent, as a manifest: what it is
   (soul or crew), which brain (a catalyst or a program row) and model run
   it with which options, whether it is disabled, its mode, and the tools
-  it is offered (a crew member's are the soul's). Nothing else — not the prompt, the title, the
-  description or what to avoid, which change what the agent says and
-  never what it may do. Pure: the same agent projects to the same map, so
+  it is offered (a crew member's are the soul's). The program is the
+  name the file declares, never the row found by it now. Nothing else —
+  not the prompt, the title, the description, what to avoid or the
+  install suggestion, which change what the agent says or what a form
+  offers and never what it may do. Pure: the same agent projects to the same map, so
   a digest of it is the agent's capability revision.
   """
   @spec to_manifest(t()) :: map()
