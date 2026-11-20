@@ -50,7 +50,8 @@ import (
 // must never pass on, and keeps a sign-in, `auth.json`, while
 // FAKE_SIGNED_OUT is unset. A resume sends the thread's last total again
 // unless FAKE_NO_REPEAT is set, and is refused in words other than a
-// missing rollout's while FAKE_RESUME_FAIL is set.
+// missing rollout's while FAKE_RESUME_FAIL is set. A thread whose rollout
+// file is empty is refused in Codex's words for it.
 const fakeEnv = "CYFR_FAKE_CODEX"
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
@@ -362,6 +363,11 @@ func fakeCodex() int {
 					path := rolloutOf(id)
 					if path == "" {
 						fail(-32600, noRolloutWords+" "+id)
+						continue
+					}
+					if info, err := os.Stat(path); err == nil && info.Size() == 0 {
+						fail(-32603, "failed to read thread: thread-store internal error: failed to read session metadata "+
+							path+": rollout at "+path+" is empty")
 						continue
 					}
 					thread.id = id

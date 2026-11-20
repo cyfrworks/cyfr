@@ -755,6 +755,31 @@ func TestAResumeOfAThreadCodexHoldsNoRolloutOfIsGoneThenAFreshStartRuns(t *testi
 	}
 }
 
+// A thread whose rollout is empty, as a program ended before the
+// thread's first turn started leaves it, cannot be resumed: it is gone,
+// and a fresh start runs in the same driver.
+func TestAResumeOfAThreadWhoseRolloutIsEmptyIsGoneThenAFreshStartRuns(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	s.end()
+	rollouts, _ := filepath.Glob(filepath.Join(s.home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+session+".jsonl"))
+	if len(rollouts) != 1 {
+		t.Fatalf("the thread has its rollout: %v", rollouts)
+	}
+	if err := os.Truncate(rollouts[0], 0); err != nil {
+		t.Fatal(err)
+	}
+
+	again := startDriverIn(t, s.home)
+	again.expect("hello")
+	again.send(map[string]any{"t": "start", "gen": 2, "session": session, "config": map[string]any{}})
+	again.expect("gone")
+	again.send(map[string]any{"t": "start", "gen": 3, "config": map[string]any{}})
+	if e := again.expect("started"); e["fresh"] != true || e["session"] == session {
+		t.Fatalf("after gone, a fresh thread starts in the same driver: %v", e)
+	}
+}
+
 // A session that is no thread id of Codex's, a lowercase uuid, has no
 // transcript: it is gone, and no harness starts for it.
 func TestAResumeOfASessionThatIsNoThreadIDIsGoneAndStartsNothing(t *testing.T) {
