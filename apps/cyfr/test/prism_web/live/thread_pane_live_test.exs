@@ -651,18 +651,20 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           turn: %{agent: "aqua", requested_by: here.user_id, origin: :interactive}
         })
 
+      # Started as `Arca.TurnStorage.start/3` starts it: running, with
+      # the recovery limit only a start writes.
       {1, _} =
         Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-          set: [status: "running"]
+          set: [status: "running", recovery_limit: 1]
         )
 
       turn
     end
 
-    defp ended!(turn) do
+    defp ended!(turn, status \\ "completed") do
       {1, _} =
         Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-          set: [status: "completed"]
+          set: [status: status]
         )
 
       turn
@@ -694,6 +696,34 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         "partial" => 0,
         "unknown" => 0
       })
+
+      menu = menu_text(open_pane(conn, athanor, thread))
+      assert menu =~ "claude-opus-5-5"
+      assert menu =~ "Tokens 120 in · 30 out"
+    end
+
+    test "a turn stopped while it waited behind a counted one never ran: the menu reads the counted turn's",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      counted =
+        program_turn!(here, thread, %{
+          "models" => %{
+            "claude-opus-5-5" => %{"input_tokens" => 120, "output_tokens" => 30}
+          },
+          "results" => 1,
+          "partial" => 0,
+          "unknown" => 0
+        })
+
+      # A Stop cancels the running turn and the one queued behind it.
+      ended!(counted, "cancelled")
+
+      {:ok, %{turn: queued}} =
+        Arca.TurnStorage.accept_message(Sanctum.Context.actor(here), thread.id, %{
+          message: %{author: here.user_id, sent_by: "person", content: "and then"},
+          turn: %{agent: "aqua", requested_by: here.user_id, origin: :interactive}
+        })
+
+      ended!(queued, "cancelled")
 
       menu = menu_text(open_pane(conn, athanor, thread))
       assert menu =~ "claude-opus-5-5"

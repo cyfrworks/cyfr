@@ -4878,8 +4878,9 @@ defmodule Arca.TurnStorage do
 
   @doc """
   The newest turn of a thread that has started, running, paused or over,
-  or nil when none has; a turn still waiting behind another is not yet
-  one.
+  or nil when none has. A turn that started holds the recovery limit only
+  its start writes (`start/3`); one still waiting behind another, or
+  cancelled while it waited, never started.
   """
   @spec latest(Prima.Actor.t(), String.t()) :: {:ok, map() | nil} | {:error, term()}
   def latest(%Prima.Actor{athanor_id: athanor_id}, thread_id)
@@ -4889,7 +4890,7 @@ defmodule Arca.TurnStorage do
        Arca.Repo.one(
          from(t in Turn,
            where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
-           where: t.status != "accepted",
+           where: not is_nil(t.recovery_limit),
            order_by: [desc: t.accepted_at, desc: t.id],
            limit: 1
          )
