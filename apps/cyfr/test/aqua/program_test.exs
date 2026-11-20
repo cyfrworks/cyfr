@@ -1821,6 +1821,42 @@ defmodule Aqua.ProgramTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "the pane's Stop while the program has counted nothing reads unknown in that pane's " <>
+           "menu, never zero",
+         %{conn: conn, ctx: ctx, thread: thread, row: row, fake: fake, user: user} do
+      turn = accept!(ctx, thread, row, "work on it")
+      conn = log_in_user(conn, user, athanor_id: ctx.athanor_id)
+      # The pane's runner takes the turn from the rows; the program takes
+      # its post and has told no usage yet.
+      pane = pane!(conn, ctx, thread)
+      started!(fake, row)
+      _post = sent()
+      stop = ~s(button[phx-click="stop"])
+
+      Prima.Test.Wait.wait_until(
+        fn -> has_element?(pane, stop) end,
+        10_000,
+        "the pane's Stop"
+      )
+
+      assert menu_text(pane) =~ "Tokens 0 in · 0 out"
+      pane |> element(stop) |> render_click()
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?({:ok, %{status: "cancelled"}}, Tape.turn(ctx, turn.id)) end,
+        10_000,
+        "the turn to be stopped"
+      )
+
+      Prima.Test.Wait.wait_until(
+        fn -> menu_text(pane) =~ "Tokens unknown" end,
+        10_000,
+        "the pane's menu to say the tokens are unknown"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "a scheduled turn starts its program with nothing asked and runs as any turn of its mode",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       ctx = %{ctx | origin: :schedule}

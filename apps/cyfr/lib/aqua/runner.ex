@@ -1347,8 +1347,6 @@ defmodule Aqua.Runner do
         Prima.LogFilter.inspect_reason(reason)
     )
 
-    state = recount(state)
-
     case Tape.turn(state.ctx, live.turn_id) do
       {:ok, %{status: "paused"} = turn} ->
         paused = %{
@@ -1375,11 +1373,12 @@ defmodule Aqua.Runner do
     end
   end
 
-  # A turn's loop is gone: what the turn used is told as the rows store
-  # it, which a program that counted nothing leaves unknown, never zero.
-  # The loop's own counts reached this process before its end did (both
-  # sent from the loop's process), so only a usage they did not tell is
-  # told again.
+  # A turn ended, by its own loop (`after_loop/2`) or by a stop, a cancel
+  # or a crash (`retire_turn/2`): what the latest turn used is told as the
+  # rows store it, which a program that counted nothing leaves unknown,
+  # never zero. The loop's own counts reached this process before its end
+  # did (both sent from the loop's process), so only a usage they did not
+  # tell is told again.
   defp recount(state) do
     usage = Tape.usage(state.ctx, state.id)
     if usage != state.usage, do: broadcast(state, :usage, usage)
@@ -1612,7 +1611,7 @@ defmodule Aqua.Runner do
     }
 
     broadcast(state, :queued, length(state.queue))
-    touch(state)
+    state |> recount() |> touch()
   end
 
   defp retire_runtime(state) do
