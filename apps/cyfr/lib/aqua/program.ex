@@ -70,7 +70,10 @@ defmodule Aqua.Program do
   the thread says the program starts over, and it does, with the thread's
   posts as its context; in the middle of the work, one recorded prompt
   carries the thread so far and what the work's calls answered, none of
-  which runs again.
+  which runs again. A turn whose member's program is now another row than
+  the held session's forgets that session, the old row's transcript owed
+  its removal first, closes its holder, and starts over on the new row
+  from the thread's posts, which the thread is told.
 
   ## Silence
 
@@ -244,6 +247,7 @@ defmodule Aqua.Program do
 
   @impl true
   def handle_call({:attend, work, loop}, from, state) do
+    {state, work} = moved(state, work)
     state = subscribe(%{state | work: work, loop: monitor(state, loop)})
     state = %{state | waiting: state.waiting ++ [from]}
 
@@ -350,6 +354,37 @@ defmodule Aqua.Program do
 
   # ---------------------------------------------------------------------------
   # The session
+
+  # A turn whose member's program is now another row than the one the held
+  # session runs on: the session is forgotten, the old row's transcript
+  # owed its removal first by the row stored with it
+  # (`Arca.TurnStorage.forget_session/3`), its holder closed, and the
+  # program starts over on the new row from the thread's posts, which the
+  # thread is told. A forget that does not answer leaves the session as it
+  # is stored: the holder is closed, and the new row's start resumes it,
+  # which its driver answers as gone (`start_over/1`).
+  defp moved(
+         %{brain: brain, work: %{program: %{row: held}}} = state,
+         %{program: %{row: row}} = work
+       )
+       when brain != nil and held != row do
+    case Tape.forget_session(work.guest, work.turn, work.generation) do
+      {:ok, generation} ->
+        _ =
+          system_row(
+            work,
+            "#{work.title} runs on another program now, so it starts over from the " <>
+              "thread's posts."
+          )
+
+        {shut(state), %{work | generation: generation}}
+
+      {:error, _unanswered} ->
+        {shut(state), work}
+    end
+  end
+
+  defp moved(state, work), do: {state, work}
 
   defp open(%{work: work} = state) do
     case Opus.Brain.open(bound(work)) do
