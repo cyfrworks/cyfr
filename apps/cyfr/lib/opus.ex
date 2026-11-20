@@ -291,10 +291,7 @@ defmodule Opus do
   `:step_id` name the hold and the loop step the child is admitted under.
   `:envelope` true reads the component's answer as its catalyst envelope,
   whose error is the component's refusal
-  (`Opus.Admission.admit/4`). `:inputs` names a process that supplies the
-  run's further inputs while it runs, for that run alone (`Opus.Inputs`,
-  the invocation-scoped port): only the run's own runner, under its live
-  attempt, reaches it, and an input handed over cannot be recalled.
+  (`Opus.Admission.admit/4`).
 
   The call is timed (`Opus.StepSpans`): its clock rides to
   admission as `:step_spans`, replacing any the caller set.
@@ -556,7 +553,6 @@ defmodule Opus do
     |> put(:parent_deadline, Keyword.get(opts, :parent_deadline))
     |> put(:service_id, Keyword.get(opts, :service_id))
     |> put(:boot_id, Keyword.get(opts, :boot_id))
-    |> put(:inputs, Keyword.get(opts, :inputs))
     |> put(:worker, Keyword.get(opts, :worker))
   end
 

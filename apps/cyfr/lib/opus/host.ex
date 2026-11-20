@@ -7,8 +7,8 @@ defmodule Opus.Host do
   `fail`, `push_deltas`, `oauth_token`, `take_rate`, `storage`,
   `fetch_artifact`, `record_denial`, `admit_child`, `tool_call`,
   `release_child`, `egress_pin`, `attached_fetch`, `pipe_open`,
-  `pipe_send`, `pipe_recv`, `pipe_close`, `input_next`, `input_sent`,
-  `question_ask` and `question_wait`, as `Prima.HostAPI` describes them.
+  `pipe_send`, `pipe_recv`, `pipe_close`, `question_ask` and
+  `question_wait`, as `Prima.HostAPI` describes them.
 
   `call/3` is the one entry point. It takes a host call's header
   (`Prima.WorkerAuth.host_call_header/3`), its JSON body,
@@ -64,12 +64,11 @@ defmodule Opus.Host do
        the attempt before, and the attempt row is held by the header's
        runner under a grant that stands, before the attempt runs it
        (`Opus.Attempt.call/3`); `fail` needs the hold alone.
-       `admit_child`, `tool_call`, `egress_pin`, `attached_fetch`, the
-       pipe calls and the input calls act under what the attempt holds
+       `admit_child`, `tool_call`, `egress_pin`, `attached_fetch` and the
+       pipe calls act under what the attempt holds
        (`Opus.Host.Children`, `Opus.Host.Egress`,
-       `Opus.Host.AttachedFetch`, `Opus.Host.Pipe`, `Opus.Host.Inputs`),
-       and need the row live as well: no cancel asked of it and its
-       execution running.
+       `Opus.Host.AttachedFetch`, `Opus.Host.Pipe`), and need the row live
+       as well: no cancel asked of it and its execution running.
 
   A grant stands while its athanor is active at the generation the run was
   admitted under (`Sanctum.ExecutionStanding.verify/1`). An archive
@@ -134,17 +133,14 @@ defmodule Opus.Host do
   | `pipe_send` | `session`, `lines` (strings) | `true` |
   | `pipe_recv` | `session`, `after` (a sequence number), `max_wait_ms` (at most `Prima.HostAPI.max_pipe_wait_ms/0`) | `lines` (each `seq`, `text`), `dropped`, `running` |
   | `pipe_close` | `session` | `true` |
-  | `input_next` | none | the next input (`id`, `content`), or `null` |
-  | `input_sent` | `id` (`Prima.Model.valid_input_id?/1`) | `true` |
   | `question_ask` | `ask_no` (a positive integer), `action`, `summary`, `operation` (strings) | `answer`, `pending: true`, or `retry_after_ms` |
   | `question_wait` | `ask_no`, `max_wait_ms` (at most `Prima.HostAPI.max_question_wait_ms/0`) | `answer` or `pending: true` |
 
   An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
   `fetch_artifact` and `record_denial` are `Opus.Host.Storage`'s;
   `admit_child`, `tool_call` and `release_child` are
-  `Opus.Host.Children`'s; the pipe calls are `Opus.Host.Pipe`'s, the
-  input calls `Opus.Host.Inputs`'s and the question calls
-  `Opus.Host.Question`'s. An `answer` is `"allowed"`, `"denied"` or
+  `Opus.Host.Children`'s; the pipe calls are `Opus.Host.Pipe`'s and the
+  question calls `Opus.Host.Question`'s. An `answer` is `"allowed"`, `"denied"` or
   `{"none": "unattended" | "invalid" | "unavailable"}`. `admit_child` is keyed: a repeat with
   the same `child_key` answers the child already admitted under it, and
   one naming another `connection` than that child was admitted with is
@@ -181,7 +177,7 @@ defmodule Opus.Host do
   alias Prima.{AttachedRequest, Assignment, Delta, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
   alias Opus.{Attempt, Keys, Lapse}
   alias Prima.Outcome
-  alias Opus.Host.{AttachedFetch, Children, Egress, Inputs, Pipe, Question}
+  alias Opus.Host.{AttachedFetch, Children, Egress, Pipe, Question}
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :member]
   @refusals [
@@ -371,8 +367,6 @@ defmodule Opus.Host do
     do: pipe_recv(caller, session, after_seq, max_wait_ms)
 
   defp dispatch(caller, {:pipe_close, session}), do: pipe_close(caller, session)
-  defp dispatch(caller, :input_next), do: input_next(caller)
-  defp dispatch(caller, {:input_sent, id}), do: input_sent(caller, id)
 
   defp dispatch(caller, {:question_ask, ask_no, request}),
     do: question_ask(caller, ask_no, request)
@@ -480,12 +474,6 @@ defmodule Opus.Host do
 
   @impl HostAPI
   def pipe_close(caller, session), do: Pipe.close(caller, session)
-
-  @impl HostAPI
-  def input_next(caller), do: Inputs.next(caller)
-
-  @impl HostAPI
-  def input_sent(caller, id), do: Inputs.sent(caller, id)
 
   @impl HostAPI
   def question_ask(caller, ask_no, request), do: Question.ask(caller, ask_no, request)
@@ -702,12 +690,6 @@ defmodule Opus.Host do
 
   defp operation("pipe_close", %{"session" => session}) do
     if name?(session), do: {:ok, {:pipe_close, session}}, else: {:error, :lost}
-  end
-
-  defp operation("input_next", args) when map_size(args) == 0, do: {:ok, :input_next}
-
-  defp operation("input_sent", %{"id" => id}) do
-    if Prima.Model.valid_input_id?(id), do: {:ok, {:input_sent, id}}, else: {:error, :lost}
   end
 
   defp operation("question_ask", %{
