@@ -69,7 +69,7 @@ defmodule Aqua.ProgramTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
-    {:ok, ctx: ctx, fake: fake, thread: thread, row: brain_row!(ctx)}
+    {:ok, ctx: ctx, fake: fake, thread: thread, row: brain_row!(ctx), user: user}
   end
 
   describe "a turn on a program brain" do
@@ -1702,8 +1702,11 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "open", _wire, _fields}
     end
 
-    test "a startup option the harness does not take is refused before anything is written",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+    test "a startup option the harness does not take is refused before anything is written, " <>
+           "and the thread says why, live and opened again",
+         %{conn: conn, ctx: ctx, thread: thread, row: row, fake: fake, user: user} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
       turn = accept!(ctx, thread, row, "warm")
       options!(turn, %{"temperature" => "0.2"})
       loop = run(ctx, turn)
@@ -1715,10 +1718,29 @@ defmodule Aqua.ProgramTest do
 
       assert {:failed, ^line} = Task.await(loop, 30_000)
       assert {:ok, %{status: "failed", error: ^line}} = Tape.turn(ctx, turn.id)
+
+      assert [said] =
+               for(
+                 %{kind: "system"} = row <-
+                   Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id),
+                 do: row
+               )
+
+      assert {said.content, said.turn_id} == {line, turn.id}
+      # Live, the thread hears the line as the pane draws a row it hears;
+      # opened again, the pane draws it.
+      said_id = said.id
+
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :message, data: %{id: ^said_id} = heard}
+      assert {heard.kind, heard.content} == {"system", line}
+
+      conn = log_in_user(conn, user, athanor_id: ctx.athanor_id)
+      assert has_element?(pane!(conn, ctx, thread), ~s([id$="-m-#{said.id}"]), line)
       assert %{dispatch_state: "closed", error: ^line} = start_step(ctx, turn)
       assert_receive {:session, "close", _wire, _fields}, 10_000
       assert inputs(ctx, turn) == []
       refute_received {:session, "send", _wire, _fields}
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "a scheduled turn starts its program with nothing asked and runs as any turn of its mode",
@@ -2897,6 +2919,16 @@ defmodule Aqua.ProgramTest do
 
   # ---------------------------------------------------------------------------
   # The brain's row, the turn and its decision
+
+  # The thread's pane, as the person has it open.
+  defp pane!(conn, ctx, thread) do
+    {:ok, pane, _html} =
+      live_isolated(conn, PrismWeb.ThreadPaneLive,
+        session: %{"athanor_id" => ctx.athanor_id, "thread_id" => thread.id}
+      )
+
+    pane
+  end
 
   defp brain_row!(ctx, name \\ "claude-code") do
     {:ok, row} =
