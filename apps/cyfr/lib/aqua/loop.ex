@@ -2199,7 +2199,9 @@ defmodule Aqua.Loop do
       {:ok, step} ->
         case pause_root(state, :launch, step.id) do
           {:ok, state} ->
-            case worker(fn -> Aqua.Launch.run(ctx(state), step, decided) end) do
+            {answer, state} = worker(state, fn -> Aqua.Launch.run(ctx(state), step, decided) end)
+
+            case answer do
               {:ok, {:ok, %{execution_id: id, result: result}}} ->
                 state |> close_launch(step, unwrap(call), {:ok, id, result}) |> resumed()
 

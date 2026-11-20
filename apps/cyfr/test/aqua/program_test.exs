@@ -638,6 +638,39 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
+    test "an own tool is shown while a launch the program asked for runs",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      app = quiet_app!(ctx)
+
+      start_supervised!(
+        {Cyfr.Test.ScriptedWorker,
+         ref: [app], script: [{:hold, self()}, {:output, %{"ran" => true}}]}
+      )
+
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "run the app")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      # The app's run is held, and the turn is paused around it.
+      launch = %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}
+      say(fake, row, ask(turn, "ask-1", "execution", launch))
+      assert_receive {:scripted_probe, launched, _child}, 60_000
+      say(fake, row, own(turn, "Bash", "start"))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :running)]
+
+      send(launched, :continue)
+      _answer = accept_next!(fake, row)
+      say(fake, row, own(turn, "Bash", "end"))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :done)]
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
     test "an own tool still shown running is done at the native turn's end",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       watch!(ctx, thread)
