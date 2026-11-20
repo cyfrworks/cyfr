@@ -14,7 +14,11 @@ defmodule Aqua.Program do
   `program.start` of that row (`Aqua.Loop`), decided as a model's
   `program.start` is; its dispatch is `attend/2`, which opens the session
   if none is held, starts or resumes the harness and sets the turn's work
-  (`work`, with the turn's tools and the configuration it runs with). The
+  (`work`, with the turn's tools and the configuration it runs with). A
+  start that opens a new native session names the turn's tools too, which
+  a harness that keeps its session's tools for the session's life (Codex)
+  takes there alone: a tool a later turn adds is not one it can call, and
+  one a later turn lacks is still refused at CYFR's gate. The
   turn's loop then decides and runs the steps this process proposes with
   its own code and never reads the session itself.
 
@@ -453,6 +457,11 @@ defmodule Aqua.Program do
   defp pending(_work, nil), do: {:ok, []}
   defp pending(work, _session), do: Tape.brain_pending(work.guest, work.turn)
 
+  # A start that opens a new native session names the work's tools beside
+  # the work's own: a harness whose session keeps the tools it started
+  # with for its life (Codex) takes them here and nowhere else, and one
+  # that takes each work's (Claude Code) reads them from the `work`. A
+  # resume names none, since the session keeps its own.
   defp write_start(%{work: work} = state, session, pending) do
     command =
       %{
@@ -461,15 +470,16 @@ defmodule Aqua.Program do
         "config" => work.config,
         "system" => work.system,
         "session" => session,
-        "pending" => if(pending != [], do: pending)
+        "pending" => if(pending != [], do: pending),
+        "tools" => if(is_nil(session), do: work.tools)
       }
       |> reject_nil()
 
     case write(state, command) do
       :ok -> %{state | phase: :starting, pending: pending, fresh?: session == nil}
-      # The wire takes no such start: a startup option of the work's, or
-      # its instructions, are not what the harness takes. Nothing was
-      # written, and the work ends saying so.
+      # The wire takes no such start: a startup option of the work's, its
+      # instructions or its tools are not what the harness takes. Nothing
+      # was written, and the work ends saying so.
       {:error, :unreadable} -> fail(shut(state), unreadable_start(work))
       {:error, reason} -> write_failed(state, reason)
     end
@@ -479,7 +489,7 @@ defmodule Aqua.Program do
     named = work.config |> Map.keys() |> Enum.sort() |> Enum.join(", ")
 
     "#{work.title} could not start with what this work gives it: one of its options " <>
-      "(#{named}) or its instructions is not one it takes."
+      "(#{named}), its instructions or its tools is not one it takes."
   end
 
   defp write_work(%{work: work} = state) do

@@ -460,6 +460,41 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute html =~ ~s(phx-click="restart")
   end
 
+  # A driven program has no MCP client: the table shows no connection
+  # and no tools for it, a dash in each, while a tool server and an MCP
+  # program keep their status and their count.
+  test "a driven row's status and tools are empty, and an MCP row keeps both",
+       %{conn: conn, athanor: athanor} do
+    _driven = driven_row!(athanor)
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "piped",
+        transport: "program",
+        mark: "mcp",
+        url: nil,
+        enabled: false,
+        config_json: Jason.encode!(%{"command" => "npx -y fs", "env" => %{}})
+      })
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+    cells = fn name ->
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s(tr[phx-value-name="#{name}"] td[data-test]))
+      |> Enum.map(
+        &{List.first(LazyHTML.attribute(&1, "data-test")), String.trim(LazyHTML.text(&1))}
+      )
+    end
+
+    assert cells.("claude") == [{"home", "kept"}, {"status", "—"}, {"tools", "—"}]
+    assert [{"home", "scratch"}, {"status", status}, {"tools", "0"}] = cells.("piped")
+    refute status in ["", "—"]
+  end
+
   # A catalyst that runs a program with the person's own sign-in.
   defp harness!(athanor) do
     ctx = Sanctum.Context.internal(user_id: "_test", athanor_id: athanor.id, scope: :athanor)
@@ -1235,6 +1270,39 @@ defmodule PrismWeb.ProgramsLiveTest do
              Arca.McpServerStorage.get(ctx(athanor), "claude")
 
     assert again.config_json == row.config_json
+  end
+
+  # Each shipped harness member names its own row and suggests its own
+  # command, the driver first: the install the card offers prefills the
+  # form from that member's file alone, one path for both programs.
+  test "each shipped harness member's install prefills the form from its own file",
+       %{conn: conn, athanor: athanor} do
+    for {member, title, program, install} <- [
+          {"claude-code", "Claude Code", "claude",
+           "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"},
+          {"openai-codex", "OpenAI Codex", "openai-codex",
+           "cyfr-codex npx -y @openai/codex@0.169.0"}
+        ] do
+      query = URI.encode_query(%{"install_for" => member, "from" => "aqua"})
+      {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
+      render(view)
+
+      assert has_element?(
+               view,
+               ~s([data-test="install-from"]),
+               "for #{title}. This is the program"
+             )
+
+      assert has_element?(view, ~s(form#add-program input[name="name"][value="#{program}"]))
+      assert has_element?(view, ~s(form#add-program input[name="command"][value="#{install}"]))
+
+      assert has_element?(
+               view,
+               ~s(form#add-program select[name="mark"] option[value="driven"][selected])
+             )
+
+      assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), program)
+    end
   end
 
   # A removal is asked through the confirmation, which says what goes with

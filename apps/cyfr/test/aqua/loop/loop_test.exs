@@ -219,20 +219,6 @@ defmodule Aqua.LoopTest do
     assert Prima.Limits.timeout_ms(brain) == {:ok, 3 * 60_000}
     assert own > 3 * 60_000
     assert spec.deadline_ms == own
-
-    # A harness's catalyst ships consented thirty minutes, past its
-    # member's own time: the deadline its member's runs are admitted at,
-    # which its turns last at least as long as (a turn of the member itself
-    # needs its sign-in, which no test holds; `Aqua.Loop.ModelWaitTest`
-    # runs a turn on a brain consented as long). Claude Code's brain is a
-    # program, with no catalyst node and no deadline.
-    for harness <- ~w(openai-codex) do
-      {:ok, authority} = Opus.authority_for(ctx, :default, "agent:local.#{harness}")
-      {:ok, own} = Prima.Limits.timeout_ms(Prima.Authority.limits(authority))
-      {:ok, brain} = Prima.Authority.node_limits(authority, "catalyst:local.#{harness}")
-      assert own < 30 * 60_000
-      assert Prima.Limits.timeout_ms(brain) == {:ok, 30 * 60_000}
-    end
   end
 
   test "a turn that pins no agent revision is refused, never run on the roster's entry", %{

@@ -158,14 +158,22 @@ defmodule Aqua.SeedContractTest do
       refute Map.has_key?(meta, "tool_policy"), member.name
     end
 
-    # Claude Code's brain is the program row of its name, with the command
-    # its install form is prefilled with, and a model the program lists.
+    # Each harness member's brain is the program row of its name, with the
+    # command its install form is prefilled with, the driver first and the
+    # version its driver was probed against, and a model the program lists.
     assert %{
              catalyst_ref: nil,
              program: "claude",
              install: "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
              model: "opus"
            } = Enum.find(crew, &(&1.name == "claude-code"))
+
+    assert %{
+             catalyst_ref: nil,
+             program: "openai-codex",
+             install: "cyfr-codex npx -y @openai/codex@0.169.0",
+             model: "gpt-6.1-sol"
+           } = Enum.find(crew, &(&1.name == "openai-codex"))
   end
 
   test "the shipped soul is offered its crew, and the search gate passes through as written" do

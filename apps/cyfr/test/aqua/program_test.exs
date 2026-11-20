@@ -82,11 +82,14 @@ defmodule Aqua.ProgramTest do
       spec = spec!(ctx, turn)
       start_step = start_step(ctx, turn)
 
-      # The holder sets `read_only` from the turn's mode, auto here.
+      # The holder sets `read_only` from the turn's mode, auto here. A
+      # start that opens a new native session names the turn's tools, which
+      # a harness that keeps them for its session's life takes there alone.
       assert Map.delete(start, "system") == %{
                "t" => "start",
                "gen" => 0,
-               "config" => %{"model" => spec.agent["model"], "read_only" => false}
+               "config" => %{"model" => spec.agent["model"], "read_only" => false},
+               "tools" => json(spec.tools)
              }
 
       assert without_clock(start["system"]) == without_clock(spec.system)
@@ -865,7 +868,7 @@ defmodule Aqua.ProgramTest do
 
       # The session resumes, and the turn completes as it would have.
       opened!(fake, row, "boot-two")
-      assert sent() == Map.merge(first, %{"session" => @session, "pending" => [input.id]})
+      assert sent() == resume_of(first, %{"session" => @session, "pending" => [input.id]})
       say(fake, row, started([input.id]))
       assert sent() == work
       say(fake, row, %{"t" => "accepted", "id" => work["id"]})
@@ -1566,7 +1569,7 @@ defmodule Aqua.ProgramTest do
       resume = sent()
 
       assert Map.delete(resume, "system") ==
-               Map.merge(Map.delete(first, "system"), %{
+               resume_of(Map.delete(first, "system"), %{
                  "session" => @session,
                  "config" => %{
                    "model" => spec!(ctx, next).agent["model"],
@@ -1606,7 +1609,7 @@ defmodule Aqua.ProgramTest do
 
       line =
         "#{@title} could not start with what this work gives it: one of its options " <>
-          "(model, temperature) or its instructions is not one it takes."
+          "(model, temperature), its instructions or its tools is not one it takes."
 
       assert {:failed, ^line} = Task.await(loop, 30_000)
       assert {:ok, %{status: "failed", error: ^line}} = Tape.turn(ctx, turn.id)
@@ -1658,7 +1661,7 @@ defmodule Aqua.ProgramTest do
       resume = sent()
 
       assert resume ==
-               Map.merge(first, %{"session" => @session, "pending" => [input.id]})
+               resume_of(first, %{"session" => @session, "pending" => [input.id]})
 
       say(fake, row, started([input.id]))
       assert sent() == work
@@ -1740,7 +1743,7 @@ defmodule Aqua.ProgramTest do
 
       Scripted.end_sessions(fake, row.id)
       opened!(fake, row, "boot-two")
-      assert sent() == Map.merge(first, %{"session" => @session, "pending" => [input.id]})
+      assert sent() == resume_of(first, %{"session" => @session, "pending" => [input.id]})
       say(fake, row, started([]))
 
       line =
@@ -1787,7 +1790,7 @@ defmodule Aqua.ProgramTest do
       opened!(fake, row, "boot-two")
 
       assert sent() ==
-               Map.merge(first_start, %{
+               resume_of(first_start, %{
                  "session" => @session,
                  "pending" => [first.id, steered.id]
                })
@@ -1862,7 +1865,7 @@ defmodule Aqua.ProgramTest do
       committed!(ctx, thread, 6)
       Scripted.end_sessions(fake, row.id)
       opened!(fake, row, "boot-two")
-      assert sent() == Map.merge(first_start, %{"session" => @session, "pending" => [input.id]})
+      assert sent() == resume_of(first_start, %{"session" => @session, "pending" => [input.id]})
       say(fake, row, started([input.id]))
       assert sent() == work
       say(fake, row, %{"t" => "accepted", "id" => work["id"]})
@@ -1884,7 +1887,7 @@ defmodule Aqua.ProgramTest do
       opened!(fake, row, "boot-three")
 
       assert sent() ==
-               Map.merge(first_start, %{
+               resume_of(first_start, %{
                  "session" => @session,
                  "pending" => [noticed_post.id, noticed_answer.id]
                })
@@ -1942,7 +1945,7 @@ defmodule Aqua.ProgramTest do
       resume = sent()
 
       assert Map.delete(resume, "system") ==
-               Map.merge(Map.delete(first, "system"), %{"session" => @session})
+               resume_of(Map.delete(first, "system"), %{"session" => @session})
 
       say(fake, row, %{"t" => "gone"})
 
@@ -1996,7 +1999,7 @@ defmodule Aqua.ProgramTest do
 
       Scripted.end_sessions(fake, row.id)
       opened!(fake, row, "boot-two")
-      assert sent() == Map.merge(first, %{"session" => @session, "pending" => [input.id]})
+      assert sent() == resume_of(first, %{"session" => @session, "pending" => [input.id]})
       say(fake, row, %{"t" => "gone"})
       fresh = sent()
       assert Map.delete(fresh, "system") == %{Map.delete(first, "system") | "gen" => 1}
@@ -2104,7 +2107,7 @@ defmodule Aqua.ProgramTest do
       resume = sent()
 
       assert Map.delete(resume, "system") ==
-               Map.merge(Map.delete(first, "system"), %{"session" => @session})
+               resume_of(Map.delete(first, "system"), %{"session" => @session})
 
       assert owed(ctx) == []
       say(fake, moved, %{"t" => "gone"})
@@ -2159,7 +2162,7 @@ defmodule Aqua.ProgramTest do
       Scripted.set(fake, :dropped, 1)
       say(fake, row, said(turn, "msg_1", "after the loss"))
       opened!(fake, row, "boot-two")
-      assert sent() == Map.merge(first, %{"session" => @session, "pending" => [input.id]})
+      assert sent() == resume_of(first, %{"session" => @session, "pending" => [input.id]})
       say(fake, row, started([input.id]))
       assert sent() == work
       say(fake, row, %{"t" => "accepted", "id" => work["id"]})
@@ -2232,7 +2235,7 @@ defmodule Aqua.ProgramTest do
       opened!(fake, row, "boot-two")
 
       assert sent() ==
-               Map.merge(first_start, %{
+               resume_of(first_start, %{
                  "session" => @session,
                  "pending" => [first.id, steered.id]
                })
@@ -2529,7 +2532,7 @@ defmodule Aqua.ProgramTest do
       start = sent()
 
       assert Map.delete(start, "system") ==
-               first_start |> Map.delete("system") |> Map.put("session", @session)
+               first_start |> Map.delete("system") |> resume_of(%{"session" => @session})
 
       assert without_clock(start["system"]) == without_clock(first_start["system"])
       say(fake, row, %{"t" => "started", "session" => @session, "fresh" => false, "held" => []})
@@ -2900,6 +2903,11 @@ defmodule Aqua.ProgramTest do
   defp without_clock(system), do: String.replace(system, ~r/Current date: .*\z/s, "")
 
   defp json(value), do: value |> Jason.encode!() |> Jason.decode!()
+
+  # The start that resumes the session `first` opened: the same, naming
+  # what `resumed` adds, and none of the tools a start gives a new native
+  # session alone.
+  defp resume_of(first, resumed), do: first |> Map.delete("tools") |> Map.merge(resumed)
 
   # ---------------------------------------------------------------------------
   # Rows
