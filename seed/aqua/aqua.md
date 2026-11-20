@@ -1,8 +1,5 @@
 ---
 title: Aqua
-catalyst_ref: catalyst:local.claude
-model: claude-sonnet-5-5
-mode: auto
 tools:
   - aqua.get
   - aqua.list
