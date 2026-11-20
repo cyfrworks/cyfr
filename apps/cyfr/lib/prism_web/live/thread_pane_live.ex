@@ -2478,9 +2478,10 @@ defmodule PrismWeb.ThreadPaneLive do
       "focus-visible:opacity-100 max-md:opacity-100 min-h-6 text-xs text-gray-500 hover:text-gray-300 px-1"
   end
 
-  # A post, and a line of the server's to the thread's Aqua (`Aqua.Nudge`),
-  # which is drawn as the server's and is no post.
-  defp drawn?(row), do: Threads.post?(row) or row.kind == "nudge"
+  # A post, a line of the server's to the thread's Aqua (`Aqua.Nudge`),
+  # which is drawn as the server's and is no post, and the line a stopped
+  # turn leaves (`turn_aborted`), which the thread draws on open too.
+  defp drawn?(row), do: Threads.post?(row) or row.kind in ["nudge", "turn_aborted"]
 
   defp role_of(%{kind: "error"}), do: "error"
   defp role_of(%{kind: kind}) when kind in ["system", "nudge"], do: "system"

@@ -404,6 +404,30 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         do: refute(has_element?(pane, ~s([id$="-m-msg_#{kind}"])))
   end
 
+  test "the line a stopped turn leaves is drawn as it lands, as the thread draws it on open",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    pane = open_pane(conn, athanor, thread)
+
+    {:ok, stopped} =
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
+        author: Prima.Author.system(),
+        sent_by: "aqua",
+        kind: "turn_aborted",
+        content: "stopped"
+      })
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: athanor.id,
+      thread_id: thread.id,
+      kind: :message,
+      data: stopped
+    })
+
+    landed = ~s([id$="-m-#{stopped.id}"])
+    Prima.Test.Wait.wait_until(fn -> has_element?(pane, landed, "stopped") end)
+    assert has_element?(open_pane(conn, athanor, thread), landed, "stopped")
+  end
+
   test "a nudge, the server's line to the thread's Aqua, is drawn as the server's as it lands",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)
