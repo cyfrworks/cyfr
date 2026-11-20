@@ -663,8 +663,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # file names is no plan.
   defp plans(crew, status) do
     crew
-    |> Enum.filter(&is_binary(program_of(&1)))
-    |> Enum.uniq_by(&program_of/1)
+    |> plan_members()
     |> Enum.map(fn %{"name" => member} = m ->
       {state, _name} = status[member] || {:model_unavailable, nil}
 
@@ -909,9 +908,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp cast_option(%{"kind" => "string"}, value), do: {:ok, value}
   defp cast_option(_declared, _value), do: {:refused, "That value does not fit the option"}
 
-  # The install the first crew member by name that names `program` gives.
+  # The member each plan is named by: for each program the crew's files
+  # name, the first member by name that names it.
+  defp plan_members(crew),
+    do: crew |> Enum.filter(&is_binary(program_of(&1))) |> Enum.uniq_by(&program_of/1)
+
+  # The install of the member `program`'s plan is named by, absent when
+  # that member's file names none.
   defp plan_install(crew, program),
-    do: Enum.find_value(crew, &(program_of(&1) == program && &1["install"]))
+    do: Enum.find(plan_members(crew), &(program_of(&1) == program))["install"]
 
   # The program a member's brain is, by its row's name, or nil.
   defp program_of(%{"program" => program}) when is_binary(program) and program != "",

@@ -1791,6 +1791,49 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "picking a plan preserves the named member's absent install suggestion",
+         %{conn: conn, ctx: ctx} do
+      fake = backends!()
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "aaa",
+          "title" => "AAA",
+          "program" => "claude",
+          "model" => "opus",
+          "content" => "Work on the job."
+        })
+
+      {:ok, named} = get_agent(ctx, "aaa")
+      assert named["install"] == nil
+      {:ok, later} = get_agent(ctx, "claude-code")
+      assert is_binary(later["install"])
+      row = program_row!(ctx, "claude", later["install"])
+      {:ok, before} = get_agent(ctx, "aqua")
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      assert has_element?(view, "#aqua-setup-plan-aaa")
+      refute has_element?(view, "#aqua-setup-plan-claude-code")
+      lists!(fake, row, fn -> plan_choices(view, "aaa") != [] end)
+
+      view
+      |> form("#aqua-setup-pick", %{"value" => "::program::claude::opus"})
+      |> render_change()
+
+      assert get_agent(ctx, "aqua") ==
+               {:ok,
+                %{
+                  before
+                  | "program" => "claude",
+                    "install" => nil,
+                    "model" => "opus",
+                    "catalyst_ref" => nil
+                }}
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "picking a connected brain for Aqua asks for its consent again at once",
          %{conn: conn, ctx: ctx} do
       athanor = seated_athanor()
