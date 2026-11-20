@@ -251,12 +251,12 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
     File.write!(Path.join([seed, "aqua", "aqua.md"]), """
     ---
     title: Aqua
-    catalyst_ref: #{@stub}
-    model: step-stub
     ---
 
     You answer the person.
     """)
+
+    Cyfr.Test.SeedBundle.seat!(seed, member: "stub", catalyst_ref: @stub, model: "step-stub")
 
     seed
   end

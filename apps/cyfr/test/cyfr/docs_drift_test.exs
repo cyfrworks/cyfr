@@ -2106,7 +2106,7 @@ defmodule Cyfr.DocsDriftTest do
     # Who reaches the tool: the CLI, the API and a glass paired with the
     # person from outside, and the assistant from a run. No tincture
     # declares it, a manifest of any type but an agent's may not name it,
-    # and the shipped soul is offered it and runs in auto.
+    # and the shipped soul is offered it and runs in its member's mode, auto.
     %Prima.Operation{planes: planes} = Map.fetch!(operations("layout"), "edit")
 
     assert :external in planes and :in_chain in planes,
@@ -2197,13 +2197,24 @@ defmodule Cyfr.DocsDriftTest do
         SourceTree.read(Path.join(@repo_root, "seed/aqua/aqua.md"))
       )
 
-    assert "layout.edit" in soul.tools and soul.mode == "auto",
-           "the shipped soul is offered #{inspect(soul.tools)} in #{soul.mode}; " <>
-             "tincture-guide.md's layout paragraph says it is offered layout.edit and runs in auto"
+    # Aqua runs in the mode of the crew member it runs on: each shipped one's.
+    modes =
+      for path <- Path.wildcard(Path.join(@repo_root, "seed/aqua/crew/*.md")) do
+        {:ok, member} =
+          Compendium.AquaAgent.parse(Path.basename(path, ".md"), SourceTree.read(path))
+
+        member.mode
+      end
+
+    assert "layout.edit" in soul.tools and modes != [] and Enum.all?(modes, &(&1 == "auto")),
+           "the shipped soul is offered #{inspect(soul.tools)}, its crew in #{inspect(modes)}; " <>
+             "tincture-guide.md's layout paragraph says it is offered layout.edit and runs " <>
+             "in auto in each shipped member"
 
     for writer <- [
           "The CLI, the API and a device paired with the person call it for the person",
-          "the assistant: the shipped Aqua is offered it and runs in auto",
+          "the assistant: the shipped Aqua is offered it and runs in the mode of the crew " <>
+            "member it runs on, auto in each shipped one",
           "No tincture declares `layout.edit`"
         ] do
       assert paragraph =~ writer,

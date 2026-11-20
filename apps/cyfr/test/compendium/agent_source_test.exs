@@ -58,7 +58,12 @@ defmodule Compendium.AgentSourceTest do
     {:ok, rows} = AgentSource.rows(ctx)
     names = Enum.map(rows, & &1.name)
     assert hd(names) == "aqua"
-    assert Enum.sort(names) == Enum.sort(~w(aqua claude-code explorer openai-codex))
+    # The shipped crew, and the member the test seed's Aqua runs on
+    # (`Cyfr.Test.SeedBundle.seat!/2`).
+    assert Enum.sort(names) ==
+             Enum.sort(
+               ~w(aqua claude-code explorer openai-codex) ++ [Cyfr.Test.SeedBundle.seat_member()]
+             )
 
     soul = Enum.find(rows, &(&1.name == "aqua"))
     assert soul.component_type == "agent" and soul.publisher == "local"
@@ -105,7 +110,8 @@ defmodule Compendium.AgentSourceTest do
 
     {:ok, bytes} = Arca.AgentRevisions.get(Sanctum.Context.actor(ctx), snap.revision_digest)
     assert {:ok, ^bytes} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.soul_file())
-    assert {:ok, snap.agent} == AquaAgent.parse("aqua", bytes)
+    # The soul as it runs: seated on the crew member its bytes name.
+    assert {:ok, snap.agent} == AquaAgent.resolve(ctx, "aqua", bytes)
 
     # A crew member's snapshot keeps its own bytes and is offered the
     # soul's tools, which its capability digest names.

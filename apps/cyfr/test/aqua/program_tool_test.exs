@@ -260,12 +260,13 @@ defmodule Aqua.ProgramToolTest do
   # A start refused as it dispatched, in the words the turn read.
   defp refused(error), do: %{outcome: "error", error: error}
 
-  # The soul switched to read-only, as the Aqua page switches it.
+  # Aqua switched to read-only, as the Aqua page switches it: the crew
+  # member Aqua runs on, whose mode Aqua runs in.
   defp read_only!(ctx) do
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
-        "name" => Compendium.AquaPath.soul_name(),
+        "name" => Cyfr.Test.SeedBundle.seat_member(),
         "mode" => "read-only"
       })
   end

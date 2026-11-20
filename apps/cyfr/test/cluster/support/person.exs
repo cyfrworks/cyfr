@@ -11,8 +11,8 @@ defmodule Cyfr.Cluster.Person do
   whose context each member establishes from the session token as the
   console does (`context/1`), in an athanor filled through the explicit
   provision verb on the member that makes the person, which answers once
-  the fill has run there: the shipped Aqua tree and catalysts copied in,
-  indexed and the soul consented. The model's key is then entered and
+  the fill has run there: the fixture's Aqua tree and shipped catalysts copied in,
+  indexed, and the soul and its crew member consented. The model's key is then entered and
   bound through the consent walk (`person!/0`). What such a
   person does then goes through the runner (`send/3`), the console's
   opening of a thread (`open/2`), the consent
@@ -23,8 +23,8 @@ defmodule Cyfr.Cluster.Person do
   each member's scripted worker service (`Cyfr.Cluster.Boot.start_worker!/1`),
   so the component is the only stand-in. The seed tree the athanor is
   filled from is the run's own (`seed!/0`), laid once by the control node
-  and read by both members: the suite's own seed carries the Aqua tree
-  alone.
+  and read by both members: the suite's seed seats Aqua on a crew member that runs the
+  scripted model.
   """
 
   @compile {:no_warn_undefined,
@@ -61,7 +61,8 @@ defmodule Cyfr.Cluster.Person do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The run's seed tree: the repository's Aqua tree and the newest shipped
+  The run's seed tree: the repository's Aqua tree seated on the scripted
+  model, and the newest shipped
   version of each catalyst a turn on the soul reaches, without build
   droppings. Laid once per run, at a path the run's own prefix names
   (`Cyfr.Cluster.Store.prefix/0`), under the run's temporary directory;
@@ -88,6 +89,7 @@ defmodule Cyfr.Cluster.Person do
     repo = Path.expand("../../../../../seed", __DIR__)
     File.mkdir_p!(dir)
     File.cp_r!(Path.join(repo, "aqua"), Path.join(dir, "aqua"))
+    Cyfr.Test.SeedBundle.seat!(dir, catalyst_ref: @model)
 
     for name <- @catalysts do
       unit = Cyfr.Test.SeedBundle.local_unit!(repo, "catalysts", name)
@@ -123,7 +125,10 @@ defmodule Cyfr.Cluster.Person do
 
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
     {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(athanor, ctx)
-    {:ok, [_soul]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @soul)
+    actor = Sanctum.Context.actor(ctx)
+    member = Prima.AgentRef.ref(Cyfr.Test.SeedBundle.seat_member())
+    {:ok, [_soul]} = Arca.ConsentStorage.profiles(actor, @soul)
+    {:ok, [_member]} = Arca.ConsentStorage.profiles(actor, member)
 
     entry =
       Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})

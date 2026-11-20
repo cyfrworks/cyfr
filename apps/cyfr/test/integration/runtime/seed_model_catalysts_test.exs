@@ -163,9 +163,9 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     end
   end
 
-  test "the shipped assistant runs claude with the key bound on claude's own profile", %{
-    ctx: ctx
-  } do
+  test "Aqua, on a crew member whose brain is claude, runs claude with the key bound on " <>
+         "claude's own profile",
+       %{ctx: ctx} do
     # The soul's closure is every shipped agent's catalyst and the hands.
     for {plural, name} <- [
           {"catalysts", "claude"},
@@ -184,10 +184,29 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "aqua")
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
 
-    # The baseline consents: the soul's edge to claude selects claude's
-    # default profile, which binds nothing yet.
+    # The baseline consents: Aqua's, which runs on no crew member yet, and
+    # claude's default profile, which binds nothing yet.
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert "agent:local.aqua" in minted and "catalyst:local.claude" in minted
+
+    # The person chooses the crew member Aqua runs on, one on claude: its
+    # brain moved Aqua's consent's shape, which is the person's to give.
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "create",
+        "name" => "writer",
+        "title" => "Writer",
+        "catalyst_ref" => "catalyst:local.claude",
+        "model" => "claude-sonnet-5-5"
+      })
+
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => "writer"})
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+    assert {:error, {:consent_required, _}} =
+             Opus.authority_for(ctx, :default, "agent:local.aqua")
 
     child_opts = [
       ctx: Sanctum.Context.enter_guest(ctx),
@@ -196,13 +215,6 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     ]
 
     input = %{"operation" => "nothing.here", "params" => %{}}
-
-    {:ok, before} = Opus.authority_for(ctx, :default, "agent:local.aqua")
-
-    assert {:error, {:setup_required, %{node_ref: "catalyst:local.claude:" <> _, reason: reason}}} =
-             Opus.run_child(before, "catalyst:local.claude", nil, input, child_opts)
-
-    assert reason == "vault_selection_unbound"
 
     # The person connects the key on the catalyst — one act, on the model.
     # CYFR attaches it, so the entry stays attach-only.
@@ -218,8 +230,10 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
 
     consent!(ctx, "catalyst:local.claude", %{entry_id: entry.id})
 
-    # The assistant's authority, loaded again, lends the key on its edge;
-    # the child runs to its own refusal.
+    # Aqua's consent given for its member's brain selects claude's default
+    # profile, which now binds the key: the assistant's authority lends it
+    # on its edge, and the child runs to its own refusal.
+    select!(ctx, "agent:local.aqua", "catalyst:local.claude")
     {:ok, authority} = Opus.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, "Unknown operation: nothing.here"} =
@@ -356,6 +370,23 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
   defp consent!(ctx, ref, identity) do
     {:ok, walk_plan} = Plan.plan(ctx, %{ref: ref})
     decisions = %{ref: ref, bindings: [Map.put(identity, :need, "api_key")]}
+    {:ok, preview} = Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: walk_plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: walk_plan.expected_consent_revision
+      })
+  end
+
+  # `ref`'s consent given as a person gives it, its edge to `dep`
+  # selecting that catalyst's default profile.
+  defp select!(ctx, ref, dep) do
+    {:ok, walk_plan} = Plan.plan(ctx, %{ref: ref})
+    decisions = %{ref: ref, selections: [%{dep: dep, label: "default"}]}
     {:ok, preview} = Commit.preview(ctx, decisions)
 
     {:ok, _} =

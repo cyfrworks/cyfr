@@ -59,7 +59,7 @@ defmodule Aqua.SeedContractTest do
     workspace.list workspace.open workspace.report
   )
 
-  test "the shipped soul is offered exactly its shipped list, and every shipped member says auto" do
+  test "the shipped soul is offered exactly its shipped list, and every shipped crew member says auto" do
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(seed_file("aqua")))
 
     assert soul.tools == @shipped_tools
@@ -67,14 +67,19 @@ defmodule Aqua.SeedContractTest do
     # The browser's switch is the person's alone: no member is offered it.
     refute "browser.turn_on" in soul.tools
 
-    # Each file names its mode, so the shipped mode is the file's word and
-    # not the parser's default.
+    # Each crew file names its mode, so the shipped mode is the file's word
+    # and not the parser's default. The soul's names none: Aqua runs in the
+    # mode of the crew member it runs on (`Compendium.AquaAgent.seated/2`).
     for agent <- seed_agents() do
       {:ok, meta, _body} =
         Compendium.AquaAgent.parse_frontmatter(File.read!(seed_file(agent.name)))
 
-      assert meta["mode"] == "auto", agent.name
-      assert agent.mode == "auto", agent.name
+      if agent.name == Compendium.AquaPath.soul_name() do
+        refute Map.has_key?(meta, "mode")
+      else
+        assert meta["mode"] == "auto", agent.name
+        assert agent.mode == "auto", agent.name
+      end
     end
   end
 
@@ -215,37 +220,12 @@ defmodule Aqua.SeedContractTest do
 
   # A grant a person signs for that no shipped prose ever exercises is a
   # line on the consent sheet for nothing. Every key of a catalogued MCP
-  # action a shipped file offers is named in the body of the file that
-  # holds it, or rostered here with the reason it is granted untaught.
+  # action the soul's file offers is named in what Aqua is taught
+  # (`taught/0`), or rostered here with the reason it is granted untaught.
   @granted_but_untaught %{
-    # The Working Loop's "an execution's logs", named in prose, not by key.
-    "execution.logs" => "verify step of the working loop",
-    # The reflex table sends the model to the Schedules page and names the list.
-    "schedule.list" => "reflex table",
-    # `aqua.get` serves the guides the capability-acquisition scroll cites.
-    "aqua.get" => "guides read by the scroll",
-    "aqua.list" => "the roster the soul may read to describe its crew",
-    "aqua.skill_get" => "taught as `aqua.skill_get`",
-    "aqua.skill_list" => "the scroll index the prompt carries",
-    "build.toolchains" => "the builder scroll checks toolchains before compiling",
-    "component.inspect" => "read a component before building on it",
-    "component.setup_plan" => "readiness check the builder and artisan scrolls run after a pull",
-    "system.status" => "status checks the planner scroll answers",
-    # A component's source is read and written as the builder and artisan
-    # scrolls teach it, with `source(action: ...)` beside the soul's own
-    # reads, and built as they teach it.
-    "source.read" => "taught by the builder and artisan scrolls",
-    "source.tree" => "taught by the builder and artisan scrolls",
-    "source.grep" => "taught by the builder and artisan scrolls",
-    "source.write" => "taught by the builder and artisan scrolls",
-    "source.edit" => "taught by the builder and artisan scrolls",
-    "build.compile" => "taught by the builder and artisan scrolls",
-    "component.create" => "the builder and artisan scrolls' scaffold",
-    # The soul's Capability Acquisition teaches these and the builder
-    # scroll builds what it does not find.
-    "component.list" => "capability acquisition, taught by the soul",
-    "component.search" => "capability acquisition, taught by the soul",
-    "component.pull" => "capability acquisition, taught by the soul"
+    # An execution's logs, named in CYFR's part as "a run's logs", not by key.
+    "execution.logs" => "the check after a change, in CYFR's part",
+    "aqua.skill_list" => "the scroll index the prompt carries"
   }
 
   test "every offered tool is taught, or rostered as granted untaught" do
@@ -253,12 +233,16 @@ defmodule Aqua.SeedContractTest do
       for {name, key} <- seed_tools(),
           mcp_action?(key),
           not Map.has_key?(@granted_but_untaught, key),
-          body = seed_body(name),
+          body = taught(),
           not String.contains?(body, key),
           not String.contains?(body, taught_form(key)),
           do: "#{name}: #{key}"
 
     assert untaught == [], Enum.join(untaught, "\n")
+
+    # The roster is exact: nothing on it is taught.
+    assert for(key <- Map.keys(@granted_but_untaught), String.contains?(taught(), key), do: key) ==
+             []
   end
 
   # A canvas is the soul's own to write: it is offered what a canvas may
@@ -287,25 +271,23 @@ defmodule Aqua.SeedContractTest do
     for taught <- ["canvas.catalog", "feed.list", "layout.edit"], do: assert(body =~ taught)
   end
 
-  # The soul's list, its prompt, the canvas scroll and the artisan scroll
-  # say one thing: the soul writes a canvas as a page's files, the next
-  # version whole, with nobody asked; the artisan scroll teaches no canvas
-  # write, and nothing teaches the module, tree or toolkit a canvas no
-  # longer has.
-  test "the list, the prompt, the canvas scroll and the artisan scroll agree on writing a canvas" do
-    soul = File.read!(seed_file("aqua"))
-    [_, section] = Regex.run(~r/^## Canvases\n(.*?)\n---/ms, soul)
-    canvases = String.replace(section, ~r/\s+/, " ")
-    assert canvases =~ "`canvas.write` writes the next version whole"
+  # The soul's list, the canvas scroll and the artisan scroll say one
+  # thing: a canvas is written as a page's files, the next version whole,
+  # with nobody asked; the artisan scroll teaches no canvas write, and
+  # nothing teaches the module, tree or toolkit a canvas no longer has.
+  # Aqua's own prompt leaves canvases to the scroll its index lists.
+  test "the list, the canvas scroll and the artisan scroll agree on writing a canvas" do
+    refute seed_body("aqua") =~ ~r/canvas/i
 
     body = String.replace(canvas_scroll(), ~r/\s+/, " ")
     assert body =~ "Write with `canvas.write` what the person asked for"
+    assert body =~ "Each write is the next version, whole"
 
     artisan = File.read!(Path.join([@seed, "skills", "artisan", "SKILL.md"]))
     refute artisan =~ "| `canvas` |"
     refute artisan =~ ~r/canvas\.(write|catalog|versions)/
 
-    for {file, text} <- [{"aqua.md", canvases}, {"skills/canvas/SKILL.md", body}] do
+    for {file, text} <- [{"skills/canvas/SKILL.md", body}] do
       refute text =~ ~r/\b(module|modules|toolkit|tree|trees|render)\b/i, file
       refute text =~ ~r/\bglass(es)?\b/i, file
       refute text =~ ~r/\bcards?\b/i, file
@@ -437,7 +419,9 @@ defmodule Aqua.SeedContractTest do
     # The soul's grant names each exactly, which is the only way a grant
     # holds a feed write.
     assert ~w(feed.bind feed.list feed.remove) -- granted() == []
-    assert seed_body("aqua") =~ "feed.list"
+
+    # The canvas scroll teaches each, and that a feed bound runs on its own.
+    for key <- ~w(feed.bind feed.list feed.remove), do: assert(canvas_scroll() =~ key)
   end
 
   # The layout is the person's arrangement: the soul is offered its read
@@ -457,8 +441,10 @@ defmodule Aqua.SeedContractTest do
     assert ~w(layout.edit layout.get) -- soul_tools == []
     assert ~w(layout.edit layout.get) -- granted() == []
 
-    body = seed_body("aqua")
-    assert body =~ "layout.get" and body =~ "layout.edit"
+    # The canvas scroll teaches both: the read, then the edit that adds a
+    # canvas from the revision it answered.
+    body = canvas_scroll()
+    assert body =~ ~s|layout(action: "get")| and body =~ "layout.edit"
   end
 
   # ---------------------------------------------------------------------------
@@ -531,6 +517,20 @@ defmodule Aqua.SeedContractTest do
   defp seed_body(name) do
     {:ok, _meta, body} = Compendium.AquaAgent.parse_frontmatter(File.read!(seed_file(name)))
     body
+  end
+
+  # What Aqua is taught: its file's body, which opens its prompt, CYFR's
+  # part that follows it on every brain (`Aqua.Prompt.briefing/2`), and
+  # each shipped scroll, which the prompt's scroll index lists and Aqua
+  # reads before doing what it describes.
+  defp taught do
+    scrolls =
+      for path <- Prima.Test.SourceTree.files!(Path.join([@seed, "skills", "*", "SKILL.md"])) do
+        {:ok, _meta, body} = Compendium.AquaAgent.parse_frontmatter(File.read!(path))
+        body
+      end
+
+    Enum.join([seed_body("aqua"), Aqua.Prompt.briefing(true, true) | scrolls], "\n")
   end
 
   # `component(action: "search")` is how a body teaches `component.search`.

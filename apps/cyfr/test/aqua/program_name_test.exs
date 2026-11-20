@@ -96,8 +96,9 @@ defmodule Aqua.ProgramNameTest do
     refute second.id == first.id
 
     # The pinned turn, built again as a resumed loop builds it, reads its
-    # pin by id and never resolves the name again: its row is gone.
-    assert {:error, :program_missing} = build(ctx, turn)
+    # pin by id and never resolves the name again: its row is gone, said
+    # as the member's card says it (`Prima.Refusal`).
+    assert {:error, {:crew_unready, "Coder", :program_missing}} = build(ctx, turn)
 
     # The next turn resolves the name once more and runs on the new row.
     next = accept!(ctx, thread, "second")

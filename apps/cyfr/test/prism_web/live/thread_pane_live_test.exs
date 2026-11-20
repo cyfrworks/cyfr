@@ -1676,9 +1676,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   describe "the pane's empty state over the model's consent" do
     # The athanor is ready, and its soul's model is installed with an owner
     # profile whose head exists: the empty state reads the model through
-    # `Aqua.model_status/2`.
+    # `Aqua.model_status/2`. Aqua runs on a crew member on that model.
     setup %{athanor: athanor, here: here} do
       {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
+      :ok = soul_on_claude!(here)
 
       {:ok, _} =
         Compendium.Registry.publish_bytes(here, Cyfr.Test.Guests.wasm(:catalyst), %{
@@ -1763,6 +1764,53 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # Aqua with no crew member, or one that does not stand, has no model
+    # to connect: the pane says why in the sentence Aqua's card says and
+    # its turn is refused with (`Prima.Refusal`), with the way to the
+    # Aqua page.
+    test "Aqua with no member, or one that does not stand, says why, never no model", %{
+      conn: conn,
+      athanor: athanor,
+      here: here
+    } do
+      actor = Sanctum.Context.actor(here)
+      crew = Compendium.AquaPath.crew_file("claude")
+
+      claude =
+        "---\ntitle: Claude\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n"
+
+      seat =
+        &Arca.put(actor, Compendium.AquaPath.soul_file(), "---\ntitle: Aqua\n#{&1}---\n\nsoul\n")
+
+      cases = [
+        {fn -> seat.("") end, {:aqua_runs_on, :none, nil}},
+        {fn -> seat.("member: ghost\n") end, {:aqua_runs_on, :missing, "ghost"}},
+        {fn -> seat.("member: Claude Code\n") end, {:aqua_runs_on, :invalid, "Claude Code"}},
+        {fn ->
+           :ok = seat.("member: claude\n")
+           Arca.put(actor, crew, claude <> "disabled: true\n---\n")
+         end, {:aqua_runs_on, :disabled, "claude"}},
+        {fn -> Arca.put(actor, crew, claude <> "---\n\nYou are Claude.\n") end,
+         {:aqua_runs_on, :refused, "claude"}}
+      ]
+
+      for {make, reason} <- cases do
+        :ok = make.()
+        {:ok, _} = Compendium.AgentIndex.sync(here)
+        pane = empty_pane(conn, athanor)
+        refute render(pane) =~ "has no model yet"
+
+        assert has_element?(pane, ~s([data-test="model-unseated"]), Prima.Refusal.message(reason))
+
+        assert has_element?(
+                 pane,
+                 ~s(a[data-test="model-connect"][href="#{athanor_path("/aqua?setup=1", athanor)}"])
+               )
+
+        Cyfr.Test.Sandbox.end_views()
+      end
+    end
+
     test "a model whose head binds no key is still one to connect", %{
       conn: conn,
       athanor: athanor
@@ -1786,9 +1834,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   describe "the pane's empty state over a model that runs a program" do
     # The athanor is ready, and its soul's model runs a program on its own
-    # sign-in, never granted.
+    # sign-in, never granted. Aqua runs on a crew member on that model.
     setup %{athanor: athanor, here: here} do
       {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
+      :ok = soul_on_claude!(here)
 
       {:ok, _} =
         Compendium.Registry.publish_bytes(here, Cyfr.Test.Guests.wasm(:catalyst), %{
@@ -1856,12 +1905,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
          %{conn: conn, athanor: athanor, here: here} do
       actor = Sanctum.Context.actor(here)
 
-      :ok =
-        Arca.put(
-          actor,
-          Compendium.AquaPath.soul_file(),
-          "---\ntitle: Aqua\nprogram: claude\nmodel: opus\n---\n\nsoul\n"
-        )
+      :ok = soul_on_program!(actor)
 
       {:ok, _} = Compendium.AgentIndex.sync(here)
 
@@ -1891,12 +1935,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
          %{conn: conn, athanor: athanor, here: here} do
       actor = Sanctum.Context.actor(here)
 
-      :ok =
-        Arca.put(
-          actor,
-          Compendium.AquaPath.soul_file(),
-          "---\ntitle: Aqua\nprogram: claude\nmodel: opus\n---\n\nsoul\n"
-        )
+      :ok = soul_on_program!(actor)
 
       {:ok, _} = Compendium.AgentIndex.sync(here)
 
@@ -1937,20 +1976,62 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       _bare = row!.("npx -y claude", true)
       unfit = said.()
 
+      # Named by the crew member Aqua runs on, whose card installs or opens
+      # it, as Aqua's turn and card name it.
       assert [missing, disabled, unfit] == [
-               "your Aqua's program is not installed here — install it from its card on the " <>
+               "Coder's program is not installed here — install it from its card on the " <>
                  "Aqua page",
-               "your Aqua's program is disabled — enable it on the Programs page",
-               "your Aqua's program is not one a brain can run in — on the Programs page, make " <>
+               "Coder's program is disabled — enable it on the Programs page",
+               "Coder's program is not one a brain can run in — on the Programs page, make " <>
                  "it a driven program with a kept folder whose command starts with its driver"
              ]
 
       assert [missing, disabled, unfit] ==
                for(
                  state <- [:program_missing, :program_disabled, :program_unfit],
-                 do: Prima.Refusal.message({:crew_unready, "your Aqua", state})
+                 do: Prima.Refusal.message({:crew_unready, "Coder", state})
                )
     end
+  end
+
+  # Aqua seated on a crew member whose brain is the catalyst named
+  # `claude`: Aqua runs on its member's brain.
+  defp soul_on_claude!(here) do
+    actor = Sanctum.Context.actor(here)
+
+    :ok =
+      Arca.put(
+        actor,
+        Compendium.AquaPath.crew_file("claude"),
+        "---\ntitle: Claude\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n---\n"
+      )
+
+    :ok =
+      Arca.put(
+        actor,
+        Compendium.AquaPath.soul_file(),
+        "---\ntitle: Aqua\nmember: claude\n---\n\nsoul\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(here)
+    :ok
+  end
+
+  # Aqua seated on a crew member whose brain is the program row named
+  # `claude`: Aqua runs on its member's brain.
+  defp soul_on_program!(actor) do
+    :ok =
+      Arca.put(
+        actor,
+        Compendium.AquaPath.crew_file("coder"),
+        "---\ntitle: Coder\nprogram: claude\nmodel: opus\n---\n"
+      )
+
+    Arca.put(
+      actor,
+      Compendium.AquaPath.soul_file(),
+      "---\ntitle: Aqua\nmember: coder\n---\n\nsoul\n"
+    )
   end
 
   # The athanor as a fill leaves it, its soul's model connected
