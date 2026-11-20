@@ -274,6 +274,58 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
+    test "small text files still fit beside escaped fresh context when their notices would not",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      files =
+        for name <- ["a.txt", "b.txt"],
+            do: %{"filename" => name, "media_type" => "text/plain", "bytes" => "x"}
+
+      blocks =
+        for file <- files,
+            do: %{"type" => "text", "text" => "The attached file #{file["filename"]}:\n\nx"}
+
+      context = fn history ->
+        [%{"type" => "text", "text" => "The thread so far:\n\nAqua: " <> history}]
+      end
+
+      prototype =
+        posted(
+          %{id: Prima.UUID7.generate_id("stp")},
+          %{id: Prima.UUID7.generate_id("trn")},
+          "tiny files",
+          blocks
+        )
+        |> Map.put("context", context.(""))
+
+      room = Opus.Brain.max_line_bytes() - byte_size(Jason.encode!(prototype)) - 10
+      history = String.duplicate("\"", div(room, 2))
+      assert byte_size("Aqua: " <> history) < 512 * 1024
+
+      assert byte_size(Jason.encode!(Map.put(prototype, "context", context.(history)))) <=
+               Opus.Brain.max_line_bytes()
+
+      assert {:ok, _} =
+               Tape.append(ctx, thread.id, %{
+                 author: Arca.Schemas.Message.agent_author(),
+                 sent_by: "aqua",
+                 kind: "text",
+                 content: history
+               })
+
+      {id, refs} = stored!(ctx, thread, files)
+      turn = accept!(ctx, thread, row, "tiny files", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+      expected = Map.put(posted(input, turn, "tiny files", blocks), "context", context.(history))
+      assert byte_size(Jason.encode!(expected)) <= Opus.Brain.max_line_bytes()
+      assert post == expected
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
     test "an image that nearly fills the line alone is handed over as itself",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       bytes = :binary.copy("P", 786_000)

@@ -988,9 +988,11 @@ defmodule Aqua.Program do
   # line past the wire's bound is named as too large instead, and the post
   # goes with the rest; one whose bytes are gone is left out. A line's
   # bytes are its command's JSON, so a block adds its own and a comma.
-  # Any file may end as its notice, so a block is taken only while the
-  # notices of the files after it still fit beside it: the post's line
-  # then passes the bound only when its text and the notices alone do.
+  # Each file ends as its block or its notice, so a block is taken only
+  # while the files after it still fit beside it, each by the smaller of
+  # the two: a notice never stands in for a smaller block, and the post's
+  # line passes the bound only when its text and those smaller ones alone
+  # do.
   defp with_files(command, work, row) do
     files =
       Aqua.Attachments.load(work.guest, row.thread_id, Aqua.Attachments.attachments_of([row]))
@@ -998,7 +1000,15 @@ defmodule Aqua.Program do
     types = Opus.Brain.media_types()
     max = Opus.Brain.max_line_bytes()
     notices = Enum.map(files, &too_large/1)
-    reserved = notices |> Enum.map(&entry_bytes/1) |> Enum.sum()
+
+    reserved =
+      files
+      |> Enum.zip(notices)
+      |> Enum.map(fn {file, notice} ->
+        block = file |> Aqua.Loop.Turn.file_block(types) |> Map.delete("filename")
+        min(entry_bytes(block), entry_bytes(notice))
+      end)
+      |> Enum.sum()
 
     {blocks, _room} =
       files
@@ -1009,10 +1019,10 @@ defmodule Aqua.Program do
   end
 
   # One file's block, or its notice, beside `bytes` taken so far and the
-  # notices `reserved` for the files after it.
+  # room `reserved` for the files after it.
   defp fit({file, notice}, {bytes, reserved}, types, max) do
-    reserved = reserved - entry_bytes(notice)
     block = file |> Aqua.Loop.Turn.file_block(types) |> Map.delete("filename")
+    reserved = reserved - min(entry_bytes(block), entry_bytes(notice))
 
     if bytes + entry_bytes(block) + reserved <= max,
       do: {block, {bytes + entry_bytes(block), reserved}},
