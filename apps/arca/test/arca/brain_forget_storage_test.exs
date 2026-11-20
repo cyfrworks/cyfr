@@ -362,6 +362,47 @@ defmodule Arca.BrainForgetStorageTest do
     end
   end
 
+  # The batch holds the thread's lock and compares its generation with the
+  # stored one strictly before anything is written, so the session it names
+  # is kept only under the generation the turn read, of the same type.
+  describe "a batch's generation" do
+    test "of another type than the stored one, 0.0 for 0, is refused and keeps nothing",
+         %{actor: actor, room: room, row: row} do
+      addressed!(actor, room, "aqua")
+      before = whole(actor, room)
+
+      assert {:error, :generation_moved} =
+               batch(actor, room, row, "aqua", 0.0, %{session: "named"})
+
+      assert whole(actor, room) == before
+      assert owed(actor) == []
+    end
+
+    test "missing raises, and the thread's row is as it was", %{
+      actor: actor,
+      room: room,
+      row: row
+    } do
+      addressed!(actor, room, "aqua")
+      before = whole(actor, room)
+
+      assert_raise KeyError, fn ->
+        TurnStorage.commit_brain(actor, room.id, %{
+          agent: "aqua",
+          boot: "boot-#{System.unique_integer([:positive])}",
+          hello: true,
+          seq: 1,
+          row_id: row.id,
+          epoch: row.epoch,
+          silence_ms: 1_800_000,
+          session: "named"
+        })
+      end
+
+      assert whole(actor, room) == before
+    end
+  end
+
   # A program brain names its row by name, which a deleted row no longer
   # answers and a replacement answers again: the threads a home's reset or
   # retirement reaches are found by the row's id the threads store, the

@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. A program's pipe (pipe_open, pipe_send, pipe_recv, pipe_close): each pipe call's answer is a success of its shape (an open's session and resumed; true; a read's lines, each seq and text, dropped and running; true), its refusals add denied and the pipe's guest errors, and its body pins the args CYFR reads (need, key and argv; session and lines; session, after and max_wait_ms, at most Prima.HostAPI.max_pipe_wait_ms/0; session). A running invocation's inputs (input_next, input_sent): input_next's body carries no args and its answer is the next input not yet reported sent, its id and content (Prima.Model.check_input/1), or null only when nobody supplies the invocation or its supplier has none, a supplier that is gone, silent or answers no answer being unavailable; input_sent's body names the id reported and its answer is true once the invocation's supplier recorded it, unavailable otherwise; each is refused lost for an attempt that is not live, and input_next a guest_error invalid_request naming the member of a supplier's input that does not read, never its content. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is denied and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused. A catalyst's ask (question_ask, question_wait): question_ask's body pins ask_no, a positive integer the runner takes once for each call of the guest's ask, and the request's action, summary and operation; question_wait's pins ask_no and max_wait_ms, at most Prima.HostAPI.max_question_wait_ms/0. Each answer is a success: {answer}, {pending: true}, or for question_ask {retry_after_ms}, a positive integer, an answer being \"allowed\", \"denied\" or {\"none\": \"unattended\" | \"invalid\" | \"unavailable\"} (Prima.HostAPI.answer_to_wire/1); each is refused lost for an attempt that is not live. question_cases holds them in the order one attempt asks: request_digests are a request's digest, SHA-256 as lowercase hexadecimal over its action, summary and operation, each prefixed with its UTF-8 byte length as an unsigned 32-bit big-endian integer (Opus.Host.Question.request_digest/3), and cases are calls, each answered as CYFR answers it: opened admits an ask whose question opens; keyed_replay is opened's body under a fresh header, answered the same wait; changed is opened's number with another request, invalid; paced is past its root's allowance and paced_admitted the same body sent again, admitted; unattended and invalid are asks answered at once; and the waits are one that timed out, pending, and one of each final answer.",
+  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. A program's pipe (pipe_open, pipe_send, pipe_recv, pipe_close): each pipe call's answer is a success of its shape (an open's session and resumed; true; a read's lines, each seq and text, dropped and running; true), its refusals add denied and the pipe's guest errors, and its body pins the args CYFR reads (need, key and argv; session and lines; session, after and max_wait_ms, at most Prima.HostAPI.max_pipe_wait_ms/0; session). pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is denied and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused. A catalyst's ask (question_ask, question_wait): question_ask's body pins ask_no, a positive integer the runner takes once for each call of the guest's ask, and the request's action, summary and operation; question_wait's pins ask_no and max_wait_ms, at most Prima.HostAPI.max_question_wait_ms/0. Each answer is a success: {answer}, {pending: true}, or for question_ask {retry_after_ms}, a positive integer, an answer being \"allowed\", \"denied\" or {\"none\": \"unattended\" | \"invalid\" | \"unavailable\"} (Prima.HostAPI.answer_to_wire/1); each is refused lost for an attempt that is not live. question_cases holds them in the order one attempt asks: request_digests are a request's digest, SHA-256 as lowercase hexadecimal over its action, summary and operation, each prefixed with its UTF-8 byte length as an unsigned 32-bit big-endian integer (Opus.Host.Question.request_digest/3), and cases are calls, each answered as CYFR answers it: opened admits an ask whose question opens; keyed_replay is opened's body under a fresh header, answered the same wait; changed is opened's number with another request, invalid; paced is past its root's allowance and paced_admitted the same body sent again, admitted; unattended and invalid are asks answered at once; and the waits are one that timed out, pending, and one of each final answer.",
   "version": 1,
   "auth_header": "x-cyfr-auth",
   "routes": {
@@ -22,8 +22,6 @@
     "pipe_send": "/host/v1/pipe_send",
     "pipe_recv": "/host/v1/pipe_recv",
     "pipe_close": "/host/v1/pipe_close",
-    "input_next": "/host/v1/input_next",
-    "input_sent": "/host/v1/input_sent",
     "question_ask": "/host/v1/question_ask",
     "question_wait": "/host/v1/question_wait",
     "runner_exited": "/host/v1/runner_exited"
@@ -48,8 +46,6 @@
     "pipe_send": "never",
     "pipe_recv": "idempotent",
     "pipe_close": "idempotent",
-    "input_next": "idempotent",
-    "input_sent": "idempotent",
     "question_ask": "keyed",
     "question_wait": "idempotent",
     "runner_exited": "idempotent"
@@ -74,8 +70,6 @@
     "pipe_send": 30000,
     "pipe_recv": 30000,
     "pipe_close": 30000,
-    "input_next": 30000,
-    "input_sent": 30000,
     "question_ask": 30000,
     "question_wait": 30000,
     "runner_exited": 30000
@@ -852,76 +846,6 @@
         {
           "answer": "{\"v\":1,\"error\":\"unavailable\"}",
           "why": "CYFR's store or the program's box could not answer: retried as the callback's class allows"
-        }
-      ]
-    },
-    {
-      "callback": "input_next",
-      "fields": {
-        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
-        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
-        "fence": 2,
-        "generation": 7,
-        "service": "wrk_4f3c2a1e9d8b7c6a",
-        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
-        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
-        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
-        "ts": 1789305251950,
-        "nonce": "n_host_input_next"
-      },
-      "body": "{\"v\":1,\"op\":\"input_next\",\"args\":{}}",
-      "body_iv_hex": "b1353c7c5309b8f348f8d592",
-      "body_sealed": "sTU8fFMJuPNI-NWSQdIwxlaEAxnAiNlHTEUqcjqSVlEpxF_G2JtJ4oPmSYvo2HwVwafadsSruobZsOFvxMw2",
-      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251950 nonce=n_host_input_next body=76915b05a0c564261472f726d6f184a1796031eb8aa69a27c41c56d2af9bac96 mac=vCZ6U0ziYQfKKUQZtt2oMCW-JapVDZl6Wa9a55AT1d8",
-      "answer": "{\"v\":1,\"ok\":{\"content\":[{\"text\":\"Still waiting on the run?\",\"type\":\"text\"}],\"id\":\"evt_vector_input_1\"}}",
-      "answer_iv_hex": "c101d5aa2ce7bde4d91c2771",
-      "answer_sealed": "wQHVqiznveTZHCdx69Pxh7YRBqRi5vg6X-sKpSYWZqptDIHUe8QHWcRBznJMrQKssvpj2EJnPkWUgwwFsb9pmCDLekbACpZHgWqaTwR0XwQUzCpTu9Rh8UopnTvmEkgJpDXtmDzr8jP85-6E6QEY6RvsJRl2Rvmka31Qc2Z6QRnGX1s",
-      "refusals": [
-        {
-          "answer": "{\"v\":1,\"error\":\"guest_error\",\"message\":\"The input the run was handed does not read (content[0].data).\",\"type\":\"invalid_request\"}",
-          "why": "the supplier answered an input Prima.Model.check_input/1 refuses, named by the member that breaks it and never by its content"
-        },
-        {
-          "answer": "{\"v\":1,\"error\":\"lost\"}",
-          "why": "the attempt is not current, running, at the caller's fence and claimed by its runner, or its execution was cancelled or ended, or the args do not read: the runner stops its work"
-        },
-        {
-          "answer": "{\"v\":1,\"error\":\"unavailable\"}",
-          "why": "the invocation's supplier could not answer (it is gone, it did not answer in time or it answered no answer), never read as null, or CYFR's store could not answer"
-        }
-      ]
-    },
-    {
-      "callback": "input_sent",
-      "fields": {
-        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
-        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
-        "fence": 2,
-        "generation": 7,
-        "service": "wrk_4f3c2a1e9d8b7c6a",
-        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
-        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
-        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
-        "ts": 1789305251960,
-        "nonce": "n_host_input_sent"
-      },
-      "body": "{\"v\":1,\"op\":\"input_sent\",\"args\":{\"id\":\"evt_vector_input_1\"}}",
-      "body_iv_hex": "3f1a6f43f2a312f1360b2934",
-      "body_sealed": "PxpvQ_KjEvE2Cyk0QKpFRjq5EXDIshQmETKBHYEnYejIs77XT94UvKWu2NF4UjvJ9vb5MrcAQusTnRetx1vE3dM-3PUC77zAb0Hs509Uedd7XevVpGVejg",
-      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251960 nonce=n_host_input_sent body=bedeb7d3a13e4df11c70484052657db3cd7b214c543b099daeb42378b44a2940 mac=gZgfrneolK9j0VEm_Sg36R7lMgED_2eH1z-AqsQc2AY",
-      "answer": "{\"v\":1,\"ok\":true}",
-      "answer_iv_hex": "47a5a9b7612d2dd10f561dea",
-      "answer_sealed": "R6Wpt2EtLdEPVh3q3pNDSqczzDcz7ir94sn707ktUG1H9f8MuaP0f8N-LCFu",
-      "refusals": [
-        {
-          "answer": "{\"v\":1,\"error\":\"lost\"}",
-          "why": "the attempt is not current, running, at the caller's fence and claimed by its runner, or its execution was cancelled or ended, or the args do not read: the runner stops its work; an id that is not an input's among them"
-        },
-        {
-          "answer": "{\"v\":1,\"error\":\"unavailable\"}",
-          "why": "no supplier recorded the report (none was named, it is gone or it did not answer) or CYFR's store could not answer: reported again as the callback's class allows"
         }
       ]
     },

@@ -67,8 +67,6 @@ defmodule Cyfr.Test.AttemptFixtures do
     which the run's questions are bound to (default none);
   - `:reservation` — `true` to admit the row with the invocation
     reservation its authority's budget names, as a root is admitted;
-  - `:inputs` — the process that supplies the run's further inputs
-    (`Opus.Inputs`), none by default;
   - `:attach` — `false` to stop before attaching.
   """
   @spec attached!(keyword()) :: map()
@@ -130,8 +128,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         worker: Keyword.get_lazy(opts, :worker, fn -> unreachable_worker(service_id) end),
         digest: digest,
         release_digest: Keyword.get(opts, :release_digest),
-        grant: grant,
-        inputs: Keyword.get(opts, :inputs)
+        grant: grant
       )
 
     {:ok, issued} =

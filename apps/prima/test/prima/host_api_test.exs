@@ -469,7 +469,6 @@ defmodule Prima.HostAPITest do
   defp refusal_of?(callback, name) when callback in @pipe_calls,
     do: name in ~w(denied guest_error)
 
-  defp refusal_of?("input_next", name), do: name == "guest_error"
   defp refusal_of?("complete", name), do: name == "failed"
   defp refusal_of?("fetch_artifact", name), do: name == "not_found"
 
@@ -730,51 +729,6 @@ defmodule Prima.HostAPITest do
       assert Enum.all?(argv ++ lines, &is_binary/1)
       assert is_integer(after_seq) and after_seq >= 0
       assert wait == HostAPI.max_pipe_wait_ms()
-    end
-  end
-
-  describe "a running invocation's inputs" do
-    test "are read and reported again freely: a read moves nothing, a report marks once" do
-      assert HostAPI.retry(:input_next) == :idempotent
-      assert HostAPI.retry(:input_sent) == :idempotent
-
-      for callback <- [:input_next, :input_sent] do
-        assert callback in HostAPI.callbacks()
-        assert HostAPI.request_timeout_ms(callback) == WorkerAuth.window_ms()
-        assert WorkerWire.host_route(callback) == "/host/v1/#{callback}"
-      end
-    end
-
-    test "each call's body pins the args CYFR reads, and its answer the shape CYFR answers" do
-      {args, answers} =
-        for call <- @vectors["calls"],
-            call["callback"] in ~w(input_next input_sent),
-            reduce: {%{}, %{}} do
-          {args, answers} ->
-            {_fields, read, {:ok, answer}} = reproduces(call)
-            {Map.put(args, call["callback"], read), Map.put(answers, call["callback"], answer)}
-        end
-
-      assert %{"input_next" => %{} = no_args, "input_sent" => %{"id" => id}} = args
-      assert no_args == %{}
-      assert %{"input_next" => %{"id" => ^id} = input, "input_sent" => true} = answers
-      assert Prima.Model.check_input(input) == :ok
-      assert Prima.Model.valid_input_id?(id)
-    end
-
-    test "a refusal of a supplier's input names its member, never its content" do
-      [next] = for %{"callback" => "input_next"} = call <- @vectors["calls"], do: call
-
-      for %{"answer" => refused} <- next["refusals"] do
-        case WorkerWire.read_answer(Jason.decode!(refused)) do
-          {:error, "guest_error", %{"type" => type, "message" => message}} ->
-            assert type == "invalid_request"
-            assert message =~ ~r/\(content\[0\]\.data\)\.\z/
-
-          {:error, name, _fields} ->
-            assert name in ["lost", "unavailable"]
-        end
-      end
     end
   end
 

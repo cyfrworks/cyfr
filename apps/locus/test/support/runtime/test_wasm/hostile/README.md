@@ -7,11 +7,11 @@ Components written in WebAssembly text that push against what the engine
 lets one run hold (`Locus.Runtime.Engine.store_limits/1`), what its vault
 hands it, what a request naming a connection may carry, what reaches a
 guest of the credential CYFR attaches for it, or what its program pipe
-answers or what its further inputs answer, that trap, or that use a feature the runtime refuses
+answers, that trap, or that use a feature the runtime refuses
 (`Prima.ComponentFeatures`). Each `.wat` says what it does; the tests that
 run them are `Locus.Runtime.StoreLimitsTest`, `Locus.Runtime.TrapTest`,
 `Locus.Runtime.ComponentFeaturesTest`, `Locus.Runtime.VaultDenialTest` and
-`Locus.Runtime.PipeImportTest` and `Locus.Runtime.InputsImportTest` in this suite,
+`Locus.Runtime.PipeImportTest` in this suite,
 `Locus.Runtime.MemoryBoundTest`, `Locus.Runtime.SecretAuditTest`,
 `Locus.Runtime.AttachedFetchTest`, `Locus.Runtime.FormulaHandlerTest`,
 `Opus.Schedules.SchedulerTest`, `CyfrWeb.WebhookFlowIntegrationTest`,
@@ -28,7 +28,6 @@ CYFR's, and the worker image's `tests/locus-runtime-image/runners.py` and
 | `attached_header_probe` | catalyst | sends its input as its one request, naming a connection, and answers the request's answer; an input that adds an `Authorization` header is refused by shape |
 | `credential_canary` | catalyst | sends its input as its one request, naming a connection, reads `CANARY_KEY` from its vault, and writes the request's answer and the read's result to one event and to its output |
 | `pipe_probe` | catalyst | opens its program pipe, sends its input's line, reads past 0 and closes, and answers what each call answered |
-| `inputs_probe` | catalyst | asks its invocation for one further input and, given one, reports it sent, and answers what each call answered |
 | `trapper` | reagent | traps on the input `{"trap":true}` and answers `{"ran":true}` to any other |
 | `async_lift` | reagent | lifts `compute` async with a callback; refused for the component-model async feature |
 | `sync_lift` | reagent | `async_lift` lifted synchronously; admitted |
@@ -71,8 +70,6 @@ credential_canary.wat      sha256:1a6454ba0eb640603d8e19e53798ab1b40f651857c2bd7
 credential_canary.wasm     sha256:a060410f737ba9418beab64d568ecd17e95424909e99cca86e021a64e1baa0e1
 pipe_probe.wat             sha256:eceee440cee4c8bc428d84480761b68b3f8a1fb526d157b32bce024238a30cba
 pipe_probe.wasm            sha256:21c9d03fa4a8521e44bc2f02749fffa26edddd1f843f10addf256298d865b485
-inputs_probe.wat           sha256:de3cdaef7b86203738a277b0d304377a6de58f7e96e00bdffb5570a1430d166b
-inputs_probe.wasm          sha256:d59de9b1794c7dd07156b0b0b05f92ae0bd3071d32b423cb3b0d975df0449015
 trapper.wat                sha256:bd87bb0835163c620f3b0b67ec482798faace66aec66781581285421392c94f9
 trapper.wasm               sha256:6c0709e585eb71f180c8f0386324aec45d4cd19db13ddc41e76ebdc7c1e1eb8c
 async_lift.wat             sha256:c990b80ab5dc7f5ae6051c16e3722f8e402b38b123f385f63785302a8f470e8f

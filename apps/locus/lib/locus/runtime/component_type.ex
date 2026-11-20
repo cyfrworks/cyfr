@@ -18,7 +18,6 @@ defmodule Locus.Runtime.ComponentType do
   | `wasi:random/random`          | ✅        | ✅       | ✅       |
   | `cyfr:vault/read`           | ✅*       | ❌       | ❌       |
   | `cyfr:process/pipe`         | ✅‡       | ❌       | ❌       |
-  | `cyfr:model/inputs`         | ✅§       | ❌       | ❌       |
   | `cyfr:question/ask`         | ✅¶       | ❌       | ❌       |
 
   *`cyfr:vault/read` resolves fields from the Vault entry a consent edge binds
@@ -26,9 +25,6 @@ defmodule Locus.Runtime.ComponentType do
   ‡`cyfr:process/pipe` is a session on the program a `login` need is bound to: each
   call is a host call (`c:Prima.HostAPI.pipe_open/4` and the rest), and CYFR decides
   the need, the binding and the session
-  §`cyfr:model/inputs` is the further input of the running invocation, which whoever
-  started it supplies: each call is a host call (`c:Prima.HostAPI.input_next/1` and
-  `c:Prima.HostAPI.input_sent/2`), answered for the caller's own attempt alone
   ¶`cyfr:question/ask` asks the run's person before an action the manifest declares
   under `asks`, and waits: each call is a `c:Prima.HostAPI.question_ask/3` host call,
   waited on in `c:Prima.HostAPI.question_wait/3` calls. A reagent does nothing outside
