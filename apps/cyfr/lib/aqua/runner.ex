@@ -524,7 +524,8 @@ defmodule Aqua.Runner do
           # Open turns another process on this boot still holds: turn id =>
           # its holder and monitor, or nil while a recovery retries.
           held: %{},
-          usage: %{input: 0, output: 0},
+          # What the latest turn used, as the rows store it.
+          usage: Tape.usage(ctx, thread.id),
           tool_activity: [],
           # The running turn's streamed answers (`Aqua.Loop.Stream`).
           partials: Aqua.Loop.Stream.new(),
@@ -1302,7 +1303,7 @@ defmodule Aqua.Runner do
   end
 
   defp after_loop(%{live: live} = state, result) do
-    state = %{state | live: nil}
+    state = recount(%{state | live: nil})
 
     case result do
       {:paused, reason} ->
@@ -1346,6 +1347,8 @@ defmodule Aqua.Runner do
         Prima.LogFilter.inspect_reason(reason)
     )
 
+    state = recount(state)
+
     case Tape.turn(state.ctx, live.turn_id) do
       {:ok, %{status: "paused"} = turn} ->
         paused = %{
@@ -1370,6 +1373,17 @@ defmodule Aqua.Runner do
           {:error, _reason} -> {:stop, :normal, retire_runtime(state)}
         end
     end
+  end
+
+  # A turn's loop is gone: what the turn used is told as the rows store
+  # it, which a program that counted nothing leaves unknown, never zero.
+  # The loop's own counts reached this process before its end did (both
+  # sent from the loop's process), so only a usage they did not tell is
+  # told again.
+  defp recount(state) do
+    usage = Tape.usage(state.ctx, state.id)
+    if usage != state.usage, do: broadcast(state, :usage, usage)
+    %{state | usage: usage}
   end
 
   # A paused turn: stopped on a call whose outcome is unknown it waits for

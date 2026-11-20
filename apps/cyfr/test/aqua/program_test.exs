@@ -1743,6 +1743,33 @@ defmodule Aqua.ProgramTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "a turn that counted nothing reads unknown in the thread's menu, live as it ends and " <>
+           "opened again, never zero",
+         %{conn: conn, ctx: ctx, thread: thread, row: row, fake: fake, user: user} do
+      turn = accept!(ctx, thread, row, "warm")
+      options!(turn, %{"temperature" => "0.2"})
+      conn = log_in_user(conn, user, athanor_id: ctx.athanor_id)
+      # The pane's runner takes the turn from the rows and runs it; its
+      # start is refused before the program counted anything.
+      pane = pane!(conn, ctx, thread)
+      opened!(fake, row, "boot-one")
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?({:ok, %{status: "failed"}}, Tape.turn(ctx, turn.id)) end,
+        10_000,
+        "the turn to fail"
+      )
+
+      Prima.Test.Wait.wait_until(
+        fn -> menu_text(pane) =~ "Tokens unknown" end,
+        10_000,
+        "the live menu to say the tokens are unknown"
+      )
+
+      assert menu_text(pane!(conn, ctx, thread)) =~ "Tokens unknown"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "a scheduled turn starts its program with nothing asked and runs as any turn of its mode",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       ctx = %{ctx | origin: :schedule}
@@ -2928,6 +2955,17 @@ defmodule Aqua.ProgramTest do
       )
 
     pane
+  end
+
+  # The thread menu's words, spaced as a person reads them.
+  defp menu_text(pane) do
+    pane
+    |> element(~s([id$="-menu"]))
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.text()
+    |> String.split()
+    |> Enum.join(" ")
   end
 
   defp brain_row!(ctx, name \\ "claude-code") do

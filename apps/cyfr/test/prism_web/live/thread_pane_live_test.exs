@@ -553,6 +553,115 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(open_pane(conn, athanor, thread), @empty_state)
   end
 
+  describe "the menu's tokens, opened again" do
+    # A turn of the thread, over, whose model step told `usage`: no runner
+    # holds what it counted.
+    defp counted_turn!(here, thread, usage) do
+      actor = Sanctum.Context.actor(here)
+      turn = turn!(here, thread)
+
+      {:ok, model} =
+        Arca.TurnStorage.put_step(actor, turn.id, %{kind: "model", fence: turn.fence})
+
+      {:ok, _} =
+        Arca.TurnStorage.record_response(actor, turn.id, model.id, %{
+          fence: turn.fence,
+          text: "done",
+          usage: usage
+        })
+
+      ended!(turn)
+    end
+
+    # A turn of the thread on a program, over: its `program.start` step,
+    # keyed as the loop keys it, holds `usage` as the program's counts
+    # store it, or none.
+    defp program_turn!(here, thread, usage) do
+      turn = turn!(here, thread)
+
+      {:ok, step} =
+        Arca.TurnStorage.put_step(Sanctum.Context.actor(here), turn.id, %{
+          kind: "tool",
+          purpose: "brain",
+          tool: "program",
+          action: "start",
+          idempotency_key: Arca.TurnStorage.brain_start_key(turn.id),
+          fence: turn.fence
+        })
+
+      if usage,
+        do:
+          {1, _} =
+            Arca.Repo.update_all(from(s in Arca.Schemas.TurnStep, where: s.id == ^step.id),
+              set: [usage: Jason.encode!(usage)]
+            )
+
+      ended!(turn)
+    end
+
+    defp turn!(here, thread) do
+      {:ok, %{turn: turn}} =
+        Arca.TurnStorage.accept_message(Sanctum.Context.actor(here), thread.id, %{
+          message: %{author: here.user_id, sent_by: "person", content: "count it"},
+          turn: %{agent: "aqua", requested_by: here.user_id, origin: :interactive}
+        })
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [status: "running"]
+        )
+
+      turn
+    end
+
+    defp ended!(turn) do
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [status: "completed"]
+        )
+
+      turn
+    end
+
+    defp menu_text(pane) do
+      pane
+      |> element(~s([id$="-menu"]))
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.text()
+      |> String.split()
+      |> Enum.join(" ")
+    end
+
+    test "an API brain's counted turn reads its stored tokens",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      counted_turn!(here, thread, %{"input_tokens" => 40, "output_tokens" => 9})
+      assert menu_text(open_pane(conn, athanor, thread)) =~ "Tokens 40 in · 9 out"
+    end
+
+    test "a program's counted turn reads its stored model and tokens",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      program_turn!(here, thread, %{
+        "models" => %{
+          "claude-opus-5-5" => %{"input_tokens" => 120, "output_tokens" => 30}
+        },
+        "results" => 1,
+        "partial" => 0,
+        "unknown" => 0
+      })
+
+      menu = menu_text(open_pane(conn, athanor, thread))
+      assert menu =~ "claude-opus-5-5"
+      assert menu =~ "Tokens 120 in · 30 out"
+    end
+
+    test "a program's turn that counted nothing reads unknown, never zero",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      program_turn!(here, thread, nil)
+      assert menu_text(open_pane(conn, athanor, thread)) =~ "Tokens unknown"
+    end
+  end
+
   test "a nudge, the server's line to the thread's Aqua, is drawn as the server's as it lands",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)
