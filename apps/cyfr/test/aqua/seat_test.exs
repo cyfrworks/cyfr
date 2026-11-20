@@ -275,6 +275,52 @@ defmodule Aqua.SeatTest do
         do: assert(Threads.pending_requests(actor(ctx), thread_id: thread.id) == [])
   end
 
+  # CYFR's part is one text for both modes: a read-only member is offered
+  # a write and refused it, and the request that offered it says what
+  # read-only runs, never that every tool it holds runs as it is called.
+  test "a read-only worker is not told that its offered writes run",
+       %{ctx: ctx, room: room, holder: holder} do
+    member!(ctx, holder, %{"mode" => "read-only"})
+    consent!(ctx, Prima.AgentRef.ref(holder), [%{dep: @model, label: "default"}])
+
+    script!([
+      %{
+        "content" => [
+          %{
+            "type" => "tool_call",
+            "id" => "write",
+            "name" => "files",
+            "arguments" => %{"action" => "delete", "path" => "data/review-missing"}
+          }
+        ],
+        "stop_reason" => "tool_call",
+        "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+      },
+      reply("Read only.")
+    ])
+
+    {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
+    turn = accept!(ctx, child, "inspect only", holder)
+    assert :completed = run(ctx, turn)
+    assert {:ok, %{agent_mode: "read-only"}} = Tape.turn(ctx, turn.id)
+    assert [%{input: %{"params" => params}}, %{input: %{"params" => followup}}] = chats(holder)
+    assert Enum.any?(params["tools"], &(&1["name"] == "files"))
+
+    assert %{
+             "type" => "tool_result",
+             "tool_call_id" => "write",
+             "name" => "files",
+             "content" => Aqua.Loop.Policy.read_only_sentence(holder),
+             "is_error" => true
+           } in Enum.flat_map(followup["messages"], & &1["content"])
+
+    system = params["system"]
+    assert system =~ "In read-only only reads run, and any other call comes back with a sentence"
+    refute system =~ "- Every tool you hold runs as you call it"
+    refute system =~ "build one by hand. A component the person granted runs"
+    refute system =~ "for that one act: nothing but this instruction stops you"
+  end
+
   # A brain picked for the member Aqua runs on asks Aqua's consent on the
   # page (`PrismWeb.AquaLive.AgentsComponent`), never the member's own:
   # that stays on the brain it was given for, so a job of the member's own
