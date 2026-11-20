@@ -818,40 +818,43 @@ defmodule Aqua.Loop do
 
   # The attendant is watched while the turn waits on it: one that ends
   # ends the turn's wait, as the program's job is over with it, and says
-  # so unless it was closed on purpose.
+  # so unless it was closed on purpose. Meanwhile the program's own tools
+  # it tells of join the turn's one list of what runs.
   defp attended(%State{} = state, start) do
+    case Aqua.Program.watch(program_work(state, start.id), self()) do
+      {:ok, attendant} -> attending(state, Process.monitor(attendant))
+      {:error, sentence} -> {:halt, {:failed, sentence}, state}
+    end
+  end
+
+  defp attending(%State{} = state, monitor) do
     turn_id = state.turn.id
 
-    case Aqua.Program.watch(program_work(state, start.id), self()) do
-      {:ok, attendant} ->
-        monitor = Process.monitor(attendant)
+    receive do
+      {:page_call, ^turn_id} ->
+        Process.demonitor(monitor, [:flush])
+        {:continue, state}
 
-        receive do
-          {:page_call, ^turn_id} ->
-            Process.demonitor(monitor, [:flush])
-            {:continue, state}
+      {Aqua.Program, ^turn_id, {:own, name, phase}} ->
+        state |> own_activity(name, phase) |> attending(monitor)
 
-          {Aqua.Program, ^turn_id, :idle} ->
-            Process.demonitor(monitor, [:flush])
-            {:halt, :completed, state}
+      {Aqua.Program, ^turn_id, :idle} ->
+        Process.demonitor(monitor, [:flush])
+        {:halt, :completed, state}
 
-          {Aqua.Program, ^turn_id, {:ended, {:failed, sentence}}} ->
-            Process.demonitor(monitor, [:flush])
-            _ = system_row(state, sentence)
-            {:halt, {:failed, sentence}, state}
+      {Aqua.Program, ^turn_id, {:ended, {:failed, sentence}}} ->
+        Process.demonitor(monitor, [:flush])
+        _ = system_row(state, sentence)
+        {:halt, {:failed, sentence}, state}
 
-          # Closed on purpose: Stop closes the session before it stops the
-          # turn, which says nothing more in the thread.
-          {:DOWN, ^monitor, :process, _pid, :normal} ->
-            {:halt, :cancelled, state}
+      # Closed on purpose: Stop closes the session before it stops the
+      # turn, which says nothing more in the thread.
+      {:DOWN, ^monitor, :process, _pid, :normal} ->
+        {:halt, :cancelled, state}
 
-          {:DOWN, ^monitor, :process, _pid, _reason} ->
-            sentence = "#{program_title(state)} stopped before it finished."
-            _ = system_row(state, sentence)
-            {:halt, {:failed, sentence}, state}
-        end
-
-      {:error, sentence} ->
+      {:DOWN, ^monitor, :process, _pid, _reason} ->
+        sentence = "#{program_title(state)} stopped before it finished."
+        _ = system_row(state, sentence)
         {:halt, {:failed, sentence}, state}
     end
   end
@@ -3130,6 +3133,25 @@ defmodule Aqua.Loop do
 
         :done ->
           Enum.reduce(named, state.activity, &mark_done(&2, &1))
+      end
+
+    announce(state, :tool_activity, activity)
+    %{state | activity: activity}
+  end
+
+  # A program brain's own tool, by the name its attendant gives, running
+  # from its start to its end: an entry of the same list, worded as a tool
+  # no step names, since none is kept of it (`Aqua.Program`).
+  defp own_activity(%State{} = state, name, phase) do
+    sentence = Aqua.Steps.sentence(nil, nil, nil)
+
+    activity =
+      case phase do
+        "start" ->
+          state.activity ++ [%{tool: name, sentence: sentence, status: :running, preview: nil}]
+
+        "end" ->
+          mark_done(state.activity, {name, sentence})
       end
 
     announce(state, :tool_activity, activity)

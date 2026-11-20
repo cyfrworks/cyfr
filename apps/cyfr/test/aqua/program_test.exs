@@ -427,7 +427,7 @@ defmodule Aqua.ProgramTest do
       refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
     end
 
-    test "text of other work, or of none, is not streamed",
+    test "text and own tools of other work, or of none, are not shown",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       watch!(ctx, thread)
       turn = accept!(ctx, thread, row, "work on it")
@@ -436,19 +436,97 @@ defmodule Aqua.ProgramTest do
       _post = sent()
       [input] = inputs(ctx, turn)
       say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
       say(fake, row, text(turn, "msg_other", "for other work", "trn_other"))
       say(fake, row, text(turn, "msg_none", "for no work", :none))
+      say(fake, row, own(turn, "Other", "start", "trn_other"))
+      say(fake, row, own(turn, "None", "start", :none))
       say(fake, row, text(turn, "msg_1", "mine"))
+      say(fake, row, own(turn, "Read", "start"))
       {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
 
-      # One process announces in order, so the first delta is the first
-      # one announced.
-      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 7}, "mine")
+      # One process announces each in order, so the first announced after
+      # the start's is the open work's.
+      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 9}, "mine")
+      assert activity!() == [start_entry(:done), own_entry("Read", :running)]
       say(fake, row, said(turn, "msg_1", "mine"))
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
       refute_received %Cyfr.Bus.ThreadEvent{kind: :delta}
       refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+    end
+
+    test "the program's own tools show in the turn's one list beside CYFR's, running then " <>
+           "done, by name, and nothing of them is kept",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "list the programs")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      _answer = accept_next!(fake, row)
+      listed = entry("program", Aqua.Steps.sentence("program", "list", "brain"))
+
+      assert [activity!(), activity!()] == [
+               [start_entry(:done), listed.(:running)],
+               [start_entry(:done), listed.(:done)]
+             ]
+
+      say(fake, row, own(turn, "Bash", "start"))
+      say(fake, row, own(turn, "Bash", "end"))
+
+      assert [activity!(), activity!()] == [
+               [start_entry(:done), listed.(:done), own_entry("Bash", :running)],
+               [start_entry(:done), listed.(:done), own_entry("Bash", :done)]
+             ]
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+
+      # No step is kept of the program's own tool.
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert Enum.map(steps, &{&1.kind, &1.tool, &1.action}) == [
+               {"tool", "program", "start"},
+               {"input", "program", "post"},
+               {"tool", "program", "list"},
+               {"input", "program", "answer"}
+             ]
+    end
+
+    test "an own tool's name past the wire's bound or not printable shows a fixed word",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+      longest = String.duplicate("a", 128)
+
+      for name <- [longest, longest <> "a", "Read\u202E", "Grep\e[31m"],
+          do: say(fake, row, own(turn, name, "start"))
+
+      assert [activity!(), activity!(), activity!(), activity!()] == [
+               [start_entry(:done), own_entry(longest, :running)],
+               [start_entry(:done), own_entry(longest, :running), own_entry("tool", :running)],
+               [start_entry(:done), own_entry(longest, :running)] ++
+                 List.duplicate(own_entry("tool", :running), 2),
+               [start_entry(:done), own_entry(longest, :running)] ++
+                 List.duplicate(own_entry("tool", :running), 3)
+             ]
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
     end
   end
 
@@ -2314,6 +2392,29 @@ defmodule Aqua.ProgramTest do
     %{"t" => "text", "gen" => 0, "message" => message, "delta" => delta}
     |> then(&if(work == :none, do: &1, else: Map.put(&1, "work", work || turn.id)))
   end
+
+  # An own event of `turn`'s work, of `work` when one is named, or of none
+  # (`:none`).
+  defp own(turn, name, phase, work \\ nil) do
+    %{"t" => "own", "gen" => 0, "name" => name, "phase" => phase}
+    |> then(&if(work == :none, do: &1, else: Map.put(&1, "work", work || turn.id)))
+  end
+
+  # The next list of what runs the turn announced.
+  defp activity! do
+    assert_receive %Cyfr.Bus.ThreadEvent{kind: :tool_activity, data: activity}, 10_000
+    activity
+  end
+
+  defp entry(tool, sentence),
+    do: fn status -> %{tool: tool, sentence: sentence, status: status, preview: nil} end
+
+  # The host's start of the program, an entry of the turn's list.
+  defp start_entry(status),
+    do: entry("program", Aqua.Steps.sentence("program", "start", "brain")).(status)
+
+  # The program's own tool, worded as a tool no step names.
+  defp own_entry(name, status), do: entry(name, "Used a tool").(status)
 
   # The thread's events reach the test as they reach a viewer.
   defp watch!(ctx, thread) do

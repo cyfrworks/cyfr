@@ -35,7 +35,9 @@ defmodule Aqua.Program do
   written, never stored (`Aqua.Loop.Stream`), once its batch committed:
   each native message streams as a step of its own, settled by its `said`
   row and withdrawn when no row will land, at its native turn's end or
-  the session's.
+  the session's. Its own tools of the open work, by the name it gives,
+  are told to the turn's loop as they start and end, which shows them in
+  the one list of what runs (`Aqua.Loop`); nothing of them is stored.
 
   It writes a command when a row says one is owed, one at a time: a closed
   ask's result as its `answer`, then each post of the open turn that
@@ -488,6 +490,7 @@ defmodule Aqua.Program do
           else:
             state
             |> stream(of_work(lines, "text", open_turn), effects.commit.said)
+            |> own(of_work(lines, "own", open_turn))
             |> act(effects, committed)
             |> arm()
 
@@ -684,6 +687,24 @@ defmodule Aqua.Program do
   defp withdraw(%{work: work, streams: streams} = state) do
     Enum.each(Map.keys(streams), &Aqua.Loop.Stream.abandon(work.guest, streamed(state, &1)))
     %{state | streams: %{}}
+  end
+
+  # The open work's own tools of the program, told to the loop as they
+  # start and end: the loop keeps the one list of what runs, and nothing
+  # of them is stored.
+  defp own(state, owns) do
+    Enum.reduce(owns, state, fn {_seq, %{"name" => name, "phase" => phase}}, state ->
+      tell(state, {__MODULE__, state.work.turn.id, {:own, own_name(name), phase}})
+    end)
+  end
+
+  # The program's word for its tool is shown as text: a name as long as
+  # the wire holds a tool's name to and with no control or format
+  # character, or else a fixed word.
+  defp own_name(name) do
+    if Opus.Brain.tool_name?(name) and not String.match?(name, ~r/\p{C}/u),
+      do: name,
+      else: "tool"
   end
 
   # What this process does once a batch is committed.
