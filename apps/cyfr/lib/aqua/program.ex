@@ -974,7 +974,9 @@ defmodule Aqua.Program do
   # notices of the files after it still fit beside it: the post's line
   # then passes the bound only when its text and the notices alone do.
   defp with_files(command, work, row) do
-    files = Aqua.Attachments.load(work.ctx, row.thread_id, Aqua.Attachments.attachments_of([row]))
+    files =
+      Aqua.Attachments.load(work.guest, row.thread_id, Aqua.Attachments.attachments_of([row]))
+
     types = Opus.Brain.media_types()
     max = Opus.Brain.max_line_bytes()
     notices = Enum.map(files, &too_large/1)
