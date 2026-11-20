@@ -768,6 +768,25 @@ defmodule Arca.TurnInputsStorageTest do
            }
   end
 
+  # From the first sign of a helper agent every total of Codex's session
+  # says partial (`brain_wire.json`): it is still counted against the
+  # thread's last one, and the step's usage says how many were partial.
+  test "a partial total, as every one after a helper agent's first sign is, is counted " <>
+         "against the last and says so",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    partial = fn n -> %{total(turn, "model-a", n) | "accounting" => "partial"} end
+    {:ok, _} = commit(actor, daily, turn, %{usage: [total(turn, "model-a", 100)]})
+    {:ok, _} = commit(actor, daily, turn, %{usage: [partial.(160)]})
+    {:ok, _} = commit(actor, daily, turn, %{usage: [partial.(200)]})
+
+    assert Jason.decode!(step(start.id).usage) == %{
+             "models" => %{"model-a" => tokens(200)},
+             "results" => 3,
+             "partial" => 2,
+             "unknown" => 0
+           }
+  end
+
   test "a total with no counts is unknown and leaves the last usable total the baseline",
        %{actor: actor, daily: daily, turn: turn, start: start} do
     {:ok, _} = commit(actor, daily, turn, %{usage: [total(turn, "model-a", 100)]})
