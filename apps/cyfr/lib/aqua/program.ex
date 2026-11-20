@@ -92,9 +92,15 @@ defmodule Aqua.Program do
 
   @registry Aqua.Program.Registry
   @sessions Aqua.Program.Sessions
-  # The most bytes of the thread's posts a fresh session is given as its
-  # context: the newest that fit, under the wire's line bound.
+  # The most bytes a fresh session's context takes on its post's line, as
+  # the line's JSON measures them, escapes included: the newest posts that
+  # fit. A post a sender writes is at most 32 KiB, at most six times that
+  # escaped, so its line with this context and its files' notices stays
+  # within the wire's bound (`Opus.Brain.max_line_bytes/0`).
   @context_bytes 512 * 1024
+  # How a fresh session's context opens, and what separates two posts.
+  @context_opening "The thread so far:\n\n"
+  @context_separator "\n\n"
   # The kinds of row a fresh session's context carries: the thread's posts.
   @context_kinds ~w(text opening report)
 
@@ -1184,12 +1190,13 @@ defmodule Aqua.Program do
           rows
           |> Enum.filter(&read?(work, &1, bound))
           |> Enum.reverse()
-          |> Enum.reduce_while({[], 0}, fn read, {kept, size} ->
+          |> Enum.reduce_while({[], encoded_bytes(@context_opening)}, fn read, {kept, size} ->
             line = line(work, read)
+            taken = size + encoded_bytes(line) + encoded_bytes(@context_separator)
 
-            if size + byte_size(line) > @context_bytes,
+            if taken > @context_bytes,
               do: {:halt, {kept, size}},
-              else: {:cont, {[{read, line} | kept], size + byte_size(line)}}
+              else: {:cont, {[{read, line} | kept], taken}}
           end)
           |> elem(0)
 
@@ -1198,9 +1205,9 @@ defmodule Aqua.Program do
             {nil, []}
 
           read ->
-            text = read |> Enum.map(&elem(&1, 1)) |> Enum.join("\n\n")
+            text = read |> Enum.map(&elem(&1, 1)) |> Enum.join(@context_separator)
 
-            {[%{"type" => "text", "text" => "The thread so far:\n\n" <> text}],
+            {[%{"type" => "text", "text" => @context_opening <> text}],
              Enum.map(read, &elem(&1, 0))}
         end
 
@@ -1228,6 +1235,10 @@ defmodule Aqua.Program do
         []
     end
   end
+
+  # The bytes `text` takes inside a JSON string on the line, as the wire
+  # encodes it: escaping is the characters' own, so a text's parts add up.
+  defp encoded_bytes(text), do: byte_size(Jason.encode!(text)) - 2
 
   defp line(_work, %{kind: "tool_result"} = row),
     do: "Your call #{Tape.payload(row)["name"]} answered: #{row.content}"

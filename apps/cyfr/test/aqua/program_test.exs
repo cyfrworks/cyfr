@@ -276,43 +276,52 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
-    test "small text files still fit beside escaped fresh context when their notices would not",
+    test "small text files still fit beside an image that nearly fills the line when their " <>
+           "notices would not",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      files =
+      texts =
         for name <- ["a.txt", "b.txt"],
             do: %{"filename" => name, "media_type" => "text/plain", "bytes" => "x"}
 
       blocks =
-        for file <- files,
+        for file <- texts,
             do: %{"type" => "text", "text" => "The attached file #{file["filename"]}:\n\nx"}
 
-      context = fn history ->
-        [%{"type" => "text", "text" => "The thread so far:\n\nAqua: " <> history}]
+      image = fn bytes ->
+        %{"type" => "image", "media_type" => "image/png", "data" => Base.encode64(bytes)}
       end
 
-      prototype =
+      line = fn bytes, rest ->
         posted(
           %{id: Prima.UUID7.generate_id("stp")},
           %{id: Prima.UUID7.generate_id("trn")},
           "tiny files",
-          blocks
+          [image.(bytes) | rest]
         )
-        |> Map.put("context", context.(""))
+        |> Jason.encode!()
+        |> byte_size()
+      end
 
-      room = Opus.Brain.max_line_bytes() - byte_size(Jason.encode!(prototype)) - 10
-      history = String.duplicate("\"", div(room, 2))
-      assert byte_size("Aqua: " <> history) < 512 * 1024
+      # The image's base64 takes all but a little more than the text
+      # files' blocks need, less than their notices would.
+      room = Opus.Brain.max_line_bytes() - line.("", blocks) - 10
+      bytes = :binary.copy("P", div(room, 4) * 3)
+      assert line.(bytes, blocks) <= Opus.Brain.max_line_bytes()
 
-      assert byte_size(Jason.encode!(Map.put(prototype, "context", context.(history)))) <=
-               Opus.Brain.max_line_bytes()
+      notices =
+        for file <- texts,
+            do: %{
+              "type" => "text",
+              "text" =>
+                "The file #{file["filename"]} (text/plain) is attached, and it is too large to " <>
+                  "hand to this program."
+            }
 
-      assert {:ok, _} =
-               Tape.append(ctx, thread.id, %{
-                 author: Arca.Schemas.Message.agent_author(),
-                 sent_by: "aqua",
-                 kind: "text",
-                 content: history
-               })
+      assert line.(bytes, notices) > Opus.Brain.max_line_bytes()
+
+      files = [
+        %{"filename" => "image.png", "media_type" => "image/png", "bytes" => bytes} | texts
+      ]
 
       {id, refs} = stored!(ctx, thread, files)
       turn = accept!(ctx, thread, row, "tiny files", %{"attachments" => refs}, id)
@@ -320,9 +329,48 @@ defmodule Aqua.ProgramTest do
       started!(fake, row)
       post = sent()
       [input] = inputs(ctx, turn)
-      expected = Map.put(posted(input, turn, "tiny files", blocks), "context", context.(history))
-      assert byte_size(Jason.encode!(expected)) <= Opus.Brain.max_line_bytes()
-      assert post == expected
+      assert post == posted(input, turn, "tiny files", [image.(bytes) | blocks])
+      assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    # A fresh session's context is fitted by what it takes on the post's
+    # line, escapes included: an older post whose escaped text would take
+    # the line past the wire's bound is left out, the newer ones that fit
+    # are kept, and the post is written.
+    test "a fresh session's context keeps the newest posts that fit on the line as it is encoded",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      # Each control character is six bytes escaped: a third of the raw
+      # bound is past the whole line.
+      escaped = :binary.copy(<<1>>, 180_000)
+
+      for content <- [escaped, "recent"] do
+        assert {:ok, _} =
+                 Tape.append(ctx, thread.id, %{
+                   author: Arca.Schemas.Message.agent_author(),
+                   sent_by: "aqua",
+                   kind: "text",
+                   content: content
+                 })
+      end
+
+      assert byte_size(escaped) < 512 * 1024
+      assert byte_size(Jason.encode!(escaped)) > Opus.Brain.max_line_bytes()
+
+      turn = accept!(ctx, thread, row, "now")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post ==
+               Map.put(posted(input, turn, "now"), "context", [
+                 %{"type" => "text", "text" => "The thread so far:\n\n#{@title}: recent"}
+               ])
+
+      assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
       say(fake, row, accepted(input))
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
