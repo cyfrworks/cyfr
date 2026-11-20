@@ -531,12 +531,12 @@ defmodule PrismWeb.AquaLiveTest do
 
       {view, _html} = mount_athanor(conn, "/aqua")
 
-      for {name, program, words} <- [
-            {"idle", "idle-claude", "is disabled — enable it on the Programs page"},
-            {"bare", "bare-claude", "is not one a brain can run in"}
+      for {name, program, state} <- [
+            {"idle", "idle-claude", :program_disabled},
+            {"bare", "bare-claude", :program_unfit}
           ] do
         card = "#aqua-card-" <> name
-        assert has_element?(view, card, "Its program, #{program}, #{words}")
+        assert has_element?(view, card, Prima.Refusal.message({:crew_unready, name, state}))
         refute has_element?(view, card <> ~s( a[data-test="install-program"]))
         refute has_element?(view, card <> ~s( [data-test="set-up-program"]))
         refute has_element?(view, card, "not installed")

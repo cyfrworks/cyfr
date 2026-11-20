@@ -1310,13 +1310,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           The model's catalyst is not installed here yet
         </span>
         <%!-- A program row of the member's program's name that stands
-             but is no brain's is never one to install: it is said as
-             such, with the row to open on the Programs page. --%>
-        <span :if={match?({:program_disabled, _}, @model_status)} class="text-amber-300">
-          Its program, {@program}, is disabled — enable it on the Programs page.
-        </span>
-        <span :if={match?({:program_unfit, _}, @model_status)} class="text-amber-300">
-          Its program, {@program}, is not one a brain can run in — on the Programs page, make it a driven program with a kept folder whose command starts with its driver.
+             but is no brain's is never one to install: it is said as a
+             turn on it is refused (`Prima.Refusal`), with the row to open
+             on the Programs page. --%>
+        <span
+          :if={match?({state, _} when state in [:program_disabled, :program_unfit], @model_status)}
+          class="text-amber-300"
+        >
+          {Prima.Refusal.message(
+            {:crew_unready, @agent["title"] || @agent["name"], elem(@model_status, 0)}
+          )}
         </span>
         <.link
           :if={match?({state, _} when state in [:program_disabled, :program_unfit], @model_status)}
