@@ -2506,6 +2506,38 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "deleting a crew thread from a workspace pane returns that pane to its room",
+         %{conn: conn, athanor: athanor, here: here, thread: daily} do
+      actor = Sanctum.Context.actor(here)
+
+      {:ok, %{workspace: room}} =
+        Arca.TurnStorage.open_workspace(actor, %{
+          daily_id: daily.id,
+          id: Prima.UUID7.generate_id("thread"),
+          title: "Review",
+          opening: %{
+            id: Prima.UUID7.generate_id("msg"),
+            author: here.user_id,
+            content: "review",
+            payload: %{"ask" => "review"}
+          },
+          pointer: %{author: "aqua", sent_by: "aqua", content: "Review"},
+          files: fn _thread, _message -> {:ok, []} end,
+          person_id: here.user_id,
+          origin: :interactive
+        })
+
+      {:ok, child} = Threads.crew_thread(actor, room.id, "explorer")
+      {:ok, view, _} = live(conn, PrismWeb.WorkspaceLive.address(route(athanor), room.id))
+      pane = on_thread!(child!(view, "workspace-pane"), room.id)
+      pane |> element("#workspace-pane-crew-#{child.id}") |> render_click()
+      on_thread!(pane, child.id)
+      pane |> element(@delete) |> render_click()
+      assert {:error, :not_found} = Threads.get(actor, child.id)
+      on_thread!(pane, room.id)
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "a daily thread's menu asks first, saying what goes and what stays, and a yes " <>
            "removes it and its crew threads through thread.delete; the list shows neither",
          %{conn: conn, athanor: athanor, here: here, thread: room} do

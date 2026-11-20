@@ -759,6 +759,17 @@ defmodule PrismWeb.ThreadPaneLive do
   def handle_info(%ThreadListed{kind: :workspace, id: id}, socket),
     do: {:noreply, reread_works(socket, [id])}
 
+  # The crew member's thread shown was deleted and its room stands: the
+  # host opens the room, whichever host it is. A room deleted with it is
+  # its host's to leave.
+  def handle_info(
+        %ThreadListed{kind: :removed, id: id},
+        %{assigns: %{thread: %{id: id, kind: "crew", parent_id: room}}} = socket
+      ) do
+    if thread_of(socket.assigns.context, room), do: tell_host(socket, {:open_thread, room})
+    {:noreply, socket}
+  end
+
   def handle_info(%ThreadListed{kind: :removed, id: id}, socket) do
     if Map.has_key?(socket.assigns.works, id),
       do: {:noreply, drop_work(socket, id)},
