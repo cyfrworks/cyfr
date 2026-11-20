@@ -274,6 +274,73 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
+    test "an image that nearly fills the line alone is handed over as itself",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      bytes = :binary.copy("P", 786_000)
+
+      {id, refs} =
+        stored!(ctx, thread, [
+          %{"filename" => "image-0.png", "media_type" => "image/png", "bytes" => bytes}
+        ])
+
+      turn = accept!(ctx, thread, row, "ten images", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post ==
+               posted(input, turn, "ten images", [
+                 %{"type" => "image", "media_type" => "image/png", "data" => Base.encode64(bytes)}
+               ])
+
+      assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "the notices of the files after an image keep their room: one that would leave " <>
+           "them none is named too, and the post goes",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      files =
+        for {size, n} <- Enum.with_index([786_000 | List.duplicate(800_000, 9)]) do
+          %{
+            "filename" => "image-#{n}.png",
+            "media_type" => "image/png",
+            "bytes" => :binary.copy("P", size)
+          }
+        end
+
+      {id, refs} = stored!(ctx, thread, files)
+      turn = accept!(ctx, thread, row, "ten images", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post ==
+               posted(
+                 input,
+                 turn,
+                 "ten images",
+                 for(
+                   n <- 0..9,
+                   do: %{
+                     "type" => "text",
+                     "text" =>
+                       "The file image-#{n}.png (image/png) is attached, and it is too large " <>
+                         "to hand to this program."
+                   }
+                 )
+               )
+
+      assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
     test "a post written while the program works carries its files as the first post does",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "first")

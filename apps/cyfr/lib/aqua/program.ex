@@ -970,26 +970,36 @@ defmodule Aqua.Program do
   # line past the wire's bound is named as too large instead, and the post
   # goes with the rest; one whose bytes are gone is left out. A line's
   # bytes are its command's JSON, so a block adds its own and a comma.
+  # Any file may end as its notice, so a block is taken only while the
+  # notices of the files after it still fit beside it: the post's line
+  # then passes the bound only when its text and the notices alone do.
   defp with_files(command, work, row) do
     files = Aqua.Attachments.load(work.ctx, row.thread_id, Aqua.Attachments.attachments_of([row]))
     types = Opus.Brain.media_types()
     max = Opus.Brain.max_line_bytes()
+    notices = Enum.map(files, &too_large/1)
+    reserved = notices |> Enum.map(&entry_bytes/1) |> Enum.sum()
 
-    {blocks, _bytes} =
-      Enum.map_reduce(files, byte_size(Jason.encode!(command)), fn file, bytes ->
-        block = file |> Aqua.Loop.Turn.file_block(types) |> Map.delete("filename")
-        added = byte_size(Jason.encode!(block)) + 1
-
-        if bytes + added <= max do
-          {block, bytes + added}
-        else
-          named = too_large(file)
-          {named, bytes + byte_size(Jason.encode!(named)) + 1}
-        end
-      end)
+    {blocks, _room} =
+      files
+      |> Enum.zip(notices)
+      |> Enum.map_reduce({byte_size(Jason.encode!(command)), reserved}, &fit(&1, &2, types, max))
 
     Map.update!(command, "content", &(&1 ++ blocks))
   end
+
+  # One file's block, or its notice, beside `bytes` taken so far and the
+  # notices `reserved` for the files after it.
+  defp fit({file, notice}, {bytes, reserved}, types, max) do
+    reserved = reserved - entry_bytes(notice)
+    block = file |> Aqua.Loop.Turn.file_block(types) |> Map.delete("filename")
+
+    if bytes + entry_bytes(block) + reserved <= max,
+      do: {block, {bytes + entry_bytes(block), reserved}},
+      else: {notice, {bytes + entry_bytes(notice), reserved}}
+  end
+
+  defp entry_bytes(block), do: byte_size(Jason.encode!(block)) + 1
 
   defp too_large(%{"filename" => name, "media_type" => media}),
     do: %{
