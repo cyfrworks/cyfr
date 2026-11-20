@@ -4327,8 +4327,11 @@ defmodule Arca.TurnStorage do
 
         thread = locked_thread!(athanor_id, thread_id)
         if turn && turn.thread_id != thread.id, do: Arca.Repo.rollback(:wrong_turn)
+        # Strict, so a generation of another type (0.0 for 0) is refused
+        # here: the session's write after it holds to no generation of its
+        # own (`keep_session!/3`).
         generation = Map.fetch!(attrs, :generation)
-        if thread.brain_generation != generation, do: Arca.Repo.rollback(:generation_moved)
+        if thread.brain_generation !== generation, do: Arca.Repo.rollback(:generation_moved)
         progress = progress(thread)
         owner!(progress, attrs)
 
@@ -4372,11 +4375,8 @@ defmodule Arca.TurnStorage do
 
   # arca:db-raise-ok inside the caller's transaction
   defp committed!(actor, athanor_id, thread, turn, progress, attrs) do
-    generation = attrs.generation
     session = Map.get(attrs, :session)
-
-    if session,
-      do: keep_session!(athanor_id, thread, %{session: session, generation: generation})
+    keep_session!(athanor_id, thread, session)
 
     said =
       if turn, do: Enum.map(Map.get(attrs, :said, []), &said!(actor, thread, turn, &1)), else: []
@@ -5809,30 +5809,16 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # The program's native session, kept on the thread for its next start only
-  # under the generation the turn read (`:generation`): a turn whose
-  # session was forgotten meanwhile (`Arca.ThreadStorage.forget_sessions/3`
-  # raises the generation) keeps nothing it answers with afterwards, the
-  # session it resumed or one it opened in the home the forget emptied. A
-  # turn that forgot the session itself writes under the generation that
-  # forget answered (`forget_session/3`). A session without a generation
-  # is refused, as a write without a fence is.
+  # The program's native session a batch's `started` names, kept on the
+  # thread for its next start. `commit_brain/3` holds the thread's lock and
+  # has refused a batch whose generation moved, so a forget committed since
+  # the turn read the thread (`Arca.ThreadStorage.forget_sessions/3`,
+  # `forget_session/3`) refused the batch before this write.
   # arca:db-raise-ok inside the caller's transaction
-  defp keep_session!(athanor_id, %Thread{id: thread_id, brain_session: current}, attrs) do
-    session = Map.get(attrs, :session)
-    generation = Map.get(attrs, :generation)
-
-    if session != nil and not is_integer(generation),
-      do: Arca.Repo.rollback(:generation_required)
-
+  defp keep_session!(athanor_id, %Thread{id: thread_id, brain_session: current}, session) do
     if is_binary(session) and session != "" and session != current do
-      # The comparison is the statement's own, so a forget committed after
-      # the thread was read still holds.
-      {_kept_or_not, _} =
-        from(c in Thread,
-          where: c.athanor_id == ^athanor_id and c.id == ^thread_id,
-          where: c.brain_generation == ^generation
-        )
+      {_kept, _} =
+        from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread_id)
         |> Arca.Repo.update_all(set: [brain_session: session])
     end
 
