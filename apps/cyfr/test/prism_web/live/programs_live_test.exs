@@ -460,6 +460,41 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute html =~ ~s(phx-click="restart")
   end
 
+  # A driven program has no MCP client: the table shows no connection
+  # and no tools for it, a dash in each, while a tool server and an MCP
+  # program keep their status and their count.
+  test "a driven row's status and tools are empty, and an MCP row keeps both",
+       %{conn: conn, athanor: athanor} do
+    _driven = driven_row!(athanor)
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "piped",
+        transport: "program",
+        mark: "mcp",
+        url: nil,
+        enabled: false,
+        config_json: Jason.encode!(%{"command" => "npx -y fs", "env" => %{}})
+      })
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+    cells = fn name ->
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s(tr[phx-value-name="#{name}"] td[data-test]))
+      |> Enum.map(
+        &{List.first(LazyHTML.attribute(&1, "data-test")), String.trim(LazyHTML.text(&1))}
+      )
+    end
+
+    assert cells.("claude") == [{"home", "kept"}, {"status", "—"}, {"tools", "—"}]
+    assert [{"home", "scratch"}, {"status", status}, {"tools", "0"}] = cells.("piped")
+    refute status in ["", "—"]
+  end
+
   # A catalyst that runs a program with the person's own sign-in.
   defp harness!(athanor) do
     ctx = Sanctum.Context.internal(user_id: "_test", athanor_id: athanor.id, scope: :athanor)

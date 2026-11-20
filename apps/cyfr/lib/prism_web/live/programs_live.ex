@@ -1413,13 +1413,17 @@ defmodule PrismWeb.ProgramsLive do
                   <td class="px-4 py-3 text-xs text-gray-400 whitespace-nowrap" data-test="home">
                     {home_line(server)}
                   </td>
-                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">
-                    <.badge color={status_color(server[:status])}>
+                  <%!-- A driven program has no MCP client, so it has no
+                        connection to show and no tools: both cells are
+                        empty for it. --%>
+                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap" data-test="status">
+                    <.badge :if={not driven?(server)} color={status_color(server[:status])}>
                       {server[:status] || "unknown"}
                     </.badge>
+                    <span :if={driven?(server)} class="text-xs text-gray-400">—</span>
                   </td>
-                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">
-                    {server[:tool_count] || 0}
+                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap" data-test="tools">
+                    {if driven?(server), do: "—", else: server[:tool_count] || 0}
                   </td>
                 </tr>
                 <tr :if={@expanded_name == server[:name]} class="bg-gray-900/60">
@@ -1776,6 +1780,9 @@ defmodule PrismWeb.ProgramsLive do
   defp endpoint(%{mark: "mcp"}), do: "MCP (backends service)"
   defp endpoint(%{mark: "driven"}), do: "driven by a person or a brain"
   defp endpoint(server), do: server[:url]
+
+  defp driven?(%{transport: "program", mark: "driven"}), do: true
+  defp driven?(_server), do: false
 
   defp kind(%{transport: "program", mark: mark}), do: "#{mark} program"
   defp kind(_server), do: "http"
