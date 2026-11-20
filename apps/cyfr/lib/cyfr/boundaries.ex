@@ -1604,13 +1604,13 @@ defmodule Cyfr.Boundaries do
         :get_message,
         :latest_messages,
         :payload,
-        :post?
+        :post_kinds
       ],
       reason:
         "the pane opens a thread, its latest messages and a room's crew threads under the " <>
-          "pane's actor, and decodes a message's stored payload, and whether a row is a " <>
-          "post, with the store's own projections, which read no row; the assistant owns " <>
-          "every thread write."
+          "pane's actor, and decodes a message's stored payload, and the kinds of row that " <>
+          "are posts, with the store's own projections, which read no row; the assistant " <>
+          "owns every thread write."
     },
     # --- the MCP surface's web adapters ---
     %{

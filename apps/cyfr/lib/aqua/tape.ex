@@ -1059,6 +1059,59 @@ defmodule Aqua.Tape do
   @spec step(Context.t(), String.t()) :: {:ok, step()} | {:error, term()}
   def step(%Context{} = ctx, step_id), do: TurnStorage.step(Sanctum.Context.actor(ctx), step_id)
 
+  @doc """
+  What the thread's latest turn (`TurnStorage.latest/2`) has used, as the
+  thread's menu shows it and `:usage` tells it: for a turn on a program,
+  the models and tokens its `program.start` step stores, unknown and never
+  zero while it stores none; for any other turn, the tokens its model
+  steps were told, added up. A thread with no turn yet has used none, and
+  one that cannot be read now is unknown.
+  """
+  @spec usage(Context.t(), String.t()) :: map()
+  def usage(%Context{} = ctx, thread_id) do
+    actor = Sanctum.Context.actor(ctx)
+
+    with {:ok, %{} = turn} <- TurnStorage.latest(actor, thread_id),
+         {:ok, steps} <- TurnStorage.steps(actor, turn.id) do
+      key = brain_start_key(turn.id)
+
+      case Enum.find(steps, &(&1.idempotency_key == key)) do
+        nil when is_nil(turn.program) -> model_usage(steps)
+        start -> program_usage(stored_usage(start && start.usage) || %{})
+      end
+    else
+      {:ok, nil} -> %{input: 0, output: 0}
+      {:error, _unread} -> %{input: 0, output: 0, accounting: :unavailable}
+    end
+  end
+
+  defp model_usage(steps) do
+    told = for %{kind: "model", usage: usage} <- steps, told = stored_usage(usage), do: told
+    sum = fn name -> told |> Enum.map(&(&1[name] || 0)) |> Enum.sum() end
+    %{input: sum.("input_tokens"), output: sum.("output_tokens")}
+  end
+
+  # A program's counts, by model, and whether they are all of its results'
+  # (`Arca.TurnStorage`'s "usage"): none counted is unknown.
+  defp program_usage(usage) do
+    models = usage["models"] || %{}
+    sum = fn name -> models |> Map.values() |> Enum.map(&(&1[name] || 0)) |> Enum.sum() end
+
+    %{
+      input: sum.("input_tokens"),
+      output: sum.("output_tokens"),
+      models: models |> Map.keys() |> Enum.sort(),
+      accounting: accounting(usage, models)
+    }
+  end
+
+  defp accounting(_usage, models) when map_size(models) == 0, do: :unavailable
+  defp accounting(%{"partial" => 0, "unknown" => 0}, _models), do: :complete
+  defp accounting(_usage, _models), do: :partial
+
+  defp stored_usage(json) when is_binary(json), do: Jason.decode!(json)
+  defp stored_usage(usage), do: usage
+
   @doc "The open turns of a thread, oldest first."
   @spec open_turns(Context.t(), String.t()) :: {:ok, [turn()]} | {:error, term()}
   def open_turns(%Context{} = ctx, thread_id),

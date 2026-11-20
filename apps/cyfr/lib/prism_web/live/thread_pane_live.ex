@@ -309,8 +309,14 @@ defmodule PrismWeb.ThreadPaneLive do
         # own turn assembly stays windowed separately.
         ctx = socket.assigns.context
 
+        # What the thread drew live is what it draws opened again: the
+        # newest rows it draws (`drawn_kinds/0`), however many of a turn's
+        # own rows stand between them. Its cards and results are posts
+        # too, read with them.
         rows =
-          case Threads.latest_messages(Sanctum.Context.actor(ctx), thread.id, @window) do
+          case Threads.latest_messages(Sanctum.Context.actor(ctx), thread.id, @window,
+                 kinds: drawn_kinds()
+               ) do
             rows when is_list(rows) -> Enum.map(rows, &files_kept(&1, ctx))
             {:error, _} -> []
           end
@@ -1633,7 +1639,7 @@ defmodule PrismWeb.ThreadPaneLive do
             :if={@running and @turn_user}
             class="text-xs text-gray-500 truncate max-w-[12rem]"
           >
-            {label_for(@members, @turn_user, @context)} is asking…
+            {asking(@members, @turn_user, @context)}
           </span>
         </div>
       </header>
@@ -1654,14 +1660,14 @@ defmodule PrismWeb.ThreadPaneLive do
           <%= cond do %>
             <% @models_loaded and @models_by_provider != %{} -> %>
               <.model_override
-                assistant={@assistant}
+                label={model_label(@assistant, @token_usage)}
                 models_by_provider={@models_by_provider}
                 model_override={@model_override}
                 class="min-w-0 max-w-[10rem] cursor-pointer truncate rounded-[7px] border border-border-default bg-surface-base px-1.5 py-0.5 font-mono text-xs text-text-primary focus:border-border-focus focus:outline-none"
               />
             <% @models_loaded -> %>
               <span class="truncate font-mono">
-                {(@assistant && @assistant["model"]) || "default"}
+                {model_label(@assistant, @token_usage)}
               </span>
             <% true -> %>
               <span>Reading the models…</span>
@@ -1693,7 +1699,7 @@ defmodule PrismWeb.ThreadPaneLive do
         <div class="aqua-panel-menu-row">
           <span>Tokens</span>
           <span class="font-mono">
-            {@token_usage.input} in · {@token_usage.output} out
+            {tokens(@token_usage)}
           </span>
         </div>
       </div>
@@ -2140,7 +2146,7 @@ defmodule PrismWeb.ThreadPaneLive do
     """
   end
 
-  attr :assistant, :any, required: true
+  attr :label, :string, required: true
   attr :models_by_provider, :map, required: true
   attr :model_override, :any, required: true
   attr :class, :string, required: true
@@ -2157,7 +2163,7 @@ defmodule PrismWeb.ThreadPaneLive do
       aria-label="Override model"
     >
       <option value="" selected={is_nil(@model_override)}>
-        {(@assistant && @assistant["model"]) || "default"}
+        {@label}
       </option>
       <%= for {provider, models} <- @models_by_provider, models != [] do %>
         <optgroup label={provider}>
@@ -2167,6 +2173,20 @@ defmodule PrismWeb.ThreadPaneLive do
     </select>
     """
   end
+
+  # The model the turn ran when its usage names it (a program's), else the
+  # assistant's own, else the default.
+  defp model_label(_assistant, %{models: [_ | _] = models}), do: Enum.join(models, ", ")
+  defp model_label(assistant, _usage), do: (assistant && assistant["model"]) || "default"
+
+  # The turn's tokens as they were told: unknown when the program could
+  # count none of them, and said to be partial when it counted only some.
+  defp tokens(%{accounting: :unavailable}), do: "unknown"
+
+  defp tokens(%{accounting: :partial} = usage),
+    do: "#{usage.input} in · #{usage.output} out, partial"
+
+  defp tokens(usage), do: "#{usage.input} in · #{usage.output} out"
 
   # The status line is drawn only while it says something.
   defp status?(assigns) do
@@ -2478,12 +2498,18 @@ defmodule PrismWeb.ThreadPaneLive do
       "focus-visible:opacity-100 max-md:opacity-100 min-h-6 text-xs text-gray-500 hover:text-gray-300 px-1"
   end
 
-  # A post, and a line of the server's to the thread's Aqua (`Aqua.Nudge`),
-  # which is drawn as the server's and is no post.
-  defp drawn?(row), do: Threads.post?(row) or row.kind == "nudge"
+  # The one rule of what the pane draws, as a row lands and when the thread
+  # is opened: a post, a line of the server's to the thread's Aqua
+  # (`Aqua.Nudge`), which is drawn as the server's and is no post, and the
+  # line a stopped turn leaves (`turn_aborted`). What a turn writes for
+  # itself, its calls, their results and its compaction, is none.
+  defp drawn?(row), do: row.kind in drawn_kinds()
+
+  defp drawn_kinds, do: Threads.post_kinds() ++ ["nudge", "turn_aborted"]
 
   defp role_of(%{kind: "error"}), do: "error"
-  defp role_of(%{kind: kind}) when kind in ["system", "nudge"], do: "system"
+  # The server's lines: a note, a nudge, and the line a stopped turn leaves.
+  defp role_of(%{kind: kind}) when kind in ["system", "nudge", "turn_aborted"], do: "system"
   defp role_of(%{author: @agent_author}), do: "assistant"
 
   # A post in the server's voice: a schedule's line, or a post of the
@@ -2533,6 +2559,11 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp label_for(_members, _user_id, _ctx), do: nil
+
+  # Who the running turn is for, with the verb that agrees with them: the
+  # person looking reads as "You".
+  defp asking(_members, user_id, %{user_id: user_id}), do: "You are asking…"
+  defp asking(members, user_id, ctx), do: "#{label_for(members, user_id, ctx)} is asking…"
 
   defp role_align("user"), do: "items-end"
   defp role_align(_), do: "items-start"

@@ -423,6 +423,19 @@ func TestAFailedTurnIsTypedInTheDriversWords(t *testing.T) {
 	}
 }
 
+// An account's error says the account or key Codex used was refused, never
+// which, since a refused key in its environment types the same as a
+// sign-in that is gone, and is worded as the Claude Code driver words it;
+// a post with neither says that instead.
+func TestAnAccountsErrorNamesTheSignInAndAKey(t *testing.T) {
+	if errorSentence("authentication") != "The account or key OpenAI Codex used was refused; check its sign-in on the program's terminal, or a key in its settings." {
+		t.Fatalf("an account's error is said in the driver's words: %q", errorSentence("authentication"))
+	}
+	if signedOutSentence != "OpenAI Codex has no sign-in or key it can use; sign it in on the program's terminal, or set a key in its settings." {
+		t.Fatalf("a post with no sign-in and no key says so: %q", signedOutSentence)
+	}
+}
+
 func TestALateTurnNamesNoWork(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
@@ -504,7 +517,7 @@ func TestAPostWhileSignedOutIsRefusedUntilASignIn(t *testing.T) {
 	startFresh(s, map[string]any{})
 	work(s, "stp_work", "trn_1")
 	s.send(map[string]any{"t": "post", "id": "stp_post", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "hello"}}})
-	if e := s.expect("refused"); e["reason"] != errorSentence("authentication") {
+	if e := s.expect("refused"); e["reason"] != signedOutSentence {
 		t.Fatalf("a post while signed out is refused, saying so: %v", e)
 	}
 	if err := os.WriteFile(filepath.Join(s.home, ".codex", "auth.json"), []byte("{}"), 0o600); err != nil {
