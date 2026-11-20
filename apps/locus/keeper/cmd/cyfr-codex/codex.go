@@ -21,11 +21,9 @@ import (
 // answers Codex's own requests: `item/tool/call` for CYFR's tools, given
 // to the thread as its dynamic tools, held until CYFR answers it and then
 // answered by its request's id; the approvals, which are allowed; and
-// `currentTime/read`. Every other request is refused. These shapes are the
-// ones the catalyst read from Codex 0.167.0
-// (seed/components/catalysts/local/openai-codex/0.1.6/src/src/server.rs
-// and chat.rs), held on 0.169.0, the version a brain row pins, against its
-// own schema (`codex app-server generate-json-schema`) and the binary.
+// `currentTime/read`. Every other request is refused. These shapes are
+// Codex 0.167.0's, held on 0.169.0, the version a brain row pins, against
+// its own schema (`codex app-server generate-json-schema`) and the binary.
 
 // appServer is the harness's command line's own argument.
 const appServer = "app-server"
