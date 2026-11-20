@@ -185,6 +185,130 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  describe "a post's files" do
+    test "reach the program after the post's text, in order: an image and a PDF as " <>
+           "themselves, a text file as text, any other named as attached and not readable",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      {id, refs} =
+        stored!(ctx, thread, [
+          %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "PNG"},
+          %{"filename" => "brief.pdf", "media_type" => "application/pdf", "bytes" => "%PDF-1"},
+          %{"filename" => "notes.txt", "media_type" => "text/plain", "bytes" => "three lines"},
+          %{"filename" => "tool.bin", "media_type" => "application/octet-stream", "bytes" => "\0"}
+        ])
+
+      turn = accept!(ctx, thread, row, "look at these", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post ==
+               posted(input, turn, "look at these", [
+                 %{
+                   "type" => "image",
+                   "media_type" => "image/png",
+                   "data" => Base.encode64("PNG")
+                 },
+                 %{
+                   "type" => "document",
+                   "media_type" => "application/pdf",
+                   "data" => Base.encode64("%PDF-1")
+                 },
+                 %{"type" => "text", "text" => "The attached file notes.txt:\n\nthree lines"},
+                 %{
+                   "type" => "text",
+                   "text" =>
+                     "The file tool.bin (application/octet-stream) is attached, and this brain " <>
+                       "cannot read it."
+                 }
+               ])
+
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a file whose block would take the line past the wire's bound is named as too large, " <>
+           "and the post goes with the rest; one whose bytes are gone is left out",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      # Its base64 alone is past the line's 1 MiB.
+      big = :binary.copy("P", 800_000)
+
+      {id, refs} =
+        stored!(ctx, thread, [
+          %{"filename" => "big.png", "media_type" => "image/png", "bytes" => big},
+          %{"filename" => "gone.png", "media_type" => "image/png", "bytes" => "GONE"},
+          %{"filename" => "small.png", "media_type" => "image/png", "bytes" => "PNG"}
+        ])
+
+      [_big, gone, _small] = refs
+
+      {:ok, _} =
+        Arca.Files.delete(
+          Sanctum.Context.actor(ctx),
+          "threads/#{thread.id}/#{id}/#{gone["stored_name"]}"
+        )
+
+      turn = accept!(ctx, thread, row, "three images", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post ==
+               posted(input, turn, "three images", [
+                 %{
+                   "type" => "text",
+                   "text" =>
+                     "The file big.png (image/png) is attached, and it is too large to hand to " <>
+                       "this program."
+                 },
+                 %{"type" => "image", "media_type" => "image/png", "data" => Base.encode64("PNG")}
+               ])
+
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a post written while the program works carries its files as the first post does",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _first = sent()
+      [first] = inputs(ctx, turn)
+      say(fake, row, accepted(first))
+      committed!(ctx, thread, 4)
+
+      {id, refs} =
+        stored!(ctx, thread, [
+          %{"filename" => "moon.webp", "media_type" => "image/webp", "bytes" => "WEBP"}
+        ])
+
+      steer!(ctx, thread, turn, "and this one", %{"attachments" => refs}, id)
+
+      post = sent()
+      [_first, second] = inputs(ctx, turn)
+
+      assert post ==
+               posted(second, turn, "and this one", [
+                 %{
+                   "type" => "image",
+                   "media_type" => "image/webp",
+                   "data" => Base.encode64("WEBP")
+                 }
+               ])
+
+      say(fake, row, accepted(second))
+      say(fake, row, idle(turn, [first.id, second.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+  end
+
   describe "the program's asks" do
     test "an ask of the open turn is a step the loop decides and runs, answered with its result; one of a tool not offered is refused",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
@@ -1724,10 +1848,11 @@ defmodule Aqua.ProgramTest do
 
   # A turn of the soul on `row`'s brain: the person's post, and the
   # program row pinned before the loop builds it (`Aqua.Loop.Turn`).
-  defp accept!(ctx, thread, row, text, payload \\ nil) do
+  defp accept!(ctx, thread, row, text, payload \\ nil, id \\ nil) do
     message =
       %{author: ctx.user_id, sent_by: "person", content: text}
       |> then(&if(payload, do: Map.put(&1, :payload, payload), else: &1))
+      |> then(&if(id, do: Map.put(&1, :id, id), else: &1))
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
@@ -1791,11 +1916,13 @@ defmodule Aqua.ProgramTest do
   end
 
   # A post the person writes into the open turn `turn`, with `payload`
-  # (its attachments) when one is given.
-  defp steer!(ctx, thread, turn, text, payload \\ nil) do
+  # (its attachments) when one is given, under `id` when its files were
+  # stored under it (`stored!/3`).
+  defp steer!(ctx, thread, turn, text, payload \\ nil, id \\ nil) do
     message =
       %{author: ctx.user_id, sent_by: "person", content: text}
       |> then(&if(payload, do: Map.put(&1, :payload, payload), else: &1))
+      |> then(&if(id, do: Map.put(&1, :id, id), else: &1))
 
     {:ok, %{message: steer}} =
       Tape.accept(ctx, thread.id, %{message: message, steer_turn_id: turn.id})
@@ -1809,6 +1936,13 @@ defmodule Aqua.ProgramTest do
       Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
         set: [options: Jason.encode!(%{"brain_options" => options})]
       )
+  end
+
+  # Files stored under a post not yet written: its id and their refs.
+  defp stored!(ctx, thread, files) do
+    id = Prima.UUID7.generate_id("msg")
+    {:ok, refs} = Aqua.Attachments.store(ctx, thread.id, id, files)
+    {id, refs}
   end
 
   # A file copied from a post of the thread `thread`.
@@ -1999,12 +2133,12 @@ defmodule Aqua.ProgramTest do
   defp running_sessions(fake, row),
     do: fake |> Scripted.sessions(row.id) |> Enum.filter(fn {_id, s} -> s.running end)
 
-  defp posted(input, turn, text),
+  defp posted(input, turn, text, files \\ []),
     do: %{
       "t" => "post",
       "id" => input.id,
       "work" => turn.id,
-      "content" => [%{"type" => "text", "text" => text}]
+      "content" => [%{"type" => "text", "text" => text} | files]
     }
 
   defp accepted(input), do: %{"t" => "accepted", "id" => input.id}

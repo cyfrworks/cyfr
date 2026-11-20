@@ -220,6 +220,14 @@ defmodule Opus.Brain do
     end
   end
 
+  @doc "The media types a post's file block may carry to a program, every kind's (`Opus.Brain.Wire`)."
+  @spec media_types() :: [String.t()]
+  def media_types, do: Wire.media_types() |> Map.values() |> List.flatten()
+
+  @doc "The most bytes one line to a program's driver may hold, a command's whole line."
+  @spec max_line_bytes() :: pos_integer()
+  def max_line_bytes, do: Wire.max_line_bytes()
+
   @doc """
   Open the session of `binding`'s thread on its program row, for the
   calling process, which becomes its attendant: a new process of the

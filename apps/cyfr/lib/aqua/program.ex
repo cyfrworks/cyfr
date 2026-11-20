@@ -35,7 +35,10 @@ defmodule Aqua.Program do
   ask's result as its `answer`, then each post of the open turn that
   waits, each first recorded as an `input` step (`carry/3`) whose id the
   command carries, so a delivery is attempted once whatever restarts
-  follow.
+  follow. A post carries its files after its text as the API path words
+  them (`Aqua.Loop.Turn.file_block/2`), an image or a PDF as itself where
+  the wire carries its type; a file never refuses a post, and one past
+  the line's bound is named as too large to hand over.
   `accepted` says the write was taken and nothing more: a post's
   obligation ends when an `idle` names it.
 
@@ -852,6 +855,7 @@ defmodule Aqua.Program do
           "context" => context
         }
         |> reject_nil()
+        |> with_files(work, row)
 
       case write(state, command) do
         :ok ->
@@ -864,6 +868,41 @@ defmodule Aqua.Program do
       {:error, _reason} -> state
     end
   end
+
+  # The post's files after its text, in its order, each as the API path
+  # makes its block for the media types the wire carries
+  # (`Aqua.Loop.Turn.file_block/2`), which has no member for the file's
+  # name. A file never refuses the post: one whose block would take the
+  # line past the wire's bound is named as too large instead, and the post
+  # goes with the rest; one whose bytes are gone is left out. A line's
+  # bytes are its command's JSON, so a block adds its own and a comma.
+  defp with_files(command, work, row) do
+    files = Aqua.Attachments.load(work.ctx, row.thread_id, Aqua.Attachments.attachments_of([row]))
+    types = Opus.Brain.media_types()
+    max = Opus.Brain.max_line_bytes()
+
+    {blocks, _bytes} =
+      Enum.map_reduce(files, byte_size(Jason.encode!(command)), fn file, bytes ->
+        block = file |> Aqua.Loop.Turn.file_block(types) |> Map.delete("filename")
+        added = byte_size(Jason.encode!(block)) + 1
+
+        if bytes + added <= max do
+          {block, bytes + added}
+        else
+          named = too_large(file)
+          {named, bytes + byte_size(Jason.encode!(named)) + 1}
+        end
+      end)
+
+    Map.update!(command, "content", &(&1 ++ blocks))
+  end
+
+  defp too_large(%{"filename" => name, "media_type" => media}),
+    do: %{
+      "type" => "text",
+      "text" =>
+        "The file #{name} (#{media}) is attached, and it is too large to hand to this program."
+    }
 
   # One recovery prompt, attempted once: for a post the transcript holds,
   # to go on with it or say where it stands; for a result its ask can no
