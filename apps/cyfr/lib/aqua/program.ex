@@ -1087,15 +1087,6 @@ defmodule Aqua.Program do
       :busy ->
         state
 
-      # The person's yes on the start's card covered what the turn had read
-      # then: a delivery that brings in more needs the work admitted anew.
-      {:not_admitted, :source_not_covered} ->
-        fail(
-          shut(state),
-          "This message brings in material the approval of #{work.title} did not cover, so " <>
-            "this work ends here. Send it again to be asked anew."
-        )
-
       {:not_admitted, _reason} ->
         fail(shut(state), "#{work.title} may not go on with this work any more.")
 
