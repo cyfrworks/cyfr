@@ -14,8 +14,8 @@
 # The host's checks queue here and nowhere else. The machine's cores are
 # cut into four equal quarters (scripts/lib/quarters.sh), and a check takes
 # one or all four:
-#   4  (default) a gate, a close, a full or multi-partition suite, go test
-#      -race, a harness self-test that needs the machine, the load check,
+#   4  (default) a full or multi-partition suite, go test -race, a
+#      harness self-test that needs the machine, the load check,
 #      a timing measurement, the canvas proof, which is held to speed
 #      budgets, or the compose proof, whose shipped compose file publishes
 #      a fixed port. It sizes itself to the whole machine, or its tests
@@ -441,8 +441,8 @@ here=${BASH_SOURCE[0]%/*}
 . "$here/lib/quarters.sh" || { echo "cannot load $here/lib/quarters.sh" >&2; exit 69; }
 command -v flock >/dev/null 2>&1 || { echo 'flock is required (util-linux; on macOS: brew install flock)' >&2; exit 69; }
 
-# Above the gate's own stop of its legs (255 s at most), so a stopped
-# gate cleans up before this script stops what remains.
+# The time a stopped check has to stop what it started and clean up
+# before this script stops what remains.
 GRACE=${HEAVY_CHECK_GRACE:-300}
 case "$GRACE" in ''|*[!0-9]*) echo 'HEAVY_CHECK_GRACE is decimal seconds' >&2; exit 64 ;; esac
 [ "${#GRACE}" -le 6 ] || { echo 'HEAVY_CHECK_GRACE is at most 999999 seconds' >&2; exit 64; }

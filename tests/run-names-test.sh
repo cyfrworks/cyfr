@@ -163,23 +163,40 @@ caller=$(printf '%s\n' "$out" | sed -n 2p)
   fail "the pattern captured ${BASH_REMATCH[1]} and ${BASH_REMATCH[2]}"
 [[ "${prefix}compose-proof-net" =~ $RUN_NAMES_PATTERN ]] || fail 'a name made from the prefix does not match'
 [ "$(run_names_prefix "$S/wt1")" = "cyfr-$seed-$$-" ] || fail 'a command substitution did not keep the calling shell pid'
-for name in "cyfr-gate-4242-boot-psql" "cyfr-${seed:0:9}-4242-x" "cyfr-${seed}x-4242-x" "cyfr-$seed--x" "x-cyfr-$seed-4242-"; do
+for name in "cyfr-proof-4242-boot-psql" "cyfr-${seed:0:9}-4242-x" "cyfr-${seed}x-4242-x" "cyfr-$seed--x" "x-cyfr-$seed-4242-"; do
   if [[ $name =~ $RUN_NAMES_PATTERN ]]; then fail "the pattern matches $name"; fi
 done
 
-begin "a gate's names are its stem and what follows, and the gate pattern recognises them and no other"
-[ "$(run_names_gate 4242)" = cyfr-gate-4242 ] || fail "the stem of gate 4242 is $(run_names_gate 4242)"
-[ "$(run_names_gate 4242 -boot-psql)" = cyfr-gate-4242-boot-psql ] || fail "gate 4242's name is $(run_names_gate 4242 -boot-psql)"
-for rest in -boot-psql -gate-psql-1-ab -harness.tools -go.codex_test.temp /cyfr:push -harness-cyfr-tailscale-standin:run1; do
-  name=$(run_names_gate 4242 "$rest")
-  [[ $name =~ $RUN_NAMES_GATE_PATTERN ]] || fail "the gate pattern does not match $name"
-  [ "${BASH_REMATCH[1]}" = 4242 ] && [ "${BASH_REMATCH[2]}" = "$rest" ] ||
-    fail "the gate pattern captured ${BASH_REMATCH[1]} and ${BASH_REMATCH[2]} from $name"
-  if [[ $name =~ $RUN_NAMES_PATTERN ]]; then fail "the run pattern matches the gate's $name"; fi
+begin 'the scripts that name what they make after their run read the prefix for it'
+# Read as text, the expressions that name each script's run, image or
+# directory: a new `docker run` or `docker create` with no --name under
+# PROOF_RUN_PREFIX passes this, and its container outlives a killed run.
+for spec in 'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-' \
+  'tests/compose-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
+  'tests/setup-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-proof-' \
+  'tests/setup-proof/cleanup-test.sh:CONTAINER="${PROOF_RUN_PREFIX:-}cyfr-setup-cleanup-test-' \
+  'tests/compose-proof/tailscale-standin/proof.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-' \
+  'tests/compose-proof/tailscale-standin/proof.sh:IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
+  'tests/identity-proof/front.sh:name="${PROOF_RUN_PREFIX:-}cyfr-identity-front-' \
+  'tests/proxy-hsts/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-' \
+  'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-ns"}' \
+  'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-reserve"}' \
+  'tests/browser/harness.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-' \
+  'tests/imagesuite.py:PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")' \
+  'tests/imagesuite.py:tempfile.mkdtemp(prefix=PROJECT_PREFIX + prefix)'; do
+  f=${spec%%:*} want=${spec#*:}
+  grep -qF -- "$want" "$root/$f" || fail "$f names what it makes without the run prefix: no $want"
 done
-for name in cyfr-gate.Ab12Cd cyfr-gate-test.Ab12Cd cyfr-gate-4242 cyfr-gate--x cyfr-gate-42a-x x-cyfr-gate-4242-x "cyfr-$seed-4242-proof"; do
-  if [[ $name =~ $RUN_NAMES_GATE_PATTERN ]]; then fail "the gate pattern matches $name"; fi
-done
+# Every tracked script under tests/ and scripts/: a directory made under
+# TMPDIR and named cyfr-... carries the prefix before it.
+unprefixed=$(cd "$root" && git grep -n 'mktemp[^"]*"${TMPDIR:-/tmp}/cyfr-' -- tests scripts || :)
+[ -z "$unprefixed" ] || fail "a directory a script makes under TMPDIR is named without the run prefix: $unprefixed"
+# Planted: the sweep finds such a directory in a script of its own.
+mkdir -p "$S/swept/tests"
+printf 'd=$(mktemp -d "${TMPDIR:-/tmp}/%s")\n' cyfr-planted.XXXXXX >"$S/swept/tests/planted.sh"
+git -C "$S/swept" init -q && git -C "$S/swept" add tests
+[ -n "$(cd "$S/swept" && git grep -n 'mktemp[^"]*"${TMPDIR:-/tmp}/cyfr-' -- tests scripts || :)" ] ||
+  fail 'the sweep did not find a directory named without the run prefix'
 
 begin 'a free port lies in 20000-29999 and binds'
 [ "$RUN_NAMES_PORT_FIRST" = 20000 ] && [ "$RUN_NAMES_PORT_LAST" = 29999 ] ||

@@ -598,7 +598,7 @@ for event in push schedule workflow_dispatch; do
   if [ "$code" -eq 0 ] && [ ! -s "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
 done
 
-label="world-checks: no event, as in the commit gate, blocks"
+label="world-checks: no event, as on a host, blocks"
 merge_repo src/app.ex
 run_world -u GITHUB_EVENT_NAME
 if [ "$code" -eq 0 ] && [ ! -s "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
@@ -673,36 +673,34 @@ while IFS='|' read -r changed want; do
   pr
   if skipped "$want"; then pass "$label"; else fail "$label"; fi
 done <<'CASES'
-src/app.ex README.md apps/arca/lib/arca.ex apps/cyfr/assets/js/app.js|host=false partitions=false gate=false
-apps/codex/go.mod seed/components/x/1.0.0/a.txt apps/arca/test/stored_test.exs|host=false partitions=false gate=false
+src/app.ex README.md apps/arca/lib/arca.ex apps/cyfr/assets/js/app.js|host=false partitions=false
+apps/codex/go.mod seed/components/x/1.0.0/a.txt apps/arca/test/stored_test.exs|host=false partitions=false
 scripts/lib/contain.sh|
 -scripts/lib/contain.sh|
 .github/workflows/test.yml|
 scripts/ci/self-test-scope.sh|
-tests/contain-test.sh|partitions=false gate=false
--tests/contain-test.sh|partitions=false gate=false
-tests/load-check/run.sh|partitions=false gate=false
-scripts/stages.tsv|partitions=false gate=false
-scripts/heavy-check.sh|partitions=false gate=false
+tests/contain-test.sh|partitions=false
+-tests/contain-test.sh|partitions=false
+tests/load-check/run.sh|partitions=false
+scripts/stages.tsv|partitions=false
+scripts/heavy-check.sh|partitions=false
 .github/workflows/release.yml|partitions=false
 .github/workflows/codex-ci.yml|partitions=false
-scripts/commit-gate.sh|partitions=false
-config/test.exs|host=false gate=false
-config/database_choice.exs|host=false gate=false
-scripts/test-partition-weights.tsv|host=false gate=false
+config/test.exs|host=false
+config/database_choice.exs|host=false
+scripts/test-partition-weights.tsv|host=false
 .github/actions/setup-elixir/action.yml|host=false
-tests/commit-gate-test.sh|host=false partitions=false
 CASES
 
 label="self-test-scope: what the base changed since the branch left it is not the pull request's"
-scope_repo README.md -- scripts/lib/contain.sh .github/workflows/test.yml scripts/commit-gate.sh
+scope_repo README.md -- scripts/lib/contain.sh .github/workflows/test.yml scripts/heavy-check.sh
 pr
-if skipped 'host=false partitions=false gate=false'; then pass "$label"; else fail "$label"; fi
+if skipped 'host=false partitions=false'; then pass "$label"; else fail "$label"; fi
 
 label="self-test-scope: each job skipped is named not needed"
 scope_repo README.md
 pr
-if [ "$(grep -c '^harness-tests-[a-z]*: not needed, ' "$scratch/out")" = 3 ] && [ ! -s "$scratch/err" ]; then pass "$label"; else fail "$label"; fi
+if [ "$(grep -c '^harness-tests-[a-z]*: not needed, ' "$scratch/out")" = 2 ] && [ ! -s "$scratch/err" ]; then pass "$label"; else fail "$label"; fi
 
 for event in push schedule workflow_dispatch; do
   label="self-test-scope: a $event runs every job"
@@ -803,7 +801,7 @@ def evaluate(expression, job, cancelled, result, output):
         }.get(t, t if t.startswith("'") else None) or sys.exit(f"{job}: its if: names {t}, which this check does not read"))
     return eval("".join(out), {"__builtins__": {}})
 
-for job in ("harness-tests-host", "harness-tests-partitions", "harness-tests-gate"):
+for job in ("harness-tests-host", "harness-tests-partitions"):
     expression = condition(job)
     if expression is None:
         print(f"{job}: no if:")
@@ -1014,6 +1012,195 @@ test|the partitions matrix is {'group': ['report', 'rest']}, and the test's grou
 comment|the partitions job runs the test in
 second|the partitions job runs the test in
 step|the partitions job runs the test in
+CASES
+
+# plant WORKFLOW OLD NEW: .github/workflows/WORKFLOW with OLD, which it
+# holds once, replaced by NEW, written to $scratch/planted.yml; a \n in
+# OLD or NEW is a newline.
+plant() {
+  rm -f "$scratch/planted.yml"
+  python3 -I - "$root/.github/workflows/$1" "$scratch/planted.yml" "$2" "$3" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:]
+old, new = old.replace("\\n", "\n"), new.replace("\\n", "\n")
+s = open(src).read()
+assert s.count(old) == 1, old
+open(dst, "w").write(s.replace(old, new))
+PY
+}
+
+# elixir_shards WORKFLOW: the test job's matrix is both adapters by shards 1
+# to N, where N is the count its Run tests step names, so the shards are
+# the whole split; and the dev compile runs on one shard the matrix has,
+# on both adapters alike.
+elixir_shards() {
+  python3 -I - "$1" <<'PY'
+import re, sys, yaml
+job = yaml.safe_load(open(sys.argv[1]))["jobs"]["test"]
+matrix = job["strategy"]["matrix"]
+run = next(s["run"] for s in job["steps"] if s.get("name") == "Run tests")
+counts = re.findall(r'--shard "\$\{\{ matrix\.shard \}\}/([1-9][0-9]*)"', run)
+if len(counts) != 1:
+    print("Run tests names no one shard of N")
+elif matrix.get("shard") != list(range(1, int(counts[0]) + 1)):
+    print(f"the shards are {matrix.get('shard')}, not 1 to {counts[0]}")
+if matrix.get("db") != ["sqlite", "postgres"]:
+    print(f"the adapters are {matrix.get('db')}, not sqlite and postgres")
+if sorted(matrix) != ["db", "shard"]:
+    print(f"the matrix has {sorted(matrix)}, not db and shard alone")
+dev = next(s for s in job["steps"] if s.get("name") == "Compile the dev target with warnings as errors")
+cond = str(dev.get("if", "")).strip()
+m = re.fullmatch(r"\$\{\{(.*)\}\}", cond, re.S)
+cond = (m.group(1) if m else cond).strip()
+m = re.fullmatch(r"matrix\.shard == ([1-9][0-9]*)", cond)
+if m is None or int(m[1]) not in matrix.get("shard", []):
+    print(f"the dev compile runs under {cond or 'no condition'!r}, not on one shard of each adapter")
+PY
+}
+label="test.yml: the Elixir shards are the whole split on both adapters, and the dev compile runs on one shard of each"
+elixir_shards "$root/.github/workflows/test.yml" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+while IFS='|' read -r kind old new want; do
+  label="test.yml: the shards check refuses $kind ($want)"
+  plant test.yml "$old" "$new"
+  elixir_shards "$scratch/planted.yml" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+a dropped shard|        shard: [1, 2, 3, 4]|        shard: [1, 2, 3]|the shards are [1, 2, 3], not 1 to 4
+another count|--shard "${{ matrix.shard }}/4"|--shard "${{ matrix.shard }}/5"|the shards are [1, 2, 3, 4], not 1 to 5
+the dev compile on every shard|        if: matrix.shard == 1\n|\n|the dev compile runs under 'no condition', not on one shard of each adapter
+the dev compile on a shard the matrix lacks|        if: matrix.shard == 1\n|        if: matrix.shard == 5\n|the dev compile runs under 'matrix.shard == 5', not on one shard of each adapter
+the dev compile on one adapter|        if: matrix.shard == 1\n|        if: matrix.shard == 1 && matrix.db == 'sqlite'\n|the dev compile runs under "matrix.shard == 1 && matrix.db == 'sqlite'", not on one shard of each adapter
+CASES
+
+# browser_viewports WORKFLOW: across the browser and browser-tincture
+# matrices no shard is listed twice, and no two shards run one proof at
+# one viewport (a shard with no viewport runs its proofs at every
+# viewport they take).
+browser_viewports() {
+  python3 -I - "$1" <<'PY'
+import sys, yaml
+jobs = yaml.safe_load(open(sys.argv[1]))["jobs"]
+rows = {}
+for job in ("browser", "browser-tincture"):
+    for e in jobs[job]["strategy"]["matrix"]["include"]:
+        if e["shard"] in rows:
+            print(f"test.yml lists browser shard {e['shard']} twice")
+        rows[e["shard"]] = e
+where = {}
+for shard, e in sorted(rows.items()):
+    for proof in e.get("proofs", []):
+        where.setdefault(proof, []).append((shard, e.get("viewport")))
+for proof, at in sorted(where.items()):
+    views = [v for _, v in at]
+    if len(at) > 1 and (None in views or len(set(views)) != len(views)):
+        print(f"the {proof} proof runs at one viewport in more than one shard: {', '.join(s for s, _ in at)}")
+PY
+}
+label="test.yml: no two browser shards run one proof at one viewport"
+browser_viewports "$root/.github/workflows/test.yml" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+while IFS='|' read -r kind row want; do
+  label="test.yml: the browser shards check refuses $kind ($want)"
+  plant test.yml '    steps: &browser-steps\n' "$row    steps: &browser-steps\n"
+  browser_viewports "$scratch/planted.yml" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+a second shard of approval at the desktop|          - shard: i\n            title: approval proof, desktop again\n            proofs: [approval]\n            build: release\n            viewport: desktop\n|the approval proof runs at one viewport in more than one shard: e, f, i
+a shard listed twice|          - shard: b\n            title: the markdown proof\n            proofs: [markdown]\n            build: markdown\n|test.yml lists browser shard b twice
+CASES
+
+# app_groups WORKFLOW: each group of the app-image-suites and
+# app-image-locus-suites matrices is listed once, and its job needs the
+# producer of each image its `images` name and no other; each case a step
+# of the jobs names (contains(matrix.cases, ...)) is in exactly one
+# group's cases, and each case a group lists is a step's.
+app_groups() {
+  python3 -I - "$1" <<'PY'
+import re, sys, yaml
+jobs = yaml.safe_load(open(sys.argv[1]))["jobs"]
+producers = {"app": "app-image", "locus": "locus-image"}
+groups, steps, listed = [], set(), {}
+for name in ("app-image-suites", "app-image-locus-suites"):
+    job = jobs[name]
+    needs = job.get("needs", [])
+    needs = sorted([needs] if isinstance(needs, str) else needs)
+    steps |= {k for st in job["steps"] for k in re.findall(r"contains\(matrix\.cases, '([a-z0-9-]+)'\)", str(st.get("if", "")))}
+    for e in job["strategy"]["matrix"]["include"]:
+        groups.append(e["group"])
+        want = sorted(producers[i] for i in e.get("images", []))
+        if needs != want:
+            print(f"group {e['group']} runs the images {', '.join(e.get('images', []))}, and its job {name} needs {', '.join(needs) or 'nothing'}")
+        for c in e.get("cases", []):
+            listed.setdefault(c, []).append(e["group"])
+for g in sorted({g for g in groups if groups.count(g) > 1}):
+    print(f"test.yml lists app image group {g} twice")
+for c in sorted(steps):
+    if len(listed.get(c, [])) != 1:
+        print(f"the case {c} is in {len(listed.get(c, []))} groups, not one: {', '.join(listed.get(c, [])) or 'none'}")
+for c in sorted(set(listed) - steps):
+    print(f"group {', '.join(listed[c])} lists the case {c}, which no step runs")
+PY
+}
+label="test.yml: each app image case runs in one group, each group on the producers of its images alone"
+app_groups "$root/.github/workflows/test.yml" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+while IFS='|' read -r kind old new want; do
+  label="test.yml: the app image groups check refuses $kind ($want)"
+  plant test.yml "$old" "$new"
+  app_groups "$scratch/planted.yml" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+a case in two groups|            cases: [bind, restore-identity]\n|            cases: [bind, restore-identity]\n          - group: d\n            title: bind again\n            images: [app]\n            cases: [bind]\n|the case bind is in 2 groups, not one: c, d
+a case in no group|            cases: [interrupt, restore, restore-person, setup, scan]\n|            cases: [interrupt, restore-person, setup, scan]\n|the case restore is in 0 groups, not one: none
+a case no step runs|            cases: [interrupt, restore, restore-person, setup, scan]\n|            cases: [interrupt, restore, restore-person, setup, scan, planted]\n|group a lists the case planted, which no step runs
+a job without a producer|    needs: [locus-image, app-image]\n|    needs: app-image\n|group both runs the images locus, app, and its job app-image-locus-suites needs app-image
+CASES
+
+# trivy_pins WORKFLOW_DIR: every aquasecurity/trivy-action step of every
+# workflow pins its trivy release (`version: vX.Y.Z`), all the same one;
+# a step with no version installs whatever trivy is latest.
+trivy_pins() {
+  python3 -I - "$1" <<'PY'
+import glob, os, re, sys, yaml
+pins = set()
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml"))):
+    for job, body in (yaml.safe_load(open(path)).get("jobs") or {}).items():
+        for step in body.get("steps") or []:
+            if str(step.get("uses", "")).split("@")[0] != "aquasecurity/trivy-action":
+                continue
+            version = str((step.get("with") or {}).get("version", ""))
+            if re.fullmatch(r"v\d+\.\d+\.\d+", version):
+                pins.add(version)
+            else:
+                print(f"{os.path.basename(path)} {job}: '{step.get('name', 'a trivy-action step')}' pins {version or 'no version'}, not one vX.Y.Z")
+if len(pins) > 1:
+    print(f"the trivy-action steps pin {', '.join(sorted(pins))}, not one release")
+if not pins:
+    print("no trivy-action step pins a release")
+PY
+}
+label="workflows: every trivy-action step pins one trivy release"
+trivy_pins "$root/.github/workflows" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+while IFS='|' read -r kind old new want; do
+  label="workflows: the trivy pin check refuses $kind ($want)"
+  rm -rf "$scratch/pins" && mkdir -p "$scratch/pins" && cp "$root"/.github/workflows/*.yml "$scratch/pins/"
+  plant security.yml "$old" "$new"
+  mv "$scratch/planted.yml" "$scratch/pins/security.yml"
+  trivy_pins "$scratch/pins" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+a step with no version|      - name: Secret scan (enforced)\n        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0\n        with:\n          version: v0.75.0\n|      - name: Secret scan (enforced)\n        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0\n        with:\n|security.yml repo-scan: 'Secret scan (enforced)' pins no version, not one vX.Y.Z
+a second release|          version: v0.75.0\n          scan-type: fs\n          scanners: misconfig\n|          version: v0.76.0\n          scan-type: fs\n          scanners: misconfig\n|the trivy-action steps pin v0.75.0, v0.76.0, not one release
 CASES
 
 # --- retry ---

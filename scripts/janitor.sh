@@ -23,12 +23,7 @@
 #      nothing after it touched, and a run whose object could not be
 #      removed keeps everything of its own after that object. Another
 #      directory named under a run prefix is not touched, since a run may
-#      keep its own on purpose. What a commit gate that is gone left goes
-#      the same way, by the gate's pid: its containers, networks, volumes,
-#      image tags and $JANITOR_TMP scratch directories of this user whose
-#      names match RUN_NAMES_GATE_PATTERN (run-names.sh), the one grammar
-#      of the names a gate gives. The databases a gate's boot leg names
-#      stay the next gate's to drop.
+#      keep its own on purpose.
 #   2. Old images. An image tagged cyfr-locus:in-<h> or cyfr:in-<h>
 #      (scripts/image.sh), or cyfr-install-screen:in-<h> (the
 #      install-screen proof's, tests/install-screen-proof/prepare.sh),
@@ -56,9 +51,9 @@
 #      first drop: one it cannot read keeps the directory and every
 #      database it names. A drop that fails keeps the directory, names what
 #      was dropped and what is left, and fails the run.
-#   5. Old logs and evidence. $JANITOR_TMP/cyfr-stage.*,
-#      $JANITOR_TMP/cyfr-gate.* and $JANITOR_TMP/cyfr-evidence.* log and
-#      evidence directories of this user more than seven days old.
+#   5. Old logs and evidence. $JANITOR_TMP/cyfr-stage.* and
+#      $JANITOR_TMP/cyfr-evidence.* log and evidence directories of this
+#      user more than seven days old.
 #   6. Old records. Under each image's lock, the dead pids in <h>.uses go.
 #      No lock file is ever removed.
 #   7. Unpinned base images. The install-screen proof's cache of Ubuntu
@@ -89,7 +84,7 @@
 #
 # HEAVY_CHECK_LOCK (default /tmp/cyfr-heavy-check.lock) names heavy-check's
 # lock, beside which the holder records lie; JANITOR_TMP (default /tmp)
-# the directory the runner, the stages and the gate make theirs in; the
+# the directory the runner and the stages make theirs in; the
 # image lock directory is the one `scripts/image.sh --lock-dir` prints.
 #
 # Every listing a rule reads (Docker's objects, the worktrees, the
@@ -210,12 +205,12 @@ remove_object() {
   esac
 }
 declare -A why_kept=()
-# The pids whose run or gate kept an object it could not remove: what
+# The pids whose run kept an object it could not remove: what
 # depends on it, the later kinds and the directories, stays.
 declare -A left=()
 # False once a listing of rule 1 failed: nothing after it is touched.
 listed_all=true
-# Sets reason to why the run or gate pid $1 names is not finished,
+# Sets reason to why the run pid $1 names is not finished,
 # remembered per pid.
 kept_for() {
   if [ -z "${why_kept[$1]+set}" ]; then why_kept[$1]=$(unfinished "$1"); fi
@@ -225,10 +220,8 @@ sweep_run_objects() {
   local kind=$1 name pid reason
   listed "$kind" "${kind}s" list_objects "$kind" || { listed_all=false; return 0; }
   while IFS= read -r name; do
-    if [[ $name =~ $RUN_NAMES_PATTERN ]]; then pid=${BASH_REMATCH[2]}
-    elif [[ $name =~ $RUN_NAMES_GATE_PATTERN ]]; then pid=${BASH_REMATCH[1]}
-    else continue
-    fi
+    [[ $name =~ $RUN_NAMES_PATTERN ]] || continue
+    pid=${BASH_REMATCH[2]}
     kept_for "$pid"
     if [ -n "$reason" ]; then kept "$kind" "$name" "$reason"; continue; fi
     if [ -n "${left[$pid]+set}" ]; then kept "$kind" "$name" "an object of its run before it could not be removed"; continue; fi
@@ -240,7 +233,7 @@ for kind in container network volume image; do
   $listed_all || break
   sweep_run_objects "$kind"
 done
-# Whether the directory $1 of the run or gate pid $2 may go now: its run
+# Whether the directory $1 of the run pid $2 may go now: its run
 # finished (reason empty) and every object it depends on gone. It says why
 # it keeps one.
 directory_free() {
@@ -261,16 +254,6 @@ while IFS= read -r -d '' dir; do
   else failure directory "$dir" 'rm -rf failed'
   fi
 done <"$lists/scratch"
-listed gates 'gate scratch directories' find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -name "$(run_names_gate '')*" -print0
-while IFS= read -r -d '' dir; do
-  [[ ${dir##*/} =~ $RUN_NAMES_GATE_PATTERN ]] || continue
-  [ -O "$dir" ] || continue
-  directory_free "$dir" "${BASH_REMATCH[1]}" || continue
-  if $dry; then removed directory "$dir"
-  elif rm -rf -- "$dir"; then removed directory "$dir"
-  else failure directory "$dir" 'rm -rf failed'
-  fi
-done <"$lists/gates"
 
 # Rule 2. The tags the repository's worktrees produce today. Without the
 # worktrees' list no tag is known to be unproduced, so the rule's removals
@@ -444,7 +427,7 @@ done <"$lists/runs"
 
 # Rule 5.
 listed logs 'log and evidence directories' \
-  find "$TMP_ROOT" -maxdepth 1 \( -name 'cyfr-stage.*' -o -name 'cyfr-gate.*' -o -name 'cyfr-evidence.*' \) -type d -mmin +10080 -print0
+  find "$TMP_ROOT" -maxdepth 1 \( -name 'cyfr-stage.*' -o -name 'cyfr-evidence.*' \) -type d -mmin +10080 -print0
 while IFS= read -r -d '' dir; do
   [ -O "$dir" ] || continue
   if $dry; then removed directory "$dir"

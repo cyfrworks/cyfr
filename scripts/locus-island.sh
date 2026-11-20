@@ -12,9 +12,8 @@
 # configuration (config/locus_runtime.exs, which its config test evaluates)
 # compiles every role with warnings as errors and runs its suite, against
 # a scripted host and no database. Its vector tests fail rather than skip
-# without the vector file. test.yml's locus-independence job,
-# scripts/commit-gate.sh's close and handoff's locus-alone row
-# (scripts/stages.tsv) run this.
+# without the vector file. test.yml's locus-independence job and
+# handoff's locus-alone row (scripts/stages.tsv) run this.
 #
 # The island is a directory the script makes under TMPDIR and removes at
 # exit. Mix runs under MIX_ENV=test with its build lock off, as test.yml's

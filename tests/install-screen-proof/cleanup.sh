@@ -10,9 +10,7 @@
 # Every name the run gives Docker begins with PROOF_PREFIX, which must be a
 # whole prefix of RUN_NAMES_PATTERN (cyfr-<seed>-<pid>-), so janitor rule 1
 # removes what a killed run leaves; it is assigned from PROOF_RUN_PREFIX
-# alone, so the commit gate's container-name check
-# (tests/commit-gate-test.sh) traces each --name made from it to the run
-# prefix. proof_own records a container or volume before it is made, and
+# alone. proof_own records a container or volume before it is made, and
 # refuses, recording nothing, without such a prefix or for a name outside
 # it. The teardown removes what was recorded and nothing else: not another run's
 # names, nor a name the run did not record, nor the proof image the

@@ -10,8 +10,7 @@
 # change independently of the tree, so a tree that passed can fail later
 # with no change of its own: security.yml's elixir-audit job runs this on
 # every change, blocking unless scripts/ci/world-checks.sh says otherwise,
-# the commit gate replays that job, and scripts/release.sh runs it again
-# right before it tags.
+# and scripts/release.sh runs it again right before it tags.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -6,14 +6,14 @@
 #
 # expect is the median seconds of the passing runs this host recorded under
 # the queue's lanes, before the quarters (the check runs from 2026-10-30 to
-# 2026-11-10); for the four subjects that also run on the whole machine it
+# 2026-11-10); for the three subjects that also run on the whole machine it
 # is twice that median, the time assumed busy on two quarters, so their
 # whole run is planned at the median itself. A row with no recorded run
 # says so.
 #
 # Every scratch worktree is prepared cold by the prep rows, in order: the
 # deps, then the deps compiled into each build path a check compiles in,
-# one at a time, as scripts/commit-gate.sh does before its legs.
+# one at a time, as scripts/stage.sh does before its rows.
 prep	deps	-	-	-	60	1800	-	scripts/ci/retry.sh mix deps.get && scripts/fetch-prebuilt-binaries.sh
 prep	deps-test	-	-	-	60	1800	-	env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test mix deps.loadpaths
 prep	deps-dev	-	-	-	60	1800	-	env CYFR_DATABASE=sqlite MIX_ENV=dev mix deps.loadpaths
@@ -22,8 +22,8 @@ prep	deps-dev-pg	-	-	-	60	1800	-	env MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=
 
 # What a subject's first run would otherwise build, warmed once in each
 # worktree that runs it: the suites' test build, go's race build, and the
-# release the release proofs start. The gate forces its own builds, and a
-# harness self-test builds what it tests inside every run, so neither warms.
+# release the release proofs start. A harness self-test builds what it
+# tests inside every run, so it does not warm.
 # A warm's scratch directory is named under the run's prefix, so the run's
 # own clean-up removes it whatever the build did.
 warm	test-sqlite	-	-	-	90	1800	-	env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test mix compile && scripts/wasm-tools.sh install _tools >/dev/null
@@ -41,18 +41,15 @@ load	postgres-tests	-	-	-	100	2700	tests/load-check/needs.sh postgres	scripts/te
 image	app-image	-	-	-	900	3600	tests/load-check/needs.sh docker	docker build --no-cache -q -f Dockerfile -t "${PROOF_RUN_PREFIX}load-check-image" .
 
 # The checks that take the whole machine today, on two quarters: the suite
-# on each adapter in the gate's shape, the gate and go test -race, which
-# also run on the whole machine, and every harness self-test a pull-request
-# workflow runs and no handoff row does. Recorded medians: suites 231 and
-# 244 s, gate 987, go test -race 107, commit-gate-test 630, heavy-check-test
-# 225, stage-test 3, test-partitioned-test with partition-env-test 693,
-# release-boot-test 45; contain-test, access-test, ci-publish-test and
-# install-verify-test have no recorded run.
+# on each adapter in partitions, and go test -race, which also run on the
+# whole machine, and every harness self-test a pull-request workflow runs
+# and no handoff row does. Recorded medians: suites 231 and 244 s, go test
+# -race 107, heavy-check-test 225, stage-test 3, test-partitioned-test with
+# partition-env-test 693, release-boot-test 45; contain-test, access-test,
+# ci-publish-test and install-verify-test have no recorded run.
 subject	suite-sqlite	2	whole	test-sqlite	462	2700	-	scripts/test-partitioned.sh -n "$LOAD_CHECK_PARTS" -a sqlite -- --warnings-as-errors
 subject	suite-postgres	2	whole	test-postgres	488	2700	tests/load-check/needs.sh postgres	scripts/test-partitioned.sh -n "$LOAD_CHECK_PARTS" -a postgres -- --warnings-as-errors
-subject	gate	2	pair,whole	-	1974	7200	tests/load-check/needs.sh postgres	scripts/commit-gate.sh -l "$LOAD_CHECK_OUT/gate"
 subject	go-race	2	pair,whole	go-race	214	1800	-	cd apps/codex && go test ./... -race
-subject	commit-gate-test	2	pair	-	630	3600	-	bash tests/commit-gate-test.sh
 subject	heavy-check-test	2	pair	-	225	1800	-	bash tests/heavy-check-test.sh
 subject	contain-test	2	pair	-	60	1200	-	bash tests/contain-test.sh
 subject	stage-test	2	pair	-	5	600	-	bash tests/stage-test.sh
