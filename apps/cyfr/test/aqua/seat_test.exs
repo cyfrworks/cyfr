@@ -19,7 +19,6 @@ defmodule Aqua.SeatTest do
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
-  alias Arca.TurnStorage
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
 
@@ -227,7 +226,24 @@ defmodule Aqua.SeatTest do
   test "the member Aqua runs on works a job as itself, briefed as a member, and asks nobody",
        %{ctx: ctx, room: room, holder: holder} do
     consent!(ctx, Prima.AgentRef.ref(holder), [%{dep: @model, label: "default"}])
-    script!([reply("Done.")])
+
+    script!([
+      reply("Done."),
+      %{
+        "content" => [
+          %{
+            "type" => "tool_call",
+            "id" => "c1",
+            "name" => "crew",
+            "arguments" => %{"action" => "ask", "member" => "explorer", "task" => "help"}
+          }
+        ],
+        "stop_reason" => "tool_call",
+        "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+      },
+      reply("Nobody else.")
+    ])
+
     {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
 
     turn = accept!(ctx, child, "tidy the notes", holder)
@@ -239,21 +255,62 @@ defmodule Aqua.SeatTest do
     assert opening == Aqua.Prompt.crew_briefing(false, false)
     refute system =~ seat_prompt()
 
-    {:ok, %{turn: open}} =
-      TurnStorage.accept_message(actor(ctx), child.id, %{
-        message: %{author: ctx.user_id, sent_by: "person", content: "again"},
-        turn: %{agent: holder, requested_by: ctx.user_id, origin: :interactive}
-      })
+    # Its own turn's crew.ask of a member that is ready reaches the
+    # admission rule, which only Aqua's turn in a daily or workspace thread
+    # passes: refused, nothing written.
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
+    assert :ok = Aqua.Crew.ready(ctx, "explorer")
+    asking = accept!(ctx, child, "get explorer to help", holder)
+    assert :completed = run(ctx, asking)
+    {:ok, steps} = Tape.steps(ctx, elem(Tape.turn(ctx, asking.id), 1))
 
-    assert {:error, :not_addressable} =
-             Aqua.Crew.ask(ctx, %{
-               "member" => "explorer",
-               "task" => "help",
-               "thread_id" => child.id,
-               "root_execution_id" => open.root_execution_id || "none"
-             })
+    assert [%{outcome: outcome, error: error}] =
+             Enum.filter(steps, &(&1.tool == "crew" and &1.action == "ask"))
 
-    assert Threads.pending_requests(actor(ctx), thread_id: room.id) == []
+    refute outcome == "ok"
+    assert is_binary(error)
+    assert List.last(answers(ctx, child, asking.id)) == "Nobody else."
+
+    for thread <- [room, child],
+        do: assert(Threads.pending_requests(actor(ctx), thread_id: thread.id) == [])
+  end
+
+  # A brain picked for the member Aqua runs on asks Aqua's consent on the
+  # page (`PrismWeb.AquaLive.AgentsComponent`), never the member's own:
+  # that stays on the brain it was given for, so a job of the member's own
+  # is refused until the person gives it again, and none of it reaches the
+  # new brain before then.
+  test "the member Aqua runs on, its brain moved and Aqua consented again, runs no job of its " <>
+         "own on the new brain before its own consent",
+       %{ctx: ctx, room: room, holder: holder} do
+    member_ref = Prima.AgentRef.ref(holder)
+    consent!(ctx, member_ref, [%{dep: @model, label: "default"}])
+
+    start_supervised!(
+      {ScriptedWorker, ref: [@model, @gemini], script: [reply("Aqua."), reply("The member.")]}
+    )
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
+    :ok = member!(ctx, holder, %{"catalyst_ref" => @gemini, "model" => "gemini-pro-latest"})
+    consent!(ctx, @soul, [%{dep: @gemini, label: "default"}])
+
+    aqua = accept!(ctx, room, "hello")
+    assert :completed = run(ctx, aqua)
+
+    # The member's own job: its consent still holds the old brain only.
+    assert {:error, {:consent_required, _}} = Opus.authority_for(ctx, :default, member_ref)
+    {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
+    refused = accept!(ctx, child, "tidy the notes", holder)
+    assert {:failed, _} = run(ctx, refused)
+    assert chats(holder) == []
+
+    # Given, the member's next job runs on its new brain.
+    consent!(ctx, member_ref, [%{dep: @gemini, label: "default"}])
+    done = accept!(ctx, child, "tidy the notes again", holder)
+    assert :completed = run(ctx, done)
+
+    assert ["gemini-pro-latest"] = Enum.map(chats(holder), & &1.input["params"]["model"])
+    assert ["gemini-pro-latest"] = Enum.map(chats("aqua"), & &1.input["params"]["model"])
   end
 
   # A turn pins Aqua's file, which names its member: rebuilt as recovery

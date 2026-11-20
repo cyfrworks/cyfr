@@ -57,7 +57,7 @@ defmodule Compendium.AquaAgent do
   soul runs with (`resolve/3`, `seated/2`). A soul file that names a
   brain, a model, options, an install or a mode of its own is refused
   (`:seat_has_brain`), with the sentence `Prima.AgentRef.seat_has_brain/0`
-  says, and so is a `member` that names no crew member's file
+  says, and so is a `member` that cannot be a crew member's file name
   (`{:member_invalid, value}`). A seat that names no member, or one
   whose member is gone, disabled or refused, still resolves, with no
   brain and its holder's state, which a turn refuses with its sentence
@@ -137,7 +137,7 @@ defmodule Compendium.AquaAgent do
   (`<name>.md`), never from the frontmatter — the tree is the roster. A
   `tool_policy` in any file (`:tool_policy_retired`), a brain, model,
   options, install or mode in the soul's file (`:seat_has_brain`), a
-  soul's `member` that names no crew file (`{:member_invalid, value}`),
+  soul's `member` that cannot name a crew file (`{:member_invalid, value}`),
   a `mode` that is
   neither `read-only` nor `auto` (`{:mode_invalid, value}`), a `tools`
   list outside the grammar (`check_tools/1`), a `tools` list in a crew
