@@ -1404,6 +1404,53 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # Aqua with no crew member, or one that does not stand, has no model
+    # to connect: the pane says why in the sentence Aqua's card says and
+    # its turn is refused with (`Prima.Refusal`), with the way to the
+    # Aqua page.
+    test "Aqua with no member, or one that does not stand, says why, never no model", %{
+      conn: conn,
+      athanor: athanor,
+      here: here
+    } do
+      actor = Sanctum.Context.actor(here)
+      crew = Compendium.AquaPath.crew_file("claude")
+
+      claude =
+        "---\ntitle: Claude\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n"
+
+      seat =
+        &Arca.put(actor, Compendium.AquaPath.soul_file(), "---\ntitle: Aqua\n#{&1}---\n\nsoul\n")
+
+      cases = [
+        {fn -> seat.("") end, {:aqua_runs_on, :none, nil}},
+        {fn -> seat.("member: ghost\n") end, {:aqua_runs_on, :missing, "ghost"}},
+        {fn -> seat.("member: Claude Code\n") end, {:aqua_runs_on, :invalid, "Claude Code"}},
+        {fn ->
+           :ok = seat.("member: claude\n")
+           Arca.put(actor, crew, claude <> "disabled: true\n---\n")
+         end, {:aqua_runs_on, :disabled, "claude"}},
+        {fn -> Arca.put(actor, crew, claude <> "---\n\nYou are Claude.\n") end,
+         {:aqua_runs_on, :refused, "claude"}}
+      ]
+
+      for {make, reason} <- cases do
+        :ok = make.()
+        {:ok, _} = Compendium.AgentIndex.sync(here)
+        pane = empty_pane(conn, athanor)
+        refute render(pane) =~ "has no model yet"
+
+        assert has_element?(pane, ~s([data-test="model-unseated"]), Prima.Refusal.message(reason))
+
+        assert has_element?(
+                 pane,
+                 ~s(a[data-test="model-connect"][href="#{athanor_path("/aqua?setup=1", athanor)}"])
+               )
+
+        Cyfr.Test.Sandbox.end_views()
+      end
+    end
+
     test "a model whose head binds no key is still one to connect", %{
       conn: conn,
       athanor: athanor
@@ -1569,18 +1616,20 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       _bare = row!.("npx -y claude", true)
       unfit = said.()
 
+      # Named by the crew member Aqua runs on, whose card installs or opens
+      # it, as Aqua's turn and card name it.
       assert [missing, disabled, unfit] == [
-               "your Aqua's program is not installed here — install it from its card on the " <>
+               "Coder's program is not installed here — install it from its card on the " <>
                  "Aqua page",
-               "your Aqua's program is disabled — enable it on the Programs page",
-               "your Aqua's program is not one a brain can run in — on the Programs page, make " <>
+               "Coder's program is disabled — enable it on the Programs page",
+               "Coder's program is not one a brain can run in — on the Programs page, make " <>
                  "it a driven program with a kept folder whose command starts with its driver"
              ]
 
       assert [missing, disabled, unfit] ==
                for(
                  state <- [:program_missing, :program_disabled, :program_unfit],
-                 do: Prima.Refusal.message({:crew_unready, "your Aqua", state})
+                 do: Prima.Refusal.message({:crew_unready, "Coder", state})
                )
     end
   end

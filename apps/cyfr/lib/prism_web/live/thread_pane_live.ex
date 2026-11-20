@@ -1424,14 +1424,31 @@ defmodule PrismWeb.ThreadPaneLive do
   # consent that exists. One that waits on the person's grant alone says
   # so. A soul on a program the athanor has no row of, or whose row is
   # disabled or no brain's, says which, as a turn on it is refused
-  # (`Prima.Refusal`).
+  # (`Prima.Refusal`), naming whose brain it is: the crew member Aqua runs
+  # on, whose card installs or opens it. Aqua whose crew member does not
+  # stand, or that names none, says so in the sentence its card says and
+  # its turn is refused with (`aqua.list`'s `member_refusal`), never as
+  # a model to connect.
   # An agents list that could not be read is not a room with no model.
   defp model_ready(_ctx, :unread), do: :agents_unavailable
 
   defp model_ready(ctx, agents) do
+    case Enum.find_value(agents, & &1["member_refusal"]) do
+      sentence when is_binary(sentence) -> {:unseated, sentence}
+      nil -> model_status_ready(ctx, agents)
+    end
+  end
+
+  defp model_status_ready(ctx, agents) do
     case Aqua.model_status(ctx, agents) do
-      empty when map_size(empty) == 0 -> :no_model
-      statuses -> unready_model(Map.values(statuses))
+      empty when map_size(empty) == 0 ->
+        :no_model
+
+      statuses ->
+        case unready_model(Map.values(statuses)) do
+          {:program, state} -> {:program, state, Enum.find_value(agents, & &1["member_title"])}
+          ready -> ready
+        end
     end
   end
 
@@ -1439,10 +1456,11 @@ defmodule PrismWeb.ThreadPaneLive do
   # with detail, as the Aqua page's agents panel reads it: the roster names
   # who can be addressed and carries no model, so a model's status read
   # from it would always be none. Whether Aqua can answer is the soul's to
-  # say, so the crew is left out. The soul is put in the roster's
-  # string-keyed projection, its catalyst or the name of its program,
-  # which `Aqua.model_status/2` reads. A list
-  # that cannot be read is `:unread`, never no agents.
+  # say, so the crew is left out but for the title of the member it runs
+  # on. The soul is put in the roster's string-keyed projection, its
+  # catalyst or the name of its program, which `Aqua.model_status/2`
+  # reads, with the sentence the list says while its member does not
+  # stand. A list that cannot be read is `:unread`, never no agents.
   defp agents(ctx) do
     soul = Compendium.agent_soul_type()
 
@@ -1453,7 +1471,9 @@ defmodule PrismWeb.ThreadPaneLive do
             "name" => guide.name,
             "type" => guide.type,
             "catalyst_ref" => guide[:catalyst_ref],
-            "program" => guide[:program]
+            "program" => guide[:program],
+            "member_refusal" => guide[:member_refusal],
+            "member_title" => Enum.find_value(guides, &(&1.name == guide[:member] && &1[:title]))
           }
         end
 
@@ -1784,6 +1804,15 @@ defmodule PrismWeb.ThreadPaneLive do
             <%= cond do %>
               <% @model_ready == :pending -> %>
                 <span data-test="model-pending">Reading the model…</span>
+              <% match?({:unseated, _}, @model_ready) -> %>
+                <span data-test="model-unseated">{elem(@model_ready, 1)}</span>
+                <.link
+                  navigate={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
+                  data-test="model-connect"
+                  class="text-blue-400 hover:underline"
+                >
+                  Open your Aqua page.
+                </.link>
               <% @model_ready in [:no_model, :no_key] -> %>
                 <span>{athanor_label(@athanor, @context)} has no model yet.</span>
                 <.link
@@ -1793,10 +1822,11 @@ defmodule PrismWeb.ThreadPaneLive do
                 >
                   Connect one on your Aqua page.
                 </.link>
-              <% match?({:program, _}, @model_ready) -> %>
+              <% match?({:program, _, _}, @model_ready) -> %>
                 <span data-test="model-program">
                   {Prima.Refusal.message(
-                    {:crew_unready, athanor_label(@athanor, @context), elem(@model_ready, 1)}
+                    {:crew_unready, elem(@model_ready, 2) || athanor_label(@athanor, @context),
+                     elem(@model_ready, 1)}
                   )}
                 </span>
               <% @model_ready == :needs_grant -> %>
