@@ -2293,7 +2293,12 @@ defmodule Arca.TurnStorage do
   its holder's runtime cancels after the commit — the loop, an
   in-process handler, a child execution (`Aqua.Loop.abort_ended/4`).
   """
-  @spec cancel_open!(Prima.Actor.t(), String.t(), map(), :reply | :silent | {:silent_to, [String.t()]}) :: [
+  @spec cancel_open!(
+          Prima.Actor.t(),
+          String.t(),
+          map(),
+          :reply | :silent | {:silent_to, [String.t()]}
+        ) :: [
           %{turn_id: String.t(), thread_id: String.t(), steps: [map()]}
         ]
   # arca:db-raise-ok a step inside the caller's transaction; a raise rolls it back.
