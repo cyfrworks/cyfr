@@ -22,6 +22,8 @@ defmodule PrismWeb.AquaSetupTest do
   @moduletag timeout: 180_000
 
   @key "sk-shared-7f3a"
+  # The crew member the fixture seed's Aqua runs on (`Cyfr.Test.ChatFixture`).
+  @member "fixture"
 
   setup do
     Arca.Cache.init()
@@ -52,12 +54,12 @@ defmodule PrismWeb.AquaSetupTest do
   test "a newcomer picks the brain their administrator's shared key binds, and Aqua answers " <>
          "after one confirmation",
        %{conn: conn, ctx: ctx, port: port} do
-    # The soul's model moved since its first fill consented it, so its
-    # consent no longer covers it.
+    # The model of the crew member Aqua runs on moved since the first fill
+    # consented Aqua, so Aqua's consent no longer covers it.
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
-        "name" => "aqua",
+        "name" => @member,
         "model" => "elsewhere"
       })
 
@@ -93,6 +95,11 @@ defmodule PrismWeb.AquaSetupTest do
 
     assert first == ["aqua-setup-brain-chat-fixture"]
 
+    # Aqua's step names the crew member it runs on; that member's brain is
+    # picked on its own setup, the shared key first there too.
+    assert has_element?(view, ~s(#aqua-setup-member option[value="#{@member}"][selected]))
+    {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=#{@member}")
+
     assert has_element?(
              view,
              ~s(#aqua-setup-brain-chat-fixture[data-state="ready"] [data-test="setup-shared"]),
@@ -114,7 +121,8 @@ defmodule PrismWeb.AquaSetupTest do
 
     view |> form("#aqua-setup-pick", %{"value" => choice}) |> render_change()
 
-    # One confirmation: the soul's consent, asked again for its new brain.
+    # One confirmation: Aqua's consent, asked again for the new brain of
+    # the member it runs on.
     wait_until(
       fn ->
         has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.aqua")

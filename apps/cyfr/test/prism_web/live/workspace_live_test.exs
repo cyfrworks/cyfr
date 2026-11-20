@@ -331,10 +331,10 @@ defmodule PrismWeb.WorkspaceLiveTest do
     # Switched to read-only, the next turn's step that does more than read
     # is refused in a line that names the soul so too, and the turn goes
     # on to its end: nothing waits on the person.
-    assert {:ok, %{updated: "aqua"}} =
+    assert {:ok, %{updated: "claude"}} =
              Compendium.Providers.Aqua.handle(me, %{
                "action" => "update",
-               "name" => "aqua",
+               "name" => Cyfr.Test.SeedBundle.seat_member(),
                "mode" => "read-only"
              })
 
