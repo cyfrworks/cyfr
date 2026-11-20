@@ -2282,7 +2282,9 @@ defmodule Arca.TurnStorage do
   by `Prima.TurnStep.unresolved/1`, its proposed ones skipped, and the
   turn ended `cancelled` with `attrs[:error]` by the one terminal write,
   its reply recorded (`:reply`) or not
-  (`:silent`, for a room that is going). `attrs` carry the root's grant
+  (`:silent`, for a room that is going), or, for `{:silent_to, ids}`,
+  recorded when the thread that asked the turn is none of `ids`, the
+  threads going with it. `attrs` carry the root's grant
   as `finish/4` takes it, `:ended_by` as `finish/4` takes it, and
   `:only`, when given, the ids of the open turns to cancel, the others
   left as they are.
@@ -2291,7 +2293,12 @@ defmodule Arca.TurnStorage do
   its holder's runtime cancels after the commit — the loop, an
   in-process handler, a child execution (`Aqua.Loop.abort_ended/4`).
   """
-  @spec cancel_open!(Prima.Actor.t(), String.t(), map(), :reply | :silent) :: [
+  @spec cancel_open!(
+          Prima.Actor.t(),
+          String.t(),
+          map(),
+          :reply | :silent | {:silent_to, [String.t()]}
+        ) :: [
           %{turn_id: String.t(), thread_id: String.t(), steps: [map()]}
         ]
   # arca:db-raise-ok a step inside the caller's transaction; a raise rolls it back.
@@ -2335,7 +2342,7 @@ defmodule Arca.TurnStorage do
       _skipped = skip_proposed!(actor, athanor_id, turn, reason)
       turn = turn!(athanor_id, turn_id)
       grant = granted!(athanor_id, turn, "cancelled", attrs)
-      _ended = ended!(athanor_id, turn, "cancelled", grant, attrs, reply)
+      _ended = ended!(athanor_id, turn, "cancelled", grant, attrs, reply_to(reply, turn))
 
       %{
         turn_id: turn_id,
@@ -2347,6 +2354,15 @@ defmodule Arca.TurnStorage do
 
   def cancel_open!(%Prima.Actor{}, _thread_id, _attrs, _reply),
     do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.cancel_open!/4")
+
+  # Whether a cancelled turn answers its asker: a turn asked from a thread
+  # that is going is answered by nobody.
+  defp reply_to({:silent_to, going}, %Turn{asking_thread_id: asker})
+       when is_binary(asker),
+       do: if(asker in going, do: :silent, else: :reply)
+
+  defp reply_to({:silent_to, _going}, %Turn{}), do: :silent
+  defp reply_to(reply, %Turn{}), do: reply
 
   defp only_steps(query, nil), do: query
   defp only_steps(query, ids) when is_list(ids), do: where(query, [s], s.id in ^ids)
