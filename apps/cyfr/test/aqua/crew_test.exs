@@ -56,7 +56,7 @@ defmodule Aqua.CrewTest do
 
     # The shipped brains of the soul and its crew, in a seed of this
     # test's own; the suite's own carries none.
-    Cyfr.Test.SeedBundle.lay!(~w(claude claude-code gemini openai-codex files http))
+    Cyfr.Test.SeedBundle.lay!(~w(claude gemini openai-codex files http))
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     # Filled now, through the explicit verb, as a person's athanor stands

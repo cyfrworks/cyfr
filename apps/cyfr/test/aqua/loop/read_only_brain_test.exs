@@ -5,7 +5,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   @moduledoc """
   A read-only crew member whose brain runs a program CYFR cannot keep
   read-only, through the real loop: a catalyst whose manifest declares a
-  `login` need (the shipped `claude-code` and `openai-codex` catalysts),
+  `login` need (the shipped `openai-codex` catalyst),
   or a program row whose driver is `cyfr-codex`. Its turn ends unrun
   before anything runs: the sentence that says to switch it to auto is a
   line in its thread and the turn's error, no model is asked, no step is
@@ -27,7 +27,6 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   alias Sanctum.Consent.Bootstrap
 
   @api "catalyst:local.claude"
-  @claude_code "catalyst:local.claude-code"
   @openai_codex "catalyst:local.openai-codex"
   @root :crypto.strong_rand_bytes(32)
   @session "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
@@ -53,9 +52,9 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       end
     end)
 
-    # The shipped brains: a key-only catalyst, and the two harnesses that
-    # sign in to a program of their own.
-    Cyfr.Test.SeedBundle.lay!(~w(claude files http claude-code openai-codex))
+    # The shipped brains: a key-only catalyst, and the harness that signs
+    # in to a program of its own.
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http openai-codex))
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
@@ -63,7 +62,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, _} = Bootstrap.run(ctx)
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @api, %{"ANTHROPIC_API_KEY" => "sk-test"})
-    ScriptedWorker.fresh_limits!(ctx, [@api, @claude_code, @openai_codex])
+    ScriptedWorker.fresh_limits!(ctx, [@api, @openai_codex])
 
     {:ok, room} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, room: room}
@@ -73,28 +72,28 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
     test "read-only on a catalyst that signs in to a program of its own ends unrun with " <>
            "the line and dispatches nothing; in auto it runs",
          %{ctx: ctx, room: room} do
-      member!(ctx, "coder", "Coder", @claude_code, "claude-opus-5-5")
-      signed_in!(ctx, "coder", @claude_code, "claude")
+      member!(ctx, "coder", "Coder", @openai_codex, "default")
+      signed_in!(ctx, "coder", @openai_codex, "openai-codex")
       mode!(ctx, "coder", "read-only")
       script!([reply("built")])
 
       {thread, turn} = accept!(ctx, room, "coder", "build the page")
 
       assert Aqua.Loop.run(ctx: ctx, turn_id: turn.id) ==
-               {:failed, {:read_only_unheld, "Coder", "claude-code"}}
+               {:failed, {:read_only_unheld, "Coder", "openai-codex"}}
 
       line =
-        "Coder can't run read-only: its brain, claude-code, runs a program CYFR can't keep " <>
+        "Coder can't run read-only: its brain, openai-codex, runs a program CYFR can't keep " <>
           "read-only, so nothing ran. Switch Coder to auto on the Aqua page to use it."
 
-      assert Aqua.Models.unheld_sentence("Coder", "claude-code") == line
+      assert Aqua.Models.unheld_sentence("Coder", "openai-codex") == line
       refused!(ctx, thread, turn, "build the page", line)
 
       # The same member, switched to auto, runs on the same brain.
       mode!(ctx, "coder", "auto")
       again = accept_in!(ctx, thread, "coder", "build the page")
       assert Aqua.Loop.run(ctx: ctx, turn_id: again.id) == :completed
-      ran!(ctx, thread, again, "auto", @claude_code, "build the page", "built")
+      ran!(ctx, thread, again, "auto", @openai_codex, "build the page", "built")
     end
 
     test "read-only on a catalyst that runs no program of its own runs",
@@ -110,8 +109,8 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
     end
 
     # The shipped Claude Code names a program row, whose driver holds a
-    # read-only start ("the soul on a program row"); its catalyst's refusal
-    # is the made member's above.
+    # read-only start ("the soul on a program row"); a made member's
+    # refusal on a catalyst that signs in is above.
     for {name, title, catalyst, program} <- [
           {"openai-codex", "OpenAI Codex", @openai_codex, "openai-codex"}
         ] do
@@ -335,8 +334,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   end
 
   defp script!(items),
-    do:
-      start_supervised!({ScriptedWorker, ref: [@api, @claude_code, @openai_codex], script: items})
+    do: start_supervised!({ScriptedWorker, ref: [@api, @openai_codex], script: items})
 
   defp reply(text),
     do: %{

@@ -500,8 +500,8 @@ defmodule Aqua.Loop.RequestTest do
     end
 
     # A harness brain rebuilds a new session from the request alone
-    # (`context.rs` in the claude-code and openai-codex catalysts): the
-    # thread's projection rides every request whole, with a session or
+    # (`context.rs` in the openai-codex catalyst): the thread's
+    # projection rides every request whole, with a session or
     # without, and its last message is the current ask. The shared vectors'
     # case is this thread, so the rule reads what the loop sends.
     test "a crew member's thread rides every request whole, its last message the current ask" do

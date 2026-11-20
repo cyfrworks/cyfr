@@ -1568,14 +1568,6 @@ jobs:
       - name: A program's pipe
         run: python3 tests/locus-backends-image/pipe.py cyfr-locus:backends
 
-      # The Claude Code catalyst, run by the runtime under a scripted host,
-      # driving a fake harness over the pipe in a kept folder: describe's
-      # options from the harness's listing, a chat round trip, a held ask of
-      # CYFR's tool answered by the next chat through cyfr-stub, a resume
-      # after the program retired, a pipe refusal as the contract's.
-      - name: The Claude Code catalyst over a program's pipe
-        run: python3 tests/locus-backends-image/claude_code.py cyfr-locus:backends
-
       # Claude Code's brain driver beside a fake harness in a kept folder,
       # spoken to over the brain wire as its holder speaks it: hello, the
       # harness's listing, a start with its flags, a work's tools on the

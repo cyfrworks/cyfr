@@ -33,6 +33,12 @@ import (
 //	other  asks the driver a control request of another kind, then replies
 //	modes  asks for its own Write and Bash, then replies with its
 //	       whole command line and the driver's two whole answers, as JSON
+//	together  waits for the next post, then answers both in one result,
+//	       whose singular `user_message_uuid` names the first alone
+//	subagent  streams and says words of a subagent's, runs its tool, then replies
+//	around replies in one message of text, a call of CYFR's, and text
+//	noise  writes a line that is no JSON, one of no type the driver
+//	       reads and an event that does not read, then replies
 //
 // Started with `--resume` of a session its folder does not hold, it ends
 // as 2.1.318 ended: a result of no turn naming the session, and exit 1,
@@ -130,6 +136,9 @@ func fakeClaude() int {
 		write(result)
 	}
 	reply = func(uuids []string, text string) { replyWith(uuids, text, modelUsage) }
+	// The posts each turn is begun from; a turn that waits for the next
+	// post takes it here.
+	work := make(chan [2]string, 16)
 	turn := func(uuid, words string) {
 		uuids := []string{uuid}
 		write(map[string]any{"type": "system", "subtype": "init", "session_id": session, "user_message_uuids": uuids})
@@ -198,11 +207,41 @@ func fakeClaude() int {
 			answersMu.Unlock()
 			got := <-ch
 			reply(uuids, fmt.Sprintf("the driver answered %v", got["subtype"]))
+		case strings.Contains(words, "together"):
+			next := <-work
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_both", "content": []any{
+				map[string]any{"type": "text", "text": "both answered"}}}})
+			write(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "uuid": "result-both",
+				"user_message_uuid": uuid, "user_message_uuids": []string{uuid, next[0]}, "model_usage_since_last_result": modelUsage})
+		case strings.Contains(words, "subagent"):
+			task := "toolu_task"
+			write(map[string]any{"type": "stream_event", "parent_tool_use_id": task, "event": map[string]any{"type": "content_block_delta",
+				"delta": map[string]any{"type": "text_delta", "text": "SUBAGENT-WORDS"}}})
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": task, "message": map[string]any{"id": "msg_sub", "content": []any{
+				map[string]any{"type": "text", "text": "SUBAGENT-WORDS"},
+				map[string]any{"type": "tool_use", "id": "toolu_sub", "name": "Grep", "input": map[string]any{"pattern": "x"}}}}})
+			write(map[string]any{"type": "user", "parent_tool_use_id": task, "message": map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "toolu_sub", "content": "SUBAGENT-WORDS"}}}})
+			reply(uuids, "the main reply")
+		case strings.Contains(words, "around"):
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_around", "content": []any{
+				map[string]any{"type": "text", "text": "before the call, "},
+				map[string]any{"type": "tool_use", "id": "toolu_around", "name": toolPrefix + "files", "input": map[string]any{}},
+				map[string]any{"type": "text", "text": "after it"}}}})
+			write(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "uuid": "result-around",
+				"user_message_uuids": uuids, "model_usage_since_last_result": modelUsage})
+		case strings.Contains(words, "noise"):
+			mu.Lock()
+			out.WriteString("not a line of JSON\n")
+			out.Flush()
+			mu.Unlock()
+			write(map[string]any{"type": "keep_alive"})
+			write(map[string]any{"type": "stream_event", "parent_tool_use_id": nil, "event": "not an event"})
+			reply(uuids, "still here")
 		default:
 			reply(uuids, "ok")
 		}
 	}
-	work := make(chan [2]string, 16)
 	go func() {
 		for w := range work {
 			turn(w[0], w[1])

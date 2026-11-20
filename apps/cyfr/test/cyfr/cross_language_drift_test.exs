@@ -591,18 +591,13 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "model_chat.json" => [
       {"apps/prima/test/prima/model_test.exs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses max_input_bytes max_input_blocks input_media_types valid_inputs invalid_inputs)},
-      {"seed/components/catalysts/local/claude-code/0.1.8/src/src/chat.rs",
-       ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)},
       {"seed/components/catalysts/local/openai-codex/0.1.6/src/src/chat.rs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)},
-      {"seed/components/catalysts/local/claude-code/0.1.8/src/src/input.rs",
-       ~w(max_input_bytes max_input_blocks input_media_types valid_inputs invalid_inputs)},
       {"seed/components/catalysts/local/openai-codex/0.1.6/src/src/input.rs",
        ~w(max_input_bytes max_input_blocks input_media_types valid_inputs invalid_inputs)}
     ],
     "session_context.json" => [
       {"apps/cyfr/test/aqua/loop/request_test.exs", ~w(cases)},
-      {"seed/components/catalysts/local/claude-code/0.1.8/src/src/context.rs", ~w(cases)},
       {"seed/components/catalysts/local/openai-codex/0.1.6/src/src/context.rs", ~w(cases)}
     ],
     "access_modes.json" => [
@@ -820,28 +815,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
   end
 
-  test "the harness catalysts rebuild a session by one rule, the same file in each" do
-    # session_context.json pins the rule; the file is copied whole into
-    # each harness catalyst's version, so a copy that drifts fails here.
-    [claude_code, openai_codex] =
-      for {file, _sections} <- @vector_readers["session_context.json"],
-          String.ends_with?(file, "/context.rs"),
-          do: read!(file)
-
-    assert claude_code == openai_codex
-  end
-
-  test "the harness catalysts read a running call's further messages by one rule, the same file in each" do
-    # model_chat.json's inputs pin the rule; the file is copied whole into
-    # each harness catalyst's version, so a copy that drifts fails here.
-    [claude_code, openai_codex] =
-      for {file, _sections} <- @vector_readers["model_chat.json"],
-          String.ends_with?(file, "/input.rs"),
-          do: read!(file)
-
-    assert claude_code == openai_codex
-  end
-
   test "every file under tests/fixtures is a vector file with its readers, or says what it is" do
     files = File.ls!(Path.join(@root, "tests/fixtures")) |> Enum.sort()
     named = Enum.sort(Map.keys(@vector_readers) ++ Map.keys(@not_vectors))
@@ -937,8 +910,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     refute test_path?("apps/codex/internal/shell/device.go")
     assert test_path?("apps/cyfr/assets/test/account/pages.test.mjs")
     assert test_path?("tests/compose-proof/predicates.sh")
-    assert test_path?("seed/components/catalysts/local/claude-code/0.1.8/src/src/chat.rs")
-    assert "seed/components/catalysts/local/claude-code/0.1.8/src/src/chat.rs" in files
+    assert test_path?("seed/components/catalysts/local/openai-codex/0.1.6/src/src/chat.rs")
+    assert "seed/components/catalysts/local/openai-codex/0.1.6/src/src/chat.rs" in files
   end
 
   # ==========================================================================

@@ -25,9 +25,8 @@ import (
 // given the tools on its command line, since an argument is bounded and a
 // tool list is not; the system prompt goes on the `initialize` request as
 // `appendSystemPrompt`, so the harness keeps its own prompt. These shapes
-// were read from Claude Code 2.1.318
-// (seed/components/catalysts/local/claude-code/0.1.8/src/src/harness.rs)
-// and held on 2.1.323, the version a brain row pins, in the live probe.
+// were read from Claude Code 2.1.318 and held on 2.1.323, the version a
+// brain row pins, in the live probe.
 
 // baseArgv is what every session starts with: stream-json both ways,
 // partial messages for streaming, no MCP server but the ones the driver
@@ -81,6 +80,17 @@ var readOnlyArgv = []string{"--permission-mode", "default", "--setting-sources",
 
 // readOnlyTools are a read-only start's own tools.
 var readOnlyTools = []string{"Read", "Grep", "Glob"}
+
+// permissionModes are the permission modes a start may name
+// (`--permission-mode`), which the harness lists nowhere: the ones under
+// which it still asks the driver before it runs one of CYFR's tools.
+// Under `bypassPermissions`, `dontAsk` or `auto` it would call the stub
+// unasked, which answers such a call as an error, so every call of CYFR's
+// would fail.
+var permissionModes = map[string]bool{"default": true, "acceptEdits": true, "plan": true}
+
+// unaskingMode is what the person reads when a start names any other mode.
+const unaskingMode = "The crew member's permission mode is not one CYFR runs Claude Code in (default, acceptEdits or plan), so nothing ran."
 
 // harnessOptions are the arguments of the row's command that are the
 // harness's own, not its launcher's. The command is either the program's

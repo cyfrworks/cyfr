@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 //
-// A stand-in for Claude Code, run as the `claude` program's command by
-// claude_code.py: it speaks the stream-json shapes Claude Code 2.1.x was
-// proved to speak (room #193; the control requests read from 2.1.318) and
-// keeps its sessions in its HOME, the kept folder, as the harness does.
+// A stand-in for Claude Code, run under its brain driver as the `claude`
+// program's command by brain_claude_code.py: it speaks the stream-json
+// shapes Claude Code 2.1.x was proved to speak (room #193; the control
+// requests read from 2.1.318) and keeps its sessions in its HOME, the
+// kept folder, as the harness does.
 //
 // - It refuses to start without the arguments every session takes
 //   (`-p`, stream-json both ways, `--verbose`, partial messages,
@@ -23,9 +24,7 @@
 //   `read` makes an `assistant` `tool_use` of `mcp__cyfr__files`, asks
 //   `can_use_tool` and holds until the driver's `control_response`, calls
 //   the stub with the allow's `updatedInput` and replies with what it
-//   answered (an allow carrying the result `RATE-LIMIT` ends the turn with
-//   the provider's rate limit instead, as the harness reports one); `first message` replies with the session's first message,
-//   from its folder; `modes` asks for its own `Write` and `Bash`
+//   answered; `modes` asks for its own `Write` and `Bash`
 //   and replies with its whole command line and the driver's two whole
 //   answers, as JSON. Each reply streams as `stream_event` text deltas, then
 //   the whole `assistant` message, then `result` with usage.
@@ -209,12 +208,6 @@ async function turn(message) {
     out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text: 'Reading it.' }, { type: 'tool_use', id: `toolu_fake_${asked + 1}`, name: 'mcp__cyfr__files', input }], usage: { input_tokens: 5, output_tokens: 2 } }, parent_tool_use_id: null, session_id: sessionId });
     const { decision, toolUseId } = await ask('mcp__cyfr__files', input);
     let said;
-    if (decision.behavior === 'allow' && decision.updatedInput.result === 'RATE-LIMIT') {
-      // The provider's rate limit, as the harness reports it: the turn ends.
-      out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text: 'API Error: rate limited' }] }, parent_tool_use_id: null, session_id: sessionId, error: 'rate_limit' });
-      out({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: rate limited', session_id: sessionId });
-      return;
-    }
     if (decision.behavior === 'allow') {
       const called = await servers.get('cyfr').request('tools/call', { name: 'files', arguments: decision.updatedInput, _meta: { 'claudecode/toolUseId': toolUseId } });
       const result = called.result;
@@ -232,8 +225,6 @@ async function turn(message) {
       ids.push(`ask-${asked}`);
     }
     reply(JSON.stringify({ argv: args, answers: ids.map((id) => wholes.get(id)) }));
-  } else if (words.includes('first message')) {
-    reply(`Your first message was: ${transcript[0].text}`);
   } else {
     reply('ok');
   }

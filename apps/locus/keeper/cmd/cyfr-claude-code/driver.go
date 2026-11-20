@@ -130,6 +130,9 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if config.ReadOnly && len(harnessOptions(d.harnessCommand)) > 0 {
 		return &brainwire.Fatal{Status: 2, Reason: "The program's command carries options a read-only crew member cannot run with, so nothing ran."}
 	}
+	if config.PermissionMode != "" && !permissionModes[config.PermissionMode] {
+		return &brainwire.Fatal{Status: 2, Reason: unaskingMode}
+	}
 	session := str("session")
 	resume := session != ""
 	// A session that is no session id of Claude Code's has no transcript.

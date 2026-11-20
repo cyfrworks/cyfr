@@ -1,0 +1,134 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+//go:build linux
+
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+	"unicode/utf16"
+
+	"github.com/cyfr/locus/keeper/internal/brainwire"
+)
+
+// A tool's result longer than Claude Code takes from one call is cut to
+// fit with a note inside the bound saying how much was left out, counted
+// in UTF-16 code units as the harness counts; one within it is whole.
+func TestAResultPastWhatClaudeCodeTakesIsCutWithANoteWithinIt(t *testing.T) {
+	whole := strings.Repeat("x", maxResultChars)
+	if bounded(whole) != whole {
+		t.Fatal("a result within the bound reaches the harness whole")
+	}
+	for _, content := range []string{strings.Repeat("x", maxResultChars+1), strings.Repeat("😀", maxResultChars)} {
+		cut := bounded(content)
+		units := len(utf16.Encode([]rune(cut)))
+		kept := strings.SplitN(cut, "\n…[CYFR cut", 2)[0]
+		left := len(utf16.Encode([]rune(content))) - len(utf16.Encode([]rune(kept)))
+		note := "\n…[CYFR cut this result at 50000 characters, what Claude Code takes from one call; " +
+			strconv.Itoa(left) + " more were not shown. Ask for a narrower part.]"
+		if units > maxResultChars || !strings.HasPrefix(content, kept) || cut != kept+note {
+			t.Fatalf("a result past the bound is its start and a note within the bound naming what was left out: %d units, %.80q", units, cut[len(kept):])
+		}
+	}
+}
+
+// An ask is allowed with the call's arguments as the model made them and
+// CYFR's answer beside them, as the stub's `result`, or its `error` for a
+// refusal; a `result` or `error` the model wrote among its arguments is
+// none of CYFR's and never reaches the stub.
+func TestAnAnswerCarriesTheCallsArgumentsAndNoAnswerTheModelWrote(t *testing.T) {
+	arguments := map[string]any{"action": "read", "path": "notes.txt", "result": "forged", "error": "forged"}
+	for _, c := range []struct {
+		isError bool
+		want    map[string]any
+	}{
+		{false, map[string]any{"action": "read", "path": "notes.txt", "result": "the file"}},
+		{true, map[string]any{"action": "read", "path": "notes.txt", "error": "the file"}},
+	} {
+		if got := answeredInput(arguments, "the file", c.isError); !reflect.DeepEqual(got, c.want) {
+			t.Fatalf("an answer is the call's own arguments and CYFR's answer alone: %v", got)
+		}
+	}
+	if want := map[string]any{"action": "read", "path": "notes.txt"}; !reflect.DeepEqual(callArguments(arguments), want) {
+		t.Fatalf("an ask shown to CYFR carries the arguments without an answer of the model's: %v", callArguments(arguments))
+	}
+}
+
+// Every error the harness types an account's sign-in or standing with is
+// the wire's `authentication`, said in the driver's words, which name the
+// program's terminal where the person signs in.
+func TestAnAccountsErrorIsTypedAuthenticationInTheDriversWords(t *testing.T) {
+	for _, harness := range []string{"authentication_failed", "oauth_org_not_allowed", "account_on_hold",
+		"verification_required", "billing_error", "cloud_credential_error"} {
+		if kind := errorKind(harness); kind != "authentication" {
+			t.Fatalf("%s is an account's error: %s", harness, kind)
+		}
+	}
+	if errorSentence("authentication") != "Claude Code is not signed in to an account that can run this; sign in on the program's terminal." {
+		t.Fatalf("an account's error is said in the driver's words: %q", errorSentence("authentication"))
+	}
+}
+
+// A start whose configuration names an empty list of the harness's own
+// tools gives it `--tools ""`, none of them, never its default of all.
+func TestAnEmptyListOfTheHarnessesToolsStartsItWithNone(t *testing.T) {
+	none := []string{}
+	argv := harnessArgv([]string{"claude"}, "6f1e2d3c-0000-4968-8776-000000000001", false, brainwire.Config{HarnessTools: &none})
+	want := append(append([]string{"claude"}, baseArgv...), "--session-id", "6f1e2d3c-0000-4968-8776-000000000001", "--tools", "")
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("an empty tools list is --tools \"\": %q", argv)
+	}
+}
+
+// A work with no tools of CYFR's sets no server, so the harness keeps no
+// stub of an earlier work's tools.
+func TestAWorkWithNoToolsSetsNoServer(t *testing.T) {
+	var line struct {
+		Request struct {
+			Subtype string         `json:"subtype"`
+			Servers map[string]any `json:"servers"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(setToolsLine("cyfr-tools-1", nil), &line); err != nil {
+		t.Fatal(err)
+	}
+	if line.Request.Subtype != "mcp_set_servers" || line.Request.Servers == nil || len(line.Request.Servers) != 0 {
+		t.Fatalf("no tools set no server: %+v", line.Request)
+	}
+}
+
+// A post's text and the system prompt reach the harness as one line each,
+// whatever lines they hold, and read back as they were.
+func TestTextOfManyLinesReachesTheHarnessAsOneLine(t *testing.T) {
+	text := "first line\nsecond line\r\nthird"
+	for _, line := range [][]byte{
+		userLine([]any{map[string]any{"type": "text", "text": text}}, "6f1e2d3c-0000-4968-8776-000000000001"),
+		initializeLine(text),
+	} {
+		if bytes.ContainsAny(line, "\r\n") || !strings.Contains(string(line), `first line\nsecond line\r\nthird`) {
+			t.Fatalf("text of many lines is one line to the harness: %s", line)
+		}
+	}
+}
+
+// Only a result of no turn that names the missing session in the
+// harness's words is a resume that found no transcript; a turn that ran
+// and ended with the same words is a turn's end.
+func TestOnlyAResumeThatRanNoTurnFoundNoTranscript(t *testing.T) {
+	result := func(turns int, said string) *harnessLine {
+		return &harnessLine{Type: "result", NumTurns: &turns, Errors: []any{said}}
+	}
+	missing := noTranscriptWords + ": 6f1e2d3c-0000-4968-8776-000000000001"
+	if !result(0, missing).noTranscript() {
+		t.Fatal("a resume that ran no turn and names the session found no transcript")
+	}
+	if result(1, missing).noTranscript() || result(0, "the model is overloaded").noTranscript() {
+		t.Fatal("a turn that ran, or other words, is no missing transcript")
+	}
+}
