@@ -1,364 +1,108 @@
 {
-  "comment": "The vectors pinning the one rule a harness session is rebuilt by. A chat request whose session is new is handed the history before its current ask (the last message) as parts: text, and the attachments the brain takes as media; a session the request names is handed none. Each case gives the brain's attachment kinds and media types, the bound of the line that carries the ask (line_bytes), the request's messages and the parts. A history of none (the current ask alone) is no parts. The second case's messages are what Aqua.Loop.Request.messages/2 makes of a crew member's thread (request_test.exs reads them), so the rule reads the projection the loop sends.",
-  "cases": [
+  "comment": "The messages Aqua.Loop.Request.messages/3 makes of a crew member's thread: who said each post, its calls and their outcomes, then the current ask. Read by apps/cyfr/test/aqua/loop/request_test.exs, which builds the thread these messages come from.",
+  "messages": [
     {
-      "name": "the current ask alone is handed no history",
-      "kinds": [
-        "image",
-        "document"
-      ],
-      "media_types": [
-        "image/png",
-        "application/pdf"
-      ],
-      "line_bytes": 1048576,
-      "messages": [
+      "content": [
         {
-          "content": [
-            {
-              "text": "Read notes/todo.md and say what is left.",
-              "type": "text"
-            }
-          ],
-          "role": "user"
+          "text": "[Summary of the thread so far]\nThe person wants the todo list kept short.",
+          "type": "text"
+        },
+        {
+          "text": "[aqua asked claude-code (request msg_3, answered)]\nTidy notes/todo.md.",
+          "type": "text"
         }
       ],
-      "parts": []
+      "role": "user"
     },
     {
-      "name": "a crew member's new session is handed its thread in order, with who said it, its calls and their outcomes, then the current ask (Aqua.Loop.Request.messages/2's projection of the thread in request_test.exs)",
-      "kinds": [
-        "image",
-        "document"
-      ],
-      "media_types": [
-        "image/png",
-        "application/pdf"
-      ],
-      "line_bytes": 1048576,
-      "messages": [
+      "content": [
         {
-          "content": [
-            {
-              "text": "[Summary of the thread so far]\nThe person wants the todo list kept short.",
-              "type": "text"
-            },
-            {
-              "text": "[aqua asked claude-code (request msg_3, answered)]\nTidy notes/todo.md.",
-              "type": "text"
-            }
-          ],
-          "role": "user"
+          "text": "I will read it first.",
+          "type": "text"
         },
         {
-          "content": [
-            {
-              "text": "I will read it first.",
-              "type": "text"
-            },
-            {
-              "arguments": {
-                "action": "read",
-                "path": "notes/todo.md"
-              },
-              "id": "call_1",
-              "name": "files",
-              "type": "tool_call"
-            }
-          ],
-          "role": "assistant"
-        },
-        {
-          "content": [
-            {
-              "content": "1: buy milk\n2: call Ana",
-              "is_error": false,
-              "name": "files",
-              "tool_call_id": "call_1",
-              "type": "tool_result"
-            }
-          ],
-          "role": "tool"
-        },
-        {
-          "content": [
-            {
-              "arguments": {
-                "action": "write",
-                "path": "notes/todo.md"
-              },
-              "id": "call_2",
-              "name": "files",
-              "type": "tool_call"
-            },
-            {
-              "arguments": {
-                "action": "get",
-                "url": "https://example.com"
-              },
-              "id": "call_3",
-              "name": "http",
-              "type": "tool_call"
-            }
-          ],
-          "role": "assistant"
-        },
-        {
-          "content": [
-            {
-              "content": "written",
-              "is_error": false,
-              "name": "files",
-              "tool_call_id": "call_2",
-              "type": "tool_result"
-            },
-            {
-              "content": "Refused by the person.",
-              "is_error": true,
-              "name": "http",
-              "tool_call_id": "call_3",
-              "type": "tool_result"
-            }
-          ],
-          "role": "tool"
-        },
-        {
-          "content": [
-            {
-              "text": "Done: two items are left.",
-              "type": "text"
-            }
-          ],
-          "role": "assistant"
-        },
-        {
-          "content": [
-            {
-              "text": "[aqua asked claude-code (request msg_12, pending)]\nAnd add the dentist.",
-              "type": "text"
-            }
-          ],
-          "role": "user"
+          "arguments": {
+            "action": "read",
+            "path": "notes/todo.md"
+          },
+          "id": "call_1",
+          "name": "files",
+          "type": "tool_call"
         }
       ],
-      "parts": [
-        {
-          "text": "[CYFR] This session is new, and the thread it continues already has a history. Here it is, oldest first, as context only: every call in it has already run or ended as its outcome says, and none is to be made again because it is shown here.\n\n[user]\n[Summary of the thread so far]\nThe person wants the todo list kept short.\n[aqua asked claude-code (request msg_3, answered)]\nTidy notes/todo.md.\n\n[you]\nI will read it first.\n[you called files with {\"action\":\"read\",\"path\":\"notes/todo.md\"}]\n\n[outcomes of your calls]\n[files answered]\n1: buy milk\n2: call Ana\n\n[you]\n[you called files with {\"action\":\"write\",\"path\":\"notes/todo.md\"}]\n[you called http with {\"action\":\"get\",\"url\":\"https://example.com\"}]\n\n[outcomes of your calls]\n[files answered]\nwritten\n[http failed]\nRefused by the person.\n\n[you]\nDone: two items are left.\n\n[CYFR] The history ends here. What is asked now follows."
-        }
-      ]
+      "role": "assistant"
     },
     {
-      "name": "a message's content may be a string, and a result's content text blocks",
-      "kinds": [
-        "image"
-      ],
-      "media_types": [
-        "image/png"
-      ],
-      "line_bytes": 1048576,
-      "messages": [
+      "content": [
         {
-          "content": "Read a.txt",
-          "role": "user"
-        },
-        {
-          "content": [
-            {
-              "arguments": {
-                "path": "a.txt"
-              },
-              "id": "call_1",
-              "name": "files",
-              "type": "tool_call"
-            }
-          ],
-          "role": "assistant"
-        },
-        {
-          "content": [
-            {
-              "content": [
-                {
-                  "text": "line 1",
-                  "type": "text"
-                },
-                {
-                  "text": " and more",
-                  "type": "text"
-                }
-              ],
-              "name": "files",
-              "tool_call_id": "call_1",
-              "type": "tool_result"
-            }
-          ],
-          "role": "tool"
-        },
-        {
-          "content": "It says line 1.",
-          "role": "assistant"
-        },
-        {
-          "content": "Thanks.",
-          "role": "user"
+          "content": "1: buy milk\n2: call Ana",
+          "is_error": false,
+          "name": "files",
+          "tool_call_id": "call_1",
+          "type": "tool_result"
         }
       ],
-      "parts": [
-        {
-          "text": "[CYFR] This session is new, and the thread it continues already has a history. Here it is, oldest first, as context only: every call in it has already run or ended as its outcome says, and none is to be made again because it is shown here.\n\n[user]\nRead a.txt\n\n[you]\n[you called files with {\"path\":\"a.txt\"}]\n\n[outcomes of your calls]\n[files answered]\nline 1 and more\n\n[you]\nIt says line 1.\n\n[CYFR] The history ends here. What is asked now follows."
-        }
-      ]
+      "role": "tool"
     },
     {
-      "name": "a request that ends in tool results hands the call that made them as history",
-      "kinds": [
-        "image"
-      ],
-      "media_types": [
-        "image/png"
-      ],
-      "line_bytes": 1048576,
-      "messages": [
+      "content": [
         {
-          "content": "What is in notes/todo.md?",
-          "role": "user"
+          "arguments": {
+            "action": "write",
+            "path": "notes/todo.md"
+          },
+          "id": "call_2",
+          "name": "files",
+          "type": "tool_call"
         },
         {
-          "content": [
-            {
-              "arguments": {
-                "action": "read",
-                "path": "notes/todo.md"
-              },
-              "id": "call_1",
-              "name": "files",
-              "provider_data": {
-                "request_id": "req-old",
-                "turn_id": "turn-old"
-              },
-              "type": "tool_call"
-            }
-          ],
-          "role": "assistant"
-        },
-        {
-          "content": [
-            {
-              "content": "1: buy milk",
-              "is_error": false,
-              "name": "files",
-              "tool_call_id": "call_1",
-              "type": "tool_result"
-            }
-          ],
-          "role": "tool"
+          "arguments": {
+            "action": "get",
+            "url": "https://example.com"
+          },
+          "id": "call_3",
+          "name": "http",
+          "type": "tool_call"
         }
       ],
-      "parts": [
-        {
-          "text": "[CYFR] This session is new, and the thread it continues already has a history. Here it is, oldest first, as context only: every call in it has already run or ended as its outcome says, and none is to be made again because it is shown here.\n\n[user]\nWhat is in notes/todo.md?\n\n[you]\n[you called files with {\"action\":\"read\",\"path\":\"notes/todo.md\"}]\n\n[CYFR] The history ends here. What is asked now follows."
-        }
-      ]
+      "role": "assistant"
     },
     {
-      "name": "an attachment the brain takes rides as a block in its message, and one it does not is named",
-      "kinds": [
-        "image"
-      ],
-      "media_types": [
-        "image/png"
-      ],
-      "line_bytes": 1048576,
-      "messages": [
+      "content": [
         {
-          "content": [
-            {
-              "text": "What is in these?",
-              "type": "text"
-            },
-            {
-              "data": "iVBORw0KGgo=",
-              "media_type": "image/png",
-              "type": "image"
-            },
-            {
-              "data": "JVBERi0x",
-              "media_type": "application/pdf",
-              "type": "document"
-            },
-            {
-              "text": "Be brief.",
-              "type": "text"
-            }
-          ],
-          "role": "user"
+          "content": "written",
+          "is_error": false,
+          "name": "files",
+          "tool_call_id": "call_2",
+          "type": "tool_result"
         },
         {
-          "content": [
-            {
-              "text": "A capybara, and a letter.",
-              "type": "text"
-            }
-          ],
-          "role": "assistant"
-        },
-        {
-          "content": "Thanks. Now the second one?",
-          "role": "user"
+          "content": "Refused by the person.",
+          "is_error": true,
+          "name": "http",
+          "tool_call_id": "call_3",
+          "type": "tool_result"
         }
       ],
-      "parts": [
-        {
-          "text": "[CYFR] This session is new, and the thread it continues already has a history. Here it is, oldest first, as context only: every call in it has already run or ended as its outcome says, and none is to be made again because it is shown here.\n\n[user]\nWhat is in these?"
-        },
-        {
-          "media": {
-            "data": "iVBORw0KGgo=",
-            "kind": "image",
-            "media_type": "image/png"
-          }
-        },
-        {
-          "text": "[an attachment (application/pdf) this session cannot be shown]\nBe brief.\n\n[you]\nA capybara, and a letter.\n\n[CYFR] The history ends here. What is asked now follows."
-        }
-      ]
+      "role": "tool"
     },
     {
-      "name": "past the line's bound the oldest messages are left out whole, and counted",
-      "kinds": [
-        "image"
-      ],
-      "media_types": [
-        "image/png"
-      ],
-      "line_bytes": 65940,
-      "messages": [
+      "content": [
         {
-          "content": "First: an early question of some length, which the bound leaves out of the history.",
-          "role": "user"
-        },
-        {
-          "content": "An early answer of some length, which the bound leaves out of the history too.",
-          "role": "assistant"
-        },
-        {
-          "content": "A later question.",
-          "role": "user"
-        },
-        {
-          "content": "A later answer.",
-          "role": "assistant"
-        },
-        {
-          "content": "Now?",
-          "role": "user"
+          "text": "Done: two items are left.",
+          "type": "text"
         }
       ],
-      "parts": [
+      "role": "assistant"
+    },
+    {
+      "content": [
         {
-          "text": "[CYFR] This session is new, and the thread it continues already has a history. Here it is, oldest first, as context only: every call in it has already run or ended as its outcome says, and none is to be made again because it is shown here.\n\n[2 earlier messages of the thread are not shown here.]\n\n[user]\nA later question.\n\n[you]\nA later answer.\n\n[CYFR] The history ends here. What is asked now follows."
+          "text": "[aqua asked claude-code (request msg_12, pending)]\nAnd add the dentist.",
+          "type": "text"
         }
-      ]
+      ],
+      "role": "user"
     }
   ]
 }

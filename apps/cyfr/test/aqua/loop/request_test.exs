@@ -500,8 +500,7 @@ defmodule Aqua.Loop.RequestTest do
     end
 
     # The thread's projection rides every request whole, and its last
-    # message is the current ask. The shared vectors' case is this thread,
-    # so the rule reads what the loop sends.
+    # message is the current ask (`tests/fixtures/session_context.json`).
     test "a crew member's thread rides every request whole, its last message the current ask" do
       call = fn seq, step, id, name, arguments ->
         row(seq, "tool_call", @agent, name, %{
@@ -543,13 +542,13 @@ defmodule Aqua.Loop.RequestTest do
 
       messages = Request.messages(rows, %{}, me: "claude-code")
 
-      %{"cases" => [_alone, thread | _]} =
+      %{"messages" => expected} =
         "../../../../../tests/fixtures/session_context.json"
         |> Path.expand(__DIR__)
         |> File.read!()
         |> Jason.decode!()
 
-      assert messages == thread["messages"]
+      assert messages == expected
 
       assert %{"role" => "user", "content" => [%{"text" => "[aqua asked claude-code" <> _}]} =
                List.last(messages)

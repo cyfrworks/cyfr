@@ -593,7 +593,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests)}
     ],
     "session_context.json" => [
-      {"apps/cyfr/test/aqua/loop/request_test.exs", ~w(cases)}
+      {"apps/cyfr/test/aqua/loop/request_test.exs", ~w(messages)}
     ],
     "access_modes.json" => [
       {"apps/codex/internal/access/head_test.go", ~w(derive boot profiles names words)},
