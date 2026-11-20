@@ -49,15 +49,18 @@ defmodule Compendium.AquaTemplate do
 
   @doc """
   The seed's agent `name` as it runs: the shipped file parsed, a crew
-  member under the shipped soul's tools (`Compendium.AquaAgent.under_soul/2`).
-  `{:error, :not_found}` when the seed ships no such agent.
+  member under the shipped soul's tools (`Compendium.AquaAgent.under_soul/2`),
+  the soul seated on the shipped crew member it names, if any
+  (`Compendium.AquaAgent.seated/2`). `{:error, :not_found}` when the seed
+  ships no such agent.
   """
   @spec shipped_agent(String.t()) :: {:ok, AquaAgent.t()} | {:error, term()}
   def shipped_agent(name) when is_binary(name) do
     ctx = Sanctum.system_context()
 
     if AquaPath.soul?(name) do
-      seed_soul(ctx)
+      with {:ok, soul} <- seed_soul(ctx),
+           do: {:ok, AquaAgent.seated(soul, seed_holder(ctx, soul))}
     else
       with {:ok, member} <- seed_member(ctx, name),
            {:ok, soul} <- seed_soul(ctx) do
@@ -253,6 +256,18 @@ defmodule Compendium.AquaTemplate do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # The shipped member the seed's soul names, read as an athanor's soul
+  # reads its own (`Compendium.AquaAgent.resolve/3`).
+  defp seed_holder(_ctx, %{member: nil}), do: :none
+
+  defp seed_holder(ctx, %{member: member}) do
+    case seed_member(ctx, member) do
+      {:ok, parsed} -> {:ok, parsed}
+      {:error, :not_found} -> :missing
+      {:error, reason} -> {:refused, reason}
     end
   end
 
