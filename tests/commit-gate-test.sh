@@ -343,7 +343,8 @@ chmod +x "$scratch/bin/go" "$scratch/bin/gofmt" "$scratch/bin/govulncheck" "$scr
 # The release boot and the close's proofs, which each start releases and
 # browsers, stand in through BASH_ENV, which bash sources before a script
 # runs: each records `script arguments` and what its environment chooses
-# in harness.calls, writes a record where the proof writes one, and exits.
+# (the viewport too, when one is set) in harness.calls, writes a record
+# where the proof writes one, and exits.
 # Each notes the PROOF_RUN_PREFIX it was given in proof.prefixes. A script
 # whose path holds STUB_HARNESS_STALL first makes, under that prefix, what
 # the Compose proof names after its run (a project's container, network
@@ -380,10 +381,11 @@ case "$0" in
     exit 0 ;;
 esac
 case "$0" in
-  *tests/release-boot/boot.sh|*tests/*-proof/run.sh|*tests/*-proof/*-test.sh|*tests/compose-proof/tailscale-standin/proof.sh|*tests/browser/run.sh|*tests/multi-home-smoke/run.sh|*tests/proxy-hsts/run.sh)
-    printf '%s %s|skip=%s browsers=%s join=%s db=%s case_image=%s\n' "${0#"$GATE_ROOT"/}" "$*" \
+  *tests/release-boot/boot.sh|*tests/release-boot/build.sh|*tests/*-proof/run.sh|*tests/*-proof/*-test.sh|*tests/compose-proof/tailscale-standin/proof.sh|*tests/browser/run.sh|*tests/multi-home-smoke/run.sh|*tests/proxy-hsts/run.sh)
+    printf '%s %s|skip=%s browsers=%s join=%s db=%s case_image=%s%s\n' "${0#"$GATE_ROOT"/}" "$*" \
       "${RELEASE_BOOT_SKIP_BUILD-unset}" "${TINCTURE_PROOF_BROWSERS:-}" "${JOIN_PROOF_BROWSERS:-}" \
-      "${CYFR_DATABASE_URL##*/}" "${SETUP_PROOF_IMAGE:-}${COMPOSE_PROOF_SKIP_BUILD:+compose ${COMPOSE_PROOF_IMAGE:-}}" >> "$TRACE/harness.calls"
+      "${CYFR_DATABASE_URL##*/}" "${SETUP_PROOF_IMAGE:-}${COMPOSE_PROOF_SKIP_BUILD:+compose ${COMPOSE_PROOF_IMAGE:-}}" \
+      "${VAULT_PROOF_VIEWPORT:+ viewport=$VAULT_PROOF_VIEWPORT}${CANVAS_PROOF_VIEWPORT:+ viewport=$CANVAS_PROOF_VIEWPORT}" >> "$TRACE/harness.calls"
     printf '%s %s\n' "${0##*tests/}" "${PROOF_RUN_PREFIX-unset}" >> "$TRACE/proof.prefixes"
     [ -z "${PROOF_OUT:-}" ] || { mkdir -p "$PROOF_OUT" && echo '{}' > "$PROOF_OUT/stand-in-proof.json"; }
     [ -z "${BROWSER_OUT:-}" ] || { mkdir -p "$BROWSER_OUT" && echo '{}' > "$BROWSER_OUT/frame-facts.json"; }
@@ -1549,8 +1551,10 @@ has_line '^locus_island=0$' "$scratch/close.log/islands.summary" &&
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
   'backends_image: test.yml locus-backends-image: 35 steps' 'browser_a: test.yml browser-tincture shard=a: 6 steps' \
-  'browser_b: test.yml browser shard=b: 3 steps' 'browser_c: test.yml browser shard=c: 4 steps' \
-  'browser_d: test.yml browser shard=d: 6 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
+  'browser_b: test.yml browser shard=b: 3 steps' 'browser_c: test.yml browser shard=c: 3 steps' \
+  'browser_d: test.yml browser shard=d: 5 steps' 'browser_e: test.yml browser shard=e: 3 steps' \
+  'browser_f: test.yml browser shard=f: 3 steps' 'browser_g: test.yml browser shard=g: 3 steps' \
+  'browser_h: test.yml browser shard=h: 3 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
   grep -qxF "    harness.$job passed" "$scratch/close.out" || fail "the close did not report $job passed: $(cat "$scratch/close.out")"
 done
 today=$(date -u +%Y-%m-%d)
@@ -1604,17 +1608,21 @@ tests/hostile-frame-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/identity-proof/run.sh |skip= browsers= join= db= case_image=
 tests/join-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/pairing-proof/run.sh |skip= browsers= join= db= case_image=
-tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
+tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 tests/multi-home-smoke/run.sh |skip= browsers= join= db= case_image=
 tests/grant-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/share-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/share-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/share-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
+tests/share-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 tests/proxy-hsts/run.sh |skip=unset browsers= join= db= case_image=
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 WANT
 prefix=$(sed -n 's/.*|prefix=\(cyfr-gate-[0-9]*-[a-z]*-\)$/\1/p' "$ct/harness.calls" | sort -u)
 [ "$prefix" = "$ns-harness-" ] || fail "the image suites ran under no one project prefix of the gate's: $(grep prefix= "$ct/harness.calls")"
@@ -1641,7 +1649,7 @@ for proof in grant share approval file-offer; do
   no_line "^tests/$proof-proof/run.sh \|skip= " "$ct/harness.calls" || fail "a shard opens with the $proof proof, which refuses to build the release"
 done
 # Each shard's records, kept as its upload step keeps them.
-for shard in a b c d; do
+for shard in a b c d e f g h; do
   [ -n "$(find "$scratch/close.log/artifacts/proof-records-$shard" -name '*.json' 2>/dev/null)" ] ||
     fail "shard $shard's records were not kept: $(find "$scratch/close.log/artifacts" 2>/dev/null | tr '\n' ' ')"
 done

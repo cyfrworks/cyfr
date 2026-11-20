@@ -235,12 +235,16 @@ what a proof it killed leaves is the gate's to find and remove by name
 
 Every proof the harness serves, with its shape, the browsers it can run
 and where the `browser` job of `.github/workflows/test.yml` runs it. The
-job is four shards, each a runner of its own (its matrix names each
+job is eight shards, each a runner of its own (its matrix names each
 shard's proofs); a shard runs its proofs in this table's order, its first
 release-backed proof building the release and the rest reusing it
 (`RELEASE_BOOT_SKIP_BUILD=1`). The grant, share, approval and
-file-offer proofs refuse to build one, so no shard opens with them, and the
-markdown proof starts no release. A
+file-offer proofs refuse to build one, so a shard that runs them opens
+with a proof that builds or with the release's own build
+(`tests/release-boot/build.sh`), and the markdown proof starts no release. The approval and canvas proofs
+run one viewport a shard: the canvas proof's budget needs its runner to
+itself, and either proof at both viewports in turn would take longer than
+any other job of the run. A
 passkey ceremony is Chromium's alone, whose virtual authenticator a proof
 drives, so a proof that needs one runs its passkey steps in Chromium. Three
 browsers run in CI where the engine decides the answer, the frame's rules,
@@ -260,15 +264,16 @@ proof's own README holds how to run it and its steps.
 | join | `tests/join-proof/` | the directory `dir.test` and the home `h.test` | Chromium | b; Chromium |
 | grant | `tests/grant-proof/` | one home, `home.test` | Chromium | d; Chromium |
 | shares | `tests/share-proof/` | the home `home.test` and the directory `dir.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 | d; Chromium, both viewports |
-| approvals | `tests/approval-proof/` | the home `home.test` and the directory `dir.test`; SQLite grant rows, binding lifetimes and named-account prompt | Chromium, desktop (1280×900) and 720×720 | c; Chromium, both viewports |
+| approvals | `tests/approval-proof/` | the home `home.test` and the directory `dir.test`; SQLite grant rows, binding lifetimes and named-account prompt | Chromium, desktop (1280×900) and 720×720 | e (desktop) and f (720×720); Chromium |
 | file offers | `tests/file-offer-proof/` | one home, `home.test`; offers, recipient acceptance and actual snapshot readback | Chromium, desktop (1280×900) and 720×720 | c; Chromium, both viewports |
-| canvas | `tests/canvas-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 | d; all three, both viewports |
+| canvas | `tests/canvas-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 | g (desktop) and h (720×720); all three |
 
 Shard d also runs the shipped Caddyfile's HSTS check
 (`tests/proxy-hsts/`), which starts no release and no browser. The commit
-gate's close (`scripts/commit-gate.sh --close`) runs the four shards one
+gate's close (`scripts/commit-gate.sh --close`) runs the eight shards one
 after another as the job runs them, each step read from the workflow, on
-this host's pull of the pinned image.
+this host's pull of the pinned image; the shards of one viewport reuse
+the release the shards before them built.
 
 In CI every proof writes its records under
 `$RUNNER_TEMP/proofs/<proof>`, or
