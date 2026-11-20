@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
+#
+# The partition runner against a stand-in Mix, then against a toy umbrella
+# and the real one:
+#   bash tests/test-partitioned-test.sh [GROUP | --groups]
+# With no argument every case runs, in order. CI runs each group on a
+# runner of its own (test.yml's harness-tests-partitions matrix, which
+# tests/ci-guards-test.sh holds equal to TEST_GROUPS): report, the cases from
+# the argument refusals through --cover, and rest, every case after them.
+# Each group starts from the fixture prologue alone, in a scratch
+# directory of its own. --groups prints TEST_GROUPS; anything else exits 64.
 set -euo pipefail
+TEST_GROUPS='report rest'
+group=
+case "$#:${1:-}" in
+  0:) ;;
+  1:--groups) echo "$TEST_GROUPS"; exit 0 ;;
+  1:*) case " $TEST_GROUPS " in *" $1 "*) group=$1 ;; *) echo "no group $1 (groups: $TEST_GROUPS)" >&2; exit 64 ;; esac ;;
+  *) echo "usage: $0 [GROUP | --groups]" >&2; exit 64 ;;
+esac
 root=$(cd "$(dirname "$0")/.." && pwd)
 runner="$root/scripts/test-partitioned.sh"
 scratch=$(mktemp -d /tmp/cyfr-runner-test.XXXXXX)
@@ -224,6 +242,50 @@ fi
 exec "$REAL_ELIXIR" "$@"
 FAKE_ELIXIR
 chmod +x "$scratch/bin/mix" "$scratch/bin/elixir"
+# git and awk stand in for the failure report's roster and projection
+# (the report cases below set DIAGNOSTIC_GIT and DIAGNOSTIC_AWK); unset,
+# each runs the real one.
+real_git=$(command -v git)
+real_awk=$(command -v awk)
+export REAL_GIT="$real_git" REAL_AWK="$real_awk"
+cat > "$scratch/bin/git" <<'FAKE_GIT'
+#!/usr/bin/env bash
+set -eu
+echo acquired >> "$TRACE/roster-calls"
+if [ "${DIAGNOSTIC_GIT:-}" = wait ]; then
+  sleep 1000 &
+  echo "$!" > "$TRACE/diagnostic-sleeper"
+  touch "$TRACE/diagnostic-ready"
+  wait
+fi
+if [ "${DIAGNOSTIC_GIT:-}" = partial ]; then
+  printf 'test/probe_test.exs\nGIT_STDOUT_PAYLOAD_SENTINEL\n'
+  echo GIT_STDERR_PAYLOAD_SENTINEL >&2
+  exit 23
+fi
+exec "$REAL_GIT" "$@"
+FAKE_GIT
+cat > "$scratch/bin/awk" <<'FAKE_AWK'
+#!/usr/bin/env bash
+set -eu
+echo projected >> "$TRACE/projection-calls"
+if [ "${DIAGNOSTIC_AWK:-}" = wait ]; then
+  sleep 1000 &
+  echo "$!" > "$TRACE/diagnostic-sleeper"
+  touch "$TRACE/diagnostic-ready"
+  wait
+fi
+if [ "${DIAGNOSTIC_AWK:-}" = fail ]; then
+  echo PARTIAL_AWK_STDOUT_PAYLOAD_SENTINEL
+  echo AWK_STDERR_PAYLOAD_SENTINEL >&2
+  exit 9
+fi
+exec "$REAL_AWK" "$@"
+FAKE_AWK
+chmod +x "$scratch/bin/git" "$scratch/bin/awk"
+# Every PostgreSQL run is given this server's URL, which no output may
+# print.
+export CYFR_DATABASE_URL='postgres://u:do-not-print@host/base?ssl=true'
 fail() { echo "FAIL: $*" >&2; exit 1; }
 refuses() { if "${clean[@]}" bash "$runner" "$@" >"$scratch/refusal" 2>&1; then fail "accepted $*"; fi; }
 status_of() { if "$@" >"$scratch/status" 2>&1; then echo 0; else echo "$?"; fi; }
@@ -271,6 +333,8 @@ await_file() {
   for ((i=0; i<600; i++)); do [ -e "$1" ] && return 0; sleep 0.1; done
   fail "$1 never appeared"
 }
+# --- report: the argument refusals through --cover ----------------------
+if [ "$group" != rest ]; then
 refuses -n
 refuses -a
 refuses -n 0
@@ -320,7 +384,6 @@ for trace in "$TRACE"/cyfr-t.*-p*; do
   [ ! -e "$(sed -n '2p' "$trace")" ] || fail 'successful resources survived cleanup'
 done
 
-export CYFR_DATABASE_URL='postgres://u:do-not-print@host/base?ssl=true'
 "${clean[@]}" bash "$runner" -n 2 -a postgres >"$scratch/a" 2>&1 &
 a=$!
 "${clean[@]}" bash "$runner" -n 2 -a postgres >"$scratch/b" 2>&1 &
@@ -426,9 +489,6 @@ grep -q 'exit 0$' "$scratch/sparse" || fail 'a run with partitions not started d
 # come early in the partition's output, before the failure tail the report
 # prints raw: the checks read what the report projects from them (the
 # location, the header counts) and hold that no payload is printed.
-real_git=$(command -v git)
-real_awk=$(command -v awk)
-export REAL_GIT="$real_git" REAL_AWK="$real_awk"
 standalone="$scratch/standalone\\identity"
 umbrella="$scratch/umbrella"
 mkdir -p "$standalone/lib" "$standalone/test" "$umbrella/apps/one/lib" \
@@ -446,41 +506,6 @@ for fixture in "$standalone" "$umbrella"; do
   "$REAL_GIT" -C "$fixture" ls-files --stage > "$fixture/index-receipt"
 done
 touch "$umbrella/apps/one/test/untracked_SENTINEL.exs"
-cat > "$scratch/bin/git" <<'FAKE_GIT'
-#!/usr/bin/env bash
-set -eu
-echo acquired >> "$TRACE/roster-calls"
-if [ "${DIAGNOSTIC_GIT:-}" = wait ]; then
-  sleep 1000 &
-  echo "$!" > "$TRACE/diagnostic-sleeper"
-  touch "$TRACE/diagnostic-ready"
-  wait
-fi
-if [ "${DIAGNOSTIC_GIT:-}" = partial ]; then
-  printf 'test/probe_test.exs\nGIT_STDOUT_PAYLOAD_SENTINEL\n'
-  echo GIT_STDERR_PAYLOAD_SENTINEL >&2
-  exit 23
-fi
-exec "$REAL_GIT" "$@"
-FAKE_GIT
-cat > "$scratch/bin/awk" <<'FAKE_AWK'
-#!/usr/bin/env bash
-set -eu
-echo projected >> "$TRACE/projection-calls"
-if [ "${DIAGNOSTIC_AWK:-}" = wait ]; then
-  sleep 1000 &
-  echo "$!" > "$TRACE/diagnostic-sleeper"
-  touch "$TRACE/diagnostic-ready"
-  wait
-fi
-if [ "${DIAGNOSTIC_AWK:-}" = fail ]; then
-  echo PARTIAL_AWK_STDOUT_PAYLOAD_SENTINEL
-  echo AWK_STDERR_PAYLOAD_SENTINEL >&2
-  exit 9
-fi
-exec "$REAL_AWK" "$@"
-FAKE_AWK
-chmod +x "$scratch/bin/git" "$scratch/bin/awk"
 
 # A genuine missing-command PATH retains the preparation VM and shell tools,
 # without a git executable. All links and fixtures belong to this test.
@@ -769,6 +794,9 @@ rm -rf "$scratch/work/apps/three" "$TRACE"/cyfr-t.*-p*
 [ "$(status_of "${clean[@]}" bash "$runner" -n 1 --cover -- --cover)" = 64 ] || fail 'Mix --cover beside the runner'"'"'s was not refused'
 [ "$(status_of "${clean[@]}" bash "$runner" -n 1 --cover -- --export-coverage mine)" = 64 ] || fail 'Mix --export-coverage beside the runner'"'"'s was not refused'
 echo 'cover: one Total line, a failing test still fails, exports removed, another run'"'"'s left alone'
+fi
+[ "$group" != report ] || { echo 'partition runner tests passed: report'; exit 0; }
+# --- rest: every case below --------------------------------------------
 # --- containment, the terminal lines and admission -------------------------
 
 # lines_of OUT ARGS...: the runner in the background, so its pid is known.

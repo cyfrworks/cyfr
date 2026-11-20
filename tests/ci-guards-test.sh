@@ -8,8 +8,10 @@
 # scripts/ci/main-run.py and scripts/ci/reds.py (the last two against a
 # stand-in gh, the last with the workflow that runs it),
 # scripts/ci/release-binary-check.sh (against real builds of the command
-# line, so it needs go and the module's dependencies), and for
-# scripts/release.sh's use of the seed guard.
+# line, so it needs go and the module's dependencies), for
+# scripts/release.sh's use of the seed guard, and for test.yml's jobs
+# divided between runners: the two-node suite's cells and the partition
+# runner test's groups (it reads test.yml through PyYAML).
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -841,6 +843,121 @@ for event in ("push", "pull_request"):
 PY
 code=$?
 if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+
+# --- test.yml's jobs divided between runners ---
+
+# cluster_cells WORKFLOW: the cluster job's matrix is the cells a and b
+# alone; the one list of files is cell a's (CLUSTER_CELL_A), each a file
+# of the two-node suite; and the job's own selection step, run for each
+# cell in this checkout, gives a exactly that list and b every other file
+# of the suite, which the suite step runs. Each error is a line.
+cluster_cells() {
+  python3 -I - "$1" "$root" <<'PY'
+import os, subprocess, sys, tempfile, yaml
+wf, root = sys.argv[1:]
+job = yaml.safe_load(open(wf))["jobs"]["cluster"]
+errors = []
+matrix = job.get("strategy", {}).get("matrix", {})
+if matrix != {"cell": ["a", "b"]}:
+    errors.append(f"the cluster matrix is {matrix}, not the cells a and b alone")
+env = job.get("env", {})
+lists = sorted(k for k in env if k.startswith("CLUSTER_CELL"))
+if lists != ["CLUSTER_CELL_A"]:
+    errors.append(f"the cluster job carries the lists {', '.join(lists) or 'none'}, not cell a's alone")
+listed = str(env.get("CLUSTER_CELL_A", "")).split()
+for f in listed:
+    if not os.path.isfile(os.path.join(root, f)):
+        errors.append(f"cell a lists {f}, which the suite does not have")
+suite = set()
+for d, _, names in os.walk(os.path.join(root, "apps/cyfr/test/cluster")):
+    suite |= {os.path.relpath(os.path.join(d, n), root) for n in names if n.endswith("_test.exs")}
+steps = {s.get("name"): s for s in job["steps"]}
+picked = {}
+for cell in matrix.get("cell", []):
+    with tempfile.NamedTemporaryFile("r") as out:
+        r = subprocess.run(["bash", "-c", steps["The cell's files"]["run"]], cwd=root, capture_output=True, text=True,
+                           env={"PATH": os.environ["PATH"], "CELL": str(cell), "GITHUB_OUTPUT": out.name,
+                                "CLUSTER_CELL_A": str(env.get("CLUSTER_CELL_A", ""))})
+        lines = [l for l in out.read().split("\n") if l.startswith("files=")]
+    if r.returncode != 0 or len(lines) != 1:
+        errors.append(f"cell {cell}'s selection failed: {(r.stdout + r.stderr).strip()}")
+        continue
+    picked[cell] = lines[0].removeprefix("files=").split()
+if "a" in picked and sorted(picked["a"]) != sorted(listed):
+    errors.append(f"cell a runs {' '.join(picked['a'])}, not the files it lists")
+if "b" in picked and sorted(picked["b"]) != sorted(suite - set(listed)):
+    errors.append(f"cell b runs {' '.join(picked['b'])}, not every file cell a does not list")
+run = steps["Run the two-node suite"]
+if run.get("env", {}).get("CELL_FILES") != "${{ steps.cell.outputs.files }}" or "$CELL_FILES" not in run["run"] or "apps/cyfr/test/cluster" in run["run"]:
+    errors.append("the suite step does not run the cell's files alone")
+for e in errors:
+    print(e)
+PY
+}
+label="test.yml: the two-node suite runs in the cells a and b, a its listed files and b every other"
+cluster_cells "$root/.github/workflows/test.yml" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+# Planted: a third cell, a listed file the suite does not have, and cell b
+# given a list of its own, each named.
+plant_cells() {
+  python3 -I - "$root/.github/workflows/test.yml" "$scratch/cells.yml" "$1" <<'PY'
+import sys
+s, out, kind = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+old = {"third": "        cell: [a, b]\n",
+       "absent": "      CLUSTER_CELL_A: >-\n",
+       "listed": "            b) files=$(LC_ALL=C comm -23"}[kind]
+new = {"third": "        cell: [a, b, c]\n",
+       "absent": "      CLUSTER_CELL_A: >-\n        apps/cyfr/test/cluster/planted_test.exs\n",
+       "listed": "            b) files=apps/cyfr/test/cluster/cell_test.exs; : $(LC_ALL=C comm -23"}[kind]
+assert s.count(old) == 1
+open(out, "w").write(s.replace(old, new))
+PY
+}
+while IFS='|' read -r kind want; do
+  label="test.yml: the cluster check refuses $kind ($want)"
+  plant_cells "$kind"
+  cluster_cells "$scratch/cells.yml" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qF "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+third|the cluster matrix is {'cell': ['a', 'b', 'c']}, not the cells a and b alone
+absent|cell a lists apps/cyfr/test/cluster/planted_test.exs, which the suite does not have
+listed|cell b runs apps/cyfr/test/cluster/cell_test.exs, not every file cell a does not list
+CASES
+
+# partition_groups WORKFLOW SCRIPT: the harness-tests-partitions matrix is
+# the groups the partition runner's test names (--groups), each once, and
+# its step runs the matrix's group.
+partition_groups() {
+  python3 -I - "$1" "$(bash "$2" --groups)" <<'PY'
+import sys, yaml
+wf, groups = sys.argv[1], sys.argv[2].split()
+job = yaml.safe_load(open(wf))["jobs"]["harness-tests-partitions"]
+matrix = job.get("strategy", {}).get("matrix", {})
+if matrix != {"group": groups}:
+    print(f"the partitions matrix is {matrix}, and the test's groups are {' '.join(groups)}")
+runs = [s for s in job["steps"] if "tests/test-partitioned-test.sh" in s.get("run", "")]
+if len(runs) != 1 or runs[0].get("env", {}).get("GROUP") != "${{ matrix.group }}" or '"$GROUP"' not in runs[0]["run"]:
+    print("the partitions job does not run the test once with its matrix's group")
+PY
+}
+label="test.yml: the partitions matrix is the partition runner test's groups"
+partition_groups "$root/.github/workflows/test.yml" "$root/tests/test-partitioned-test.sh" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+# Planted: a group the matrix gained, and one the test gained.
+sed 's/^        group: \[report, rest\]$/        group: [report, rest, more]/' "$root/.github/workflows/test.yml" > "$scratch/groups.yml"
+sed "s/^TEST_GROUPS='report rest'\$/TEST_GROUPS='report rest more'/" "$root/tests/test-partitioned-test.sh" > "$scratch/groups-test.sh"
+for planted in matrix test; do
+  label="test.yml: the partitions check refuses a group the $planted alone gained"
+  case $planted in
+    matrix) partition_groups "$scratch/groups.yml" "$root/tests/test-partitioned-test.sh" ;;
+    test) partition_groups "$root/.github/workflows/test.yml" "$scratch/groups-test.sh" ;;
+  esac > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qF "the test's groups are report rest" "$scratch/out" && grep -qF "more" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done
 
 # --- retry ---
 
