@@ -1438,7 +1438,8 @@ defmodule PrismWeb.ThreadPaneLive do
   # who can be addressed and carries no model, so a model's status read
   # from it would always be none. Whether Aqua can answer is the soul's to
   # say, so the crew is left out. The soul is put in the roster's
-  # string-keyed projection, which `Aqua.model_status/2` reads. A list
+  # string-keyed projection, its catalyst or the name of its program,
+  # which `Aqua.model_status/2` reads. A list
   # that cannot be read is `:unread`, never no agents.
   defp agents(ctx) do
     soul = Compendium.agent_soul_type()
@@ -1446,7 +1447,12 @@ defmodule PrismWeb.ThreadPaneLive do
     case PrismWeb.Ops.call_tool(ctx, "aqua", %{"action" => "list", "detail" => true}) do
       {:ok, %{guides: guides}} when is_list(guides) ->
         for %{type: ^soul} = guide <- guides do
-          %{"name" => guide.name, "type" => guide.type, "catalyst_ref" => guide[:catalyst_ref]}
+          %{
+            "name" => guide.name,
+            "type" => guide.type,
+            "catalyst_ref" => guide[:catalyst_ref],
+            "program" => guide[:program]
+          }
         end
 
       _unread ->

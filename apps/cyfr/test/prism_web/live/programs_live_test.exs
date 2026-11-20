@@ -1168,6 +1168,75 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert open_confirmations(user, athanor) == []
   end
 
+  # A crew member whose brain is a program the athanor has no row of: its
+  # card's install opens the form prefilled from the member's file, named
+  # as the file names it, its command as the file suggests. Installing it
+  # asks the person once, as any program's addition does, then opens its
+  # terminal; the member's file is not written, and a row of that name
+  # that is there is opened, never offered again or replaced.
+  test "an install for a crew member asks once, opens its terminal, leaves the member's file " <>
+         "as it was and never replaces a row of its name",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    person = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+    install = "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"
+
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(person, %{
+        "action" => "create",
+        "name" => "coder",
+        "title" => "Coder",
+        "program" => "claude",
+        "install" => install,
+        "model" => "opus",
+        "content" => "# Coder"
+      })
+
+    {:ok, file} = Arca.get(ctx(athanor), Compendium.AquaPath.crew_file("coder"))
+    query = URI.encode_query(%{"install_for" => "coder", "from" => "aqua"})
+    {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
+    render(view)
+
+    assert has_element?(view, ~s([data-test="install-from"]), "for Coder. This is the program")
+    assert has_element?(view, ~s(form#add-program input[name="name"][value="claude"]))
+    assert has_element?(view, ~s(form#add-program input[name="command"][value="#{install}"]))
+
+    assert has_element?(
+             view,
+             ~s(form#add-program select[name="mark"] option[value="driven"][selected])
+           )
+
+    # Nothing is made before the person confirms it.
+    view |> form("form#add-program", %{}) |> render_submit()
+    answered(view)
+    assert %{"details" => %{"command" => ^install}} = asked(user, athanor, "mcp_servers.create")
+    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+
+    confirm!(view, user, athanor, "mcp_servers.create")
+
+    assert {:ok, %{id: home, mark: "driven", home: "kept", epoch: epoch} = row} =
+             Arca.McpServerStorage.get(ctx(athanor), "claude")
+
+    assert_receive {:session, "open", %{"mode" => "terminal", "home_id" => ^home}, _fields},
+                   2_000
+
+    opened_session(view)
+    assert open_confirmations(user, athanor) == []
+    assert {:ok, ^file} = Arca.get(ctx(athanor), Compendium.AquaPath.crew_file("coder"))
+
+    # The row of that name is there: the install opens it, offers no form
+    # and changes nothing of it.
+    {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
+    render(view)
+    refute has_element?(view, "form#add-program")
+    assert flash(view, "info") == "claude is already on the Programs page."
+
+    assert {:ok, %{id: ^home, epoch: ^epoch} = again} =
+             Arca.McpServerStorage.get(ctx(athanor), "claude")
+
+    assert again.config_json == row.config_json
+  end
+
   # A removal is asked through the confirmation, which says what goes with
   # the program before it is given; a tool server's is the browser's.
   test "Remove asks before a program goes, saying its folder goes with it",

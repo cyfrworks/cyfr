@@ -225,7 +225,8 @@ defmodule Aqua.Models do
   brain's `describe` of that model declares them (`capabilities/5`), read
   as the caller through the catalog like `catalogue/1`'s listing, within
   30 seconds. An agent that names no catalyst, a program brain's
-  included, declares none; a catalyst the athanor does not hold is
+  included, declares none (a program's are its listing's,
+  `program_listing/2`); a catalyst the athanor does not hold is
   `{:error, :catalyst_not_found}`, and a `describe` that fails is
   `capabilities/5`'s refusal.
   """
@@ -244,6 +245,21 @@ defmodule Aqua.Models do
   end
 
   def brain_options(%Context{}, _agent), do: {:ok, []}
+
+  @doc """
+  What the program a program brain names lists, read as the person at the
+  Aqua page from the harness of the row of that name (`program/2`,
+  `Opus.Brain.models/2`): `{:ok, %{models: [%{id, name}], efforts:
+  [effort]}}`, the models its `model` may name and the efforts its
+  `effort` option may take. A name with no row, or a row that does not
+  stand as a brain's, is `program/2`'s refusal, and one whose harness did
+  not list them is the holder's (`{:refused, sentence}` among them); a
+  turn's context is refused, since only a person at a screen lists.
+  """
+  @spec program_listing(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def program_listing(%Context{} = ctx, %{"program" => name}) when is_binary(name) do
+    with {:ok, %{row: row_id}} <- program(ctx, name), do: Opus.Brain.models(ctx, row_id)
+  end
 
   defp run_as_caller(ctx, resolved, input) do
     Aqua.Ops.call_tool("execution", ctx, %{

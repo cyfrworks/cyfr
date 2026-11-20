@@ -63,7 +63,12 @@ defmodule PrismWeb.ProgramsLive do
   named, its command as the need's install block suggests, its home kept,
   every field editable. Installing it defines the row, once confirmed, and
   opens its terminal in its folder, where the person signs it in as the
-  program asks; a grant of the component then binds the row. `?name=` (the
+  program asks; a grant of the component then binds the row.
+  `?install_for=<crew member>` opens the same form for a crew member whose
+  brain is a program the athanor has no row of: named as the member's file
+  names it, its command as the file's `install` suggests, confirmed and
+  signed in the same way. The member's file is not written, and a row of
+  that name that exists is opened, never replaced. `?name=` (the
   `ui.mcp_server.focus` intent) expands one row.
 
   A definition the catalog refuses says why in its form. A server saved
@@ -433,6 +438,9 @@ defmodule PrismWeb.ProgramsLive do
         %{"install" => ref, "need" => need} when ref != "" and need != "" ->
           send(self(), {:install, ref, need})
 
+        %{"install_for" => member} when member != "" ->
+          send(self(), {:install_for, member})
+
         %{"add" => "browser"} ->
           send(self(), {:add_browser, :person})
 
@@ -471,6 +479,9 @@ defmodule PrismWeb.ProgramsLive do
 
   def handle_info({:install, ref, need}, socket),
     do: {:noreply, prefill_install(socket, ref, need)}
+
+  def handle_info({:install_for, member}, socket),
+    do: {:noreply, prefill_member(socket, member)}
 
   def handle_info({:add_browser, chrome}, socket),
     do: {:noreply, prefill_browser(socket, chrome)}
@@ -925,7 +936,7 @@ defmodule PrismWeb.ProgramsLive do
       |> assign(:show_add, "program")
       |> assign(:form_error, nil)
       |> assign(:editing, nil)
-      |> assign(:install, %{ref: ref, need: need_name, reason: field(need, :reason)})
+      |> assign(:install, %{for: ref, reason: field(need, :reason)})
       |> assign(:prefill, %{
         "mark" => "driven",
         "home" => "kept",
@@ -939,6 +950,39 @@ defmodule PrismWeb.ProgramsLive do
           :error,
           "#{ref} declares no login need named '#{need_name}' to install from."
         )
+    end
+  end
+
+  # The program form, driven and kept, for the crew member whose brain is
+  # the program its file names: the name as the file names it, the command
+  # as its `install` suggests, every field the person's to change. It only
+  # fills a form: the person confirms the program as any program's, the
+  # file is not written, and a row of that name that exists is opened
+  # rather than offered again, so no suggestion replaces a row.
+  defp prefill_member(socket, member) do
+    with {:ok, agent} <- call_tool(socket, "aqua", %{"action" => "get", "name" => member}),
+         program when is_binary(program) and program != "" <- field(agent, :program) do
+      if Enum.any?(socket.assigns.servers, &(&1[:name] == program)) do
+        socket
+        |> put_flash(:info, "#{program} is already on the Programs page.")
+        |> expand_server(program)
+      else
+        socket
+        |> assign(:show_add, "program")
+        |> assign(:form_error, nil)
+        |> assign(:editing, nil)
+        |> assign(:adding_browser, false)
+        |> assign(:install, %{for: field(agent, :title) || member, reason: nil})
+        |> assign(:prefill, %{
+          "mark" => "driven",
+          "home" => "kept",
+          "name" => program,
+          "command" => field(agent, :install)
+        })
+      end
+    else
+      _ ->
+        put_flash(socket, :error, "#{member} names no program to install.")
     end
   end
 
@@ -1172,8 +1216,9 @@ defmodule PrismWeb.ProgramsLive do
         <form id="add-program" phx-submit="add_program" class="space-y-4">
           <p :if={@install} class="text-sm text-gray-300" data-test="install-from">
             Install <span class="font-mono">{@prefill["name"]}</span>
-            for <span class="font-mono">{@install.ref}</span>
-            — {@install.reason}. This is the program as it will run; change anything first.
+            for
+            <span class="font-mono">{@install.for}</span><span :if={@install.reason}>
+              — {@install.reason}</span>. This is the program as it will run; change anything first.
             Installing it asks you to confirm the program, then opens its terminal in the
             program's own folder.
           </p>

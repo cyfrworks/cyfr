@@ -95,6 +95,10 @@ defmodule Aqua do
   @spec brain_options(Context.t(), map()) :: {:ok, [map()]} | {:error, term()}
   defdelegate brain_options(ctx, agent), to: Models
 
+  @doc "The models and efforts a program brain's program lists. See `Aqua.Models.program_listing/2`."
+  @spec program_listing(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  defdelegate program_listing(ctx, agent), to: Models
+
   @doc "Every local source whose consent no longer answers. See `Aqua.ConsentStatus.stale_refs/1`."
   @spec stale_consent_refs(Context.t()) ::
           {:ok, [{String.t(), :stale | {:drifted, [String.t()]}}]}

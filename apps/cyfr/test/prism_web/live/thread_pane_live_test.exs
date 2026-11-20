@@ -1488,6 +1488,41 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
       Cyfr.Test.Sandbox.end_views()
     end
+
+    # A soul whose brain is a program names its row by name: the pane reads
+    # the row of that name, and one that stands as a brain's is a model
+    # ready, never no model.
+    test "a soul whose brain is a program reads ready on the row of its name",
+         %{conn: conn, athanor: athanor, here: here} do
+      actor = Sanctum.Context.actor(here)
+
+      :ok =
+        Arca.put(
+          actor,
+          Compendium.AquaPath.soul_file(),
+          "---\ntitle: Aqua\nprogram: claude\nmodel: opus\n---\n\nsoul\n"
+        )
+
+      {:ok, _} = Compendium.AgentIndex.sync(here)
+
+      {:ok, _row} =
+        Arca.McpServerStorage.insert(actor, %{
+          cap: 0,
+          name: "claude",
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          home: "kept",
+          config_json: Jason.encode!(%{"command" => "cyfr-claude-code claude", "env" => %{}})
+        })
+
+      pane = empty_pane(conn, athanor)
+      refute render(pane) =~ "has no model yet"
+      refute render(pane) =~ @connect
+      assert render(pane) =~ "anything."
+
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 
   # The athanor as a fill leaves it, its soul's model connected

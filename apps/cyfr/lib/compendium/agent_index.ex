@@ -12,7 +12,7 @@ defmodule Compendium.AgentIndex do
   revision) and of its security-relevant subset as it runs
   (`Compendium.AquaAgent.to_manifest/1`, its capability: a crew member's
   names the soul's policy it runs under), and the brain it names, its
-  catalyst or its program row. Every revision's bytes are kept by digest
+  catalyst or its program, by the row's name. Every revision's bytes are kept by digest
   (`Arca.AgentRevisions`) before the row names it, so a turn that pins a
   revision can always retrieve it. A file that
   fails to parse leaves no row and is reported; the index is never a
