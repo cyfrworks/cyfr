@@ -178,10 +178,12 @@ same worktree refuses, naming the run that holds it.
   refuses to start without it: install it once with
   `scripts/wasm-tools.sh install _tools` (`scripts/test-partitioned.sh`
   installs it when it is missing).
-- After `mix deps.get` in a fresh checkout, and after a change to
-  `mix.lock`, run `scripts/fetch-prebuilt-binaries.sh` before the first
-  compile, and `scripts/fetch-prebuilt-binaries.sh --tailwind` before the
-  first `mix assets.deploy` or dev server: neither the deps' precompiled
+- A stage fetches the deps itself when `mix.lock` changed: `mix deps.get`,
+  then `scripts/fetch-prebuilt-binaries.sh` (`scripts/lib/stage-deps.sh`).
+  Outside a stage, after `mix deps.get` in a fresh checkout or after a
+  change to `mix.lock`, run `scripts/fetch-prebuilt-binaries.sh` before
+  the first compile; and `scripts/fetch-prebuilt-binaries.sh --tailwind`
+  before the first `mix assets.deploy` or dev server: neither the deps' precompiled
   NIFs (wasmex's, exqlite's and lazy_html's) nor the tailwind CLI download
   through the deps' own downloads, and the script's header says why.
 - The tests tagged `:requires_cargo_component` build real components, and
@@ -207,7 +209,11 @@ same worktree refuses, naming the run that holds it.
   keeps a stand-in alive and waits for nothing, is exempt.
 - Checks run in stages. `scripts/stages.tsv` names what each stage runs,
   and `scripts/stage.sh STAGE` runs it, queuing its checks through
-  `scripts/heavy-check.sh` for the quarters the table names. In `save`
+  `scripts/heavy-check.sh` for the quarters the table names; a check of
+  a few seconds that starts no build, container or test runner takes no
+  quarter and runs at once. Before any check that uses a build folder,
+  the stage fetches the deps and compiles them into each stale folder,
+  which a warm checkout skips without starting Mix. In `save`
   and `handoff` the checks that use one build folder (`_build/dev`,
   `dev_pg`, `test` or `test_pg`, the table's folder column) run one after
   another on one queue ticket and the rest side by side, each on its own,
@@ -218,25 +224,28 @@ same worktree refuses, naming the run that holds it.
   host answers while you edit and keeps itself; GitHub proves the tree:
   - `save`, after an edit: the format and credo checks, an incremental
     compile with warnings as errors, and the touched tests on SQLite;
-  - `handoff`, before you report a change ready, one quarter for each
-    build folder's checks and for each other check: the format and credo
-    checks, a compile with warnings as errors on both adapters (unforced:
-    a warning or Boundary violation compiled earlier still fails it), the
-    generated files' checks, the touched tests on both adapters (all of
-    `apps/arca/test` when Arca changed), the roster tests that read the
-    whole source tree (the boundaries, the test seams, Sanctum's gate
-    rosters, the restore order, the cross-language drift, the router's
-    route map and the export declarations) and CI's vocabulary scan
-    (`scripts/ci/vocabulary.sh`) on every change, the configuration check
-    when an `apps` source changed, `mix dialyzer` when a `lib` file
-    changed, `go test` of the CLI and of the keeper when a path their
-    workflows watch changed, the model catalysts' `cargo test`, the test
-    WASM fixtures' check and Locus compiled and tested alone
-    (`scripts/locus-island.sh`) when their sources changed, and the light
-    self-test of every harness script you touched. The other apps compiled
-    and tested alone (CI's island jobs), the proofs under `tests/` and the
-    tests no change reaches are the pull request's run's, and the install
-    proof the nightly's;
+  - `handoff`, before you report a change ready, on SQLite, one quarter
+    for each build folder's checks and for each other check that takes
+    one: the format and credo checks, a compile with warnings as errors
+    (unforced: a warning or Boundary violation compiled earlier still
+    fails it), the generated files' checks, the touched tests and the
+    tests that name what the change defines (all of `apps/arca/test` when
+    Arca changed), the roster tests that read the whole source tree (the
+    boundaries, the test seams, Sanctum's gate rosters, the restore order,
+    the cross-language drift, the router's route map and the export
+    declarations) and CI's vocabulary scan (`scripts/ci/vocabulary.sh`) on
+    every change, the configuration check when an `apps` source changed,
+    `go test` of the CLI and of the keeper when a path their workflows
+    watch changed, the model catalysts' `cargo test` and the test WASM
+    fixtures' check when their sources changed, and the light self-test of
+    every harness script you touched. PostgreSQL, Dialyzer, the apps
+    compiled and tested alone (CI's island jobs), the proofs under `tests/`
+    and the tests no change reaches are the pull request's run's, and the
+    install proof the nightly's. The table names the checks only the pull
+    request selects (`named`): one runs here only to reproduce a red of
+    the pull request's run, with that run's id,
+    `scripts/stage.sh handoff --reproduce RUN tests-postgres,dialyzer
+    [-- <test paths>]`, and the receipt records both;
   - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
     proof, which no workflow runs, each on one quarter, then the canvas
     proof at both viewports on all four with its reference budget. The host's
@@ -435,9 +444,11 @@ same worktree refuses, naming the run that holds it.
   [Install]
   WantedBy=timers.target
   ```
-- Run the tests for what you touched as operating-system partitions:
+- The tests run as operating-system partitions:
   `scripts/test-partitioned.sh <test paths>` on SQLite, and
-  `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL.
+  `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL,
+  which the handoff's rows run for you (PostgreSQL's only under
+  `--reproduce`).
   CI runs the whole suite on both, each across four runners: `--shard I/N`
   runs only shard I's partitions of the whole split, so a shard is CI's
   split of the suite between machines, not the local one, which runs it
@@ -454,8 +465,8 @@ same worktree refuses, naming the run that holds it.
   each into a fresh directory, and keep each file's larger
   `elixir scripts/test-timings.exs weights <dir>` value, as its header
   says.
-- If you changed a `@spec` or a function's return shape, run `mix dialyzer`.
-  CI runs it too. It is fast once the PLT is built, and the findings it
+- Dialyzer runs on the pull request whenever a `lib` file changes, and here
+  as the handoff's `dialyzer` check to reproduce its red. The findings it
   reports are recorded in [`.dialyzer_ignore.exs`](.dialyzer_ignore.exs)
   — fixing one means deleting its line and its reason there, since a filter
   that matches nothing also fails the build.

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Runs the checks a stage names: scripts/stage.sh [-l LOGDIR] [-n] STAGE [-- PATHS]
+# Runs the checks a stage names:
+#   scripts/stage.sh [-l LOGDIR] [-n] STAGE [--reproduce RUN CHECKS] [-- PATHS]
 #
 # The stages are save (after an edit), handoff (before a change is
 # reported ready) and nightly (the janitor and the host's proofs, which
@@ -12,7 +13,12 @@
 #   stage<TAB>check<TAB>quarters<TAB>hold<TAB>folder<TAB>when<TAB>command
 #   stage    one of the three above
 #   check    [a-z0-9-]+, unique within its stage
-#   quarters 1 or 4, the quarters of the machine it takes, heavy-check's -q
+#   quarters 1 or 4, the quarters of the machine it takes, heavy-check's -q;
+#            or - for a row that takes none and runs at once, beside every
+#            ticket, contained (scripts/lib/stage-chain.sh): a script over
+#            files that starts no compiler, BEAM, container or test runner
+#            (stages.tsv says which rows are). A row of no quarter names no
+#            folder
 #   hold     the seconds the command may run before it is stopped. A row
 #            of no folder is heavy-check's -t; the rows of one folder
 #            share a ticket whose -t is the sum of their holds and 60 s
@@ -26,9 +32,11 @@
 #            _build/dev), dev_pg, test or test_pg, the _build folder of
 #            that name; or - for a row that uses none of them
 #   when     always; tests, when the stage's touched tests are not none;
-#            or comma-separated path globs with Git's :(glob) meaning,
-#            when a path of the changed set matches one. Only save and
-#            handoff rows take tests or globs.
+#            comma-separated path globs with Git's :(glob) meaning, when a
+#            path of the changed set matches one; or named, never by the
+#            changed set: a handoff row that runs only when --reproduce
+#            names it. Only save and handoff rows take tests or globs, and
+#            only handoff rows are named.
 #   command  the rest of the line, run as `bash -c` from the worktree's
 #            root
 # Lines that start with #, and blank lines, are skipped. The whole table
@@ -37,22 +45,29 @@
 # folder that run take one heavy-check ticket, on the most quarters one of
 # them takes, and run under it one after another in the table's order
 # (scripts/lib/stage-chain.sh), and every other row runs beside them on a
-# ticket of its own; every ticket queues when the stage starts, so a stage
-# can hold every quarter at once. The nightly runs its rows one after
-# another in the table's order, each on a ticket of its own. Every
+# ticket of its own, or on none; every ticket queues when the stage starts,
+# so a stage can hold every quarter at once. The nightly runs its rows one
+# after another in the table's order, each on a ticket of its own. Every
 # row runs whatever an earlier one ended with. When the save or handoff
-# rows that
-# run name two folders or more, the stage first compiles the dependencies
-# into each of those folders in turn, in the order the table first names
-# them, on one quarter (`mix deps.loadpaths` under the folder's build path,
-# adapter and MIX_ENV, logged in deps.log), and starts no row that names a
-# folder before it ends: a dependency's own compile writes under deps/,
-# which every folder shares (erlex's generated parser), so two cold builds
-# started together race there. Warm, it finds nothing to do. When it
-# fails, no row that names a folder starts: each reads `not run 69`, and
-# the rows of no folder still run. No check is called deps. The stage
-# clears MIX_ENV and MIX_BUILD_PATH before any of it, so a row's build
-# folder is what its own command sets, never the caller's.
+# rows that run name a folder, the stage first runs the dependencies'
+# fetch and, for two folders or more, their compile into each stale
+# folder (scripts/lib/stage-deps.sh, whose header gives the stamps that
+# make a warm run start no BEAM and take no quarter), contained and on no
+# ticket of its own, logged in deps.log, and starts no row that names a
+# folder before it ends. When it fails, no row that names a folder starts:
+# each reads `not run 69`, and the rows of no folder still run. No check is
+# called deps. The stage clears MIX_ENV and MIX_BUILD_PATH before any of
+# it, so a row's build folder is what its own command sets, never the
+# caller's.
+#
+# --reproduce RUN CHECKS runs each check CHECKS names (comma-separated
+# check names of the handoff table) besides the rows the changed set
+# selects, whatever its when says, but a test row that reads $STAGE_TESTS
+# is still skipped with no touched test. It is how a row the change does
+# not select is run here, and only to reproduce a red that the pull
+# request's run RUN (its run id) reported. Handoff alone takes it; RUN is
+# decimal and each check one of the stage's, else 64. The receipt names
+# both.
 #
 # The changed set is every path the diff from the base to the working
 # tree adds, modifies or deletes, renames as a deletion and an addition,
@@ -117,10 +132,11 @@
 # from when it queued; a row of the folder it left without a line reads
 # that status, 1 for a ticket that ended 0. A ticket whose stage is gone
 # starts no more rows (scripts/lib/stage-chain.sh). The dependency
-# compile, when there is one, says `deps: ...` first, alike. -n prints
-# `would compile deps (1 quarter): <folders>` when it would, then `would
-# run <check> (<n> quarter[s]): <command>` or `would skip <check>:
-# <reason>` per row, and runs nothing.
+# step, when there is one, says `deps: ...` first, alike. -n prints
+# `would run deps (no quarter): <folders>` when it would, then `would
+# run <check> (<n> quarter[s]): <command>`, `would run <check> (no
+# quarter): <command>` or `would skip <check>: <reason>` per row, and runs
+# nothing.
 #
 # A handoff makes its log directory and takes its start snapshot before it
 # reads anything of the checkout, its table included, and ends, at every
@@ -134,6 +150,7 @@
 # index in the log directory), `state` (committed when that one commit's
 # tree is both snapshots, uncommitted when the two snapshots are one other
 # tree, moved when they differ, unknown when Git could not say),
+# `reproduce <run> <checks>` when --reproduce was given,
 # `selected <check> <adapter> <files>` for each test row's planned files,
 # `left <name> <count>` for each name the selection left to the pull
 # request's run, and `row <line>` for each summary line, the stdout's,
@@ -210,6 +227,7 @@ receipt() {
     echo "start-tree ${start_tree:-unknown}"
     echo "end-tree ${end_tree:-unknown}"
     echo "state $state"
+    [ -z "$reproduce_run" ] || echo "reproduce $reproduce_run $reproduce_checks"
     for i in ${rows[@]+"${!rows[@]}"}; do
       [ -z "${reasons[$i]-x}" ] && runner "$i" || continue
       IFS=$'\t' read -r _ _ check _ <<<"${rows[$i]}"
@@ -260,12 +278,16 @@ refuse() { echo "stage: $2" >&2; exit "$1"; }
 
 # Whether $1 names a stage, whole.
 is_stage() { case $1 in save|handoff|nightly) return 0 ;; *) return 1 ;; esac; }
-usage() { echo "usage: $0 [-l LOGDIR] [-n] save|handoff|nightly [-- PATHS]"; }
+usage() { echo "usage: $0 [-l LOGDIR] [-n] save|handoff|nightly [--reproduce RUN CHECKS] [-- PATHS]"; }
 
-logdir= dry=false stage= explicit=false paths=()
+logdir= dry=false stage= explicit=false paths=() reproduce_run= reproduce_checks=
 while [ "$#" -gt 0 ]; do
   case $1 in
     -l) [ "$#" -ge 2 ] || { usage >&2; exit 64; }; logdir=$2; shift 2 ;;
+    --reproduce)
+      [ "$#" -ge 3 ] || { usage >&2; exit 64; }
+      reproduce_run=$2 reproduce_checks=$3
+      shift 3 ;;
     -n) dry=true; shift ;;
     -h|--help) usage; finished=true; exit 0 ;;
     --) shift; explicit=true; paths=("$@"); break ;;
@@ -274,6 +296,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 is_stage "$stage" || { usage >&2; exit 64; }
+if [ -n "$reproduce_run$reproduce_checks" ]; then
+  [ "$stage" = handoff ] || refuse 64 'only handoff takes --reproduce'
+  [[ $reproduce_run =~ ^[1-9][0-9]{0,19}$ ]] || refuse 64 "--reproduce takes the pull request's run id, not '$reproduce_run'"
+  [[ $reproduce_checks =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || refuse 64 "--reproduce takes comma-separated checks, not '$reproduce_checks'"
+fi
 [ -z "${HEAVY_CHECK_HELD:-}" ] || refuse 64 'the stage queues its own tickets: run this outside scripts/heavy-check.sh'
 # A caller's MIX_ENV or MIX_BUILD_PATH would move a lane's rows into
 # another folder, or two lanes into one.
@@ -321,24 +348,34 @@ while IFS= read -r line || [ -n "$line" ]; do
   [ -z "${seen[$r_stage/$r_check]+set}" ] || refuse 65 "$table:$number: $r_stage has a second check called $r_check"
   seen[$r_stage/$r_check]=1
   case $r_quarters in
-    1|4) ;;
-    *) refuse 65 "$table:$number: a row takes 1 or 4 quarters, not '$r_quarters'" ;;
+    1|4|-) ;;
+    *) refuse 65 "$table:$number: a row takes 1, 4 or - quarters, not '$r_quarters'" ;;
   esac
   [[ $r_hold =~ ^[1-9][0-9]{0,5}$ ]] || refuse 65 "$table:$number: the hold '$r_hold' is not seconds"
   case $r_folder in
     dev | dev_pg | test | test_pg | -) ;;
     *) refuse 65 "$table:$number: the folder '$r_folder' is not dev, dev_pg, test, test_pg or -" ;;
   esac
+  [ "$r_quarters" != - ] || [ "$r_folder" = - ] || refuse 65 "$table:$number: a row of no quarter names no build folder"
   case $r_when in
     always) ;;
+    named) [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only handoff rows are named" ;;
     tests) [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take tests" ;;
     *)
-      [[ $r_when =~ ^[^,[:space:]]+(,[^,[:space:]]+)*$ ]] || refuse 65 "$table:$number: '$r_when' is not always, tests or comma-separated globs"
+      [[ $r_when =~ ^[^,[:space:]]+(,[^,[:space:]]+)*$ ]] || refuse 65 "$table:$number: '$r_when' is not always, tests, named or comma-separated globs"
       [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take globs" ;;
   esac
   [ -n "${r_command//[[:space:]]/}" ] || refuse 65 "$table:$number: the command is empty"
   if [ "$r_stage" = "$stage" ]; then rows+=("$number"$'\t'"$line"); fi
 done <"$table"
+declare -A asked=()
+if [ -n "$reproduce_checks" ]; then
+  IFS=, read -r -a words <<<"$reproduce_checks"
+  for check in "${words[@]}"; do
+    [ -n "${seen[$stage/$check]+set}" ] || refuse 64 "--reproduce names $check, which is no check of $stage"
+    asked[$check]=1
+  done
+fi
 
 # The changed set and the touched tests, for the stages that read them.
 base= changed=() tests=()
@@ -377,8 +414,8 @@ else
 fi
 # Handoff's touched tests take, besides, the tests that name what the
 # change defines or reads (the header's rule), within SELECT_BUDGET.
-# The budget trades the consumers handoff runs against the time every
-# slice's handoff holds two quarters for: 300 s was the smallest of 100,
+# The budget trades the consumers handoff runs against the time its test
+# row holds a quarter for: 300 s was the smallest of 100,
 # 200, 300 and 600 that, replayed over the 2026-11-16 to 11-18 pull
 # requests that went red on GitHub, selected each failing test, and at it
 # the median handoff of the 40 pull requests before it added about 220 s.
@@ -528,16 +565,35 @@ matches() {
   [ -n "$found" ]
 }
 
+# A test row's runner options and test paths.
+runner() { # INDEX: sets r_options and r_paths for a test row, else returns 1
+  local command words k
+  IFS=$'\t' read -r _ _ _ _ _ _ _ command <<<"${rows[$1]}"
+  read -r -a words <<<"$command"
+  [ "${words[0]-}" = scripts/test-partitioned.sh ] || return 1
+  k=${#words[@]}
+  while [ "$k" -gt 1 ]; do
+    case ${words[k - 1]} in apps/* | '$STAGE_TESTS') k=$((k - 1)) ;; *) break ;; esac
+  done
+  [ "$k" -lt "${#words[@]}" ] || return 1
+  r_options="${words[*]:0:k}" r_paths=("${words[@]:k}")
+}
+
 # Each row's reason to be skipped, empty for a row that runs.
 reasons=()
-for row in ${rows[@]+"${rows[@]}"}; do
-  IFS=$'\t' read -r _ _ _ _ _ _ when _ <<<"$row"
+for i in ${rows[@]+"${!rows[@]}"}; do
+  IFS=$'\t' read -r _ _ check _ _ _ when _ <<<"${rows[$i]}"
   reason=
-  case $when in
-    always) ;;
-    tests) [ -n "${tests[*]+${tests[*]}}" ] || reason='no touched test' ;;
-    *) matches "$when" || reason="no changed path matches $when" ;;
-  esac
+  if [ -n "${asked[$check]+set}" ]; then
+    if runner "$i" && [[ " ${r_paths[*]} " == *' $STAGE_TESTS '* ]] && [ -z "${tests[*]+${tests[*]}}" ]; then reason='no touched test'; fi
+  else
+    case $when in
+      always) ;;
+      named) reason='named: run with --reproduce' ;;
+      tests) [ -n "${tests[*]+${tests[*]}}" ] || reason='no touched test' ;;
+      *) matches "$when" || reason="no changed path matches $when" ;;
+    esac
+  fi
   reasons+=("$reason")
 done
 
@@ -553,18 +609,6 @@ done
 # a test row of a folder names by $STAGE_TESTS alone and another test row
 # of the folder, with the same options, names runs in the other (the
 # header's rule).
-runner() { # INDEX: sets r_options and r_paths for a test row, else returns 1
-  local command words k
-  IFS=$'\t' read -r _ _ _ _ _ _ _ command <<<"${rows[$1]}"
-  read -r -a words <<<"$command"
-  [ "${words[0]-}" = scripts/test-partitioned.sh ] || return 1
-  k=${#words[@]}
-  while [ "$k" -gt 1 ]; do
-    case ${words[k - 1]} in apps/* | '$STAGE_TESTS') k=$((k - 1)) ;; *) break ;; esac
-  done
-  [ "$k" -lt "${#words[@]}" ] || return 1
-  r_options="${words[*]:0:k}" r_paths=("${words[@]:k}")
-}
 row_tests=() notes=()
 for i in ${rows[@]+"${!rows[@]}"}; do
   row_tests[$i]=${tests[*]+${tests[*]}} notes[$i]=
@@ -593,34 +637,22 @@ for i in ${rows[@]+"${!rows[@]}"}; do
   [ "${#kept[@]}" -gt 0 ] || [ "${#elsewhere[@]}" = 0 ] || reasons[$i]="every touched test runs in ${elsewhere[*]}"
 done
 # The lanes the rows that run name, in the order the table first names
-# them, and, for two folders or more, the dependency compile into each in
-# turn.
-folders=() deps_command=
+# them, and the build folders among them, which the dependency step takes.
+folders=() builds=()
 for i in ${rows[@]+"${!rows[@]}"}; do
   [ -z "${reasons[$i]}" ] || continue
   folder=${lanes[$i]}
   [ "$folder" = - ] || [[ " ${folders[*]+${folders[*]}} " == *" $folder "* ]] || folders+=("$folder")
 done
-if [ "${#folders[@]}" -ge 2 ]; then
-  deps_command='s=0'
-  for folder in "${folders[@]}"; do
-    case $folder in
-      dev) build='CYFR_DATABASE=sqlite MIX_ENV=dev' ;;
-      dev_pg) build='MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=postgres MIX_ENV=dev' ;;
-      test) build='MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test' ;;
-      test_pg) build='MIX_BUILD_PATH=_build/test_pg CYFR_DATABASE=postgres MIX_ENV=test' ;;
-    esac
-    deps_command+="; echo '==> $folder'; env $build mix deps.loadpaths || s=1"
-  done
-  deps_command+='; exit $s'
-fi
+for folder in ${folders[@]+"${folders[@]}"}; do [ "$folder" = stage ] || builds+=("$folder"); done
 
 if $dry; then
-  [ -z "$deps_command" ] || echo "would compile deps (1 quarter): ${folders[*]}"
+  [ "${#builds[@]}" = 0 ] || echo "would run deps (no quarter): ${builds[*]}"
   for i in ${rows[@]+"${!rows[@]}"}; do
     IFS=$'\t' read -r _ _ check quarters _ _ _ command <<<"${rows[$i]}"
     reason=${reasons[$i]}
     if [ -n "$reason" ]; then echo "would skip $check: $reason"
+    elif [ "$quarters" = - ]; then echo "would run $check (no quarter): $command"
     elif [ "$quarters" = 1 ]; then echo "would run $check (1 quarter): $command"
     else echo "would run $check ($quarters quarters): $command"; fi
   done
@@ -648,6 +680,23 @@ launch() {
   scripts/heavy-check.sh -q "$quarters" -t "$hold" -- "$@" >>"$log" 2>&1 &
   running[$!]=$entry
 }
+# unqueued ENTRY CHECK HOLD TESTS COMMAND: COMMAND, contained and held by
+# scripts/lib/stage-chain.sh on no ticket, in the background, its chain's
+# pid recorded with ENTRY; it ends in $logdir/CHECK.results, and its
+# output in $logdir/CHECK.log, which the caller starts.
+unqueued() {
+  local entry=$1 check=$2
+  : >"$logdir/$check.results"
+  bash scripts/lib/stage-chain.sh "$$" "$logdir/$check.results" "$entry" "$check" "$3" "$4" "$5" >>"$logdir/$check.log" 2>&1 </dev/null &
+  running[$!]=$entry
+}
+# chained CHECK STATUS: the status of an unqueued run whose chain ended
+# with STATUS, its command's when the chain recorded one.
+chained() {
+  local index status ended last=
+  while read -r index status ended; do last=$status; done <"$logdir/$1.results"
+  if [ "$2" = 0 ]; then echo "${last:-1}"; else echo "$2"; fi
+}
 began=() lines=()
 declare -A lane=() chain_began=() chain_last=() chain_read=()
 tickets=()
@@ -656,7 +705,11 @@ start_row() { # INDEX: the row on a ticket of its own
   IFS=$'\t' read -r _ _ check quarters hold _ _ command <<<"${rows[$1]}"
   began[$1]=$SECONDS
   printf '%s' "${notes[$1]}" >"$logdir/$check.log"
-  launch "$1" "$quarters" "$hold" "$logdir/$check.log" bash -c "$command"
+  if [ "$quarters" = - ]; then
+    unqueued "$1" "$check" "$hold" "${row_tests[$1]}" "$command"
+  else
+    launch "$1" "$quarters" "$hold" "$logdir/$check.log" bash -c "$command"
+  fi
 }
 # start_lane FOLDER: the stage lane's next row on a ticket of its own, or
 # every row of a build folder on one ticket.
@@ -749,10 +802,12 @@ for i in ${rows[@]+"${!rows[@]}"}; do
   fi
 done
 failures=0 launched=true
-if [ -n "$deps_command" ]; then
+if [ "${#builds[@]}" -gt 0 ]; then
   deps_waits=true deps_began=$SECONDS
   : >"$logdir/deps.log"
-  launch deps 1 1800 "$logdir/deps.log" bash -c "$deps_command"
+  # The fetch waits on the network and a compile queues inside it, so the
+  # step's hold covers both.
+  unqueued deps deps 3600 '' "bash scripts/lib/stage-deps.sh ${builds[*]}"
 else
   for folder in ${folders[@]+"${folders[@]}"}; do start_lane "$folder"; done
 fi
@@ -771,6 +826,7 @@ while [ "${#running[@]}" -gt 0 ]; do
   case $entry in
     tick) ticking=false ;;
     deps)
+      status=$(chained deps "$status")
       [ "$status" = 0 ] || failures=$((failures + 1))
       deps_line=$(result deps "$status" $((SECONDS - deps_began)))
       if [ "$status" = 0 ]; then
@@ -801,8 +857,9 @@ while [ "${#running[@]}" -gt 0 ]; do
       fi
       for i in ${lane[$folder]}; do unfinished "$i" "$status"; done ;;
     *)
+      IFS=$'\t' read -r _ _ check quarters _ _ _ <<<"${rows[$entry]}"
+      [ "$quarters" != - ] || status=$(chained "$check" "$status")
       [ "$status" = 0 ] || failures=$((failures + 1))
-      IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$entry]}"
       lines[$entry]=$(result "$check" "$status" $((SECONDS - began[entry])))
       [ "${lanes[$entry]}" = - ] || start_lane "${lanes[$entry]}" ;;
   esac

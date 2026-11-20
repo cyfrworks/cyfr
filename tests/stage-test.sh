@@ -45,7 +45,13 @@ git init -q -b main "$repo"
 mkdir -p "$repo/scripts"
 mkdir -p "$repo/scripts/lib"
 cp "$ROOT/scripts/stage.sh" "$repo/scripts/"
-cp "$ROOT/scripts/lib/stage-chain.sh" "$ROOT/scripts/lib/contain.sh" "$repo/scripts/lib/"
+cp "$ROOT/scripts/lib/stage-chain.sh" "$ROOT/scripts/lib/stage-deps.sh" "$ROOT/scripts/lib/contain.sh" "$repo/scripts/lib/"
+cat >"$repo/scripts/fetch-prebuilt-binaries.sh" <<'EOF'
+#!/usr/bin/env bash
+echo prebuilt >>"$EVENTS"
+EOF
+put "$repo/mix.lock" '%{}'
+printf '%s\n' /deps/ /_build/ >"$repo/.gitignore"
 cat >"$repo/scripts/test-partitioned.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$RUNNER_CALLS"
@@ -59,7 +65,7 @@ shift
 case "$*" in *stage-chain.sh*) [ -z "${STUB_TICKET_EXIT:-}" ] || { "$@"; exit "$STUB_TICKET_EXIT"; } ;; esac
 exec "$@"
 EOF
-chmod +x "$repo/scripts/heavy-check.sh" "$repo/scripts/test-partitioned.sh"
+chmod +x "$repo/scripts/heavy-check.sh" "$repo/scripts/test-partitioned.sh" "$repo/scripts/fetch-prebuilt-binaries.sh"
 export STUB_CALLS="$S/calls" RUNNER_CALLS="$S/runner-calls"
 for f in apps/arca/lib/arca/x.ex apps/arca/test/arca/x_test.exs apps/cyfr/lib/cyfr/a.ex apps/cyfr/test/cyfr/a_test.exs \
   apps/cyfr/lib/cyfr/no_mirror.ex apps/cyfr/lib/cyfr/gone.ex apps/cyfr/test/cyfr/gone_test.exs apps/cyfr/test/cyfr/old_test.exs \
@@ -207,6 +213,58 @@ grep -qxF 'would skip compile: no changed path matches apps/**,config/**' "$S/dr
 [ ! -s "$STUB_CALLS" ] || fail 'a dry run queued a row'
 reset_tree
 
+begin 'a row of no quarter runs at once on no ticket, contained, held to its hold and with the stage environment, beside the queued rows'
+reset_tree
+printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/a.ex"
+table 'handoff|quick|-|60|-|always|printf "%s;%s\n" "$STAGE" "$STAGE_TESTS" >"$STAGE_LOGDIR/quick.txt"; echo said' \
+  'handoff|slow|-|1|-|always|exec sleep 6131' 'handoff|queued|1|60|-|always|echo queued' 'handoff|failing|-|60|-|always|exit 7'
+stage unqueued -l "$S/logs-unqueued" handoff
+[ "$rc" = 1 ] || fail "exited $rc, not 1: $(cat "$S/unqueued.err")"
+framed unqueued 1
+[ "$(sed -n '2,$p' "$S/unqueued.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'quick: ok;slow: failed 124;queued: ok;failing: failed 7;' ] ||
+  fail "the rows said: $(cat "$S/unqueued.out")"
+[ "$(cat "$STUB_CALLS")" = '-q 1 -t 60 -- bash -c echo queued' ] || fail "a row of no quarter was queued: $(cat "$STUB_CALLS")"
+grep -qx said "$S/logs-unqueued/quick.log" || fail "the row's log: $(cat "$S/logs-unqueued/quick.log")"
+[ "$(cat "$S/logs-unqueued/quick.txt")" = 'handoff;apps/cyfr/test/cyfr/a_test.exs' ] || fail "the row's environment: $(cat "$S/logs-unqueued/quick.txt")"
+grep -qx '==> stage: hold deadline after 1s: the command was stopped' "$S/logs-unqueued/slow.log" || fail "the held row's log: $(cat "$S/logs-unqueued/slow.log")"
+! pgrep -f '^sleep 6131$' >/dev/null || fail 'the held row outlived its hold'
+grep -qx 'row quick: ok [0-9]*s' "$S/logs-unqueued/receipt" || fail "the receipt: $(cat "$S/logs-unqueued/receipt")"
+stage unqueued-dry -n handoff
+grep -qxF 'would run slow (no quarter): exec sleep 6131' "$S/unqueued-dry.out" || fail "the dry run said: $(cat "$S/unqueued-dry.out")"
+table "${toy_rows[@]}"
+reset_tree
+
+begin 'a named row runs only when --reproduce names it, whatever its own or the changed set, and a named test row with no touched test is still skipped; the receipt names the run and the checks'
+reset_tree
+printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/a.ex"
+table 'handoff|format|1|60|-|always|echo format' 'handoff|pg|1|60|-|named|echo pg' \
+  'handoff|pgtests|1|60|-|named|scripts/test-partitioned.sh -n 1 -a postgres -- $STAGE_TESTS' 'handoff|notes|1|60|-|notes/**|echo notes'
+stage plain -l "$S/logs-plain" handoff
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/plain.err")"
+[ "$(sed -n '2,$p' "$S/plain.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'format: ok;pg: skipped (named: run with --reproduce);pgtests: skipped (named: run with --reproduce);notes: skipped (no changed path matches notes/**);' ] ||
+  fail "without --reproduce the rows said: $(cat "$S/plain.out")"
+! grep -q '^reproduce ' "$S/logs-plain/receipt" || fail 'a receipt without --reproduce names a run'
+stage asked -l "$S/logs-asked" handoff --reproduce 44812345678 pg,pgtests,notes
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/asked.err")"
+[ "$(sed -n '2,$p' "$S/asked.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'format: ok;pg: ok;pgtests: ok;notes: ok;' ] ||
+  fail "with --reproduce the rows said: $(cat "$S/asked.out")"
+grep -qx 'reproduce 44812345678 pg,pgtests,notes' "$S/logs-asked/receipt" || fail "the receipt: $(cat "$S/logs-asked/receipt")"
+grep -qx 'selected pgtests postgres apps/cyfr/test/cyfr/a_test.exs' "$S/logs-asked/receipt" || fail "the receipt's selection: $(cat "$S/logs-asked/receipt")"
+stage asked-none -l "$S/logs-asked-none" handoff --reproduce 7 pgtests -- 
+[ "$rc" = 0 ] && grep -qx 'pgtests: skipped (no touched test) [0-9]*s' "$S/asked-none.out" || fail "a named test row with no touched test: $rc, $(cat "$S/asked-none.out")"
+for bad in 'save|--reproduce 7 format|only handoff takes --reproduce' 'handoff|--reproduce 07 pg|--reproduce takes the pull request'"'"'s run id' \
+  'handoff|--reproduce run pg|--reproduce takes the pull request'"'"'s run id' 'handoff|--reproduce 7 pg,,notes|--reproduce takes comma-separated checks' \
+  'handoff|--reproduce 7 deploy|--reproduce names deploy, which is no check of handoff' 'handoff|--reproduce 7|usage:'; do
+  IFS='|' read -r which args why <<<"$bad"
+  read -r -a words <<<"$args"
+  stage refused-asked -l "$S/logs-refused-asked" "$which" "${words[@]}"
+  [ "$rc" = 64 ] && grep -qF -- "$why" "$S/refused-asked.err" || fail "$which $args gave $rc: $(cat "$S/refused-asked.err")"
+  [ ! -s "$STUB_CALLS" ] || fail "$which $args ran a row"
+  framed refused-asked 64
+done
+table "${toy_rows[@]}"
+reset_tree
+
 begin 'the table is read whole and refused at its first bad line with 65, before any row runs'
 refused() { # LINE WHY ROW: the toy table with ROW appended at line LINE
   table "${toy_rows[@]}" "$3"
@@ -218,15 +276,15 @@ refused() { # LINE WHY ROW: the toy table with ROW appended at line LINE
 }
 refused 9 "no stage is called 'deploy'" 'deploy|x|1|60|-|always|echo x'
 refused 9 "no stage is called 'save handoff'" 'save handoff|x|1|60|-|always|echo x'
-refused 9 "a row takes 1 or 4 quarters, not '2'" 'nightly|x|2|60|-|always|echo x'
-refused 9 "a row takes 1 or 4 quarters, not 'scoped'" 'nightly|x|scoped|60|-|always|echo x'
-refused 9 "a row takes 1 or 4 quarters, not 'exclusive'" 'nightly|x|exclusive|60|-|always|echo x'
-refused 9 "'apps/**,,config/**' is not always, tests or comma-separated globs" 'handoff|x|1|60|-|apps/**,,config/**|echo x'
-refused 9 "'apps/** config/**' is not always, tests or comma-separated globs" 'handoff|x|1|60|-|apps/** config/**|echo x'
+refused 9 "a row takes 1, 4 or - quarters, not '2'" 'nightly|x|2|60|-|always|echo x'
+refused 9 "a row takes 1, 4 or - quarters, not 'scoped'" 'nightly|x|scoped|60|-|always|echo x'
+refused 9 "a row takes 1, 4 or - quarters, not 'exclusive'" 'nightly|x|exclusive|60|-|always|echo x'
+refused 9 "'apps/**,,config/**' is not always, tests, named or comma-separated globs" 'handoff|x|1|60|-|apps/**,,config/**|echo x'
+refused 9 "'apps/** config/**' is not always, tests, named or comma-separated globs" 'handoff|x|1|60|-|apps/** config/**|echo x'
 refused 9 'handoff has a second check called compile' 'handoff|compile|1|60|-|always|echo x'
 refused 9 'only save and handoff rows take tests' 'nightly|x|1|60|-|tests|echo x'
 refused 9 'only save and handoff rows take globs' 'nightly|x|1|60|-|apps/**|echo x'
-refused 9 "a row takes 1 or 4 quarters, not 'none'" 'handoff|x|none|-|-|always|git grep x'
+refused 9 "a row takes 1, 4 or - quarters, not 'none'" 'handoff|x|none|-|-|always|git grep x'
 refused 9 "the hold '-' is not seconds" 'handoff|x|1|-|-|always|echo x'
 refused 9 "the check 'Compile' is not [a-z0-9-]+" 'handoff|Compile|1|60|-|always|echo x'
 refused 9 'a row has seven fields separated by single tabs' 'handoff|x|1|60|-|echo x'
@@ -234,6 +292,9 @@ refused 9 'a field is empty' 'handoff||1|60|-|always|echo x'
 refused 9 "the folder 'prod' is not dev, dev_pg, test, test_pg or -" 'handoff|x|1|60|prod|always|echo x'
 refused 9 "the folder '_build/test' is not dev, dev_pg, test, test_pg or -" 'handoff|x|1|60|_build/test|always|echo x'
 refused 9 'no check is called deps' 'handoff|deps|1|60|-|always|echo x'
+refused 9 'a row of no quarter names no build folder' 'handoff|x|-|60|dev|always|echo x'
+refused 9 'only handoff rows are named' 'save|x|1|60|-|named|echo x'
+refused 9 'only handoff rows are named' 'nightly|x|1|60|-|named|echo x'
 table "${toy_rows[@]}"
 
 begin 'a table that is missing or unreadable is refused with 65 naming it, and a stage is named whole'
@@ -303,8 +364,13 @@ cat >"$S/fake-mix/mix" <<'EOF'
 #!/usr/bin/env bash
 printf '%s|%s|%s|%s\n' "${MIX_BUILD_PATH-default}" "${CYFR_DATABASE-}" "${MIX_ENV-}" "$*" >>"$FAKE_MIX_CALLS"
 printf '%s %s\n' "${MIX_BUILD_PATH:-_build/${MIX_ENV:-dev}}" "$*" >>"$FAKE_MIX_USES"
-echo "deps ${MIX_BUILD_PATH-default}" >>"$EVENTS"
-exit "${FAKE_MIX_EXIT:-0}"
+if [ "$1" = deps.get ]; then
+  echo "fetch $([ -e "$FAKE_MIX_RELEASED" ] && echo after || echo before)" >>"$EVENTS"
+  mkdir -p deps
+else
+  echo "deps ${MIX_BUILD_PATH-default}" >>"$EVENTS"
+fi
+[ "$1" != "${FAKE_MIX_FAIL:-}" ] || exit 1
 EOF
 chmod +x "$S/fake-mix/mix"
 cat >"$repo/scripts/wait-for" <<'EOF'
@@ -313,10 +379,14 @@ for _ in $(seq 100); do [ -e "$1" ] && exit 0; sleep 0.05; done
 exit 1
 EOF
 chmod +x "$repo/scripts/wait-for"
-export FAKE_MIX_CALLS="$S/mix-calls" FAKE_MIX_USES="$S/mix-uses" EVENTS="$S/events"
-lanes() { # NAME ARGS...: the toy stage with the stand-in mix; stdout to $S/NAME.out, rows' lines to $S/NAME.rows
+export FAKE_MIX_CALLS="$S/mix-calls" FAKE_MIX_USES="$S/mix-uses" EVENTS="$S/events" FAKE_MIX_RELEASED="$S/released"
+# Every later toy stage whose rows name a folder fetches its dependencies
+# through the stand-in.
+export PATH="$S/fake-mix:$PATH"
+lanes() { # NAME ARGS...: the toy stage with the stand-in mix, from no fetched or compiled dependencies unless WARM=1; stdout to $S/NAME.out, rows' lines to $S/NAME.rows
   local name=$1
   shift
+  [ "${WARM:-}" = 1 ] || rm -rf "$repo/deps" "$repo/_build"
   : >"$FAKE_MIX_CALLS"
   : >"$FAKE_MIX_USES"
   : >"$EVENTS"
@@ -343,11 +413,11 @@ lanes lanes -l "$S/logs-lanes" handoff
 framed lanes 1
 printf '%s\n' 'deps: ok' 'first: ok' 'second: failed 3' 'third: ok' 'beside: ok' 'loose: ok' 'quick: ok' >"$S/want"
 diff "$S/want" "$S/lanes.rows" >/dev/null || fail "the rows said: $(tr '\n' ';' <"$S/lanes.rows")"
-printf '%s\n' 'default|sqlite|dev|deps.loadpaths' '_build/test|sqlite|test|deps.loadpaths' >"$S/want"
-diff "$S/want" "$FAKE_MIX_CALLS" >/dev/null || fail "the dependencies were compiled as: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
-[ "$(head -n 2 "$EVENTS" | tr '\n' ';')" = 'deps default;deps _build/test;' ] || fail "a folder's row started before the dependencies were compiled: $(tr '\n' ';' <"$EVENTS")"
+printf '%s\n' 'default|||deps.get' 'default|sqlite|dev|deps.loadpaths' '_build/test|sqlite|test|deps.loadpaths' >"$S/want"
+diff "$S/want" "$FAKE_MIX_CALLS" >/dev/null || fail "the dependencies were fetched and compiled as: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
+[ "$(head -n 4 "$EVENTS" | tr '\n' ';')" = 'fetch before;prebuilt;deps default;deps _build/test;' ] || fail "a folder's row started before the dependencies were fetched and compiled: $(tr '\n' ';' <"$EVENTS")"
 grep -qx '==> test' "$S/logs-lanes/deps.log" || fail "deps.log holds: $(cat "$S/logs-lanes/deps.log")"
-grep -q -- '^-q 1 -t 1800 -- bash -c s=0' "$STUB_CALLS" || fail "the dependency compile was not queued on one quarter: $(cat "$STUB_CALLS")"
+grep -qx -- '-q 1 -t 1800 -- bash scripts/lib/stage-deps.sh --compile dev test' "$STUB_CALLS" || fail "the dependency compile was not queued on one quarter: $(cat "$STUB_CALLS")"
 # One ticket per folder, holding each of its rows' holds and a minute
 # for each stop; a row of no folder on a ticket of its own.
 [ "$(grep -c -- '^-q 1 -t 60 -- bash -c ' "$STUB_CALLS")" = 2 ] || fail "the rows of no folder were not queued alone: $(cat "$STUB_CALLS")"
@@ -358,7 +428,7 @@ grep -q -- "^-q 1 -t 360 -- bash scripts/lib/stage-chain.sh [0-9]* $S/logs-lanes
 [ -e "$S/logs-lanes/dev.queue.log" ] && [ -e "$S/logs-lanes/test.queue.log" ] || fail 'a ticket kept no log'
 [ -e "$S/logs-lanes/third.ran" ] || fail 'the row after a failed one did not run'
 lanes lanes-dry -n handoff
-grep -qxF 'would compile deps (1 quarter): dev test' "$S/lanes-dry.out" || fail "the dry run said: $(cat "$S/lanes-dry.out")"
+grep -qxF 'would run deps (no quarter): dev test' "$S/lanes-dry.out" || fail "the dry run said: $(cat "$S/lanes-dry.out")"
 [ ! -s "$FAKE_MIX_CALLS" ] || fail 'a dry run compiled the dependencies'
 
 begin "the caller's MIX_ENV and MIX_BUILD_PATH reach no row and no dependency compile: format stays in dev's folder and the tests in test's"
@@ -367,25 +437,71 @@ for caller in MIX_ENV=test "MIX_BUILD_PATH=$S/elsewhere"; do
   (export "$caller"; lanes inherited -l "$S/logs-inherited" handoff)
   rc=$(sed -n 's/^_EXIT=[0-9]* //p' "$S/inherited.out")
   [ "$rc" = 0 ] || fail "under $caller the stage exited $rc: $(cat "$S/inherited.err")"
-  printf '%s\n' '_build/dev deps.loadpaths' '_build/test deps.loadpaths' '_build/dev format' '_build/test test' >"$S/want"
+  printf '%s\n' '_build/dev deps.loadpaths' '_build/test deps.loadpaths' '_build/dev deps.get' '_build/dev format' '_build/test test' >"$S/want"
   diff "$S/want" <(LC_ALL=C sort "$FAKE_MIX_USES" | sed -n '/deps.loadpaths/p'; grep -v deps.loadpaths "$FAKE_MIX_USES" | LC_ALL=C sort) >/dev/null ||
     fail "under $caller the rows used: $(tr '\n' ';' <"$FAKE_MIX_USES")"
 done
 
-begin 'rows that name one folder compile no dependencies first, and a failed dependency compile fails the stage and starts no row that names a folder, each of which reads not run, while the rest still run'
+begin 'rows that name one folder fetch the dependencies and compile none first, and a failed fetch or dependency compile fails the stage and starts no row that names a folder, each of which reads not run, while the rest still run'
 table 'handoff|solo|1|60|dev|always|echo solo' 'handoff|free|1|60|-|always|echo free'
 lanes one-folder -l "$S/logs-one-folder" handoff
 [ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/one-folder.err")"
-[ "$(tr '\n' ';' <"$S/one-folder.rows")" = 'solo: ok;free: ok;' ] || fail "the rows said: $(tr '\n' ';' <"$S/one-folder.rows")"
-[ ! -s "$FAKE_MIX_CALLS" ] && [ ! -e "$S/logs-one-folder/deps.log" ] || fail 'one folder compiled the dependencies first'
+[ "$(tr '\n' ';' <"$S/one-folder.rows")" = 'deps: ok;solo: ok;free: ok;' ] || fail "the rows said: $(tr '\n' ';' <"$S/one-folder.rows")"
+[ "$(tr '\n' ';' <"$FAKE_MIX_CALLS")" = 'default|||deps.get;' ] && ! grep -q stage-deps "$STUB_CALLS" || fail "one folder compiled the dependencies first: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
 table 'handoff|a|1|60|dev|always|echo a' 'handoff|b|1|60|test_pg|always|echo b' 'handoff|c|1|60|-|always|echo c'
-FAKE_MIX_EXIT=1 lanes deps-failed -l "$S/logs-deps-failed" handoff
+FAKE_MIX_FAIL=deps.loadpaths lanes deps-failed -l "$S/logs-deps-failed" handoff
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
 [ "$(tr '\n' ';' <"$S/deps-failed.rows")" = 'deps: failed 1;a: not run 69;b: not run 69;c: ok;' ] || fail "the rows said: $(tr '\n' ';' <"$S/deps-failed.rows")"
 [ ! -e "$S/logs-deps-failed/a.log" ] && [ ! -e "$S/logs-deps-failed/b.log" ] && ! grep -q 'echo [ab]$' "$STUB_CALLS" ||
   fail "a row of a folder started after the failed compile: $(cat "$STUB_CALLS")"
-[ "$(cut -d'|' -f1-3 "$FAKE_MIX_CALLS" | tr '\n' ';')" = 'default|sqlite|dev;_build/test_pg|postgres|test;' ] ||
+[ "$(cut -d'|' -f1-3 "$FAKE_MIX_CALLS" | tr '\n' ';')" = 'default||;default|sqlite|dev;_build/test_pg|postgres|test;' ] ||
   fail "a failed compile stopped the next folder's: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
+[ ! -e "$repo/_build/dev/.cyfr-deps" ] && [ ! -e "$repo/_build/test_pg/.cyfr-deps" ] || fail 'a failed compile stamped its folder'
+FAKE_MIX_FAIL=deps.get lanes fetch-failed -l "$S/logs-fetch-failed" handoff
+[ "$(tr '\n' ';' <"$S/fetch-failed.rows")" = 'deps: failed 1;a: not run 69;b: not run 69;c: ok;' ] || fail "after a failed fetch the rows said: $(tr '\n' ';' <"$S/fetch-failed.rows")"
+[ "$(tr '\n' ';' <"$FAKE_MIX_CALLS")" = 'default|||deps.get;' ] && [ ! -e "$repo/deps/.cyfr-fetched" ] || fail "a failed fetch compiled or was stamped: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
+
+begin "a warm stage fetches nothing, compiles nothing and takes no quarter for its dependencies; a changed lock fetches again, and a fetch by hand compiles each folder again"
+table 'handoff|a|1|60|dev|always|echo a' 'handoff|b|1|60|test|always|echo b'
+lanes cold -l "$S/logs-cold" handoff
+[ "$rc" = 0 ] && [ "$(wc -l <"$FAKE_MIX_CALLS")" = 3 ] || fail "the cold stage: $rc, $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
+[ "$(cat "$repo/deps/.cyfr-fetched")" = "$(git -C "$repo" hash-object mix.lock)" ] &&
+  [ "$(cat "$repo/_build/test/.cyfr-deps")" = "$(git -C "$repo" hash-object mix.lock)" ] || fail 'the fetch or a compile left no stamp of the lock'
+WARM=1 lanes warm -l "$S/logs-warm" handoff
+[ "$rc" = 0 ] && [ "$(tr '\n' ';' <"$S/warm.rows")" = 'deps: ok;a: ok;b: ok;' ] || fail "the warm stage: $rc, $(tr '\n' ';' <"$S/warm.rows")"
+[ ! -s "$FAKE_MIX_CALLS" ] && ! grep -q stage-deps "$STUB_CALLS" || fail "a warm stage fetched or queued a compile: $(tr '\n' ';' <"$FAKE_MIX_CALLS") $(cat "$STUB_CALLS")"
+grep -qx '==> dev: warm' "$S/logs-warm/deps.log" || fail "deps.log of the warm stage: $(cat "$S/logs-warm/deps.log")"
+printf '%s\n' '%{"a" => 1}' >"$repo/mix.lock"
+WARM=1 lanes relocked -l "$S/logs-relocked" handoff
+[ "$(cut -d'|' -f4 "$FAKE_MIX_CALLS" | tr '\n' ';')" = 'deps.get;deps.loadpaths;deps.loadpaths;' ] || fail "a changed lock: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
+git -C "$repo" checkout -q -- mix.lock
+WARM=1 lanes refetched -l "$S/logs-refetched" handoff
+touch "$repo/deps/by-hand"
+WARM=1 lanes by-hand -l "$S/logs-by-hand" handoff
+[ "$(cut -d'|' -f4 "$FAKE_MIX_CALLS" | tr '\n' ';')" = 'deps.loadpaths;deps.loadpaths;' ] || fail "a fetch by hand: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
+
+begin "two stages of one worktree take turns at the dependencies: a stage waits for the worktree's lock before it fetches"
+table 'handoff|a|1|60|dev|always|echo a' 'handoff|b|1|60|test|always|echo b'
+rm -rf "$repo/deps" "$repo/_build" "$FAKE_MIX_RELEASED"
+lock=$(git -C "$repo" rev-parse --path-format=absolute --git-path cyfr-deps.lock)
+mkfifo "$S/hold"
+flock "$lock" sh -c 'touch "$1.taken"; read -r _ <"$1"; touch "$2"' sh "$S/hold" "$FAKE_MIX_RELEASED" &
+holder=$!
+until_true 10 test -e "$S/hold.taken" || fail 'the lock was not taken'
+WARM=1 lanes turns -l "$S/logs-turns" handoff &
+staged=$!
+blocked() { # a flock(1) whose parent runs stage-deps.sh waits
+  local p
+  for p in $(pgrep -x flock); do
+    grep -q stage-deps "/proc/$(ps -o ppid= -p "$p" | tr -d ' ')/cmdline" 2>/dev/null && return 0
+  done
+  return 1
+}
+until_true 20 blocked || fail 'the stage did not wait for the lock'
+echo go >"$S/hold"
+wait "$holder"
+wait "$staged"
+[ "$(head -n 1 "$EVENTS")" = 'fetch after' ] || fail "the fetch ran while another stage held the lock: $(tr '\n' ';' <"$EVENTS")"
 
 begin 'a touched test that two test rows of one folder name runs once, in the row that names it, which the other says; another folder, other options and a row of no test keep it'
 tests_rows=(
@@ -560,7 +676,7 @@ grep -q -- '^-q 1 -t 181 -- ' "$STUB_CALLS" || fail "the ticket's hold: $(cat "$
 table 'handoff|q1|1|60|dev|always|echo one #queue-deadline' 'handoff|q2|1|60|dev|always|echo two' 'handoff|free|1|60|-|always|true'
 stage queued -l "$S/logs-queued" handoff
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
-[ "$(sed -n '2,$p' "$S/queued.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'q1: not run 75;q2: not run 75;free: ok;dev ticket: not run 75;' ] ||
+[ "$(sed -n '2,$p' "$S/queued.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'deps: ok;q1: not run 75;q2: not run 75;free: ok;dev ticket: not run 75;' ] ||
   fail "the rows said: $(cat "$S/queued.out")"
 
 begin "a ticket killed outright fails the row it ran and every row after it, none of which starts, and its row's command is stopped"
@@ -575,7 +691,7 @@ chain=$(pgrep -f "stage-chain.sh .*$S/logs-killed/dev.results" | head -1)
 kill -KILL "$chain"
 status=0; wait "$runner" || status=$?
 [ "$status" = 1 ] || fail "exited $status, not 1: $(cat "$S/killed.out")"
-[ "$(sed -n '2,$p' "$S/killed.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'victim: failed 137;orphan: failed 137;free: ok;dev ticket: failed 137;' ] ||
+[ "$(sed -n '2,$p' "$S/killed.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'deps: ok;victim: failed 137;orphan: failed 137;free: ok;dev ticket: failed 137;' ] ||
   fail "the rows said: $(cat "$S/killed.out")"
 [ ! -e "$S/logs-killed/orphan.ran" ] || fail 'a row started after its ticket was killed'
 until_true 20 eval '! kill -0 "$sleeper"' || { kill -KILL "$sleeper"; fail "the killed ticket's row outlived it"; }
@@ -585,7 +701,7 @@ table 'handoff|first|1|60|dev|always|true' 'handoff|after|1|60|dev|always|true' 
 STUB_TICKET_EXIT=42 stage red-ticket -l "$S/logs-red-ticket" handoff
 [ "$rc" = 1 ] || fail "exited $rc, not 1: $(cat "$S/red-ticket.out")"
 framed red-ticket 1
-[ "$(sed -n '2,$p' "$S/red-ticket.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'first: ok;after: ok;free: ok;dev ticket: failed 42;' ] ||
+[ "$(sed -n '2,$p' "$S/red-ticket.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'deps: ok;first: ok;after: ok;free: ok;dev ticket: failed 42;' ] ||
   fail "the rows said: $(cat "$S/red-ticket.out")"
 
 begin "a chain whose stage is gone starts no more rows; the row it was running ends as it would"
@@ -628,7 +744,7 @@ for sig in INT:130 TERM:143; do
   for sleeper in $sleepers; do until_true 10 eval '! kill -0 "$sleeper"' || fail "$name: a row's command outlived the stage"; done
   [ ! -e "$S/logs-side-$name/after.ran" ] || fail "$name: a row started after the signal"
   [ "$(sed -n '2,$p' "$S/side-$name.out" | grep -v '^stage: ' | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = \
-    "slow-a: failed $want;after: failed $want;slow-b: failed $want;" ] ||
+    "deps: ok;slow-a: failed $want;after: failed $want;slow-b: failed $want;" ] ||
     fail "$name: the rows the signal stopped or kept from starting did not each read failed: $(cat "$S/side-$name.out")"
 done
 table "${toy_rows[@]}"
@@ -704,7 +820,7 @@ table "${toy_rows[@]}" "${night_rows[@]}" 'nightly|x|2|60|-|always|echo x'
 nightly early -l "$S/logs-early"
 [ "$rc" = 65 ] || fail "exited $rc, not 65"
 call_is early "$head with changes" 65 '' "$S/logs-early"
-grep -qF "a row takes 1 or 4 quarters, not '2'" "$S/logs-early/stage.err" || fail "the stage's refusal is not kept: $(cat "$S/logs-early/stage.err")"
+grep -qF "a row takes 1, 4 or - quarters, not '2'" "$S/logs-early/stage.err" || fail "the stage's refusal is not kept: $(cat "$S/logs-early/stage.err")"
 reset_tree
 
 begin 'a green night whose report does not reach GitHub exits 1 and says so'
@@ -1115,18 +1231,22 @@ grep -qx 'selected unit sqlite apps/cyfr/test/cyfr/a_test.exs' "$S/logs-unqueued
   ! grep -qE '^(tests|row unit: ok)' "$S/logs-unqueued/receipt" || fail "the unstarted row's receipt: $(cat "$S/logs-unqueued/receipt")"
 git -C "$rrepo" checkout -q -- .
 
-begin 'the real table reads whole, no save or handoff row takes more than one quarter, and every self-test a handoff row runs is one a pull-request workflow runs'
+begin 'the real table reads whole, no save or handoff row takes more than one quarter, the rows the pull request alone runs are named, and every self-test a handoff row runs is one a pull-request workflow runs'
 status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/real.out" 2>"$S/real.err" || status=$?
 [ "$status" = 0 ] || fail "the real table was refused: $(cat "$S/real.err")"
 grep -qxF 'would run janitor (1 quarter): scripts/janitor.sh' "$S/real.out" || fail "$(cat "$S/real.out")"
 # What needs the whole machine is the pull request's run's: the save and
 # handoff rows each queue for one quarter.
 whole_rows() { # TABLE: prints each save or handoff row of TABLE on more than one quarter
-  awk -F'\t' '!/^#/ && ($1 == "save" || $1 == "handoff") && $3 != "1" { print $1 "/" $2 }' "$1"
+  awk -F'\t' '!/^#/ && ($1 == "save" || $1 == "handoff") && $3 != "1" && $3 != "-" { print $1 "/" $2 }' "$1"
 }
 [ -z "$(whole_rows "$ROOT/scripts/stages.tsv")" ] || fail "a row takes the whole machine: $(whole_rows "$ROOT/scripts/stages.tsv" | tr '\n' ' ')"
-{ cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe-one\t1\t60\t-\talways\ttrue\nhandoff\tprobe\t4\t60\t-\talways\ttrue\nsave\tprobe\t4\t60\t-\talways\ttrue\nnightly\tprobe\t4\t60\t-\talways\ttrue\n'; } >"$S/stages-whole.tsv"
+{ cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe-one\t1\t60\t-\talways\ttrue\nhandoff\tprobe-none\t-\t60\t-\talways\ttrue\nhandoff\tprobe\t4\t60\t-\talways\ttrue\nsave\tprobe\t4\t60\t-\talways\ttrue\nnightly\tprobe\t4\t60\t-\talways\ttrue\n'; } >"$S/stages-whole.tsv"
 [ "$(whole_rows "$S/stages-whole.tsv" | tr '\n' ' ')" = 'handoff/probe save/probe ' ] || fail "the whole-machine rows were not caught alone: $(whole_rows "$S/stages-whole.tsv")"
+# PostgreSQL, Dialyzer, Locus alone and the load check's self-test are the
+# pull request's: no change selects them, and --reproduce runs them.
+named=$(awk -F'\t' '!/^#/ && $1 == "handoff" && $6 == "named" { print $2 }' "$ROOT/scripts/stages.tsv" | tr '\n' ' ')
+[ "$named" = 'compile-postgres tests-postgres arca-postgres dialyzer load-check-test locus-alone ' ] || fail "the named rows are: $named"
 guard() { # TABLE [WORKFLOWS]: prints each self-test a handoff row of TABLE runs that no pull-request workflow runs
   python3 -I - "${2:-$ROOT/.github/workflows}" "$1" <<'PY'
 import glob, os, re, sys, yaml
@@ -1379,7 +1499,7 @@ planted 'python3 -I tests/stage-probe.py --self-check # no image'
 [ -z "$(guard "$S/stages-probe.tsv" "$S/workflows")" ] ||
   fail "a self-check with a comment after it was not counted: $(guard "$S/stages-probe.tsv" "$S/workflows")"
 
-begin "the Go rows' paths are their workflows' pull_request paths, and each new handoff row of the real table runs for its own sources alone"
+begin "the Go rows' paths are their workflows' pull_request paths, each new handoff row of the real table runs for its own sources alone, and no change runs a named row"
 python3 -I - "$ROOT/scripts/stages.tsv" "$ROOT/.github/workflows" >"$S/go-paths.err" 2>&1 <<'PY' || fail "$(cat "$S/go-paths.err")"
 import sys, yaml
 table, workflows = sys.argv[1:3]
@@ -1396,20 +1516,20 @@ mkdir -p "$real/scripts"
 cp "$ROOT/scripts/stage.sh" "$ROOT/scripts/stages.tsv" "$real/scripts/"
 git -C "$real" add -A
 git -C "$real" -c user.name=test -c user.email=test@invalid commit -q -m 'the real table'
-new_rows='go-codex go-keeper catalysts test-wasm locus-alone'
+new_rows='go-codex go-keeper catalysts test-wasm'
 for spec in \
   'apps/codex/cmd/x.go|go-codex' \
   'seed/aqua/aqua.md|go-codex' \
-  'apps/locus/keeper/main.go|go-keeper locus-alone' \
+  'apps/locus/keeper/main.go|go-keeper' \
   'tests/fixtures/residue-canary.go|go-codex go-keeper' \
-  'apps/locus/lib/locus/x.ex|locus-alone' \
+  'apps/locus/lib/locus/x.ex|' \
   'stray.wasm|test-wasm' \
   'seed/components/catalysts/local/claude/1.4.3/src/src/chat.rs|catalysts' \
   'apps/cyfr/test/support/test_wasm/chat_fixture/chat_fixture.wasm|test-wasm' \
   'apps/prima/lib/prima/cargo_toml.ex|test-wasm' \
-  'wit/catalyst/world.wit|test-wasm locus-alone' \
-  'config/locus_runtime.exs|locus-alone' \
-  'scripts/locus-island.sh|locus-alone' \
+  'wit/catalyst/world.wit|test-wasm' \
+  'config/locus_runtime.exs|' \
+  'scripts/locus-island.sh|' \
   'scripts/test-catalysts.sh|catalysts' \
   'mix.lock|' \
   'apps/prima/lib/prima/model.ex|' \
@@ -1425,6 +1545,8 @@ for spec in \
     if grep -q "^would run $check " "$S/real-rows.out"; then got+="$check "; fi
   done
   [ "$got" = "${want:+$want }" ] || fail "a change to $path runs '${got% }', not '$want'"
+  ! grep -q '^would run \(compile-postgres\|tests-postgres\|arca-postgres\|dialyzer\|load-check-test\|locus-alone\) ' "$S/real-rows.out" ||
+    fail "a change to $path runs a named row: $(grep '^would run' "$S/real-rows.out")"
 done
 
 begin 'the catalysts script tests every crate, stops at the first that fails with its status, and removes only the target folder it made'
