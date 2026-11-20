@@ -1674,8 +1674,8 @@ defmodule Aqua.ProgramTest do
                posted(
                  noticed,
                  turn,
-                 "CYFR restarted while you were working on the last message, which you " <>
-                   "already have. Go on with it, or say where it stands."
+                 "Your work on the last message was interrupted, and you already have that " <>
+                   "message. Go on with it, or say where it stands."
                )
 
       assert step_fields(noticed) == input_fields("notice", turn.message_id, nil, "0:notice:")
@@ -2016,9 +2016,10 @@ defmodule Aqua.ProgramTest do
                  posted(
                    continued,
                    turn,
-                   "CYFR restarted and you no longer had your record of this thread, so the " <>
-                     "thread so far is above, with what your calls in this work answered; they " <>
-                     "are not run again. Go on with the last message, or say where it stands."
+                   "Your work was interrupted and you no longer had your record of this " <>
+                     "thread, so the thread so far is above, with what your calls in this work " <>
+                     "answered; they are not run again. Go on with the last message, or say " <>
+                     "where it stands."
                  ),
                  "context",
                  [
@@ -2413,6 +2414,63 @@ defmodule Aqua.ProgramTest do
       )
 
       refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "after Stop during a CYFR tool, the next turn hands the program its post and no " <>
+           "prompt about the stopped call",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "run it")
+      tasks = start_supervised!(Task.Supervisor)
+
+      loop =
+        Task.Supervisor.async_nolink(tasks, fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+
+      %{start: first} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      Scripted.hold(fake, "open", 30_000)
+      args = %{"action" => "start", "program" => row.id, "epoch" => row.epoch}
+      say(fake, row, ask(turn, "ask-1", "program", args))
+      assert_receive {:held, "open", opening}, 10_000
+
+      {:ok, open} = Tape.turn(ctx, turn.id)
+      assert {:ok, aborted} = Aqua.Loop.abort(ctx, open, "stopped")
+      assert_receive {:DOWN, _ref, :process, pid, _reason} when pid == loop.pid, 10_000
+      {:ok, _} = Tape.finish(ctx, aborted, "cancelled", %{error: "stopped"})
+      send(opening, :go)
+
+      Prima.Test.Wait.wait_until(
+        fn ->
+          Opus.Programs.running(ctx) == {:ok, []} and
+            not Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua")
+        end,
+        10_000,
+        "the stopped turn's terminal and session to end"
+      )
+
+      # The next turn resumes the session the stopped one held, and the
+      # program is handed that turn's post alone.
+      next = accept!(ctx, thread, row, "next one")
+      loop = run(ctx, next)
+      opened!(fake, row, "boot-two")
+
+      assert sent() |> Map.delete("system") ==
+               resume_of(Map.delete(first, "system"), %{"session" => @session})
+
+      say(fake, row, %{"t" => "started", "session" => @session, "fresh" => false, "held" => []})
+      assert %{"t" => "work"} = work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+
+      handed = sent()
+      [post] = inputs(ctx, next)
+      assert handed == posted(post, next, "next one")
+      say(fake, row, accepted(post))
+      say(fake, row, idle(next, [post.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_receive {:session, "send", _wire, _fields}, 500
     end
 
     test "a program turn has no deadline: one whose active time is past its turn's keeps running",
@@ -3177,14 +3235,14 @@ defmodule Aqua.ProgramTest do
   # The recovery prompt that continues a post the transcript holds.
   defp post_notice,
     do:
-      "CYFR restarted while you were working on the last message, which you already have. " <>
+      "Your work on the last message was interrupted, and you already have that message. " <>
         "Go on with it, or say where it stands."
 
   # The recovery prompt that carries an answer the session no longer asks for.
   defp answer_notice(name, ask, content),
     do:
-      "CYFR restarted while your call #{name} (#{ask}) ran, so its answer comes as this " <>
-        "message instead. It answered: " <> content
+      "Your work was interrupted before your call #{name} (#{ask}) was answered, so its " <>
+        "answer comes as this message instead. It answered: " <> content
 
   defp said(turn, message, text),
     do: %{"t" => "said", "gen" => 0, "work" => turn.id, "message" => message, "text" => text}

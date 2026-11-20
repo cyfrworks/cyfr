@@ -1137,22 +1137,26 @@ defmodule Aqua.Program do
 
   defp renotice(state, %{row: row_id}), do: notice(state, "answer", row_id)
 
+  # Each says what the work is known to have reached, never why it was
+  # interrupted: the driver's end, a lost line and CYFR's restart read
+  # alike here.
   defp notice_text(_work, "post", _row),
     do:
-      "CYFR restarted while you were working on the last message, which you already have. " <>
+      "Your work on the last message was interrupted, and you already have that message. " <>
         "Go on with it, or say where it stands."
 
   defp notice_text(_work, "fresh", _row),
     do:
-      "CYFR restarted and you no longer had your record of this thread, so the thread so " <>
-        "far is above, with what your calls in this work answered; they are not run again. " <>
-        "Go on with the last message, or say where it stands."
+      "Your work was interrupted and you no longer had your record of this thread, so the " <>
+        "thread so far is above, with what your calls in this work answered; they are not " <>
+        "run again. Go on with the last message, or say where it stands."
 
   defp notice_text(_work, _answer, row) do
     payload = Tape.payload(row)
 
-    "CYFR restarted while your call #{payload["name"]} (#{payload["tool_call_id"]}) ran, so " <>
-      "its answer comes as this message instead. It answered" <>
+    "Your work was interrupted before your call #{payload["name"]} " <>
+      "(#{payload["tool_call_id"]}) was answered, so its answer comes as this message " <>
+      "instead. It answered" <>
       if(payload["is_error"], do: " with an error: ", else: ": ") <>
       (row.content || "")
   end
