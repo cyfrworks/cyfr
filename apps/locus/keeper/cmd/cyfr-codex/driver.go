@@ -210,11 +210,7 @@ func (d *driver) post(id, work string, members map[string]json.RawMessage) error
 	if raw, ok := members["context"]; ok {
 		_ = json.Unmarshal(raw, &context)
 	}
-	input, err := inputItems(append(context, content...))
-	if err != nil {
-		return d.c.Refuse(id, fmt.Sprintf("OpenAI Codex takes text and images; %s is not written to it.", err.Error()))
-	}
-	w := &waiting{id: id, kind: "post", work: work, uuid: brainwire.PostUUID(id), input: input}
+	w := &waiting{id: id, kind: "post", work: work, uuid: brainwire.PostUUID(id), input: inputItems(append(context, content...))}
 	d.waiting = w
 	if !d.signedIn {
 		// Codex was signed out when it started: the sign-in is read again,

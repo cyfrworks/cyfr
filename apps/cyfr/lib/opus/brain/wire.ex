@@ -177,6 +177,10 @@ defmodule Opus.Brain.Wire do
   @spec native() :: [String.t()]
   def native, do: @native
 
+  @doc "Whether `name` is as long as a tool's name may be: 1 to 128 bytes."
+  @spec tool_name?(term()) :: boolean()
+  def tool_name?(name), do: is_binary(name) and byte_size(name) in @tool_name_bytes
+
   @doc "Whether `event` is one of the program's own lines (`native/0`)."
   @spec native?(message()) :: boolean()
   def native?(%{"t" => t}), do: t in @native
@@ -280,9 +284,7 @@ defmodule Opus.Brain.Wire do
 
   defp tool?(%{"name" => name, "description" => description, "parameters" => parameters} = tool)
        when map_size(tool) == 3,
-       do:
-         is_binary(name) and byte_size(name) in @tool_name_bytes and is_binary(description) and
-           is_map(parameters)
+       do: tool_name?(name) and is_binary(description) and is_map(parameters)
 
   defp tool?(_tool), do: false
 

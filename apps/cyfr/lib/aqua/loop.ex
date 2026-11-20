@@ -125,6 +125,10 @@ defmodule Aqua.Loop do
       steps: 0,
       usage: %{input: 0, output: 0},
       activity: [],
+      # The places in `activity` of a program brain's own tools still shown
+      # running (`own_activity/3`), settled when its native turn or its
+      # session ends (`settle_own/1`).
+      own: [],
       since: nil,
       active_ms: 0,
       observed: nil,
@@ -818,40 +822,45 @@ defmodule Aqua.Loop do
 
   # The attendant is watched while the turn waits on it: one that ends
   # ends the turn's wait, as the program's job is over with it, and says
-  # so unless it was closed on purpose.
+  # so unless it was closed on purpose. Meanwhile what it tells of the
+  # program's own work is taken (`native/2`), as it is while a call runs.
   defp attended(%State{} = state, start) do
+    case Aqua.Program.watch(program_work(state, start.id), self()) do
+      {:ok, attendant} -> attending(state, Process.monitor(attendant))
+      {:error, sentence} -> {:halt, {:failed, sentence}, state}
+    end
+  end
+
+  defp attending(%State{} = state, monitor) do
     turn_id = state.turn.id
 
-    case Aqua.Program.watch(program_work(state, start.id), self()) do
-      {:ok, attendant} ->
-        monitor = Process.monitor(attendant)
+    receive do
+      {:page_call, ^turn_id} ->
+        Process.demonitor(monitor, [:flush])
+        {:continue, state}
 
-        receive do
-          {:page_call, ^turn_id} ->
-            Process.demonitor(monitor, [:flush])
-            {:continue, state}
+      {Aqua.Program, ^turn_id, {:native, native}} ->
+        state |> native(native) |> attending(monitor)
 
-          {Aqua.Program, ^turn_id, :idle} ->
-            Process.demonitor(monitor, [:flush])
-            {:halt, :completed, state}
+      # The attendant told the native turn's end first (`native/2`), which
+      # settled the program's own tools.
+      {Aqua.Program, ^turn_id, :idle} ->
+        Process.demonitor(monitor, [:flush])
+        {:halt, :completed, state}
 
-          {Aqua.Program, ^turn_id, {:ended, {:failed, sentence}}} ->
-            Process.demonitor(monitor, [:flush])
-            _ = system_row(state, sentence)
-            {:halt, {:failed, sentence}, state}
+      {Aqua.Program, ^turn_id, {:ended, {:failed, sentence}}} ->
+        Process.demonitor(monitor, [:flush])
+        _ = system_row(state, sentence)
+        {:halt, {:failed, sentence}, state}
 
-          # Closed on purpose: Stop closes the session before it stops the
-          # turn, which says nothing more in the thread.
-          {:DOWN, ^monitor, :process, _pid, :normal} ->
-            {:halt, :cancelled, state}
+      # Closed on purpose: Stop closes the session before it stops the
+      # turn, which says nothing more in the thread.
+      {:DOWN, ^monitor, :process, _pid, :normal} ->
+        {:halt, :cancelled, state}
 
-          {:DOWN, ^monitor, :process, _pid, _reason} ->
-            sentence = "#{program_title(state)} stopped before it finished."
-            _ = system_row(state, sentence)
-            {:halt, {:failed, sentence}, state}
-        end
-
-      {:error, sentence} ->
+      {:DOWN, ^monitor, :process, _pid, _reason} ->
+        sentence = "#{program_title(state)} stopped before it finished."
+        _ = system_row(state, sentence)
         {:halt, {:failed, sentence}, state}
     end
   end
@@ -1653,9 +1662,10 @@ defmodule Aqua.Loop do
 
   defp run_group(%State{} = state, {:exclusive, item}) do
     state = activity(state, [item], :running)
+    {answer, state} = worker(state, fn -> run_one(state, item) end)
 
     outcome =
-      case worker(fn -> run_one(state, item) end) do
+      case answer do
         {:ok, {:uncertain, step, reason}} -> {:uncertain, step, reason}
         {:ok, _} -> :ok
         {:exit, reason} -> settle_dead(state, item, reason)
@@ -1672,7 +1682,7 @@ defmodule Aqua.Loop do
   defp run_group(%State{} = state, {:concurrent, items}) do
     state = activity(state, items, :running)
     cap = max(state.spec.authority.budget.cap, 1)
-    outcome = run_concurrent(state, items, min(length(items), cap))
+    {outcome, state} = run_concurrent(state, items, min(length(items), cap))
     state = activity(state, items, :done)
 
     case outcome do
@@ -1682,7 +1692,7 @@ defmodule Aqua.Loop do
   end
 
   # The reads of a group run beside each other, at most `cap` at once,
-  # each in a worker of its own, waited for as `worker/1` waits: every
+  # each in a worker of its own, waited for as `worker/2` waits: every
   # answer and death is attributed to its step as it arrives. The first
   # unknown outcome stops
   # the group — nothing more is started, and what still runs is handed
@@ -1691,7 +1701,7 @@ defmodule Aqua.Loop do
     collect(state, items, %{}, cap)
   end
 
-  defp collect(_state, [], running, _cap) when map_size(running) == 0, do: :ok
+  defp collect(state, [], running, _cap) when map_size(running) == 0, do: {:ok, state}
 
   defp collect(state, pending, running, cap) when map_size(running) < cap and pending != [] do
     [item | rest] = pending
@@ -1700,6 +1710,8 @@ defmodule Aqua.Loop do
   end
 
   defp collect(state, pending, running, cap) do
+    turn_id = state.turn.id
+
     receive do
       {ref, result} when is_map_key(running, ref) ->
         Process.demonitor(ref, [:flush])
@@ -1707,7 +1719,7 @@ defmodule Aqua.Loop do
 
         case result do
           {:uncertain, step, reason} ->
-            {:uncertain, step, reason, Map.values(running) ++ pending_items(pending)}
+            {{:uncertain, step, reason, Map.values(running) ++ pending_items(pending)}, state}
 
           _ ->
             collect(state, pending, running, cap)
@@ -1719,11 +1731,14 @@ defmodule Aqua.Loop do
 
         case settle_dead(state, item, reason) do
           {:uncertain, step, why} ->
-            {:uncertain, step, why, Map.values(running) ++ pending_items(pending)}
+            {{:uncertain, step, why, Map.values(running) ++ pending_items(pending)}, state}
 
           _ ->
             collect(state, pending, running, cap)
         end
+
+      {Aqua.Program, ^turn_id, {:native, native}} ->
+        state |> native(native) |> collect(pending, running, cap)
     end
   end
 
@@ -2186,7 +2201,9 @@ defmodule Aqua.Loop do
       {:ok, step} ->
         case pause_root(state, :launch, step.id) do
           {:ok, state} ->
-            case worker(fn -> Aqua.Launch.run(ctx(state), step, decided) end) do
+            {answer, state} = worker(state, fn -> Aqua.Launch.run(ctx(state), step, decided) end)
+
+            case answer do
               {:ok, {:ok, %{execution_id: id, result: result}}} ->
                 state |> close_launch(step, unwrap(call), {:ok, id, result}) |> resumed()
 
@@ -3129,26 +3146,77 @@ defmodule Aqua.Loop do
             end)
 
         :done ->
-          Enum.reduce(named, state.activity, &mark_done(&2, &1))
+          Enum.reduce(named, state.activity, &(&2 |> mark_done(&1, cyfr?(state)) |> elem(0)))
       end
 
     announce(state, :tool_activity, activity)
     %{state | activity: activity}
   end
 
-  # The newest running entry for `tool` is done; none running adds a done one.
-  defp mark_done(activity, {tool, sentence}) do
-    index =
+  # What a program brain's attendant tells of the open work while the
+  # turn waits on it or on a call (`Aqua.Program`): its own tools as they
+  # start and end, and the native turn's end and the session's, after
+  # either of which none of them runs.
+  defp native(%State{} = state, {:own, name, phase}), do: own_activity(state, name, phase)
+  defp native(%State{} = state, :idle), do: settle_own(state)
+  defp native(%State{} = state, :session_ended), do: settle_own(state)
+
+  # A program brain's own tool, by the name its attendant gives, running
+  # from its start to its end: an entry of the same list, worded as a tool
+  # no step names, since none is kept of it (`Aqua.Program`).
+  defp own_activity(%State{} = state, name, phase) do
+    sentence = Aqua.Steps.sentence(nil, nil, nil)
+
+    {activity, own} =
+      case phase do
+        "start" ->
+          {state.activity ++ [%{tool: name, sentence: sentence, status: :running, preview: nil}],
+           state.own ++ [length(state.activity)]}
+
+        "end" ->
+          {activity, place} = mark_done(state.activity, {name, sentence}, &(&1 in state.own))
+          {activity, List.delete(state.own, place)}
+      end
+
+    announce(state, :tool_activity, activity)
+    %{state | activity: activity, own: own}
+  end
+
+  # The program brain's native turn or its session ended: none of its own
+  # tools runs any more, and each still shown running is done.
+  defp settle_own(%State{own: []} = state), do: state
+
+  defp settle_own(%State{own: own} = state) do
+    activity =
+      Enum.reduce(own, state.activity, fn place, activity ->
+        List.update_at(activity, place, &%{&1 | status: :done})
+      end)
+
+    announce(state, :tool_activity, activity)
+    %{state | activity: activity, own: []}
+  end
+
+  # The places of the list that are CYFR's calls, not a program's own tools.
+  defp cyfr?(%State{own: own}), do: &(&1 not in own)
+
+  # The newest running entry for `tool` at a place `among?` takes is done;
+  # none running adds a done one. Answers the list and the place marked.
+  defp mark_done(activity, {tool, sentence}, among?) do
+    place =
       activity
       |> Enum.with_index()
       |> Enum.reverse()
       |> Enum.find_value(fn {entry, i} ->
-        entry.tool == tool and entry.status == :running and i
+        entry.tool == tool and entry.status == :running and among?.(i) and i
       end)
 
-    case index do
-      nil -> activity ++ [%{tool: tool, sentence: sentence, status: :done, preview: nil}]
-      i -> List.update_at(activity, i, &%{&1 | status: :done})
+    case place do
+      nil ->
+        {activity ++ [%{tool: tool, sentence: sentence, status: :done, preview: nil}],
+         length(activity)}
+
+      i ->
+        {List.update_at(activity, i, &%{&1 | status: :done}), i}
     end
   end
 
@@ -3183,6 +3251,27 @@ defmodule Aqua.Loop do
   # holder's death stops its workers (`Aqua.Loop.Worker`).
   defp worker(fun) do
     fun |> Aqua.Loop.Worker.async() |> Aqua.Loop.Worker.yield(:infinity)
+  end
+
+  # `worker/1` for a call the turn's page round runs: what a program
+  # brain's attendant tells of the open work meanwhile (`native/2`) is
+  # taken while the call runs, and the state answered goes on with it.
+  defp worker(%State{} = state, fun), do: awaiting(state, Aqua.Loop.Worker.async(fun))
+
+  defp awaiting(%State{} = state, %Aqua.Loop.Worker.Handle{ref: ref} = task) do
+    turn_id = state.turn.id
+
+    receive do
+      {^ref, result} ->
+        Process.demonitor(ref, [:flush])
+        {{:ok, result}, state}
+
+      {:DOWN, ^ref, :process, _pid, reason} ->
+        {{:exit, reason}, state}
+
+      {Aqua.Program, ^turn_id, {:native, native}} ->
+        state |> native(native) |> awaiting(task)
+    end
   end
 
   # The request the store keeps: the one sent, less the room excerpt the

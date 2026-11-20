@@ -31,6 +31,13 @@ defmodule Aqua.Loop.Stream do
   (`abandon/2`) for a step that streamed but lands no text row — a failed
   or retried request, or an answer of tool calls alone.
 
+  A program used as a brain streams through its attendant
+  (`Aqua.Program`), which announces each `text` event of the open work as
+  a delta (`announce/4`) whose step is the program's native message: its
+  `said` row, whose payload names that message as `brain_message`, settles
+  it as a step's text row does, and the attendant abandons a message that
+  will land no row.
+
   **Keeping.** A viewer holds a `t()` for the running turn: `advance/2` for
   each fence announced, `add/2` for each delta, `landed/2` for each row,
   `abandoned/2` for each abandoned step, `texts/1` to show. It keeps one
@@ -79,6 +86,11 @@ defmodule Aqua.Loop.Stream do
   @spec announce_fence(Context.t(), Tape.turn()) :: :ok
   def announce_fence(%Context{} = ctx, turn),
     do: Tape.announce(ctx, turn.thread_id, :turn_fence, %{turn_id: turn.id, fence: turn.fence})
+
+  @doc "Announce `text`, streamed at `seq` for the step `attrs` names."
+  @spec announce(Context.t(), attrs(), {non_neg_integer(), non_neg_integer()}, String.t()) :: :ok
+  def announce(%Context{} = ctx, attrs, seq, text),
+    do: Tape.announce(ctx, attrs.thread_id, :delta, delta(attrs, seq, text))
 
   @doc "Announce that the step `attrs` names lands no text row: what it streamed is withdrawn."
   @spec abandon(Context.t(), attrs()) :: :ok
@@ -197,10 +209,16 @@ defmodule Aqua.Loop.Stream do
 
   def add(%__MODULE__{} = kept, _stale), do: kept
 
-  @doc "What is kept once `row` landed: a step's text row replaces the answer that streamed for it."
+  @doc """
+  What is kept once `row` landed: a step's text row, or a program's
+  `said` row by its native message, replaces the answer that streamed for
+  it.
+  """
   @spec landed(t(), Aqua.Tape.row()) :: t()
   def landed(%__MODULE__{} = kept, %{kind: "text"} = row) do
-    case Tape.payload(row)["step_id"] do
+    payload = Tape.payload(row)
+
+    case payload["step_id"] || payload["brain_message"] do
       step_id when is_binary(step_id) -> settle(kept, step_id)
       _ -> kept
     end
@@ -249,7 +267,7 @@ defmodule Aqua.Loop.Stream do
       when {durable, n} > last ->
         case data do
           %{"type" => "text.delta", "text" => text} when is_binary(text) and text != "" ->
-            Tape.announce(ctx, attrs.thread_id, :delta, delta(attrs, {durable, n}, text))
+            announce(ctx, attrs, {durable, n}, text)
 
           _ ->
             :ok

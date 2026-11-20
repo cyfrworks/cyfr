@@ -781,7 +781,9 @@ echo 'ok: what the gate leaves out'
 # ci_shards WORKFLOW: the gate's whole-suite steps stand for test.yml's
 # Run tests (the run map above) only while its shards are the whole split:
 # the test job's matrix is both adapters by shards 1 to N, and the step
-# runs shard matrix.shard of that N.
+# runs shard matrix.shard of that N. The dev compile (compile_sqlite_dev
+# and compile_pg_dev in the run map) stands for one of each adapter, so its
+# condition is one shard the matrix has, on both adapters alike.
 ci_shards() {
   python3 -I - "$1" <<'PY'
 import re, sys, yaml
@@ -798,6 +800,13 @@ if matrix.get("db") != ["sqlite", "postgres"]:
     errors.append(f"the adapters are {matrix.get('db')}, not sqlite and postgres")
 if sorted(matrix) != ["db", "shard"]:
     errors.append(f"the matrix has {sorted(matrix)}, not db and shard alone")
+dev = next(s for s in job["steps"] if s.get("name") == "Compile the dev target with warnings as errors")
+cond = str(dev.get("if", "")).strip()
+m = re.fullmatch(r"\$\{\{(.*)\}\}", cond, re.S)
+cond = (m.group(1) if m else cond).strip()
+m = re.fullmatch(r"matrix\.shard == ([1-9][0-9]*)", cond)
+if m is None or int(m[1]) not in matrix.get("shard", []):
+    errors.append(f"the dev compile runs under {cond or 'no condition'!r}, not on one shard of each adapter")
 for e in errors:
     print(e, file=sys.stderr)
 sys.exit(1 if errors else 0)
@@ -824,7 +833,20 @@ plant_shards count '--shard "${{ matrix.shard }}/4"' '--shard "${{ matrix.shard 
 ! ci_shards "$scratch/shards/count.yml" 2>"$scratch/shards/count.err" || fail 'a step running another count of shards passed'
 has_line '^the shards are \[1, 2, 3, 4\], not 1 to 5$' "$scratch/shards/count.err" ||
   fail "another count of shards failed without its reason: $(cat "$scratch/shards/count.err")"
-echo "ok: CI's shards are the whole split on both adapters"
+# Planted: the dev compile on every shard, on a shard the matrix lacks, and
+# on one adapter alone, each fail it with the reason.
+dev_refused() {
+  ! ci_shards "$scratch/shards/$1.yml" 2>"$scratch/shards/$1.err" || fail "a dev compile under $2 passed"
+  has_line "^the dev compile runs under $2, not on one shard of each adapter$" "$scratch/shards/$1.err" ||
+    fail "a dev compile under $2 failed without its reason: $(cat "$scratch/shards/$1.err")"
+}
+plant_shards dev-every $'        if: matrix.shard == 1\n' ''
+dev_refused dev-every "'no condition'"
+plant_shards dev-absent '        if: matrix.shard == 1' '        if: matrix.shard == 5'
+dev_refused dev-absent "'matrix.shard == 5'"
+plant_shards dev-one-adapter '        if: matrix.shard == 1' "        if: matrix.shard == 1 && matrix.db == 'sqlite'"
+dev_refused dev-one-adapter "\"matrix.shard == 1 && matrix.db == 'sqlite'\""
+echo "ok: CI's shards are the whole split on both adapters, and the dev compile runs on one shard of each"
 
 # --- the image tags the close runs under the gate's names ------------------------
 # image_table GATE ROOT TABLE: every job the gate runs under
