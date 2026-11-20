@@ -2,8 +2,12 @@
 # Copyright 2026 CYFR Works Inc.
 
 # The nightly: the Test workflow on main's head under its nightly input, so
-# each test shard runs the suite twice and keeps both runs; then the reports
-# job lays the runs out as scripts/lib/nightly.py reads them, writes the
+# each test shard runs the suite twice and keeps both runs, beside the other
+# workflows a release tag's run calls (release.yml), which a pull request
+# and a push to main run only when their paths change: a break outside
+# those paths shows here the next night, not first at a tag that then
+# publishes nothing. Then the reports job lays the runs out as
+# scripts/lib/nightly.py reads them, writes the
 # flake list and the regenerated partition weights into its summary and its
 # artifacts, and, when the weights differ from the tracked table, leaves
 # them on the branch nightly/weights. A pull request opened with this run's
@@ -26,6 +30,26 @@ jobs:
     uses: ./.github/workflows/test.yml
     with:
       nightly: true
+
+  dialyzer:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/dialyzer.yml
+
+  codex-ci:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/codex-ci.yml
+
+  keeper-ci:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/keeper-ci.yml
+
+  license-lint:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/license-lint.yml
+
+  security:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/security.yml
 
   reports:
     name: The flake list and the partition weights

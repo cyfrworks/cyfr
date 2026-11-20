@@ -1653,27 +1653,25 @@ HELPER_GREEN_RUNS = json.dumps({"check_runs": [{"status": "completed", "conclusi
 HELPER_GREEN_TEST = json.dumps({"workflow_runs": [
     {"path": ".github/workflows/test.yml", "status": "completed", "conclusion": "success", "created_at": "2026-11-04T00:00:00Z"}
 ]})
-# The audits the proof is followed by pass; the release stage, as --gate
-# runs it, passes once it has moved HEAD by a commit of its own, as
-# another agent in the checkout could during the stage.
+# The audits the proof is followed by pass. The movers stand in for them,
+# as the step between the proof and the tag: each passes once it has moved
+# HEAD by a commit of its own, as another agent in the checkout could while
+# the audits run.
 HELPER_AUDIT = "#!/usr/bin/env bash\nexit 0\n"
-HELPER_MOVING_STAGE = """#!/usr/bin/env bash
-rm -rf "$2"
+HELPER_MOVING_AUDIT = """#!/usr/bin/env bash
 echo moved > moved.txt
 git add moved.txt
 git commit -qm 'another agent'
 """
-# A release stage during which another merge lands on origin's main,
-# HEAD left where it was.
-HELPER_MAIN_MOVING_STAGE = """#!/usr/bin/env bash
-rm -rf "$2"
+# Audits during which another merge lands on origin's main, HEAD left where
+# it was.
+HELPER_MAIN_MOVING_AUDIT = """#!/usr/bin/env bash
 merged=$(git commit-tree "HEAD^{tree}" -p HEAD -m 'another merge')
 git push -q origin "$merged:refs/heads/main"
 """
-# A release stage during which another agent commits the version bump
-# itself, every mix.exs then declaring the version asked for.
-HELPER_BUMPING_STAGE = """#!/usr/bin/env bash
-rm -rf "$2"
+# Audits during which another agent commits the version bump itself, every
+# mix.exs then declaring the version asked for.
+HELPER_BUMPING_AUDIT = """#!/usr/bin/env bash
 sed -i 's/version: "[^"]*"/version: "0.1.0"/' mix.exs apps/*/mix.exs
 git commit -qam 'another agent'
 """
@@ -1724,23 +1722,22 @@ def helper_proof_failure(script):
 
 
 def helper_bump_failure(script):
-    """The tag names the proved commit: a HEAD moved during the --gate
-    stage is refused, nothing tagged and no bump committed, whether the
-    proved commit declares the version already, needs the bump, or the
-    move is another agent's bump to that version; a tree with changes is
-    refused under --gate even when the prompt is answered; a bump commit
+    """The tag names the proved commit: a HEAD moved after the proof, while
+    the audits run, is refused, nothing tagged and no bump committed,
+    whether the proved commit declares the version already, needs the bump,
+    or the move is another agent's bump to that version; a bump commit
     that is not the proved commit plus version lines declaring the version
     (a hook adding another line, writing another version or changing a
     file's mode, or another commit landing under it) is not tagged; a bump
     of the files still behind, the root already at the version, is
     tagged."""
     for declared, version, mover in (
-        ("0.6.0-alpha.1", "0.6.0-alpha.1", HELPER_MOVING_STAGE),
-        (HELPER_BASE, "0.1.0", HELPER_MOVING_STAGE),
-        ("0.0.1", "0.1.0", HELPER_BUMPING_STAGE),
+        ("0.6.0-alpha.1", "0.6.0-alpha.1", HELPER_MOVING_AUDIT),
+        (HELPER_BASE, "0.1.0", HELPER_MOVING_AUDIT),
+        ("0.0.1", "0.1.0", HELPER_BUMPING_AUDIT),
     ):
-        repo = helper_repo(script, declared, {"stage.sh": mover})
-        status, output = run_helper(repo, version, args=["--gate"])
+        repo = helper_repo(script, declared, {"dependency-audit.sh": mover})
+        status, output = run_helper(repo, version)
         tags = helper_git(repo, "tag", "-l")
         moved = helper_git(repo, "log", "-1", "--format=%s")
         if status == 0 or tags or moved != "another agent" or "HEAD moved from the proved" not in output:
@@ -1748,12 +1745,6 @@ def helper_bump_failure(script):
                 f"release.sh asked for {version} on a commit declaring {declared} went on after HEAD moved during the proof "
                 f"(exit {status}, tags {tags!r}, last commit {moved!r}): {output.strip()[-300:]}"
             )
-    repo = helper_repo(script, "0.6.0-alpha.1")
-    with open(os.path.join(repo, "notes.txt"), "w") as f:
-        f.write("not committed\n")
-    status, output = run_helper(repo, "0.6.0-alpha.1", "y\n", args=["--gate"])
-    if status == 0 or helper_git(repo, "tag", "-l") or "uncommitted changes the tag would not carry" not in output:
-        return f"release.sh --gate let a tree with changes through (exit {status}): {output.strip()[-300:]}"
     repo = helper_repo(script, HELPER_BASE)
     hook = os.path.join(repo, ".git", "hooks", "pre-commit")
     with open(hook, "w") as f:
@@ -1815,8 +1806,8 @@ def helper_push_failure(script):
     refuses the tag takes neither, the push being atomic, and it fails
     without saying Pushed!. A HEAD that is not main's head on origin
     (behind it, ahead of it, or with no origin to read) is refused with
-    nothing made, with or without --push, and under --gate before the
-    release stage runs; a main that moves during the --gate proof is
+    nothing made, with or without --push, before its proof is read or its
+    audits run; a main that moves after the proof, while the audits run, is
     refused before the commit."""
     for declared, version in ((HELPER_BASE, "0.1.0"), ("0.6.0-alpha.1", "0.6.0-alpha.1")):
         repo = helper_repo(script, declared)
@@ -1857,15 +1848,14 @@ def helper_push_failure(script):
     def no_origin(repo):
         helper_git(repo, "remote", "remove", "origin")
 
-    ran = os.path.join(scratch(), "helper-stage-ran")
-    recording_stage = f'#!/usr/bin/env bash\nrm -rf "$2"\ntouch "{ran}"\n'
+    ran = os.path.join(scratch(), "helper-audit-ran")
+    recording_audit = f'#!/usr/bin/env bash\ntouch "{ran}"\n'
     for name, move, args, said in (
         ("behind main", behind, ["--push"], "is not main's head on origin"),
         ("ahead of main", ahead, [], "is not main's head on origin"),
-        ("ahead of main under --gate", ahead, ["--gate"], "is not main's head on origin"),
         ("with no origin", no_origin, ["--push"], "origin's main could not be read"),
     ):
-        repo = helper_repo(script, HELPER_BASE, {"stage.sh": recording_stage})
+        repo = helper_repo(script, HELPER_BASE, {"dependency-audit.sh": recording_audit})
         move(repo)
         before = helper_state(repo)
         if os.path.exists(ran):
@@ -1874,13 +1864,13 @@ def helper_push_failure(script):
         if status == 0 or helper_state(repo) != before or said not in output or os.path.exists(ran):
             return (
                 f"release.sh on a HEAD {name} ({' '.join(args) or 'no flags'}) exits {status}, changed the repository "
-                f"{helper_state(repo) != before} or ran the release stage {os.path.exists(ran)}: {output.strip()[-300:]}"
+                f"{helper_state(repo) != before} or ran the audits {os.path.exists(ran)}: {output.strip()[-300:]}"
             )
-    repo = helper_repo(script, HELPER_BASE, {"stage.sh": HELPER_MAIN_MOVING_STAGE})
+    repo = helper_repo(script, HELPER_BASE, {"dependency-audit.sh": HELPER_MAIN_MOVING_AUDIT})
     before = helper_state(repo)
-    status, output = run_helper(repo, "0.1.0", args=["--gate"])
+    status, output = run_helper(repo, "0.1.0")
     if status == 0 or helper_state(repo) != before or "Main moved during the proof" not in output:
-        return f"release.sh went on after main moved during the --gate proof (exit {status}): {output.strip()[-300:]}"
+        return f"release.sh went on after main moved after the proof (exit {status}): {output.strip()[-300:]}"
     return None
 
 
@@ -1898,10 +1888,6 @@ RELEASE_SH_MUTANTS = [
     ),
     ("the Test workflow's run unread", lambda t: t.replace('if [ "$TEST_RUN" != "completed success" ]; then', "if false; then", 1)),
     ("a bump on a moved HEAD", lambda t: t.replace('if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then', "if false; then", 1)),
-    (
-        "a tree with changes let through under --gate",
-        lambda t: t.replace('if [ -n "$GATE" ] && [ -n "$(git status --porcelain)" ]; then', "if false; then", 1),
-    ),
     (
         "the bump's lines unread",
         lambda t: t.replace("! grep -qvE '^[+-][[:space:]]*version: \"[^\"]*\",?[[:space:]]*$' <<< \"$lines\"", ":", 1),

@@ -23,7 +23,7 @@ quarters and refuses with 64 anywhere else:
 
 ```bash
 tests/load-check/run.sh -n                      # the plan and its time, anywhere
-scripts/heavy-check.sh -t 21600 -- tests/load-check/run.sh -s suite-sqlite,suite-postgres,gate,go-race
+scripts/heavy-check.sh -t 21600 -- tests/load-check/run.sh -s suite-sqlite,suite-postgres,go-race
 scripts/heavy-check.sh -t 86400 -- tests/load-check/run.sh -r 3
 ```
 
@@ -39,8 +39,8 @@ scripts/heavy-check.sh -t 86400 -- tests/load-check/run.sh -r 3
   of its own from `fresh-database.sh`), and the real-tailnet run
   `TAILNET_REAL_AUTH_KEY_FILE` and what `tests/tailnet-real/run.sh` names.
   A subject that exits 69, or 77 as the proxy HSTS proof does, is skipped
-  with its own words: the install proof without its prepared image, the
-  gate without cargo-component. A skipped subject never counts as passed;
+  with its own words: the install proof without its prepared image. A
+  skipped subject never counts as passed;
   a run with a skip and no failure exits 69.
 - The busy load needs the PostgreSQL server the test runs use and a
   Docker daemon; without either the check refuses with 69 before any work.
@@ -56,7 +56,7 @@ Each round runs, per subject, in this order:
 |---|---|---|
 | busy | its quarters | the busy load on every other quarter |
 | pair | copy a on 1 to q, copy b on q+1 to 2q, from another worktree | each other |
-| whole (the suites, the gate, `go test -race`) | all four quarters | nothing |
+| whole (the suites, `go test -race`) | all four quarters | nothing |
 | alone, after a failed busy or pair run | its quarters | nothing |
 
 The alone run tells a failure the load caused (FAILS BUSY) from a subject
@@ -71,9 +71,8 @@ void, not passed.
 A run's time is from its leader's start to its exit. Before a subject's
 first run, the worktrees that run it are warmed, once each, with what that
 first run would otherwise build: the suites' test build, go's race build,
-and the release the release proofs start. The gate forces its own builds
-and a harness self-test builds what it tests inside each run, so neither
-is warmed. A warm row that fails in a worktree leaves every subject that
+and the release the release proofs start. A harness self-test builds
+what it tests inside each run, so it is not warmed. A warm row that fails in a worktree leaves every subject that
 names it unmeasured: one void row names the warm row, and the run exits
 1. A warm's scratch directory is named under the run's prefix, so the
 run's clean-up removes it however the warm ended.
@@ -84,8 +83,8 @@ The quarters are the host's whole cores, a core being one
 `thread_siblings_list`, cut in order into four: on this host processors
 `0,1,8,9`, `2,3,10,11`, `4,5,12,13` and `6,7,14,15`. Every command runs
 under `taskset -c`, so `nproc`, the Erlang runtime and cargo see only its
-processors; the suites and the gate pick their partitions by the gate's
-rule for that count (the self-test holds the two rules together).
+processors; the suites run in eight partitions on sixteen processors or
+more and in four on fewer (`LOAD_CHECK_PARTS`).
 
 Each run is handed its processors as `HEAVY_CHECK_CPUS`. The browser
 harness (`tests/browser/harness.sh`: the Playwright run and its library's
@@ -111,22 +110,18 @@ this check does not hold.
 `subjects.tsv` is the one list, each subject by its own entry point as the
 workflow step or its README runs it. Its `expect` column is the median
 time of the passing runs this host recorded before the quarters, doubled for
-the four subjects that also run on the whole machine.
+the three subjects that also run on the whole machine.
 
 | Subjects | Quarters | Also | Warmed |
 |---|---|---|---|
 | `suite-sqlite`, `suite-postgres` | 2 | whole | the adapter's test build |
-| `gate` | 2 | pair, whole | nothing |
 | `go-race` | 2 | pair, whole | go's race build |
-| `commit-gate-test`, `heavy-check-test`, `contain-test`, `stage-test`, `test-partitioned-test`, `partition-env-test`, `release-boot-test`, `access-test`, `ci-publish-test`, `install-verify-test`: every harness self-test a pull-request workflow runs and no handoff row does | 2 | pair | nothing |
+| `heavy-check-test`, `contain-test`, `stage-test`, `test-partitioned-test`, `partition-env-test`, `release-boot-test`, `access-test`, `ci-publish-test`, `install-verify-test`: every harness self-test a pull-request workflow runs and no handoff row does | 2 | pair | nothing |
 | `handle`, `join`, `pairing`, `identity`, `approval`, `file-offer`, `share`, `grant`, `hostile-frame`, `multi-home-smoke`, `tincture`, `frame-facts`, `release-boot-sqlite` | 1 | pair | the SQLite release |
 | `release-boot-postgres` | 1 | pair | the PostgreSQL release |
 | `install-screen`, `markdown`, `setup`, `proxy-hsts`, `tailnet-real` | 1 | pair | nothing |
 | `compose` | 4 | listed, not measured: it keeps the shipped networks' fixed subnets, which Docker gives one project at a time | |
 | `canvas` (both viewports, the reference budget) | 4 | listed, not measured: it is held to speed budgets, which it failed on one quarter beside a busy machine | |
-
-The gate's close is not a subject: it holds the host for hours and runs
-only for a release with no run on GitHub.
 
 ## The report
 
@@ -134,7 +129,7 @@ only for a release with no run on GitHub.
 processors, status, exit, seconds, start and end, a note and the log. The
 summary, printed last and kept as `report.txt`, gives per subject and
 condition the runs passed and the median seconds of the passed runs, and
-for the four whole-machine subjects `busy/whole`: the busy median on two
+for the three whole-machine subjects `busy/whole`: the busy median on two
 quarters over the whole-machine median, the ratio the 2.5 rule reads.
 
 A subject's verdict is the first that applies of: a failed or stopped run
@@ -171,12 +166,12 @@ janitor's rule 3 removes it after seven days unused.
 
 ## Expected time
 
-From the dry run on this host, one round: about 3 h 40 min for the first
-decisive run (the two suites, the gate, `go test -race`, the ten harness
+From the dry run on this host, one round: about 1 h 55 min for the first
+decisive run (the two suites, `go test -race`, the nine harness
 self-tests, and the install, join, pairing and SQLite release-boot
 proofs), of which about 10 min prepare and 10 min warm; about
-5 h 15 min for the whole list with the handle, PostgreSQL boot and
-real-tailnet settings given. The times assume the four whole-machine
+3 h 35 min for the whole list with the handle, PostgreSQL boot and
+real-tailnet settings given. The times assume the three whole-machine
 subjects take twice as long busy on two quarters; their real ratio is
 what the run measures. An alone run after a failure adds its own time.
 

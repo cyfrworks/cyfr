@@ -12,8 +12,8 @@
 # writes informational=true to GITHUB_OUTPUT, which those steps feed to
 # continue-on-error. Everywhere else it writes nothing and they block: a
 # push to main, a release (test.yml and security.yml called from
-# release.yml carry the tag push's event), the commit gate, and a diff that
-# cannot be read.
+# release.yml carry the tag push's event), a run with no event, and a diff
+# that cannot be read.
 #
 # It compares the merge commit a pull request's run checks out with that
 # commit's first parent, the base, so the job's checkout takes

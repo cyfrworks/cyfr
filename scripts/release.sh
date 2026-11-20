@@ -6,14 +6,12 @@ set -euo pipefail
 VERSION=""
 PUSH=""
 COMMIT_MSG=""
-GATE=""
 NOTES=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --push) PUSH="--push"; shift ;;
     --message) COMMIT_MSG="$2"; shift 2 ;;
-    --gate) GATE="--gate"; shift ;;
     --notes) NOTES="$2"; shift 2 ;;
     -*) echo "Unknown flag: $1"; exit 1 ;;
     *) VERSION="$1"; shift ;;
@@ -21,10 +19,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$VERSION" ] || [ -z "$NOTES" ]; then
-  echo "Usage: $0 <version> --notes <file> [--push] [--message <msg>] [--gate]"
+  echo "Usage: $0 <version> --notes <file> [--push] [--message <msg>]"
   echo "Example: $0 0.9.0 --notes notes.md --push"
   echo "         $0 0.9.0-rc.1 --notes notes.md --push"
-  echo "         $0 0.9.0 --notes notes.md --push --gate   # proves HEAD green here, offline, instead of by its run on GitHub"
   echo "The notes file holds the release's written note, at most 64 KiB: what the release changes for a running CYFR, and what a person must do before they update."
   exit 1
 fi
@@ -32,7 +29,7 @@ fi
 # The one rule for a release version, which the release workflow's version
 # job holds the tag to (tests/fixtures/release_manifest.json's versions),
 # matched byte by byte in a subshell of its own: under another locale
-# [A-Za-z] can admit letters outside ASCII, and the release stage below runs
+# [A-Za-z] can admit letters outside ASCII, and the rest of this script runs
 # under the caller's locale.
 RELEASE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
 if ! (LC_ALL=C; [[ "$VERSION" =~ $RELEASE ]]); then
@@ -101,14 +98,6 @@ main_is_head() {
 }
 main_is_head || exit 1
 
-# Under --gate the proof is of the working tree's bytes, which the tag
-# would not carry, so a tree with changes is refused there.
-if [ -n "$GATE" ] && [ -n "$(git status --porcelain)" ]; then
-  echo "Error: --gate proves the working tree, and it has uncommitted changes the tag would not carry:"
-  git status --short
-  echo "Commit or stash them first."
-  exit 1
-fi
 if [ -n "$(git status --porcelain)" ]; then
   echo "Warning: working tree has uncommitted changes:"
   git status --short
@@ -150,72 +139,53 @@ fi
 # among them the Test workflow's latest run on HEAD completed green, read
 # through `gh`, which refuses a HEAD that is not pushed, still running or
 # unchecked. Another workflow whose path filter kept it from running for
-# HEAD is not among them, and runs at the tag; a HEAD the Test workflow's
-# path filter skipped has no proof there. --gate proves HEAD here instead,
-# for a release cut offline or a HEAD GitHub has not run: the release
-# stage (scripts/stage.sh release, the gate's close as scripts/stages.tsv
-# holds it), CI's checks and the full suite on both database adapters, the
-# cluster suite and every island, queued on the verification host on all
-# four quarters and holding the host for over an hour. Its
-# PostgreSQL legs use the database config/test.exs names for each
-# partition on the host's fixture server, localhost:5432, so the release
-# names none, and its logs stay in a fresh directory named before it
-# starts and again when it ends, /tmp/cyfr-stage.release.*, the stage's
-# own log name (scripts/stage.sh), which the janitor keeps seven days.
+# HEAD is not among them; it runs on main's head each night (nightly.yml)
+# and at the tag. A HEAD the Test workflow's path filter skipped has no
+# proof.
 HEAD_SHA="$(git rev-parse HEAD)"
-if [ -n "$GATE" ]; then
-  GATE_LOGS="$(mktemp -d /tmp/cyfr-stage.release.XXXXXX)"
-  echo "Running the release stage on HEAD $HEAD_SHA; its logs go to $GATE_LOGS"
-  if ! scripts/stage.sh -l "$GATE_LOGS" release; then
-    echo "Error: the release stage failed; its logs are in $GATE_LOGS"
-    exit 1
-  fi
-  echo "The release stage passed; its logs are in $GATE_LOGS"
-else
-  echo "Reading HEAD's check runs on GitHub ($HEAD_SHA)..."
-  if ! command -v gh >/dev/null 2>&1; then
-    echo "Error: gh is not installed, and the proof that HEAD is green is its run on GitHub, read through gh."
-    echo "Install gh and sign in, or prove HEAD here with --gate."
-    exit 1
-  fi
-  if ! RUNS="$(gh api "repos/{owner}/{repo}/commits/$HEAD_SHA/check-runs?per_page=100" --paginate \
-      -q '.check_runs[] | "\(.status) \(.conclusion // "-") \(.name)"' 2>&1)"; then
-    echo "Error: HEAD's check runs could not be read: $RUNS"
-    echo "Push HEAD and let its run finish, sign gh in, or prove HEAD here with --gate."
-    exit 1
-  fi
-  if [ -z "$RUNS" ]; then
-    echo "Error: GitHub holds no check run for HEAD $HEAD_SHA: it is unchecked."
-    echo "Push HEAD and let its run finish, or prove HEAD here with --gate."
-    exit 1
-  fi
-  NOT_GREEN="$(grep -v -E '^completed (success|skipped|neutral) ' <<< "$RUNS" || true)"
-  if [ -n "$NOT_GREEN" ]; then
-    echo "Error: HEAD $HEAD_SHA is not proved green on GitHub; a release tag never points at a red, running or unchecked commit:"
-    sed 's/^/  /' <<< "$NOT_GREEN"
-    echo "Wait for green, fix what is red, or prove HEAD here with --gate."
-    exit 1
-  fi
-  # The suites are the Test workflow's: its latest run on HEAD, of any
-  # event, is the one that must be green.
-  if ! TEST_RUN="$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
-      -q '[.workflow_runs[] | select(.path == ".github/workflows/test.yml")] | sort_by(.created_at) | last
-          | if . == null then "none" else "\(.status) \(.conclusion // "-")" end' 2>&1)"; then
-    echo "Error: HEAD's workflow runs could not be read: $TEST_RUN"
-    echo "Sign gh in, or prove HEAD here with --gate."
-    exit 1
-  fi
-  if [ "$TEST_RUN" != "completed success" ]; then
-    if [ "$TEST_RUN" = none ]; then
-      echo "Error: the Test workflow has no run on HEAD $HEAD_SHA (its path filter skipped it): HEAD's suites are unproved."
-    else
-      echo "Error: the Test workflow's latest run on HEAD $HEAD_SHA is $TEST_RUN, not completed success."
-    fi
-    echo "Wait for green, fix what is red, or prove HEAD here with --gate."
-    exit 1
-  fi
-  echo "HEAD's tree is proved green on GitHub: $(wc -l <<< "$RUNS") check runs completed, none failed, the Test workflow's among them."
+echo "Reading HEAD's check runs on GitHub ($HEAD_SHA)..."
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Error: gh is not installed, and the proof that HEAD is green is its run on GitHub, read through gh."
+  echo "Install gh and sign in."
+  exit 1
 fi
+if ! RUNS="$(gh api "repos/{owner}/{repo}/commits/$HEAD_SHA/check-runs?per_page=100" --paginate \
+    -q '.check_runs[] | "\(.status) \(.conclusion // "-") \(.name)"' 2>&1)"; then
+  echo "Error: HEAD's check runs could not be read: $RUNS"
+  echo "Push HEAD and let its run finish, or sign gh in."
+  exit 1
+fi
+if [ -z "$RUNS" ]; then
+  echo "Error: GitHub holds no check run for HEAD $HEAD_SHA: it is unchecked."
+  echo "Push HEAD and let its run finish."
+  exit 1
+fi
+NOT_GREEN="$(grep -v -E '^completed (success|skipped|neutral) ' <<< "$RUNS" || true)"
+if [ -n "$NOT_GREEN" ]; then
+  echo "Error: HEAD $HEAD_SHA is not proved green on GitHub; a release tag never points at a red, running or unchecked commit:"
+  sed 's/^/  /' <<< "$NOT_GREEN"
+  echo "Wait for green, or fix what is red."
+  exit 1
+fi
+# The suites are the Test workflow's: its latest run on HEAD, of any
+# event, is the one that must be green.
+if ! TEST_RUN="$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
+    -q '[.workflow_runs[] | select(.path == ".github/workflows/test.yml")] | sort_by(.created_at) | last
+        | if . == null then "none" else "\(.status) \(.conclusion // "-")" end' 2>&1)"; then
+  echo "Error: HEAD's workflow runs could not be read: $TEST_RUN"
+  echo "Sign gh in."
+  exit 1
+fi
+if [ "$TEST_RUN" != "completed success" ]; then
+  if [ "$TEST_RUN" = none ]; then
+    echo "Error: the Test workflow has no run on HEAD $HEAD_SHA (its path filter skipped it): HEAD's suites are unproved."
+  else
+    echo "Error: the Test workflow's latest run on HEAD $HEAD_SHA is $TEST_RUN, not completed success."
+  fi
+  echo "Wait for green, or fix what is red."
+  exit 1
+fi
+echo "HEAD's tree is proved green on GitHub: $(wc -l <<< "$RUNS") check runs completed, none failed, the Test workflow's among them."
 
 # The dependency audits compare mix.lock with advisory feeds that change
 # independently of the tree, so the proof's audit, run when HEAD's run

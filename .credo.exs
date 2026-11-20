@@ -2,8 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # Credo's configuration: the warning category and each further check that
-# holds a rule of AGENTS.md, run as `mix credo --strict` by the commit gate
-# and CI. Any finding fails the run.
+# holds a rule of AGENTS.md, run as `mix credo --strict` by the save and
+# handoff stages and CI. Any finding fails the run.
 
 %{
   configs: [

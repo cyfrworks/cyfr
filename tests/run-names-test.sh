@@ -163,22 +163,8 @@ caller=$(printf '%s\n' "$out" | sed -n 2p)
   fail "the pattern captured ${BASH_REMATCH[1]} and ${BASH_REMATCH[2]}"
 [[ "${prefix}compose-proof-net" =~ $RUN_NAMES_PATTERN ]] || fail 'a name made from the prefix does not match'
 [ "$(run_names_prefix "$S/wt1")" = "cyfr-$seed-$$-" ] || fail 'a command substitution did not keep the calling shell pid'
-for name in "cyfr-gate-4242-boot-psql" "cyfr-${seed:0:9}-4242-x" "cyfr-${seed}x-4242-x" "cyfr-$seed--x" "x-cyfr-$seed-4242-"; do
+for name in "cyfr-proof-4242-boot-psql" "cyfr-${seed:0:9}-4242-x" "cyfr-${seed}x-4242-x" "cyfr-$seed--x" "x-cyfr-$seed-4242-"; do
   if [[ $name =~ $RUN_NAMES_PATTERN ]]; then fail "the pattern matches $name"; fi
-done
-
-begin "a gate's names are its stem and what follows, and the gate pattern recognises them and no other"
-[ "$(run_names_gate 4242)" = cyfr-gate-4242 ] || fail "the stem of gate 4242 is $(run_names_gate 4242)"
-[ "$(run_names_gate 4242 -boot-psql)" = cyfr-gate-4242-boot-psql ] || fail "gate 4242's name is $(run_names_gate 4242 -boot-psql)"
-for rest in -boot-psql -gate-psql-1-ab -harness.tools -go.codex_test.temp /cyfr:push -harness-cyfr-tailscale-standin:run1; do
-  name=$(run_names_gate 4242 "$rest")
-  [[ $name =~ $RUN_NAMES_GATE_PATTERN ]] || fail "the gate pattern does not match $name"
-  [ "${BASH_REMATCH[1]}" = 4242 ] && [ "${BASH_REMATCH[2]}" = "$rest" ] ||
-    fail "the gate pattern captured ${BASH_REMATCH[1]} and ${BASH_REMATCH[2]} from $name"
-  if [[ $name =~ $RUN_NAMES_PATTERN ]]; then fail "the run pattern matches the gate's $name"; fi
-done
-for name in cyfr-gate.Ab12Cd cyfr-gate-test.Ab12Cd cyfr-gate-4242 cyfr-gate--x cyfr-gate-42a-x x-cyfr-gate-4242-x "cyfr-$seed-4242-proof"; do
-  if [[ $name =~ $RUN_NAMES_GATE_PATTERN ]]; then fail "the gate pattern matches $name"; fi
 done
 
 begin 'a free port lies in 20000-29999 and binds'
