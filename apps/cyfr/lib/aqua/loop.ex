@@ -1007,8 +1007,10 @@ defmodule Aqua.Loop do
         do: {row.id, Turn.file_blocks(spec.ctx, row, spec.capabilities.media_types)}
   end
 
-  # The model step is dispatched before the call: a recovery finds it
-  # without a response and never replays it.
+  # The model step opens dispatched, before the call: a recovery finds it
+  # without a response and never replays it. A chat step carries the posts
+  # its request holds in that same write (`TurnStorage.put_step/3`), so a
+  # post is never carried by a step that was not dispatched.
   # Every model step opened — a chat round, its retry, a compaction —
   # counts against the turn's cap, before it opens; the count is the
   # turn's, rebuilt from its rows on a continuation.
@@ -1030,10 +1032,10 @@ defmodule Aqua.Loop do
              tool: state.spec.catalyst,
              action: "chat",
              purpose: purpose,
+             dispatch_state: "dispatched",
              threads: Tape.carried_threads(rows),
              threads_from: earlier_turns(state, rows ++ cited)
-           }),
-         {:ok, step} <- Tape.mark_dispatched(guest(state), state.turn, step) do
+           }) do
       {:ok, step, %{state | steps: state.steps + 1}}
     end
   end

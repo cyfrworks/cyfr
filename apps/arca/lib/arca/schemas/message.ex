@@ -40,7 +40,9 @@ defmodule Arca.Schemas.Message do
   `input` step that delivered it.
 
   `carried_by` is the step that first carried a post to its brain: a
-  program brain's `input` step (`Arca.TurnStorage.carry/3`). A post with
+  program brain's `input` step (`Arca.TurnStorage.carry/3`), or the chat
+  model step whose request first held it, which places it in every later
+  reading of the thread (`Arca.TurnStorage.projection/2`). A post with
   none still waits; one carried is no steer and the turn reads it as
   history.
   """

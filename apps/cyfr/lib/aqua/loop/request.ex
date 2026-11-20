@@ -758,8 +758,9 @@ defmodule Aqua.Loop.Request do
   # A call whose result never landed gets a synthetic one right after it,
   # so the provider sees every call answered and the model knows what
   # happened. A call's results are those up to the next assistant message,
-  # its own group, past any post that landed between: a wire id a later
-  # round reuses answers that round's call alone.
+  # its own group (the projection reads them right after it, every post
+  # and restart's mark after them): a wire id a later round reuses answers
+  # that round's call alone.
   defp answer_dangling_calls([%{"role" => "assistant", "content" => blocks} = message | rest]) do
     answered =
       for %{"role" => "tool", "content" => results} <-

@@ -906,6 +906,164 @@ defmodule Arca.TurnTapeStorageTest do
     end
   end
 
+  describe "a post's place" do
+    # One chat round of an API brain: the round takes in what was posted,
+    # its model step opens dispatched, and it answers `text` with a read
+    # call for each id, each dispatched.
+    defp round!(actor, turn, text, calls \\ []) do
+      {:ok, _drained} = TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})
+      model!(actor, turn, text, calls)
+    end
+
+    defp model!(actor, turn, text, calls) do
+      {:ok, step} =
+        TurnStorage.put_step(actor, turn.id, %{
+          kind: "model",
+          idempotency_key: "model:#{System.unique_integer([:positive])}",
+          dispatch_state: "dispatched",
+          fence: turn.fence
+        })
+
+      {:ok, recorded} =
+        TurnStorage.record_response(actor, turn.id, step.id, %{
+          fence: turn.fence,
+          text: text,
+          usage: %{"input_tokens" => 10, "output_tokens" => 3},
+          stop_reason: if(calls == [], do: "end_turn", else: "tool_call"),
+          tool_calls:
+            for id <- calls do
+              %{
+                tool_call_id: id,
+                name: "files.read",
+                tool: "files",
+                action: "read",
+                arguments: %{"path" => "a.txt"},
+                kind: "read",
+                recovery: "replay_safe",
+                idempotency_key: "call:#{turn.id}:#{id}",
+                child_execution_id: "exec_child_#{turn.id}_#{id}"
+              }
+            end
+        })
+
+      for %{step: call} <- recorded.calls,
+          do: {:ok, _} = TurnStorage.dispatch_step(actor, call.id, %{fence: turn.fence})
+
+      {step, recorded}
+    end
+
+    defp result!(actor, turn, %{step: call}) do
+      {:ok, %{result: result}} =
+        TurnStorage.close_step(actor, call.id, "ok", %{
+          result: %{content: "ok"},
+          fence: turn.fence
+        })
+
+      result
+    end
+
+    defp post!(actor, thread, turn, text) do
+      {:ok, %{message: post}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: text},
+          steer_turn_id: turn.id
+        })
+
+      post
+    end
+
+    defp read_ids(actor, turn) do
+      {:ok, rows} = TurnStorage.projection(actor, turn.id)
+      Enum.map(rows, & &1.id)
+    end
+
+    defp carried_by(row), do: Arca.Repo.get!(Message, row.id).carried_by
+
+    test "a post written while a call runs reads after the call's result and before the answer " <>
+           "of the step that carried it, in every round and turn after; one written while an " <>
+           "answer is written reads after that answer",
+         %{actor: actor, thread: thread} do
+      %{message: ask, turn: turn} = accept_turn!(actor, thread, "@aqua read it")
+      {turn, _root} = start!(actor, turn)
+      {first, %{text: reply, calls: [read]}} = round!(actor, turn, "Reading.", ["c1"])
+      assert carried_by(ask) == first.id
+
+      moon = post!(actor, thread, turn, "and the moon too")
+      result = result!(actor, turn, read)
+
+      # The next round takes the post in. Should it die before its step is
+      # written, the post is taken in and carried by nothing: no steer, and
+      # read last, where the round after carries it.
+      assert {:ok, [%{id: drained}]} =
+               TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})
+
+      assert drained == moon.id
+      refute TurnStorage.steer_pending?(actor, turn.id)
+      assert carried_by(moon) == nil
+      assert read_ids(actor, turn) == [ask.id, reply.id, read.message.id, result.id, moon.id]
+
+      # A compaction's model step carries nothing; a post written after the
+      # round read the thread waits for the step after.
+      {:ok, _} =
+        TurnStorage.put_step(actor, turn.id, %{
+          kind: "model",
+          purpose: "compaction",
+          idempotency_key: "compaction:1",
+          dispatch_state: "dispatched",
+          fence: turn.fence
+        })
+
+      assert carried_by(moon) == nil
+      stars = post!(actor, thread, turn, "and the stars")
+      {second, %{text: both}} = model!(actor, turn, "Both.", [])
+      assert carried_by(moon) == second.id
+      assert carried_by(stars) == nil
+
+      held = [ask.id, reply.id, read.message.id, result.id, moon.id, both.id]
+      assert read_ids(actor, turn) == held
+
+      # The stars were written while that answer was: they read after it.
+      assert stars.seq < both.seq
+      {third, %{text: last}} = round!(actor, turn, "Stars too.")
+      assert carried_by(stars) == third.id
+      assert read_ids(actor, turn) == held ++ [stars.id, last.id]
+
+      {:ok, _} =
+        TurnStorage.finish(actor, turn.id, "completed", %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: turn.fence
+        })
+
+      %{message: again, turn: next} = accept_turn!(actor, thread, "@aqua and now?")
+      {next, _} = start!(actor, next)
+      assert read_ids(actor, next) == held ++ [stars.id, last.id, again.id]
+    end
+
+    test "a post no round held reads after the rest of its turn, in the turns after",
+         %{actor: actor, thread: thread} do
+      %{message: ask, turn: turn} = accept_turn!(actor, thread, "@aqua read it")
+      {turn, _root} = start!(actor, turn)
+      {_first, %{text: reply, calls: [read]}} = round!(actor, turn, "Reading.", ["c1"])
+      never = post!(actor, thread, turn, "never mind")
+      result = result!(actor, turn, read)
+
+      {:ok, _} =
+        TurnStorage.finish(actor, turn.id, "failed", %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: turn.fence
+        })
+
+      %{message: again, turn: next} = accept_turn!(actor, thread, "@aqua try again")
+      {next, _} = start!(actor, next)
+      assert never.seq < result.seq
+
+      assert read_ids(actor, next) ==
+               [ask.id, reply.id, read.message.id, result.id, never.id, again.id]
+    end
+  end
+
   describe "the uncertain stop" do
     # `n` of the steps proposed for `ids`, in order, flipped to dispatched.
     defp dispatched!(actor, turn, ids, n) do

@@ -288,6 +288,26 @@ defmodule Arca.TurnInputsStorageTest do
              TurnStorage.uncarry(actor, turn.id, %{fence: turn.fence, step_id: step.id})
   end
 
+  test "a post an input step carried reads where it arrived, among the program's own words",
+       %{actor: actor, daily: daily, turn: turn} do
+    first = opening(actor, turn)
+    assert {:ok, _} = carry(actor, turn, "post", first)
+
+    assert {:ok, %{said: [said]}} =
+             commit(actor, daily, turn, %{
+               seq: 5,
+               hello: true,
+               said: [%{message: "msg_native_1", text: "on it"}]
+             })
+
+    later = steer!(actor, daily, turn, "and the moon")
+    assert {:ok, _} = carry(actor, turn, "post", later)
+
+    assert {:ok, rows} = TurnStorage.projection(actor, turn.id)
+    ids = [first.id, said.id, later.id]
+    assert rows |> Enum.map(& &1.id) |> Enum.filter(&(&1 in ids)) == ids
+  end
+
   # ---- batches ----------------------------------------------------------------
 
   test "a batch commits with its position once: a line at or before it is skipped, another " <>

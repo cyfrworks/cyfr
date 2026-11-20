@@ -1423,13 +1423,13 @@ defmodule Aqua.LoopTest do
   end
 
   # A post lands while a call runs; the calls after it are skipped, and the
-  # model is asked again. Each skipped call is answered by its own skipped
-  # result, which names it, after the post, where the rows stand: no
-  # made-up unknown outcome, and no result that names no call. Both shipped
-  # adapters take that request, since each pairs the last message's result
-  # with a call of the assistant message nearest before it.
+  # model is asked again. Each call is answered by its own result, the
+  # skipped one's naming it, right after the calls, and the post reads
+  # after them, where the round that carried it placed it: no made-up
+  # unknown outcome, no result that names no call, and nothing between a
+  # call and its result, which providers refuse.
   test "a post that lands while a call runs skips the calls after it, each answered by its own " <>
-         "skipped result after the post in the next request",
+         "result right after the calls, and the post after them, in the next request",
        %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua keep a note")
     write = %{"action" => "write", "path" => "data/x.md", "content" => "y"}
@@ -1472,10 +1472,6 @@ defmodule Aqua.LoopTest do
                ]
              },
              %{
-               "role" => "user",
-               "content" => [%{"type" => "text", "text" => "actually, never mind"}]
-             },
-             %{
                "role" => "tool",
                "content" => [
                  tool_result(
@@ -1486,6 +1482,10 @@ defmodule Aqua.LoopTest do
                  ),
                  tool_result("c2", "notes", "a newer message arrived", false)
                ]
+             },
+             %{
+               "role" => "user",
+               "content" => [%{"type" => "text", "text" => "actually, never mind"}]
              }
            ]
 
@@ -1538,8 +1538,9 @@ defmodule Aqua.LoopTest do
              model_row("ok")
            ]
 
-    # The model is asked again with the post, the restart the takeover
-    # wrote, and each skipped call answered by its own skipped result.
+    # The model is asked again with each skipped call answered by its own
+    # skipped result right after the calls, then the post and the restart
+    # the takeover wrote, in the order they were written.
     skipped = "a newer message arrived"
 
     restarted =
@@ -1558,17 +1559,17 @@ defmodule Aqua.LoopTest do
                ]
              },
              %{
-               "role" => "user",
-               "content" => [
-                 %{"type" => "text", "text" => "actually, leave it"},
-                 %{"type" => "text", "text" => restarted}
-               ]
-             },
-             %{
                "role" => "tool",
                "content" => [
                  tool_result("c1", "files", skipped, false),
                  tool_result("c2", "browser", skipped, false)
+               ]
+             },
+             %{
+               "role" => "user",
+               "content" => [
+                 %{"type" => "text", "text" => "actually, leave it"},
+                 %{"type" => "text", "text" => restarted}
                ]
              }
            ]
@@ -1666,16 +1667,6 @@ defmodule Aqua.LoopTest do
         ]
       },
       %{
-        "role" => "user",
-        "content" => [
-          text.("make it look like this"),
-          image.("sun.png", "SUN"),
-          text.(""),
-          text.("The attached file notes.txt:\n\ntwo stars"),
-          text.("The file art.bmp (image/bmp) is attached, and this brain cannot read it.")
-        ]
-      },
-      %{
         "role" => "tool",
         "content" => [
           %{
@@ -1685,6 +1676,16 @@ defmodule Aqua.LoopTest do
             "content" => Jason.encode!(%{"written" => "data/note.md"}, pretty: true),
             "is_error" => false
           }
+        ]
+      },
+      %{
+        "role" => "user",
+        "content" => [
+          text.("make it look like this"),
+          image.("sun.png", "SUN"),
+          text.(""),
+          text.("The attached file notes.txt:\n\ntwo stars"),
+          text.("The file art.bmp (image/bmp) is attached, and this brain cannot read it.")
         ]
       }
     ]
@@ -1760,7 +1761,13 @@ defmodule Aqua.LoopTest do
     [_first, %{input: %{"params" => %{"messages" => messages}}}] =
       Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
-    assert Jason.encode!(messages) =~ "one more thing"
+    # The post was written while the answer was: it reads after the answer
+    # that never read it, and the request ends on it.
+    assert messages == [
+             %{"role" => "user", "content" => [%{"type" => "text", "text" => "@aqua hello"}]},
+             %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "hello"}]},
+             %{"role" => "user", "content" => [%{"type" => "text", "text" => "one more thing"}]}
+           ]
 
     assert Enum.any?(
              Threads.messages(Sanctum.Context.actor(ctx), thread.id),
