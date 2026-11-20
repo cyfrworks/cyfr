@@ -20,8 +20,9 @@ defmodule Opus.BrainTest do
   stored turn's mode in every start and work, whatever the caller names,
   and a work for a turn of the other mode starts the program again in
   that mode. A line that does not read, one past the bound, one lost
-  unread, the row's change, the driver's end, a lost answer to a write and
-  a take-over each end the session, its box session closed.
+  unread, a read the box refuses, the row's change, the driver's end, a
+  lost answer to a write and a take-over each end the session, its box
+  session closed.
   """
   use ExUnit.Case, async: false
 
@@ -1082,6 +1083,26 @@ defmodule Opus.BrainTest do
       Scripted.set(fake, :dropped, 2)
       say(fake, row, %{"t" => "text", "gen" => 0, "message" => "m", "delta" => "x"})
       assert_receive {Brain, ^ref, {:ended, :dropped}}, 5_000
+    end
+
+    for {code, reason} <- [{"unknown_session", :exited}, {"bad_request", :unavailable}] do
+      test "a read the box refuses #{code} ends it, its session closed", %{
+        fake: fake,
+        row: row,
+        brain: {pid, ref} = brain
+      } do
+        # The reader waits on the holder once it handed a batch, so the
+        # next read is the one refused.
+        say(fake, row, %{"t" => "text", "gen" => 0, "message" => "m", "delta" => "x"})
+        assert {"boot-one", [{seq, %{"t" => "text"}}]} = batch(brain)
+        monitor = Process.monitor(pid)
+        Scripted.refuse_once(fake, "recv", unquote(code))
+        :ok = Brain.read_on(brain, "boot-one", seq)
+        assert_receive {Brain, ^ref, {:ended, unquote(reason)}}, 5_000
+        assert_receive {:DOWN, ^monitor, :process, ^pid, _}, 5_000
+        assert_receive {:session, "close", _wire, _fields}, 5_000
+        assert running_sessions(fake, row) == []
+      end
     end
 
     test "the row's change ends it", %{ctx: ctx, row: row, brain: {_pid, ref}} do
