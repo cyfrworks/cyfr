@@ -31,7 +31,8 @@ defmodule Aqua.AgentConfig do
   disabled ones dropped — each as the string-keyed map the `aqua` tool's
   `list` with `detail` answers (`"name"`, `"title"`, `"description"`,
   `"avoid"`, `"type"`, `"mode"`, `"tools"`, `"catalyst_ref"`,
-  `"program"`, `"model"`, `"options"`); the soul's prompt, which no
+  `"program"`, `"model"`, `"options"`, and the soul's `"holder"`, who it
+  runs on, `Compendium.AquaAgent.seated/2`); the soul's prompt, which no
   reader of the roster needs, is not in it.
 
   Fails as it reads: a tree that cannot be listed is
@@ -99,7 +100,8 @@ defmodule Aqua.AgentConfig do
       "program" => agent.program,
       "model" => agent.model,
       "options" => agent.options,
-      "disabled" => agent.disabled
+      "disabled" => agent.disabled,
+      "holder" => agent.holder
     }
   end
 

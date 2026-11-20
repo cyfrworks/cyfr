@@ -11,7 +11,7 @@
 # its own deadline, and never on nothing.
 #
 # The terminal line. scripts/heavy-check.sh, scripts/test-partitioned.sh
-# and scripts/commit-gate.sh frame their output with `_START=<pid>` first
+# and scripts/stage.sh frame their output with `_START=<pid>` first
 # and `_EXIT=<pid> <status>` last, each at the start of a line, where pid is
 # the writer's own. With no success-regex, or an empty one, the answer is
 # the one `_EXIT=<P> <n>` line that follows `_START=<P>`, P being the

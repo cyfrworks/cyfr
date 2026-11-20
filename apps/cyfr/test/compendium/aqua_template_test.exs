@@ -48,7 +48,6 @@ defmodule Compendium.AquaTemplateTest do
     File.write!(Path.join(template, "aqua.md"), """
     ---
     title: A.Q.U.A.
-    model: model-#{marker}
     ---
 
     soul prompt #{marker}

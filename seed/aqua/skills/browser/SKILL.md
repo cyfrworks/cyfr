@@ -67,7 +67,10 @@ telling you.
 The browser follows the person's browser setting. When an action is
 refused because the browser is turned off, say so and stop: the person
 turns it on on the Aqua page. When it was not found, the person adds
-Aqua's browser once from the Aqua page.
+Aqua's browser once from the Aqua page. `browser(action: "status")`
+says whether it is on and whether Aqua's browser is added. Only the
+person turns it on; asked to turn it off, call
+`browser(action: "turn_off")`, which holds at once.
 
 ## Operations
 
@@ -113,4 +116,9 @@ Take a picture of the window and post it into this thread:
 ```
 browser(action: "screenshot")
 thread(action: "post", text: "The page as it stands", screenshot: "<message_id it answered>")
+```
+
+Close this thread's window when you are done with it:
+```
+browser(action: "close")
 ```

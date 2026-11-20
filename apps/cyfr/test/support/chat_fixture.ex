@@ -150,15 +150,14 @@ defmodule Cyfr.Test.ChatFixture do
     File.write!(Path.join([seed, "aqua", "aqua.md"]), """
     ---
     title: Aqua
-    catalyst_ref: #{@ref}
-    model: #{@name}
-    mode: auto
     tools:
     #{tools}
     ---
 
     You answer the person.
     """)
+
+    Cyfr.Test.SeedBundle.seat!(seed, member: "fixture", catalyst_ref: @ref, model: @name)
 
     seed
   end

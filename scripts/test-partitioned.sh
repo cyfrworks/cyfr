@@ -36,7 +36,7 @@
 # apps/*/cover/ holds an export of another run. Every exit path removes the
 # run's own exports. `mix test.coverage` also writes a page per module under
 # the checkout's cover/ (git- and docker-ignored), replacing the last run's.
-# The option is for measuring on demand, not for the gate: a cover-compiled
+# The option is for measuring on demand, not for a check: a cover-compiled
 # module has no beam on disk (`:code.which/1` answers `cover_compiled`), so
 # the tests that read a module's beam (Prima.EffectsTest's compiled view,
 # Prima.VersionTest, Prima.Test.BeamsTest, Cyfr.SeedOfferTest) fail under it.

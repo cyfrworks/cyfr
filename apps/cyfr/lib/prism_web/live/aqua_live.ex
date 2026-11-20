@@ -40,8 +40,9 @@ defmodule PrismWeb.AquaLive do
   `lite`, so a box that never opens `dev` still gets its key in. A grant
   for a brain ends in one `models` call (`Aqua.models/2`) whose answer the
   page shows, so a key the provider refuses reads as the provider says.
-  The setup then picks which connected brain is the soul's own (or, with
-  `agent=<name>`, a crew member's), a change of shape whose consent is
+  The setup then picks which crew member Aqua runs on, whose brain,
+  model and mode Aqua takes (or, with `agent=<name>`, which connected
+  brain that crew member runs on), a change of shape whose consent is
   asked at once. A source whose consent moved is consented again the
   same way.
 
@@ -51,10 +52,10 @@ defmodule PrismWeb.AquaLive do
   the state of the row of that name. A plan whose row is missing is installed through the Programs
   page's form, prefilled from that member's file; one whose row stands is
   signed in on its terminal (the card's Set up), and its program's own
-  listing fills the picker. Picking one of those models makes the agent
-  name that program, with the member's install, the model and no
-  catalyst, as a crew member does; picking a catalyst's model takes the
-  program and its install away again. A program row no crew file names is
+  listing fills a crew member's picker. Picking one of those models makes
+  the member name that program, with the install of the member the plan
+  is named by, the model and no catalyst; picking a catalyst's model
+  takes the program and its install away again. A program row no crew file names is
   no plan here: the aqua tool names it.
   """
 
@@ -550,8 +551,9 @@ defmodule PrismWeb.AquaLive do
   Aqua's setup: what the person has, as a checklist of every brain the
   athanor can connect, a key shared with them first, and each plan, a
   program the crew's files name; one step for each brain or plan ticked;
-  each connected brain's answer to its `models` call; which connected
-  brain or plan the agent the setup is for runs on; the crew members
+  each connected brain's answer to its `models` call; which crew member
+  Aqua runs on, or, for a crew member the setup is for, which connected
+  brain or plan it runs on; the crew members
   whose brain is not connected; and, for an administrator who has not
   seen it, their own setup next.
   """
@@ -589,6 +591,9 @@ defmodule PrismWeb.AquaLive do
         Enum.any?(providers, &(&1.state == :ready)) or Enum.any?(plans, &(&1.state == :ready))
       )
       |> assign(:unconnected, (assigns.agents_read && assigns.agents_read.unconnected) || [])
+      |> assign(:soul, assigns.agents_read && assigns.agents_read.soul)
+      |> assign(:member, assigns.agents_read && assigns.agents_read[:member])
+      |> assign(:members, (assigns.agents_read && assigns.agents_read[:members]) || [])
 
     ~H"""
     <details
@@ -763,8 +768,39 @@ defmodule PrismWeb.AquaLive do
           </li>
         </ol>
 
+        <%!-- Aqua runs on a crew member, whose brain it takes: the setup
+              names which. A brain connected with no member on it gets
+              one from + New crew member, then its model on its card. --%>
         <form
-          :if={@connected? and @target}
+          :if={@target && @target == @soul}
+          id="aqua-setup-member"
+          phx-change="editor_set_member"
+          phx-target="#aqua-agents"
+          phx-auto-recover="ignore"
+        >
+          <label class="block text-gray-400 mb-1">Which crew member does Aqua run on?</label>
+          <select
+            name="member"
+            aria-label="Runs on"
+            class="w-full md:w-1/2 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+          >
+            <option value="" selected={is_nil(@member)}>Choose a crew member</option>
+            <option
+              :for={member <- @members}
+              value={member.name}
+              selected={member.name == @member}
+            >
+              {member.title}
+            </option>
+          </select>
+          <p class="mt-1 text-gray-500">
+            Aqua answers with that member's brain, model and mode. For a brain no member runs
+            on yet, make one with + New crew member below and pick its model on its card.
+          </p>
+        </form>
+
+        <form
+          :if={(@connected? and @target) && @target != @soul}
           id="aqua-setup-pick"
           phx-change="editor_set_model"
           phx-target="#aqua-agents"
@@ -896,7 +932,6 @@ defmodule PrismWeb.AquaLive do
   defp answer_class({:error, _}), do: "text-red-300"
   defp answer_class(_answer), do: "text-gray-400"
 
-  defp pick_label(target, %{soul: target}), do: "Which connected brain is Aqua's own?"
   defp pick_label(target, _read), do: "Which connected brain does #{target} run on?"
 
   defp programs_path(athanor, %{ref: ref, need: %{name: need}}),
@@ -926,7 +961,7 @@ defmodule PrismWeb.AquaLive do
       <div>
         <h3 class="text-sm font-medium text-gray-200">Aqua</h3>
         <p class="text-[11px] text-gray-500 mt-0.5">
-          One assistant — the soul — and its crew: who it hands a job to, each on a brain of its own. How a job is done is a scroll any of them reads.
+          One assistant — the soul — and its crew: who it hands a job to, each on a brain of its own. Aqua runs on the crew member you choose. How a job is done is a scroll any of them reads.
         </p>
       </div>
 

@@ -3,10 +3,13 @@
 
 defmodule PrismWeb.AquaLive.AgentsComponent do
   @moduledoc """
-  The soul and its crew. The soul has a prompt, a brain and the tools
-  every crew member is offered too; a crew member has a brain, what it
-  is good at and what to avoid, and no prompt: CYFR briefs it and the job
-  says what to do. A crew member whose file still holds a prompt is
+  The soul and its crew. The soul has a prompt and the tools every crew
+  member is offered too, and runs on the crew member its card names,
+  whose brain, model, options and mode it takes; while that member does
+  not stand, the card says why in the sentence Aqua's turn is refused
+  with, and choosing a member asks the soul's consent again at once. A
+  crew member has a brain, what it is good at and what to avoid, and no
+  prompt: CYFR briefs it and the job says what to do. A crew member whose file still holds a prompt is
   refused, and the sentence that says what to change stands in place of
   its card. Each of them has a mode,
   read-only or auto, which decides what of its offered tools it runs; the
@@ -357,6 +360,36 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
+  # The crew member Aqua runs on, or none: a change of what Aqua runs on
+  # moves its consent's shape, so its consent is asked again at once, in
+  # the page's system layer, as a brain picked for a member's is.
+  def handle_event("editor_set_member", %{"member" => value}, socket) when is_binary(value) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      member = if value == "", do: nil, else: value
+
+      result =
+        call_aqua(socket.assigns.context, %{
+          "action" => "update",
+          "name" => Prima.AgentRef.soul_name(),
+          "member" => member
+        })
+
+      send(self(), {:refresh, :agents})
+
+      case result do
+        {:ok, _} when is_binary(member) ->
+          send(self(), {:ask_grant, Prima.AgentRef.soul_ref()})
+          {:noreply, socket}
+
+        {:ok, _} ->
+          {:noreply, socket}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
+      end
+    end)
+  end
+
   # A program brain's model is one its program lists, written alone: its
   # brain stays the program the member names.
   def handle_event(
@@ -445,7 +478,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         # A brain or model picked moves the agent's consent's shape, so its
         # consent is asked again at once, in the page's system layer.
         {:ok, _} when is_tuple(choice) and elem(choice, 0) in [:model, :program] ->
-          send(self(), {:ask_grant, Prima.AgentRef.ref(name)})
+          send(self(), {:ask_grant, moved_grant(socket.assigns.soul, name)})
           {:noreply, socket}
 
         {:ok, _} ->
@@ -612,6 +645,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           "mode" => g[:mode] || "auto",
           "tools" => g[:tools] || [],
           "disabled" => g.disabled == true,
+          "member" => g[:member],
+          "member_refusal" => g[:member_refusal],
           "provenance" => Map.get(provenance, Enum.join(Compendium.agent_file_path(g.name), "/"))
         }
       end
@@ -657,6 +692,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     %{
       soul: soul && soul["name"],
       soul_ready: soul != nil and ready?.(soul["name"]),
+      member: soul && soul["member"],
+      members: for(m <- crew, not m["disabled"], do: %{name: m["name"], title: m["title"]}),
       unconnected: for(m <- crew, not m["disabled"], not ready?.(m["name"]), do: m["name"]),
       plans: plans(crew, status)
     }
@@ -701,7 +738,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # option it offers. A brain that is not ready, or whose `describe` or
   # listing does not answer, offers none.
   defp load_brain_options(socket, agents, status) do
-    case Enum.filter(agents, &match?({:ready, _}, status[&1["name"]])) do
+    soul_type = Compendium.agent_soul_type()
+
+    case Enum.filter(
+           agents,
+           &(&1["type"] != soul_type and match?({:ready, _}, status[&1["name"]]))
+         ) do
       [] -> socket |> assign(:brain_options, %{}) |> assign(:program_models, %{})
       ready -> describe_brains(socket, ready)
     end
@@ -786,6 +828,37 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp offers(program_offers, _status, agent),
     do: Map.get(program_offers, agent["catalyst_ref"], [])
+
+  # A brain picked for a crew member moves its consent's shape, and Aqua's
+  # too when Aqua runs on it. The page asks one consent at a time: Aqua's
+  # then, whose turns take their brain from the member; the member's own is
+  # asked when a job of its own is refused for it.
+  defp moved_grant(%{"member" => name}, name), do: Prima.AgentRef.soul_ref()
+  defp moved_grant(_soul, name), do: Prima.AgentRef.ref(name)
+
+  # Whether the card says its program's state in the sentence a turn on it
+  # is refused with: a row that stands but cannot run, on every card, and
+  # a program not installed on Aqua's alone, the member's own card offering
+  # its install instead.
+  defp program_said?({state, _}, _soul?) when state in [:program_disabled, :program_unfit],
+    do: true
+
+  defp program_said?({:program_missing, _}, soul?), do: soul?
+  defp program_said?(_status, _soul?), do: false
+
+  # Whose brain a card's states are: Aqua's are the member's it runs on.
+  defp brain_title(%{"member" => member}, crew, true) when is_binary(member),
+    do: Enum.find_value(crew, member, &(&1["name"] == member && &1["title"]))
+
+  defp brain_title(agent, _crew, _soul?), do: agent["title"] || agent["name"]
+
+  # Aqua runs in its member's mode: a member in read-only whose brain CYFR
+  # cannot keep read-only leaves Aqua unable to run, in the member's
+  # sentence (`Aqua.read_only_unheld/3`).
+  defp soul_unheld(unheld, %{"mode" => "read-only", "member" => member}) when is_binary(member),
+    do: Map.get(unheld, member)
+
+  defp soul_unheld(_unheld, _soul), do: nil
 
   # A brain that runs on a program's own sign-in is bound to the one row
   # named as its program, so its card offers no other to change to.
@@ -1080,11 +1153,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         setting_up={@setting_up}
         set_up_refused={@set_up_refused}
         athanor={@athanor}
-        offers={offers(@program_offers, Map.get(@model_status, @soul["name"]), @soul)}
+        offers={[]}
         signs_in?={signs_in?(@signs_in, @soul)}
         program_models={Map.get(@program_models, @soul["name"])}
-        unheld={Map.get(@unheld, @soul["name"])}
+        unheld={soul_unheld(@unheld, @soul)}
         browser={@browser}
+        crew={@crew}
       />
 
       <div :if={@crew != []} class="space-y-3 border-l border-gray-800 pl-4 ml-2">
@@ -1188,6 +1262,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :program_models, :list, default: nil
   attr :unheld, :string, default: nil
   attr :browser, :map, default: nil
+  attr :crew, :list, default: []
 
   defp agent_card(assigns) do
     assigns =
@@ -1355,10 +1430,49 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </span>
       </div>
 
+      <%!-- Aqua runs on a crew member, whose brain, model, options and
+           mode it takes: the member's own card sets those. While the
+           member does not stand, the sentence Aqua's turn is refused
+           with says why. --%>
+      <form
+        :if={@is_soul}
+        id={"aqua-card-#{@agent["name"]}-member"}
+        phx-change="editor_set_member"
+        phx-auto-recover="ignore"
+        phx-target={@myself}
+      >
+        <p class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Runs on</p>
+        <select
+          name="member"
+          aria-label="Runs on"
+          class="w-full md:w-1/2 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+        >
+          <option value="" selected={is_nil(@agent["member"])}>No crew member</option>
+          <option
+            :for={member <- @crew}
+            :if={not member["disabled"] or member["name"] == @agent["member"]}
+            value={member["name"]}
+            selected={member["name"] == @agent["member"]}
+          >
+            {member["title"]}
+          </option>
+        </select>
+        <p
+          :if={@agent["member_refusal"]}
+          data-test="aqua-runs-on-refused"
+          class="mt-1 text-[11px] text-amber-300"
+        >
+          {@agent["member_refusal"]}
+        </p>
+        <p :if={@unheld} data-test="read-only-unheld" class="mt-1 text-[11px] text-amber-300">
+          {@unheld}
+        </p>
+      </form>
+
       <%!-- A member with no brain yet is connected through the setup like
            any other. --%>
       <div
-        :if={@agent["catalyst_ref"] in [nil, ""] and is_nil(@program)}
+        :if={not @is_soul and @agent["catalyst_ref"] in [nil, ""] and is_nil(@program)}
         class="flex flex-wrap items-center gap-2 text-[11px]"
       >
         <span class="text-amber-300">No brain yet</span>
@@ -1407,16 +1521,19 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:missing, _}, @model_status)} class="text-amber-300">
           The model's catalyst is not installed here yet
         </span>
-        <%!-- A program row of the member's program's name that stands
-             but is no brain's is never one to install: it is said as a
-             turn on it is refused (`Prima.Refusal`), with the row to open
-             on the Programs page. --%>
+        <%!-- A program's state is said as a turn on it is refused
+             (`Prima.Refusal`), naming whose brain it is: on Aqua's card the
+             member it runs on. A row that stands but is no brain's is never
+             one to install: its row opens on the Programs page. A missing
+             program is installed from the member's own card, which offers
+             it above; Aqua's card says why Aqua cannot run. --%>
         <span
-          :if={match?({state, _} when state in [:program_disabled, :program_unfit], @model_status)}
+          :if={program_said?(@model_status, @is_soul)}
+          data-test="program-refused"
           class="text-amber-300"
         >
           {Prima.Refusal.message(
-            {:crew_unready, @agent["title"] || @agent["name"], elem(@model_status, 0)}
+            {:crew_unready, brain_title(@agent, @crew, @is_soul), elem(@model_status, 0)}
           )}
         </span>
         <.link
@@ -1479,7 +1596,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             none other: its brain is the program it names. While its row is
             not there to list them, the member's model stands alone. --%>
       <form
-        :if={@program}
+        :if={@program && !@is_soul}
         id={"aqua-card-#{@agent["name"]}-model"}
         phx-change="editor_set_model"
         phx-auto-recover="ignore"
@@ -1507,7 +1624,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       </form>
 
       <form
-        :if={is_nil(@program)}
+        :if={is_nil(@program) and not @is_soul}
         id={"aqua-card-#{@agent["name"]}-model"}
         phx-change="editor_set_model"
         phx-auto-recover="ignore"
@@ -1565,6 +1682,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             the read-only choice, and a file set to it by hand shows it
             chosen with the same reason, since its turns are refused. --%>
       <div
+        :if={not @is_soul}
         id={"aqua-card-#{@agent["name"]}-mode"}
         role="radiogroup"
         aria-label="Mode"

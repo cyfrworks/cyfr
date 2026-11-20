@@ -4,16 +4,15 @@
 #
 # Decide which harness self-test jobs this run needs: scripts/ci/self-test-scope.sh
 #
-# test.yml's harness-tests-host, harness-tests-partitions and
-# harness-tests-gate jobs test the CI and host scripts against stand-ins.
-# For each job whose paths below a pull request leaves as its base has
-# them, this writes JOB=false (host, partitions, gate) to GITHUB_OUTPUT,
-# and test.yml skips that job, once this has succeeded. Its outputs are
-# written last, in one write, after everything else that can fail. It
-# writes nothing, and every job runs, everywhere else: a push to main, a
-# release or the nightly (test.yml called from release.yml or nightly.yml
-# carries the caller's event), a run with no event, and a diff that
-# cannot be read.
+# test.yml's harness-tests-host and harness-tests-partitions jobs test the
+# CI and host scripts against stand-ins. For each job whose paths below a
+# pull request leaves as its base has them, this writes JOB=false (host,
+# partitions) to GITHUB_OUTPUT, and test.yml skips that job, once this has
+# succeeded. Its outputs are written last, in one write, after everything
+# else that can fail. It writes nothing, and every job runs, everywhere
+# else: a push to main, a release or the nightly (test.yml called from
+# release.yml or nightly.yml carries the caller's event), a run with no
+# event, and a diff that cannot be read.
 #
 # It compares the merge commit a pull request's run checks out with that
 # commit's first parent, the base, so the job's checkout takes
@@ -27,14 +26,6 @@
 # red. A path left out skips a job that could have failed, so a script
 # that starts reading another file adds it here.
 #
-# The gate job's paths are narrower than what its self-test reads, on
-# purpose: that is every workflow and every script and test, and a set
-# that wide ran it on nearly every pull request. They are the gate, its
-# self-test, the library they share, the workflows the gate replays, the
-# setup-elixir action and this script. A change elsewhere that breaks the gate's self-test shows
-# on main's push run after the merge, where a red job is rerun once and a
-# second red opens an issue.
-#
 # Exit 0 with or without the output, 64 when given any argument.
 set -euo pipefail
 
@@ -46,11 +37,11 @@ always=(.github/workflows/test.yml scripts/ci/self-test-scope.sh)
 # The containment library, the host queue, the run names, the stage table,
 # the shared images, the janitor and the load check. Their fixtures are
 # scratch repositories holding copies of these; the stage table's guard
-# reads every workflow, and the load check one block of the commit gate.
+# reads every workflow.
 host=(
   .github/workflows
   scripts/lib
-  scripts/await-task.sh scripts/commit-gate.sh scripts/heavy-check.sh scripts/image.sh
+  scripts/await-task.sh scripts/heavy-check.sh scripts/image.sh
   scripts/janitor.sh scripts/nightly.sh scripts/stage.sh scripts/stages.tsv
   tests/contain-test.sh tests/heavy-check-test.sh tests/run-names-test.sh tests/stage-test.sh
   tests/image-test.sh tests/image-stub.sh tests/janitor-test.sh
@@ -73,17 +64,6 @@ partitions=(
   config/test.exs config/database_choice.exs
 )
 
-# The commit gate and its self-test, the library they share, and the
-# workflows the gate replays; and the setup-elixir action, to which this
-# job alone passes the mix-harness-tests prefix, so a change to its prefix
-# check or cache can fail this job while every other job passes.
-gate=(
-  scripts/commit-gate.sh tests/commit-gate-test.sh
-  scripts/lib
-  .github/workflows
-  .github/actions/setup-elixir
-)
-
 [ "${GITHUB_EVENT_NAME:-}" = pull_request ] || exit 0
 [ -n "${PR_HEAD_SHA:-}" ] || exit 0
 second=$(git rev-parse -q --verify 'HEAD^2^{commit}') || exit 0
@@ -91,7 +71,7 @@ second=$(git rev-parse -q --verify 'HEAD^2^{commit}') || exit 0
 git rev-parse -q --verify 'HEAD^1^{commit}' >/dev/null || exit 0
 
 outputs=
-for job in host partitions gate; do
+for job in host partitions; do
   declare -n paths=$job
   # 0 is no change; 1 a change and anything else a diff that cannot be
   # read, and both run the job.

@@ -5,16 +5,12 @@
 # Runs the checks a stage names: scripts/stage.sh [-l LOGDIR] [-n] STAGE [-- PATHS]
 #
 # The stages are save (after an edit), handoff (before a change is
-# reported ready), pull-request (the gate, CI's checks on this host, for
-# offline work and reproducing a CI failure: the pull request's run on
-# GitHub is the check), release (the gate's close, which
-# `scripts/release.sh --gate` runs for a HEAD with no run on GitHub) and
-# nightly (the janitor and the host's proofs, which
+# reported ready) and nightly (the janitor and the host's proofs, which
 # scripts/nightly.sh runs once a day from a timer on the host, on main's
-# head, and reports to GitHub). What each runs is scripts/stages.tsv, one
-# row per check:
+# head, and reports to GitHub). Every other check is the pull request's run
+# on GitHub. What each runs is scripts/stages.tsv, one row per check:
 #   stage<TAB>check<TAB>quarters<TAB>hold<TAB>folder<TAB>when<TAB>command
-#   stage    one of the five above
+#   stage    one of the three above
 #   check    [a-z0-9-]+, unique within its stage
 #   quarters 1 or 4, the quarters of the machine it takes, heavy-check's -q
 #   hold     the seconds the command may run before it is stopped. A row
@@ -42,8 +38,8 @@
 # them takes, and run under it one after another in the table's order
 # (scripts/lib/stage-chain.sh), and every other row runs beside them on a
 # ticket of its own; every ticket queues when the stage starts, so a stage
-# can hold every quarter at once. Every other stage runs its rows one
-# after another in the table's order, each on a ticket of its own. Every
+# can hold every quarter at once. The nightly runs its rows one after
+# another in the table's order, each on a ticket of its own. Every
 # row runs whatever an earlier one ended with. When the save or handoff
 # rows that
 # run name two folders or more, the stage first compiles the dependencies
@@ -103,7 +99,7 @@
 # /tmp/cyfr-stage.<stage>.XXXXXX, the name scripts/janitor.sh removes after
 # seven days; it is named on stderr. The name carries no PROOF_RUN_PREFIX:
 # logs outlive the run that wrote them, and the janitor finds them by this
-# name alone (its rule 5), as it finds the gate's /tmp/cyfr-gate.*.
+# name alone (its rule 5).
 #
 # Stdout is `_START=<pid>` first and `_EXIT=<pid> <status>` last, as the
 # other harness scripts frame theirs (scripts/await-task.sh), with one line
@@ -263,8 +259,8 @@ trap 'on_signal 129' HUP
 refuse() { echo "stage: $2" >&2; exit "$1"; }
 
 # Whether $1 names a stage, whole.
-is_stage() { case $1 in save|handoff|pull-request|release|nightly) return 0 ;; *) return 1 ;; esac; }
-usage() { echo "usage: $0 [-l LOGDIR] [-n] save|handoff|pull-request|release|nightly [-- PATHS]"; }
+is_stage() { case $1 in save|handoff|nightly) return 0 ;; *) return 1 ;; esac; }
+usage() { echo "usage: $0 [-l LOGDIR] [-n] save|handoff|nightly [-- PATHS]"; }
 
 logdir= dry=false stage= explicit=false paths=()
 while [ "$#" -gt 0 ]; do
@@ -546,7 +542,7 @@ for row in ${rows[@]+"${rows[@]}"}; do
 done
 
 # Each row's lane: in save and handoff its folder, - for one that runs
-# beside every other; in every other stage the one lane of the stage.
+# beside every other; in the nightly the one lane of the stage.
 lanes=()
 for i in ${rows[@]+"${!rows[@]}"}; do
   IFS=$'\t' read -r _ _ _ _ _ folder _ <<<"${rows[$i]}"

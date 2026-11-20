@@ -9,7 +9,7 @@
 # Prints cyfr-locus:in-<h> (Dockerfile.locus) or cyfr:in-<h> (Dockerfile)
 # on stdout, where <h> is the first 20 hex digits of a hash of the image's
 # inputs, and says `image: built <tag>` or `image: reused <tag>` on stderr.
-# CI and the commit gate build under their own tags and never use these.
+# CI builds under its own tags and never uses these.
 #
 # The inputs are the files the Dockerfile's COPY lines read, as the tree
 # this checkout holds now: its index, its modified files and its untracked
@@ -34,8 +34,8 @@
 # source) the path and a newline, then its mode, a space, its blob id and
 # a newline; then the Docker daemon's platform (os/arch) and a newline;
 # then each build argument as NAME=value and a newline, sorted by name.
-# The only argument is APT_REFRESH: the UTC date, as CI and the gate pass
-# it, or 0 with --undated, as a compose or dev build leaves it.
+# The only argument is APT_REFRESH: the UTC date, as CI passes it, or 0
+# with --undated, as a compose or dev build leaves it.
 # .dockerignore's exclusions are not applied to the hash: a spare build is
 # the cheaper error than a hash that misses a file the build reads.
 #

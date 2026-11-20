@@ -5,7 +5,10 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   @moduledoc """
   The shipped soul's baseline consent selects, on its edge to the shipped
   catalyst it runs on, that catalyst's default profile — so the key a
-  person binds on the catalyst is what the assistant runs it with. A
+  person binds on the catalyst is what the assistant runs it with. The
+  repository's seed names no crew member Aqua runs on, so the seed here
+  seats it on one on claude (`Cyfr.Test.SeedBundle.seat!/2`), as an
+  operator's seed may. A
   person's own formula is not machine-minted.
   A boot re-mints a bootstrap-only consent that lacks the
   selections its dependencies offer, or whose closure the seed moved,
@@ -32,6 +35,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     seed_dir = Path.join(test_dir, "seed")
     copy_bundle!(Path.join(seed_dir, "components"))
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
+    :ok = Cyfr.Test.SeedBundle.seat!(seed_dir)
 
     prev_base = Application.get_env(:arca, :base_path)
     prev_seed = Application.get_env(:arca, :seed_path)

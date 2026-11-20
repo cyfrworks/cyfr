@@ -48,7 +48,11 @@ streams.
   run's outcome from `runs.changes`, never as the press's answer.
 - Write with `canvas.write` what the person asked for, and declare only
   the streams the page opens.
-- Add a new canvas to the person's layout with `layout.edit`.
+- Add a new canvas to the person's layout with `layout.edit`. It
+  rearranges their screen, so move or add one when they ask.
+- `feed.bind` binds a feed and `feed.remove` removes one: a feed runs
+  on its own, under the person's grant of its component, so say in your
+  reply what you bound or removed.
 - Leave activation to the browser. It checks a new version before it
   shows it, and the way back to the version it replaced is the person's.
 

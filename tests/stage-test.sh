@@ -74,7 +74,7 @@ toy_rows=(
   'handoff|tests|1|60|-|tests|printf "%s\n" $STAGE_TESTS >"$STAGE_LOGDIR/tests.txt"'
   'handoff|env|4|60|-|always|printf "%s;%s;%s;%s\n" "$STAGE" "$STAGE_TESTS" "$STAGE_LOGDIR" "${PROOF_RUN_PREFIX-unset}" >"$STAGE_LOGDIR/env.txt"'
   'handoff|notes|4|60|-|notes/**|echo notes'
-  'release|close|4|60|-|always|echo close'
+  'save|close|4|60|-|always|echo close'
 )
 table "${toy_rows[@]}"
 git -C "$repo" add -A
@@ -181,17 +181,17 @@ stage spaced2 -l "$S/logs-spaced2" handoff
 reset_tree
 
 begin 'a row whose queue deadline passes or whose prerequisite is missing is not run, another that fails is failed, each fails the stage, and the rows after them still run'
-table "${toy_rows[@]}" 'release|queue|1|60|-|always|echo #queue-deadline' 'release|missing|1|60|-|always|exit 69' \
-  'release|broken|1|60|-|always|exit 3' 'release|after|1|60|-|always|echo after'
-stage deadline -l "$S/logs-deadline" release
+table "${toy_rows[@]}" 'nightly|queue|1|60|-|always|echo #queue-deadline' 'nightly|missing|1|60|-|always|exit 69' \
+  'nightly|broken|1|60|-|always|exit 3' 'nightly|after|1|60|-|always|echo after'
+stage deadline -l "$S/logs-deadline" nightly
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
 framed deadline 1
 grep -qx 'queue: not run 75 [0-9]*s' "$S/deadline.out" || fail "the deadline row said: $(cat "$S/deadline.out")"
 grep -qx 'missing: not run 69 [0-9]*s' "$S/deadline.out" || fail "the row missing a prerequisite said: $(cat "$S/deadline.out")"
 grep -qx 'broken: failed 3 [0-9]*s' "$S/deadline.out" || fail "the failing row said: $(cat "$S/deadline.out")"
 grep -qx 'after: ok [0-9]*s' "$S/deadline.out" || fail 'the row after them did not run'
-table "${toy_rows[@]}" 'release|missing|1|60|-|always|exit 69' 'release|after|1|60|-|always|echo after'
-stage missing-only -l "$S/logs-missing-only" release
+table "${toy_rows[@]}" 'nightly|missing|1|60|-|always|exit 69' 'nightly|after|1|60|-|always|echo after'
+stage missing-only -l "$S/logs-missing-only" nightly
 [ "$rc" = 1 ] || fail "a stage whose one red row was not run exited $rc, not 1"
 framed missing-only 1
 table "${toy_rows[@]}"
@@ -224,7 +224,7 @@ refused 9 "a row takes 1 or 4 quarters, not 'exclusive'" 'nightly|x|exclusive|60
 refused 9 "'apps/**,,config/**' is not always, tests or comma-separated globs" 'handoff|x|1|60|-|apps/**,,config/**|echo x'
 refused 9 "'apps/** config/**' is not always, tests or comma-separated globs" 'handoff|x|1|60|-|apps/** config/**|echo x'
 refused 9 'handoff has a second check called compile' 'handoff|compile|1|60|-|always|echo x'
-refused 9 'only save and handoff rows take tests' 'release|x|1|60|-|tests|echo x'
+refused 9 'only save and handoff rows take tests' 'nightly|x|1|60|-|tests|echo x'
 refused 9 'only save and handoff rows take globs' 'nightly|x|1|60|-|apps/**|echo x'
 refused 9 "a row takes 1 or 4 quarters, not 'none'" 'handoff|x|none|-|-|always|git grep x'
 refused 9 "the hold '-' is not seconds" 'handoff|x|1|-|-|always|echo x'
@@ -238,7 +238,7 @@ table "${toy_rows[@]}"
 
 begin 'a table that is missing or unreadable is refused with 65 naming it, and a stage is named whole'
 mv "$repo/scripts/stages.tsv" "$S/stages.tsv.away"
-stage missing -l "$S/logs-missing" release
+stage missing -l "$S/logs-missing" nightly
 [ "$rc" = 65 ] && grep -qF 'stage: scripts/stages.tsv: there is no stage table to read' "$S/missing.err" ||
   fail "a missing table gave $rc: $(cat "$S/missing.err")"
 framed missing 65
@@ -247,7 +247,7 @@ mv "$S/stages.tsv.away" "$repo/scripts/stages.tsv"
 mkdir "$S/a-directory"
 mv "$repo/scripts/stages.tsv" "$S/stages.tsv.away"
 ln -s "$S/a-directory" "$repo/scripts/stages.tsv"
-stage unreadable -l "$S/logs-unreadable" release
+stage unreadable -l "$S/logs-unreadable" nightly
 [ "$rc" = 65 ] || fail "a table that is a directory gave $rc"
 rm "$repo/scripts/stages.tsv"
 mv "$S/stages.tsv.away" "$repo/scripts/stages.tsv"
@@ -272,11 +272,11 @@ status=0; (cd "$repo" && scripts/stage.sh -n deploy) >/dev/null 2>&1 || status=$
 [ "$status" = 64 ] || fail "an unknown stage gave $status"
 
 begin 'INT and TERM stop the running row and end with a frame'
-table "${toy_rows[@]}" 'release|slow|1|60|-|always|exec sleep 6107'
+table "${toy_rows[@]}" 'nightly|slow|1|60|-|always|exec sleep 6107'
 for sig in INT:130 TERM:143; do
   name=${sig%%:*} want=${sig##*:}
   : >"$STUB_CALLS"
-  (cd "$repo" && exec "${defaulted[@]}" INT scripts/stage.sh -l "$S/logs-$name" release) >"$S/$name.out" 2>"$S/$name.err" &
+  (cd "$repo" && exec "${defaulted[@]}" INT scripts/stage.sh -l "$S/logs-$name" nightly) >"$S/$name.out" 2>"$S/$name.err" &
   runner=$!
   until_true 10 grep -q 'sleep 6107' "$STUB_CALLS" || fail "$name: the slow row never started"
   until_true 10 pgrep -f '^sleep 6107$' >/dev/null || fail "$name: no sleep found"
@@ -635,8 +635,8 @@ table "${toy_rows[@]}"
 reset_tree
 
 begin 'the handle proof without CYFR_RUN_DIR exits 69 and says it did not run, which the stage reports as not run'
-table "${toy_rows[@]}" "release|handle|1|60|-|always|env -u CYFR_RUN_DIR bash '$ROOT/tests/handle-proof/run.sh'"
-stage handle -l "$S/logs-handle" release
+table "${toy_rows[@]}" "nightly|handle|1|60|-|always|env -u CYFR_RUN_DIR bash '$ROOT/tests/handle-proof/run.sh'"
+stage handle -l "$S/logs-handle" nightly
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
 grep -qx 'handle: not run 69 [0-9]*s' "$S/handle.out" || fail "the handle proof's row said: $(cat "$S/handle.out")"
 grep -qxF 'handle proof: not run: CYFR_RUN_DIR names no cyfr.run checkout, and the registry is built from one' "$S/logs-handle/handle.log" ||
@@ -1116,16 +1116,16 @@ grep -qx 'selected unit sqlite apps/cyfr/test/cyfr/a_test.exs' "$S/logs-unqueued
 git -C "$rrepo" checkout -q -- .
 
 begin 'the real table reads whole, no save or handoff row takes more than one quarter, and every self-test a handoff row runs is one a pull-request workflow runs'
-status=0; (cd "$ROOT" && scripts/stage.sh -n release) >"$S/real.out" 2>"$S/real.err" || status=$?
+status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/real.out" 2>"$S/real.err" || status=$?
 [ "$status" = 0 ] || fail "the real table was refused: $(cat "$S/real.err")"
-grep -qF 'would run close (4 quarters): scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"' "$S/real.out" || fail "$(cat "$S/real.out")"
+grep -qxF 'would run janitor (1 quarter): scripts/janitor.sh' "$S/real.out" || fail "$(cat "$S/real.out")"
 # What needs the whole machine is the pull request's run's: the save and
 # handoff rows each queue for one quarter.
 whole_rows() { # TABLE: prints each save or handoff row of TABLE on more than one quarter
   awk -F'\t' '!/^#/ && ($1 == "save" || $1 == "handoff") && $3 != "1" { print $1 "/" $2 }' "$1"
 }
 [ -z "$(whole_rows "$ROOT/scripts/stages.tsv")" ] || fail "a row takes the whole machine: $(whole_rows "$ROOT/scripts/stages.tsv" | tr '\n' ' ')"
-{ cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe-one\t1\t60\t-\talways\ttrue\nhandoff\tprobe\t4\t60\t-\talways\ttrue\nsave\tprobe\t4\t60\t-\talways\ttrue\nrelease\tprobe\t4\t60\t-\talways\ttrue\n'; } >"$S/stages-whole.tsv"
+{ cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe-one\t1\t60\t-\talways\ttrue\nhandoff\tprobe\t4\t60\t-\talways\ttrue\nsave\tprobe\t4\t60\t-\talways\ttrue\nnightly\tprobe\t4\t60\t-\talways\ttrue\n'; } >"$S/stages-whole.tsv"
 [ "$(whole_rows "$S/stages-whole.tsv" | tr '\n' ' ')" = 'handoff/probe save/probe ' ] || fail "the whole-machine rows were not caught alone: $(whole_rows "$S/stages-whole.tsv")"
 guard() { # TABLE [WORKFLOWS]: prints each self-test a handoff row of TABLE runs that no pull-request workflow runs
   python3 -I - "${2:-$ROOT/.github/workflows}" "$1" <<'PY'

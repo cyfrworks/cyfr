@@ -50,6 +50,12 @@ defmodule PrismWeb.ConnCase do
     Cyfr.Test.SeedBundle.lay!(~w(claude files http))
     ctx = %{Sanctum.TestContext.local(:prism) | user_id: user_id, athanor_id: athanor_id}
     :ok = Sanctum.TestContext.shipped!(athanor_id)
+    # A sign-in before the bundle was laid (`log_in_user/3`) copied in the
+    # suite's own seed, whose Aqua runs on no crew member; the athanor
+    # takes the bundle's, which runs on one (`Cyfr.Test.SeedBundle.seat!/2`).
+    :ok =
+      Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)

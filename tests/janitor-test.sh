@@ -116,16 +116,6 @@ record "$d5" '' "$HEAVY_CHECK_LOCK.quarter3.holder"
 # A stale record, its group and watchdog gone, for a pid that still lives.
 record "$l2" "group=$(dead_pid) watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.quarter4.holder"
 plant_container other-project-db
-# Rule 1: what a commit gate made, named by its pid: a gone gate's
-# objects and scratch directories, and a running gate's.
-gate_dead=$(dead_pid); gate_live=$(live_pid)
-for g in "$gate_dead" "$gate_live"; do
-  plant_container "cyfr-gate-$g-boot-psql"
-  touch "$DOCKER_STUB/networks/cyfr-gate-$g-harness-net" "$DOCKER_STUB/volumes/cyfr-gate-$g-harness-data"
-  plant_image "cyfr-gate-$g/cyfr:push" '' "$OLD"
-  plant_image "cyfr-gate-$g-harness-cyfr-tailscale-standin:run1" '' "$OLD"
-  mkdir -p "$S/tmp/cyfr-gate-$g-gate" "$S/tmp/cyfr-gate-$g-harness.tools"
-done
 # Rule 1: the install-screen proof's scratch directories, one of a finished
 # run and one of a live run, beside another directory named under the
 # finished run's prefix, which that run may keep, and one under no prefix.
@@ -215,11 +205,11 @@ run_dir cyfr-t.r7 "$(dead_pid)"; mkdir -p "$S/tmp/cyfr-t.r7/p1"
 db1=cyfr_test_11111111111111111111111111111111_p1
 db2=cyfr_test_11111111111111111111111111111111_p2
 run_dir cyfr-t.r8 "$(dead_pid)"; receipt "$S/tmp/cyfr-t.r8" 1 "$db1"; receipt "$S/tmp/cyfr-t.r8" 2 "$db2" mismatched
-mkdir -p "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-gate.b" "$S/tmp/cyfr-stage.save.c" \
+mkdir -p "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-stage.save.c" \
   "$S/tmp/cyfr-evidence.install-screen-case2.d" "$S/tmp/cyfr-evidence.install-screen-case3.e"
 age 4 "$S"/tmp/cyfr-t.r1 "$S"/tmp/cyfr-t.r2 "$S"/tmp/cyfr-t.r3 "$S"/tmp/cyfr-t.r4 "$S"/tmp/cyfr-t.r7 "$S"/tmp/cyfr-t.r8
 age 1 "$S/tmp/cyfr-t.r5" "$S/tmp/cyfr-stage.save.c" "$S/tmp/cyfr-evidence.install-screen-case3.e"
-age 8 "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-gate.b" "$S/tmp/cyfr-evidence.install-screen-case2.d"
+age 8 "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-evidence.install-screen-case2.d"
 
 # Rule 6: uses with dead and live pids.
 h6=66666666666666666666
@@ -273,22 +263,6 @@ has main "kept container cyfr-$seed-$l2-proof: its pid $l2 is alive"
 for pid in "$l1" "$l2" "$d3" "$d4" "$d5"; do there "$DOCKER_STUB/containers/cyfr-$seed-$pid-proof"; done
 there "$DOCKER_STUB/containers/other-project-db"; lacks main other-project-db
 
-begin "rule 1: a gone gate's objects and scratch directories go by its pid; a running gate's stay"
-gone "$DOCKER_STUB/containers/cyfr-gate-$gate_dead-boot-psql"; has main "removed container cyfr-gate-$gate_dead-boot-psql"
-gone "$DOCKER_STUB/networks/cyfr-gate-$gate_dead-harness-net"; has main "removed network cyfr-gate-$gate_dead-harness-net"
-gone "$DOCKER_STUB/volumes/cyfr-gate-$gate_dead-harness-data"; has main "removed volume cyfr-gate-$gate_dead-harness-data"
-for t in "cyfr-gate-$gate_dead/cyfr:push" "cyfr-gate-$gate_dead-harness-cyfr-tailscale-standin:run1"; do
-  gone "$(image_file "$t")"; has main "removed image $t"
-done
-for d in gate harness.tools; do
-  gone "$S/tmp/cyfr-gate-$gate_dead-$d"; has main "removed directory $S/tmp/cyfr-gate-$gate_dead-$d"
-  there "$S/tmp/cyfr-gate-$gate_live-$d"; has main "kept directory $S/tmp/cyfr-gate-$gate_live-$d: its pid $gate_live is alive"
-done
-there "$DOCKER_STUB/containers/cyfr-gate-$gate_live-boot-psql"
-has main "kept container cyfr-gate-$gate_live-boot-psql: its pid $gate_live is alive"
-there "$(image_file "cyfr-gate-$gate_live/cyfr:push")"
-has main "kept image cyfr-gate-$gate_live/cyfr:push: its pid $gate_live is alive"
-
 begin "rule 1: the install-screen proof's scratch directory, holding a guest's key, goes once its run is finished"
 gone "$scratch_done"; has main "removed directory $scratch_done"
 there "$scratch_live"; has main "kept directory $scratch_live: its pid $l1 is alive"
@@ -338,9 +312,8 @@ if grep -qF "$db1" "$DOCKER_STUB/calls"; then fail "the readable partition's dat
 lacks main "removed database $db1"
 
 begin 'rule 5: log and evidence directories older than seven days go'
-gone "$S/tmp/cyfr-stage.nightly.a"; gone "$S/tmp/cyfr-gate.b"; there "$S/tmp/cyfr-stage.save.c"
+gone "$S/tmp/cyfr-stage.nightly.a"; there "$S/tmp/cyfr-stage.save.c"
 has main "removed directory $S/tmp/cyfr-stage.nightly.a"
-has main "removed directory $S/tmp/cyfr-gate.b"
 gone "$S/tmp/cyfr-evidence.install-screen-case2.d"; has main "removed directory $S/tmp/cyfr-evidence.install-screen-case2.d"
 there "$S/tmp/cyfr-evidence.install-screen-case3.e"; lacks main cyfr-evidence.install-screen-case3.e
 
@@ -431,11 +404,11 @@ EOF
 chmod +x "$S/list-bin/docker" "$S/list-bin/git"
 dl=$(dead_pid)
 plant_container "cyfr-$seed-$dl-listing"
-# A gone gate's network and scratch directory, which a container of the
-# gate the failed listing did not show could still hold.
+# A gone run's network and scratch directory, which a container of the
+# run the failed listing did not show could still hold.
 gl=$(dead_pid)
-touch "$DOCKER_STUB/networks/cyfr-gate-$gl-harness-net"
-mkdir -p "$S/tmp/cyfr-gate-$gl-harness.tools"
+touch "$DOCKER_STUB/networks/cyfr-$seed-$gl-net"
+mkdir -p "$S/tmp/cyfr-$seed-$gl-install-screen.Qr90St"
 sum8=8888888888888888888888888888888888888888888888888888888888888888
 mkdir -p "$S/cache/$sum8"; age 30 "$S/cache/$sum8"
 there "$(image_file "$t0")"
@@ -444,15 +417,15 @@ status=0; PATH="$S/list-bin:$PATH" janitor listing --keep-build-cache || status=
 has listing 'failed listing containers: stub: ps fails'
 has listing 'failed listing worktrees: stub: worktree list fails'
 there "$DOCKER_STUB/containers/cyfr-$seed-$dl-listing"
-there "$DOCKER_STUB/networks/cyfr-gate-$gl-harness-net"; lacks listing "network cyfr-gate-$gl-harness-net"
-there "$S/tmp/cyfr-gate-$gl-harness.tools"
-has listing "kept directory $S/tmp/cyfr-gate-$gl-harness.tools: the Docker objects could not all be listed"
+there "$DOCKER_STUB/networks/cyfr-$seed-$gl-net"; lacks listing "network cyfr-$seed-$gl-net"
+there "$S/tmp/cyfr-$seed-$gl-install-screen.Qr90St"
+has listing "kept directory $S/tmp/cyfr-$seed-$gl-install-screen.Qr90St: the Docker objects could not all be listed"
 there "$(image_file "$t0")"; lacks listing "$t0"
 there "$S/cache/$sum8"; lacks listing "$sum8"
 janitor listing-after --keep-build-cache || fail "the next run exited $?"
-gone "$DOCKER_STUB/networks/cyfr-gate-$gl-harness-net"; gone "$S/tmp/cyfr-gate-$gl-harness.tools"
+gone "$DOCKER_STUB/networks/cyfr-$seed-$gl-net"; gone "$S/tmp/cyfr-$seed-$gl-install-screen.Qr90St"
 
-begin "a gone gate whose container cannot be removed keeps its network, image and scratch directory"
+begin "a gone run whose container cannot be removed keeps its network, image and scratch directory"
 mkdir -p "$S/rm-container-bin"
 cat >"$S/rm-container-bin/docker" <<EOF
 #!/usr/bin/env bash
@@ -461,21 +434,21 @@ exec $(command -v docker) "\$@"
 EOF
 chmod +x "$S/rm-container-bin/docker"
 gr=$(dead_pid)
-plant_container "cyfr-gate-$gr-boot-psql"
-touch "$DOCKER_STUB/networks/cyfr-gate-$gr-harness-net"
-plant_image "cyfr-gate-$gr/cyfr:push" '' "$OLD"
-mkdir -p "$S/tmp/cyfr-gate-$gr-gate"
+plant_container "cyfr-$seed-$gr-proof"
+touch "$DOCKER_STUB/networks/cyfr-$seed-$gr-net"
+plant_image "cyfr-$seed-$gr-cyfr-tailscale-standin:run1" '' "$OLD"
+mkdir -p "$S/tmp/cyfr-$seed-$gr-install-screen.Uv12Wx"
 status=0; PATH="$S/rm-container-bin:$PATH" janitor rm-container --keep-build-cache || status=$?
 [ "$status" = 1 ] || fail "exited $status, not 1"
-has rm-container "failed container cyfr-gate-$gr-boot-psql: stub: rm fails"
-there "$DOCKER_STUB/containers/cyfr-gate-$gr-boot-psql"
-there "$DOCKER_STUB/networks/cyfr-gate-$gr-harness-net"
-has rm-container "kept network cyfr-gate-$gr-harness-net: an object of its run before it could not be removed"
-there "$(image_file "cyfr-gate-$gr/cyfr:push")"
-there "$S/tmp/cyfr-gate-$gr-gate"
-has rm-container "kept directory $S/tmp/cyfr-gate-$gr-gate: its run's Docker objects could not all be removed"
+has rm-container "failed container cyfr-$seed-$gr-proof: stub: rm fails"
+there "$DOCKER_STUB/containers/cyfr-$seed-$gr-proof"
+there "$DOCKER_STUB/networks/cyfr-$seed-$gr-net"
+has rm-container "kept network cyfr-$seed-$gr-net: an object of its run before it could not be removed"
+there "$(image_file "cyfr-$seed-$gr-cyfr-tailscale-standin:run1")"
+there "$S/tmp/cyfr-$seed-$gr-install-screen.Uv12Wx"
+has rm-container "kept directory $S/tmp/cyfr-$seed-$gr-install-screen.Uv12Wx: its run's Docker objects could not all be removed"
 janitor rm-container-after --keep-build-cache || fail "the next run exited $?"
-gone "$DOCKER_STUB/containers/cyfr-gate-$gr-boot-psql"; gone "$S/tmp/cyfr-gate-$gr-gate"
+gone "$DOCKER_STUB/containers/cyfr-$seed-$gr-proof"; gone "$S/tmp/cyfr-$seed-$gr-install-screen.Uv12Wx"
 
 # The interleavings of a janitor and an image.sh call for one tag, from a
 # clone, which no worktree of the repository speaks for.

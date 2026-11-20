@@ -5,16 +5,18 @@ defmodule Aqua.Loop.Turn do
   @moduledoc """
   What a loop runs, rebuilt from rows: the turn and its thread, the
   agent as the turn pinned it — the revision bytes, resolved as the agent
-  runs (a crew member offered the soul's tools,
-  `Compendium.resolve_agent/3`), whose capability digest must equal the
+  runs (a crew member offered the soul's tools, the soul seated on the
+  crew member its bytes name, `Compendium.resolve_agent/3`), whose
+  capability digest must equal the
   one the turn started under — the roster, the member's mode and the set
   it is offered (`Aqua.Offered`) narrowed to the tools a crew request
   named (`options["tools"]`), the resolved model catalyst with its capabilities
   and the request size its consent caps it at (`request_cap`), the brain
   options — the agent file's own, over which a crew request's
-  (`options["brain_options"]`) set theirs — the system prompt (a crew
-  member's opening with CYFR's briefing for its kind of brain,
-  `Aqua.Prompt.briefing/2`), the tool
+  (`options["brain_options"]`) set theirs — the system prompt (the
+  soul's prompt or a crew member's opening, then CYFR's part for its
+  kind of brain, `Aqua.Prompt.briefing/2`; the soul's brain is its
+  member's), the tool
   surface (with the accounts its launches may name,
   read once here for every request the spec makes,
   `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
@@ -80,7 +82,10 @@ defmodule Aqua.Loop.Turn do
   model, so its brain is not described and its capabilities are none
   (`Aqua.Models.none/0`).
 
-  Refuses an agent that names no model (`:no_model`), a catalyst the
+  Refuses Aqua whose crew member does not stand (`{:aqua_runs_on,
+  state, member}`, `Compendium.AquaAgent.seated/2`), a program brain
+  whose row does not (`{:crew_unready, title, state}`), an agent that
+  names no model (`:no_model`), a catalyst the
   athanor does not hold or that does not speak `model/chat@1`, and a
   model its catalyst cannot describe (`Aqua.Models.capabilities/5`; a
   typed refusal is `{:model_refused, catalyst, error}`, and a catalyst
@@ -93,6 +98,7 @@ defmodule Aqua.Loop.Turn do
     with {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          {:ok, agent} <- agent(ctx, turn),
+         :ok <- held(agent),
          soul? = Prima.AgentRef.soul?(agent["name"]),
          options = decode(turn.options),
          brain_options = Map.merge(agent["options"] || %{}, options["brain_options"] || %{}),
@@ -261,9 +267,19 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
+  # Aqua runs on the crew member its pinned bytes name, which must supply
+  # its brain; a crew member holds no one.
+  defp held(%{"holder" => %{state: :held}}), do: :ok
+
+  defp held(%{"holder" => %{state: state, name: member}}),
+    do: {:error, {:aqua_runs_on, state, member}}
+
+  defp held(_crew), do: :ok
+
   defp agent_map(%{name: name} = parsed) do
     %{
       "name" => name,
+      "holder" => parsed.holder,
       "title" => parsed.title,
       "description" => parsed.description,
       "avoid" => parsed.avoid,
@@ -307,8 +323,16 @@ defmodule Aqua.Loop.Turn do
          do: {:ok, {nil, Map.delete(program, :driver)}, turn.model || agent["model"]}
   end
 
-  defp program_model(_turn, _agent, {:error, {state, _name}}), do: {:error, state}
-  defp program_model(_turn, _agent, {:error, state}), do: {:error, state}
+  # A program row that does not stand is said as the member's card says
+  # it, naming whose brain it is: Aqua's is its member's, whose card
+  # installs or opens it.
+  defp program_model(_turn, agent, {:error, {state, _name}}),
+    do: {:error, {:crew_unready, brain_title(agent), state}}
+
+  defp program_model(_turn, _agent, {:error, :unavailable}), do: {:error, :unavailable}
+
+  defp program_model(_turn, agent, {:error, state}),
+    do: {:error, {:crew_unready, brain_title(agent), state}}
 
   defp catalyst_model(ctx, turn, agent) do
     listing =
@@ -324,19 +348,27 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  # A read-only member's brain must be one CYFR keeps read-only
+  # A read-only member's brain, Aqua's member's included, must be one CYFR keeps read-only
   # (`Aqua.Models.holds_read_only?/1`): this is the first point the turn
   # reads its catalyst's manifest or its program row, after the root's
   # claim and before anything runs, and a turn refused here ends unrun
   # with the sentence as a line in its thread (`Aqua.Loop`). The mode is
   # the one the turn's row stored at its start (`turns.agent_mode`).
+  # Aqua's mode is its member's, so the sentence names the member whose
+  # mode the person switches.
   defp holds(%{agent_mode: "read-only"}, agent, brain, name) do
     if Aqua.Models.holds_read_only?(brain),
       do: :ok,
-      else: {:error, {:read_only_unheld, agent["title"] || agent["name"], name}}
+      else: {:error, {:read_only_unheld, brain_title(agent), name}}
   end
 
   defp holds(_auto, _agent, _brain, _name), do: :ok
+
+  # Whose brain and mode the agent's are: Aqua's are its member's.
+  defp brain_title(%{"holder" => %{title: title}}) when is_binary(title), do: title
+  defp brain_title(agent), do: title(agent)
+
+  defp title(agent), do: agent["title"] || agent["name"]
 
   defp needs(listing, catalyst) do
     row = Enum.find(listing, &(&1["component_ref"] == catalyst)) || %{}

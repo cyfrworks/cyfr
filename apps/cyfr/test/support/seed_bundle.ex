@@ -95,7 +95,9 @@ defmodule Cyfr.Test.SeedBundle do
 
   @doc """
   Lay the tree, with the formulas `formulas:` names beside the catalysts,
-  set `:seed_path` to it, and answer its path.
+  set `:seed_path` to it, and answer its path. Its Aqua runs on the crew
+  member `seat!/2` lays, on the bundled Claude catalyst, as a shipped
+  athanor's does once its person has chosen one.
   """
   @spec lay!([String.t()], formulas: [String.t()]) :: String.t()
   def lay!(catalysts, opts \\ []) when is_list(catalysts) do
@@ -106,6 +108,7 @@ defmodule Cyfr.Test.SeedBundle do
     seed_tree!("seed_bundle", fn dir ->
       File.mkdir_p!(dir)
       File.cp_r!(Path.join(@repo_seed, "aqua"), Path.join(dir, "aqua"))
+      seat!(dir)
 
       for %{rel: rel} <- units do
         copy_unit!(
@@ -114,6 +117,43 @@ defmodule Cyfr.Test.SeedBundle do
         )
       end
     end)
+  end
+
+  @seat_member "claude"
+
+  @doc """
+  The crew member a laid tree's Aqua runs on (`seat!/2`).
+  """
+  @spec seat_member() :: String.t()
+  def seat_member, do: @seat_member
+
+  @doc """
+  Seat the Aqua tree under `dir` on a crew member of the tree's own: the
+  shipped soul names no member, so a tree whose turns run on one brain
+  lays a member on it beside the shipped crew, and the soul's file names
+  it. `opts`: `:member` (`seat_member/0`), `:catalyst_ref`
+  (`catalyst:local.claude`), `:model` (`claude-sonnet-5-5`) and `:mode`
+  (`auto`).
+  """
+  @spec seat!(Path.t(), keyword()) :: :ok
+  def seat!(dir, opts \\ []) do
+    member = Keyword.get(opts, :member, @seat_member)
+    aqua = Path.join(dir, "aqua")
+    File.mkdir_p!(Path.join(aqua, "crew"))
+
+    File.write!(Path.join([aqua, "crew", member <> ".md"]), """
+    ---
+    title: #{member}
+    description: "Answers on #{Keyword.get(opts, :catalyst_ref, "catalyst:local.claude")}"
+    catalyst_ref: #{Keyword.get(opts, :catalyst_ref, "catalyst:local.claude")}
+    model: #{Keyword.get(opts, :model, "claude-sonnet-5-5")}
+    mode: #{Keyword.get(opts, :mode, "auto")}
+    ---
+    """)
+
+    soul = Path.join(aqua, "aqua.md")
+    "---\n" <> rest = File.read!(soul)
+    File.write!(soul, "---\nmember: " <> member <> "\n" <> rest)
   end
 
   # A tree of this test's own, filled by `fill`, and `:seed_path` pointed at
