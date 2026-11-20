@@ -223,7 +223,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("mode", :string,
               enum: AquaAgent.modes(),
               description:
-                "What of its offered tools this member runs (create/update; the soul or a crew member): 'read-only' runs only reads, then answers, and every other call is refused; 'auto' runs every tool it is offered, deleting included. A file without it is auto."
+                "What of its offered tools this member runs (create/update; a crew member, whose mode Aqua runs in when it runs on it): 'read-only' runs only reads, then answers, and every other call is refused; 'auto' runs every tool it is offered, deleting included. A file without it is auto."
             ),
             Arg.new("tools", {:array, Arg.new(nil, :string)},
               nullable: true,
@@ -247,6 +247,11 @@ defmodule Compendium.Providers.Aqua do
               nullable: true,
               description:
                 "Take a crew member out of the crew without deleting its file (for update; shipped members cannot be deleted — disable them instead)"
+            ),
+            Arg.new("member", :string,
+              nullable: true,
+              description:
+                "update only, the soul ('aqua'): the crew member Aqua runs on, whose brain, model, options and mode it takes; null names none. The soul has no brain of its own."
             ),
             Arg.new("expected_digest", :string,
               description:
@@ -403,7 +408,7 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua'), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools and running them in its own mode), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
+        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools and running them in its own mode), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
       title: "Aqua Agent System"
     )
   end
@@ -476,6 +481,7 @@ defmodule Compendium.Providers.Aqua do
               tools: agent.tools,
               disabled: agent.disabled
             })
+            |> Map.merge(seat_fields(agent))
             |> then(
               &if(is_binary(agent.prompt), do: Map.put(&1, :content, agent.prompt), else: &1)
             )
@@ -540,7 +546,8 @@ defmodule Compendium.Providers.Aqua do
          model: agent.model,
          options: agent.options,
          disabled: agent.disabled
-       })}
+       })
+       |> Map.merge(seat_fields(agent))}
     else
       {:error, :not_found} ->
         {:error, {:not_found, "Soul, crew member or guide", name}}
@@ -600,6 +607,8 @@ defmodule Compendium.Providers.Aqua do
     with :ok <- validate_name(name),
          :ok <- no_crew_tools(name, args),
          :ok <- no_crew_prompt(name, args),
+         :ok <- no_seat_brain(name, args),
+         :ok <- validate_member(name, args),
          :ok <- one_tools_argument(args),
          :ok <- validate_mode(args["mode"]),
          :ok <- validate_tools(args["tools"]),
@@ -618,6 +627,9 @@ defmodule Compendium.Providers.Aqua do
 
       {:error, :crew_has_no_prompt} ->
         {:error, {:conflict, AquaAgent.prompt_refused(name)}}
+
+      {:error, :seat_has_brain} ->
+        {:error, {:conflict, Prima.AgentRef.seat_has_brain()}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -970,7 +982,9 @@ defmodule Compendium.Providers.Aqua do
       options: args["options"] || %{},
       mode: args["mode"] || "auto",
       tools: [],
-      prompt: nil
+      prompt: nil,
+      member: nil,
+      holder: nil
     }
 
     # A crew member is a file unit: the one atomic put IS the unit commit
@@ -1057,6 +1071,7 @@ defmodule Compendium.Providers.Aqua do
     |> maybe_update(args, "model", :model, nil)
     |> maybe_update(args, "options", :options, %{})
     |> maybe_update(args, "disabled", :disabled, false)
+    |> maybe_update(args, "member", :member, nil)
     |> then(fn a ->
       case args["content"] do
         content when is_binary(content) -> %{a | prompt: content}
@@ -1112,6 +1127,16 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
+  # What the soul says of the crew member it runs on: its name, and while
+  # that member does not supply its brain, the sentence its turn is
+  # refused with (`Prima.Refusal`). A crew member says nothing of it.
+  defp seat_fields(%{holder: %{state: :held}, member: member}), do: %{member: member}
+
+  defp seat_fields(%{holder: %{state: state, name: holder}, member: member}),
+    do: %{member: member, member_refusal: Prima.Refusal.message({:aqua_runs_on, state, holder})}
+
+  defp seat_fields(_crew), do: %{}
+
   # The soul's own read, out of the list's per-agent errors: a soul whose
   # file the store could not give, or which does not parse, is refused
   # with that error.
@@ -1125,6 +1150,9 @@ defmodule Compendium.Providers.Aqua do
 
       {_soul, {:tools_invalid_entry, entry}} ->
         {:error, {:conflict, Prima.AgentRef.tools_entry_invalid(entry)}}
+
+      {_soul, :seat_has_brain} ->
+        {:error, {:conflict, Prima.AgentRef.seat_has_brain()}}
 
       {_soul, reason} ->
         {:error, reason}
@@ -1209,6 +1237,39 @@ defmodule Compendium.Providers.Aqua do
              "kind of job is done is a scroll — write one with skill_create"}},
        else: :ok
   end
+
+  # The soul runs on the crew member it names and has no brain of its
+  # own (`Compendium.AquaAgent`): a write that gives it one is refused,
+  # never dropped, with where the brain is set instead. A crew member
+  # names no member.
+  @seat_brain_args ~w(catalyst_ref program install model options options_patch mode)
+
+  defp no_seat_brain(name, args) do
+    cond do
+      AquaPath.soul?(name) and Enum.any?(@seat_brain_args, &(not is_nil(args[&1]))) ->
+        {:error,
+         {:invalid_argument,
+          "Aqua has no brain of its own: it runs on the crew member `member` names — set " <>
+            "member, and the brain, model, options and mode on that member"}}
+
+      not AquaPath.soul?(name) and not is_nil(args["member"]) ->
+        {:error,
+         {:invalid_argument, "Only Aqua runs on a crew member: member is set on 'aqua' alone"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  # The member the soul runs on is named as the tree names a crew
+  # member's file, and is never the soul itself.
+  defp validate_member(name, %{"member" => member}) when is_binary(member) do
+    if AquaPath.soul?(name) and AquaPath.valid_name?(member) and not AquaPath.soul?(member),
+      do: :ok,
+      else: {:error, {:invalid_argument, "member names a crew member, by its file's name"}}
+  end
+
+  defp validate_member(_name, _args), do: :ok
 
   # An agent names its brain once (`Compendium.AquaAgent.check_brain/1`):
   # a write that would name both a catalyst and a program is refused here,

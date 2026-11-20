@@ -44,12 +44,12 @@ defmodule Compendium.ProviderTest do
         )
     end
 
+    # Aqua runs on the crew member it names, whose brain and model it takes.
     write.(
       "aqua",
       %{
         title: "A.Q.U.A.",
-        catalyst_ref: "catalyst:moonmoon69.claude",
-        model: "claude-opus-4-6",
+        member: "claude-code",
         tools: ["component.list", "build.compile"]
       },
       "# A.Q.U.A.\n\nYou are A.Q.U.A."
@@ -69,7 +69,9 @@ defmodule Compendium.ProviderTest do
       "claude-code",
       %{
         title: "Claude Code",
-        description: "Coding work in a workspace of its own"
+        description: "Coding work in a workspace of its own",
+        catalyst_ref: "catalyst:moonmoon69.claude",
+        model: "claude-opus-4-6"
       },
       nil
     )
@@ -1682,6 +1684,8 @@ defmodule Compendium.ProviderTest do
       assert result.type == "soul"
       assert result.format == "markdown"
       assert result.content =~ "You are A.Q.U.A."
+      # The brain and model of the crew member Aqua runs on.
+      assert result.member == "claude-code"
       assert result.catalyst_ref == "catalyst:moonmoon69.claude"
       assert result.model == "claude-opus-4-6"
     end
@@ -1742,7 +1746,7 @@ defmodule Compendium.ProviderTest do
     test "update refuses a mode other than read-only or auto", %{ctx: ctx} do
       actor = Sanctum.Context.actor(ctx)
 
-      for name <- ["aqua", "explorer"] do
+      for name <- ["explorer"] do
         {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.agent_file(name))
 
         assert {:error,
@@ -1766,6 +1770,18 @@ defmodule Compendium.ProviderTest do
 
         assert {:ok, ^bytes} = Arca.get(actor, Compendium.AquaPath.agent_file(name))
       end
+
+      # Aqua runs in its member's mode and is given none of its own.
+      {:ok, soul} = Arca.get(actor, Compendium.AquaPath.soul_file())
+
+      assert {:error, {:invalid_argument, "Aqua has no brain of its own" <> _}} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua",
+                 "mode" => "ask"
+               })
+
+      assert {:ok, ^soul} = Arca.get(actor, Compendium.AquaPath.soul_file())
 
       assert {:error, {:invalid_argument, "mode must be \"read-only\" or \"auto\""}} =
                Provider.handle("aqua", ctx, %{
@@ -1893,7 +1909,6 @@ defmodule Compendium.ProviderTest do
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
                  "name" => "aqua",
-                 "mode" => "read-only",
                  "tools" => ["native_search", "github:list_issues", "files.read", "files.write"]
                })
 
@@ -1904,9 +1919,19 @@ defmodule Compendium.ProviderTest do
                  "mode" => "read-only"
                })
 
+      # Aqua runs in the mode of the crew member it runs on.
+      assert {:ok, _} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua",
+                 "member" => "claude-code"
+               })
+
       tools = ["files.read", "files.write", "github:list_issues", "native_search"]
       {:ok, soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
-      assert Map.take(soul, [:mode, :tools]) == %{mode: "read-only", tools: tools}
+
+      assert Map.take(soul, [:mode, :tools, :member]) ==
+               %{mode: "read-only", tools: tools, member: "claude-code"}
 
       # A mode is each member's own; the tools are the soul's.
       for {name, mode} <- [{"claude-code", "read-only"}, {"explorer", "auto"}] do
