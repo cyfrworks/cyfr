@@ -44,6 +44,18 @@ defmodule PrismWeb.AquaLive do
   `agent=<name>`, a crew member's), a change of shape whose consent is
   asked at once. A source whose consent moved is consented again the
   same way.
+
+  Beside the brains it offers each plan the crew names: a program a crew
+  member's file names, read from the cards' own roster, named by the
+  first member that names it with that member's title and install, and
+  the state of the row of that name. A plan whose row is missing is installed through the Programs
+  page's form, prefilled from that member's file; one whose row stands is
+  signed in on its terminal (the card's Set up), and its program's own
+  listing fills the picker. Picking one of those models makes the agent
+  name that program, with the member's install, the model and no
+  catalyst, as a crew member does; picking a catalyst's model takes the
+  program and its install away again. A program row no crew file names is
+  no plan here: the aqua tool names it.
   """
 
   use PrismWeb, :live_view
@@ -77,14 +89,16 @@ defmodule PrismWeb.AquaLive do
       |> assign(:prompt_seq, 0)
       # Aqua's setup: whether the address asked for it and for whom, the
       # brains it offers, the ones ticked, each connected brain's answer to
-      # its `models` call, how the roster's brains stand, and whether its
-      # last step leads to the administrator's own setup.
+      # its `models` call, how the roster's brains stand, the models each
+      # plan's program lists, and whether its last step leads to the
+      # administrator's own setup.
       |> assign(:setup_asked, false)
       |> assign(:setup_for, nil)
       |> assign(:providers, nil)
       |> assign(:ticked, MapSet.new())
       |> assign(:answers, %{})
       |> assign(:agents_read, nil)
+      |> assign(:plan_models, %{})
       |> assign(:admin_next, admin_next?(socket.assigns[:context]))
 
     # Subscribe before the load asks whether the athanor is ready: a fill
@@ -197,6 +211,11 @@ defmodule PrismWeb.AquaLive do
   # soul's is not connected, and names the crew members whose is not.
   def handle_info({:agents_read, read}, socket),
     do: {:noreply, assign(socket, :agents_read, read)}
+
+  # The models each plan's program listed for its member's card, which the
+  # setup's picker offers.
+  def handle_info({:plan_models, models}, socket),
+    do: {:noreply, assign(socket, :plan_models, models)}
 
   # A brain or model picked for an agent moved its consent's shape, which
   # is asked again at once.
@@ -522,9 +541,10 @@ defmodule PrismWeb.AquaLive do
 
   @doc """
   Aqua's setup: what the person has, as a checklist of every brain the
-  athanor can connect, a key shared with them first; one step for each
-  brain ticked; each connected brain's answer to its `models` call; which
-  connected brain the agent the setup is for runs on; the crew members
+  athanor can connect, a key shared with them first, and each plan, a
+  program the crew's files name; one step for each brain or plan ticked;
+  each connected brain's answer to its `models` call; which connected
+  brain or plan the agent the setup is for runs on; the crew members
   whose brain is not connected; and, for an administrator who has not
   seen it, their own setup next.
   """
@@ -535,6 +555,7 @@ defmodule PrismWeb.AquaLive do
   attr :agents_read, :any, required: true
   attr :setup_for, :string, default: nil
   attr :models_by_provider, :map, required: true
+  attr :plan_models, :map, default: %{}
   attr :athanor, :any, required: true
   attr :admin_next, :boolean, required: true
 
@@ -546,13 +567,20 @@ defmodule PrismWeb.AquaLive do
       end
 
     target = assigns.setup_for || (assigns.agents_read && assigns.agents_read.soul)
+    plans = (assigns.agents_read && assigns.agents_read[:plans]) || []
 
     assigns =
       assigns
       |> assign(:brains, providers)
+      |> assign(:plans, plans)
       |> assign(:target, target)
       |> assign(:steps, Enum.filter(providers, &step?(&1, assigns.ticked)))
-      |> assign(:connected?, Enum.any?(providers, &(&1.state == :ready)))
+      |> assign(:plan_steps, Enum.filter(plans, &plan_step?(&1, assigns.ticked)))
+      |> assign(:listed, listed_plans(plans, assigns.plan_models))
+      |> assign(
+        :connected?,
+        Enum.any?(providers, &(&1.state == :ready)) or Enum.any?(plans, &(&1.state == :ready))
+      )
       |> assign(:unconnected, (assigns.agents_read && assigns.agents_read.unconnected) || [])
 
     ~H"""
@@ -626,15 +654,50 @@ defmodule PrismWeb.AquaLive do
           </li>
         </ul>
 
+        <%!-- A plan is a program the crew's files name, run in the program
+              row of that name, signed in on its own terminal, and named by
+              the member that names it, as its catalyst once was. --%>
+        <ul :if={@plans != []} id="aqua-setup-plans" class="space-y-1.5">
+          <li
+            :for={plan <- @plans}
+            id={"aqua-setup-plan-" <> plan.member}
+            data-state={plan.state}
+            class="flex flex-wrap items-center gap-2"
+          >
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={MapSet.member?(@ticked, plan_tick(plan))}
+                phx-click="setup_tick"
+                phx-value-provider={plan_tick(plan)}
+                class="rounded bg-gray-900 border-gray-600"
+              />
+              <span class="font-medium text-gray-100">{plan.member}</span>
+              <span class="text-gray-400">{plan_need_line(plan)}</span>
+            </label>
+            <span :if={plan.state == :ready} class="text-emerald-400">connected</span>
+            <span
+              :if={plan.state in [:program_disabled, :program_unfit, :model_unavailable]}
+              class="text-amber-300"
+            >
+              {plan_line(plan.state)}
+            </span>
+          </li>
+        </ul>
+
         <p
-          :if={@brains != [] and MapSet.size(@ticked) == 0 and not @connected?}
+          :if={(@brains != [] or @plans != []) and MapSet.size(@ticked) == 0 and not @connected?}
           data-test="setup-needs"
           class="text-amber-300"
         >
           Aqua needs a key or a plan to answer: tick one you have.
         </p>
 
-        <ol :if={@steps != []} id="aqua-setup-steps" class="space-y-1.5 list-decimal pl-5">
+        <ol
+          :if={@steps != [] or @plan_steps != []}
+          id="aqua-setup-steps"
+          class="space-y-1.5 list-decimal pl-5"
+        >
           <li :for={brain <- @steps} id={"aqua-setup-step-" <> brain.provider}>
             <%= cond do %>
               <% brain.state == :needs_grant -> %>
@@ -667,6 +730,30 @@ defmodule PrismWeb.AquaLive do
                 </button>
             <% end %>
           </li>
+          <li :for={plan <- @plan_steps} id={"aqua-setup-step-plan-" <> plan.member}>
+            <%= if plan.state == :program_missing do %>
+              {plan.member}: install its program, then sign it in.
+              <.link
+                navigate={install_path(@athanor, plan)}
+                data-test="install-program"
+                class="text-blue-400 hover:underline"
+              >
+                install {plan.program}
+              </.link>
+            <% else %>
+              {plan.member}: sign its program in on its terminal, then pick it below.
+              <button
+                type="button"
+                phx-click="set_up_program"
+                phx-value-program={plan.program}
+                phx-target="#aqua-agents"
+                data-test="set-up-program"
+                class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
+              >
+                Set up {plan.program}
+              </button>
+            <% end %>
+          </li>
         </ol>
 
         <form
@@ -689,6 +776,13 @@ defmodule PrismWeb.AquaLive do
             <%= for {provider, models} <- @models_by_provider, models != [] do %>
               <optgroup label={provider}>
                 <option :for={m <- models} value={"#{provider}::#{m}"}>{m}</option>
+              </optgroup>
+            <% end %>
+            <%= for {plan, models} <- @listed do %>
+              <optgroup label={plan.member}>
+                <option :for={m <- models} value={"program::#{plan.program}::#{m.id}"}>
+                  {m.name}
+                </option>
               </optgroup>
             <% end %>
           </select>
@@ -715,6 +809,51 @@ defmodule PrismWeb.AquaLive do
   # unreadable consent is no step the person can take here.
   defp step?(%{state: state, provider: provider}, ticked),
     do: state in [:needs_grant, :needs_key, :needs_program] and MapSet.member?(ticked, provider)
+
+  # A plan ticked is a step while its program is to install or to sign
+  # in: the card cannot tell whether a row that stands is signed in, so a
+  # ready one still offers its terminal. Its tick is kept apart from the
+  # brains', which a catalyst of the program's name may share.
+  defp plan_step?(%{state: state} = plan, ticked),
+    do: state in [:program_missing, :ready] and MapSet.member?(ticked, plan_tick(plan))
+
+  defp plan_tick(%{program: program}), do: "program:" <> program
+
+  # Each ready plan with the models its program's listing gave, in the
+  # plans' order; a plan whose listing has not come, or gave none, offers
+  # none yet.
+  defp listed_plans(plans, models) do
+    for %{state: :ready, program: program} = plan <- plans,
+        [_ | _] = listed <- [Map.get(models, program, [])],
+        do: {plan, listed}
+  end
+
+  # A plan's line, in the words a catalyst's login need gave it, from the
+  # title of the member that names its program.
+  defp plan_need_line(%{title: title}),
+    do:
+      need_line(%{
+        kind: "login",
+        reason: "to run #{title} in its own folder, signed in to your own plan"
+      })
+
+  defp plan_line(:program_disabled), do: "it is disabled — enable it on the Programs page"
+
+  defp plan_line(:program_unfit),
+    do:
+      "it is not one a brain can run in — on the Programs page, make it a driven program " <>
+        "with a kept folder whose command starts with its driver"
+
+  defp plan_line(:model_unavailable), do: unready_line(:model_unavailable)
+
+  # The Programs page's install form, prefilled from the file of the crew
+  # member that names the plan's program, as its card's install is.
+  defp install_path(athanor, %{member: member}),
+    do:
+      PrismWeb.Focus.path(
+        athanor,
+        "/programs?" <> URI.encode_query(%{"install_for" => member, "from" => "aqua"})
+      )
 
   defp shared_line(%{owner: owner, person_daily: cap}) when is_integer(cap),
     do: "#{owner}'s key, shared with you, up to #{cap} requests a day"
@@ -796,6 +935,7 @@ defmodule PrismWeb.AquaLive do
         agents_read={@agents_read}
         setup_for={@setup_for}
         models_by_provider={@models_by_provider}
+        plan_models={@plan_models}
         athanor={@athanor}
         admin_next={@admin_next}
       />

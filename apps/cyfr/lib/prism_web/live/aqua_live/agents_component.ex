@@ -402,7 +402,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             # No hardcoded publisher fallback. A ref built from a personal
             # namespace resolves to nothing on any other deployment, so the
             # model choice failed silently there; the refs the page loaded are
-            # the only ones that exist.
+            # the only ones that exist. A brain is a catalyst or a program, so
+            # a program the agent named, and its install, go.
             catalyst_ref =
               case socket.assigns[:catalyst_refs][provider] do
                 nil -> nil
@@ -413,7 +414,21 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               "action" => "update",
               "name" => name,
               "model" => model,
-              "catalyst_ref" => catalyst_ref
+              "catalyst_ref" => catalyst_ref,
+              "program" => nil,
+              "install" => nil
+            })
+
+          # A plan the setup offers: the program a crew member names, with
+          # that member's install, and a model its program lists.
+          {:program, program, model} ->
+            call_aqua(ctx, %{
+              "action" => "update",
+              "name" => name,
+              "model" => model,
+              "catalyst_ref" => nil,
+              "program" => program,
+              "install" => plan_install(socket.assigns.crew, program)
             })
 
           :noop ->
@@ -425,7 +440,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       case result do
         # A brain or model picked moves the agent's consent's shape, so its
         # consent is asked again at once, in the page's system layer.
-        {:ok, _} when is_tuple(choice) and elem(choice, 0) == :model ->
+        {:ok, _} when is_tuple(choice) and elem(choice, 0) in [:model, :program] ->
           send(self(), {:ask_grant, Prima.AgentRef.ref(name)})
           {:noreply, socket}
 
@@ -516,6 +531,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   def handle_async(:brain_options, {:ok, {tag, options, models}}, socket) do
     CyfrWeb.ContextGuard.deliver(socket, tag, fn socket ->
+      send(self(), {:plan_models, plan_models(socket.assigns.crew, models)})
       {:noreply, socket |> assign(:brain_options, options) |> assign(:program_models, models)}
     end)
   end
@@ -614,8 +630,42 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     %{
       soul: soul && soul["name"],
       soul_ready: soul != nil and ready?.(soul["name"]),
-      unconnected: for(m <- crew, not m["disabled"], not ready?.(m["name"]), do: m["name"])
+      unconnected: for(m <- crew, not m["disabled"], not ready?.(m["name"]), do: m["name"]),
+      plans: plans(crew, status)
     }
+  end
+
+  # The plans the page's setup offers: each program the crew's files
+  # name, once, by the first member by name that names it, with that
+  # member's title and install, and how the row of that name stands, as
+  # that member's status reads it (`Aqua.Models`). A program row no crew
+  # file names is no plan.
+  defp plans(crew, status) do
+    crew
+    |> Enum.filter(&is_binary(program_of(&1)))
+    |> Enum.uniq_by(&program_of/1)
+    |> Enum.map(fn %{"name" => member} = m ->
+      {state, _name} = status[member] || {:model_unavailable, nil}
+
+      %{
+        program: m["program"],
+        install: m["install"],
+        member: member,
+        title: m["title"] || member,
+        state: state
+      }
+    end)
+    |> Enum.sort_by(& &1.program)
+  end
+
+  # Each program a crew member names with the models its listing gave
+  # that member's card, for the setup's picker.
+  defp plan_models(crew, models) do
+    for %{"name" => member} = m <- crew,
+        is_binary(program_of(m)),
+        is_list(models[member]),
+        into: %{},
+        do: {m["program"], models[member]}
   end
 
   # Each ready brain's options, from its own `describe` — a catalyst run
@@ -837,6 +887,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp cast_option(%{"kind" => "string"}, value), do: {:ok, value}
   defp cast_option(_declared, _value), do: {:refused, "That value does not fit the option"}
+
+  # The install the first crew member by name that names `program` gives.
+  defp plan_install(crew, program),
+    do: Enum.find_value(crew, &(program_of(&1) == program && &1["install"]))
 
   # The program a member's brain is, by its row's name, or nil.
   defp program_of(%{"program" => program}) when is_binary(program) and program != "",

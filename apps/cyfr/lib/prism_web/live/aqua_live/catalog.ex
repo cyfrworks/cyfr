@@ -123,16 +123,27 @@ defmodule PrismWeb.AquaLive.Catalog do
   # Decode the model dropdown's combined "provider::model" value back into a
   # provider+model pair. "" = inherit from parent. Anything else = noop.
   @doc """
-  Decode the model dropdown's combined `"provider::model"` value.
+  Decode the model dropdown's combined `"provider::model"` value, or the
+  setup's `"program::<name>::<model>"`: a plan, the program row of that
+  name with a model its program lists (`{:program, name, model}`).
   """
   def decode_model_choice(""), do: {:inherit}
 
-  def decode_model_choice(value) when is_binary(value) do
+  def decode_model_choice("program::" <> rest = value) do
+    case String.split(rest, "::", parts: 2) do
+      [program, model] when program != "" and model != "" -> {:program, program, model}
+      _ -> decode_catalyst_choice(value)
+    end
+  end
+
+  def decode_model_choice(value) when is_binary(value), do: decode_catalyst_choice(value)
+
+  def decode_model_choice(_), do: :noop
+
+  defp decode_catalyst_choice(value) do
     case String.split(value, "::", parts: 2) do
       [provider, model] when provider != "" and model != "" -> {:model, provider, model}
       _ -> :noop
     end
   end
-
-  def decode_model_choice(_), do: :noop
 end

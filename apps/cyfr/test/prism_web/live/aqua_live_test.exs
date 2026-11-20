@@ -1618,6 +1618,109 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # Each program the crew's files name is a plan on the setup, named by
+    # the member that names it, in the words its catalyst's login need gave
+    # it. Ticked, its install is the Programs page's form prefilled from
+    # that member's file; once its row stands, Set up opens its terminal and
+    # the picker offers, under the member's name, the models its program
+    # lists. Picking one makes the soul name the program, with the member's
+    # install and that model and no catalyst, and asks its consent at once;
+    # a key's model takes the program and its install away again.
+    for {member, title, program, install, model} <- [
+          {"claude-code", "Claude Code", "claude",
+           "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323", "opus"},
+          {"openai-codex", "OpenAI Codex", "openai-codex",
+           "cyfr-codex npx -y @openai/codex@0.169.0", "gpt-6.1-sol"}
+        ] do
+      @tag plan: {member, title, program, install, model}
+      test "the setup offers #{member}'s program as a plan, installs it, signs it in and " <>
+             "makes it Aqua's own; a key's model takes it back",
+           %{conn: conn, ctx: ctx, plan: {member, title, program, install, model}} do
+        fake = backends!()
+        publish_brain!(ctx, "open", %{})
+        grant!(ctx, "catalyst:local.open", %{bindings: []})
+        remember_catalogue!(%{"open" => ["open-1"]}, %{"open" => "catalyst:local.open:0.1.0"})
+        {:ok, before} = get_agent(ctx, "aqua")
+        assert {before["program"], before["install"]} == {nil, nil}
+
+        {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+        plan = "#aqua-setup-plan-" <> member
+        assert has_element?(view, plan <> ~s([data-state="program_missing"]))
+
+        assert texts(view, plan <> " label span") == [
+                 member,
+                 "a plan: to run #{title} in its own folder, signed in to your own plan"
+               ]
+
+        view |> element(plan <> " input") |> render_click()
+        step = "#aqua-setup-step-plan-" <> member
+        assert has_element?(view, step, "#{member}: install its program, then sign it in.")
+
+        assert has_element?(
+                 view,
+                 step <> ~s( a[data-test="install-program"]),
+                 "install #{program}"
+               )
+
+        [href] =
+          view
+          |> render()
+          |> LazyHTML.from_fragment()
+          |> LazyHTML.query(step <> ~s( a[data-test="install-program"]))
+          |> LazyHTML.attribute("href")
+
+        assert URI.parse(href).path == athanor_path("/programs")
+
+        assert URI.decode_query(URI.parse(href).query) == %{
+                 "install_for" => member,
+                 "from" => "aqua"
+               }
+
+        row = program_row!(ctx, program, install)
+        send_update_agents(view, load: true)
+        assert has_element?(view, plan <> ~s([data-state="ready"]), "connected")
+        assert has_element?(view, step <> ~s( [data-test="set-up-program"]), "Set up #{program}")
+        refute has_element?(view, step <> ~s( a[data-test="install-program"]))
+
+        listing = [%{"id" => model, "name" => "The model"}, %{"id" => "other", "name" => "Other"}]
+        lists!(fake, row, fn -> plan_choices(view, member) != [] end, listing)
+
+        assert plan_choices(view, member) == [
+                 {"program::#{program}::#{model}", "The model"},
+                 {"program::#{program}::other", "Other"}
+               ]
+
+        view
+        |> form("#aqua-setup-pick", %{"value" => "program::#{program}::#{model}"})
+        |> render_change()
+
+        assert get_agent(ctx, "aqua") ==
+                 {:ok,
+                  %{
+                    before
+                    | "program" => program,
+                      "install" => install,
+                      "model" => model,
+                      "catalyst_ref" => nil
+                  }}
+
+        settled(
+          fn ->
+            has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.aqua")
+          end,
+          "the soul's consent asked again"
+        )
+
+        # A key's model is a catalyst's: the program and its install go.
+        view |> form("#aqua-setup-pick", %{"value" => "open::open-1"}) |> render_change()
+
+        assert get_agent(ctx, "aqua") ==
+                 {:ok, %{before | "catalyst_ref" => "catalyst:local.open", "model" => "open-1"}}
+
+        Cyfr.Test.Sandbox.end_views()
+      end
+    end
+
     test "picking a connected brain for Aqua asks for its consent again at once",
          %{conn: conn, ctx: ctx} do
       athanor = seated_athanor()
@@ -2153,6 +2256,19 @@ defmodule PrismWeb.AquaLiveTest do
     |> Enum.flat_map(&LazyHTML.attribute(&1, "phx-value-mode"))
   end
 
+  # Each model the setup's picker offers under `member`'s plan, as its value
+  # and the words it shows.
+  defp plan_choices(view, member) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(#aqua-setup-pick optgroup[label="#{member}"] option))
+    |> Enum.map(fn option ->
+      {option |> LazyHTML.attribute("value") |> List.first(),
+       option |> LazyHTML.text() |> String.trim()}
+    end)
+  end
+
   # Each choice of a member's Model, as its value and the words it shows.
   defp model_choices(view, name) do
     view
@@ -2168,10 +2284,21 @@ defmodule PrismWeb.AquaLiveTest do
   defp say(fake, row, event),
     do: Cyfr.Test.ScriptedBackends.write(fake, row.id, Jason.encode!(event))
 
+  # The models a program lists unless a test names its own.
+  @listing [
+    %{"id" => "default", "name" => "Default (recommended)"},
+    %{"id" => "opus", "name" => "Opus"},
+    %{"id" => "haiku", "name" => "Haiku"}
+  ]
+
   # Plays the driver of `row` for every listing a page asks of it, a new
-  # driver process each, until `shown` holds: its hello once the session
-  # stands, then the models and efforts its program lists.
-  defp lists!(fake, row, shown, deadline \\ System.monotonic_time(:millisecond) + 10_000) do
+  # driver process each, until `shown` holds: its hello, as the row's
+  # driver, once the session stands, then the models `listing` names and
+  # the efforts its program lists.
+  defp lists!(fake, row, shown, listing \\ @listing),
+    do: lists!(fake, row, shown, listing, System.monotonic_time(:millisecond) + 10_000)
+
+  defp lists!(fake, row, shown, listing, deadline) do
     home = row.id
 
     cond do
@@ -2190,7 +2317,7 @@ defmodule PrismWeb.AquaLiveTest do
             say(fake, row, %{
               "t" => "hello",
               "v" => Opus.Brain.Wire.version(),
-              "driver" => "cyfr-claude-code",
+              "driver" => Arca.McpServerStorage.driver(row),
               "boot" => "b#{System.unique_integer([:positive])}"
             })
 
@@ -2200,11 +2327,7 @@ defmodule PrismWeb.AquaLiveTest do
                 say(fake, row, %{
                   "t" => "models",
                   "id" => id,
-                  "models" => [
-                    %{"id" => "default", "name" => "Default (recommended)"},
-                    %{"id" => "opus", "name" => "Opus"},
-                    %{"id" => "haiku", "name" => "Haiku"}
-                  ],
+                  "models" => listing,
                   "efforts" => ["low", "high", "max"]
                 })
 
@@ -2215,7 +2338,7 @@ defmodule PrismWeb.AquaLiveTest do
           100 -> :ok
         end
 
-        lists!(fake, row, shown, deadline)
+        lists!(fake, row, shown, listing, deadline)
     end
   end
 
