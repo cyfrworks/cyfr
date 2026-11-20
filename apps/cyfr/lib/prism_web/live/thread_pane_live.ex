@@ -2505,8 +2505,6 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp crew(_row), do: nil
 
-  # The room a crew thread works under: a daily thread by its day's date,
-  # a workspace thread by its title.
   # What the menu's Delete asks before anything goes: what a delete
   # removes (`Arca.ThreadStorage.delete/3`) and what it leaves, the crew
   # threads under a room named, and the stop the pane makes first when it
@@ -2531,6 +2529,8 @@ defmodule PrismWeb.ThreadPaneLive do
     Enum.join(init, ", ") <> " and " <> last
   end
 
+  # The room a crew thread works under: a daily thread by its day's date,
+  # a workspace thread by its title.
   defp room_name(%{kind: "daily", day: %Date{} = day}), do: day_name(day)
   defp room_name(%{title: title}) when is_binary(title), do: title
   defp room_name(_none), do: "its thread"
