@@ -260,8 +260,8 @@
 # left it; COMPOSE_PROOF_KEEP=1 keeps the scratch directory, which a later
 # run's start leaves alone. Needs docker,
 # go (the command line and the stand-in are built here), python3 and
-# curl. test.yml's locus-backends-image job runs every case on the app
-# image it builds, tagged cyfr:compose-proof.
+# curl. test.yml's app-image-suites job runs every case, in groups, on
+# the app image its app-image job builds, tagged cyfr:compose-proof.
 set -euo pipefail
 
 CASES="bind|modes|interrupt|restore-identity|shutdown|restore|restore-person|runtime|update|update-refused|update-fail|update-interrupt"
