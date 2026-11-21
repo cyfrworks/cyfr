@@ -304,7 +304,7 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp consented(socket, name),
-    do: socket |> put_flash(:info, "#{name} consented again.") |> load_models()
+    do: socket |> put_flash(:info, "#{name} consented.") |> load_models()
 
   # Connecting a brain makes one `models` call, run off the page's process,
   # and shows what the provider answered: a key that is bound is not yet a

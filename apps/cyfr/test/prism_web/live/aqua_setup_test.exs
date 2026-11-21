@@ -372,6 +372,7 @@ defmodule PrismWeb.AquaSetupTest do
     view |> element(line <> " button", "Grant") |> render_click()
     assert has_element?(view, sheet)
     view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+    wait_until(fn -> render(view) =~ "aqua consented." end, 10_000, "the grant said")
   end
 
   # Aqua's grant as it is stored: each of its profiles with the head
