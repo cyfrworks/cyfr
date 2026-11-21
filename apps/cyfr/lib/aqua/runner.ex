@@ -2006,8 +2006,10 @@ defmodule Aqua.Runner do
       paused_reason: state.paused && state.paused.reason,
       athanor_id: state.athanor_id,
       turn_id: current && current.turn_id,
+      # A viewer joining draws what a live pane draws, which clears a
+      # turn's text and calls when it hears the turn end or pause.
       partials: if(state.live, do: state.partials, else: Aqua.Loop.Stream.new()),
-      tool_activity: state.tool_activity,
+      tool_activity: if(state.live, do: state.tool_activity, else: []),
       usage: state.usage,
       agent: state.agent && %{"name" => state.agent, "title" => state.agent},
       turn_user: current && current.user_id,

@@ -1471,9 +1471,12 @@ defmodule PrismWeb.ThreadPaneLive do
   # on, whose card installs or opens it. Aqua whose crew member does not
   # stand, or that names none, says so in the sentence its card says and
   # its turn is refused with (`aqua.list`'s `member_refusal`), never as
-  # a model to connect.
+  # a model to connect. A soul whose file the list refuses, one that
+  # still names a brain of its own among them, says the sentence the
+  # list refuses it with, which the Aqua page says too.
   # An agents list that could not be read is not a room with no model.
   defp model_ready(_ctx, :unread), do: :agents_unavailable
+  defp model_ready(_ctx, {:refused, sentence}), do: {:unseated, sentence}
 
   defp model_ready(ctx, agents) do
     case Enum.find_value(agents, & &1["member_refusal"]) do
@@ -1503,7 +1506,9 @@ defmodule PrismWeb.ThreadPaneLive do
   # on. The soul is put in the roster's string-keyed projection, its
   # catalyst or the name of its program, which `Aqua.model_status/2`
   # reads, with the sentence the list says while its member does not
-  # stand. A list that cannot be read is `:unread`, never no agents.
+  # stand. A list that refuses the soul's file is `{:refused, sentence}`,
+  # in the sentence that says what to change; one that cannot be read is
+  # `:unread`, never no agents.
   defp agents(ctx) do
     soul = Compendium.agent_soul_type()
 
@@ -1519,6 +1524,9 @@ defmodule PrismWeb.ThreadPaneLive do
             "member_title" => Enum.find_value(guides, &(&1.name == guide[:member] && &1[:title]))
           }
         end
+
+      {:error, {:conflict, sentence}} when is_binary(sentence) ->
+        {:refused, sentence}
 
       _unread ->
         :unread
