@@ -179,6 +179,7 @@ forget_killed() {
     until_true 30 run_finished "$f" || fail "a holder record names a run that is not finished: $(cat "$f")"
     rm -f "$f"
   done
+  rm -f "$scratch"/lock.quarter?.writing.*
 }
 # A pid that belonged to a process that has exited.
 gone_pid() { local p; sh -c 'exit 0' & p=$!; wait "$p" || :; echo "$p"; }
@@ -236,6 +237,22 @@ cat > "$scratch/stop-at" <<'STOPAT'
 set -T
 trap 'if [[ ! -e $STOP_MARK ]] && { [[ ${FUNCNAME[0]:-} == "$STOP_FN" && $BASH_COMMAND == $STOP_CMD ]] || [[ -n ${STOP_FN2:-} && ${FUNCNAME[0]:-} == "$STOP_FN2" && $BASH_COMMAND == $STOP_CMD2 ]]; }; then : > "$STOP_MARK"; kill -STOP $$; while [[ -n ${STOP_UNTIL:-} && ! -e $STOP_UNTIL ]]; do sleep 0.05; done; fi' DEBUG
 STOPAT
+# A BASH_ENV for a check: the process, the check or a child of it, that
+# first runs a command matching the pattern $GATE_CMD in a function
+# matching the pattern $GATE_FN (once $GATE_ARM exists, when that is set)
+# writes its pid to $GATE_MARK and waits there until $GATE_OPEN exists, so
+# a case holds one check at a step while another passes. With $GATE_THEN
+# set, the first command the same check runs in that function after the
+# gate creates $GATE_MARK.then. With $SIMULATED_CLOCK set, that is the
+# clock Bash reads. Patterns name the same step in 76205ced7's script
+# where a case was shown failing there.
+cat > "$scratch/gate-at" <<'GATEAT'
+if [[ -n ${SIMULATED_CLOCK:-} ]]; then unset EPOCHREALTIME; EPOCHREALTIME=$SIMULATED_CLOCK; fi
+if [[ -n ${GATE_FN:-} ]]; then
+  set -T
+  trap 'if [[ ! -e $GATE_MARK && ${FUNCNAME[0]:-} == $GATE_FN && $BASH_COMMAND == $GATE_CMD ]] && [[ -z ${GATE_ARM:-} || -e $GATE_ARM ]]; then echo $BASHPID > "$GATE_MARK"; until [[ -e $GATE_OPEN || ! -d ${GATE_OPEN%/*} ]]; do sleep 0.05; done; elif [[ -n ${GATE_THEN:-} && -e $GATE_OPEN && ! -e $GATE_MARK.then && ${FUNCNAME[0]:-} == "$GATE_THEN" ]]; then : > "$GATE_MARK.then"; fi' DEBUG
+fi
+GATEAT
 chmod +x "$scratch/hold" "$scratch/probe" "$scratch/stubborn"
 hold="$scratch/hold"
 probe="$scratch/probe"
@@ -612,7 +629,7 @@ t_quarter_stale() {
   a=$!; started+=("$a")
   until_true 10 has_line '^==> heavy-check: queued, ' "$scratch/stA.err" || fail 'the first waiter did not queue'
   kill -KILL "$a"; wait "$a" 2>/dev/null || :
-  [ -n "$(find "$scratch" -maxdepth 1 -name 'lock.wait.*')" ] || fail 'the killed waiter left no ticket to step over'
+  [ -n "$(find "$scratch" -maxdepth 1 -name 'lock.arrival.*')" ] || fail 'the killed waiter left no ticket to step over'
   "${hc[@]}" -- sh -c "echo B >> $scratch/order" >/dev/null 2>"$scratch/stB.err" &
   b=$!; started+=("$b")
   until_true 10 has_line '^==> heavy-check: queued, ' "$scratch/stB.err" || fail 'the second waiter did not queue'
@@ -790,6 +807,245 @@ in_order() {
   done
 }
 
+# --- the order is decided and the quarter taken in one step ---------------------
+# Each case holds one check at a named step while another passes it, and
+# reads the order the commands started in.
+# trees: the scratch worktrees A, B and C, and nothing of an earlier case.
+trees() {
+  local w
+  for w in A B C; do [ -d "$scratch/wt$w/.git" ] || { mkdir -p "$scratch/wt$w"; git init -q "$scratch/wt$w"; }; done
+  rm -f "$scratch"/*.mark "$scratch"/*.mark.then "$scratch"/*.open "$scratch"/*.arm
+  pids=()
+}
+# from WORKTREE NAME [NAME=value...]: NAME's check from that worktree, with
+# that environment; its command writes NAME to the order file as it starts
+# and holds its quarter until release-NAME appears.
+from() {
+  local tree=$1 name=$2; shift 2
+  rm -f "$scratch/$name.out" "$scratch/$name.err"
+  (cd "$scratch/wt$tree" && exec "${clean[@]}" "$@" bash "$check" -- sh -c "echo $name >> $scratch/order; $hold $scratch/release-$name") >"$scratch/$name.out" 2>"$scratch/$name.err" &
+  pids+=("$!"); started+=("$!")
+}
+# gated NAME FUNCTION COMMAND: sets $gate, the environment that holds NAME's check at
+# that step until NAME.open appears; NAME.mark appears as it gets there.
+gated() { gate=("BASH_ENV=$scratch/gate-at" "GATE_MARK=$scratch/$1.mark" "GATE_OPEN=$scratch/$1.open" "GATE_FN=$2" "GATE_CMD=$3"); }
+begun() { until_true 10 started_in_order "$1" || fail "$1 did not start: $(cat "$scratch/$1.err")"; }
+queued() { until_true 10 has_line '^==> heavy-check: queued, ' "$scratch/$1.err" || fail "$1 did not queue: $(cat "$scratch/$1.err")"; }
+at_gate() { until_true 10 test -s "$scratch/$1.mark" || fail "$1 did not reach its gate: $(cat "$scratch/$1.err")"; }
+order_has() { [ -e "$scratch/order" ] && [ "$(wc -l <"$scratch/order")" -ge "$1" ]; }
+# ended NAME...: those checks' commands released, and every check of the
+# case over.
+ended() {
+  local name p
+  for name in "$@"; do touch "$scratch/release-$name"; done
+  for p in "${pids[@]}"; do wait "$p" || fail "check $p failed"; done
+}
+# Whether check $1 waits for the queue's lock: a flock it did not start
+# itself, started by a child of it.
+behind_lock() {
+  local k
+  for k in $(pgrep -P "$1"); do ! pgrep -P "$k" -x flock >/dev/null || return 0; done
+  return 1
+}
+
+# A waiter that has decided to take a quarter decides again once it has
+# it. A, B and C hold the four quarters and A2 is first in line; it is
+# held as it goes to take. B2 arrives, B's only check ends, and B2 is now
+# the first whose worktree holds none. A2, let go, takes the freed quarter
+# and gives it back: B2 starts on it, and A2 on the next.
+t_release_race() {
+  local n
+  trees
+  for n in A1 B1 C1 C2; do from "${n:0:1}" "$n"; begun "$n"; done
+  gated A2 admit 'since=*'
+  from A A2 "${gate[@]}" GATE_THEN=announce
+  at_gate A2
+  gated B2 admit 'since=*'
+  from B B2 "${gate[@]}"
+  queued B2
+  touch "$scratch/release-B1"; wait "${pids[1]}" || fail 'B1 failed'
+  unset "pids[1]"
+  at_gate B2
+  touch "$scratch/A2.open"
+  # A2 has taken the quarter and started, or given it back and gone on.
+  until_true 10 eval 'order_has 5 || test -e "$scratch/A2.mark.then"' || fail "A2 neither started nor went on: $(cat "$scratch/A2.err")"
+  touch "$scratch/B2.open"
+  until_true 10 order_has 5 || fail 'no check took the quarter B1 freed'
+  touch "$scratch/release-C1"
+  until_true 10 order_has 6 || fail 'no check took the quarter C1 freed'
+  [ "$(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')" = 'B2 A2 ' ] ||
+    fail "A was given a second quarter while B, holding none, waited: $(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')"
+  ended A1 A2 B2 C2
+}
+
+# Two quarters free at once go to two worktrees. C holds all four; A2, A3
+# and B1 wait in that order. A3 and B1 are each held in the middle of
+# reading the queue, after the holders and before the tickets. Two of C's
+# checks end and A2 starts. A3, let go, finishes a reading in which A held
+# nothing and A2 no longer waits, so it goes to take the second quarter:
+# under the lock it reads again, finds A holding one and B1 waiting, and
+# gives the quarter back to B1.
+t_two_free() {
+  local n
+  trees
+  for n in C1 C2 C3 C4; do from C "$n"; begun "$n"; done
+  from A A2; queued A2
+  gated A3 places 'mine=0'
+  from A A3 "${gate[@]}" GATE_ARM="$scratch/A3.arm" GATE_THEN=announce; queued A3
+  gated B1 places 'mine=0'
+  from B B1 "${gate[@]}" GATE_ARM="$scratch/B1.arm"; queued B1
+  touch "$scratch/A3.arm" "$scratch/B1.arm"
+  at_gate A3; at_gate B1
+  touch "$scratch/release-C1" "$scratch/release-C2"
+  begun A2
+  touch "$scratch/A3.open"
+  until_true 10 eval 'order_has 6 || test -e "$scratch/A3.mark.then"' || fail "A3 neither started nor went on: $(cat "$scratch/A3.err")"
+  touch "$scratch/B1.open"
+  until_true 10 order_has 6 || fail 'no check took the second free quarter'
+  touch "$scratch/release-C3"
+  until_true 10 order_has 7 || fail 'no check took the quarter C3 freed'
+  [ "$(sed -n '5,7p' "$scratch/order" | tr '\n' ' ')" = 'A2 B1 A3 ' ] ||
+    fail "two free quarters went as $(sed -n '5,7p' "$scratch/order" | tr '\n' ' '), not A2 B1 A3"
+  ended C4 A2 A3 B1
+}
+
+# A check whose whole process group is stopped while its step is inside
+# the queue's lock, as a foreground run suspended from its terminal is,
+# holds no one back: the step is outside the group, finishes and gives the
+# lock up, so another worktree's check is admitted. The stopped check
+# holds its quarter with its record and runs once continued.
+t_group_stop() {
+  local x child s=0
+  trees
+  gated X take_quarter 'write_record*'
+  (cd "$scratch/wtA" && exec setsid "${clean[@]}" "${gate[@]}" \
+    bash "$check" -- sh -c "echo X >> $scratch/order") >"$scratch/X.out" 2>"$scratch/X.err" &
+  x=$!; started+=("$x")
+  at_gate X
+  child=$(cat "$scratch/X.mark")
+  [ "$child" != "$x" ] && [ "$(ps -o pgid= -p "$x" | tr -d ' ')" = "$x" ] || fail 'the check does not lead a process group of its own, or took its quarter itself'
+  kill -STOP -- "-$x"
+  until_true 5 is_stopped "$x" || fail 'the check did not stop'
+  ! is_stopped "$child" || { kill -CONT -- "-$x"; fail "the step inside the queue's lock stopped with its check's group"; }
+  touch "$scratch/X.open"
+  (cd "$scratch/wtB" && timeout 20 "${hc[@]}" -- sh -c "echo Y >> $scratch/order") >"$scratch/Y.out" 2>"$scratch/Y.err" || s=$?
+  [ "$s" = 0 ] || { kill -CONT -- "-$x"; fail "a check of another worktree, behind a stopped group, exited $s: $(cat "$scratch/Y.err")"; }
+  until_true 5 sh -c "'$check' --status | grep -q '^held quarter=1 pid=$x state=stopped '" || { kill -CONT -- "-$x"; fail "--status with the group stopped: $("${hc[@]}" --status)"; }
+  kill -CONT -- "-$x"
+  wait "$x" || fail 'the continued check failed'
+  [ "$(tr '\n' ' ' < "$scratch/order")" = 'Y X ' ] || fail "the order was $(tr '\n' ' ' < "$scratch/order")"
+}
+
+# A command's own words cannot move a record's fields. A holds every
+# quarter and A5, whose command carries the argument `command=label`,
+# waits with B1. The first quarter freed goes to B1, whose worktree holds
+# none, and the next to A5: neither takes the other for a different
+# worktree's.
+t_record_grammar() {
+  local n line
+  trees
+  for n in A1 A2 A3 A4; do from A "$n"; begun "$n"; done
+  (cd "$scratch/wtA" && exec "${hc[@]}" -- sh -c "echo A5 >> $scratch/order; $hold $scratch/release-A5" command=label 'a  b') >"$scratch/A5.out" 2>"$scratch/A5.err" &
+  pids+=("$!"); started+=("$!")
+  queued A5
+  from B B1; queued B1
+  line=$("${hc[@]}" --status | grep '^waiting 1 ')
+  [[ $line == *" checkout=$scratch/wtA command=sh -c "*" command=… a  b" ]] || fail "the waiter with command= among its words: $line"
+  touch "$scratch/release-A1"
+  until_true 10 order_has 5 || fail "a quarter was free and neither waiter took it: $(tail -n 2 "$scratch/A5.err" "$scratch/B1.err")"
+  touch "$scratch/release-A2"
+  until_true 10 order_has 6 || fail 'the second waiter did not start'
+  [ "$(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')" = 'B1 A5 ' ] || fail "the waiters started as $(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')"
+  ended A3 A4 A5 B1
+}
+
+# Arrival order is the tickets' numbers, whatever the clock says: B1
+# arrives, the clock steps back a second, C1 arrives, and B1 is served
+# first.
+t_clock_back() {
+  local n
+  trees
+  for n in A1 A2 A3 A4; do from A "$n"; begun "$n"; done
+  from B B1 BASH_ENV="$scratch/gate-at" SIMULATED_CLOCK=1760000002.123456; queued B1
+  from C C1 BASH_ENV="$scratch/gate-at" SIMULATED_CLOCK=1760000001.123456; queued C1
+  touch "$scratch/release-A1"
+  until_true 10 order_has 5 || fail 'no waiter started'
+  touch "$scratch/release-A2"
+  until_true 10 order_has 6 || fail 'the second waiter did not start'
+  [ "$(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')" = 'B1 C1 ' ] || fail "a later arrival went first when the clock stepped back: $(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')"
+  ended A3 A4 B1 C1
+}
+
+# No check passes one that is arriving. B1 is held as its ticket is put in
+# place, a quarter frees, and C1, started then with the same clock
+# reading, waits for the queue's lock behind it and neither queues nor
+# runs. B1, let go, has the lower number and the quarter; C1 the next.
+t_arrival_held() {
+  local n c
+  trees
+  for n in A1 A2 A3 A4; do from A "$n"; begun "$n"; done
+  gated B1 '@(publish_ticket|number_ticket)' 'mv -f *'
+  from B B1 "${gate[@]}" SIMULATED_CLOCK=1760000002.123456
+  at_gate B1
+  touch "$scratch/release-A1"; wait "${pids[0]}" || fail 'A1 failed'
+  unset "pids[0]"
+  from C C1 BASH_ENV="$scratch/gate-at" SIMULATED_CLOCK=1760000002.123456
+  c=$!
+  until_true 10 eval 'order_has 5 || behind_lock "$c"' || fail "C1 neither ran nor waited behind B1's arrival: $(cat "$scratch/C1.err")"
+  touch "$scratch/B1.open"
+  until_true 10 order_has 5 || fail 'no check took the free quarter'
+  touch "$scratch/release-A2"
+  until_true 10 order_has 6 || fail 'the second check did not start'
+  [ "$(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')" = 'B1 C1 ' ] || fail "a check passed one that was arriving: $(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')"
+  ended A3 A4 B1 C1
+}
+
+# A holder's record is whole at every moment. A1 is held as it writes its
+# record the second time, with the command's group; A2 and then B1 queue,
+# and the quarter C1 frees goes to B1, because A's record still says that
+# A holds one.
+t_record_whole() {
+  local n
+  trees
+  cat > "$scratch/record-gate" <<'RECORDGATE'
+printf() {
+  if [[ ${FUNCNAME[1]:-} == write_record && -n ${7:-} && ! -e $GATE_MARK ]]; then
+    echo "$BASHPID" > "$GATE_MARK"
+    until [[ -e $GATE_OPEN || ! -d ${GATE_OPEN%/*} ]]; do sleep 0.05; done
+  fi
+  builtin printf "$@"
+}
+RECORDGATE
+  for n in C1 C2 C3; do from C "$n"; begun "$n"; done
+  from A A1 BASH_ENV="$scratch/record-gate" GATE_MARK="$scratch/A1.mark" GATE_OPEN="$scratch/A1.open"
+  begun A1; at_gate A1
+  has_line '^pid=[0-9]+ quarter=4 .* group= watchdog= checkout=' "$scratch/lock.quarter4.holder" ||
+    fail "a record being written again was not the one before, whole: $(cat "$scratch/lock.quarter4.holder")"
+  from A A2; queued A2
+  from B B1; queued B1
+  touch "$scratch/release-C1"
+  until_true 10 order_has 5 || fail 'no waiter took the freed quarter'
+  touch "$scratch/A1.open" "$scratch/release-C2"
+  until_true 10 order_has 6 || fail 'the second waiter did not start'
+  [ "$(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')" = 'B1 A2 ' ] ||
+    fail "A was given a second quarter while its record was written: $(sed -n '5,6p' "$scratch/order" | tr '\n' ' ')"
+  ended C3 A1 A2 B1
+}
+
+# When no quarter's record can be written the check ends, 69, naming the
+# records, and holds nothing; it does not wait.
+t_no_record() {
+  local q s
+  for q in 1 2 3 4; do mkdir "$scratch/lock.quarter$q.holder"; done
+  s=$(status_of timeout 20 "${hc[@]}" -- touch "$scratch/no-record.ran")
+  for q in 1 2 3 4; do rmdir "$scratch/lock.quarter$q.holder"; done
+  [ "$s" = 69 ] || fail "a check that could write no record exited $s: $(cat "$scratch/err")"
+  has_line "^==> heavy-check: no quarter's record can be written: $scratch/lock.quarter1.holder to $scratch/lock.quarter4.holder\$" "$scratch/err" ||
+    fail "the cause was not named: $(cat "$scratch/err")"
+  framed "$scratch/out" 69 || fail "not framed: $(tr '\n' '|' < "$scratch/out")"
+  [ ! -e "$scratch/no-record.ran" ] || fail 'the check ran without a record'
+  quarters_free || fail 'a quarter was held'
+}
 
 # A check stopped in its first-in-line test keeps no one waiting: a later
 # check starts at once, without queuing, the stopped one keeps its ticket,
@@ -809,7 +1065,7 @@ t_admission_stopped() {
   has_line '^==> heavy-check: running \(quarter ' <(grep '^==> heavy-check: ' "$scratch/err" | sed -n 1p) ||
     fail "the later check did not start at once: $(grep '^==> heavy-check: ' "$scratch/err")"
   [ "$(cat "$scratch/order")" = later ] || fail "the later check did not run: $(cat "$scratch/order" 2>/dev/null)"
-  [ -n "$(find "$scratch" -maxdepth 1 -name 'lock.wait.*')" ] || fail 'the stopped check lost its ticket'
+  [ -n "$(find "$scratch" -maxdepth 1 -name 'lock.arrival.*')" ] || fail 'the stopped check lost its ticket'
   kill -CONT "$a"
   s=0; wait "$a" || s=$?
   [ "$s" = 0 ] || fail "the continued check exited $s"
@@ -825,7 +1081,7 @@ t_ticket_order() {
   rm -f "$scratch/order" "$scratch/stopped-mark"
   hold_quarters to
   "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark" \
-    STOP_FN=publish_ticket STOP_CMD='ticket=*' STOP_FN2=take_ticket STOP_CMD2='*LOCK.seq*' \
+    STOP_FN=publish_ticket STOP_CMD='locked number_ticket*' STOP_FN2=take_ticket STOP_CMD2='*LOCK.seq*' \
     bash "$check" -- sh -c "echo A >> $scratch/order" >/dev/null 2>"$scratch/toA.err" &
   a=$!; started+=("$a")
   until_true 10 test -e "$scratch/stopped-mark" || fail 'the first check did not reach its publication'
@@ -985,6 +1241,33 @@ t_record_watchdog() {
   until_true 10 dead "$watchdog" || fail 'the watchdog did not exit once continued'
   [ "$(status_of "${hc[@]}" --status)" = 0 ] && [ "$(cat "$scratch/out")" = idle ] || fail "the host was not idle once the watchdog exited: $(cat "$scratch/out")"
   forget_killed
+}
+
+# --- what is told its processors passes them on -----------------------------------
+# Every container the browser harness and the install proof start is
+# given the processors its check was told, HEAVY_CHECK_CPUS: a container
+# does not inherit its starter's. placed_containers FILE...: every docker
+# run and docker create in FILE passes them.
+placed_containers() {
+  python3 -I - "$@" <<'PLACED'
+import re, sys
+for path in sys.argv[1:]:
+    text = re.sub(r"\\\n\s*", " ", open(path).read())
+    for line in text.splitlines():
+        if line.lstrip().startswith("#") or not re.search(r"\bdocker (run|create)\b", line):
+            continue
+        if '${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"}' not in line:
+            sys.exit(f"{path}: a container is not placed: {line.strip()[:120]}")
+PLACED
+}
+t_placed_containers() {
+  local lib="$root/tests/install-screen-proof/lib.sh" why
+  local placed='docker create --init --name "$GUEST" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"}'
+  why=$(placed_containers "$root/tests/browser/harness.sh" "$lib" 2>&1) || fail "$why"
+  # The control: the same file with one container's processors taken out.
+  grep -qF -- "$placed" "$lib" || fail "the control's line is not in $lib"
+  python3 -I -c 'import sys; sys.stdout.write(open(sys.argv[1]).read().replace(sys.argv[2], "docker create --init --name \"$GUEST\""))' "$lib" "$placed" > "$scratch/unplaced.sh"
+  ! placed_containers "$scratch/unplaced.sh" 2>/dev/null || fail 'an unplaced guest passed'
 }
 
 # --- the environment ---------------------------------------------------------------
@@ -1433,14 +1716,14 @@ t_survivor_remains() {
 }
 
 # A kill between truncating the holder record and writing its new line
-# leaves an empty record. The watchdog still stops the command and frees
-# the quarter; an empty record is not a pid the cleanup can wait on.
+# leaves the record it wrote when it took the quarter, whole, which names
+# no group. The watchdog still stops the command and frees the quarter;
+# that record names nothing the cleanup can wait on once its pid is gone.
 t_killed_record() {
   local p file=lock.quarter1.holder
   cat > "$scratch/record-write" <<'RECORDWRITE'
 printf() {
   if [[ ${FUNCNAME[1]:-} == write_record && -n ${7:-} ]]; then
-    # The caller's redirection has already truncated the holder file.
     echo "$BASHPID" > "$RECORD_MARK"
     kill -STOP "$BASHPID"
   fi
@@ -1454,13 +1737,14 @@ RECORDWRITE
   until_true 10 test -s "$scratch/record.mark" || fail 'the producer did not reach the record rewrite'
   [ "$(cat "$scratch/record.mark")" = "$p" ] || fail 'stopped a process other than the producer'
   until_true 10 is_stopped "$p" || fail 'the producer did not stop inside the rewrite'
-  [ -e "$scratch/$file" ] && [ ! -s "$scratch/$file" ] || fail 'the interrupted record was not empty'
+  has_line "^pid=$p quarter=1 cpus=${Q[1]} since=[0-9T:+-]+ hold=2700s group= watchdog= checkout=$worktree command=sleep 120\$" "$scratch/$file" ||
+    fail "the interrupted rewrite did not leave the record before it, whole: $(cat "$scratch/$file" 2>/dev/null)"
   kill -KILL "$p"; wait "$p" 2>/dev/null || :
   [ "$(AWAIT_POLL_SECONDS=1 AWAIT_PID=$p await "$scratch/record.task" '' 60)" = 3 ] || fail 'the interrupted writer was not reported dead'
   host_free || fail 'the interrupted writer kept its quarter'
-  [ "$(status_of "${hc[@]}" --status)" = 0 ] && [ "$(cat "$scratch/out")" = idle ] || fail 'an empty record was shown as held'
-  # The empty record neither blocks admission nor names a live run.
-  [ "$(status_of timeout 20 "${hc[@]}" -- touch "$scratch/record-next")" = 0 ] || fail 'an empty record blocked the next check'
+  [ "$(status_of "${hc[@]}" --status)" = 0 ] && [ "$(cat "$scratch/out")" = idle ] || fail "a dead writer's record was shown as held"
+  # The record neither blocks admission nor names a live run.
+  [ "$(status_of timeout 20 "${hc[@]}" -- touch "$scratch/record-next")" = 0 ] || fail "a dead writer's record blocked the next check"
   [ -e "$scratch/record-next" ] || fail 'the next check did not run'
   forget_killed
 }
@@ -1493,6 +1777,44 @@ t_record_line() {
   : >"$scratch/records"
   [ "$(status_of "${hc[@]}" -- bash "$check" -- true)" = 0 ] && [ "$(wc -l <"$scratch/records" | tr -d ' ')" = 1 ] ||
     fail "a nested check wrote a line of its own: $(cat "$scratch/records")"
+}
+# One line for every check that queued. A check given TERM as its ticket
+# is put in place leaves its line; a worktree whose path holds a newline
+# leaves one line; and a check that finds the record's lock held waits for
+# it, however long, and then leaves its line.
+t_record_always() {
+  local p s=0 fd
+  : >"$scratch/records"
+  rm -f "$scratch/published" "$scratch/ra.ran"
+  cat > "$scratch/term-at-publish" <<'TERMAT'
+mv() {
+  command mv "$@" || return
+  if [[ $* == *.ticket.* || $* == *.arriving.* ]]; then : > "$PUBLISH_MARK"; kill -TERM "$$"; fi
+}
+TERMAT
+  "${clean[@]}" BASH_ENV="$scratch/term-at-publish" PUBLISH_MARK="$scratch/published" bash "$check" -- touch "$scratch/ra.ran" >"$scratch/ra.out" 2>"$scratch/ra.err" &
+  p=$!; started+=("$p")
+  wait "$p" || s=$?
+  [ "$s" = 143 ] && [ -e "$scratch/published" ] && [ ! -e "$scratch/ra.ran" ] || fail "a check given TERM as it arrived exited $s: $(cat "$scratch/ra.err")"
+  has_line "^end=[0-9T:+-]+ quarter=- waited=[0-9]+ ran=0 exit=143 checkout=$worktree command=touch " "$scratch/records" ||
+    fail "a check given TERM as its ticket appeared left no line: $(cat "$scratch/records")"
+  : >"$scratch/records"
+  mkdir -p "$scratch/"$'line\nbreak  dir'
+  (cd "$scratch/"$'line\nbreak  dir' && "${hc[@]}" -- true) >/dev/null 2>"$scratch/ra.err" || fail "the check in a folder with a newline failed: $(cat "$scratch/ra.err")"
+  [ "$(wc -l <"$scratch/records" | tr -d ' ')" = 1 ] && grep -qF "exit=0 checkout=$scratch/line\\nbreak\\s\\sdir command=true" "$scratch/records" ||
+    fail "the line of a worktree with a newline in its path: $(cat "$scratch/records")"
+  : >"$scratch/records"
+  exec {fd}>>"$scratch/records"
+  flock -x "$fd"
+  "${hc[@]}" -- true {fd}>&- >"$scratch/ra.out" 2>"$scratch/ra.err" &
+  p=$!; started+=("$p")
+  # sleep-ok: the window in which a deadline on the record's lock, ten
+  # seconds in 76205ced7, would have dropped the line.
+  if until_true 12 dead "$p"; then flock -u "$fd"; fail "the check ended without its line while the record's lock was held: $(cat "$scratch/ra.err")"; fi
+  flock -u "$fd"; exec {fd}>&-
+  s=0; wait "$p" || s=$?
+  [ "$s" = 0 ] || fail "the check exited $s"
+  [ "$(grep -c ' exit=0 ' "$scratch/records")" = 1 ] || fail "the record after its lock was given up: $(cat "$scratch/records")"
 }
 
 # --- await-task.sh -------------------------------------------------------------------
@@ -1645,10 +1967,11 @@ t_await_queue() {
 cases=(
   usage admission nested result frame roster fds fd_base elsewhere cut host unplaced
   redaction killed_quarter quarters placement quarter_order quarter_stale quarter_stopped
-  all_or_none stopped_take fairness admission_stopped ticket_order admission_two_stopped stopped_holder
-  waiters_skipped run_record record_watchdog environment status queued_repeat
+  all_or_none stopped_take fairness release_race two_free group_stop record_grammar clock_back arrival_held
+  record_whole no_record admission_stopped ticket_order admission_two_stopped stopped_holder
+  waiters_skipped run_record record_watchdog placed_containers environment status queued_repeat
   hold hold_frame stage_side_by_side term int hup usr1 quarter_stop term_queued int_queued hup_queued
-  refusals leftover sigkill nested_session registry_nested survivor survivor_remains killed_record record_line
+  refusals leftover sigkill nested_session registry_nested survivor survivor_remains killed_record record_line record_always
   await_result await_died await_line await_nested await_bare await_reused await_explicit
   await_statuses await_usage await_zombie await_queue
 )
@@ -1665,6 +1988,6 @@ for c in "${cases[@]}"; do
   host_free || fail 'a quarter was still held after the case'
   [ -z "$(find "$scratch" -maxdepth 1 -name 'lock.quarter*.holder')" ] || fail "a quarter's holder record was left"
   [ "$(registries)" = 0 ] || fail 'a registry was left'
-  [ -z "$(find "$scratch" -maxdepth 1 -name 'lock.wait.*')" ] || fail 'a ticket was left'
+  [ -z "$(find "$scratch" -maxdepth 1 \( -name 'lock.arriv*' -o -name 'lock.quarter?.writing.*' \))" ] || fail 'a ticket or an unfinished record was left'
 done
 echo 'heavy check tests passed'

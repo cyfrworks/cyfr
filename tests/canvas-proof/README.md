@@ -44,8 +44,8 @@ WebKit alike.
 ## Running it
 
 ```
-CANVAS_PROOF_VIEWPORT=desktop tests/canvas-proof/run.sh
-CANVAS_PROOF_VIEWPORT=720x720 tests/canvas-proof/run.sh
+CANVAS_PROOF_VIEWPORT=desktop CANVAS_PROOF_HOST_CLASS=github-hosted tests/canvas-proof/run.sh
+CANVAS_PROOF_VIEWPORT=720x720 CANVAS_PROOF_HOST_CLASS=github-hosted tests/canvas-proof/run.sh
 ```
 
 Every pull request's run holds both viewports to the `github-hosted`

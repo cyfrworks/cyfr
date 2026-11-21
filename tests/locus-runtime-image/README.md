@@ -48,6 +48,10 @@ the image goes.
 On the verification host each suite, and `memory.py --measure`, takes one
 quarter of the machine,
 `scripts/heavy-check.sh -- python3 tests/locus-runtime-image/runners.py "$tag"`.
+The quarter bounds the suite's own processes. The service's containers
+are started by Compose without the quarter's processors and run where
+Docker puts them, so `memory.py --measure` is measured beside whatever
+else the host runs.
 `PROOF_RUN_PREFIX` prefixes every compose project, container and
 temporary directory a run makes (`tests/browser/README.md`, Run names). A TERM or INT ends a suite with its compose project and its
 temporary directories removed.

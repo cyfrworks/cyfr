@@ -97,7 +97,7 @@ git clone -q "$S/repo" "$S/clone"
 
 # Rule 1: run objects. seed is any ten hex digits.
 seed=aaaaaaaaaa
-d1=$(dead_pid); d2=$(dead_pid); d3=$(dead_pid); d4=$(dead_pid); d5=$(dead_pid)
+d1=$(dead_pid); d2=$(dead_pid); d3=$(dead_pid); d4=$(dead_pid); d5=$(dead_pid); d6=$(dead_pid)
 l1=$(live_pid)
 setsid sleep 600 >/dev/null 2>&1 & group=$!; echo "$group" >>"$S/pids"
 until_true 10 eval '[ "$(ps -o pgid= -p "$group" | tr -d " ")" = "$group" ]' || fail "setsid did not make $group a group leader"
@@ -108,10 +108,10 @@ for pid in "$d1" "$d2"; do
   plant_image "cyfr-$seed-$pid-cyfr-tailscale-standin:run1" '' "$OLD"
 done
 l2=$(live_pid)
-for pid in "$l1" "$l2" "$d3" "$d4" "$d5"; do plant_container "cyfr-$seed-$pid-proof"; done
-# The janitor reads every quarter's record file, so a fifth carries the
-# case the four below leave no room for: a record whose run is finished.
-record "$d2" "group=$(dead_pid) watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.quarter5.holder"
+for pid in "$l1" "$l2" "$d3" "$d4" "$d5" "$d6"; do plant_container "cyfr-$seed-$pid-proof"; done
+# A record at a path outside the four quarters, the whole-machine record of
+# a worktree on an earlier heavy-check, whose group lives.
+record "$d6" "group=$group watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.holder"
 record "$d3" "group=$group watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.quarter1.holder"
 record "$d4" "group=$(dead_pid) watchdog=$watchdog" "$HEAVY_CHECK_LOCK.quarter2.holder"
 record "$d5" '' "$HEAVY_CHECK_LOCK.quarter3.holder"
@@ -261,8 +261,9 @@ has main "kept container cyfr-$seed-$l1-proof: its pid $l1 is alive"
 has main "kept container cyfr-$seed-$d3-proof: a process of its group $group is alive"
 has main "kept container cyfr-$seed-$d4-proof: its watchdog $watchdog is alive"
 has main "kept container cyfr-$seed-$d5-proof: its holder record names no group"
+has main "kept container cyfr-$seed-$d6-proof: a process of its group $group is alive"
 has main "kept container cyfr-$seed-$l2-proof: its pid $l2 is alive"
-for pid in "$l1" "$l2" "$d3" "$d4" "$d5"; do there "$DOCKER_STUB/containers/cyfr-$seed-$pid-proof"; done
+for pid in "$l1" "$l2" "$d3" "$d4" "$d5" "$d6"; do there "$DOCKER_STUB/containers/cyfr-$seed-$pid-proof"; done
 there "$DOCKER_STUB/containers/other-project-db"; lacks main other-project-db
 
 begin "rule 1: the install-screen proof's scratch directory, holding a guest's key, goes once its run is finished"

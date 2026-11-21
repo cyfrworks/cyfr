@@ -354,8 +354,9 @@ same worktree refuses, naming the run that holds it.
   starts. Nothing here takes the whole machine: a full or multi-partition
   suite, `go test -race` and the harness self-tests that would are the
   pull request's run's. A freed quarter goes to the first check to arrive
-  whose worktree holds none, else to the first to arrive, so a long run
-  delays only its own worktree's checks. `scripts/heavy-check.sh --status`
+  whose worktree holds none, else to the first to arrive: a worktree is
+  never given a second quarter while another worktree's check waits.
+  `scripts/heavy-check.sh --status`
   shows who holds which quarters and who waits, and every check that
   queued leaves a line in `/var/tmp/cyfr/heavy-check.log` (its header
   gives the fields).
