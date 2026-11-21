@@ -434,7 +434,7 @@ defmodule Aqua.SeedContractTest do
 
     soul_tools =
       soul
-      |> Compendium.AgentSource.manifest()
+      |> Compendium.AgentSource.manifest([])
       |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
       |> Map.fetch!(:tools)
 
@@ -467,16 +467,16 @@ defmodule Aqua.SeedContractTest do
     caps() |> Sanctum.Consent.ShapeDerivation.expand_tools()
   end
 
-  # What every shipped agent's manifest grants, as one list: each agent's
-  # `caps.tools` is derived from its own list.
+  # What the crew's one grant, the shipped Aqua's, grants: its `caps.tools`
+  # is derived from Aqua's own list, which every crew member is offered. Its
+  # brains add no tools.
   defp caps do
-    seed_agents()
-    |> Enum.flat_map(fn agent ->
-      agent
-      |> Compendium.AgentSource.manifest()
-      |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
-      |> Map.fetch!(:tools)
-    end)
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
+
+    soul
+    |> Compendium.AgentSource.manifest([])
+    |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
+    |> Map.fetch!(:tools)
     |> Enum.uniq()
     # The provider's own search is a tool by its name, no catalog action.
     |> Enum.reject(&(&1 == "native_search"))
