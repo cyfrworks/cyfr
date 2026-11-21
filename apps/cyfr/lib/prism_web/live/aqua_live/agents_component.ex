@@ -429,18 +429,19 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # A program brain's model is one its program lists. The pick names its
-  # whole brain, the program the card shows, beside the model, so the
-  # member is left on the brain and model the person saw and chose, and
-  # an option that program does not list is taken off in the same write
-  # (`moved/4`).
+  # whole brain, the program its form showed (the form's own field, not
+  # the page's copy of the member, which may have moved since), beside
+  # the model, so the member is left on the brain and model the person
+  # saw and chose, and an option that program does not list is taken off
+  # in the same write (`moved/4`).
   def handle_event(
         "editor_set_model",
-        %{"name" => name, "brain" => "program", "value" => value},
+        %{"name" => name, "brain" => "program", "program" => program, "value" => value},
         socket
-      ) do
+      )
+      when program != "" do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       model = if value == "", do: nil, else: value
-      program = program_of(member(socket, name))
 
       result =
         moved(socket, name, declared("program:#{program}", model, socket), %{
@@ -1801,6 +1802,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       >
         <input type="hidden" name="name" value={@agent["name"]} />
         <input type="hidden" name="brain" value="program" />
+        <input type="hidden" name="program" value={@program} />
         <p class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Model</p>
         <select
           name="value"

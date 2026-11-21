@@ -2384,6 +2384,69 @@ defmodule PrismWeb.AquaLiveTest do
       assert config == %{"model" => "haiku", "effort" => "low"}
     end
 
+    # The program a card's pick names is the one its form showed, not the
+    # page's copy of the member: a pick that lands after the card has
+    # moved to an API brain still puts the member on that program, and
+    # never leaves it with no brain.
+    test "a model picked on a program's card lands after the card moved to an API brain " <>
+           "and names the program its form showed",
+         %{conn: conn, ctx: ctx} do
+      Cyfr.Test.SeedBundle.lay!(~w(files http))
+      :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+      :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+      {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+      {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+      open_brain!(ctx)
+
+      fake = backends!()
+      claude = brain_row!(ctx, "claude-code")
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "mine",
+          "title" => "Mine",
+          "program" => "claude-code",
+          "model" => "opus"
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      shown = ~s(#aqua-card-mine-model input[name="program"][value="claude-code"])
+
+      lists_each!(fake, [claude], fn ->
+        has_element?(view, ~s(#aqua-card-mine-model option[value="haiku"]))
+      end)
+
+      assert has_element?(view, shown)
+
+      # The card moves to an API brain before the pick lands.
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "mine",
+          "program" => nil,
+          "catalyst_ref" => "catalyst:local.open",
+          "model" => "open-1"
+        })
+
+      send(view.pid, {:refresh, :agents})
+      settled(fn -> not has_element?(view, shown) end, "the card on the API brain")
+
+      # The pick the program's form sent, as it showed the card.
+      view
+      |> with_target("#aqua-agents")
+      |> render_change("editor_set_model", %{
+        "name" => "mine",
+        "brain" => "program",
+        "program" => "claude-code",
+        "value" => "haiku"
+      })
+
+      assert {:ok, %{"program" => "claude-code", "catalyst_ref" => nil, "model" => "haiku"}} =
+               get_agent(ctx, "mine")
+    end
+
     # A member moved from one program brain to the other keeps each option
     # whose value the new program lists, and drops any other: the access
     # the first driver listed is none of the second's, so it goes, and the
