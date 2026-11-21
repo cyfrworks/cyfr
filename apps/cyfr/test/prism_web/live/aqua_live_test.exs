@@ -2489,7 +2489,7 @@ defmodule PrismWeb.AquaLiveTest do
 
   # The athanor's kept driven program row `name`, as an install confirmed
   # on the Programs page leaves it.
-  defp program_row!(ctx, name, command \\ nil) do
+  defp program_row!(ctx, name, command) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
@@ -2498,7 +2498,7 @@ defmodule PrismWeb.AquaLiveTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        config_json: Jason.encode!(%{"command" => command || "npx -y #{name}", "env" => %{}})
+        config_json: Jason.encode!(%{"command" => command, "env" => %{}})
       })
 
     row
