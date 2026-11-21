@@ -134,7 +134,7 @@ defmodule Aqua.SeedContractTest do
     assert Enum.map(seed_agents(), & &1.name) == [Compendium.AquaPath.soul_name()]
   end
 
-  test "every brain the seed can connect has a suggested crew member that says what it does" do
+  test "every brain the seed can connect has a suggested crew member, named for its brain" do
     catalysts =
       for manifest <-
             Path.wildcard(
@@ -147,23 +147,23 @@ defmodule Aqua.SeedContractTest do
 
     assert catalysts != []
 
+    # Each shipped catalyst's member is named for it and titled as CYFR
+    # ships it; nothing is said of what it is good at: the person writes it.
     for provider <- catalysts do
-      assert %{name: ^provider, description: good, avoid: avoid, mode: "auto"} =
-               Aqua.Crew.suggestion({:catalyst, provider})
+      assert %{name: ^provider, title: title, mode: "auto"} =
+               suggested = Aqua.Crew.suggestion({:catalyst, provider})
 
-      assert good != "" and avoid != "", provider
+      assert title != provider, provider
+      assert suggested |> Map.keys() |> Enum.sort() == [:mode, :name, :title]
     end
 
     for %{name: name, title: title} <- Opus.Programs.Definition.brains() do
-      assert %{name: ^name, title: ^title, description: good, avoid: avoid, mode: "auto"} =
-               Aqua.Crew.suggestion({:program, name, title})
-
-      assert good != "" and avoid != "", name
+      assert Aqua.Crew.suggestion({:program, name, title}) ==
+               %{name: name, title: title, mode: "auto"}
     end
 
-    # A brain CYFR does not ship is offered under a name a member can hold,
-    # with nothing said of it.
-    assert %{name: "acme-mistral", title: "acme.mistral", description: "", avoid: ""} =
+    # A brain CYFR does not ship is offered under a name a member can hold.
+    assert %{name: "acme-mistral", title: "acme.mistral"} =
              Aqua.Crew.suggestion({:catalyst, "acme.mistral"})
   end
 

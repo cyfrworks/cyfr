@@ -215,6 +215,27 @@ defmodule Aqua.CrewTest do
       })
   end
 
+  # A member is its brain, its model and its effort together, and Aqua is
+  # told the three on the member's one line, in its prompt's Crew section
+  # and from crew.list alike.
+  test "the crew index names a member's model and its effort beside its brain", %{ctx: ctx} do
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+
+    roster =
+      Enum.map(roster, fn
+        %{"name" => "planner"} = member -> Map.put(member, "options", %{"effort" => "high"})
+        member -> member
+      end)
+
+    assert {:ok, index} = Crew.index(ctx, roster)
+
+    assert %{"brain" => "claude (claude-sonnet-5-5, effort high)"} =
+             Enum.find(index, &(&1["name"] == "planner"))
+
+    assert %{"brain" => "claude (claude-sonnet-5-5)"} =
+             Enum.find(index, &(&1["name"] == "claude"))
+  end
+
   test "the crew index names the members whose brain is ready, by brain, good at and avoid",
        %{ctx: ctx} do
     {:ok, roster} = Aqua.AgentConfig.roster(ctx)

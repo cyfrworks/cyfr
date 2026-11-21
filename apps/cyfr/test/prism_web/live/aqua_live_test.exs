@@ -1728,7 +1728,7 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, step)
       refute has_element?(view, ~s([data-test="setup-crew-waits"]))
 
-      assert choices(view, suggest <> " select option") == [
+      assert choices(view, suggest <> ~s( select[name="model"] option)) == [
                {"", "Choose a model"},
                {"default", "Default (recommended)"},
                {"opus", "Opus"},
@@ -1741,8 +1741,29 @@ defmodule PrismWeb.AquaLiveTest do
       assert view |> form(suggest, %{"model" => ""}) |> render_submit() =~ "Choose a model first."
       assert {:error, _} = get_agent(ctx, name)
 
-      view |> form(suggest, %{"model" => "opus"}) |> render_submit()
-      suggested = Aqua.Crew.suggestion({:program, name, title})
+      # A member is its brain, its model and its effort: the row offers the
+      # efforts the program lists, and what it is good at and should avoid
+      # are the person's to write, or to leave empty.
+      assert texts(view, suggest <> ~s( select[name="effort"] option)) ==
+               ["The program's default effort", "low", "high", "max"]
+
+      assert has_element?(
+               view,
+               suggest <> ~s| input[name="description"][placeholder="Good at (optional)"]|
+             )
+
+      assert has_element?(
+               view,
+               suggest <> ~s| input[name="avoid"][placeholder="Avoid (optional)"]|
+             )
+
+      view
+      |> form(suggest, %{
+        "model" => "opus",
+        "effort" => "high",
+        "description" => " Builds things "
+      })
+      |> render_submit()
 
       assert {:ok,
               %{
@@ -1750,10 +1771,12 @@ defmodule PrismWeb.AquaLiveTest do
                 "program" => ^name,
                 "catalyst_ref" => nil,
                 "model" => "opus",
-                "mode" => "auto"
-              } = made} = get_agent(ctx, name)
+                "mode" => "auto",
+                "description" => "Builds things",
+                "avoid" => "",
+                "options" => %{"effort" => "high"}
+              }} = get_agent(ctx, name)
 
-      assert {made["description"], made["avoid"]} == {suggested.description, suggested.avoid}
       assert render(view) =~ "Made #{title}."
 
       settled(
@@ -1776,7 +1799,7 @@ defmodule PrismWeb.AquaLiveTest do
       suggest = "#aqua-setup-suggest-open"
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
-      assert choices(view, suggest <> " select option") == [
+      assert choices(view, suggest <> ~s( select[name="model"] option)) == [
                {"", "Choose a model"},
                {"open-1", "open-1"}
              ]

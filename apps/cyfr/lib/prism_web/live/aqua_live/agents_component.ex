@@ -169,13 +169,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # Make on a member the setup suggests for a connected brain
   # (`Aqua.crew_suggestion/1`): the member written once, under the name
   # the suggestion gives it (a second Make, or one after a reload, is
-  # refused as a member that exists), on that brain, with the model the
-  # person picked from the brain's own listing; then its consent.
-  def handle_event("make_member", %{"brain" => brain, "model" => model}, socket)
+  # refused as a member that exists), on that brain, with the model and
+  # the effort the person picked from the brain's own listing and what
+  # they wrote it is good at and should avoid; then its consent.
+  def handle_event("make_member", %{"brain" => brain, "model" => model} = params, socket)
       when is_binary(brain) and is_binary(model) and model != "" do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       with {:ok, %{"name" => name, "title" => title} = args} <-
-             made(brain, model, socket.assigns[:catalyst_refs] || %{}),
+             made(brain, params, socket.assigns[:catalyst_refs] || %{}),
            {:ok, _created} <- call_aqua(socket.assigns.context, Map.put(args, "action", "create")) do
         send(self(), {:refresh, :agents})
         send(self(), {:refresh, :setup})
@@ -967,13 +968,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # The member a Make writes: the suggestion for its brain, with the brain
   # named as a crew file names one and the model picked.
-  defp made("catalyst:" <> provider, model, catalyst_refs) do
+  defp made("catalyst:" <> provider, params, catalyst_refs) do
     case catalyst_refs[provider] do
       ref when is_binary(ref) ->
         {:ok,
          {:catalyst, provider}
          |> Aqua.crew_suggestion()
-         |> member_args(model)
+         |> member_args(params)
          |> Map.put("catalyst_ref", Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, ""))}
 
       _unknown ->
@@ -981,13 +982,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  defp made("program:" <> name, model, _catalyst_refs) do
+  defp made("program:" <> name, params, _catalyst_refs) do
     case Opus.Programs.Definition.brain(name) do
       %{title: title} ->
         {:ok,
          {:program, name, title}
          |> Aqua.crew_suggestion()
-         |> member_args(model)
+         |> member_args(params)
          |> Map.put("program", name)}
 
       nil ->
@@ -995,17 +996,24 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  defp made(_brain, _model, _catalyst_refs), do: :error
+  defp made(_brain, _params, _catalyst_refs), do: :error
 
-  defp member_args(suggested, model),
-    do: %{
+  # A member is its brain, its model and its effort together, with what
+  # it is good at and what to avoid as the person wrote them, or nothing:
+  # a member with neither said is a member all the same.
+  defp member_args(suggested, params) do
+    effort = String.trim(params["effort"] || "")
+
+    %{
       "name" => suggested.name,
       "title" => suggested.title,
-      "description" => suggested.description,
-      "avoid" => suggested.avoid,
+      "description" => String.trim(params["description"] || ""),
+      "avoid" => String.trim(params["avoid"] || ""),
       "mode" => suggested.mode,
-      "model" => model
+      "model" => params["model"],
+      "options" => if(effort == "", do: %{}, else: %{"effort" => effort})
     }
+  end
 
   # The program a member's brain is, by its row's name, or nil.
   defp program_of(%{"program" => program}) when is_binary(program) and program != "",

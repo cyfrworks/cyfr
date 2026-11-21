@@ -878,20 +878,14 @@ defmodule PrismWeb.AquaLive do
                 Make, with the model they pick from its brain's own
                 listing; connecting a brain makes none. --%>
           <form
-            :for={{suggested, brain, models} <- @suggestions}
+            :for={{suggested, brain, models, efforts} <- @suggestions}
             id={"aqua-setup-suggest-" <> suggested.name}
             phx-submit="make_member"
             phx-target="#aqua-agents"
             class="space-y-1"
           >
             <input type="hidden" name="brain" value={brain} />
-            <p>
-              <span class="font-medium text-gray-100">{suggested.title}</span>
-              <span :if={suggested.description != ""}>— {suggested.description}.</span>
-              <span :if={suggested.avoid != ""} class="text-gray-400">
-                Avoid: {suggested.avoid}.
-              </span>
-            </p>
+            <p class="font-medium text-gray-100">{suggested.title}</p>
             <div class="flex flex-wrap items-center gap-2">
               <select
                 name="model"
@@ -901,6 +895,29 @@ defmodule PrismWeb.AquaLive do
                 <option value="">Choose a model</option>
                 <option :for={{id, name} <- models} value={id}>{name}</option>
               </select>
+              <select
+                :if={efforts != []}
+                name="effort"
+                aria-label={"Effort for " <> suggested.title}
+                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+              >
+                <option value="">The program's default effort</option>
+                <option :for={effort <- efforts} value={effort}>{effort}</option>
+              </select>
+              <input
+                type="text"
+                name="description"
+                aria-label={"Good at, for " <> suggested.title}
+                placeholder="Good at (optional)"
+                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+              />
+              <input
+                type="text"
+                name="avoid"
+                aria-label={"Avoid, for " <> suggested.title}
+                placeholder="Avoid (optional)"
+                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+              />
               <button
                 type="submit"
                 class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
@@ -1086,24 +1103,24 @@ defmodule PrismWeb.AquaLive do
   end
 
   # The member suggested for each connected brain no crew member runs on,
-  # with the value its Make names the brain by and the models its own
-  # listing gave: a catalyst's from the catalogue, a program's from its
-  # program.
+  # with the value its Make names the brain by, the models its own listing
+  # gave (a catalyst's from the catalogue, a program's from its program)
+  # and the efforts a program's listing offers, a catalyst's none here.
   defp suggestions(providers, signed_in, assigns, taken) do
     catalysts =
       for %{state: :ready, provider: provider, ref: ref} <- providers,
           not MapSet.member?(taken, {:catalyst, identity(ref)}),
           do:
             {Aqua.crew_suggestion({:catalyst, provider}), "catalyst:" <> provider,
-             Enum.map(Map.get(assigns.models_by_provider, provider) || [], &{&1, &1})}
+             Enum.map(Map.get(assigns.models_by_provider, provider) || [], &{&1, &1}), []}
 
     programs =
       for %{name: name, title: title} <- signed_in,
           not MapSet.member?(taken, {:program, name}),
-          {:ok, %{models: models}} <- [assigns.listings[name]],
+          {:ok, %{models: models} = listing} <- [assigns.listings[name]],
           do:
             {Aqua.crew_suggestion({:program, name, title}), "program:" <> name,
-             Enum.map(models, &{&1.id, &1.name})}
+             Enum.map(models, &{&1.id, &1.name}), Map.get(listing, :efforts, [])}
 
     catalysts ++ programs
   end
