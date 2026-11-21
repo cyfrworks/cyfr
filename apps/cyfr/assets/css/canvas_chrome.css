@@ -211,8 +211,10 @@
  * backdrop filter would otherwise be the containing block of the overlays'
  * fixed panels: the gear, the chat with its unread count and Aqua, in that
  * order, centred in the shelf's height. It sets no z-index, so the panels
- * inside it stack with the page; its buttons stand above the shelf. */
-:root { --canvas-shelf-end: 14rem; }
+ * inside it stack with the page; its buttons stand above the shelf. Its
+ * room is one number, wide enough for both counts at two digits: the shelf
+ * ends before it, and so does the fallback's line. */
+:root { --canvas-shelf-end: 17.5rem; }
 .shelf-end {
   position: absolute;
   right: 8px;
@@ -364,11 +366,12 @@
  * above it; they stay the shell's markup (PrismWeb.ShellLive). So does the
  * fallback's line after them (PrismWeb.SystemLayer), and while it stands
  * the chips' room widens to hold it, so the dots and the open apps stand to
- * its right rather than under it. */
+ * its right rather than under it. The line starts after the Devices chip
+ * (4.75rem) and ends before the right end's room. */
 #shell:has(#canvas-shelf) #shell-devices,
 #shell:has(#canvas-shelf) #system-layer-desktop-notice { bottom: calc((var(--canvas-shelf-height) - 26px) / 2); }
-#system-layer-desktop-notice { width: min(30rem, 100vw - 10.75rem); }
-#shell:has(#system-layer-desktop-notice) .canvas-shelf-chips { width: calc(4.75rem + min(30rem, 100vw - 10.75rem)); }
+#system-layer-desktop-notice { width: min(30rem, 100vw - 4.75rem - var(--canvas-shelf-end)); }
+#shell:has(#system-layer-desktop-notice) .canvas-shelf-chips { width: calc(4.75rem + min(30rem, 100vw - 4.75rem - var(--canvas-shelf-end))); }
 
 /* A desktop's own colours: the lines and the quieter surfaces drawn from
  * its four, where the console's tokens draw them otherwise. */

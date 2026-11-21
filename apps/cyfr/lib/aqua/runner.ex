@@ -282,14 +282,13 @@ defmodule Aqua.Runner do
   The crew's delivery consumer (`Aqua.Crew`) sends with `:sent_by` (the
   sender's name; `"person"` when absent), `:request` (the request row a
   delivery carries into its member's child thread) with `:crew`
-  (`%{tools, options}` for the turn it opens), `:reply` (`%{request,
+  (`%{options}`, the brain options for the turn it opens), `:reply` (`%{request,
   outcome, answers}` for a member's reply), `:payload` (merged into the
   row's) and `:receipt` (its receipt, written in the acceptance).
 
   The same consumer delivers a workspace thread's opening with
   `:opening` (the opening row its transaction wrote, on which the turn
-  opens, in place of a new row) and the tools `:crew` narrows it to, and
-  a workspace thread's report into a daily thread with `:report`,
+  opens, in place of a new row), and a workspace thread's report into a daily thread with `:report`,
   `:kind` (`"report"`) and `:workspace_id` (the thread it reports, which
   must still stand when it lands). Neither steers a turn already there.
 
@@ -741,13 +740,12 @@ defmodule Aqua.Runner do
   Whether a send steers `turn`, the running or paused turn as the runner
   holds it from its row: only when the send's user, sender (`sent_by`),
   agent, origin and job all equal the turn's (`turns.requested_by`,
-  `turns.sent_by`, `turns.agent`, `turns.origin`, and the tools and brain
-  options its options name), so a paused or recovered turn steers by the
-  same rule as a running one. Any other send is a turn of its own, judged
-  by its own grant: an API key's `programmatic` line never acts inside an
-  `interactive` turn, a request from the soul never joins one a person
-  opened, and a turn keeps the one policy it opened with, never widened
-  or narrowed by a request that steers it.
+  `turns.sent_by`, `turns.agent`, `turns.origin`, and the brain options
+  its options name), so a paused or recovered turn steers by the same
+  rule as a running one. Any other send is a turn of its own: an API
+  key's `programmatic` line never acts inside an `interactive` turn, a
+  request from the soul never joins one a person opened, and a turn keeps
+  the brain options it opened with.
   """
   @spec steer?(map(), %{
           user_id: String.t(),
@@ -767,19 +765,19 @@ defmodule Aqua.Runner do
   def steer?(_turn, _send), do: false
 
   @typedoc """
-  What a turn was asked to work under beyond its agent: the tools a crew
-  request narrowed it to (nil for all its agent holds) and the brain
-  options it set.
+  What a turn was asked to work under beyond its agent: the brain options
+  a crew request set. Every member is offered the same tools on every
+  job (`Aqua.Offered`).
   """
-  @type job :: %{tools: [String.t()] | nil, options: map()}
+  @type job :: %{options: map()}
 
   # The job a send carries, or a turn's row names in its options.
-  defp job(nil), do: %{tools: nil, options: %{}}
-  defp job(%{} = crew), do: %{tools: crew[:tools], options: crew[:options] || %{}}
+  defp job(nil), do: %{options: %{}}
+  defp job(%{} = crew), do: %{options: crew[:options] || %{}}
 
   defp job_of(%{options: json}) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, %{} = options} -> %{tools: options["tools"], options: options["brain_options"] || %{}}
+      {:ok, %{} = options} -> %{options: options["brain_options"] || %{}}
       _ -> job(nil)
     end
   end
@@ -932,7 +930,6 @@ defmodule Aqua.Runner do
           request: %{
             member: member,
             task: text,
-            tools: nil,
             options: %{},
             person_id: ctx.user_id,
             origin: ctx.origin
@@ -1039,15 +1036,13 @@ defmodule Aqua.Runner do
   defp put_present(attrs, key, value), do: Map.put(attrs, key, value)
 
   # The turn's options: its agent, the room the sender had open, and for a
-  # delivered request the tools it narrows the job to and the brain
-  # options it sets.
+  # delivered request the brain options it sets.
   defp options(name, opts) do
     crew = Keyword.get(opts, :crew, %{})
 
     %{
       "agent" => name,
       "room" => Keyword.get(opts, :room),
-      "tools" => Map.get(crew, :tools),
       "brain_options" => Map.get(crew, :options),
       "schedule" => Keyword.get(opts, :schedule)
     }

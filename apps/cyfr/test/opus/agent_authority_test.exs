@@ -3,9 +3,11 @@
 
 defmodule Opus.AgentAuthorityTest do
   @moduledoc """
-  The soul's authority, pinned as `agent:local.aqua`, runs its model
-  catalyst as a child under this host: the edge selects the key bound on
-  the catalyst's own profile, and the child answers the contract.
+  The crew's one grant, pinned as `agent:local.aqua`, runs each brain as
+  a child under this host: each brain's edge selects the key bound on that
+  brain's own profile, so a turn on one brain carries that brain's key and
+  destination alone, and the child answers the contract. A crew member is
+  no source of its own.
   """
 
   use ExUnit.Case, async: false
@@ -135,18 +137,12 @@ defmodule Opus.AgentAuthorityTest do
                child_opts
              )
 
-    # A crew member loads as a source of its own, under the soul's policy:
-    # its edge into the http hand the soul holds carries the hand's egress.
-    {:ok, explorer} = Admission.authority_for(ctx, :default, "agent:local.explorer")
-    assert explorer.source_ref == "agent:local.explorer"
+    # A crew member loads no authority of its own: it runs under the
+    # crew's, whose edge into the http hand carries the hand's egress.
+    assert {:error, _} = Admission.authority_for(ctx, :default, "agent:local.explorer")
 
     {:ok, http_edge} =
-      Prima.Authority.Blob.lookup_edge(
-        explorer.policy,
-        "agent:local.explorer",
-        "catalyst:local.http",
-        ""
-      )
+      Prima.Authority.Blob.lookup_edge(authority.policy, @soul, "catalyst:local.http", "")
 
     assert http_edge.egress.domains != []
   end
@@ -181,59 +177,38 @@ defmodule Opus.AgentAuthorityTest do
              {:error, {:corrupt, {:component_graph, @soul}}}
   end
 
-  test "two crew members run one catalyst with two keys, each under its own consent", %{
+  # Shared permission is not shared secret material: under the one grant,
+  # each brain's edge lends that brain's own key to that brain's own
+  # destination, so a member's call on one brain never carries another's.
+  test "two brains under the one grant run each with its own brain's key, to its own host", %{
     ctx: ctx
   } do
     {:ok, _} = Bootstrap.run(ctx)
+    claude = bind_claude!(ctx, name: "claude key", fields: %{"ANTHROPIC_API_KEY" => "sk-claude"})
 
-    # Two members the athanor made, both on claude.
-    for name <- ~w(scout scribe) do
-      :ok =
-        Arca.put(
-          Sanctum.Context.actor(ctx),
-          Compendium.AquaPath.crew_file(name),
-          "---\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n---\n"
-        )
+    gemini =
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, "catalyst:local.gemini", %{
+        "GEMINI_API_KEY" => "g-gemini"
+      })
+
+    {:ok, authority} = Admission.authority_for(ctx, :default, @soul)
+
+    for {brain, entry, host} <- [
+          {"catalyst:local.claude", claude, "api.anthropic.com"},
+          {"catalyst:local.gemini", gemini, "generativelanguage.googleapis.com"}
+        ] do
+      {:ok, edge} = Prima.Authority.Blob.lookup_edge(authority.policy, @soul, brain, "")
+      assert edge.vault.entry_id == entry.id
+      assert host in edge.egress.domains
+
+      # The child a turn steps into on that brain holds that edge alone.
+      assert {:ok, %{authority: child, bound?: true}} =
+               Admission.step_invoke(authority, brain, nil, ctx: Sanctum.Context.enter_guest(ctx))
+
+      assert child.chain == [@soul, brain]
+      assert child.resources.vault.entry_id == entry.id
+      assert child.resources.egress.domains == edge.egress.domains
     end
-
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
-
-    home =
-      bind_claude!(ctx, name: "home key", fields: %{"ANTHROPIC_API_KEY" => "sk-home"})
-
-    work =
-      bind_claude!(ctx,
-        label: "work",
-        name: "work key",
-        fields: %{"ANTHROPIC_API_KEY" => "sk-work"}
-      )
-
-    for {member, label} <- [{"agent:local.scout", "default"}, {"agent:local.scribe", "work"}] do
-      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: member})
-      decisions = %{ref: member, selections: [%{dep: "catalyst:local.claude", label: label}]}
-      {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-      {:ok, _} =
-        Sanctum.Consent.Commit.commit(ctx, %{
-          decisions: decisions,
-          plan_token: plan.plan_token,
-          proof: preview.proof,
-          commit_digest: preview.commit_digest,
-          expected_consent_revision: plan.expected_consent_revision
-        })
-    end
-
-    edge = fn member ->
-      {:ok, authority} = Admission.authority_for(ctx, :default, member)
-
-      {:ok, edge} =
-        Prima.Authority.Blob.lookup_edge(authority.policy, member, "catalyst:local.claude", "")
-
-      edge
-    end
-
-    assert edge.("agent:local.scout").vault.entry_id == home.id
-    assert edge.("agent:local.scribe").vault.entry_id == work.id
   end
 
   defp bind_claude!(ctx, opts) do

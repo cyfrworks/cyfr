@@ -375,8 +375,15 @@ func copyScaffold(names []string, dst string) error {
 	if err := os.Mkdir(dst, 0700); err != nil {
 		return err
 	}
+	// Read through one os.Root of the project, so a folder linked outside
+	// it carries no other directory's file into the snapshot.
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	for _, name := range names {
-		info, err := os.Lstat(name)
+		info, err := root.Lstat(name)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -390,7 +397,12 @@ func copyScaffold(names []string, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
 			return err
 		}
-		if err := copyFile(name, target); err != nil {
+		in, err := root.Open(name)
+		if err != nil {
+			return err
+		}
+		err = copyTo(in, target)
+		if err = errors.Join(err, in.Close()); err != nil {
 			return err
 		}
 	}

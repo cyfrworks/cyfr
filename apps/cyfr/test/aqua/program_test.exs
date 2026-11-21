@@ -3586,7 +3586,7 @@ defmodule Aqua.ProgramTest do
     {:ok, turn} = Tape.turn(ctx, turn.id)
 
     {:ok, authority} =
-      Opus.authority_for(ctx, {:id, turn.profile_id}, Prima.AgentRef.ref(turn.agent),
+      Opus.authority_for(ctx, {:id, turn.profile_id}, Prima.AgentRef.soul_ref(),
         budget_id: turn.budget_id
       )
 

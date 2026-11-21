@@ -508,6 +508,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
     pane |> element(~s(button[phx-click="dismiss_link"])) |> render_click()
     refute render(pane) =~ "Aqua points to"
 
+    # The turn the send started has ended, so no model call of it is
+    # still being dispatched when the test does.
+    settled_today!(me)
     Cyfr.Test.Sandbox.end_views()
   end
 

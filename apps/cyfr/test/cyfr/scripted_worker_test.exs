@@ -507,7 +507,8 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert %{state: "completed", outcome: "ok"} =
              Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
 
-    assert Attempt.whereis(id) == nil
+    # The run answers before its attempt has stopped.
+    wait_until(fn -> Attempt.whereis(id) == nil end, 5_000, "the attempt to stop")
   end
 
   defp post(route, headers, body) do

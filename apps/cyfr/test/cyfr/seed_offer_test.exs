@@ -58,9 +58,9 @@ defmodule Cyfr.SeedOfferTest do
   test "the offer runs under its own claim and gives it up for the next boot", %{key: key} do
     test = self()
 
-    {pid, ref} = offer!(key: key, owner: "member-a", sync: fn -> send(test, :synced) end)
+    pid = offer!(key: key, owner: "member-a", sync: fn -> send(test, :synced) end)
 
-    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :ok}}, 5_000
+    assert_receive {:EXIT, ^pid, {:shutdown, :ok}}, 5_000
     assert_received :synced
     assert_received {:event, [:cyfr, :seed_offer, :completed], %{duration: _}, %{key: ^key}}
     assert {:ok, row} = JobClaims.read("seed_release", key)
@@ -73,10 +73,9 @@ defmodule Cyfr.SeedOfferTest do
 
     began = System.monotonic_time(:millisecond)
 
-    {pid, ref} =
-      offer!(key: key, owner: "member-a", sync: fn -> flunk("synced a peer's offer") end)
+    pid = offer!(key: key, owner: "member-a", sync: fn -> flunk("synced a peer's offer") end)
 
-    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :skipped}}, 5_000
+    assert_receive {:EXIT, ^pid, {:shutdown, :skipped}}, 5_000
     waited = System.monotonic_time(:millisecond) - began
 
     assert waited < 1_000
@@ -93,8 +92,8 @@ defmodule Cyfr.SeedOfferTest do
         ] do
       {:ok, log} =
         with_log(fn ->
-          {pid, ref} = offer!(key: key, sync: failure)
-          assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:error, :exception}}}, 5_000
+          pid = offer!(key: key, sync: failure)
+          assert_receive {:EXIT, ^pid, {:shutdown, {:error, :exception}}}, 5_000
           :ok
         end)
 
@@ -408,11 +407,14 @@ defmodule Cyfr.SeedOfferTest do
 
   defp capture(node, acc), do: {node, acc}
 
-  # Start an offer under the test's supervisor and monitor it: it stops by
-  # itself, with `{:shutdown, outcome}`.
+  # Start an offer that stops by itself, with `{:shutdown, outcome}`, linked
+  # to the test, which traps exits. The link is made with the start, so the
+  # offer's end reaches the test with its reason however soon it comes; a
+  # monitor placed after the start can find the offer gone and say `:noproc`.
   defp offer!(opts) do
-    {:ok, pid} = start_supervised({SeedOffer, opts})
-    {pid, Process.monitor(pid)}
+    Process.flag(:trap_exit, true)
+    {:ok, pid} = SeedOffer.start_link(opts)
+    pid
   end
 
   # An offer whose sync is running and blocked: its start has returned

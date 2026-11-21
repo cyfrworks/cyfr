@@ -294,13 +294,14 @@ defmodule Aqua.Launch do
   # anything a caller sends: the turn's read threads as its row holds them
   # now, which the root is seeded with, the root's id (the step's pre-minted
   # child id, so the loop can read the root's row whatever the launch
-  # answers), and the name of the agent whose turn launched it, which the
-  # root records as its caller.
+  # answers), and Aqua's name, which the root records as its caller:
+  # toward CYFR the crew is one caller, whichever member's turn launched
+  # it, and the member stays the worker the turn's row names.
   defp launching(caller, step, turn) do
     Sanctum.Context.stamp_launch(caller, %{
       read_threads: Arca.ThreadStorage.threads_of(turn.read_threads),
       execution_id: root_id(step),
-      agent: turn.agent
+      agent: Prima.AgentRef.soul_name()
     })
   end
 

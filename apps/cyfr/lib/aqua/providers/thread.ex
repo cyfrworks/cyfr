@@ -611,10 +611,6 @@ defmodule Aqua.Providers.Thread do
                 "ask: a short title for the job, plain text on one line of at most #{Aqua.Crew.title_max()} characters, that a desktop shows for it; omit for none",
               max: Aqua.Crew.title_max()
             ),
-            Arg.new("tools", {:array, Arg.new(nil, :string)},
-              description:
-                "ask: narrow the member's tools for this job to these (a tool, or tool.action); omit for all it holds"
-            ),
             Arg.new("options", {:map, Arg.new(nil, :json)},
               description: "ask: options for the member's brain, those it declares"
             )

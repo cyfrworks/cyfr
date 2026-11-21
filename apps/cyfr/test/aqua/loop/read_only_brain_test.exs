@@ -74,7 +74,6 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
     test "read-only on a catalyst runs",
          %{ctx: ctx, room: room} do
       member!(ctx, "reader", "Reader", @api, "claude-sonnet-5-5")
-      keyed!(ctx, "reader")
       mode!(ctx, "reader", "read-only")
       script!([reply("three notes")])
 
@@ -261,26 +260,6 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   defp mode!(ctx, name, mode) do
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => name, "mode" => mode})
-  end
-
-  # The member's brain on the key the catalyst's own profile binds,
-  # selected as a person's consent selects it.
-  defp keyed!(ctx, name),
-    do: commit!(ctx, Prima.AgentRef.ref(name), %{selections: [%{dep: @api, label: "default"}]})
-
-  defp commit!(ctx, ref, over) do
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    decisions = Map.merge(%{ref: ref}, over)
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
   end
 
   # A driven program row with a kept folder, as the Programs page sets one up.

@@ -200,6 +200,12 @@ async function freshContext(browser) {
 }
 
 const connected = (page) => page.waitForSelector(".phx-connected", { timeout: 60_000 });
+// The desktop's own socket joined on a page that landed at a CYFR. The
+// desktop is a LiveView beside the page's, and its mount keeps the
+// browser's zone in the person's preferences before the join is answered
+// (`PrismWeb.ShellLive`, `Aqua.Day`): a page parked before that leaves the
+// write to land under a read of the person's row, or never.
+const desktopJoined = (page) => page.waitForSelector(".phx-connected #shell", { state: "attached", timeout: 60_000 });
 
 // A page done with its CYFR for now, parked on a blank document: an open
 // page's socket asks its CYFR about its session, which past the freshness
@@ -279,6 +285,9 @@ async function main(chromium) {
   const deskContext = await freshContext(chromium);
   const desk = await deskContext.newPage();
   const keys = passkeys();
+  // The zone every page of this browser reports, as the desktop's socket
+  // sends it (app.js, `appearance`).
+  S.zone = await desk.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   let from = clock();
   const made = await createAccount(desk, keys, { directory: REG, name: HANDLE, secrets });
   windowed("make", from, "the account made at registry.test's pages");
@@ -297,6 +306,7 @@ async function main(chromium) {
 
   from = clock();
   const atA = await setUpWith(desk, keys, AHome, "a");
+  if (atA.landed) await desktopJoined(desk);
   windowed("setup", from, "setup at A");
   await park(desk);
   record.setup.at_a = atA;
@@ -370,6 +380,7 @@ async function main(chromium) {
   if (!row("allow", atB.landed && typeof bSlug === "string", "B's administrator lands at B with an athanor of their own", { setup: atB, slug: bSlug ?? null, read_error: bRead })) return;
   await admin.goto(`${B}/a/${encodeURIComponent(`@${bSlug}`)}/settings`);
   await connected(admin);
+  await desktopJoined(admin);
   const entry = admin.locator('#door-entry-form input[name="value"]');
   await entry.fill(`@${HANDLE}`);
   const allow = admin.locator("#door-entry-form button", { hasText: "Allow" });
@@ -405,6 +416,7 @@ async function main(chromium) {
   const personKeys = passkeys((await keys.list()).filter((c) => c.rpId === REGISTRY));
   from = clock();
   const signedIn = await signIn(person, personKeys, BHome);
+  if (signedIn.landed) await desktopJoined(person);
   windowed("signin", from, "the sign-in at B");
   S.cookies.remote = await cookieDigest(personContext, B, "b");
   await park(person);
@@ -425,6 +437,7 @@ async function main(chromium) {
   const namelessSign = await namelessSignContext.newPage();
   const namelessSignKeys = passkeys((await namelessKeys.list()).filter((c) => c.rpId === REGISTRY));
   const namelessIn = await signIn(namelessSign, namelessSignKeys, BHome);
+  if (namelessIn.landed) await desktopJoined(namelessSign);
   S.cookies.nameless = await cookieDigest(namelessSignContext, B, "b");
   await park(namelessSign);
   windowed("collision", collisionFrom, "the nameless account's making, allow and sign-in at B");
@@ -468,7 +481,7 @@ async function main(chromium) {
   }
   if (aUsersError) {
     row("sync", false, `A's person, read after the sync: the read failed (${aUsersError})`, {});
-  } else if (aUsersRead.every((r) => r.prefs === "{}")) {
+  } else if (aUsersRead.every((r) => !r.prefs.includes('"registry_terms_seen"'))) {
     row("sync", false, "A's person holds no terms version after the sync: the registry's terms were not read within the sign page's 3 s, so CYFR recorded nothing, by design", { users: aUsersRead });
   } else {
     let first = aUsersRead;

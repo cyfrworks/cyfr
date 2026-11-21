@@ -5,10 +5,9 @@ defmodule PrismWeb.AquaSetupTest do
   @moduledoc """
   Aqua's setup for a newcomer whose administrator shared a key with
   everyone: the brain that key fits stands first, already bound and named
-  as the administrator's with its daily cap; picking it for Aqua asks one
-  confirmation, and Aqua then answers. With no crew, as CYFR's own seed
-  ships none, the setup suggests a member on that brain, which the person
-  makes, grants and chooses for Aqua, each grant asked on its own, and
+  as the administrator's with its daily cap, so it is connected; a crew
+  member made on it, its model picked and the member chosen as Aqua's
+  ask nothing, since every member runs under the crew's one grant, and
   Aqua then answers. The brain is the chat fixture
   (`Cyfr.Test.ChatFixture`) in attach mode, run by the runtime for real,
   and the key goes only to its loopback upstream.
@@ -25,8 +24,6 @@ defmodule PrismWeb.AquaSetupTest do
   @moduletag timeout: 180_000
 
   @key "sk-shared-7f3a"
-  # The crew member the fixture seed's Aqua runs on (`Cyfr.Test.ChatFixture`).
-  @member "fixture"
 
   setup tags do
     Arca.Cache.init()
@@ -59,15 +56,16 @@ defmodule PrismWeb.AquaSetupTest do
     {:ok, ctx: ctx, port: port}
   end
 
-  test "a newcomer picks the brain their administrator's shared key binds, and Aqua answers " <>
-         "after one confirmation",
+  test "a newcomer makes a crew member on the brain their administrator's shared key binds, " <>
+         "chooses it as Aqua's, and Aqua answers with no sheet",
        %{conn: conn, ctx: ctx, port: port} do
-    # The model of the crew member Aqua runs on moved since the first fill
-    # consented Aqua, so Aqua's consent no longer covers it.
+    # The newcomer makes a crew member on the connected brain.
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => @member,
+        "action" => "create",
+        "name" => "scout",
+        "title" => "Scout",
+        "catalyst_ref" => Fixture.ref(),
         "model" => "elsewhere"
       })
 
@@ -79,19 +77,14 @@ defmodule PrismWeb.AquaSetupTest do
 
     {view, _html} = mount_athanor(conn, "/aqua")
 
-    # A stale consent reads as stale and is consented again, never a key
-    # to connect.
-    assert has_element?(
-             view,
-             "#aqua-card-aqua",
-             "Its consent is out of date: what it runs on changed since it was consented."
-           )
+    # Aqua's member's brain is connected by the shared key, so Aqua reads
+    # ready, and no card says a grant is out of date: a member holds none.
+    assert has_element?(view, "#aqua-card-aqua", "Model connected")
+    refute has_element?(view, "#aqua-card-aqua", "changed since you granted it")
+    refute has_element?(view, "#aqua-card-scout", "changed since")
 
-    assert has_element?(view, "#aqua-card-aqua button[phx-click=open_consent]", "Consent again")
-    refute has_element?(view, "#aqua-card-aqua", "the model has no key yet")
-    refute has_element?(view, ~s(#aqua-card-aqua a[data-test="connect"]))
-
-    # The setup is the first step, and the shared key stands first, bound.
+    # The setup's brains: the shared key stands first, bound.
+    {view, _html} = mount_athanor(conn, "/aqua?setup=1")
     assert has_element?(view, "#aqua-setup[open]")
 
     [first | _] =
@@ -103,10 +96,9 @@ defmodule PrismWeb.AquaSetupTest do
 
     assert first == ["aqua-setup-brain-chat-fixture"]
 
-    # Aqua's step names the crew member it runs on; that member's brain is
-    # picked on its own setup, the shared key first there too.
-    assert has_element?(view, ~s(#aqua-setup-member option[value="#{@member}"][selected]))
-    {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=#{@member}")
+    # The member's model is picked on its own setup, the shared key first
+    # there too: picking asks nothing.
+    {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=scout")
 
     assert has_element?(
              view,
@@ -128,26 +120,15 @@ defmodule PrismWeb.AquaSetupTest do
       |> Enum.flat_map(&LazyHTML.attribute(&1, "value"))
 
     view |> form("#aqua-setup-pick", %{"value" => choice}) |> render_change()
-
-    # One confirmation: Aqua's consent, asked again for the new brain of
-    # the member it runs on.
-    wait_until(
-      fn ->
-        has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.aqua")
-      end,
-      10_000,
-      "the soul's grant"
-    )
-
-    # The grant reopens on what the soul's head bound for its brain.
-    assert has_element?(
-             view,
-             ~s(#system-layer-dialog [data-test="grant-pick"][aria-pressed="true"])
-           )
-
-    view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
-    wait_until(fn -> render(view) =~ "aqua consented." end, 10_000, "the soul's consent")
+    _ = render(view)
     refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+    # Aqua's step: the member it runs on, chosen here, asks nothing either.
+    {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+    view |> form("#aqua-setup-member", %{"member" => "scout"}) |> render_change()
+    _ = render(view)
+    refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+    assert {:ok, %{member: "scout"}} = Compendium.agent(ctx, "aqua")
 
     # The soul's brain is connected through the key it was shared, read as
     # the person reads it on the screen, whose origin the grant admits.

@@ -108,12 +108,15 @@ defmodule Sanctum.Consent.Bootstrap do
   immutable, and its caps are auditable once at build time rather than per
   athanor.
 
-  The athanor's agents (`agent:local.<name>`, read through the
-  component-facts port) are sources here too, minted after the components
-  they run on. A source is minted only while it is vouched for — the
-  seed's own bytes, or a head that already names it unchanged. A
-  member-authored agent or component, and an edited shipped copy, consent
-  through the walk.
+  The crew's one grant, Aqua's agent source (`agent:local.aqua`, read
+  through the component-facts port), is a source here too, minted after
+  the components it runs on: its closure holds every brain the athanor
+  can connect, each edge selecting that brain's `default` profile as
+  above, so a key bound there is what every crew member runs that brain
+  with. A crew member is no source. A source is minted only while it is
+  vouched for — the seed's own bytes, or a head that already names it
+  unchanged. A person-made component, and an edited shipped copy,
+  consent through the walk.
 
   Bootstrap consent applies only to the operator's seed bundle.
   Components discovered by `component.register` require explicit consent.
@@ -264,7 +267,7 @@ defmodule Sanctum.Consent.Bootstrap do
      }}
   end
 
-  # An athanor whose agent files cannot be listed bootstraps no agent and
+  # An athanor whose Aqua file cannot be read bootstraps no agent and
   # goes on: the components are a separate roster and a transient tree
   # read must not hold them up. Facts that are not configured at all are
   # a different thing and refuse the walk — see `run/2`.

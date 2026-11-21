@@ -105,18 +105,20 @@ defmodule Compendium.ConsentFacts do
     type = to_string(Map.get(row, :component_type))
 
     cond do
-      type == agent_type() -> seed_agent_digest(Map.get(row, :name))
+      type == agent_type() -> seed_agent_digest(ctx, Map.get(row, :name))
       type == "tincture" -> pristine_tincture_digest(ctx, row)
       type in @wasm_types -> Provenance.shipped_release_digest(row)
       true -> :error
     end
   end
 
-  # The seed's own agent file, projected: a prose-only edit of the
-  # athanor's copy leaves this digest alone, a policy, model or catalyst
-  # edit of the seed file moves it.
-  defp seed_agent_digest(name) do
-    with {:ok, row} <- AgentSource.shipped_row(name) do
+  # The seed's own Aqua file, projected as the crew's grant over the
+  # brains the seed ships (`AgentSource.shipped_row/2`): a prose-only edit
+  # of the athanor's copy leaves this digest alone, a tools edit of the
+  # seed file moves it, and a brain the seed does not ship keeps it from
+  # matching the installed row.
+  defp seed_agent_digest(ctx, name) do
+    with {:ok, row} <- AgentSource.shipped_row(ctx, name) do
       {:ok, Map.get(row, :release_digest)}
     end
   end

@@ -17,6 +17,8 @@ defmodule Aqua.SeatTest do
 
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
@@ -26,9 +28,8 @@ defmodule Aqua.SeatTest do
   @model "catalyst:local.claude"
   @gemini "catalyst:local.gemini"
   @context "\n\n---\n\n## Runtime Context\n\n"
-  # A rebuilt turn whose consent's shape moved since its root was claimed.
-  @consent_moved "Consent required: agent:local.aqua asks for more than its grant holds — " <>
-                   "review and grant again"
+  # A rebuilt turn whose pins moved since its root was claimed.
+  @moved_on "The turn moved on — read the thread again and retry"
 
   setup do
     # Deliberate crashes in other tests must not spend this test's restart budget.
@@ -101,11 +102,28 @@ defmodule Aqua.SeatTest do
 
   defp run(ctx, turn), do: Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
 
-  defp chats(name) do
+  # The model calls of `name`'s turns: every call names the crew's one
+  # grant, Aqua's, so the worker is the turn the call's root holds.
+  defp chats(ctx, name) do
     Enum.filter(
       ScriptedWorker.calls(),
-      &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == Prima.AgentRef.ref(name))
+      &(&1.input["operation"] == "chat" and worker_of(ctx, &1) == name)
     )
+  end
+
+  defp worker_of(ctx, %{execution_id: id}) do
+    case Arca.Execution.get_tenant(actor(ctx), id) do
+      %{root_execution_id: root} ->
+        Arca.Repo.one(
+          from(t in Arca.Schemas.Turn,
+            where: t.athanor_id == ^ctx.athanor_id and t.root_execution_id == ^(root || id),
+            select: t.agent
+          )
+        )
+
+      _another_athanors ->
+        nil
+    end
   end
 
   defp aqua!(ctx, args) do
@@ -133,6 +151,13 @@ defmodule Aqua.SeatTest do
       })
 
     :ok
+  end
+
+  # The head of the crew's one grant, Aqua's.
+  defp grant_head(ctx) do
+    {:ok, [profile]} = Arca.ConsentStorage.profiles(actor(ctx), @soul)
+    {:ok, head, _refs} = Arca.ConsentStorage.get_head(actor(ctx), profile.id)
+    {:ok, head}
   end
 
   defp seat_prompt do
@@ -216,8 +241,8 @@ defmodule Aqua.SeatTest do
     turn = accept!(ctx, room, "say hello to the fern")
     assert :completed = run(ctx, turn)
 
-    assert [%{input: %{"params" => params}}] = chats("aqua")
-    assert chats(holder) == []
+    assert [%{input: %{"params" => params}}] = chats(ctx, "aqua")
+    assert chats(ctx, holder) == []
     assert params["model"] == "claude-sonnet-5-5"
 
     [opening, context] = String.split(params["system"], @context, parts: 2)
@@ -240,8 +265,6 @@ defmodule Aqua.SeatTest do
   # prompt, and its own turn asks nobody.
   test "the member Aqua runs on works a job as itself, briefed as a member, and asks nobody",
        %{ctx: ctx, room: room, holder: holder} do
-    consent!(ctx, Prima.AgentRef.ref(holder), [%{dep: @model, label: "default"}])
-
     script!([
       reply("Done."),
       %{
@@ -264,8 +287,8 @@ defmodule Aqua.SeatTest do
     turn = accept!(ctx, child, "tidy the notes", holder)
     assert :completed = run(ctx, turn)
 
-    assert [%{input: %{"params" => %{"system" => system}}}] = chats(holder)
-    assert chats("aqua") == []
+    assert [%{input: %{"params" => %{"system" => system}}}] = chats(ctx, holder)
+    assert chats(ctx, "aqua") == []
     [opening, _context] = String.split(system, @context, parts: 2)
     assert opening == Aqua.Prompt.crew_briefing(false, false)
     refute system =~ seat_prompt()
@@ -296,7 +319,6 @@ defmodule Aqua.SeatTest do
   test "a read-only worker is not told that its offered writes run",
        %{ctx: ctx, room: room, holder: holder} do
     member!(ctx, holder, %{"mode" => "read-only"})
-    consent!(ctx, Prima.AgentRef.ref(holder), [%{dep: @model, label: "default"}])
 
     script!([
       %{
@@ -318,7 +340,10 @@ defmodule Aqua.SeatTest do
     turn = accept!(ctx, child, "inspect only", holder)
     assert :completed = run(ctx, turn)
     assert {:ok, %{agent_mode: "read-only"}} = Tape.turn(ctx, turn.id)
-    assert [%{input: %{"params" => params}}, %{input: %{"params" => followup}}] = chats(holder)
+
+    assert [%{input: %{"params" => params}}, %{input: %{"params" => followup}}] =
+             chats(ctx, holder)
+
     assert Enum.any?(params["tools"], &(&1["name"] == "files"))
 
     assert %{
@@ -336,49 +361,96 @@ defmodule Aqua.SeatTest do
     refute system =~ "for that one act: nothing but this instruction stops you"
   end
 
-  # A brain picked for the member Aqua runs on asks Aqua's consent on the
-  # page (`PrismWeb.AquaLive.AgentsComponent`), never the member's own:
-  # that stays on the brain it was given for, so a job of the member's own
-  # is refused until the person gives it again, and none of it reaches the
-  # new brain before then.
-  test "the member Aqua runs on, its brain moved and Aqua consented again, runs no job of its " <>
-         "own on the new brain before its own consent",
+  # A brain picked for the member Aqua runs on asks nothing: the crew's one
+  # grant names every brain the athanor can connect, so Aqua's turn and a
+  # job of the member's own run on the new brain at once, each with that
+  # brain's own key, under the one grant.
+  test "the member Aqua runs on, its brain moved, runs Aqua's turn and a job of its own on the " <>
+         "new brain at once, with that brain's key",
        %{ctx: ctx, room: room, holder: holder} do
-    member_ref = Prima.AgentRef.ref(holder)
-    consent!(ctx, member_ref, [%{dep: @model, label: "default"}])
-
     start_supervised!(
       {ScriptedWorker, ref: [@model, @gemini], script: [reply("Aqua."), reply("The member.")]}
     )
 
-    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
+    {:ok, %{revision: revision}} = grant_head(ctx)
+    key = Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
     :ok = member!(ctx, holder, %{"catalyst_ref" => @gemini, "model" => "gemini-pro-latest"})
-    consent!(ctx, @soul, [%{dep: @gemini, label: "default"}])
 
     aqua = accept!(ctx, room, "hello")
     assert :completed = run(ctx, aqua)
-
-    # The member's own job: its consent still holds the old brain only.
-    assert {:error, {:consent_required, _}} = Opus.authority_for(ctx, :default, member_ref)
     {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
-    refused = accept!(ctx, child, "tidy the notes", holder)
-    assert {:failed, _} = run(ctx, refused)
-    assert chats(holder) == []
-
-    # Given, the member's next job runs on its new brain.
-    consent!(ctx, member_ref, [%{dep: @gemini, label: "default"}])
-    done = accept!(ctx, child, "tidy the notes again", holder)
+    done = accept!(ctx, child, "tidy the notes", holder)
     assert :completed = run(ctx, done)
 
-    assert ["gemini-pro-latest"] = Enum.map(chats(holder), & &1.input["params"]["model"])
-    assert ["gemini-pro-latest"] = Enum.map(chats("aqua"), & &1.input["params"]["model"])
+    for name <- ["aqua", holder] do
+      assert [%{input: %{"params" => %{"model" => "gemini-pro-latest"}}, authority: authority}] =
+               chats(ctx, name)
+
+      assert authority.chain == [@soul, @gemini]
+      assert authority.resources.vault.entry_id == key.id
+    end
+
+    # Nothing was granted along the way: the grant is the one the fill made.
+    assert {:ok, %{revision: ^revision}} = grant_head(ctx)
   end
 
   # A turn pins Aqua's file, which names its member: rebuilt as recovery
-  # rebuilds it, it runs on the member it started on. Choosing another
-  # gives no consent: the next turn waits for the person's, then runs on
-  # the new member's brain.
-  test "a member chosen during a turn does not retarget it; the next turn runs on the new one once consented",
+  # rebuilds it, it runs on the member it started on. Choosing another asks
+  # nothing and changes no grant: the next turn runs on the new member's
+  # brain under the same grant.
+  # The crew's grant is Aqua's whatever brain its member runs on: Aqua on a
+  # member whose brain is a program that stands reads the grant's stale
+  # state, as Aqua on a catalyst does, and its refused turn asks for the
+  # grant.
+  test "Aqua on a program brain reads the crew's stale grant, and its refused turn asks for it",
+       %{ctx: ctx, room: room} do
+    {:ok, _row} =
+      Arca.McpServerStorage.insert(actor(ctx), %{
+        cap: 0,
+        name: "claude",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "cyfr-claude-code claude", "env" => %{}})
+      })
+
+    :ok = aqua!(ctx, %{"member" => "claude-code"})
+    agents = [%{"name" => "aqua", "program" => "claude"}]
+    assert %{"aqua" => {:ready, "claude"}} = Aqua.Models.model_status(ctx, agents)
+
+    # A tool Aqua gains moves the grant's shape: stale until granted again.
+    :ok = aqua!(ctx, %{"tools_add" => [ungranted_action(ctx)]})
+    assert %{"aqua" => {:consent_stale, "claude"}} = Aqua.Models.model_status(ctx, agents)
+
+    turn = accept!(ctx, room, "hello?")
+    assert {:failed, :setup_required} = run(ctx, turn)
+    assert {:ok, %{status: "failed", root_execution_id: nil}} = Tape.turn(ctx, turn.id)
+    room_id = room.id
+
+    assert_receive %ThreadEvent{
+                     thread_id: ^room_id,
+                     kind: :consent_required,
+                     data: %{ref: @soul}
+                   },
+                   5_000
+  end
+
+  # A catalog action Aqua's list does not reach, of a tool no bundled
+  # catalyst serves, so granting it adds no dependency.
+  defp ungranted_action(ctx) do
+    {:ok, soul} = Compendium.AquaAgent.get(ctx, "aqua")
+    held = Sanctum.Consent.ShapeDerivation.expand_tools(soul.tools)
+
+    Enum.find(Sanctum.Catalog.tool_actions(), fn key ->
+      [tool, _action] = String.split(key, ".", parts: 2)
+
+      key not in held and key not in Prima.Manifest.Caps.agent_only_tools() and
+        Sanctum.VirtualTools.catalyst_for(tool) == nil
+    end)
+  end
+
+  test "a member chosen during a turn does not retarget it; the next turn runs on the new one, asking nothing",
        %{ctx: ctx, room: room, holder: holder} do
     start_supervised!(
       {ScriptedWorker, ref: [@model, @gemini], script: [reply("First."), reply("Third.")]}
@@ -406,21 +478,16 @@ defmodule Aqua.SeatTest do
              holder: %{name: "explorer", state: :held}
            } = next.agent
 
-    # Choosing minted nothing: Aqua's consent is the person's to give again.
-    assert {:error, {:consent_required, _}} = Opus.authority_for(ctx, :default, @soul)
-    refused = accept!(ctx, room, "second")
-    assert {:failed, _} = run(ctx, refused)
-    assert [_first] = chats("aqua")
-
-    # Given, the next turn runs on the new member's brain and model.
+    # Choosing changed no grant: the next turn, its brain connected, runs
+    # on the new member's brain and model under the same grant.
+    assert {:ok, again} = Opus.authority_for(ctx, :default, @soul)
+    assert again.consent_id == authority.consent_id
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
-    consent!(ctx, @soul, [%{dep: @gemini, label: "default"}])
-    assert {:ok, _} = Opus.authority_for(ctx, :default, @soul)
     third = accept!(ctx, room, "third")
     assert :completed = run(ctx, third)
 
     assert ["claude-sonnet-5-5", "gemini-pro-latest"] =
-             Enum.map(chats("aqua"), & &1.input["params"]["model"])
+             Enum.map(chats(ctx, "aqua"), & &1.input["params"]["model"])
 
     assert {:ok, %{agent: "aqua", catalyst_ref: @gemini <> ":" <> _}} = Tape.turn(ctx, third.id)
     assert answers(ctx, room, third.id) == ["Third."]
@@ -443,7 +510,8 @@ defmodule Aqua.SeatTest do
         reply("On claude."),
         {:probe, self()},
         reply("Taken over."),
-        {:probe, self()}
+        {:probe, self()},
+        reply("Taken over again.")
       ])
 
       {:ok, _} =
@@ -477,27 +545,29 @@ defmodule Aqua.SeatTest do
       assert answers(ctx, room, same) == ["Taken over."]
       :ok = aqua!(ctx, %{"member" => holder})
 
-      # A member on another brain, chosen mid-call: taken over, the turn is
-      # refused, its consent's shape moved, and nothing reaches that brain.
+      # A member on another brain, chosen mid-call: the crew's grant does
+      # not follow it, so taken over, the turn runs on the member its pin
+      # names, and nothing reaches the other brain.
+      {:ok, %{consent_id: grant}} = Opus.authority_for(ctx, :default, @soul)
       {other, pids} = open_turn!(ctx, room, "third")
       :ok = aqua!(ctx, %{"member" => "explorer"})
       gone = take_over!(pids)
 
-      assert {:ok, %{status: "failed", error: @consent_moved}} = Tape.turn(ctx, other)
-      assert answers(ctx, room, other) == []
+      assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, other)
+      assert answers(ctx, room, other) == ["Taken over again."]
 
       for call <- [dead, gone], do: send(call, :continue)
 
-      # The first turn's call, the second's held and taken-over ones, and
-      # the third's held one: each on the member the pin names.
-      assert List.duplicate("claude-sonnet-5-5", 4) ==
-               Enum.map(chats("aqua"), & &1.input["params"]["model"])
+      # The first turn's call, the second's and the third's held and
+      # taken-over ones: each on the member the pin names.
+      assert List.duplicate("claude-sonnet-5-5", 5) ==
+               Enum.map(chats(ctx, "aqua"), & &1.input["params"]["model"])
 
-      # The file names the new member; its consent is the person's to give.
+      # The file names the new member, and the grant is the one it was.
       assert {:ok, %{agent: %{holder: %{name: "explorer", state: :held}}}} =
                Compendium.agent_snapshot(ctx, "aqua")
 
-      assert {:error, {:consent_required, _}} = Opus.authority_for(ctx, :default, @soul)
+      assert {:ok, %{consent_id: ^grant}} = Opus.authority_for(ctx, :default, @soul)
     end
 
     test "a member whose brain moves while the turn is open never runs it on the new brain: " <>
@@ -514,12 +584,16 @@ defmodule Aqua.SeatTest do
       assert answers(ctx, room, live) == ["On sonnet."]
       edit.(%{"model" => "claude-sonnet-5-5"})
 
-      # Taken over after its model moved: its consent's shape moved, and
-      # it is refused with the sentence that says so.
+      # Taken over after its model moved, which the grant does not hold
+      # and the turn's capability digest does: refused as a turn that moved
+      # on, and never run on the new model.
       {model, pids} = open_turn!(ctx, room, "second")
       edit.(%{"model" => "claude-opus-5-5"})
       dead = take_over!(pids)
-      assert {:ok, %{status: "failed", error: @consent_moved}} = Tape.turn(ctx, model)
+
+      assert {:ok, %{status: "failed", error: @moved_on}} =
+               Tape.turn(ctx, model)
+
       edit.(%{"model" => "claude-sonnet-5-5"})
 
       # Taken over after its mode moved, which the consent does not hold
@@ -529,15 +603,39 @@ defmodule Aqua.SeatTest do
       edit.(%{"mode" => "read-only"})
       gone = take_over!(pids)
 
-      assert {:ok,
-              %{status: "failed", error: "The turn moved on — read the thread again and retry"}} =
+      assert {:ok, %{status: "failed", error: @moved_on}} =
                Tape.turn(ctx, mode)
 
       for call <- [dead, gone], do: send(call, :continue)
       assert answers(ctx, room, model) ++ answers(ctx, room, mode) == []
 
       assert List.duplicate("claude-sonnet-5-5", 3) ==
-               Enum.map(chats("aqua"), & &1.input["params"]["model"])
+               Enum.map(chats(ctx, "aqua"), & &1.input["params"]["model"])
+    end
+
+    # A member's turn keeps the revision of the crew's grant it was claimed
+    # under: the person granting Aqua's sheet again while it is open, a
+    # rebuilt loop finds the grant moved and is refused, and nothing runs
+    # under the newer grant.
+    test "a member's job open while the crew's grant is granted again is refused once taken " <>
+           "over, never run under the newer grant",
+         %{ctx: ctx, room: room, holder: holder} do
+      script!([{:probe, self()}])
+      {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
+      :ok = Aqua.Runner.subscribe(child.id, ctx.athanor_id)
+      {:ok, %{turn_id: job}} = Aqua.Runner.send_message(ctx, child.id, "tidy the notes")
+      pids = running!(child)
+      assert {:ok, %{agent: ^holder, consent_id: claimed}} = Tape.turn(ctx, job)
+
+      consent!(ctx, @soul, [%{dep: @model, label: "default"}])
+      assert {:ok, %{consent_id: newer}} = Opus.authority_for(ctx, :default, @soul)
+      refute newer == claimed
+
+      dead = take_over!(pids)
+      send(dead, :continue)
+      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, job)
+      assert answers(ctx, child, job) == []
+      assert [%{authority: %{consent_id: ^claimed}}] = chats(ctx, holder)
     end
   end
 
@@ -595,7 +693,7 @@ defmodule Aqua.SeatTest do
       assert system_lines(ctx, thread) == [sentence]
     end
 
-    assert chats("aqua") == []
+    assert chats(ctx, "aqua") == []
     _ = room
   end
 
@@ -634,7 +732,7 @@ defmodule Aqua.SeatTest do
     sentence = Prima.Refusal.message(reason)
     assert {:ok, %{status: "failed", error: ^sentence}} = Tape.turn(ctx, turn.id)
     assert system_lines(ctx, room) == [sentence]
-    assert chats("aqua") == []
+    assert chats(ctx, "aqua") == []
   end
 
   # No old key is read: Aqua's file naming a brain of its own refuses
@@ -663,7 +761,7 @@ defmodule Aqua.SeatTest do
     turn = accept!(ctx, room, "hello?")
     assert {:failed, :seat_has_brain} = run(ctx, turn)
     assert system_lines(ctx, room) == [sentence]
-    assert chats("aqua") == []
+    assert chats(ctx, "aqua") == []
   end
 
   # The door names the member Aqua runs on and gives it no brain of its own.

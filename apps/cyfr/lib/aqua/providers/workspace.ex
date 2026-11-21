@@ -12,8 +12,8 @@ defmodule Aqua.Providers.Workspace do
     * `open` opens one, or sends a further ask to one, from a daily
       thread: in one transaction the thread, its opening (the envelope:
       the ask, who asked, the post that asked, the daily thread's posts
-      it refers to, the files it carries, copied into it, the tools it is
-      narrowed to, whether its browser work is kept apart, its title), a
+      it refers to, the files it carries, copied into it, whether its
+      browser work is kept apart, its title), a
       pointer post on the daily thread and the `workspace_open` record
       whose delivery starts the soul's turn there
       (`Arca.TurnStorage.open_workspace/2`, `Aqua.Crew`). It answers the
@@ -116,10 +116,6 @@ defmodule Aqua.Providers.Workspace do
               description:
                 "open: files of that daily thread's posts to carry into the workspace thread, each {message_id, stored_name}"
             ),
-            Arg.new("tools", {:array, Arg.new(nil, :string)},
-              description:
-                "open: narrow the work's tools to these (a tool, or tool.action); posting and reporting stay; omit for all"
-            ),
             Arg.new("apart", :boolean,
               description: "open: keep this work's browser apart from the person's other work"
             )
@@ -186,7 +182,6 @@ defmodule Aqua.Providers.Workspace do
   defp open(ctx, args) do
     with {:ok, ask} <- ask(args["ask"]),
          {:ok, title} <- Aqua.Crew.parse_title(args["title"], "workspace.open"),
-         {:ok, tools} <- Aqua.Crew.parse_tools(args["tools"], "workspace.open"),
          {:ok, apart} <- apart(args["apart"]),
          {:ok, from} <- opener(ctx, args),
          {:ok, refs} <- refs(ctx, from, args["refs"]),
@@ -210,7 +205,6 @@ defmodule Aqua.Providers.Workspace do
               "asked_by" => from.person,
               "from" => %{"thread" => from.daily.id, "message" => from.asked},
               "refs" => refs,
-              "tools" => tools,
               "apart" => apart,
               "title" => title
             }

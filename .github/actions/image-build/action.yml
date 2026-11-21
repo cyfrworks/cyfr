@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# Build the app image (Dockerfile) or the Locus image (Dockerfile.locus) on
+# the runner's own platform, over the layer cache in the public package
+# ghcr.io/cyfrworks/cyfr-buildcache, a tag an image. This is the one
+# definition of either build: test.yml's image jobs build through it to
+# load the image, and layer-cache.yml builds through it to write the cache,
+# so the cache holds the layers of the very build Test runs. The caller
+# checks the repository out first; a writer logs in to ghcr.io first.
+#
+# The read is anonymous. A cache that cannot be read (missing, private, the
+# registry down) is a warning from BuildKit and a cold build. A write that
+# fails fails the step.
+name: Build an image
+description: Build the app or the Locus image over the layer cache, loading it under its tag or writing the cache
+inputs:
+  image:
+    description: "'app' (Dockerfile, loaded as cyfr:push) or 'locus' (Dockerfile.locus, loaded as cyfr-locus:ci)"
+    required: true
+  write:
+    description: "'false' loads the image and writes no cache; 'true' writes the cache and keeps no image"
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Check the inputs
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        WRITE: ${{ inputs.write }}
+      run: |
+        case "$IMAGE" in
+          app|locus) ;;
+          *) echo "::error::image-build image must be 'app' or 'locus', got '$IMAGE'"; exit 1 ;;
+        esac
+        case "$WRITE" in
+          true|false) ;;
+          *) echo "::error::image-build write must be 'true' or 'false', got '$WRITE'"; exit 1 ;;
+        esac
+    # Each image's upgrade layer refreshes once a UTC day and is shared
+    # within it (both Dockerfiles' APT_REFRESH).
+    - name: The UTC date the upgrade layer refreshes on
+      id: apt-refresh
+      shell: bash
+      run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+    - name: Build the image
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        file: ${{ inputs.image == 'locus' && 'Dockerfile.locus' || 'Dockerfile' }}
+        build-args: |
+          APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
+        load: ${{ inputs.write == 'false' }}
+        tags: ${{ inputs.write == 'false' && (inputs.image == 'locus' && 'cyfr-locus:ci' || 'cyfr:push') || '' }}
+        outputs: ${{ inputs.write == 'true' && 'type=cacheonly' || '' }}
+        cache-from: type=registry,ref=ghcr.io/cyfrworks/cyfr-buildcache:${{ inputs.image }}
+        cache-to: ${{ inputs.write == 'true' && format('type=registry,ref=ghcr.io/cyfrworks/cyfr-buildcache:{0},mode=max,image-manifest=true,oci-mediatypes=true', inputs.image) || '' }}

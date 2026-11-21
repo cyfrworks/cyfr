@@ -7,9 +7,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   member is offered too, and runs on the crew member its card names,
   whose brain, model, options and mode it takes; while that member does
   not stand, the card says why in the sentence Aqua's turn is refused
-  with, and choosing a member asks the soul's consent again at once. A
-  crew member has a brain, what it is good at and what to avoid, and no
-  prompt: CYFR briefs it and the job says what to do. A crew member whose file still holds a prompt is
+  with. Every member runs under the crew's one grant, Aqua's
+  (`Compendium.AgentSource`): choosing Aqua's member, making a member or
+  picking its brain or model asks nothing, and a member is ready once its
+  brain is connected. A crew member has a brain, what it is good at and
+  what to avoid, and no prompt: CYFR briefs it and the job says what to
+  do. A crew member whose file still holds a prompt is
   refused, and the sentence that says what to change stands in place of
   its card. Each of them has a mode,
   read-only or auto, which decides what of its offered tools it runs; the
@@ -388,9 +391,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # The crew member Aqua runs on, or none: a change of what Aqua runs on
-  # moves its consent's shape, so its consent is asked again at once, in
-  # the page's system layer, as a brain picked for a member's is.
+  # The crew member Aqua runs on, or none: the crew's grant does not follow
+  # it, so choosing asks nothing.
   def handle_event("editor_set_member", %{"member" => value}, socket) when is_binary(value) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       member = if value == "", do: nil, else: value
@@ -405,10 +407,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       send(self(), {:refresh, :agents})
 
       case result do
-        {:ok, _} when is_binary(member) ->
-          send(self(), {:ask_grant, Prima.AgentRef.soul_ref()})
-          {:noreply, socket}
-
         {:ok, _} ->
           {:noreply, socket}
 
@@ -500,12 +498,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       send(self(), {:refresh, :agents})
 
       case result do
-        # A brain or model picked moves the agent's consent's shape, so its
-        # consent is asked again at once, in the page's system layer.
-        {:ok, _} when is_tuple(choice) and elem(choice, 0) in [:model, :program] ->
-          send(self(), {:ask_grant, moved_grant(socket.assigns.soul, name)})
-          {:noreply, socket}
-
         {:ok, _} ->
           {:noreply, socket}
 
@@ -842,13 +834,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         end
     end
   end
-
-  # A brain picked for a crew member moves its consent's shape, and Aqua's
-  # too when Aqua runs on it. The page asks one consent at a time: Aqua's
-  # then, whose turns take their brain from the member; the member's own is
-  # asked when a job of its own is refused for it.
-  defp moved_grant(%{"member" => name}, name), do: Prima.AgentRef.soul_ref()
-  defp moved_grant(_soul, name), do: Prima.AgentRef.ref(name)
 
   # Whether the card says its program's state in the sentence a turn on it
   # is refused with: a row that stands but cannot run, on every card, and
@@ -1517,17 +1502,20 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={@connected} class="text-emerald-400">
           Model connected
         </span>
+        <%!-- The crew's grant, which a member holds none of its own of:
+             stale on Aqua's card, and on a member's whose brain holds its
+             key but is not in the grant. --%>
         <span :if={match?({:consent_stale, _}, @model_status)} class="text-amber-300">
-          Its consent is out of date: what it runs on changed since it was consented.
+          What Aqua and its crew members may use changed since you granted it.
         </span>
         <button
           :if={match?({:consent_stale, _}, @model_status)}
           type="button"
           phx-click="open_consent"
-          phx-value-ref={Prima.AgentRef.ref(@agent["name"])}
+          phx-value-ref={Prima.AgentRef.soul_ref()}
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
         >
-          Consent again
+          Grant again
         </button>
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet
@@ -1741,7 +1729,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       </div>
 
       <p :if={!@is_soul} class="text-[11px] text-gray-500">
-        Offered the soul's tools; a hand-off may narrow them for one job.
+        Offered the soul's tools on every job; its mode decides what of them it runs.
       </p>
 
       <div :if={@is_soul}>

@@ -9,8 +9,8 @@ defmodule Aqua.Loop.Turn do
   crew member its bytes name, `Compendium.resolve_agent/3`), whose
   capability digest must equal the
   one the turn started under — the roster, the member's mode and the set
-  it is offered (`Aqua.Offered`) narrowed to the tools a crew request
-  named (`options["tools"]`), the resolved model catalyst with its capabilities
+  it is offered (`Aqua.Offered`), the same on every job, the resolved
+  model catalyst with its capabilities
   and the request size its consent caps it at (`request_cap`), the brain
   options — the agent file's own, over which a crew request's
   (`options["brain_options"]`) set theirs — the system prompt (the
@@ -68,7 +68,6 @@ defmodule Aqua.Loop.Turn do
     :deadline_ms,
     :options,
     :brain_options,
-    :narrowed,
     :excerpt,
     :attachments,
     soul?: true
@@ -102,10 +101,7 @@ defmodule Aqua.Loop.Turn do
          soul? = Prima.AgentRef.soul?(agent["name"]),
          options = decode(turn.options),
          brain_options = Map.merge(agent["options"] || %{}, options["brain_options"] || %{}),
-         offered =
-           agent["tools"]
-           |> Aqua.Offered.resolve(Aqua.BrowserSetting.allowed?(ctx))
-           |> narrowed(options["tools"]),
+         offered = Aqua.Offered.resolve(agent["tools"], Aqua.BrowserSetting.allowed?(ctx)),
          {:ok, brain, model} <- model(ctx, turn, agent),
          {catalyst, program} = brain,
          asks? = Keyword.get(opts, :asks_model?, true) and program == nil,
@@ -150,7 +146,6 @@ defmodule Aqua.Loop.Turn do
         deadline_ms: deadline_ms(authority, brain_timeout_ms(authority, catalyst)),
         options: options,
         brain_options: brain_options,
-        narrowed: options["tools"],
         excerpt: if(Keyword.get(opts, :excerpt?, true), do: excerpt(ctx, options), else: nil),
         attachments: attachments(ctx, turn, capabilities.media_types),
         soul?: soul?
@@ -190,20 +185,6 @@ defmodule Aqua.Loop.Turn do
       {:error, {:invalid, member}} -> {:error, "the brain does not take #{member} as it was set"}
     end
   end
-
-  # A crew request narrows the job to the tools it names: a key stays when
-  # its tool or its `tool.action` is named, so the narrowing only takes
-  # away from what the member is offered.
-  defp narrowed(offered, [_ | _] = names) do
-    named = MapSet.new(names)
-
-    Map.filter(offered, fn {key, _offered} ->
-      tool = key |> String.split(".", parts: 2) |> hd()
-      MapSet.member?(named, key) or MapSet.member?(named, tool)
-    end)
-  end
-
-  defp narrowed(offered, _all), do: offered
 
   # The crew index, listed in the soul's prompt when it is offered
   # `crew.ask`; only the soul hands a job on (`Aqua.Runner.Admission`). An
@@ -522,11 +503,8 @@ defmodule Aqua.Loop.Turn do
   re-read here; a mode switched mid-turn reaches the member's next turn.
   """
   @spec current_offered(t()) :: Aqua.Offered.t()
-  def current_offered(%__MODULE__{ctx: ctx, agent: agent, options: options}) do
-    agent["tools"]
-    |> Aqua.Offered.resolve(Aqua.BrowserSetting.allowed?(ctx))
-    |> narrowed((options || %{})["tools"])
-  end
+  def current_offered(%__MODULE__{ctx: ctx, agent: agent}),
+    do: Aqua.Offered.resolve(agent["tools"], Aqua.BrowserSetting.allowed?(ctx))
 
   defp decode(nil), do: %{}
 
