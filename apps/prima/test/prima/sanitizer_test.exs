@@ -169,6 +169,19 @@ defmodule Prima.SanitizerTest do
       refute inspect(result) =~ "cyfr_live_token_value"
     end
 
+    # A rendered page's body is iodata, whose lists may end in a binary:
+    # an event's connection carries one, and a sanitizer that raised on it
+    # detached the console reporter's handlers for the rest of the boot.
+    test "an improper list keeps its shape, its tail sanitized like its elements" do
+      credential = "whsec_" <> String.duplicate("x", 32)
+
+      assert ["<p>", %{"token" => "[REDACTED]"} | "key [REDACTED]</p>"] ==
+               Sanitizer.sanitize(["<p>", %{"token" => "abc"} | "key #{credential}</p>"])
+
+      assert %{"resp_body" => [["<html>" | "ok"] | "</html>"]} ==
+               Sanitizer.sanitize(%{"resp_body" => [["<html>" | "ok"] | "</html>"]})
+    end
+
     test "round-trips calendar value structs unchanged" do
       dt = ~U[2026-08-10 12:00:00Z]
       assert dt == Sanitizer.sanitize(dt)
