@@ -94,7 +94,7 @@ defmodule Compendium.Providers.Aqua do
           [
             Arg.new("detail", :boolean,
               description:
-                "For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent"
+                "For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent"
             ),
             Arg.new("include_disabled", :boolean,
               description:
@@ -1209,7 +1209,7 @@ defmodule Compendium.Providers.Aqua do
         {:error,
          {:invalid_argument,
           "Aqua has no brain of its own: it runs on the crew member `member` names — set " <>
-            "member, and the brain, model, options and mode on that member"}}
+            "member, and the brain, model and options on that member"}}
 
       not AquaPath.soul?(name) and not is_nil(args["member"]) ->
         {:error,

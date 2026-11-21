@@ -194,7 +194,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @doc """
   The `ShapeDigest.compute/1` input derived from live state. The crew's
   grant, Aqua's agent source, names every brain the athanor can connect
-  as a dependency and no crew member's brain, model or mode
+  as a dependency and no crew member's brain, model or options
   (`Compendium.AgentSource`): choosing a member, its brain or its model
   re-asks nothing, and what of its tools a member runs grants nothing the
   consent does not (`ARCHITECTURE.md` §5.4).

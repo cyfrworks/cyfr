@@ -26,9 +26,9 @@ defmodule Aqua.Notes do
   rather than truncated). Everything else is **filed**: listed by name,
   read on demand. Pinning an empty page clears it; that is unpin.
 
-  Aqua writes the pinned page itself, where its mode runs the write, as
-  it writes a workspace thread's notes (`workspace/4`): a page written so
-  is kept by Aqua and names the thread it was written in. When that thread
+  Aqua writes the pinned page itself, as it writes a workspace thread's
+  notes (`workspace/4`): a page written so is kept by Aqua and names the
+  thread it was written in. When that thread
   is deleted the page stays as it is, and a read says it was learned in a
   deleted thread (`read/3`'s `from_deleted_thread`), for the person to
   remove it or make it their own; nothing here rewrites it.

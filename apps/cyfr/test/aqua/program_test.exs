@@ -1443,7 +1443,7 @@ defmodule Aqua.ProgramTest do
 
       assert {:ok, %{status: "paused", paused_reason: "launch"}} = Tape.turn(ctx, turn.id)
 
-      # The launch ends and the turn goes on: auto runs both, each started
+      # The launch ends and the turn goes on: both run, each started
       # once the launch had closed, and each ask is answered once, in order.
       send(launched, :continue)
       answers = for _ask <- keys, do: accept_next!(fake, row)

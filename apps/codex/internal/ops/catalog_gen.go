@@ -415,7 +415,7 @@ func (args AquaGetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaListArgs carries arguments for aqua.list.
 type AquaListArgs struct {
-	// For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent
+	// For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent
 	Detail Field[bool] `json:"detail,omitzero"`
 	// For list: include crew members set aside with disabled: true, which the roster otherwise leaves out
 	IncludeDisabled Field[bool] `json:"include_disabled,omitzero"`

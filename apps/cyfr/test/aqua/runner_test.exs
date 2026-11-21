@@ -912,16 +912,16 @@ defmodule Aqua.RunnerTest do
        %{ctx: ctx, thread: thread} do
     script!([keep("c1", "first"), reply("kept it")])
 
-    {:ok, %{turn_id: auto}} = Runner.send_message(ctx, thread.id, "@aqua keep it")
+    {:ok, %{turn_id: kept}} = Runner.send_message(ctx, thread.id, "@aqua keep it")
     assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     refute_received %ThreadEvent{kind: :turn_paused}
-    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, auto)
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, kept)
 
     assert [
-             model_step(ctx, auto, 1, nil),
-             call_step(ctx, auto, 2, "notes.keep", "c1", "ok"),
-             model_step(ctx, auto, 3, "text")
-           ] == steps!(ctx, auto)
+             model_step(ctx, kept, 1, nil),
+             call_step(ctx, kept, 2, "notes.keep", "c1", "ok"),
+             model_step(ctx, kept, 3, "text")
+           ] == steps!(ctx, kept)
 
     assert {:ok, %{content: "x"}} = Aqua.Notes.read(ctx, "first")
     refute Enum.any?(rows!(ctx, thread.id), &(&1.kind == "system"))

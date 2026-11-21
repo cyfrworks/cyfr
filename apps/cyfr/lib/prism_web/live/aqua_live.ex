@@ -994,7 +994,9 @@ defmodule PrismWeb.AquaLive do
                 {member.title}
               </option>
             </select>
-            <p class="mt-1 text-gray-500">Aqua answers with that member's brain, model and mode.</p>
+            <p class="mt-1 text-gray-500">
+              Aqua answers with that member's brain, model and options.
+            </p>
           </form>
 
           <p :if={@soul_ready and @member_title} data-test="setup-aqua-done" class="text-emerald-400">

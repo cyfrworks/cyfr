@@ -2246,7 +2246,7 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # Aqua answers with the brain, model and mode of the crew member it
+    # Aqua answers with the brain, model and options of the crew member it
     # runs on: the crew's grant does not follow that member, so choosing
     # one asks nothing and grants nothing.
     test "choosing the crew member Aqua runs on asks nothing",
@@ -2284,7 +2284,6 @@ defmodule PrismWeb.AquaLiveTest do
       # The card names who Aqua runs on, and has no model of its own.
       assert has_element?(view, ~s(#aqua-card-aqua-member option[value="mine"][selected]))
       refute has_element?(view, "#aqua-card-aqua-model")
-      refute has_element?(view, "#aqua-card-aqua-mode")
 
       Cyfr.Test.Sandbox.end_views()
     end
@@ -2483,9 +2482,9 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, before} == get_agent(ctx, "aqua")
     end
 
-    # Every athanor made before modes holds a soul whose file lists its
-    # tools under the retired `tool_policy`: the section says what to
-    # change in place of every card, and the rest of the page renders.
+    # A soul whose file lists its tools under the retired `tool_policy`:
+    # the section says what to change in place of every card, and the
+    # rest of the page renders.
     test "a soul that still holds tool_policy says what to change in place of every card",
          %{conn: conn, ctx: ctx} do
       :ok =
