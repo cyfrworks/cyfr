@@ -367,3 +367,22 @@ test("the sign-out reads the redirect the CYFR answers, and an acknowledged one 
   await settled()
   assert.doesNotMatch(content().webContents.url, /unconfirmed/)
 })
+
+test("a lock's notice is its own sign-out's: one unconfirmed before does not make a later acknowledged one unconfirmed", async () => {
+  await signedIn()
+  world.powerMonitor.emit("lock-screen") // the CYFR answers 503: unconfirmed
+  await settled()
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  await settled()
+  assert.match(content().webContents.url, /notice=unconfirmed$/)
+  await give(content())
+  world.answer = () => ({status: 303, headers: new Headers({"location": "/login?error=signed_out", "cyfr-session-retired": "1"})})
+  world.powerMonitor.emit("lock-screen")
+  await settled()
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  await settled()
+  assert.equal(world.fetched.length, 2, "each lock sent its sign-out")
+  assert.doesNotMatch(content().webContents.url, /unconfirmed/)
+})
