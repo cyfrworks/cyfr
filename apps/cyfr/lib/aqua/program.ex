@@ -413,6 +413,13 @@ defmodule Aqua.Program do
   defp refused_open(work, {:not_admitted, _reason}),
     do: "#{work.title} may not start for this work any more."
 
+  # The backends refused for want of room, at its owner's hold or at the
+  # session's open: the person reads why, not that the program is away.
+  defp refused_open(work, {:refused, :capacity, _boot}), do: refused_open(work, :capacity)
+
+  defp refused_open(work, :capacity),
+    do: Prima.Refusal.message({:program_full, work.title, div(Opus.Brain.silence_ms(), 60_000)})
+
   defp refused_open(work, _unavailable),
     do: "#{work.title} could not be reached: its program did not open."
 

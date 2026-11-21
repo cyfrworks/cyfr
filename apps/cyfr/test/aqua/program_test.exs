@@ -421,6 +421,44 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  describe "a workspace thread's report" do
+    test "opens Aqua's turn on the daily thread, whose program is handed it once, and the turn " <>
+           "completes on the idle that answers it",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      workspace = workspace!(ctx, thread)
+      text = "Done: the tip calculator is built."
+
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "report",
+            workspace_id: workspace.id,
+            content: text
+          },
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      {:ok, turn} =
+        TurnStorage.pin_program(Sanctum.Context.actor(ctx), turn.id, row.id, %{fence: turn.fence})
+
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+      assert post == posted(input, turn, text)
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "The tip calculator is ready."))
+      say(fake, row, idle(turn, [input.id]))
+
+      assert :completed = Task.await(loop, 30_000)
+      assert [carried] = inputs(ctx, turn)
+      assert step_fields(carried) == input_fields("post", turn.message_id, "ok")
+      refute_receive {:session, "send", _wire, _fields}, 500
+    end
+  end
+
   describe "a post's files" do
     test "reach the program after the post's text, in order: an image and a PDF as " <>
            "themselves, a text file as text, any other named as attached and not readable",
@@ -2910,6 +2948,63 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
+    test "a session its completed turn left with no work is closed once its silence runs " <>
+           "out, its native session and its sign-in kept: the next turn resumes it",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      %{start: first} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      # The idle restarts the interval, short enough now to wait out.
+      silence!(1_000)
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+
+      Prima.Test.Wait.wait_until(
+        fn -> not Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua") end,
+        10_000,
+        "the idle session to be let go"
+      )
+
+      assert running_sessions(fake, row) == []
+      assert {:ok, %{session: @session, generation: 0}} = Tape.brain(ctx, thread.id)
+      assert owed(ctx) == []
+      refute_received {:control, "home", _message, _fields}
+
+      next = accept!(ctx, thread, row, "second")
+      loop = run(ctx, next)
+      opened!(fake, row, "boot-two")
+
+      assert sent() |> Map.delete("system") ==
+               resume_of(Map.delete(first, "system"), %{"session" => @session})
+
+      say(fake, row, %{"t" => "started", "session" => @session, "fresh" => false, "held" => []})
+      assert %{"t" => "work"} = work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      handed!(fake, row, ctx, next, loop)
+    end
+
+    test "a start the backends refuse for want of room ends the turn saying every place for a " <>
+           "running program is taken, not that the program is away",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      Scripted.refuse_once(fake, "open", "capacity")
+      turn = accept!(ctx, thread, row, "hello")
+
+      line =
+        "#{@title} could not start because every place for a running program is taken: wait " <>
+          "for the work in another thread to end, or stop it, and a program left with no work " <>
+          "gives its place back after 30 minutes"
+
+      assert {:failed, ^line} = Task.await(run(ctx, turn), 30_000)
+      assert system_lines(ctx, thread, turn) == [line]
+    end
+
     test "the program's own silence after it took a post ends its work, saying so",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       silence!(2_000)
@@ -3428,6 +3523,30 @@ defmodule Aqua.ProgramTest do
       })
 
     ref
+  end
+
+  # A workspace thread opened from the daily thread `daily`, whose reports
+  # land there.
+  defp workspace!(ctx, daily) do
+    {:ok, %{workspace: workspace}} =
+      TurnStorage.open_workspace(Sanctum.Context.actor(ctx), %{
+        daily_id: daily.id,
+        id: Prima.UUID7.generate_id("thread"),
+        title: "Tip calculator app",
+        opened_from: "msg_ask",
+        opening: %{
+          id: Prima.UUID7.generate_id("msg"),
+          author: ctx.user_id,
+          content: "build a tip calculator",
+          payload: %{"ask" => "build a tip calculator"}
+        },
+        pointer: %{author: "aqua", sent_by: "aqua", content: "Tip calculator app", payload: %{}},
+        files: fn _thread, _message -> {:ok, []} end,
+        person_id: ctx.user_id,
+        origin: :interactive
+      })
+
+    workspace
   end
 
   # The program's silence, below the roster's floor so a test can wait it

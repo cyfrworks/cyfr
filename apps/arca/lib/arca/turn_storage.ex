@@ -2246,6 +2246,7 @@ defmodule Arca.TurnStorage do
       ended_work!(athanor_id, turn, status, attrs)
     end
 
+    :ok = unattended!(athanor_id, turn)
     Arca.ThreadStorage.release_all!(Prima.Actor.in_athanor(athanor_id), turn.thread_id, turn.id)
 
     turn = turn!(athanor_id, turn.id)
@@ -4412,8 +4413,9 @@ defmodule Arca.TurnStorage do
 
   @doc """
   The posts of a program turn that wait for their delivery, in order
-  (`carry/3`): its own rows someone other than its agent wrote, that no
-  step carried yet.
+  (`carry/3`): its own rows that are not the program's own words, that no
+  step carried yet. A report its agent wrote, which opens or joins the
+  turn, is one of them.
   """
   @spec brain_posts(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def brain_posts(%Prima.Actor{athanor_id: athanor_id}, turn_id)
@@ -4427,13 +4429,16 @@ defmodule Arca.TurnStorage do
   def brain_posts(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
 
   # The posts of a program turn no step carried yet, in order: the turn's
-  # own rows that someone other than its agent wrote.
+  # own rows but the program's words, a text of its agent's (`said!/4`).
+  # Its agent writes other kinds of row a program is handed: a workspace
+  # thread's report, written by Aqua, opens Aqua's daily turn.
   # arca:db-raise-ok inside the caller's transaction
   defp waiting_posts(athanor_id, %Turn{} = turn) do
     Arca.Repo.all(
       from(m in Message,
         where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
-        where: m.sent_by != ^turn.agent and m.kind in ^@brain_posts and is_nil(m.carried_by),
+        where: m.kind in ^@brain_posts and is_nil(m.carried_by),
+        where: m.kind != "text" or m.sent_by != ^turn.agent,
         order_by: [asc: m.seq]
       )
     )
@@ -4830,6 +4835,25 @@ defmodule Arca.TurnStorage do
   defp elapsed_ms(since, now) do
     {:ok, at, _offset} = DateTime.from_iso8601(since)
     max(DateTime.diff(now, at, :millisecond), 0)
+  end
+
+  # A program turn's end leaves its session with no turn open, which owes
+  # output (`owes?/3`): the clock runs from now with what is left of its
+  # interval, so a session kept idle is closed when it runs out. A thread
+  # whose clock never started has no session to close.
+  # arca:db-raise-ok inside the caller's transaction
+  defp unattended!(_athanor_id, %Turn{program: nil}), do: :ok
+
+  defp unattended!(athanor_id, %Turn{} = turn) do
+    thread = locked_thread!(athanor_id, turn.thread_id)
+
+    case progress(thread) do
+      %{"clock" => %{"left_ms" => left}} = progress ->
+        put_progress!(athanor_id, thread.id, clocked(progress, athanor_id, nil, left, false))
+
+      _no_clock ->
+        :ok
+    end
   end
 
   # Whether the program owes output: with no turn open, always, so a

@@ -33,12 +33,13 @@ defmodule Arca.TurnInputsStorageTest do
 
   # ---- fixtures ------------------------------------------------------------
 
-  # A turn of Aqua's on a program brain, accepted on a person's post in
-  # `thread` and started with its root, as the loop starts one.
-  defp running!(actor, thread) do
+  # A turn of Aqua's on a program brain, accepted on `message` in `thread`
+  # (a person's post unless another is given) and started with its root,
+  # as the loop starts one.
+  defp running!(actor, thread, message \\ nil) do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, thread.id, %{
-        message: %{author: actor.user_id, sent_by: "person", content: "go"},
+        message: message || %{author: actor.user_id, sent_by: "person", content: "go"},
         turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
@@ -175,6 +176,39 @@ defmodule Arca.TurnInputsStorageTest do
   defp progress(thread),
     do: Jason.decode!(Arca.Repo.get!(Thread, thread.id).brain_progress || "{}")
 
+  # A workspace thread opened from `daily`, whose reports land there.
+  defp workspace!(actor, daily) do
+    {:ok, %{workspace: workspace}} =
+      TurnStorage.open_workspace(actor, %{
+        daily_id: daily.id,
+        id: Prima.UUID7.generate_id("thread"),
+        title: "Moon report",
+        opened_from: "msg_ask",
+        opening: %{
+          id: Prima.UUID7.generate_id("msg"),
+          author: actor.user_id,
+          content: "write the moon report",
+          payload: %{"ask" => "write the moon report"}
+        },
+        pointer: %{author: "aqua", sent_by: "aqua", content: "Moon report", payload: %{}},
+        files: fn _thread, _message -> {:ok, []} end,
+        person_id: actor.user_id,
+        origin: :interactive
+      })
+
+    workspace
+  end
+
+  # The workspace thread's report, as Aqua writes it on the daily thread.
+  defp report(workspace, content),
+    do: %{
+      author: "aqua",
+      sent_by: "aqua",
+      kind: "report",
+      workspace_id: workspace.id,
+      content: content
+    }
+
   # The turn's own post, which opened it.
   defp opening(actor, turn) do
     {:ok, [row]} = TurnStorage.brain_posts(actor, turn.id)
@@ -305,6 +339,46 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:ok, rows} = TurnStorage.projection(actor, turn.id)
     ids = [first.id, said.id, later.id]
     assert rows |> Enum.map(& &1.id) |> Enum.filter(&(&1 in ids)) == ids
+  end
+
+  test "a report Aqua wrote is its Aqua turn's post, the one that opened it and one that joined " <>
+         "it, each carried once, while what the program says is never handed back to it",
+       %{actor: actor, daily: daily, turn: first} do
+    {:ok, _} = finish(actor, first, "cancelled")
+    workspace = workspace!(actor, daily)
+    turn = running!(actor, daily, report(workspace, "Done: the moon report."))
+    _start = start!(actor, turn)
+
+    assert {:ok, [opened]} = TurnStorage.brain_posts(actor, turn.id)
+    assert {opened.id, opened.kind, opened.sent_by} == {turn.message_id, "report", "aqua"}
+    assert {:ok, %{step: step}} = carry(actor, turn, "post", opened)
+    assert {:error, :carried} = carry(actor, turn, "post", opened)
+    assert carried_by(opened) == step.id
+    assert {:ok, []} = TurnStorage.brain_posts(actor, turn.id)
+
+    assert {:ok, %{said: [said]}} =
+             commit(actor, daily, turn, %{
+               hello: true,
+               accepted: [step.id],
+               said: [%{message: "msg_native_1", text: "The moon report is done."}]
+             })
+
+    assert {said.kind, said.sent_by} == {"text", "aqua"}
+    assert {:error, :not_waiting} = carry(actor, turn, "post", said)
+
+    {:ok, %{message: joined}} =
+      TurnStorage.accept_message(actor, daily.id, %{
+        message: report(workspace, "Also: the tides."),
+        steer_turn_id: turn.id
+      })
+
+    assert joined.turn_id == turn.id
+    assert {:ok, [%{id: waiting}]} = TurnStorage.brain_posts(actor, turn.id)
+    assert waiting == joined.id
+    assert {:ok, %{step: joined_step}} = carry(actor, turn, "post", joined)
+    assert {:error, :carried} = carry(actor, turn, "post", joined)
+    assert carried_by(joined) == joined_step.id
+    assert {:ok, []} = TurnStorage.brain_posts(actor, turn.id)
   end
 
   # ---- batches ----------------------------------------------------------------
@@ -555,6 +629,22 @@ defmodule Arca.TurnInputsStorageTest do
     {:ok, _} = commit(actor, daily, turn, %{native: true})
     assert {:ok, %{due_ms: restarted}} = TurnStorage.brain_silence(actor, daily.id)
     assert restarted > @silence - 5_000
+
+    backdate!(daily, @silence + 1)
+    assert {:ok, %{expired?: true, due_ms: 0}} = TurnStorage.brain_silence(actor, daily.id)
+  end
+
+  test "a program turn's end starts the clock of the session it leaves with no turn open, " <>
+         "with what was left of its interval",
+       %{actor: actor, daily: daily, turn: turn} do
+    {:ok, %{step: post}} = carry(actor, turn, "post", opening(actor, turn))
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [post.id], busy: true})
+    {:ok, _} = commit(actor, daily, turn, %{answered: [post.id], busy: false, native: true})
+    assert {:ok, %{due_ms: nil, expired?: false}} = TurnStorage.brain_silence(actor, daily.id)
+
+    assert {:ok, %{status: "completed"}} = finish(actor, turn, "completed")
+    assert {:ok, %{due_ms: due, expired?: false}} = TurnStorage.brain_silence(actor, daily.id)
+    assert is_integer(due) and due > @silence - 5_000
 
     backdate!(daily, @silence + 1)
     assert {:ok, %{expired?: true, due_ms: 0}} = TurnStorage.brain_silence(actor, daily.id)
