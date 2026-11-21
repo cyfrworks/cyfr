@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os/user"
 	"path/filepath"
 	"slices"
@@ -242,11 +243,16 @@ func toAccount(u *user.User) (Account, error) {
 	return Account{UID: uid, GID: gid, Name: u.Username, Home: u.HomeDir}, nil
 }
 
+// int holds every id parseID answers: this constant does not compile where
+// it cannot (a 32-bit build), so no build converts an id into a wrapped int.
+const _ = uint(math.MaxInt - protocol.MaxUID)
+
 func parseID(s string) (int, error) {
 	n, err := strconv.ParseUint(s, 10, 32)
 	if err != nil || n > protocol.MaxUID {
 		return 0, fmt.Errorf("%q is not an id from 0 to %d", s, uint64(protocol.MaxUID))
 	}
+	// n is at most protocol.MaxUID, which int holds (the constant above).
 	return int(n), nil
 }
 

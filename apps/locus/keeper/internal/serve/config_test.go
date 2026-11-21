@@ -249,6 +249,14 @@ func TestResolveAccountsRefusesAnIdOutsideTheLinuxRange(t *testing.T) {
 			}
 		}
 	}
+	// The parser's refusal comes before any policy: a root uid with a
+	// bad gid is refused for its gid, not by the root check.
+	root := locusUser
+	root.Uid, root.Gid = "0", "-1"
+	_, _, err := ResolveAccounts(Config{Pools: pools, ClientUser: "locus"}, fakeLookup(root))
+	if err == nil || !strings.Contains(err.Error(), `gid "-1" is not an id from 0 to 4294967294`) {
+		t.Errorf("a root uid with gid -1: error %v", err)
+	}
 	top := poolUser(20001, 4294967294)
 	_, accounts, err := ResolveAccounts(Config{Pools: pools, ClientUser: "locus"}, fakeLookup(locusUser, top))
 	if err != nil || accounts[20001].GID != 4294967294 {
