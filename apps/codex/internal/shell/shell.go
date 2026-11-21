@@ -116,8 +116,9 @@ type ClientStore interface {
 // owner: client.json in this user's device folder (DeviceDir).
 type ClientFile string
 
-// DeviceDir is this user's device folder, ~/.cyfr/device, made private
-// when it is not there: the key's record (holder.json) and the client
+// DeviceDir is this user's device folder, ~/.cyfr/device, made when it is
+// not there and kept private to this account each time it is used
+// (privateFolder): the key's record (holder.json) and the client
 // record (client.json) of every road this user's CYFR app or screen
 // takes, one key and one selected CYFR for the user.
 func DeviceDir() (string, error) {
@@ -127,6 +128,9 @@ func DeviceDir() (string, error) {
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
+	}
+	if err := privateFolder(dir); err != nil {
+		return "", fmt.Errorf("%s is not this account's alone (%v)", dir, err)
 	}
 	return dir, nil
 }
@@ -140,19 +144,74 @@ func DeviceFolder() (string, error) {
 	return filepath.Join(home, ".cyfr", "device"), nil
 }
 
-// SelectHome remembers home, a remote CYFR's origin, as the CYFR this
-// device connects to, with directory the URL approved for it. Selecting
-// another CYFR than the one remembered drops the client and certificate
-// held for that one.
-func (f ClientFile) SelectHome(home, directory string) error {
+// Selection is a remote CYFR being selected over this account's client
+// record. It reads as that CYFR's record, with the client and certificate
+// held there when the record already selects it, and it writes the record
+// only once the selection succeeded: when that CYFR admits this device
+// (Save), or when the app opens it and the record holds no working client
+// of another CYFR to lose (Commit). Until then the record stays as it was,
+// a local project's among others.
+type Selection struct {
+	file ClientFile
+	mu   sync.Mutex
+	rec  ClientRecord
+}
+
+// Select begins selecting home, a remote CYFR's origin, with directory the
+// account service approved for it; it writes nothing.
+func (f ClientFile) Select(home, directory string) (*Selection, error) {
 	c, err := f.Load()
+	if err != nil {
+		return nil, err
+	}
+	rec := ClientRecord{Home: home, Directory: directory}
+	if c.Home == home && c.Project == "" {
+		rec.ClientID, rec.Certificate = c.ClientID, c.Certificate
+	}
+	return &Selection{file: f, rec: rec}, nil
+}
+
+// Load is the selected CYFR's record.
+func (s *Selection) Load() (ClientRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rec, nil
+}
+
+// Save keeps the selected CYFR's client as it changes, which only that
+// CYFR's admission begins: the record becomes the selection's.
+func (s *Selection) Save(c ClientRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rec = c
+	return s.file.Save(c)
+}
+
+// Commit writes the selection once the app opened it, unless the record
+// holds a working client of another CYFR, which only the selected CYFR's
+// admission replaces.
+func (s *Selection) Commit() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.file.Load()
 	if err != nil {
 		return err
 	}
-	if c.Home != home || c.Project != "" {
-		c = ClientRecord{Home: home}
+	if c.ClientID != "" && (c.Home != s.rec.Home || c.Project != "") {
+		return nil
 	}
-	c.Directory = directory
+	return s.file.Save(s.rec)
+}
+
+// EndApproval forgets the account service approved for home, which named
+// another since: whatever the person answers now, a later return to the
+// old address asks again.
+func (f ClientFile) EndApproval(home string) error {
+	c, err := f.Load()
+	if err != nil || c.Home != home || c.Directory == "" {
+		return err
+	}
+	c.Directory = ""
 	return f.Save(c)
 }
 
@@ -1243,6 +1302,12 @@ func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, use
 		return
 	case err != nil:
 		s.say("The name could not be looked up (%s).", s.sentence(err))
+		return
+	case found.Directory != s.cfg.Directory:
+		// The account service this CYFR uses is the one approved for it;
+		// another the registry names is never contacted.
+		s.say("@%s's account is at the account service %s, not at %s, which this CYFR uses, so nothing was sent there. "+
+			"Add this device to an account at %s.", name, found.Directory, s.cfg.Directory, s.cfg.Directory)
 		return
 	}
 	d := account.Directory{URL: found.Directory, Client: s.cfg.Client}

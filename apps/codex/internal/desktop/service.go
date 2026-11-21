@@ -59,8 +59,9 @@ type Service struct {
 	mu      sync.Mutex
 	pending *selection
 	// ready receives main's home-ready for selecting, the CYFR being
-	// selected.
+	// selected; a lock closes locked, which ends that selection unopened.
 	ready     chan struct{}
+	locked    chan struct{}
 	selecting string
 	sh        *shell.Shell
 	pages     *shell.Server
@@ -211,6 +212,11 @@ func (s *Service) connect(ctx context.Context, req request) answer {
 	if found.Directory == account.DefaultDirectory || (c.Home == home && c.Directory == found.Directory) {
 		return s.selectHome(ctx, home, found)
 	}
+	if c.Home == home && c.Directory != "" {
+		if err := s.Clients.EndApproval(home); err != nil {
+			return answer{Error: "This computer could not forget the account service it approved before (" + err.Error() + ")."}
+		}
+	}
 	s.mu.Lock()
 	s.pending = &selection{home: home, found: found}
 	s.mu.Unlock()
@@ -228,29 +234,33 @@ func (s *Service) approve(ctx context.Context, req request) answer {
 	return s.selectHome(ctx, p.home, p.found)
 }
 
-// selectHome remembers home and its directory, makes the device's shell
-// there and sends main home; once main answers home-ready for it, the
-// device's pages are served.
+// selectHome makes the device's shell at home, with its directory, over
+// the selection (shell.Selection) and sends main home; once main answers
+// home-ready for it, the selection is remembered and the device's pages are
+// served. A lock meanwhile ends it unopened.
 func (s *Service) selectHome(ctx context.Context, home string, found account.Discovered) answer {
 	s.mu.Lock()
 	if s.ready != nil || s.pages != nil {
 		s.mu.Unlock()
 		return answer{Error: "This app is connected to a CYFR already. Quit it and open it again to connect to another."}
 	}
-	ready := make(chan struct{}, 1)
-	s.ready, s.selecting = ready, home
+	ready, locked := make(chan struct{}, 1), make(chan struct{})
+	s.ready, s.locked, s.selecting = ready, locked, home
 	s.mu.Unlock()
 	failed := func(sentence string) answer {
 		s.mu.Lock()
-		s.ready, s.selecting = nil, ""
+		if s.locked == locked {
+			s.ready, s.locked, s.selecting = nil, nil, ""
+		}
 		s.mu.Unlock()
 		return answer{Error: sentence}
 	}
-	if err := s.Clients.SelectHome(home, found.Directory); err != nil {
-		return failed("This computer could not remember the CYFR (" + err.Error() + ").")
+	sel, err := s.Clients.Select(home, found.Directory)
+	if err != nil {
+		return failed("This computer's CYFR record could not be read (" + err.Error() + ").")
 	}
 	cfg := shell.Config{Address: home, Client: s.Client, DisplayName: s.DisplayName,
-		Record: s.Record, Clients: s.Clients, Directory: found.Directory,
+		Record: s.Record, Clients: sel, Directory: found.Directory,
 		Detect: remoteDisks, Restart: func() { _ = s.Send(Message{Type: TypeLocked}) }}
 	if s.Shell != nil {
 		s.Shell(&cfg)
@@ -264,12 +274,21 @@ func (s *Service) selectHome(ctx context.Context, home string, found account.Dis
 	}
 	select {
 	case <-ready:
+	case <-locked:
+		return failed("CYFR locked before it opened " + home + ". Connect again.")
 	case <-ctx.Done():
 		return failed("The app did not get ready to open " + home + ". Connect again.")
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.locked != locked {
+		return answer{Error: "CYFR locked before it opened " + home + ". Connect again."}
+	}
+	if err := sel.Commit(); err != nil {
+		s.ready, s.locked, s.selecting = nil, nil, ""
+		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
+	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
-	s.mu.Unlock()
 	return answer{Next: "/"}
 }
 
@@ -294,14 +313,26 @@ func (s *Service) HomeReady(home string) {
 	}
 }
 
-// Lock locks the device and says so to main, even when it was locked.
+// Lock locks the device in whatever state it is and says so to main:
+// the shell erases its key and every proof a page holds, open channel or
+// not, and a directory awaiting approval or a CYFR awaiting main's
+// home-ready is dropped, so no later answer opens it.
 func (s *Service) Lock(why string) {
 	s.mu.Lock()
 	sh := s.sh
+	s.pending = nil
+	if s.locked != nil && s.pages == nil {
+		close(s.locked)
+		s.ready, s.locked, s.selecting = nil, nil, ""
+	}
 	s.mu.Unlock()
-	if sh != nil && sh.Unlocked() {
+	if sh != nil {
+		wasOpen := sh.Unlocked()
 		sh.Lock(why)
-		return
+		if wasOpen {
+			// The shell said locked as it restarted the pages.
+			return
+		}
 	}
 	_ = s.Send(Message{Type: TypeLocked})
 }

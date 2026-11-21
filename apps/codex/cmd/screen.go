@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/cyfr/codex/internal/account"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -395,20 +396,18 @@ func runScreenShell(ctx context.Context) error {
 	_ = exec.Command("pkill", "-f", "--", "^swayidle -w timeout [0-9]+ kill -USR1 ").Run()
 	chrome := &screenChrome{args: chromeArgs}
 	host, _ := os.Hostname()
-	device, err := shell.DeviceDir()
+	ln, device, err := screenClaim(dir)
 	if err != nil {
-		return fmt.Errorf("The screen cannot make this account's device folder (%v)", err)
-	}
-	if err := shell.ClientFile(filepath.Join(device, "client.json")).SelectProject(dir); err != nil {
-		return fmt.Errorf("The screen cannot show the CYFR here: %v", err)
+		return err
 	}
 	sh, err := shell.New(screenShellConfig(dir, device, address, client, host, chrome.restart))
 	if err != nil {
+		ln.Close()
 		return err
 	}
 	srv := &shell.Server{Shell: sh, Reachable: func() bool { return screenReachable(client, address) }}
 	served := make(chan error, 1)
-	go func() { served <- srv.Serve(ctx) }()
+	go func() { served <- srv.ServeOn(ctx, ln) }()
 
 	keyboard := screenChild(exec.Command("wvkbd-mobintl"))
 	_ = keyboard.Start()
@@ -475,6 +474,25 @@ func runScreenShell(ctx context.Context) error {
 	sh.Lock("")
 	stopBrowsing()
 	return ended
+}
+
+// screenClaim takes the shell's listener, then selects the CYFR in dir in
+// this account's client record: the record is shared with the CYFR app,
+// so only the one process holding the listener writes it.
+func screenClaim(dir string) (net.Listener, string, error) {
+	ln, err := shell.ListenLoopback()
+	if err != nil {
+		return nil, "", fmt.Errorf("The screen cannot take %s, which another program holds (%v)", shell.Listen, err)
+	}
+	device, err := shell.DeviceDir()
+	if err == nil {
+		err = shell.ClientFile(filepath.Join(device, "client.json")).SelectProject(dir)
+	}
+	if err != nil {
+		ln.Close()
+		return nil, "", fmt.Errorf("The screen cannot show the CYFR here: %v", err)
+	}
+	return ln, device, nil
 }
 
 // sigUSR1 is Linux's SIGUSR1, named by number so this file builds where

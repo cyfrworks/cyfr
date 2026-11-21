@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,7 +55,7 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 		!strings.Contains(err.Error(), "close the app using port 7340") {
 		t.Fatalf("a second cyfr took the port: %v", err)
 	}
-	if info, err := os.Stat(filepath.Join(home, ".cyfr", "device")); err != nil || info.Mode().Perm() != 0o700 {
+	if info, err := os.Stat(filepath.Join(home, ".cyfr", "device")); err != nil || !info.IsDir() {
 		t.Fatalf("the device folder is %v (%v)", info, err)
 	}
 	if _, err := io.WriteString(inW, `{"version":1,"type":"shutdown"}`+"\n"); err != nil {
@@ -73,5 +74,34 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	}
 	if _, err := http.Get("http://127.0.0.1:7340/bootstrap/"); err == nil {
 		t.Fatal("the port is still served after shutdown")
+	}
+}
+
+// The device's screen shares its account's client record with the CYFR
+// app: it writes the record only once it holds the shell's listener, so a
+// screen that loses the address to another program changes nothing.
+func TestTheScreenWritesTheSharedRecordOnlyHoldingItsListener(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	record := filepath.Join(home, ".cyfr", "device", "client.json")
+	held, err := net.Listen("tcp4", "127.0.0.1:7340")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := screenClaim("/home/ada/cyfr"); err == nil {
+		t.Fatal("the screen went on without its listener")
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("a screen without its listener wrote the record (%v)", err)
+	}
+	held.Close()
+	ln, _, err := screenClaim("/home/ada/cyfr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+	if raw, err := os.ReadFile(record); err != nil || !strings.Contains(string(raw), `"project": "/home/ada/cyfr"`) {
+		t.Fatalf("the screen holding its listener did not select its CYFR: %s (%v)", raw, err)
 	}
 }

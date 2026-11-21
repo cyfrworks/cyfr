@@ -9,13 +9,17 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cyfr/codex/internal/account"
+	"github.com/cyfr/codex/internal/account/accounttest"
 	"github.com/cyfr/codex/internal/disk"
 	"github.com/cyfr/codex/internal/shell"
 )
@@ -297,6 +301,124 @@ func TestAnotherDirectoryIsApprovedBeforeAnythingContactsIt(t *testing.T) {
 		t.Fatalf("a changed directory went on unapproved: %+v", got)
 	}
 	moved.quiet(t)
+
+	// Declined: the CYFR named another account service, which ended the
+	// approval of the first; naming the first again asks again.
+	back := newApp(t, dir, service.Client())
+	back.directory.Store(custom)
+	if got := back.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"}); got.Confirm != custom {
+		t.Fatalf("a return to the account service approved before went on unasked: %+v", got)
+	}
+	back.quiet(t)
+}
+
+// A failed or unfinished selection leaves the account's record as it
+// was: the device's screen keeps its working client until another CYFR
+// admits this device.
+func TestASelectionThatDidNotSucceedLeavesTheRecord(t *testing.T) {
+	dir := t.TempDir()
+	working := shell.ClientRecord{Project: "/home/ada/cyfr", ClientID: "pcl_box", Certificate: json.RawMessage(`{"box":1}`)}
+	if err := shell.ClientFile(filepath.Join(dir, "client.json")).Save(working); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(dir, "client.json"))
+	unchanged := func(when string) {
+		t.Helper()
+		if after, _ := os.ReadFile(filepath.Join(dir, "client.json")); string(after) != string(before) {
+			t.Fatalf("%s the record became %s", when, after)
+		}
+	}
+
+	cancelled := newApp(t, dir, offline())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- cancelled.request(ctx, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"}, nil)
+	}()
+	cancelled.next(t)
+	cancel()
+	<-done
+	unchanged("after a selection cancelled before main was ready,")
+
+	opened := newApp(t, dir, offline())
+	answer := opened.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	opened.next(t)
+	opened.HomeReady("https://cyfr.example.com")
+	if got := answered(t, answer); got.Next != "/" {
+		t.Fatalf("answered %+v", got)
+	}
+	unchanged("after a selection opened but never admitted,")
+}
+
+// A lock while the app waits for main's home-ready ends that selection:
+// a home-ready after it opens nothing.
+func TestALockEndsASelectionWaitingForMain(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	a.next(t)
+	a.Lock("Locked.")
+	if m := a.next(t); m.Type != TypeLocked {
+		t.Fatalf("main heard %+v", m)
+	}
+	a.HomeReady("https://cyfr.example.com")
+	if got := answered(t, done); got.Next != "" || got.Error == "" {
+		t.Fatalf("a locked selection answered %+v", got)
+	}
+	if w := a.get("/"); w.Code != http.StatusSeeOther {
+		t.Fatal("the device's pages were served after the lock")
+	}
+}
+
+var (
+	proofShape = regexp.MustCompile(`data-proof="([^"]+)"`)
+	codeShape  = regexp.MustCompile(`<p class="code">([^<]+)</p>`)
+)
+
+// form posts a form of the device's own pages, as their script sends it.
+func (a *app) form(path string, fields url.Values) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, "http://"+shell.Listen+path, strings.NewReader(fields.Encode()))
+	r.Host = shell.Listen
+	r.Header.Set("Origin", shell.Origin)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, r)
+	return w
+}
+
+// A lock at the recovery-code page, before the device's first connection,
+// erases the key that setup holds and the page's proof: the code no longer
+// shows to the page that holds the proof.
+func TestALockBeforeTheFirstConnectionErasesTheKeyAndTheProof(t *testing.T) {
+	accounts := accounttest.New(t)
+	a := newApp(t, t.TempDir(), nil)
+	a.directory.Store(accounts.URL())
+	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"}); got.Confirm != accounts.URL() {
+		t.Fatalf("answered %+v", got)
+	}
+	done := a.connect(t, "/bootstrap/approve", map[string]string{"home": "https://cyfr.example.com", "directory": accounts.URL()})
+	a.next(t)
+	a.HomeReady("https://cyfr.example.com")
+	answered(t, done)
+
+	drawn := codeShape.FindStringSubmatch(a.form("/passphrase", nil).Body.String())
+	if drawn == nil {
+		t.Fatal("no passphrase was drawn")
+	}
+	setup := a.form("/setup", url.Values{"name": {"alice"}, "secret": {drawn[1]}, "again": {drawn[1]}}).Body.String()
+	proof, code := proofShape.FindStringSubmatch(setup), codeShape.FindStringSubmatch(setup)
+	if proof == nil || code == nil {
+		t.Fatalf("setup did not reach the recovery code:\n%s", setup)
+	}
+	if !strings.Contains(a.form("/recovery", url.Values{"proof": {proof[1]}}).Body.String(), code[1]) {
+		t.Fatal("the page holding the proof is shown no recovery code before the lock")
+	}
+	a.Lock("Locked.")
+	if m := a.next(t); m.Type != TypeLocked {
+		t.Fatalf("main heard %+v", m)
+	}
+	if page := a.form("/recovery", url.Values{"proof": {proof[1]}}).Body.String(); strings.Contains(page, code[1]) {
+		t.Fatalf("the proof still shows the recovery code after the lock:\n%s", page)
+	}
 }
 
 // Every end of main's messages locks the device and says so: lock,

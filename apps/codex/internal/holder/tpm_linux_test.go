@@ -11,18 +11,15 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/google/go-tpm/tpm2/transport/linuxudstpm"
+
+	"github.com/cyfr/codex/internal/holder/holdertest"
 )
 
 func init() {
@@ -37,97 +34,21 @@ const (
 	wrongPIN = "000000"
 )
 
-// swtpm is a disposable software TPM serving one test from its own state
-// directory.
-type swtpm struct {
-	bin, dir string
-	env      []string
-	cmd      *exec.Cmd
-	done     chan struct{} // closed once cmd has exited and been waited for
-}
+// swtpm is the test's software TPM (holdertest.SWTPM), which openTPM
+// reaches until the test ends.
+type swtpm struct{ *holdertest.SWTPM }
 
 // startSWTPM starts an swtpm on a fresh state directory and points openTPM
-// at it until the test ends. CYFR_TEST_SWTPM names an unpacked swtpm binary
-// (<root>/usr/bin/swtpm, its libraries under <root>/usr/lib); without it the
-// swtpm on PATH runs, and without either the test skips.
+// at it until the test ends.
 func startSWTPM(t *testing.T) *swtpm {
 	t.Helper()
-	s := &swtpm{bin: os.Getenv("CYFR_TEST_SWTPM"), dir: t.TempDir(), env: os.Environ()}
-	if s.bin != "" {
-		if _, err := os.Stat(s.bin); err != nil {
-			t.Fatalf("CYFR_TEST_SWTPM: %v", err)
-		}
-		root := filepath.Dir(filepath.Dir(filepath.Dir(s.bin)))
-		libs, _ := filepath.Glob(filepath.Join(root, "usr", "lib", "*-linux-gnu"))
-		var path []string
-		for _, l := range libs {
-			path = append(path, l, filepath.Join(l, "swtpm"))
-		}
-		s.env = append(s.env, "LD_LIBRARY_PATH="+strings.Join(path, ":"))
-	} else if p, err := exec.LookPath("swtpm"); err == nil {
-		s.bin = p
-	} else if os.Getenv("CYFR_TEST_SWTPM_REQUIRED") != "" {
-		// CI installs swtpm and sets this, so a lost install fails the
-		// job rather than skipping the chip tests unseen.
-		t.Fatal("swtpm is not installed, and CYFR_TEST_SWTPM_REQUIRED says the chip tests must run")
-	} else {
-		t.Skip("swtpm is not installed: the chip holder is unproven here")
-	}
-	saved := openTPM
-	t.Cleanup(func() {
-		openTPM = saved
-		if s.cmd != nil {
-			_ = s.cmd.Process.Kill()
-			<-s.done
-		}
-	})
-	openTPM = func() (transport.TPMCloser, error) { return linuxudstpm.Open(s.sock()) }
-	s.start(t)
+	s := &swtpm{holdertest.New(t)}
+	t.Cleanup(UseTPM(s.Sock()))
+	s.Start(t)
 	return s
 }
 
-func (s *swtpm) sock() string { return filepath.Join(s.dir, "s") }
-
-func (s *swtpm) log() string {
-	b, _ := os.ReadFile(filepath.Join(s.dir, "log"))
-	return string(b)
-}
-
-// start runs swtpm and waits until its socket accepts a connection.
-func (s *swtpm) start(t *testing.T) {
-	t.Helper()
-	_ = os.Remove(s.sock())
-	log, err := os.OpenFile(filepath.Join(s.dir, "log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer log.Close()
-	s.cmd = exec.Command(s.bin, "socket", "--tpm2", "--tpmstate", "dir="+s.dir,
-		"--server", "type=unixio,path="+s.sock(), "--ctrl", "type=unixio,path="+filepath.Join(s.dir, "c"),
-		"--flags", "not-need-init,startup-clear")
-	s.cmd.Env, s.cmd.Stdout, s.cmd.Stderr = s.env, log, log
-	if err := s.cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	done, cmd := make(chan struct{}), s.cmd
-	s.done = done
-	go func() { _ = cmd.Wait(); close(done) }()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if c, err := net.Dial("unix", s.sock()); err == nil {
-			c.Close()
-			return
-		}
-		select {
-		case <-done:
-			t.Fatalf("swtpm exited before it listened:\n%s", s.log())
-		case <-time.After(10 * time.Millisecond):
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("swtpm did not listen within 10 s:\n%s", s.log())
-		}
-	}
-}
+func (s *swtpm) log() string { return s.Log() }
 
 // restart shuts the TPM down in order, as an operating system does before a
 // reboot, stops swtpm and starts a new swtpm process on the same state.
@@ -141,18 +62,8 @@ func (s *swtpm) restart(t *testing.T) {
 	// The orderly shutdown has written the chip's state; swtpm under a
 	// loaded host may be slow to act on SIGTERM, and the claim is the
 	// state's, not the exit's, so a slow one is killed.
-	_ = s.cmd.Process.Signal(syscall.SIGTERM)
-	select {
-	case <-s.done:
-	case <-time.After(10 * time.Second):
-		_ = s.cmd.Process.Kill()
-		select {
-		case <-s.done:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("swtpm did not stop on SIGTERM or SIGKILL:\n%s", s.log())
-		}
-	}
-	s.start(t)
+	s.Stop(t)
+	s.Start(t)
 }
 
 // withTPM runs f on a fresh connection to the test's swtpm.

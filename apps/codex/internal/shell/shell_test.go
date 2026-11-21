@@ -49,11 +49,17 @@ type box struct {
 
 func newBox(t *testing.T, home *fakeHome, dir string) *box {
 	t.Helper()
+	return newBoxAt(t, home, dir, home.accounts.URL())
+}
+
+// newBoxAt is newBox at a CYFR whose account service is directory.
+func newBoxAt(t *testing.T, home *fakeHome, dir, directory string) *box {
+	t.Helper()
 	b := &box{t: t, home: home, dir: dir, record: filepath.Join(dir, "holder.json")}
 	b.now.Store(time.Now().UnixNano())
 	sh, err := New(Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
-		Directory: home.accounts.URL(),
+		Directory: directory,
 		Tokens:    func() string { return home.setupToken },
 		SetupOpen: home.setupOpen,
 		Restart:   func() { b.restarts.Add(1) },
@@ -1301,5 +1307,42 @@ func TestChannel_ACompanySignInIsToldApartFromAnUnreachableCYFR(t *testing.T) {
 				t.Fatalf("the box did not lock saying %q: %s", tc.want, page)
 			}
 		})
+	}
+}
+
+// Adding the device to an account reads that account's log at the
+// account service the registry names. One other than this CYFR's, the one
+// approved for it, is never contacted: the page says where the account is.
+func TestEnroll_AnAccountServiceOtherThanThisCYFRsIsNeverContacted(t *testing.T) {
+	var contacted atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contacted.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer other.Close()
+	var registry *httptest.Server
+	registry = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/account/config.json":
+			_ = json.NewEncoder(w).Encode(map[string]any{"directory": registry.URL, "registry": registry.URL, "policy": nil})
+		case "/v1/handles/alice":
+			_ = json.NewEncoder(w).Encode(map[string]any{"protocol": "cyfr-handle/v1", "registry": "127.0.0.1", "handle": "alice",
+				"identifier": "per_" + strings.Repeat("ab", 32), "directory": other.URL})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer registry.Close()
+	b := newBoxAt(t, newFakeHome(t), t.TempDir(), registry.URL)
+	p := b.shown()
+	b.post("/make", url.Values{"secret": {p}, "again": {p}})
+	b.post("/enroll", url.Values{"name": {"alice"}})
+	page := html.UnescapeString(b.page())
+	if !strings.Contains(page, "@alice's account is at the account service "+other.URL+", not at "+registry.URL) {
+		t.Fatalf("the page did not say where the account is:\n%s", page)
+	}
+	if n := contacted.Load(); n != 0 {
+		t.Fatalf("the account service the registry named was contacted %d times", n)
 	}
 }
