@@ -107,8 +107,11 @@ defmodule Opus.Admission do
   The component graph the consent is judged against is read before the
   loader is asked (`Compendium.resolve_verified_activation/2`). One that
   cannot be read right now is `{:error, {:unavailable, "The component
-  graph"}}`, and one whose stored rows do not hash, or a node of which
-  holds a stored manifest that does not decode, is
+  graph"}}`, and so is the crew's grant's own row read while the
+  component index its brains are named from cannot be
+  (`Compendium.AgentSource.brains/1`); one whose stored rows do not
+  hash, or a node of which holds a stored manifest that does not decode,
+  is
   `{:error, {:corrupt, {:component_graph, ref}}}`, `ref` the root's own
   component ref: an outage and damage, never a setup to make.
 
@@ -1012,12 +1015,30 @@ defmodule Opus.Admission do
          {:ok, entries} <- read_profiles(ctx, name_ref),
          {:ok, candidates} <- RootSelect.candidates(entries, pinned),
          {:ok, profile} <- select.(candidates),
-         {:ok, _ref, _type, component} <- inspect_component(ctx, reference),
+         {:ok, _ref, _type, component} <- root_component(ctx, reference),
          {:ok, authority, stamp} <-
            ctx
            |> approved_root(load_authority(ctx, profile, component, opts))
            |> at_revision(opts[:consent_id]) do
       {:ok, %{authority: authority, stamp: stamp, profile: profile}}
+    end
+  end
+
+  # The root's row. The crew's grant's row names its brains as the component
+  # index holds them (`Compendium.AgentSource.brains/1`), so an index that
+  # cannot be read right now is, for it, the outage of the graph the grant
+  # is judged against, said as that graph's read says it
+  # (`live_activation/2`). Any other root's row answers the index's own
+  # refusal.
+  defp root_component(ctx, reference) do
+    case inspect_component(ctx, reference) do
+      {:error, :projection_unavailable} = refused ->
+        if Prima.AgentRef.agent_ref?(reference),
+          do: {:error, {:unavailable, "The component graph"}},
+          else: refused
+
+      answer ->
+        answer
     end
   end
 

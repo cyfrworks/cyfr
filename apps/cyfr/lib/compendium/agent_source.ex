@@ -92,16 +92,18 @@ defmodule Compendium.AgentSource do
   Every brain the athanor can connect, as the versionless refs the grant
   names: each installed catalyst whose newest release declares
   `model/chat@1`, sorted. A release whose stored manifest does not decode
-  speaks nothing. The names are read as the store holds them, without
-  waiting for the component index: each one's release is resolved by the
-  graph that reads the grant (`Compendium.Activation`), which waits for the
-  index and says when it cannot, so an index behind its tree is that
-  graph's outage, never the grant row's. A store that cannot answer is its
-  refusal.
+  speaks nothing. The names are read behind the component index's barrier
+  (`Compendium.ProjectionReconciler.await/2`), as the graph that resolves
+  each one's release is (`Compendium.Activation`): the grant's brain set
+  and its graph are read at one state of the index, so a plan shown over
+  them commits. A component index behind its tree that cannot catch up
+  (`{:error, :projection_unavailable}`), or a store that cannot answer, is
+  its refusal, never a shorter brain set.
   """
   @spec brains(Context.t()) :: {:ok, [String.t()]} | {:error, term()}
   def brains(%Context{} = ctx) do
-    with {:ok, rows} <-
+    with :ok <- Compendium.ProjectionReconciler.await(ctx, "components"),
+         {:ok, rows} <-
            Arca.ComponentStorage.list_components(Context.actor(ctx),
              component_type: "catalyst",
              limit: :none

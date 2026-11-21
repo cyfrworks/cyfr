@@ -349,6 +349,42 @@ defmodule Sanctum.Consent.AgentConsentTest do
     refute Enum.any?(ingress.tools, &String.starts_with?(&1, "explorer."))
   end
 
+  # A brain whose publish the component index has not caught up with yet:
+  # the grant's brain set is read at the state of the index its graph is
+  # read at, so Aqua's first plan names the brain and the plan a person
+  # confirms commits.
+  test "a brain published while the component index is behind is in Aqua's first plan, which commits",
+       %{ctx: ctx} do
+    bind_claude!(ctx)
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "late", "0.1.0",
+      manifest: %{
+        "name" => "late",
+        "type" => "catalyst",
+        "version" => "0.1.0",
+        "publisher" => "local",
+        "contracts" => [Prima.Model.chat_contract()]
+      },
+      wasm: Cyfr.Test.Guests.wasm(:catalyst)
+    )
+
+    {:ok, plan} = Plan.plan(ctx, %{ref: @soul})
+    decisions = %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]}
+    assert {:ok, preview} = Commit.preview(ctx, decisions)
+
+    assert {:ok, _} =
+             Commit.commit(ctx, %{
+               decisions: decisions,
+               plan_token: plan.plan_token,
+               proof: preview.proof,
+               commit_digest: preview.commit_digest,
+               expected_consent_revision: plan.expected_consent_revision
+             })
+
+    {_, head, _} = head!(ctx, @soul)
+    assert %Blob.Edge{} = edge!(head.resolved_policy, @soul, "catalyst:local.late")
+  end
+
   test "a grant whose tools moved is not re-minted", %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, first, _} = head!(ctx, @soul)
