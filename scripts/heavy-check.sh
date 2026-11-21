@@ -29,16 +29,14 @@
 # appearing keeps its earlier arrival, so a check that published meanwhile
 # can run after it; and two checks whose tickets appear in the same
 # instant may each see no earlier ticket, and the locks decide between
-# them. When a quarter is free, the waiter served is the first to arrive
-# whose worktree holds no quarter; when every waiter's worktree holds one,
-# the first to arrive. A check's worktree is the Git top level of the
-# directory it was started from, else that directory, physical
-# (`pwd -P`). So a long run delays only the checks of its own worktree,
-# and a worktree alone on the host takes every free quarter. Given the
-# same arrivals and the same ends, the order is the same: there is no
-# priority, no clock and no lock over admission. A stopped or dead waiter
-# holds no one back. A holder stopped after it took its quarter keeps it
-# until it is continued or ends; --status shows it held and stopped.
+# them. A check starts only when no check that arrived before it still
+# waits, a stopped or dead waiter apart, and a quarter is free; it never
+# waits for a check that arrived after it, and never starts past one that
+# arrived before it. There is no priority and no lock over admission: a
+# check never waits on another waiter's admission, only on earlier tickets
+# and on the quarters' locks. A holder stopped after it took its quarter
+# keeps it until it is continued or ends; --status shows it held and
+# stopped.
 #
 # Inside a check, a check runs its command in place, on its parent's
 # quarter.
@@ -85,10 +83,13 @@
 # Each holder writes a record, one line, for example
 #   pid=41237 quarter=2 cpus=2,3,10,11 since=2026-10-28T21:14:03+0000 hold=2700s group=41251 watchdog=41250 checkout=/home/x/cyfr command=mix dialyzer
 # in LOCK.quarter<i>.holder, where cpus is its processors or `unplaced`,
-# checkout its worktree, group the command's process group and watchdog
-# its watchdog's pid; each waiter's ticket holds pid=, queued=, checkout=
-# and command= the same way. scripts/janitor.sh reads the pid, group and
-# watchdog of every LOCK.quarter<i>.holder. A run is finished when no
+# checkout the directory it was started from, group the command's process
+# group and watchdog its watchdog's pid; each waiter's ticket holds pid=,
+# queued=, checkout= and command= the same way (the grammar is at field()
+# below). A record is written whole under another name and renamed into
+# place, so a reader finds the one before or the new one, never part of
+# one. scripts/janitor.sh reads the pid, group and watchdog of every
+# holder record beside the lock. A run is finished when no
 # process is left in its group and its watchdog has exited. The record is
 # removed at the exit only when the registry ended empty and the run is
 # finished, both checked; otherwise it stays until its quarter's next
@@ -96,13 +97,17 @@
 # it, so a record names its run until the run is finished.
 #
 # Every check that queued appends, as it exits, one line to the record of
-# the host's load, HEAVY_CHECK_RECORDS (default
-# /var/tmp/cyfr/heavy-check.log, on disk; the folder is made this user's
-# alone, and one that is a symlink or another user's is refused, so that
-# check writes no line and says so): `end=<time> quarter=<i or -> waited=<s>
-# ran=<s> exit=<status> checkout=<worktree> command=<words>`, waited from
-# its arrival to its start or exit and ran from its start, the words as
-# the records show them. The line is appended holding the file's lock.
+# the host's load, /var/tmp/cyfr/heavy-check.log (on disk; the folder is
+# made this user's alone, and one that is a symlink or another user's is
+# refused, so that check writes no line and says so): `end=<time>
+# quarter=<i or -> waited=<s> ran=<s> exit=<status> checkout=<directory>
+# command=<words>`, waited from its arrival to its start or exit and ran
+# from its start, the directory and the words as the records show them.
+# The line is one append under no lock, so nothing waits on it: it is kept
+# under 4096 bytes, the most Bash hands the kernel in one write, by
+# cutting the words short and ending them ` [cut]`.
+# HEAVY_CHECK_RECORDS names another file: it is the seam of this script's
+# own tests and of nothing else.
 #
 # --status prints, and exits 0: a `held quarter=<i> pid=<pid> cpus=...`
 # line for each holder whose run is not finished, with `state=stopped`
@@ -128,7 +133,7 @@
 # processors <list>)`, or `not placed: <why>` in place of the processors.
 # A `NAME=value` word of the command is shown as `NAME=…` there, in the
 # records and in --status, a URL's userinfo in any word as `[redacted]`,
-# and a tab or newline in a word as \t or \n.
+# and a tab or newline in a word, or in the directory, as \t or \n.
 set -uo pipefail
 
 HOLD=2700; STATUS=false
@@ -204,14 +209,20 @@ stopped() {
   return 1
 }
 pid_ok() { case "${1:-}" in ''|0*|*[!0-9]*) return 1 ;; esac; }
-# The value of field $1 in record line $2; checkout= and command= may hold
-# spaces, so command= is the rest of the line and checkout= runs up to it.
+# The grammar of a record line, a holder's, a ticket's or the load
+# record's: `name=value` fields in a fixed order, one space between them,
+# checkout= and command= last. The first ` checkout=` on the line ends the
+# one-word fields; checkout= may hold spaces and runs to the first
+# ` command=`; command= is the rest of the line, whatever it holds. These
+# lines are for people, --status and the janitor: the order reads the
+# tickets' names and the locks.
+# field NAME LINE: the value of that field, empty when the line has none.
 field() {
-  local line=$2 v
+  local line=" $2" v
   case "$1" in
     command) v=${line#* command=}; [ "$v" != "$line" ] || v= ;;
-    checkout) v=${line#* checkout=}; [ "$v" != "$line" ] || v=; v=${v% command=*} ;;
-    *) v=" $line"; v=${v#* "$1"=}; [ "$v" != " $line" ] || v=; v=${v%% *} ;;
+    checkout) v=${line#* checkout=}; [ "$v" != "$line" ] || v=; v=${v%% command=*} ;;
+    *) line=${line%% checkout=*}; v=${line#* "$1"=}; [ "$v" != "$line" ] || v=; v=${v%% *} ;;
   esac
   printf '%s' "$v"
 }
@@ -316,26 +327,31 @@ cmd=
 survivors=
 run_group= run_watchdog=
 finished=false
-ticket= published=false held_quarter=
-# The worktree the check counts against in the queue's order.
+ticket= held_quarter=
 checkout=$(pwd -P)
-if top=$(git -C "$checkout" rev-parse --show-toplevel 2>/dev/null) && top=$(cd "$top" 2>/dev/null && pwd -P); then
-  checkout=$top
-fi
+# The directory as a record shows it, on one line.
+checkout_text=${checkout//$'\t'/\\t}
+checkout_text=${checkout_text//$'\n'/\\n}
 command_text=$(redacted "$@")
 
 # Every exit after this point passes here, and only here is `_EXIT=`
 # written. In order: the command is stopped if it still runs, every
 # session in the registry is swept, survivors are waited for, then the
-# registry goes, and the holder's record when nothing of the run is left,
-# and the quarters are released by the exit itself. A 0 that is not the main
+# registry goes, and the holder's record when nothing of the run is left;
+# then the load record's line, and the quarter is released by the exit
+# itself. The record goes before the quarter and never after: once the
+# quarter is free its record is the next holder's. A 0 that is not the main
 # path's own end is the status of whatever ran last before a signal Bash
 # dies of, so it is reported as 1.
 on_exit() {
-  local status=$? p left waited
+  local status=$? p left waited queued=false
   trap '' HUP INT TERM
   trap - EXIT
   exec 1>&"$saved_out" 2>&"$saved_err"
+  # Whether this check queued is read from its ticket, not from a note made
+  # after the ticket appeared, which a signal can come before.
+  for p in "$LOCK".wait.*."$$"; do [ ! -e "$p" ] || queued=true; done
+  [ -z "$held_quarter" ] || queued=true
   if [ "$status" = 0 ] && ! $finished; then status=1; fi
   if [ -n "$cmd" ]; then
     contain_stop "$cmd" "$GRACE" || :
@@ -360,10 +376,10 @@ on_exit() {
       waited=$((waited + 1))
     done
   fi
-  rm -f "$LOCK.ticket.$$" "$LOCK".wait.*."$$"
+  rm -f "$LOCK.ticket.$$" "$LOCK".wait.*."$$" "$LOCK".quarter?.holder."$$".new
   if $owner; then rm -f "$CONTAIN_REGISTRY"; fi
   if $wrote_record && [ -z "$survivors" ] && run_finished; then rm -f "$record"; fi
-  if $published; then log_run "$status"; fi
+  if $queued; then log_run "$status"; fi
   if [ -n "$ran_at" ]; then
     say "exit $status after $((SECONDS - ran_at))s (queued $((ran_at - queued_at))s)"
   fi
@@ -372,9 +388,9 @@ on_exit() {
   exit "$status"
 }
 # log_run STATUS: this check's line in the record of the host's load (the
-# header's).
+# header's), as one append.
 log_run() {
-  local file=${HEAVY_CHECK_RECORDS:-} dir=/var/tmp/cyfr waited ran
+  local file=${HEAVY_CHECK_RECORDS:-} dir=/var/tmp/cyfr waited ran line LC_ALL=C
   if [ -z "$file" ]; then
     mkdir -p -m 700 "$dir" 2>/dev/null
     if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -O "$dir" ]; then
@@ -384,9 +400,10 @@ log_run() {
     file=$dir/heavy-check.log
   fi
   if [ -n "$ran_at" ]; then waited=$((ran_at - queued_at)) ran=$((SECONDS - ran_at)); else waited=$((SECONDS - queued_at)) ran=0; fi
-  { flock -w 10 3 &&
-    printf 'end=%s quarter=%s waited=%s ran=%s exit=%s checkout=%s command=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
-      "${held_quarter:--}" "$waited" "$ran" "$1" "$checkout" "$command_text" >&3; } 3>>"$file" 2>/dev/null ||
+  line="end=$(date '+%Y-%m-%dT%H:%M:%S%z') quarter=${held_quarter:--} waited=$waited ran=$ran exit=$1 checkout=$checkout_text command=$command_text"
+  # Bytes, under LC_ALL=C: with its newline the line stays under 4096.
+  if [ "${#line}" -gt 4000 ]; then line="${line:0:3994} [cut]"; fi
+  printf '%s\n' "$line" 2>/dev/null >>"$file" ||
     say "no line in the record of the host's load: $file cannot be written"
 }
 # Whether this check's run is finished: no process is left in its group and
@@ -466,7 +483,7 @@ fi
 cpus_for() { if $placed; then echo "${QUARTER[$1]}"; else echo unplaced; fi; }
 
 # The queue. A check arrives by publishing its ticket, $LOCK.wait.<ns>.<pid>,
-# a file that carries its pid, arrival, worktree and command. It is written
+# a file that carries its pid, arrival, directory and command. It is written
 # whole and locked under a temporary name, then a child process reads the
 # clock and renames it into place under that time in nanoseconds and the
 # check's pid, so a stop of the check itself does not delay its
@@ -493,29 +510,20 @@ publish_ticket() {
   exec {ticket_fd}>"$LOCK.ticket.$$" || exit 1
   flock -n -x "$ticket_fd" || exit 1
   printf 'pid=%s queued=%s checkout=%s command=%s\n' "$$" \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$checkout" "$command_text" >&"$ticket_fd" || exit 1
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$checkout_text" "$command_text" >&"$ticket_fd" || exit 1
   ticket=$(t=$(now_ns) && mv -f "$LOCK.ticket.$$" "$LOCK.wait.$t.$$" && echo "$t.$$") || exit 1
-  published=true
 }
 release_ticket() {
   rm -f "$LOCK.wait.$ticket"
   exec {ticket_fd}>&-
   ticket=
 }
-# How many live waiters would be served before this one ($ahead) and how
-# many wait in all ($waiting), this one included: those of worktrees that
-# hold no quarter, in arrival order, then the rest, in arrival order (the
-# header's order). A ticket nothing locks is removed; a stopped or exited
-# owner holds no one back.
+# How many live waiters arrived before this one ($ahead) and how many wait
+# in all ($waiting), this one included. A ticket nothing locks is removed;
+# a stopped or exited owner holds no one back.
 places() {
-  local f k line pid mine theirs tree
-  local -A holding=()
+  local f k line pid
   ahead=0 waiting=0
-  while IFS= read -r line; do
-    tree=$(field checkout "$line")
-    [ -z "$tree" ] || holding[$tree]=1
-  done < <(holders)
-  mine=0; [ -z "${holding[$checkout]+set}" ] || mine=1
   for f in "$LOCK".wait.*; do
     k=${f##*.wait.}
     ticket_key_ok "$k" || continue
@@ -524,11 +532,7 @@ places() {
       line=$(head -n 1 "$f" 2>/dev/null) || continue
       pid=$(field pid "$line")
       if pid_ok "$pid" && { ! alive "$pid" || stopped "$pid"; }; then continue; fi
-      tree=$(field checkout "$line") theirs=0
-      [ -z "$tree" ] || [ -z "${holding[$tree]+set}" ] || theirs=1
-      if [ "$theirs" -lt "$mine" ] || { [ "$theirs" = "$mine" ] && earlier "$k" "$ticket"; }; then
-        ahead=$((ahead + 1))
-      fi
+      if earlier "$k" "$ticket"; then ahead=$((ahead + 1)); fi
     fi
     waiting=$((waiting + 1))
   done
@@ -536,9 +540,14 @@ places() {
 
 # The locks: descriptor 7 holds the quarter taken.
 record_for() { echo "$LOCK.quarter$1.holder"; }
+# The record, whole, under a name no reader looks at, then renamed into
+# place.
 write_record() {
-  printf 'pid=%s quarter=%s cpus=%s since=%s hold=%ss group=%s watchdog=%s checkout=%s command=%s\n' \
-    "$$" "$held_quarter" "$cpus" "$since" "$HOLD" "${1:-}" "${2:-}" "$checkout" "$command_text" > "$record"
+  local new="$record.$$.new"
+  [ ! -d "$record" ] &&
+    printf 'pid=%s quarter=%s cpus=%s since=%s hold=%ss group=%s watchdog=%s checkout=%s command=%s\n' \
+      "$$" "$held_quarter" "$cpus" "$since" "$HOLD" "${1:-}" "${2:-}" "$checkout_text" "$command_text" > "$new" &&
+    mv -f "$new" "$record" || { rm -f "$new"; return 1; }
 }
 # Run in a child process, so that a check stopped meanwhile either holds
 # its quarter with its record written or holds nothing: it takes a free

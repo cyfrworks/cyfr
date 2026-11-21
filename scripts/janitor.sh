@@ -153,10 +153,13 @@ alive() {
 }
 
 # The holder record that names pid $1, as its group= and watchdog= values
-# ("-" for one it lacks); nothing when no record names the pid.
+# ("-" for one it lacks); nothing when no record names the pid. Every
+# holder record beside the lock is read, whatever its name: one roster
+# here would call a run dead whose record a worktree on another version of
+# heavy-check wrote, such as the whole-machine record $LOCK.holder.
 record_of() {
   local file line
-  for file in "$LOCK".quarter*.holder; do
+  for file in "$LOCK"*.holder; do
     [ -s "$file" ] || continue
     IFS= read -r line <"$file" || [ -n "$line" ] || continue
     line=" ${line%% command=*} "
