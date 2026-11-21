@@ -7,8 +7,9 @@ defmodule Aqua.Launch do
   neither a hand nor an agent, which becomes an external-plane
   `execution.run` as a person, so the application roots its own consent
   and the turn's pinned authority is never widened into it. A launch is
-  one a member in `auto` called (`Aqua.Loop.Policy`), run (`run/3`) as
-  the turn's person and held to what that decision read (`t:decided/0`).
+  an offered `execution.run` a member called (`Aqua.Loop.Policy`), run
+  (`run/3`) as the turn's person and held to what that decision read
+  (`t:decided/0`).
   A run stands on the grant of the person it acts as, whoever started
   it; this is the assistant starting one.
 

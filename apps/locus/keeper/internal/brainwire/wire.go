@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package brainwire is the brain wire, version 2, a driver's side, for
+// Package brainwire is the brain wire, version 3, a driver's side, for
 // every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex):
 // tests/fixtures/brain_wire.json defines it (its "comment") and binds this
 // package and the holder (Opus.Brain.Wire) to the same lines. Commands come
@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	Version      = 2
+	Version      = 3
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000
@@ -54,6 +54,7 @@ const (
 	tConfig
 	tCounts
 	tModels
+	tChoices
 	tModelCounts
 	tPhase
 	tErrorType
@@ -70,11 +71,10 @@ type Spec struct {
 }
 
 var configTypes = map[string]fieldType{
-	"model":           tString,
-	"effort":          tString,
-	"permission_mode": tString,
-	"harness_tools":   tStrings,
-	"read_only":       tBoolean,
+	"model":         tString,
+	"effort":        tString,
+	"access":        tString,
+	"harness_tools": tStrings,
 }
 
 // CountNames are the four counts of a model's usage, in the wire's order.
@@ -126,8 +126,8 @@ var Events = map[string]Spec{
 		map[string]fieldType{"gen": tCount, "work": tID, "answered": tIDs, "stop": tStop}},
 	"error": {[]string{"t", "gen", "type", "message"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "type": tErrorType, "message": tString}},
-	"models": {[]string{"t", "id", "models", "efforts"}, nil,
-		map[string]fieldType{"id": tID, "models": tModels, "efforts": tStrings}},
+	"models": {[]string{"t", "id", "models", "efforts", "access"}, nil,
+		map[string]fieldType{"id": tID, "models": tModels, "efforts": tStrings, "access": tChoices}},
 	"forgot": {[]string{"t", "id", "session"}, nil, map[string]fieldType{"id": tID, "session": tID}},
 }
 
@@ -229,8 +229,8 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 		return listOf(raw, BlockOK)
 	case tTools:
 		return listOf(raw, toolOK)
-	case tModels:
-		return listOf(raw, modelOK)
+	case tModels, tChoices:
+		return listOf(raw, idNameOK)
 	case tModelCounts:
 		return listOf(raw, modelCountsOK)
 	case tConfig:
@@ -360,7 +360,7 @@ func toolOK(raw json.RawMessage) bool {
 		len(name) >= 1 && len(name) <= 128 && ofType(tString, m["description"]) && ofType(tObject, m["parameters"])
 }
 
-func modelOK(raw json.RawMessage) bool {
+func idNameOK(raw json.RawMessage) bool {
 	m, ok := objectOf(raw, "id", "name")
 	return ok && ofType(tID, m["id"]) && ofType(tString, m["name"])
 }
@@ -386,13 +386,41 @@ type Tool struct {
 }
 
 // Config is a start's configuration: absent members are the harness's
-// defaults, and an absent ReadOnly is false.
+// defaults, and an absent Access the driver's first listed choice.
 type Config struct {
-	Model          string    `json:"model"`
-	Effort         string    `json:"effort"`
-	PermissionMode string    `json:"permission_mode"`
-	HarnessTools   *[]string `json:"harness_tools"`
-	ReadOnly       bool      `json:"read_only"`
+	Model        string    `json:"model"`
+	Effort       string    `json:"effort"`
+	Access       *string   `json:"access"`
+	HarnessTools *[]string `json:"harness_tools"`
+}
+
+// Choice is one access choice a driver lists: the id a start's
+// config.access names, and the words a person reads.
+type Choice struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Access is one access choice of a driver's, with the native settings N
+// it starts and resumes its harness with. A `models` answer lists it as
+// its Choice alone.
+type Access[N any] struct {
+	Choice
+	Native N `json:"-"`
+}
+
+// Choose is the access of `listed` a start's config names: the first
+// when it names none, and false when it names one not listed.
+func Choose[N any](listed []Access[N], access *string) (Access[N], bool) {
+	if access == nil {
+		return listed[0], true
+	}
+	for _, a := range listed {
+		if a.ID == *access {
+			return a, true
+		}
+	}
+	return Access[N]{}, false
 }
 
 // ModelCounts are one model's counts in a `usage` event.

@@ -90,8 +90,8 @@ defmodule Arca.McpServerStorage do
   (`Dockerfile.locus`), by its name or by the path the box installs it
   at (`/usr/local/bin/cyfr-codex` is `cyfr-codex`), or nil: a bare
   harness, another program, a tool server, no command. The one answer
-  to which driver a row runs: the turn's read-only refusal and the Aqua
-  page's read it (`Aqua.Models`). What a kept row's folder holds of a
+  to which driver a row runs: the holder (`Opus.Brain`) and a brain's
+  status (`Aqua.Models`) read it. What a kept row's folder holds of a
   brain's sessions is laid out by that driver's harness, so the driver
   and the kept folder are fixed once the row names one (`update/4`).
   """

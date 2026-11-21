@@ -503,7 +503,7 @@ defmodule Locus.Runtime.ModelContractTest do
     end
   end
 
-  test "a write the soul is offered runs at once under auto, and its result returns to the next chat",
+  test "a write the soul is offered runs at once, and its result returns to the next chat",
        %{ctx: ctx} do
     keep = %{"action" => "keep", "name" => "kept", "content" => "from the fixture"}
 
@@ -525,7 +525,7 @@ defmodule Locus.Runtime.ModelContractTest do
 
     played = play(ctx, steps)
 
-    assert %{status: "completed", agent_mode: "auto"} = played.turn
+    assert %{status: "completed"} = played.turn
 
     assert [
              %{kind: "model", outcome: "ok"},

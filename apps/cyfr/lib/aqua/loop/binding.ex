@@ -16,7 +16,7 @@ defmodule Aqua.Loop.Binding do
   is the hand it aliases, an `execution.run` of an agent is refused (a
   crew member is asked with `crew.ask`, never launched), and any other
   `execution.run` is a launch the loop hands to `Aqua.Launch` once the
-  member's mode runs it, its arguments as the model wrote them, the
+  policy runs it, its arguments as the model wrote them, the
   account it names (`connection`) among them.
 
   `dispatch/2` runs a hand, a catalog call or an external call under the

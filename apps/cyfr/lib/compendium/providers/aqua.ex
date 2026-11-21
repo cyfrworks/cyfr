@@ -68,9 +68,9 @@ defmodule Compendium.Providers.Aqua do
     # a turn resolves its agent through `get`, so the reads
     # carry no consent class and stay reachable from every surface
     # that can start one. Editing them — the crew, the prompts,
-    # the `tools` a chain may call and each member's `mode` — is a
-    # member's act from outside, never something a chain can do to
-    # itself.
+    # the `tools` a chain may call and each member's options, its access
+    # among them — is a member's act from outside, never something a
+    # chain can do to itself.
     # Every write is `consent: :interactive`: a person's own session
     # changes the soul, the crew and the scrolls, never a standing
     # credential — an API key, a `*` key included, is refused at the
@@ -78,8 +78,7 @@ defmodule Compendium.Providers.Aqua do
     # `tools/list`.
     #
     # A scroll is a procedure the athanor learns. Writing one is a
-    # member's act at the door, and a chain's under its member's mode:
-    # in `auto` it writes, in `read-only` it is refused. In-chain the
+    # member's act at the door, and a chain's. In-chain the
     # interactive class keeps its surface half, so the write needs an
     # `:oidc`-rooted turn: a schedule- or key-started turn cannot write a
     # scroll, exactly like a note. Deleting stays a member's act alone.
@@ -95,7 +94,7 @@ defmodule Compendium.Providers.Aqua do
           [
             Arg.new("detail", :boolean,
               description:
-                "For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent"
+                "For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent"
             ),
             Arg.new("include_disabled", :boolean,
               description:
@@ -150,11 +149,6 @@ defmodule Compendium.Providers.Aqua do
               description:
                 "What the soul should never hand a crew member (create/update; crew members only)"
             ),
-            Arg.new("mode", :string,
-              enum: AquaAgent.modes(),
-              description:
-                "What of its offered tools the member runs: 'read-only' or 'auto' (the default)"
-            ),
             Arg.new("options", {:map, Arg.new(nil, :json)},
               description:
                 "The options this agent's brain is asked with on every request — names and values its describe declares (create/update)"
@@ -205,16 +199,11 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("options", {:map, Arg.new(nil, :json)},
               nullable: true,
               description:
-                "The options this agent's brain is asked with on every request — names and values its describe declares (create/update)"
+                "The options this agent's brain is asked with on every request — names and values its describe declares; for a program brain, 'effort' and 'access', each one of the values its program lists (create/update)"
             ),
             Arg.new("options_patch", {:map, Arg.new(nil, :json, nullable: true)},
               description:
                 "update only: the brain options to change, applied to the options as they are when the write lands — a value sets an option, null takes it off; options not named are kept, so two edits of different options at once keep both. Not with options."
-            ),
-            Arg.new("mode", :string,
-              enum: AquaAgent.modes(),
-              description:
-                "What of its offered tools this member runs (create/update; a crew member, whose mode Aqua runs in when it runs on it): 'read-only' runs only reads, then answers, and every other call is refused; 'auto' runs every tool it is offered, deleting included. A file without it is auto."
             ),
             Arg.new("tools", {:array, Arg.new(nil, :string)},
               nullable: true,
@@ -242,7 +231,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("member", :string,
               nullable: true,
               description:
-                "update only, the soul ('aqua'): the crew member Aqua runs on, whose brain, model, options and mode it takes; null names none. The soul has no brain of its own."
+                "update only, the soul ('aqua'): the crew member Aqua runs on, whose brain, model and options it takes; null names none. The soul has no brain of its own."
             ),
             Arg.new("expected_digest", :string,
               description:
@@ -399,7 +388,7 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools and running them in its own mode), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
+        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
       title: "Aqua Agent System"
     )
   end
@@ -467,7 +456,6 @@ defmodule Compendium.Providers.Aqua do
               program: agent.program,
               options: agent.options,
               avoid: agent.avoid,
-              mode: agent.mode,
               tools: agent.tools,
               disabled: agent.disabled
             })
@@ -528,7 +516,6 @@ defmodule Compendium.Providers.Aqua do
          title: agent.title,
          description: agent.description,
          avoid: agent.avoid,
-         mode: agent.mode,
          tools: agent.tools,
          catalyst_ref: agent.catalyst_ref,
          program: agent.program,
@@ -561,7 +548,6 @@ defmodule Compendium.Providers.Aqua do
          :ok <- refute_reserved(name),
          :ok <- no_crew_tools(name, args),
          :ok <- no_crew_prompt(name, args),
-         :ok <- validate_mode(args["mode"]),
          :ok <- validate_options(args["options"]),
          :ok <- one_brain(%{catalyst_ref: args["catalyst_ref"], program: args["program"]}) do
       create_member(ctx, name, args)
@@ -599,7 +585,6 @@ defmodule Compendium.Providers.Aqua do
          :ok <- no_seat_brain(name, args),
          :ok <- validate_member(name, args),
          :ok <- one_tools_argument(args),
-         :ok <- validate_mode(args["mode"]),
          :ok <- validate_tools(args["tools"]),
          :ok <- validate_tools(args["tools_add"]),
          :ok <- validate_tools(args["tools_remove"]),
@@ -968,7 +953,6 @@ defmodule Compendium.Providers.Aqua do
       program: args["program"],
       model: args["model"],
       options: args["options"] || %{},
-      mode: args["mode"] || "auto",
       tools: [],
       prompt: nil,
       member: nil,
@@ -1051,7 +1035,6 @@ defmodule Compendium.Providers.Aqua do
     |> maybe_update(args, "title", :title, agent.name)
     |> maybe_update(args, "description", :description, "")
     |> maybe_update(args, "avoid", :avoid, "")
-    |> maybe_update(args, "mode", :mode, "auto")
     |> maybe_update(args, "tools", :tools, [])
     |> maybe_update(args, "catalyst_ref", :catalyst_ref, nil)
     |> maybe_update(args, "program", :program, nil)
@@ -1171,17 +1154,6 @@ defmodule Compendium.Providers.Aqua do
   # grammar the file parser applies, so nothing this door admits can fail
   # to parse back. An absent argument leaves the list alone
   # (`apply_updates/2`).
-  # A member's mode at this door as the file parser reads it, whoever
-  # calls it: one of the file's two, so no write lands a mode its next
-  # read refuses.
-  defp validate_mode(nil), do: :ok
-
-  defp validate_mode(mode) do
-    if mode in AquaAgent.modes(),
-      do: :ok,
-      else: {:error, {:invalid_argument, "mode must be \"read-only\" or \"auto\""}}
-  end
-
   defp validate_tools(nil), do: :ok
 
   defp validate_tools(tools) do
@@ -1229,7 +1201,7 @@ defmodule Compendium.Providers.Aqua do
   # own (`Compendium.AquaAgent`): a write that gives it one is refused,
   # never dropped, with where the brain is set instead. A crew member
   # names no member.
-  @seat_brain_args ~w(catalyst_ref program model options options_patch mode)
+  @seat_brain_args ~w(catalyst_ref program model options options_patch)
 
   defp no_seat_brain(name, args) do
     cond do
@@ -1237,7 +1209,7 @@ defmodule Compendium.Providers.Aqua do
         {:error,
          {:invalid_argument,
           "Aqua has no brain of its own: it runs on the crew member `member` names — set " <>
-            "member, and the brain, model, options and mode on that member"}}
+            "member, and the brain, model and options on that member"}}
 
       not AquaPath.soul?(name) and not is_nil(args["member"]) ->
         {:error,

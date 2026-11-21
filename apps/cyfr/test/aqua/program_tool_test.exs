@@ -4,14 +4,12 @@
 defmodule Aqua.ProgramToolTest do
   @moduledoc """
   Aqua's own program tool through the real loop, a model's start a call
-  like any other of its mode: in auto it runs at once, and its answer is
-  what the program printed, which joins no thread to the turn; in
-  read-only every start is refused in the read-only sentence, which the
-  thread is told once, while the tool's list runs; a start whose words
-  are not readable text, too many or too long, or whose row changed
-  since it was listed or is gone, is refused as it dispatches and opens
-  nothing; a schedule's turn starts one as any turn of its mode; and the
-  turn's end ends what it started.
+  like any other: it runs at once, and its answer is what the program
+  printed, which joins no thread to the turn; a start whose words are not
+  readable text, too many or too long, or whose row changed since it was
+  listed or is gone, is refused as it dispatches and opens nothing; a
+  schedule's turn starts one as any turn does; and the turn's end ends
+  what it started.
 
   The model is scripted and the backends service is the scripted one;
   the loop, the gate and the session owner are real.
@@ -43,13 +41,7 @@ defmodule Aqua.ProgramToolTest do
 
     {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
-    {:ok,
-     conn: conn,
-     ctx: ctx,
-     fake: fake,
-     thread: thread,
-     gh: program!(ctx, "gh"),
-     jq: program!(ctx, "jq")}
+    {:ok, conn: conn, ctx: ctx, fake: fake, thread: thread, gh: program!(ctx, "gh")}
   end
 
   defp program!(ctx, name) do
@@ -67,7 +59,7 @@ defmodule Aqua.ProgramToolTest do
     row
   end
 
-  describe "in auto" do
+  describe "a model's start" do
     test "asked to run gh on a repository, Aqua starts it at once and answers from the output",
          %{ctx: ctx, thread: thread, gh: gh, fake: fake} do
       turn = accept!(ctx, thread, "@aqua how many stars has cyfr/cyfr? use gh")
@@ -82,8 +74,7 @@ defmodule Aqua.ProgramToolTest do
       prints(fake, gh, ~s({"stargazerCount":3}), exit: 0)
       assert :completed = run(ctx, turn)
 
-      assert {:ok, %{status: "completed", agent_mode: "auto", paused_at: nil}} =
-               Tape.turn(ctx, turn.id)
+      assert {:ok, %{status: "completed", paused_at: nil}} = Tape.turn(ctx, turn.id)
 
       assert_received {:session, "open",
                        %{"argv" => ["repo", "view", "cyfr/cyfr", "--json", "stargazerCount"]},
@@ -100,48 +91,6 @@ defmodule Aqua.ProgramToolTest do
 
       # Its session ended with the turn, at the latest.
       assert {:ok, []} = Opus.Programs.running(ctx)
-    end
-  end
-
-  describe "in read-only" do
-    test "every start is refused in the read-only sentence while the list runs; the thread is told once, and nothing opens",
-         %{ctx: ctx, thread: thread, gh: gh, jq: jq} do
-      read_only!(ctx)
-      turn = accept!(ctx, thread, "@aqua run gh, then jq")
-
-      script!([
-        calls([{"l1", "program", %{"action" => "list"}}]),
-        calls([start("c1", gh, ["--version"])]),
-        calls([start("c2", jq, ["--version"])]),
-        reply("Neither ran.")
-      ])
-
-      assert :completed = run(ctx, turn)
-      said = Aqua.Loop.Policy.read_only_sentence("Aqua")
-
-      assert {:ok, %{status: "completed", agent_mode: "read-only", paused_at: nil}} =
-               Tape.turn(ctx, turn.id)
-
-      # The list is a read and runs; each start, the same call auto runs,
-      # is refused before it dispatches, in the sentence.
-      assert %{outcome: "ok"} = step(ctx, turn, "l1")
-
-      for id <- ~w(c1 c2) do
-        assert %{outcome: "denied", error: ^said, started_at: nil} =
-                 step(ctx, turn, id)
-      end
-
-      refute_received {:session, "open", _message, _fields}
-      assert {:ok, []} = Opus.Programs.running(ctx)
-
-      # The thread is told once, though two starts were refused.
-      assert [%{kind: "system", content: ^said, turn_id: turn_id}] =
-               Enum.filter(
-                 Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id),
-                 &(&1.client_id == "read-only:" <> turn.id)
-               )
-
-      assert turn_id == turn.id
     end
   end
 
@@ -201,7 +150,7 @@ defmodule Aqua.ProgramToolTest do
   end
 
   describe "a schedule's turn" do
-    test "starts a program as any turn of its mode: in auto the start runs, and the turn's end ends it",
+    test "starts a program as any turn does: the start runs, and the turn's end ends it",
          %{ctx: ctx, thread: thread, gh: gh, fake: fake} do
       ctx = %{ctx | origin: :schedule}
 
@@ -215,7 +164,7 @@ defmodule Aqua.ProgramToolTest do
       prints(fake, gh, "gh version 2")
       assert :completed = run(ctx, turn)
 
-      assert {:ok, %{status: "completed", origin: "schedule", agent_mode: "auto", error: nil}} =
+      assert {:ok, %{status: "completed", origin: "schedule", error: nil}} =
                Tape.turn(ctx, turn.id)
 
       assert %{outcome: "ok"} = step(ctx, turn, "c1")
@@ -259,17 +208,6 @@ defmodule Aqua.ProgramToolTest do
 
   # A start refused as it dispatched, in the words the turn read.
   defp refused(error), do: %{outcome: "error", error: error}
-
-  # Aqua switched to read-only, as the Aqua page switches it: the crew
-  # member Aqua runs on, whose mode Aqua runs in.
-  defp read_only!(ctx) do
-    {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => Cyfr.Test.SeedBundle.seat_member(),
-        "mode" => "read-only"
-      })
-  end
 
   defp script!(items) do
     start_supervised!({ScriptedWorker, ref: @model, script: items, window: 40_000}, id: :script)

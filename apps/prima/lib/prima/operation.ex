@@ -44,7 +44,7 @@ defmodule Prima.Operation do
 
   `follows_setting: true` marks an action that follows the person's own
   browser setting: with the setting off the action is refused, and with
-  it on the member's mode decides it as any offered call
+  it on it is decided as any offered call
   (`Aqua.BrowserSetting`). It is admitted for the browser tool's in-chain
   actions alone (`validate!/1`). It is metadata for the gate, absent from
   the annotation view and from discovery.

@@ -10,7 +10,8 @@ defmodule Aqua.Crew do
   what it is good at and what to avoid; how a job is done is a skill any
   of them reads. Every member is offered the soul's tools on every job,
   and runs under the crew's one grant, Aqua's (`Compendium.AgentSource`):
-  only its mode changes what a call may do.
+  a member differs from another in its brain, model and options, a
+  program's access among them, never in what CYFR lets a call do.
 
   ## The index
 
@@ -29,9 +30,9 @@ defmodule Aqua.Crew do
   ## Suggested members
 
   `suggestion/1` is the member Aqua's setup offers to make on a brain the
-  person connected: its name, its title and its mode, read by the setup
-  and by nothing else. A member is its brain, its model and its effort
-  together, which the person picks, with what it is good at and what to
+  person connected: its name and its title, read by the setup and by
+  nothing else. A member is its brain, its model, its effort and, on a
+  program, its access together, which the person picks, with what it is good at and what to
   avoid, which the person writes. Making it is the person's press, and
   asks nothing: a member holds no grant of its own.
 
@@ -193,12 +194,12 @@ defmodule Aqua.Crew do
   @doc """
   The crew member Aqua's setup offers to make on `brain`: its `name`, the
   brain's own (a catalyst's provider with any character a member's name
-  cannot hold made `-`), its `title`, and its `mode`, `auto`. What a
-  member is good at and should avoid depends on the model and the effort
-  the person picks for it, so nothing is said of it here: the person
-  writes it, on the setup's row or on the member's card.
+  cannot hold made `-`), and its `title`. What a member is good at and
+  should avoid depends on the model and the effort the person picks for
+  it, so nothing is said of it here: the person writes it, on the setup's
+  row or on the member's card.
   """
-  @spec suggestion(brain()) :: %{name: String.t(), title: String.t(), mode: String.t()}
+  @spec suggestion(brain()) :: %{name: String.t(), title: String.t()}
   def suggestion({:program, name, title}) when is_binary(name) and is_binary(title),
     do: suggested(name, title)
 
@@ -209,7 +210,7 @@ defmodule Aqua.Crew do
         Map.get(@catalyst_titles, provider, provider)
       )
 
-  defp suggested(name, title), do: %{name: name, title: title, mode: "auto"}
+  defp suggested(name, title), do: %{name: name, title: title}
 
   # ---------------------------------------------------------------------------
   # The hand-off
@@ -221,7 +222,9 @@ defmodule Aqua.Crew do
   `args["title"]` (what a desktop shows for the job: trimmed, 1 to
   `title_max/0` code points of plain text on one line, and none when
   absent or blank) and `args["options"]` (the brain's options for the
-  job). Answers the
+  job, merged over the member's own). A member's access is its own, set
+  by the person on its card: options that name it are refused before
+  anything is written. Answers the
   request's id; `{:error, :not_addressable}` when the calling turn is not
   the soul's in a room or the member is not of the crew.
   """
@@ -518,6 +521,13 @@ defmodule Aqua.Crew do
   # (`Prima.Model`); which names and values the member's brain takes is
   # checked when the job's turn opens (`Aqua.Loop.Turn`).
   defp options(nil), do: {:ok, %{}}
+
+  defp options(%{"access" => _access}),
+    do:
+      {:error,
+       {:invalid_argument,
+        "crew.ask's options cannot name access: a crew member's access is set by the " <>
+          "person, on the member's card on the Aqua page"}}
 
   defp options(%{} = options) do
     if Enum.all?(options, fn {name, value} ->

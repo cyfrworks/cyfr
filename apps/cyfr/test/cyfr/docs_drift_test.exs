@@ -2106,8 +2106,7 @@ defmodule Cyfr.DocsDriftTest do
     # Who reaches the tool: the CLI, the API and a glass paired with the
     # person from outside, and the assistant from a run. No tincture
     # declares it, a manifest of any type but an agent's may not name it,
-    # and the shipped soul is offered it and runs in its member's mode,
-    # auto unless the person set that member read-only.
+    # and the shipped soul is offered it.
     %Prima.Operation{planes: planes} = Map.fetch!(operations("layout"), "edit")
 
     assert :external in planes and :in_chain in planes,
@@ -2202,27 +2201,9 @@ defmodule Cyfr.DocsDriftTest do
            "the shipped soul is offered #{inspect(soul.tools)}; tincture-guide.md's layout " <>
              "paragraph says it is offered layout.edit"
 
-    # Aqua runs in the mode of the crew member it runs on. The seed ships
-    # none, and a member's file that names no mode runs auto, as the one
-    # the person makes does until they set it read-only.
-    refute File.exists?(Path.join(@repo_root, "seed/aqua/crew")),
-           "the seed ships a crew; tincture-guide.md's layout paragraph says none ships"
-
-    {:ok, made} =
-      Compendium.AquaAgent.parse(
-        "made",
-        "---\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n---\n"
-      )
-
-    assert made.mode == "auto" and "read-only" in Compendium.AquaAgent.modes(),
-           "a member the person makes runs #{inspect(made.mode)}; tincture-guide.md's layout " <>
-             "paragraph says it runs auto unless they set it read-only"
-
     for writer <- [
           "The CLI, the API and a device paired with the person call it for the person",
-          "the assistant: the shipped Aqua is offered it and runs in the mode of the crew " <>
-            "member it runs on: none ships, and one the person makes runs auto unless they " <>
-            "set it read-only",
+          "the assistant: the shipped Aqua is offered it",
           "No tincture declares `layout.edit`"
         ] do
       assert paragraph =~ writer,

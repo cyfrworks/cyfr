@@ -7,7 +7,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
   mints its grant after every brain the athanor can connect, its edge
   into each brain selecting the brain's default profile, and no crew
   member is a source or a node of it; the shape reads Aqua's tools and
-  never a member's brain, model or mode, the member Aqua runs on or the
+  never a member's brain, model or options, the member Aqua runs on or the
   prompt; a crew member a person makes asks nothing and leaves the grant
   alone; and the loaded authority carries the tools Aqua's list names,
   never a pattern no catalogued action matches.
@@ -184,20 +184,16 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
   end
 
-  test "a member's mode, brain or model and Aqua's member ask nothing; native search " <>
+  test "a member's brain or model and Aqua's member ask nothing; native search " <>
          "switched, or a tool gained, is one edit and one row of the comparison",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, head, _} = head!(ctx, @soul)
     assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
 
-    # What of its tools a member runs grants nothing the consent does not,
-    # and the grant follows no member: Aqua read-only through the mode of
-    # the crew member it runs on, a member's model changed, and Aqua
-    # moved onto another member leave the shape standing, and nothing
-    # compares as changed.
-    write_agent!(ctx, Cyfr.Test.SeedBundle.seat_member(), &%{&1 | mode: "read-only"})
-    assert {:ok, %{mode: "read-only"}} = AquaAgent.get(ctx, "aqua")
+    # The grant follows no member: a member's model changed and Aqua moved
+    # onto another member leave the shape standing, and nothing compares
+    # as changed.
     write_agent!(ctx, "explorer", &%{&1 | model: "another-model"})
     write_agent!(ctx, "aqua", &%{&1 | member: "explorer"})
     assert {:ok, %{catalyst_ref: "catalyst:local.gemini"}} = AquaAgent.get(ctx, "aqua")
@@ -252,7 +248,6 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
     {:ok, input} = ShapeDerivation.shape_input(ctx, @soul)
     refute Map.has_key?(input, :model_target)
-    refute Map.has_key?(input, :mode)
   end
 
   test "a grant narrowed to fewer tools keeps the provider's search it does not untick",

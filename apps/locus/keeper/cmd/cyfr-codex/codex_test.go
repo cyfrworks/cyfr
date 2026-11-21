@@ -93,9 +93,9 @@ func TestTextOfManyLinesReachesCodexAsOneLine(t *testing.T) {
 		line []byte
 		want map[string]any
 	}{
-		{threadStart("cyfr-thread-1", text, []map[string]any{}, brainwire.Config{}), map[string]any{"id": "cyfr-thread-1", "method": "thread/start", "params": map[string]any{
+		{threadStart("cyfr-thread-1", text, []map[string]any{}, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/start", "params": map[string]any{
 			"approvalPolicy": "never", "sandbox": "danger-full-access", "dynamicTools": []any{}, "developerInstructions": text}}},
-		{threadResume("cyfr-thread-1", thread, text, brainwire.Config{}), map[string]any{"id": "cyfr-thread-1", "method": "thread/resume", "params": map[string]any{
+		{threadResume("cyfr-thread-1", thread, text, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/resume", "params": map[string]any{
 			"threadId": thread, "approvalPolicy": "never", "sandbox": "danger-full-access", "excludeTurns": true, "developerInstructions": text}}},
 		{toolAnswer(json.RawMessage("7"), text, true), map[string]any{"id": float64(7), "result": map[string]any{
 			"contentItems": []any{map[string]any{"type": "inputText", "text": text}}, "success": true}}},

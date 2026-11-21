@@ -5,8 +5,8 @@ defmodule Aqua.Offered do
   @moduledoc """
   The tools a turn offers: the soul's `tools` list
   (`Compendium.AquaAgent`), which every crew member is offered too, made
-  exact against the catalog and the person's browser setting. What a
-  member runs of it is its mode's to say (`Aqua.Loop.Policy`).
+  exact against the catalog and the person's browser setting. Each call
+  of it is decided as it runs (`Aqua.Loop.Policy`).
 
   The set is a map from an exact key to `"offered"` or `"off"`. Every
   entry names one action (the list has no wildcard), so the list a

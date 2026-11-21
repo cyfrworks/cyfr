@@ -31,13 +31,15 @@
 // delivery. A call of CYFR's tool
 // (`item/tool/call`) is held and shown as an `ask`, and an `answer`
 // answers it by its request's id. There is no interrupt: Stop closes the
-// session, and Codex's own `turn/interrupt` is never sent. Codex's own
-// tools run in its box, asking nothing, and are shown by name only. A
-// read-only start (`config.read_only`) ends the driver before anything
-// starts: Codex's read-only sandbox cannot start in the box. The
-// driver keeps no account of calls: which post a native turn answers is
-// Codex's own naming of the posts' uuids in that turn, which `idle`
-// passes on, and a turn's usage is the thread's total as Codex reports it,
+// session, and Codex's own `turn/interrupt` is never sent. A start runs
+// the thread in the access it names, one of those `models` lists
+// (accessChoices: Full access, no approvals, Codex's own sandbox off and
+// asking for nothing), or in the first when it names none; a start naming
+// another ends the driver before anything starts. Codex's own tools run
+// in its box and are shown by name only. The driver keeps no account of
+// calls: which post a native turn answers is Codex's own naming of the
+// posts' uuids in that turn, which `idle` passes on, and a turn's usage
+// is the thread's total as Codex reports it,
 // partial once a sub-agent works and for a resumed thread's first usable
 // total, one that carries counts (the wire's "comment" says why).
 //

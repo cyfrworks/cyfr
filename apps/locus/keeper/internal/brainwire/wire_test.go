@@ -75,7 +75,7 @@ func loadWireVectors(t *testing.T) wireVectors {
 var typeNames = map[fieldType]string{
 	tID: "id", tString: "string", tCount: "count", tBoolean: "boolean", tObject: "object", tIDs: "ids",
 	tStrings: "strings", tContent: "content", tTools: "tools", tConfig: "config", tCounts: "counts",
-	tModels: "models", tModelCounts: "model_counts", tPhase: "phase", tErrorType: "error_type",
+	tModels: "models", tChoices: "choices", tModelCounts: "model_counts", tPhase: "phase", tErrorType: "error_type",
 	tAccounting: "accounting", tStop: "stop",
 }
 

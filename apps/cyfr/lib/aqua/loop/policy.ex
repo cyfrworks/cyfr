@@ -3,8 +3,8 @@
 
 defmodule Aqua.Loop.Policy do
   @moduledoc """
-  What a resolved call may do under its member's mode: run, or be
-  refused with a sentence — and whether it may run beside others.
+  What a resolved call may do: run, or be refused with a sentence — and
+  whether it may run beside others.
 
   A call is decided in this order, and nothing is ever asked:
 
@@ -16,14 +16,11 @@ defmodule Aqua.Loop.Policy do
        own words. A launch is offered by `execution.run` or
        `execution.run_stream`, an outside server's tool by its
        `server:tool`.
-    3. **The mode.** `auto` runs every offered call. `read-only` runs a
-       call whose action's declared kind is `:read` (`Aqua.Kinds`) and the
-       turn's own start of its program brain, which the holder starts
-       read-only (`Opus.Brain`); it refuses every other call, a launch and
-       an outside server's tool among them, with `read_only_sentence/1`.
+    3. **Run.** Every offered call runs. A crew member's access is its
+       harness's own setting (`Opus.Brain`), never a step here.
 
-  A launch is refused before the mode when its reference names no
-  component, and a launch naming an account (`connection`) has it
+  A launch is refused when its reference names no component, and a
+  launch naming an account (`connection`) has it
   resolved first (`launch_account/2`), as account names compare: the
   entry the launched app's own profile binds under that name, and the
   name as the binding stores it. A name the profile does not bind ends
@@ -50,9 +47,8 @@ defmodule Aqua.Loop.Policy do
   @type account :: %{vault_entry: String.t(), name: String.t()}
 
   @typedoc """
-  What a call does: run, a launch with what its decision read; be denied,
-  refused, or refused by a read-only mode, with a sentence; or, for a
-  launch naming an account its app's profile does not bind, end the turn
+  What a call does: run, a launch with what its decision read; be denied
+  or refused, with a sentence; or, for a launch naming an account its app's profile does not bind, end the turn
   as setup required, naming the app, its credential need (nil: the one
   need, or one no binding tells) and the account.
   """
@@ -61,39 +57,25 @@ defmodule Aqua.Loop.Policy do
           | {:run, Aqua.Launch.decided()}
           | {:deny, String.t()}
           | {:refuse, String.t()}
-          | {:read_only, String.t()}
           | {:setup_required, String.t(), {String.t() | nil, String.t()}}
 
   @doc """
-  The decision for `call` among the `offered` set under `mode`
-  (`read-only` or `auto`, `Compendium.AquaAgent`). A restricted turn's
+  The decision for `call` among the `offered` set. A restricted turn's
   calls reach here only when replay-safe (`Aqua.Loop` denies the rest
-  first). Every member is offered the same set on every job, so the mode
-  is the one thing on the member's side that changes what a call may do.
-  `opts`: `:host_start` (true for the turn's own start of its
-  program brain), `:title` (the member's title, which a read-only
-  refusal names) and `:ctx` (the member's context a launch's account is
+  first). Every member is offered the same set on every job.
+  `opts`: `:host_start` (true for the turn's own start of its program
+  brain, which is no call of its job), `:title` (the member's title, which
+  a refusal names) and `:ctx` (the member's context a launch's account is
   resolved under). Without a context a launch naming an account is
   refused.
   """
-  @spec decide(Call.t(), Aqua.Offered.t(), String.t(), keyword()) :: decision()
-  def decide(%Call{} = call, offered, mode, opts) when is_map(offered) do
+  @spec decide(Call.t(), Aqua.Offered.t(), keyword()) :: decision()
+  def decide(%Call{} = call, offered, opts) when is_map(offered) do
     cond do
       call.kind == :ui -> :run
       Keyword.get(opts, :host_start) == true -> :run
-      true -> decide_offered(call, offered, mode, opts)
+      true -> decide_offered(call, offered, opts)
     end
-  end
-
-  @doc """
-  The sentence a read-only member's refused call answers, and the line
-  the thread is given once per turn: the member by its title, and the one
-  way to let it. The refused step shows in the thread in its own words.
-  """
-  @spec read_only_sentence(String.t()) :: String.t()
-  def read_only_sentence(title) when is_binary(title) do
-    "#{title} is read-only, so it refused a step that does more than read. " <>
-      "To let it, switch #{title} to auto on the Aqua page."
   end
 
   @doc """
@@ -110,35 +92,22 @@ defmodule Aqua.Loop.Policy do
 
   def replay_safe?(%Call{}), do: false
 
-  defp decide_offered(%Call{} = call, offered, mode, opts) do
+  defp decide_offered(%Call{} = call, offered, opts) do
     case Map.get(offered, offered_key(call)) do
-      "offered" -> by_mode(call, mode, opts)
+      "offered" -> offered(call, opts)
       "off" -> {:deny, Aqua.Providers.Browser.turned_off()}
       nil -> {:deny, "#{name(call)} is not among the tools #{title(opts)} is offered"}
     end
   end
 
-  # A launch is refused first when it names no component; then the mode.
-  defp by_mode(%Call{kind: :launch, target: reference} = call, mode, opts) do
-    cond do
-      not component_ref?(reference) ->
-        {:refuse, "#{inspect(reference)} is not a component reference"}
-
-      mode == "auto" ->
-        launch(call, opts)
-
-      true ->
-        {:read_only, read_only_sentence(title(opts))}
-    end
+  # A launch is refused when it names no component.
+  defp offered(%Call{kind: :launch, target: reference} = call, opts) do
+    if component_ref?(reference),
+      do: launch(call, opts),
+      else: {:refuse, "#{inspect(reference)} is not a component reference"}
   end
 
-  defp by_mode(%Call{}, "auto", _opts), do: :run
-
-  defp by_mode(%Call{kind: kind, tool: tool, action: action}, _read_only, opts) do
-    if kind in [:hand, :catalog] and Aqua.Kinds.kind_for(tool, action) == :read,
-      do: :run,
-      else: {:read_only, read_only_sentence(title(opts))}
-  end
+  defp offered(%Call{}, _opts), do: :run
 
   # The key a call is offered under: an outside server's tool by its
   # `server:tool`, anything else by its `tool.action`.

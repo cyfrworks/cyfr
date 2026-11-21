@@ -3,11 +3,11 @@
 
 defmodule Aqua.Loop.PolicyTest do
   @moduledoc """
-  A call runs or is refused by its member's offered set and mode, and is
-  never asked: read-only runs a read, the `ui` event and the turn's own
-  start of its program brain, and refuses every other call with one
-  sentence; auto runs every offered call. A call not offered is refused
-  in either mode. Reads overlap and nothing else does.
+  A call runs or is refused by its member's offered set, and is never
+  asked: every offered call runs, a launch with its call and its account,
+  and the `ui` event and the turn's own start of its program brain run
+  offered or not. A call not offered is refused. Reads overlap and
+  nothing else does.
   """
 
   use ExUnit.Case, async: true
@@ -25,40 +25,38 @@ defmodule Aqua.Loop.PolicyTest do
   # the notes writes, the workspace thread's writes, a hand-off, a post
   # and an outside server's tool.
   @rows [
-    {"a file read", "files", %{"action" => "read", "path" => "a"}, :read},
-    {"a notes read", "notes", %{"action" => "list"}, :read},
-    {"a web read", "http", %{"action" => "get", "url" => "https://example.com/"}, :read},
-    {"a thread search", "thread", %{"action" => "search", "query" => "q"}, :read},
-    {"the crew's list", "crew", %{"action" => "list"}, :read},
-    {"the browser's read", "browser", %{"action" => "read"}, :read},
-    {"the browser's status", "browser", %{"action" => "status"}, :read},
-    {"a file write", "files", %{"action" => "write", "path" => "a", "content" => "b"}, :other},
-    {"a file delete", "files", %{"action" => "delete", "path" => "a"}, :other},
-    {"a web post", "http", %{"action" => "post", "url" => "https://example.com/"}, :other},
+    {"a file read", "files", %{"action" => "read", "path" => "a"}},
+    {"a notes read", "notes", %{"action" => "list"}},
+    {"a web read", "http", %{"action" => "get", "url" => "https://example.com/"}},
+    {"a thread search", "thread", %{"action" => "search", "query" => "q"}},
+    {"the crew's list", "crew", %{"action" => "list"}},
+    {"the browser's read", "browser", %{"action" => "read"}},
+    {"the browser's status", "browser", %{"action" => "status"}},
+    {"a file write", "files", %{"action" => "write", "path" => "a", "content" => "b"}},
+    {"a file delete", "files", %{"action" => "delete", "path" => "a"}},
+    {"a web post", "http", %{"action" => "post", "url" => "https://example.com/"}},
     {"a launch", "execution",
-     %{"action" => "run", "reference" => "reagent:local.app:1.0.0", "input" => %{}}, :launch},
-    {"a model's program start", "program", %{"action" => "start", "program" => "srv_1"}, :other},
-    {"the browser's open", "browser", %{"action" => "open", "url" => "https://example.com/"},
-     :other},
-    {"the browser's click", "browser", %{"action" => "click", "ref" => "e1"}, :other},
-    {"the browser's close", "browser", %{"action" => "close"}, :other},
-    {"the browser's turn off", "browser", %{"action" => "turn_off"}, :other},
-    {"a kept note", "notes", %{"action" => "keep", "name" => "n", "content" => "c"}, :other},
-    {"the pinned page", "notes", %{"action" => "pin", "content" => "c"}, :other},
-    {"a workspace's notes", "notes", %{"action" => "workspace", "content" => "c"}, :other},
-    {"a forgotten note", "notes", %{"action" => "forget", "name" => "n"}, :other},
-    {"a workspace opened", "workspace", %{"action" => "open", "title" => "t", "ask" => "a"},
-     :other},
+     %{"action" => "run", "reference" => "reagent:local.app:1.0.0", "input" => %{}}},
+    {"a model's program start", "program", %{"action" => "start", "program" => "srv_1"}},
+    {"the browser's open", "browser", %{"action" => "open", "url" => "https://example.com/"}},
+    {"the browser's click", "browser", %{"action" => "click", "ref" => "e1"}},
+    {"the browser's close", "browser", %{"action" => "close"}},
+    {"the browser's turn off", "browser", %{"action" => "turn_off"}},
+    {"a kept note", "notes", %{"action" => "keep", "name" => "n", "content" => "c"}},
+    {"the pinned page", "notes", %{"action" => "pin", "content" => "c"}},
+    {"a workspace's notes", "notes", %{"action" => "workspace", "content" => "c"}},
+    {"a forgotten note", "notes", %{"action" => "forget", "name" => "n"}},
+    {"a workspace opened", "workspace", %{"action" => "open", "title" => "t", "ask" => "a"}},
     {"a workspace report", "workspace",
-     %{"action" => "report", "outcome" => "done", "summary" => "s"}, :other},
-    {"a hand-off", "crew", %{"action" => "ask", "member" => "explorer", "task" => "t"}, :other},
-    {"a post", "thread", %{"action" => "post", "content" => "c"}, :other},
-    {"an outside server's tool", "github__search", %{"q" => "x"}, :other}
+     %{"action" => "report", "outcome" => "done", "summary" => "s"}},
+    {"a hand-off", "crew", %{"action" => "ask", "member" => "explorer", "task" => "t"}},
+    {"a post", "thread", %{"action" => "post", "content" => "c"}},
+    {"an outside server's tool", "github__search", %{"q" => "x"}}
   ]
 
   defp offered(rows) do
     keys =
-      for {_label, name, args, _row} <- rows do
+      for {_label, name, args} <- rows do
         case resolve!(name, args) do
           %{kind: :external, tool: tool} -> tool
           %{tool: tool, action: action} -> "#{tool}.#{action}"
@@ -70,65 +68,38 @@ defmodule Aqua.Loop.PolicyTest do
 
   @opts [title: "Aqua"]
 
-  test "each row of the table in both modes: read-only runs reads alone, auto runs every one" do
+  test "each row of the table, offered, runs: a launch with its call and its account" do
     offered = offered(@rows)
 
-    for {label, name, args, row} <- @rows do
+    for {label, name, args} <- @rows do
       call = resolve!(name, args)
-      read_only = Policy.decide(call, offered, "read-only", @opts)
-      auto = Policy.decide(call, offered, "auto", @opts)
 
-      case row do
-        :read ->
-          assert read_only == :run, label
-          assert auto == :run, label
-
-        :launch ->
-          assert read_only == {:read_only, Policy.read_only_sentence("Aqua")}, label
-
-          assert auto ==
-                   {:run, %{call: %{action: call.action, args: call.args}, account: nil}},
-                 label
-
-        :other ->
-          assert read_only == {:read_only, Policy.read_only_sentence("Aqua")}, label
-          assert auto == :run, label
+      if call.kind == :launch do
+        assert Policy.decide(call, offered, @opts) ==
+                 {:run, %{call: %{action: call.action, args: call.args}, account: nil}},
+               label
+      else
+        assert Policy.decide(call, offered, @opts) == :run, label
       end
     end
   end
 
-  test "the sentence names the member by its title and the one way to let it" do
-    assert Policy.read_only_sentence("Explorer") ==
-             "Explorer is read-only, so it refused a step that does more than read. " <>
-               "To let it, switch Explorer to auto on the Aqua page."
-
-    write = resolve!("files", %{"action" => "write", "path" => "a", "content" => "b"})
-
-    assert {:read_only, sentence} =
-             Policy.decide(write, offered(@rows), "read-only", title: "Explorer")
-
-    assert sentence == Policy.read_only_sentence("Explorer")
-  end
-
-  test "what only shows the person something runs in either mode, offered or not" do
-    for call <- [resolve!("ui", %{"kind" => "ui.navigate"}), resolve!("request_setup.open", %{})],
-        mode <- ["read-only", "auto"] do
-      assert :run = Policy.decide(call, %{}, mode, @opts)
+  test "what only shows the person something runs, offered or not" do
+    for call <- [resolve!("ui", %{"kind" => "ui.navigate"}), resolve!("request_setup.open", %{})] do
+      assert :run = Policy.decide(call, %{}, @opts)
     end
   end
 
-  test "the turn's own start of its program brain runs in either mode" do
+  test "the turn's own start of its program brain runs, offered or not" do
     start = resolve!("program", %{"action" => "start", "program" => "srv_1", "epoch" => 1})
 
-    for mode <- ["read-only", "auto"] do
-      assert :run = Policy.decide(start, %{}, mode, host_start: true)
-    end
+    assert :run = Policy.decide(start, %{}, host_start: true)
 
     # A model's start of a program is a call like any other.
-    assert {:deny, _} = Policy.decide(start, %{}, "auto", @opts)
+    assert {:deny, _} = Policy.decide(start, %{}, @opts)
   end
 
-  test "a call not offered is refused in either mode, a browser action the setting turned off in the browser's words" do
+  test "a call not offered is refused, a browser action the setting turned off in the browser's words" do
     offered = Aqua.Offered.resolve(["files.read", "browser.open"], {:ok, false})
     assert offered == %{"files.read" => "offered", "browser.open" => "off"}
 
@@ -136,24 +107,21 @@ defmodule Aqua.Loop.PolicyTest do
     open = resolve!("browser", %{"action" => "open", "url" => "https://example.com/"})
     tool = resolve!("github__search", %{})
 
-    for mode <- ["read-only", "auto"] do
-      assert {:deny, "files.write is not among the tools Aqua is offered"} =
-               Policy.decide(write, offered, mode, @opts)
+    assert {:deny, "files.write is not among the tools Aqua is offered"} =
+             Policy.decide(write, offered, @opts)
 
-      assert {:deny, sentence} = Policy.decide(open, offered, mode, @opts)
-      assert sentence == Aqua.Providers.Browser.turned_off()
+    assert {:deny, sentence} = Policy.decide(open, offered, @opts)
+    assert sentence == Aqua.Providers.Browser.turned_off()
 
-      assert {:deny, "github:search is not among the tools Aqua is offered"} =
-               Policy.decide(tool, offered, mode, @opts)
-    end
+    assert {:deny, "github:search is not among the tools Aqua is offered"} =
+             Policy.decide(tool, offered, @opts)
   end
 
-  test "a launch naming no component is refused before the mode" do
+  test "a launch naming no component is refused" do
     bad = resolve!("execution", %{"action" => "run", "reference" => "not a ref"})
     offered = Aqua.Offered.resolve(["execution.run"], {:ok, true})
 
-    for mode <- ["read-only", "auto"],
-        do: assert({:refuse, _} = Policy.decide(bad, offered, mode, @opts))
+    assert {:refuse, _} = Policy.decide(bad, offered, @opts)
   end
 
   test "a launch's decision is its call and its account, and binds nothing of what the turn read" do
@@ -163,7 +131,7 @@ defmodule Aqua.Loop.PolicyTest do
 
     assert launch.action == "run"
 
-    assert Policy.decide(launch, offered, "auto", title: "Aqua") ==
+    assert Policy.decide(launch, offered, title: "Aqua") ==
              {:run, %{call: %{action: "run", args: launch.args}, account: nil}}
   end
 

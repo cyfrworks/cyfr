@@ -217,8 +217,7 @@ defmodule Emissary.External.Proxy do
                 # Pass through upstream MCP-spec hints. Aqua classifies any
                 # `server:tool`-namespaced tool as `:external` via
                 # `Aqua.Kinds.kind_for/2`; no per-action annotation
-                # needed. A read-only member therefore never runs one;
-                # an auto member runs it when the soul's `tools` list
+                # needed. A member runs one when the soul's `tools` list
                 # names it.
                 #
                 # No planes entry: an upstream catalogue is unbounded and

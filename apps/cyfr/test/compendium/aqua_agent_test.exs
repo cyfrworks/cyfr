@@ -4,9 +4,8 @@
 defmodule Compendium.AquaAgentTest do
   @moduledoc """
   The agent file format: frontmatter round-trips byte-stably, a disabled
-  crew member leaves the crew without leaving the tree, every member has
-  a mode of its own, and a crew file holds no tools of its own: a member
-  is offered the soul's. A crew file is its frontmatter alone: the soul
+  crew member leaves the crew without leaving the tree, and a crew file
+  holds no tools of its own: a member is offered the soul's. A crew file is its frontmatter alone: the soul
   has a prompt, and a crew file with one is refused with the sentence
   that says where its words go. A file still holding the retired `tool_policy`
   is refused whole. Which file is the soul is the tree's to say, never
@@ -29,7 +28,6 @@ defmodule Compendium.AquaAgentTest do
         program: nil,
         model: "claude-sonnet-5-5",
         options: %{"effort" => "high", "budget" => 8, "thinking" => true, "label" => "true"},
-        mode: "read-only",
         tools: [],
         prompt: nil,
         member: nil,
@@ -49,7 +47,6 @@ defmodule Compendium.AquaAgentTest do
           catalyst_ref: nil,
           model: nil,
           options: %{},
-          mode: "auto",
           tools: ["files.read", "github:search", "native_search", "web.fetch"],
           prompt: "You are Aqua.\n\n## Style\n\n- terse",
           member: "scribe"
@@ -101,7 +98,6 @@ defmodule Compendium.AquaAgentTest do
     assert parsed.title == "min"
     assert parsed.avoid == ""
     assert parsed.options == %{}
-    assert parsed.mode == "auto"
     assert parsed.tools == []
     assert parsed.prompt == nil
   end
@@ -170,9 +166,8 @@ defmodule Compendium.AquaAgentTest do
   test "serialize writes the soul's tools as a list, one per line, in one form" do
     binary = AquaAgent.serialize(soul(%{tools: ["web.fetch", "files.read", "files.read"]}))
 
-    # The soul's file names its member and no brain, model, options or mode.
+    # The soul's file names its member and no brain, model or options.
     assert binary =~ "\nmember: scribe\ntools:\n  - files.read\n  - web.fetch\n---\n"
-    refute binary =~ "mode:"
     refute binary =~ "options:"
 
     assert {:ok, %{tools: ["files.read", "web.fetch"]}} = AquaAgent.parse("aqua", binary)
@@ -183,35 +178,15 @@ defmodule Compendium.AquaAgentTest do
     assert {:ok, %{tools: ["github:search"]}} = AquaAgent.parse("aqua", binary)
   end
 
-  test "every crew member has a mode of its own: read-only or auto, a file without one auto" do
-    for mode <- ["read-only", "auto"] do
-      assert {:ok, %{mode: ^mode}} =
-               AquaAgent.parse("scribe", "---\nmode: #{mode}\n---\n")
-    end
-
-    assert {:error, {:mode_invalid, "manual"}} =
-             AquaAgent.parse("scribe", "---\nmode: manual\n---\n")
-
-    # Aqua runs in its member's mode, and a soul file that names one is
-    # refused, as one that names any brain of its own is.
-    assert {:ok, %{mode: "auto"}} = AquaAgent.parse("aqua", "---\ntitle: Aqua\n---\n\nprompt\n")
-
-    assert {:error, :seat_has_brain} =
-             AquaAgent.parse("aqua", "---\nmode: true\n---\n\nprompt\n")
-
-    assert AquaAgent.modes() == ["read-only", "auto"]
-  end
-
   # The soul is a seat: it runs on the brain of the crew member it names,
   # and a file that still names a brain of its own is refused whole, with
   # the sentence that says what to delete (no old key is read).
-  test "the soul names the member it runs on and no brain: a brain, model, options or mode refuses it" do
+  test "the soul names the member it runs on and no brain: a brain, model or options refuses it" do
     for line <- [
           "catalyst_ref: catalyst:local.claude",
           "program: claude",
           "model: claude-sonnet-5-5",
-          "options:\n  effort: high",
-          "mode: auto"
+          "options:\n  effort: high"
         ] do
       assert {:error, :seat_has_brain} =
                AquaAgent.parse("aqua", "---\ntitle: Aqua\n#{line}\n---\n\nprompt\n"),
@@ -219,11 +194,8 @@ defmodule Compendium.AquaAgentTest do
     end
 
     # A crew member's file names its brain, as before.
-    assert {:ok, %{catalyst_ref: "catalyst:local.claude", mode: "auto"}} =
-             AquaAgent.parse(
-               "scribe",
-               "---\ncatalyst_ref: catalyst:local.claude\nmode: auto\n---\n"
-             )
+    assert {:ok, %{catalyst_ref: "catalyst:local.claude"}} =
+             AquaAgent.parse("scribe", "---\ncatalyst_ref: catalyst:local.claude\n---\n")
 
     assert {:ok, %{member: "scribe", catalyst_ref: nil, model: nil, holder: nil}} =
              AquaAgent.parse("aqua", "---\ntitle: Aqua\nmember: scribe\n---\n\nprompt\n")
@@ -247,7 +219,7 @@ defmodule Compendium.AquaAgentTest do
     assert Prima.AgentRef.seat_has_brain() =~ "choose the crew member Aqua runs on"
   end
 
-  # Seated, the soul takes its member's brain, model, options and mode and
+  # Seated, the soul takes its member's brain, model and options and
   # keeps its own prompt, title and tools; a member that does not stand
   # leaves it with no brain, and says why.
   test "the soul seated on its member takes the member's brain and keeps its own prompt and tools" do
@@ -259,11 +231,10 @@ defmodule Compendium.AquaAgentTest do
                program: nil,
                model: scribe.model,
                options: scribe.options,
-               mode: "read-only",
                holder: %{name: "scribe", title: "Scribe", state: :held}
            }
 
-    unheld = %{soul() | mode: "auto"}
+    unheld = soul()
 
     assert AquaAgent.seated(soul(), {:ok, %{scribe | disabled: true}}) ==
              %{unheld | holder: %{name: "scribe", title: "Scribe", state: :disabled}}
@@ -285,18 +256,17 @@ defmodule Compendium.AquaAgentTest do
              %{unheld | holder: %{name: "scribe", title: nil, state: :refused}}
   end
 
-  # The soul's capability is its member's brain, options and mode and its
-  # own tools: the member's prose, the soul's prompt and title, and whose
-  # name it runs on move none of it.
-  test "the soul's capability moves with its member's brain, options and mode, never with prose" do
+  # The soul's capability is its member's brain and options and its own
+  # tools: the member's prose, the soul's prompt and title, and whose name
+  # it runs on move none of it.
+  test "the soul's capability moves with its member's brain and options, never with prose" do
     scribe = member()
     {:ok, digest} = AquaAgent.capability_digest(AquaAgent.seated(soul(), {:ok, scribe}))
 
     for moved <- [
           %{scribe | model: "claude-opus-5-5"},
           %{scribe | catalyst_ref: "catalyst:local.gemini"},
-          %{scribe | options: %{}},
-          %{scribe | mode: "auto"}
+          %{scribe | options: %{}}
         ] do
       {:ok, other} = AquaAgent.capability_digest(AquaAgent.seated(soul(), {:ok, moved}))
       refute other == digest
@@ -375,10 +345,10 @@ defmodule Compendium.AquaAgentTest do
              AquaAgent.parse("x", "---\noptions:\n  effort: high\n  budget: 4\n---\n")
   end
 
-  test "a crew member is offered the soul's tools and keeps its own mode, the soul as it is" do
+  test "a crew member is offered the soul's tools, the soul as it is" do
     tools = ["crew.ask", "files.read"]
 
-    assert %{tools: ^tools, mode: "read-only"} = AquaAgent.under_soul(member(), tools)
+    assert AquaAgent.under_soul(member(), tools) == %{member() | tools: tools}
     assert AquaAgent.under_soul(soul(), []) == soul()
   end
 
@@ -394,7 +364,6 @@ defmodule Compendium.AquaAgentTest do
       catalyst_ref: "catalyst:moonmoon69.claude",
       model: "claude-sonnet-5-5",
       options: %{},
-      mode: "auto",
       tools: ["files.read"],
       prompt: "You look around."
     }
@@ -404,7 +373,6 @@ defmodule Compendium.AquaAgentTest do
     assert manifest["type"] == AquaAgent.crew_type()
     assert manifest["catalyst_ref"] == "catalyst:moonmoon69.claude"
     assert manifest["tools"] == ["files.read"]
-    assert manifest["mode"] == "auto"
     refute Map.has_key?(manifest, "options")
     refute Map.has_key?(manifest, "prompt")
     refute Map.has_key?(manifest, "title")
@@ -424,10 +392,6 @@ defmodule Compendium.AquaAgentTest do
 
     {:ok, other} = AquaAgent.capability_digest(%{scout | tools: ["files.read", "files.write"]})
     refute digest == other
-
-    # The mode is what the member runs of its tools: it moves the capability.
-    {:ok, read_only} = AquaAgent.capability_digest(%{scout | mode: "read-only"})
-    refute digest == read_only
 
     # The brain's options are what it runs with: they move the capability.
     {:ok, tuned} = AquaAgent.capability_digest(%{scout | options: %{"effort" => "high"}})

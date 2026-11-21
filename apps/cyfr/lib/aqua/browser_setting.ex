@@ -5,8 +5,8 @@ defmodule Aqua.BrowserSetting do
   @moduledoc """
   The person's browser setting: whether Aqua may use its browser
   (`Opus.Browser`). There is no yes per thread for the browser's own
-  actions: with it on, every action of the browser tool runs as the
-  member's mode decides; with it off, every one is refused and Aqua says so.
+  actions: with it on, every action of the browser tool is decided as
+  any offered call; with it off, every one is refused and Aqua says so.
   Turning it off holds at once: from then on CYFR starts no browser and
   sends it nothing, no action and no page, and a browser that a start
   already under way brings up is sent nothing and closed as soon as that

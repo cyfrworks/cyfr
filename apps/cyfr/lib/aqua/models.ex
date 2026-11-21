@@ -89,9 +89,6 @@ defmodule Aqua.Models do
   @listing_concurrency 5
   @listing_timeout_ms 30_000
   @capabilities_ttl_ms :timer.hours(24)
-  # The brains' drivers whose harness cannot start read-only in the box
-  # (`holds_read_only?/1`).
-  @unheld_drivers ~w(cyfr-codex)
   # The crew's one grant, which runs every member's brain
   # (`Compendium.AgentSource`).
   @grant Prima.AgentRef.soul_ref()
@@ -255,8 +252,9 @@ defmodule Aqua.Models do
   What the program a program brain names lists, read as the person at the
   Aqua page from the harness of the row of that name (`program/2`,
   `Opus.Brain.models/2`): `{:ok, %{models: [%{id, name}], efforts:
-  [effort]}}`, the models its `model` may name and the efforts its
-  `effort` option may take. A name with no row, or a row that does not
+  [effort], access: [%{id, name}]}}`, the models its `model` may name,
+  the efforts its `effort` option may take and the access choices its
+  `access` option may take, each named in the driver's words. A name with no row, or a row that does not
   stand as a brain's, is `program/2`'s refusal, and one whose harness did
   not list them is the holder's (`{:refused, sentence}` among them); a
   turn's context is refused, since only a person at a screen lists.
@@ -664,7 +662,7 @@ defmodule Aqua.Models do
   def pinned_program(%Context{} = ctx, row_id) when is_binary(row_id),
     do: suited(Arca.McpServerStorage.get_by_id(Context.actor(ctx), row_id))
 
-  # A row a brain runs in: `{:ok, %{row, epoch, name, driver}}` for an
+  # A row a brain runs in: `{:ok, %{row, epoch, name}}` for an
   # enabled driven program with a kept folder whose command starts with a
   # brain's driver (`Arca.McpServerStorage.driver/1`); else
   # `{:error, {:program_unfit, name}}` for any other row, Aqua's browser
@@ -677,8 +675,8 @@ defmodule Aqua.Models do
       {nil, _enabled} ->
         {:error, {:program_unfit, row.name}}
 
-      {driver, true} ->
-        {:ok, %{row: row.id, epoch: row.epoch, name: row.name, driver: driver}}
+      {_driver, true} ->
+        {:ok, %{row: row.id, epoch: row.epoch, name: row.name}}
 
       {_driver, _disabled} ->
         {:error, {:program_disabled, row.name}}
@@ -786,71 +784,6 @@ defmodule Aqua.Models do
   # and every agent's status read: its grant alone (`grant_only?/1`), else
   # a key.
   defp connect_state(plan), do: if(grant_only?(plan), do: :needs_grant, else: :needs_key)
-
-  @doc """
-  Whether a read-only member's brain that is a program row can be kept
-  read-only, by its row's driver, which must be one that starts its
-  harness read-only; a catalyst's brain runs no program, so CYFR's mode
-  reaches every call it makes. Codex's
-  sandbox cannot start in the box, so its driver refuses a read-only
-  start (`cyfr-codex`), and a member on such a row is refused before it.
-  The row's driver is the one `Arca.McpServerStorage.driver/1` names, by
-  its name or its installed path. A row whose command reaches a driver
-  another way (through `env` or `sh -c`, or from another path) names
-  none, so it is no brain's row: it reads unfit, and a turn on it is
-  refused before this check is asked (`program/2`), since such a program
-  could run but its transcripts could not be forgotten one by one
-  (`Opus.Brain`).
-  """
-  @spec holds_read_only?({:driver, String.t() | nil}) :: boolean()
-  def holds_read_only?({:driver, driver}), do: driver not in @unheld_drivers
-
-  @doc """
-  The sentence a read-only member whose brain cannot be kept read-only
-  (`holds_read_only?/1`) is refused with: as a line in the thread its turn
-  never ran in, and beneath the read-only choice on the Aqua page.
-  """
-  @spec unheld_sentence(String.t(), String.t()) :: String.t()
-  def unheld_sentence(title, brain) when is_binary(title) and is_binary(brain),
-    do:
-      "#{title} can't run read-only: its brain, #{brain}, runs a program CYFR can't keep " <>
-        "read-only, so nothing ran. Switch #{title} to auto on the Aqua page to use it."
-
-  @doc """
-  Each of `members` (as the `aqua` tool lists them: `name`, `title` and
-  a `catalyst_ref` or a `program`) whose brain CYFR cannot keep read-only
-  (`holds_read_only?/1`), by name, with the sentence the Aqua page shows
-  beneath its closed read-only choice (`unheld_sentence/2`): the program
-  row of the name it names, read once each by that name, whose driver
-  cannot start its harness read-only. A row that cannot be read leaves
-  the member out; its turn checks the brain again before anything runs
-  (`Aqua.Loop.Turn`).
-  """
-  @spec read_only_unheld(Context.t(), [map()]) :: %{String.t() => String.t()}
-  def read_only_unheld(%Context{} = ctx, members) when is_list(members) do
-    rows =
-      for name <- members |> Enum.map(& &1[:program]) |> Enum.uniq(),
-          is_binary(name) and name != "",
-          {:ok, row} <- [program(ctx, name)],
-          into: %{},
-          do: {name, row}
-
-    for member <- members,
-        brain <- List.wrap(unheld_brain(member, rows)),
-        into: %{},
-        do: {member.name, unheld_sentence(member[:title] || member.name, brain)}
-  end
-
-  defp unheld_brain(%{program: program}, rows) when is_binary(program) do
-    with %{name: name, driver: driver} <- rows[program],
-         false <- holds_read_only?({:driver, driver}) do
-      name
-    else
-      _held -> nil
-    end
-  end
-
-  defp unheld_brain(_member, _rows), do: nil
 
   defp head_state(%{consent: %{head_state: state}}), do: state
   defp head_state(_plan), do: nil

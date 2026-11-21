@@ -52,7 +52,7 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
 
   test "a files.write to the soul's file is refused at the storage door, and one under data/ is made",
        %{ctx: ctx, thread: thread} do
-    # The shipped soul is offered files.write on auto: only the door stands
+    # The shipped soul is offered files.write: only the door stands
     # between the hand and the soul's file.
     before = soul_file!(ctx)
 
@@ -64,7 +64,7 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
         {"c1", "files.write",
          %{
            "path" => "aqua/aqua.md",
-           "content" => "---\nmode: auto\ntools:\n  - browser.turn_on\n---\n"
+           "content" => "---\ntools:\n  - browser.turn_on\n---\n"
          }}
       ]),
       calls([{"c2", "files.write", %{"path" => "data/control.md", "content" => "control"}}]),
