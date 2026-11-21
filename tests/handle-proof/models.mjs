@@ -466,6 +466,9 @@ function models(S) {
   M["setup:registry.request_nonces[a]"] = () => [nonce(id, win(S, "make")), nonce(id, win(S, "make"))];
   M["setup:handle_answer[proof]"] = () => handleAnswer(HANDLE, id);
 
+  // A person's preferences hold the zone their browser reported, kept as
+  // the desktop's socket joined on the page they landed at (`Aqua.Day`).
+  const ZONE_KEPT = "the zone the proof's browser reports, kept as the desktop's socket joined";
   const userRow = (window, admission, readKey, name) => ({
     id: anId("usr"),
     email: nil(),
@@ -474,7 +477,7 @@ function models(S) {
     display_name: nil(),
     namespace: exact(name, { shown: `\`"${name}"\`: the name the registry says the account holds, learned at the admission (\`Sanctum.Newcomer\`)` }),
     status: exact("active"),
-    prefs: exact("{}"),
+    prefs: derived(JSON.stringify({ time_zone: S.zone }), ZONE_KEPT),
     first_seen_at: within(win(S, window)),
     last_seen_at: within(until(S, window, readKey)),
     denied_at: noTime(),
@@ -731,7 +734,7 @@ function models(S) {
   // recorded in their preferences (`PrismWeb.LoginLive`, the registry's
   // terms); everything else of the row as read at setup.
   M["sync:a.users"] = () => [held(first("setup:a.users")[0] ?? {}, {
-    prefs: derived(JSON.stringify({ registry_terms_seen: S.policyVersion }), "the registry's GET /v1/legal/version, recorded once the sync's signature completed"),
+    prefs: derived(JSON.stringify({ registry_terms_seen: S.policyVersion, time_zone: S.zone }), `the registry's GET /v1/legal/version, recorded once the sync's signature completed, beside ${ZONE_KEPT}`),
     last_seen_at: sameOrWithin(first("setup:a.users")[0]?.last_seen_at, win(S, "sync"), "as read at setup"),
     updated_at: within(until(S, "sync", "sync:a.users")),
   }, "as read at setup", M["setup:a.users"]()[0])];
