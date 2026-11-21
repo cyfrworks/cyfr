@@ -657,6 +657,15 @@ defmodule Arca.TurnInputsStorageTest do
 
     backdate!(daily, @silence + 1)
     assert {:ok, %{expired?: true, due_ms: 0}} = TurnStorage.brain_silence(actor, daily.id)
+
+    # A turn of the thread opened since, accepted and not yet at work,
+    # holds the idle clock still; once it ends unattended the clock runs
+    # out again.
+    next = running!(actor, daily)
+    assert {:ok, %{expired?: false, due_ms: nil}} = TurnStorage.brain_silence(actor, daily.id)
+    {:ok, _} = finish(actor, next, "cancelled")
+    backdate!(daily, @silence + 1)
+    assert {:ok, %{expired?: true, due_ms: 0}} = TurnStorage.brain_silence(actor, daily.id)
   end
 
   # The clock as if its interval began `ms` earlier.

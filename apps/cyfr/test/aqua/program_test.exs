@@ -2987,6 +2987,67 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
+    test "a turn's end its loop did not live to release still closes the session it left " <>
+           "with no work once its silence runs out",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      # The loop is held while the program finishes and the turn's end is
+      # written for it, then dies before it releases the session.
+      :erlang.suspend_process(loop.pid)
+      on_exit(fn -> Process.exit(loop.pid, :kill) end)
+      silence!(1_000)
+      say(fake, row, idle(turn, [input.id]))
+      committed!(ctx, thread, 5)
+      assert {:ok, %{due_ms: nil}} = Tape.brain_silence(ctx, thread.id)
+      {:ok, running} = Tape.turn(ctx, turn.id)
+      assert {:ok, %{status: "completed"}} = Tape.finish(ctx, running, "completed")
+      Task.shutdown(loop, :brutal_kill)
+      assert {:ok, %{due_ms: due}} = Tape.brain_silence(ctx, thread.id)
+      assert is_integer(due)
+
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+      assert {:ok, %{session: @session}} = Tape.brain(ctx, thread.id)
+      assert owed(ctx) == []
+      refute_received {:control, "home", _message, _fields}
+    end
+
+    test "the silence a finished turn left never ends the next turn, which waits for the " <>
+           "driver to take its work",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+      silence!(1_000)
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      next = accept!(ctx, thread, row, "second")
+      loop = run(ctx, next)
+      assert %{"t" => "work"} = work = sent()
+
+      # No post reached the program yet; the session's idle second passes
+      # while the next turn waits for its work to be taken.
+      assert inputs(ctx, next) == []
+      refute_receive {:session, "close", _wire, _fields}, 1_500
+
+      assert TurnStorage.brain_silence(Sanctum.Context.actor(ctx), thread.id) ==
+               {:ok, %{expired?: false, due_ms: nil}}
+
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      handed!(fake, row, ctx, next, loop)
+    end
+
     test "a session its completed turn left with no work is closed once its silence runs " <>
            "out, its native session and its sign-in kept: the next turn resumes it",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
