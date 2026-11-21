@@ -104,6 +104,7 @@ defmodule PrismWeb.AquaLive do
       |> assign(:agents_read, nil)
       |> assign(:programs, nil)
       |> assign(:listings, %{})
+      |> assign(:listing, :idle)
       |> assign(:admin_next, admin_next?(socket.assigns[:context]))
 
     # Subscribe before the load asks whether the athanor is ready: a fill
@@ -176,15 +177,27 @@ defmodule PrismWeb.AquaLive do
   # The same prompt binds a model's key and re-consents a formula whose
   # closure moved, so what it says names what was consented. A refused
   # commit leaves the prompt open; anything else ended it.
-  # A program brain's listing, for the focus it was asked under: its
-  # models and efforts, or the sentence it was refused with, a program with
-  # no sign-in among them.
+  # The program brains' listings, for the focus they were asked under:
+  # each one's models and efforts, or the sentence it was refused with, a
+  # program with no sign-in among them; then the programs asked meanwhile.
+  # A listing that answers under another focus is dropped, and so are the
+  # programs asked meanwhile: the setup read under the new focus asks its
+  # own. A program's ask that raised or exited answered as one unread
+  # (`listing/2`), so the task always answers.
   @impl true
-  def handle_async({:program_listing, name}, {:ok, {tag, result}}, socket),
-    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, listed(&1, name, result)})
+  def handle_async(:program_listing, {:ok, {tag, results}}, socket) do
+    waiting = socket.assigns.listing
+    socket = assign(socket, :listing, :idle)
 
-  def handle_async({:program_listing, name}, {:exit, _reason}, socket),
-    do: {:noreply, listed(socket, name, {:error, :lost})}
+    CyfrWeb.ContextGuard.deliver(socket, tag, fn socket ->
+      socket =
+        Enum.reduce(results, socket, fn {name, result}, acc -> listed(acc, name, result) end)
+
+      {:noreply, ask_listings(socket, waiting)}
+    end)
+  end
+
+  def handle_async(:program_listing, {:exit, _reason}, socket), do: {:noreply, socket}
 
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_report(id, outcome, %{assigns: %{grant_prompt: {id, ref}}} = socket) do
@@ -456,27 +469,42 @@ defmodule PrismWeb.AquaLive do
 
   # Each program brain whose row stands is asked for its listing once per
   # read of the setup, and the program a crew member names the first time
-  # the roster says its row stands, off the page's process and ended with
-  # it: the one place the page learns whether a program is signed in,
-  # since a program with no sign-in has its listing refused. A program
-  # still being asked is not asked again, so one row never runs two
-  # listings at once; the answer it held stays shown until the new one
-  # comes.
+  # the roster says its row stands: the one place the page learns whether
+  # a program is signed in, since a program with no sign-in has its
+  # listing refused. One listing task runs at a time, off the page's
+  # process and ended with it, so one row never runs two listings at once;
+  # a program asked while it runs is asked by the next. The answer a
+  # program held stays shown until its new one comes.
   defp ask_listings(socket, names) do
-    ctx = socket.assigns.context
-    tag = CyfrWeb.ContextGuard.capture(ctx)
-    names = names |> Enum.uniq() |> Enum.reject(&(socket.assigns.listings[&1] == :asking))
-
     socket =
-      Enum.reduce(names, socket, fn name, socket ->
-        start_async(socket, {:program_listing, name}, fn ->
-          {tag, Aqua.program_listing(ctx, %{"program" => name})}
-        end)
+      update(socket, :listings, fn listings ->
+        Enum.reduce(names, listings, &Map.put_new(&2, &1, :asking))
       end)
 
-    update(socket, :listings, fn listings ->
-      Enum.reduce(names, listings, &Map.put_new(&2, &1, :asking))
-    end)
+    case socket.assigns.listing do
+      :idle -> start_listing(socket, Enum.uniq(names))
+      waiting -> assign(socket, :listing, Enum.uniq(waiting ++ names))
+    end
+  end
+
+  defp start_listing(socket, []), do: assign(socket, :listing, :idle)
+
+  defp start_listing(socket, names) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+
+    socket
+    |> assign(:listing, [])
+    |> start_async(:program_listing, fn -> {tag, Map.new(names, &{&1, listing(ctx, &1)})} end)
+  end
+
+  # One program's listing; one that raised or exited did not answer.
+  defp listing(ctx, name) do
+    Aqua.program_listing(ctx, %{"program" => name})
+  rescue
+    _raised -> {:error, :lost}
+  catch
+    :exit, _reason -> {:error, :lost}
   end
 
   defp listed(socket, name, result) do

@@ -1165,7 +1165,8 @@ defmodule PrismWeb.ProgramsLive do
         <form id="add-program" phx-submit="add_program" class="space-y-4">
           <p :if={@install} class="text-sm text-gray-300" data-test="install-from">
             Install <span class="font-mono">{@prefill["name"]}</span>
-            to run <span class="font-mono">{@install.for}</span> as a brain. This is the program as it will run; change anything first.
+            to run <span class="font-mono">{@install.for}</span>
+            as a brain. This is the program as it will run; change anything first.
             Installing it asks you to confirm the program, then opens its terminal in the
             program's own folder.
           </p>
