@@ -40,6 +40,8 @@ defmodule PrismWeb.AuthController do
   alias CyfrWeb.SignInResponse
   alias Sanctum.Session
 
+  @not_signed_out "The server could not sign you out just now, so you are still signed in. Try again."
+
   @doc """
   Begin the company sign-in for the browser's session (the module doc).
   """
@@ -101,16 +103,41 @@ defmodule PrismWeb.AuthController do
 
   POST, never GET, so signing someone out is not one `<img src>` away:
   the route's browser pipeline checks the forgery token first.
+
+  `cyfr-session-retired: 1` on the signed-out redirect states a
+  condition, not an event: the presented session is gone from the store
+  and its cached authorization is cleared on the member that answered.
+  Another member may go on honouring its cached authorization until the
+  invalidation reaches it or the cache entry expires, the bound
+  `Sanctum.Caller.invalidate_hash/1` documents. It is sent when the
+  store answers that it removed the session the cookie names or that
+  there was none to remove (`Sanctum.Session.destroy/1`), so a second
+  sign-out with the same cookie carries it too, and a caller holding that
+  cookie (the CYFR app at its lock) relies on it. A sign-out whose cookie names no session at all
+  redirects without it: it presents no session to state anything about.
+  When the store cannot answer, the answer is `503` with neither the
+  header nor the redirect, and the cookie session is kept: the session
+  may still stand and the same sign-out can be sent again.
   """
   def browser_logout(conn, _params) do
     case get_session(conn, SignInResponse.session_key()) do
-      token when is_binary(token) and token != "" -> Session.destroy(token)
-      _ -> :ok
-    end
+      token when is_binary(token) and token != "" ->
+        case Session.destroy(token) do
+          {:ok, _removed_or_absent} ->
+            conn
+            |> put_resp_header("cyfr-session-retired", "1")
+            |> signed_out()
 
-    conn
-    |> configure_session(drop: true)
-    |> redirect(to: "/login?error=signed_out")
+          {:error, _reason} ->
+            conn
+            |> CallIdentity.refused(503, @not_signed_out)
+            |> put_resp_content_type("text/plain")
+            |> send_resp(503, @not_signed_out)
+        end
+
+      _none ->
+        signed_out(conn)
+    end
   end
 
   # ============================================================================
@@ -123,6 +150,12 @@ defmodule PrismWeb.AuthController do
     conn
     |> CallIdentity.refused(status, PrismWeb.CompanyLoginLive.sentence(error))
     |> redirect(to: "/company-login?error=" <> error)
+  end
+
+  defp signed_out(conn) do
+    conn
+    |> configure_session(drop: true)
+    |> redirect(to: "/login?error=signed_out")
   end
 
   defp to_login(conn, status, message) do

@@ -1848,6 +1848,8 @@ defmodule Cyfr.Boundaries do
   @sanctum_exports %{
     "Sanctum" => [
       build_tincture_context: 2,
+      # The sign-in page names the directory (`PrismWeb.LoginLive`).
+      directory_url: 0,
       origin: 0,
       registry_base_url: 1,
       system_context: 0

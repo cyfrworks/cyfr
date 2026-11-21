@@ -582,6 +582,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-backends-image/harness.py", ~w(release roles)},
       {"tests/locus-runtime-image/stack.py", ~w(release roles)}
     ],
+    "login_directory.json" => [
+      {"apps/codex/internal/account/discover_test.go", ~w(path attribute pages)},
+      {"apps/cyfr/test/prism_web/live/login_directory_test.exs", ~w(path attribute rendered)}
+    ],
     "mcp_wire.json" => [
       {"apps/codex/internal/mcp/wire_vectors_test.go",
        ~w(protocol_version supported meta header_values named_subject error_codes consent_tags consent_errors)},
