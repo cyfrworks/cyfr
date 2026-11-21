@@ -1553,15 +1553,14 @@ async function stepCrashFallback(page, name, viewport) {
   const aquaBefore = await aquaState(page);
   const line = await fallbackNotice(page, 40_000);
   // The line stands in the shelf's strip, level with the Devices chip after
-  // which it stands, over none of the shelf's own controls nor the Devices
-  // chip, and under nothing. The buttons at the shelf's right end
-  // (#shelf-end) are left out: its width varies with the chat's and Aqua's
-  // counts, and the line's room beside it is not settled.
+  // which it stands, over none of the shelf's own controls, the Devices
+  // chip nor the buttons at the shelf's right end (#shelf-end), and under
+  // nothing.
   const strip = await boxesOn(page, {
     notice: "#system-layer-desktop-notice", shelf: "#canvas-shelf", devices: "#shell-devices",
   }, ["notice"]);
   const s = (strip && strip.boxes) || {};
-  const controls = await page.$$eval("#canvas-shelf button, #shell-devices", (els) =>
+  const controls = await page.$$eval("#canvas-shelf button, #shell-devices, #shelf-end .shelf-end-button", (els) =>
     els.filter((e) => e.getClientRects().length > 0).map((e) => {
       const r = e.getBoundingClientRect();
       return { control: e.id || e.getAttribute("aria-label") || e.getAttribute("data-canvas") || e.tagName, x: r.x, y: r.y, width: r.width, height: r.height };
