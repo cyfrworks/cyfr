@@ -129,6 +129,10 @@ defmodule Locus.Backends.Backend do
   def recv(server, after_seq, max_wait_ms),
     do: GenServer.call(server, {:recv, after_seq, max_wait_ms}, max_wait_ms + @call_margin_ms)
 
+  @doc "The bound past the stop grace after which a release the launcher never reports ends a stop's wait."
+  @spec release_timeout_ms() :: pos_integer()
+  def release_timeout_ms, do: @release_timeout_ms
+
   @doc "End the session's process: answered at once, the process going within its grace."
   @spec close(GenServer.server()) :: :ok
   def close(server), do: GenServer.call(server, {:end, :closed, nil}, @call_margin_ms)

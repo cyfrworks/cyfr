@@ -40,7 +40,10 @@ defmodule Opus.Brain.Cleanup do
 
   Anything else leaves the record owed, tried again at the next drain:
   the driver's `refused` (a folder it could not inspect, or the session
-  running there), a box that is away or does not answer, a lost answer, a
+  running there), a box that is away or does not answer, an open the box
+  refused because the session it would attach to is being closed, one the
+  backends service refused because the process that ran the session had
+  not gone within its bound, a lost answer, a
   row disabled, a row whose command names no driver (one that still runs
   the bare harness, which nothing answers the wire in, so nothing is
   opened until the row names a driver again), and a holder running under
