@@ -2164,7 +2164,8 @@ defmodule Cyfr.StackShapeTest do
 
     assert code =~ "[ ! -f /app/seed/aqua/#{soul} ]"
     assert File.regular?(Path.join(@root, "seed/aqua/#{soul}"))
-    assert File.dir?(Path.join(@root, "seed/aqua/#{crew}"))
+    # The template ships the soul and its scrolls, and no crew member.
+    refute File.exists?(Path.join(@root, "seed/aqua/#{crew}"))
 
     # Prima.WIT embeds the WIT tree at compile time, so the builder stage
     # carries it.

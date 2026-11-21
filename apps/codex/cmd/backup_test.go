@@ -296,8 +296,8 @@ func TestAHoldsReceiptNamesTheCommandThatStoppedCYFR(t *testing.T) {
 
 // A managed scaffold file that is there as a link refuses the backup
 // before anything stops, in the words cyfr update's scaffold check uses,
-// and so does a directory managed files lie under (wit/, the crew
-// directory, a shipped scroll's) that is a link or a file, its link not
+// and so does a directory managed files lie under (wit/, a shipped
+// scroll's) that is a link or a file, its link not
 // followed: a backup holds every managed file present or is not made.
 func TestBackupRefusesALinkWhereAManagedFileIs(t *testing.T) {
 	for _, c := range []struct {
@@ -312,22 +312,10 @@ func TestBackupRefusesALinkWhereAManagedFileIs(t *testing.T) {
 			func(s *updateScenario) { s.relink("wit") }},
 		{"a directory inside wit/", "wit/cyfr, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed",
 			func(s *updateScenario) { s.relink("wit/cyfr") }},
-		{"the crew directory", "aqua/crew, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
-			func(s *updateScenario) {
-				s.edit("aqua/crew/explorer.md", "# the shipped explorer\n")
-				s.relink("aqua/crew")
-			}},
 		{"a shipped scroll's directory", "aqua/skills/builder, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
 			func(s *updateScenario) {
 				s.edit("aqua/skills/builder/SKILL.md", "# the shipped builder\n")
 				s.relink("aqua/skills/builder")
-			}},
-		{"the crew directory as a file", "aqua/crew, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
-			func(s *updateScenario) {
-				if err := os.RemoveAll(filepath.Join(s.project, "aqua", "crew")); err != nil {
-					s.t.Fatal(err)
-				}
-				s.edit("aqua/crew", "a file where the crew directory goes")
 			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

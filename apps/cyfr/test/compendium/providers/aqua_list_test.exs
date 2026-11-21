@@ -40,8 +40,8 @@ defmodule Compendium.Providers.AquaListTest.UnreadableSoul do
   end
 end
 
-# A store that cannot give one shipped crew member's file
-# (seed/aqua/crew/explorer.md).
+# A store that cannot give one crew member's file, the explorer the test
+# makes.
 defmodule Compendium.Providers.AquaListTest.UnreadableRole do
   @moduledoc false
   use Arca.Storage.TestDouble
@@ -120,9 +120,20 @@ defmodule Compendium.Providers.AquaListTest do
 
   defp names(%{guides: guides}), do: Enum.map(guides, & &1.name)
 
+  # A crew member the athanor made: the seed ships none.
+  defp explorer!(ctx) do
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        Compendium.AquaPath.crew_file("explorer"),
+        "---\ntitle: Explorer\ncatalyst_ref: catalyst:local.gemini\nmodel: gemini-pro-latest\n---\n"
+      )
+  end
+
   @guides ["component-guide", "tincture-guide", "integration-guide"]
 
   test "the list answers the soul, the crew and the guides", %{ctx: ctx} do
+    explorer!(ctx)
     assert {:ok, listed} = list(ctx)
     assert ["aqua" | _] = names(listed)
     assert "explorer" in names(listed)
@@ -149,7 +160,8 @@ defmodule Compendium.Providers.AquaListTest do
 
   @tag :capture_log
   test "a role that cannot be read stays out, and the list answers the rest", %{ctx: ctx} do
-    # The role is one the fill ships, listed while its file reads.
+    # The role is listed while its file reads.
+    explorer!(ctx)
     assert {:ok, listed} = list(ctx)
     assert "explorer" in names(listed)
     readable = names(listed) -- ["explorer"]

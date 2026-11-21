@@ -1177,17 +1177,29 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert again.config_json == row.config_json
   end
 
-  # Each shipped harness member names its own row and suggests its own
-  # command, the driver first: the install the card offers prefills the
-  # form from that member's file alone, one path for both programs.
-  test "each shipped harness member's install prefills the form from its own file",
-       %{conn: conn, athanor: athanor} do
+  # Each harness member names its own row and suggests its own command,
+  # the driver first: the install the card offers prefills the form from
+  # that member's file alone, one path for both programs.
+  test "each harness member's install prefills the form from its own file",
+       %{conn: conn, athanor: athanor, user: user} do
+    person = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
     for {member, title, program, install} <- [
           {"claude-code", "Claude Code", "claude",
            "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"},
           {"openai-codex", "OpenAI Codex", "openai-codex",
            "cyfr-codex npx -y @openai/codex@0.169.0"}
         ] do
+      # A member the person made: the seed ships none.
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(person, %{
+          "action" => "create",
+          "name" => member,
+          "title" => title,
+          "program" => program,
+          "install" => install
+        })
+
       query = URI.encode_query(%{"install_for" => member, "from" => "aqua"})
       {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
       render(view)

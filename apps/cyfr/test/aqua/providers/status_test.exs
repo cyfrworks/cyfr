@@ -8,7 +8,8 @@ defmodule Aqua.Providers.StatusTest do
   the declared shape), each field from its one source: the reserve's
   latch and the gate's own `system.status` for the health, the athanor's
   bytes and cap, the soul's and the crew's brains on an athanor filled
-  from the shipped seed, the build's version and the release channel.
+  from a seed of the test's own, the build's version and the release
+  channel.
   """
 
   # The storage reserve's latch is the node's, a platform setting is
@@ -35,9 +36,17 @@ defmodule Aqua.Providers.StatusTest do
     tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
     on_exit(fn -> File.rm_rf!(tree) end)
 
-    # The shipped crew and the brains it and the soul run on, in a seed
-    # of this test's own; the suite's own carries none.
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+    # The brains the soul and the crew run on, in a seed of this test's
+    # own; the suite's own carries none. The seed ships no crew, so this
+    # one lays a member of its own on Gemini.
+    seed = Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+
+    :ok =
+      Cyfr.Test.SeedBundle.member!(seed, "explorer",
+        catalyst_ref: "catalyst:local.gemini",
+        model: "gemini-pro-latest"
+      )
+
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
@@ -115,11 +124,11 @@ defmodule Aqua.Providers.StatusTest do
                "storage_used" => bytes,
                "storage_cap" => nil,
                # The brain of the crew member Aqua runs on has no key
-               # bound, nor has any other crew member's: the shipped three,
-               # and that member, a worker too (`Cyfr.Test.SeedBundle.seat!/2`).
+               # bound, nor has the other crew member's: the explorer, and
+               # that member, a worker too (`Cyfr.Test.SeedBundle.seat!/2`).
                "model_connected" => false,
                "crew_ready" => 0,
-               "crew_total" => 4,
+               "crew_total" => 2,
                "version" => Prima.Version.current(),
                # The suite's release channel never reads.
                "update_available" => nil
@@ -146,13 +155,13 @@ defmodule Aqua.Providers.StatusTest do
 
       # Aqua's brain is the brain of the crew member it runs on, which is
       # a ready worker too.
-      assert [%{"model_connected" => true, "crew_ready" => 1, "crew_total" => 4}] =
+      assert [%{"model_connected" => true, "crew_ready" => 1, "crew_total" => 2}] =
                refreshed(ctx)
 
       # The explorer's brain.
       ConsentFixtures.bind_key!(ctx, "catalyst:local.gemini", %{"GEMINI_API_KEY" => "g-test"})
 
-      assert [%{"model_connected" => true, "crew_ready" => 2, "crew_total" => 4}] =
+      assert [%{"model_connected" => true, "crew_ready" => 2, "crew_total" => 2}] =
                refreshed(ctx)
 
       # The same counts the crew index names.

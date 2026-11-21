@@ -33,7 +33,15 @@ defmodule Compendium.AgentSourceTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
 
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+    seed = Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+
+    # A crew member of the seed's own, on another brain than the soul's.
+    :ok =
+      Cyfr.Test.SeedBundle.member!(seed, "explorer",
+        catalyst_ref: "catalyst:local.gemini",
+        model: "gemini-pro-latest"
+      )
+
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
@@ -58,12 +66,10 @@ defmodule Compendium.AgentSourceTest do
     {:ok, rows} = AgentSource.rows(ctx)
     names = Enum.map(rows, & &1.name)
     assert hd(names) == "aqua"
-    # The shipped crew, and the member the test seed's Aqua runs on
+    # The seed's own member, and the member its Aqua runs on
     # (`Cyfr.Test.SeedBundle.seat!/2`).
     assert Enum.sort(names) ==
-             Enum.sort(
-               ~w(aqua claude-code explorer openai-codex) ++ [Cyfr.Test.SeedBundle.seat_member()]
-             )
+             Enum.sort(~w(aqua explorer) ++ [Cyfr.Test.SeedBundle.seat_member()])
 
     soul = Enum.find(rows, &(&1.name == "aqua"))
     assert soul.component_type == "agent" and soul.publisher == "local"

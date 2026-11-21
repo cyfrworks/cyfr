@@ -41,6 +41,34 @@ defmodule PrismWeb.AquaLiveTest do
   defp get_agent(ctx, name),
     do: Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => name})
 
+  # The crew members these tests make, as the person makes one on the Aqua
+  # page: the seed ships none.
+  @members %{
+    "claude-code" => %{
+      "title" => "Claude Code",
+      "program" => "claude",
+      "install" => "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
+      "model" => "opus"
+    },
+    "openai-codex" => %{
+      "title" => "OpenAI Codex",
+      "program" => "openai-codex",
+      "install" => "cyfr-codex npx -y @openai/codex@0.169.0",
+      "model" => "gpt-6.1-sol"
+    },
+    "explorer" => %{
+      "title" => "Explorer",
+      "catalyst_ref" => "catalyst:local.gemini",
+      "model" => "gemini-pro-latest"
+    }
+  }
+
+  defp member!(ctx, name) do
+    args = Map.merge(%{"action" => "create", "name" => name}, Map.fetch!(@members, name))
+    {:ok, %{"created" => ^name}} = Cyfr.Test.AquaTool.call(ctx, args)
+    :ok
+  end
+
   # The storage adapter for the rest of the test.
   defp storage!(adapter) do
     original = Application.get_env(:arca, :storage_adapter)
@@ -267,6 +295,8 @@ defmodule PrismWeb.AquaLiveTest do
         Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => nil})
       end)
 
+      :ok = member!(ctx, "claude-code")
+
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "update",
@@ -308,6 +338,8 @@ defmodule PrismWeb.AquaLiveTest do
         |> String.trim()
       end
 
+      :ok = member!(ctx, "explorer")
+      :ok = member!(ctx, "openai-codex")
       {view, _html} = mount_athanor(conn, "/aqua")
       assert has_element?(view, ~s(#aqua-card-aqua-member option[value=""][selected]))
       assert said.(view) == Prima.Refusal.message({:aqua_runs_on, :none, nil})
@@ -315,14 +347,6 @@ defmodule PrismWeb.AquaLiveTest do
 
       on_exit(fn ->
         Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => nil})
-
-        Cyfr.Test.AquaTool.call(ctx, %{
-          "action" => "update",
-          "name" => "explorer",
-          "disabled" => false
-        })
-
-        Cyfr.Test.AquaTool.call(ctx, %{"action" => "reset", "name" => "openai-codex"})
       end)
 
       for {edit, reason} <- [
@@ -382,6 +406,8 @@ defmodule PrismWeb.AquaLiveTest do
     # terminal with the way back here.
     test "Set up on the card starts the program and shows its terminal, which comes back here",
          %{conn: conn, ctx: ctx} do
+      :ok = member!(ctx, "claude-code")
+
       row =
         program_row!(ctx, "claude", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323")
 
@@ -410,6 +436,7 @@ defmodule PrismWeb.AquaLiveTest do
     # from here; once that terminal has ended, Set up opens one of its own.
     test "Set up shows the program's running terminal, and opens one only when none runs",
          %{conn: conn, ctx: ctx} do
+      :ok = member!(ctx, "claude-code")
       fake = backends!()
 
       row =
@@ -607,16 +634,18 @@ defmodule PrismWeb.AquaLiveTest do
       end
     end
 
-    test "the soul offers no Delete; a shipped crew member is disabled and enabled from its card",
+    test "the shipped soul offers no Delete; a crew member is disabled and enabled from its card",
          %{conn: conn, ctx: ctx} do
+      :ok = member!(ctx, "explorer")
       {view, _html} = mount_athanor(conn, "/aqua")
 
+      assert has_element?(view, "#aqua-card-aqua", "shipped")
       refute has_element?(view, "#aqua-card-aqua button[phx-click=editor_delete]")
       refute has_element?(view, "#aqua-card-aqua button[phx-click=editor_set_disabled]")
 
-      # Shipped and unedited: no Delete, a Disable.
-      assert has_element?(view, "#aqua-card-explorer", "shipped")
-      refute has_element?(view, "#aqua-card-explorer button[phx-click=editor_delete]")
+      # The athanor's own: a Delete and a Disable.
+      assert has_element?(view, "#aqua-card-explorer", "yours")
+      assert has_element?(view, "#aqua-card-explorer button[phx-click=editor_delete]")
 
       view
       |> element("#aqua-card-explorer button[phx-click=editor_set_disabled]", "Disable")
@@ -625,21 +654,14 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, %{"disabled" => true}} = get_agent(ctx, "explorer")
 
       # Still on the page — `list` drops it, the page does not — as
-      # disabled, edited, and with the way back. The write answers before
-      # the section re-reads, so the card is awaited.
+      # disabled, with the way back. The write answers before the section
+      # re-reads, so the card is awaited.
       settled(
         fn -> has_element?(view, "#aqua-card-explorer", "disabled") end,
         "the disabled card"
       )
 
       assert has_element?(view, "#aqua-card-explorer", "disabled")
-      assert has_element?(view, "#aqua-card-explorer", "edited")
-
-      assert has_element?(
-               view,
-               "#aqua-card-explorer button[phx-click=editor_revert]",
-               "Revert to shipped"
-             )
 
       view
       |> element("#aqua-card-explorer button[phx-click=editor_set_disabled]", "Enable")
@@ -1572,15 +1594,16 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # The shipped brains are API catalysts, so each program the shipped
-    # crew names is one row on the setup, its plan, and no catalyst's row
-    # reads the same name beside it.
+    # The shipped brains are API catalysts, so each program the crew
+    # names is one row on the setup, its plan, and no catalyst's row reads
+    # the same name beside it.
     test "with the shipped brains installed, the setup offers each as a brain and each program " <>
            "the crew names once, as its plan",
          %{conn: conn, ctx: ctx} do
       shipped = Enum.map(Cyfr.Test.SeedBundle.model_chat_units(), & &1.name)
       Cyfr.Test.SeedBundle.lay!(shipped)
       :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+      for name <- ~w(claude-code openai-codex), do: :ok = member!(ctx, name)
       {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
       {:ok, _} = Compendium.AgentIndex.sync(ctx)
       {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
@@ -1622,6 +1645,7 @@ defmodule PrismWeb.AquaLiveTest do
       test "the setup offers #{member}'s program as a plan, installs it, signs it in and " <>
              "makes it a crew member's brain; a key's model takes it back",
            %{conn: conn, ctx: ctx, plan: {member, title, program, install, model}} do
+        :ok = member!(ctx, member)
         fake = backends!()
         publish_brain!(ctx, "open", %{})
         grant!(ctx, "catalyst:local.open", %{bindings: []})
@@ -1754,6 +1778,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       {:ok, named} = get_agent(ctx, "aaa")
       assert named["install"] == nil
+      :ok = member!(ctx, "claude-code")
       {:ok, later} = get_agent(ctx, "claude-code")
       assert is_binary(later["install"])
       row = program_row!(ctx, "claude", later["install"])
@@ -1860,6 +1885,8 @@ defmodule PrismWeb.AquaLiveTest do
 
       on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor.id) end)
 
+      # A member on a key's model, whose card's picker reads the catalogue.
+      :ok = member!(ctx, "explorer")
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "kept-model-1"
 
@@ -1945,6 +1972,8 @@ defmodule PrismWeb.AquaLiveTest do
     # holds one stands on the page as the sentence that says what to do.
     test "a crew member whose file still holds a prompt is shown as what to change, in place of its card",
          %{conn: conn, ctx: ctx} do
+      :ok = member!(ctx, "claude-code")
+
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
@@ -1972,6 +2001,7 @@ defmodule PrismWeb.AquaLiveTest do
     # its own on the same list.
     test "a checkbox offers the soul a tool and takes it off again; a crew member holds none",
          %{conn: conn, ctx: ctx} do
+      :ok = member!(ctx, "explorer")
       {view, _html} = mount_athanor(conn, "/aqua")
       {:ok, before} = get_agent(ctx, "aqua")
       refute "storage.write" in before["tools"]
@@ -2023,6 +2053,7 @@ defmodule PrismWeb.AquaLiveTest do
     # member it runs on, and its card has no switch of its own.
     test "each member's switch shows its mode, and a choice writes it to the member's file",
          %{conn: conn, ctx: ctx} do
+      :ok = member!(ctx, "explorer")
       actor = Sanctum.Context.actor(ctx)
       {view, _html} = mount_athanor(conn, "/aqua")
       refute has_element?(view, "#aqua-card-aqua-mode")
@@ -2077,7 +2108,7 @@ defmodule PrismWeb.AquaLiveTest do
 
     # A brain CYFR cannot keep read-only closes the read-only choice and
     # says why beneath it: a program row whose driver cannot start its
-    # harness read-only, the shipped OpenAI Codex member's own row among
+    # harness read-only, an OpenAI Codex member's own row among
     # them. A file set to read-only by hand on such a brain shows it
     # chosen, with the same sentence, since its turns are refused. A brain
     # on a key, or a row CYFR keeps read-only, leaves the choice open.
@@ -2096,6 +2127,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       codex = program_row!(ctx, "openai-codex", "cyfr-codex npx -y @openai/codex@0.169.0")
       claude = program_row!(ctx, "claude", "cyfr-claude-code")
+      :ok = member!(ctx, "openai-codex")
 
       members = [
         {"by-hand", "By Hand", %{"program" => codex.name}},
@@ -2210,6 +2242,7 @@ defmodule PrismWeb.AquaLiveTest do
       # No brain here is ready, so the page reads no options of its own;
       # the explorer's are given as a ready brain's `describe` declares
       # them, again after each write's re-read of the section.
+      :ok = member!(ctx, "explorer")
       {view, _html} = mount_athanor(conn, "/aqua")
       assert has_element?(view, "#aqua-card-explorer")
       refute has_element?(view, "[id$=-options]")
@@ -2260,6 +2293,7 @@ defmodule PrismWeb.AquaLiveTest do
       ]
 
       edits = [{"effort", "high"}, {"budget", "8"}]
+      :ok = member!(ctx, "explorer")
 
       views =
         for _edit <- edits do
@@ -2285,10 +2319,12 @@ defmodule PrismWeb.AquaLiveTest do
     end
 
     test "the capability matrix is the soul's alone, its destructive rows among it",
-         %{conn: conn} do
+         %{conn: conn, ctx: ctx} do
+      :ok = member!(ctx, "explorer")
       {view, _html} = mount_athanor(conn, "/aqua")
 
       assert has_element?(view, ~s(#aqua-card-aqua input[phx-value-key="files.delete"]))
+      assert has_element?(view, "#aqua-card-explorer")
       refute has_element?(view, ~s(#aqua-card-explorer input[phx-value-key="files.delete"]))
     end
 

@@ -44,8 +44,23 @@ defmodule Aqua.SeatTest do
     on_exit(fn -> File.rm_rf!(tree) end)
 
     # The seed's Aqua runs on its own crew member on the Claude catalyst
-    # (`Cyfr.Test.SeedBundle.seat!/2`), beside the shipped crew.
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+    # (`Cyfr.Test.SeedBundle.seat!/2`), beside two more members of the
+    # seed's own to choose: one on Gemini and one on a program.
+    seed = Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+
+    :ok =
+      Cyfr.Test.SeedBundle.member!(seed, "explorer",
+        catalyst_ref: @gemini,
+        model: "gemini-pro-latest"
+      )
+
+    :ok =
+      Cyfr.Test.SeedBundle.member!(seed, "claude-code",
+        title: "Claude Code",
+        program: "claude",
+        model: "opus"
+      )
+
     Cyfr.Test.Sandbox.stop_work_on_exit()
     {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(athanor, ctx)
 

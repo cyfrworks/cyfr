@@ -36,7 +36,14 @@ defmodule Opus.AgentAuthorityTest do
       end
     end)
 
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+    seed = Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+
+    # A crew member of the seed's own, on a brain the soul does not run on.
+    :ok =
+      Cyfr.Test.SeedBundle.member!(seed, "explorer",
+        catalyst_ref: "catalyst:local.gemini",
+        model: "gemini-pro-latest"
+      )
 
     ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)

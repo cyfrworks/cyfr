@@ -2106,7 +2106,8 @@ defmodule Cyfr.DocsDriftTest do
     # Who reaches the tool: the CLI, the API and a glass paired with the
     # person from outside, and the assistant from a run. No tincture
     # declares it, a manifest of any type but an agent's may not name it,
-    # and the shipped soul is offered it and runs in its member's mode, auto.
+    # and the shipped soul is offered it and runs in its member's mode,
+    # auto unless the person set that member read-only.
     %Prima.Operation{planes: planes} = Map.fetch!(operations("layout"), "edit")
 
     assert :external in planes and :in_chain in planes,
@@ -2197,24 +2198,31 @@ defmodule Cyfr.DocsDriftTest do
         SourceTree.read(Path.join(@repo_root, "seed/aqua/aqua.md"))
       )
 
-    # Aqua runs in the mode of the crew member it runs on: each shipped one's.
-    modes =
-      for path <- Path.wildcard(Path.join(@repo_root, "seed/aqua/crew/*.md")) do
-        {:ok, member} =
-          Compendium.AquaAgent.parse(Path.basename(path, ".md"), SourceTree.read(path))
+    assert "layout.edit" in soul.tools,
+           "the shipped soul is offered #{inspect(soul.tools)}; tincture-guide.md's layout " <>
+             "paragraph says it is offered layout.edit"
 
-        member.mode
-      end
+    # Aqua runs in the mode of the crew member it runs on. The seed ships
+    # none, and a member's file that names no mode runs auto, as the one
+    # the person makes does until they set it read-only.
+    refute File.exists?(Path.join(@repo_root, "seed/aqua/crew")),
+           "the seed ships a crew; tincture-guide.md's layout paragraph says none ships"
 
-    assert "layout.edit" in soul.tools and modes != [] and Enum.all?(modes, &(&1 == "auto")),
-           "the shipped soul is offered #{inspect(soul.tools)}, its crew in #{inspect(modes)}; " <>
-             "tincture-guide.md's layout paragraph says it is offered layout.edit and runs " <>
-             "in auto in each shipped member"
+    {:ok, made} =
+      Compendium.AquaAgent.parse(
+        "made",
+        "---\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n---\n"
+      )
+
+    assert made.mode == "auto" and "read-only" in Compendium.AquaAgent.modes(),
+           "a member the person makes runs #{inspect(made.mode)}; tincture-guide.md's layout " <>
+             "paragraph says it runs auto unless they set it read-only"
 
     for writer <- [
           "The CLI, the API and a device paired with the person call it for the person",
           "the assistant: the shipped Aqua is offered it and runs in the mode of the crew " <>
-            "member it runs on, auto in each shipped one",
+            "member it runs on: none ships, and one the person makes runs auto unless they " <>
+            "set it read-only",
           "No tincture declares `layout.edit`"
         ] do
       assert paragraph =~ writer,

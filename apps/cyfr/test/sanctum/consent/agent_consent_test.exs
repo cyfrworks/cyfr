@@ -4,8 +4,9 @@
 defmodule Sanctum.Consent.AgentConsentTest do
   @moduledoc """
   The athanor's agents consent as sources, each its own: the fill mints
-  the shipped soul and the crew whose brain is installed, each agent's
-  edge into its model selecting the model's default profile, a crew
+  the shipped soul and the crew its seed ships whose brain is installed
+  (here a crew this test lays in its own seed; CYFR's ships none), each
+  agent's edge into its model selecting the model's default profile, a crew
   member's tools the soul's it runs under, and no edge from one agent into
   another; the shape reads the model target and never the prompt; a crew
   member a person makes is not machine-minted — it consents through the
@@ -40,7 +41,17 @@ defmodule Sanctum.Consent.AgentConsentTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
 
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+    seed = Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+
+    # The seed's own crew: one member on a catalyst the soul does not run
+    # on, and two on programs.
+    for {name, brain} <- [
+          {"explorer", [catalyst_ref: "catalyst:local.gemini", model: "gemini-pro-latest"]},
+          {"claude-code", [program: "claude", model: "opus"]},
+          {"openai-codex", [program: "openai-codex", model: "gpt-6.1-sol"]}
+        ],
+        do: :ok = Cyfr.Test.SeedBundle.member!(seed, name, brain)
+
     ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
@@ -107,9 +118,8 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
   end
 
-  test "the fill mints the shipped soul and crew after their models, with their edges", %{
-    ctx: ctx
-  } do
+  test "the fill mints the shipped soul and the seed's crew after their models, with their edges",
+       %{ctx: ctx} do
     {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
     assert @soul in minted
     assert "agent:local.explorer" in minted
@@ -391,7 +401,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     refute Enum.any?(ingress.tools, &String.starts_with?(&1, "explorer."))
   end
 
-  test "an edited shipped crew member is not re-minted, nor is one whose soul's tools moved",
+  test "an edited crew member the seed ships is not re-minted, nor is one whose soul's tools moved",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, first, _} = head!(ctx, "agent:local.explorer")
@@ -403,7 +413,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {_, still, _} = head!(ctx, "agent:local.explorer")
     assert still.revision == first.revision
 
-    # Back to the shipped model, a tool the soul gains moves the member's
+    # Back to the seed's model, a tool the soul gains moves the member's
     # shape with the soul's: neither is re-minted.
     write_agent!(ctx, "explorer", &%{&1 | model: "gemini-pro-latest"})
     gained = ungranted_action(ctx)

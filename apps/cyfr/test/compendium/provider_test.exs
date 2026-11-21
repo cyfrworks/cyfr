@@ -11,13 +11,13 @@ defmodule Compendium.ProviderTest do
 
   @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
 
-  # The athanor's own Aqua definitions live under its tenant storage —
-  # agent files that shadow the throwaway seed's per-file, so these
-  # tests read exactly this fixture whatever the shipped template says.
-  # Only the soul has a prompt; a crew member's file is its frontmatter.
-  # Written through the facade so each shadowing write records its origin
-  # — the fixture IS an edit of the shipped template, not the athanor's
-  # own work.
+  # The athanor's own Aqua definitions live under its tenant storage: the
+  # soul's file shadows the throwaway seed's, so these tests read exactly
+  # this fixture whatever the shipped template says, and two crew members
+  # the athanor made, since the seed ships none. Only the soul has a
+  # prompt; a crew member's file is its frontmatter. Written through the
+  # facade so each write records its origin — the soul's is an edit of the
+  # shipped template, the members the athanor's own work.
   defp setup_aqua_dir do
     write = fn name, attrs, prompt ->
       agent =
@@ -86,7 +86,7 @@ defmodule Compendium.ProviderTest do
     Application.put_env(:arca, :base_path, test_dir)
 
     # The athanor holds the shipped tree, as a fill leaves it; the fixture
-    # then edits every shipped agent.
+    # then edits the shipped soul and makes two crew members.
     :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     setup_aqua_dir()
 
@@ -1605,9 +1605,9 @@ defmodule Compendium.ProviderTest do
     test "list returns available guides", %{ctx: ctx} do
       {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "list"})
 
-      # the soul + 3 crew members + 3 doc guides = 7
-      assert result.count == 7
-      assert length(result.guides) == 7
+      # the soul + the fixture's 2 crew members + 3 doc guides = 6
+      assert result.count == 6
+      assert length(result.guides) == 6
 
       names = Enum.map(result.guides, & &1.name)
       assert "component-guide" in names
@@ -1616,7 +1616,6 @@ defmodule Compendium.ProviderTest do
       assert "aqua" in names
       assert "explorer" in names
       assert "claude-code" in names
-      assert "openai-codex" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do
@@ -1633,7 +1632,8 @@ defmodule Compendium.ProviderTest do
       {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "list"})
       crew = Enum.filter(result.guides, &(&1.type == "crew"))
 
-      assert length(crew) == 3
+      # The fixture's two members.
+      assert length(crew) == 2
       refute Enum.any?(crew, &Map.has_key?(&1, :parent))
     end
 
@@ -2190,8 +2190,8 @@ defmodule Compendium.ProviderTest do
 
   describe "aqua tool - status, skills, delete semantics" do
     test "status speaks the one provenance vocabulary", %{ctx: ctx} do
-      # The fixture materialized every shipped agent (they shadow the seed);
-      # the shipped scroll is read in place.
+      # The fixture edited the shipped soul (it shadows the seed's); the
+      # shipped scroll is read in place.
       {:ok, %{files: files}} = Provider.handle("aqua", ctx, %{"action" => "status"})
 
       assert %{state: "bundled_modified"} =
@@ -2222,7 +2222,7 @@ defmodule Compendium.ProviderTest do
 
       assert "aqua/crew/keeper.md" in kept
       assert "aqua/skills/pdf" in kept
-      assert "aqua/crew/explorer.md" in reverted
+      assert "aqua/aqua.md" in reverted
       assert Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "crew", "keeper.md"])
 
       {:ok, %{reset: true, kept: []}} =
@@ -2441,37 +2441,51 @@ defmodule Compendium.ProviderTest do
                Provider.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "pdf"})
     end
 
-    test "a shipped crew member refuses delete, edited or not, and points at disable", %{ctx: ctx} do
-      # The fixture edited the athanor's copy of explorer: still shipped,
-      # still not deletable — disable is the verb, and reset the way back.
-      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "delete", "name" => "explorer"})
+    test "a crew member the seed ships refuses delete, edited or not, and points at disable",
+         %{ctx: ctx} do
+      # CYFR's seed ships no crew member; one a seed ships is copied in as
+      # the fill copies the rest, here from a seed of the test's own.
+      seed = Cyfr.Test.SeedBundle.isolate_from!(Application.fetch_env!(:arca, :seed_path))
+      :ok = Cyfr.Test.SeedBundle.member!(seed, "courier")
+      :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
+
+      # Edited, it is still shipped and still not deletable — disable is
+      # the verb, and reset the way back.
+      {:ok, %{updated: "courier"}} =
+        Provider.handle("aqua", ctx, %{
+          "action" => "update",
+          "name" => "courier",
+          "title" => "Mine"
+        })
+
+      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "delete", "name" => "courier"})
       assert err_msg(msg) =~ "cannot be deleted"
       assert err_msg(msg) =~ "disabled=true"
 
-      {:ok, %{restored: "explorer"}} =
-        Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "explorer"})
+      {:ok, %{restored: "courier"}} =
+        Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "courier"})
 
       {:ok, %{files: files}} = Provider.handle("aqua", ctx, %{"action" => "status"})
-      assert %{state: "bundled"} = Enum.find(files, &(&1.path == "aqua/crew/explorer.md"))
+      assert %{state: "bundled"} = Enum.find(files, &(&1.path == "aqua/crew/courier.md"))
 
-      {:ok, %{restored: "explorer"}} =
-        Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "explorer"})
+      {:ok, %{restored: "courier"}} =
+        Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "courier"})
 
-      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "delete", "name" => "explorer"})
+      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "delete", "name" => "courier"})
       assert err_msg(msg) =~ "cannot be deleted"
 
       {:ok, _} =
         Provider.handle("aqua", ctx, %{
           "action" => "update",
-          "name" => "explorer",
+          "name" => "courier",
           "disabled" => true
         })
 
       {:ok, listing} = Provider.handle("aqua", ctx, %{"action" => "list"})
-      refute Enum.any?(listing.guides, &(&1.name == "explorer"))
+      refute Enum.any?(listing.guides, &(&1.name == "courier"))
 
       # get still answers (so it can be re-enabled), flagged.
-      {:ok, got} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
+      {:ok, got} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "courier"})
       assert got.disabled == true
     end
 
@@ -2481,7 +2495,7 @@ defmodule Compendium.ProviderTest do
       Arca.ControlPlane.record(:lost)
 
       assert {:error, :not_owner} =
-               Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "explorer"})
+               Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "aqua"})
 
       assert {:error, :not_owner} =
                Provider.handle("aqua", ctx, %{
@@ -2492,8 +2506,7 @@ defmodule Compendium.ProviderTest do
       Arca.ControlPlane.record(:unclaimed)
       {:ok, %{files: files}} = Provider.handle("aqua", ctx, %{"action" => "status"})
 
-      assert %{state: "bundled_modified"} =
-               Enum.find(files, &(&1.path == "aqua/crew/explorer.md"))
+      assert %{state: "bundled_modified"} = Enum.find(files, &(&1.path == "aqua/aqua.md"))
     end
 
     test "the soul is edited, never created or deleted", %{ctx: ctx} do

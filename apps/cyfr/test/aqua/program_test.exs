@@ -121,6 +121,7 @@ defmodule Aqua.ProgramTest do
 
     test "starts briefed by CYFR, told of its folder, with the scroll list and its job apart",
          %{ctx: ctx, thread: thread, fake: fake} do
+      claude_code!(ctx)
       row = brain_row!(ctx, "claude")
       turn = accept!(ctx, thread, row, "tidy notes.md", nil, nil, "claude-code")
       loop = run(ctx, turn)
@@ -161,6 +162,7 @@ defmodule Aqua.ProgramTest do
     # post it is handed.
     test "starts with Aqua's own prompt, then CYFR's part with its folder, the job apart",
          %{ctx: ctx, thread: thread, fake: fake} do
+      claude_code!(ctx)
       seat!(ctx, "claude-code")
       row = brain_row!(ctx, "claude")
       turn = accept!(ctx, thread, row, "what is in notes.md?")
@@ -199,6 +201,7 @@ defmodule Aqua.ProgramTest do
     test "deleting Aqua's thread forgets its stored session alone, leaving the member's on " <>
            "the same row and the row",
          %{ctx: ctx, thread: thread, fake: fake} do
+      claude_code!(ctx)
       seat!(ctx, "claude-code")
       row = brain_row!(ctx, "claude")
       actor = Sanctum.Context.actor(ctx)
@@ -3370,7 +3373,27 @@ defmodule Aqua.ProgramTest do
       Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => member})
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    ref = Prima.AgentRef.soul_ref()
+    consent!(ctx, Prima.AgentRef.soul_ref())
+  end
+
+  # A Claude Code crew member on the `claude` row, made as the setup makes
+  # it on the connected program: the seed ships no crew.
+  defp claude_code!(ctx) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "create",
+        "name" => "claude-code",
+        "title" => "Claude Code",
+        "program" => "claude",
+        "model" => "opus"
+      })
+
+    consent!(ctx, Prima.AgentRef.ref("claude-code"))
+  end
+
+  # `ref`'s consent given as the person gives it: on a program brain, which
+  # is no dependency, the walk selects nothing.
+  defp consent!(ctx, ref) do
     decisions = %{ref: ref, selections: []}
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
     {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)

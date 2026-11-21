@@ -129,31 +129,55 @@ defmodule Cyfr.Test.SeedBundle do
 
   @doc """
   Seat the Aqua tree under `dir` on a crew member of the tree's own: the
-  shipped soul names no member, so a tree whose turns run on one brain
-  lays a member on it beside the shipped crew, and the soul's file names
-  it. `opts`: `:member` (`seat_member/0`), `:catalyst_ref`
-  (`catalyst:local.claude`), `:model` (`claude-sonnet-5-5`) and `:mode`
-  (`auto`).
+  shipped soul names no member and the seed ships no crew, so a tree
+  whose turns run on one brain lays a member on it (`member!/3`), and the
+  soul's file names it. `opts`: `:member` (`seat_member/0`) and the
+  member's own (`member!/3`).
   """
   @spec seat!(Path.t(), keyword()) :: :ok
   def seat!(dir, opts \\ []) do
-    member = Keyword.get(opts, :member, @seat_member)
-    aqua = Path.join(dir, "aqua")
-    File.mkdir_p!(Path.join(aqua, "crew"))
+    {member, opts} = Keyword.pop(opts, :member, @seat_member)
+    :ok = member!(dir, member, opts)
 
-    File.write!(Path.join([aqua, "crew", member <> ".md"]), """
-    ---
-    title: #{member}
-    description: "Answers on #{Keyword.get(opts, :catalyst_ref, "catalyst:local.claude")}"
-    catalyst_ref: #{Keyword.get(opts, :catalyst_ref, "catalyst:local.claude")}
-    model: #{Keyword.get(opts, :model, "claude-sonnet-5-5")}
-    mode: #{Keyword.get(opts, :mode, "auto")}
-    ---
-    """)
-
-    soul = Path.join(aqua, "aqua.md")
+    soul = Path.join([dir, "aqua", "aqua.md"])
     "---\n" <> rest = File.read!(soul)
     File.write!(soul, "---\nmember: " <> member <> "\n" <> rest)
+  end
+
+  @doc """
+  Lay a crew member of the tree's own in the Aqua tree under `dir`, before
+  an athanor is filled from it, so the member is one the athanor's seed
+  ships and the bootstrap vouches for it. `opts`: `:title` (the name),
+  `:description` (the brain it answers on), `:avoid` (none), the brain,
+  `:catalyst_ref` (`catalyst:local.claude`) or `:program` with its
+  `:install`, `:model` (`claude-sonnet-5-5`) and `:mode` (`auto`).
+  """
+  @spec member!(Path.t(), String.t(), keyword()) :: :ok
+  def member!(dir, name, opts \\ []) do
+    program = Keyword.get(opts, :program)
+
+    catalyst =
+      if program, do: nil, else: Keyword.get(opts, :catalyst_ref, "catalyst:local.claude")
+
+    crew = Path.join([dir, "aqua", "crew"])
+    File.mkdir_p!(crew)
+
+    File.write!(
+      Path.join(crew, name <> ".md"),
+      Compendium.AquaAgent.serialize(%{
+        name: name,
+        title: Keyword.get(opts, :title, name),
+        description: Keyword.get(opts, :description, "Answers on #{catalyst || program}"),
+        avoid: Keyword.get(opts, :avoid),
+        disabled: false,
+        catalyst_ref: catalyst,
+        program: program,
+        install: Keyword.get(opts, :install),
+        model: Keyword.get(opts, :model, "claude-sonnet-5-5"),
+        options: %{},
+        mode: Keyword.get(opts, :mode, "auto")
+      })
+    )
   end
 
   # A tree of this test's own, filled by `fill`, and `:seed_path` pointed at
