@@ -292,6 +292,53 @@ defmodule Sanctum.Consent.AgentConsentTest do
     end)
   end
 
+  # A machine grant reaches only the brains the seed ships: Aqua's grant
+  # names every installed brain, so with one the seed does not ship
+  # installed, a person's own or a person's newer release of a shipped
+  # one, the mint is a person's to make, before a first grant and after a
+  # person revoked one alike.
+  test "a person-made brain installed, the walk mints no grant for Aqua", %{ctx: ctx} do
+    Arca.Test.UnitFixtures.chat_catalyst!(ctx, "made")
+
+    {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
+    refute @soul in minted
+    assert {@soul, :not_vouched} in skipped
+  end
+
+  test "a person-made brain installed after Aqua's grant was revoked, the walk mints it no grant again",
+       %{ctx: ctx} do
+    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
+    assert @soul in minted
+    assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, @soul)
+
+    Arca.Test.UnitFixtures.chat_catalyst!(ctx, "made")
+
+    {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
+    refute @soul in minted
+    assert {@soul, :not_vouched} in skipped
+  end
+
+  test "a shipped brain whose newest release is a person's own, the walk mints no grant for Aqua",
+       %{ctx: ctx} do
+    unit =
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "claude", "9.0.0",
+        manifest: %{
+          "name" => "claude",
+          "type" => "catalyst",
+          "version" => "9.0.0",
+          "publisher" => "local",
+          "contracts" => [Prima.Model.chat_contract()]
+        },
+        wasm: Cyfr.Test.Guests.wasm(:catalyst)
+      )
+
+    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+
+    {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
+    refute @soul in minted
+    assert {@soul, :not_vouched} in skipped
+  end
+
   test "the shape never reads the prompt", %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, soul_head, _} = head!(ctx, @soul)

@@ -102,6 +102,13 @@ defmodule Compendium.AgentSource do
   """
   @spec brains(Context.t()) :: {:ok, [String.t()]} | {:error, term()}
   def brains(%Context{} = ctx) do
+    with {:ok, releases} <- brain_releases(ctx), do: {:ok, brain_refs(releases)}
+  end
+
+  # The newest release of each installed catalyst that speaks
+  # `model/chat@1`: the one read both projections filter, so the
+  # installed row and the shipped row see the same brains.
+  defp brain_releases(ctx) do
     with :ok <- Compendium.ProjectionReconciler.await(ctx, "components"),
          {:ok, rows} <-
            Arca.ComponentStorage.list_components(Context.actor(ctx),
@@ -112,11 +119,17 @@ defmodule Compendium.AgentSource do
        rows
        |> Enum.group_by(&{&1.publisher, &1.name})
        |> Enum.map(fn {_name, versions} -> Prima.ComponentRow.latest_of(versions) end)
-       |> Enum.filter(&Prima.Model.speaks_chat?(&1.manifest))
-       |> Enum.map(&Prima.ComponentRow.node_key/1)
-       |> Enum.sort()}
+       |> Enum.filter(&Prima.Model.speaks_chat?(&1.manifest))}
     end
   end
+
+  defp brain_refs(releases),
+    do: releases |> Enum.map(&Prima.ComponentRow.node_key/1) |> Enum.sort()
+
+  # A release the seed ships byte for byte (`Compendium.Provenance.shipped_release_digest/1`,
+  # what consent asks of any wasm component), not a person's own copy of it.
+  defp shipped_release?(release),
+    do: Compendium.Provenance.shipped_release_digest(release) == {:ok, release.release_digest}
 
   @doc "The consent manifest of Aqua's grant over `brains` (`brains/1`)."
   @spec manifest(AquaAgent.t(), [String.t()]) :: map()
@@ -167,11 +180,16 @@ defmodule Compendium.AgentSource do
   end
 
   @doc """
-  The grant's row the seed's Aqua projects over the athanor's brains
-  (`Compendium.AquaTemplate.shipped_agent/1`): a prose-only edit of the
-  athanor's copy does not change it; a tools edit of the seed file does.
-  A crew member, shipped or not, has none (`{:error, :not_found}`), and
-  neither has a disabled seed Aqua.
+  The grant's row the seed vouches for: the seed's Aqua
+  (`Compendium.AquaTemplate.shipped_agent/1`) over the brains the seed
+  ships, each installed brain whose newest release is the seed's own. A
+  prose-only edit of the athanor's copy does not change it; a tools edit
+  of the seed file does. With a brain installed that the seed does not
+  ship, a person's or a pulled one, or a shipped brain whose newest
+  release is a person's, it differs from the installed row (`rows/1`), so
+  no machine grant covers that brain: a person grants it. A crew member,
+  shipped or not, has none (`{:error, :not_found}`), and neither has a
+  disabled seed Aqua.
   """
   @spec shipped_row(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shipped_row(%Context{} = ctx, name) when is_binary(name) do
@@ -181,8 +199,8 @@ defmodule Compendium.AgentSource do
   defp shipped_soul_row(ctx, name) do
     with {:ok, soul} <- Compendium.AquaTemplate.shipped_agent(name),
          :ok <- if(soul.disabled, do: {:error, :disabled}, else: :ok),
-         {:ok, brains} <- brains(ctx) do
-      {:ok, row(soul, brains)}
+         {:ok, releases} <- brain_releases(ctx) do
+      {:ok, row(soul, releases |> Enum.filter(&shipped_release?/1) |> brain_refs())}
     end
   end
 
