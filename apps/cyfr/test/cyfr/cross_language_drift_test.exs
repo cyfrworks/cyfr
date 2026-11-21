@@ -452,6 +452,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(kinds narrowable_kinds preview refusals version)}
     ],
     "desktop-process.json" => [
+      {"apps/codex/desktop/test/process.test.mjs", ~w(version go_to_main main_to_go refused)},
       {"apps/codex/internal/desktop/process_test.go", ~w(version go_to_main main_to_go refused)}
     ],
     "device.json" => [
@@ -662,6 +663,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
     ],
     "sign_in.json" => [
+      {"apps/codex/desktop/test/policy.test.mjs", ~w(home max_fragment_bytes requests)},
       {"apps/codex/internal/account/wire_test.go",
        ~w(answer_refusals answers keys request_refusals requests)},
       {"apps/cyfr/assets/test/account/pages.test.mjs",

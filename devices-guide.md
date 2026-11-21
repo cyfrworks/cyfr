@@ -1,12 +1,12 @@
 # Devices and Fresh Confirmation
 
-How a CYFR box's own screen becomes a device of your account, how it is added by approval, how it stays connected at each CYFR, how your passkeys sit beside your devices, and how a sensitive change is confirmed by a key of yours. A device holds one key of your account under a local unlock, a PIN or a passphrase, and serves every CYFR you use; it holds no store, vault or other key. A browser holds no key of its own: it signs in and confirms with your passkey, through the account pages ([identity-guide.md](identity-guide.md)).
+How a CYFR box's own screen, or a computer with the CYFR app, becomes a device of your account, how it is added by approval, how it stays connected at each CYFR, how your passkeys sit beside your devices, and how a sensitive change is confirmed by a key of yours. A device holds one key of your account under a local unlock, a PIN or a passphrase, and serves every CYFR you use; it holds no store, vault or other key. A browser holds no key of its own: it signs in and confirms with your passkey, through the account pages ([identity-guide.md](identity-guide.md)).
 
 ---
 
 ## A Device's Key
 
-A device keeps one key, made on it and never exported, for every CYFR it signs in to, beside the box's own files.
+A device keeps one key, made on it and never exported, for every CYFR it signs in to, in `~/.cyfr/device` under your login on that machine, which the box's screen and the CYFR app share.
 
 - **On a machine with a security chip**, the chip seals the key under a six-digit PIN you choose, and allows eight wrong tries, then one every ten minutes.
 - **On a machine without one**, the key is encrypted on its disk under a passphrase of six words drawn for you and shown once; write it down. Six digits alone never protect a key on disk.
@@ -17,13 +17,13 @@ The PIN or passphrase never leaves the device: a CYFR checks the key's signature
 
 ## Adding a Device to Your Account
 
-A box joins your account by your approval, never by a link it is handed:
+A device joins your account by your approval, never by a link it is handed:
 
-1. **On the box**, choose **Add this box to my account** on its screen. It makes its key under its PIN or passphrase first, then shows the key's code (16 letters and digits) and a QR code of the account page that adds it (`/account/add`).
-2. **Approve it with your passkey.** On a phone or computer where you use your passkey, scan the QR code or open its address: the page asks "Add this device to your account?" and shows the code. Check that it is the code the box shows, then **Add with your passkey**: the first passkey prompt names your account and the second signs the addition.
-3. **Type your name on the box** and press **I approved it**, which waits until your account lists its key. Then the box goes on by itself.
+1. **On the device**, on the box's screen or in the CYFR app, choose **Add this device to my account**. It makes its key under its PIN or passphrase first, then shows the key's code (16 letters and digits), the account service's address, and a QR code of the account page that adds it (`/account/add`).
+2. **Approve it with your passkey on another device of yours.** On a phone or computer where you use your passkey, scan the QR code or open its address: the page asks "Add this device to your account?" and shows the code. Approve only if it shows the same code at the account service's address the device named, then **Add with your passkey**: the first passkey prompt names your account and the second signs the addition.
+3. **Type your name on the device** and press **I approved it**, which waits until your account lists its key. Then the device goes on by itself.
 
-Nothing is approved at a CYFR. A device's first connection to each CYFR introduces it: it names its key and your account, signs the request that CYFR answers with after its own unlock, and the CYFR checks the signature against your account's keys, admits you by its own rules, and issues the device a certificate of its own. A box that makes a new account with **Set up CYFR** ([identity guide](identity-guide.md)) is that account's first key and needs no approval.
+Nothing is approved at a CYFR. A device's first connection to each CYFR introduces it: it names its key and your account, signs the request that CYFR answers with after its own unlock, and the CYFR checks the signature against your account's keys, admits you by its own rules, and issues the device a certificate of its own. A device that makes a new account with **Set up CYFR** ([identity guide](identity-guide.md)) is that account's first key and needs no approval.
 
 ---
 
@@ -31,12 +31,26 @@ Nothing is approved at a CYFR. A device's first connection to each CYFR introduc
 
 A CYFR box with its own screen (`cyfr screen on`) sets itself up and signs you in there, with no phone or security key, through a key of its own under its local unlock.
 
-1. **Setup.** The screen says when the box's system disk or CYFR's data volume is not encrypted, or when that cannot be told. **Set up CYFR** makes your account with the box as its first device and shows your recovery code as a QR code to scan or print; keep it off the box. **Add this box to my account** adds the box to an account you already have instead (above). Either way, on a CYFR nobody has set up yet the box brings the setup token with it, so that account becomes the installation's first person; on one already set up it brings nothing, and the CYFR's allowlist decides.
+1. **Setup.** The screen says when the box's system disk or CYFR's data volume is not encrypted, or when that cannot be told. **Set up CYFR** makes your account with the box as its first device and shows your recovery code as a QR code to scan or print; keep it off the box. **Add this device to my account** adds the box to an account you already have instead (above). Either way, on a CYFR nobody has set up yet the box brings the setup token with it, so that account becomes the installation's first person; on one already set up it brings nothing, and the CYFR's allowlist decides.
 2. **Unlocking.** The screen starts locked, whatever its browser kept. Unlocking proves the box's key to CYFR on the box's own channel, which answers a one-time ticket; the browser spends it once for a session (`/auth/device/complete`). The session lasts one minute at a time and only the box's channel extends it, never past its certificate, so a copied cookie, a reboot, a dead shell or a lost connection ends it within a minute.
 3. **Locking.** The **Lock** control, five minutes without local input, suspend, and the browser or the shell exiting lock the screen: the session ends at once and the screen asks for the PIN or passphrase again. A lock is final for that session; unlocking makes a new one.
 4. **Confirming on this device.** A change that needs a fresh confirmation offers **Confirm on this device**. The screen's own page shows the change as CYFR stored it, not as the asking page described it, and asks for your PIN or passphrase again before it signs; cancelling signs nothing.
 
-**Devices** in Prism's shell lists the box with what holds its key and, from what it reported within the last minute, whether its disks are encrypted. A box that keeps its data unencrypted is named as one: whoever takes it reads everything, so keep it where only people you trust can reach it, or install Ubuntu again with disk encryption turned on. The box changes no disk or boot setting; an encrypted Ubuntu installation still asks for its passphrase at boot. **Devices** also lists each passkey a browser asks to add to your account, with its code, which the box's screen approves ([identity-guide.md](identity-guide.md#signing-in-at-a-cyfr)).
+**Devices** in Prism's shell lists the box with what holds its key and, from what it reported within the last minute, whether its disks are encrypted. A box that keeps its data unencrypted is named as one: whoever takes it reads everything, so keep it where only people you trust can reach it, or install Ubuntu again with disk encryption turned on. The box changes no disk or boot setting; an encrypted Ubuntu installation still asks for its passphrase at boot. **Devices** also lists each passkey a browser asks to add to your account, with its code, which a device of yours approves ([identity-guide.md](identity-guide.md#signing-in-at-a-cyfr)).
+
+---
+
+## The CYFR App
+
+The CYFR app shows CYFR in a window of its own on Linux, macOS or Windows, connected to a CYFR that runs elsewhere; the computer needs no Docker. Its packages are not signed or published with a release yet, and setting up CYFR on the computer itself comes in a later version of the app.
+
+1. **Connect.** Open the app, type the CYFR's address under **Connect to a CYFR**, and press **Connect**; the app fills in the address it last connected to. It reads which account service that CYFR signs its people in at. When that is not cyfr.run, the app shows the account service's full address beside the CYFR's and asks once: press **Go on** only if you expected that address, and **Cancel** sends nothing there. The app remembers your answer while that CYFR names the same account service, and asks again once it names another. The app connects to one CYFR at a time: to connect to another, quit it and open it again.
+2. **Sign in with your passkey** (macOS and Windows). The CYFR's own sign-in page opens, and its **Sign in with your account** opens the account service's page in a window of its own, which shows only the account service's sign-in and recovery pages; your passkey signs there, and the answer goes back only to the CYFR window that asked ([identity guide](identity-guide.md#signing-in-at-a-cyfr)). **Confirm with a passkey** opens that same window. On Windows, Windows Hello keeps the passkey; on macOS, Touch ID comes with the signed Mac package, and until then use this computer's key.
+3. **Use this computer's key** (the only way on Linux). The app shows the device's pages, as the box's screen does: **Set up CYFR** makes a new account with the computer as its first key, and **Add this device to my account** adds it to the account you have, approved on another device of yours that shows the same code at the same account service (above). From then on its PIN or passphrase unlocks it, **Open CYFR** opens it, and its session and **Confirm on this device** work as on the box's screen.
+4. **Locking.** The app locks when the computer locks or sleeps, when one of its pages stops, and, with this computer's key, when you press **Lock** in CYFR's top bar: it closes CYFR's windows, forgets the key it unlocked, and asks you to sign in again. Signed in with your passkey, it also signs that session out at the CYFR; when the CYFR does not confirm the sign-out, the app says so, and that sign-in stands until it expires or you sign it out under **Settings → Keys on your account**. Quitting the app signs out the same way. Leaving the computer idle does not lock the app; the computer's own lock does. Unlocking again needs your passkey, or the computer's PIN or passphrase.
+5. **A company sign-in.** The app does not offer one. At a CYFR that requires it, the app says "This CYFR requires company sign-in. Open its address in a browser to continue." once you have signed in, or added the computer to your account: open the CYFR's address in a browser instead.
+
+The app never gives a page your camera, microphone, screen or other devices.
 
 ---
 
@@ -48,7 +62,7 @@ A device certificate is one CYFR's own word that a device of your account is adm
 - **Expiry is strict** on that CYFR's clock. `clock_skew_seconds` (60 by default) applies only to a certificate's not-before time and never extends its life. The channel closes at the instant the certificate expires unrenewed.
 - **Sleep.** A device that wakes, or reconnects, with an expired certificate renews by proving its key before it sends anything else.
 - **Streams.** When a CYFR cannot check the device's standing in time to pass on a change, or the device falls behind, the stream ends and the device opens it again and reads what is waiting.
-- **Your account's keys.** Every request the device makes is checked against your account's keys as that CYFR last read them, within `identity_freshness_seconds` (five minutes by default). Removing the device's key from your account ends its certificates and sessions at each CYFR once that CYFR reads the removal, and replacing everything with your recovery code ends all of them. A box whose key was removed says so at its next unlock and shows the same key's code and QR code again; approving it adds that same key back, and no new key is made.
+- **Your account's keys.** Every request the device makes is checked against your account's keys as that CYFR last read them, within `identity_freshness_seconds` (five minutes by default). Removing the device's key from your account ends its certificates and sessions at each CYFR once that CYFR reads the removal, and replacing everything with your recovery code ends all of them. A device whose key was removed says so at its next unlock and shows the same key's code and QR code again; approving it adds that same key back, and no new key is made.
 - **Signing it out of one CYFR.** **Sign out this device** under **Devices** in Prism's shell needs a fresh confirmation. The device's channel there closes within 30 seconds, ending its streams and its session. Its key stays on your account, so its next unlock introduces it to that CYFR again: to end a device everywhere, remove its key from your account. **Settings → Keys on your account** lists the device by its name, with its sessions at that CYFR; **Sign out** there ends one session alone and leaves the device's channel connected.
 
 Signing out erases nothing already shown on the device. Until its key is removed, what the device shows and what its unlocked key signs are the exposure of a lost device.
@@ -87,7 +101,7 @@ Prism's desktop and the pages that ask for these changes (API keys, webhooks, th
 A proof covers that one request, is used once and expires with it. Only a key of your account gives one, checked against your account's keys at that moment:
 
 - **A passkey**: **Confirm with a passkey** opens the account page in a new tab, which says "Confirm a change at" that CYFR's address, and your passkey signs that one request, with your face, fingerprint or screen lock.
-- **A device of yours**: the box's own screen signs the request's stored digest with its key, after you unlock it again on its own page (above).
+- **A device of yours**: the box's own screen, or the CYFR app on a computer you unlocked with its PIN or passphrase, signs the request's stored digest with its key, after you unlock it again on its own page (above).
 
 A sign-in, however recent, proves nothing by itself, and neither does a company sign-in. A client with no person behind it, an app frame or an API key, shows no confirm control; where one asks, it offers to request confirmation, and you confirm on a device of yours.
 
@@ -98,7 +112,7 @@ A sign-in, however recent, proves nothing by itself, and neither does a company 
 CYFR's address is its tailnet name, its domain, or `localhost` when only its own computer reaches it, and it changes when `cyfr access` moves CYFR to another mode or name. Your account and its passkeys do not change: they live at the account service, not at CYFR's address.
 
 1. **Sessions.** Every browser signs in again at the new address, with the same passkey.
-2. **Devices.** The box's screen drops the certificate it held for the old address at its next unlock and introduces itself at the new one with the same key, and nothing is approved.
+2. **Devices.** The box's screen drops the certificate it held for the old address at its next unlock and introduces itself at the new one with the same key, and the CYFR app does so once you connect it to the new address; nothing is approved.
 3. **Clients and callbacks.** Update the redirect address in OAuth apps you registered (vault credentials, a company's sign-in issuer), the URL your webhook senders call, the command line's contexts and MCP clients.
 4. **Saved addresses.** Every device that saved the old address needs the new one.
 

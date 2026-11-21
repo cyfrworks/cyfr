@@ -622,3 +622,29 @@ func TestAConnectThatFailsAfterHomeReadyLeavesTheServiceFree(t *testing.T) {
 		t.Fatalf("the next Connect answered %+v", got)
 	}
 }
+
+// Where the app signs in with the account's passkey, an open CYFR's
+// answer offers that CYFR's own sign-in page beside the device's pages,
+// and so does the chooser shown again after a lock; elsewhere it offers
+// the device's pages alone.
+func TestAnOpenCYFROffersThePasskeyRoadWhereTheAppHasIt(t *testing.T) {
+	for _, road := range []bool{true, false} {
+		a := newApp(t, t.TempDir(), offline())
+		a.AccountRoad = road
+		done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+		a.next(t)
+		a.HomeReady("https://cyfr.example.com")
+		want := answer{Home: "https://cyfr.example.com", Next: "/"}
+		if road {
+			want.Passkey = "https://cyfr.example.com/login"
+		}
+		if got := answered(t, done); got != want {
+			t.Fatalf("account road %v: answered %+v", road, got)
+		}
+		a.Lock("Locked.")
+		a.next(t)
+		if got := a.post(t, "/bootstrap/state", map[string]string{}); got != want {
+			t.Fatalf("account road %v: the chooser after a lock shows %+v", road, got)
+		}
+	}
+}

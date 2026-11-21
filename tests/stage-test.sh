@@ -1537,15 +1537,18 @@ mkdir -p "$real/scripts"
 cp "$ROOT/scripts/stage.sh" "$ROOT/scripts/stages.tsv" "$real/scripts/"
 git -C "$real" add -A
 git -C "$real" -c user.name=test -c user.email=test@invalid commit -q -m 'the real table'
-new_rows='go-codex go-keeper catalysts test-wasm'
+new_rows='go-codex go-keeper js desktop-js catalysts test-wasm'
 for spec in \
   'apps/codex/cmd/x.go|go-codex' \
-  'seed/aqua/aqua.md|go-codex' \
+  'apps/codex/desktop/src/app.js|go-codex desktop-js' \
+  'tests/desktop-proof/native/smoke.sh|go-codex' \
+  'apps/cyfr/assets/account/sign_in.js|go-codex js desktop-js' \
+  'seed/aqua/aqua.md|go-codex js' \
   'apps/locus/keeper/main.go|go-keeper' \
   'tests/fixtures/residue-canary.go|go-codex go-keeper' \
   'apps/locus/lib/locus/x.ex|' \
   'stray.wasm|test-wasm' \
-  'seed/components/catalysts/local/claude/1.4.3/src/src/chat.rs|catalysts' \
+  'seed/components/catalysts/local/claude/1.4.3/src/src/chat.rs|js catalysts' \
   'apps/cyfr/test/support/test_wasm/chat_fixture/chat_fixture.wasm|test-wasm' \
   'apps/prima/lib/prima/cargo_toml.ex|test-wasm' \
   'wit/catalyst/world.wit|test-wasm' \

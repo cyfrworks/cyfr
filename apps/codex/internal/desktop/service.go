@@ -55,6 +55,9 @@ type Service struct {
 	Discover func(ctx context.Context, client *http.Client, home string) (account.Discovered, error)
 	// Shell adapts a selected CYFR's shell configuration; nil leaves it.
 	Shell func(*shell.Config)
+	// AccountRoad is whether the app signs in with the account's passkey
+	// too (macOS and Windows), beside the device's six words.
+	AccountRoad bool
 
 	mu sync.Mutex
 	// epoch counts locks. A chooser request belongs to the epoch it
@@ -213,17 +216,37 @@ type request struct {
 
 // answer is what the chooser does next: show a sentence, ask to approve a
 // directory for a CYFR, or go to the device's pages.
+//
+// Once a CYFR is open, Next is the device's pages and, where the app signs
+// in with the account's passkey (AccountRoad), Passkey is that CYFR's own
+// sign-in page, which the page offers first.
 type answer struct {
 	Home    string `json:"home,omitempty"`
 	Confirm string `json:"confirm,omitempty"`
 	Next    string `json:"next,omitempty"`
+	Passkey string `json:"passkey,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+// opened is the answer for the CYFR open at home.
+func (s *Service) opened(home string) answer {
+	a := answer{Home: home, Next: "/"}
+	if s.AccountRoad {
+		a.Passkey = home + "/login"
+	}
+	return a
 }
 
 func (s *Service) state(context.Context, uint64, request) answer {
 	c, err := s.Clients.Load()
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
+	}
+	s.mu.Lock()
+	open := s.pages != nil
+	s.mu.Unlock()
+	if open {
+		return s.opened(c.Home)
 	}
 	return answer{Home: c.Home}
 }
@@ -357,7 +380,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
-	return answer{Next: "/"}
+	return s.opened(home)
 }
 
 // remoteDisks is what a device of a remote CYFR reports: its own system

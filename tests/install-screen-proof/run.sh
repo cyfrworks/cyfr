@@ -527,7 +527,7 @@ screen_confirms() {
   printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   confirm_page_until confirm-drawn "$since" 60
   check "Confirm on this device opened the screen's own page, which draws the key CYFR is asked to make" \
-    sh -c 'grep -q "Confirm on this screen" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
+    sh -c 'grep -q "Confirm on this device" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
   check "screenshot screen-confirm-drawn.png" guest_screenshot screen-confirm-drawn.png
   ref=$CONFIRM_REF
   [ -n "$ref" ] || return 0
@@ -558,13 +558,13 @@ screen_confirms() {
   sleep 6
   confirm_page confirm-wrong
   check "a wrong PIN confirms nothing: the screen says so and still asks" \
-    sh -c 'grep -q "That is not this screen" "$1" && grep -q "Confirm on this screen" "$1"' sh "$GUEST_DIR/shell-confirm-wrong.html"
+    sh -c 'grep -q "That is not this device" "$1" && grep -q "Confirm on this device" "$1"' sh "$GUEST_DIR/shell-confirm-wrong.html"
   confirmation_state wrong "$ref"
   check "the home still holds it pending" json_is "$GUEST_DIR/confirmation-wrong.json" '{"state": "pending", "confirmed_client_id": null}'
   printf '\t%s\n' "$SECRET" | guest_keys || fail "QMP did not type"
   sleep 8
   shell_page confirmed
-  check "the screen confirmed it with the PIN again" grep -q 'Confirmed on this screen' "$GUEST_DIR/shell-confirmed.html"
+  check "the screen confirmed it with the PIN again" grep -q 'Confirmed on this device' "$GUEST_DIR/shell-confirmed.html"
   check "screenshot screen-confirmed.png" guest_screenshot screen-confirmed.png
   sleep 6
   check "screenshot screen-key-made.png" guest_screenshot screen-key-made.png
@@ -590,7 +590,7 @@ confirm_page_until() {
       sed -n 's/.*[?&]ref=\([A-Za-z0-9_-]*\).*/\1/p' | tail -n 1)
     if [ -n "$CONFIRM_REF" ]; then
       confirm_page "$1"
-      grep -q 'Confirm on this screen' "$GUEST_DIR/shell-$1.html" && return 0
+      grep -q 'Confirm on this device' "$GUEST_DIR/shell-$1.html" && return 0
     fi
     [ "$SECONDS" -lt "$closes" ] || return 1
     sleep 3

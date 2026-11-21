@@ -5,6 +5,7 @@ name: Codex CI (cyfr CLI)
 
 # Vet, test, and build the Go CLI on every change. security.yml only runs
 # govulncheck; this gives the CLI a real green-build + test signal at PR time.
+# desktop-native builds, installs and smokes the CYFR app around it.
 
 on:
   push:
@@ -26,6 +27,12 @@ on:
       # entrypoint against the restore's bar (tests/fixtures/restore_barrier.json).
       - 'docker-entrypoint.sh'
       - 'tests/fixtures/**'
+      # desktop-native runs the installed CYFR app's home-free smoke,
+      # tests/desktop-proof/native/smoke.sh.
+      - 'tests/desktop-proof/**'
+      # The app bundles the account pages' sign-in reader
+      # (apps/codex/desktop/src/policy.js).
+      - 'apps/cyfr/assets/account/**'
       - 'seed/aqua/**'
       # TestShippedGuidesAreManaged reads the tarball's ITEMS list.
       - 'scripts/scaffold-tarball.sh'
@@ -42,6 +49,8 @@ on:
       - 'docker-compose.yml'
       - 'docker-entrypoint.sh'
       - 'tests/fixtures/**'
+      - 'tests/desktop-proof/**'
+      - 'apps/cyfr/assets/account/**'
       - 'seed/aqua/**'
       - 'scripts/scaffold-tarball.sh'
       - 'README.md'
@@ -246,3 +255,104 @@ jobs:
 
       - name: go test
         run: go test -race -count=1 ./...
+
+  desktop-native:
+    # The CYFR app, Electron around this module's cyfr, on each platform it
+    # ships for: its unit tests, then its package built for this runner
+    # from the tree's cyfr, installed as a person installs it, and the
+    # home-free smoke (tests/desktop-proof/native/smoke.sh) run against the
+    # installed app with no CYFR server and no signing credentials.
+    name: CYFR app (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    # Electron's download and the package's build take most of it.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Linux amd64, os: ubuntu-24.04, arch: amd64, exe: ''}
+          - {name: Linux arm64, os: ubuntu-24.04-arm, arch: arm64, exe: ''}
+          - {name: macOS arm64, os: macos-latest, arch: arm64, exe: ''}
+          - {name: Windows amd64, os: windows-latest, arch: amd64, exe: .exe}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The smoke runs under Git Bash on Windows, which reads a script with
+      # rewritten line ends as other commands.
+      - name: Keep line ends as committed
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+
+      # Node 24, the runtime every pinned action runs on.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/codex/desktop/package-lock.json
+
+      - name: Build cyfr for this runner
+        working-directory: apps/codex
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr/cyfr${{ matrix.exe }}" .
+
+      # The app's build tools as package-lock.json pins them, with no
+      # install script run: electron-builder fetches Electron itself.
+      - name: The app's unit tests
+        working-directory: apps/codex/desktop
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+
+      # The package guard (scripts/check-package.mjs) runs inside the build
+      # and fails it on a package that is not exactly the staged app.
+      - name: Build the app's package
+        working-directory: apps/codex/desktop
+        run: node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr${{ matrix.exe }}" --version 0.0.0-ci --arch ${{ matrix.arch }}
+
+      # The DEB installs at /opt/cyfr and loads its sandbox's AppArmor
+      # profile; Xvfb and a session bus give the app a display and a bus.
+      - name: Install the app (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "$PWD"/apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb xvfb xauth dbus-x11
+          echo "APP=/opt/cyfr/CYFR" >> "$GITHUB_ENV"
+
+      - name: Install the app (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/cyfr-dmg" apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_darwin_${{ matrix.arch }}.dmg
+          cp -R "$RUNNER_TEMP/cyfr-dmg/CYFR.app" /Applications/
+          hdiutil detach "$RUNNER_TEMP/cyfr-dmg"
+          echo "APP=/Applications/CYFR.app/Contents/MacOS/CYFR" >> "$GITHUB_ENV"
+
+      # The MSI installs for this account alone, under its local programs
+      # folder, and must find exactly one CYFR.exe there.
+      - name: Install the app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = (Resolve-Path "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi").Path
+          $log = Join-Path $env:RUNNER_TEMP "cyfr-msi.log"
+          $install = Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { Get-Content $log -Tail 50; throw "msiexec exited $($install.ExitCode)" }
+          $found = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs") -Recurse -Filter CYFR.exe -ErrorAction SilentlyContinue)
+          if ($found.Count -ne 1) { throw "the MSI installed $($found.Count) CYFR.exe under $env:LOCALAPPDATA\Programs" }
+          "APP=$($found[0].FullName)" >> $env:GITHUB_ENV
+
+      - name: Smoke the installed app (Linux)
+        if: runner.os == 'Linux'
+        run: dbus-run-session -- xvfb-run -a bash tests/desktop-proof/native/smoke.sh "$APP"
+
+      - name: Smoke the installed app
+        if: runner.os != 'Linux'
+        run: bash tests/desktop-proof/native/smoke.sh "$APP"

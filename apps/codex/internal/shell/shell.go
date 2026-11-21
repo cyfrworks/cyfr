@@ -469,13 +469,13 @@ func New(cfg Config) (*Shell, error) {
 	case err == nil:
 		s.rec = rec
 	case !errors.Is(err, fs.ErrNotExist):
-		return nil, fmt.Errorf("this screen's key record %s cannot be read (%v)", cfg.Record, err)
+		return nil, fmt.Errorf("this device's key record %s cannot be read (%v)", cfg.Record, err)
 	}
 	if s.here, err = cfg.Clients.Load(); err != nil {
-		return nil, fmt.Errorf("this screen's standing at %s cannot be read (%v)", cfg.Address, err)
+		return nil, fmt.Errorf("this device's standing at %s cannot be read (%v)", cfg.Address, err)
 	}
 	if s.unfinished, err = s.readAttempt(); err != nil {
-		return nil, fmt.Errorf("the account this screen was making cannot be read (%v)", err)
+		return nil, fmt.Errorf("the account this device was making cannot be read (%v)", err)
 	}
 	return s, nil
 }
@@ -832,19 +832,19 @@ func sentence(err error) string {
 	case errors.As(err, &refused):
 		return refused.Message
 	case errors.Is(err, holder.ErrWrongSecret), errors.Is(err, holder.ErrSecretShape):
-		return "That is not this screen's PIN or passphrase. Nothing was sent anywhere."
+		return "That is not this device's PIN or passphrase. Nothing was sent anywhere."
 	case errors.Is(err, holder.ErrLockedOut):
-		return "Too many wrong PINs: this screen's chip takes one more try every ten minutes."
+		return "Too many wrong PINs: this device's chip takes one more try every ten minutes."
 	case errors.Is(err, ErrRevoked):
-		return "CYFR does not take this screen now: it was removed, CYFR does not admit your account, or CYFR was restored from a backup, which suspends every device. Unlocking it again asks CYFR again."
+		return "CYFR does not take this device now: it was removed, CYFR does not admit your account, or CYFR was restored from a backup, which suspends every device. Unlocking it again asks CYFR again."
 	case errors.Is(err, ErrCompanySignIn):
 		return CompanySignIn
 	case errors.Is(err, ErrUnavailable):
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):
-		return "CYFR did not accept this screen's proof. Nothing was signed for anything else."
+		return "CYFR did not accept this device's proof. Nothing was signed for anything else."
 	case errors.Is(err, ErrRenew):
-		return "This screen's certificate expired, and with it its session: unlock it again to renew it."
+		return "This device's certificate expired, and with it its session: unlock it again to renew it."
 	case errors.Is(err, account.ErrUnreachable):
 		return "Your account could not be reached just now. Try again; nothing is lost."
 	case errors.As(err, &dir) && dir.Code == "gone":
@@ -873,7 +873,7 @@ func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 		return true, nil
 	}
 	if err := holder.CheckPassphrase(secret); err != nil {
-		s.say("Without a chip, this screen needs the six-word passphrase shown, not a short PIN.")
+		s.say("Without a chip, this device needs the six-word passphrase shown, not a short PIN.")
 		return false, err
 	}
 	if string(secret) != s.passphrase {
@@ -931,7 +931,7 @@ func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
 		rec, err = holder.NewSoftware(secret)
 	}
 	if err != nil {
-		s.say("This screen could not make its key: %v.", err)
+		s.say("This device could not make its key: %v.", err)
 		return nil, err
 	}
 	err = rec.Create(s.cfg.Record)
@@ -941,7 +941,7 @@ func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
 		return nil, err
 	}
 	if err != nil {
-		s.say("This screen could not save its key (%v). Nothing was sent anywhere.", err)
+		s.say("This device could not save its key (%v). Nothing was sent anywhere.", err)
 		return nil, err
 	}
 	s.passphrase = ""
@@ -1119,7 +1119,7 @@ func (s *Shell) asPage(proof []byte, act func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.holds(proof) {
-		s.say("Only the page this screen's PIN or passphrase was typed on can do that. Nothing was sent.")
+		s.say("Only the page this device's PIN or passphrase was typed on can do that. Nothing was sent.")
 		return
 	}
 	act()
@@ -1147,7 +1147,7 @@ func (s *Shell) saved(ctx context.Context, accepted string) {
 			return
 		}
 		if err != nil {
-			s.say("This screen could not keep the account it is making (%v). Nothing was sent.", err)
+			s.say("This device could not keep the account it is making (%v). Nothing was sent.", err)
 			return
 		}
 		m.saved, m.code = true, ""
@@ -1294,7 +1294,7 @@ func (s *Shell) submit(ctx context.Context) {
 	}
 	s.rec.Identifier, s.rec.Directory = m.attempt.Identifier, m.attempt.Directory
 	if err := s.rec.Save(s.cfg.Record); err != nil {
-		s.say("This screen could not save its account (%v). Try again.", err)
+		s.say("This device could not save its account (%v). Try again.", err)
 		return
 	}
 	clear(m.key)
@@ -1384,7 +1384,7 @@ func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, use
 		}
 		select {
 		case <-waiting.Done():
-			s.say("This screen is not on @%s's account yet. Approve it on a device of yours, then try again.", name)
+			s.say("This device is not on @%s's account yet. Approve it on another device of yours, then try again.", name)
 			return
 		case <-time.After(pollEvery):
 		}
@@ -1405,7 +1405,7 @@ func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, use
 	}
 	s.rec.Identifier, s.rec.Directory = found.Identifier, found.Directory
 	if err := s.rec.Save(s.cfg.Record); err != nil {
-		s.say("This screen could not save its account (%v). Try again.", err)
+		s.say("This device could not save its account (%v). Try again.", err)
 		return
 	}
 	if useHeld {
@@ -1442,14 +1442,14 @@ func (s *Shell) CheckListed(ctx context.Context) {
 	unlisted := *s.rec
 	unlisted.Identifier, unlisted.Directory = "", ""
 	if err := unlisted.Save(s.cfg.Record); err != nil {
-		s.say("Your account no longer lists this screen's key, and this screen could not keep that (%v). Try again.", err)
+		s.say("Your account no longer lists this device's key, and this device could not keep that (%v). Try again.", err)
 		return
 	}
 	s.rec = &unlisted
 	if len(s.here.Certificate) > 0 {
 		s.forget()
 	}
-	s.say("Your account no longer lists this screen's key. Add the same key to your account again to go on.")
+	s.say("Your account no longer lists this device's key. Add the same key to your account again to go on.")
 }
 
 // Unlock opens the key with the PIN (or passphrase) and opens the channel.
@@ -1723,7 +1723,7 @@ func (s *Shell) Draw(ctx context.Context, ref string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ch == nil {
-		s.say("Unlock this screen first, then confirm the change again from the page that asked.")
+		s.say("Unlock this device first, then confirm the change again from the page that asked.")
 		return
 	}
 	p, err := s.pending(ctx, ref)
@@ -1832,7 +1832,7 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 		s.say("CYFR did not take the confirmation: %s", s.sentence(err))
 		return
 	}
-	s.say("Confirmed on this screen. The page that asked finishes the change and shows its result.")
+	s.say("Confirmed on this device. The page that asked finishes the change and shows its result.")
 }
 
 // errNotWaiting is a passkey request the CYFR does not hold: none by that
@@ -1849,7 +1849,7 @@ func (s *Shell) DrawPasskey(ctx context.Context, ref string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ch == nil {
-		s.say("Unlock this screen first, then approve the passkey again from Your devices.")
+		s.say("Unlock this device first, then approve the passkey again from Your devices.")
 		return
 	}
 	p, err := s.waiting(ctx, ref)
@@ -1921,7 +1921,7 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref, digest string, approve b
 	defer s.mu.Unlock()
 	defer erase(secret)
 	if s.ch == nil {
-		s.say("Unlock this screen first, then approve the passkey again from Your devices.")
+		s.say("Unlock this device first, then approve the passkey again from Your devices.")
 		return false
 	}
 	drawn := s.passkey
@@ -1969,9 +1969,9 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref, digest string, approve b
 		s.say("Your account lists that passkey already.")
 		return true
 	case errors.Is(err, account.ErrNotListed):
-		s.say("Your account does not list this screen any more, so it cannot add a passkey.")
+		s.say("Your account does not list this device any more, so it cannot add a passkey.")
 	case errors.Is(err, account.ErrUnanswered):
-		s.say("Your account's answer did not arrive, so this screen does not know whether the passkey was added. " +
+		s.say("Your account's answer did not arrive, so this device does not know whether the passkey was added. " +
 			"Sign in with it in the browser that asked, or look at your account's devices page, which lists every key.")
 	case errors.Is(err, account.ErrUnreachable):
 		s.say("Your account could not be reached just now. Nothing was added; approve it again from Your devices.")
