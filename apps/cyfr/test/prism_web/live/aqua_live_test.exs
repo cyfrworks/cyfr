@@ -1694,9 +1694,28 @@ defmodule PrismWeb.AquaLiveTest do
     # member is suggested on it; once the listing answers it is signed in,
     # and the crew's step suggests the member CYFR suggests for it, with the
     # models its program lists. Make with a model writes that member on the
-    # program and asks its consent at once; with none it writes nothing.
-    test "a program brain signs in on the setup, and Make writes the member it suggests",
+    # program and asks nothing; with none it writes nothing. Chosen for
+    # Aqua, the member asks nothing and Aqua's grant stays as it was, and
+    # Aqua answers on the program.
+    test "a program brain signs in on the setup, Make writes the member it suggests, and Aqua " <>
+           "answers on it, asked nothing on the way",
          %{conn: conn, ctx: ctx} do
+      on_exit(fn ->
+        Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => nil})
+      end)
+
+      # Aqua's grant, as the fill mints it over a seed whose hands Aqua's
+      # tools need are installed; the seed's own member stands on a brain
+      # not installed here.
+      Cyfr.Test.SeedBundle.lay!(~w(files http))
+      :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+
+      :ok =
+        Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+
+      {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+      {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
       fake = backends!()
       %{name: name, title: title} = Opus.Programs.Definition.brain("claude-code")
       row = brain_row!(ctx, name)
@@ -1778,13 +1797,39 @@ defmodule PrismWeb.AquaLiveTest do
               }} = get_agent(ctx, name)
 
       assert render(view) =~ "Made #{title}."
+      settled(fn -> has_element?(view, "#aqua-setup-made-" <> name, "ready.") end, "ready")
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+      # Chosen for Aqua: nothing is asked, and Aqua's grant is what it was.
+      actor = Sanctum.Context.actor(ctx)
+      granted = aqua_grant!(actor)
+      view |> form("#aqua-setup-member", %{"member" => name}) |> render_change()
 
       settled(
-        fn ->
-          has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.#{name}")
-        end,
-        "the member's consent"
+        fn -> has_element?(view, ~s([data-test="setup-aqua-done"]), "Aqua runs on #{title}.") end,
+        "Aqua seated"
       )
+
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert aqua_grant!(actor) == granted
+
+      # Aqua answers, its turn on the program the member names.
+      person = %{ctx | origin: :interactive}
+      {:ok, thread} = Arca.Test.Days.thread(actor)
+
+      assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
+               Aqua.Runner.send_message(person, thread.id, "@aqua hello")
+
+      answers!(fake, row, "Hello from Claude Code.", fn ->
+        match?({:ok, %{status: "completed"}}, Aqua.Tape.turn(ctx, turn_id))
+      end)
+
+      assert ["Hello from Claude Code."] =
+               for(
+                 %{turn_id: ^turn_id, author: "aqua", kind: "text", content: said} <-
+                   Arca.ThreadStorage.messages(actor, thread.id),
+                 do: said
+               )
 
       Cyfr.Test.Sandbox.end_views()
     end
@@ -1831,6 +1876,67 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-setup-made-second")
       assert has_element?(view, "#aqua-card-open") and has_element?(view, "#aqua-card-second")
       refute has_element?(view, ~s(form[id^="aqua-setup-suggest-"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # An API brain's efforts are what its `describe` declares for the model
+    # picked on its row, read as a card reads a brain's options: none
+    # before a model is picked, none for a model that declares none, and
+    # Make writes the one chosen, as it does for a program.
+    test "an API brain's row offers the efforts of the model picked, and Make writes the one " <>
+           "chosen",
+         %{conn: conn, ctx: ctx} do
+      # Installed, as the card's read of a brain's options lists it.
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "open", "0.1.0",
+        manifest: %{
+          "name" => "open",
+          "type" => "catalyst",
+          "version" => "0.1.0",
+          "publisher" => "local",
+          "contracts" => [Prima.Model.chat_contract()]
+        },
+        wasm: Cyfr.Test.Guests.wasm(:catalyst)
+      )
+
+      grant!(ctx, "catalyst:local.open", %{bindings: []})
+
+      remember_catalogue!(%{"open" => ["open-1", "open-2"]}, %{
+        "open" => "catalyst:local.open:0.1.0"
+      })
+
+      described!(ctx, "catalyst:local.open:0.1.0", %{
+        "open-1" => [
+          %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]},
+          %{"name" => "budget", "kind" => "integer", "default" => 4}
+        ],
+        "open-2" => []
+      })
+
+      suggest = "#aqua-setup-suggest-open"
+      effort = suggest <> ~s( select[name="effort"])
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      assert has_element?(view, suggest)
+      refute has_element?(view, effort)
+
+      view |> form(suggest, %{"model" => "open-1"}) |> render_change()
+      settled(fn -> has_element?(view, effort) end, "the model's efforts")
+      assert texts(view, effort <> " option") == ["The model's default effort", "low", "high"]
+      assert has_element?(view, suggest <> ~s( option[value="open-1"][selected]))
+
+      view |> form(suggest, %{"model" => "open-2"}) |> render_change()
+      settled(fn -> not has_element?(view, effort) end, "no efforts for open-2")
+
+      view |> form(suggest, %{"model" => "open-1"}) |> render_change()
+      settled(fn -> has_element?(view, effort) end, "open-1's efforts again")
+      view |> form(suggest, %{"model" => "open-1", "effort" => "high"}) |> render_submit()
+
+      assert {:ok,
+              %{
+                "catalyst_ref" => "catalyst:local.open",
+                "model" => "open-1",
+                "options" => %{"effort" => "high"}
+              }} = get_agent(ctx, "open")
+
       Cyfr.Test.Sandbox.end_views()
     end
 
@@ -2712,6 +2818,111 @@ defmodule PrismWeb.AquaLiveTest do
         end
 
         lists!(fake, row, shown, listing, deadline)
+    end
+  end
+
+  # Plays the driver of `row` for Aqua's turn on it until `done` holds: its
+  # hello, the harness started, the turn's work and its post taken, `said`
+  # said and the post answered; a listing asked meanwhile is answered.
+  defp answers!(fake, row, said, done),
+    do: answers!(fake, row, said, done, System.monotonic_time(:millisecond) + 30_000)
+
+  defp answers!(fake, row, said, done, deadline) do
+    cond do
+      done.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("Aqua's turn on the program did not complete")
+
+      true ->
+        receive do
+          {:session, "recv", %{"after" => 0}, _fields} ->
+            say(fake, row, %{
+              "t" => "hello",
+              "v" => Opus.Brain.Wire.version(),
+              "driver" => Arca.McpServerStorage.driver(row),
+              "boot" => "b#{System.unique_integer([:positive])}"
+            })
+
+          {:session, "send", %{"lines" => [line]}, _fields} ->
+            answer!(fake, row, said, Jason.decode!(line))
+        after
+          100 -> :ok
+        end
+
+        answers!(fake, row, said, done, deadline)
+    end
+  end
+
+  # The driver's answer to one line the holder wrote it.
+  defp answer!(fake, row, said, %{"t" => t} = line) do
+    cond do
+      t == "models" ->
+        say(fake, row, listed(line["id"], @listing))
+
+      t == "start" ->
+        say(fake, row, %{
+          "t" => "started",
+          "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
+          "fresh" => true,
+          "held" => []
+        })
+
+      t == "work" ->
+        say(fake, row, %{"t" => "accepted", "id" => line["id"]})
+
+      t == "post" ->
+        %{"id" => id, "work" => work} = line
+        say(fake, row, %{"t" => "accepted", "id" => id})
+
+        say(fake, row, %{
+          "t" => "said",
+          "gen" => 0,
+          "work" => work,
+          "message" => "msg_1",
+          "text" => said
+        })
+
+        say(fake, row, %{
+          "t" => "idle",
+          "gen" => 0,
+          "work" => work,
+          "answered" => [id],
+          "stop" => "end_turn"
+        })
+
+      true ->
+        :ok
+    end
+  end
+
+  # What the catalyst `resolved` declares in its `describe` of each model,
+  # by the options of each, as the capabilities it was read for keep it
+  # (`Aqua.Models.capabilities/5`), forgotten when the test ends.
+  defp described!(ctx, resolved, options_by_model) do
+    on_exit(fn -> Arca.Cache.delete_match({:model_caps, ctx.athanor_id, :_, :_, :_}) end)
+
+    for {model, options} <- options_by_model,
+        do:
+          Arca.Cache.put(
+            {:model_caps, ctx.athanor_id, resolved, model, nil},
+            %{options: options},
+            600_000
+          )
+
+    :ok
+  end
+
+  # Aqua's grant as it is stored: each of its profiles with the head
+  # consent it holds, whole.
+  defp aqua_grant!(actor) do
+    {:ok, profiles} = Arca.ConsentStorage.profiles(actor, Prima.AgentRef.soul_ref())
+    assert profiles != []
+
+    for profile <- profiles do
+      {:ok, head, refs} = Arca.ConsentStorage.get_head(actor, profile.id)
+      {profile, head, refs}
     end
   end
 

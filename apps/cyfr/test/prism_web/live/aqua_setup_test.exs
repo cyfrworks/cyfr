@@ -183,23 +183,21 @@ defmodule PrismWeb.AquaSetupTest do
 
   # CYFR's own seed ships no crew member: the setup suggests the member on
   # the brain the shared key connects, which the person makes with a model
-  # from that brain's own listing. Making grants nothing: the member's own
-  # sheet opens at once and its consent stands only once confirmed, and
-  # choosing it for Aqua asks Aqua's in a sheet of its own. Aqua then
+  # from that brain's own listing. A member holds no grant of its own:
+  # making it asks nothing and it is ready at once, and choosing it for
+  # Aqua asks nothing and leaves Aqua's grant as it was. Aqua then
   # answers. A member made is suggested no more, and a second Make of it
   # writes nothing.
   @tag seated: false
   test "a newcomer with no crew makes the member the setup suggests on the shared key's brain, " <>
-         "grants it, chooses it for Aqua, and Aqua answers",
+         "chooses it for Aqua, and Aqua answers, asked nothing on the way",
        %{conn: conn, ctx: ctx, port: port} do
     actor = Sanctum.Context.actor(ctx)
     person = %{ctx | origin: :interactive}
     member = "chat-fixture"
-    ref = Prima.AgentRef.ref(member)
     suggest = "#aqua-setup-suggest-" <> member
     made = "#aqua-setup-made-" <> member
     sheet = ~s(#system-layer-dialog [data-kind="grant"])
-    confirm = ~s(#system-layer-dialog button[phx-click="confirm"])
 
     conn =
       log_in_user(conn, %{user_id: ctx.user_id, email: "newcomer@example.com", namespace: nil},
@@ -231,9 +229,9 @@ defmodule PrismWeb.AquaSetupTest do
           do: value
 
     view |> form(suggest, %{"model" => model}) |> render_submit()
-    wait_until(fn -> has_element?(view, sheet, ref) end, 10_000, "the member's grant")
 
-    # Made, it holds no consent until the person confirms its sheet.
+    # Made, it asks nothing, holds no grant of its own and is ready, since
+    # its brain is connected.
     assert {:ok,
             %{
               "catalyst_ref" => "catalyst:local.chat-fixture",
@@ -241,34 +239,24 @@ defmodule PrismWeb.AquaSetupTest do
               "mode" => "auto"
             }} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => member})
 
-    assert {:ok, []} = Arca.ConsentStorage.profiles(actor, ref)
-    refute match?({:ok, _}, Opus.authority_for(person, :default, ref))
-
-    wait_until(
-      fn -> has_element?(view, made, "waiting for its grant.") end,
-      10_000,
-      "the made member"
-    )
-
-    view |> element(confirm) |> render_click()
-    wait_until(fn -> render(view) =~ "#{member} consented." end, 10_000, "the member's consent")
-    assert {:ok, [_profile]} = Arca.ConsentStorage.profiles(actor, ref)
     wait_until(fn -> has_element?(view, made, "ready.") end, 10_000, "the member ready")
+    refute has_element?(view, sheet)
     refute has_element?(view, suggest)
+    assert {:ok, []} = Arca.ConsentStorage.profiles(actor, Prima.AgentRef.ref(member))
 
-    # Chosen for Aqua: Aqua's own sheet, and only its confirmation seats it.
+    # Chosen for Aqua, it asks nothing either, and Aqua's grant is what it
+    # was before the choice.
+    granted = aqua_grant!(actor)
     view |> form("#aqua-setup-member", %{"member" => member}) |> render_change()
-    wait_until(fn -> has_element?(view, sheet, "agent:local.aqua") end, 10_000, "Aqua's grant")
-    refute has_element?(view, ~s([data-test="setup-aqua-done"]))
-
-    view |> element(confirm) |> render_click()
-    wait_until(fn -> render(view) =~ "aqua consented." end, 10_000, "Aqua's consent")
 
     wait_until(
       fn -> has_element?(view, ~s([data-test="setup-aqua-done"]), "Aqua runs on #{member}.") end,
       10_000,
       "Aqua seated"
     )
+
+    refute has_element?(view, sheet)
+    assert aqua_grant!(actor) == granted
 
     # Aqua answers through the key it was shared, attached on the way to
     # the upstream.
@@ -335,5 +323,17 @@ defmodule PrismWeb.AquaSetupTest do
     assert for(%{name: name} <- agents, name != "aqua", do: name) == [member]
 
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  # Aqua's grant as it is stored: each of its profiles with the head
+  # consent it holds, whole.
+  defp aqua_grant!(actor) do
+    {:ok, profiles} = Arca.ConsentStorage.profiles(actor, Prima.AgentRef.soul_ref())
+    assert profiles != []
+
+    for profile <- profiles do
+      {:ok, head, refs} = Arca.ConsentStorage.get_head(actor, profile.id)
+      {profile, head, refs}
+    end
   end
 end
