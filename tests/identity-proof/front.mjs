@@ -5,10 +5,11 @@
 // proof's own loopback address, port 443, presenting the certificate the
 // run's authority issued for the directory's name, and forwarding each
 // request to the directory cell's proxy listener as the stack's Caddy
-// forwards to cyfr's (X-Forwarded-For, -Proto and -Host). The homes'
-// directory client reaches it at https://dir.test, the name each cell's
-// ERL_INETRC maps to this address, and trusts it through the run's
-// authority.
+// forwards to cyfr's (X-Forwarded-For, -Proto and -Host), a WebSocket
+// upgrade included. The homes' directory client reaches it at
+// https://dir.test, the name each cell's ERL_INETRC maps to this address,
+// and trusts it through the run's authority. The CYFR app's proof
+// (tests/desktop-proof) fronts a CYFR the same way.
 //
 // A control listener beside it (plain HTTP, the same address) lets the
 // proof break the directory on purpose, and reports what reached it:
@@ -16,7 +17,8 @@
 //   POST /fault {"mode": …}   none | down
 //     down                       every connection is closed before it is
 //                                answered: the directory is unreachable
-//   GET /seen                 every request: method, path, status, fault
+//   GET /seen                 every request: method, path, user agent,
+//                             status, fault
 //   GET /health               200 once listening, with the TOKEN it was
 //                             started with, so front.sh accepts readiness
 //                             from its own container alone
@@ -24,6 +26,7 @@
 // Usage: node front.mjs LISTEN_HOST:PORT CONTROL_PORT NAME CERT KEY UPSTREAM_PORT TOKEN
 
 import { createServer as createHttp, request as forward } from "node:http";
+import { connect } from "node:net";
 import { createServer as createTls } from "node:https";
 import { readFileSync } from "node:fs";
 
@@ -37,7 +40,7 @@ let mode = "none";
 const seen = [];
 
 const front = createTls({ cert: readFileSync(cert), key: readFileSync(key) }, (req, res) => {
-  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, status: null, fault: null };
+  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, status: null, fault: null };
   seen.push(account);
 
   if (mode === "down") {
@@ -69,6 +72,33 @@ const front = createTls({ cert: readFileSync(cert), key: readFileSync(key) }, (r
     res.end(`front: the directory does not answer: ${error.message}`);
   });
   req.pipe(outbound);
+});
+
+// An upgrade (a WebSocket) goes through whole: its request head as the
+// front forwards any request's, then both ways byte for byte.
+front.on("upgrade", (req, socket, head) => {
+  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, status: 101, fault: null };
+  seen.push(account);
+  if (mode === "down") {
+    account.fault = "down";
+    socket.destroy();
+    return;
+  }
+  const headers = {
+    ...Object.fromEntries(Object.entries(req.headers).filter(([header]) => !header.startsWith("x-forwarded-"))),
+    "x-forwarded-for": "127.0.0.1",
+    "x-forwarded-proto": "https",
+    "x-forwarded-host": req.headers.host,
+  };
+  const upstream = connect(Number(upstreamPort), "127.0.0.1", () => {
+    upstream.write(`${req.method} ${req.url} HTTP/1.1\r\n` +
+      Object.entries(headers).flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((one) => `${k}: ${one}\r\n`)).join("") + "\r\n");
+    upstream.write(head);
+    upstream.pipe(socket);
+    socket.pipe(upstream);
+  });
+  upstream.on("error", () => socket.destroy());
+  socket.on("error", () => upstream.destroy());
 });
 
 const control = createHttp((req, res) => {

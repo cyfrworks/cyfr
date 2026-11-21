@@ -1550,8 +1550,8 @@ new_rows='go-codex go-keeper js desktop-js catalysts test-wasm'
 for spec in \
   'apps/codex/cmd/x.go|go-codex' \
   'apps/codex/desktop/src/app.js|go-codex desktop-js' \
-  'tests/desktop-proof/native/smoke.sh|go-codex' \
-  'tests/desktop-proof/connect/run.sh|go-codex' \
+  'tests/desktop-proof/native/smoke.sh|go-codex desktop-js' \
+  'tests/desktop-proof/connect/run.sh|go-codex desktop-js' \
   'apps/cyfr/assets/js/hooks/aqua_chat.js|js' \
   'apps/cyfr/lib/cyfr_web/plugs/browser_csp.ex|' \
   'apps/cyfr/lib/emissary/web/tincture_assets.ex|' \

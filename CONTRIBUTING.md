@@ -261,8 +261,16 @@ same worktree refuses, naming the run that holds it.
   CYFR server and no signing credentials: the refused switches,
   startup and the chooser on 127.0.0.1:7340, the renderers' sandbox on
   Linux, a second launch, a lost renderer or `cyfr`, an occupied port and
-  the app's end. Its header names what the smoke leaves to the real-home
-  proof and to a person at the machine.
+  the app's end. Its header names what the smoke leaves to the real-CYFR
+  proofs and to a person at the machine.
+
+  The Test workflow's `desktop-home` job runs those proofs on Linux amd64
+  and arm64 (`tests/desktop-proof/home.sh`, its README): this tree's DEB
+  installed in a client container with no Docker, and each tracked
+  `tests/desktop-proof/*/run.sh` against a CYFR and an account directory
+  from the run's app image of the same architecture. Run here, it needs
+  127.0.0.1:7340 free on this machine for its whole run, so not beside a
+  handoff whose Go rows run.
 
   Past `handoff`, the pull request's run on GitHub is the check, and it
   runs every check in parallel; a CI job is reproduced here by running

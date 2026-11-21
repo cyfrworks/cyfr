@@ -3,12 +3,12 @@
 
 import assert from "node:assert/strict"
 import {createHash} from "node:crypto"
-import {mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync} from "node:fs"
+import {existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync} from "node:fs"
 import {tmpdir} from "node:os"
 import path from "node:path"
 import {test} from "node:test"
 
-import {createPackage} from "@electron/asar"
+import {createPackage, extractFile} from "@electron/asar"
 
 import {PROOF_MARKER, Refused, checkPackage, packaged} from "../scripts/check-package.mjs"
 
@@ -96,4 +96,25 @@ test("electron-builder's renames are each named, and nothing else is renamed", (
     "CYFR.app/Contents/Frameworks/CYFR Helper.app/Contents/Info.plist")
   assert.equal(packaged("Electron.app/Contents/Frameworks/Electron Framework.framework/Electron Framework", "darwin", "CYFR"),
     "CYFR.app/Contents/Frameworks/Electron Framework.framework/Electron Framework")
+})
+
+// The real-CYFR proofs replace the app's entry with a bundle of their own
+// (tests/desktop-proof/pack.mjs). Each such bundle carries the proof-only
+// marker, so a package holding it is refused even where the bundle is the
+// one staged: the swap cannot ship.
+test("every proof entry's bundle is refused in a package", async (t) => {
+  const {pack} = await import("../../../../tests/desktop-proof/pack.mjs")
+  const proofs = new URL("../../../../tests/desktop-proof/", import.meta.url)
+  const entries = readdirSync(proofs, {withFileTypes: true}).filter((d) => d.isDirectory())
+    .map((d) => path.join(proofs.pathname, d.name, "proof.js")).filter((f) => existsSync(f))
+  assert.ok(entries.length > 0, "no proof entry found")
+  for (const entry of entries) {
+    const dir = mkdtempSync(path.join(tmpdir(), "cyfr-proof-bundle-"))
+    t.after(() => rmSync(dir, {recursive: true, force: true}))
+    await pack(entry, path.join(dir, "app.asar"))
+    const bundled = extractFile(path.join(dir, "app.asar"), "main.js")
+    const out = await unpacked(t, ({files}) => { files["main.js"] = bundled })
+    assert.throws(() => checkPackage(out, {...staged, files: {...staged.files, "main.js": bundled}}, "linux"),
+      (e) => e instanceof Refused && /proof-only marker/.test(e.message), entry)
+  }
 })
