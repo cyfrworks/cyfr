@@ -13,8 +13,10 @@ leave main's first-parent line), asking for each commit's runs by its sha.
 For each workflow with such a run, the run that covers the commit is the
 one on the earliest of those commits, in git's topological order (every
 commit after its parents; between two lines that both descend from the
-commit, git's order decides), that holds a run of it: a waiting push run
-gives way to a newer push's, so a merge's run is often a later commit's. A cancelled run covers nothing
+commit, git's order decides), that holds a run of it: in a workflow whose
+push runs on main share a group (every one but Test, whose runs each have
+their own), a waiting push run gives way to a newer push's, so a merge's
+run is often a later commit's. A cancelled run covers nothing
 while another run does. It decides nothing about runs GitHub did not make:
 a workflow with no such run is not listed, so a run that was due and never
 made is not detected. One line per workflow:
