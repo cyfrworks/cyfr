@@ -840,7 +840,7 @@ defmodule Sanctum.Consent.CommitTest do
       assert blob["nodes"][ref]["edges"]["@ingress"]["egress"]["domains"] == []
     end
 
-    # What a re-grant keeps has one definition (`Plan.head_narrowing/4`): the
+    # What a re-grant keeps has one definition (`Plan.head_narrowing/5`): the
     # plan answers it, the grant sheet commits it as its decisions'
     # `subset`, and `Commit.grant/3` re-issues it. Each path, run over the
     # same head and the same ask, writes the same grant.
@@ -909,7 +909,8 @@ defmodule Sanctum.Consent.CommitTest do
       # unclamped reading does, the ask being the unnarrowed revision's.
       asked_policy = head!(ctx, profile_id).resolved_policy
 
-      assert Plan.head_narrowing(profile_id, narrowed, ref, asked_policy) ==
+      # A reagent's stored row names no brain, so no node is excepted.
+      assert Plan.head_narrowing(profile_id, narrowed, ref, asked_policy, %{}) ==
                {:ok, unclamped_narrowing(narrowed.resolved_policy, asked_policy, ref)}
 
       assert unclamped_narrowing(narrowed.resolved_policy, asked_policy, ref) == narrowing

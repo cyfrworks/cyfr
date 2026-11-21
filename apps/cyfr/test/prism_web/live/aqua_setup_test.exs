@@ -280,6 +280,16 @@ defmodule PrismWeb.AquaSetupTest do
     wait_until(fn -> has_element?(view, sheet, "agent:local.aqua") end, 10_000, "Aqua's grant")
     refute has_element?(view, ~s([data-test="setup-aqua-done"]))
 
+    # The brain it chose is new to Aqua's grant, which the sheet says, and
+    # it opens granted as it asks, never as narrowed by the person.
+    assert has_element?(
+             view,
+             ~s(#system-layer-dialog [data-test="grant-delta"]),
+             "asks for 127.0.0.1, which your grant does not give"
+           )
+
+    refute has_element?(view, "#system-layer-dialog", "narrowed by you")
+
     view |> element(confirm) |> render_click()
     wait_until(fn -> render(view) =~ "aqua consented." end, 10_000, "Aqua's consent")
 

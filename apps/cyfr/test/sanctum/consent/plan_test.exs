@@ -378,7 +378,7 @@ defmodule Sanctum.Consent.PlanTest do
       assert plan.head_narrowing == %{}
     end
 
-    # What a re-grant keeps (`Plan.head_narrowing/4`): the head's narrowing
+    # What a re-grant keeps (`Plan.head_narrowing/5`): the head's narrowing
     # against the ask as it stands, which the grant sheet opens on.
     test "a re-grant answers the narrowing its head holds, and a method newly asked for " <>
            "falls outside it",
