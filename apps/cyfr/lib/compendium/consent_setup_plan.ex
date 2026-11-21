@@ -16,8 +16,7 @@ defmodule Compendium.ConsentSetupPlan do
 
   Each row of the head revision is read by what it names
   (`Sanctum.Consent.row_binding/3`): the athanor's own entry, held
-  to the digest the person approved; the program row a login need binds,
-  standing at the digest approved; a selection of another profile's
+  to the digest the person approved; a selection of another profile's
   key, resolved as a run resolves it and its lender's entry held to the
   same check, or reported not ready with the reason it resolves to
   nothing; and a share, read as the person is offered it, its owner

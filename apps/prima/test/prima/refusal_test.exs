@@ -168,7 +168,6 @@ defmodule Prima.RefusalTest do
     {{:not_found, {:blob, "sha256:ab12"}}, :not_found},
     {{:invalid_reference, "Invalid reference format: x"}, :invalid_argument},
     {{:invalid_reference, :empty}, :invalid_argument},
-    {{:program_unavailable, "claude"}, :setup_required},
     {{:oauth_client_required, "google"}, :setup_required},
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},

@@ -35,12 +35,13 @@ defmodule Arca.ConsentStorage do
   shared lock (`Arca.QueryHelpers.for_share/1`) on every vault entry they
   reach, the athanor's own and the source entry of every share they bind,
   in one query over those `{athanor_id, id}` pairs in that order; then on
-  every program row of the athanor's they bind, in id order; then on
-  every share they bind, in id order. They refuse with nothing written
+  every `mcp_servers` row of the athanor's whose tools the blob grants,
+  in id order; then on every share they bind, in id order. They refuse with nothing written
   when an entry is not `active` (`{:error, {:entry_unavailable, status}}`)
   or has no row (`{:error, :not_found}`; an athanor's own entry is read in
-  the revision's athanor alone), when a program row has no row in the
-  revision's athanor (`{:error, :not_found}`), when a share has no row
+  the revision's athanor alone), when a server whose tools the blob grants
+  has no row of that name in the revision's athanor
+  (`{:error, {:tool_server_not_found, name}}`), when a share has no row
   (`{:error, :not_found}`) or is not `active`
   (`{:error, {:share_unavailable, status}}`), when a share's audience is
   no longer the one its binding was admitted under, read under its lock
@@ -123,8 +124,7 @@ defmodule Arca.ConsentStorage do
   One binding of a revision as it is read back: its key, its scope
   (`"share"` or `"athanor"`, derived from what it names by
   `Arca.Schemas.ConsentVaultRef.scope/1`), the one thing it names (an
-  athanor's entry, an athanor's program row, a share or a selection's
-  label; the others nil), the
+  athanor's entry, a share or a selection's label; the others nil), the
   digest it was approved at (nil for a selection that pinned none) and
   its lifetime.
   """
@@ -359,7 +359,7 @@ defmodule Arca.ConsentStorage do
     |> Ecto.Multi.run(:entries, fn _repo, %{sources: sources} ->
       lock_vault_entries(refs, athanor_id, sources)
     end)
-    |> Ecto.Multi.run(:programs, fn _repo, _done -> lock_servers(servers, athanor_id) end)
+    |> Ecto.Multi.run(:servers, fn _repo, _done -> lock_servers(servers, athanor_id) end)
     |> Ecto.Multi.run(:shares, fn _repo, %{sources: sources, entries: entries} ->
       lock_shares(refs, sources, entries)
     end)

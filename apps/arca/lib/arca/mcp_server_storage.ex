@@ -235,8 +235,7 @@ defmodule Arca.McpServerStorage do
   In one transaction the row is locked, every profile whose head stands
   on it is blocked to ask again (`Arca.ConsentStorage.head_profiles_on_row/2`
   through `block_dependents/4`, the order a revision binding the row
-  takes), and then the row is deleted; a login need's bindings go with it
-  (the baseline's cascade).
+  takes), and then the row is deleted.
 
   With `expected` (`%{id, epoch}`, the row a person confirmed removing),
   the row under `name` must still be that row at that epoch, compared

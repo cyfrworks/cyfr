@@ -63,8 +63,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     questions()
     logs()
     retention()
-    # Before the vault and consent: a binding of a login need names a
-    # program row.
     registrations()
     vault_and_consent()
     file_offers()

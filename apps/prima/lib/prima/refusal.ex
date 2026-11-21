@@ -442,13 +442,6 @@ defmodule Prima.Refusal do
   defp row({:invalid_caps, _detail} = failure),
     do: {:invalid_argument, "The manifest is refused: #{Prima.Manifest.Caps.words(failure)}."}
 
-  # A login need's mount (`Sanctum.Mount`): the program row its binding
-  # names is not set up as a program with a kept home.
-  defp row({:program_unavailable, name}) when is_binary(name),
-    do:
-      {:setup_required,
-       "The program #{name} is not set up with a kept home; set it up on Programs."}
-
   # An OAuth grant or refresh for a provider this athanor holds no OAuth
   # client for (`Sanctum.ProviderCredentials`): the client is set on the
   # Vault page, which shows the return address to register with it.
