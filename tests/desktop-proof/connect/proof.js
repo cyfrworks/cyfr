@@ -48,12 +48,18 @@ app.commandLine.appendSwitch("use-fake-device-for-media-stream")
 
 const said = []
 const record = {rows: [], stopped: null}
-const log = (line) => appendFileSync(path.join(OUT, "connect.log"), `${new Date().toISOString()} ${line}\n`)
+// What the proof writes carries no address's fragment, which may hold the
+// run token, an unlock ticket or an enrolment offer: every address in it
+// ends at its "#".
+const scrub = (text) => String(text).replace(/((?:https?|data):[^\s"'#<>\\]*)#[^\s"'<>)\]\\]*/g, "$1#")
+// JSON of `value` with every string in it scrubbed.
+const scrubbed = (value, space) => JSON.stringify(value, (_key, v) => typeof v === "string" ? scrub(v) : v, space)
+const log = (line) => appendFileSync(path.join(OUT, "connect.log"), `${new Date().toISOString()} ${scrub(line)}\n`)
 
 function row(name, ok, what, detail = {}) {
   record.rows.push({name, ok: !!ok, what, detail})
-  appendFileSync(path.join(OUT, "connect.txt"), `${ok ? "PASS" : "FAIL"} ${name}: ${what}${ok ? "" : ` ${JSON.stringify(detail)}`}\n`)
-  log(`${ok ? "PASS" : "FAIL"} ${name} ${JSON.stringify(detail)}`)
+  appendFileSync(path.join(OUT, "connect.txt"), `${ok ? "PASS" : "FAIL"} ${name}: ${what}${ok ? "" : ` ${scrubbed(detail)}`}\n`)
+  log(`${ok ? "PASS" : "FAIL"} ${name} ${scrubbed(detail)}`)
   if (!ok) throw new Stop(name)
 }
 
@@ -108,7 +114,7 @@ const atHome = (url) => url.startsWith(HOME + "/") && !/^\/(login|setup|auth\/)/
 async function submit(wc, action, fields = {}, button = null) {
   await js(wc, `(() => {
     const f = document.querySelector('form[action="${action}"]')
-    if (!f) throw new Error("no form ${action} on " + location.href)
+    if (!f) throw new Error("no form ${action} on " + location.origin + location.pathname)
     for (const [k, v] of Object.entries(${JSON.stringify(fields)})) {
       const inputs = f.querySelectorAll('[name="' + k + '"]')
       if (!inputs.length) throw new Error("no field " + k)
@@ -259,6 +265,7 @@ async function load(wc, url) {
 // content window shows the CYFR.
 async function openCYFR(w, passphrase) {
   const acted = new Set()
+  const pages = []
   await waitFor(async () => {
     const win = content()
     if (!win) return null
@@ -268,11 +275,13 @@ async function openCYFR(w, passphrase) {
       document.querySelector('form[action="/unlock"]') ? "locked" : null`)
     if (page && !acted.has(page + win.webContents.getURL())) {
       acted.add(page + win.webContents.getURL())
+      pages.push(page)
       if (page === "locked") await submit(win.webContents, "/unlock", {secret: passphrase})
       else await submit(win.webContents, "/open")
     }
     return null
   }, "Prism, from the device's pages")
+  return pages
 }
 
 // ---- the proof ----
@@ -430,8 +439,9 @@ async function connectPhase() {
   const setupPage = await waitFor(async () => (await text(w.webContents)).includes("Set up CYFR"), "the setup page")
   row("device_pages", setupPage, "once approved, the device's pages open in the content window", {url: bare(w.webContents.getURL())})
 
-  // device_key: the passphrase drawn, the device's key made under it, and
-  // its code shown beside the account service's address.
+  // enrolment_page: the passphrase drawn and given, the enrolment page
+  // with the key's code beside the account service's address. That the
+  // key is made under the passphrase is the holder's tests' to show.
   await submit(w.webContents, "/passphrase")
   const passphrase = await waitFor(() => js(w.webContents, `document.querySelector("p.code")?.textContent.trim() || null`), "the passphrase")
   await submit(w.webContents, "/make", {secret: passphrase, again: passphrase})
@@ -441,8 +451,8 @@ async function connectPhase() {
     const b = [...document.querySelectorAll("p b")].map((x) => x.textContent)
     return {code: b[0], service: b[1], add: document.querySelector("p.code")?.textContent.trim()}
   })()`), "the enrolment page")
-  row("device_key", enroll.service === DIRECTORY && /^[0-9a-z]{16}$/i.test(enroll.code) && enroll.add.startsWith(DIRECTORY + "/account/add#"),
-    "the key is made under the passphrase; the page shows its code at the account service's address", {...enroll, add: bare(enroll.add)})
+  row("enrolment_page", enroll.service === DIRECTORY && /^[0-9a-z]{16}$/i.test(enroll.code) && enroll.add.startsWith(DIRECTORY + "/account/add#"),
+    "with a passphrase given, the enrolment page shows the key's code beside the account service's address", {...enroll, add: bare(enroll.add)})
 
   // admission_refused: "I approved it" before any approval is refused.
   await submit(w.webContents, "/enroll", {name: NAME})
@@ -505,8 +515,9 @@ async function connectPhase() {
   // the frame sent to the CYFR's company sign-in, and the frame sending
   // the top frame on, asked from inside the frame (the engine's initiator
   // is the frame).
-  const windowsBefore = appWindows().length
   const opened = await js(w.webContents, `window.open(${JSON.stringify(DIRECTORY + "/")}) === null`)
+  const windowAnswer = (await waitFor(() => decisions.find((d) => d.window === w.webContents.id && d.name === "window-open" &&
+    d.url === DIRECTORY + "/"), "main's decision on the window asked for elsewhere")).action
   const away = DIRECTORY + "/account/devices"
   await js(w.webContents, `location.href = ${JSON.stringify(away)}; "asked"`)
   const awayPrevented = await decided(w.webContents, away, false, "main's decision on the top frame sent elsewhere")
@@ -518,9 +529,9 @@ async function connectPhase() {
   const topAsked = await frame("proof-frame").executeJavaScript(`top.location.href = ${JSON.stringify(fromFrame)}; "asked"`, true)
   const topPrevented = await decided(w.webContents, fromFrame, false, "main's decision on the frame sending the top frame on")
   const company = (await reachedSince("x.test", xBefore)).filter((r) => r.path === "/company-login").length
-  const nav = {opened, windows: appWindows().length - windowsBefore, awayPrevented, companyAsked, companyPrevented, company,
+  const nav = {opened, windowAnswer, awayPrevented, companyAsked, companyPrevented, company,
     topAsked, topPrevented, showing: bare(w.webContents.getURL())}
-  row("navigation", opened && nav.windows === 0 && awayPrevented && companyAsked === "asked" && companyPrevented && company === 0 &&
+  row("navigation", opened && windowAnswer === "deny" && awayPrevented && companyAsked === "asked" && companyPrevented && company === 0 &&
     topAsked === "asked" && topPrevented && atHome(w.webContents.getURL()),
     "main refuses the top frame elsewhere, a window elsewhere, a frame at the company sign-in and a frame moving the top frame", nav)
 
@@ -554,11 +565,21 @@ async function connectPhase() {
   await js(w.webContents, `document.querySelector('[data-test="confirm-device"]').click()`)
   const confirm = await waitFor(() => appWindows().find((x) => x.getParentWindow() === w && x.webContents.getURL().startsWith(LOOPBACK + "/confirm")),
     "the device's confirmation window")
-  await waitFor(() => js(confirm.webContents, `!!document.querySelector('form[action="/confirm/decide"]')`), "the confirmation page")
+  const confirmForm = () => js(confirm.webContents, `!!document.querySelector('form[action="/confirm/decide"]')`)
+  await waitFor(confirmForm, "the confirmation page")
+  // A wrong passphrase first: refused, the same confirmation asked again,
+  // and no key shown in Prism.
+  const loads = () => history.length
+  const loadsBefore = loads()
+  await submit(confirm.webContents, "/confirm/decide", {secret: passphrase + " wrong"}, 'button[value="confirm"]')
+  const wrong = await waitFor(async () => loads() > loadsBefore && !confirm.webContents.isLoading() && await confirmForm() &&
+    js(confirm.webContents, `document.querySelector(".notice")?.textContent.trim() || null`), "the wrong passphrase's refusal")
+  const keyAfterWrong = (await text(w.webContents)).includes("It will not be shown again")
   await submit(confirm.webContents, "/confirm/decide", {secret: passphrase}, 'button[value="confirm"]')
   const shownKey = await waitFor(async () => (await text(w.webContents)).includes("It will not be shown again"), "the key shown")
-  row("confirm", shownKey, "a key asked for in Prism is confirmed on this device in a window of its own, with the passphrase again",
-    {child: confirm.isDestroyed() ? "closed" : bare(confirm.webContents.getURL())})
+  row("confirm", !!wrong && !keyAfterWrong && shownKey,
+    "a key asked for in Prism waits on this device's own window: a wrong passphrase is refused and asked again, the right one confirms it",
+    {wrong, keyAfterWrong, child: confirm.isDestroyed() ? "closed" : bare(confirm.webContents.getURL())})
 
   // The lock rows. On this road cyfr's lock also retires the session
   // through the device's channel, so the cookie refused afterwards does
@@ -573,10 +594,11 @@ async function connectPhase() {
     "the device's Lock closes Prism; main's sign-out of a session that opened a page is acknowledged, and its cookie opens nothing", lockDetail(out))
 
   // reconnect: unlocked again with the passphrase, a new session.
-  await openCYFR(out.back, passphrase)
+  const start = await openCYFR(out.back, passphrase)
   w = await contentAt(atHome, "Prism again")
   const renewed = await sessionCookie(w)
-  row("reconnect", !!renewed && renewed !== out.cookie, "the passphrase opens Prism again under a new session", {})
+  row("reconnect", start[0] === "locked" && !!renewed && renewed !== out.cookie,
+    "the lock left the device locked; its passphrase opens Prism again under a new session", {start})
 
   // system_lock: the computer's lock closes Prism at once, before anything
   // is awaited, and signs its session out.
@@ -686,6 +708,15 @@ app.on("browser-window-created", (_event, win) => {
     if (details.isMainFrame) history.push(details.url)
     if (details.isMainFrame) log(`window ${id} starts ${bare(details.url)}`)
   })
+  // Main's window handler, set after this, answers through this wrapper,
+  // which records each answer as main's decision on that request.
+  const setHandler = wc.setWindowOpenHandler.bind(wc)
+  wc.setWindowOpenHandler = (handler) => setHandler((details) => {
+    const answer = handler(details)
+    decisions.push({window: id, name: "window-open", url: details.url, action: answer.action})
+    log(`window ${id} window-open ${bare(details.url)} ${answer.action}`)
+    return answer
+  })
   wc.on("did-fail-load", (_e, code, description, url, isMainFrame) => {
     if (isMainFrame) log(`window ${id} failed ${code} ${description} ${bare(url)}`)
   })
@@ -717,7 +748,7 @@ function childOfThis(word) {
 
 function finish(code) {
   appendFileSync(path.join(OUT, "connect.txt"), `RESULT ${PHASE} ${code === 0 ? "passed" : "failed"}\n`)
-  writeFileSync(path.join(OUT, `connect-${PHASE}.json`), JSON.stringify(record, null, 2))
+  writeFileSync(path.join(OUT, `connect-${PHASE}.json`), scrubbed(record, 2))
   app.exit(code)
 }
 
@@ -743,8 +774,8 @@ async function where() {
 if (!PHASES[PHASE]) throw new Error(`no phase ${PHASE}`)
 app.whenReady().then(PHASES[PHASE]).then(() => finish(record.rows.every((r) => r.ok) ? 0 : 1), async (e) => {
   if (!(e instanceof Stop)) {
-    record.stopped = e.stack ?? String(e)
-    appendFileSync(path.join(OUT, "connect.txt"), `FAIL stopped: ${e.message}\n`)
+    record.stopped = scrub(e.stack ?? String(e))
+    appendFileSync(path.join(OUT, "connect.txt"), `FAIL stopped: ${scrub(e.message)}\n`)
   }
   record.where = await where().catch((x) => String(x))
   record.agents = await Promise.all(Object.keys(inputs.fronts).map(async (h) =>

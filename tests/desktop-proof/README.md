@@ -61,7 +61,7 @@ account's passkey on Chromium's virtual authenticator (CDP through its
 gives the app's engine a fake camera and microphone, so a page the app let
 have them would get them. Each row is a claim about the running app and
 fails when the behaviour it names is broken; the proof stops at the first
-that fails. `run.sh` launches the app three times: `connect`, then
+that fails. The proof has 28 rows over three launches of the app (`run.sh`): `connect`, then
 `remembered` and `changed` on what that left on this computer.
 
 | Row | What holds | What the row observes |
@@ -73,18 +73,19 @@ that fails. `run.sh` launches the app three times: `connect`, then
 | `custom_directory` | an account service other than cyfr.run is shown whole and asked about | the chooser's question |
 | `lock_during_connect` | a lock while a Connect runs ends it; the chooser comes back and `cyfr` runs on | `cyfr`'s request for the CYFR's sign-in page held at the front (fault `hold`), then, after the lock, given up by `cyfr`; the chooser again; no end of `cyfr` |
 | `decline` | Cancel says nothing was sent, and nothing of the app reaches the account service until it is approved; the next Connect asks again | the front of `dir.test`, from before the first question to the approval |
-| `device_pages`, `device_key` | once approved, the device's pages; the key made under the passphrase, its code shown beside the account service's address | the device's pages |
+| `device_pages` | once approved, the device's pages | the device's pages |
+| `enrolment_page` | with a passphrase given, the enrolment page shows the key's code beside the account service's address | the enrolment page alone; that the key is made under the passphrase is the Go holder's tests' to show, not this row's |
 | `admission_refused` | "I approved it" before any approval is refused, and says so | the device's page |
 | `approved` | the second client shows the same code and adds the key with the passkey | the account pages |
 | `prism` | the device is admitted and Prism opens in the content window, signed in | the content window and its session cookie |
 | `passkeys` | both passkey calls, in Prism's page and in a frame of it, are refused by the app's permissions policy (Prism names none for its page) | each call's refusal, which names the denied feature, and the reported feature policy |
 | `media` | the camera and the microphone are refused to Prism's page and to a frame it allows them to | each request's `NotAllowedError` |
-| `navigation` | main refuses the top frame sent elsewhere, a window elsewhere, a frame sent to the CYFR's company sign-in and a frame moving the top frame (asked from inside the frame, so the engine's initiator is the frame); Prism's page and the frame allow each | main's decision on each navigation's event; `window.open`'s answer; nothing at the front for the company sign-in |
+| `navigation` | main refuses the top frame sent elsewhere, a window elsewhere, a frame sent to the CYFR's company sign-in and a frame moving the top frame (asked from inside the frame, so the engine's initiator is the frame); Prism's page and the frame allow each | main's decision on each navigation's event and on the window request, read from its window handler; nothing at the front for the company sign-in |
 | `prism_frame_rules` | Prism's own frame rules hold in the app: a frame Prism serves (a canvas) is given no window and cannot move the top frame. This is Prism's sandbox refusing, not the app | the engine's answers in the frame |
-| `confirm` | an API key asked for in Prism is confirmed on this device, in the device's own window, with the passphrase again | the key shown in Prism |
+| `confirm` | an API key asked for in Prism waits on the device's own window: a wrong passphrase is refused and asked again, the right one confirms it | the refusal and the same confirmation asked again, no key in Prism; then the key shown in Prism |
 | `lock`, `system_lock`, `renderer_loss` | Prism's Lock, the computer's lock (main's lock-screen event, as the system sends it) and Prism's page stopping each close Prism and sign its session out, confirmed | the session's cookie opening a page before; main's sign-out answered at the front with the CYFR's acknowledgement; the chooser opened with no unconfirmed notice; the cookie refused after. On this road `cyfr`'s lock also retires the session through the device's channel, so the refused cookie alone does not tell which retired it; the passkey road shows the sign-out alone |
 | `system_lock_at_once` | the computer's lock closes Prism's window at once | the window, destroyed before anything is awaited |
-| `reconnect` | the passphrase opens Prism again under a new session | a new session cookie |
+| `reconnect` | the lock left the device locked; its passphrase opens Prism again under a new session | the locked device's page first; a new session cookie |
 | `offline_lock` | with the CYFR unreachable, the lock still closes Prism, and the chooser says the sign-out is unconfirmed | the front taking `down`; the chooser's notice |
 | `process_loss` | `cyfr` killed while Prism holds a session: the app closes its content for good, signs the session out, confirmed, and tells the person | the app's message; the acknowledged sign-out; the cookie before and after |
 | `remembered` | launched again, the CYFR's approved account service is not asked about again | the device's pages, with no question |
