@@ -413,7 +413,8 @@ defmodule Aqua.Loop.Turn do
   The brain `turn`, about to start, pins with its start
   (`Tape.start_turn/3`, in the write that holds Aqua's pin): for a turn
   that asks its model (`asks?`) on a catalyst brain, the release the
-  agent's catalyst resolves to and the brain's own grant, loaded with the
+  agent's catalyst (`parsed`, the agent as its snapshot resolved it)
+  resolves to and the brain's own grant, loaded with the
   turn's reservation `budget_id`, as `%{catalyst_ref, brain_profile_id,
   brain_consent_id}`; nothing (`%{}`) for a turn that asks no model, a
   program brain, or an agent whose brain does not resolve, which
@@ -423,7 +424,7 @@ defmodule Aqua.Loop.Turn do
   @spec brain_pin(
           Context.t(),
           Tape.turn(),
-          Compendium.AquaAgent.t(),
+          map(),
           String.t() | nil,
           boolean()
         ) :: {:ok, map()} | {:error, term()}
