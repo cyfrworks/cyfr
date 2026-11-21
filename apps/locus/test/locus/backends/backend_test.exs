@@ -149,6 +149,7 @@ defmodule Locus.Backends.BackendTest do
   } do
     session =
       start_session(supervisor, "echo up; exec cat", stop_grace_ms: 2_000, release_timeout_ms: 25)
+
     assert read(session, 0, 1) == ["up"]
     handle = :sys.get_state(session).handle
 

@@ -868,7 +868,9 @@ defmodule Locus.Backends.Owners do
   # An open held: its caller watched, and its bound set.
   defp hold(state, invoke, message, {pid, _tag} = from) do
     ref = make_ref()
-    release_ms = Keyword.get(state.session_opts, :release_timeout_ms, Backend.release_timeout_ms())
+
+    release_ms =
+      Keyword.get(state.session_opts, :release_timeout_ms, Backend.release_timeout_ms())
 
     entry = %{
       invoke: invoke,
