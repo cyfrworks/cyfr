@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict"
 import {createHash} from "node:crypto"
-import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from "node:fs"
+import {mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync} from "node:fs"
 import {tmpdir} from "node:os"
 import path from "node:path"
 import {test} from "node:test"
@@ -70,9 +70,10 @@ test("a contaminated package is refused", async (t) => {
   const deeper = await unpacked(t)
   writeFileSync(path.join(deeper, "locales", "proof.js"), "x")
   assert.throws(() => checkPackage(deeper, staged, "linux"), Refused, "a file among Electron's")
+  // Renamed rather than made beside, which a filesystem that folds case
+  // cannot hold.
   const cased = await unpacked(t)
-  mkdirSync(path.join(cased, "Locales"))
-  writeFileSync(path.join(cased, "Locales", "en-US.pak"), "x")
+  renameSync(path.join(cased, "locales"), path.join(cased, "LOCALES"))
   assert.throws(() => checkPackage(cased, staged, "linux"), Refused, "a file differing from Electron's in case alone")
   const renamed = await unpacked(t)
   writeFileSync(path.join(renamed, "Electron"), "x")
