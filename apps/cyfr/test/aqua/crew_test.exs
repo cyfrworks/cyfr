@@ -317,6 +317,37 @@ defmodule Aqua.CrewTest do
     assert {:ok, []} = Tape.open_turns(ctx, child.id)
   end
 
+  # A key has no default model: a member on a connected key that names no
+  # model is not ready, so the soul is told of it by no one and a job
+  # handed to it is refused before anything is written, in the sentence
+  # that says what to do.
+  test "a member on a connected key that names no model takes no job and is left out of the crew",
+       %{ctx: ctx, room: room} do
+    {:ok, planner} = Compendium.AquaAgent.get(ctx, "planner")
+
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("planner"),
+        Compendium.AquaAgent.serialize(%{planner | model: nil})
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+    assert {:needs_model, _resolved} = Aqua.Models.model_status(ctx, roster)["planner"]
+
+    {:ok, index} = Aqua.Crew.index(ctx, roster)
+    refute "planner" in Enum.map(index, & &1["name"])
+
+    refusal = {:crew_unready, "planner", :no_model}
+    assert {:error, ^refusal} = Runner.send_message(ctx, room.id, "@planner plan this")
+
+    assert Prima.Refusal.message(refusal) ==
+             "planner has no model chosen yet — choose one on its card on the Aqua page"
+
+    assert {:ok, []} = Tape.open_turns(ctx, room.id)
+  end
+
   # Readiness holds at every way a job reaches a member, not only in the
   # index: the seed's explorer has no key bound here, and claude-code's
   # and openai-codex's programs are not installed.

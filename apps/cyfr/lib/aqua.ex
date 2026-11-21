@@ -89,9 +89,6 @@ defmodule Aqua do
   @spec program_listing(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   defdelegate program_listing(ctx, agent), to: Models
 
-  @doc "The crew member Aqua's setup offers to make on a connected brain (`Aqua.Crew.suggestion/1`)."
-  defdelegate crew_suggestion(brain), to: Aqua.Crew, as: :suggestion
-
   @doc "Every local source whose consent no longer answers. See `Aqua.ConsentStatus.stale_refs/1`."
   @spec stale_consent_refs(Context.t()) ::
           {:ok, [{String.t(), :stale | {:drifted, [String.t()]}}]}
