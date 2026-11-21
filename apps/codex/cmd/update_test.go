@@ -460,6 +460,8 @@ func (f fakeScaffold) Managed() []string {
 	return names
 }
 
+func (f fakeScaffold) Check() error { return nil }
+
 func (f fakeScaffold) Write(overwriteManaged bool) error {
 	f.s.logLine("SCAFFOLD WRITE")
 	for _, file := range newScaffold {

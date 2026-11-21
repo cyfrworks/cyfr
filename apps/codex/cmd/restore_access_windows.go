@@ -30,10 +30,17 @@ func putProjectFile(name string, data []byte, mode os.FileMode) error {
 	return scaffold.ReplaceFile(name, data, mode)
 }
 
-// removeProjectFile removes the project's file name; one that is not
-// there is no failure.
+// removeProjectFile removes the project's file name through an os.Root of
+// the project, as scaffold.ReplaceFile writes one, so no folder link it
+// does not follow carries the removal outside; one that is not there is no
+// failure.
 func removeProjectFile(name string) error {
-	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := root.Remove(name); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil

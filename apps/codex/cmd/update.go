@@ -313,6 +313,7 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 // it written (scaffold.Release).
 type scaffoldRelease interface {
 	Managed() []string
+	Check() error
 	Write(overwriteManaged bool) error
 	File(name string) ([]byte, bool)
 }
@@ -1425,12 +1426,17 @@ func (u *updater) pull() error {
 }
 
 // fetchScaffold fetches the release's scaffold, whose checksums the
-// scaffold fetch verifies itself, and refuses a managed path that is there
-// as something other than a regular file, which the snapshot cannot hold.
+// scaffold fetch verifies itself, and refuses a folder it writes in that is
+// a link it does not follow (scaffold.ErrLinkNotFollowed) and a
+// managed path that is there as something other than a regular file, which
+// the snapshot cannot hold; both before the stack stops.
 func (u *updater) fetchScaffold() error {
 	r, err := fetchScaffold(u.version)
 	if err != nil {
 		return fmt.Errorf("Failed to fetch the scaffold files (%v); the running stack was not touched, and %s", err, u.composeAsRead())
+	}
+	if err := r.Check(); err != nil {
+		return fmt.Errorf("%v; nothing was changed", err)
 	}
 	for _, name := range r.Managed() {
 		if info, err := os.Lstat(name); err == nil && !info.Mode().IsRegular() {
@@ -1919,6 +1925,11 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
+	return copyTo(in, dst)
+}
+
+// copyTo copies in into dst, a new file of mode 0600, synced.
+func copyTo(in io.Reader, dst string) error {
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
