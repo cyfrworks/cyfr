@@ -15,8 +15,10 @@
 # groups, the Elixir shards, the browser shards' viewports and the app
 # image's groups (it reads test.yml through PyYAML), for what lets a check
 # pass in every workflow (a trivy scan's pin and inputs, continue-on-error,
-# the MinIO image's digest, the npm audit's lockfiles), and for the run
-# prefix the proof scripts name what they make under.
+# the MinIO image's digest, the npm audit's lockfiles), for the image
+# builds' layer cache (one workflow writes it and a package, release.yml's
+# publishing aside), and for the run prefix the proof scripts name what
+# they make under.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -1486,6 +1488,64 @@ a step that audits one lockfile#for lock in "${locks[@]}"; do#for lock in "${loc
 a step at a laxer level#--audit-level=high#--audit-level=critical#is audited at a laxer level
 a step that passes on a failed audit#) || status=1#) || :#the audit step passed with an audit failing
 a step that passes with no lockfile#  exit 1\n#  exit 0\n#the audit step passed with no lockfile to read
+CASES
+
+# --- the image builds' layer cache ---
+
+# cache_boundary WORKFLOW_DIR: the layer cache's credential is one
+# workflow's. No workflow asks for packages: write (nor write-all) but
+# layer-cache.yml's writer and release.yml's publishing jobs; test.yml and
+# release.yml write no layer cache, neither a cache-to of their own nor
+# .github/actions/image-build with write other than 'false'; and
+# layer-cache.yml runs on a push to main and on a schedule, nothing else.
+# Each error is a line.
+cache_boundary() {
+  python3 -I - "$1" <<'PY'
+import glob, os, sys, yaml
+WRITERS = {("layer-cache.yml", "write"), ("release.yml", "images"), ("release.yml", "merge")}
+def writes_packages(perms):
+    return perms == "write-all" or (isinstance(perms, dict) and perms.get("packages") == "write")
+# GitHub runs a workflow file of either extension.
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml")) + glob.glob(os.path.join(sys.argv[1], "*.yaml"))):
+    wf = os.path.basename(path)
+    doc = yaml.safe_load(open(path)) or {}
+    if writes_packages(doc.get("permissions")):
+        print(f"{wf}: the workflow asks for packages: write")
+    for job, body in (doc.get("jobs") or {}).items():
+        if writes_packages(body.get("permissions")) and (wf, job) not in WRITERS:
+            print(f"{wf} {job}: the job asks for packages: write")
+        if wf not in ("test.yml", "release.yml"):
+            continue
+        for step in body.get("steps") or []:
+            where = f"{wf} {job}: '{step.get('name', step.get('uses', 'a step'))}'"
+            given = step.get("with") or {}
+            if "cache-to" in given:
+                print(f"{where} writes a layer cache")
+            if step.get("uses") == "./.github/actions/image-build" and str(given.get("write")) != "false":
+                print(f"{where} builds with write {given.get('write')}, not 'false'")
+    if wf == "layer-cache.yml":
+        # PyYAML reads the bare key on as True.
+        on = doc.get("on", doc.get(True))
+        if not (isinstance(on, dict) and set(on) == {"push", "schedule"} and on["push"] == {"branches": ["main"]}
+                and isinstance(on["schedule"], list) and on["schedule"]):
+            print(f"layer-cache.yml runs on {on}, not a push to main and a schedule alone")
+PY
+}
+label="workflows: only the layer cache's writer and release's publishing write a package, and only the writer writes the cache"
+cache_boundary "$root/.github/workflows" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+while IFS='|' read -r kind wf body want; do
+  label="workflows: the layer cache's boundary check refuses $kind"
+  rm -rf "$scratch/fixture" && mkdir -p "$scratch/fixture" && printf '%b' "$body" > "$scratch/fixture/$wf"
+  cache_boundary "$scratch/fixture" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+a Test job that writes a package|test.yml|jobs:\n  image:\n    permissions:\n      packages: write\n    steps: []\n|test.yml image: the job asks for packages: write
+a release build that writes a cache|release.yml|jobs:\n  images:\n    steps:\n      - name: Build\n        with:\n          cache-to: type=registry,ref=example/cache:app\n|release.yml images: 'Build' writes a layer cache
+a writer a pull request starts|layer-cache.yml|on:\n  push:\n    branches: [main]\n  schedule:\n    - cron: '7 0 * * *'\n  pull_request:\njobs: {}\n|layer-cache.yml runs on {'push': {'branches': ['main']}, 'schedule': [{'cron': '7 0 * * *'}], 'pull_request': None}, not a push to main and a schedule alone
+a .yaml workflow that writes a package|plant.yaml|jobs:\n  image:\n    permissions:\n      packages: write\n    steps: []\n|plant.yaml image: the job asks for packages: write
 CASES
 
 # --- the proofs' run prefix ---
