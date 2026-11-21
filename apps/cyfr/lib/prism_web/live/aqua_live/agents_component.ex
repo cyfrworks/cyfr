@@ -428,8 +428,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # A program brain's model is one its program lists, written alone: its
-  # brain stays the program the member names.
+  # A program brain's model is one its program lists: its brain stays the
+  # program the member names, and its options are those its program
+  # lists (`moved_options/3`).
   def handle_event(
         "editor_set_model",
         %{"name" => name, "brain" => "program", "value" => value},
@@ -437,12 +438,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       ) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       model = if value == "", do: nil, else: value
+      program = program_of(member(socket, name))
 
       result =
         call_aqua(socket.assigns.context, %{
           "action" => "update",
           "name" => name,
-          "model" => model
+          "model" => model,
+          "options" => moved_options(socket, name, declared("program:#{program}", model, socket))
         })
 
       send(self(), {:refresh, :agents})
@@ -457,6 +460,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
+  # A member's brain or model changed on its card or the setup's pick: its
+  # options are those the new brain and model list, every other one
+  # dropped in the same write (`moved_options/3`).
   def handle_event("editor_set_model", %{"name" => name, "value" => value}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       ctx = socket.assigns.context
@@ -470,7 +476,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               "action" => "update",
               "name" => name,
               "model" => nil,
-              "catalyst_ref" => nil
+              "catalyst_ref" => nil,
+              "options" => %{}
             })
 
           {:model, provider, model} ->
@@ -485,12 +492,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                 ref -> Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, "")
               end
 
+            brain = %{"catalyst_ref" => catalyst_ref, "model" => model}
+
             call_aqua(ctx, %{
               "action" => "update",
               "name" => name,
               "model" => model,
               "catalyst_ref" => catalyst_ref,
-              "program" => nil
+              "program" => nil,
+              "options" => moved_options(socket, name, described(ctx, brain))
             })
 
           # A program brain the setup offers, and a model its program lists.
@@ -500,7 +510,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               "name" => name,
               "model" => model,
               "catalyst_ref" => nil,
-              "program" => program
+              "program" => program,
+              "options" =>
+                moved_options(socket, name, declared("program:" <> program, model, socket))
             })
 
           :noop ->
@@ -982,7 +994,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # brain's `describe`, a program's from its program's listing, its
   # access among them.
   defp declared_option(socket, name, option) do
-    agent = Enum.find(socket.assigns.agents, %{"name" => name}, &(&1["name"] == name))
+    agent = member(socket, name)
     listings = socket.assigns.program_listings
 
     socket.assigns.brain_options
@@ -1028,12 +1040,29 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # brain those its `describe` declared for that model, as the row read
   # them, none while unread; on a program brain its listing's efforts and
   # access.
-  defp offered(options, brain, model, socket) do
-    case Prima.Model.check_chat_request(%{"options" => options}, declared(brain, model, socket)) do
+  defp offered(options, brain, model, socket),
+    do: offered(options, declared(brain, model, socket))
+
+  defp offered(options, declared) do
+    case Prima.Model.check_chat_request(%{"options" => options}, declared) do
       :ok -> :ok
       {:error, {:invalid, _member}} -> :not_offered
     end
   end
+
+  # The member's options a brain and model it moves to list, each held to
+  # what they declare as Make holds a new member's: an effort another
+  # model offered, or an access its old program listed, is dropped, so
+  # the member never carries an option its brain refuses at its turn.
+  defp moved_options(socket, name, declared) do
+    for {option, value} <- member(socket, name)["options"] || %{},
+        offered(%{option => value}, declared) == :ok,
+        into: %{},
+        do: {option, value}
+  end
+
+  defp member(socket, name),
+    do: Enum.find(socket.assigns.agents, %{"name" => name}, &(&1["name"] == name))
 
   defp declared("catalyst:" <> provider, model, socket),
     do: Map.get(socket.assigns.brain_options, {:picked, provider, model}, [])

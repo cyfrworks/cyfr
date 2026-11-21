@@ -2084,8 +2084,9 @@ defmodule PrismWeb.AquaLiveTest do
     # member's picker offers, under the brain's title, the models its
     # program lists. Picking one makes that crew member name the program,
     # with that model and no catalyst, and asks nothing, since a member
-    # holds no consent of its own; a key's model takes the program away
-    # again.
+    # holds no consent of its own. Its access saved, a key's model takes
+    # the program away again, and the access with it in the same write, so
+    # the member answers on the key's brain.
     for %{name: name, title: title, command: command} <- Opus.Programs.Definition.brains() do
       @tag brain: {name, title, command}
       test "the setup offers #{name} as a program brain, installs it, signs it in and makes it " <>
@@ -2185,8 +2186,22 @@ defmodule PrismWeb.AquaLiveTest do
         [choice] = driver_access(command)
         assert choices(view, access <> " option") == [{choice["id"], choice["name"]}]
 
+        # Saved on the card, the access is the member's own.
+        view |> form("#aqua-card-mine-access") |> render_change()
+        saved = %{"access" => choice["id"]}
+
+        assert get_agent(ctx, "mine") ==
+                 {:ok,
+                  %{
+                    before
+                    | "program" => name,
+                      "model" => "the-model",
+                      "catalyst_ref" => nil,
+                      "options" => saved
+                  }}
+
         # A key's model is a catalyst's: the program goes, and so does the
-        # access: an API brain has none to choose.
+        # access, in the same write: an API brain has none to choose.
         view |> form("#aqua-setup-pick", %{"value" => "open::open-1"}) |> render_change()
 
         assert get_agent(ctx, "mine") ==
@@ -2194,7 +2209,9 @@ defmodule PrismWeb.AquaLiveTest do
 
         settled(fn -> not has_element?(view, "#aqua-card-mine-access") end, "no access")
 
+        # And the member answers a post on its new brain.
         Cyfr.Test.Sandbox.end_views()
+        answered_on_open!(ctx, "mine")
       end
     end
 
@@ -2703,6 +2720,58 @@ defmodule PrismWeb.AquaLiveTest do
     publish_brain!(ctx, "open", %{})
     grant!(ctx, "catalyst:local.open", %{bindings: []})
     remember_catalogue!(%{"open" => ["open-1"]}, %{"open" => "catalyst:local.open:0.1.0"})
+  end
+
+  # The person's post to `member`, in its own thread off a room, answered
+  # on the brain `open`, a worker playing the brain's answer, under the
+  # crew's grant as the fill mints it.
+  defp answered_on_open!(ctx, member) do
+    ref = "catalyst:local.open"
+    Cyfr.Test.SeedBundle.lay!(~w(files http))
+    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+    :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+    grant!(ctx, Prima.AgentRef.soul_ref(), %{})
+    Cyfr.Test.ScriptedWorker.fresh_limits!(ctx, [ref])
+
+    start_supervised!(
+      {Cyfr.Test.ScriptedWorker,
+       ref: [ref],
+       script: [
+         %{
+           "content" => [%{"type" => "text", "text" => "Hello from open."}],
+           "stop_reason" => "end_turn",
+           "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
+         }
+       ]}
+    )
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, room} = Arca.Test.Days.thread(actor)
+    {:ok, thread} = Aqua.Tape.crew_thread(ctx, room.id, member)
+
+    assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
+             Aqua.Runner.send_message(%{ctx | origin: :interactive}, thread.id, "hello")
+
+    Prima.Test.Wait.wait_until(
+      fn ->
+        {:ok, %{status: status}} = Aqua.Tape.turn(ctx, turn_id)
+        status in Prima.TurnState.terminal_statuses()
+      end,
+      30_000,
+      "the member's turn to end"
+    )
+
+    assert {:ok, %{status: "completed", error: nil}} = Aqua.Tape.turn(ctx, turn_id)
+
+    assert ["Hello from open."] =
+             for(
+               %{turn_id: ^turn_id, sent_by: ^member, kind: "text", content: said} <-
+                 Arca.ThreadStorage.messages(actor, thread.id),
+               do: said
+             )
   end
 
   # Each choice of a member's Model, as its value and the words it shows.
