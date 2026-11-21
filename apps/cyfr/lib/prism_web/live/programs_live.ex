@@ -58,14 +58,15 @@ defmodule PrismWeb.ProgramsLive do
   disabled, and when the list says it is disabled, so a disabled program
   reads as stopped.
 
-  `?install_for=<crew member>` opens the program form, driven, for a crew
-  member whose brain is a program the athanor has no row of: named as the
-  member's file names it, its command as the file's `install` suggests,
-  its home kept, every field editable. Installing it defines the row, once
-  confirmed, and opens its terminal in its folder, where the person signs
-  it in as the program asks. The member's file is not written, and a row
-  of that name that exists is opened, never replaced. `?name=` (the
-  `ui.mcp_server.focus` intent) expands one row.
+  `?add=<name>` opens the program form, driven, for a program brain of
+  that name: its command as the brain's definition holds it
+  (`Opus.Programs.Definition.brains/0`), none for a name CYFR ships no
+  brain of, its home kept, every field editable. Installing it defines the
+  row, once confirmed, and opens its terminal in its folder, where the
+  person signs it in as the program asks. A row of that name that exists
+  is opened, never replaced. `?add=browser` and `?add=browser-apart` are
+  Aqua's two browsers. `?name=` (the `ui.mcp_server.focus` intent)
+  expands one row.
 
   A definition the catalog refuses says why in its form. A server saved
   whose connect is refused, and a Test whose connect is refused, say why
@@ -431,14 +432,14 @@ defmodule PrismWeb.ProgramsLive do
       end
 
       case params do
-        %{"install_for" => member} when member != "" ->
-          send(self(), {:install_for, member})
-
         %{"add" => "browser"} ->
           send(self(), {:add_browser, :person})
 
         %{"add" => "browser-apart"} ->
           send(self(), {:add_browser, :apart})
+
+        %{"add" => name} when name != "" ->
+          send(self(), {:add_brain, name})
 
         _ ->
           :ok
@@ -470,8 +471,8 @@ defmodule PrismWeb.ProgramsLive do
       else: {:noreply, expand_server(socket, name)}
   end
 
-  def handle_info({:install_for, member}, socket),
-    do: {:noreply, prefill_member(socket, member)}
+  def handle_info({:add_brain, name}, socket),
+    do: {:noreply, prefill_brain(socket, name)}
 
   def handle_info({:add_browser, chrome}, socket),
     do: {:noreply, prefill_browser(socket, chrome)}
@@ -570,7 +571,7 @@ defmodule PrismWeb.ProgramsLive do
 
   # What the page says while a change's call runs.
   defp working({:create, name}), do: "Adding #{name}…"
-  defp working({:install, name, _for_member?}), do: "Adding #{name}…"
+  defp working({:install, name, _brain?}), do: "Adding #{name}…"
   defp working({:open, name}), do: "Opening #{name}…"
   defp working({:update, name}), do: "Saving #{name}…"
   defp working({:set_hosts, name}), do: "Saving #{name}'s hosts…"
@@ -689,15 +690,15 @@ defmodule PrismWeb.ProgramsLive do
     |> warnings_flash(result)
   end
 
-  # A new driven program: the row, then, for one installed for a crew
-  # member, its terminal, where the person signs it in.
-  defp answered(socket, {:install, name, for_member?}, {:ok, result}) do
+  # A new driven program: the row, then, for one installed as a brain, its
+  # terminal, where the person signs it in.
+  defp answered(socket, {:install, name, brain?}, {:ok, result}) do
     socket =
       socket
       |> assign(:install, nil)
       |> answered({:create, name}, {:ok, result})
 
-    if for_member?, do: open_program(socket, name, []), else: socket
+    if brain?, do: open_program(socket, name, []), else: socket
   end
 
   defp answered(socket, {:open, _name}, {:ok, %{session: session}}),
@@ -913,36 +914,32 @@ defmodule PrismWeb.ProgramsLive do
 
   # ————— installing a crew member's program —————
 
-  # The program form, driven and kept, for the crew member whose brain is
-  # the program its file names: the name as the file names it, the command
-  # as its `install` suggests, every field the person's to change. It only
-  # fills a form: the person confirms the program as any program's, the
-  # file is not written, and a row of that name that exists is opened
-  # rather than offered again, so no suggestion replaces a row.
-  defp prefill_member(socket, member) do
-    with {:ok, agent} <- call_tool(socket, "aqua", %{"action" => "get", "name" => member}),
-         program when is_binary(program) and program != "" <- field(agent, :program) do
-      if Enum.any?(socket.assigns.servers, &(&1[:name] == program)) do
-        socket
-        |> put_flash(:info, "#{program} is already on the Programs page.")
-        |> expand_server(program)
-      else
-        socket
-        |> assign(:show_add, "program")
-        |> assign(:form_error, nil)
-        |> assign(:editing, nil)
-        |> assign(:adding_browser, false)
-        |> assign(:install, %{for: field(agent, :title) || member})
-        |> assign(:prefill, %{
-          "mark" => "driven",
-          "home" => "kept",
-          "name" => program,
-          "command" => field(agent, :install)
-        })
-      end
+  # The program form, driven and kept, for a program brain named `name`:
+  # the command its definition holds (`Opus.Programs.Definition.brains/0`),
+  # or none for a name CYFR ships no brain of, every field the person's to
+  # change. It only fills a form: the person confirms the program as any
+  # program's, and a row of that name that exists is opened rather than
+  # offered again, so no suggestion replaces a row.
+  defp prefill_brain(socket, name) do
+    if Enum.any?(socket.assigns.servers, &(&1[:name] == name)) do
+      socket
+      |> put_flash(:info, "#{name} is already on the Programs page.")
+      |> expand_server(name)
     else
-      _ ->
-        put_flash(socket, :error, "#{member} names no program to install.")
+      brain = Opus.Programs.Definition.brain(name)
+
+      socket
+      |> assign(:show_add, "program")
+      |> assign(:form_error, nil)
+      |> assign(:editing, nil)
+      |> assign(:adding_browser, false)
+      |> assign(:install, %{for: (brain && brain.title) || name})
+      |> assign(:prefill, %{
+        "mark" => "driven",
+        "home" => "kept",
+        "name" => name,
+        "command" => brain && brain.command
+      })
     end
   end
 
@@ -1129,11 +1126,6 @@ defmodule PrismWeb.ProgramsLive do
 
   # ————— small helpers —————
 
-  defp field(map, key) when is_map(map),
-    do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
-
-  defp field(_map, _key), do: nil
-
   defp trimmed(params, key), do: String.trim(params[key] || "")
 
   defp put_present(map, _key, nil), do: map
@@ -1173,7 +1165,7 @@ defmodule PrismWeb.ProgramsLive do
         <form id="add-program" phx-submit="add_program" class="space-y-4">
           <p :if={@install} class="text-sm text-gray-300" data-test="install-from">
             Install <span class="font-mono">{@prefill["name"]}</span>
-            for <span class="font-mono">{@install.for}</span>. This is the program as it will run; change anything first.
+            to run <span class="font-mono">{@install.for}</span> as a brain. This is the program as it will run; change anything first.
             Installing it asks you to confirm the program, then opens its terminal in the
             program's own folder.
           </p>

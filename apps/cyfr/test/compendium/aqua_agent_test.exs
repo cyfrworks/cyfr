@@ -27,7 +27,6 @@ defmodule Compendium.AquaAgentTest do
         disabled: false,
         catalyst_ref: "catalyst:moonmoon69.claude",
         program: nil,
-        install: nil,
         model: "claude-sonnet-5-5",
         options: %{"effort" => "high", "budget" => 8, "thinking" => true, "label" => "true"},
         mode: "read-only",
@@ -136,31 +135,15 @@ defmodule Compendium.AquaAgentTest do
   end
 
   # A brain is named once: a catalyst or a program row by its name, whose
-  # model is one its harness lists, with the command its install form is
-  # prefilled with beside it.
-  test "a brain named as a program round-trips with its install, and a file naming a catalyst too refuses" do
-    coder =
-      member(%{
-        catalyst_ref: nil,
-        program: "claude",
-        install: "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
-        model: "opus"
-      })
+  # model is one its harness lists.
+  test "a brain named as a program round-trips, and a file naming a catalyst too refuses" do
+    coder = member(%{catalyst_ref: nil, program: "claude", model: "opus"})
 
     binary = AquaAgent.serialize(coder)
     assert binary =~ "\nprogram: claude\n"
-    assert binary =~ ~s(\ninstall: "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"\n)
     refute binary =~ "catalyst_ref"
     assert {:ok, ^coder} = AquaAgent.parse("scribe", binary)
     assert AquaAgent.serialize(coder) == binary
-
-    # Without an install the line is absent, and a blank one is none.
-    plain = %{coder | install: nil}
-    refute AquaAgent.serialize(plain) =~ "install"
-    assert {:ok, ^plain} = AquaAgent.parse("scribe", AquaAgent.serialize(plain))
-
-    assert {:ok, %{program: "claude", install: nil}} =
-             AquaAgent.parse("scribe", "---\nprogram: claude\ninstall: \"\"\n---\n")
 
     assert {:error, :catalyst_and_program} =
              AquaAgent.parse(
@@ -222,11 +205,10 @@ defmodule Compendium.AquaAgentTest do
   # The soul is a seat: it runs on the brain of the crew member it names,
   # and a file that still names a brain of its own is refused whole, with
   # the sentence that says what to delete (no old key is read).
-  test "the soul names the member it runs on and no brain: a brain, model, options, install or mode refuses it" do
+  test "the soul names the member it runs on and no brain: a brain, model, options or mode refuses it" do
     for line <- [
           "catalyst_ref: catalyst:local.claude",
           "program: claude",
-          "install: cyfr-claude-code claude",
           "model: claude-sonnet-5-5",
           "options:\n  effort: high",
           "mode: auto"
@@ -457,22 +439,17 @@ defmodule Compendium.AquaAgentTest do
 
     # A brain that is a program is named by the name its file declares:
     # another name is another capability, and neither is the catalyst's.
-    # Its install is a form's suggestion, which moves none.
-    coder =
-      Map.merge(scout, %{catalyst_ref: nil, program: "claude", install: "cyfr-claude-code claude"})
+    coder = Map.merge(scout, %{catalyst_ref: nil, program: "claude"})
 
     manifest = AquaAgent.to_manifest(coder)
     assert manifest["program"] == "claude"
     refute Map.has_key?(manifest, "catalyst_ref")
-    refute Map.has_key?(manifest, "install")
     refute Map.has_key?(AquaAgent.to_manifest(scout), "program")
 
     {:ok, programmed} = AquaAgent.capability_digest(coder)
     {:ok, moved} = AquaAgent.capability_digest(%{coder | program: "claude-work"})
-    {:ok, suggested} = AquaAgent.capability_digest(%{coder | install: "cyfr-claude-code other"})
     refute programmed == digest
     refute programmed == moved
-    assert programmed == suggested
   end
 
   test "a null entry in the tools list is refused as grammar" do

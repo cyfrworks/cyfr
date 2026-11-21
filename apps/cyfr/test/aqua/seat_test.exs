@@ -671,7 +671,6 @@ defmodule Aqua.SeatTest do
     for {key, value} <- [
           {"catalyst_ref", @model},
           {"program", "claude"},
-          {"install", "cyfr-claude-code claude"},
           {"model", "opus"},
           {"options", %{"effort" => "high"}},
           {"options_patch", %{"effort" => "high"}},

@@ -48,14 +48,14 @@ defmodule PrismWeb.AquaLive do
 
   Beside the brains it offers each plan the crew names: a program a crew
   member's file names, read from the cards' own roster, named by the
-  first member that names it with that member's title and install, and
-  the state of the row of that name. A plan whose row is missing is installed through the Programs
-  page's form, prefilled from that member's file; one whose row stands is
+  first member that names it with that member's title, and the state of
+  the row of that name. A plan whose row is missing is installed through
+  the Programs page's form, prefilled from the program brain's definition
+  (`Opus.Programs.Definition.brains/0`); one whose row stands is
   signed in on its terminal (the card's Set up), and its program's own
   listing fills a crew member's picker. Picking one of those models makes
-  the member name that program, with the install of the member the plan
-  is named by, the model and no catalyst; picking a catalyst's model
-  takes the program and its install away again. A program row no crew file names is
+  the member name that program, the model and no catalyst; picking a
+  catalyst's model takes the program away again. A program row no crew file names is
   no plan here: the aqua tool names it.
   """
 
@@ -876,13 +876,13 @@ defmodule PrismWeb.AquaLive do
 
   defp plan_line(:model_unavailable), do: unready_line(:model_unavailable)
 
-  # The Programs page's install form, prefilled from the file of the crew
-  # member that names the plan's program, as its card's install is.
-  defp install_path(athanor, %{member: member}),
+  # The Programs page's install form for the plan's program brain, as its
+  # card's install is.
+  defp install_path(athanor, %{program: program}),
     do:
       PrismWeb.Focus.path(
         athanor,
-        "/programs?" <> URI.encode_query(%{"install_for" => member, "from" => "aqua"})
+        "/programs?" <> URI.encode_query(%{"add" => program, "from" => "aqua"})
       )
 
   defp shared_line(%{owner: owner, person_daily: cap}) when is_integer(cap),

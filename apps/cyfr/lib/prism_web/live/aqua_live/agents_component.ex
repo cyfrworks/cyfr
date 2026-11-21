@@ -20,7 +20,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   program, named by its row's name, offers the models and efforts its
   program lists (`Aqua.program_listing/2`) and no other brain, and its
   card offers to install the program while the athanor has no row of
-  that name, prefilled from the member's file, then to set it up, where
+  that name, prefilled from the program brain's definition
+  (`Opus.Programs.Definition.brains/0`), then to set it up, where
   the person signs it in. Every write goes
   through the `aqua` tool, the gate every writer of an agent file goes
   through; a write that changes a file's provenance asks the page to
@@ -438,7 +439,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             # namespace resolves to nothing on any other deployment, so the
             # model choice failed silently there; the refs the page loaded are
             # the only ones that exist. A brain is a catalyst or a program, so
-            # a program the agent named, and its install, go.
+            # a program the agent named goes.
             catalyst_ref =
               case socket.assigns[:catalyst_refs][provider] do
                 nil -> nil
@@ -450,20 +451,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               "name" => name,
               "model" => model,
               "catalyst_ref" => catalyst_ref,
-              "program" => nil,
-              "install" => nil
+              "program" => nil
             })
 
-          # A plan the setup offers: the program a crew member names, with
-          # that member's install, and a model its program lists.
+          # A program brain the setup offers, and a model its program lists.
           {:program, program, model} ->
             call_aqua(ctx, %{
               "action" => "update",
               "name" => name,
               "model" => model,
               "catalyst_ref" => nil,
-              "program" => program,
-              "install" => plan_install(socket.assigns.crew, program)
+              "program" => program
             })
 
           :noop ->
@@ -638,7 +636,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           "model" => g.model,
           "catalyst_ref" => g.catalyst_ref,
           "program" => g[:program],
-          "install" => g[:install],
           "options" => g[:options] || %{},
           "mode" => g[:mode] || "auto",
           "tools" => g[:tools] || [],
@@ -699,7 +696,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # The plans the page's setup offers: each program the crew's files
   # name, once, by the first member by name that names it, with that
-  # member's title and install, and how the row of that name stands, as
+  # member's title, and how the row of that name stands, as
   # that member's status reads it (`Aqua.Models`). A program row no crew
   # file names is no plan.
   defp plans(crew, status) do
@@ -710,7 +707,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
       %{
         program: m["program"],
-        install: m["install"],
         member: member,
         title: m["title"] || member,
         state: state
@@ -780,14 +776,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # The program offers a card shows, a program brain's, from the row of
   # its name as its status reads it: none of that name is offered to
-  # install, through
-  # the Programs page's form prefilled from the member's file, and one
+  # install, through the Programs page's form for a program brain of that
+  # name (`Opus.Programs.Definition.brains/0`), and one
   # that stands as a brain's to set up, its press starting it in a
   # terminal where the person signs it in. A row of that name that stands
   # disabled, unfit or unread offers neither: its status says why.
-  defp offers({:program_missing, _name}, %{"program" => program} = agent)
+  defp offers({:program_missing, _name}, %{"program" => program})
        when is_binary(program) do
-    query = %{"install_for" => agent["name"], "from" => "aqua"}
+    query = %{"add" => program, "from" => "aqua"}
     [%{program: program, installed?: false, query: URI.encode_query(query)}]
   end
 
@@ -918,11 +914,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # name, the first member by name that names it.
   defp plan_members(crew),
     do: crew |> Enum.filter(&is_binary(program_of(&1))) |> Enum.uniq_by(&program_of/1)
-
-  # The install of the member `program`'s plan is named by, absent when
-  # that member's file names none.
-  defp plan_install(crew, program),
-    do: Enum.find(plan_members(crew), &(program_of(&1) == program))["install"]
 
   # The program a member's brain is, by its row's name, or nil.
   defp program_of(%{"program" => program}) when is_binary(program) and program != "",

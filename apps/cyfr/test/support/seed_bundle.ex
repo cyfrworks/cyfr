@@ -149,8 +149,8 @@ defmodule Cyfr.Test.SeedBundle do
   an athanor is filled from it, so the member is one the athanor's seed
   ships and the bootstrap vouches for it. `opts`: `:title` (the name),
   `:description` (the brain it answers on), `:avoid` (none), the brain,
-  `:catalyst_ref` (`catalyst:local.claude`) or `:program` with its
-  `:install`, `:model` (`claude-sonnet-5-5`) and `:mode` (`auto`).
+  `:catalyst_ref` (`catalyst:local.claude`) or `:program`, `:model`
+  (`claude-sonnet-5-5`) and `:mode` (`auto`).
   """
   @spec member!(Path.t(), String.t(), keyword()) :: :ok
   def member!(dir, name, opts \\ []) do
@@ -172,7 +172,6 @@ defmodule Cyfr.Test.SeedBundle do
         disabled: false,
         catalyst_ref: catalyst,
         program: program,
-        install: Keyword.get(opts, :install),
         model: Keyword.get(opts, :model, "claude-sonnet-5-5"),
         options: %{},
         mode: Keyword.get(opts, :mode, "auto")

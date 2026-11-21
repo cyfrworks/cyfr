@@ -44,16 +44,10 @@ defmodule PrismWeb.AquaLiveTest do
   # The crew members these tests make, as the person makes one on the Aqua
   # page: the seed ships none.
   @members %{
-    "claude-code" => %{
-      "title" => "Claude Code",
-      "program" => "claude",
-      "install" => "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
-      "model" => "opus"
-    },
+    "claude-code" => %{"title" => "Claude Code", "program" => "claude", "model" => "opus"},
     "openai-codex" => %{
       "title" => "OpenAI Codex",
       "program" => "openai-codex",
-      "install" => "cyfr-codex npx -y @openai/codex@0.169.0",
       "model" => "gpt-6.1-sol"
     },
     "explorer" => %{
@@ -495,7 +489,7 @@ defmodule PrismWeb.AquaLiveTest do
 
     # A crew member whose brain is a program names the row by its name.
     # While the athanor has no row of that name, its card offers to install
-    # it, through the Programs page's form prefilled from the member's file;
+    # it, through the Programs page's form for a program of that name;
     # once the row stands as a brain's, to set it up, where the person signs
     # it in. Either way it offers no other brain, and its models and
     # efforts are the ones its program lists, read from the row's driver;
@@ -504,7 +498,6 @@ defmodule PrismWeb.AquaLiveTest do
            "with the models and efforts its program lists",
          %{conn: conn, ctx: ctx} do
       fake = backends!()
-      install = "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"
 
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
@@ -512,7 +505,6 @@ defmodule PrismWeb.AquaLiveTest do
           "name" => "coder",
           "title" => "Coder",
           "program" => "claude",
-          "install" => install,
           "model" => "opus"
         })
 
@@ -530,10 +522,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       assert URI.parse(href).path == athanor_path("/programs")
 
-      assert URI.decode_query(URI.parse(href).query) == %{
-               "install_for" => "coder",
-               "from" => "aqua"
-             }
+      assert URI.decode_query(URI.parse(href).query) == %{"add" => "claude", "from" => "aqua"}
 
       refute has_element?(view, card <> ~s( [data-test="set-up-program"]))
       refute has_element?(view, card <> ~s( [data-test="connect"]))
@@ -542,7 +531,9 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-card-coder-options")
       refute_received {:session, "open", _open, _fields}
 
-      row = program_row!(ctx, "claude", install)
+      row =
+        program_row!(ctx, "claude", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323")
+
       send_update_agents(view, load: true)
       refute has_element?(view, card <> ~s( a[data-test="install-program"]))
       assert has_element?(view, card <> ~s( [data-test="set-up-program"]), "Set up claude")
@@ -571,13 +562,7 @@ defmodule PrismWeb.AquaLiveTest do
       |> element("#aqua-card-coder-model")
       |> render_change(%{"name" => "coder", "brain" => "program", "value" => "haiku"})
 
-      assert {:ok,
-              %{
-                "program" => "claude",
-                "catalyst_ref" => nil,
-                "model" => "haiku",
-                "install" => ^install
-              }} =
+      assert {:ok, %{"program" => "claude", "catalyst_ref" => nil, "model" => "haiku"}} =
                Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => "coder"})
     end
 
@@ -606,8 +591,7 @@ defmodule PrismWeb.AquaLiveTest do
           Cyfr.Test.AquaTool.call(ctx, %{
             "action" => "create",
             "name" => name,
-            "program" => program,
-            "install" => "cyfr-claude-code claude"
+            "program" => program
           })
       end
 
@@ -1628,23 +1612,22 @@ defmodule PrismWeb.AquaLiveTest do
 
     # Each program the crew's files name is a plan on the setup, named by
     # the member that names it and worded from that member's title.
-    # Ticked, its install is the Programs page's form prefilled from
-    # that member's file; once its row stands, Set up opens its terminal and
-    # a crew member's picker offers, under the plan member's name, the
-    # models its program lists. Picking one makes that crew member name the
-    # program, with the plan member's install and that model and no
-    # catalyst, and asks its consent at once; a key's model takes the
-    # program and its install away again.
-    for {member, title, program, install, model} <- [
+    # Ticked, its install is the Programs page's form for a program of that
+    # name; once its row stands, Set up opens its terminal and a crew
+    # member's picker offers, under the plan member's name, the models its
+    # program lists. Picking one makes that crew member name the program,
+    # with that model and no catalyst, and asks its consent at once; a
+    # key's model takes the program away again.
+    for {member, title, program, command, model} <- [
           {"claude-code", "Claude Code", "claude",
            "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323", "opus"},
           {"openai-codex", "OpenAI Codex", "openai-codex",
            "cyfr-codex npx -y @openai/codex@0.169.0", "gpt-6.1-sol"}
         ] do
-      @tag plan: {member, title, program, install, model}
+      @tag plan: {member, title, program, command, model}
       test "the setup offers #{member}'s program as a plan, installs it, signs it in and " <>
              "makes it a crew member's brain; a key's model takes it back",
-           %{conn: conn, ctx: ctx, plan: {member, title, program, install, model}} do
+           %{conn: conn, ctx: ctx, plan: {member, title, program, command, model}} do
         :ok = member!(ctx, member)
         fake = backends!()
         publish_brain!(ctx, "open", %{})
@@ -1652,7 +1635,7 @@ defmodule PrismWeb.AquaLiveTest do
         remember_catalogue!(%{"open" => ["open-1"]}, %{"open" => "catalyst:local.open:0.1.0"})
         {:ok, _} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "create", "name" => "mine"})
         {:ok, before} = get_agent(ctx, "mine")
-        assert {before["program"], before["install"]} == {nil, nil}
+        assert before["program"] == nil
 
         {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
         plan = "#aqua-setup-plan-" <> member
@@ -1682,12 +1665,9 @@ defmodule PrismWeb.AquaLiveTest do
 
         assert URI.parse(href).path == athanor_path("/programs")
 
-        assert URI.decode_query(URI.parse(href).query) == %{
-                 "install_for" => member,
-                 "from" => "aqua"
-               }
+        assert URI.decode_query(URI.parse(href).query) == %{"add" => program, "from" => "aqua"}
 
-        row = program_row!(ctx, program, install)
+        row = program_row!(ctx, program, command)
         send_update_agents(view, load: true)
         assert has_element?(view, plan <> ~s([data-state="ready"]), "connected")
         assert has_element?(view, step <> ~s( [data-test="set-up-program"]), "Set up #{program}")
@@ -1710,7 +1690,6 @@ defmodule PrismWeb.AquaLiveTest do
                   %{
                     before
                     | "program" => program,
-                      "install" => install,
                       "model" => model,
                       "catalyst_ref" => nil
                   }}
@@ -1722,7 +1701,7 @@ defmodule PrismWeb.AquaLiveTest do
           "the member's consent asked again"
         )
 
-        # A key's model is a catalyst's: the program and its install go.
+        # A key's model is a catalyst's: the program goes.
         view |> form("#aqua-setup-pick", %{"value" => "open::open-1"}) |> render_change()
 
         assert get_agent(ctx, "mine") ==
@@ -1763,7 +1742,9 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "picking a plan preserves the named member's absent install suggestion",
+    # A program two members name is one plan, named by the first of them
+    # by name; picking it makes the member name that program.
+    test "a program two crew members name is one plan, named by the first of them",
          %{conn: conn, ctx: ctx} do
       fake = backends!()
 
@@ -1776,12 +1757,11 @@ defmodule PrismWeb.AquaLiveTest do
           "model" => "opus"
         })
 
-      {:ok, named} = get_agent(ctx, "aaa")
-      assert named["install"] == nil
       :ok = member!(ctx, "claude-code")
-      {:ok, later} = get_agent(ctx, "claude-code")
-      assert is_binary(later["install"])
-      row = program_row!(ctx, "claude", later["install"])
+
+      row =
+        program_row!(ctx, "claude", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323")
+
       {:ok, _} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "create", "name" => "mine"})
       {:ok, before} = get_agent(ctx, "mine")
 
@@ -1799,7 +1779,6 @@ defmodule PrismWeb.AquaLiveTest do
                 %{
                   before
                   | "program" => "claude",
-                    "install" => nil,
                     "model" => "opus",
                     "catalyst_ref" => nil
                 }}

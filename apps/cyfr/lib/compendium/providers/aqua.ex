@@ -95,7 +95,7 @@ defmodule Compendium.Providers.Aqua do
           [
             Arg.new("detail", :boolean,
               description:
-                "For list: include each agent's full fields (model, catalyst_ref, program, install, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent"
+                "For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent"
             ),
             Arg.new("include_disabled", :boolean,
               description:
@@ -142,10 +142,6 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("program", :string,
               description:
                 "The name of the program on the Programs page this agent's brain runs in, a driven program with a kept folder, in place of catalyst_ref; a name the athanor has no program of yet is kept, and the agent's card offers to install it (for create/update actions)"
-            ),
-            Arg.new("install", :string,
-              description:
-                "The command the Programs page's install form suggests for the agent's program while the athanor has none of that name: the person confirms or changes it there, and it runs nothing by itself (for create/update actions, beside program)"
             ),
             Arg.new("model", :string,
               description: "Model identifier (for create/update actions)"
@@ -196,11 +192,6 @@ defmodule Compendium.Providers.Aqua do
               nullable: true,
               description:
                 "The name of the program on the Programs page this agent's brain runs in, a driven program with a kept folder, in place of catalyst_ref; a name the athanor has no program of yet is kept, and the agent's card offers to install it (for create/update actions)"
-            ),
-            Arg.new("install", :string,
-              nullable: true,
-              description:
-                "The command the Programs page's install form suggests for the agent's program while the athanor has none of that name: the person confirms or changes it there, and it runs nothing by itself (for create/update actions, beside program)"
             ),
             Arg.new("model", :string,
               nullable: true,
@@ -474,7 +465,6 @@ defmodule Compendium.Providers.Aqua do
               model: agent.model,
               catalyst_ref: agent.catalyst_ref,
               program: agent.program,
-              install: agent.install,
               options: agent.options,
               avoid: agent.avoid,
               mode: agent.mode,
@@ -542,7 +532,6 @@ defmodule Compendium.Providers.Aqua do
          tools: agent.tools,
          catalyst_ref: agent.catalyst_ref,
          program: agent.program,
-         install: agent.install,
          model: agent.model,
          options: agent.options,
          disabled: agent.disabled
@@ -977,7 +966,6 @@ defmodule Compendium.Providers.Aqua do
       disabled: false,
       catalyst_ref: args["catalyst_ref"],
       program: args["program"],
-      install: args["install"],
       model: args["model"],
       options: args["options"] || %{},
       mode: args["mode"] || "auto",
@@ -1067,7 +1055,6 @@ defmodule Compendium.Providers.Aqua do
     |> maybe_update(args, "tools", :tools, [])
     |> maybe_update(args, "catalyst_ref", :catalyst_ref, nil)
     |> maybe_update(args, "program", :program, nil)
-    |> maybe_update(args, "install", :install, nil)
     |> maybe_update(args, "model", :model, nil)
     |> maybe_update(args, "options", :options, %{})
     |> maybe_update(args, "disabled", :disabled, false)
@@ -1242,7 +1229,7 @@ defmodule Compendium.Providers.Aqua do
   # own (`Compendium.AquaAgent`): a write that gives it one is refused,
   # never dropped, with where the brain is set instead. A crew member
   # names no member.
-  @seat_brain_args ~w(catalyst_ref program install model options options_patch mode)
+  @seat_brain_args ~w(catalyst_ref program model options options_patch mode)
 
   defp no_seat_brain(name, args) do
     cond do

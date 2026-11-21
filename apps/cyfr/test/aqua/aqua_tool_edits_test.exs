@@ -242,13 +242,12 @@ defmodule Aqua.AquaToolEditsTest do
   end
 
   # A brain is a catalyst or a program, by its row's name: the tool writes
-  # either, with the program's install beside it, lists and gets what it
-  # wrote, indexes it, and refuses a member that would name both, whether
-  # the call names both or one beside the file's other. A name the athanor
-  # has no row of is configuration all the same: the install follows it.
+  # either, lists and gets what it wrote, indexes it, and refuses a member
+  # that would name both, whether the call names both or one beside the
+  # file's other. A name the athanor has no row of is configuration all
+  # the same.
   test "a member's brain is a program by name through the tool, never a catalyst too", %{ctx: ctx} do
     actor = Sanctum.Context.actor(ctx)
-    install = "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"
     assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "claude")
 
     assert {:ok, %{"created" => "coder"}} =
@@ -256,41 +255,25 @@ defmodule Aqua.AquaToolEditsTest do
                "action" => "create",
                "name" => "coder",
                "program" => "claude",
-               "install" => install,
                "model" => "opus"
              })
 
-    assert {:ok,
-            %{
-              "program" => "claude",
-              "install" => ^install,
-              "catalyst_ref" => nil,
-              "model" => "opus"
-            }} = call(ctx, %{"action" => "get", "name" => "coder"})
+    assert {:ok, %{"program" => "claude", "catalyst_ref" => nil, "model" => "opus"}} =
+             call(ctx, %{"action" => "get", "name" => "coder"})
 
     {:ok, %{"guides" => guides}} = call(ctx, %{"action" => "list", "detail" => true})
 
-    assert %{"program" => "claude", "install" => ^install, "catalyst_ref" => nil} =
+    assert %{"program" => "claude", "catalyst_ref" => nil} =
              Enum.find(guides, &(&1["name"] == "coder"))
 
-    assert %{"program" => nil, "install" => nil} = Enum.find(guides, &(&1["name"] == "scout"))
+    assert %{"program" => nil} = Enum.find(guides, &(&1["name"] == "scout"))
 
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     coder = Enum.find(rows, &(&1.name == "coder"))
     assert %{program: "claude", catalyst_ref: nil} = coder
     assert %{program: nil} = Enum.find(rows, &(&1.name == "scout"))
 
-    # Another install is the same capability; another name is another.
-    assert {:ok, _} =
-             call(ctx, %{
-               "action" => "update",
-               "name" => "coder",
-               "install" => "cyfr-claude-code claude"
-             })
-
-    {:ok, rows} = Compendium.AgentIndex.list(ctx)
-    assert Enum.find(rows, &(&1.name == "coder")).capability_digest == coder.capability_digest
-
+    # Another name is another capability.
     assert {:ok, _} =
              call(ctx, %{"action" => "update", "name" => "coder", "program" => "claude-work"})
 
@@ -298,9 +281,6 @@ defmodule Aqua.AquaToolEditsTest do
     moved = Enum.find(rows, &(&1.name == "coder"))
     assert moved.program == "claude-work"
     refute moved.capability_digest == coder.capability_digest
-
-    assert {:ok, %{"install" => "cyfr-claude-code claude"}} =
-             call(ctx, %{"action" => "get", "name" => "coder"})
 
     {:ok, file} = Arca.get(actor, AquaPath.crew_file("coder"))
 
@@ -322,18 +302,17 @@ defmodule Aqua.AquaToolEditsTest do
     refute Arca.exists?(actor, AquaPath.crew_file("both"))
     assert {:ok, ^file} = Arca.get(actor, AquaPath.crew_file("coder"))
 
-    # The program and its install cleared in the same write, the brain
-    # moves to the catalyst.
+    # The program cleared in the same write, the brain moves to the
+    # catalyst.
     assert {:ok, _} =
              call(ctx, %{
                "action" => "update",
                "name" => "coder",
                "catalyst_ref" => "catalyst:local.claude",
-               "program" => nil,
-               "install" => nil
+               "program" => nil
              })
 
-    assert {:ok, %{"program" => nil, "install" => nil, "catalyst_ref" => "catalyst:local.claude"}} =
+    assert {:ok, %{"program" => nil, "catalyst_ref" => "catalyst:local.claude"}} =
              call(ctx, %{"action" => "get", "name" => "coder"})
 
     # Nothing of it made a program row.
