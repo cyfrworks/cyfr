@@ -2154,41 +2154,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  # A store that stops answering one profile's head, and only it: each
-  # read of the head's row finds the table of its vault references gone,
-  # and the read that fails there puts the table back, so every other read
-  # answers.
-  defp head_outage!(ctx, profile_id) do
-    {:ok, %{head_consent_id: head_id}} =
-      Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
-
-    away = :atomics.new(1, [])
-    handler = "pane-head-outage-#{System.unique_integer([:positive])}"
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:arca, :repo, :query],
-        fn _event, _measurements, meta, _config ->
-          cond do
-            meta[:source] == "consents" and head_id in List.wrap(meta[:params]) and
-                :atomics.compare_exchange(away, 1, 0, 1) == :ok ->
-              Arca.Repo.query!("ALTER TABLE consent_vault_refs RENAME TO consent_vault_refs_away")
-
-            meta[:source] == "consent_vault_refs" and match?({:error, _}, meta[:result]) and
-                :atomics.compare_exchange(away, 1, 1, 0) == :ok ->
-              Arca.Repo.query!("ALTER TABLE consent_vault_refs_away RENAME TO consent_vault_refs")
-
-            true ->
-              :ok
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-  end
-
   describe "a connected model whose assistant cannot load its consent" do
     # The soul's model reads ready on its own setup plan; what stands in
     # the way is the assistant's own load, as a turn makes it. A load
@@ -2242,7 +2207,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     @tag :capture_log
     test "an outage of the assistant's own head reads unanswered",
          %{conn: conn, athanor: athanor, ctx: ctx, soul: soul, soul_profile: soul_profile} do
-      head_outage!(ctx, soul_profile)
+      _handler = Sanctum.Test.ConsentFixtures.head_outage!(ctx, soul_profile)
 
       assert {:error, {:head_unavailable, ^soul_profile}} =
                Opus.authority_for(ctx, :default, soul)

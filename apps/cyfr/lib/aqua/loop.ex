@@ -324,14 +324,8 @@ defmodule Aqua.Loop do
       with {:ok, turn} <- Tape.turn(ctx, turn_id),
            {:ok, claim, turn} <- reclaim(ctx, turn, mode),
            {:ok, authority} <- pinned_authority(ctx, turn),
-           {:ok, spec} <-
-             Turn.build(ctx, turn,
-               authority: authority,
-               excerpt?: false,
-               asks_model?: asks_model?(ctx, turn)
-             ),
-           {:ok, turn} <- pin_brain(ctx, turn, spec) do
-        spec = Turn.with_turn(spec, turn)
+           {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false) do
+        turn = spec.turn
 
         state = %State{
           spec: spec,
@@ -539,35 +533,46 @@ defmodule Aqua.Loop do
            ) do
       with {:ok, snapshot} <- Compendium.agent_snapshot(ctx, turn.agent),
            :ok <- consented_release(ctx, claim.authority, snapshot),
-           {:ok, started} <-
-             Tape.start_turn(ctx, turn, %{
-               root_execution_id: claim.execution_id,
-               attempt: claim.attempt,
-               budget_id: claim.budget_id,
-               profile_id: claim.authority.profile_id,
-               consent_id: claim.authority.consent_id,
-               agent_revision_digest: snapshot.revision_digest,
-               agent_capability_digest: snapshot.capability_digest,
-               agent_mode: snapshot.agent.mode,
-               recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
-             }),
            # A server's line that no longer stands as its turn first starts
            # asks no model: the turn ends with nothing run. A store that
            # cannot say ends it as any store failure after the claim does.
-           {:ok, stands?} <- Tape.line_stands(ctx, started),
-           {:ok, spec} <-
-             Turn.build(ctx, started,
-               authority: claim.authority,
-               asks_model?: stands? and asks_model?(ctx, started)
+           {:ok, stands?} <- Tape.line_stands(ctx, turn),
+           # The brain's own grant is on the turn's row from its start, in
+           # the write that holds Aqua's, so no runner's death leaves a
+           # started turn whose recovery could choose a brain grant: a turn
+           # that asks no model pins none and loads none.
+           {:ok, brain} <-
+             Turn.brain_pin(
+               ctx,
+               turn,
+               snapshot.agent,
+               claim.budget_id,
+               stands? and asks_model?(ctx, turn)
              ),
-           {:ok, started} <- pin_brain(ctx, started, spec) do
+           {:ok, started} <-
+             Tape.start_turn(
+               ctx,
+               turn,
+               Map.merge(brain, %{
+                 root_execution_id: claim.execution_id,
+                 attempt: claim.attempt,
+                 budget_id: claim.budget_id,
+                 profile_id: claim.authority.profile_id,
+                 consent_id: claim.authority.consent_id,
+                 agent_revision_digest: snapshot.revision_digest,
+                 agent_capability_digest: snapshot.capability_digest,
+                 agent_mode: snapshot.agent.mode,
+                 recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+               })
+             ),
+           {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority) do
         {:ok,
          %State{
            model?: stands?,
            program: spec.program,
-           spec: Turn.with_turn(spec, started),
+           spec: spec,
            claim: claim,
-           turn: started,
+           turn: spec.turn,
            generation: spec.thread.brain_generation,
            since: now(),
            active_ms: started.active_ms
@@ -577,13 +582,6 @@ defmodule Aqua.Loop do
       end
     end
   end
-
-  # The brain the turn runs on, pinned once: its program row, or its
-  # catalyst release with the brain's own grant its model calls run under.
-  defp pin_brain(ctx, turn, %Turn{program: %{row: row}}), do: Tape.pin_program(ctx, turn, row)
-
-  defp pin_brain(ctx, turn, %Turn{catalyst: catalyst, brain_authority: authority}),
-    do: Tape.pin_catalyst(ctx, turn, catalyst, authority)
 
   # A schedule's turn admits its root as that schedule's fire, which starts
   # its occurrence (`Opus.TurnRoot`).
@@ -920,6 +918,25 @@ defmodule Aqua.Loop do
     |> Map.new()
   end
 
+  # A turn built asking no model, a page's call, holds no brain grant: a
+  # steer that brings it a model round loads and pins its brain's own
+  # grant first (`Turn.with_brain/1`), and a brain that cannot be used
+  # ends it as a turn refused at its build does, with the brain's line.
+  defp model_round(%State{spec: %Turn{catalyst: catalyst, brain_authority: nil}} = state)
+       when is_binary(catalyst) do
+    case Turn.with_brain(Turn.with_turn(state.spec, state.turn)) do
+      {:ok, spec} ->
+        model_round(%{state | spec: spec, turn: spec.turn})
+
+      {:error, {:crew_unready, _member, _state} = unready} ->
+        _ = system_row(state, describe(unready))
+        {:halt, {:failed, unready}, state}
+
+      {:error, reason} ->
+        {:halt, {:failed, reason}, state}
+    end
+  end
+
   defp model_round(%State{} = state) do
     with {:ok, _drained} <- Tape.drain_steer(guest(state), state.turn),
          {:ok, rows} <- Tape.projection(guest(state), state.turn),
@@ -1091,6 +1108,15 @@ defmodule Aqua.Loop do
     {:halt, {:failed, unready}, state}
   end
 
+  # A model call refused because the brain's grant the turn pinned moved
+  # since: the turn ends as one whose grant moved at its rebuild does, in
+  # the thread and as its error.
+  defp moved(%State{} = state, step) do
+    _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: "consent_moved"})
+    _ = system_row(state, describe(:consent_moved))
+    {:halt, {:failed, :consent_moved}, state}
+  end
+
   defp ask_model(%State{} = state, step, request, retained, retries) do
     case model_call(state, step, request, retained, true) do
       {:ok, data} ->
@@ -1119,6 +1145,11 @@ defmodule Aqua.Loop do
       # says or as its admission refuses it: the brain's own state.
       {:error, %{"type" => type} = error} when type in @setup ->
         no_key(state, step, error["message"])
+
+      # The brain's grant the turn pinned moved since (its key bound
+      # again): admission refuses the call, and the turn moved on.
+      {:error, {:setup_required, %{reason: "consent_moved"}}} ->
+        moved(state, step)
 
       {:error, {:setup_required, _detail}} ->
         no_key(state, step, "setup_required")
@@ -2393,10 +2424,20 @@ defmodule Aqua.Loop do
 
   defp startup_context(_state, []), do: {:ok, []}
 
-  defp opened_on_call?(%State{} = state), do: not asks_model?(guest(state), state.turn)
+  # Whether a recovered turn goes on to ask its model. A turn on a
+  # catalyst brain asks it only when its row pins the brain's grant, which
+  # its start wrote for a turn that asked its model then; one that pins
+  # none (a page's call, a server's line that no longer stood) is never
+  # rebuilt as one that asks, and only a steer brings it a model round
+  # (`model_round/1`). A program brain's turn asks unless a page's call
+  # opened it.
+  defp asks_on_recovery?(%State{spec: %Turn{catalyst: catalyst} = spec}) when is_binary(catalyst),
+    do: spec.brain_authority != nil
 
-  # A turn opened on a page's call asks no model, so its brain is not
-  # described when the turn is built (`Turn.build/3`).
+  defp asks_on_recovery?(%State{} = state), do: asks_model?(guest(state), state.turn)
+
+  # A turn opened on a page's call asks no model, so its start pins no
+  # brain grant (`Turn.brain_pin/5`).
   defp asks_model?(ctx, %{message_id: id}) when is_binary(id),
     do: not match?({:ok, %{kind: "page_call"}}, Tape.message(ctx, id))
 
@@ -2629,7 +2670,7 @@ defmodule Aqua.Loop do
         state
         | restricted?: open != [] or Tape.restricted?(guest, state.turn),
           steps: Enum.count(steps, &(&1.kind == "model")),
-          model?: not opened_on_call?(state) and not answered?(steps)
+          model?: asks_on_recovery?(state) and not answered?(steps)
       }
 
       cond do
@@ -3234,11 +3275,17 @@ defmodule Aqua.Loop do
   defp describe(reason) when is_binary(reason), do: reason
 
   # A refusal for ownership (this server has not won its slot, or has lost
-  # it), or a component index still catching up with its files, reads as
-  # its declared sentence, which says to retry: the turn did not run, and
-  # the message can be sent again.
+  # it), a component index still catching up with its files, or a pinned
+  # grant that moved, reads as its declared sentence, which says to retry:
+  # the turn did not run on, and the message can be sent again.
   defp describe(reason)
-       when reason in [:not_owner, :control_plane_lost, :slot_not_held, :projection_unavailable],
+       when reason in [
+              :not_owner,
+              :control_plane_lost,
+              :slot_not_held,
+              :projection_unavailable,
+              :consent_moved
+            ],
        do: Prima.Refusal.message(reason)
 
   defp describe(reason) when is_atom(reason), do: Atom.to_string(reason)

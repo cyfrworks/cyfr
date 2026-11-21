@@ -206,7 +206,10 @@ defmodule Cyfr.Test.ScriptedWorker do
   for any model (default 200_000), `media_types:` the media types it says
   the model takes inline (default image/png and application/pdf),
   `provider_tools:` the provider tools it says the model has (default none),
-  `describe:` `{:refuse, error}` to have a described model refused instead, `lose_start_answer:` true to answer
+  `describe:` `{:refuse, error}` to have a described model refused instead, or
+  `{:hold, pid}` to have the first description held as a `{:hold, pid}`
+  item holds its run and answered once continued (every later one is
+  answered at once), `lose_start_answer:` true to answer
   every start `{:error, :lost}` once its runner attached.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -470,6 +473,12 @@ defmodule Cyfr.Test.ScriptedWorker do
   def handle_call(:settings, _from, state),
     do: {:reply, Map.take(state, [:window, :media_types, :provider_tools, :describe]), state}
 
+  # The one description held: taken once, every later one answered.
+  def handle_call(:take_describe_hold, _from, %{describe: {:hold, pid}} = state),
+    do: {:reply, pid, %{state | describe: :answer}}
+
+  def handle_call(:take_describe_hold, _from, state), do: {:reply, nil, state}
+
   def handle_call(:take, _from, %{script: []} = state), do: {:reply, nil, state}
 
   def handle_call(:take, _from, %{script: [item | rest]} = state),
@@ -710,7 +719,19 @@ defmodule Cyfr.Test.ScriptedWorker do
     end
   end
 
-  defp answer(_runner, %{"operation" => "describe", "params" => params}) do
+  defp answer(runner, %{"operation" => "describe", "params" => params}) do
+    case GenServer.call(__MODULE__, :take_describe_hold) do
+      nil ->
+        :ok
+
+      pid ->
+        send(pid, {:scripted_probe, self(), runner.assignment.execution_id})
+
+        receive do
+          :continue -> :ok
+        end
+    end
+
     case GenServer.call(__MODULE__, :settings) do
       %{describe: {:refuse, error}} ->
         {:complete, %{"status" => 429, "error" => error}}

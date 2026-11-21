@@ -80,11 +80,16 @@ defmodule Aqua.Loop.Turn do
 
   @doc """
   Build the spec for `turn` as `ctx` (the actor's external-plane context).
-  `opts`: `:authority` (the turn's pinned authority, required),
-  `:excerpt?` (read the room excerpt the turn's options name), and
-  `:asks_model?`: false for a turn opened on a page's call, which asks no
-  model, so its brain is not described and its capabilities are none
-  (`Aqua.Models.none/0`).
+  `opts`: `:authority` (the turn's pinned authority, required) and
+  `:excerpt?` (read the room excerpt the turn's options name).
+
+  A catalyst brain's own grant is the one the turn's row pinned with its
+  start (`brain_pin/5`), and nothing else: a turn whose row pins none
+  asks no model (a page's call, a server's line that no longer stands),
+  so no brain grant is loaded or checked, its brain is not described and
+  its capabilities are none (`Aqua.Models.none/0`). A program brain's row
+  is pinned here (`Tape.pin_program/3`), before anything runs on it, and
+  the spec carries the turn's row as pinned.
 
   Refuses Aqua whose crew member does not stand (`{:aqua_runs_on,
   state, member}`, `Compendium.AquaAgent.seated/2`), a program brain
@@ -95,8 +100,9 @@ defmodule Aqua.Loop.Turn do
   typed refusal is `{:model_refused, catalyst, error}`, and a catalyst
   whose consent lacks its key `{:setup_required, catalyst}`), a catalyst
   whose own grant is missing, revoked or stale (`{:setup_required,
-  catalyst}`), and a pinned brain grant whose head moved
-  (`:consent_moved`).
+  catalyst}`), a catalyst whose own grant is damaged or cannot be read
+  (`{:crew_unready, title, state}`), and a pinned brain grant whose head
+  moved (`:consent_moved`).
   """
   @spec build(Context.t(), Tape.turn(), keyword()) :: {:ok, t()} | {:error, term()}
   def build(%Context{} = ctx, turn, opts) do
@@ -112,9 +118,8 @@ defmodule Aqua.Loop.Turn do
          offered = Aqua.Offered.resolve(agent["tools"], Aqua.BrowserSetting.allowed?(ctx)),
          {:ok, brain, model} <- model(ctx, turn, agent),
          {catalyst, program} = brain,
-         {:ok, brain_authority} <-
-           brain_said(ctx, agent, catalyst, brain_grant(ctx, turn, catalyst)),
-         asks? = Keyword.get(opts, :asks_model?, true) and program == nil,
+         {:ok, turn, brain_authority} <- brain(ctx, turn, agent, brain),
+         asks? = brain_authority != nil,
          {:ok, capabilities} <-
            brain_said(
              ctx,
@@ -390,55 +395,158 @@ defmodule Aqua.Loop.Turn do
 
   # The grant a catalyst brain's model calls run under: the brain's own,
   # its key, network and limits, never Aqua's, which names no brain. The
-  # host loads it from the brain the turn resolved in the authenticated
+  # host loads it from the brain the agent names in the authenticated
   # athanor, never from anything a caller sends; each call is the brain's
   # own node invoking itself under it (`Prima.Authority.Transition`'s
-  # self-invocation), as the brain runs when a person runs it. A turn
-  # that pinned it loads exactly that grant by its profile, in recovery
-  # too, and refuses one whose head moved since (`:consent_moved`, as
-  # Aqua's pin is refused); before, the brain's default grant, which the
-  # loop pins with the release (`Aqua.Loop`). It is loaded with the
-  # turn's reservation, so every call is charged to the turn's root
-  # budget. A brain whose own grant is missing, revoked or stale is the
-  # brain's to set up, said as the brain (`{:setup_required, catalyst}`).
-  # A program brain has none: its turn starts its program by the
-  # program's own row.
-  defp brain_grant(_ctx, _turn, nil), do: {:ok, nil}
+  # self-invocation), as the brain runs when a person runs it. It is the
+  # brain's profile labelled "default", the one its setup's key entry
+  # writes, however many other profiles the person keeps on it
+  # (`brain_pin/5`). Once the turn has started, its row is the only source
+  # of it: a turn loads exactly the grant it pinned, by its profile, in
+  # recovery too, and refuses one whose head moved since (`:consent_moved`,
+  # as Aqua's pin is refused). It is loaded with the turn's reservation,
+  # so every call is charged to the turn's root budget. A program brain has
+  # none: its turn starts its program by the program's own row.
+  @brain_label "default"
 
-  defp brain_grant(ctx, turn, catalyst) do
+  @doc """
+  The brain `turn`, about to start, pins with its start
+  (`Tape.start_turn/3`, in the write that holds Aqua's pin): for a turn
+  that asks its model (`asks?`) on a catalyst brain, the release the
+  agent's catalyst resolves to and the brain's own grant, loaded with the
+  turn's reservation `budget_id`, as `%{catalyst_ref, brain_profile_id,
+  brain_consent_id}`; nothing (`%{}`) for a turn that asks no model, a
+  program brain, or an agent whose brain does not resolve, which
+  `build/3` refuses as it does. A brain that cannot be used is refused as
+  the brain (`{:crew_unready, title, state}`).
+  """
+  @spec brain_pin(
+          Context.t(),
+          Tape.turn(),
+          Compendium.AquaAgent.t(),
+          String.t() | nil,
+          boolean()
+        ) :: {:ok, map()} | {:error, term()}
+  def brain_pin(ctx, turn, parsed, budget_id, asks?)
+
+  # A turn whose row already pins a program row runs on that row, as
+  # `build/3` reads it.
+  def brain_pin(%Context{}, %{program: row}, _parsed, _budget_id, _asks?) when is_binary(row),
+    do: {:ok, %{}}
+
+  def brain_pin(%Context{} = ctx, _turn, parsed, budget_id, true = _asks?) do
+    agent = agent_map(parsed)
+
+    with %{"program" => nil} <- agent,
+         {:ok, {catalyst, nil}, _model} <-
+           catalyst_model(ctx, %{catalyst_ref: nil, model: nil}, agent),
+         {:ok, authority} <-
+           brain_said(ctx, agent, catalyst, default_brain(ctx, catalyst, budget_id)) do
+      {:ok,
+       %{
+         catalyst_ref: catalyst,
+         brain_profile_id: authority.profile_id,
+         brain_consent_id: authority.consent_id
+       }}
+    else
+      {:error, {:crew_unready, _title, _state}} = unready -> unready
+      {:error, :consent_moved} = moved -> moved
+      _program_or_unresolved -> {:ok, %{}}
+    end
+  end
+
+  def brain_pin(%Context{}, _turn, _parsed, _budget_id, false = _asks?), do: {:ok, %{}}
+
+  # The brain the turn runs on, from its row: a program brain's row,
+  # pinned once; a catalyst brain's own grant, exactly the one the row
+  # pinned. A turn whose row pins no brain grant asks no model (a page's
+  # call, a server's line that no longer stands): it loads and checks none,
+  # recovered or not.
+  defp brain(_ctx, %{program: row} = turn, _agent, {nil, %{row: row}}), do: {:ok, turn, nil}
+
+  defp brain(ctx, turn, _agent, {nil, %{row: row}}) do
+    with {:ok, turn} <- Tape.pin_program(ctx, turn, row), do: {:ok, turn, nil}
+  end
+
+  defp brain(ctx, %{brain_profile_id: profile_id} = turn, agent, {catalyst, nil})
+       when is_binary(profile_id) do
+    with {:ok, authority} <- brain_said(ctx, agent, catalyst, pinned_brain(ctx, turn, catalyst)),
+         do: {:ok, turn, authority}
+  end
+
+  defp brain(_ctx, turn, _agent, _unpinned), do: {:ok, turn, nil}
+
+  @doc """
+  The spec with its brain's own grant loaded and pinned on the turn's row
+  (`turn`, as the loop holds it now), for a turn whose row pins none
+  because it asked no model when it started (a page's call) and that a
+  steer now asks one: nothing ran under any brain grant before, so its
+  first is the brain's grant as it stands, pinned before the model is
+  asked, and refused as `brain_pin/5` refuses it. A spec that holds its
+  grant, or whose brain is a program, is answered as it is.
+  """
+  @spec with_brain(t()) :: {:ok, t()} | {:error, term()}
+  def with_brain(%__MODULE__{catalyst: catalyst, brain_authority: nil} = spec)
+      when is_binary(catalyst) do
+    with {:ok, authority} <-
+           brain_said(
+             spec.ctx,
+             spec.agent,
+             catalyst,
+             default_brain(spec.ctx, catalyst, spec.turn.budget_id)
+           ),
+         {:ok, turn} <- Tape.pin_catalyst(spec.ctx, spec.turn, catalyst, authority) do
+      {:ok,
+       %{
+         spec
+         | turn: turn,
+           brain_authority: authority,
+           request_cap: request_cap(authority, catalyst),
+           deadline_ms: deadline_ms(spec.authority, brain_timeout_ms(authority, catalyst))
+       }}
+    end
+  end
+
+  def with_brain(%__MODULE__{} = spec), do: {:ok, spec}
+
+  defp default_brain(ctx, catalyst, budget_id) do
     with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst) do
-      case pinned_brain(ctx, turn, name_ref) do
-        {:ok, authority} ->
+      ctx
+      |> Opus.authority_for({:label, @brain_label}, name_ref, budget_id: budget_id)
+      |> classified(catalyst)
+    end
+  end
+
+  defp pinned_brain(ctx, turn, catalyst) do
+    with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst) do
+      case Opus.authority_for(ctx, {:id, turn.brain_profile_id}, name_ref,
+             budget_id: turn.budget_id
+           ) do
+        {:ok, %{consent_id: consent_id} = authority} when consent_id == turn.brain_consent_id ->
           {:ok, authority}
 
-        {:error, reason} ->
-          case Aqua.ConsentStatus.classify_refusal(reason) do
-            {:ok, _absent_or_stale} when reason != :consent_moved ->
-              {:error, {:setup_required, catalyst}}
+        {:ok, _moved} ->
+          {:error, :consent_moved}
 
-            _moved_damaged_or_unread ->
-              {:error, reason}
-          end
+        error ->
+          classified(error, catalyst)
       end
     end
   end
 
-  defp pinned_brain(ctx, %{brain_profile_id: profile_id} = turn, name_ref)
-       when is_binary(profile_id) do
-    case Opus.authority_for(ctx, {:id, profile_id}, name_ref, budget_id: turn.budget_id) do
-      {:ok, %{consent_id: consent_id} = authority} when consent_id == turn.brain_consent_id ->
-        {:ok, authority}
+  # A brain whose own grant is missing, revoked or stale is the brain's to
+  # set up (`{:setup_required, catalyst}`); one whose grant is damaged or
+  # cannot be read is the brain's state too (`{:brain_unready, state}`):
+  # both said as the brain (`brain_said/4`).
+  defp classified({:ok, _authority} = loaded, _catalyst), do: loaded
 
-      {:ok, _moved} ->
-        {:error, :consent_moved}
-
-      {:error, _} = error ->
-        error
+  defp classified({:error, reason}, catalyst) do
+    case Aqua.ConsentStatus.classify_refusal(reason) do
+      {:ok, _absent_or_stale} -> {:error, {:setup_required, catalyst}}
+      {:error, :corrupt} -> {:error, {:brain_unready, :consent_damaged}}
+      {:error, _unread} -> {:error, {:brain_unready, :unavailable}}
     end
   end
-
-  defp pinned_brain(ctx, turn, name_ref),
-    do: Opus.authority_for(ctx, :default, name_ref, budget_id: turn.budget_id)
 
   # A brain not set up, its grant never given or taken away or its key
   # not entered, is the brain's own state, said as its card and its row in
@@ -467,6 +575,11 @@ defmodule Aqua.Loop.Turn do
     {:error, {:crew_unready, brain_title(agent), state}}
   end
 
+  # A brain's own grant that is damaged or cannot be read is the brain's
+  # state too, said as its card says it.
+  defp brain_said(_ctx, agent, _catalyst, {:error, {:brain_unready, state}}),
+    do: {:error, {:crew_unready, brain_title(agent), state}}
+
   defp brain_said(_ctx, agent, catalyst, {:error, {:model_refused, catalyst, %{"type" => type}}})
        when type in @key_refusals,
        do: {:error, {:crew_unready, brain_title(agent), :no_key}}
@@ -485,6 +598,7 @@ defmodule Aqua.Loop.Turn do
   # (`Opus.Admission` steps by name), so a versioned key finds nothing and
   # a cap of nil is a check that never fires. A program brain has no
   # catalyst, and so neither cap nor timeout.
+  defp request_cap(nil, _catalyst), do: nil
   defp request_cap(_authority, nil), do: nil
 
   defp request_cap(authority, catalyst) do
@@ -504,6 +618,7 @@ defmodule Aqua.Loop.Turn do
   # (`Opus.Admission`), so the turn's own deadline is never under it. Nil
   # when the graph holds no such node or its timeout does not parse:
   # admission refuses such a call before anything runs.
+  defp brain_timeout_ms(nil, _catalyst), do: nil
   defp brain_timeout_ms(_authority, nil), do: nil
 
   defp brain_timeout_ms(authority, catalyst) do

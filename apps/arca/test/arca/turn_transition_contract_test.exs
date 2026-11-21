@@ -238,6 +238,38 @@ defmodule Arca.TurnTransitionContractTest do
   # The root's grant and the lease
   # ---------------------------------------------------------------------------
 
+  describe "a turn's brain is pinned with its start, once" do
+    # The release and the brain's own grant are written in the start's own
+    # write, all three or none, and a pin of the same release under
+    # another grant is refused: the row is the turn's one source of it.
+    test "the start writes the brain's pin, and the store keeps it against another grant",
+         %{actor: actor, thread: thread} do
+      turn = accept!(actor, thread)
+      root = root!(actor, turn.id)
+
+      assert {:error, :illegal_transition} =
+               TurnStorage.start(
+                 actor,
+                 turn.id,
+                 start_attrs(turn, root, %{catalyst_ref: "cat@1", brain_profile_id: "prof_brain"})
+               )
+
+      pin = %{catalyst_ref: "cat@1", brain_profile_id: "prof_brain", brain_consent_id: "con_one"}
+      {:ok, started} = TurnStorage.start(actor, turn.id, start_attrs(turn, root, pin))
+      assert Map.take(started, Map.keys(pin)) == pin
+
+      held = %{fence: started.fence}
+      same = %{profile_id: "prof_brain", consent_id: "con_one"}
+      other = %{profile_id: "prof_brain", consent_id: "con_two"}
+
+      assert {:ok, %{brain_consent_id: "con_one"}} =
+               TurnStorage.pin_catalyst(actor, turn.id, {"cat@1", same}, held)
+
+      assert {:error, :catalyst_pinned} =
+               TurnStorage.pin_catalyst(actor, turn.id, {"cat@1", other}, held)
+    end
+  end
+
   describe "the root's grant is required where the write must stand" do
     test "a resume, a completion, a takeover and a set-down without a check are refused",
          %{actor: actor, thread: thread} do

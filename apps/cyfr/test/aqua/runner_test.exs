@@ -818,6 +818,54 @@ defmodule Aqua.RunnerTest do
     assert ScriptedWorker.calls() == ran
   end
 
+  # A brain's own grant that is damaged, or that cannot be read, is the
+  # brain's state: a post in a thread that already has posts is refused
+  # with the brain's sentence, as a line in the thread and as the turn's
+  # error, and nothing is asked.
+  test "a post refused because its brain's own grant cannot be read, or is damaged, says so " <>
+         "in a thread that already has posts",
+       %{ctx: ctx, thread: thread} do
+    script!([reply("Aqua ran.")])
+
+    accept = fn content ->
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: content},
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      turn
+    end
+
+    assert :completed = Aqua.Loop.run(ctx: ctx, turn_id: accept.("first").id)
+    ran = ScriptedWorker.calls()
+    {:ok, %{profile_id: brain}} = Opus.authority_for(ctx, :default, @model)
+
+    cases = [
+      {:unavailable, fn -> Sanctum.Test.ConsentFixtures.head_outage!(ctx, brain) end,
+       &:telemetry.detach/1},
+      {:consent_damaged,
+       fn -> Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, brain, scope: "sideways") end,
+       fn :ok -> :ok end}
+    ]
+
+    for {{state, break, mend}, n} <- Enum.with_index(cases, 1) do
+      broken = break.()
+      turn = accept.("go #{n}")
+
+      assert {:failed, {:crew_unready, _member, ^state} = refusal} =
+               Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+
+      mend.(broken)
+      sentence = Prima.Refusal.message(refusal)
+      assert {:ok, %{status: "failed", error: ^sentence}} = Tape.turn(ctx, turn.id)
+      assert List.last(system_lines(ctx, thread)) == sentence
+      assert length(system_lines(ctx, thread)) == n
+    end
+
+    assert ScriptedWorker.calls() == ran
+  end
+
   # A turn's brain grant is read as the component index holds it: an index
   # that cannot catch up refuses the turn before its brain is asked, and
   # the failed turn says so in the refusal's own sentence, never its atom.
@@ -1020,21 +1068,28 @@ defmodule Aqua.RunnerTest do
     {:ok, claim} =
       Opus.claim_turn_root(ctx, @soul, turn_id: turn.id, thread_id: other_thread.id)
 
-    {:ok, %{capability_digest: capability, revision_digest: revision}} =
+    {:ok, %{capability_digest: capability, revision_digest: revision} = snapshot} =
       Compendium.AgentIndex.snapshot(ctx, "aqua")
 
+    # Started as the loop starts a turn, its brain pinned with its start.
+    {:ok, brain} = Aqua.Loop.Turn.brain_pin(ctx, turn, snapshot.agent, claim.budget_id, true)
+
     {:ok, running} =
-      Tape.start_turn(ctx, turn, %{
-        root_execution_id: claim.execution_id,
-        attempt: claim.attempt,
-        budget_id: claim.budget_id,
-        profile_id: claim.authority.profile_id,
-        consent_id: claim.authority.consent_id,
-        agent_revision_digest: revision,
-        agent_capability_digest: capability,
-        agent_mode: "auto",
-        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
-      })
+      Tape.start_turn(
+        ctx,
+        turn,
+        Map.merge(brain, %{
+          root_execution_id: claim.execution_id,
+          attempt: claim.attempt,
+          budget_id: claim.budget_id,
+          profile_id: claim.authority.profile_id,
+          consent_id: claim.authority.consent_id,
+          agent_revision_digest: revision,
+          agent_capability_digest: capability,
+          agent_mode: "auto",
+          recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+        })
+      )
 
     # The dead boot's slot and keeper are gone; the rows say running.
     :ok = Opus.release_turn_root(ctx, claim.execution_id, claim: claim)
@@ -2763,6 +2818,13 @@ defmodule Aqua.RunnerTest do
           do: turn
 
     work
+  end
+
+  # The system lines of `thread`, oldest first.
+  defp system_lines(ctx, thread) do
+    for %{kind: "system", content: text} <-
+          Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+        do: text
   end
 
   # The thread's rows, oldest first, each whole but for its id and clock,
