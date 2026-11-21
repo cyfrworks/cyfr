@@ -1741,8 +1741,8 @@ defmodule PrismWeb.ThreadPaneLive do
               <span>Reading the models…</span>
           <% end %>
         </div>
-        <div class="aqua-panel-menu-row" title="The soul or crew member this thread is on">
-          <span>Soul or crew member</span>
+        <div class="aqua-panel-menu-row" title="Aqua or the crew member this thread is on">
+          <span>Aqua or crew member</span>
           <span class="truncate">
             {if @roster == [],
               do: "No assistant here",

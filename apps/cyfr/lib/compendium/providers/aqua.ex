@@ -597,7 +597,7 @@ defmodule Compendium.Providers.Aqua do
       {:ok, %{updated: name}}
     else
       {:error, :not_found} ->
-        {:error, {:not_found, "Soul or crew member", name}}
+        {:error, {:not_found, "Aqua or crew member", name}}
 
       {:error, :crew_has_no_prompt} ->
         {:error, {:conflict, AquaAgent.prompt_refused(name)}}
@@ -633,7 +633,7 @@ defmodule Compendium.Providers.Aqua do
           {:error, {:invalid_argument, bundled_delete_message(name)}}
 
         {:error, :not_found} ->
-          {:error, {:not_found, "Soul or crew member", name}}
+          {:error, {:not_found, "Aqua or crew member", name}}
 
         # This member's slot is not live: nothing was removed, and the
         # refusal reads as itself.
@@ -656,7 +656,7 @@ defmodule Compendium.Providers.Aqua do
 
   def handle(%Context{} = ctx, %{"action" => "reset", "name" => name}) when is_binary(name) do
     with :ok <- validate_name(name) do
-      restore_unit(ctx, AquaPath.agent_file(name), "Soul or crew member", name)
+      restore_unit(ctx, AquaPath.agent_file(name), "Aqua or crew member", name)
     end
   end
 
