@@ -1285,8 +1285,10 @@ jobs:
           PROOF_OUT: ${{ runner.temp }}/desktop-proof
         run: bash tests/desktop-proof/home.sh "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb" cyfr:push
       # What each proof recorded: its rows, its log and the app's output.
-      # No secret is in them: the authority's key and the setup token stay
-      # in the run's scratch directory, which the run removes.
+      # No secret is in them: a proof records addresses without their
+      # fragments, headings and notices, never a page's text, and the
+      # authority's key and the setup token stay in the run's scratch
+      # directory, which the run removes.
       - name: Keep the proofs' records
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

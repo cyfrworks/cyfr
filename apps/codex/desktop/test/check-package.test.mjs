@@ -7,6 +7,7 @@ import {existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, wri
 import {tmpdir} from "node:os"
 import path from "node:path"
 import {test} from "node:test"
+import {fileURLToPath} from "node:url"
 
 import {createPackage, extractFile} from "@electron/asar"
 
@@ -104,9 +105,9 @@ test("electron-builder's renames are each named, and nothing else is renamed", (
 // one staged: the swap cannot ship.
 test("every proof entry's bundle is refused in a package", async (t) => {
   const {pack} = await import("../../../../tests/desktop-proof/pack.mjs")
-  const proofs = new URL("../../../../tests/desktop-proof/", import.meta.url)
+  const proofs = fileURLToPath(new URL("../../../../tests/desktop-proof/", import.meta.url))
   const entries = readdirSync(proofs, {withFileTypes: true}).filter((d) => d.isDirectory())
-    .map((d) => path.join(proofs.pathname, d.name, "proof.js")).filter((f) => existsSync(f))
+    .map((d) => path.join(proofs, d.name, "proof.js")).filter((f) => existsSync(f))
   assert.ok(entries.length > 0, "no proof entry found")
   for (const entry of entries) {
     const dir = mkdtempSync(path.join(tmpdir(), "cyfr-proof-bundle-"))

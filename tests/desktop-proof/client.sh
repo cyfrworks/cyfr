@@ -14,7 +14,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends /deb/cyfr-desktop.deb xvfb xauth dbus-x11 libnss3-tools \
-  ca-certificates procps >/dev/null
+  ca-certificates >/dev/null
 cp /fixture/authority.pem /usr/local/share/ca-certificates/cyfr-proof.crt
 update-ca-certificates >/dev/null
 useradd -m proof

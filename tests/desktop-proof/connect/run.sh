@@ -6,9 +6,12 @@
 # the client container as its user: the installed app, whose entry is
 # this folder's proof.js, under a display and a session bus, with nothing
 # of this environment but those, HOME and where the proof's inputs are.
-# The proof writes one PASS or FAIL line a row to FIXTURE_DIR/out/connect.txt
-# and its whole record to connect.json; one FAIL, or a proof that does not
-# finish its record, fails the run.
+# The app is launched once for each of the proof's phases, in order: the
+# road itself, then twice more on what this computer remembers of it.
+# Each launch appends one PASS or FAIL line a row to
+# FIXTURE_DIR/out/connect.txt and its RESULT line, and writes its record to
+# connect-PHASE.json; one FAIL, or a launch that does not finish its
+# record, fails the run.
 #
 # Usage: bash tests/desktop-proof/connect/run.sh APP_PATH HOME_ORIGIN FIXTURE_DIR
 set -uo pipefail
@@ -17,7 +20,7 @@ HOME_ORIGIN="${2:?}"
 FIXTURE="${3:?}"
 OUT="$FIXTURE/out"
 mkdir -p "$OUT"
-rm -f "$OUT/connect.txt" "$OUT/connect.json"
+rm -f "$OUT/connect.txt" "$OUT"/connect-*.json
 
 # The client has no Docker: no program and no socket.
 if command -v docker >/dev/null 2>&1 || [ -e /var/run/docker.sock ]; then
@@ -31,14 +34,27 @@ grep -q "\"home\": \"$HOME_ORIGIN\"" "$FIXTURE/inputs.json" ||
 # The display and the bus are the ones xvfb-run and dbus-run-session give
 # the command they run.
 export APP FIXTURE
-timeout 900 dbus-run-session -- xvfb-run -a -s "-screen 0 1400x1000x24" bash -c \
-  'exec env -i HOME="$HOME" PATH=/usr/bin:/bin LANG=C.UTF-8 DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" \
-    DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" CYFR_DESKTOP_PROOF_FIXTURE="$FIXTURE" "$APP"' >"$OUT/app.log" 2>&1
-code=$?
-cat "$OUT/connect.txt" 2>/dev/null
-if ! grep -qx 'RESULT [a-z]*' "$OUT/connect.txt" 2>/dev/null; then
-  echo "FAIL proof: the proof did not finish (the app exited $code); the app's last lines:"
-  tail -n 30 "$OUT/app.log"
-  exit 1
-fi
-grep -qx 'RESULT passed' "$OUT/connect.txt"
+for phase in connect remembered changed; do
+  # The last launch's cyfr leaves 127.0.0.1:7340 as it ends.
+  for _ in $(seq 100); do
+    (exec 3<>/dev/tcp/127.0.0.1/7340) 2>/dev/null || break
+    sleep 0.1 # sleep-ok: polls the port the last launch's cyfr releases as it ends
+  done
+  export PHASE="$phase"
+  timeout 900 dbus-run-session -- xvfb-run -a -s "-screen 0 1400x1000x24" bash -c \
+    'exec env -i HOME="$HOME" PATH=/usr/bin:/bin LANG=C.UTF-8 DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" \
+      DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" CYFR_DESKTOP_PROOF_FIXTURE="$FIXTURE" \
+      CYFR_DESKTOP_PROOF_PHASE="$PHASE" "$APP"' >"$OUT/app-$phase.log" 2>&1
+  code=$?
+  if ! grep -qx "RESULT $phase [a-z]*" "$OUT/connect.txt" 2>/dev/null; then
+    cat "$OUT/connect.txt" 2>/dev/null
+    echo "FAIL proof: the $phase launch did not finish (the app exited $code); the app's last lines:"
+    tail -n 30 "$OUT/app-$phase.log"
+    exit 1
+  fi
+  if ! grep -qx "RESULT $phase passed" "$OUT/connect.txt"; then
+    cat "$OUT/connect.txt"
+    exit 1
+  fi
+done
+cat "$OUT/connect.txt"
