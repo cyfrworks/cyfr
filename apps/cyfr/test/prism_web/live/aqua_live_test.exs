@@ -2312,6 +2312,78 @@ defmodule PrismWeb.AquaLiveTest do
       answered_on_open!(ctx, "mine")
     end
 
+    # A model picked on a card names the card's whole brain: a card left
+    # open on Claude Code while the member was moved to Codex elsewhere
+    # puts the member back on Claude Code with the model picked, holding
+    # only what Claude Code lists, and its next turn runs there.
+    test "a model picked on a card left open on another program puts the member on the card's " <>
+           "program",
+         %{conn: conn, ctx: ctx} do
+      Cyfr.Test.SeedBundle.lay!(~w(files http))
+      :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+      :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+      {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+      {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+
+      fake = backends!()
+      claude = brain_row!(ctx, "claude-code")
+      codex = brain_row!(ctx, "openai-codex")
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "mine",
+          "title" => "Mine",
+          "program" => "claude-code",
+          "model" => "opus",
+          "options" => %{"effort" => "high"}
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+
+      lists_each!(fake, [claude, codex], fn ->
+        has_element?(view, ~s(#aqua-card-mine-model option[value="haiku"]))
+      end)
+
+      # Elsewhere: moved to Codex, with an effort and Codex's access saved.
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "mine",
+          "program" => "openai-codex",
+          "model" => "gpt-6.1-sol",
+          "options_patch" => %{"effort" => "low", "access" => "full-access"}
+        })
+
+      view |> form("#aqua-card-mine-model", %{"value" => "haiku"}) |> render_change()
+
+      assert {:ok,
+              %{
+                "program" => "claude-code",
+                "catalyst_ref" => nil,
+                "model" => "haiku",
+                "options" => options
+              }} = get_agent(ctx, "mine")
+
+      assert options == %{"effort" => "low"}
+      Cyfr.Test.Sandbox.end_views()
+
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, room} = Arca.Test.Days.thread(actor)
+      {:ok, thread} = Aqua.Tape.crew_thread(ctx, room.id, "mine")
+
+      assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
+               Aqua.Runner.send_message(%{ctx | origin: :interactive}, thread.id, "hello")
+
+      answers!(fake, claude, "Hello from Claude Code.", fn ->
+        match?({:ok, %{status: "completed"}}, Aqua.Tape.turn(ctx, turn_id))
+      end)
+
+      assert_received {:driver_start, %{"config" => config}}
+      assert config == %{"model" => "haiku", "effort" => "low"}
+    end
+
     # A member moved from one program brain to the other keeps each option
     # whose value the new program lists, and drops any other: the access
     # the first driver listed is none of the second's, so it goes, and the

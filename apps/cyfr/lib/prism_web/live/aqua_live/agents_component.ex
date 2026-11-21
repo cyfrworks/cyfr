@@ -428,9 +428,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # A program brain's model is one its program lists: its brain stays the
-  # program the member names, and an option its program does not list
-  # is taken off in the same write (`moved/4`).
+  # A program brain's model is one its program lists. The pick names its
+  # whole brain, the program the card shows, beside the model, so the
+  # member is left on the brain and model the person saw and chose, and
+  # an option that program does not list is taken off in the same write
+  # (`moved/4`).
   def handle_event(
         "editor_set_model",
         %{"name" => name, "brain" => "program", "value" => value},
@@ -441,7 +443,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       program = program_of(member(socket, name))
 
       result =
-        moved(socket, name, declared("program:#{program}", model, socket), %{"model" => model})
+        moved(socket, name, declared("program:#{program}", model, socket), %{
+          "model" => model,
+          "catalyst_ref" => nil,
+          "program" => program
+        })
 
       send(self(), {:refresh, :agents})
 
