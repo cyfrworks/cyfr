@@ -417,6 +417,7 @@ defmodule Aqua.RunnerTest do
 
       [%{kind: "model", id: step}] = raw_steps!(ctx, turn_id)
 
+      # The post is carried by the model step whose request held it.
       assert [
                row(thread, %{
                  seq: 1,
@@ -425,7 +426,8 @@ defmodule Aqua.RunnerTest do
                  content: "hello",
                  turn_id: turn_id,
                  sent_by: "person",
-                 addressee: "aqua"
+                 addressee: "aqua",
+                 carried_by: step
                }),
                row(thread, %{
                  seq: 2,
