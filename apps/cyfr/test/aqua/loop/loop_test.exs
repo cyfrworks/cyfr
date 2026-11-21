@@ -1213,15 +1213,6 @@ defmodule Aqua.LoopTest do
     assert {:ok, %{catalyst_ref: "catalyst:local.claude:" <> _ = pinned} = paused} =
              Tape.turn(ctx, turn.id)
 
-    assert {:error, :catalyst_pinned} =
-             Arca.TurnStorage.pin_catalyst(
-               Sanctum.Context.actor(ctx),
-               turn.id,
-               {"catalyst:local.openai:1.4.3",
-                %{profile_id: paused.brain_profile_id, consent_id: paused.brain_consent_id}},
-               %{fence: paused.fence}
-             )
-
     # A spec is built on the pinned release alone, and only on one that
     # speaks the chat contract.
     {:ok, authority} = Opus.authority_for(ctx, :default, @soul)

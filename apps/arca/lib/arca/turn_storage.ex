@@ -1881,8 +1881,8 @@ defmodule Arca.TurnStorage do
   positive count, required), the brain it runs on when it asks a catalyst
   brain's model (`:catalyst_ref`, `:brain_profile_id` and
   `:brain_consent_id`, all three or none: the release and the brain's own
-  grant, which `pin_catalyst/4` then answers and never replaces), and the
-  consumption boundary set to the highest seq the turn may read now.
+  grant, written here and nowhere else), and the consumption boundary set
+  to the highest seq the turn may read now.
   Event `turn.started`.
 
   The root is read from its rows, not taken from the map: it must be a
@@ -1960,60 +1960,8 @@ defmodule Arca.TurnStorage do
   end
 
   @doc """
-  Pin the exact catalyst release the turn runs on, with the brain's own
-  grant its model calls run under (`brain`: `%{profile_id, consent_id}`),
-  under `:fence`, in one write. A turn pins once: pinning what is already
-  pinned answers the turn, and a different release or grant is
-  `{:error, :catalyst_pinned}`; a turn that is over pins nothing
-  (`{:error, :not_open}`).
-  """
-  @spec pin_catalyst(Prima.Actor.t(), String.t(), {String.t(), map()}, map()) ::
-          {:ok, map()} | {:error, term()}
-  def pin_catalyst(
-        %Prima.Actor{athanor_id: athanor_id},
-        turn_id,
-        {catalyst_ref, %{profile_id: profile_id, consent_id: consent_id}},
-        attrs
-      )
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(catalyst_ref) and
-             is_binary(profile_id) and is_binary(consent_id) and is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pin_catalyst", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        case open!(own!(athanor_id, turn_id, attrs)) do
-          %Turn{catalyst_ref: nil} ->
-            {1, _} =
-              from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
-              |> Arca.Repo.update_all(
-                set: [
-                  catalyst_ref: catalyst_ref,
-                  brain_profile_id: profile_id,
-                  brain_consent_id: consent_id
-                ]
-              )
-
-            turn!(athanor_id, turn_id)
-
-          %Turn{
-            catalyst_ref: ^catalyst_ref,
-            brain_profile_id: ^profile_id,
-            brain_consent_id: ^consent_id
-          } = turn ->
-            turn
-
-          %Turn{} ->
-            Arca.Repo.rollback(:catalyst_pinned)
-        end
-      end)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def pin_catalyst(%Prima.Actor{}, _turn_id, _catalyst_ref, _attrs), do: {:error, :no_athanor}
-
-  @doc """
-  Pin the program row a turn's brain runs on, once, as `pin_catalyst/4`
-  pins a catalyst: the same row again is the turn as it stands, another
-  is `{:error, :program_pinned}`.
+  Pin the program row a turn's brain runs on, once: the same row again is
+  the turn as it stands, another is `{:error, :program_pinned}`.
   """
   @spec pin_program(Prima.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, map()} | {:error, term()}

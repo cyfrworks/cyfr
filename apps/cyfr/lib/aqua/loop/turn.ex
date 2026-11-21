@@ -58,7 +58,8 @@ defmodule Aqua.Loop.Turn do
     :offered,
     :authority,
     # The grant a catalyst brain's model calls run under: the brain's own,
-    # never Aqua's (`brain_grant/3`). Nil for a program brain.
+    # never Aqua's, as the turn's row pinned it (`brain_pin/5`). Nil for a
+    # program brain and for a turn that asks no model.
     :brain_authority,
     :catalyst,
     # The program row a program brain runs on, `%{row, epoch, name}`, or
@@ -390,10 +391,15 @@ defmodule Aqua.Loop.Turn do
   the model the turn's post names over the agent's, as `build/3` reads
   them) resolves to and the brain's own grant, loaded with the
   turn's reservation `budget_id`, as `%{catalyst_ref, brain_profile_id,
-  brain_consent_id}`; nothing (`%{}`) for a turn that asks no model, a
-  program brain, or an agent whose brain does not resolve, which
-  `build/3` refuses as it does. A brain that cannot be used is refused as
-  the brain (`{:crew_unready, title, state}`).
+  brain_consent_id}`; nothing (`%{}`) for a turn that asks no model or a
+  program brain. This is the one decision of the brain a turn that asks
+  its model runs on: `build/3` reads it from the row and resolves no
+  other. Aqua whose crew member does not stand is refused as `build/3`
+  refuses it (`{:aqua_runs_on, state, member}`). A brain that cannot be
+  used, or that the athanor's listing does
+  not resolve to a release, is refused as the brain (`{:crew_unready,
+  title, state}`); an agent that names no model, or whose catalyst does
+  not speak the chat contract, is refused as `build/3` refuses it.
   """
   @spec brain_pin(
           Context.t(),
@@ -412,7 +418,8 @@ defmodule Aqua.Loop.Turn do
   def brain_pin(%Context{} = ctx, turn, parsed, budget_id, true = _asks?) do
     agent = agent_map(parsed)
 
-    with %{"program" => nil} <- agent,
+    with :ok <- held(agent),
+         %{"program" => nil} <- agent,
          {:ok, {catalyst, nil}, _model} <-
            catalyst_model(ctx, %{catalyst_ref: nil, model: turn.model}, agent),
          {:ok, authority} <-
@@ -424,20 +431,37 @@ defmodule Aqua.Loop.Turn do
          brain_consent_id: authority.consent_id
        }}
     else
-      {:error, {:crew_unready, _title, _state}} = unready -> unready
-      {:error, :consent_moved} = moved -> moved
-      _program_or_unresolved -> {:ok, %{}}
+      %{"program" => program} when is_binary(program) ->
+        {:ok, %{}}
+
+      {:error, {:catalyst_not_in_athanor, _ref}} ->
+        {:error, {:crew_unready, brain_title(agent), unresolved(ctx, agent)}}
+
+      {:error, _refused} = refused ->
+        refused
     end
   end
 
   def brain_pin(%Context{}, _turn, _parsed, _budget_id, false = _asks?), do: {:ok, %{}}
 
+  # A brain the listing did not resolve, as its card reads it; one its
+  # card reads ready is one that cannot be read now, to retry.
+  defp unresolved(ctx, %{"catalyst_ref" => ref}) when is_binary(ref) do
+    with {:ok, _name_ref} <- Prima.ComponentRef.to_name_ref(ref),
+         state when state != :ready <- brain_state(ctx, ref) do
+      state
+    else
+      _ready_or_unnamed -> :unavailable
+    end
+  end
+
+  defp unresolved(_ctx, _agent), do: :no_brain
+
   # The brain the turn runs on, from its row: a program brain's row,
   # pinned once; a catalyst brain's own grant, exactly the one the row
   # pinned. A turn whose row pins no brain grant asks no model (a page's
   # call, a server's line that no longer stands): it loads and checks none,
-  # recovered or not, and no steer gives it one: a person's post is a turn
-  # of its own, never a part of a page's call's turn.
+  # recovered or not.
   defp brain(_ctx, %{program: row} = turn, _agent, {nil, %{row: row}}), do: {:ok, turn, nil}
 
   defp brain(ctx, turn, _agent, {nil, %{row: row}}) do

@@ -717,6 +717,7 @@ defmodule Aqua.SeatTest do
       held = take_over!(pids)
       send(held, :continue)
       assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
+      assert system_lines(ctx, room) == [@moved_on]
       assert answers(ctx, room, turn) == []
       assert chats(ctx, "aqua") == []
 
@@ -747,6 +748,7 @@ defmodule Aqua.SeatTest do
       held = take_over!(pids)
       send(held, :continue)
       assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
+      assert system_lines(ctx, room) == [@moved_on]
       assert answers(ctx, room, turn) == []
       assert chats(ctx, "aqua") == []
     end
@@ -863,6 +865,90 @@ defmodule Aqua.SeatTest do
              chats(ctx, "aqua")
 
     assert params |> inspect() |> String.contains?("image/png")
+  end
+
+  # The start decides the brain once: the brain's catalogue entry unread
+  # at the start and read again by the time the turn would build, the post
+  # is refused at its start with the brain's sentence, as its line and its
+  # error, and never completes with nothing said. The listing is unread
+  # while its unit's edit is pending: query hooks in the turn's process
+  # begin the edit at its first read of a message after it records the
+  # agent's revision, its root claimed and its release checked, just
+  # before its brain is resolved, and end it at the starting write, before
+  # any later read of the listing.
+  test "a post whose brain's catalogue entry cannot be read at its start is refused there " <>
+         "with a line, never completed empty when a later read finds it",
+       %{ctx: ctx, room: room} do
+    script!([reply("Answered without a pin.")])
+    {:ok, listing} = Aqua.AgentConfig.catalyst_listing(ctx)
+    {:ok, release} = Aqua.AgentConfig.resolve_catalyst(listing, @model)
+
+    {:ok, %{namespace: namespace, name: name, version: version}} =
+      Prima.ComponentRef.parse(release)
+
+    unit = "catalysts/#{namespace}/#{name}/#{version}"
+    actor = actor(ctx)
+    test = self()
+    hide = "seat-test-hide-#{System.unique_integer([:positive])}"
+    show = "seat-test-show-#{System.unique_integer([:positive])}"
+    on_exit(fn -> Enum.each([hide, show], &:telemetry.detach/1) end)
+
+    finish = fn pending ->
+      {:ok, _generation} =
+        Arca.StorageProjectionChanges.finish_edit(actor, "components", unit, pending)
+    end
+
+    :ok =
+      :telemetry.attach(
+        hide,
+        [:arca, :repo, :query],
+        fn _event, _measurements, %{query: query}, _config ->
+          cond do
+            query =~ ~s(INSERT INTO "agent_revisions") ->
+              Process.put(hide, :armed)
+
+            Process.get(hide) == :armed and query =~ ~s(FROM "messages") ->
+              :telemetry.detach(hide)
+              {:ok, pending} = Arca.StorageProjectionChanges.begin_edit(actor, "components", unit)
+              Process.put(hide, pending)
+              send(test, {:hidden, pending})
+
+            true ->
+              :ok
+          end
+        end,
+        nil
+      )
+
+    :ok =
+      :telemetry.attach(
+        show,
+        [:arca, :repo, :query],
+        fn _event, _measurements, %{query: query}, _config ->
+          if is_integer(Process.get(hide)) and query =~ ~s(UPDATE "turns") and
+               query =~ ~s("window_upto_seq") do
+            :telemetry.detach(show)
+            send(test, {:shown, finish.(Process.delete(hide))})
+          end
+        end,
+        nil
+      )
+
+    {:ok, %{turn_id: turn}} = Aqua.Runner.send_message(ctx, room.id, "@aqua anyone there?")
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+    assert_received {:hidden, pending}
+
+    receive do
+      {:shown, _finished} -> :ok
+    after
+      0 -> finish.(pending)
+    end
+
+    assert [line] = system_lines(ctx, room)
+    assert line =~ "brain cannot be read right now — retry shortly"
+    assert {:ok, %{status: "failed", error: ^line, brain_profile_id: nil}} = Tape.turn(ctx, turn)
+    assert answers(ctx, room, turn) == []
+    assert chats(ctx, "aqua") == []
   end
 
   # A brain's own grant is its profile labelled "default", the one its

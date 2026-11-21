@@ -313,8 +313,7 @@ defmodule Aqua.Loop do
     hold(turn_id, fn ->
       with {:ok, turn} <- Tape.turn(ctx, turn_id),
            {:ok, claim, turn} <- reclaim(ctx, turn, mode),
-           {:ok, authority} <- pinned_authority(ctx, turn),
-           {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false) do
+           {:ok, spec} <- rebuilt(ctx, turn) do
         turn = spec.turn
 
         state = %State{
@@ -335,6 +334,24 @@ defmodule Aqua.Loop do
         end
       end
     end)
+  end
+
+  # The spec of a continued turn, built from its row alone. A pin that no
+  # longer loads, Aqua's or its brain's, bound again or taken back, ends
+  # the turn as one that moved on, said in its thread as it is mid-turn;
+  # the runner ends it with the same sentence as its error.
+  defp rebuilt(ctx, turn) do
+    with {:ok, authority} <- pinned_authority(ctx, turn),
+         {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false) do
+      {:ok, spec}
+    else
+      {:error, :consent_moved} = moved ->
+        _ = unrun_line(ctx, turn, describe(:consent_moved))
+        moved
+
+      refused ->
+        refused
+    end
   end
 
   @doc """
@@ -909,10 +926,20 @@ defmodule Aqua.Loop do
 
   # A turn whose row pins no brain grant asks no model (a page's call, a
   # server's line that no longer stood): nothing it holds runs under a
-  # brain, and it ends with what its steps did.
+  # brain, and it ends with what its steps did. A turn that was to ask its
+  # model pins its brain at its start or is refused there
+  # (`Turn.brain_pin/5`); one that reaches here holding none never ends
+  # as answered: it ends with the brain's sentence, as its line and error.
   defp model_round(%State{spec: %Turn{catalyst: catalyst, brain_authority: nil}} = state)
-       when is_binary(catalyst),
-       do: {:halt, :completed, state}
+       when is_binary(catalyst) do
+    if asks_model?(guest(state), state.turn) do
+      unread = {:crew_unready, Turn.brain_title(state.spec.agent), :unavailable}
+      _ = system_row(state, describe(unread))
+      {:halt, {:failed, unread}, state}
+    else
+      {:halt, :completed, state}
+    end
+  end
 
   defp model_round(%State{} = state) do
     with {:ok, _drained} <- Tape.drain_steer(guest(state), state.turn),
