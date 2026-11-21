@@ -18,6 +18,7 @@ defmodule Aqua.FacadeTest do
     attachments_as_kept: 2,
     brain_options: 2,
     browser_turned_off: 0,
+    crew_suggestion: 1,
     describe_note_result: 1,
     mark_read: 3,
     model_status: 2,
@@ -56,6 +57,12 @@ defmodule Aqua.FacadeTest do
       |> Enum.sort()
 
     assert exported == @roster
+  end
+
+  test "the member a setup suggests is Aqua.Crew's" do
+    for brain <- [{:catalyst, "open"}, {:program, "claude-code", "Claude Code"}] do
+      assert Aqua.crew_suggestion(brain) == Aqua.Crew.suggestion(brain)
+    end
   end
 
   test "the brains a setup offers are Aqua.Models'" do
