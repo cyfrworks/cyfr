@@ -210,7 +210,7 @@ defmodule Arca.SharesTest do
   end
 
   describe "destination_complete?/1" do
-    test "a destination naming methods and paths carries a share, and a program's does not" do
+    test "a complete destination carries a share, and one outside the grammar does not" do
       assert Shares.destination_complete?(
                ~s({"hosts":["api.example.com"],"methods":["POST"],"paths":["/v1"],"scheme":"https"})
              )

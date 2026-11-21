@@ -22,9 +22,7 @@ defmodule Prima.Manifest.Provides do
   Keyed by the dependency's reference, exactly as `dependencies.static`
   names it, then by the dependency's need name (the need-name grammar of
   `Prima.Manifest.Needs`). Each entry is exactly `destination`, in
-  `Prima.Destination`'s grammar of hosts (methods and paths optional; a
-  program's destination is refused `{:invalid_destination,
-  :hosts_required}`), and
+  `Prima.Destination`'s grammar of hosts (methods and paths optional), and
   `values`, a map of non-empty string names to string values whose names
   and values together span at most `max_values_bytes/0` bytes.
 

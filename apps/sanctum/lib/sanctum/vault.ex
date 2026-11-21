@@ -311,9 +311,7 @@ defmodule Sanctum.Vault do
     * `:destination` (required) — where the material may go, a
       `Prima.Destination` map (string or atom keys); absent is
       `:destination_required` and one outside the grammar
-      `{:invalid_destination, reason}`, both before anything is asked; a
-      program's destination (`{"program": name}`) names no host, and is
-      refused `{:invalid_destination, :hosts_required}`
+      `{:invalid_destination, reason}`, both before anything is asked
     * `:disclose` — `true` to let a component read the fields; `false`
       when absent, so the entry is attach-only unless it says otherwise
 
