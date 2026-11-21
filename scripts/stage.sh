@@ -3,7 +3,8 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # Runs the checks a stage names:
-#   scripts/stage.sh [-l LOGDIR] [-n] STAGE [--reproduce RUN CHECKS] [-- PATHS]
+#   scripts/stage.sh [-l LOGDIR] [-n] save|nightly [-- PATHS]
+#   scripts/stage.sh [-l LOGDIR] [-n] handoff [--reproduce RUN CHECKS] [-- PATHS]
 #
 # The stages are save (after an edit), handoff (before a change is
 # reported ready) and nightly (the janitor and the host's proofs, which
@@ -65,9 +66,9 @@
 # selects, whatever its when says, but a test row that reads $STAGE_TESTS
 # is still skipped with no touched test. It is how a row the change does
 # not select is run here, and only to reproduce a red that the pull
-# request's run RUN (its run id) reported. Handoff alone takes it; RUN is
-# decimal and each check one of the stage's, else 64. The receipt names
-# both.
+# request's run RUN (its run id) reported. Handoff alone takes it, once;
+# RUN is decimal and CHECKS one or more of the stage's checks, neither
+# empty, else 64. The receipt names both.
 #
 # The changed set is every path the diff from the base to the working
 # tree adds, modifies or deletes, renames as a deletion and an addition,
@@ -133,7 +134,9 @@
 # that status, 1 for a ticket that ended 0. A ticket whose stage is gone
 # starts no more rows (scripts/lib/stage-chain.sh). The dependency
 # step, when there is one, says `deps: ...` first, alike. -n prints
-# `would run deps (no quarter): <folders>` when it would, then `would
+# `would run deps (the fetch on no quarter[, a stale folder's compile on 1
+# quarter]): <folders>` when it would, the compile's part for two folders
+# or more, then `would
 # run <check> (<n> quarter[s]): <command>`, `would run <check> (no
 # quarter): <command>` or `would skip <check>: <reason>` per row, and runs
 # nothing.
@@ -142,7 +145,7 @@
 # reads anything of the checkout, its table included, and ends, at every
 # exit after that, by writing $STAGE_LOGDIR/receipt and then printing on
 # stderr `stage: receipt: handoff <result>, commit <commit>, tree <tree>,
-# <state>, logs <logdir>`. The receipt's lines: `stage`, `result` (passed,
+# <state>, base <base>, logs <logdir>`. The receipt's lines: `stage`, `result` (passed,
 # or failed and the status), `end-commit` (HEAD, read once at the end) and
 # `end-commit-tree` (that commit's tree), `start-tree` and `end-tree` (the
 # working files' tree at the start and at the end, each as a commit of
@@ -154,7 +157,8 @@
 # `selected <check> <adapter> <files>` for each test row's planned files,
 # `left <name> <count>` for each name the selection left to the pull
 # request's run, and `row <line>` for each summary line, the stdout's,
-# which say what ran. The printed tree is the end commit's, and the word
+# which say what ran, and `base <commit>`, the commit the changed set was
+# measured from. The printed tree is the end commit's, and the word
 # beside it says whether the working files were that tree. A receipt that
 # cannot be written whole prints no receipt line, says so, and fails a
 # stage that would have passed. A log directory inside the checkout must
@@ -227,6 +231,7 @@ receipt() {
     echo "start-tree ${start_tree:-unknown}"
     echo "end-tree ${end_tree:-unknown}"
     echo "state $state"
+    echo "base ${base_commit:-unknown}"
     [ -z "$reproduce_run" ] || echo "reproduce $reproduce_run $reproduce_checks"
     for i in ${rows[@]+"${!rows[@]}"}; do
       [ -z "${reasons[$i]-x}" ] && runner "$i" || continue
@@ -252,7 +257,7 @@ receipt() {
     echo "stage: receipt: could not be written to $logdir/receipt, so this $stage has no evidence" >&2
     return 1
   fi
-  echo "stage: receipt: $stage $result, commit $commit, tree $head_tree, $state, logs $logdir" >&2
+  echo "stage: receipt: $stage $result, commit $commit, tree $head_tree, $state, base ${base_commit:-unknown}, logs $logdir" >&2
 }
 on_signal() {
   trap '' INT TERM HUP
@@ -278,15 +283,19 @@ refuse() { echo "stage: $2" >&2; exit "$1"; }
 
 # Whether $1 names a stage, whole.
 is_stage() { case $1 in save|handoff|nightly) return 0 ;; *) return 1 ;; esac; }
-usage() { echo "usage: $0 [-l LOGDIR] [-n] save|handoff|nightly [--reproduce RUN CHECKS] [-- PATHS]"; }
+usage() {
+  echo "usage: $0 [-l LOGDIR] [-n] save|nightly [-- PATHS]"
+  echo "       $0 [-l LOGDIR] [-n] handoff [--reproduce RUN CHECKS] [-- PATHS]"
+}
 
-logdir= dry=false stage= explicit=false paths=() reproduce_run= reproduce_checks=
+logdir= dry=false stage= explicit=false paths=() reproducing=false reproduce_run= reproduce_checks= base_commit=
 while [ "$#" -gt 0 ]; do
   case $1 in
     -l) [ "$#" -ge 2 ] || { usage >&2; exit 64; }; logdir=$2; shift 2 ;;
     --reproduce)
       [ "$#" -ge 3 ] || { usage >&2; exit 64; }
-      reproduce_run=$2 reproduce_checks=$3
+      $reproducing && refuse 64 '--reproduce is given once'
+      reproducing=true reproduce_run=$2 reproduce_checks=$3
       shift 3 ;;
     -n) dry=true; shift ;;
     -h|--help) usage; finished=true; exit 0 ;;
@@ -296,7 +305,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 is_stage "$stage" || { usage >&2; exit 64; }
-if [ -n "$reproduce_run$reproduce_checks" ]; then
+if $reproducing; then
   [ "$stage" = handoff ] || refuse 64 'only handoff takes --reproduce'
   [[ $reproduce_run =~ ^[1-9][0-9]{0,19}$ ]] || refuse 64 "--reproduce takes the pull request's run id, not '$reproduce_run'"
   [[ $reproduce_checks =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || refuse 64 "--reproduce takes comma-separated checks, not '$reproduce_checks'"
@@ -389,6 +398,7 @@ if [ "$stage" = save ] || [ "$stage" = handoff ]; then
   fi
   [ -n "$base" ] && git rev-parse --verify -q "$base^{commit}" >/dev/null ||
     refuse 69 "the base ${base:-of the handoff stage (origin/main or main)} is not a commit here"
+  base_commit=$(git rev-parse -q --verify "$base^{commit}")
   while IFS= read -r -d '' path; do changed+=("$path"); done < <(
     git diff --name-only --no-renames -z "$base" --
     git ls-files -z --others --exclude-standard
@@ -647,7 +657,8 @@ done
 for folder in ${folders[@]+"${folders[@]}"}; do [ "$folder" = stage ] || builds+=("$folder"); done
 
 if $dry; then
-  [ "${#builds[@]}" = 0 ] || echo "would run deps (no quarter): ${builds[*]}"
+  if [ "${#builds[@]}" -ge 2 ]; then echo "would run deps (the fetch on no quarter, a stale folder's compile on 1 quarter): ${builds[*]}"
+  elif [ "${#builds[@]}" = 1 ]; then echo "would run deps (the fetch on no quarter): ${builds[*]}"; fi
   for i in ${rows[@]+"${!rows[@]}"}; do
     IFS=$'\t' read -r _ _ check quarters _ _ _ command <<<"${rows[$i]}"
     reason=${reasons[$i]}
@@ -805,9 +816,9 @@ failures=0 launched=true
 if [ "${#builds[@]}" -gt 0 ]; then
   deps_waits=true deps_began=$SECONDS
   : >"$logdir/deps.log"
-  # The fetch waits on the network and a compile queues inside it, so the
-  # step's hold covers both.
-  unqueued deps deps 3600 '' "bash scripts/lib/stage-deps.sh ${builds[*]}"
+  # No hold of its own: the step's work carries its holds, and its waits,
+  # for the worktree's lock and for a quarter, have none (stage-deps.sh).
+  unqueued deps deps 0 '' "bash scripts/lib/stage-deps.sh ${builds[*]}"
 else
   for folder in ${folders[@]+"${folders[@]}"}; do start_lane "$folder"; done
 fi

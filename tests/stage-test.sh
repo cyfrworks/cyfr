@@ -250,11 +250,12 @@ stage asked -l "$S/logs-asked" handoff --reproduce 44812345678 pg,pgtests,notes
   fail "with --reproduce the rows said: $(cat "$S/asked.out")"
 grep -qx 'reproduce 44812345678 pg,pgtests,notes' "$S/logs-asked/receipt" || fail "the receipt: $(cat "$S/logs-asked/receipt")"
 grep -qx 'selected pgtests postgres apps/cyfr/test/cyfr/a_test.exs' "$S/logs-asked/receipt" || fail "the receipt's selection: $(cat "$S/logs-asked/receipt")"
-stage asked-none -l "$S/logs-asked-none" handoff --reproduce 7 pgtests -- 
+stage asked-none -l "$S/logs-asked-none" handoff --reproduce 7 pgtests --
 [ "$rc" = 0 ] && grep -qx 'pgtests: skipped (no touched test) [0-9]*s' "$S/asked-none.out" || fail "a named test row with no touched test: $rc, $(cat "$S/asked-none.out")"
 for bad in 'save|--reproduce 7 format|only handoff takes --reproduce' 'handoff|--reproduce 07 pg|--reproduce takes the pull request'"'"'s run id' \
   'handoff|--reproduce run pg|--reproduce takes the pull request'"'"'s run id' 'handoff|--reproduce 7 pg,,notes|--reproduce takes comma-separated checks' \
-  'handoff|--reproduce 7 deploy|--reproduce names deploy, which is no check of handoff' 'handoff|--reproduce 7|usage:'; do
+  'handoff|--reproduce 7 deploy|--reproduce names deploy, which is no check of handoff' 'handoff|--reproduce 7|usage:' \
+  'handoff|--reproduce 7 pg --reproduce 8 notes|--reproduce is given once' 'handoff|--reproduce 7 deploy --reproduce 8 pg|--reproduce is given once'; do
   IFS='|' read -r which args why <<<"$bad"
   read -r -a words <<<"$args"
   stage refused-asked -l "$S/logs-refused-asked" "$which" "${words[@]}"
@@ -262,6 +263,17 @@ for bad in 'save|--reproduce 7 format|only handoff takes --reproduce' 'handoff|-
   [ ! -s "$STUB_CALLS" ] || fail "$which $args ran a row"
   framed refused-asked 64
 done
+# Empty values are refused as any other wrong one is.
+for args in "'' ''" "'' pg" "7 ''"; do
+  eval "stage refused-empty -l \"\$S/logs-refused-empty\" handoff --reproduce $args"
+  [ "$rc" = 64 ] && [ ! -s "$STUB_CALLS" ] || fail "--reproduce $args gave $rc and ran: $(cat "$STUB_CALLS")"
+  framed refused-empty 64
+done
+# The usage names --reproduce with handoff alone.
+stage usage-text -h
+grep -qx 'usage: scripts/stage.sh \[-l LOGDIR\] \[-n\] save|nightly \[-- PATHS\]' "$S/usage-text.out" &&
+  grep -qx '       scripts/stage.sh \[-l LOGDIR\] \[-n\] handoff \[--reproduce RUN CHECKS\] \[-- PATHS\]' "$S/usage-text.out" ||
+  fail "the usage: $(cat "$S/usage-text.out")"
 table "${toy_rows[@]}"
 reset_tree
 
@@ -428,7 +440,7 @@ grep -q -- "^-q 1 -t 360 -- bash scripts/lib/stage-chain.sh [0-9]* $S/logs-lanes
 [ -e "$S/logs-lanes/dev.queue.log" ] && [ -e "$S/logs-lanes/test.queue.log" ] || fail 'a ticket kept no log'
 [ -e "$S/logs-lanes/third.ran" ] || fail 'the row after a failed one did not run'
 lanes lanes-dry -n handoff
-grep -qxF 'would run deps (no quarter): dev test' "$S/lanes-dry.out" || fail "the dry run said: $(cat "$S/lanes-dry.out")"
+grep -qxF "would run deps (the fetch on no quarter, a stale folder's compile on 1 quarter): dev test" "$S/lanes-dry.out" || fail "the dry run said: $(cat "$S/lanes-dry.out")"
 [ ! -s "$FAKE_MIX_CALLS" ] || fail 'a dry run compiled the dependencies'
 
 begin "the caller's MIX_ENV and MIX_BUILD_PATH reach no row and no dependency compile: format stays in dev's folder and the tests in test's"
@@ -479,6 +491,17 @@ WARM=1 lanes refetched -l "$S/logs-refetched" handoff
 touch "$repo/deps/by-hand"
 WARM=1 lanes by-hand -l "$S/logs-by-hand" handoff
 [ "$(cut -d'|' -f4 "$FAKE_MIX_CALLS" | tr '\n' ';')" = 'deps.loadpaths;deps.loadpaths;' ] || fail "a fetch by hand: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
+
+begin "a fetch that fails part way leaves no stamp: the next stage fetches again, even for the lock the stamp held before"
+table 'handoff|a|1|60|dev|always|echo a' 'handoff|b|1|60|test|always|echo b'
+lanes warm-first -l "$S/logs-warm-first" handoff
+[ "$rc" = 0 ] && [ -e "$repo/deps/.cyfr-fetched" ] || fail "the first stage: $rc, $(tr '\n' ';' <"$S/warm-first.rows")"
+printf '%s\n' '%{"b" => 2}' >"$repo/mix.lock"
+FAKE_MIX_FAIL=deps.get WARM=1 lanes half-fetched -l "$S/logs-half-fetched" handoff
+[ "$rc" = 1 ] && [ ! -e "$repo/deps/.cyfr-fetched" ] || fail "a failed fetch: $rc, the stamp $(cat "$repo/deps/.cyfr-fetched" 2>/dev/null)"
+git -C "$repo" checkout -q -- mix.lock
+WARM=1 lanes refetch -l "$S/logs-refetch" handoff
+[ "$(head -n 1 "$FAKE_MIX_CALLS" | cut -d'|' -f4)" = deps.get ] || fail "the lock of the old stamp was taken as fetched: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
 
 begin "two stages of one worktree take turns at the dependencies: a stage waits for the worktree's lock before it fetches"
 table 'handoff|a|1|60|dev|always|echo a' 'handoff|b|1|60|test|always|echo b'
@@ -1122,15 +1145,23 @@ untouched >"$S/after"
 diff "$S/before" "$S/after" >/dev/null || fail "the receipt touched the checkout: $(diff "$S/before" "$S/after")"
 head=$(git -C "$rrepo" rev-parse HEAD) tree=$(git -C "$rrepo" rev-parse 'HEAD^{tree}')
 printf '%s\n' 'stage handoff' 'result passed' "end-commit $head" "end-commit-tree $tree" "start-tree $tree" "end-tree $tree" \
-  'state committed' >"$S/want"
-head -n 7 "$S/logs-committed/receipt" | diff "$S/want" - >/dev/null || fail "the receipt opens: $(head -n 7 "$S/logs-committed/receipt")"
-grep -qx "stage: receipt: handoff passed, commit $head, tree $tree, committed, logs $S/logs-committed" "$S/committed.err" ||
+  'state committed' "base $head" >"$S/want"
+head -n 8 "$S/logs-committed/receipt" | diff "$S/want" - >/dev/null || fail "the receipt opens: $(head -n 8 "$S/logs-committed/receipt")"
+grep -qx "stage: receipt: handoff passed, commit $head, tree $tree, committed, base $head, logs $S/logs-committed" "$S/committed.err" ||
   fail "the receipt's line: $(grep receipt "$S/committed.err")"
 grep -qx 'row unit: skipped (no touched test) [0-9]*s' "$S/logs-committed/receipt" &&
   grep -qx 'row fail: ok [0-9]*s' "$S/logs-committed/receipt" || fail "the receipt's rows: $(grep '^row' "$S/logs-committed/receipt")"
 rstage committed-save save
 [ "$rc" = 0 ] && [ ! -e "$S/logs-committed-save/receipt" ] && ! grep -q receipt "$S/committed-save.err" ||
   fail "save wrote a receipt or exited $rc"
+# A base other than origin/main's (STAGE_BASE) is named in the receipt and
+# its line, so a reviewer sees what the changed set was measured from.
+git -C "$rrepo" -c user.name=test -c user.email=test@invalid commit -q --allow-empty -m 'one past the base'
+STAGE_BASE=$head rstage based handoff
+next=$(git -C "$rrepo" rev-parse HEAD)
+[ "$rc" = 0 ] && grep -qx "base $head" "$S/logs-based/receipt" && grep -qx "end-commit $next" "$S/logs-based/receipt" &&
+  grep -q ", base $head, logs " "$S/based.err" || fail "a stage measured from $head: $rc, $(grep -E '^(base|end-commit) ' "$S/logs-based/receipt") $(grep receipt "$S/based.err")"
+git -C "$rrepo" reset -q --hard "$head"
 
 begin "an uncommitted edit reads uncommitted with the tree it tested, and the receipt names each adapter's tests and each name left out with its count"
 printf '# edit\n' >>"$rrepo/apps/cyfr/lib/cyfr/a.ex"
@@ -1150,7 +1181,7 @@ git -C "$rrepo" reset -q
 grep -qx 'selected unit sqlite apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
   grep -qx 'selected unit-pg postgres apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
   grep -qx 'left Cyfr.Wide 3' "$S/logs-uncommitted/receipt" || fail "the receipt's selection: $(grep -E '^(selected|left)' "$S/logs-uncommitted/receipt")"
-grep -qx "stage: receipt: handoff passed, commit $head, tree $tree, uncommitted, logs $S/logs-uncommitted" "$S/uncommitted.err" ||
+grep -qx "stage: receipt: handoff passed, commit $head, tree $tree, uncommitted, base $head, logs $S/logs-uncommitted" "$S/uncommitted.err" ||
   fail "the receipt's line: $(grep receipt "$S/uncommitted.err")"
 git -C "$rrepo" checkout -q -- .
 
@@ -1159,13 +1190,13 @@ RECEIPT_EDIT="$rrepo/notes.txt" rstage moved handoff
 [ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/moved.err")"
 grep -qx "start-tree $tree" "$S/logs-moved/receipt" && ! grep -qx "end-tree $tree" "$S/logs-moved/receipt" &&
   grep -qx 'state moved' "$S/logs-moved/receipt" || fail "the receipt reads: $(head -n 7 "$S/logs-moved/receipt")"
-grep -q ', moved, logs ' "$S/moved.err" || fail "the receipt's line: $(grep receipt "$S/moved.err")"
+grep -q ', moved, base ' "$S/moved.err" || fail "the receipt's line: $(grep receipt "$S/moved.err")"
 git -C "$rrepo" checkout -q -- .
 RECEIPT_FAIL=3 rstage failing handoff
 [ "$rc" = 1 ] || fail "a failing row's stage exited $rc"
 grep -qx 'result failed 1' "$S/logs-failing/receipt" && grep -qx 'row fail: failed 3 [0-9]*s' "$S/logs-failing/receipt" &&
   grep -qx 'state committed' "$S/logs-failing/receipt" || fail "the failing run's receipt: $(cat "$S/logs-failing/receipt")"
-grep -qx "stage: receipt: handoff failed 1, commit $head, tree $tree, committed, logs $S/logs-failing" "$S/failing.err" ||
+grep -qx "stage: receipt: handoff failed 1, commit $head, tree $tree, committed, base $head, logs $S/logs-failing" "$S/failing.err" ||
   fail "the receipt's line: $(grep receipt "$S/failing.err")"
 
 begin "a commit made after the stage starts, before its first row, reads moved, never committed for the new commit; a receipt's commit and tree are one commit's"

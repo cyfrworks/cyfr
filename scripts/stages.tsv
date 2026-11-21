@@ -11,8 +11,9 @@
 # that need the whole machine, and go test -race, run on the pull request's run
 # on GitHub. A row takes no quarter (-) when it names no folder, runs none of
 # docker, mix, elixir, cargo, go, node or npm, and took under 15 s when it was
-# classed. A handoff row is named when no path rule selects it: it is the
-# pull request's, and runs here only to reproduce a red of that run
+# classed. A handoff row is named when no path rule selects it: it runs on
+# every pull request whose paths select its job, and here only to
+# reproduce a red of that run
 # (scripts/stage.sh --reproduce). The PostgreSQL rows, Dialyzer, Locus alone
 # and the load check's self-test are named: what they catch the pull
 # request's run catches too, and no path rule picks it out beforehand.

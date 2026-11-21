@@ -1321,13 +1321,6 @@ t_stage_side_by_side() {
   git init -q -b main "$repo"
   cp "$root/scripts/stage.sh" "$check" "$repo/scripts/"
   cp "$root"/scripts/lib/*.sh "$repo/scripts/lib/"
-  # A row of a folder first waits for the dependency step
-  # (scripts/lib/stage-deps.sh), which reads mix.lock: the stamp of a fetch
-  # of this lock makes the step warm, so no Mix runs here.
-  printf '%%{}\n' >"$repo/mix.lock"
-  printf '/deps/\n' >"$repo/.gitignore"
-  mkdir -p "$repo/deps"
-  git -C "$repo" hash-object "$repo/mix.lock" >"$repo/deps/.cyfr-fetched"
   rows() { printf 'handoff\t%s\t1\t60\t-\talways\t%s\n' "$@" >"$repo/scripts/stages.tsv"; }
   # Each row records its processors and waits, at most 10 s, for the other's.
   meets() { printf 'echo "$HEAVY_CHECK_CPUS" >"$STAGE_LOGDIR/%s.cpus"; for _ in $(seq 100); do [ -e "$STAGE_LOGDIR/%s.cpus" ] && exit 0; sleep 0.1; done; exit 1' "$1" "$2"; }

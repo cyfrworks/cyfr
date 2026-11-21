@@ -212,8 +212,9 @@ same worktree refuses, naming the run that holds it.
   `scripts/heavy-check.sh` for the quarters the table names; a check of
   a few seconds that starts no build, container or test runner takes no
   quarter and runs at once. Before any check that uses a build folder,
-  the stage fetches the deps and compiles them into each stale folder,
-  which a warm checkout skips without starting Mix. In `save`
+  the stage fetches the deps when `mix.lock` changed, and when its checks
+  use two build folders or more it compiles them into each stale folder
+  on one quarter; a warm checkout does neither and starts no Mix. In `save`
   and `handoff` the checks that use one build folder (`_build/dev`,
   `dev_pg`, `test` or `test_pg`, the table's folder column) run one after
   another on one queue ticket and the rest side by side, each on its own,
@@ -240,8 +241,8 @@ same worktree refuses, naming the run that holds it.
     fixtures' check when their sources changed, and the light self-test of
     every harness script you touched. PostgreSQL, Dialyzer, the apps
     compiled and tested alone (CI's island jobs), the proofs under `tests/`
-    and the tests no change reaches are the pull request's run's, and the
-    install proof the nightly's. The table names the checks only the pull
+    and the tests no change reaches run on every pull request whose paths
+    select them, and the install proof in the nightly. The table names the checks only the pull
     request selects (`named`): one runs here only to reproduce a red of
     the pull request's run, with that run's id,
     `scripts/stage.sh handoff --reproduce RUN tests-postgres,dialyzer
