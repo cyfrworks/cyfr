@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# Writes the image builds' layer cache, ghcr.io/cyfrworks/cyfr-buildcache,
+# and nothing else: the app and the Locus image built from main's head
+# through .github/actions/image-build, the definition test.yml's image jobs
+# build through, with no image kept. It is the only workflow whose token
+# may write a package, release.yml's publishing aside, so it runs only on
+# a push to main and on a schedule just after the UTC date turns, when both
+# images' upgrade layers (APT_REFRESH) are due again. A failed login or
+# write is a red run here, with no fallback: it gates no Test run and no
+# merge, and a red run is how a cache that is not being refreshed shows.
+# scripts/release.sh waits for its run on HEAD as for every workflow's, a
+# release pushing to the same registry.
+name: Layer cache
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '7 0 * * *'
+permissions: {}
+# A running write finishes and the newest push's waits (GitHub keeps one
+# waiting run), so pushes faster than an export still refresh the cache.
+concurrency:
+  group: layer-cache
+  cancel-in-progress: false
+jobs:
+  write:
+    name: The ${{ matrix.image }} image's layer cache
+    if: github.repository == 'cyfrworks/cyfr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [app, locus]
+    steps:
+      # Whether the branch filter matches a branch named Main is not
+      # documented; this comparison is exact.
+      - name: The ref is exactly main
+        run: '[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::the layer cache is written from refs/heads/main alone, not $GITHUB_REF"; exit 1; }'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Write the layer cache
+        uses: ./.github/actions/image-build
+        with:
+          image: ${{ matrix.image }}
+          write: 'true'

@@ -1163,29 +1163,21 @@ jobs:
   # builder-image, locus-runtime-image, locus-backends-image,
   # app-image-locus-suites and the browser-tincture job's tincture proof
   # each load this build under their own tag.
+  #
+  # The two image jobs build through .github/actions/image-build, reading
+  # the layer cache anonymously; they never write it, and ask for no
+  # permission beyond the workflow's (layer-cache.yml writes it, from main).
   locus-image:
     name: The Locus image, built once for this run
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The image's upgrade layer refreshes once a UTC day and is shared
-      # within it (Dockerfile.locus's APT_REFRESH).
-      - name: The UTC date the upgrade layer refreshes on
-        id: apt-refresh
-        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the Locus image once
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: ./.github/actions/image-build
         with:
-          context: .
-          file: Dockerfile.locus
-          build-args: |
-            APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
-          load: true
-          tags: cyfr-locus:ci
-          cache-from: type=gha,scope=locus
-          cache-to: type=gha,scope=locus,mode=max
+          image: locus
+          write: 'false'
       - name: Save the Locus image
         run: |
           set -euo pipefail
@@ -1212,23 +1204,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The image's upgrade layer refreshes once a UTC day and is shared
-      # within it (Dockerfile's APT_REFRESH), as the Locus image's does.
-      - name: The UTC date the upgrade layer refreshes on
-        id: apt-refresh
-        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the app image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: ./.github/actions/image-build
         with:
-          context: .
-          file: Dockerfile
-          build-args: |
-            APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
-          load: true
-          tags: cyfr:push
-          cache-from: type=gha,scope=cyfr-push
-          cache-to: type=gha,scope=cyfr-push,mode=max
+          image: app
+          write: 'false'
       - name: Save the app image
         run: |
           set -euo pipefail
