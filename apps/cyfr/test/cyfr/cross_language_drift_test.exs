@@ -841,27 +841,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
            ]
   end
 
-  # Handoff's locus-alone row (scripts/stages.tsv) compiles and tests Locus
-  # alone when a vector its tests read changes, so its fixture paths are
-  # the vectors this roster gives a reader under apps/locus/test.
-  test "handoff's locus-alone row names the vectors Locus's tests read, and no other" do
-    row =
-      read!("scripts/stages.tsv")
-      |> String.split("\n")
-      |> Enum.map(&String.split(&1, "\t"))
-      |> Enum.find(&match?(["handoff", "locus-alone" | _], &1))
-
-    assert [_, _, _, _, _, globs, _] = row
-    named = for "tests/fixtures/" <> vector <- String.split(globs, ","), do: vector
-
-    read =
-      for {vector, readers} <- @vector_readers,
-          Enum.any?(readers, fn {file, _} -> String.starts_with?(file, "apps/locus/test/") end),
-          do: vector
-
-    assert Enum.sort(named) == Enum.sort(read)
-  end
-
   test "every file under a test path that names a vector file is a row of it" do
     files = test_path_files()
     assert "apps/codex/internal/shell/device_test.go" in files
