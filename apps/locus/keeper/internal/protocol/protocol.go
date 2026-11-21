@@ -241,7 +241,8 @@ const (
 	// MaxHomePathBytes is the longest a kept home's path may be, PATH_MAX
 	// less its NUL.
 	MaxHomePathBytes = 4095
-	// MaxUID is the highest uid a kept home may own: (uid_t)-1 is no uid.
+	// MaxUID is the highest uid or gid an account or a kept home may hold:
+	// (uid_t)-1 is no id.
 	MaxUID = 4294967294
 	// MaxHomeBytes is the most a kept home's bound may be, a number every
 	// client's JSON carries exactly.
