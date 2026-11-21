@@ -188,11 +188,28 @@ defmodule PrismWeb.AquaSetupTest do
   # Aqua asks nothing and leaves Aqua's grant as it was. Aqua then
   # answers. A member made is suggested no more, and a second Make of it
   # writes nothing.
-  @tag seated: false
-  test "a newcomer with no crew makes the member the setup suggests on the shared key's brain, " <>
-         "chooses it for Aqua, and Aqua answers, asked nothing on the way",
-       %{conn: conn, ctx: ctx, port: port} do
+  #
+  # Without Aqua's grant (here, the person revoked it), the brain's own
+  # grant standing, choosing grants nothing either: the step for Aqua is
+  # not done and says the grant is what Aqua waits on, with its Grant,
+  # which opens Aqua's own confirmation; granted there, the step is done
+  # and Aqua answers.
+  for grant <- [:standing, :revoked] do
+    @tag seated: false, grant: grant
+    test "a newcomer with no crew makes the member the setup suggests on the shared key's brain, " <>
+           "chooses it for Aqua, and Aqua answers, Aqua's grant #{grant}",
+         %{conn: conn, ctx: ctx, port: port, grant: grant} do
+      walk!(conn, ctx, port, grant)
+    end
+  end
+
+  defp walk!(conn, ctx, port, grant) do
     actor = Sanctum.Context.actor(ctx)
+
+    if grant == :revoked do
+      {:ok, %{revoked: [_ | _]}} = Sanctum.Consent.revoke_source(ctx, Prima.AgentRef.soul_ref())
+    end
+
     person = %{ctx | origin: :interactive}
     member = "chat-fixture"
     suggest = "#aqua-setup-suggest-" <> member
@@ -247,7 +264,13 @@ defmodule PrismWeb.AquaSetupTest do
     # Chosen for Aqua, it asks nothing either, and Aqua's grant is what it
     # was before the choice.
     granted = aqua_grant!(actor)
+    # Revoked, Aqua holds no grant at all; standing, the one the fill made.
+    assert granted == [] == (grant == :revoked)
     view |> form("#aqua-setup-member", %{"member" => member}) |> render_change()
+
+    if grant == :revoked do
+      grant_on_page!(view, sheet, fn -> assert aqua_grant!(actor) == granted end)
+    end
 
     wait_until(
       fn -> has_element?(view, ~s([data-test="setup-aqua-done"]), "Aqua runs on #{member}.") end,
@@ -255,8 +278,10 @@ defmodule PrismWeb.AquaSetupTest do
       "Aqua seated"
     )
 
+    assert has_element?(view, ~s(#aqua-setup-step-aqua[data-done="true"]))
+    refute has_element?(view, ~s([data-test="setup-aqua-grant"]))
     refute has_element?(view, sheet)
-    assert aqua_grant!(actor) == granted
+    if grant == :standing, do: assert(aqua_grant!(actor) == granted)
 
     # Aqua answers through the key it was shared, attached on the way to
     # the upstream.
@@ -325,11 +350,34 @@ defmodule PrismWeb.AquaSetupTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # Aqua chosen without its grant: the step is not done, and says what
+  # Aqua waits on with its Grant, the choice having granted nothing
+  # (`unchanged`); the Grant opens Aqua's own confirmation, confirmed.
+  defp grant_on_page!(view, sheet, unchanged) do
+    line = ~s([data-test="setup-aqua-grant"])
+
+    wait_until(fn -> has_element?(view, line) end, 10_000, "Aqua's grant asked")
+    assert has_element?(view, ~s(#aqua-setup-step-aqua[data-done="false"]))
+    refute has_element?(view, ~s([data-test="setup-aqua-done"]))
+
+    assert has_element?(
+             view,
+             line,
+             "You have not granted yet what Aqua and its crew members may use."
+           )
+
+    refute has_element?(view, sheet)
+    unchanged.()
+
+    view |> element(line <> " button", "Grant") |> render_click()
+    assert has_element?(view, sheet)
+    view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+  end
+
   # Aqua's grant as it is stored: each of its profiles with the head
   # consent it holds, whole.
   defp aqua_grant!(actor) do
     {:ok, profiles} = Arca.ConsentStorage.profiles(actor, Prima.AgentRef.soul_ref())
-    assert profiles != []
 
     for profile <- profiles do
       {:ok, head, refs} = Arca.ConsentStorage.get_head(actor, profile.id)

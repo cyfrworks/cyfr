@@ -436,6 +436,37 @@ defmodule Aqua.SeatTest do
                    5_000
   end
 
+  # A grant there is none of (here, the person revoked it) is Aqua's own
+  # state whatever brain its member runs on, the brain's own grant
+  # standing: never the brain's to connect and never ready. A member on
+  # that brain reads its brain alone.
+  test "Aqua without its grant reads that state on a program brain and on a catalyst",
+       %{ctx: ctx, holder: holder} do
+    {:ok, _row} =
+      Arca.McpServerStorage.insert(actor(ctx), %{
+        cap: 0,
+        name: "claude",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "cyfr-claude-code claude", "env" => %{}})
+      })
+
+    on_program = [%{"name" => "aqua", "program" => "claude"}]
+    on_catalyst = [%{"name" => "aqua", "catalyst_ref" => @model}]
+    member = [%{"name" => holder, "catalyst_ref" => @model}]
+    assert %{"aqua" => {:ready, "claude"}} = Aqua.Models.model_status(ctx, on_program)
+    assert %{"aqua" => {:ready, _}} = Aqua.Models.model_status(ctx, on_catalyst)
+
+    {:ok, %{revoked: [_ | _]}} = Sanctum.Consent.revoke_source(ctx, @soul)
+
+    assert %{"aqua" => {:consent_absent, "claude"}} = Aqua.Models.model_status(ctx, on_program)
+    assert %{"aqua" => {:consent_absent, resolved}} = Aqua.Models.model_status(ctx, on_catalyst)
+    assert String.starts_with?(resolved, @model <> ":")
+    assert %{^holder => {:ready, _}} = Aqua.Models.model_status(ctx, member)
+  end
+
   # A catalog action Aqua's list does not reach, of a tool no bundled
   # catalyst serves, so granting it adds no dependency.
   defp ungranted_action(ctx) do

@@ -47,6 +47,8 @@ defmodule Aqua.Models do
       key it holds but the grant's edge into it binds none, or the edge
       selects a key it can no longer resolve. It runs once the person
       grants Aqua again;
+    * `:consent_absent` — Aqua only: the crew's grant was never given,
+      or was revoked; Aqua runs once the person grants it;
     * `:consent_damaged`, `:consent_unavailable` — the brain's own grant,
       or for Aqua the crew's, is damaged, or the store could not answer
       it;
@@ -73,6 +75,7 @@ defmodule Aqua.Models do
            | :needs_key
            | :needs_grant
            | :consent_stale
+           | :consent_absent
            | :consent_damaged
            | :consent_unavailable
            | :missing
@@ -538,8 +541,10 @@ defmodule Aqua.Models do
   edge binds none of, reads `:consent_stale`, Aqua's to grant again, and
   any other edge reads ready; where it does not, Aqua reads why
   (`Aqua.ConsentStatus.classify_refusal/1`: a stale grant is
-  `:consent_stale`, a grant to give again, and damage or an outage as
-  above), which is said once, on Aqua, and never on a member. A catalyst
+  `:consent_stale`, a grant to give again, one never given or revoked
+  `:consent_absent`, a grant to give, and damage or an outage as above),
+  on a program brain as on a catalyst, which is said once, on Aqua, and
+  never on a member. A catalyst
   listing that cannot be read is not an empty one, and a setup plan
   refused for any reason but the component's absence
   (`{:not_found, {:component, _}}`,
@@ -598,17 +603,22 @@ defmodule Aqua.Models do
 
   defp soul_program(_name, status), do: status
 
-  # A program brain is no edge of the grant: its stale, damaged or
-  # unreadable grant is said, and any other answer leaves it ready, the
-  # turn asking for a grant there is none of.
+  # A program brain is no edge of the grant: Aqua on it is ready when the
+  # grant loads, and otherwise reads the grant's own state (`soul_grant/2`).
   defp granted_program({:ok, _authority}, program), do: {:ready, program}
+  defp granted_program({:error, reason}, program), do: soul_grant(reason, program)
 
-  defp granted_program({:error, reason}, program) do
+  # Why the crew's grant did not load, as Aqua reads it whatever brain its
+  # member runs on, through `Aqua.ConsentStatus.classify_refusal/1`: stale,
+  # never given or revoked (`:absent`), damaged, or unread. A context that
+  # names no athanor (`:forbidden`) cannot read the grant at all, so it
+  # reads as one the store could not answer, never as one to give.
+  defp soul_grant(reason, brain) do
     case Aqua.ConsentStatus.classify_refusal(reason) do
-      {:ok, :stale} -> {:consent_stale, program}
-      {:error, :corrupt} -> {:consent_damaged, program}
-      {:error, :unavailable} -> {:consent_unavailable, program}
-      _absent_or_forbidden -> {:ready, program}
+      {:ok, :stale} -> {:consent_stale, brain}
+      {:ok, :absent} -> {:consent_absent, brain}
+      {:error, :corrupt} -> {:consent_damaged, brain}
+      {:error, _unread_or_forbidden} -> {:consent_unavailable, brain}
     end
   end
 
@@ -727,31 +737,21 @@ defmodule Aqua.Models do
   # was connected), whose edge selects a key it can no longer resolve (the
   # brain's key bound again since), or that the grant names no edge into,
   # is not one to connect: granting Aqua again is the next step, said as
-  # the grant's stale state. A grant that does not load
-  # is Aqua's to say, read through `Aqua.ConsentStatus.classify_refusal/1`:
-  # damage (the grant's head, a lender, a stored grant that fails its
-  # checks), an outage, or a grant whose shape moved since it was given,
-  # never a key to connect, and a grant there is none of is the brain's to
-  # connect (`connect_state/1`). A crew member reads its brain alone, which
-  # its own grant answers: it holds no consent, and the grant's state is
-  # said once, on Aqua.
+  # the grant's stale state. A grant that does not load is Aqua's to say
+  # (`soul_grant/2`), never a key to connect over a brain whose own plan
+  # reads ready. A crew member reads its brain alone, which its own grant
+  # answers: it holds no consent, and the grant's state is said once, on
+  # Aqua.
   defp granted_status({:ok, authority}, _name, catalyst_ref, resolved, plan) do
     if lent?(authority, @grant, catalyst_ref, plan),
       do: {:ready, resolved},
       else: {:consent_stale, resolved}
   end
 
-  defp granted_status({:error, reason}, name, _catalyst_ref, resolved, plan) do
-    if Prima.AgentRef.soul?(name) do
-      case Aqua.ConsentStatus.classify_refusal(reason) do
-        {:ok, :stale} -> {:consent_stale, resolved}
-        {:error, :corrupt} -> {:consent_damaged, resolved}
-        {:error, :unavailable} -> {:consent_unavailable, resolved}
-        _absent_or_forbidden -> {connect_state(plan), resolved}
-      end
-    else
-      {:ready, resolved}
-    end
+  defp granted_status({:error, reason}, name, _catalyst_ref, resolved, _plan) do
+    if Prima.AgentRef.soul?(name),
+      do: soul_grant(reason, resolved),
+      else: {:ready, resolved}
   end
 
   # Whether a turn on the brain runs on the grant's edge into it with what

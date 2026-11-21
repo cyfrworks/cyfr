@@ -180,12 +180,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # refused as a member that exists), on that brain, with the model and
   # the effort the person picked from the brain's own listing and what
   # they wrote it is good at and should avoid. A member holds no grant of
-  # its own, so making one asks nothing.
+  # its own, so making one asks nothing. Its effort must be one the model
+  # submitted offers, checked as a turn checks the options a member sets
+  # (`Prima.Model.check_chat_request/2`): an effort another model offered,
+  # or one asked before the model's own efforts answered, writes nothing,
+  # and the row then shows that model's own choices.
   def handle_event("make_member", %{"brain" => brain, "model" => model} = params, socket)
       when is_binary(brain) and is_binary(model) and model != "" do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       with {:ok, %{"title" => title} = args} <-
              made(brain, params, socket.assigns[:catalyst_refs] || %{}),
+           :ok <- offered(args["options"], brain, model, socket),
            {:ok, _created} <- call_aqua(socket.assigns.context, Map.put(args, "action", "create")) do
         send(self(), {:refresh, :agents})
         send(self(), {:refresh, :setup})
@@ -197,6 +202,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       else
         :error ->
           {:noreply, put_flash(socket, :error, "That brain is not connected here.")}
+
+        :not_offered ->
+          {:noreply,
+           socket
+           |> pick(brain, model)
+           |> put_flash(:error, "That model does not offer the effort chosen — choose again.")}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Make failed: #{error_message(reason)}")}
@@ -223,12 +234,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {:noreply, socket |> assign(:picked, Map.delete(picked, provider)) |> suggested()}
 
         {model, _was} when is_binary(model) ->
-          socket = assign(socket, :picked, Map.put(picked, provider, model))
-
-          {:noreply,
-           socket
-           |> suggested()
-           |> load_brain_options(socket.assigns.agents, socket.assigns.model_status)}
+          {:noreply, pick(socket, "catalyst:" <> provider, model)}
       end
     end)
   end
@@ -746,6 +752,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     %{
       soul: soul && soul["name"],
       soul_ready: soul != nil and ready?.(soul["name"]),
+      soul_state: soul && state_of(status[soul["name"]]),
       member: soul && soul["member"],
       members:
         for(
@@ -765,6 +772,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         )
     }
   end
+
+  defp state_of({state, _brain}), do: state
+  defp state_of(nil), do: nil
 
   # The brain a member's file names, as the setup tells brains apart.
   defp brain_of(%{"program" => program}) when is_binary(program) and program != "",
@@ -1020,6 +1030,38 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp cast_option(%{"kind" => "string"}, value), do: {:ok, value}
   defp cast_option(_declared, _value), do: {:refused, "That value does not fit the option"}
+
+  # The model picked on an API brain's setup row, its efforts read from
+  # the brain's own `describe`; a program brain's row offers its listing's.
+  defp pick(socket, "catalyst:" <> provider, model) do
+    socket = assign(socket, :picked, Map.put(socket.assigns.picked, provider, model))
+
+    socket
+    |> suggested()
+    |> load_brain_options(socket.assigns.agents, socket.assigns.model_status)
+  end
+
+  defp pick(socket, _program, _model), do: socket
+
+  # Whether a Make's options are ones the model it names offers: on an API
+  # brain those its `describe` declared for that model, as the row read
+  # them, none while unread; on a program brain its listing's efforts.
+  defp offered(options, brain, model, socket) do
+    case Prima.Model.check_chat_request(%{"options" => options}, declared(brain, model, socket)) do
+      :ok -> :ok
+      {:error, {:invalid, _member}} -> :not_offered
+    end
+  end
+
+  defp declared("catalyst:" <> provider, model, socket),
+    do: Map.get(socket.assigns.brain_options, {:picked, provider, model}, [])
+
+  defp declared("program:" <> name, _model, socket) do
+    case socket.assigns.program_listings[name] do
+      {:ok, %{efforts: efforts}} -> efforts_option(efforts)
+      _unlisted -> []
+    end
+  end
 
   # The member a Make writes: the suggestion for its brain, with the brain
   # named as a crew file names one and the model picked.
@@ -1327,6 +1369,65 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     """
   end
 
+  @grant_states [:consent_absent, :consent_stale, :consent_damaged, :consent_unavailable]
+
+  @doc """
+  The sentence for a state of the crew's grant, Aqua's
+  (`Aqua.Models.t:status/0`): never given or revoked, stale, damaged or
+  unread; nil for any other state. The one wording of these states, on a
+  card, in the setup's step for Aqua and in the daily thread. A damaged
+  or unread brain's own grant reads the same, since neither is a key to
+  connect.
+  """
+  @spec grant_sentence(atom()) :: String.t() | nil
+  def grant_sentence(:consent_absent),
+    do: "You have not granted yet what Aqua and its crew members may use."
+
+  def grant_sentence(:consent_stale),
+    do: "What Aqua and its crew members may use changed since you granted it."
+
+  def grant_sentence(:consent_damaged),
+    do:
+      "A consent this model runs under is damaged and cannot be used — " <>
+        "revoke the damaged profile and grant it again."
+
+  def grant_sentence(:consent_unavailable),
+    do: "A consent this model runs under cannot be read right now — try again."
+
+  def grant_sentence(_state), do: nil
+
+  @doc """
+  The state of the crew's grant (`grant_sentence/1`) with what the page
+  can do about it: a grant never given, or one that moved, opens Aqua's
+  own confirmation (`open_consent`, handled by the Aqua page); damage or
+  an outage offers nothing to press, since connecting cannot repair a
+  grant that exists. Nothing for any other state.
+  """
+  attr :state, :atom, required: true
+
+  def grant_line(%{state: state} = assigns) when state in @grant_states do
+    ~H"""
+    <span
+      data-test="aqua-grant"
+      data-state={@state}
+      class={if @state == :consent_damaged, do: "text-red-300", else: "text-amber-300"}
+    >
+      {grant_sentence(@state)}
+    </span>
+    <button
+      :if={@state in [:consent_absent, :consent_stale]}
+      type="button"
+      phx-click="open_consent"
+      phx-value-ref={Prima.AgentRef.soul_ref()}
+      class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
+    >
+      {if @state == :consent_absent, do: "Grant", else: "Grant again"}
+    </button>
+    """
+  end
+
+  def grant_line(assigns), do: ~H""
+
   attr :myself, :any, required: true
   attr :agent, :map, required: true
   attr :models_by_provider, :map, required: true
@@ -1579,33 +1680,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           Model connected
         </span>
         <%!-- The crew's grant, which a member holds none of its own of:
-             stale on Aqua's card, and on a member's whose brain holds its
-             key but is not in the grant. --%>
-        <span :if={match?({:consent_stale, _}, @model_status)} class="text-amber-300">
-          What Aqua and its crew members may use changed since you granted it.
-        </span>
-        <button
-          :if={match?({:consent_stale, _}, @model_status)}
-          type="button"
-          phx-click="open_consent"
-          phx-value-ref={Prima.AgentRef.soul_ref()}
-          class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
-        >
-          Grant again
-        </button>
+             its every state on Aqua's card, and stale on a member's whose
+             brain holds its key but is not in the grant; a brain's own
+             grant damaged or unread is said the same way. --%>
+        <.grant_line state={elem(@model_status, 0)} />
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet
         </span>
         <span :if={match?({:needs_grant, _}, @model_status)} class="text-amber-300">
           Not connected — it needs only your grant
-        </span>
-        <%!-- A consent that exists but is damaged, or could not be read, is
-             no key to connect: no Connect button is offered over it. --%>
-        <span :if={match?({:consent_damaged, _}, @model_status)} class="text-red-300">
-          A consent this model runs under is damaged and cannot be used — revoke the damaged profile and grant it again.
-        </span>
-        <span :if={match?({:consent_unavailable, _}, @model_status)} class="text-amber-300">
-          A consent this model runs under cannot be read right now — try again.
         </span>
         <span :if={match?({:missing, _}, @model_status)} class="text-amber-300">
           The model's catalyst is not installed here yet

@@ -655,8 +655,10 @@ defmodule PrismWeb.AquaLive do
   lists (a program's from its listing, an API brain's from its
   `describe` once a model is picked) and its Make, and the
   members made, each ready or what it waits on. Aqua: which crew member
-  it runs on. Or, for a crew member the setup is for, which connected
-  brain it runs on; the crew members whose brain is not connected; and,
+  it runs on, done once Aqua reads ready, and until then the state of
+  the crew's grant it waits on, with its Grant
+  (`AgentsComponent.grant_line/1`). Or, for a crew member the setup is
+  for, which connected brain it runs on; the crew members whose brain is not connected; and,
   for an administrator who has not seen it, their own setup next.
   """
   attr :open, :boolean, required: true
@@ -704,6 +706,7 @@ defmodule PrismWeb.AquaLive do
       |> assign(:soul, read[:soul])
       |> assign(:member, read[:member])
       |> assign(:soul_ready, read[:soul_ready] == true)
+      |> assign(:soul_state, read[:soul_state])
       |> assign(:members, members)
       |> assign(:member_title, Enum.find_value(members, &(&1.name == read[:member] && &1.title)))
 
@@ -988,6 +991,17 @@ defmodule PrismWeb.AquaLive do
 
           <p :if={@soul_ready and @member_title} data-test="setup-aqua-done" class="text-emerald-400">
             Aqua runs on {@member_title}.
+          </p>
+
+          <%!-- Choosing grants nothing: with a member chosen, the step is
+                done only once Aqua reads ready, and while the crew's grant
+                is what it waits on, the step says so with what to do. --%>
+          <p
+            :if={@member && AgentsComponent.grant_sentence(@soul_state)}
+            data-test="setup-aqua-grant"
+            class="flex flex-wrap items-center gap-2"
+          >
+            <AgentsComponent.grant_line state={@soul_state} />
           </p>
         </section>
 

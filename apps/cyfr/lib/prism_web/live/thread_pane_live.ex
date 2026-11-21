@@ -1536,6 +1536,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp unready_model(statuses) do
     cond do
       Enum.any?(statuses, &match?({:ready, _}, &1)) -> :ready
+      Enum.any?(statuses, &match?({:consent_absent, _}, &1)) -> :consent_absent
       Enum.any?(statuses, &match?({:consent_stale, _}, &1)) -> :consent_stale
       Enum.any?(statuses, &match?({:consent_damaged, _}, &1)) -> :consent_damaged
       Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
@@ -1905,28 +1906,26 @@ defmodule PrismWeb.ThreadPaneLive do
                 >
                   Grant it on your Aqua page.
                 </.link>
-              <% @model_ready == :consent_stale -> %>
-                <%!-- The crew's grant no longer covers what the crew may
-                     use: granting it again is all it needs, never a model
-                     to connect. --%>
+              <% @model_ready in [:consent_absent, :consent_stale] -> %>
+                <%!-- The crew's grant was never given, or no longer covers
+                     what the crew may use: granting it on the Aqua page is
+                     all it needs, never a model to connect. --%>
                 <span data-test="model-consent">
-                  What Aqua and its crew members may use changed since you granted it.
+                  {PrismWeb.AquaLive.AgentsComponent.grant_sentence(@model_ready)}
                 </span>
                 <.link
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua")}
                   class="text-blue-400 hover:underline"
                 >
-                  Grant it again on your Aqua page.
+                  {if @model_ready == :consent_absent,
+                    do: "Grant it on your Aqua page.",
+                    else: "Grant it again on your Aqua page."}
                 </.link>
-              <% @model_ready == :consent_damaged -> %>
+              <% @model_ready in [:consent_damaged, :consent_unavailable] -> %>
                 <%!-- A consent that exists but is damaged, or could not be read,
                      is no model to connect: it is said as such. --%>
                 <span data-test="model-consent">
-                  A consent this model runs under is damaged and cannot be used — revoke the damaged profile and grant it again.
-                </span>
-              <% @model_ready == :consent_unavailable -> %>
-                <span data-test="model-consent">
-                  A consent this model runs under cannot be read right now — try again.
+                  {PrismWeb.AquaLive.AgentsComponent.grant_sentence(@model_ready)}
                 </span>
               <% @model_ready == :agents_unavailable -> %>
                 <%!-- Whether the room has agents, or a model, could not be
