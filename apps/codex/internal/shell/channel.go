@@ -70,6 +70,10 @@ var (
 	// ErrRefused is a proof the home refused (4401) or a frame it refused
 	// (4400).
 	ErrRefused = errors.New("CYFR refused this screen's proof")
+	// ErrCompanySignIn is a person who stands but for the company sign-in
+	// the CYFR requires: the one refusal the home closes as try again
+	// (1013) with the class forbidden, keeping the pairing.
+	ErrCompanySignIn = errors.New("CYFR requires a company sign-in")
 )
 
 // Device is what a certified device presents on its channel.
@@ -395,6 +399,10 @@ func (c *Channel) recv(ctx context.Context) (message, error) {
 
 // closeReason maps the home's close code to why the channel ended.
 func closeReason(err error) error {
+	var closed websocket.CloseError
+	if errors.As(err, &closed) && closed.Code == websocket.StatusTryAgainLater && closed.Reason == "forbidden" {
+		return ErrCompanySignIn
+	}
 	switch websocket.CloseStatus(err) {
 	case 4403:
 		return ErrRevoked

@@ -451,6 +451,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/consent_preview_test.exs",
        ~w(kinds narrowable_kinds preview refusals version)}
     ],
+    "desktop-process.json" => [
+      {"apps/codex/internal/desktop/process_test.go", ~w(version go_to_main main_to_go refused)}
+    ],
     "device.json" => [
       {"apps/codex/internal/shell/device_test.go", ~w(keys messages refusals)},
       {"apps/cyfr/test/emissary/web/device_channel_test.exs", ~w(messages refusals)},

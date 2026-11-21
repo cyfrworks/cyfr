@@ -93,9 +93,15 @@ type Config struct {
 	Chip func() bool
 }
 
-// ClientRecord is the client a CYFR admitted this device's key as and the
-// certificate it connects under there.
+// ClientRecord is the one CYFR this user's device connects to and its
+// standing there: the CYFR selected, a remote CYFR's origin (Home) or a
+// local project's absolute directory (Project), the directory URL
+// approved for it, and the client that CYFR admitted this device's key as
+// and the certificate it connects under there.
 type ClientRecord struct {
+	Home        string          `json:"home,omitempty"`
+	Project     string          `json:"project,omitempty"`
+	Directory   string          `json:"directory,omitempty"`
 	ClientID    string          `json:"client_id,omitempty"`
 	Certificate json.RawMessage `json:"certificate,omitempty"`
 }
@@ -107,8 +113,68 @@ type ClientStore interface {
 }
 
 // ClientFile keeps a ClientRecord in a file of its own, private to its
-// owner: a box's screen's.
+// owner: client.json in this user's device folder (DeviceDir).
 type ClientFile string
+
+// DeviceDir is this user's device folder, ~/.cyfr/device, made private
+// when it is not there: the key's record (holder.json) and the client
+// record (client.json) of every road this user's CYFR app or screen
+// takes, one key and one selected CYFR for the user.
+func DeviceDir() (string, error) {
+	dir, err := DeviceFolder()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// DeviceFolder is DeviceDir's path, made or not.
+func DeviceFolder() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cyfr", "device"), nil
+}
+
+// SelectHome remembers home, a remote CYFR's origin, as the CYFR this
+// device connects to, with directory the URL approved for it. Selecting
+// another CYFR than the one remembered drops the client and certificate
+// held for that one.
+func (f ClientFile) SelectHome(home, directory string) error {
+	c, err := f.Load()
+	if err != nil {
+		return err
+	}
+	if c.Home != home || c.Project != "" {
+		c = ClientRecord{Home: home}
+	}
+	c.Directory = directory
+	return f.Save(c)
+}
+
+// SelectProject remembers project, a local project's absolute directory,
+// as the CYFR this device connects to. A record that already selects
+// another CYFR, or holds a client of one, is refused: this user's device
+// connects to one CYFR.
+func (f ClientFile) SelectProject(project string) error {
+	c, err := f.Load()
+	if err != nil {
+		return err
+	}
+	switch {
+	case c.Project == project:
+		return nil
+	case c.Home != "":
+		return fmt.Errorf("this account's CYFR app is connected to %s, not to the CYFR in %s", c.Home, project)
+	case c.Project != "" || c.ClientID != "":
+		return fmt.Errorf("this account's device is connected to the CYFR in %s, not to the one in %s", c.Project, project)
+	}
+	return f.Save(ClientRecord{Project: project})
+}
 
 // Load reads the file; none is an empty record.
 func (f ClientFile) Load() (ClientRecord, error) {
@@ -477,6 +543,9 @@ type View struct {
 	Code   string
 	AddURL string
 	Key    string
+	// Service is the account service's origin the add page is at, which
+	// the device that approves must show beside the code.
+	Service string
 }
 
 // View is the page the device shows now, and the notice of the last
@@ -593,7 +662,8 @@ func (s *Shell) view() View {
 	case s.rec.Identifier == "":
 		kid := account.Kid(s.rec.PublicKey)
 		v.Page, v.Code, v.Key = PageEnroll, account.ShortCode(kid), account.B64(s.rec.PublicKey)
-		v.AddURL = account.Directory{URL: s.cfg.Directory}.Origin() + "/account/add#key=" + v.Key +
+		v.Service = account.Directory{URL: s.cfg.Directory}.Origin()
+		v.AddURL = v.Service + "/account/add#key=" + v.Key +
 			"&alg=ed25519&kind=device&code=" + v.Code
 	case s.ch == nil:
 		v.Page = PageLocked
@@ -633,6 +703,11 @@ func (s *Shell) say(format string, args ...any) { s.notice = fmt.Sprintf(format,
 // the shell's Config does.
 func (s *Shell) sentence(err error) string { return sentence(err) }
 
+// CompanySignIn is what a person reads at a CYFR that requires a company
+// sign-in, which the CYFR app does not offer.
+const CompanySignIn = "This CYFR requires company sign-in. Open its address in a browser to continue. " +
+	"The CYFR app does not support company sign-in yet."
+
 // sentence is what the person reads for a failure of this screen.
 func sentence(err error) string {
 	var intent *IntentError
@@ -647,6 +722,8 @@ func sentence(err error) string {
 		return "Too many wrong PINs: this screen's chip takes one more try every ten minutes."
 	case errors.Is(err, ErrRevoked):
 		return "CYFR does not take this screen now: it was removed, CYFR does not admit your account, or CYFR was restored from a backup, which suspends every device. Unlocking it again asks CYFR again."
+	case errors.Is(err, ErrCompanySignIn):
+		return CompanySignIn
 	case errors.Is(err, ErrUnavailable):
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):
@@ -1332,7 +1409,7 @@ func (s *Shell) admission(ctx context.Context) map[string]any {
 // admitted keeps the client and certificate a hello was answered before
 // the connection goes on.
 func (s *Shell) admitted(a Admitted) error {
-	s.here = ClientRecord{ClientID: a.ClientID, Certificate: a.Certificate}
+	s.here.ClientID, s.here.Certificate = a.ClientID, a.Certificate
 	return s.cfg.Clients.Save(s.here)
 }
 

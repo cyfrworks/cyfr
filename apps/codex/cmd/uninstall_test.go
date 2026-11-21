@@ -645,3 +645,22 @@ func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T)
 		t.Error("a Homebrew install's program was removed")
 	}
 }
+
+// The account's device folder, its key and the CYFR it connects to, is
+// outside the project folder: the uninstall leaves it and names it, as it
+// names every other thing it leaves.
+func TestUninstallLeavesAndNamesTheDeviceKey(t *testing.T) {
+	s := newUninstallScenario(t)
+	device := filepath.Join(s.home, ".cyfr", "device")
+	s.write(filepath.Join(device, "holder.json"), "{}")
+	out, err := s.run(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "  this account's device key, "+device+"\n") {
+		t.Errorf("the uninstall did not name the device key:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(device, "holder.json")); err != nil {
+		t.Errorf("the device key is gone: %v", err)
+	}
+}

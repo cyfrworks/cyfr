@@ -24,6 +24,10 @@ import (
 // screenProject is a project directory on a machine that can show it.
 func screenProject(t *testing.T) *standIn {
 	t.Helper()
+	// The device folder is the account's own (shell.DeviceDir): each test
+	// has a home of its own, which its subprocesses inherit.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	s := standInMachine(t)
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -603,7 +607,7 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 		t.Error("setup read as open under a lock another command holds")
 	}
 	unlock()
-	if screenShellConfig(t.TempDir(), "http://localhost:4000", nil, "box", func() {}).SetupOpen == nil {
+	if screenShellConfig(t.TempDir(), t.TempDir(), "http://localhost:4000", nil, "box", func() {}).SetupOpen == nil {
 		t.Error("the screen's shell does not read whether setup is open")
 	}
 }

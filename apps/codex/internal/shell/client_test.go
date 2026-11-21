@@ -240,3 +240,41 @@ func TestUnlock_RenewsAnExpiredCertificate(t *testing.T) {
 		t.Fatalf("a certificate of another key: unlocked %v, %d hellos", again.Unlocked(), len(home.hellosSeen()))
 	}
 }
+
+// One account's device connects to one CYFR: the app's remote selection
+// and a screen's local project share one record, and neither takes the
+// other's place silently.
+func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
+	f := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	if err := f.SelectHome("https://cyfr.example.com", "https://cyfr.run"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Save(ClientRecord{Home: "https://cyfr.example.com", Directory: "https://cyfr.run", ClientID: "pcl_1", Certificate: json.RawMessage(`{"a":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SelectHome("https://cyfr.example.com", "https://accounts.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Load(); c.ClientID != "pcl_1" || c.Directory != "https://accounts.example.com" {
+		t.Fatalf("a new directory for the same CYFR dropped its client: %+v", c)
+	}
+	if err := f.SelectProject("/home/ada/cyfr"); err == nil || !strings.Contains(err.Error(), "https://cyfr.example.com") {
+		t.Fatalf("a local project took the app's CYFR's place: %v", err)
+	}
+	if err := f.SelectHome("https://other.example.com", "https://cyfr.run"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Load(); c.ClientID != "" || len(c.Certificate) != 0 || c.Home != "https://other.example.com" {
+		t.Fatalf("another CYFR kept the first one's client: %+v", c)
+	}
+
+	g := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	for range 2 {
+		if err := g.SelectProject("/home/ada/cyfr"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := g.SelectProject("/home/ada/other"); err == nil {
+		t.Fatal("a second project took the first one's place")
+	}
+}

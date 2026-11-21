@@ -1273,3 +1273,33 @@ func TestPasskey_ALostSendIsSettledOnlyByAnAnswerThatShowsTheLog(t *testing.T) {
 		})
 	}
 }
+
+// A CYFR that requires a company sign-in closes the channel 1013 with the
+// class forbidden; any other try-again close is a CYFR not reachable now.
+// The page says which, and the app's own words for the first.
+func TestChannel_ACompanySignInIsToldApartFromAnUnreachableCYFR(t *testing.T) {
+	for _, tc := range []struct{ reason, want string }{
+		{"forbidden", CompanySignIn},
+		{"unavailable", "CYFR could not be reached"},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			home := newFakeHome(t)
+			b := newBox(t, home, t.TempDir())
+			setUpAndOpen(t, home, b)
+			home.mu.Lock()
+			conns := home.conns
+			home.conns = nil
+			home.mu.Unlock()
+			for _, c := range conns {
+				c.Close(websocket.StatusTryAgainLater, tc.reason)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for b.shell.Unlocked() && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond) // sleep-ok: polls the lock the close starts, bounded by deadline
+			}
+			if page := b.page(); b.shell.Unlocked() || !strings.Contains(html.UnescapeString(page), tc.want) {
+				t.Fatalf("the box did not lock saying %q: %s", tc.want, page)
+			}
+		})
+	}
+}

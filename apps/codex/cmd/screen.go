@@ -338,13 +338,13 @@ const screenIdle = 5 * 60
 const screenProxy = "socks5://127.0.0.1:1055"
 
 // screenShellConfig is the box's own screen's shell in dir, for the CYFR
-// at address: the box's key and its client there, kept beside the
-// screen's files.
-func screenShellConfig(dir, address string, client *http.Client, host string, restart func()) shell.Config {
+// at address: the key and the client there of the account the screen runs
+// as, kept in its device folder, device.
+func screenShellConfig(dir, device, address string, client *http.Client, host string, restart func()) shell.Config {
 	return shell.Config{
 		Address: address, Client: client, DisplayName: host,
-		Record:    filepath.Join(dir, screenDir, "holder.json"),
-		Clients:   shell.ClientFile(filepath.Join(dir, screenDir, "client.json")),
+		Record:    filepath.Join(device, "holder.json"),
+		Clients:   shell.ClientFile(filepath.Join(device, "client.json")),
 		Directory: directoryURL(),
 		DataDir:   filepath.Join(dir, "data"),
 		Tokens:    screenTokens,
@@ -395,7 +395,14 @@ func runScreenShell(ctx context.Context) error {
 	_ = exec.Command("pkill", "-f", "--", "^swayidle -w timeout [0-9]+ kill -USR1 ").Run()
 	chrome := &screenChrome{args: chromeArgs}
 	host, _ := os.Hostname()
-	sh, err := shell.New(screenShellConfig(dir, address, client, host, chrome.restart))
+	device, err := shell.DeviceDir()
+	if err != nil {
+		return fmt.Errorf("The screen cannot make this account's device folder (%v)", err)
+	}
+	if err := shell.ClientFile(filepath.Join(device, "client.json")).SelectProject(dir); err != nil {
+		return fmt.Errorf("The screen cannot show the CYFR here: %v", err)
+	}
+	sh, err := shell.New(screenShellConfig(dir, device, address, client, host, chrome.restart))
 	if err != nil {
 		return err
 	}

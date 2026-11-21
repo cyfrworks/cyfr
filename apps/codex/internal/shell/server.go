@@ -535,8 +535,12 @@ func (srv *Server) Serve(ctx context.Context) error {
 	return srv.ServeOn(ctx, ln)
 }
 
-// ListenLoopback takes the shell's one listener, Listen.
-func ListenLoopback() (net.Listener, error) { return net.Listen("tcp4", Listen) }
+// ListenLoopback takes the shell's one listener, Listen, for this process
+// alone: on Windows no other socket may bind the same address beside it
+// (exclusiveAddress).
+func ListenLoopback() (net.Listener, error) {
+	return (&net.ListenConfig{Control: exclusiveAddress}).Listen(context.Background(), "tcp4", Listen)
+}
 
 // ServeOn serves the pages on ln, the shell's listener, until ctx ends.
 func (srv *Server) ServeOn(ctx context.Context, ln net.Listener) error {

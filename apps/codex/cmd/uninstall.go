@@ -16,6 +16,7 @@ import (
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/config"
+	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
 )
 
@@ -87,6 +88,9 @@ type uninstallPlan struct {
 	inFolder []string
 	// settings are this program's settings files, which stay.
 	settings []string
+	// device is this account's device folder, its key and the CYFR it
+	// connects to, which stays; "" when there is none.
+	device string
 }
 
 // readUninstallPlan reads what an uninstall of the CYFR in the working
@@ -134,6 +138,11 @@ func readUninstallPlan() (*uninstallPlan, error) {
 			}
 		}
 	}
+	if device, err := shell.DeviceFolder(); err == nil {
+		if _, err := os.Lstat(device); err == nil {
+			p.device = device
+		}
+	}
 	return p, nil
 }
 
@@ -176,6 +185,9 @@ func (p *uninstallPlan) show(out io.Writer) {
 	fmt.Fprintln(out, "  the stack's volumes")
 	if len(p.settings) > 0 {
 		fmt.Fprintf(out, "  this program's settings, %s\n", strings.Join(p.settings, ", "))
+	}
+	if p.device != "" {
+		fmt.Fprintf(out, "  this account's device key, %s\n", p.device)
 	}
 	if p.cask {
 		fmt.Fprintln(out, "  this program, which Homebrew installed: remove it with 'brew uninstall --cask cyfr'")
@@ -257,6 +269,9 @@ func (p *uninstallPlan) left(volumes []string) string {
 	}
 	if len(p.settings) > 0 {
 		fmt.Fprintf(&b, "  this program's settings, %s\n", strings.Join(p.settings, ", "))
+	}
+	if p.device != "" {
+		fmt.Fprintf(&b, "  this account's device key, %s\n", p.device)
 	}
 	if len(volumes) > 0 {
 		fmt.Fprintf(&b, "  the stack's volumes, which this command removes:\n    docker volume rm %s\n", shellQuote(volumes))
