@@ -1811,6 +1811,37 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       end
     end
 
+    # An athanor made before Aqua ran on a crew member: Aqua's file still
+    # names a brain of its own, and the list refuses the soul with the
+    # sentence the Aqua page and the turn say, never as a list that could
+    # not be read.
+    test "Aqua's file that still names a brain says the file's own sentence, never unread", %{
+      conn: conn,
+      athanor: athanor,
+      here: here
+    } do
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(here),
+          Compendium.AquaPath.soul_file(),
+          "---\ntitle: Aqua\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n" <>
+            "---\n\nsoul\n"
+        )
+
+      {:ok, _} = Compendium.AgentIndex.sync(here)
+      pane = empty_pane(conn, athanor)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="model-unseated"]),
+               Prima.AgentRef.seat_has_brain()
+             )
+
+      refute has_element?(pane, ~s([data-test="agents-unavailable"]))
+      refute render(pane) =~ "has no model yet"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "a model whose head binds no key is still one to connect", %{
       conn: conn,
       athanor: athanor

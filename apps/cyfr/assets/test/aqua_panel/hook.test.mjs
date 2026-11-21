@@ -41,8 +41,13 @@ function panel(dataset = {}) {
     releasePointerCapture: () => (captured = null)
   }
   const pushed = []
+  const handlers = {}
   const hook = Object.create(AquaPanel)
-  Object.assign(hook, {el, pushEvent: (event, payload) => pushed.push({event, payload})})
+  Object.assign(hook, {
+    el,
+    pushEvent: (event, payload) => pushed.push({event, payload}),
+    handleEvent: (event, fn) => (handlers[event] = fn)
+  })
   hook.mounted()
 
   const drawn = () => ({
@@ -52,7 +57,8 @@ function panel(dataset = {}) {
     h: parseInt(props["--aqua-h"], 10)
   })
   const fire = (type, event) => listeners[type]({pointerId: 1, button: 0, preventDefault() {}, type, ...event})
-  return {el, hook, pushed, drawn, fire, menu, toggle, captured: () => captured}
+  const serve = (event, payload = {}) => handlers[event](payload)
+  return {el, hook, pushed, drawn, fire, serve, menu, toggle, captured: () => captured}
 }
 
 const TOGGLE = {closest: (selector) => (selector.includes("[data-aqua-menu-toggle]") ? {} : null)}
@@ -204,6 +210,17 @@ describe("the thread's menu", () => {
     assert.equal(p.menu.hidden, false)
     windowListeners.pointerdown({target: OUTSIDE})
     assert.equal(p.menu.hidden, true)
+  })
+
+  // The thread shown was deleted and the panel lands on another: the menu
+  // of the thread that went does not stand over it.
+  test("the server's close_menu, sent where a deleted thread's panel lands, closes it", () => {
+    const p = panel()
+    p.fire("click", {target: TOGGLE})
+    assert.equal(p.menu.hidden, false)
+    p.serve("aqua:close_menu")
+    assert.equal(p.menu.hidden, true)
+    assert.equal(p.toggle.attributes["aria-expanded"], "false")
   })
 
   test("the window losing focus, to a frame whose presses the page never hears, closes it", () => {

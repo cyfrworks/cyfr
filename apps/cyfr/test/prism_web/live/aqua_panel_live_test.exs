@@ -1797,6 +1797,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
       for {panel, pane} <- [{panel, pane}, {other, other_pane}] do
         wait_until(fn -> is_nil(thread_of(pane)) end)
+        # The menu the delete was pressed in, or open on another screen,
+        # closes where the panel lands.
+        assert_push_event(panel, "aqua:close_menu", %{})
         assert has_element?(panel, "#aqua-panel-today", "Today")
         refute has_element?(panel, "#aqua-panel-day-name")
         assert :sys.get_state(pane.pid).socket.assigns.flash == %{}
@@ -1818,6 +1821,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
       assert {:error, :not_found} = Threads.get(actor, explorer.id)
       on_thread!(pane, today.id)
+      assert_push_event(panel, "aqua:close_menu", %{})
       assert {:ok, ^room} = Threads.get(actor, today.id)
       assert has_element?(panel, "#aqua-panel-day-name")
 

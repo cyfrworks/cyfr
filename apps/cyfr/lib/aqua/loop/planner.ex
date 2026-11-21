@@ -118,13 +118,14 @@ defmodule Aqua.Loop.Planner do
 
   @doc """
   The boundary that keeps about `keep_tokens` of the newest rows without
-  parting a tool call from its results: rows are grouped by the model
-  step that produced them, and the boundary is the start of the oldest
-  group that still fits — at least the newest group, always.
+  parting a tool call from its results: rows, in the order the turn reads
+  them (`Arca.TurnStorage.projection/2`), are grouped by the model step
+  that produced them, and the boundary is the start of the oldest group
+  that still fits — at least the newest group, always.
   """
   @spec boundary([Aqua.Tape.row()], pos_integer()) :: boundary()
   def boundary(rows, keep_tokens) when is_list(rows) and rows != [] do
-    groups = rows |> Enum.sort_by(& &1.seq) |> group()
+    groups = group(rows)
 
     {kept, _} =
       groups
@@ -142,8 +143,30 @@ defmodule Aqua.Loop.Planner do
       end)
 
     first = kept |> List.first() |> List.first()
-    kept_seq = with_answered_calls(rows, first.seq)
+    kept_seq = kept_from(rows, first.seq)
     %{first_kept_seq: kept_seq, summarized_through_seq: kept_seq - 1}
+  end
+
+  # What a compaction keeps is read by seq (`first_kept_seq`), while a post
+  # reads later than its seq, after the rows its round held. So the boundary
+  # is pulled back, with the calls whose answers it keeps, until no row read
+  # from the first kept one on comes before it by seq: the kept rows are
+  # then exactly what the turn reads from there, and the summary stands for
+  # everything read before them. A summary and a pinned request are read
+  # wherever the boundary falls. It only ever moves earlier, so it settles.
+  defp kept_from(rows, first) do
+    pairs = answered(rows)
+    read = Enum.reject(rows, &(&1.kind == "compaction" or pinned?(&1)))
+    settle(pairs, read, first)
+  end
+
+  defp settle(pairs, read, first) do
+    later = read |> Enum.drop_while(&(&1.seq < first)) |> Enum.map(& &1.seq)
+
+    case pairs |> pull_back(first) |> min(Enum.min(later, fn -> first end)) do
+      ^first -> first
+      earlier -> settle(pairs, read, earlier)
+    end
   end
 
   # Grouping keeps a result beside the call it answers, but only while they
@@ -155,8 +178,6 @@ defmodule Aqua.Loop.Planner do
   # So the boundary is pulled back to include any call whose answer is kept.
   # Pulling back can bring in further results whose calls are older still,
   # hence the repeat; it only ever moves earlier, so it settles.
-  defp with_answered_calls(rows, first), do: pull_back(answered(rows), first)
-
   defp pull_back(pairs, first) do
     orphaned = for {result, call} <- pairs, result >= first, call < first, do: call
 
@@ -289,10 +310,10 @@ defmodule Aqua.Loop.Planner do
   def estimate_tokens(term), do: term |> Jason.encode!() |> byte_size() |> estimate_tokens()
 
   @doc """
-  The rows the model reads: everything from the latest compaction's
-  boundary, with that compaction standing in for what came before it,
-  and the pinned requests before it. The summary row is kept, because it
-  is sent and it costs tokens.
+  The rows the model reads, in the order given: everything from the latest
+  compaction's boundary, with that compaction standing in for what came
+  before it, and the pinned requests before it. The summary row is kept,
+  because it is sent and it costs tokens.
   """
   @spec readable([Aqua.Tape.row()]) :: [Aqua.Tape.row()]
   def readable(rows) do
@@ -303,8 +324,10 @@ defmodule Aqua.Loop.Planner do
       latest ->
         first = first_kept_seq(latest)
 
-        [latest | Enum.filter(rows, &(&1.seq < first and pinned?(&1)))] ++
-          Enum.filter(rows, &(&1.kind != "compaction" and &1.seq >= first))
+        Enum.filter(rows, fn row ->
+          row.id == latest.id or (row.seq < first and pinned?(row)) or
+            (row.kind != "compaction" and row.seq >= first)
+        end)
     end
   end
 

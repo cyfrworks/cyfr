@@ -1636,15 +1636,26 @@ defmodule Arca.TurnStorage do
     |> Arca.Repo.exists?()
   end
 
-  # A model step opened on a turn carries the nudges the turn had read by
-  # then, past its boundary or not: each still waiting names the step.
-  # Taken under the turn's lock, after `drain_steer/3` moved the boundary
-  # past what the step's request carries.
+  # A model step opened on a turn carries what its request holds of the
+  # rows others wrote into the turn, the boundary `drain_steer/3` moved
+  # before the request was read bounding them: each post no step carried
+  # yet names the step its `carried_by`, its place in every later reading
+  # (`projection/2`), and each nudge still waiting names it its
+  # `resolved_by` too. Taken under the turn's lock, in the step's own write,
+  # so a post arriving after the request was read waits for the next step.
   # arca:db-raise-ok inside the caller's transaction
   defp consumed!(athanor_id, %Turn{} = turn, %{id: step_id, kind: "model", purpose: "chat"}) do
+    window = turn.window_upto_seq || 0
+
+    from(m in Message,
+      where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
+      where: m.sent_by != ^turn.agent and m.seq <= ^window and is_nil(m.carried_by)
+    )
+    |> Arca.Repo.update_all(set: [carried_by: step_id])
+
     from(m in Message,
       where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id and m.kind == "nudge",
-      where: m.seq <= ^(turn.window_upto_seq || 0) and is_nil(m.resolved_by)
+      where: m.seq <= ^window and is_nil(m.resolved_by)
     )
     |> Arca.Repo.update_all(set: [resolved_by: step_id, resolved_at: DateTime.utc_now()])
 
@@ -2147,8 +2158,8 @@ defmodule Arca.TurnStorage do
   root execution leaves `running`/`paused`, the reservation is released
   and the open running interval is added to `active_ms`. A turn already
   over is answered `{:error, :already_finished}`; a turn with no root yet
-  (still `accepted`) closes on its own. A turn with a steer past its
-  boundary refuses `completed` with `{:error, :steer_pending}`: its loop
+  (still `accepted`) closes on its own. A turn with a steer no step
+  carried refuses `completed` with `{:error, :steer_pending}`: its loop
   goes on to answer the steer; one with a page's call the host proposed
   in it and nobody dispatched yet refuses it with
   `{:error, :call_pending}`: its loop goes on to dispatch the call. A turn with a root attempt ends under its
@@ -3632,10 +3643,13 @@ defmodule Arca.TurnStorage do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Move the turn's boundary past every human row attached to it that
-  arrived while it worked, and answer those rows in `seq` order: the
-  steer the loop drains before its next model request. A turn that is
-  over drains nothing (`{:error, :not_open}`).
+  Move the turn's boundary past every post attached to it that arrived
+  while it worked and no step carried yet, and answer those rows in `seq`
+  order: the steer the loop drains before its next model request, which
+  its model step carries (`consumed!/3`). A post drained by a round that
+  died before its step is drained again by the next, and the boundary
+  never moves back: a post older than rows the turn already reads leaves
+  them read. A turn that is over drains nothing (`{:error, :not_open}`).
   """
   @spec drain_steer(Prima.Actor.t(), String.t(), map()) :: {:ok, [map()]} | {:error, term()}
   def drain_steer(actor, turn_id, attrs \\ %{})
@@ -3652,7 +3666,7 @@ defmodule Arca.TurnStorage do
             []
 
           rows ->
-            newest = rows |> Enum.map(& &1.seq) |> Enum.max()
+            newest = rows |> Enum.map(& &1.seq) |> Enum.max() |> max(turn.window_upto_seq || 0)
 
             {1, _} =
               from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
@@ -3667,7 +3681,11 @@ defmodule Arca.TurnStorage do
 
   def drain_steer(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
 
-  @doc "Whether a human row attached to the turn waits past its boundary."
+  @doc """
+  Whether a post written into the turn after its opening waits for a step
+  to carry it, past the boundary of a turn stopped on an uncertain call
+  (`steer_rows/2`).
+  """
   @spec steer_pending?(Prima.Actor.t(), String.t()) :: boolean() | {:error, term()}
   def steer_pending?(%Prima.Actor{athanor_id: athanor_id}, turn_id)
       when is_binary(athanor_id) and athanor_id != "" do
@@ -3682,12 +3700,26 @@ defmodule Arca.TurnStorage do
     do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.steer_pending?/2")
 
   @doc """
-  The rows a turn may read, in `seq` order: its own rows except an
-  undrained steer, plus — behind its boundary — unattached rows and the
-  rows of terminal turns of the thread. Rows attached to other open
-  turns are never read, nor an opening still waiting for its own turn,
-  whose ask is read under that turn's person, origin and restrictions
-  alone.
+  The rows a turn may read, in the order it reads them: its own rows
+  except an undrained steer, plus — behind its boundary — unattached rows
+  and the rows of terminal turns of the thread. Rows attached to other
+  open turns are never read, nor an opening still waiting for its own
+  turn, whose ask is read under that turn's person, origin and
+  restrictions alone.
+
+  The order is `seq`'s, but for a post, a row of a turn its agent did not
+  write, which stands where the model step that carried it placed it
+  (`carried_by`, `consumed!/3`): right before the first answer, a reply or
+  a call, of that step or of a later one of its turn. Every row that step's
+  request held reads before it, the results of the calls open when it
+  arrived among them, and no answer reads before it that did not read it.
+  A post no model step carried yet stands after the rest of its turn, and
+  in the turn read here after every row: its next round carries it. The
+  server's mark of a restart (`turn_aborted`) stands before the next
+  answer, after the results written since, so a call's results follow it.
+  A post a program's `input` step carried stays where it arrived. Only
+  rows move later, never earlier, so each turn's order is the one its last
+  request held, with the newer rows after it.
   """
   @spec projection(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def projection(%Prima.Actor{athanor_id: athanor_id}, turn_id)
@@ -3710,12 +3742,170 @@ defmodule Arca.TurnStorage do
           )
         )
 
-      {:ok, rows}
+      {:ok, placed(athanor_id, turn_id, rows)}
     end)
     |> Arca.Data.project()
   end
 
   def projection(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
+
+  # `rows`, in `seq` order, as `projection/2` reads them: each held row (a
+  # post, a restart's mark) leaves its place and waits for the first answer
+  # of its turn that releases it, for a post an answer of a model step at
+  # or after its carrier, for a mark any answer; one its turn never
+  # releases follows that turn's last row that waits for nothing, or every
+  # row in the turn read (`open`). A row of a settled turn with nothing of
+  # its turn after it to wait for keeps its place.
+  # arca:db-raise-ok inside the caller's transaction
+  defp placed(_athanor_id, _open, []), do: []
+
+  defp placed(athanor_id, open, rows) do
+    agents = turn_agents(athanor_id, rows)
+    steps = step_seqs(athanor_id, rows, agents)
+    indexed = rows |> Enum.map(&{&1, waits(&1, agents, steps)}) |> Enum.with_index()
+    last = for {{%{turn_id: id}, nil}, at} <- indexed, is_binary(id), into: %{}, do: {id, at}
+
+    {out, held} =
+      Enum.reduce(indexed, {[], %{}}, fn {{row, wait}, at}, {out, held} ->
+        case held_from(wait, at, open, last) do
+          {turn_id, from} ->
+            {out, Map.update(held, turn_id, [{from, row}], &[{from, row} | &1])}
+
+          nil ->
+            emit(
+              row,
+              out,
+              held,
+              answer(row, agents, steps),
+              open != row.turn_id and last[row.turn_id] == at
+            )
+        end
+      end)
+
+    Enum.reverse(
+      out,
+      held |> Map.values() |> Enum.concat() |> rows_of() |> Enum.sort_by(& &1.seq)
+    )
+  end
+
+  # `row` read in its place, after the rows waiting in its turn that it
+  # releases, and before the rest of them when it is a settled turn's last.
+  defp emit(row, out, held, answer, last?) do
+    {ready, held} = release(held, row.turn_id, answer)
+    out = [row | ready ++ out]
+
+    if last?,
+      do: {rows_of(Map.get(held, row.turn_id, [])) ++ out, Map.delete(held, row.turn_id)},
+      else: {out, held}
+  end
+
+  # A row waits in the turn read, and in a settled turn only while a row of
+  # its turn that waits for nothing still follows it.
+  defp held_from(nil, _at, _open, _last), do: nil
+  defp held_from({open, _from} = wait, _at, open, _last), do: wait
+
+  defp held_from({turn_id, _from} = wait, at, _open, last),
+    do: if(Map.get(last, turn_id, -1) > at, do: wait)
+
+  # The rows waiting in `turn_id` that an answer of its model step `at`
+  # releases (a program's answer is 0), newest first as `placed/3` keeps
+  # them.
+  defp release(held, _turn_id, nil), do: {[], held}
+
+  defp release(held, turn_id, at) do
+    {ready, waiting} =
+      held
+      |> Map.get(turn_id, [])
+      |> Enum.split_with(fn {from, _row} -> is_integer(from) and from <= at end)
+
+    {rows_of(ready), Map.put(held, turn_id, waiting)}
+  end
+
+  defp rows_of(held), do: Enum.map(held, &elem(&1, 1))
+
+  # Whether `row` waits, and from which step on: a post its turn's agent did
+  # not write, from its carrier's seq (`:never` while no model step carried
+  # it), and a restart's mark from the first answer; nil for every other
+  # row, and for a post a program's `input` step carried.
+  defp waits(%{turn_id: nil}, _agents, _steps), do: nil
+
+  defp waits(%{kind: "turn_aborted"} = row, _agents, _steps), do: {row.turn_id, 0}
+
+  defp waits(%{sent_by: sent_by} = row, agents, steps) when is_binary(sent_by) do
+    cond do
+      sent_by == agents[row.turn_id] -> nil
+      is_nil(row.carried_by) -> {row.turn_id, :never}
+      true -> carrier(row, steps)
+    end
+  end
+
+  defp waits(_row, _agents, _steps), do: nil
+
+  defp carrier(row, steps) do
+    case steps[row.carried_by] do
+      {"model", seq} -> {row.turn_id, seq}
+      {_input, _seq} -> nil
+      nil -> {row.turn_id, :never}
+    end
+  end
+
+  # The seq of the model step whose answer `row` is, a reply or a call its
+  # turn's agent wrote; 0 for one no model step wrote (a program's); nil
+  # for any other row.
+  defp answer(%{kind: kind, turn_id: turn_id, sent_by: sent_by} = row, agents, steps)
+       when kind in ["text", "tool_call"] and is_binary(turn_id) do
+    if sent_by == agents[turn_id] do
+      case steps[step_id(row)] do
+        {"model", seq} -> seq
+        _none -> 0
+      end
+    end
+  end
+
+  defp answer(_row, _agents, _steps), do: nil
+
+  defp step_id(%{payload: payload}) when is_binary(payload) do
+    case Jason.decode(payload) do
+      {:ok, %{"step_id" => id}} when is_binary(id) -> id
+      _ -> nil
+    end
+  end
+
+  defp step_id(_row), do: nil
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp turn_agents(athanor_id, rows) do
+    ids = for %{turn_id: id} <- rows, is_binary(id), uniq: true, do: id
+
+    from(t in Turn, where: t.athanor_id == ^athanor_id and t.id in ^ids, select: {t.id, t.agent})
+    |> Arca.Repo.all()
+    |> Map.new()
+  end
+
+  # The kind and seq of each step the rows name: the posts' carriers and the
+  # model steps whose answers the agents' rows are.
+  # arca:db-raise-ok inside the caller's transaction
+  defp step_seqs(athanor_id, rows, agents) do
+    ids =
+      Enum.uniq(
+        for(%{carried_by: id} <- rows, is_binary(id), do: id) ++
+          for(
+            row <- rows,
+            row.kind in ["text", "tool_call"],
+            row.sent_by == agents[row.turn_id],
+            id = step_id(row),
+            is_binary(id),
+            do: id
+          )
+      )
+
+    from(s in TurnStep,
+      where: s.athanor_id == ^athanor_id and s.id in ^ids,
+      select: {s.id, {s.kind, s.seq}}
+    )
+    |> Arca.Repo.all()
+    |> Map.new()
+  end
 
   # ---------------------------------------------------------------------------
   # A program brain's session
@@ -5324,21 +5514,31 @@ defmodule Arca.TurnStorage do
       owed_notices(athanor_id, turn, progress) != []
   end
 
-  # A steer is what someone other than the turn's agent wrote into it
-  # past its boundary, and that no program brain's step carried
-  # (`carry/3`): every row the turn writes itself carries its agent.
+  # A steer is a post someone other than the turn's agent wrote into it
+  # after the one that opened it, that no step carried yet (`consumed!/3`,
+  # `carry/3`): every row the turn writes itself carries its agent. A post
+  # a round took in waits until that round's step carries it, so one whose
+  # round died first is still owed a round. A turn stopped on an uncertain
+  # call goes on only on a line past the boundary its stop moved, so while
+  # it is so paused a post written before the stop is none.
   # arca:db-raise-ok inside the caller's transaction
   defp steer_rows(athanor_id, %Turn{} = turn) do
-    window = turn.window_upto_seq || 0
-
-    Arca.Repo.all(
-      from(m in Message,
-        where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
-        where: m.sent_by != ^turn.agent and m.seq > ^window and is_nil(m.carried_by),
-        order_by: [asc: m.seq]
-      )
+    from(m in Message,
+      where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
+      where: m.sent_by != ^turn.agent and is_nil(m.carried_by),
+      order_by: [asc: m.seq]
     )
+    |> steers_of(turn)
+    |> Arca.Repo.all()
   end
+
+  defp steers_of(query, %Turn{status: "paused", paused_reason: "uncertain"} = turn),
+    do: from(m in query, where: m.seq > ^(turn.window_upto_seq || 0))
+
+  defp steers_of(query, %Turn{message_id: opening}) when is_binary(opening),
+    do: from(m in query, where: m.id != ^opening)
+
+  defp steers_of(query, _turn), do: query
 
   # The thread's row, held until the caller's transaction ends.
   # arca:db-raise-ok inside the caller's transaction
