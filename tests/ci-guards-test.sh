@@ -16,9 +16,9 @@
 # image's groups (it reads test.yml through PyYAML), for what lets a check
 # pass in every workflow (a trivy scan's pin and inputs, continue-on-error,
 # the MinIO image's digest, the npm audit's lockfiles), for the image
-# builds' layer cache (no write from a pull request's run, none in
-# release.yml), and for the run prefix the proof scripts name what they
-# make under.
+# builds' layer cache (one workflow writes it and a package, release.yml's
+# publishing aside), and for the run prefix the proof scripts name what
+# they make under.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -1492,52 +1492,58 @@ CASES
 
 # --- the image builds' layer cache ---
 
-# layer_caches WORKFLOW_DIR: a docker/build-push-action step writes a layer
-# cache only through test.yml's form, an expression that is empty unless the
-# run is on main, so a pull request's run (ref refs/pull/N/merge) writes
-# none; and release.yml's builds read and write none, a released image being
-# built from its sources alone. Each error is a line.
-layer_caches() {
+# cache_boundary WORKFLOW_DIR: the layer cache's credential is one
+# workflow's. No workflow asks for packages: write (nor write-all) but
+# layer-cache.yml's writer and release.yml's publishing jobs; test.yml and
+# release.yml write no layer cache, neither a cache-to of their own nor
+# .github/actions/image-build with write other than 'false'; and
+# layer-cache.yml runs on a push to main and on a schedule, nothing else.
+# Each error is a line.
+cache_boundary() {
   python3 -I - "$1" <<'PY'
-import glob, os, re, sys, yaml
-ON_MAIN = re.compile(r"\$\{\{ github\.ref == 'refs/heads/main' && '[^']+' \|\| '' \}\}")
+import glob, os, sys, yaml
+WRITERS = {("layer-cache.yml", "write"), ("release.yml", "images"), ("release.yml", "merge")}
+def writes_packages(perms):
+    return perms == "write-all" or (isinstance(perms, dict) and perms.get("packages") == "write")
 for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml"))):
     wf = os.path.basename(path)
-    for job, body in (yaml.safe_load(open(path)).get("jobs") or {}).items():
+    doc = yaml.safe_load(open(path)) or {}
+    if writes_packages(doc.get("permissions")):
+        print(f"{wf}: the workflow asks for packages: write")
+    for job, body in (doc.get("jobs") or {}).items():
+        if writes_packages(body.get("permissions")) and (wf, job) not in WRITERS:
+            print(f"{wf} {job}: the job asks for packages: write")
+        if wf not in ("test.yml", "release.yml"):
+            continue
         for step in body.get("steps") or []:
-            if str(step.get("uses", "")).split("@")[0] != "docker/build-push-action":
-                continue
-            where = f"{wf} {job}: '{step.get('name', 'a build-push-action step')}'"
+            where = f"{wf} {job}: '{step.get('name', step.get('uses', 'a step'))}'"
             given = step.get("with") or {}
-            if wf == "release.yml":
-                for k in ("cache-from", "cache-to"):
-                    if k in given:
-                        print(f"{where} sets {k}, a layer cache in a release build")
-            elif "cache-to" in given and not ON_MAIN.fullmatch(str(given["cache-to"])):
-                print(f"{where} writes its layer cache on a run off main: {given['cache-to']}")
+            if "cache-to" in given:
+                print(f"{where} writes a layer cache")
+            if step.get("uses") == "./.github/actions/image-build" and str(given.get("write")) != "false":
+                print(f"{where} builds with write {given.get('write')}, not 'false'")
+    if wf == "layer-cache.yml":
+        # PyYAML reads the bare key on as True.
+        on = doc.get("on", doc.get(True))
+        if not (isinstance(on, dict) and set(on) == {"push", "schedule"} and on["push"] == {"branches": ["main"]}
+                and isinstance(on["schedule"], list) and on["schedule"]):
+            print(f"layer-cache.yml runs on {on}, not a push to main and a schedule alone")
 PY
 }
-label="workflows: a layer cache is written only from main, and a release build has none"
-layer_caches "$root/.github/workflows" > "$scratch/out" 2> "$scratch/err"
+label="workflows: only the layer cache's writer and release's publishing write a package, and only the writer writes the cache"
+cache_boundary "$root/.github/workflows" > "$scratch/out" 2> "$scratch/err"
 code=$?
 if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
-while IFS='|' read -r kind wf cache want; do
-  label="workflows: the layer cache check refuses $kind"
-  fixture_workflow "$wf" <<YML
-jobs:
-  image:
-    steps:
-      - name: Build
-        uses: docker/build-push-action@0000000000000000000000000000000000000000
-        with:
-          $cache
-YML
-  layer_caches "$scratch/fixture" > "$scratch/out" 2> "$scratch/err"
+while IFS='|' read -r kind wf body want; do
+  label="workflows: the layer cache's boundary check refuses $kind"
+  printf '%b' "$body" | fixture_workflow "$wf"
+  cache_boundary "$scratch/fixture" > "$scratch/out" 2> "$scratch/err"
   code=$?
   if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
 done <<'CASES'
-a write on every event|test|cache-to: type=registry,ref=example/cache:app,mode=max|test.yml image: 'Build' writes its layer cache on a run off main: type=registry,ref=example/cache:app,mode=max
-a release build that reads one|release|cache-from: type=registry,ref=example/cache:app|release.yml image: 'Build' sets cache-from, a layer cache in a release build
+a Test job that writes a package|test|jobs:\n  image:\n    permissions:\n      packages: write\n    steps: []\n|test.yml image: the job asks for packages: write
+a release build that writes a cache|release|jobs:\n  images:\n    steps:\n      - name: Build\n        with:\n          cache-to: type=registry,ref=example/cache:app\n|release.yml images: 'Build' writes a layer cache
+a writer a pull request starts|layer-cache|on:\n  push:\n    branches: [main]\n  schedule:\n    - cron: '7 0 * * *'\n  pull_request:\njobs: {}\n|layer-cache.yml runs on {'push': {'branches': ['main']}, 'schedule': [{'cron': '7 0 * * *'}], 'pull_request': None}, not a push to main and a schedule alone
 CASES
 
 # --- the proofs' run prefix ---

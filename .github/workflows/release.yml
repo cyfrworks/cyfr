@@ -35,12 +35,6 @@ jobs:
   test:
     if: github.repository == 'cyfrworks/cyfr'
     uses: ./.github/workflows/test.yml
-    # A called job holds no more than its caller grants. Test's image jobs
-    # ask for packages: write for their layer cache, which a tag's run only
-    # reads (test.yml's locus-image says how).
-    permissions:
-      contents: read
-      packages: write
 
   dialyzer:
     if: github.repository == 'cyfrworks/cyfr'
@@ -166,7 +160,7 @@ jobs:
           echo "arch=${PLATFORM#linux/}" >> "$GITHUB_OUTPUT"
           echo "apt-refresh=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
-      # No layer cache, read or written: a released image is built from its
+      # No layer cache, read or written: a published image is built from its
       # sources alone.
       - name: Build
         id: build

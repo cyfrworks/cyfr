@@ -28,11 +28,6 @@ jobs:
   test:
     if: github.repository == 'cyfrworks/cyfr'
     uses: ./.github/workflows/test.yml
-    # A called job holds no more than its caller grants: Test's image jobs
-    # write their layer cache from main (test.yml's locus-image says how).
-    permissions:
-      contents: read
-      packages: write
     with:
       nightly: true
 
