@@ -740,9 +740,9 @@ defmodule Prima.Refusal do
   defp row({:program_full, member, minutes}) when is_binary(member) and is_integer(minutes),
     do:
       {:rate_limited,
-       "#{member} could not start because every place for a running program is taken: wait " <>
-         "for the work in another thread to end, or stop it, and a program left with no work " <>
-         "gives its place back after #{minutes} minutes"}
+       "#{member} could not start: every place for a running program is taken. Stop the " <>
+         "work in another thread or wait for it to end. A program with no work gives its " <>
+         "place back after #{minutes} minutes."}
 
   defp row({:crew_unready, member, :consent_damaged}) when is_binary(member),
     do: {:corrupt, "#{member}'s brain's own grant is damaged — revoke it and grant it again"}

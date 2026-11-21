@@ -2997,9 +2997,9 @@ defmodule Aqua.ProgramTest do
       turn = accept!(ctx, thread, row, "hello")
 
       line =
-        "#{@title} could not start because every place for a running program is taken: wait " <>
-          "for the work in another thread to end, or stop it, and a program left with no work " <>
-          "gives its place back after 30 minutes"
+        "#{@title} could not start: every place for a running program is taken. Stop the " <>
+          "work in another thread or wait for it to end. A program with no work gives its " <>
+          "place back after 30 minutes."
 
       assert {:failed, ^line} = Task.await(run(ctx, turn), 30_000)
       assert system_lines(ctx, thread, turn) == [line]
