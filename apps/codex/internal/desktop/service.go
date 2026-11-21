@@ -58,10 +58,14 @@ type Service struct {
 
 	mu      sync.Mutex
 	pending *selection
+	// gen is the time since the last lock: every chooser request runs
+	// under it from its first step (runUnder), and a lock ends it, so
+	// nothing a request began before a lock publishes anything after it.
+	gen    context.Context
+	endGen context.CancelFunc
 	// ready receives main's home-ready for selecting, the CYFR being
-	// selected; a lock closes locked, which ends that selection unopened.
+	// selected.
 	ready     chan struct{}
-	locked    chan struct{}
 	selecting string
 	sh        *shell.Shell
 	pages     *shell.Server
@@ -151,9 +155,36 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+	run, end := s.runUnder(ctx)
+	defer end()
 	h.Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(act(ctx, req))
+	_ = json.NewEncoder(w).Encode(act(run, req))
 }
+
+type genKey struct{}
+
+// runUnder is ctx bound to the time since the last lock: it ends at the
+// next lock, and live tells whether that lock has come.
+func (s *Service) runUnder(ctx context.Context) (context.Context, context.CancelFunc) {
+	s.mu.Lock()
+	if s.gen == nil {
+		s.gen, s.endGen = context.WithCancel(context.Background())
+	}
+	gen := s.gen
+	s.mu.Unlock()
+	run, cancel := context.WithCancel(context.WithValue(ctx, genKey{}, gen))
+	stop := context.AfterFunc(gen, cancel)
+	return run, func() { stop(); cancel() }
+}
+
+// live is whether no lock came since run began. The caller holds s.mu,
+// under which a lock ends the time it began in, so what the caller
+// publishes while it holds s.mu precedes that lock's locked.
+func (s *Service) live(run context.Context) bool {
+	return run.Err() == nil && s.gen != nil && run.Value(genKey{}) == s.gen
+}
+
+const lockedSentence = "CYFR locked. Connect again."
 
 // request is a chooser's request: the token, and the address typed or the
 // directory approved.
@@ -209,17 +240,23 @@ func (s *Service) connect(ctx context.Context, req request) answer {
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
-	if found.Directory == account.DefaultDirectory || (c.Home == home && c.Directory == found.Directory) {
-		return s.selectHome(ctx, home, found)
-	}
-	if c.Home == home && c.Directory != "" {
+	// An approval stands only while the CYFR names the address approved:
+	// naming anything else, cyfr.run included, ends it now, whatever the
+	// person or a lock does next.
+	if c.Home == home && c.Directory != "" && c.Directory != found.Directory {
 		if err := s.Clients.EndApproval(home); err != nil {
 			return answer{Error: "This computer could not forget the account service it approved before (" + err.Error() + ")."}
 		}
 	}
+	if found.Directory == account.DefaultDirectory || (c.Home == home && c.Directory == found.Directory) {
+		return s.selectHome(ctx, home, found)
+	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.live(ctx) {
+		return answer{Error: lockedSentence}
+	}
 	s.pending = &selection{home: home, found: found}
-	s.mu.Unlock()
 	return answer{Home: home, Confirm: found.Directory}
 }
 
@@ -240,17 +277,21 @@ func (s *Service) approve(ctx context.Context, req request) answer {
 // served. A lock meanwhile ends it unopened.
 func (s *Service) selectHome(ctx context.Context, home string, found account.Discovered) answer {
 	s.mu.Lock()
-	if s.ready != nil || s.pages != nil {
+	switch {
+	case !s.live(ctx):
+		s.mu.Unlock()
+		return answer{Error: lockedSentence}
+	case s.ready != nil || s.pages != nil:
 		s.mu.Unlock()
 		return answer{Error: "This app is connected to a CYFR already. Quit it and open it again to connect to another."}
 	}
-	ready, locked := make(chan struct{}, 1), make(chan struct{})
-	s.ready, s.locked, s.selecting = ready, locked, home
+	ready := make(chan struct{}, 1)
+	s.ready, s.selecting = ready, home
 	s.mu.Unlock()
 	failed := func(sentence string) answer {
 		s.mu.Lock()
-		if s.locked == locked {
-			s.ready, s.locked, s.selecting = nil, nil, ""
+		if s.ready == ready {
+			s.ready, s.selecting = nil, ""
 		}
 		s.mu.Unlock()
 		return answer{Error: sentence}
@@ -269,23 +310,31 @@ func (s *Service) selectHome(ctx context.Context, home string, found account.Dis
 	if err != nil {
 		return failed(err.Error())
 	}
-	if err := s.Send(Message{Type: TypeHome, Home: home, Account: found.Origin}); err != nil {
+	s.mu.Lock()
+	if !s.live(ctx) {
+		s.mu.Unlock()
+		return failed(lockedSentence)
+	}
+	err = s.Send(Message{Type: TypeHome, Home: home, Account: found.Origin})
+	s.mu.Unlock()
+	if err != nil {
 		return failed("The app did not take the CYFR (" + err.Error() + ").")
 	}
 	select {
 	case <-ready:
-	case <-locked:
-		return failed("CYFR locked before it opened " + home + ". Connect again.")
 	case <-ctx.Done():
+		if ctx.Value(genKey{}).(context.Context).Err() != nil {
+			return failed(lockedSentence)
+		}
 		return failed("The app did not get ready to open " + home + ". Connect again.")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.locked != locked {
-		return answer{Error: "CYFR locked before it opened " + home + ". Connect again."}
+	if !s.live(ctx) {
+		return answer{Error: lockedSentence}
 	}
 	if err := sel.Commit(); err != nil {
-		s.ready, s.locked, s.selecting = nil, nil, ""
+		s.ready, s.selecting = nil, ""
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
@@ -315,15 +364,18 @@ func (s *Service) HomeReady(home string) {
 
 // Lock locks the device in whatever state it is and says so to main:
 // the shell erases its key and every proof a page holds, open channel or
-// not, and a directory awaiting approval or a CYFR awaiting main's
-// home-ready is dropped, so no later answer opens it.
+// not, and the time since the last lock ends, so every chooser request
+// begun in it, in discovery, awaiting approval or awaiting main's
+// home-ready, publishes nothing more.
 func (s *Service) Lock(why string) {
 	s.mu.Lock()
 	sh := s.sh
-	s.pending = nil
-	if s.locked != nil && s.pages == nil {
-		close(s.locked)
-		s.ready, s.locked, s.selecting = nil, nil, ""
+	if s.endGen != nil {
+		s.endGen()
+	}
+	s.gen, s.endGen, s.pending = nil, nil, nil
+	if s.pages == nil {
+		s.ready, s.selecting = nil, ""
 	}
 	s.mu.Unlock()
 	if sh != nil {

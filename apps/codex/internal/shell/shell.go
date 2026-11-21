@@ -146,15 +146,18 @@ func DeviceFolder() (string, error) {
 
 // Selection is a remote CYFR being selected over this account's client
 // record. It reads as that CYFR's record, with the client and certificate
-// held there when the record already selects it, and it writes the record
-// only once the selection succeeded: when that CYFR admits this device
-// (Save), or when the app opens it and the record holds no working client
-// of another CYFR to lose (Commit). Until then the record stays as it was,
-// a local project's among others.
+// held there when the record already selects it. A working client and its
+// certificate are replaced only by an admission that succeeded: until the
+// selected CYFR admits this device, the record changes only where it
+// selects nothing at all (Commit), and every other change the shell keeps
+// (a refused first hello's forget among them) stays in memory.
 type Selection struct {
 	file ClientFile
 	mu   sync.Mutex
 	rec  ClientRecord
+	// owns is whether the record is the selection's: it selected this CYFR
+	// already, or this CYFR admitted the device.
+	owns bool
 }
 
 // Select begins selecting home, a remote CYFR's origin, with directory the
@@ -165,10 +168,11 @@ func (f ClientFile) Select(home, directory string) (*Selection, error) {
 		return nil, err
 	}
 	rec := ClientRecord{Home: home, Directory: directory}
-	if c.Home == home && c.Project == "" {
+	owns := c.Home == home && c.Project == ""
+	if owns {
 		rec.ClientID, rec.Certificate = c.ClientID, c.Certificate
 	}
-	return &Selection{file: f, rec: rec}, nil
+	return &Selection{file: f, rec: rec, owns: owns}, nil
 }
 
 // Load is the selected CYFR's record.
@@ -178,18 +182,23 @@ func (s *Selection) Load() (ClientRecord, error) {
 	return s.rec, nil
 }
 
-// Save keeps the selected CYFR's client as it changes, which only that
-// CYFR's admission begins: the record becomes the selection's.
+// Save keeps the selected CYFR's client as the shell changes it. It
+// writes the record once the record is the selection's, or when c is an
+// admission (a client and the certificate this CYFR issued it), which
+// makes it so.
 func (s *Selection) Save(c ClientRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rec = c
+	if !s.owns && (c.ClientID == "" || len(c.Certificate) == 0) {
+		return nil
+	}
+	s.owns = true
 	return s.file.Save(c)
 }
 
-// Commit writes the selection once the app opened it, unless the record
-// holds a working client of another CYFR, which only the selected CYFR's
-// admission replaces.
+// Commit writes the selection once the app opened it, where the record
+// selects nothing yet or this CYFR already.
 func (s *Selection) Commit() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -197,9 +206,10 @@ func (s *Selection) Commit() error {
 	if err != nil {
 		return err
 	}
-	if c.ClientID != "" && (c.Home != s.rec.Home || c.Project != "") {
+	if !s.owns && (c.Home != "" || c.Project != "" || c.ClientID != "" || len(c.Certificate) != 0) {
 		return nil
 	}
+	s.owns = true
 	return s.file.Save(s.rec)
 }
 

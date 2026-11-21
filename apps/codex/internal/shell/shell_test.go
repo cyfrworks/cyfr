@@ -52,12 +52,13 @@ func newBox(t *testing.T, home *fakeHome, dir string) *box {
 	return newBoxAt(t, home, dir, home.accounts.URL())
 }
 
-// newBoxAt is newBox at a CYFR whose account service is directory.
-func newBoxAt(t *testing.T, home *fakeHome, dir, directory string) *box {
+// newBoxAt is newBox at a CYFR whose account service is directory, its
+// configuration changed by each of edit.
+func newBoxAt(t *testing.T, home *fakeHome, dir, directory string, edit ...func(*Config)) *box {
 	t.Helper()
 	b := &box{t: t, home: home, dir: dir, record: filepath.Join(dir, "holder.json")}
 	b.now.Store(time.Now().UnixNano())
-	sh, err := New(Config{
+	cfg := Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
 		Directory: directory,
 		Tokens:    func() string { return home.setupToken },
@@ -66,7 +67,11 @@ func newBoxAt(t *testing.T, home *fakeHome, dir, directory string) *box {
 		Detect:    func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
 		Now:       func() time.Time { return time.Unix(0, b.now.Load()) },
 		Chip:      func() bool { return false },
-	})
+	}
+	for _, e := range edit {
+		e(&cfg)
+	}
+	sh, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1344,5 +1349,34 @@ func TestEnroll_AnAccountServiceOtherThanThisCYFRsIsNeverContacted(t *testing.T)
 	}
 	if n := contacted.Load(); n != 0 {
 		t.Fatalf("the account service the registry named was contacted %d times", n)
+	}
+}
+
+// A remote CYFR selected over a local project's working record that
+// refuses the device's first hello (4403) changes nothing in the record:
+// only an admission that succeeded replaces a working client.
+func TestSelection_ARefusedFirstHelloLeavesTheWorkingRecord(t *testing.T) {
+	home := newFakeHome(t)
+	// Someone is set up there already, and the door admits no one new.
+	home.mu.Lock()
+	home.setupUsed = true
+	home.mu.Unlock()
+	file := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	if err := file.Save(ClientRecord{Project: "/home/ada/cyfr", ClientID: "pcl_box", Certificate: json.RawMessage(`{"box":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(string(file))
+	sel, err := file.Select(home.address(), home.accounts.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), func(c *Config) { c.Clients = sel })
+	b.setUp("alice")
+	b.post("/saved", nil)
+	if b.shell.Unlocked() || len(home.hellosSeen()) != 1 {
+		t.Fatalf("the CYFR did not refuse the first hello: hellos %v", home.hellosSeen())
+	}
+	if after, _ := os.ReadFile(string(file)); string(after) != string(before) {
+		t.Fatalf("a refused first hello replaced the working record:\n%s", after)
 	}
 }

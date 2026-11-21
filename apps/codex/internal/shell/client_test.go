@@ -302,6 +302,21 @@ func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 		t.Fatalf("an opened selection over nothing was not remembered: %+v", c)
 	}
 
+	// A local project the screen selected, not yet admitted anywhere, is
+	// still the account's selection: an opened remote one leaves it, or
+	// the screen would refuse the record at its next start.
+	screen := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	if err := screen.SelectProject("/home/ada/cyfr"); err != nil {
+		t.Fatal(err)
+	}
+	remote, _ := screen.Select("https://cyfr.example.com", "https://cyfr.run")
+	if err := remote.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := screen.Load(); c.Project != "/home/ada/cyfr" || c.Home != "" {
+		t.Fatalf("an opened selection replaced the screen's project: %+v", c)
+	}
+
 	g := ClientFile(filepath.Join(t.TempDir(), "client.json"))
 	for range 2 {
 		if err := g.SelectProject("/home/ada/cyfr"); err != nil {

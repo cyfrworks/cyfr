@@ -14,7 +14,9 @@ import (
 
 // An existing device folder, which inherits whatever its profile folder
 // allows, is made this account's and the system's alone before anything
-// is read or kept there: a protected access list naming no one else.
+// is read or kept there: owned by this account, under a protected access
+// list naming no one else. (A folder another account owns is refused;
+// making one needs a privilege no test holds.)
 func TestDeviceDirKeepsAnExistingFolderPrivate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
@@ -25,9 +27,21 @@ func TestDeviceDirKeepsAnExistingFolderPrivate(t *testing.T) {
 	if got, err := DeviceDir(); err != nil || got != dir {
 		t.Fatalf("DeviceDir = %q, %v", got, err)
 	}
-	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
+	}
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine, err := defaultOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner, _, err := sd.Owner(); err != nil || (!owner.Equals(user.User.Sid) && !owner.Equals(mine)) {
+		t.Fatalf("the device folder's owner is %v, not this account (%v)", owner, err)
 	}
 	control, _, err := sd.Control()
 	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
@@ -36,10 +50,6 @@ func TestDeviceDirKeepsAnExistingFolderPrivate(t *testing.T) {
 	acl, _, err := sd.DACL()
 	if err != nil || acl == nil {
 		t.Fatalf("the folder has no access list (%v)", err)
-	}
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
-		t.Fatal(err)
 	}
 	system, _ := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
 	for i := range uint32(acl.AceCount) {

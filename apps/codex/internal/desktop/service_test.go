@@ -465,3 +465,65 @@ func TestTheChooserPageRunsOnlyItsOwnScript(t *testing.T) {
 		t.Fatal("the chooser does not say where local setup is")
 	}
 }
+
+// One rule for a lock: nothing a request began before it publishes
+// anything after it. A Connect still reading the CYFR's sign-in page when
+// the lock is acknowledged sends main nothing more, and a home-ready after
+// it opens nothing.
+func TestALockDuringDiscoveryEndsTheConnect(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	reading, release := make(chan struct{}), make(chan struct{})
+	discover := a.Discover
+	a.Discover = func(ctx context.Context, c *http.Client, home string) (account.Discovered, error) {
+		close(reading)
+		<-release
+		return discover(ctx, c, home)
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	<-reading
+	a.Lock("Locked.")
+	if m := a.next(t); m.Type != TypeLocked {
+		t.Fatalf("main heard %+v", m)
+	}
+	close(release)
+	if got := answered(t, done); got.Next != "" || got.Error == "" {
+		t.Fatalf("a Connect begun before the lock answered %+v", got)
+	}
+	a.HomeReady("https://cyfr.example.com")
+	a.quiet(t)
+	if w := a.get("/"); w.Code != http.StatusSeeOther {
+		t.Fatal("the device's pages were served after the lock")
+	}
+}
+
+// An approval stands only while the CYFR names the address approved: one
+// that names cyfr.run, even in a Connect that never opened, ends it, and
+// naming the first address again asks again.
+func TestAnApprovalEndsWhenTheCYFRNamesTheDefault(t *testing.T) {
+	dir := t.TempDir()
+	custom := "https://accounts.example.com"
+	first := newApp(t, dir, offline())
+	first.directory.Store(custom)
+	first.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	done := first.connect(t, "/bootstrap/approve", map[string]string{"home": "https://cyfr.example.com", "directory": custom})
+	first.next(t)
+	first.HomeReady("https://cyfr.example.com")
+	answered(t, done)
+
+	moved := newApp(t, dir, offline())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelled := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		cancelled <- moved.request(ctx, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"}, nil)
+	}()
+	moved.next(t)
+	cancel()
+	<-cancelled
+
+	back := newApp(t, dir, offline())
+	back.directory.Store(custom)
+	if got := back.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"}); got.Confirm != custom {
+		t.Fatalf("a return to the address approved before went on unasked: %+v", got)
+	}
+	back.quiet(t)
+}
