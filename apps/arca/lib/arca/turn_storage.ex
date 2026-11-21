@@ -4853,6 +4853,8 @@ defmodule Arca.TurnStorage do
     left =
       cond do
         native? -> silence_ms
+        # Work that takes an idle session starts its interval anew.
+        clock["idle"] == true and not is_nil(turn) -> silence_ms
         is_binary(clock["since"]) -> max(clock["left_ms"] - elapsed_ms(clock["since"], now), 0)
         true -> clock["left_ms"]
       end

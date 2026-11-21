@@ -668,6 +668,29 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:ok, %{expired?: true, due_ms: 0}} = TurnStorage.brain_silence(actor, daily.id)
   end
 
+  test "the time a session sat idle, its deadline passed included, is not taken from the " <>
+         "next turn's interval once that turn's program owes output",
+       %{actor: actor, daily: daily, turn: turn} do
+    {:ok, %{step: first}} = carry(actor, turn, "post", opening(actor, turn))
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [first.id], busy: true})
+    {:ok, _} = commit(actor, daily, turn, %{answered: [first.id], busy: false, native: true})
+    {:ok, _} = finish(actor, turn, "completed")
+    backdate!(daily, @silence + 1)
+
+    next = running!(actor, daily)
+    _start = start!(actor, next)
+    assert {:ok, %{expired?: false, due_ms: nil}} = TurnStorage.brain_silence(actor, daily.id)
+
+    # The driver's taking the work is its acknowledgement, not the
+    # program's own line.
+    {:ok, _} = commit(actor, daily, next, %{})
+    {:ok, %{step: post}} = carry(actor, next, "post", opening(actor, next))
+    {:ok, _} = commit(actor, daily, next, %{accepted: [post.id], busy: true})
+
+    assert {:ok, %{expired?: false, due_ms: due}} = TurnStorage.brain_silence(actor, daily.id)
+    assert is_integer(due) and due > @silence - 5_000
+  end
+
   # The clock as if its interval began `ms` earlier.
   defp backdate!(thread, ms) do
     progress = progress(thread)

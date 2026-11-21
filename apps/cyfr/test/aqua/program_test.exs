@@ -3086,7 +3086,7 @@ defmodule Aqua.ProgramTest do
     end
 
     test "the silence a finished turn left never ends the next turn, which waits for the " <>
-           "driver to take its work",
+           "driver to take its work and then has its whole interval to answer",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "first")
       loop = run(ctx, turn)
@@ -3111,8 +3111,16 @@ defmodule Aqua.ProgramTest do
       assert TurnStorage.brain_silence(Sanctum.Context.actor(ctx), thread.id) ==
                {:ok, %{expired?: false, due_ms: nil}}
 
+      # The driver takes the work and the post; the idle time spent is not
+      # taken from the second the program has to answer.
       say(fake, row, %{"t" => "accepted", "id" => work["id"]})
-      handed!(fake, row, ctx, next, loop)
+      _post = sent()
+      [input] = inputs(ctx, next)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 7)
+      refute_receive {:session, "close", _wire, _fields}, 250
+      say(fake, row, idle(next, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
     end
 
     test "a session its completed turn left with no work is closed once its silence runs " <>
