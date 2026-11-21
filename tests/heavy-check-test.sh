@@ -588,7 +588,7 @@ t_placement() {
 t_quarter_order() {
   local round a b p
   for round in 1 2 3 4 5 6 7 8; do
-    rm -f "$scratch"/release-* "$scratch/order" "$scratch"/so*.cpus
+    rm -f "$scratch"/release-* "$scratch/order" "$scratch"/so*.cpus "$scratch"/so[AB].err
     hold_quarters so
     "${hc[@]}" -- sh -c "echo A >> $scratch/order; $hold $scratch/release-w" >/dev/null 2>"$scratch/soA.err" &
     a=$!; started+=("$a")
@@ -1615,6 +1615,7 @@ t_await_result() {
 
 t_await_died() {
   local p
+  rm -f "$scratch/task"
   "${hc[@]}" -- sleep 120 >"$scratch/task" 2>&1 &
   p=$!; started+=("$p")
   until_true 10 has_line '^==> heavy-check: running' "$scratch/task" || fail 'the producer did not start'
