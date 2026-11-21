@@ -169,29 +169,29 @@ defmodule Opus.Brain.CleanupTest do
 
   # A holder of the row's owner for the test: it holds the owner and, given
   # `params`, opens the session they name as a brain holder of a thread
-  # opens its own.
+  # opens its own. Supervised by the test, it stops before the controller
+  # started in the setup, as a brain holder would.
   defp holder!(owner, params \\ nil) do
     test = self()
 
-    pid =
-      spawn(fn ->
-        {:ok, _grant} = Opus.Programs.hold(owner)
+    holding = fn ->
+      {:ok, _grant} = Opus.Programs.hold(owner)
 
-        opened =
-          if params,
-            do:
-              Opus.Programs.box_open(
-                owner,
-                self(),
-                params,
-                System.system_time(:millisecond) + 10_000
-              )
+      opened =
+        if params,
+          do:
+            Opus.Programs.box_open(
+              owner,
+              self(),
+              params,
+              System.system_time(:millisecond) + 10_000
+            )
 
-        send(test, {:holding, self(), opened})
-        Process.sleep(:infinity)
-      end)
+      send(test, {:holding, self(), opened})
+      Process.sleep(:infinity)
+    end
 
-    on_exit(fn -> Process.exit(pid, :kill) end)
+    pid = start_supervised!(Supervisor.child_spec({Task, holding}, id: make_ref()))
     assert_receive {:holding, ^pid, opened}, 10_000
     {pid, opened}
   end
