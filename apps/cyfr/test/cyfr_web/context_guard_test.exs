@@ -604,8 +604,7 @@ defmodule CyfrWeb.ContextGuardTest do
 
       socket =
         Phoenix.Component.assign(%{socket_with(ctx) | private: %{live_temp: %{}}},
-          brain_options: %{},
-          program_models: %{}
+          brain_options: %{}
         )
 
       tag = ContextGuard.capture(ctx)
@@ -618,12 +617,11 @@ defmodule CyfrWeb.ContextGuardTest do
         assert {:noreply, answer} =
                  PrismWeb.AquaLive.AgentsComponent.handle_async(
                    :brain_options,
-                   {:ok, {tag, options, %{"aqua" => [%{id: "opus", name: "Opus"}]}}},
+                   {:ok, {tag, options}},
                    socket
                  )
 
         assert answer.assigns.brain_options == %{}
-        assert answer.assigns.program_models == %{}
       after
         Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
       end

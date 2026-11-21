@@ -27,36 +27,33 @@ defmodule PrismWeb.AquaLive do
   LiveView's mount (the topbar, the panel) is answered between them
   rather than after them all.
 
-  This is also where a person connects a brain, in Aqua's setup, at the
-  top of the page (`/a/<athanor>/aqua?setup=1` opens it, and it is open
-  while the soul has no connected brain): every installed catalyst that
-  speaks `model/chat@1` (`Aqua.providers/1`), a key someone shared with
-  the person first, a checklist of what each needs, then one step for
-  each brain ticked — its grant, asked in the page's system layer
+  This is also where a person sets Aqua up, at the top of the page
+  (`/a/<athanor>/aqua?setup=1` opens it, and it is open while Aqua's
+  brain is not connected), in three steps. The brains: every installed
+  catalyst that speaks `model/chat@1` (`Aqua.providers/1`), a key someone
+  shared with the person first, then each program brain CYFR ships
+  (`Opus.Programs.Definition.brains/0`), with what each needs; one step
+  for each brain ticked — its grant, asked in the page's system layer
   (`PrismWeb.SystemLayer`), whose sheet takes the key in CYFR's own
   credential prompt, the grant alone for a brain that needs nothing else
-  of the person, or, for a plan whose program is not set up yet, the
-  Programs page's form for that program first — reachable in
-  `lite`, so a box that never opens `dev` still gets its key in. A grant
-  for a brain ends in one `models` call (`Aqua.models/2`) whose answer the
-  page shows, so a key the provider refuses reads as the provider says.
-  The setup then picks which crew member Aqua runs on, whose brain,
-  model and mode Aqua takes (or, with `agent=<name>`, which connected
-  brain that crew member runs on), a change of shape whose consent is
-  asked at once. A source whose consent moved is consented again the
-  same way.
-
-  Beside the brains it offers each plan the crew names: a program a crew
-  member's file names, read from the cards' own roster, named by the
-  first member that names it with that member's title and install, and
-  the state of the row of that name. A plan whose row is missing is installed through the Programs
-  page's form, prefilled from that member's file; one whose row stands is
-  signed in on its terminal (the card's Set up), and its program's own
-  listing fills a crew member's picker. Picking one of those models makes
-  the member name that program, with the install of the member the plan
-  is named by, the model and no catalyst; picking a catalyst's model
-  takes the program and its install away again. A program row no crew file names is
-  no plan here: the aqua tool names it.
+  of the person, or, for a program brain, the Programs page's form,
+  prefilled from its definition, then its terminal, where the person
+  signs it in — reachable in `lite`, so a box that never opens `dev`
+  still gets its key in. A grant for a brain ends in one `models` call
+  (`Aqua.models/2`) whose answer the page shows, so a key the provider
+  refuses reads as the provider says. A program brain whose row stands
+  is asked for its program's listing (`Aqua.program_listing/2`) on each
+  read of the setup: it is signed in once that answers, and its refusal
+  (a program with no sign-in is refused) says what is left to do. The
+  crew: for each connected brain no crew member runs on, the member CYFR
+  suggests for it (`Aqua.crew_suggestion/1`), made only when the person
+  picks a model from the brain's own listing, and an effort where that
+  model lists efforts, and presses Make, which asks nothing; more by hand
+  with + New crew member. Aqua: which crew member it runs on, whose
+  brain, model and mode Aqua takes, which asks nothing either (or, with
+  `agent=<name>`, which connected brain that crew member runs on). A
+  source whose consent moved is consented again in the page's system
+  layer.
   """
 
   use PrismWeb, :live_view
@@ -97,16 +94,20 @@ defmodule PrismWeb.AquaLive do
       |> assign(:prompt_seq, 0)
       # Aqua's setup: whether the address asked for it and for whom, the
       # brains it offers, the ones ticked, each connected brain's answer to
-      # its `models` call, how the roster's brains stand, the models each
-      # plan's program lists, and whether its last step leads to the
-      # administrator's own setup.
+      # its `models` call, how the roster's brains stand, the program
+      # brains and each one's listing, the model picked on each row
+      # suggested on an API brain with that model's efforts, and whether its
+      # last step leads to the administrator's own setup.
       |> assign(:setup_asked, false)
       |> assign(:setup_for, nil)
       |> assign(:providers, nil)
       |> assign(:ticked, MapSet.new())
       |> assign(:answers, %{})
       |> assign(:agents_read, nil)
-      |> assign(:plan_models, %{})
+      |> assign(:programs, nil)
+      |> assign(:listings, %{})
+      |> assign(:listing, :idle)
+      |> assign(:suggested, %{})
       |> assign(:admin_next, admin_next?(socket.assigns[:context]))
 
     # Subscribe before the load asks whether the athanor is ready: a fill
@@ -173,6 +174,28 @@ defmodule PrismWeb.AquaLive do
   # Loads and refreshes
   # ============================================================================
 
+  # The program brains' listings, for the focus they were asked under:
+  # each one's models and efforts, or the sentence it was refused with, a
+  # program with no sign-in among them; then the programs asked meanwhile.
+  # A listing that answers under another focus is dropped, and so are the
+  # programs asked meanwhile: the setup read under the new focus asks its
+  # own. A program's ask that raised or exited answered as one unread
+  # (`listing/2`), so the task always answers.
+  @impl true
+  def handle_async(:program_listing, {:ok, {tag, results}}, socket) do
+    waiting = socket.assigns.listing
+    socket = assign(socket, :listing, :idle)
+
+    CyfrWeb.ContextGuard.deliver(socket, tag, fn socket ->
+      socket =
+        Enum.reduce(results, socket, fn {name, result}, acc -> listed(acc, name, result) end)
+
+      {:noreply, ask_listings(socket, waiting)}
+    end)
+  end
+
+  def handle_async(:program_listing, {:exit, _reason}, socket), do: {:noreply, socket}
+
   # The grant this page asked for. Granted, the model got its key: the
   # kept catalogue predates the key, so it is dropped before the re-read —
   # a key bound here shows in the picker now, not when the entry lapses.
@@ -217,13 +240,15 @@ defmodule PrismWeb.AquaLive do
 
   # The roster read how its brains stand: the setup is open while the
   # soul's is not connected, and names the crew members whose is not.
-  def handle_info({:agents_read, read}, socket),
-    do: {:noreply, assign(socket, :agents_read, read)}
+  def handle_info({:agents_read, read}, socket) do
+    unasked = Enum.reject(read[:listable] || [], &Map.has_key?(socket.assigns.listings, &1))
+    {:noreply, socket |> assign(:agents_read, read) |> ask_listings(unasked)}
+  end
 
-  # The models each plan's program listed for its member's card, which the
-  # setup's picker offers.
-  def handle_info({:plan_models, models}, socket),
-    do: {:noreply, assign(socket, :plan_models, models)}
+  # The model picked on each setup row suggested on an API brain, with the
+  # efforts the roster read from its brain's `describe` for that model.
+  def handle_info({:suggested, suggested}, socket),
+    do: {:noreply, assign(socket, :suggested, suggested)}
 
   # A connected brain's answer to its one `models` call, for the focus it
   # was asked under.
@@ -279,7 +304,7 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp consented(socket, name),
-    do: socket |> put_flash(:info, "#{name} consented again.") |> load_models()
+    do: socket |> put_flash(:info, "#{name} consented.") |> load_models()
 
   # Connecting a brain makes one `models` call, run off the page's process,
   # and shows what the provider answered: a key that is bound is not yet a
@@ -423,8 +448,83 @@ defmodule PrismWeb.AquaLive do
   defp load_section(socket, :skills), do: socket |> load_provenance() |> load_skills()
   defp load_section(socket, section) when section in [:about, :notes], do: load_notes(socket)
 
-  defp load_section(socket, :setup),
-    do: assign(socket, :providers, Aqua.providers(socket.assigns.context))
+  defp load_section(socket, :setup) do
+    ctx = socket.assigns.context
+    programs = program_brains(ctx)
+
+    socket
+    |> assign(:providers, Aqua.providers(ctx))
+    |> assign(:programs, programs)
+    |> ask_listings(for %{state: :ready, name: name} <- programs, do: name)
+  end
+
+  # The program brains CYFR ships (`Opus.Programs.Definition.brains/0`),
+  # each with how the row of its name stands, as a crew member on it
+  # reads it (`Aqua.model_status/2`).
+  defp program_brains(ctx) do
+    brains = Opus.Programs.Definition.brains()
+    status = Aqua.model_status(ctx, Enum.map(brains, &%{"name" => &1.name, "program" => &1.name}))
+
+    for brain <- brains do
+      {state, _name} = Map.get(status, brain.name, {:model_unavailable, brain.name})
+      Map.put(brain, :state, state)
+    end
+  end
+
+  # Each program brain whose row stands is asked for its listing once per
+  # read of the setup, and the program a crew member names the first time
+  # the roster says its row stands: the one place the page learns whether
+  # a program is signed in, since a program with no sign-in has its
+  # listing refused. One listing task runs at a time, off the page's
+  # process and ended with it, so one row never runs two listings at once;
+  # a program asked while it runs is asked by the next. The answer a
+  # program held stays shown until its new one comes.
+  defp ask_listings(socket, names) do
+    socket =
+      update(socket, :listings, fn listings ->
+        Enum.reduce(names, listings, &Map.put_new(&2, &1, :asking))
+      end)
+
+    case socket.assigns.listing do
+      :idle -> start_listing(socket, Enum.uniq(names))
+      waiting -> assign(socket, :listing, Enum.uniq(waiting ++ names))
+    end
+  end
+
+  defp start_listing(socket, []), do: assign(socket, :listing, :idle)
+
+  defp start_listing(socket, names) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+
+    socket
+    |> assign(:listing, [])
+    |> start_async(:program_listing, fn -> {tag, Map.new(names, &{&1, listing(ctx, &1)})} end)
+  end
+
+  # One program's listing; one that raised or exited did not answer.
+  defp listing(ctx, name) do
+    Aqua.program_listing(ctx, %{"program" => name})
+  rescue
+    _raised -> {:error, :lost}
+  catch
+    :exit, _reason -> {:error, :lost}
+  end
+
+  defp listed(socket, name, result) do
+    answer =
+      case result do
+        {:ok, %{models: _models} = listing} -> {:ok, listing}
+        {:error, {:refused, sentence}} when is_binary(sentence) -> {:error, sentence}
+        {:error, _unanswered} -> {:error, "it cannot be read right now — try again"}
+      end
+
+    update(
+      socket,
+      :listings,
+      &if(Map.has_key?(&1, name), do: Map.put(&1, name, answer), else: &1)
+    )
+  end
 
   # Every unit's provenance, keyed by its path in the tree: shipped and
   # unedited, shipped but edited here, or the athanor's own. What a card
@@ -544,23 +644,33 @@ defmodule PrismWeb.AquaLive do
   end
 
   @doc """
-  Aqua's setup: what the person has, as a checklist of every brain the
-  athanor can connect, a key shared with them first, and each plan, a
-  program the crew's files name; one step for each brain or plan ticked;
-  each connected brain's answer to its `models` call; which crew member
-  Aqua runs on, or, for a crew member the setup is for, which connected
-  brain or plan it runs on; the crew members
-  whose brain is not connected; and, for an administrator who has not
-  seen it, their own setup next.
+  Aqua's setup, in three steps a person reads as three. The brains: every
+  brain the athanor can connect, a key shared with them first, then the
+  program brains CYFR ships (`Opus.Programs.Definition.brains/0`), each
+  with what it needs; one step for each brain ticked; each connected
+  brain's answer to its `models` call, and a program brain signed in once
+  its program's listing answers. The crew: for each connected brain no
+  crew member runs on, the member CYFR suggests for it (`Aqua.crew_suggestion/1`),
+  with a model from that brain's own listing, the efforts that model
+  lists (a program's from its listing, an API brain's from its
+  `describe` once a model is picked) and its Make, and the
+  members made, each ready or what it waits on. Aqua: which crew member
+  it runs on, done once Aqua reads ready, and until then the state of
+  the crew's grant it waits on, with its Grant
+  (`AgentsComponent.grant_line/1`). Or, for a crew member the setup is
+  for, which connected brain it runs on; the crew members whose brain is not connected; and,
+  for an administrator who has not seen it, their own setup next.
   """
   attr :open, :boolean, required: true
   attr :providers, :any, required: true
+  attr :programs, :any, required: true
+  attr :listings, :map, required: true
   attr :ticked, :any, required: true
   attr :answers, :map, required: true
   attr :agents_read, :any, required: true
   attr :setup_for, :string, default: nil
   attr :models_by_provider, :map, required: true
-  attr :plan_models, :map, default: %{}
+  attr :suggested, :map, default: %{}
   attr :athanor, :any, required: true
   attr :admin_next, :boolean, required: true
 
@@ -571,25 +681,34 @@ defmodule PrismWeb.AquaLive do
         _unread -> []
       end
 
-    target = assigns.setup_for || (assigns.agents_read && assigns.agents_read.soul)
-    plans = (assigns.agents_read && assigns.agents_read[:plans]) || []
+    read = assigns.agents_read || %{}
+    programs = assigns.programs || []
+    signed_in = Enum.filter(programs, &signed_in?(&1, assigns.listings))
+    members = read[:members] || []
 
     assigns =
       assigns
       |> assign(:brains, providers)
-      |> assign(:plans, plans)
-      |> assign(:target, target)
+      |> assign(:programs, programs)
+      |> assign(:target, assigns.setup_for || read[:soul])
       |> assign(:steps, Enum.filter(providers, &step?(&1, assigns.ticked)))
-      |> assign(:plan_steps, Enum.filter(plans, &plan_step?(&1, assigns.ticked)))
-      |> assign(:listed, listed_plans(plans, assigns.plan_models))
+      |> assign(:program_steps, Enum.filter(programs, &program_step?(&1, assigns)))
+      |> assign(:listed, listed_programs(signed_in, assigns.listings))
       |> assign(
         :connected?,
-        Enum.any?(providers, &(&1.state == :ready)) or Enum.any?(plans, &(&1.state == :ready))
+        Enum.any?(providers, &(&1.state == :ready)) or signed_in != []
       )
-      |> assign(:unconnected, (assigns.agents_read && assigns.agents_read.unconnected) || [])
-      |> assign(:soul, assigns.agents_read && assigns.agents_read.soul)
-      |> assign(:member, assigns.agents_read && assigns.agents_read[:member])
-      |> assign(:members, (assigns.agents_read && assigns.agents_read[:members]) || [])
+      |> assign(
+        :suggestions,
+        suggestions(providers, signed_in, assigns, taken(read[:brains] || []))
+      )
+      |> assign(:unconnected, read[:unconnected] || [])
+      |> assign(:soul, read[:soul])
+      |> assign(:member, read[:member])
+      |> assign(:soul_ready, read[:soul_ready] == true)
+      |> assign(:soul_state, read[:soul_state])
+      |> assign(:members, members)
+      |> assign(:member_title, Enum.find_value(members, &(&1.name == read[:member] && &1.title)))
 
     ~H"""
     <details
@@ -598,194 +717,293 @@ defmodule PrismWeb.AquaLive do
       class="rounded-lg border border-gray-800 bg-gray-900/60 p-4"
     >
       <summary class="cursor-pointer text-sm font-medium text-gray-200">Set up Aqua</summary>
-      <div class="mt-3 space-y-4 text-xs text-gray-300">
+      <div class="mt-3 space-y-5 text-xs text-gray-300">
         <p>
-          Aqua answers with a model you bring: a key from a model provider, or a plan you
-          already pay for. Tick what you have.
+          Aqua answers with the brain of a crew member: connect the brains you have, make a crew
+          member on one, and choose the one Aqua runs on.
         </p>
 
-        <p
-          :if={match?({:error, _}, @providers)}
-          data-test="setup-unavailable"
-          class="text-amber-300"
-        >
-          The brains installed here cannot be read right now — try again.
-        </p>
+        <section id="aqua-setup-step-brains" data-done={to_string(@connected?)} class="space-y-2">
+          <h4 class="text-[11px] uppercase tracking-wider text-gray-400">1. Brains</h4>
 
-        <p
-          :if={match?({:ok, []}, @providers)}
-          data-test="setup-none"
-          class="text-amber-300"
-        >
-          No brain is installed in this athanor yet. One installed from Components shows here.
-        </p>
-
-        <ul :if={@brains != []} id="aqua-setup-brains" class="space-y-1.5">
-          <li
-            :for={brain <- @brains}
-            id={"aqua-setup-brain-" <> brain.provider}
-            data-state={brain.state}
-            class="flex flex-wrap items-center gap-2"
+          <p
+            :if={match?({:error, _}, @providers)}
+            data-test="setup-unavailable"
+            class="text-amber-300"
           >
-            <%= if brain.shared do %>
-              <span class="font-medium text-gray-100">{brain.provider}</span>
-              <span data-test="setup-shared">
-                {shared_line(brain.shared)}
+            The brains installed here cannot be read right now — try again.
+          </p>
+
+          <p
+            :if={not @connected? and MapSet.size(@ticked) == 0}
+            data-test="setup-needs"
+            class="text-amber-300"
+          >
+            Tick the brains you have: a key from a model provider, or {program_titles(@programs)} on your own plan.
+          </p>
+
+          <ul id="aqua-setup-brains" class="space-y-1.5">
+            <li
+              :for={brain <- @brains}
+              id={"aqua-setup-brain-" <> brain.provider}
+              data-state={brain.state}
+              class="flex flex-wrap items-center gap-2"
+            >
+              <%= if brain.shared do %>
+                <span class="font-medium text-gray-100">{brain.provider}</span>
+                <span data-test="setup-shared">
+                  {shared_line(brain.shared)}
+                </span>
+              <% else %>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={MapSet.member?(@ticked, brain.provider)}
+                    phx-click="setup_tick"
+                    phx-value-provider={brain.provider}
+                    class="rounded bg-gray-900 border-gray-600"
+                  />
+                  <span class="font-medium text-gray-100">{brain.provider}</span>
+                  <span class="text-gray-400">{row_line(brain)}</span>
+                </label>
+              <% end %>
+              <span :if={brain.state == :ready} class="text-emerald-400">connected</span>
+              <span
+                :if={brain.state in [:consent_damaged, :consent_unavailable, :model_unavailable]}
+                class="text-amber-300"
+              >
+                {unready_line(brain.state)}
               </span>
-            <% else %>
+              <span
+                :if={@answers[brain.ref]}
+                data-test="setup-answer"
+                class={answer_class(@answers[brain.ref])}
+              >
+                {answer_line(brain.provider, @answers[brain.ref])}
+              </span>
+            </li>
+            <%!-- A program brain runs in the program row of its name,
+                  signed in on its own terminal: signed in once its
+                  program's listing answers, which it does not while the
+                  program has no sign-in. --%>
+            <li
+              :for={program <- @programs}
+              id={"aqua-setup-brain-" <> program.name}
+              data-state={program_state(program, @listings)}
+              class="flex flex-wrap items-center gap-2"
+            >
               <label class="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={MapSet.member?(@ticked, brain.provider)}
+                  checked={MapSet.member?(@ticked, program_tick(program))}
                   phx-click="setup_tick"
-                  phx-value-provider={brain.provider}
+                  phx-value-provider={program_tick(program)}
                   class="rounded bg-gray-900 border-gray-600"
                 />
-                <span class="font-medium text-gray-100">{brain.provider}</span>
-                <span class="text-gray-400">{row_line(brain)}</span>
+                <span class="font-medium text-gray-100">{program.title}</span>
+                <span class="text-gray-400">{program_need_line(program)}</span>
               </label>
-            <% end %>
-            <span :if={brain.state == :ready} class="text-emerald-400">connected</span>
-            <span
-              :if={brain.state in [:consent_damaged, :consent_unavailable, :model_unavailable]}
-              class="text-amber-300"
-            >
-              {unready_line(brain.state)}
-            </span>
-            <span
-              :if={@answers[brain.ref]}
-              data-test="setup-answer"
-              class={answer_class(@answers[brain.ref])}
-            >
-              {answer_line(brain.provider, @answers[brain.ref])}
-            </span>
-          </li>
-        </ul>
+              <%= case {program.state, @listings[program.name]} do %>
+                <% {:ready, {:ok, _listing}} -> %>
+                  <span class="text-emerald-400">signed in</span>
+                <% {:ready, {:error, sentence}} -> %>
+                  <span data-test="setup-signed-out" class="text-amber-300">{sentence}</span>
+                <% {:ready, _asking} -> %>
+                  <span class="text-gray-400">Asking {program.title}…</span>
+                <% {state, _listing} when state in [:program_disabled, :program_unfit, :model_unavailable] -> %>
+                  <span class="text-amber-300">{plan_line(state)}</span>
+                <% _missing -> %>
+              <% end %>
+            </li>
+          </ul>
 
-        <%!-- A plan is a program the crew's files name, run in the program
-              row of that name, signed in on its own terminal, and named by
-              the member that names it. --%>
-        <ul :if={@plans != []} id="aqua-setup-plans" class="space-y-1.5">
-          <li
-            :for={plan <- @plans}
-            id={"aqua-setup-plan-" <> plan.member}
-            data-state={plan.state}
-            class="flex flex-wrap items-center gap-2"
+          <ol
+            :if={@steps != [] or @program_steps != []}
+            id="aqua-setup-steps"
+            class="space-y-1.5 list-decimal pl-5"
           >
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={MapSet.member?(@ticked, plan_tick(plan))}
-                phx-click="setup_tick"
-                phx-value-provider={plan_tick(plan)}
-                class="rounded bg-gray-900 border-gray-600"
-              />
-              <span class="font-medium text-gray-100">{plan.member}</span>
-              <span class="text-gray-400">{plan_need_line(plan)}</span>
-            </label>
-            <span :if={plan.state == :ready} class="text-emerald-400">connected</span>
-            <span
-              :if={plan.state in [:program_disabled, :program_unfit, :model_unavailable]}
-              class="text-amber-300"
-            >
-              {plan_line(plan.state)}
-            </span>
-          </li>
-        </ul>
-
-        <p
-          :if={(@brains != [] or @plans != []) and MapSet.size(@ticked) == 0 and not @connected?}
-          data-test="setup-needs"
-          class="text-amber-300"
-        >
-          Aqua needs a key or a plan to answer: tick one you have.
-        </p>
-
-        <ol
-          :if={@steps != [] or @plan_steps != []}
-          id="aqua-setup-steps"
-          class="space-y-1.5 list-decimal pl-5"
-        >
-          <li :for={brain <- @steps} id={"aqua-setup-step-" <> brain.provider}>
-            <%= cond do %>
-              <% brain.state == :needs_grant -> %>
-                {brain.provider}: grant it to connect.
+            <li :for={brain <- @steps} id={"aqua-setup-step-" <> brain.provider}>
+              <%= cond do %>
+                <% brain.state == :needs_grant -> %>
+                  {brain.provider}: grant it to connect.
+                  <button
+                    type="button"
+                    phx-click="open_consent"
+                    phx-value-ref={brain.ref}
+                    class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
+                  >
+                    Grant
+                  </button>
+                <% true -> %>
+                  {brain.provider}: enter your key.
+                  <button
+                    type="button"
+                    phx-click="open_consent"
+                    phx-value-ref={brain.ref}
+                    class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
+                  >
+                    Enter the key
+                  </button>
+              <% end %>
+            </li>
+            <li :for={program <- @program_steps} id={"aqua-setup-step-program-" <> program.name}>
+              <%= if program.state == :program_missing do %>
+                {program.title}: install its program, then sign it in.
+                <.link
+                  navigate={install_path(@athanor, program)}
+                  data-test="install-program"
+                  class="text-blue-400 hover:underline"
+                >
+                  install {program.name}
+                </.link>
+              <% else %>
+                {program.title}: sign it in on its terminal.
                 <button
                   type="button"
-                  phx-click="open_consent"
-                  phx-value-ref={brain.ref}
+                  phx-click="set_up_program"
+                  phx-value-program={program.name}
+                  phx-target="#aqua-agents"
+                  data-test="set-up-program"
                   class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
                 >
-                  Grant
+                  Set up {program.name}
                 </button>
-              <% true -> %>
-                {brain.provider}: enter your key.
-                <button
-                  type="button"
-                  phx-click="open_consent"
-                  phx-value-ref={brain.ref}
-                  class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
-                >
-                  Enter the key
-                </button>
-            <% end %>
-          </li>
-          <li :for={plan <- @plan_steps} id={"aqua-setup-step-plan-" <> plan.member}>
-            <%= if plan.state == :program_missing do %>
-              {plan.member}: install its program, then sign it in.
-              <.link
-                navigate={install_path(@athanor, plan)}
-                data-test="install-program"
-                class="text-blue-400 hover:underline"
+              <% end %>
+            </li>
+          </ol>
+        </section>
+
+        <section
+          id="aqua-setup-step-crew"
+          data-done={to_string(Enum.any?(@members, & &1.ready))}
+          class="space-y-2"
+        >
+          <h4 class="text-[11px] uppercase tracking-wider text-gray-400">2. Crew</h4>
+
+          <p :if={not @connected?} data-test="setup-crew-waits" class="text-gray-400">
+            Connect a brain first.
+          </p>
+
+          <%!-- A suggested member is made only when the person presses
+                Make, with the model they pick from its brain's own
+                listing; connecting a brain makes none. --%>
+          <form
+            :for={{suggested, brain, models, efforts, picked} <- @suggestions}
+            id={"aqua-setup-suggest-" <> suggested.name}
+            phx-change="suggest_model"
+            phx-submit="make_member"
+            phx-target="#aqua-agents"
+            class="space-y-1"
+          >
+            <input type="hidden" name="brain" value={brain} />
+            <p class="font-medium text-gray-100">{suggested.title}</p>
+            <div class="flex flex-wrap items-center gap-2">
+              <select
+                name="model"
+                aria-label={"Model for " <> suggested.title}
+                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
               >
-                install {plan.program}
-              </.link>
-            <% else %>
-              {plan.member}: sign its program in on its terminal, then pick it below.
+                <option value="">Choose a model</option>
+                <option :for={{id, name} <- models} value={id} selected={id == picked}>
+                  {name}
+                </option>
+              </select>
+              <select
+                :if={efforts != []}
+                name="effort"
+                aria-label={"Effort for " <> suggested.title}
+                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+              >
+                <option value="">{default_effort(brain)}</option>
+                <option :for={effort <- efforts} value={effort}>{effort}</option>
+              </select>
+              <input
+                type="text"
+                name="description"
+                aria-label={"Good at, for " <> suggested.title}
+                placeholder="Good at (optional)"
+                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+              />
+              <input
+                type="text"
+                name="avoid"
+                aria-label={"Avoid, for " <> suggested.title}
+                placeholder="Avoid (optional)"
+                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+              />
               <button
-                type="button"
-                phx-click="set_up_program"
-                phx-value-program={plan.program}
-                phx-target="#aqua-agents"
-                data-test="set-up-program"
+                type="submit"
                 class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
               >
-                Set up {plan.program}
+                Make {suggested.title}
               </button>
-            <% end %>
-          </li>
-        </ol>
+            </div>
+          </form>
 
-        <%!-- Aqua runs on a crew member, whose brain it takes: the setup
-              names which. A brain connected with no member on it gets
-              one from + New crew member, then its model on its card. --%>
-        <form
-          :if={@target && @target == @soul}
-          id="aqua-setup-member"
-          phx-change="editor_set_member"
-          phx-target="#aqua-agents"
-          phx-auto-recover="ignore"
-        >
-          <label class="block text-gray-400 mb-1">Which crew member does Aqua run on?</label>
-          <select
-            name="member"
-            aria-label="Runs on"
-            class="w-full md:w-1/2 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
-          >
-            <option value="" selected={is_nil(@member)}>Choose a crew member</option>
-            <option
-              :for={member <- @members}
-              value={member.name}
-              selected={member.name == @member}
-            >
-              {member.title}
-            </option>
-          </select>
-          <p class="mt-1 text-gray-500">
-            Aqua answers with that member's brain, model and mode. For a brain no member runs
-            on yet, make one with + New crew member below and pick its model on its card.
+          <ul :if={@members != []} id="aqua-setup-members" class="space-y-1">
+            <li :for={member <- @members} id={"aqua-setup-made-" <> member.name}>
+              <%= if member.ready do %>
+                {member.title}: <span class="text-emerald-400">ready.</span>
+              <% else %>
+                {member.title}: not ready yet — its card below says why.
+              <% end %>
+            </li>
+          </ul>
+
+          <p :if={@connected?} class="text-gray-500">
+            For another member on a brain, make one with + New crew member below.
           </p>
-        </form>
+        </section>
+
+        <section id="aqua-setup-step-aqua" data-done={to_string(@soul_ready)} class="space-y-2">
+          <h4 class="text-[11px] uppercase tracking-wider text-gray-400">3. Aqua</h4>
+
+          <p :if={@members == []} data-test="setup-aqua-waits" class="text-gray-400">
+            Make a crew member first.
+          </p>
+
+          <%!-- Aqua runs on a crew member, whose brain it takes: the setup
+                names which, and choosing asks nothing. --%>
+          <form
+            :if={(@members != [] and @target) && @target == @soul}
+            id="aqua-setup-member"
+            phx-change="editor_set_member"
+            phx-target="#aqua-agents"
+            phx-auto-recover="ignore"
+          >
+            <label class="block text-gray-400 mb-1">Which crew member does Aqua run on?</label>
+            <select
+              name="member"
+              aria-label="Runs on"
+              class="w-full md:w-1/2 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+            >
+              <option value="" selected={is_nil(@member)}>Choose a crew member</option>
+              <option
+                :for={member <- @members}
+                value={member.name}
+                selected={member.name == @member}
+              >
+                {member.title}
+              </option>
+            </select>
+            <p class="mt-1 text-gray-500">Aqua answers with that member's brain, model and mode.</p>
+          </form>
+
+          <p :if={@soul_ready and @member_title} data-test="setup-aqua-done" class="text-emerald-400">
+            Aqua runs on {@member_title}.
+          </p>
+
+          <%!-- Choosing grants nothing: with a member chosen, the step is
+                done only once Aqua reads ready, and while the crew's grant
+                is what it waits on, the step says so with what to do. --%>
+          <p
+            :if={@member && AgentsComponent.grant_sentence(@soul_state)}
+            data-test="setup-aqua-grant"
+            class="flex flex-wrap items-center gap-2"
+          >
+            <AgentsComponent.grant_line state={@soul_state} />
+          </p>
+        </section>
 
         <form
           :if={(@connected? and @target) && @target != @soul}
@@ -809,9 +1027,9 @@ defmodule PrismWeb.AquaLive do
                 <option :for={m <- models} value={Catalog.model_choice(provider, m)}>{m}</option>
               </optgroup>
             <% end %>
-            <%= for {plan, models} <- @listed do %>
-              <optgroup label={plan.member}>
-                <option :for={m <- models} value={Catalog.program_choice(plan.program, m.id)}>
+            <%= for {program, models} <- @listed do %>
+              <optgroup label={program.title}>
+                <option :for={m <- models} value={Catalog.program_choice(program.name, m.id)}>
                   {m.name}
                 </option>
               </optgroup>
@@ -841,26 +1059,93 @@ defmodule PrismWeb.AquaLive do
   defp step?(%{state: state, provider: provider}, ticked),
     do: state in [:needs_grant, :needs_key] and MapSet.member?(ticked, provider)
 
-  # A plan ticked is a step while its program is to install or to sign
-  # in: the card cannot tell whether a row that stands is signed in, so a
-  # ready one still offers its terminal. Its tick is kept apart from the
-  # brains', which a catalyst of the program's name may share.
-  defp plan_step?(%{state: state} = plan, ticked),
-    do: state in [:program_missing, :ready] and MapSet.member?(ticked, plan_tick(plan))
+  # A program brain ticked is a step while its program is to install, or
+  # stands and its listing says it has no sign-in yet. Its tick is kept
+  # apart from the catalysts', which may share a name.
+  defp program_step?(%{state: :program_missing} = program, assigns),
+    do: MapSet.member?(assigns.ticked, program_tick(program))
 
-  defp plan_tick(%{program: program}), do: "program:" <> program
+  defp program_step?(%{state: :ready, name: name} = program, assigns),
+    do:
+      match?({:error, _}, assigns.listings[name]) and
+        MapSet.member?(assigns.ticked, program_tick(program))
 
-  # Each ready plan with the models its program's listing gave, in the
-  # plans' order; a plan whose listing has not come, or gave none, offers
-  # none yet.
-  defp listed_plans(plans, models) do
-    for %{state: :ready, program: program} = plan <- plans,
-        [_ | _] = listed <- [Map.get(models, program, [])],
-        do: {plan, listed}
+  defp program_step?(_program, _assigns), do: false
+
+  defp program_tick(%{name: name}), do: "program:" <> name
+
+  # A program brain is signed in when its row stands and its program's
+  # listing answered: a program with no sign-in has its listing refused.
+  defp signed_in?(%{state: :ready, name: name}, listings),
+    do: match?({:ok, _}, listings[name])
+
+  defp signed_in?(_program, _listings), do: false
+
+  defp program_state(program, listings) do
+    case {program.state, listings[program.name]} do
+      {:ready, {:ok, _listing}} -> "signed_in"
+      {:ready, {:error, _sentence}} -> "signed_out"
+      {state, _listing} -> to_string(state)
+    end
   end
 
-  # A plan's line, from the title of the member that names its program.
-  defp plan_need_line(%{title: title}),
+  defp program_titles(programs) do
+    case Enum.map(programs, & &1.title) do
+      [] -> "a coding program"
+      [one] -> one
+      titles -> Enum.join(Enum.drop(titles, -1), ", ") <> " or " <> List.last(titles)
+    end
+  end
+
+  # Each signed-in program brain with the models its listing gave.
+  defp listed_programs(signed_in, listings) do
+    for %{name: name} = program <- signed_in,
+        {:ok, %{models: [_ | _] = models}} <- [listings[name]],
+        do: {program, models}
+  end
+
+  # The brains the crew's members run on, each by its identity: a catalyst
+  # by its versionless reference, a program by its row's name.
+  defp taken(brains) do
+    for brain <- brains, into: MapSet.new() do
+      case brain do
+        {:program, name} -> {:program, name}
+        {:catalyst, ref} -> {:catalyst, identity(ref)}
+      end
+    end
+  end
+
+  # The member suggested for each connected brain no crew member runs on,
+  # with the value its Make names the brain by, the models its own listing
+  # gave (a catalyst's from the catalogue, a program's from its program),
+  # the efforts it offers and the model picked on its row: a program's
+  # efforts are its listing's, a catalyst's those its `describe` declares
+  # for the model picked, none before one is.
+  defp suggestions(providers, signed_in, assigns, taken) do
+    catalysts =
+      for %{state: :ready, provider: provider, ref: ref} <- providers,
+          not MapSet.member?(taken, {:catalyst, identity(ref)}),
+          {picked, efforts} = Map.get(assigns.suggested, provider, {nil, []}),
+          do:
+            {Aqua.crew_suggestion({:catalyst, provider}), "catalyst:" <> provider,
+             Enum.map(Map.get(assigns.models_by_provider, provider) || [], &{&1, &1}), efforts,
+             picked}
+
+    programs =
+      for %{name: name, title: title} <- signed_in,
+          not MapSet.member?(taken, {:program, name}),
+          {:ok, %{models: models} = listing} <- [assigns.listings[name]],
+          do:
+            {Aqua.crew_suggestion({:program, name, title}), "program:" <> name,
+             Enum.map(models, &{&1.id, &1.name}), Map.get(listing, :efforts, []), nil}
+
+    catalysts ++ programs
+  end
+
+  defp default_effort("program:" <> _name), do: "The program's default effort"
+  defp default_effort(_catalyst), do: "The model's default effort"
+
+  defp program_need_line(%{title: title}),
     do: "a plan: to run #{title} in its own folder, signed in to your own plan"
 
   defp plan_line(:program_disabled), do: "it is disabled — enable it on the Programs page"
@@ -872,13 +1157,13 @@ defmodule PrismWeb.AquaLive do
 
   defp plan_line(:model_unavailable), do: unready_line(:model_unavailable)
 
-  # The Programs page's install form, prefilled from the file of the crew
-  # member that names the plan's program, as its card's install is.
-  defp install_path(athanor, %{member: member}),
+  # The Programs page's install form for a program brain, prefilled from
+  # its definition, as a card's install is.
+  defp install_path(athanor, %{name: name}),
     do:
       PrismWeb.Focus.path(
         athanor,
-        "/programs?" <> URI.encode_query(%{"install_for" => member, "from" => "aqua"})
+        "/programs?" <> URI.encode_query(%{"add" => name, "from" => "aqua"})
       )
 
   defp shared_line(%{owner: owner, person_daily: cap}) when is_integer(cap),
@@ -944,12 +1229,14 @@ defmodule PrismWeb.AquaLive do
       <.setup
         open={@setup_asked or soul_unconnected?(@agents_read)}
         providers={@providers}
+        programs={@programs}
+        listings={@listings}
         ticked={@ticked}
         answers={@answers}
         agents_read={@agents_read}
         setup_for={@setup_for}
         models_by_provider={@models_by_provider}
-        plan_models={@plan_models}
+        suggested={@suggested}
         athanor={@athanor}
         admin_next={@admin_next}
       />
@@ -962,6 +1249,7 @@ defmodule PrismWeb.AquaLive do
         provenance={@provenance}
         models_by_provider={@models_by_provider}
         catalyst_refs={@catalyst_refs}
+        program_listings={@listings}
       />
 
       <.live_component module={NotesComponent} id="aqua-notes-section" context={@context} />

@@ -11,7 +11,8 @@ defmodule Compendium.AquaTemplate do
   Provisioning copies the shipped tree into the athanor's `aqua/`
   (`Arca.Overlay`); from then on the athanor's files are its own, and the
   seed is the default a reset copies in again. A release that ships new
-  crew members or scrolls changes nothing until a reset asks for them.
+  scrolls changes nothing until a reset asks for them. The seed ships no
+  crew member: every member is one the athanor made.
 
   This module is the seed-side surface: `seed_check/0` (is the
   install's template well-formed — provisioning fails loud on a mount

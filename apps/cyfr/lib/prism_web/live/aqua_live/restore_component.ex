@@ -62,14 +62,14 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
           <div>
             <h4 class="text-sm font-medium text-gray-200">Shipped files</h4>
             <p class="text-[11px] text-gray-500">
-              The soul, some crew members and some scrolls ship with the server. Restoring puts an edited copy back to what shipped; crew members and scrolls this athanor made are kept.
+              The soul and some scrolls ship with the server. Restoring puts an edited copy back to what shipped; crew members and scrolls this athanor made are kept.
             </p>
           </div>
           <button
             type="button"
             phx-click="restore_shipped"
             phx-target={@myself}
-            data-confirm="Restore the shipped files? Edited copies of the soul, the shipped crew members and the shipped scrolls go back to what ships with the server. Crew members and scrolls this athanor made are kept."
+            data-confirm="Restore the shipped files? Edited copies of the soul and the shipped scrolls go back to what ships with the server. Crew members and scrolls this athanor made are kept."
             class="shrink-0 rounded border border-gray-700 px-3 py-1 text-xs text-gray-200 hover:bg-gray-800"
           >
             Restore shipped files

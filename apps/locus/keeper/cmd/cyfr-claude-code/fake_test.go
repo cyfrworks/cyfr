@@ -261,12 +261,16 @@ func fakeClaude() int {
 				id := message["request_id"]
 				switch request["subtype"] {
 				case "initialize":
-					write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": map[string]any{
+					answer := map[string]any{
 						"models": []any{
 							map[string]any{"value": "default", "displayName": "Default", "supportedEffortLevels": []string{"low", "high"}},
 							map[string]any{"value": "fake-opus", "displayName": "Fake Opus", "supportedEffortLevels": []string{"low", "medium", "high", "max"}},
 							map[string]any{"value": "fake-haiku", "displayName": "Fake Haiku"},
-						}}}})
+						}}
+					if account := os.Getenv("FAKE_ACCOUNT"); account != "" {
+						answer["account"] = json.RawMessage(account)
+					}
+					write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": answer}})
 				case "mcp_set_servers":
 					errors := map[string]any{}
 					if os.Getenv("FAKE_TOOLS_FAIL") != "" {

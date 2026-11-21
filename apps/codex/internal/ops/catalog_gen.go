@@ -366,8 +366,6 @@ type AquaCreateArgs struct {
 	CatalystRef Field[string] `json:"catalyst_ref,omitzero"`
 	// The name of the program on the Programs page this agent's brain runs in, a driven program with a kept folder, in place of catalyst_ref; a name the athanor has no program of yet is kept, and the agent's card offers to install it (for create/update actions)
 	Program Field[string] `json:"program,omitzero"`
-	// The command the Programs page's install form suggests for the agent's program while the athanor has none of that name: the person confirms or changes it there, and it runs nothing by itself (for create/update actions, beside program)
-	Install Field[string] `json:"install,omitzero"`
 	// Model identifier (for create/update actions)
 	Model Field[string] `json:"model,omitzero"`
 	// What the soul should never hand a crew member (create/update; crew members only)
@@ -419,7 +417,7 @@ func (args AquaGetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaListArgs carries arguments for aqua.list.
 type AquaListArgs struct {
-	// For list: include each agent's full fields (model, catalyst_ref, program, install, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent
+	// For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent
 	Detail Field[bool] `json:"detail,omitzero"`
 	// For list: include crew members set aside with disabled: true, which the roster otherwise leaves out
 	IncludeDisabled Field[bool] `json:"include_disabled,omitzero"`
@@ -572,8 +570,6 @@ type AquaUpdateArgs struct {
 	CatalystRef Field[*string] `json:"catalyst_ref,omitzero"`
 	// The name of the program on the Programs page this agent's brain runs in, a driven program with a kept folder, in place of catalyst_ref; a name the athanor has no program of yet is kept, and the agent's card offers to install it (for create/update actions)
 	Program Field[*string] `json:"program,omitzero"`
-	// The command the Programs page's install form suggests for the agent's program while the athanor has none of that name: the person confirms or changes it there, and it runs nothing by itself (for create/update actions, beside program)
-	Install Field[*string] `json:"install,omitzero"`
 	// Model identifier (for create/update actions)
 	Model Field[*string] `json:"model,omitzero"`
 	// What the soul should never hand a crew member (create/update; crew members only)

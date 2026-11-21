@@ -96,8 +96,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
          {"live/aqua_live/agents_component.ex", :brain_options},
          {"live/aqua_live/agents_component.ex", :set_up_program}
        ]},
-    # A brain's one `models` call after its grant, answered to the page.
-    "live/aqua_live.ex" => {1, [{"live/aqua_live.ex", :setup_answer}]},
+    # A brain's one `models` call after its grant, and each program brain's
+    # listing on a read of the setup, answered to the page.
+    "live/aqua_live.ex" =>
+      {2, [{"live/aqua_live.ex", :setup_answer}, {"live/aqua_live.ex", :program_listing}]},
     # The system layer's listener on `prompt.changes`, whose facts
     # the layer takes in the focus it was opened for.
     "live/system_layer.ex" => {1, [{"live/system_layer.ex", :fact}]}

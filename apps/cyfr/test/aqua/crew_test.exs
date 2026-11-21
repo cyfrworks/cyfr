@@ -56,8 +56,18 @@ defmodule Aqua.CrewTest do
     on_exit(fn -> File.rm_rf!(tree) end)
 
     # The shipped brains of the soul and its crew, in a seed of this
-    # test's own; the suite's own carries none.
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+    # test's own; the suite's own carries none. The seed ships no crew, so
+    # this one lays its own: a member on a catalyst whose key is not bound
+    # here, and two on programs not installed here.
+    seed = Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+
+    for {name, brain} <- [
+          {"explorer", [catalyst_ref: "catalyst:local.gemini", model: "gemini-pro-latest"]},
+          {"claude-code", [program: "claude", model: "opus"]},
+          {"openai-codex", [program: "openai-codex", model: "gpt-6.1-sol"]}
+        ],
+        do: :ok = Cyfr.Test.SeedBundle.member!(seed, name, brain)
+
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     # Filled now, through the explicit verb, as a person's athanor stands
@@ -190,11 +200,32 @@ defmodule Aqua.CrewTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
   end
 
+  # A member is its brain, its model and its effort together, and Aqua is
+  # told the three on the member's one line, in its prompt's Crew section
+  # and from crew.list alike.
+  test "the crew index names a member's model and its effort beside its brain", %{ctx: ctx} do
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+
+    roster =
+      Enum.map(roster, fn
+        %{"name" => "planner"} = member -> Map.put(member, "options", %{"effort" => "high"})
+        member -> member
+      end)
+
+    assert {:ok, index} = Crew.index(ctx, roster)
+
+    assert %{"brain" => "claude (claude-sonnet-5-5, effort high)"} =
+             Enum.find(index, &(&1["name"] == "planner"))
+
+    assert %{"brain" => "claude (claude-sonnet-5-5)"} =
+             Enum.find(index, &(&1["name"] == "claude"))
+  end
+
   test "the crew index names the members whose brain is ready, by brain, good at and avoid",
        %{ctx: ctx} do
     {:ok, roster} = Aqua.AgentConfig.roster(ctx)
 
-    # The shipped crew, the planner, and `claude`, the member the test
+    # The seed's crew, the planner, and `claude`, the member the test
     # seed's Aqua runs on, which is a worker too (`Cyfr.Test.SeedBundle.seat!/2`).
     assert roster |> Enum.map(& &1["name"]) |> Enum.sort() ==
              ~w(aqua claude claude-code explorer openai-codex planner)
@@ -292,7 +323,7 @@ defmodule Aqua.CrewTest do
   end
 
   # Readiness holds at every way a job reaches a member, not only in the
-  # index: the shipped explorer has no key bound here, and claude-code's
+  # index: the seed's explorer has no key bound here, and claude-code's
   # and openai-codex's programs are not installed.
   @unready [
     {"explorer", :no_key, "no key bound"},

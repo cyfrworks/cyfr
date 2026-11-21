@@ -6,6 +6,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,20 +70,15 @@ func TestAquaHelpVocabulary(t *testing.T) {
 }
 
 // TestAquaGetExamplesNameWhatShips holds the help's `cyfr aqua get`
-// examples to names the command can retrieve on a shipped tree: the soul,
-// a guide or a crew member the seed ships (seed/aqua/crew). A skill is read
+// examples to names the command can retrieve on a shipped tree: the soul or
+// a guide. The seed ships no crew member (seed/aqua has no crew), so an
+// example naming one would answer nothing on a new athanor. A skill is read
 // with `cyfr aqua skills get`, never `get`.
 func TestAquaGetExamplesNameWhatShips(t *testing.T) {
-	entries, err := os.ReadDir(filepath.Join("..", "..", "..", "seed", "aqua", "crew"))
-	if err != nil {
-		t.Fatalf("cannot read the shipped crew: %v", err)
+	if _, err := os.Stat(filepath.Join("..", "..", "..", "seed", "aqua", "crew")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the seed ships a crew directory (%v); no crew member ships", err)
 	}
 	names := map[string]bool{"aqua": true, "component-guide": true, "tincture-guide": true, "integration-guide": true}
-	for _, entry := range entries {
-		if name, ok := strings.CutSuffix(entry.Name(), ".md"); ok {
-			names[name] = true
-		}
-	}
 
 	examples := 0
 	for _, line := range strings.Split(findCommand(t, "aqua get").Example, "\n") {

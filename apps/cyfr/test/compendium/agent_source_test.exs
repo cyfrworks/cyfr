@@ -33,7 +33,15 @@ defmodule Compendium.AgentSourceTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
 
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+    seed = Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+
+    # A crew member of the seed's own, on another brain than the soul's.
+    :ok =
+      Cyfr.Test.SeedBundle.member!(seed, "explorer",
+        catalyst_ref: "catalyst:local.gemini",
+        model: "gemini-pro-latest"
+      )
+
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)

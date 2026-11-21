@@ -288,6 +288,7 @@ func (o *oneOff) call(build func(id string) []byte) (rpc, error) {
 func (o *oneOff) close() { o.p.Stop() }
 
 // listOnce is Codex's model listing, every page of it up to listingPages,
+// read once Codex's account read says it has a sign-in (`signedOut`),
 // from an app-server of its own.
 func (d *driver) listOnce() ([]json.RawMessage, error) {
 	o, err := d.openOneOff()
@@ -295,6 +296,13 @@ func (d *driver) listOnce() ([]json.RawMessage, error) {
 		return nil, err
 	}
 	defer o.close()
+	account, err := o.call(func(id string) []byte { return request(id, "account/read", map[string]any{}) })
+	if err != nil {
+		return nil, err
+	}
+	if account.Error == nil && signedOut(account.Result) {
+		return nil, errSignedOut
+	}
 	var listing []json.RawMessage
 	cursor := ""
 	for pages := 0; pages < listingPages; pages++ {

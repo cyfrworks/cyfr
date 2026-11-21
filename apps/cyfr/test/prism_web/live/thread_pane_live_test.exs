@@ -1901,9 +1901,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
 
     # A soul whose brain is a program names its row by name: the pane reads
-    # the row of that name, and one that stands as a brain's is a model
-    # ready, never no model.
-    test "a soul whose brain is a program reads ready on the row of its name",
+    # the row of that name, and one that stands as a brain's is never no
+    # model; with no grant for Aqua on this athanor, the grant is what
+    # Aqua then waits on.
+    test "a soul whose brain is a program reads the row of its name standing, then Aqua's grant",
          %{conn: conn, athanor: athanor, here: here} do
       actor = Sanctum.Context.actor(here)
 
@@ -1925,7 +1926,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       pane = empty_pane(conn, athanor)
       refute render(pane) =~ "has no model yet"
       refute render(pane) =~ @connect
-      assert render(pane) =~ "anything."
+      refute has_element?(pane, ~s([data-test="model-program"]))
+
+      assert has_element?(
+               pane,
+               ~s([data-test="model-consent"]),
+               "You have not granted yet what Aqua and its crew members may use."
+             )
 
       Cyfr.Test.Sandbox.end_views()
     end
@@ -2058,6 +2065,34 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     pane = empty_pane(conn, athanor)
 
     assert render(pane) =~ "anything."
+    refute render(pane) =~ "has no model yet"
+    refute render(pane) =~ @connect
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # Aqua's grant revoked, its brain's own grant standing: the grant is all
+  # Aqua waits on, said as its stale state is, pointing at the Aqua page,
+  # never a model to connect and never ready.
+  test "Aqua without its grant says so, granted on the Aqua page",
+       %{athanor: athanor, user: user, conn: conn} do
+    ctx = connected!(athanor, user)
+    {:ok, %{revoked: [_ | _]}} = Sanctum.Consent.revoke_source(ctx, Prima.AgentRef.soul_ref())
+    pane = empty_pane(conn, athanor)
+
+    assert has_element?(
+             pane,
+             ~s([data-test="model-consent"]),
+             "You have not granted yet what Aqua and its crew members may use."
+           )
+
+    assert has_element?(
+             pane,
+             ~s(a[href="#{athanor_path("/aqua", athanor)}"]),
+             "Grant it on your Aqua page."
+           )
+
+    refute render(pane) =~ "anything."
     refute render(pane) =~ "has no model yet"
     refute render(pane) =~ @connect
 

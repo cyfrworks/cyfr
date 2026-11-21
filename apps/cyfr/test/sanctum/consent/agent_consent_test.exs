@@ -39,7 +39,17 @@ defmodule Sanctum.Consent.AgentConsentTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
 
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+    seed = Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+
+    # The seed's own crew: one member on a catalyst the soul does not run
+    # on, and two on programs.
+    for {name, brain} <- [
+          {"explorer", [catalyst_ref: "catalyst:local.gemini", model: "gemini-pro-latest"]},
+          {"claude-code", [program: "claude", model: "opus"]},
+          {"openai-codex", [program: "openai-codex", model: "gpt-6.1-sol"]}
+        ],
+        do: :ok = Cyfr.Test.SeedBundle.member!(seed, name, brain)
+
     ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)

@@ -45,8 +45,23 @@ defmodule Aqua.SeatTest do
     on_exit(fn -> File.rm_rf!(tree) end)
 
     # The seed's Aqua runs on its own crew member on the Claude catalyst
-    # (`Cyfr.Test.SeedBundle.seat!/2`), beside the shipped crew.
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+    # (`Cyfr.Test.SeedBundle.seat!/2`), beside two more members of the
+    # seed's own to choose: one on Gemini and one on a program.
+    seed = Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
+
+    :ok =
+      Cyfr.Test.SeedBundle.member!(seed, "explorer",
+        catalyst_ref: @gemini,
+        model: "gemini-pro-latest"
+      )
+
+    :ok =
+      Cyfr.Test.SeedBundle.member!(seed, "claude-code",
+        title: "Claude Code",
+        program: "claude",
+        model: "opus"
+      )
+
     Cyfr.Test.Sandbox.stop_work_on_exit()
     {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(athanor, ctx)
 
@@ -421,6 +436,37 @@ defmodule Aqua.SeatTest do
                    5_000
   end
 
+  # A grant there is none of (here, the person revoked it) is Aqua's own
+  # state whatever brain its member runs on, the brain's own grant
+  # standing: never the brain's to connect and never ready. A member on
+  # that brain reads its brain alone.
+  test "Aqua without its grant reads that state on a program brain and on a catalyst",
+       %{ctx: ctx, holder: holder} do
+    {:ok, _row} =
+      Arca.McpServerStorage.insert(actor(ctx), %{
+        cap: 0,
+        name: "claude",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "cyfr-claude-code claude", "env" => %{}})
+      })
+
+    on_program = [%{"name" => "aqua", "program" => "claude"}]
+    on_catalyst = [%{"name" => "aqua", "catalyst_ref" => @model}]
+    member = [%{"name" => holder, "catalyst_ref" => @model}]
+    assert %{"aqua" => {:ready, "claude"}} = Aqua.Models.model_status(ctx, on_program)
+    assert %{"aqua" => {:ready, _}} = Aqua.Models.model_status(ctx, on_catalyst)
+
+    {:ok, %{revoked: [_ | _]}} = Sanctum.Consent.revoke_source(ctx, @soul)
+
+    assert %{"aqua" => {:consent_absent, "claude"}} = Aqua.Models.model_status(ctx, on_program)
+    assert %{"aqua" => {:consent_absent, resolved}} = Aqua.Models.model_status(ctx, on_catalyst)
+    assert String.starts_with?(resolved, @model <> ":")
+    assert %{^holder => {:ready, _}} = Aqua.Models.model_status(ctx, member)
+  end
+
   # A catalog action Aqua's list does not reach, of a tool no bundled
   # catalyst serves, so granting it adds no dependency.
   defp ungranted_action(ctx) do
@@ -695,7 +741,8 @@ defmodule Aqua.SeatTest do
     sentence = Prima.Refusal.message({:aqua_runs_on, :none, nil})
 
     assert sentence ==
-             "Aqua runs on no crew member yet — choose one on Aqua's card on the Aqua page"
+             "Aqua isn't set up yet — on your Aqua page, connect a brain, make a crew member " <>
+               "and choose the one Aqua runs on"
 
     assert {:ok, %{status: "failed", error: ^sentence}} = Tape.turn(ctx, turn.id)
     assert system_lines(ctx, room) == [sentence]
@@ -754,7 +801,6 @@ defmodule Aqua.SeatTest do
     for {key, value} <- [
           {"catalyst_ref", @model},
           {"program", "claude"},
-          {"install", "cyfr-claude-code claude"},
           {"model", "opus"},
           {"options", %{"effort" => "high"}},
           {"options_patch", %{"effort" => "high"}},

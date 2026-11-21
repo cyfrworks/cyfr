@@ -121,6 +121,7 @@ defmodule Aqua.ProgramTest do
 
     test "starts briefed by CYFR, told of its folder, with the scroll list and its job apart",
          %{ctx: ctx, thread: thread, fake: fake} do
+      claude_code!(ctx)
       row = brain_row!(ctx, "claude")
       turn = accept!(ctx, thread, row, "tidy notes.md", nil, nil, "claude-code")
       loop = run(ctx, turn)
@@ -161,6 +162,7 @@ defmodule Aqua.ProgramTest do
     # post it is handed.
     test "starts with Aqua's own prompt, then CYFR's part with its folder, the job apart",
          %{ctx: ctx, thread: thread, fake: fake} do
+      claude_code!(ctx)
       seat!(ctx, "claude-code")
       row = brain_row!(ctx, "claude")
       turn = accept!(ctx, thread, row, "what is in notes.md?")
@@ -199,6 +201,7 @@ defmodule Aqua.ProgramTest do
     test "deleting Aqua's thread forgets its stored session alone, leaving the member's on " <>
            "the same row and the row",
          %{ctx: ctx, thread: thread, fake: fake} do
+      claude_code!(ctx)
       seat!(ctx, "claude-code")
       row = brain_row!(ctx, "claude")
       actor = Sanctum.Context.actor(ctx)
@@ -3382,6 +3385,22 @@ defmodule Aqua.ProgramTest do
         proof: preview.proof,
         commit_digest: preview.commit_digest,
         expected_consent_revision: plan.expected_consent_revision
+      })
+
+    :ok
+  end
+
+  # A Claude Code crew member on the `claude` row, made as the setup makes
+  # it on the connected program: the seed ships no crew, and a member
+  # holds no grant of its own.
+  defp claude_code!(ctx) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "create",
+        "name" => "claude-code",
+        "title" => "Claude Code",
+        "program" => "claude",
+        "model" => "opus"
       })
 
     :ok

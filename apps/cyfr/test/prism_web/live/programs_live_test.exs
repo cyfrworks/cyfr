@@ -11,7 +11,7 @@ defmodule PrismWeb.ProgramsLiveTest do
   Restart for an mcp program only, replaces a program's whole definition
   keeping its folder, removes a program once its removal is confirmed,
   and shows a disabled program as stopped. It prefills the program form
-  for a crew member whose brain is a program and opens the program's
+  for a program brain from its definition and opens the program's
   terminal in the row's folder once the install is confirmed. A program opens on a
   terminal the server owns for the person: the page attaches once the
   frame's hook stands, hands each write to the hook and keeps none of it,
@@ -1109,37 +1109,32 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert {:error, :not_added} = Opus.Browser.row(athanor.id)
   end
 
-  # A crew member whose brain is a program the athanor has no row of: its
-  # card's install opens the form prefilled from the member's file, named
-  # as the file names it, its command as the file suggests. Installing it
-  # asks the person once, as any program's addition does, then opens its
-  # terminal; the member's file is not written, and a row of that name
+  # A program brain the athanor has no row of: the install a card or the
+  # setup offers opens the form prefilled from the brain's definition, its
+  # name and its command. Installing it asks the person once, as any
+  # program's addition does, then opens its terminal; a row of that name
   # that is there is opened, never offered again or replaced.
-  test "an install for a crew member asks once, opens its terminal, leaves the member's file " <>
-         "as it was and never replaces a row of its name",
+  test "an install of a program brain asks once, opens its terminal and never replaces a row " <>
+         "of its name",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()
-    person = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
-    install = "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"
-
-    {:ok, _} =
-      Cyfr.Test.AquaTool.call(person, %{
-        "action" => "create",
-        "name" => "coder",
-        "title" => "Coder",
-        "program" => "claude",
-        "install" => install,
-        "model" => "opus"
-      })
-
-    {:ok, file} = Arca.get(ctx(athanor), Compendium.AquaPath.crew_file("coder"))
-    query = URI.encode_query(%{"install_for" => "coder", "from" => "aqua"})
+    brain = Opus.Programs.Definition.brain("claude-code")
+    query = URI.encode_query(%{"add" => brain.name, "from" => "aqua"})
     {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
     render(view)
 
-    assert has_element?(view, ~s([data-test="install-from"]), "for Coder. This is the program")
-    assert has_element?(view, ~s(form#add-program input[name="name"][value="claude"]))
-    assert has_element?(view, ~s(form#add-program input[name="command"][value="#{install}"]))
+    assert has_element?(
+             view,
+             ~s([data-test="install-from"]),
+             "to run #{brain.title} as a brain. This is the program"
+           )
+
+    assert has_element?(view, ~s(form#add-program input[name="name"][value="#{brain.name}"]))
+
+    assert has_element?(
+             view,
+             ~s(form#add-program input[name="command"][value="#{brain.command}"])
+           )
 
     assert has_element?(
              view,
@@ -1149,64 +1144,78 @@ defmodule PrismWeb.ProgramsLiveTest do
     # Nothing is made before the person confirms it.
     view |> form("form#add-program", %{}) |> render_submit()
     answered(view)
-    assert %{"details" => %{"command" => ^install}} = asked(user, athanor, "mcp_servers.create")
-    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+    command = brain.command
+    assert %{"details" => %{"command" => ^command}} = asked(user, athanor, "mcp_servers.create")
+    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), brain.name)
 
     confirm!(view, user, athanor, "mcp_servers.create")
 
     assert {:ok, %{id: home, mark: "driven", home: "kept", epoch: epoch} = row} =
-             Arca.McpServerStorage.get(ctx(athanor), "claude")
+             Arca.McpServerStorage.get(ctx(athanor), brain.name)
 
     assert_receive {:session, "open", %{"mode" => "terminal", "home_id" => ^home}, _fields},
                    2_000
 
     opened_session(view)
     assert open_confirmations(user, athanor) == []
-    assert {:ok, ^file} = Arca.get(ctx(athanor), Compendium.AquaPath.crew_file("coder"))
 
     # The row of that name is there: the install opens it, offers no form
     # and changes nothing of it.
     {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
     render(view)
     refute has_element?(view, "form#add-program")
-    assert flash(view, "info") == "claude is already on the Programs page."
+    assert flash(view, "info") == "#{brain.name} is already on the Programs page."
 
     assert {:ok, %{id: ^home, epoch: ^epoch} = again} =
-             Arca.McpServerStorage.get(ctx(athanor), "claude")
+             Arca.McpServerStorage.get(ctx(athanor), brain.name)
 
     assert again.config_json == row.config_json
   end
 
-  # Each shipped harness member names its own row and suggests its own
-  # command, the driver first: the install the card offers prefills the
-  # form from that member's file alone, one path for both programs.
-  test "each shipped harness member's install prefills the form from its own file",
+  # Each program brain CYFR ships names its own row and its own command,
+  # the driver first: its install prefills the form from its definition
+  # alone, one path for every brain. A name CYFR ships no brain of opens
+  # the same form under that name, with no command to suggest.
+  test "each program brain's install prefills the form from its definition, and another name " <>
+         "from nothing but its name",
        %{conn: conn, athanor: athanor} do
-    for {member, title, program, install} <- [
-          {"claude-code", "Claude Code", "claude",
-           "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"},
-          {"openai-codex", "OpenAI Codex", "openai-codex",
-           "cyfr-codex npx -y @openai/codex@0.169.0"}
-        ] do
-      query = URI.encode_query(%{"install_for" => member, "from" => "aqua"})
+    brains = Enum.map(Opus.Programs.Definition.brains(), &{&1.name, &1.title, &1.command})
+
+    for {name, title, command} <- brains ++ [{"notes-cli", "notes-cli", nil}] do
+      query = URI.encode_query(%{"add" => name, "from" => "aqua"})
       {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
       render(view)
 
       assert has_element?(
                view,
                ~s([data-test="install-from"]),
-               "for #{title}. This is the program"
+               "to run #{title} as a brain. This is the program"
              )
 
-      assert has_element?(view, ~s(form#add-program input[name="name"][value="#{program}"]))
-      assert has_element?(view, ~s(form#add-program input[name="command"][value="#{install}"]))
+      assert has_element?(view, ~s(form#add-program input[name="name"][value="#{name}"]))
+
+      if command do
+        assert has_element?(view, ~s(form#add-program input[name="command"][value="#{command}"]))
+      else
+        assert has_element?(view, ~s(form#add-program input[name="command"]))
+
+        refute has_element?(
+                 view,
+                 ~s|form#add-program input[name="command"][value]:not([value=""])|
+               )
+      end
 
       assert has_element?(
                view,
                ~s(form#add-program select[name="mark"] option[value="driven"][selected])
              )
 
-      assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), program)
+      assert has_element?(
+               view,
+               ~s(form#add-program select[name="home"] option[value="kept"][selected])
+             )
+
+      assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), name)
     end
   end
 

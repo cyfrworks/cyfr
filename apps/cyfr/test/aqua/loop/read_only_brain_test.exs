@@ -5,7 +5,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   @moduledoc """
   A read-only crew member whose brain runs a program CYFR cannot keep
   read-only, through the real loop: a program row whose driver is
-  `cyfr-codex`, the shipped OpenAI Codex member's own among them. Its
+  `cyfr-codex`, an OpenAI Codex member's own among them. Its
   turn ends unrun
   before anything runs: the sentence that says to switch it to auto is a
   line in its thread and the turn's error, no model is asked, no step is
@@ -83,25 +83,37 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
     end
   end
 
-  # Both shipped harness members name a program row: Claude Code's driver
-  # holds a read-only start ("the soul on a program row"), and Codex's
-  # cannot, so the shipped OpenAI Codex member is refused before its row's
+  # A harness member names a program row: Claude Code's driver holds a
+  # read-only start ("the soul on a program row"), and Codex's cannot, so
+  # an OpenAI Codex member the person made is refused before its row's
   # session opens.
-  describe "the shipped OpenAI Codex member" do
-    setup do
+  describe "an OpenAI Codex member" do
+    setup %{ctx: ctx} do
       fake = Scripted.start(self(), @root)
       _controller = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
       assert_receive {:control, "reconcile", _message, _fields}, 2_000
       script!([])
+
+      # Made as the setup makes it on the connected program; a crew member
+      # holds no grant of its own.
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "openai-codex",
+          "title" => "OpenAI Codex",
+          "program" => "openai-codex",
+          "model" => "gpt-6.1-sol"
+        })
+
       {:ok, fake: fake}
     end
 
     test "switched to read-only, is refused with its own title and its program's name before " <>
-           "a session opens; in auto the holder starts it on its shipped model",
+           "a session opens; in auto the holder starts it on its own model",
          %{ctx: ctx, room: room, fake: fake} do
-      {:ok, codex} = Compendium.AquaAgent.get(ctx, "openai-codex")
-      assert {codex.program, codex.model} == {"openai-codex", "gpt-6.1-sol"}
-      row = program_row!(ctx, codex.program, codex.install)
+      row =
+        program_row!(ctx, "openai-codex", Opus.Programs.Definition.brain("openai-codex").command)
+
       mode!(ctx, "openai-codex", "read-only")
 
       {thread, turn} = accept!(ctx, room, "openai-codex", "fix the build")
@@ -115,7 +127,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       assert Scripted.sessions(fake, row.id) == %{}
 
       # The same member in auto passes the check: the holder starts a new
-      # native session on its shipped model, with the turn's tools, which
+      # native session on its own model, with the turn's tools, which
       # Codex takes at its thread's start alone.
       mode!(ctx, "openai-codex", "auto")
       again = accept_in!(ctx, thread, "openai-codex", "fix the build")

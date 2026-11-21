@@ -26,6 +26,15 @@ defmodule Aqua.Crew do
   `failed` with that reason when its delivery comes (an outage of the
   reads waits for the next drain instead).
 
+  ## Suggested members
+
+  `suggestion/1` is the member Aqua's setup offers to make on a brain the
+  person connected: its name, its title and its mode, read by the setup
+  and by nothing else. A member is its brain, its model and its effort
+  together, which the person picks, with what it is good at and what to
+  avoid, which the person writes. Making it is the person's press, and
+  asks nothing: a member holds no grant of its own.
+
   ## The hand-off
 
   `ask/2` is `crew.ask {member, task, title?, options?}`, called
@@ -162,6 +171,47 @@ defmodule Aqua.Crew do
           | {:error, term()}
 
   # ---------------------------------------------------------------------------
+  # Suggested members
+  # ---------------------------------------------------------------------------
+
+  # The title a member on each model catalyst CYFR ships is offered under.
+  @catalyst_titles %{
+    "claude" => "Claude",
+    "gemini" => "Gemini",
+    "openai" => "OpenAI",
+    "grok" => "Grok",
+    "openrouter" => "OpenRouter"
+  }
+
+  @typedoc """
+  A connected brain, as Aqua's setup names it: a program brain by its
+  row's name and its title (`Opus.Programs.Definition.brains/0`), or a
+  model catalyst by its provider (`Aqua.Models.providers/1`).
+  """
+  @type brain :: {:program, String.t(), String.t()} | {:catalyst, String.t()}
+
+  @doc """
+  The crew member Aqua's setup offers to make on `brain`: its `name`, the
+  brain's own (a catalyst's provider with any character a member's name
+  cannot hold made `-`), its `title`, and its `mode`, `auto`. What a
+  member is good at and should avoid depends on the model and the effort
+  the person picks for it, so nothing is said of it here: the person
+  writes it, on the setup's row or on the member's card.
+  """
+  @spec suggestion(brain()) :: %{name: String.t(), title: String.t(), mode: String.t()}
+  def suggestion({:program, name, title}) when is_binary(name) and is_binary(title),
+    do: suggested(name, title)
+
+  def suggestion({:catalyst, provider}) when is_binary(provider),
+    do:
+      suggested(
+        String.replace(provider, ~r/[^A-Za-z0-9_-]/, "-"),
+        Map.get(@catalyst_titles, provider, provider)
+      )
+
+  defp suggested(name, title), do: %{name: name, title: title, mode: "auto"}
+
+  # ---------------------------------------------------------------------------
   # The hand-off
   # ---------------------------------------------------------------------------
 
@@ -255,7 +305,8 @@ defmodule Aqua.Crew do
   The crew index of `roster`: every crew member whose brain reads ready
   (`Aqua.Models.model_status/2`), by name, as `%{"name", "brain",
   "description", "avoid"}` — the brain its catalyst's or its program
-  row's name and the model, what it is good at and what to avoid — in
+  row's name, the model and the effort it runs at, what it is good at and
+  what to avoid — in
   the roster's order. `ctx` reads the athanor's catalysts on its own
   plane; a listing it cannot read is `{:error, {:unavailable, _}}`, never
   an index with nobody in it.
@@ -393,23 +444,34 @@ defmodule Aqua.Crew do
   defp unready({_unread, _}), do: :unavailable
 
   # A brain as a reader names it: its program's name, which its ready
-  # status carries, or its catalyst's name, and the model.
-  defp brain(%{"program" => program, "model" => model}, {:ready, name})
+  # status carries, or its catalyst's name, then the model and the effort
+  # the member runs it at, for a member is the three together.
+  defp brain(%{"program" => program} = member, {:ready, name})
        when is_binary(program) and program != "",
-       do: with_model(name, model)
+       do: with_model(name, member)
 
-  defp brain(%{"catalyst_ref" => ref, "model" => model}, _status) do
+  defp brain(%{"catalyst_ref" => ref} = member, _status) do
     catalyst =
       case Prima.ComponentRef.parse(ref || "") do
         {:ok, %{name: name}} -> name
         _ -> ref
       end
 
-    with_model(catalyst, model)
+    with_model(catalyst, member)
   end
 
-  defp with_model(brain, model) when is_binary(model) and model != "", do: "#{brain} (#{model})"
-  defp with_model(brain, _model), do: brain
+  defp with_model(brain, member) do
+    effort =
+      case member["options"] do
+        %{"effort" => effort} when is_binary(effort) and effort != "" -> "effort " <> effort
+        _none -> nil
+      end
+
+    case Enum.reject([member["model"], effort], &(&1 in [nil, ""])) do
+      [] -> brain
+      said -> "#{brain} (#{Enum.join(said, ", ")})"
+    end
+  end
 
   defp task(""), do: {:error, {:invalid_argument, "crew.ask requires a non-empty 'task'"}}
 

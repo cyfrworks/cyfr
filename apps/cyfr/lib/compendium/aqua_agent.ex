@@ -36,11 +36,7 @@ defmodule Compendium.AquaAgent do
   (`catalyst_ref`) or as a program (`program`, the name of the athanor's
   program row it runs in, unique in the athanor, so a shipped file names
   the same row in every athanor), and `model`, the model it asks for
-  (for a program, one its harness lists); `install`, beside a program,
-  the command the Programs page's install form is prefilled with while
-  the athanor has no row of that name: a suggestion the person confirms
-  or changes as any program's definition, which runs nothing itself and
-  is outside the capability (`to_manifest/1`); `options`, the brain
+  (for a program, one its harness lists); `options`, the brain
   options its every request sets (a flat map of strings, integers and
   booleans, which the brain's `describe` declares); `disabled: true`, how
   a shipped member is taken out of the crew (shipped files revert, they
@@ -55,7 +51,7 @@ defmodule Compendium.AquaAgent do
   absent list offers nothing), `disabled`, and `member`, the name of the
   crew member that holds it, whose brain, model, options and mode the
   soul runs with (`resolve/3`, `seated/2`). A soul file that names a
-  brain, a model, options, an install or a mode of its own is refused
+  brain, a model, options or a mode of its own is refused
   (`:seat_has_brain`), with the sentence `Prima.AgentRef.seat_has_brain/0`
   says, and so is a `member` that is not text (`{:member_invalid,
   value}`). A seat that names no member, a name no crew member can have
@@ -94,7 +90,6 @@ defmodule Compendium.AquaAgent do
           disabled: boolean(),
           catalyst_ref: String.t() | nil,
           program: String.t() | nil,
-          install: String.t() | nil,
           model: String.t() | nil,
           options: %{String.t() => option_value()},
           mode: mode(),
@@ -126,7 +121,7 @@ defmodule Compendium.AquaAgent do
 
   # What a member's file says of its brain, which the soul's never does:
   # the soul runs on the brain of the member it names.
-  @brain_keys ~w(catalyst_ref program install model options mode)
+  @brain_keys ~w(catalyst_ref program model options mode)
 
   # ---------------------------------------------------------------------------
   # Format
@@ -136,7 +131,7 @@ defmodule Compendium.AquaAgent do
   Parse one agent file as it is written. The name comes from the filename
   (`<name>.md`), never from the frontmatter — the tree is the roster. A
   `tool_policy` in any file (`:tool_policy_retired`), a brain, model,
-  options, install or mode in the soul's file (`:seat_has_brain`), a
+  options or mode in the soul's file (`:seat_has_brain`), a
   soul's `member` that is not text (`{:member_invalid, value}`),
   a `mode` that is
   neither `read-only` nor `auto` (`{:mode_invalid, value}`), a `tools`
@@ -172,7 +167,6 @@ defmodule Compendium.AquaAgent do
            disabled: meta["disabled"] == true,
            catalyst_ref: blank_to_nil(meta["catalyst_ref"]),
            program: blank_to_nil(meta["program"]),
-           install: blank_to_nil(meta["install"]),
            model: blank_to_nil(meta["model"]),
            options: options,
            mode: mode,
@@ -230,7 +224,7 @@ defmodule Compendium.AquaAgent do
   member's file parsed, or `:none`, `:invalid`, `:missing` or
   `{:refused, reason}`. A
   member in the crew gives the soul its brain (a catalyst or a program),
-  model, options and mode; its install stays the member's. Anything else
+  model, options and mode. Anything else
   leaves the soul with no brain, in `auto`, and says why in its
   `holder` (`t:holder/0`). The soul keeps its own title, prompt and tools.
   Pure, so the seed's soul and an athanor's resolve alike.
@@ -356,7 +350,6 @@ defmodule Compendium.AquaAgent do
           {"avoid", blank_to_nil(Map.get(agent, :avoid))},
           {"catalyst_ref", agent.catalyst_ref},
           {"program", Map.get(agent, :program)},
-          {"install", Map.get(agent, :install)},
           {"model", agent.model},
           {"mode", Map.get(agent, :mode) || "auto"},
           {"disabled", if(agent.disabled, do: true)}
@@ -512,9 +505,9 @@ defmodule Compendium.AquaAgent do
   options and mode are those of the crew member it runs on, `seated/2`,
   so they move its capability as the member's own move). The program is the
   name the file declares, never the row found by it now. Nothing else —
-  not the prompt, the title, the description, what to avoid, the
-  install suggestion or the name of the member the soul runs on, which
-  change what the agent says, what a form offers or whose file it reads,
+  not the prompt, the title, the description, what to avoid or the name
+  of the member the soul runs on, which change what the agent says or
+  whose file it reads,
   and never what it may do. Pure: the same agent projects to the same map, so
   a digest of it is the agent's capability revision.
   """

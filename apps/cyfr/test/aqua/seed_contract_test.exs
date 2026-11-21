@@ -15,8 +15,8 @@ defmodule Aqua.SeedContractTest do
   is "Denied by chain authority" on the call; a name on the second the
   registry cannot serve is dropped silently by `expand_tools/1`, so the
   consent sheet a person signs is shorter than the manifest claims. This
-  pins the three to each other, the soul's list itself, and every shipped
-  member's mode.
+  pins the three to each other and the soul's list itself; the seed ships
+  the soul and no crew member.
 
   Hands (`files`, `storage`, `http`, `request_setup`) and the
   `native_search` gate are the loop's own and not MCP actions — they must
@@ -59,32 +59,22 @@ defmodule Aqua.SeedContractTest do
     workspace.list workspace.open workspace.report
   )
 
-  test "the shipped soul is offered exactly its shipped list, and every shipped crew member says auto" do
-    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(seed_file("aqua")))
+  test "the shipped soul is offered exactly its shipped list, and names no mode" do
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     assert soul.tools == @shipped_tools
     assert length(soul.tools) == 90
     # The browser's switch is the person's alone: no member is offered it.
     refute "browser.turn_on" in soul.tools
 
-    # Each crew file names its mode, so the shipped mode is the file's word
-    # and not the parser's default. The soul's names none: Aqua runs in the
-    # mode of the crew member it runs on (`Compendium.AquaAgent.seated/2`).
-    for agent <- seed_agents() do
-      {:ok, meta, _body} =
-        Compendium.AquaAgent.parse_frontmatter(File.read!(seed_file(agent.name)))
-
-      if agent.name == Compendium.AquaPath.soul_name() do
-        refute Map.has_key?(meta, "mode")
-      else
-        assert meta["mode"] == "auto", agent.name
-        assert agent.mode == "auto", agent.name
-      end
-    end
+    # Aqua runs in the mode of the crew member it runs on
+    # (`Compendium.AquaAgent.seated/2`), so the soul's file names none.
+    {:ok, meta, _body} = Compendium.AquaAgent.parse_frontmatter(File.read!(soul_file()))
+    refute Map.has_key?(meta, "mode")
   end
 
   test "the shipped soul's list names no tool the catalog lacks" do
-    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(seed_file("aqua")))
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     # Every entry is an exact `tool.action` of a catalogued tool, a hand's
     # among them, or the provider's own search: no glob, nothing a turn
@@ -137,48 +127,44 @@ defmodule Aqua.SeedContractTest do
     assert unasked == [], "caps grant actions no shipped file names: #{inspect(unasked)}"
   end
 
-  test "the shipped crew lists no tools: every member is offered the soul's" do
-    # A crew member's file names its brain, its mode and what it is good
-    # at; the tools it is offered are the soul's
-    # (`Compendium.AquaAgent.under_soul/2`), so a list in a crew file
-    # refuses the file.
-    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(seed_file("aqua")))
-    crew = for agent <- seed_agents(), agent.name != Compendium.AquaPath.soul_name(), do: agent
+  test "the seed ships no crew member: a new athanor's crew is the person's to make" do
+    # The setup suggests a member on each brain the person connects
+    # (`Aqua.Crew.suggestion/1`); the seed itself lays none.
+    refute File.exists?(Path.join(@seed, Compendium.AquaPath.crew_dirname()))
+    assert Enum.map(seed_agents(), & &1.name) == [Compendium.AquaPath.soul_name()]
+  end
 
-    assert Enum.map(crew, & &1.name) |> Enum.sort() == ~w(claude-code explorer openai-codex)
+  test "every brain the seed can connect has a suggested crew member, named for its brain" do
+    catalysts =
+      for manifest <-
+            Path.wildcard(
+              Path.join(@seed, "../components/catalysts/local/*/*/cyfr-manifest.json")
+            ),
+          %{"name" => name} = shape = Jason.decode!(File.read!(manifest)),
+          Prima.Model.chat_contract() in Map.get(shape, "contracts", []),
+          uniq: true,
+          do: name
 
-    for member <- crew do
-      assert member.tools == [], member.name
-      assert Compendium.AquaAgent.under_soul(member, soul.tools).tools == @shipped_tools
+    assert catalysts != []
 
-      assert is_binary(member.catalyst_ref || member.program) and is_binary(member.model),
-             member.name
+    # Each shipped catalyst's member is named for it and titled as CYFR
+    # ships it; nothing is said of what it is good at: the person writes it.
+    for provider <- catalysts do
+      assert %{name: ^provider, title: title, mode: "auto"} =
+               suggested = Aqua.Crew.suggestion({:catalyst, provider})
 
-      assert member.description != "" and member.avoid != "", member.name
-
-      {:ok, meta, _body} =
-        Compendium.AquaAgent.parse_frontmatter(File.read!(seed_file(member.name)))
-
-      refute Map.has_key?(meta, "tools"), member.name
-      refute Map.has_key?(meta, "tool_policy"), member.name
+      assert title != provider, provider
+      assert suggested |> Map.keys() |> Enum.sort() == [:mode, :name, :title]
     end
 
-    # Each harness member's brain is the program row of its name, with the
-    # command its install form is prefilled with, the driver first and the
-    # version its driver was probed against, and a model the program lists.
-    assert %{
-             catalyst_ref: nil,
-             program: "claude",
-             install: "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
-             model: "opus"
-           } = Enum.find(crew, &(&1.name == "claude-code"))
+    for %{name: name, title: title} <- Opus.Programs.Definition.brains() do
+      assert Aqua.Crew.suggestion({:program, name, title}) ==
+               %{name: name, title: title, mode: "auto"}
+    end
 
-    assert %{
-             catalyst_ref: nil,
-             program: "openai-codex",
-             install: "cyfr-codex npx -y @openai/codex@0.169.0",
-             model: "gpt-6.1-sol"
-           } = Enum.find(crew, &(&1.name == "openai-codex"))
+    # A brain CYFR does not ship is offered under a name a member can hold.
+    assert %{name: "acme-mistral", title: "acme.mistral"} =
+             Aqua.Crew.suggestion({:catalyst, "acme.mistral"})
   end
 
   test "the shipped soul is offered its crew, and the search gate passes through as written" do
@@ -186,7 +172,7 @@ defmodule Aqua.SeedContractTest do
     # there is with `crew.list`; no glob stands in for them. `native_search`
     # is not a tool action and passes through `Aqua.Offered.resolve/2`
     # untouched.
-    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(seed_file("aqua")))
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     offered = Aqua.Offered.resolve(soul.tools, {:ok, true})
     assert offered["crew.ask"] == "offered" and offered["crew.list"] == "offered"
@@ -195,7 +181,7 @@ defmodule Aqua.SeedContractTest do
   end
 
   test "the shipped soul names every browser action, and the person's setting, not its list, decides whether they run" do
-    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(seed_file("aqua")))
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     family =
       for action <- Aqua.Kinds.actions_of("browser"),
@@ -249,7 +235,7 @@ defmodule Aqua.SeedContractTest do
   # read and the write, never the browser's activation or the way back,
   # and the scroll it follows ships beside the capability-acquisition one.
   test "the soul is offered a canvas's reads and its write, and ships the scroll" do
-    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(seed_file("aqua")))
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     assert ~w(canvas.catalog canvas.versions canvas.write) -- soul.tools == []
     refute "canvas.activate" in soul.tools
@@ -277,7 +263,7 @@ defmodule Aqua.SeedContractTest do
   # nothing teaches the module, tree or toolkit a canvas no longer has.
   # Aqua's own prompt leaves canvases to the scroll its index lists.
   test "the list, the canvas scroll and the artisan scroll agree on writing a canvas" do
-    refute seed_body("aqua") =~ ~r/canvas/i
+    refute soul_body() =~ ~r/canvas/i
 
     body = String.replace(canvas_scroll(), ~r/\s+/, " ")
     assert body =~ "Write with `canvas.write` what the person asked for"
@@ -296,18 +282,14 @@ defmodule Aqua.SeedContractTest do
   end
 
   # Nothing asks Aqua's leave: each member's mode decides what of its
-  # offered tools runs. So no prose the Aqua tree ships, the soul's, a crew
-  # member's or a scroll's, promises a yes, a standing yes or an answer to
+  # offered tools runs. So no prose the Aqua tree ships, the soul's or a
+  # scroll's, promises a yes, a standing yes or an answer to
   # wait for, or tells a member to propose a call for one. A frame's
   # request to the person (`cyfr.request`) is the person's own prompt and
   # is not this.
   test "no shipped prose promises the person's yes before a call, or proposes a call for one" do
     files =
-      [Path.join(@seed, "aqua.md")] ++
-        Prima.Test.SourceTree.files!(
-          Path.join([@seed, Compendium.AquaPath.crew_dirname(), "*.md"])
-        ) ++
-        Prima.Test.SourceTree.files!(Path.join([@seed, "skills", "*", "SKILL.md"]))
+      [soul_file() | Prima.Test.SourceTree.files!(Path.join([@seed, "skills", "*", "SKILL.md"]))]
 
     assert length(files) > 3
 
@@ -409,7 +391,7 @@ defmodule Aqua.SeedContractTest do
   # member runs it; binding is external in kind, so a read-only member
   # refuses it (`Aqua.Loop.Policy`).
   test "the soul is offered the feeds' list, binding and removal, and no press" do
-    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(seed_file("aqua")))
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     assert ~w(feed.bind feed.list feed.remove) -- soul.tools == []
     refute "feed.press" in soul.tools
@@ -428,7 +410,7 @@ defmodule Aqua.SeedContractTest do
   # and its edit. The layout's write is an agent's alone and only by its
   # exact name, so the soul's own grant names both.
   test "the soul is offered the layout's read and edit, and its grant names both" do
-    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(seed_file("aqua")))
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     assert ~w(layout.edit layout.get) -- soul.tools == []
 
@@ -483,18 +465,13 @@ defmodule Aqua.SeedContractTest do
     |> Enum.reject(fn key -> key |> split() |> elem(0) |> Hands.hand?() end)
   end
 
-  # Each shipped file as it is written: the soul's list, and the crew's
-  # none.
+  # Each shipped agent as its file is written: the soul alone, since the
+  # seed ships no crew member.
   defp seed_agents do
-    crew = Path.join(@seed, Compendium.AquaPath.crew_dirname())
+    {:ok, soul} =
+      Compendium.AquaAgent.parse(Compendium.AquaPath.soul_name(), File.read!(soul_file()))
 
-    files =
-      [Path.join(@seed, "aqua.md") | Prima.Test.SourceTree.files!(Path.join(crew, "*.md"))]
-
-    for path <- files,
-        name = Path.basename(path, ".md"),
-        {:ok, agent} = Compendium.AquaAgent.parse(name, File.read!(path)),
-        do: agent
+    [soul]
   end
 
   # Every `tool.action` key a shipped file holds that names an MCP action:
@@ -508,14 +485,10 @@ defmodule Aqua.SeedContractTest do
     for agent <- seed_agents(), key <- agent.tools, do: {agent.name, key}
   end
 
-  defp seed_file(name) do
-    if name == Compendium.AquaPath.soul_name(),
-      do: Path.join(@seed, "aqua.md"),
-      else: Path.join([@seed, Compendium.AquaPath.crew_dirname(), name <> ".md"])
-  end
+  defp soul_file, do: Path.join(@seed, "aqua.md")
 
-  defp seed_body(name) do
-    {:ok, _meta, body} = Compendium.AquaAgent.parse_frontmatter(File.read!(seed_file(name)))
+  defp soul_body do
+    {:ok, _meta, body} = Compendium.AquaAgent.parse_frontmatter(File.read!(soul_file()))
     body
   end
 
@@ -530,7 +503,7 @@ defmodule Aqua.SeedContractTest do
         body
       end
 
-    Enum.join([seed_body("aqua"), Aqua.Prompt.briefing(true, true) | scrolls], "\n")
+    Enum.join([soul_body(), Aqua.Prompt.briefing(true, true) | scrolls], "\n")
   end
 
   # `component(action: "search")` is how a body teaches `component.search`.

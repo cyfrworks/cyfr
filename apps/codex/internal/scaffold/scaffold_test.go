@@ -29,10 +29,10 @@ import (
 
 // TestIsManaged pins down which scaffold entries `cyfr update` is allowed to
 // overwrite. Managed = the guides, the WIT definitions, and the Aqua files
-// the scaffold ships — the soul, the shipped roles and every file inside a
-// shipped scroll. Everything a member owns — config, the compose/proxy
-// files, their own roles and scrolls, .env — must NOT be managed, or
-// `cyfr update` would clobber them.
+// the scaffold ships — the soul and every file inside a shipped scroll.
+// Everything a member owns — config, the compose/proxy files, every crew
+// member, their own scrolls, .env — must NOT be managed, or `cyfr update`
+// would clobber them.
 func TestIsManaged(t *testing.T) {
 	managed := []string{
 		"configuration-guide.md",
@@ -45,9 +45,6 @@ func TestIsManaged(t *testing.T) {
 		"wit",
 		"wit/cyfr/oauth/token.wit",
 		"aqua/aqua.md",
-		"aqua/crew/explorer.md",
-		"aqua/crew/claude-code.md",
-		"aqua/crew/openai-codex.md",
 		"aqua/skills/builder/SKILL.md",
 		"aqua/skills/canvas/SKILL.md",
 		"aqua/skills/capability-acquisition/SKILL.md",
@@ -66,10 +63,9 @@ func TestIsManaged(t *testing.T) {
 		".env.example",
 		".env.locus.example",
 		"aqua",
-		"aqua/README.md",                     // only the soul, crew and scrolls ship
+		"aqua/README.md",                     // only the soul and scrolls ship
 		"aqua/crew/custom.md",                // a member's own crew file
-		"aqua/crew/explorer.txt",             // a crew member is a .md file
-		"aqua/crew/nested/explorer.md",       // the crew is flat
+		"aqua/crew/claude-code.md",           // no crew member ships
 		"aqua/roles/builder.md",              // the roles are gone
 		"aqua/skills/custom/SKILL.md",        // a member's own scroll
 		"aqua/skills/capability-acquisition", // a scroll is the files inside its directory
@@ -171,17 +167,16 @@ func TestShippedProfileIsManaged(t *testing.T) {
 	}
 }
 
-// TestBundledPromptsMatchSeed binds the shipped rosters to the seed tree the
+// TestBundledPromptsMatchSeed binds the shipped roster to the seed tree the
 // scaffold tarball is packed from (scripts/scaffold-tarball.sh packs
 // `-C seed aqua`, so seed/aqua/<path> lands in the tarball as aqua/<path>).
-// A crew member or scroll added to seed without a roster entry would never be
-// refreshed by `cyfr update`; a roster entry the seed no longer ships would
-// match nothing.
+// A scroll added to seed without a roster entry would never be refreshed by
+// `cyfr update`; a roster entry the seed no longer ships would match
+// nothing. The seed ships no crew member.
 func TestBundledPromptsMatchSeed(t *testing.T) {
 	seedAqua := filepath.Join("..", "..", "..", "..", "seed", "aqua")
 
 	soulShipped := false
-	seedCrew := map[string]bool{}
 	seedScrolls := map[string]bool{}
 
 	err := filepath.WalkDir(seedAqua, func(path string, d fs.DirEntry, err error) error {
@@ -205,14 +200,7 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 				t.Errorf("the soul %q is not managed — `cyfr update` will never refresh it", tarPath)
 			}
 		case strings.HasPrefix(rel, "crew/"):
-			name, isMarkdown := strings.CutSuffix(strings.TrimPrefix(rel, "crew/"), ".md")
-			if !isMarkdown || strings.Contains(name, "/") {
-				return nil
-			}
-			seedCrew[name] = true
-			if !IsManaged(tarPath) {
-				t.Errorf("shipped crew member %q is not managed — `cyfr update` will never refresh it", tarPath)
-			}
+			t.Errorf("the seed ships the crew member %q: no crew member ships, each is the athanor's own", tarPath)
 		case strings.HasPrefix(rel, "skills/"):
 			name, file, _ := strings.Cut(strings.TrimPrefix(rel, "skills/"), "/")
 			if file != "SKILL.md" {
@@ -232,18 +220,10 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 	if !soulShipped {
 		t.Fatalf("no soul found at %s", filepath.Join(seedAqua, "aqua.md"))
 	}
-	if len(seedCrew) == 0 {
-		t.Fatalf("no shipped crew found under %s", filepath.Join(seedAqua, "crew"))
-	}
 	if len(seedScrolls) == 0 {
 		t.Fatalf("no shipped scrolls found under %s", filepath.Join(seedAqua, "skills"))
 	}
 
-	for name := range shippedCrew {
-		if !seedCrew[name] {
-			t.Errorf("shippedCrew names %q which the seed tree does not ship — a stale entry that matches nothing", name)
-		}
-	}
 	for name := range shippedScrolls {
 		if !seedScrolls[name] {
 			t.Errorf("shippedScrolls names %q which the seed tree does not ship — a stale entry that matches nothing", name)
@@ -253,8 +233,8 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 	// A member's own crew file or scroll must survive `cyfr update`. Guard the
 	// made-up name so the assertion stays honest if seed ever ships it.
 	const custom = "custom"
-	if seedCrew[custom] || seedScrolls[custom] {
-		t.Fatalf("the seed tree ships a crew member or scroll named %q; pick another name for the member-owned check", custom)
+	if seedScrolls[custom] {
+		t.Fatalf("the seed tree ships a scroll named %q; pick another name for the member-owned check", custom)
 	}
 	for _, p := range []string{"aqua/crew/custom.md", "aqua/skills/custom/SKILL.md"} {
 		if IsManaged(p) {
