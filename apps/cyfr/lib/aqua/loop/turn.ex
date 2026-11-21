@@ -480,22 +480,13 @@ defmodule Aqua.Loop.Turn do
   defp brain(_ctx, turn, _agent, _unpinned), do: {:ok, turn, nil}
 
   # The brain's owner profile labelled "default", selected as a lender's
-  # edge selects it (`Sanctum.Consent.owner_profile/3`), never a public
-  # profile that carries the same label, then loaded by its id.
+  # edge selects it (`Prima.Authority.RootSelect`'s `{:owner_label, _}`),
+  # never a public profile that carries the same label.
   defp default_brain(ctx, catalyst, budget_id) do
     with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst) do
-      case Sanctum.Consent.owner_profile(Context.actor(ctx), name_ref, @brain_label) do
-        {:ok, %{id: profile_id}} ->
-          ctx
-          |> Opus.authority_for({:id, profile_id}, name_ref, budget_id: budget_id)
-          |> classified(catalyst)
-
-        {:error, {:no_such_profile, _target, _label}} ->
-          classified({:error, :no_profile}, catalyst)
-
-        error ->
-          classified(error, catalyst)
-      end
+      ctx
+      |> Opus.authority_for({:owner_label, @brain_label}, name_ref, budget_id: budget_id)
+      |> classified(catalyst)
     end
   end
 

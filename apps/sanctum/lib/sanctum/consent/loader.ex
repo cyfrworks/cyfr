@@ -58,6 +58,7 @@ defmodule Sanctum.Consent.Loader do
 
   alias Prima.Authority
   alias Prima.Authority.Blob
+  alias Prima.Authority.RootSelect
   alias Sanctum.Consent.Loader.Decision
   alias Prima.ComponentRef
   alias Sanctum.Context
@@ -492,7 +493,7 @@ defmodule Sanctum.Consent.Loader do
   end
 
   defp resolve_selection(actor, target, via, borrower_key) do
-    with {:ok, profile} <- owner_profile(actor, target, via.label),
+    with {:ok, profile} <- selected_profile(actor, target, via.label),
          {:ok, consent} <- lender_head(actor, target, profile),
          {:ok, target_blob} <- lender_blob(consent, target, profile),
          {:ok, ingress} <- ingress_edge(target_blob, target),
@@ -717,38 +718,29 @@ defmodule Sanctum.Consent.Loader do
     Enum.uniq(from_resources ++ from_policy)
   end
 
-  @doc """
-  `target`'s owner profile labelled `label`, the one a lender's edge
-  names and the one a brain's own grant is (`Aqua.Loop.Turn`): only an
-  active owner profile of that label, never a public one carrying the
-  same label. Read as admission reads a root's: a row whose kind or
-  status is outside the closed vocabulary may carry the label asked for,
-  so it refuses the selection (`{:lender_corrupt, target, id}`) rather
-  than being skipped, and a store that cannot answer
-  (`{:lender_unavailable, target}`) is not a profile that does not exist
-  (`{:no_such_profile, target, label}`); one that is not active is
-  `{:profile_unavailable, status}`.
-  """
-  @spec owner_profile(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, map()} | {:error, term()}
-  def owner_profile(actor, target, label) do
+  # The lending profile, the owner profile of the edge's label
+  # (`RootSelect`'s `{:owner_label, _}`, never a public profile carrying
+  # it), read as admission reads a root's: a row whose kind or status is
+  # outside the closed vocabulary may carry the label asked for, so it
+  # refuses the selection rather than being skipped, and a store that
+  # cannot answer is not a lender that does not exist.
+  defp selected_profile(actor, target, label) do
     case Arca.ConsentStorage.profile_entries(actor, target) do
-      {:ok, entries} ->
-        case Enum.find(entries, &(&1.status == :corrupt)) do
-          %{id: id} -> {:error, {:lender_corrupt, target, id}}
-          nil -> labelled_owner(entries, target, label)
-        end
-
-      {:error, _unanswered} ->
-        {:error, {:lender_unavailable, target}}
+      {:ok, entries} -> labelled_owner(entries, target, label)
+      {:error, _unanswered} -> {:error, {:lender_unavailable, target}}
     end
   end
 
   defp labelled_owner(entries, target, label) do
-    case Enum.find(entries, &(&1.label == label and &1.kind == :owner)) do
-      %{status: :active} = profile -> {:ok, profile}
-      %{status: status} -> {:error, {:profile_unavailable, status}}
-      nil -> {:error, {:no_such_profile, target, label}}
+    selected =
+      with {:ok, candidates} <- RootSelect.candidates(entries, nil) do
+        RootSelect.select(candidates, {:owner_label, label})
+      end
+
+    case selected do
+      {:error, {:corrupt, {:profile, id}}} -> {:error, {:lender_corrupt, target, id}}
+      {:error, {:not_found, _label}} -> {:error, {:no_such_profile, target, label}}
+      selected -> selected
     end
   end
 
