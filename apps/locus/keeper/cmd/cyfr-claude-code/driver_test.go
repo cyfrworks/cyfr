@@ -725,6 +725,42 @@ func TestModelsAreListedWithOrWithoutAStart(t *testing.T) {
 	}
 }
 
+// A listing with no harness running is refused in the signed-out
+// sentence only on the one shape a harness with no sign-in answers; any
+// other `account`, an unknown or absent one among them, lists.
+func TestAListingOfAHarnessWithNoSignInIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		account string
+		out     bool
+	}{
+		{`{"tokenSource":"none","apiProvider":"firstParty"}`, true},
+		{`{"tokenSource":"none","apiKeySource":"ANTHROPIC_API_KEY","apiProvider":"firstParty"}`, false},
+		{`{"tokenSource":"claude.ai","apiProvider":"firstParty"}`, false},
+		{`{"tokenSource":"none","apiProvider":"bedrock"}`, false},
+		{`{"tokenSource":"none"}`, false},
+		{`{"apiProvider":"firstParty"}`, false},
+		{`null`, false},
+		{``, false},
+	} {
+		t.Run(c.account, func(t *testing.T) {
+			s := startDriver(t)
+			t.Setenv("FAKE_ACCOUNT", c.account)
+			s.expect("hello")
+			s.send(map[string]any{"t": "models", "id": "m1"})
+			if !c.out {
+				if listed := s.expect("models"); len(listed["models"].([]any)) != 3 {
+					t.Fatalf("the harness's listing: %v", listed)
+				}
+				return
+			}
+			refused := s.expect("refused")
+			if refused["id"] != "m1" || refused["reason"] != signedOutSentence {
+				t.Fatalf("a harness with no sign-in has its listing refused in the signed-out sentence: %v", refused)
+			}
+		})
+	}
+}
+
 // A folder that cannot be looked into may hold the transcript: forget
 // says it could not look, and the transcript is there when the folder
 // opens again; once it can be looked into, the transcript goes.

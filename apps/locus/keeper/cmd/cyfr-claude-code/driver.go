@@ -222,16 +222,22 @@ func (d *driver) answer(id, ask, content string, isError bool) error {
 
 // models answers the harness's model listing: from the answer its running
 // session's `initialize` gave, or from a harness of its own, started and
-// closed for it, when none runs.
+// closed for it, when none runs. That one-off listing is refused in
+// `signedOutSentence` while the harness has no sign-in (`signedOut`), so a
+// person setting the brain up reads that it is still to sign in.
 func (d *driver) models(id string) error {
 	listing := d.listing
 	if d.h != nil && !d.running() {
 		return d.c.Refuse(id, "The harness is starting: its models are listed once it has started.")
 	}
 	if d.h == nil {
+		var out bool
 		var err error
-		if listing, err = d.listOnce(); err != nil {
+		if listing, out, err = d.listOnce(); err != nil {
 			return d.c.Refuse(id, "Claude Code did not list its models: "+err.Error()+".")
+		}
+		if out {
+			return d.c.Refuse(id, signedOutSentence)
 		}
 	}
 	var entries []struct {
@@ -258,18 +264,45 @@ func (d *driver) models(id string) error {
 	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", models).Set("efforts", efforts))
 }
 
+// signedOutSentence refuses a one-off listing while Claude Code has no
+// sign-in and no key it can run with, as its `initialize` answer says.
+const signedOutSentence = "Claude Code has no sign-in or key it can use; sign it in on the program's terminal, or set a key in its settings."
+
+// signedOut reads an `initialize` answer's `account`: only the one shape
+// Claude Code 2.1.323 answers with no sign-in and no key, measured on an
+// empty folder (`tokenSource` "none", no `apiKeySource`, `apiProvider`
+// "firstParty"), is signed out. Any other answer, a field absent or
+// unknown among them, lists as before, so a sign-in in a shape not yet
+// seen never reads signed out. Nothing of the account is kept.
+func signedOut(response json.RawMessage) bool {
+	var r struct {
+		Account *struct {
+			TokenSource  *string `json:"tokenSource"`
+			APIKeySource *string `json:"apiKeySource"`
+			APIProvider  *string `json:"apiProvider"`
+		} `json:"account"`
+	}
+	if json.Unmarshal(response, &r) != nil || r.Account == nil {
+		return false
+	}
+	a := r.Account
+	return a.TokenSource != nil && *a.TokenSource == "none" && a.APIKeySource == nil &&
+		a.APIProvider != nil && *a.APIProvider == "firstParty"
+}
+
 // listOnce starts a harness only to ask its `initialize` answer, and
-// closes it. Its errors are the driver's own sentences, never the
+// closes it: the models it lists, and whether it has no sign-in
+// (`signedOut`). Its errors are the driver's own sentences, never the
 // harness's or the system's words, since a refusal carries them to the
 // wire.
-func (d *driver) listOnce() (json.RawMessage, error) {
+func (d *driver) listOnce() (json.RawMessage, bool, error) {
 	h, err := d.c.Spawn(append(append([]string{}, d.harnessCommand...), baseArgv...))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer h.Stop()
 	if err := h.Write(initializeLine("")); err != nil {
-		return nil, errors.New("it ended before it was asked")
+		return nil, false, errors.New("it ended before it was asked")
 	}
 	deadline := time.After(listingWait)
 	for {
@@ -284,17 +317,17 @@ func (d *driver) listOnce() (json.RawMessage, error) {
 				continue
 			}
 			if answer.Subtype != "success" {
-				return nil, errors.New("it refused to start")
+				return nil, false, errors.New("it refused to start")
 			}
 			var response struct {
 				Models json.RawMessage `json:"models"`
 			}
 			_ = json.Unmarshal(answer.Response, &response)
-			return response.Models, nil
+			return response.Models, signedOut(answer.Response), nil
 		case <-h.Done:
-			return nil, errors.New("it ended before it answered")
+			return nil, false, errors.New("it ended before it answered")
 		case <-deadline:
-			return nil, errors.New("it did not answer in time")
+			return nil, false, errors.New("it did not answer in time")
 		}
 	}
 }

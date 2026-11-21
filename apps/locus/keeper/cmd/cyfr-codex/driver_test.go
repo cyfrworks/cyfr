@@ -1057,6 +1057,33 @@ func TestModelsAreListedWithOrWithoutAStart(t *testing.T) {
 	}
 }
 
+// A listing with no app-server running reads Codex's account first: the
+// one shape Codex answers with no sign-in refuses it in the signed-out
+// sentence, and any other answer lists.
+func TestAListingOfCodexWithNoSignInIsRefused(t *testing.T) {
+	t.Setenv("FAKE_SIGNED_OUT", "1")
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(map[string]any{"t": "models", "id": "m1"})
+	if refused := s.expect("refused"); refused["id"] != "m1" || refused["reason"] != signedOutSentence {
+		t.Fatalf("Codex with no sign-in has its listing refused in the signed-out sentence: %v", refused)
+	}
+
+	for result, out := range map[string]bool{
+		`{"account":null,"requiresOpenaiAuth":true}`:               true,
+		`{"account":null,"requiresOpenaiAuth":false}`:              false,
+		`{"account":{"type":"chatgpt"},"requiresOpenaiAuth":true}`: false,
+		`{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}`:  false,
+		`{"requiresOpenaiAuth":true}`:                              false,
+		`{"account":null}`:                                         false,
+		`{"account":null,"requiresOpenaiAuth":"yes"}`:              false,
+	} {
+		if signedOut(json.RawMessage(result)) != out {
+			t.Errorf("signedOut(%s) is %v", result, !out)
+		}
+	}
+}
+
 func openPTY(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)

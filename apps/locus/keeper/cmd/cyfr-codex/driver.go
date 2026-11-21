@@ -7,6 +7,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -256,6 +257,9 @@ func (d *driver) models(id string) error {
 	}
 	if d.h == nil {
 		listing, err := d.listOnce()
+		if errors.Is(err, errSignedOut) {
+			return d.c.Refuse(id, signedOutSentence)
+		}
 		if err != nil {
 			return d.c.Refuse(id, "OpenAI Codex did not list its models: "+err.Error()+".")
 		}
@@ -379,6 +383,28 @@ func (d *driver) response(id string, m rpc) error {
 		return d.listed(w.id, w.listing)
 	}
 	return nil
+}
+
+// errSignedOut is a one-off listing's answer while Codex has no sign-in
+// (`signedOut`): the listing is refused in `signedOutSentence`, so a
+// person setting the brain up reads that it is still to sign in.
+var errSignedOut = errors.New("signed out")
+
+// signedOut reads `account/read`'s answer for a listing: only the one
+// shape Codex 0.169.0 answers with no sign-in, measured on an empty
+// folder (`account` null and `requiresOpenaiAuth` true), is signed out.
+// Any other answer, a field absent or unknown among them, lists as
+// before, so a sign-in in a shape not yet seen never reads signed out.
+func signedOut(result json.RawMessage) bool {
+	var r struct {
+		Account  json.RawMessage `json:"account"`
+		Requires *bool           `json:"requiresOpenaiAuth"`
+	}
+	if json.Unmarshal(result, &r) != nil || r.Requires == nil {
+		return false
+	}
+	// An absent `account` is no shape seen; a present null is.
+	return string(r.Account) == "null" && *r.Requires
 }
 
 // signedIn reads `account/read`'s answer: no account, when Codex needs
