@@ -600,16 +600,44 @@ def truncated_archive():
     return data[:len(data) // 2]
 
 
-def net_log_leaving(text):
-    """What a Chrome network log shows leaving: the URLs requested, the hosts resolved and the addresses connected to.
+def net_log(text):
+    """A Chrome network log as an object. A log Chrome did not close is read up to its last whole event; a text that
+    is no log either way fails the suite saying its length and how it begins."""
+    cut = text.rstrip()
+    for whole in (cut, cut.rstrip(",") + "]}"):
+        try:
+            return json.loads(whole)
+        except json.JSONDecodeError:
+            pass
+    raw = text.encode()
+    sys.exit(f"FAIL: Chrome's network log is no log: {len(raw)} bytes, beginning {raw[:80]!r}")
 
-    A log Chrome did not close is read up to its last whole event.
-    """
-    text = text.rstrip()
-    try:
-        log = json.loads(text)
-    except json.JSONDecodeError:
-        log = json.loads(text.rstrip(",") + "]}")
+
+def check_net_log():
+    """`net_log` reads a closed log and one cut after an event, and says of any other text its length and start."""
+    closed = '{"constants": {}, "events": [{"type": 1}]}'
+    wrong = {}
+    for name, text in (("closed", closed), ("cut after an event", closed[:-2] + ",\n")):
+        if net_log(text) != json.loads(closed):
+            wrong[name] = net_log(text)
+    for name, text, says in (("empty", "", "0 bytes, beginning b''"),
+                             ("not a log", "\x00\x00 events", "9 bytes, beginning b'\\x00\\x00 events'")):
+        try:
+            wrong[name] = net_log(text)
+        except SystemExit as failed:
+            if str(failed.code) != f"FAIL: Chrome's network log is no log: {says}":
+                wrong[name] = str(failed.code)
+    if wrong:
+        sys.exit("FAIL: browser.py does not read a network log, or say what is none, as it should\n"
+                 + json.dumps(wrong, indent=2))
+
+
+check_net_log()
+
+
+def net_log_leaving(text):
+    """What a Chrome network log shows leaving: the URLs requested, the hosts resolved and the addresses connected to."""
+    log = net_log(text)
     names = {number: name for name, number in log["constants"]["logEventTypes"].items()}
     found = set()
     for event in log.get("events", []):
@@ -807,11 +835,7 @@ def net_log_of_pages(text):
     query, a TCP connection, a QUIC session); the URLs that reached Chrome's network stack and the hosts it was asked
     to resolve, which do not; and the addresses a UDP socket was connected to, which sends nothing, as the
     resolver's check of whether IPv6 is reachable does."""
-    text = text.rstrip()
-    try:
-        log = json.loads(text)
-    except json.JSONDecodeError:
-        log = json.loads(text.rstrip(",") + "]}")
+    log = net_log(text)
     names = {number: name for name, number in log["constants"]["logEventTypes"].items()}
     left, urls, asked, udp = set(), set(), set(), set()
     for event in log.get("events", []):
