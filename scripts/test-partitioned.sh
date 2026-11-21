@@ -211,7 +211,7 @@ if [ "$cluster" = true ] && { [ "$PARTITIONS" -ne 1 ] || [ "$ADAPTER" != postgre
   echo 'the cluster suite requires -n 1 -a postgres' >&2; exit 64
 fi
 # The cores this run may size itself to: the machine's, or the count a
-# caller that runs several at once gives it (scripts/heavy-check.sh -q 1).
+# caller that runs several at once gives it (scripts/heavy-check.sh).
 if [ -n "${CYFR_TEST_CORES:-}" ]; then
   case "$CYFR_TEST_CORES" in *[!0-9]*|0*) echo 'CYFR_TEST_CORES must be a positive decimal integer' >&2; exit 64 ;; esac
   [ "${#CYFR_TEST_CORES}" -le 4 ] || { echo 'CYFR_TEST_CORES is at most 9999' >&2; exit 64; }

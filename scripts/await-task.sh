@@ -38,16 +38,15 @@
 #   0   the line says 0 (or the success-regex matched)
 #   1   the line says anything else
 #   3   the job died without the line
-#   2   deadline, of the run or of the queue
-#   64  usage, including a deadline, AWAIT_POLL_SECONDS,
-#       AWAIT_QUEUE_SECONDS or AWAIT_PID that is not positive decimal
+#   2   the run's deadline
+#   64  usage, including a deadline, AWAIT_POLL_SECONDS or AWAIT_PID that
+#       is not positive decimal
 # The answering line is printed on stdout.
 #
-# A check started through scripts/heavy-check.sh may first queue for the
-# host. The deadline (default 2400 s) is for the check's run: while the
-# output shows it queued and not yet running, the queue deadline
-# (AWAIT_QUEUE_SECONDS, default 14400, heavy-check's own queue deadline)
-# is the one that counts.
+# A check started through scripts/heavy-check.sh may first queue for a
+# quarter. The deadline (default 2400 s) is for the check's run: while the
+# output shows it queued and not yet running, no deadline runs, as the
+# queue has none.
 # AWAIT_POLL_SECONDS (default 10) is the interval between reads. An
 # AWAIT_PID that is set but empty counts as unset.
 set -uo pipefail
@@ -55,7 +54,7 @@ set -uo pipefail
 usage() {
   echo "usage: $0 <output-file> [success-regex] [deadline-seconds]" >&2
   echo "  exit 0: the terminal line says 0 (or the regex matched)   1: it says anything else" >&2
-  echo "       3: the job died without it   2: deadline (run or queue)   64: usage" >&2
+  echo "       3: the job died without it   2: the run's deadline   64: usage" >&2
   echo "  without a regex, the answer is _EXIT=<P> <n> after _START=<P>: P is AWAIT_PID, or" >&2
   echo "  the file's first _START= pid, so give a fresh file" >&2
 }
@@ -73,11 +72,9 @@ file=$1
 pattern=${2:-}
 deadline=${3:-2400}
 poll=${AWAIT_POLL_SECONDS:-10}
-queue_deadline=${AWAIT_QUEUE_SECONDS:-14400}
 producer=${AWAIT_PID:-}
 seconds_ok "$deadline" || { echo "the deadline is positive decimal seconds: $deadline" >&2; usage; exit 64; }
 seconds_ok "$poll" || { echo "AWAIT_POLL_SECONDS is positive decimal seconds: $poll" >&2; exit 64; }
-seconds_ok "$queue_deadline" || { echo "AWAIT_QUEUE_SECONDS is positive decimal seconds: $queue_deadline" >&2; exit 64; }
 case "$producer" in
   '') ;;
   *[!0-9]*|0*) echo "AWAIT_PID is a positive decimal pid: $producer" >&2; exit 64 ;;
@@ -120,7 +117,6 @@ died() {
 }
 
 start=$SECONDS
-queue_start=$SECONDS
 while :; do
   # Sampled before the file is read, so a producer that writes its line
   # and exits in between is answered.
@@ -146,11 +142,6 @@ while :; do
   if $gone; then died; fi
 
   if [ -s "$file" ] && grep -qE "$queued" "$file" && ! grep -qE "$running" "$file"; then
-    if [ $((SECONDS - queue_start)) -ge "$queue_deadline" ]; then
-      echo "QUEUE DEADLINE after ${queue_deadline}s, the check never started: $file" >&2
-      tail -5 "$file" >&2
-      exit 2
-    fi
     # The run's clock starts when the queue ends.
     start=$SECONDS
   elif [ $((SECONDS - start)) -ge "$deadline" ]; then

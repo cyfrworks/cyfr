@@ -80,7 +80,7 @@
 # objects. The per-image lock and the run-finished test,
 # not the queue, protect an image between its choice and its
 # container's start and a run until its end, so it takes one quarter
-# (scripts/heavy-check.sh -q 1) beside any other check.
+# (scripts/heavy-check.sh) beside any other check.
 #
 # HEAVY_CHECK_LOCK (default /tmp/cyfr-heavy-check.lock) names heavy-check's
 # lock, beside which the holder records lie; JANITOR_TMP (default /tmp)
@@ -153,10 +153,13 @@ alive() {
 }
 
 # The holder record that names pid $1, as its group= and watchdog= values
-# ("-" for one it lacks); nothing when no record names the pid.
+# ("-" for one it lacks); nothing when no record names the pid. Every
+# holder record beside the lock is read, whatever its name: one roster
+# here would call a run dead whose record a worktree on another version of
+# heavy-check wrote, such as the whole-machine record $LOCK.holder.
 record_of() {
   local file line
-  for file in "$LOCK".holder "$LOCK".*.holder; do
+  for file in "$LOCK"*.holder; do
     [ -s "$file" ] || continue
     IFS= read -r line <"$file" || [ -n "$line" ] || continue
     line=" ${line%% command=*} "

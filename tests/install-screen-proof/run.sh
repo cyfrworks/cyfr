@@ -63,7 +63,7 @@
 # Every name the run gives Docker begins with PROOF_RUN_PREFIX, which
 # scripts/heavy-check.sh sets; unset, it is scripts/lib/run-names.sh's prefix
 # with this script's pid. It takes one quarter:
-#   scripts/heavy-check.sh -q 1 -t 3600 -- tests/install-screen-proof/run.sh
+#   scripts/heavy-check.sh -t 3600 -- tests/install-screen-proof/run.sh
 #
 # Needs docker with the host's /dev/kvm, ssh, ssh-keygen, git, go, python3,
 # timeout, flock, getent, and the guest's network: Ubuntu's archive,

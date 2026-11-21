@@ -45,10 +45,13 @@ or reuses the build of any worktree at the same inputs, and prints its
 tag; its header says what the tag hashes, and `scripts/janitor.sh`'s when
 the image goes.
 
-On the verification host each suite takes one quarter of the machine,
-`scripts/heavy-check.sh -q 1 -- python3 tests/locus-runtime-image/runners.py "$tag"`,
-and `memory.py --measure`, a measurement, takes all four
-(`scripts/heavy-check.sh -- …`) so that no other check runs beside it.
+On the verification host each suite, and `memory.py --measure`, takes one
+quarter of the machine,
+`scripts/heavy-check.sh -- python3 tests/locus-runtime-image/runners.py "$tag"`.
+The quarter bounds the suite's own processes. The service's containers
+are started by Compose without the quarter's processors and run where
+Docker puts them, so `memory.py --measure` is measured beside whatever
+else the host runs.
 `PROOF_RUN_PREFIX` prefixes every compose project, container and
 temporary directory a run makes (`tests/browser/README.md`, Run names). A TERM or INT ends a suite with its compose project and its
 temporary directories removed.
