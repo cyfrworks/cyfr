@@ -135,10 +135,10 @@ defmodule Aqua.RunnerTest do
     end
   end
 
-  # A crew member the athanor made, on the scripted model, consented as a
-  # person consents one: it is offered the soul's tools, as a source of its
-  # own, its edge into the model selecting the key bound on the model's
-  # default profile.
+  # A crew member the athanor made, on the scripted model: it is offered
+  # the soul's tools and holds no consent of its own, running under the
+  # crew's one grant, whose edge into the model selects the key bound on
+  # the model's default profile. Making it asks nothing.
   defp member!(ctx, name) do
     :ok =
       Arca.put(
@@ -149,20 +149,6 @@ defmodule Aqua.RunnerTest do
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
-
-    ref = Prima.AgentRef.ref(name)
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    decisions = %{ref: ref, selections: [%{dep: @model, label: "default"}]}
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
   end
 
   # The athanor's tree under the partition's storage root, which no earlier
@@ -779,32 +765,101 @@ defmodule Aqua.RunnerTest do
              Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
   end
 
-  test "a turn addressed to a source with no consent claims no root and asks for setup", %{
-    ctx: ctx,
-    thread: thread
-  } do
-    {:ok, %{turn: turn}} =
-      Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, sent_by: "person", content: "@ghost go"},
-        turn: %{agent: "ghost", requested_by: ctx.user_id}
-      })
+  # The crew has one grant, Aqua's: under it Aqua's turn and a member's
+  # run; revoked, it refuses every member's turn as it refuses Aqua's,
+  # before a root is claimed or a model is asked, and asks for that one
+  # grant.
+  test "with the crew's grant revoked, Aqua's turn and every member's claim no root and ask for it",
+       %{ctx: ctx, thread: thread} do
+    member!(ctx, "planner")
+    {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(ctx), thread.id, "planner")
+    :ok = Runner.subscribe(child.id, ctx.athanor_id)
+    script!([reply("Aqua ran."), reply("The planner ran.")])
 
-    assert {:failed, :setup_required} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+    for {room, agent} <- [{thread, "aqua"}, {child, "planner"}] do
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, room.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "first"},
+          turn: %{agent: agent, requested_by: ctx.user_id}
+        })
 
-    assert {:ok, %{status: "failed", root_execution_id: nil, profile_id: nil}} =
-             Tape.turn(ctx, turn.id)
+      assert :completed = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+    end
 
-    assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
+    ran = ScriptedWorker.calls()
+    assert Enum.count(ran, &(&1.input["operation"] == "chat")) == 2
+
+    assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "agent:local.aqua")
     user = ctx.user_id
 
-    assert_receive %ThreadEvent{
-                     kind: :consent_required,
-                     data: %{ref: "agent:local.ghost", user_id: ^user}
-                   },
-                   5_000
+    for {room, agent} <- [{thread, "aqua"}, {child, "planner"}] do
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, room.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "go"},
+          turn: %{agent: agent, requested_by: ctx.user_id}
+        })
+
+      assert {:failed, :setup_required} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+
+      assert {:ok, %{status: "failed", root_execution_id: nil, profile_id: nil}} =
+               Tape.turn(ctx, turn.id)
+
+      assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
+      room_id = room.id
+
+      assert_receive %ThreadEvent{
+                       thread_id: ^room_id,
+                       kind: :consent_required,
+                       data: %{ref: "agent:local.aqua", user_id: ^user}
+                     },
+                     5_000
+    end
+
+    assert ScriptedWorker.calls() == ran
   end
 
-  test "a crew member asked by name works in its child thread as its own source, with its own consent and key",
+  # The crew's grant names its brains as the component index holds them: an
+  # index that cannot catch up refuses the turn's claim as it refuses any
+  # root's, and the failed turn says so in the index's own sentence, never
+  # its atom.
+  test "a turn refused while the component index catches up is told to retry in its sentence",
+       %{ctx: ctx, thread: thread} do
+    script!([reply("Aqua ran.")])
+
+    accept = fn content ->
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: content},
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      turn
+    end
+
+    assert :completed = Aqua.Loop.run(ctx: ctx, turn_id: accept.("first").id)
+    ran = ScriptedWorker.calls()
+
+    {:ok, _pending} =
+      Arca.StorageProjectionChanges.begin_edit(
+        Sanctum.Context.actor(ctx),
+        "components",
+        "catalysts/local/claude/1.0.0"
+      )
+
+    turn = accept.("go")
+    assert {:failed, :projection_unavailable} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+
+    assert {:ok,
+            %{
+              status: "failed",
+              root_execution_id: nil,
+              error: "The component index is catching up with its files — retry shortly"
+            }} = Tape.turn(ctx, turn.id)
+
+    assert ScriptedWorker.calls() == ran
+  end
+
+  test "a crew member asked by name works in its child thread under the crew's one grant, with its brain's key",
        %{ctx: ctx, thread: thread} do
     entry =
       Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
@@ -823,21 +878,23 @@ defmodule Aqua.RunnerTest do
 
     wait_until(fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, turn_id)) end, 60_000)
 
-    {:ok, [planner_profile]} =
-      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.planner")
+    assert {:ok, []} =
+             Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.planner")
+
+    {:ok, [grant]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.aqua")
 
     {:ok, turn} = Tape.turn(ctx, turn_id)
     assert turn.request_id == request and turn.asking_thread_id == thread.id
     assert turn.status == "completed" and turn.agent == "planner"
-    assert turn.profile_id == planner_profile.id
+    assert turn.profile_id == grant.id
     assert {:ok, bytes} = Tape.agent_revision(ctx, turn)
     assert bytes =~ "Planner"
 
     assert %{authority: authority} =
              Enum.find(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
-    assert authority.chain == ["agent:local.planner", @model]
-    assert authority.profile_id == planner_profile.id
+    assert authority.chain == ["agent:local.aqua", @model]
+    assert authority.profile_id == grant.id
     assert authority.resources.vault.entry_id == entry.id
   end
 

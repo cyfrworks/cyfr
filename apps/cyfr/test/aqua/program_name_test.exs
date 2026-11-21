@@ -43,20 +43,8 @@ defmodule Aqua.ProgramNameTest do
         "model" => "opus"
       })
 
-    # A program brain is no dependency of the member's consent, which
-    # binds nothing: the person consents to it as it stands.
-    ref = Prima.AgentRef.ref("coder")
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
-
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: %{ref: ref},
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
+    # A member holds no consent of its own: it runs under the crew's one
+    # grant, Aqua's, which a program brain is no dependency of.
 
     {:ok, room} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     {:ok, thread} = Threads.crew_thread(Sanctum.Context.actor(ctx), room.id, "coder")
@@ -199,7 +187,7 @@ defmodule Aqua.ProgramNameTest do
     {:ok, turn} = Tape.turn(ctx, turn.id)
 
     {:ok, authority} =
-      Opus.authority_for(ctx, {:id, turn.profile_id}, Prima.AgentRef.ref("coder"),
+      Opus.authority_for(ctx, {:id, turn.profile_id}, Prima.AgentRef.soul_ref(),
         budget_id: turn.budget_id
       )
 

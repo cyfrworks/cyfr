@@ -6,9 +6,8 @@ defmodule Aqua.Loop.PolicyTest do
   A call runs or is refused by its member's offered set and mode, and is
   never asked: read-only runs a read, the `ui` event and the turn's own
   start of its program brain, and refuses every other call with one
-  sentence; auto runs every offered call. A call not offered, or outside
-  a job's narrowing, is refused in either mode. Reads overlap and nothing
-  else does.
+  sentence; auto runs every offered call. A call not offered is refused
+  in either mode. Reads overlap and nothing else does.
   """
 
   use ExUnit.Case, async: true
@@ -118,11 +117,11 @@ defmodule Aqua.Loop.PolicyTest do
     end
   end
 
-  test "the turn's own start of its program brain runs in either mode, unnarrowed" do
+  test "the turn's own start of its program brain runs in either mode" do
     start = resolve!("program", %{"action" => "start", "program" => "srv_1", "epoch" => 1})
 
     for mode <- ["read-only", "auto"] do
-      assert :run = Policy.decide(start, %{}, mode, host_start: true, narrowed: nil)
+      assert :run = Policy.decide(start, %{}, mode, host_start: true)
     end
 
     # A model's start of a program is a call like any other.
@@ -147,62 +146,6 @@ defmodule Aqua.Loop.PolicyTest do
       assert {:deny, "github:search is not among the tools Aqua is offered"} =
                Policy.decide(tool, offered, mode, @opts)
     end
-  end
-
-  test "a job narrowed to some tools refuses every other call, whatever its kind and mode" do
-    offered = offered(@rows)
-    narrowed = Keyword.put(@opts, :narrowed, ["files.read"])
-
-    assert :run =
-             Policy.decide(
-               resolve!("files", %{"action" => "read", "path" => "a"}),
-               offered,
-               "auto",
-               narrowed
-             )
-
-    for {name, args} <- [
-          {"files", %{"action" => "write", "path" => "a"}},
-          {"notes", %{"action" => "keep"}},
-          {"github__search", %{}},
-          {"execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"}}
-        ],
-        mode <- ["read-only", "auto"] do
-      assert {:deny, sentence} = Policy.decide(resolve!(name, args), offered, mode, narrowed)
-      assert sentence =~ "outside the tools this job was narrowed to"
-    end
-
-    # Narrowed to a bare tool, the job runs every action of it and nothing else.
-    by_tool = Keyword.put(@opts, :narrowed, ["notes"])
-
-    for args <- [%{"action" => "keep", "name" => "n", "content" => "c"}, %{"action" => "list"}] do
-      assert Policy.decide(resolve!("notes", args), offered, "auto", by_tool) == :run
-    end
-
-    assert Policy.decide(
-             resolve!("files", %{"action" => "read", "path" => "a"}),
-             offered,
-             "auto",
-             by_tool
-           ) == {:deny, "files.read is outside the tools this job was narrowed to"}
-
-    assert :run =
-             Policy.decide(
-               resolve!("github__search", %{"q" => "x"}),
-               offered,
-               "auto",
-               Keyword.put(@opts, :narrowed, ["github:search"])
-             )
-
-    assert :run =
-             Policy.decide(
-               resolve!("ui", %{"kind" => "ui.navigate"}),
-               offered,
-               "read-only",
-               narrowed
-             )
-
-    assert Policy.within?(resolve!("request_setup.open", %{}), ["files.read"])
   end
 
   test "a launch naming no component is refused before the mode" do

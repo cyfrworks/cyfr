@@ -42,6 +42,7 @@ defmodule Aqua.CrewTest do
   alias Cyfr.Test.ScriptedWorker
 
   @model "catalyst:local.claude"
+  @gemini "catalyst:local.gemini"
 
   setup do
     Arca.Cache.init()
@@ -144,7 +145,6 @@ defmodule Aqua.CrewTest do
         request: %{
           member: member,
           task: task,
-          tools: Map.get(job, :tools),
           options: Map.get(job, :options, %{}),
           person_id: ctx.user_id,
           origin: :interactive
@@ -176,7 +176,8 @@ defmodule Aqua.CrewTest do
 
   # A crew member the athanor made, on the scripted model: it is offered
   # the soul's tools, in auto as a file naming no mode is, has no prompt,
-  # and a member the athanor made is the person's to consent to.
+  # and holds no consent of its own: it runs under the crew's one grant,
+  # Aqua's, so making it asks nothing.
   defp member!(ctx, name) do
     :ok =
       Arca.put(
@@ -187,22 +188,6 @@ defmodule Aqua.CrewTest do
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
-
-    # Its brain's key is the one the model's own profile binds, selected as
-    # a person's consent selects it.
-    ref = Prima.AgentRef.ref(name)
-    decisions = %{ref: ref, selections: [%{dep: @model, label: "default"}]}
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
   end
 
   test "the crew index names the members whose brain is ready, by brain, good at and avoid",
@@ -497,10 +482,259 @@ defmodule Aqua.CrewTest do
     assert rows(ctx, room.id) == []
   end
 
-  test "a member whose brain changed and was not confirmed is refused with what to do: confirm it",
+  # A member holds no consent of its own: its brain's model changed, it
+  # takes a person's job at once, under the crew's one grant.
+  # A person's @name of `member` in `room`, delivered, its turn run to its
+  # end and its reply delivered back: the turn.
+  defp job!(ctx, room, member, text) do
+    assert {:ok, %{admitted: :request, message_id: request}} =
+             Runner.send_message(ctx, room.id, "@#{member} " <> text)
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, member)
+    wait_until(fn -> delivered_turn(ctx, child, request) end, 30_000)
+    turn_id = delivered_turn(ctx, child, request)
+    await_status(ctx, turn_id, "completed")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    elem(Tape.turn(ctx, turn_id), 1)
+  end
+
+  # The crew's one grant: every member's job runs under it, each brain's
+  # edge carrying that brain's own key, so two members on two brains share
+  # the grant and nothing of each other's credential. A member made on a
+  # connected brain takes a job at once: nothing is asked and nothing is
+  # granted for it.
+  test "two members on different brains run under the one grant, each with its own brain's key",
        %{ctx: ctx, room: room} do
-    # The planner's brain moves to another model; its consent is not given
-    # again.
+    {:ok, [grant]} = Arca.ConsentStorage.profiles(actor(ctx), "agent:local.aqua")
+    {:ok, head, _refs} = Arca.ConsentStorage.get_head(actor(ctx), grant.id)
+    {:ok, claude} = Opus.authority_for(ctx, :default, "agent:local.aqua")
+
+    {:ok, claude_edge} =
+      Prima.Authority.Blob.lookup_edge(claude.policy, "agent:local.aqua", @model, "")
+
+    gemini =
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
+
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("scout"),
+        "---\ntitle: scout\ndescription: Searches.\navoid: Building.\n" <>
+          "catalyst_ref: #{@gemini}\nmodel: gemini-pro-latest\n---\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    assert {:ok, []} = Arca.ConsentStorage.profiles(actor(ctx), "agent:local.scout")
+    assert :ok = Crew.ready(ctx, "scout")
+
+    ScriptedWorker.fresh_limits!(ctx, [@gemini])
+
+    start_supervised!(
+      {ScriptedWorker, ref: [@model, @gemini], script: [reply("Planned."), reply("Found.")]}
+    )
+
+    planned = job!(ctx, room, "planner", "plan it")
+    found = job!(ctx, room, "scout", "find it")
+
+    for {turn, member, brain, entry} <- [
+          {planned, "planner", @model, claude_edge.vault.entry_id},
+          {found, "scout", @gemini, gemini.id}
+        ] do
+      assert %{agent: ^member} = turn
+      assert turn.profile_id == grant.id
+
+      assert [%{authority: authority}] = member_chats(ctx, member)
+      assert authority.chain == ["agent:local.aqua", brain]
+      assert authority.profile_id == grant.id
+      assert authority.resources.vault.entry_id == entry
+    end
+
+    refute claude_edge.vault.entry_id == gemini.id
+    assert planned.consent_id == found.consent_id
+
+    # Nothing was granted for either member: the head is the fill's.
+    {:ok, still, _refs} = Arca.ConsentStorage.get_head(actor(ctx), grant.id)
+    assert still.revision == head.revision
+  end
+
+  # A member's brain reads what its own plan requires of Aqua's grant. A
+  # brain that requires no key asks nothing of the grant but its edge, so
+  # the member on it is ready. A grant the person gave before a brain had
+  # its key leaves that key out of it: while the key is missing the member
+  # on that brain is told to connect it, and once the brain holds its key
+  # it is not told to connect a brain that is connected, but to grant Aqua
+  # again.
+  test "a member's brain reads ready, a key to connect or Aqua's grant to give again, " <>
+         "by what the brain's own plan requires",
+       %{ctx: ctx, room: room} do
+    soul = "agent:local.aqua"
+    open = "catalyst:local.open"
+    Arca.Test.UnitFixtures.chat_catalyst!(ctx, "open")
+    walk!(ctx, %{ref: open})
+    walk!(ctx, %{ref: soul, selections: [%{dep: @model, label: "default"}]})
+
+    {:ok, authority} = Opus.authority_for(ctx, :default, soul)
+    {:ok, edge} = Prima.Authority.Blob.lookup_edge(authority.policy, soul, open, "")
+    refute Prima.Authority.Blob.bound_vault?(edge.vault)
+
+    for {name, brain, model} <- [{"scout", @gemini, "gemini-pro-latest"}, {"drafter", open, "m"}] do
+      :ok =
+        Arca.put(
+          actor(ctx),
+          Compendium.AquaPath.crew_file(name),
+          "---\ntitle: #{name}\ndescription: Searches.\navoid: Building.\n" <>
+            "catalyst_ref: #{brain}\nmodel: #{model}\n---\n"
+        )
+    end
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+    status = Aqua.Models.model_status(ctx, roster)
+    assert {:needs_key, _resolved} = status["scout"]
+    assert {:ready, _resolved} = status["drafter"]
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
+
+    status = Aqua.Models.model_status(ctx, roster)
+    assert {:consent_stale, _resolved} = status["scout"]
+    assert {:ready, _resolved} = status["drafter"]
+    assert {:ready, _resolved} = status["planner"]
+
+    assert {:error, {:crew_unready, "scout", :consent_stale} = refusal} =
+             Runner.send_message(ctx, room.id, "@scout look into this")
+
+    assert Aqua.Ops.render_refusal(refusal) ==
+             "What Aqua and its crew members may use changed since you granted it — " <>
+               "grant it again on the Aqua page"
+  end
+
+  # A brain whose own plan requires no key, whose key Aqua's grant selected:
+  # the brain's key bound again with other destination restrictions leaves
+  # that selection unresolved, which a turn's setup refuses. The member on
+  # it reads Aqua's grant to give again, never ready, until the person
+  # grants Aqua again, and then takes a job with the key bound since.
+  test "a member whose brain's selected key Aqua's grant no longer resolves is told to grant " <>
+         "Aqua again, and takes a job once granted",
+       %{ctx: ctx, room: room} do
+    soul = "agent:local.aqua"
+    optional = "catalyst:local.optional"
+
+    need = %{
+      "type" => "api_key:optional.test",
+      "reason" => "to call the model with your key",
+      "fields" => ["OPTIONAL_API_KEY"],
+      "required" => false,
+      "hosts" => ["api.optional.test"]
+    }
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
+        name: "optional",
+        version: "0.1.0",
+        type: "catalyst",
+        manifest:
+          Jason.encode!(%{
+            "contracts" => [Prima.Model.chat_contract()],
+            "needs" => %{"api_key" => need},
+            "caps" => %{"egress" => %{"domains" => ["api.optional.test"]}}
+          })
+      })
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, optional, %{"OPTIONAL_API_KEY" => "o-1"})
+    selections = [%{dep: @model, label: "default"}, %{dep: optional, label: "default"}]
+    walk!(ctx, %{ref: soul, selections: selections})
+
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("keeper"),
+        "---\ntitle: keeper\ndescription: Keeps.\navoid: Building.\n" <>
+          "catalyst_ref: #{optional}\nmodel: optional-1\n---\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+    assert {:ready, _resolved} = Aqua.Models.model_status(ctx, roster)["keeper"]
+
+    rebound =
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, optional, %{"OPTIONAL_API_KEY" => "o-2"},
+        destination: %{"hosts" => ["api.optional.test"], "scheme" => "https", "paths" => ["/v1/"]}
+      )
+
+    {:ok, authority} = Opus.authority_for(ctx, :default, soul)
+    {:ok, edge} = Prima.Authority.Blob.lookup_edge(authority.policy, soul, optional, "")
+    assert %{via: %{label: "default"}} = edge.vault
+    assert {:consent_stale, _resolved} = Aqua.Models.model_status(ctx, roster)["keeper"]
+
+    walk!(ctx, %{ref: soul, selections: selections})
+    assert {:ready, _resolved} = Aqua.Models.model_status(ctx, roster)["keeper"]
+
+    ScriptedWorker.fresh_limits!(ctx, [optional])
+    start_supervised!({ScriptedWorker, ref: [optional], script: [reply("Kept.")]})
+    assert %{agent: "keeper", status: "completed"} = job!(ctx, room, "keeper", "keep it")
+    assert [%{authority: kept}] = member_chats(ctx, "keeper")
+    assert kept.resources.vault.entry_id == rebound.id
+  end
+
+  # A person's walk of `decisions`, from plan to commit.
+  defp walk!(ctx, %{ref: ref} = decisions) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
+  # Another athanor's crew runs under its own athanor's grant, read from the
+  # authenticated context, never this one's: revoking this athanor's grant
+  # leaves its member's job running there, and this one's refused.
+  test "another athanor's member runs under its own grant and reaches nothing of this one's",
+       %{ctx: ctx, room: room} do
+    {other, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+    elsewhere = Sanctum.Test.People.athanor!(user)
+    other = %{other | athanor_id: elsewhere.id, origin: :interactive}
+    segments = Arca.Storage.physical_segments(Sanctum.Context.actor(other), [])
+    tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
+    on_exit(fn -> File.rm_rf!(tree) end)
+    {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(elsewhere, other)
+    Sanctum.Test.ConsentFixtures.bind_key!(other, @model, %{"ANTHROPIC_API_KEY" => "sk-other"})
+    ScriptedWorker.fresh_limits!(other, [@model, "catalyst:local.files", "catalyst:local.http"])
+    member!(other, "planner")
+    {:ok, their_room} = Arca.Test.Days.thread(Sanctum.Context.actor(other))
+    :ok = Runner.subscribe(their_room.id, other.athanor_id)
+
+    {:ok, [ours]} = Arca.ConsentStorage.profiles(actor(ctx), "agent:local.aqua")
+    {:ok, [theirs]} = Arca.ConsentStorage.profiles(actor(other), "agent:local.aqua")
+    refute ours.id == theirs.id
+
+    assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "agent:local.aqua")
+    script!([reply("Theirs.")])
+
+    turn = job!(other, their_room, "planner", "plan it")
+    assert turn.profile_id == theirs.id
+    assert [%{authority: authority}] = member_chats(other, "planner")
+    assert authority.profile_id == theirs.id
+
+    # Here the same member's job is refused for want of this athanor's grant.
+    assert {:ok, %{admitted: :request, message_id: request}} =
+             Runner.send_message(ctx, room.id, "@planner plan it")
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    wait_until(fn -> delivered_turn(ctx, child, request) end, 30_000)
+    refused = delivered_turn(ctx, child, request)
+    await_status(ctx, refused, "failed")
+    assert {:ok, %{profile_id: nil, root_execution_id: nil}} = Tape.turn(ctx, refused)
+  end
+
+  test "a member whose model changed asks nothing and takes the job", %{ctx: ctx, room: room} do
     :ok =
       Arca.put(
         actor(ctx),
@@ -510,15 +744,19 @@ defmodule Aqua.CrewTest do
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    script!([reply("Looked.")])
 
-    assert {:error, {:crew_unready, "planner", :consent_stale} = refusal} =
-             Runner.send_message(ctx, room.id, "@planner look into this")
+    assert {:ok, _accepted} = Runner.send_message(ctx, room.id, "@planner look into this")
+    request = Enum.find(rows(ctx, room.id), &(&1.addressee == "planner"))
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    wait_until(fn -> delivered_turn(ctx, child, request.id) end, 30_000)
+    turn_id = delivered_turn(ctx, child, request.id)
+    await_status(ctx, turn_id, "completed")
 
-    assert Aqua.Ops.render_refusal(refusal) ==
-             "planner's brain changed since it was consented to — confirm the change from its " <>
-               "card on the Aqua page"
-
-    assert rows(ctx, room.id) == []
+    assert {:ok, %{agent: "planner", profile_id: profile_id}} = Tape.turn(ctx, turn_id)
+    {:ok, grant} = Opus.authority_for(ctx, :default, "agent:local.aqua")
+    assert profile_id == grant.profile_id
   end
 
   test "the soul's crew.ask of a member that is not ready is refused with why, and asks nobody",
@@ -685,11 +923,28 @@ defmodule Aqua.CrewTest do
       Enum.map_join(entries, fn %{name: name, description: line} -> "- #{name} — #{line}\n" end)
   end
 
-  defp member_chats(name) do
+  # The model calls of `name`'s turns: every call names the crew's one
+  # grant, Aqua's, so the worker is the turn the call's root holds.
+  defp member_chats(ctx, name) do
     Enum.filter(
       ScriptedWorker.calls(),
-      &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == Prima.AgentRef.ref(name))
+      &(&1.input["operation"] == "chat" and worker_of(ctx, &1) == name)
     )
+  end
+
+  defp worker_of(ctx, %{execution_id: id}) do
+    case Arca.Execution.get_tenant(actor(ctx), id) do
+      %{root_execution_id: root} ->
+        Arca.Repo.one(
+          from(t in Arca.Schemas.Turn,
+            where: t.athanor_id == ^ctx.athanor_id and t.root_execution_id == ^(root || id),
+            select: t.agent
+          )
+        )
+
+      _another_athanors ->
+        nil
+    end
   end
 
   # A member has no prompt: CYFR briefs it, the scroll list follows in the
@@ -705,7 +960,7 @@ defmodule Aqua.CrewTest do
     turn_id = delivered_turn(ctx, child!(ctx, room, "planner"), request_id)
     await_status(ctx, turn_id, "completed")
 
-    assert [%{input: %{"operation" => "chat", "params" => params}}] = member_chats("planner")
+    assert [%{input: %{"operation" => "chat", "params" => params}}] = member_chats(ctx, "planner")
 
     assert Enum.sort(Map.keys(params)) ==
              ~w(max_tokens messages model provider_tools system tools)
@@ -743,7 +998,7 @@ defmodule Aqua.CrewTest do
     await_status(ctx, delivered_turn(ctx, child!(ctx, room, "planner"), request_id), "completed")
 
     assert [%{input: %{"params" => %{"provider_tools" => ["web_search"], "system" => system}}}] =
-             member_chats("planner")
+             member_chats(ctx, "planner")
 
     assert [@briefing <> @searches, _context] = String.split(system, @context, parts: 2)
   end
@@ -777,8 +1032,7 @@ defmodule Aqua.CrewTest do
       call("c1", "crew", %{
         "action" => "ask",
         "member" => "planner",
-        "task" => "list the risks",
-        "tools" => ["files.read"]
+        "task" => "list the risks"
       }),
       reply("Asked the planner."),
       reply("Two risks."),
@@ -803,17 +1057,21 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
 
-    # The job was narrowed to what the request named, out of the soul's
-    # tools the member is offered.
-    %{input: %{"params" => %{"tools" => tools}}} =
-      Enum.find(
-        ScriptedWorker.calls(),
-        &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == "agent:local.planner")
-      )
+    # The member's job runs under the crew's one grant, Aqua's, as the
+    # soul's turn does, and is offered every tool the soul is: nothing
+    # narrows one job below another.
+    chats = for %{input: %{"operation" => "chat"}} = call <- ScriptedWorker.calls(), do: call
+    assert length(chats) >= 2
+    assert Enum.all?(chats, &(hd(&1.authority.chain) == "agent:local.aqua"))
+    assert chats |> Enum.map(& &1.authority.consent_id) |> Enum.uniq() |> length() == 1
 
-    assert [%{"name" => "files"} = files | _] = tools
-    assert files["parameters"]["properties"]["action"]["enum"] == ["read"]
-    refute Enum.any?(tools, &(&1["name"] in ["storage", "aqua", "component"]))
+    offered =
+      chats
+      |> Enum.map(&(&1.input["params"]["tools"] |> Enum.map(fn tool -> tool["name"] end)))
+      |> Enum.uniq()
+
+    assert [names] = offered
+    assert "files" in names and "component" in names and "crew" in names
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
@@ -1014,7 +1272,7 @@ defmodule Aqua.CrewTest do
     for {turn_id, agent} <- [{soul_turn, "aqua"}, {member_turn, "planner"}] do
       {:ok, pinned} = Tape.turn(ctx, turn_id)
       assert pinned.agent == agent
-      {:ok, authority} = Opus.authority_for(ctx, :default, Prima.AgentRef.ref(agent))
+      {:ok, authority} = Opus.authority_for(ctx, :default, "agent:local.aqua")
       build = fn -> Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false) end
 
       assert {:ok, true} = Aqua.BrowserSetting.put(ctx, true)
@@ -1137,29 +1395,6 @@ defmodule Aqua.CrewTest do
     end
   end
 
-  test "a request with other tools or brain options queues as its own turn, never steering one with another job",
-       %{ctx: ctx, room: room} do
-    script!([{:probe, self()}, reply("open"), reply("narrowed")])
-
-    open = soul_request!(ctx, room, "planner", "look at everything")
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-    assert_receive {:scripted_probe, worker, _}, 60_000
-    child = child!(ctx, room, "planner")
-    first = delivered_turn(ctx, child, open.id)
-
-    narrowed = soul_request!(ctx, room, "planner", "read only", %{tools: ["files.read"]})
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-    second = delivered_turn(ctx, child, narrowed.id)
-    assert second != first
-    assert %{running: true, queued: 1} = Runner.state(child.id, ctx.athanor_id)
-
-    send(worker, :continue)
-    await_status(ctx, first, "completed")
-    await_status(ctx, second, "completed")
-    assert {:ok, %{options: options}} = Tape.turn(ctx, second)
-    assert %{"tools" => ["files.read"]} = Jason.decode!(options)
-  end
-
   # An app of the person's own with no exit at all, granted with nothing to
   # bind: its grant covers whatever a turn has read.
   defp quiet_app!(ctx) do
@@ -1199,7 +1434,9 @@ defmodule Aqua.CrewTest do
     )
   end
 
-  test "a member's turn in auto runs a granted component under the soul's tools, and a job narrowed away from it runs none",
+  # Toward CYFR the crew is one caller: the app a member's turn launches
+  # records Aqua as its caller, and the member stays the turn's worker.
+  test "a member's turn in auto runs a granted component under the soul's tools, as Aqua",
        %{ctx: ctx, room: room} do
     app = quiet_app!(ctx)
     run = call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})
@@ -1209,59 +1446,30 @@ defmodule Aqua.CrewTest do
        ref: [@model, app],
        script: [
          run,
-         {:probe, self()},
          %{"answered" => true},
-         reply("ran it"),
-         run,
-         reply("not run")
+         reply("ran it")
        ]}
     )
 
     request = soul_request!(ctx, room, "planner", "run the app")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
-
-    # The app runs, held, while a job narrowed away from it queues behind.
-    assert_receive {:scripted_probe, worker, root}, 60_000
     child = child!(ctx, room, "planner")
+    wait_until(fn -> delivered_turn(ctx, child, request.id) end, 30_000)
     first = delivered_turn(ctx, child, request.id)
-    narrowed = soul_request!(ctx, room, "planner", "read only", %{tools: ["files.read"]})
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-    second = delivered_turn(ctx, child, narrowed.id)
-    send(worker, :continue)
     await_status(ctx, first, "completed")
-    await_status(ctx, second, "completed")
 
     {:ok, turn} = Tape.turn(ctx, first)
+    assert turn.agent == "planner"
     {:ok, steps} = Tape.steps(ctx, turn)
 
-    assert %{outcome: "ok", child_execution_id: ^root} =
+    assert %{outcome: "ok", child_execution_id: root} =
              Enum.find(steps, &(&1.kind == "launch"))
 
-    {:ok, turn} = Tape.turn(ctx, second)
-    {:ok, steps} = Tape.steps(ctx, turn)
-
-    assert %{outcome: "denied", error: said} =
-             Enum.find(steps, &(&1.kind == "launch"))
-
-    assert said == "execution.run is outside the tools this job was narrowed to"
     assert runs_of(ctx, app) == [root]
-  end
+    assert %{caller: "agent:aqua"} = Arca.Execution.get_tenant(actor(ctx), root)
 
-  test "a narrowed job is refused a call outside its tools though its member is in auto, and goes on",
-       %{ctx: ctx, room: room} do
-    script!([
-      call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
-      reply("read only, as asked")
-    ])
-
-    request = soul_request!(ctx, room, "planner", "read the plan", %{tools: ["files.read"]})
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-    turn_id = delivered_turn(ctx, child!(ctx, room, "planner"), request.id)
-    await_status(ctx, turn_id, "completed")
-
-    {:ok, turn} = Tape.turn(ctx, turn_id)
-    {:ok, steps} = Tape.steps(ctx, turn)
-    assert %{outcome: "denied"} = Enum.find(steps, &(&1.action == "keep"))
+    assert %{reference: "agent:local.aqua", caller: "agent:aqua"} =
+             Arca.Execution.get_tenant(actor(ctx), turn.root_execution_id)
   end
 
   test "retiring cancels every open turn in its own transaction, the running one included, and leaves none open",
@@ -1394,11 +1602,7 @@ defmodule Aqua.CrewTest do
                Aqua.Attachments.load(ctx, held.thread_id, Aqua.Attachments.attachments_of([held]))
     end
 
-    %{input: %{"params" => %{"messages" => messages}}} =
-      Enum.find(
-        ScriptedWorker.calls(),
-        &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == "agent:local.planner")
-      )
+    [%{input: %{"params" => %{"messages" => messages}}} | _] = member_chats(ctx, "planner")
 
     blocks = Enum.flat_map(messages, &List.wrap(&1["content"]))
 
@@ -1682,11 +1886,7 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     await_status(ctx, delivered_turn(ctx, child, message_id), "completed")
 
-    %{input: %{"params" => %{"messages" => messages}}} =
-      Enum.find(
-        ScriptedWorker.calls(),
-        &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == "agent:local.planner")
-      )
+    [%{input: %{"params" => %{"messages" => messages}}} | _] = member_chats(ctx, "planner")
 
     Enum.flat_map(messages, &List.wrap(&1["content"]))
   end

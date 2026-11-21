@@ -169,41 +169,33 @@ defmodule Aqua.Loop.FlushTest do
     refute kept =~ "ROOM-ONLY-LINE"
   end
 
-  # Each differs from an auto member offered notes.keep, whose flush runs
-  # above, in one thing alone: its mode, or a job narrowed to the round's
-  # own read.
-  for {shape, mode, tools} <- [
-        {"a read-only member", "read-only", nil},
-        {"a job narrowed away from notes.keep", "auto", ["files.list"]}
-      ] do
-    test "#{shape} makes no flush request and keeps no note, and the summary still lands", %{
-      ctx: ctx,
-      thread: thread
-    } do
-      {:ok, _} =
-        Cyfr.Test.AquaTool.call(ctx, %{
-          "action" => "update",
-          "name" => Cyfr.Test.SeedBundle.seat_member(),
-          "mode" => unquote(mode)
-        })
+  # It differs from an auto member offered notes.keep, whose flush runs
+  # above, in one thing alone: its mode.
+  test "a read-only member makes no flush request and keeps no note, and the summary still lands",
+       %{ctx: ctx, thread: thread} do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => Cyfr.Test.SeedBundle.seat_member(),
+        "mode" => "read-only"
+      })
 
-      turn = accept_large!(ctx, thread, unquote(tools))
-      script!([round_one(), %{"entries" => []}, reply("the story so far"), reply("done")])
+    turn = accept_large!(ctx, thread)
+    script!([round_one(), %{"entries" => []}, reply("the story so far"), reply("done")])
 
-      assert :completed = Task.await(run(ctx, turn), 60_000)
-      {:ok, steps} = Tape.steps(ctx, turn)
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
 
-      assert ["chat", "compaction", "chat"] =
-               for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
+    assert ["chat", "compaction", "chat"] =
+             for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
 
-      refute Enum.any?(steps, &(&1.purpose == "flush"))
-      assert [_first, _summary, _last] = chat_requests()
+    refute Enum.any?(steps, &(&1.purpose == "flush"))
+    assert [_first, _summary, _last] = chat_requests()
 
-      assert Enum.any?(
-               Threads.messages(Sanctum.Context.actor(ctx), thread.id),
-               &(&1.kind == "compaction")
-             )
-    end
+    assert Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.kind == "compaction")
+           )
   end
 
   test "a flush runs notes.keep alone, and never past its size", %{
@@ -407,18 +399,18 @@ defmodule Aqua.Loop.FlushTest do
 
   # A message past the window's fill: the first round has nothing older to
   # summarize; once a round follows it, the message is older than the
-  # boundary. `tools` narrows the turn's job to them.
-  defp accept_large!(ctx, thread, tools \\ nil) do
-    accept!(ctx, thread, "@aqua read this\n" <> String.duplicate("lorem ipsum ", 7_000), tools)
+  # boundary.
+  defp accept_large!(ctx, thread) do
+    accept!(ctx, thread, "@aqua read this\n" <> String.duplicate("lorem ipsum ", 7_000))
   end
 
-  defp accept!(ctx, thread, text, tools \\ nil) do
+  defp accept!(ctx, thread, text) do
     turn = %{agent: "aqua", requested_by: ctx.user_id, model: @model_id}
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, sent_by: "person", content: text},
-        turn: if(tools, do: Map.put(turn, :options, %{"tools" => tools}), else: turn)
+        turn: turn
       })
 
     turn

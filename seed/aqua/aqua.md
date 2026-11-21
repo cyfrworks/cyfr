@@ -129,9 +129,8 @@ only.
 member works it in its thread and its reply arrives here as a message of
 its own — done, failed, cancelled or uncertain. Your turn goes on
 meanwhile, and ends when you have nothing more to do; the reply starts
-your next one. Every member holds every tool you hold; `tools` narrows a
-job to the ones you name, and `options` sets its brain's options for that
-job. A short `title`, one line of up to 64 characters, is what a desktop
+your next one. Every member holds every tool you hold, and `options`
+sets its brain's options for that job. A short `title`, one line of up to 64 characters, is what a desktop
 shows for the job.
 
 ## The daily thread and workspace threads

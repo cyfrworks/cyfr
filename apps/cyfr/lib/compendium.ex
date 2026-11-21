@@ -424,10 +424,12 @@ defmodule Compendium do
   end
 
   @doc """
-  The athanor's indexed agents as consent sources, the soul first:
-  `{:ok, [%{ref, name, soul?}]}`. An index behind its tree, or a store
-  that cannot answer, is `{:error, :unavailable}`; a context that names
-  no athanor is `{:error, :forbidden}`.
+  The athanor's indexed agents that are consent sources: Aqua alone,
+  whose grant is the crew's (`Compendium.AgentSource`), as
+  `{:ok, [%{ref, name, soul?}]}`, empty while the index holds no Aqua.
+  An index behind its tree, or a store that cannot answer, is
+  `{:error, :unavailable}`; a context that names no athanor is
+  `{:error, :forbidden}`.
   """
   @spec agent_source_refs(Context.t()) ::
           {:ok, [agent_source()]} | {:error, :unavailable | :forbidden}
@@ -437,10 +439,9 @@ defmodule Compendium do
         soul = AquaAgent.soul_type()
 
         {:ok,
-         Enum.map(
-           rows,
-           &%{ref: Prima.AgentRef.ref(&1.name), name: &1.name, soul?: &1.kind == soul}
-         )}
+         for %{kind: ^soul} = row <- rows do
+           %{ref: Prima.AgentRef.ref(row.name), name: row.name, soul?: true}
+         end}
 
       {:error, :no_athanor} ->
         {:error, :forbidden}
@@ -623,9 +624,12 @@ defmodule Compendium do
           | {:error, term()}
   defdelegate agent_snapshot(ctx, name), to: AgentIndex, as: :snapshot
 
-  @doc "The consent row an agent projects (`Compendium.AgentSource.row/1`)."
-  @spec agent_row(AquaAgent.t()) :: map()
-  defdelegate agent_row(agent), to: AgentSource, as: :row
+  @doc """
+  The consent row of the crew's one grant, Aqua's, as the tree and the
+  installed brains stand now (`Compendium.AgentSource.latest_row/2`).
+  """
+  @spec crew_grant_row(Context.t()) :: {:ok, map()} | {:error, term()}
+  def crew_grant_row(%Context{} = ctx), do: AgentSource.latest_row(ctx, AquaPath.soul_name())
 
   @doc "The athanor's skills, at most `limit` of them (`Compendium.AquaSkills.index/2`)."
   @spec skills_index(Context.t(), pos_integer() | :all) ::

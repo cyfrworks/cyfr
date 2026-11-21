@@ -8,8 +8,9 @@ defmodule Aqua.Crew do
   reply row. A crew member is a file under `aqua/crew/` (every agent of
   the roster but the soul): who does a job, on a brain of its own, with
   what it is good at and what to avoid; how a job is done is a skill any
-  of them reads. Every member runs under the soul's tools, which a
-  request may narrow for its one job.
+  of them reads. Every member is offered the soul's tools on every job,
+  and runs under the crew's one grant, Aqua's (`Compendium.AgentSource`):
+  only its mode changes what a call may do.
 
   ## The index
 
@@ -27,7 +28,7 @@ defmodule Aqua.Crew do
 
   ## The hand-off
 
-  `ask/2` is `crew.ask {member, task, title?, tools?, options?}`, called
+  `ask/2` is `crew.ask {member, task, title?, options?}`, called
   by a turn of the soul in a room (the gate's lineage names the thread and
   the turn's root): admitted by `Aqua.Runner.Admission.request/4`, it
   writes the request row (`sent_by` the soul, `addressee` the member,
@@ -56,9 +57,8 @@ defmodule Aqua.Crew do
       room (`Aqua.Tape.crew_thread/3`, made on the first request), sent by
       whoever sent the request: it opens a turn whose reply address is
       the request, steers the member's turn when the steer rule admits it
-      (`Aqua.Runner.steer?/2`), or waits as a turn of its own. The tools
-      it narrows the job to and the brain options it sets ride on the
-      turn it opens.
+      (`Aqua.Runner.steer?/2`), or waits as a turn of its own. The brain
+      options it sets ride on the turn it opens.
     * A reply lands on the request's room, sent by the member and
       addressed to the request's sender, and answers every request the
       record names. To the soul it opens or steers the soul's turn; to
@@ -68,9 +68,7 @@ defmodule Aqua.Crew do
   (`Aqua.Providers.Workspace`):
 
     * An opening (`workspace_open`) starts the workspace thread's turn
-      on the opening row its transaction wrote, as the person who asked,
-      narrowed to the tools the opening names and to the means of posting
-      and reporting there (`thread.post`, `workspace.report`).
+      on the opening row its transaction wrote, as the person who asked.
     * A report (`workspace_report`) lands on the daily thread current
       when it is delivered (`Aqua.Day`), sent by the soul, with the files
       it carries copied from the workspace thread's posts into its own
@@ -113,9 +111,6 @@ defmodule Aqua.Crew do
 
   @consumer "crew_delivery"
   @kinds ["crew_request", "crew_reply", "workspace_open", "workspace_report"]
-  # What an opening narrowed to named tools keeps whatever it names: the
-  # soul's means of posting in its thread and of reporting it.
-  @workspace_means ["thread.post", "workspace.report"]
   @lease_ms 30_000
   @tick_ms 30_000
   @max_task_bytes 32 * 1024
@@ -175,8 +170,8 @@ defmodule Aqua.Crew do
   lineage names (`args["thread_id"]`, `args["root_execution_id"]`), with
   `args["title"]` (what a desktop shows for the job: trimmed, 1 to
   `title_max/0` code points of plain text on one line, and none when
-  absent or blank), `args["tools"]` (tool names the job is narrowed to)
-  and `args["options"]` (the brain's options for the job). Answers the
+  absent or blank) and `args["options"]` (the brain's options for the
+  job). Answers the
   request's id; `{:error, :not_addressable}` when the calling turn is not
   the soul's in a room or the member is not of the crew.
   """
@@ -187,7 +182,6 @@ defmodule Aqua.Crew do
 
     with :ok <- task(task),
          {:ok, title} <- parse_title(args["title"], "crew.ask"),
-         {:ok, tools} <- parse_tools(args["tools"], "crew.ask"),
          {:ok, options} <- options(args["options"]),
          {:ok, turn} <- Tape.calling_turn(ctx, args),
          {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
@@ -208,7 +202,6 @@ defmodule Aqua.Crew do
              request: %{
                member: member,
                task: task,
-               tools: tools,
                options: options,
                person_id: turn.requested_by,
                origin: origin
@@ -329,10 +322,13 @@ defmodule Aqua.Crew do
   defp ready_brain?(status), do: match?({:ready, _}, status)
 
   @typedoc """
-  Why a crew member cannot take a job: no brain named, its catalyst not
-  installed, no key bound, only the person's grant to give, a consent it runs under damaged, for a brain
-  that is a program its row gone, disabled or not a program a brain runs
-  in, or the reads that would tell unavailable.
+  Why a crew member cannot take a job, all of it its brain's, since a
+  member holds no consent of its own: no brain named, its catalyst not
+  installed, no key bound, only the person's grant of the brain to give,
+  a brain holding its key that the crew's grant does not name with it,
+  the brain's own grant damaged, for a brain that is a program its row
+  gone, disabled or not a program a brain runs in, or the reads that
+  would tell unavailable.
   """
   @type unready ::
           :no_brain
@@ -455,23 +451,6 @@ defmodule Aqua.Crew do
 
   defp titled(payload, nil), do: payload
   defp titled(payload, title), do: Map.put(payload, "title", title)
-
-  @doc """
-  The tool names a job or a workspace thread's opening is narrowed to, as
-  `operation` takes them: nil for all its agent holds, else a non-empty
-  list of names (a tool, or `tool.action`), each once.
-  """
-  @spec parse_tools(term(), String.t()) :: {:ok, [String.t()] | nil} | {:error, term()}
-  def parse_tools(nil, _operation), do: {:ok, nil}
-
-  def parse_tools(names, operation) when is_list(names) do
-    if names != [] and Enum.all?(names, &(is_binary(&1) and &1 != "")),
-      do: {:ok, Enum.uniq(names)},
-      else: {:error, {:invalid_argument, "#{operation} takes 'tools' as tool names"}}
-  end
-
-  def parse_tools(_names, operation),
-    do: {:error, {:invalid_argument, "#{operation} takes 'tools' as tool names"}}
 
   # A brain option is a named value of one of the kinds a brain declares
   # (`Prima.Model`); which names and values the member's brain takes is
@@ -722,16 +701,9 @@ defmodule Aqua.Crew do
   defp work(%Prima.OutboxRecord{kind: "workspace_open", snapshot: snapshot} = record, held) do
     with {:ok, ctx} <- continuation(record),
          {:ok, opening} <- opening_row(ctx, snapshot) do
-      tools =
-        case Tape.payload(opening)["tools"] do
-          [_ | _] = names -> Enum.uniq(names ++ @workspace_means)
-          _all -> nil
-        end
-
       ctx
       |> Runner.send_message(opening.thread_id, opening.content,
         opening: opening,
-        crew: %{tools: tools, options: %{}},
         receipt: receipt(record, held, "applied")
       )
       |> delivered("applied", fn reason -> opening_refused(ctx, record, reason, held) end)
@@ -798,7 +770,7 @@ defmodule Aqua.Crew do
         id: id,
         sent_by: request.sent_by,
         request: request,
-        crew: %{tools: snapshot["tools"], options: snapshot["options"]},
+        crew: %{options: snapshot["options"]},
         attachments: refs,
         payload: delivered_payload(request),
         receipt: receipt(record, held, "applied")

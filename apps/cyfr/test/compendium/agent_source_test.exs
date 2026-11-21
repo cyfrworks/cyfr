@@ -3,12 +3,12 @@
 
 defmodule Compendium.AgentSourceTest do
   @moduledoc """
-  An agent is a consent source: its row projects from its file with the
-  capability digest as artifact, tool actions as caps, and the model
-  catalyst and hands as dependencies, never another agent; a crew member
-  projects the soul's tools it is offered beside its own brain; the same
-  lookups that serve component nodes serve it, its activation walks the
-  closure, and only what it may do moves its digests.
+  The crew's one grant is a consent source: Aqua's row, projected from
+  its file and the athanor's brains, with its tools as caps and its hands
+  and every brain the athanor can connect as dependencies, never a crew
+  member or a member's brain, model or mode; a crew member is no source;
+  the same lookups that serve component nodes serve it, its activation
+  walks the closure, and only what the crew may use moves its digests.
   """
 
   use ExUnit.Case, async: false
@@ -54,24 +54,20 @@ defmodule Compendium.AgentSourceTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
   end
 
-  test "the shipped tree projects the soul and every crew member as rows", %{ctx: ctx} do
-    {:ok, rows} = AgentSource.rows(ctx)
-    names = Enum.map(rows, & &1.name)
-    assert hd(names) == "aqua"
-    # The shipped crew, and the member the test seed's Aqua runs on
-    # (`Cyfr.Test.SeedBundle.seat!/2`).
-    assert Enum.sort(names) ==
-             Enum.sort(
-               ~w(aqua claude-code explorer openai-codex) ++ [Cyfr.Test.SeedBundle.seat_member()]
-             )
-
-    soul = Enum.find(rows, &(&1.name == "aqua"))
+  test "the tree projects the crew's grant alone, Aqua's, and no crew member", %{ctx: ctx} do
+    assert {:ok, [soul]} = AgentSource.rows(ctx)
+    assert soul.name == "aqua"
     assert soul.component_type == "agent" and soul.publisher == "local"
     assert soul.id == @soul
     assert String.starts_with?(soul.digest, "sha256:")
     assert String.starts_with?(soul.release_digest, "sha256:")
     assert {:ok, ^soul} = Registry.get_latest(ctx, "aqua", "local", "agent")
-    assert {:error, :not_found} = Registry.get_latest(ctx, "nobody", "local", "agent")
+
+    # A crew member, shipped or the one Aqua runs on, is no source.
+    for member <- ["explorer", Cyfr.Test.SeedBundle.seat_member(), "nobody"] do
+      assert {:error, :not_found} = AgentSource.latest_row(ctx, member)
+      assert {:error, :not_found} = Registry.get_latest(ctx, member, "local", "agent")
+    end
   end
 
   # The tree's grammar is the roster: a Markdown file whose name the path
@@ -95,7 +91,7 @@ defmodule Compendium.AgentSourceTest do
     assert errors == []
 
     {:ok, rows} = AgentSource.rows(ctx)
-    refute "bad name" in Enum.map(rows, & &1.name)
+    assert Enum.map(rows, & &1.name) == ["aqua"]
   end
 
   test "snapshot keeps the bytes and parses the same ones", %{ctx: ctx} do
@@ -126,11 +122,10 @@ defmodule Compendium.AgentSourceTest do
     assert {:ok, member.capability_digest} == AquaAgent.capability_digest(member.agent)
   end
 
-  test "the soul's manifest names its tools, its model and its hands, never a crew member", %{
+  test "the grant names Aqua's tools, its hands and every brain, never a member's model", %{
     ctx: ctx
   } do
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
-    {:ok, agent} = AquaAgent.get(ctx, "aqua")
     manifest = soul.manifest
 
     tools = manifest["caps"]["tools"]
@@ -139,44 +134,28 @@ defmodule Compendium.AgentSourceTest do
     # of its tools by its name.
     assert "native_search" in tools
     assert tools == Enum.sort(tools)
-    assert manifest["agent"]["model"] == agent.model
-    assert manifest["agent"]["catalyst"] == agent.catalyst_ref
+    refute Map.has_key?(manifest, "agent")
     refute Map.has_key?(manifest, "model")
 
-    deps = manifest["dependencies"]["static"]
-    by_ref = Map.new(deps, &{&1["ref"], &1})
-    assert by_ref[agent.catalyst_ref] == %{"ref" => agent.catalyst_ref}
-    assert by_ref["catalyst:local.files"] == %{"ref" => "catalyst:local.files"}
-    assert by_ref["catalyst:local.http"] == %{"ref" => "catalyst:local.http"}
-    refute Enum.any?(deps, &String.starts_with?(&1["ref"], "agent:"))
+    # Every installed catalyst that speaks the model contract is a brain
+    # of the grant, the one Aqua's member runs on and the explorer's alike;
+    # the hands beside them; and no crew member.
+    assert {:ok, ["catalyst:local.claude", "catalyst:local.gemini"]} = AgentSource.brains(ctx)
 
-    # A crew member's manifest: its own brain, and the soul's tools and
-    # hands, under which it runs.
-    {:ok, explorer} = AgentSource.latest_row(ctx, "explorer")
-    assert explorer.manifest["caps"] == manifest["caps"]
-
-    # The member's mode is no part of the manifest; the provider's own
-    # search, offered, is one of its tools.
-    refute Map.has_key?(manifest["agent"], "mode")
-    assert "native_search" in manifest["caps"]["tools"]
-    assert explorer.manifest["agent"]["catalyst"] == "catalyst:local.gemini"
-
-    hands = deps |> Enum.map(& &1["ref"]) |> List.delete(agent.catalyst_ref)
-
-    assert explorer.manifest["dependencies"]["static"] |> Enum.map(& &1["ref"]) |> Enum.sort() ==
-             Enum.sort(["catalyst:local.gemini" | hands])
+    assert Enum.map(manifest["dependencies"]["static"], & &1["ref"]) ==
+             ~w(catalyst:local.claude catalyst:local.files catalyst:local.gemini catalyst:local.http)
   end
 
-  test "the soul's activation walks its model and its hands, and no crew member", %{ctx: ctx} do
+  test "the grant's activation walks every brain and the hands, and no crew member", %{
+    ctx: ctx
+  } do
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
     {:ok, live} = Activation.resolve_verified(ctx, soul)
 
     keys = Map.keys(live.graph) |> Enum.sort()
     assert @soul in keys
     assert Enum.filter(keys, &String.starts_with?(&1, "agent:")) == [@soul]
-    assert "catalyst:local.claude" in keys
-    # The explorer runs on gemini, and the soul's closure holds no crew member.
-    refute "catalyst:local.gemini" in keys
+    assert "catalyst:local.claude" in keys and "catalyst:local.gemini" in keys
     assert "catalyst:local.files" in keys and "catalyst:local.http" in keys
     assert Enum.all?(live.nodes, fn {_key, node} -> node.integrity == :ok end)
 
@@ -191,74 +170,30 @@ defmodule Compendium.AgentSourceTest do
              })
   end
 
-  test "the prompt moves nothing; the soul's tools and the model move the digests", %{ctx: ctx} do
-    {:ok, before} = AgentSource.latest_row(ctx, "explorer")
-    {:ok, soul_unworded} = AgentSource.latest_row(ctx, "aqua")
+  # The grant follows no crew member: a member's brain, model, options and
+  # mode, the member Aqua runs on and Aqua's prompt move nothing; Aqua's
+  # tools move it.
+  test "only Aqua's tools move the grant; a member, its brain and Aqua's seat move nothing", %{
+    ctx: ctx
+  } do
+    {:ok, before} = AgentSource.latest_row(ctx, "aqua")
 
-    # Only the soul has a prompt, and its words move no digest.
     write_agent!(ctx, "aqua", &%{&1 | prompt: &1.prompt <> "\n\nSay less."})
-    {:ok, reworded} = AgentSource.latest_row(ctx, "explorer")
-    assert reworded.digest == before.digest and reworded.release_digest == before.release_digest
-    {:ok, soul_reworded} = AgentSource.latest_row(ctx, "aqua")
-    assert soul_reworded.digest == soul_unworded.digest
+    write_agent!(ctx, "explorer", &%{&1 | model: "another-model", options: %{"effort" => "high"}})
+    write_agent!(ctx, "explorer", &%{&1 | mode: "read-only"})
+    write_agent!(ctx, "explorer", &%{&1 | catalyst_ref: nil, program: "mcp_019a2b3c"})
+    write_agent!(ctx, "aqua", &%{&1 | member: "explorer"})
+    write_agent!(ctx, "explorer", &%{&1 | disabled: true})
+    assert {:ok, ^before} = AgentSource.latest_row(ctx, "aqua")
 
-    # The member is offered the soul's tools: an edit of them moves the
-    # member's capability with the soul's.
     write_agent!(ctx, "aqua", &%{&1 | tools: ["storage.write" | &1.tools]})
-
-    {:ok, widened} = AgentSource.latest_row(ctx, "explorer")
+    {:ok, widened} = AgentSource.latest_row(ctx, "aqua")
     refute widened.digest == before.digest
     refute widened.release_digest == before.release_digest
     assert "storage.write" in widened.manifest["caps"]["tools"]
-    {:ok, soul_before} = AgentSource.latest_row(ctx, "aqua")
 
-    # The model target is capability: retargeting is a new release.
-    write_agent!(ctx, "explorer", &%{&1 | model: "another-model"})
-    {:ok, retargeted} = AgentSource.latest_row(ctx, "explorer")
-    refute retargeted.digest == widened.digest
-    refute retargeted.release_digest == widened.release_digest
-
-    # So are its brain's options.
-    write_agent!(ctx, "explorer", &%{&1 | options: %{"effort" => "high"}})
-    {:ok, tuned} = AgentSource.latest_row(ctx, "explorer")
-    refute tuned.digest == retargeted.digest
-
-    # A disabled member has no row, and the soul's row does not move with it.
-    write_agent!(ctx, "explorer", &%{&1 | disabled: true})
-    assert {:error, :not_found} = AgentSource.latest_row(ctx, "explorer")
-    assert {:ok, ^soul_before} = AgentSource.latest_row(ctx, "aqua")
-  end
-
-  # A program brain's turns are admitted each by its own program.start
-  # step: its consent names no brain, only its hands, and its model alone,
-  # which the manifest grammar and the shape both take. Its row is
-  # capability, so another row is a new release.
-  test "a brain that is a program is no dependency, and its row moves the digest", %{ctx: ctx} do
-    {:ok, before} = AgentSource.latest_row(ctx, "explorer")
-
-    write_agent!(ctx, "explorer", &%{&1 | catalyst_ref: nil, program: "mcp_019a2b3c"})
-    {:ok, programmed} = AgentSource.latest_row(ctx, "explorer")
-    {:ok, agent} = AquaAgent.get(ctx, "explorer")
-
-    assert programmed.manifest["agent"] == %{"model" => agent.model}
-    refs = Enum.map(programmed.manifest["dependencies"]["static"], & &1["ref"])
-
-    assert refs ==
-             Enum.map(before.manifest["dependencies"]["static"], & &1["ref"]) --
-               ["catalyst:local.gemini"]
-
-    assert :ok = Prima.Manifest.validate(programmed.manifest, fn _path -> true end)
-    refute programmed.digest == before.digest
-
-    assert {:ok, shape} =
-             Sanctum.Consent.ShapeDerivation.shape_input(ctx, "agent:local.explorer")
-
+    assert {:ok, shape} = Sanctum.Consent.ShapeDerivation.shape_input(ctx, @soul)
     refute Map.has_key?(shape, :model_target)
-
-    write_agent!(ctx, "explorer", &%{&1 | program: "mcp_019a2b3d"})
-    {:ok, moved} = AgentSource.latest_row(ctx, "explorer")
-    refute moved.digest == programmed.digest
-    refute moved.release_digest == programmed.release_digest
   end
 
   test "a tool on the soul named as a crew member is a tool pattern, not an edge into it", %{
@@ -268,7 +203,6 @@ defmodule Compendium.AgentSourceTest do
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
 
     assert "explorer.search" in soul.manifest["caps"]["tools"]
-    refute Map.has_key?(soul.manifest["agent"], "mode")
 
     refute "agent:local.explorer" in Enum.map(
              soul.manifest["dependencies"]["static"],
@@ -279,23 +213,16 @@ defmodule Compendium.AgentSourceTest do
     refute Map.has_key?(live.graph, "agent:local.explorer")
   end
 
-  test "shipped_row/1 equals the tenant row while the seed files are unchanged", %{ctx: ctx} do
-    for name <- ~w(aqua explorer) do
-      {:ok, tenant} = AgentSource.latest_row(ctx, name)
-      assert {:ok, ^tenant} = AgentSource.shipped_row(name)
-    end
-  end
-
-  test "an edit of the tenant soul's tools does not change the seed rows", %{ctx: ctx} do
-    {:ok, before} = AgentSource.latest_row(ctx, "explorer")
+  test "shipped_row/2 equals the tenant row while the seed's Aqua is unchanged; a member has none",
+       %{ctx: ctx} do
+    {:ok, tenant} = AgentSource.latest_row(ctx, "aqua")
+    assert {:ok, ^tenant} = AgentSource.shipped_row(ctx, "aqua")
+    assert {:error, :not_found} = AgentSource.shipped_row(ctx, "explorer")
 
     write_agent!(ctx, "aqua", &%{&1 | tools: ["storage.write" | &1.tools]})
-
-    {:ok, edited} = AgentSource.latest_row(ctx, "explorer")
-    refute edited.release_digest == before.release_digest
-
-    assert {:ok, seed} = AgentSource.shipped_row("explorer")
-    assert seed.release_digest == before.release_digest
+    {:ok, edited} = AgentSource.latest_row(ctx, "aqua")
+    assert {:ok, seed} = AgentSource.shipped_row(ctx, "aqua")
+    assert seed.release_digest == tenant.release_digest
     refute seed.release_digest == edited.release_digest
   end
 end

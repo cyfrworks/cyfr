@@ -52,8 +52,8 @@ defmodule Aqua.WorkspaceStopTest do
     {:ok, ctx: ctx, daily: daily}
   end
 
-  # A crew member the athanor made, on the scripted model, consented as a
-  # person consents one.
+  # A crew member the athanor made, on the scripted model: it holds no
+  # consent of its own, so making it asks nothing.
   defp member!(ctx, name) do
     :ok =
       Arca.put(
@@ -64,20 +64,6 @@ defmodule Aqua.WorkspaceStopTest do
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
-
-    ref = Prima.AgentRef.ref(name)
-    decisions = %{ref: ref, selections: [%{dep: @model, label: "default"}]}
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
   end
 
   defp script!(items), do: start_supervised!({ScriptedWorker, ref: @model, script: items})

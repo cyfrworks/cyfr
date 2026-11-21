@@ -296,8 +296,8 @@ defmodule Aqua.Prompt do
     [
       "\n\n---\n\n## Crew\n\nHand a job to one of these with `crew.ask` when it is what the " <>
         "member is good at. Each works it in a thread of its own under this one, with every " <>
-        "tool you hold unless the ask narrows them, and replies here when it is done, failed " <>
-        "or stopped, or when it needs the person; nothing waits for the reply.\n",
+        "tool you hold, and replies here when it is done, failed or stopped, or when it " <>
+        "needs the person; nothing waits for the reply.\n",
       Enum.map(members, fn member ->
         [
           "- ",

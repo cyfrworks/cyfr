@@ -3,47 +3,48 @@
 
 defmodule Compendium.AgentSource do
   @moduledoc """
-  An Aqua agent — the soul or a crew member — as a consent source node.
+  The crew's one grant as a consent source node: `agent:local.aqua`.
 
-  `agent:local.<name>` is a source ref like any component's: it plans,
+  Every turn of the crew, Aqua's and each crew member's, runs under the
+  one grant whose source is Aqua (`Prima.AgentRef.soul_ref/0`): toward
+  CYFR the crew is one caller, and a crew member holds no consent of its
+  own. `agent:local.aqua` is a source ref like any component's: it plans,
   consents, activates and loads through the same machinery, which reads
   every node as a row (`component_type`, `publisher`, `name`, `manifest`,
-  `digest`, `release_digest`). This module projects that row from the
-  agent file (`Compendium.AquaAgent`) so nothing downstream needs a second
-  path.
+  `digest`, `release_digest`). This module projects that row from Aqua's
+  file (`Compendium.AquaAgent`) and the athanor's brains, so nothing
+  downstream needs a second path.
 
   What the projection carries, and what it leaves out:
 
-    * The artifact digest is the agent's **capability** digest
-      (`Compendium.AquaAgent.capability_digest/1`): type, catalyst or
-      program, model, options, mode, tools, disabled. A crew member's
-      tools are the soul's (`Compendium.AquaAgent.under_soul/2`), so
-      a tool the soul gains or loses moves every member's consent with
-      the soul's. The prompt is not in it, so editing what an agent says
-      never moves a consent; the file's bytes are its **revision**, kept
-      by `Arca.AgentRevisions` for a turn to pin.
-    * `caps.tools` are the agent's `tools` that name tool actions
-      (`tool.action`, one action an entry), which consent expands
+    * `caps.tools` are Aqua's `tools`, the tools every crew member is
+      offered (`Compendium.AquaAgent.under_soul/2`), that name tool
+      actions (`tool.action`, one action an entry), which consent expands
       against the live catalog: a key no catalogued action matches
-      expands to nothing
-      (`Prima.ToolPattern.expand/2`); and `native_search`, the provider's
-      own search, which no catalog action is and the consent carries by
-      its name.
-    * `dependencies.static` are the model catalyst the agent runs on and
-      the catalysts behind the tool families it names — its hands. An
-      agent has no edge into another agent: a crew member consents and
-      runs as its own source, so a member whose brain is not installed
-      leaves the soul's consent whole. A brain that is a program is no
-      dependency: each of its turns is admitted by that turn's own
-      `program.start` step, never by the agent's consent.
-    * `agent` is the model target, the catalyst and the model, which the
-      shape digest reads; a program brain's holds its model alone, which
-      names no target. The member's mode is not in the manifest: what of
-      its tools a member runs grants nothing the consent does not
-      (`ARCHITECTURE.md` §5.4), so switching a member's mode moves no
-      consent. The flat `"model"` key is not written.
+      expands to nothing (`Prima.ToolPattern.expand/2`); and
+      `native_search`, the provider's own search, which no catalog action
+      is and the consent carries by its name.
+    * `dependencies.static` are the catalysts behind the tool families
+      Aqua's tools name, its hands, and every brain the athanor can
+      connect: each installed catalyst whose newest release speaks
+      `model/chat@1` (`brains/1`). So the grant covers every brain a crew
+      member may run on, whichever member Aqua runs on, and making a
+      member, changing its brain or choosing Aqua's member moves nothing
+      here. Each brain's edge takes its key from the brain's own grant
+      (`Sanctum.Consent.Bootstrap`'s selection of its `default` profile),
+      so connecting a brain is the one grant of its key. A brain that is a
+      program is no dependency: each of its turns is admitted by that
+      turn's own `program.start` step, never by this consent.
+    * Nothing of a crew member: no brain, model, options or mode is in it,
+      and the mode a member runs in grants nothing the consent does not
+      (`ARCHITECTURE.md` §5.4).
 
-  A disabled agent has no row: it is out of the roster.
+  The artifact digest is the digest of the manifest, so the release moves
+  exactly when what the grant covers moves. Aqua's prompt is not in it,
+  so editing what Aqua says never moves the grant; the file's bytes are
+  its **revision**, kept by `Arca.AgentRevisions` for a turn to pin.
+
+  A disabled Aqua, or a tree with none, has no row.
   """
 
   alias Compendium.AquaAgent
@@ -56,31 +57,84 @@ defmodule Compendium.AgentSource do
   @publisher "local"
 
   @doc """
-  The row of every enabled agent in the athanor's tree, the soul first.
-  A file that fails to parse has no row.
+  The grant's row, `[row]`, or `[]` for a tree with no Aqua or a disabled
+  one. Aqua's file that fails to parse has no row.
   """
   @spec rows(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def rows(%Context{} = ctx) do
     with {:ok, agents, _errors} <- AquaAgent.list(ctx) do
-      {:ok, agents |> Enum.reject(& &1.disabled) |> Enum.map(&row/1)}
-    end
-  end
+      case Enum.find(agents, &Prima.AgentRef.soul?(&1.name)) do
+        %{disabled: false} = soul ->
+          with {:ok, brains} <- brains(ctx), do: {:ok, [row(soul, brains)]}
 
-  @doc "The row of the enabled agent `name`, or `{:error, :not_found}`."
-  @spec latest_row(Context.t(), String.t()) :: {:ok, map()} | {:error, :not_found | term()}
-  def latest_row(%Context{} = ctx, name) when is_binary(name) do
-    with {:ok, rows} <- rows(ctx) do
-      case Enum.find(rows, &(&1.name == name)) do
-        nil -> {:error, :not_found}
-        row -> {:ok, row}
+        _none_or_disabled ->
+          {:ok, []}
       end
     end
   end
 
-  @doc "The consent manifest of an agent."
-  @spec manifest(AquaAgent.t()) :: map()
-  def manifest(%{name: name} = agent) do
-    tools = Map.get(agent, :tools) || []
+  @doc """
+  The grant's row when `name` is Aqua's, or `{:error, :not_found}`: a crew
+  member is no consent source.
+  """
+  @spec latest_row(Context.t(), String.t()) :: {:ok, map()} | {:error, :not_found | term()}
+  def latest_row(%Context{} = ctx, name) when is_binary(name) do
+    with true <- Prima.AgentRef.soul?(name),
+         {:ok, [row]} <- rows(ctx) do
+      {:ok, row}
+    else
+      {:error, _} = error -> error
+      _not_aqua_or_none -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Every brain the athanor can connect, as the versionless refs the grant
+  names: each installed catalyst whose newest release declares
+  `model/chat@1`, sorted. A release whose stored manifest does not decode
+  speaks nothing. The names are read behind the component index's barrier
+  (`Compendium.ProjectionReconciler.await/2`), as the graph that resolves
+  each one's release is (`Compendium.Activation`): the grant's brain set
+  and its graph are read at one state of the index, so a plan shown over
+  them commits. A component index behind its tree that cannot catch up
+  (`{:error, :projection_unavailable}`), or a store that cannot answer, is
+  its refusal, never a shorter brain set.
+  """
+  @spec brains(Context.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def brains(%Context{} = ctx) do
+    with {:ok, releases} <- brain_releases(ctx), do: {:ok, brain_refs(releases)}
+  end
+
+  # The newest release of each installed catalyst that speaks
+  # `model/chat@1`: the one read both projections filter, so the
+  # installed row and the shipped row see the same brains.
+  defp brain_releases(ctx) do
+    with :ok <- Compendium.ProjectionReconciler.await(ctx, "components"),
+         {:ok, rows} <-
+           Arca.ComponentStorage.list_components(Context.actor(ctx),
+             component_type: "catalyst",
+             limit: :none
+           ) do
+      {:ok,
+       rows
+       |> Enum.group_by(&{&1.publisher, &1.name})
+       |> Enum.map(fn {_name, versions} -> Prima.ComponentRow.latest_of(versions) end)
+       |> Enum.filter(&Prima.Model.speaks_chat?(&1.manifest))}
+    end
+  end
+
+  defp brain_refs(releases),
+    do: releases |> Enum.map(&Prima.ComponentRow.node_key/1) |> Enum.sort()
+
+  # A release the seed ships byte for byte (`Compendium.Provenance.shipped_release_digest/1`,
+  # what consent asks of any wasm component), not a person's own copy of it.
+  defp shipped_release?(release),
+    do: Compendium.Provenance.shipped_release_digest(release) == {:ok, release.release_digest}
+
+  @doc "The consent manifest of Aqua's grant over `brains` (`brains/1`)."
+  @spec manifest(AquaAgent.t(), [String.t()]) :: map()
+  def manifest(%{name: name} = soul, brains) when is_list(brains) do
+    tools = Map.get(soul, :tools) || []
 
     hands =
       tools
@@ -89,42 +143,36 @@ defmodule Compendium.AgentSource do
       |> Enum.reject(&is_nil/1)
 
     dependencies =
-      (List.wrap(agent.catalyst_ref) ++ hands)
+      (hands ++ brains)
       |> Enum.uniq()
       |> Enum.sort()
       |> Enum.map(&%{"ref" => &1})
-
-    agent_block =
-      %{}
-      |> Prima.MapUtil.put_present("catalyst", agent.catalyst_ref)
-      |> Prima.MapUtil.put_present("model", agent.model)
 
     %{
       "name" => name,
       "type" => @type_name,
       "version" => "",
       "publisher" => @publisher,
-      "description" => agent.description || "",
+      "description" => soul.description || "",
       "caps" => %{"tools" => Enum.sort(tools)},
-      "dependencies" => %{"static" => dependencies},
-      "agent" => agent_block
+      "dependencies" => %{"static" => dependencies}
     }
   end
 
-  @doc "The consent row of an agent file — the soul or a crew member."
-  @spec row(AquaAgent.t()) :: map()
-  def row(%{name: _} = agent) do
-    manifest = manifest(agent)
-    {:ok, digest} = AquaAgent.capability_digest(agent)
+  @doc "The grant's consent row: Aqua's file over the athanor's brains."
+  @spec row(AquaAgent.t(), [String.t()]) :: map()
+  def row(%{name: _} = soul, brains) do
+    manifest = manifest(soul, brains)
+    {:ok, digest} = Prima.JCS.hash(manifest)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
 
     %{
-      id: Prima.AgentRef.ref(agent.name),
+      id: Prima.AgentRef.ref(soul.name),
       component_type: @type_name,
       publisher: @publisher,
-      name: agent.name,
+      name: soul.name,
       version: "",
-      description: agent.description,
+      description: soul.description,
       manifest: manifest,
       digest: digest,
       release_digest: release_digest
@@ -132,17 +180,27 @@ defmodule Compendium.AgentSource do
   end
 
   @doc """
-  The consent row the seed's agent `name` projects, a crew member under
-  the seed soul's policy (`Compendium.AquaTemplate.shipped_agent/1`). A
-  prose-only edit of the athanor's copy does not change this row; a
-  policy, model, options or catalyst edit of the seed file does, and so
-  does an edit of the seed soul's policy for every crew member. A
-  disabled seed agent has no row.
+  The grant's row the seed vouches for: the seed's Aqua
+  (`Compendium.AquaTemplate.shipped_agent/1`) over the brains the seed
+  ships, each installed brain whose newest release is the seed's own. A
+  prose-only edit of the athanor's copy does not change it; a tools edit
+  of the seed file does. With a brain installed that the seed does not
+  ship, a person's or a pulled one, or a shipped brain whose newest
+  release is a person's, it differs from the installed row (`rows/1`), so
+  no machine grant covers that brain: a person grants it. A crew member,
+  shipped or not, has none (`{:error, :not_found}`), and neither has a
+  disabled seed Aqua.
   """
-  @spec shipped_row(String.t()) :: {:ok, map()} | {:error, term()}
-  def shipped_row(name) when is_binary(name) do
-    with {:ok, agent} <- Compendium.AquaTemplate.shipped_agent(name) do
-      if agent.disabled, do: {:error, :disabled}, else: {:ok, row(agent)}
+  @spec shipped_row(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def shipped_row(%Context{} = ctx, name) when is_binary(name) do
+    if Prima.AgentRef.soul?(name), do: shipped_soul_row(ctx, name), else: {:error, :not_found}
+  end
+
+  defp shipped_soul_row(ctx, name) do
+    with {:ok, soul} <- Compendium.AquaTemplate.shipped_agent(name),
+         :ok <- if(soul.disabled, do: {:error, :disabled}, else: :ok),
+         {:ok, releases} <- brain_releases(ctx) do
+      {:ok, row(soul, releases |> Enum.filter(&shipped_release?/1) |> brain_refs())}
     end
   end
 

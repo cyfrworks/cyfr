@@ -405,12 +405,13 @@ defmodule Compendium.ActivationTest do
           type: "formula",
           manifest: %{
             "dependencies" => %{
-              "static" => [%{"ref" => "agent:local.scout", "optional" => true}]
+              "static" => [%{"ref" => "agent:local.aqua", "optional" => true}]
             }
           }
         )
 
-      # No such agent: an optional dependency that is not there is absent.
+      # Aqua's is the one agent that is a source: with no Aqua in the tree,
+      # an optional dependency that is not there is absent.
       assert {:ok, %{graph: graph}} = Activation.resolve(ctx, root)
       assert Map.keys(graph) == ["formula:local.agent-caller"]
 

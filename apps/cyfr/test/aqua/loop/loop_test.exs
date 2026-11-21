@@ -1129,11 +1129,13 @@ defmodule Aqua.LoopTest do
     consent!(ctx, name)
   end
 
-  # The member's grant walked again as a person walks it, its brain's key
-  # the one the model's own profile binds.
+  # The crew's one grant, Aqua's, walked again as a person walks it, its
+  # brain's key the one the model's own profile binds. A crew member holds
+  # no grant of its own, so there is none to walk for it.
   defp consent!(ctx, name) do
-    ref = if Prima.AgentRef.soul?(name), do: @soul, else: Prima.AgentRef.ref(name)
-    walk!(ctx, %{ref: ref, selections: [%{dep: @model, label: "default"}]})
+    if Prima.AgentRef.soul?(name),
+      do: walk!(ctx, %{ref: @soul, selections: [%{dep: @model, label: "default"}]}),
+      else: :ok
   end
 
   # A crew member of the athanor's own, on the soul's brain, in `mode`.

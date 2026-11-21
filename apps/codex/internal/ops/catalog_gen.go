@@ -5465,8 +5465,6 @@ type WorkspaceOpenArgs struct {
 	Refs Field[[]string] `json:"refs,omitzero"`
 	// open: files of that daily thread's posts to carry into the workspace thread, each {message_id, stored_name}
 	Attachments Field[[]WorkspaceOpenArgsAttachmentsItem] `json:"attachments,omitzero"`
-	// open: narrow the work's tools to these (a tool, or tool.action); posting and reporting stay; omit for all
-	Tools Field[[]string] `json:"tools,omitzero"`
 	// open: keep this work's browser apart from the person's other work
 	Apart Field[bool] `json:"apart,omitzero"`
 }

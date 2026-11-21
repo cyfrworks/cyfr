@@ -1906,16 +1906,17 @@ defmodule PrismWeb.ThreadPaneLive do
                   Grant it on your Aqua page.
                 </.link>
               <% @model_ready == :consent_stale -> %>
-                <%!-- The soul's shape moved since its consent: consenting
-                     again is all it needs, never a model to connect. --%>
+                <%!-- The crew's grant no longer covers what the crew may
+                     use: granting it again is all it needs, never a model
+                     to connect. --%>
                 <span data-test="model-consent">
-                  What Aqua runs on changed since it was consented.
+                  What Aqua and its crew members may use changed since you granted it.
                 </span>
                 <.link
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua")}
                   class="text-blue-400 hover:underline"
                 >
-                  Consent again on your Aqua page.
+                  Grant it again on your Aqua page.
                 </.link>
               <% @model_ready == :consent_damaged -> %>
                 <%!-- A consent that exists but is damaged, or could not be read,
