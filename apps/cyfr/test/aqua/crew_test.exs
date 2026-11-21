@@ -979,6 +979,15 @@ defmodule Aqua.CrewTest do
     assert {:ok, _} = drain(ctx)
     assert {:ok, "applied"} = outcome(ctx, "message", last)
     await_status(ctx, delivered_turn(ctx, child, last), "completed")
+
+    # That drain also took the member's replies to the room, where they
+    # opened a turn of the soul's: the test ends once that turn has, so
+    # no model call of it is still being dispatched.
+    wait_until(
+      fn -> match?({:ok, []}, Tape.open_turns(ctx, room.id)) end,
+      45_000,
+      "the room's turn to end"
+    )
   end
 
   # The browser's actions follow the person's browser setting, not the
