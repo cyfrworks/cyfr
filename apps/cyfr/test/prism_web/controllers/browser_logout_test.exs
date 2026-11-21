@@ -10,10 +10,10 @@ defmodule PrismWeb.BrowserLogoutTest do
   When the store deletes the session the cookie names, the answer is the
   signed-out redirect with `cyfr-session-retired: 1`, and the cookie the
   browser held is refused afterwards; the same cookie signed out again
-  gets the header again, since no session of it stands. When the store
-  cannot delete it, the answer is `503` with neither the header nor the
-  redirect, and that same cookie still signs the browser in, so the
-  sign-out can be sent again. A sign-out with no session redirects
+  gets the header again, since its session is gone from the store. When
+  the store cannot delete it, the answer is `503` with neither the header
+  nor the redirect, and that same cookie still signs the browser in, so
+  the sign-out can be sent again. A sign-out with no session redirects
   without the header.
   """
 
@@ -141,7 +141,7 @@ defmodule PrismWeb.BrowserLogoutTest do
     refute signs_in?(browser.cookie)
   end
 
-  test "the same cookie signed out again is told again that no session of it stands",
+  test "the same cookie signed out again is told again that its session is gone",
        %{conn: conn} do
     browser = signed_in!(conn)
 
