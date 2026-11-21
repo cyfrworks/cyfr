@@ -554,19 +554,31 @@ defmodule Aqua.Models do
     # The listing's refusal is kept: a listing that cannot be read never
     # resolves a model against no catalysts.
     listing = Aqua.AgentConfig.catalyst_listing(ctx)
-    brains = for %{"name" => name} = agent <- agents, is_binary(name), do: {name, brain_of(agent)}
 
-    # The crew's one grant, loaded once for every catalyst brain given.
+    statuses =
+      for %{"name" => name} = agent <- agents,
+          is_binary(name),
+          brain <- List.wrap(brain_of(agent)),
+          into: %{} do
+        case brain do
+          {:program, id} -> {name, program_status(ctx, id)}
+          {:catalyst, ref} -> {name, catalyst_status(ctx, listing, ref)}
+        end
+      end
+
+    # The crew's one grant, loaded once, and only after every brain's own
+    # plan has read connected, as a turn reaches the grant after its brain.
     grant =
-      if Enum.any?(brains, &match?({_name, {:catalyst, _}}, &1)),
+      if Enum.any?(statuses, &match?({_name, {:connected, _ref, _resolved, _connect}}, &1)),
         do: Opus.authority_for(ctx, :default, @grant)
 
-    for {name, brain} <- brains, brain != nil, into: %{} do
-      case brain do
-        {:program, id} -> {name, program_status(ctx, id)}
-        {:catalyst, ref} -> {name, catalyst_status(ctx, listing, grant, name, ref)}
-      end
-    end
+    Map.new(statuses, fn
+      {name, {:connected, ref, resolved, connect}} ->
+        {name, granted_status(grant, name, ref, resolved, connect)}
+
+      settled ->
+        settled
+    end)
   end
 
   # The brain an agent names: its program, by the row's name, or its
@@ -641,12 +653,11 @@ defmodule Aqua.Models do
   # every member actually runs it with, resolved as a turn would resolve
   # it. A bound key the grant's edge does not select is still one to
   # connect.
-  defp catalyst_status(_ctx, {:error, _unread}, _grant, _name, ref),
-    do: {:model_unavailable, ref}
+  defp catalyst_status(_ctx, {:error, _unread}, ref), do: {:model_unavailable, ref}
 
-  defp catalyst_status(ctx, {:ok, listing}, grant, name, ref) do
+  defp catalyst_status(ctx, {:ok, listing}, ref) do
     case Aqua.AgentConfig.resolve_catalyst(listing, ref) do
-      {:ok, resolved} -> planned_status(ctx, grant, name, ref, resolved)
+      {:ok, resolved} -> planned_status(ctx, ref, resolved)
       {:error, _no_such_catalyst} -> {:missing, ref}
     end
   end
@@ -656,14 +667,16 @@ defmodule Aqua.Models do
   # every other refusal (a store that could not answer, which the
   # component domain answers as a sentence, a damaged row, a timeout, a
   # forbidden call, anything else) leaves whether it is installed unknown.
-  defp planned_status(ctx, grant, name, ref, resolved) do
+  # A brain whose own plan reads ready is `{:connected, ref, resolved,
+  # connect}`, which the crew's grant then settles (`granted_status/5`).
+  defp planned_status(ctx, ref, resolved) do
     case Aqua.Ops.call_tool("component", ctx, %{
            "action" => "setup_plan",
            "reference" => resolved
          }) do
       {:ok, plan} ->
         case plan_state(plan, resolved) do
-          :ready -> granted_status(grant, name, ref, resolved, connect_state(plan))
+          :ready -> {:connected, ref, resolved, connect_state(plan)}
           state -> {state, resolved}
         end
 
