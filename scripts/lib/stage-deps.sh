@@ -24,7 +24,7 @@
 #      an entry of deps/ or of a dependency's folder in it, has its
 #      dependencies compiled (`mix deps.loadpaths` under the folder's build
 #      path, adapter and MIX_ENV), in turn, whatever the one before ended
-#      with, on one quarter (scripts/heavy-check.sh -q 1, running this
+#      with, on one quarter (scripts/heavy-check.sh, running this
 #      script with --compile), and its stamp is written once its compile
 #      has passed. A dependency's
 #      own compile writes under deps/, which every folder shares (erlex's
@@ -118,6 +118,6 @@ done
 [ "${#stale[@]}" -gt 0 ] || exit 0
 # In the background, so a signal reaches its trap while the compile
 # queues or runs.
-scripts/heavy-check.sh -q 1 -t 1800 -- bash scripts/lib/stage-deps.sh --compile "${stale[@]}" 9>&- &
+scripts/heavy-check.sh -t 1800 -- bash scripts/lib/stage-deps.sh --compile "${stale[@]}" 9>&- &
 compiling=$!
 wait "$compiling"

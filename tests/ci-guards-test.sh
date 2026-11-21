@@ -685,7 +685,6 @@ scripts/lib/contain.sh|
 scripts/ci/self-test-scope.sh|
 tests/contain-test.sh|partitions=false
 -tests/contain-test.sh|partitions=false
-tests/load-check/run.sh|partitions=false
 scripts/stages.tsv|partitions=false
 scripts/heavy-check.sh|partitions=false
 .github/workflows/release.yml|partitions=false
