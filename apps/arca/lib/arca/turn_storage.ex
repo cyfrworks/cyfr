@@ -2158,8 +2158,8 @@ defmodule Arca.TurnStorage do
   root execution leaves `running`/`paused`, the reservation is released
   and the open running interval is added to `active_ms`. A turn already
   over is answered `{:error, :already_finished}`; a turn with no root yet
-  (still `accepted`) closes on its own. A turn with a steer past its
-  boundary refuses `completed` with `{:error, :steer_pending}`: its loop
+  (still `accepted`) closes on its own. A turn with a steer no step
+  carried refuses `completed` with `{:error, :steer_pending}`: its loop
   goes on to answer the steer; one with a page's call the host proposed
   in it and nobody dispatched yet refuses it with
   `{:error, :call_pending}`: its loop goes on to dispatch the call. A turn with a root attempt ends under its
@@ -3643,10 +3643,12 @@ defmodule Arca.TurnStorage do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Move the turn's boundary past every human row attached to it that
-  arrived while it worked, and answer those rows in `seq` order: the
-  steer the loop drains before its next model request. A turn that is
-  over drains nothing (`{:error, :not_open}`).
+  Move the turn's boundary past every post attached to it that arrived
+  while it worked and no step carried yet, and answer those rows in `seq`
+  order: the steer the loop drains before its next model request, which
+  its model step carries (`consumed!/3`). A post drained by a round that
+  died before its step is drained again by the next. A turn that is over
+  drains nothing (`{:error, :not_open}`).
   """
   @spec drain_steer(Prima.Actor.t(), String.t(), map()) :: {:ok, [map()]} | {:error, term()}
   def drain_steer(actor, turn_id, attrs \\ %{})
@@ -3678,7 +3680,11 @@ defmodule Arca.TurnStorage do
 
   def drain_steer(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
 
-  @doc "Whether a human row attached to the turn waits past its boundary."
+  @doc """
+  Whether a post written into the turn after its opening waits for a step
+  to carry it, past the boundary of a turn stopped on an uncertain call
+  (`steer_rows/2`).
+  """
   @spec steer_pending?(Prima.Actor.t(), String.t()) :: boolean() | {:error, term()}
   def steer_pending?(%Prima.Actor{athanor_id: athanor_id}, turn_id)
       when is_binary(athanor_id) and athanor_id != "" do
@@ -5507,21 +5513,31 @@ defmodule Arca.TurnStorage do
       owed_notices(athanor_id, turn, progress) != []
   end
 
-  # A steer is what someone other than the turn's agent wrote into it
-  # past its boundary, and that no program brain's step carried
-  # (`carry/3`): every row the turn writes itself carries its agent.
+  # A steer is a post someone other than the turn's agent wrote into it
+  # after the one that opened it, that no step carried yet (`consumed!/3`,
+  # `carry/3`): every row the turn writes itself carries its agent. A post
+  # a round took in waits until that round's step carries it, so one whose
+  # round died first is still owed a round. A turn stopped on an uncertain
+  # call goes on only on a line past the boundary its stop moved, so while
+  # it is so paused a post written before the stop is none.
   # arca:db-raise-ok inside the caller's transaction
   defp steer_rows(athanor_id, %Turn{} = turn) do
-    window = turn.window_upto_seq || 0
-
-    Arca.Repo.all(
-      from(m in Message,
-        where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
-        where: m.sent_by != ^turn.agent and m.seq > ^window and is_nil(m.carried_by),
-        order_by: [asc: m.seq]
-      )
+    from(m in Message,
+      where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
+      where: m.sent_by != ^turn.agent and is_nil(m.carried_by),
+      order_by: [asc: m.seq]
     )
+    |> steers_of(turn)
+    |> Arca.Repo.all()
   end
+
+  defp steers_of(query, %Turn{status: "paused", paused_reason: "uncertain"} = turn),
+    do: from(m in query, where: m.seq > ^(turn.window_upto_seq || 0))
+
+  defp steers_of(query, %Turn{message_id: opening}) when is_binary(opening),
+    do: from(m in query, where: m.id != ^opening)
+
+  defp steers_of(query, _turn), do: query
 
   # The thread's row, held until the caller's transaction ends.
   # arca:db-raise-ok inside the caller's transaction

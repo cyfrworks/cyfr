@@ -3029,8 +3029,9 @@ defmodule Aqua.Loop do
 
   defp replay_safe?(%Call{} = call), do: Policy.replay_safe?(call)
 
-  # A post past a model turn's boundary skips what the turn had not run,
-  # since the model answers the newer message instead. A program turn's
+  # A post no step carried yet skips what a model turn had not run, since
+  # the model answers the newer message instead; one a round took in before
+  # it died is such a post, so the round is run again (`settle/1`). A program turn's
   # posts are deliveries its attendant writes once the turn's start is
   # allowed (`Aqua.Program`), so none skips a step of it, its start least.
   defp steered?(%State{program: %{}}), do: false

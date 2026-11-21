@@ -19,6 +19,32 @@ defmodule Aqua.LoopTest.CountStore do
   def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
 end
 
+# Holds the first listing of one post's files until told to go on: the
+# round has drained the post and not yet opened its model step. The test
+# sets the term through `Prima.Test.Env`, which restores it; `once` lets
+# the round's later listings of the same files through.
+defmodule Aqua.LoopTest.DrainGapStore do
+  use Arca.Storage.TestDouble
+
+  def list_typed(actor, path) do
+    case :persistent_term.get(__MODULE__, nil) do
+      {^path, observer, once} ->
+        if :atomics.add_get(once, 1, 1) == 1 do
+          send(observer, {:drain_gap, self()})
+
+          receive do
+            :continue -> :ok
+          end
+        end
+
+      _ ->
+        :ok
+    end
+
+    Arca.Adapters.Local.list_typed(actor, path)
+  end
+end
+
 defmodule Aqua.LoopTest do
   @moduledoc """
   The loop against the real root, the real hands and a scripted model:
@@ -1780,6 +1806,56 @@ defmodule Aqua.LoopTest do
              Threads.messages(Sanctum.Context.actor(ctx), thread.id),
              &(&1.content == "and hi again")
            )
+  end
+
+  # The runner dies while a round that drained a post reads its files:
+  # before the round's model step opened, the recovered turn still owes the
+  # post that round; once the step opened (the control), the step carries it.
+  for checkpoint <- [:drained, :opened] do
+    @tag checkpoint: checkpoint
+    test "a takeover answers a later post after #{checkpoint}",
+         %{ctx: ctx, thread: thread, checkpoint: checkpoint} do
+      script!([{:probe, self()}, reply("hello"), reply("I read the later post")])
+      turn_id = send!(ctx, thread, "hello")
+      assert_receive {:scripted_probe, worker, _}, 30_000
+      {:ok, turn} = Tape.turn(ctx, turn_id)
+      file = %{"filename" => "later.txt", "media_type" => "text/plain", "bytes" => "later"}
+      {id, refs} = stored!(ctx, thread, [file])
+      steer!(ctx, thread, turn, id, "one more thing", refs)
+      Prima.Test.Env.put_app_env(:arca, :storage_adapter, Aqua.LoopTest.DrainGapStore)
+
+      Prima.Test.Env.put_persistent_term(
+        Aqua.LoopTest.DrainGapStore,
+        {["threads", thread.id, id], self(), :atomics.new(1, [])}
+      )
+
+      send(worker, :continue)
+      assert_receive {:drain_gap, blocked}, 30_000
+      {:ok, kept} = Tape.turn(ctx, turn_id)
+      {:ok, post} = Tape.message(ctx, id)
+      assert kept.window_upto_seq >= post.seq
+      assert post.carried_by == nil
+      {:ok, [%{kind: "model", dispatch_state: "closed", outcome: "ok"}]} = Tape.steps(ctx, turn)
+
+      if checkpoint == :opened do
+        assert {:ok, _step} =
+                 Tape.propose_call(ctx, kept, %{
+                   kind: "model",
+                   purpose: "chat",
+                   dispatch_state: "dispatched",
+                   idempotency_key: "review:never-reached-model"
+                 })
+      end
+
+      Process.exit(Aqua.Runner.whereis(thread.id), :kill)
+      Process.exit(blocked, :kill)
+      ended = ended!(ctx, turn_id)
+      assert ended.status == "completed"
+      assert ended.recovery_attempts == 1
+      assert length(chat_messages()) == 2
+      {:ok, carried} = Tape.message(ctx, id)
+      assert is_binary(carried.carried_by)
+    end
   end
 
   test "a steer names an open turn of its own thread", %{ctx: ctx, thread: thread} do
