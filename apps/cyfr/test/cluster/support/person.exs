@@ -12,7 +12,8 @@ defmodule Cyfr.Cluster.Person do
   console does (`context/1`), in an athanor filled through the explicit
   provision verb on the member that makes the person, which answers once
   the fill has run there: the fixture's Aqua tree and shipped catalysts copied in,
-  indexed, and the soul and its crew member consented. The model's key is then entered and
+  indexed, and the crew's one grant, Aqua's, consented; a crew member holds
+  none of its own. The model's key is then entered and
   bound through the consent walk (`person!/0`). What such a
   person does then goes through the runner (`send/3`), the console's
   opening of a thread (`open/2`), the consent
@@ -128,7 +129,7 @@ defmodule Cyfr.Cluster.Person do
     actor = Sanctum.Context.actor(ctx)
     member = Prima.AgentRef.ref(Cyfr.Test.SeedBundle.seat_member())
     {:ok, [_soul]} = Arca.ConsentStorage.profiles(actor, @soul)
-    {:ok, [_member]} = Arca.ConsentStorage.profiles(actor, member)
+    {:ok, []} = Arca.ConsentStorage.profiles(actor, member)
 
     entry =
       Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
@@ -138,9 +139,9 @@ defmodule Cyfr.Cluster.Person do
 
   @doc """
   A crew member of the person's athanor named `name`, on the model's
-  brain: its file written to the athanor's crew, indexed, and consented as
-  the person consents a member the athanor made, its brain's key the one
-  the model's default profile binds.
+  brain: its file written to the athanor's crew and indexed. It asks
+  nothing: it runs under the crew's one grant, whose edge into the model
+  takes the key the model's default profile binds.
   """
   @spec crew_member!(String.t(), String.t()) :: :ok
   def crew_member!(token, name) do
@@ -155,10 +156,6 @@ defmodule Cyfr.Cluster.Person do
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    ref = Prima.AgentRef.ref(name)
-    decisions = %{ref: ref, selections: [%{dep: @model, label: "default"}]}
-    %{plan: plan, preview: preview} = walk(token, %{ref: ref}, decisions)
-    {:ok, _} = commit(token, decisions, plan, preview)
     :ok
   end
 

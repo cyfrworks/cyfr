@@ -192,12 +192,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   @doc """
-  The `ShapeDigest.compute/1` input derived from live state. An agent
-  source's shape also carries its model target (`catalyst#model`): the
-  model an agent runs on is what it may do, so changing it re-asks. Its
-  mode is not in it: what of its tools a member runs grants nothing the
-  consent does not (`ARCHITECTURE.md` §5.4), so switching a member's mode
-  re-asks nothing.
+  The `ShapeDigest.compute/1` input derived from live state. The crew's
+  grant, Aqua's agent source, names every brain the athanor can connect
+  as a dependency and no crew member's brain, model or mode
+  (`Compendium.AgentSource`): choosing a member, its brain or its model
+  re-asks nothing, and what of its tools a member runs grants nothing the
+  consent does not (`ARCHITECTURE.md` §5.4).
   """
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref), do: shape_input(ctx, source_ref, :latest)
@@ -231,7 +231,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
          slots: Enum.sort(Enum.map(needs, & &1.name)),
          dependency_releases: releases
        }
-       |> Prima.MapUtil.put_present(:model_target, model_target(manifest))
        |> Prima.MapUtil.put_present(:tincture_digest, tincture_digest)
        |> Prima.MapUtil.put_present(:provides, provides(manifest))}
     end
@@ -270,19 +269,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
       end
     else
       {:ok, nil}
-    end
-  end
-
-  defp model_target(manifest) do
-    agent = manifest["agent"] || %{}
-
-    case {manifest["type"], agent["catalyst"], agent["model"]} do
-      {"agent", catalyst, model}
-      when is_binary(catalyst) and catalyst != "" and is_binary(model) and model != "" ->
-        "#{catalyst}##{model}"
-
-      _ ->
-        nil
     end
   end
 

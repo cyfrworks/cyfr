@@ -24,6 +24,11 @@ defmodule Aqua.Loop do
   the app and the account: the person grants it there, and the retry is a
   new turn, since this one's authority never widens.
 
+  Every turn, Aqua's and each crew member's, claims its root under the
+  crew's one grant, Aqua's (`Compendium.AgentSource`): toward CYFR the
+  caller is Aqua, and the member whose turn it is stays the worker the
+  turn's row, its posts and its usage name.
+
   Every write goes through `Aqua.Tape` under the actor's guest-planed
   context; the loop process never runs a child on itself.
 
@@ -72,6 +77,10 @@ defmodule Aqua.Loop do
 
   # A root turn's holder on this boot registers here (`holder/1`).
   @holders Aqua.RunnerRegistry
+  # The source every turn of the crew claims its root under, Aqua's and
+  # each crew member's alike: the crew's one grant (`Compendium.AgentSource`).
+  # The member stays the worker the turn's row names (`turns.agent`).
+  @grant Prima.AgentRef.soul_ref()
   @max_steps 30
   @retry_delays_ms [2_000, 8_000, 20_000]
   # `{"operation":"chat","params":}` around the request, which is what
@@ -198,36 +207,17 @@ defmodule Aqua.Loop do
     end)
   end
 
-  # Why a root was not claimed, as the person can act on it. A soul whose
-  # file is refused has no registry row (`Compendium.AgentIndex` indexes
-  # only what parses), so its root is refused as an unknown component
-  # before the file is read: the soul's own refusal is the reason then,
-  # and a file still holding the retired `tool_policy`, or a `tools`
-  # entry that names no one action, gets its line.
-  #
-  # A soul whose crew member does not stand has a consent of a shape that
-  # names no brain, so its root is refused before its file is pinned: that
-  # member's sentence is the reason then, as the turn's would be.
-  defp unclaimed(ctx, %{agent: agent}, reason) do
-    with true <- Prima.AgentRef.soul?(agent),
-         {:ok, roster, refused} <- Aqua.AgentConfig.roster_and_soul(ctx) do
-      cond do
-        soul_line?(refused) -> refused
-        unheld = unheld(roster) -> unheld
-        true -> reason
-      end
-    else
+  # Why a root was not claimed, as the person can act on it. Every turn of
+  # the crew claims under Aqua's grant, and Aqua's file that is refused has
+  # no row to grant (`Compendium.AgentSource` projects only what parses),
+  # so the root of every turn is refused as an unknown component before a
+  # file is read: Aqua's own refusal is the reason then, and a file still
+  # holding the retired `tool_policy`, or a `tools` entry that names no
+  # one action, gets its line.
+  defp unclaimed(ctx, _turn, reason) do
+    case Aqua.AgentConfig.roster_and_soul(ctx) do
+      {:ok, _roster, refused} -> if soul_line?(refused), do: refused, else: reason
       _other -> reason
-    end
-  end
-
-  defp unheld(roster) do
-    case Enum.find(roster, &Prima.AgentRef.soul?(&1["name"])) do
-      %{"holder" => %{state: state, name: member}} when state != :held ->
-        {:aqua_runs_on, state, member}
-
-      _held_or_none ->
-        nil
     end
   end
 
@@ -325,7 +315,7 @@ defmodule Aqua.Loop do
     _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
 
     Tape.announce(ctx, turn.thread_id, :consent_required, %{
-      ref: source_ref(turn),
+      ref: @grant,
       user_id: ctx.user_id
     })
 
@@ -559,12 +549,12 @@ defmodule Aqua.Loop do
     with {:ok, claim} <-
            Opus.claim_turn_root(
              ctx,
-             source_ref(turn),
+             @grant,
              [turn_id: turn.id, thread_id: turn.thread_id, envelope: %{"turn" => turn.id}] ++
                fire_of(turn)
            ) do
       with {:ok, snapshot} <- Compendium.agent_snapshot(ctx, turn.agent),
-           :ok <- consented_release(claim.authority, turn, snapshot),
+           :ok <- consented_release(ctx, claim.authority, snapshot),
            {:ok, started} <-
              Tape.start_turn(ctx, turn, %{
                root_execution_id: claim.execution_id,
@@ -642,7 +632,7 @@ defmodule Aqua.Loop do
   # must still be at the pinned consent, and the budget is the turn's
   # reservation.
   defp pinned_authority(ctx, %{profile_id: profile_id} = turn) when is_binary(profile_id) do
-    case Opus.authority_for(ctx, {:id, profile_id}, source_ref(turn), budget_id: turn.budget_id) do
+    case Opus.authority_for(ctx, {:id, profile_id}, @grant, budget_id: turn.budget_id) do
       {:ok, %{consent_id: consent_id} = authority} when consent_id == turn.consent_id ->
         {:ok, authority}
 
@@ -656,22 +646,21 @@ defmodule Aqua.Loop do
 
   defp pinned_authority(_ctx, _turn), do: {:error, :no_pin}
 
-  # The source a turn runs as: the soul, or the crew member it runs.
-  defp source_ref(%{agent: name}) do
-    if Prima.AgentRef.soul?(name),
-      do: Prima.AgentRef.soul_ref(),
-      else: Prima.AgentRef.ref(name)
-  end
-
-  # The file the turn pins must be the release the loaded consent names
-  # for its own node; a file edited past its consent is refused, never
-  # run under the old grant.
-  defp consented_release(%{activation: activation}, turn, %{agent: agent}) do
-    consented = Map.get(activation, source_ref(turn))
-
-    if is_binary(consented) and consented == Compendium.agent_row(agent).release_digest,
-      do: :ok,
-      else: {:error, :agent_changed}
+  # The tools the turn pinned must be those of the release the loaded
+  # grant names for its source, Aqua's, as the tree and the brains stand
+  # once the file is pinned: Aqua's file edited past its grant is refused,
+  # never run under the old grant, whichever member's turn it is. A crew
+  # member's own file is in no grant, so its edit refuses nothing here.
+  defp consented_release(ctx, %{activation: activation}, %{agent: agent}) do
+    with {:ok, row} <- Compendium.crew_grant_row(ctx),
+         consented when is_binary(consented) <- Map.get(activation, @grant),
+         true <- consented == row.release_digest,
+         true <- Enum.sort(agent.tools || []) == row.manifest["caps"]["tools"] do
+      :ok
+    else
+      {:error, reason} when reason != :not_found -> {:error, reason}
+      _moved -> {:error, :agent_changed}
+    end
   end
 
   # ---------------------------------------------------------------------------
