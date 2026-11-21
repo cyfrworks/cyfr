@@ -166,8 +166,7 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
   test "Aqua, on a crew member whose brain is claude, runs claude with the key bound on " <>
          "claude's own profile",
        %{ctx: ctx} do
-    # The crew's grant's closure is every brain the athanor can connect and
-    # the hands.
+    # The brains the athanor can connect and the hands Aqua's tools need.
     for {plural, name} <- [
           {"catalysts", "claude"},
           {"catalysts", "openai"},
@@ -230,15 +229,17 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
 
     consent!(ctx, "catalyst:local.claude", %{entry_id: entry.id})
 
-    # The crew's grant selects claude's default profile, which now binds the
-    # key: the assistant's authority lends it on its edge, with nothing
-    # granted again, and the child runs to its own refusal.
-    {:ok, authority} = Opus.authority_for(ctx, :default, "agent:local.aqua")
+    # A turn's model call runs under claude's own grant, whose default
+    # profile now binds the key: claude's node invoking itself takes it,
+    # with nothing of Aqua's granted again, and the child runs to its own
+    # refusal.
+    {:ok, authority} = Opus.authority_for(ctx, :default, "catalyst:local.claude")
 
     assert {:error, "Unknown operation: nothing.here"} =
              Opus.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
 
-    # Revoking the catalyst's profile cuts the assistant off at the next load.
+    # Revoking the catalyst's profile cuts the crew off at the next load:
+    # claude's grant no longer stands, and Aqua's still does.
     {:ok, [claude_profile]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")
 
@@ -250,10 +251,9 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
         "revoked"
       )
 
-    {:ok, revoked} = Opus.authority_for(ctx, :default, "agent:local.aqua")
-
-    assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
-             Opus.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
+    assert {:error, revoked} = Opus.authority_for(ctx, :default, "catalyst:local.claude")
+    assert {:ok, :absent} = Aqua.ConsentStatus.classify_refusal(revoked)
+    assert {:ok, _grant} = Opus.authority_for(ctx, :default, "agent:local.aqua")
   end
 
   test "a shared key whose one field is `API key` is a candidate for the Grok need with the " <>

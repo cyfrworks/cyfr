@@ -3,11 +3,11 @@
 
 defmodule Opus.AgentAuthorityTest do
   @moduledoc """
-  The crew's one grant, pinned as `agent:local.aqua`, runs each brain as
-  a child under this host: each brain's edge selects the key bound on that
-  brain's own profile, so a turn on one brain carries that brain's key and
-  destination alone, and the child answers the contract. A crew member is
-  no source of its own.
+  The crew's one grant, pinned as `agent:local.aqua`, names no brain: a
+  turn's model call runs under the brain's own grant, the brain's node
+  invoking itself under it as a child of the turn's root, so a call on one
+  brain carries that brain's key, destination and limits alone, and the
+  child answers the contract. A crew member is no source of its own.
   """
 
   use ExUnit.Case, async: false
@@ -54,7 +54,9 @@ defmodule Opus.AgentAuthorityTest do
     {:ok, ctx: ctx}
   end
 
-  test "the soul runs its model with the key bound on the model's own profile", %{ctx: ctx} do
+  test "a brain's model call runs under the brain's own grant, the key bound on its own " <>
+         "profile, as the brain invoking itself",
+       %{ctx: ctx} do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted and "catalyst:local.claude" in minted
 
@@ -68,10 +70,18 @@ defmodule Opus.AgentAuthorityTest do
 
     describe = %{"operation" => "describe", "params" => %{}}
 
-    {:ok, unbound} = Admission.authority_for(ctx, :default, @soul)
-    assert unbound.source_ref == @soul
+    # Aqua's grant names no brain: a step into one from it carries nothing.
+    {:ok, soul} = Admission.authority_for(ctx, :default, @soul)
+    refute Map.has_key?(soul.policy.nodes, "catalyst:local.claude")
 
-    assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
+    # Until the person binds a key the brain's grant holds none: its own
+    # answers about itself, which need none, run under it with nothing
+    # attached.
+    {:ok, unbound} = Admission.authority_for(ctx, :default, "catalyst:local.claude")
+    assert unbound.source_ref == "catalyst:local.claude"
+    assert unbound.resources.vault == nil
+
+    assert {:ok, %{output: _}} =
              Opus.run_child(unbound, "catalyst:local.claude", nil, describe, child_opts)
 
     {:ok, entry} =
@@ -104,8 +114,20 @@ defmodule Opus.AgentAuthorityTest do
         expected_consent_revision: plan.expected_consent_revision
       })
 
-    {:ok, authority} = Admission.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Admission.authority_for(ctx, :default, "catalyst:local.claude")
     assert Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
+    assert authority.resources.vault.entry_id == entry.id
+
+    # The call is the brain's node invoking itself: the child holds the
+    # brain's own grant whole, its key, its destination and its limits.
+    assert {:ok, %{authority: child, bound?: true}} =
+             Admission.step_invoke(authority, "catalyst:local.claude", nil,
+               ctx: Sanctum.Context.enter_guest(ctx)
+             )
+
+    assert child.chain == ["catalyst:local.claude", "catalyst:local.claude"]
+    assert child.resources == authority.resources
+    assert Prima.Authority.limits(child) == Prima.Authority.limits(authority)
 
     # A root pin whose profile row is missing is not intact: the loader
     # fails closed rather than trusting a constructed authority.
@@ -142,7 +164,7 @@ defmodule Opus.AgentAuthorityTest do
     assert {:error, _} = Admission.authority_for(ctx, :default, "agent:local.explorer")
 
     {:ok, http_edge} =
-      Prima.Authority.Blob.lookup_edge(authority.policy, @soul, "catalyst:local.http", "")
+      Prima.Authority.Blob.lookup_edge(soul.policy, @soul, "catalyst:local.http", "")
 
     assert http_edge.egress.domains != []
   end
@@ -154,11 +176,11 @@ defmodule Opus.AgentAuthorityTest do
              Admission.inspect_component(ctx, @soul)
   end
 
-  # The soul's inspection reads no dependency tree, so its model's damage
-  # first meets the run's graph.
+  # The soul's grant names no brain, so a brain's damage meets the brain's
+  # own grant, never Aqua's.
   @tag :capture_log
-  test "a model catalyst whose stored manifest does not decode is the soul's damaged " <>
-         "component graph, never a setup to make",
+  test "a model catalyst whose stored manifest does not decode is its own grant's damage, " <>
+         "never Aqua's, and never a setup to make",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     assert {:ok, _} = Admission.authority_for(ctx, :default, @soul)
@@ -173,14 +195,16 @@ defmodule Opus.AgentAuthorityTest do
 
     assert count > 0
 
-    assert Admission.authority_for(ctx, :default, @soul) ==
-             {:error, {:corrupt, {:component_graph, @soul}}}
+    assert {:ok, _} = Admission.authority_for(ctx, :default, @soul)
+
+    assert {:error, {:corrupt, _damage}} =
+             Admission.authority_for(ctx, :default, "catalyst:local.claude")
   end
 
-  # Shared permission is not shared secret material: under the one grant,
-  # each brain's edge lends that brain's own key to that brain's own
-  # destination, so a member's call on one brain never carries another's.
-  test "two brains under the one grant run each with its own brain's key, to its own host", %{
+  # Shared permission is not shared secret material: each brain's model
+  # calls run under that brain's own grant, so a member's call on one
+  # brain never carries another's key or reaches another's host.
+  test "two brains run each under its own grant, with its own key, to its own host", %{
     ctx: ctx
   } do
     {:ok, _} = Bootstrap.run(ctx)
@@ -191,24 +215,31 @@ defmodule Opus.AgentAuthorityTest do
         "GEMINI_API_KEY" => "g-gemini"
       })
 
-    {:ok, authority} = Admission.authority_for(ctx, :default, @soul)
-
     for {brain, entry, host} <- [
           {"catalyst:local.claude", claude, "api.anthropic.com"},
           {"catalyst:local.gemini", gemini, "generativelanguage.googleapis.com"}
         ] do
-      {:ok, edge} = Prima.Authority.Blob.lookup_edge(authority.policy, @soul, brain, "")
-      assert edge.vault.entry_id == entry.id
-      assert host in edge.egress.domains
+      {:ok, authority} = Admission.authority_for(ctx, :default, brain)
+      assert Map.keys(authority.policy.nodes) == [brain]
+      assert authority.resources.vault.entry_id == entry.id
+      assert authority.resources.egress.domains == [host]
 
-      # The child a turn steps into on that brain holds that edge alone.
+      # The child a turn's call steps into holds that grant alone.
       assert {:ok, %{authority: child, bound?: true}} =
                Admission.step_invoke(authority, brain, nil, ctx: Sanctum.Context.enter_guest(ctx))
 
-      assert child.chain == [@soul, brain]
+      assert child.chain == [brain, brain]
       assert child.resources.vault.entry_id == entry.id
-      assert child.resources.egress.domains == edge.egress.domains
+      assert child.resources.egress.domains == [host]
     end
+
+    # A pinned profile names one brain's grant alone: claude's id never
+    # loads for gemini, so a turn's pin cannot carry a call to another
+    # brain's grant.
+    {:ok, claude_grant} = Admission.authority_for(ctx, :default, "catalyst:local.claude")
+
+    assert {:error, {:not_found, _id}} =
+             Admission.authority_for(ctx, {:id, claude_grant.profile_id}, "catalyst:local.gemini")
   end
 
   defp bind_claude!(ctx, opts) do

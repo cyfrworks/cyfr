@@ -303,7 +303,9 @@ defmodule Cyfr.TwoWorkersTest do
 
       assert Wire.seen(wire, WorkerWire.host_route(:record_denial)) == [:forward_then_drop]
 
-      {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
+      # The parent runs under the stub brain's own grant, as a turn's model
+      # call does, so its child is the stub invoking itself with its key.
+      {:ok, authority} = Opus.authority_for(ctx, :default, @stub)
 
       parent =
         Locus.Runtime.Test.FormulaHost.attached!(

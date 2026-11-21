@@ -171,7 +171,8 @@ defmodule Aqua.LoopTest do
   test "the catalyst's consented cap answers to a name, not to the ref the spec carries", %{
     ctx: ctx
   } do
-    {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
+    # The brain's own grant consents its cap: Aqua's names no brain.
+    {:ok, authority} = Opus.authority_for(ctx, :default, @model)
 
     # What `Aqua.AgentConfig` resolves, and so what the spec holds.
     versioned = @model <> ":1.4.3"
@@ -241,7 +242,7 @@ defmodule Aqua.LoopTest do
     {:ok, spec} = Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false)
     {:ok, own} = Prima.Limits.timeout_ms(Prima.Authority.limits(authority))
     {:ok, name_ref} = Prima.ComponentRef.to_name_ref(spec.catalyst)
-    {:ok, brain} = Prima.Authority.node_limits(authority, name_ref)
+    {:ok, brain} = Prima.Authority.node_limits(spec.brain_authority, name_ref)
     assert Prima.Limits.timeout_ms(brain) == {:ok, 3 * 60_000}
     assert own > 3 * 60_000
     assert spec.deadline_ms == own
@@ -1129,12 +1130,12 @@ defmodule Aqua.LoopTest do
     consent!(ctx, name)
   end
 
-  # The crew's one grant, Aqua's, walked again as a person walks it, its
-  # brain's key the one the model's own profile binds. A crew member holds
-  # no grant of its own, so there is none to walk for it.
+  # The crew's one grant, Aqua's, walked again as a person walks it; it
+  # names no brain, whose own grant holds its key. A crew member holds no
+  # grant of its own, so there is none to walk for it.
   defp consent!(ctx, name) do
     if Prima.AgentRef.soul?(name),
-      do: walk!(ctx, %{ref: @soul, selections: [%{dep: @model, label: "default"}]}),
+      do: walk!(ctx, %{ref: @soul}),
       else: :ok
   end
 
@@ -1416,10 +1417,9 @@ defmodule Aqua.LoopTest do
              Arca.TurnStorage.pin_catalyst(
                Sanctum.Context.actor(ctx),
                turn.id,
-               "catalyst:local.openai:1.4.3",
-               %{
-                 fence: paused.fence
-               }
+               {"catalyst:local.openai:1.4.3",
+                %{profile_id: paused.brain_profile_id, consent_id: paused.brain_consent_id}},
+               %{fence: paused.fence}
              )
 
     # A spec is built on the pinned release alone, and only on one that
@@ -2074,7 +2074,7 @@ defmodule Aqua.LoopTest do
   end
 
   test "a rate limit is retried; a refused key is a line in the provider's words and asks " <>
-         "for no grant, while a key not bound asks for setup",
+         "for no grant, while a key not bound is said as the brain's",
        %{
          ctx: ctx,
          thread: thread
@@ -2117,12 +2117,22 @@ defmodule Aqua.LoopTest do
     assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
     refute Enum.any?(thread_events(drain()), &match?({:consent_required, _}, &1))
 
+    # A key the catalyst says is not there is the brain's own state: a
+    # line pointing at the Aqua page, where its row takes the key.
     unbound = accept!(ctx, thread, "@aqua once more")
     ScriptedWorker.script([{:refuse, %{"type" => "secret_denied", "message" => "no key"}}])
-    assert {:failed, :setup_required} = Task.await(run(ctx, unbound), 60_000)
+    unready = {:crew_unready, "claude", :no_key}
+    assert {:failed, ^unready} = Task.await(run(ctx, unbound), 60_000)
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, unbound.id)
-    assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user}}, 5_000
-    assert ref =~ @model and user == ctx.user_id
+    sentence = Prima.Refusal.message(unready)
+
+    assert [%{content: ^sentence}] =
+             for(
+               %{turn_id: turn_id, kind: "system"} = row <-
+                 Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               turn_id == unbound.id,
+               do: row
+             )
   end
 
   test "a chat step's text streams to the thread in order, once, under its turn's fence, before its row lands",
@@ -2265,7 +2275,7 @@ defmodule Aqua.LoopTest do
     assert Tape.payload(row)["step_id"] == retry_step
   end
 
-  test "a model its catalyst does not know ends the turn before any request, and a missing key asks for setup",
+  test "a model its catalyst does not know ends the turn before any request, and a missing key is said as the brain's",
        %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua hello")
 
@@ -2289,10 +2299,21 @@ defmodule Aqua.LoopTest do
        describe: {:refuse, %{"type" => "secret_denied", "message" => "no key"}}}
     )
 
+    # A missing key is the brain's own state: a line pointing at the Aqua
+    # page, where its row takes the key.
     other = accept!(ctx, thread, "@aqua again")
-    assert {:failed, :setup_required} = Task.await(run(ctx, other), 30_000)
-    assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user}}, 5_000
-    assert ref =~ @model and user == ctx.user_id
+    unready = {:crew_unready, "claude", :no_key}
+    assert {:failed, ^unready} = Task.await(run(ctx, other), 30_000)
+    sentence = Prima.Refusal.message(unready)
+    assert sentence =~ "on the Aqua page"
+
+    assert [%{content: ^sentence}] =
+             for(
+               %{turn_id: turn_id, kind: "system"} = row <-
+                 Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               turn_id == other.id,
+               do: row
+             )
 
     stop_supervised!(ScriptedWorker)
 
@@ -2363,14 +2384,9 @@ defmodule Aqua.LoopTest do
     {profile, row, refs}
   end
 
-  # The soul's grant committed again, its ingress narrowed to `tools`, its
-  # edge into the model still lending the model's default profile.
+  # The soul's grant committed again, its ingress narrowed to `tools`.
   defp commit_soul!(ctx, tools) do
-    decisions = %{
-      ref: @soul,
-      selections: [%{dep: @model, label: "default"}],
-      subset: %{@soul => %{"tools" => tools}}
-    }
+    decisions = %{ref: @soul, subset: %{@soul => %{"tools" => tools}}}
 
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @soul})
     {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)

@@ -738,7 +738,7 @@ defmodule Aqua.Providers.NotesTest do
   defp shipped_soul_manifest do
     seed = Path.expand("../../../../../seed/aqua", __DIR__)
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(seed, "aqua.md")))
-    Compendium.AgentSource.manifest(soul, [])
+    Compendium.AgentSource.manifest(soul)
   end
 
   test "the annotations say forget is destructive and the workspace notes are a chain's" do

@@ -708,10 +708,11 @@ defmodule Opus.ProviderTest do
                "aqua" => {:consent_unavailable, resolved}
              }
 
-      # The crew's grant names its brains as the component index holds
-      # them, so its row is refused as any root's is while the index cannot
-      # catch up: the index's own refusal.
-      assert {:error, :projection_unavailable} = Opus.authority_for(ctx, :default, soul)
+      # The crew's grant names the hands its tools need as the component
+      # index holds them, so its graph is refused as any root's is while the
+      # index cannot catch up.
+      assert {:error, {:unavailable, "The component graph"}} =
+               Opus.authority_for(ctx, :default, soul)
     end
   end
 
