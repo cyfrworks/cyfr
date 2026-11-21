@@ -57,7 +57,11 @@
 # say so. HEAVY_CHECK_CPU_ROOT (default /sys/devices/system/cpu) names the
 # processor directory read.
 #
-# The command's environment gains HEAVY_CHECK_HELD=1, HEAVY_CHECK_CPUS
+# The command's environment gains TMPDIR when the caller set none: the
+# folder scripts/lib/run-names.sh's run_names_root gives, on disk, so what
+# the command and its tools leave there is swept by scripts/janitor.sh,
+# and the memory-backed /tmp holds none of it. It gains HEAVY_CHECK_HELD=1,
+# HEAVY_CHECK_CPUS
 # (its processors, in the form docker's --cpuset-cpus takes) when it is
 # placed, and loses one its caller set when it is not, and gains
 # CONTAIN_REGISTRY, and PROOF_RUN_PREFIX when the caller set none: the
@@ -97,15 +101,15 @@
 # it, so a record names its run until the run is finished.
 #
 # Every check that queued appends, as it exits, one line to the record of
-# the host's load, /var/tmp/cyfr/heavy-check.log (on disk; the folder is
-# made this user's alone, and one that is a symlink or another user's is
-# refused, so that check writes no line and says so): `end=<time>
+# the host's load, heavy-check.log in run_names_root's folder (when that
+# folder is refused the check writes no line and says so): `end=<time>
 # quarter=<i or -> waited=<s> ran=<s> exit=<status> checkout=<directory>
 # command=<words>`, waited from its arrival to its start or exit and ran
 # from its start, the directory and the words as the records show them.
 # The line is one append under no lock, so nothing waits on it: it is kept
 # under 4096 bytes, the most Bash hands the kernel in one write, by
-# cutting the words short and ending them ` [cut]`.
+# cutting the words short and ending them ` [cut]`. scripts/janitor.sh
+# keeps the file's size bounded.
 # HEAVY_CHECK_RECORDS names another file: it is the seam of this script's
 # own tests and of nothing else.
 #
@@ -390,13 +394,9 @@ on_exit() {
 # log_run STATUS: this check's line in the record of the host's load (the
 # header's), as one append.
 log_run() {
-  local file=${HEAVY_CHECK_RECORDS:-} dir=/var/tmp/cyfr waited ran line LC_ALL=C
+  local file=${HEAVY_CHECK_RECORDS:-} dir waited ran line LC_ALL=C
   if [ -z "$file" ]; then
-    mkdir -p -m 700 "$dir" 2>/dev/null
-    if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -O "$dir" ]; then
-      say "no line in the record of the host's load: $dir is not a folder of this user's own"
-      return 0
-    fi
+    dir=$(run_names_root 2>&1) || { say "no line in the record of the host's load: $dir"; return 0; }
     file=$dir/heavy-check.log
   fi
   if [ -n "$ran_at" ]; then waited=$((ran_at - queued_at)) ran=$((SECONDS - ran_at)); else waited=$((SECONDS - queued_at)) ran=0; fi
@@ -629,6 +629,9 @@ fi
 # harness's part of it.
 export HEAVY_CHECK_HELD=1
 if $placed; then export HEAVY_CHECK_CPUS="$cpus"; else unset HEAVY_CHECK_CPUS; fi
+if [ -z "${TMPDIR:-}" ]; then
+  if scratch=$(run_names_root 2>&1); then export TMPDIR="$scratch"; else say "TMPDIR is left unset: $scratch"; fi
+fi
 if [ -z "${PROOF_RUN_PREFIX:-}" ]; then
   prefix=$(run_names_prefix "$checkout" 2>/dev/null) || prefix=$(run_names_prefix "$here" 2>/dev/null) || prefix=
   if [ -n "$prefix" ]; then export PROOF_RUN_PREFIX="$prefix"; fi

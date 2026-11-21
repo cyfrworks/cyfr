@@ -41,7 +41,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 fetch="$root/scripts/fetch-prebuilt-binaries.sh"
-scratch=$(mktemp -d /tmp/cyfr-fetch-prebuilt-test.XXXXXX)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-fetch-prebuilt-test.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 cd "$root"

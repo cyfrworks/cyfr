@@ -18,7 +18,8 @@
 # this host. Only those reach GitHub, whose runs are public; the logs stay
 # here.
 #
-# The log directory is LOGDIR, else a fresh /tmp/cyfr-stage.nightly.XXXXXX,
+# The log directory is LOGDIR, else a fresh cyfr-stage.nightly.XXXXXX in
+# scripts/lib/run-names.sh's run_names_root,
 # which scripts/janitor.sh removes after seven days (its rule 5); it is
 # named on stderr when the stage starts, and holds the stage's stdout as
 # stage.out and its stderr as stage.err beside each row's log. Stdout is the
@@ -47,7 +48,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P) && cd "$root" || exit 1
 if [ -n "$logdir" ]; then
   mkdir -p "$logdir" && logdir=$(cd "$logdir" && pwd -P) || { echo "nightly: cannot use $logdir for the logs" >&2; exit 64; }
 else
-  logdir=$(mktemp -d /tmp/cyfr-stage.nightly.XXXXXX) || { echo 'nightly: cannot make a log directory' >&2; exit 1; }
+  # shellcheck source=lib/run-names.sh
+  logdir=$(. scripts/lib/run-names.sh && dir=$(run_names_root) && mktemp -d "$dir/cyfr-stage.nightly.XXXXXX") ||
+    { echo 'nightly: cannot make a log directory' >&2; exit 1; }
 fi
 commit=$(git rev-parse HEAD 2>/dev/null) || commit=unknown
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then commit="$commit with changes"; fi
