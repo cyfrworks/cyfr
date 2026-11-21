@@ -19,8 +19,8 @@ const linux = {home, account, accountRoad: false}
 const before = {home: "", account: "", accountRoad: true}
 
 // A navigation of a content window's top frame from `from`, or of a frame.
-const top = (url, state, from = home + "/login") => contentNavigation({url, mainFrame: true, from}, state)
-const frame = (url, state) => contentNavigation({url, mainFrame: false, from: home + "/"}, state)
+const top = (url, state, showing = home + "/login", asker = "top") => contentNavigation({url, target: "top", asker, showing}, state)
+const frame = (url, state) => contentNavigation({url, target: "frame", asker: "frame", showing: home + "/"}, state)
 
 test("a content window loads the device's pages, then the selected CYFR, and nothing else", () => {
   assert.equal(top(LOOPBACK + "/bootstrap/", before, ""), "allow")
@@ -34,9 +34,10 @@ test("a content window loads the device's pages, then the selected CYFR, and not
   }
 })
 
-test("only the selected CYFR's own page hops, to the sign-in or recovery route, and only on the account road", () => {
+test("only the content window's top frame, showing the selected CYFR's page, hops, to the sign-in route alone", () => {
   assert.equal(top(account + "/account/sign#x", ready), "hop")
-  assert.equal(top(account + "/account/recover#x", ready), "hop")
+  assert.equal(top(account + "/account/recover#x", ready), "block", "recovery is reached inside the account window")
+  assert.equal(top(account + "/account/sign#x", ready, home + "/login", "none"), "block", "asked by no frame")
   assert.equal(top(account + "/account/sign#x", linux), "block", "no account road on Linux")
   assert.equal(top(account + "/account/sign#x", ready, LOOPBACK + "/bootstrap/"), "block", "from the device's pages")
   assert.equal(top(account + "/account/sign#x", ready, "https://evil.example/"), "block", "from another page")
@@ -45,9 +46,15 @@ test("only the selected CYFR's own page hops, to the sign-in or recovery route, 
 test("a CYFR that serves its own account pages hops to them, never loads them as its page", () => {
   const same = {home, account: home, accountRoad: true}
   assert.equal(top(home + "/account/sign#x", same), "hop")
-  assert.equal(top(home + "/account/recover", same), "hop")
+  assert.equal(top(home + "/account/recover", same), "block")
   assert.equal(top(home + "/account/sign#x", {...same, accountRoad: false}), "block")
   assert.equal(top(home + "/threads", same), "allow")
+})
+
+test("a frame asking is refused whatever it targets, the top frame included", () => {
+  for (const url of [account + "/account/sign#x", home + "/threads", home + "/company-login", LOOPBACK + "/lock"]) {
+    assert.equal(top(url, ready, home + "/", "frame"), "block", url)
+  }
 })
 
 test("a frame never hops and never loads a ceremony's route, by navigation or by redirect", () => {
@@ -112,9 +119,7 @@ test("the account window loads the sign-in page and its recovery continuation, a
   const same = {home: account, account, accountRoad: true}
   assert.equal(accountLoad(account + "/login#a", same), "return", "a CYFR that is its own account service")
   assert.equal(accountLoad(account + "/", same), "block")
-  for (const where of [home + "/login#answer", account + "/account/sign#x"]) {
-    assert.equal(accountLoad(where, ready, false), "block", `a frame at ${where}`)
-  }
+
 })
 
 test("no page is granted a device, a capture or a credential", () => {
@@ -135,8 +140,14 @@ test("content documents deny both passkey calls and workers, keeping their own p
   assert.deepEqual(got["Content-Security-Policy"], ["default-src 'self'", "worker-src 'none'"])
   assert.deepEqual(got["X-Frame-Options"], ["DENY"])
   assert.ok(!("permissions-policy" in got))
+  assert.ok(!got["Content-Security-Policy"].some((p) => p.startsWith("sandbox")), "the top frame is no sandbox")
   const frame = documentHeaders("content", "subFrame", {})
   assert.deepEqual(frame["Permissions-Policy"], ["publickey-credentials-get=(), publickey-credentials-create=()"])
+  const sandbox = frame["Content-Security-Policy"].find((p) => p.startsWith("sandbox"))
+  assert.ok(sandbox, "every frame is sandboxed")
+  for (const token of ["allow-popups", "allow-top-navigation", "allow-popups-to-escape-sandbox"]) {
+    assert.ok(!sandbox.split(" ").some((t) => t.startsWith(token)), `a frame's sandbox carries ${token}`)
+  }
   const script = {"Content-Type": ["text/javascript"]}
   assert.equal(documentHeaders("content", "script", script), script)
 })

@@ -27,7 +27,7 @@ function show(a){say(a.error);asked=a.confirm?a:null;$("confirm").hidden=!asked;
 if(asked){$("home").textContent=a.home;$("service").textContent=a.confirm}
 if(a.passkey){$("open").textContent=a.home;$("passkey").onclick=()=>location.assign(a.passkey);$("words").onclick=()=>location.assign(a.next)}
 else if(a.next)location.replace(a.next)}
-post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;$("warning").textContent=a.warning||"";show(a);if(!a.error)say(notices[f.get("notice")])});
+post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;$("warning").textContent=a.warning||"";show(a);if(!a.error)say((f.get("notice")||"").split(",").map(n=>notices[n]).filter(Boolean).join(" "))});
 $("connect").addEventListener("submit",e=>{e.preventDefault();say("Connecting\u2026");post("/bootstrap/connect",{address:$("address").value}).then(show)});
 $("approve").addEventListener("click",()=>{say("Connecting\u2026");post("/bootstrap/approve",{home:asked.home,directory:asked.confirm}).then(show)});
 $("decline").addEventListener("click",()=>{show({});say("Nothing was sent to that account service.")});`

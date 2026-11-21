@@ -91,8 +91,9 @@ func TestTheChooserSaysWhenThisComputersLockIsNotHeard(t *testing.T) {
 }
 
 // Hearing the bus lost while running, a closed channel or a nil signal,
-// locks and says so, and crashes nothing; the bus closed at the end of
-// the run does neither.
+// or logind leaving it, locks and says so, and crashes nothing; another
+// name leaving does nothing, and the bus closed at the end of the run
+// does neither.
 func TestLosingTheSystemBusLocksAndSaysSo(t *testing.T) {
 	for _, lost := range []func(chan *dbus.Signal){
 		func(c chan *dbus.Signal) { close(c) },
@@ -107,9 +108,19 @@ func TestLosingTheSystemBusLocksAndSaysSo(t *testing.T) {
 			t.Fatalf("locked %q, warned %q", locked, warned)
 		}
 	}
+	signals := make(chan *dbus.Signal, 2)
+	var locked, warned []string
+	signals <- &dbus.Signal{Name: dbusName + ".NameOwnerChanged", Body: []any{"org.freedesktop.Accounts", ":1.4", ""}}
+	signals <- &dbus.Signal{Name: dbusName + ".NameOwnerChanged", Body: []any{login1, ":1.2", ""}}
+	close(signals)
+	watchSignals(context.Background(), signals, "", func(why string) { locked = append(locked, why) },
+		func(s string) { warned = append(warned, s) })
+	if len(locked) != 1 || locked[0] != logindLost || len(warned) != 1 || warned[0] != notWatched {
+		t.Fatalf("logind leaving the bus: locked %q, warned %q", locked, warned)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	signals := make(chan *dbus.Signal)
-	close(signals)
-	watchSignals(ctx, signals, "", func(string) { t.Error("the run's end locked") }, func(string) { t.Error("the run's end warned") })
+	ended := make(chan *dbus.Signal)
+	close(ended)
+	watchSignals(ctx, ended, "", func(string) { t.Error("the run's end locked") }, func(string) { t.Error("the run's end warned") })
 }

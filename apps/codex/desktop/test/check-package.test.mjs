@@ -10,7 +10,7 @@ import {test} from "node:test"
 
 import {createPackage} from "@electron/asar"
 
-import {PROOF_MARKER, Refused, checkPackage} from "../scripts/check-package.mjs"
+import {PROOF_MARKER, Refused, checkPackage, packaged} from "../scripts/check-package.mjs"
 
 const main = Buffer.from("startApp({cyfr: path.join(process.resourcesPath, 'cyfr')})\n")
 const pkg = Buffer.from('{"name":"cyfr-desktop","main":"main.js"}\n')
@@ -70,9 +70,29 @@ test("a contaminated package is refused", async (t) => {
   const deeper = await unpacked(t)
   writeFileSync(path.join(deeper, "locales", "proof.js"), "x")
   assert.throws(() => checkPackage(deeper, staged, "linux"), Refused, "a file among Electron's")
+  const cased = await unpacked(t)
+  mkdirSync(path.join(cased, "Locales"))
+  writeFileSync(path.join(cased, "Locales", "en-US.pak"), "x")
+  assert.throws(() => checkPackage(cased, staged, "linux"), Refused, "a file differing from Electron's in case alone")
+  const renamed = await unpacked(t)
+  writeFileSync(path.join(renamed, "Electron"), "x")
+  assert.throws(() => checkPackage(renamed, staged, "linux"), Refused, "Electron's executable under its own name beside the app's")
   const unread = await unpacked(t)
   assert.throws(() => checkPackage(unread, {...staged, distribution: null}, "linux"), Refused, "no distribution read")
   const swapped = await unpacked(t)
   writeFileSync(path.join(swapped, "resources", "cyfr"), "another program")
   assert.throws(() => checkPackage(swapped, staged, "linux"), Refused, "another cyfr")
+})
+
+test("electron-builder's renames are each named, and nothing else is renamed", () => {
+  assert.equal(packaged("electron", "linux", "CYFR"), "CYFR")
+  assert.equal(packaged("locales/en-US.pak", "linux", "CYFR"), "locales/en-US.pak")
+  assert.equal(packaged("electron.exe", "windows", "CYFR"), "CYFR.exe")
+  assert.equal(packaged("Electron.app/Contents/MacOS/Electron", "darwin", "CYFR"), "CYFR.app/Contents/MacOS/CYFR")
+  assert.equal(packaged("Electron.app/Contents/Frameworks/Electron Helper (GPU).app/Contents/MacOS/Electron Helper (GPU)", "darwin", "CYFR"),
+    "CYFR.app/Contents/Frameworks/CYFR Helper (GPU).app/Contents/MacOS/CYFR Helper (GPU)")
+  assert.equal(packaged("Electron.app/Contents/Frameworks/Electron Helper.app/Contents/Info.plist", "darwin", "CYFR"),
+    "CYFR.app/Contents/Frameworks/CYFR Helper.app/Contents/Info.plist")
+  assert.equal(packaged("Electron.app/Contents/Frameworks/Electron Framework.framework/Electron Framework", "darwin", "CYFR"),
+    "CYFR.app/Contents/Frameworks/Electron Framework.framework/Electron Framework")
 })

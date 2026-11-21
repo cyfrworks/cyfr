@@ -12,7 +12,7 @@ const FIELDS = {
   ready: {required: ["url"]},
   home: {required: ["home", "account"], optional: ["proxy", "resolver"]},
   opened: {required: ["home"]},
-  locked: {required: []},
+  locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
   "pick-folder": {required: ["id", "suggested"]},
   "home-ready": {required: ["home"]},
   lock: {required: []},
@@ -51,6 +51,11 @@ export function readFromCyfr(line) {
   for (const key of [...required, ...optional.filter((k) => Object.hasOwn(m, k))]) {
     if (typeof m[key] !== "string" || m[key] === "") throw new Refused("fields")
   }
+  // Fields that come together or not at all, and a route only beside them.
+  const {together = []} = FIELDS[m.type]
+  const named = together.filter((k) => Object.hasOwn(m, k)).length
+  if (named !== 0 && named !== together.length) throw new Refused("fields")
+  if (together.length && named === 0 && (Object.hasOwn(m, "proxy") || Object.hasOwn(m, "resolver"))) throw new Refused("fields")
   return m
 }
 
@@ -84,35 +89,3 @@ export function lines(line) {
   }
 }
 
-/**
- * The CYFR main keeps to. cyfr proposes one with home, and holds it as
- * selected only once it has committed it, which opened says: until then
- * a lock (`cancel`) or a failure leaves main able to take cyfr's next
- * proposal, for the same CYFR or another. Once one is selected, another
- * proposal is not a message cyfr sends.
- */
-export function selection() {
-  const s = {home: "", account: "", selected: false}
-  return {
-    get home() { return s.home },
-    get account() { return s.account },
-    get selected() { return s.selected },
-    /** Take home's proposal; false once a CYFR is selected. */
-    propose(m) {
-      if (s.selected) return false
-      s.home = m.home
-      s.account = m.account
-      return true
-    },
-    /** cyfr committed `home`; false unless it is the one proposed. */
-    opened(home) {
-      if (s.selected || !s.home || home !== s.home) return false
-      s.selected = true
-      return true
-    },
-    /** A lock ends a proposal cyfr has not committed. */
-    cancel() {
-      if (!s.selected) s.home = s.account = ""
-    }
-  }
-}

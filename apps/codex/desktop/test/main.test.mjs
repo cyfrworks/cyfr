@@ -29,6 +29,7 @@ function reset() {
   world.windows = []
   world.sessions = new Map()
   world.fetched = []
+  world.cleared = []
   world.answer = () => ({status: 503, headers: new Headers()})
   world.page = () => Promise.resolve("forgery-token")
   world.app.removeAllListeners()
@@ -58,7 +59,10 @@ class BrowserWindow extends EventEmitter {
   }
   loadURL(url) {
     this.webContents.url = url
-    queueMicrotask(() => this.webContents.emit("did-finish-load"))
+    queueMicrotask(() => {
+      this.webContents.emit("did-navigate", {}, url)
+      this.webContents.emit("did-finish-load")
+    })
   }
   destroy() {
     if (this.destroyed) return
@@ -84,7 +88,7 @@ function fromPartition(partition) {
         world.fetched.push({partition, url, body: init.body})
         return world.answer(url)
       },
-      async clearStorageData() {}
+      async clearStorageData() { world.cleared.push(partition) }
     })
     world.sessions.set(partition, ses)
   }
@@ -145,6 +149,14 @@ async function started(accountRoad) {
 const live = () => world.windows.filter((w) => !w.destroyed)
 const content = () => live().find((w) => w.webContents.url.startsWith("http"))
 
+// A navigation of `w`'s top frame to `url`, asked for by its top frame.
+function navigate(w, url) {
+  const event = {url, isMainFrame: true, initiator: w.webContents.mainFrame, prevented: false,
+    preventDefault() { this.prevented = true }}
+  w.webContents.emit("will-navigate", event)
+  return event
+}
+
 // The CYFR at HOME opened on the passkey road, its page showing and its
 // forgery token read.
 async function signedIn() {
@@ -164,6 +176,7 @@ test("an interrupted Connect, through main: a proposal a lock ended gives way to
   assert.deepEqual(child.heard.at(-1), {version: 1, type: "home-ready", home: HOME})
   child.say({type: "locked"})
   await settled()
+  await settled()
   child.say({type: "home", home: HOME, account: ACCOUNT})
   await settled()
   assert.deepEqual(child.heard.filter((m) => m.type === "home-ready").length, 2, "the same CYFR proposed again")
@@ -180,7 +193,7 @@ test("a lock closes the content and the ceremony before anything is awaited, and
   const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
   const page = content()
   page.webContents.url = HOME + "/login"
-  page.webContents.emit("will-navigate", {url: hop, isMainFrame: true, preventDefault() {}})
+  navigate(page, hop)
   const account = live().find((w) => w.webContents.url === hop)
   assert.ok(account, "the hop opened the account window")
   world.page = () => new Promise(() => {}) // a page that never answers again
@@ -188,8 +201,10 @@ test("a lock closes the content and the ceremony before anything is awaited, and
   assert.ok(page.destroyed && account.destroyed, "both closed at once")
   assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"})
   await settled()
-  await settled()
   assert.deepEqual(world.fetched.map((f) => [f.url, f.body]), [[HOME + "/auth/logout", "_csrf_token=forgery-token"]])
+  assert.equal(content(), undefined, "no chooser before cyfr's locked")
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
   assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\/.*notice=unconfirmed$/)
 })
 
@@ -212,4 +227,59 @@ test("closing the content window signs out with what was held for it", async () 
   await settled()
   assert.deepEqual(world.fetched.map((f) => f.url), [HOME + "/auth/logout"])
   assert.equal(world.quit, true)
+})
+
+test("a lock on the company page signs its session out", async () => {
+  await signedIn()
+  const event = navigate(content(), HOME + "/company-login")
+  assert.ok(event.prevented)
+  await settled()
+  assert.deepEqual(world.fetched.map((f) => f.url), [HOME + "/auth/logout"])
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  assert.match(content().webContents.url, /notice=company,unconfirmed$/)
+})
+
+test("a lock before the forgery token was read is unconfirmed, and the session's storage is cleared", async () => {
+  await started(true)
+  world.page = () => new Promise(() => {}) // the token never arrives
+  child.say({type: "home", home: HOME, account: ACCOUNT})
+  child.say({type: "opened", home: HOME})
+  await settled()
+  const page = content()
+  page.loadURL(HOME + "/")
+  await settled()
+  world.powerMonitor.emit("lock-screen")
+  await settled()
+  assert.deepEqual(world.fetched, [], "nothing to send without the token")
+  assert.ok(world.cleared.includes(page.webContents.session.partition), "the session's storage cleared")
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  assert.match(content().webContents.url, /notice=unconfirmed$/)
+})
+
+test("a lock after cyfr committed and before main read opened leaves cyfr running and the chooser ready", async () => {
+  await started(false)
+  child.say({type: "home", home: HOME, account: ACCOUNT})
+  await settled()
+  world.powerMonitor.emit("lock-screen")
+  child.say({type: "opened", home: HOME})
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  await settled()
+  assert.equal(child.killed, false)
+  assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//)
+  const next = navigate(content(), HOME + "/threads")
+  assert.equal(next.prevented, false, "main keeps to the CYFR cyfr committed")
+})
+
+test("a frame asking the top frame to go to the sign-in route is refused and opens nothing", async () => {
+  await signedIn()
+  const page = content()
+  const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  const event = {url: `${ACCOUNT}/account/sign#${fragment(request)}`, isMainFrame: true, initiator: {processId: 9, routingId: 9},
+    prevented: false, preventDefault() { this.prevented = true }}
+  page.webContents.emit("will-navigate", event)
+  assert.ok(event.prevented)
+  assert.equal(live().length, 1, "no account window")
 })

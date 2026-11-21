@@ -16,6 +16,7 @@ const (
 	login1Seat  = "org.freedesktop.login1.Manager"
 	login1Sess  = "org.freedesktop.login1.Session"
 	dbusProps   = "org.freedesktop.DBus.Properties"
+	dbusName    = "org.freedesktop.DBus"
 	lockedHint  = "LockedHint"
 	sessionLock = "Lock"
 )
@@ -26,21 +27,24 @@ const (
 	notWatched     = "CYFR cannot tell when this computer locks or sleeps here, so it does not lock when the computer does."
 	sessionUnheard = "CYFR cannot tell when this computer locks here, only when it sleeps, so it does not lock when the computer locks."
 	watchLost      = "Locked: CYFR stopped hearing this computer's lock."
+	logindLost     = "Locked: this computer's login manager stopped, so CYFR stopped hearing its lock."
 )
 
 // watchSessionLock calls lock whenever this login session locks (logind's
 // Lock signal, or its LockedHint turning true) or the computer is about
 // to sleep (PrepareForSleep), until ctx ends. It fails closed and never
 // silently: what it cannot watch from the start it tells warn, in the
-// sentence the chooser shows, and losing the system bus while running
-// locks and tells warn too.
+// sentence the chooser shows, and losing the system bus, or logind
+// leaving it, while running locks and tells warn too.
 func watchSessionLock(ctx context.Context, lock func(why string), warn func(sentence string)) {
 	conn, err := dbus.ConnectSystemBus(dbus.WithContext(ctx))
 	if err != nil {
 		warn(notWatched)
 		return
 	}
-	if err := conn.AddMatchSignal(dbus.WithMatchInterface(login1Seat), dbus.WithMatchMember("PrepareForSleep")); err != nil {
+	if err := conn.AddMatchSignal(dbus.WithMatchInterface(login1Seat), dbus.WithMatchMember("PrepareForSleep")); err != nil ||
+		conn.AddMatchSignal(dbus.WithMatchSender(dbusName), dbus.WithMatchInterface(dbusName),
+			dbus.WithMatchMember("NameOwnerChanged"), dbus.WithMatchArg(0, login1)) != nil {
 		conn.Close()
 		warn(notWatched)
 		return
@@ -63,7 +67,8 @@ func watchSessionLock(ctx context.Context, lock func(why string), warn func(sent
 
 // watchSignals locks on each of signals that locks this session (or any
 // session's sleep), until ctx ends. A channel that closes, or a nil
-// signal, while ctx runs is the bus lost: it locks and warns.
+// signal, while ctx runs is the bus lost, and logind's name losing its
+// owner is logind gone: either locks and warns.
 func watchSignals(ctx context.Context, signals <-chan *dbus.Signal, session dbus.ObjectPath, lock func(string), warn func(string)) {
 	for {
 		select {
@@ -77,11 +82,22 @@ func watchSignals(ctx context.Context, signals <-chan *dbus.Signal, session dbus
 				}
 				return
 			}
+			if logindGone(sig) {
+				warn(notWatched)
+				lock(logindLost)
+				return
+			}
 			if why := lockSignal(sig, session); why != "" {
 				lock(why)
 			}
 		}
 	}
+}
+
+// logindGone is whether sig says logind's name lost its owner.
+func logindGone(sig *dbus.Signal) bool {
+	return sig.Name == dbusName+".NameOwnerChanged" && len(sig.Body) == 3 &&
+		sig.Body[0] == login1 && sig.Body[2] == ""
 }
 
 // lockSignal is why sig locks the device, or "".

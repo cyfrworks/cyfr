@@ -5,8 +5,9 @@
 // or packed, holds exactly the pinned Electron distribution, the staged
 // app and the verified cyfr. Every file of the package is one of three:
 // a file of the Electron distribution as electron-builder extracted it
-// (`distribution`, read at its afterExtract step), under the same path or
-// with the product's name where Electron's stood; the archive, exactly
+// (`distribution`, read at its afterExtract step), under exactly its path
+// or, for the files electron-builder renames, the one name `packaged`
+// gives it; the archive, exactly
 // package.json and main.js, byte for byte the staged ones; or cyfr, whose
 // SHA-256 is the verified one, with electron-builder's AppArmor profile
 // on Linux and the app's icon on macOS. Nothing else, loose app code and
@@ -44,9 +45,30 @@ function resourcesOf(appOutDir, os) {
   return `${bundle}/Contents/Resources`
 }
 
-// A distribution file under the product's name: electron-builder renames
-// Electron's executable, and on macOS its bundle and helpers, to it.
-const asElectron = (file, product) => file.toLowerCase().replaceAll(product.toLowerCase(), "electron")
+// The macOS helper apps Electron ships, each renamed with the bundle.
+const HELPERS = ["Helper", "Helper (GPU)", "Helper (Plugin)", "Helper (Renderer)"]
+
+/**
+ * Where the package holds Electron's distribution file `file` on `os`:
+ * electron-builder names Electron's executable, and on macOS its bundle
+ * and helper apps, after the product. Each such file is named here; every
+ * other keeps its path, exactly.
+ */
+export function packaged(file, os, product) {
+  if (os === "linux") return file === "electron" ? product : file
+  if (os === "windows") return file === "electron.exe" ? `${product}.exe` : file
+  if (!file.startsWith("Electron.app/")) return file
+  const inside = file.slice("Electron.app/".length)
+  if (inside === "Contents/MacOS/Electron") return `${product}.app/Contents/MacOS/${product}`
+  for (const helper of HELPERS) {
+    const from = `Contents/Frameworks/Electron ${helper}.app/`
+    if (!inside.startsWith(from)) continue
+    const rest = inside.slice(from.length)
+    const to = `${product}.app/Contents/Frameworks/${product} ${helper}.app/`
+    return to + (rest === `Contents/MacOS/Electron ${helper}` ? `Contents/MacOS/${product} ${helper}` : rest)
+  }
+  return `${product}.app/${inside}`
+}
 
 /**
  * Check the unpacked app at appOutDir (os: linux, darwin or windows)
@@ -73,12 +95,10 @@ export function checkPackage(appOutDir, staged, os) {
   const own = new Set([`${resources}/app.asar`, `${resources}/${staged.helper.name}`,
     ...(os === "linux" ? [`${resources}/apparmor-profile`] : []), ...(os === "darwin" ? [`${resources}/icon.icns`] : [])])
   if (!Array.isArray(staged.distribution)) throw new Refused("Electron's distribution was not read")
-  const distribution = new Set(staged.distribution.map((f) => f.toLowerCase()))
+  const distribution = new Set(staged.distribution.map((f) => packaged(f, os, staged.product)))
   for (const file of filesOf(appOutDir)) {
     if (own.has(file)) continue
-    if (!distribution.has(file.toLowerCase()) && !distribution.has(asElectron(file, staged.product))) {
-      throw new Refused(`${file} is neither the app's nor Electron's`)
-    }
+    if (!distribution.has(file)) throw new Refused(`${file} is neither the app's nor Electron's`)
     if (/\.(js|mjs|cjs|asar)$/.test(file) && readFileSync(path.join(appOutDir, file)).includes(PROOF_MARKER)) {
       throw new Refused(`${file} carries the proof-only marker`)
     }

@@ -75,6 +75,9 @@ type Service struct {
 	selecting string
 	sh        *shell.Shell
 	pages     *shell.Server
+	// committed is the CYFR the device's pages serve, as home named it:
+	// every locked names it again.
+	committed Message
 	// warning is what the chooser tells the person this app cannot do
 	// here (Warn).
 	warning string
@@ -359,7 +362,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 	}
 	cfg := shell.Config{Address: home, Client: s.Client, DisplayName: s.DisplayName,
 		Record: s.Record, Clients: sel, Directory: found.Directory,
-		Detect: remoteDisks, Restart: func() { _ = s.Send(Message{Type: TypeLocked}) }}
+		Detect: remoteDisks, Restart: s.sayLocked}
 	if s.Shell != nil {
 		s.Shell(&cfg)
 	}
@@ -368,13 +371,14 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 		return answer{Error: err.Error()}
 	}
 	ready := make(chan struct{}, 1)
+	proposal := Message{Type: TypeHome, Home: home, Account: found.Origin}
 	s.mu.Lock()
 	if s.epoch != epoch {
 		s.mu.Unlock()
 		return answer{Error: lockedSentence}
 	}
 	s.ready, s.selecting = ready, home
-	err = s.Send(Message{Type: TypeHome, Home: home, Account: found.Origin})
+	err = s.Send(proposal)
 	s.mu.Unlock()
 	if err != nil {
 		return answer{Error: "The app did not take the CYFR (" + err.Error() + ")."}
@@ -395,10 +399,13 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 	if err := sel.Commit(); err != nil {
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
+	// The device's pages are served only once main was told home opened:
+	// a write that failed opens nothing.
+	if err := s.Send(Message{Type: TypeOpened, Home: home}); err != nil {
+		return answer{Error: "The app did not take the CYFR (" + err.Error() + ")."}
+	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
-	// main holds home as selected from now on (TypeOpened); a main that
-	// does not hear it keeps to home all the same, as its proposal.
-	_ = s.Send(Message{Type: TypeOpened, Home: home})
+	s.committed = proposal
 	return s.opened(home)
 }
 
@@ -448,7 +455,16 @@ func (s *Service) Lock(why string) {
 			return
 		}
 	}
-	_ = s.Send(Message{Type: TypeLocked})
+	s.sayLocked()
+}
+
+// sayLocked tells main the device locked, naming the CYFR committed.
+func (s *Service) sayLocked() {
+	s.mu.Lock()
+	m := s.committed
+	s.mu.Unlock()
+	m.Type = TypeLocked
+	_ = s.Send(m)
 }
 
 // Run reads main's messages from in until shutdown or the end of in,

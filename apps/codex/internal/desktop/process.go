@@ -36,8 +36,9 @@ const (
 	// Opened says cyfr committed the CYFR home proposed: main holds it as
 	// selected from then on, and until then takes cyfr's next proposal.
 	TypeOpened = "opened"
-	// Locked says the device locked: main destroys its content windows and
-	// shows the device's pages.
+	// Locked says the device locked, naming the CYFR cyfr holds committed,
+	// if any, as home names one: main's lock waits for it, and main keeps
+	// to that CYFR, or none, from then on.
 	TypeLocked = "locked"
 	// PickFolder asks main for a folder (reserved: nothing sends it yet).
 	TypePickFolder = "pick-folder"
@@ -57,7 +58,7 @@ var fields = map[string]struct{ required, optional []string }{
 	TypeReady:        {required: []string{"url"}},
 	TypeHome:         {required: []string{"home", "account"}, optional: []string{"proxy", "resolver"}},
 	TypeOpened:       {required: []string{"home"}},
-	TypeLocked:       {},
+	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
 	TypePickFolder:   {required: []string{"id", "suggested"}},
 	TypeHomeReady:    {required: []string{"home"}},
 	TypeLock:         {},

@@ -691,3 +691,53 @@ func TestTheChooserShowsWhatTheAppCannotDoHere(t *testing.T) {
 		t.Fatalf("the chooser of an open CYFR shows %+v", got)
 	}
 }
+
+// The device's pages are served only once main was told the CYFR opened:
+// a write of opened that failed opens nothing, and the next Connect goes
+// on as if this one never ran.
+func TestAFailedWriteOfOpenedServesNoDevicePage(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	send := a.Send
+	a.Send = func(m Message) error {
+		if m.Type == TypeOpened {
+			return errors.New("main's pipe is gone")
+		}
+		return send(m)
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	a.next(t)
+	a.HomeReady("https://cyfr.example.com")
+	if got := answered(t, done); got.Next != "" || got.Error == "" {
+		t.Fatalf("a Connect whose opened was not written answered %+v", got)
+	}
+	if w := a.get("/"); w.Code != http.StatusSeeOther {
+		t.Fatal("the device's pages were served though main was never told")
+	}
+	a.Send = send
+	again := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	a.next(t)
+	a.HomeReady("https://cyfr.example.com")
+	if got := answered(t, again); got.Next != "/" {
+		t.Fatalf("the next Connect answered %+v", got)
+	}
+	a.opened(t, "https://cyfr.example.com")
+}
+
+// Every locked names the CYFR cyfr holds committed, as home named it, and
+// none before one is committed: main keeps to what it names.
+func TestLockedNamesTheCommittedCYFR(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	a.Lock("Locked.")
+	if m := a.next(t); m.Type != TypeLocked || m.Home != "" || m.Account != "" {
+		t.Fatalf("before a commit main heard %+v", m)
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	a.next(t)
+	a.HomeReady("https://cyfr.example.com")
+	answered(t, done)
+	a.opened(t, "https://cyfr.example.com")
+	a.Lock("Locked.")
+	if m := a.next(t); m.Type != TypeLocked || m.Home != "https://cyfr.example.com" || m.Account != account.DefaultDirectory {
+		t.Fatalf("after the commit main heard %+v", m)
+	}
+}
