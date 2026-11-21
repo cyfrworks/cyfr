@@ -35,8 +35,8 @@ defmodule Aqua.Models do
   carry the ref the agent names, whether or not the listing resolved it:
 
     * `:ready` — the crew's grant runs it with what its own plan
-      requires: its bound key, or nothing more than the grant's edge
-      into it for a brain that requires no need;
+      requires: its bound key, or for a brain that requires no need an
+      edge into it that selects no key it cannot resolve;
     * `:needs_key` — a key to connect;
     * `:needs_grant` — the person's grant of the brain is all it asks, as
       Aqua's setup reads it (`t:provider/0`): a brain that needs nothing
@@ -44,8 +44,9 @@ defmodule Aqua.Models do
     * `:consent_stale` — the crew's grant does not cover what the crew
       may use: on Aqua, its tools, or the brains and hands it names,
       changed since it was granted; on any agent, its brain requires a
-      key it holds but the grant's edge into it binds none. It runs once
-      the person grants Aqua again;
+      key it holds but the grant's edge into it binds none, or the edge
+      selects a key it can no longer resolve. It runs once the person
+      grants Aqua again;
     * `:consent_damaged`, `:consent_unavailable` — the brain's own grant,
       or for Aqua the crew's, is damaged, or the store could not answer
       it;
@@ -532,10 +533,10 @@ defmodule Aqua.Models do
   the same way. The brain's own grant that is damaged, or that the store
   could not answer, is `:consent_damaged` or `:consent_unavailable`,
   never a key to connect over a consent that exists. The crew's grant is
-  read once, as a turn loads it: where it loads, a brain whose own plan
-  requires a key its edge binds none of reads `:consent_stale`, Aqua's to
-  grant again, and a brain that requires no need reads ready on its edge;
-  where it does not, Aqua reads why
+  read once, as a turn loads it: where it loads, a brain whose edge
+  selects a key it cannot resolve, or whose own plan requires a key its
+  edge binds none of, reads `:consent_stale`, Aqua's to grant again, and
+  any other edge reads ready; where it does not, Aqua reads why
   (`Aqua.ConsentStatus.classify_refusal/1`: a stale grant is
   `:consent_stale`, a grant to give again, and damage or an outage as
   above), which is said once, on Aqua, and never on a member. A catalyst
@@ -719,13 +720,14 @@ defmodule Aqua.Models do
   end
 
   # The crew's grant, loaded as a turn would load it, settles a brain whose
-  # own plan reads ready by what that plan requires: the grant's edge into
-  # the brain is all a brain that requires no need asks, and a brain that
-  # requires its key asks that the edge bind it too (`lent?/4`). A brain
-  # that holds its own key but whose edge in the grant binds none (a grant
-  # the person gave before the brain was connected), or that the grant
-  # names no edge into, is not one to connect: granting Aqua again is the
-  # next step, said as the grant's stale state. A grant that does not load
+  # own plan reads ready by its edge into the brain (`lent?/4`): the edge
+  # is ready when it carries no selection it cannot resolve and binds what
+  # the brain's plan requires. A brain that holds its own key but whose
+  # edge in the grant binds none (a grant the person gave before the brain
+  # was connected), whose edge selects a key it can no longer resolve (the
+  # brain's key bound again since), or that the grant names no edge into,
+  # is not one to connect: granting Aqua again is the next step, said as
+  # the grant's stale state. A grant that does not load
   # is Aqua's to say, read through `Aqua.ConsentStatus.classify_refusal/1`:
   # damage (the grant's head, a lender, a stored grant that fails its
   # checks), an outage, or a grant whose shape moved since it was given,
@@ -752,14 +754,19 @@ defmodule Aqua.Models do
     end
   end
 
-  # Whether the grant's edge into the brain carries what the brain's own
-  # plan requires: the edge alone when the plan requires no need
-  # (`need_of/1`), else a bound vault too, an entry or a key provided
-  # alike (`Prima.Authority.Blob.bound_vault?/1`).
+  # Whether a turn on the brain runs on the grant's edge into it with what
+  # the brain's own plan requires: a bound vault, an entry or a key
+  # provided alike (`Prima.Authority.Blob.bound_vault?/1`), or no vault at
+  # all when the plan requires no need (`need_of/1`). A selection the load
+  # could not resolve is no bound vault, and a turn's setup refuses it
+  # (`Opus.Attempt`), so it is never ready, whatever the plan requires.
   defp lent?(authority, source, catalyst_ref, plan) do
     case Prima.Authority.Blob.lookup_edge(authority.policy, source, catalyst_ref, "") do
-      {:ok, edge} -> is_nil(need_of(plan)) or Prima.Authority.Blob.bound_vault?(edge.vault)
-      _no_edge -> false
+      {:ok, %{vault: vault}} ->
+        Prima.Authority.Blob.bound_vault?(vault) or (is_nil(vault) and is_nil(need_of(plan)))
+
+      _no_edge ->
+        false
     end
   end
 

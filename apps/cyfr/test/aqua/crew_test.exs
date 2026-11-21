@@ -609,6 +609,74 @@ defmodule Aqua.CrewTest do
                "grant it again on the Aqua page"
   end
 
+  # A brain whose own plan requires no key, whose key Aqua's grant selected:
+  # the brain's key bound again with other destination restrictions leaves
+  # that selection unresolved, which a turn's setup refuses. The member on
+  # it reads Aqua's grant to give again, never ready, until the person
+  # grants Aqua again, and then takes a job with the key bound since.
+  test "a member whose brain's selected key Aqua's grant no longer resolves is told to grant " <>
+         "Aqua again, and takes a job once granted",
+       %{ctx: ctx, room: room} do
+    soul = "agent:local.aqua"
+    optional = "catalyst:local.optional"
+
+    need = %{
+      "type" => "api_key:optional.test",
+      "reason" => "to call the model with your key",
+      "fields" => ["OPTIONAL_API_KEY"],
+      "required" => false,
+      "hosts" => ["api.optional.test"]
+    }
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
+        name: "optional",
+        version: "0.1.0",
+        type: "catalyst",
+        manifest:
+          Jason.encode!(%{
+            "contracts" => [Prima.Model.chat_contract()],
+            "needs" => %{"api_key" => need},
+            "caps" => %{"egress" => %{"domains" => ["api.optional.test"]}}
+          })
+      })
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, optional, %{"OPTIONAL_API_KEY" => "o-1"})
+    selections = [%{dep: @model, label: "default"}, %{dep: optional, label: "default"}]
+    walk!(ctx, %{ref: soul, selections: selections})
+
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("keeper"),
+        "---\ntitle: keeper\ndescription: Keeps.\navoid: Building.\n" <>
+          "catalyst_ref: #{optional}\nmodel: optional-1\n---\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+    assert {:ready, _resolved} = Aqua.Models.model_status(ctx, roster)["keeper"]
+
+    rebound =
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, optional, %{"OPTIONAL_API_KEY" => "o-2"},
+        destination: %{"hosts" => ["api.optional.test"], "scheme" => "https", "paths" => ["/v1/"]}
+      )
+
+    {:ok, authority} = Opus.authority_for(ctx, :default, soul)
+    {:ok, edge} = Prima.Authority.Blob.lookup_edge(authority.policy, soul, optional, "")
+    assert %{via: %{label: "default"}} = edge.vault
+    assert {:consent_stale, _resolved} = Aqua.Models.model_status(ctx, roster)["keeper"]
+
+    walk!(ctx, %{ref: soul, selections: selections})
+    assert {:ready, _resolved} = Aqua.Models.model_status(ctx, roster)["keeper"]
+
+    ScriptedWorker.fresh_limits!(ctx, [optional])
+    start_supervised!({ScriptedWorker, ref: [optional], script: [reply("Kept.")]})
+    assert %{agent: "keeper", status: "completed"} = job!(ctx, room, "keeper", "keep it")
+    assert [%{authority: kept}] = member_chats(ctx, "keeper")
+    assert kept.resources.vault.entry_id == rebound.id
+  end
+
   # A person's walk of `decisions`, from plan to commit.
   defp walk!(ctx, %{ref: ref} = decisions) do
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
