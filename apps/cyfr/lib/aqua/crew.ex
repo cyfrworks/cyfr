@@ -25,6 +25,14 @@ defmodule Aqua.Crew do
   `failed` with that reason when its delivery comes (an outage of the
   reads waits for the next drain instead).
 
+  ## Suggested members
+
+  `suggestion/1` is the member Aqua's setup offers to make on a brain the
+  person connected: the one table of what a member on each brain CYFR
+  ships is good at and what to avoid, read by the setup and by nothing
+  else. Making it is the person's press, and its consent is asked as any
+  member's is.
+
   ## The hand-off
 
   `ask/2` is `crew.ask {member, task, title?, tools?, options?}`, called
@@ -165,6 +173,92 @@ defmodule Aqua.Crew do
           | :busy
           | {:stopped, term()}
           | {:error, term()}
+
+  # ---------------------------------------------------------------------------
+  # Suggested members
+  # ---------------------------------------------------------------------------
+
+  @coding_avoid "A quick answer, a single read or a web search; work the person must watch " <>
+                  "step by step"
+  @no_shell "Long builds and runs that need a folder and a shell of their own"
+
+  # What the setup suggests a member on each brain CYFR ships is good at and
+  # should never be handed: a program brain by its row's name
+  # (`Opus.Programs.Definition.brains/0`), a model catalyst by its name.
+  @suggested %{
+    {:program, "claude-code"} =>
+      {"Coding work end to end in a folder of its own: reading, writing, building and " <>
+         "running code with Claude Code's own tools, long multi-step builds and fixes of " <>
+         "components and tinctures", @coding_avoid},
+    {:program, "openai-codex"} =>
+      {"Coding work end to end in a folder of its own: reading, writing, building and " <>
+         "running code with OpenAI Codex's own tools, long multi-step builds and fixes of " <>
+         "components and tinctures", @coding_avoid},
+    {:catalyst, "claude"} =>
+      {"Careful reasoning and writing: plans, reviews, summaries and checks of another " <>
+         "member's work", @no_shell},
+    {:catalyst, "gemini"} =>
+      {"Deep web research: fact-finding across several searches, current events, " <>
+         "documentation lookup, findings cross-checked and cited",
+       "Changing the athanor's files, components or settings; reading one known URL, which " <>
+         "needs no search"},
+    {:catalyst, "openai"} =>
+      {"General reasoning, writing and analysis: drafting, explaining and working a problem " <>
+         "through step by step", @no_shell},
+    {:catalyst, "grok"} =>
+      {"Current events and what people are saying about them now: quick research with its " <>
+         "sources", "Changing the athanor's files, components or settings"},
+    {:catalyst, "openrouter"} =>
+      {"General work on the model picked through OpenRouter: answers, drafts and reading",
+       @no_shell}
+  }
+
+  @catalyst_titles %{
+    "claude" => "Claude",
+    "gemini" => "Gemini",
+    "openai" => "OpenAI",
+    "grok" => "Grok",
+    "openrouter" => "OpenRouter"
+  }
+
+  @typedoc """
+  A connected brain, as Aqua's setup names it: a program brain by its
+  row's name and its title (`Opus.Programs.Definition.brains/0`), or a
+  model catalyst by its provider (`Aqua.Models.providers/1`).
+  """
+  @type brain :: {:program, String.t(), String.t()} | {:catalyst, String.t()}
+
+  @doc """
+  The crew member Aqua's setup offers to make on `brain`: its `name`, the
+  brain's own (a catalyst's provider with any character a member's name
+  cannot hold made `-`), its `title`, what it is good at (`description`)
+  and what to avoid, and its `mode`, `auto`. A brain CYFR does not ship
+  is offered under its own name and title with nothing said of it, for
+  the person to write on its card. Its model is the person's to pick from
+  the brain's own listing.
+  """
+  @spec suggestion(brain()) :: %{
+          name: String.t(),
+          title: String.t(),
+          description: String.t(),
+          avoid: String.t(),
+          mode: String.t()
+        }
+  def suggestion({:program, name, title}) when is_binary(name) and is_binary(title),
+    do: suggested({:program, name}, name, title)
+
+  def suggestion({:catalyst, provider} = brain) when is_binary(provider),
+    do:
+      suggested(
+        brain,
+        String.replace(provider, ~r/[^A-Za-z0-9_-]/, "-"),
+        Map.get(@catalyst_titles, provider, provider)
+      )
+
+  defp suggested(brain, name, title) do
+    {description, avoid} = Map.get(@suggested, brain, {"", ""})
+    %{name: name, title: title, description: description, avoid: avoid, mode: "auto"}
+  end
 
   # ---------------------------------------------------------------------------
   # The hand-off

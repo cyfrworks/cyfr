@@ -310,4 +310,25 @@ defmodule Opus.Programs.DefinitionTest do
       refute "login_entry_id" in Definition.config_keys()
     end
   end
+
+  test "each program brain is a definition its row can hold, its command starting with a driver" do
+    names = Enum.map(Definition.brains(), & &1.name)
+    assert names == Enum.uniq(names)
+
+    drivers =
+      for %{name: name, title: title, command: command} <- Definition.brains() do
+        assert is_binary(title) and title != "", name
+        assert Compendium.AquaPath.valid_name?(name), name
+        assert {:ok, %{"command" => ^command}} = Definition.validate(%{"command" => command})
+
+        row = %{transport: "program", config_json: Jason.encode!(%{"command" => command})}
+        driver = Arca.McpServerStorage.driver(row)
+        assert is_binary(driver), "#{name}: #{command} starts with no brain driver"
+        driver
+      end
+
+    assert drivers == Enum.uniq(drivers)
+    assert Definition.brain("claude-code").title == "Claude Code"
+    assert Definition.brain("nope") == nil
+  end
 end

@@ -181,6 +181,37 @@ defmodule Aqua.SeedContractTest do
            } = Enum.find(crew, &(&1.name == "openai-codex"))
   end
 
+  test "every brain the seed can connect has a suggested crew member that says what it does" do
+    catalysts =
+      for manifest <-
+            Path.wildcard(Path.join(@seed, "../components/catalysts/local/*/*/cyfr-manifest.json")),
+          %{"name" => name} = shape = Jason.decode!(File.read!(manifest)),
+          Prima.Model.chat_contract() in Map.get(shape, "contracts", []),
+          uniq: true,
+          do: name
+
+    assert catalysts != []
+
+    for provider <- catalysts do
+      assert %{name: ^provider, description: good, avoid: avoid, mode: "auto"} =
+               Aqua.Crew.suggestion({:catalyst, provider})
+
+      assert good != "" and avoid != "", provider
+    end
+
+    for %{name: name, title: title} <- Opus.Programs.Definition.brains() do
+      assert %{name: ^name, title: ^title, description: good, avoid: avoid, mode: "auto"} =
+               Aqua.Crew.suggestion({:program, name, title})
+
+      assert good != "" and avoid != "", name
+    end
+
+    # A brain CYFR does not ship is offered under a name a member can hold,
+    # with nothing said of it.
+    assert %{name: "acme-mistral", title: "acme.mistral", description: "", avoid: ""} =
+             Aqua.Crew.suggestion({:catalyst, "acme.mistral"})
+  end
+
   test "the shipped soul is offered its crew, and the search gate passes through as written" do
     # The soul hands a job to a crew member with `crew.ask` and reads who
     # there is with `crew.list`; no glob stands in for them. `native_search`

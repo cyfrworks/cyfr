@@ -206,6 +206,41 @@ defmodule Opus.Programs.Definition do
 
   def browser?(_row), do: false
 
+  # The program brains CYFR ships a driver for: the row's name, the title a
+  # person reads, and the command its install form is prefilled with, the
+  # driver first and the harness at the version its driver was probed
+  # against. `Arca.McpServerStorage.driver/1` is the one list of driver
+  # words; a test holds each command to it.
+  @brains [
+    %{
+      name: "claude-code",
+      title: "Claude Code",
+      command: "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"
+    },
+    %{
+      name: "openai-codex",
+      title: "OpenAI Codex",
+      command: "cyfr-codex npx -y @openai/codex@0.169.0"
+    }
+  ]
+
+  @typedoc "A program brain CYFR ships a driver for (`brains/0`)."
+  @type brain :: %{name: String.t(), title: String.t(), command: String.t()}
+
+  @doc """
+  The program brains a person can connect, in the order Aqua's setup
+  lists them: each a driven row with a kept folder, named `name`, whose
+  command is `command`. The one source of a brain's install: the Programs
+  page's form is prefilled from it (`/programs?add=<name>`) for the person
+  to confirm or change, and it runs nothing itself.
+  """
+  @spec brains() :: [brain()]
+  def brains, do: @brains
+
+  @doc "The program brain named `name` (`brains/0`), or nil."
+  @spec brain(String.t()) :: brain() | nil
+  def brain(name) when is_binary(name), do: Enum.find(@brains, &(&1.name == name))
+
   @typedoc "One program a sync defines, its environment as stored (templates unresolved)."
   @type program :: %{
           name: String.t(),
