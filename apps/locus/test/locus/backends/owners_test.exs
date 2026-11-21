@@ -781,9 +781,7 @@ defmodule Locus.Backends.OwnersTest do
       [first | _] = ids
       backend = session_pid(owners, "a", {1, 1}, first)
       os_pid = :sys.get_state(backend).handle.pid
-      # Ended by its owners, answered at once; a close answers only once
-      # the process is gone.
-      :ok = Backend.end_session(backend, "ended")
+      :ok = Backend.close(backend)
       assert %{running: false} = Backend.recv(backend, 0, 0)
       assert File.exists?("/proc/#{os_pid}"), "the session's OS process still runs"
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "cat", home_id: @home, key: "next")
@@ -1307,10 +1305,9 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "cat")
       pid = session_pid(owners, "a", {1, 1}, id)
 
-      # Ended by its owners, the session answers ended at once while its
-      # process takes its grace to go: its bound stays held until then. (A
-      # close answers only once the process is gone.)
-      :ok = Backend.end_session(pid, "ended")
+      # Closed, the session answers ended at once while its process takes
+      # its grace to go: its bound stays held until then.
+      :ok = Backend.close(pid)
       assert %{running: false} = Backend.recv(pid, 0, 0)
       assert held_bytes(owners) == 256 * @mib
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "cat", key: "two")
