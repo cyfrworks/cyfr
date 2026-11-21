@@ -226,16 +226,28 @@ func checkKeptUIDs(k home.Kept, client Account, poolGIDs map[int]int, lookup Loo
 	return nil
 }
 
+// toAccount refuses a record whose uid or gid is not a Linux id, 0 to
+// (uid_t)-2: the launchers narrow an Account's ids into a uint32 process
+// credential, so a larger value would run as an id no policy here checked,
+// and (uid_t)-1 means "unchanged" to setresuid and setresgid.
 func toAccount(u *user.User) (Account, error) {
-	uid, err := strconv.Atoi(u.Uid)
+	uid, err := parseID(u.Uid)
 	if err != nil {
-		return Account{}, fmt.Errorf("uid %q is not numeric", u.Uid)
+		return Account{}, fmt.Errorf("uid %w", err)
 	}
-	gid, err := strconv.Atoi(u.Gid)
+	gid, err := parseID(u.Gid)
 	if err != nil {
-		return Account{}, fmt.Errorf("gid %q is not numeric", u.Gid)
+		return Account{}, fmt.Errorf("gid %w", err)
 	}
 	return Account{UID: uid, GID: gid, Name: u.Username, Home: u.HomeDir}, nil
+}
+
+func parseID(s string) (int, error) {
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil || n > protocol.MaxUID {
+		return 0, fmt.Errorf("%q is not an id from 0 to %d", s, uint64(protocol.MaxUID))
+	}
+	return int(n), nil
 }
 
 // EnvPrefix is the prefix of the keeper's own variable names.

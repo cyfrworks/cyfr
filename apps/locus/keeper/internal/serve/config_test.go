@@ -222,6 +222,49 @@ func TestCheckEnvironRefusesEveryUndeclaredKeeperVariableByName(t *testing.T) {
 	}
 }
 
+// A uid or gid outside 0..(uid_t)-2 is refused where the record is read,
+// before any policy sees it: 4294967296 narrows to root in the launchers'
+// uint32 credential, and 4294967295 is no id.
+func TestResolveAccountsRefusesAnIdOutsideTheLinuxRange(t *testing.T) {
+	pools := []pool.Spec{{Name: "backends", First: 20001, Last: 20001}}
+	for _, bad := range []string{"-1", "4294967295", "4294967296", "4294987297", "+10001"} {
+		client := locusUser
+		client.Uid = bad
+		clientGroup := locusUser
+		clientGroup.Gid = bad
+		pooled := poolUser(20001, 20001)
+		pooled.Uid = bad
+		pooledGroup := poolUser(20001, 20001)
+		pooledGroup.Gid = bad
+		cases := map[string]Lookup{
+			"client uid": fakeLookup(client),
+			"client gid": fakeLookup(clientGroup),
+			"pooled uid": recordFor(pooled),
+			"pooled gid": fakeLookup(locusUser, pooledGroup),
+		}
+		for name, lookup := range cases {
+			_, _, err := ResolveAccounts(Config{Pools: pools, ClientUser: "locus"}, lookup)
+			if err == nil || !strings.Contains(err.Error(), strconv.Quote(bad)+" is not an id from 0 to 4294967294") {
+				t.Errorf("%s %s: error %v", name, bad, err)
+			}
+		}
+	}
+	top := poolUser(20001, 4294967294)
+	_, accounts, err := ResolveAccounts(Config{Pools: pools, ClientUser: "locus"}, fakeLookup(locusUser, top))
+	if err != nil || accounts[20001].GID != 4294967294 {
+		t.Fatalf("the highest gid: %+v, %v", accounts[20001], err)
+	}
+}
+
+// recordFor answers the client's name with locusUser and every uid with
+// record, whatever uid the record carries.
+func recordFor(record user.User) Lookup {
+	return Lookup{
+		ByName: fakeLookup(locusUser).ByName,
+		ByID:   func(string) (*user.User, error) { return &record, nil },
+	}
+}
+
 func TestPoolAccountsNamesEveryPooledUidAndGid(t *testing.T) {
 	got := PoolAccounts(map[int]Account{20001: {UID: 20001, GID: 20001}, 20002: {UID: 20002, GID: 30002}})
 	if !got.UIDs[20001] || !got.UIDs[20002] || !got.GIDs[20001] || !got.GIDs[30002] || got.GIDs[20002] || len(got.UIDs) != 2 {
