@@ -414,8 +414,9 @@ defmodule Aqua.Loop.RequestTest do
       row(seq, "tool_result", @system, content, %{"tool_call_id" => "call_1", "name" => "files"})
     end
 
-    # A post landed while the call waited; its result came after it. Rows
-    # keep their places.
+    # Rows given with a post between a call and its result (the projection
+    # reads a post after the results): each row keeps the place it is given,
+    # and the call is answered by its own result alone.
     assert [
              %{"role" => "user"},
              %{"role" => "assistant"},

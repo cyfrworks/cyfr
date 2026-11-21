@@ -28,7 +28,9 @@
 // the header's `data-aqua-menu-toggle`) is an element of the panel, under
 // the command palette like the rest of it. The hook shows and hides it:
 // the toggle, a press outside it, Escape inside it, the window losing
-// focus and the palette opening close it; the panel closing removes it.
+// focus, the palette opening and the server's `aqua:close_menu` (the
+// thread shown was deleted and the panel lands elsewhere) close it; the
+// panel closing removes it.
 //
 // `AquaPanelKeys`, on the panel's root, which is drawn open or closed,
 // sends `toggle` on Ctrl+J while no modal prompt is open.
@@ -100,6 +102,7 @@ export const AquaPanel = {
     this.el.addEventListener("pointercancel", this.onLost)
     this.el.addEventListener("lostpointercapture", this.onLost)
     this.el.addEventListener("click", this.onClick)
+    this.handleEvent("aqua:close_menu", () => this.closeMenu())
     this.watchPalette()
   },
 

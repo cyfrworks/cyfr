@@ -840,9 +840,12 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:ok, [drained]} = TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})
 
       assert drained.id == steer.id
-      refute TurnStorage.steer_pending?(actor, turn.id)
 
-      assert {:ok, []} = TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})
+      # Taken in, it waits until a model step carries it: the next round
+      # takes it in again.
+      assert TurnStorage.steer_pending?(actor, turn.id)
+      assert {:ok, [again]} = TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})
+      assert again.id == steer.id
 
       assert {:ok, rows} = TurnStorage.projection(actor, turn.id)
 
@@ -893,6 +896,50 @@ defmodule Arca.TurnTapeStorageTest do
       refute c_message.id in ids
     end
 
+    test "draining a post accepted while queued keeps the predecessor's final rows",
+         %{actor: actor, thread: thread} do
+      %{turn: first} = accept_turn!(actor, thread, "first")
+      {first, _} = start!(actor, first)
+      %{turn: queued} = accept_turn!(actor, thread, "second")
+
+      {:ok, %{message: post}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "and also"},
+          steer_turn_id: queued.id
+        })
+
+      {_model, %{text: answer, calls: [%{step: call}]}} =
+        respond!(actor, first, [{"c", "files", "read"}])
+
+      {:ok, _} = TurnStorage.dispatch_step(actor, call.id, %{fence: first.fence})
+
+      {:ok, %{result: result}} =
+        TurnStorage.close_step(actor, call.id, "ok", %{
+          result: %{content: "ok"},
+          fence: first.fence
+        })
+
+      {:ok, _} =
+        TurnStorage.finish(actor, first.id, "completed", %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: first.fence
+        })
+
+      {queued, _} = start!(actor, queued)
+      assert post.seq < answer.seq and answer.seq < result.seq
+      assert {:ok, before} = TurnStorage.projection(actor, queued.id)
+      assert answer.id in Enum.map(before, & &1.id)
+      assert result.id in Enum.map(before, & &1.id)
+
+      assert {:ok, [%{id: drained}]} =
+               TurnStorage.drain_steer(actor, queued.id, %{fence: queued.fence})
+
+      assert drained == post.id
+      assert {:ok, after_drain} = TurnStorage.projection(actor, queued.id)
+      assert Enum.map(after_drain, & &1.id) == Enum.map(before, & &1.id)
+    end
+
     test "the first message of an empty thread is inside the window", %{
       actor: actor,
       thread: thread
@@ -903,6 +950,172 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:ok, [%{id: id}]} = TurnStorage.projection(actor, turn.id)
       assert id == message.id
       refute TurnStorage.steer_pending?(actor, turn.id)
+    end
+  end
+
+  describe "a post's place" do
+    # One chat round of an API brain: the round takes in what was posted,
+    # its model step opens dispatched, and it answers `text` with a read
+    # call for each id, each dispatched.
+    defp round!(actor, turn, text, calls \\ []) do
+      {:ok, _drained} = TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})
+      model!(actor, turn, text, calls)
+    end
+
+    defp model!(actor, turn, text, calls) do
+      {:ok, step} =
+        TurnStorage.put_step(actor, turn.id, %{
+          kind: "model",
+          idempotency_key: "model:#{System.unique_integer([:positive])}",
+          dispatch_state: "dispatched",
+          fence: turn.fence
+        })
+
+      {:ok, recorded} =
+        TurnStorage.record_response(actor, turn.id, step.id, %{
+          fence: turn.fence,
+          text: text,
+          usage: %{"input_tokens" => 10, "output_tokens" => 3},
+          stop_reason: if(calls == [], do: "end_turn", else: "tool_call"),
+          tool_calls:
+            for id <- calls do
+              %{
+                tool_call_id: id,
+                name: "files.read",
+                tool: "files",
+                action: "read",
+                arguments: %{"path" => "a.txt"},
+                kind: "read",
+                recovery: "replay_safe",
+                idempotency_key: "call:#{turn.id}:#{id}",
+                child_execution_id: "exec_child_#{turn.id}_#{id}"
+              }
+            end
+        })
+
+      for %{step: call} <- recorded.calls,
+          do: {:ok, _} = TurnStorage.dispatch_step(actor, call.id, %{fence: turn.fence})
+
+      {step, recorded}
+    end
+
+    defp result!(actor, turn, %{step: call}) do
+      {:ok, %{result: result}} =
+        TurnStorage.close_step(actor, call.id, "ok", %{
+          result: %{content: "ok"},
+          fence: turn.fence
+        })
+
+      result
+    end
+
+    defp post!(actor, thread, turn, text) do
+      {:ok, %{message: post}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: text},
+          steer_turn_id: turn.id
+        })
+
+      post
+    end
+
+    defp read_ids(actor, turn) do
+      {:ok, rows} = TurnStorage.projection(actor, turn.id)
+      Enum.map(rows, & &1.id)
+    end
+
+    defp carried_by(row), do: Arca.Repo.get!(Message, row.id).carried_by
+
+    test "a post written while a call runs reads after the call's result and before the answer " <>
+           "of the step that carried it, in every round and turn after; one written while an " <>
+           "answer is written reads after that answer",
+         %{actor: actor, thread: thread} do
+      %{message: ask, turn: turn} = accept_turn!(actor, thread, "@aqua read it")
+      {turn, _root} = start!(actor, turn)
+      {first, %{text: reply, calls: [read]}} = round!(actor, turn, "Reading.", ["c1"])
+      assert carried_by(ask) == first.id
+
+      moon = post!(actor, thread, turn, "and the moon too")
+      result = result!(actor, turn, read)
+
+      # The next round takes the post in. Should it die before its step is
+      # written, the post is taken in and carried by nothing: still a steer,
+      # read last, which the round after carries.
+      assert {:ok, [%{id: drained}]} =
+               TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})
+
+      assert drained == moon.id
+      assert TurnStorage.steer_pending?(actor, turn.id)
+      assert carried_by(moon) == nil
+
+      assert {:error, :steer_pending} =
+               TurnStorage.finish(actor, turn.id, "completed", %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: turn.fence
+               })
+
+      assert read_ids(actor, turn) == [ask.id, reply.id, read.message.id, result.id, moon.id]
+
+      # A compaction's model step carries nothing; a post written after the
+      # round read the thread waits for the step after.
+      {:ok, _} =
+        TurnStorage.put_step(actor, turn.id, %{
+          kind: "model",
+          purpose: "compaction",
+          idempotency_key: "compaction:1",
+          dispatch_state: "dispatched",
+          fence: turn.fence
+        })
+
+      assert carried_by(moon) == nil
+      stars = post!(actor, thread, turn, "and the stars")
+      {second, %{text: both}} = model!(actor, turn, "Both.", [])
+      assert carried_by(moon) == second.id
+      assert carried_by(stars) == nil
+
+      held = [ask.id, reply.id, read.message.id, result.id, moon.id, both.id]
+      assert read_ids(actor, turn) == held
+
+      # The stars were written while that answer was: they read after it.
+      assert stars.seq < both.seq
+      {third, %{text: last}} = round!(actor, turn, "Stars too.")
+      assert carried_by(stars) == third.id
+      assert read_ids(actor, turn) == held ++ [stars.id, last.id]
+
+      {:ok, _} =
+        TurnStorage.finish(actor, turn.id, "completed", %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: turn.fence
+        })
+
+      %{message: again, turn: next} = accept_turn!(actor, thread, "@aqua and now?")
+      {next, _} = start!(actor, next)
+      assert read_ids(actor, next) == held ++ [stars.id, last.id, again.id]
+    end
+
+    test "a post no round held reads after the rest of its turn, in the turns after",
+         %{actor: actor, thread: thread} do
+      %{message: ask, turn: turn} = accept_turn!(actor, thread, "@aqua read it")
+      {turn, _root} = start!(actor, turn)
+      {_first, %{text: reply, calls: [read]}} = round!(actor, turn, "Reading.", ["c1"])
+      never = post!(actor, thread, turn, "never mind")
+      result = result!(actor, turn, read)
+
+      {:ok, _} =
+        TurnStorage.finish(actor, turn.id, "failed", %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: turn.fence
+        })
+
+      %{message: again, turn: next} = accept_turn!(actor, thread, "@aqua try again")
+      {next, _} = start!(actor, next)
+      assert never.seq < result.seq
+
+      assert read_ids(actor, next) ==
+               [ask.id, reply.id, read.message.id, result.id, never.id, again.id]
     end
   end
 
@@ -922,6 +1135,63 @@ defmodule Arca.TurnTapeStorageTest do
           step
         end
       end)
+    end
+
+    test "a post written while the call ran is no steer while the turn is stopped on it, " <>
+           "though no step carried it: the sender's line after the stop is",
+         %{actor: actor, thread: thread} do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {turn, _root} = start!(actor, turn)
+      [c1] = dispatched!(actor, turn, ["c1"], 1)
+
+      {:ok, %{message: early}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "and also"},
+          steer_turn_id: turn.id
+        })
+
+      assert TurnStorage.steer_pending?(actor, turn.id)
+
+      {:ok, _} =
+        TurnStorage.pause_uncertain(actor, turn.id, %{
+          fence: turn.fence,
+          step_id: c1.id,
+          generation: 0,
+          reason: "the worker died"
+        })
+
+      refute TurnStorage.steer_pending?(actor, turn.id)
+      assert Arca.Repo.get!(Message, early.id).carried_by == nil
+
+      {:ok, _} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "go on"},
+          steer_turn_id: turn.id
+        })
+
+      assert TurnStorage.steer_pending?(actor, turn.id)
+
+      {:ok, resumed} =
+        TurnStorage.resume(actor, turn.id, %{
+          fence: turn.fence,
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1
+        })
+
+      assert {:ok, posts} = TurnStorage.drain_steer(actor, turn.id, %{fence: resumed.fence})
+      assert Enum.map(posts, & &1.content) == ["and also", "go on"]
+
+      {:ok, carrier} =
+        TurnStorage.put_step(actor, turn.id, %{
+          kind: "model",
+          purpose: "chat",
+          dispatch_state: "dispatched",
+          idempotency_key: "review:after-ack",
+          fence: resumed.fence
+        })
+
+      assert Arca.Repo.get!(Message, early.id).carried_by == carrier.id
+      refute TurnStorage.steer_pending?(actor, turn.id)
     end
 
     test "a mark takes the turn's fence and the step's generation", %{

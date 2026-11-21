@@ -417,6 +417,7 @@ defmodule Aqua.RunnerTest do
 
       [%{kind: "model", id: step}] = raw_steps!(ctx, turn_id)
 
+      # The post is carried by the model step whose request held it.
       assert [
                row(thread, %{
                  seq: 1,
@@ -425,7 +426,8 @@ defmodule Aqua.RunnerTest do
                  content: "hello",
                  turn_id: turn_id,
                  sent_by: "person",
-                 addressee: "aqua"
+                 addressee: "aqua",
+                 carried_by: step
                }),
                row(thread, %{
                  seq: 2,
@@ -545,6 +547,39 @@ defmodule Aqua.RunnerTest do
     send(worker, :continue)
     assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert Aqua.Loop.Stream.texts(Runner.state(thread.id, ctx.athanor_id).partials) == []
+  end
+
+  # A viewer that joins draws what the live thread draws: a thread's pane
+  # clears a turn's calls when it hears the turn end, so the turn's calls
+  # are no part of what a viewer joining after that end reads.
+  test "a viewer joining after a stop reads no call of the stopped turn, as the live thread draws none",
+       %{ctx: ctx, thread: thread} do
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, "catalyst:local.http"],
+       script: [
+         call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+         {:probe, self()},
+         reply("never sent")
+       ]}
+    )
+
+    {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua fetch")
+    assert_receive {:scripted_probe, worker, _}, 30_000
+
+    wait_until(fn ->
+      match?(
+        %{running: true, turn_id: ^turn_id, tool_activity: [_ | _]},
+        Runner.state(thread.id, ctx.athanor_id)
+      )
+    end)
+
+    assert :ok = Runner.stop_turn(ctx, thread.id)
+    assert_receive %ThreadEvent{kind: :turn_finished}, 10_000
+    send(worker, :continue)
+
+    assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
+    assert %{running: false, tool_activity: []} = Runner.state(thread.id, ctx.athanor_id)
   end
 
   test "a steer offered again is the same steer", %{ctx: ctx, thread: thread} do

@@ -164,9 +164,10 @@ defmodule Prima.Sanitizer do
     |> Map.new()
   end
 
-  def sanitize(data) when is_list(data) do
-    Enum.map(data, &sanitize/1)
-  end
+  # A list may be improper, as iodata is (`["<p>" | "text"]`): its tail is
+  # sanitized as any other value, so no shape raises.
+  def sanitize([head | tail]), do: [sanitize(head) | sanitize_tail(tail)]
+  def sanitize([]), do: []
 
   # Check two-tuples as key/value pairs before traversing general tuples.
   # This redacts credential headers such as {"authorization", "Bearer ..."}.
@@ -187,6 +188,9 @@ defmodule Prima.Sanitizer do
   def sanitize(data) when is_binary(data), do: Prima.CredentialShape.redact(data, @placeholder)
 
   def sanitize(data), do: data
+
+  defp sanitize_tail([head | tail]), do: [sanitize(head) | sanitize_tail(tail)]
+  defp sanitize_tail(tail), do: sanitize(tail)
 
   @doc """
   Check if a key matches a known sensitive pattern.

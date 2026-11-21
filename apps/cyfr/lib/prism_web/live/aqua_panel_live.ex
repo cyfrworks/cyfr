@@ -329,7 +329,9 @@ defmodule PrismWeb.AquaPanelLive do
   # member's thread whose room stands goes back to that room, and any
   # other to today's thread as the panel holds it, or to the blank slate
   # when today's is the one gone, where the next post makes it again. A
-  # closed panel only keeps where its next open lands.
+  # closed panel only keeps where its next open lands. An open one closes
+  # the thread's menu, which its hook shows and hides, so the menu of the
+  # thread that went does not stand over the one it lands on.
   defp leave(socket, removed) do
     landing =
       case socket.assigns.thread do
@@ -339,10 +341,12 @@ defmodule PrismWeb.AquaPanelLive do
 
     cond do
       not socket.assigns.open -> assign(socket, :thread, landing)
-      landing -> reach(socket, landing)
-      true -> show(socket, nil)
+      landing -> socket |> close_menu() |> reach(landing)
+      true -> socket |> close_menu() |> show(nil)
     end
   end
+
+  defp close_menu(socket), do: push_event(socket, "aqua:close_menu", %{})
 
   # The person's workspace threads as the list shows them, read under the
   # panel's context; a read that fails keeps what was shown.

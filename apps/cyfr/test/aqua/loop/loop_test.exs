@@ -19,6 +19,32 @@ defmodule Aqua.LoopTest.CountStore do
   def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
 end
 
+# Holds the first listing of one post's files until told to go on: the
+# round has drained the post and not yet opened its model step. The test
+# sets the term through `Prima.Test.Env`, which restores it; `once` lets
+# the round's later listings of the same files through.
+defmodule Aqua.LoopTest.DrainGapStore do
+  use Arca.Storage.TestDouble
+
+  def list_typed(actor, path) do
+    case :persistent_term.get(__MODULE__, nil) do
+      {^path, observer, once} ->
+        if :atomics.add_get(once, 1, 1) == 1 do
+          send(observer, {:drain_gap, self()})
+
+          receive do
+            :continue -> :ok
+          end
+        end
+
+      _ ->
+        :ok
+    end
+
+    Arca.Adapters.Local.list_typed(actor, path)
+  end
+end
+
 defmodule Aqua.LoopTest do
   @moduledoc """
   The loop against the real root, the real hands and a scripted model:
@@ -1430,13 +1456,13 @@ defmodule Aqua.LoopTest do
   end
 
   # A post lands while a call runs; the calls after it are skipped, and the
-  # model is asked again. Each skipped call is answered by its own skipped
-  # result, which names it, after the post, where the rows stand: no
-  # made-up unknown outcome, and no result that names no call. Both shipped
-  # adapters take that request, since each pairs the last message's result
-  # with a call of the assistant message nearest before it.
+  # model is asked again. Each call is answered by its own result, the
+  # skipped one's naming it, right after the calls, and the post reads
+  # after them, where the round that carried it placed it: no made-up
+  # unknown outcome, no result that names no call, and nothing between a
+  # call and its result, which providers refuse.
   test "a post that lands while a call runs skips the calls after it, each answered by its own " <>
-         "skipped result after the post in the next request",
+         "result right after the calls, and the post after them, in the next request",
        %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua keep a note")
     write = %{"action" => "write", "path" => "data/x.md", "content" => "y"}
@@ -1479,10 +1505,6 @@ defmodule Aqua.LoopTest do
                ]
              },
              %{
-               "role" => "user",
-               "content" => [%{"type" => "text", "text" => "actually, never mind"}]
-             },
-             %{
                "role" => "tool",
                "content" => [
                  tool_result(
@@ -1493,6 +1515,10 @@ defmodule Aqua.LoopTest do
                  ),
                  tool_result("c2", "notes", "a newer message arrived", false)
                ]
+             },
+             %{
+               "role" => "user",
+               "content" => [%{"type" => "text", "text" => "actually, never mind"}]
              }
            ]
 
@@ -1545,8 +1571,9 @@ defmodule Aqua.LoopTest do
              model_row("ok")
            ]
 
-    # The model is asked again with the post, the restart the takeover
-    # wrote, and each skipped call answered by its own skipped result.
+    # The model is asked again with each skipped call answered by its own
+    # skipped result right after the calls, then the post and the restart
+    # the takeover wrote, in the order they were written.
     skipped = "a newer message arrived"
 
     restarted =
@@ -1565,17 +1592,17 @@ defmodule Aqua.LoopTest do
                ]
              },
              %{
-               "role" => "user",
-               "content" => [
-                 %{"type" => "text", "text" => "actually, leave it"},
-                 %{"type" => "text", "text" => restarted}
-               ]
-             },
-             %{
                "role" => "tool",
                "content" => [
                  tool_result("c1", "files", skipped, false),
                  tool_result("c2", "browser", skipped, false)
+               ]
+             },
+             %{
+               "role" => "user",
+               "content" => [
+                 %{"type" => "text", "text" => "actually, leave it"},
+                 %{"type" => "text", "text" => restarted}
                ]
              }
            ]
@@ -1673,16 +1700,6 @@ defmodule Aqua.LoopTest do
         ]
       },
       %{
-        "role" => "user",
-        "content" => [
-          text.("make it look like this"),
-          image.("sun.png", "SUN"),
-          text.(""),
-          text.("The attached file notes.txt:\n\ntwo stars"),
-          text.("The file art.bmp (image/bmp) is attached, and this brain cannot read it.")
-        ]
-      },
-      %{
         "role" => "tool",
         "content" => [
           %{
@@ -1692,6 +1709,16 @@ defmodule Aqua.LoopTest do
             "content" => Jason.encode!(%{"written" => "data/note.md"}, pretty: true),
             "is_error" => false
           }
+        ]
+      },
+      %{
+        "role" => "user",
+        "content" => [
+          text.("make it look like this"),
+          image.("sun.png", "SUN"),
+          text.(""),
+          text.("The attached file notes.txt:\n\ntwo stars"),
+          text.("The file art.bmp (image/bmp) is attached, and this brain cannot read it.")
         ]
       }
     ]
@@ -1767,12 +1794,68 @@ defmodule Aqua.LoopTest do
     [_first, %{input: %{"params" => %{"messages" => messages}}}] =
       Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
-    assert Jason.encode!(messages) =~ "one more thing"
+    # The post was written while the answer was: it reads after the answer
+    # that never read it, and the request ends on it.
+    assert messages == [
+             %{"role" => "user", "content" => [%{"type" => "text", "text" => "@aqua hello"}]},
+             %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "hello"}]},
+             %{"role" => "user", "content" => [%{"type" => "text", "text" => "one more thing"}]}
+           ]
 
     assert Enum.any?(
              Threads.messages(Sanctum.Context.actor(ctx), thread.id),
              &(&1.content == "and hi again")
            )
+  end
+
+  # The runner dies while a round that drained a post reads its files:
+  # before the round's model step opened, the recovered turn still owes the
+  # post that round; once the step opened (the control), the step carries it.
+  for checkpoint <- [:drained, :opened] do
+    @tag checkpoint: checkpoint
+    test "a takeover answers a later post after #{checkpoint}",
+         %{ctx: ctx, thread: thread, checkpoint: checkpoint} do
+      script!([{:probe, self()}, reply("hello"), reply("I read the later post")])
+      turn_id = send!(ctx, thread, "hello")
+      assert_receive {:scripted_probe, worker, _}, 30_000
+      {:ok, turn} = Tape.turn(ctx, turn_id)
+      file = %{"filename" => "later.txt", "media_type" => "text/plain", "bytes" => "later"}
+      {id, refs} = stored!(ctx, thread, [file])
+      steer!(ctx, thread, turn, id, "one more thing", refs)
+      Prima.Test.Env.put_app_env(:arca, :storage_adapter, Aqua.LoopTest.DrainGapStore)
+
+      Prima.Test.Env.put_persistent_term(
+        Aqua.LoopTest.DrainGapStore,
+        {["threads", thread.id, id], self(), :atomics.new(1, [])}
+      )
+
+      send(worker, :continue)
+      assert_receive {:drain_gap, blocked}, 30_000
+      {:ok, kept} = Tape.turn(ctx, turn_id)
+      {:ok, post} = Tape.message(ctx, id)
+      assert kept.window_upto_seq >= post.seq
+      assert post.carried_by == nil
+      {:ok, [%{kind: "model", dispatch_state: "closed", outcome: "ok"}]} = Tape.steps(ctx, turn)
+
+      if checkpoint == :opened do
+        assert {:ok, _step} =
+                 Tape.propose_call(ctx, kept, %{
+                   kind: "model",
+                   purpose: "chat",
+                   dispatch_state: "dispatched",
+                   idempotency_key: "review:never-reached-model"
+                 })
+      end
+
+      Process.exit(Aqua.Runner.whereis(thread.id), :kill)
+      Process.exit(blocked, :kill)
+      ended = ended!(ctx, turn_id)
+      assert ended.status == "completed"
+      assert ended.recovery_attempts == 1
+      assert length(chat_messages()) == 2
+      {:ok, carried} = Tape.message(ctx, id)
+      assert is_binary(carried.carried_by)
+    end
   end
 
   test "a steer names an open turn of its own thread", %{ctx: ctx, thread: thread} do
