@@ -218,7 +218,7 @@ same worktree refuses, naming the run that holds it.
   and `handoff` the checks that use one build folder (`_build/dev`,
   `dev_pg`, `test` or `test_pg`, the table's folder column) run one after
   another on one queue ticket and the rest side by side, each on its own,
-  so one stage can hold several quarters while no other worktree waits; a touched test
+  so one stage can hold several quarters; a touched test
   that two test checks of one folder name runs once, in the one that names
   it. The nightly runs its checks one after another. A stage's
   summary lists every check in the table's order. The

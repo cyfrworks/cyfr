@@ -60,9 +60,9 @@ probe_cpus() {
   printf '%s' "mkdir -p $1; echo \"\${HEAVY_CHECK_CPUS-unset}\" >$1/told; echo \"\${CYFR_TEST_CORES-unset}\" >$1/count; grep Cpus_allowed_list /proc/self/status >$1/mask; sh -c 'grep Cpus_allowed_list /proc/self/status' >$1/child"
 }
 clean=(env -u HEAVY_CHECK_HELD -u CONTAIN_REGISTRY -u CONTAIN_CLOSE_FDS -u CONTAIN_HOLD_FDS)
-# The worktree a check started from here counts against: the Git top level
-# of the working directory, else the directory itself.
-worktree=$(git rev-parse --show-toplevel 2>/dev/null) && worktree=$(cd "$worktree" && pwd -P) || worktree=$(pwd -P)
+# The directory a check started from here records as its checkout: the
+# working directory, physical.
+worktree=$(pwd -P)
 hc=("${clean[@]}" bash "$check")
 # A signal ignored on entry cannot be trapped: a command started in the
 # background ignores INT, and one started under nohup ignores HUP, unless
@@ -1385,8 +1385,8 @@ t_survivor_remains() {
   forget_killed
 }
 
-# A kill between truncating the holder record and writing its new line
-# leaves the record it wrote when it took the quarter, whole, which names
+# A check killed as it writes its record the second time, with the
+# command's group, leaves the record it wrote when it took the quarter, whole, which names
 # no group. The watchdog still stops the command and frees the quarter;
 # that record names nothing the cleanup can wait on once its pid is gone.
 t_killed_record() {
@@ -1421,7 +1421,7 @@ RECORDWRITE
 
 # --- the record of the host's load ------------------------------------------------
 # Every check that queued appends one line as it exits: its end, its
-# quarter, its wait and its run, its status, its worktree and its words,
+# quarter, its wait and its run, its status, its directory and its words,
 # redacted; a check stopped while it waited, quarter - and ran 0.
 t_record_line() {
   local q p s=0
@@ -1480,6 +1480,43 @@ TERMAT
     fail "a long command's line is $(wc -l <"$scratch/records") lines, $(wc -c <"$scratch/records") bytes"
   has_line "^end=[0-9T:+-]+ quarter=1 waited=[0-9]+ ran=[0-9]+ exit=0 checkout=$worktree command=true 0+ \\[cut\\]\$" "$scratch/records" ||
     fail "a long command's line is not cut and marked: $(cut -c1-120 "$scratch/records")"
+}
+
+# A check removes its record before its quarter is free, never after: once
+# the quarter is free the record there is the next holder's. A1, on
+# quarter 1 with the other three held, is held as it goes to remove its
+# record: quarter 1 is still locked and B1 waits. Let go, A1 ends, and B1
+# runs on quarter 1 with its own record in place.
+t_record_before_quarter() {
+  local a b p
+  cat > "$scratch/remove-gate" <<'REMOVEGATE'
+rm() {
+  if [[ ${FUNCNAME[1]:-} == on_exit && $* == *.quarter1.holder && ! -e $GATE_MARK ]]; then
+    echo "$BASHPID" > "$GATE_MARK"
+    until [[ -e $GATE_OPEN || ! -d ${GATE_OPEN%/*} ]]; do sleep 0.05; done
+  fi
+  command rm "$@"
+}
+REMOVEGATE
+  rm -f "$scratch/rb.mark" "$scratch/rb.open"
+  BASH_ENV="$scratch/remove-gate" GATE_MARK="$scratch/rb.mark" GATE_OPEN="$scratch/rb.open" \
+    "${hc[@]}" -- "$hold" "$scratch/release-rbA" >/dev/null 2>"$scratch/rbA.err" &
+  a=$!; started+=("$a")
+  until_true 10 has_line ' watchdog=[0-9]+ ' "$scratch/lock.quarter1.holder" || fail "A1 did not start on quarter 1: $(cat "$scratch/rbA.err")"
+  hold_others rb 3
+  touch "$scratch/release-rbA"
+  until_true 10 test -s "$scratch/rb.mark" || fail "A1 did not reach its record's removal: $(cat "$scratch/rbA.err")"
+  "${hc[@]}" -- "$hold" "$scratch/release-rbB" >/dev/null 2>"$scratch/rbB.err" &
+  b=$!; started+=("$b")
+  until_true 10 eval 'has_line "^==> heavy-check: (queued,|running )" "$scratch/rbB.err"' || fail 'B1 neither queued nor ran'
+  ! flock -n "$scratch/lock.quarter1" true || { touch "$scratch/rb.open"; fail 'the quarter was free while its record was still there to remove'; }
+  ! ran "$scratch/rbB.err" || { touch "$scratch/rb.open"; fail 'B1 ran before A1 removed its record'; }
+  touch "$scratch/rb.open"
+  wait "$a" || fail 'A1 failed'
+  until_true 10 has_line "^pid=$b quarter=1 .* watchdog=[0-9]+ " "$scratch/lock.quarter1.holder" ||
+    fail "B1's record on quarter 1 is not in place: $(cat "$scratch/lock.quarter1.holder" 2>/dev/null)"
+  touch "$scratch/release-rbB" "$scratch"/release-rb{1,2,3}
+  for p in "$b" "${quarter_holders[@]}"; do wait "$p"; done
 }
 
 # A holder's record is whole at every moment: held as it writes its record
@@ -1706,6 +1743,7 @@ cases=(
   waiters_skipped run_record record_watchdog environment status queued_repeat
   hold hold_frame stage_side_by_side term int hup usr1 quarter_stop term_queued int_queued hup_queued
   refusals leftover sigkill nested_session registry_nested survivor survivor_remains killed_record record_line record_always record_whole record_grammar
+  record_before_quarter
   placed_containers
   await_result await_died await_line await_nested await_bare await_reused await_explicit
   await_statuses await_usage await_zombie await_queue
