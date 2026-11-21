@@ -423,7 +423,7 @@ screen_signed_in() {
   # page's "I saved it", without the proof: the check below holds after it.
   guest_ssh "curl -s -o /dev/null --max-time 30 -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/saved" >/dev/null 2>&1
   guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/v1/handles/alice" >"$GUEST_DIR/handle-shown.json" 2>&1
-  guest_ssh 'cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder-shown.json" 2>&1
+  guest_ssh 'cat ~/.cyfr/device/holder.json' >"$GUEST_DIR/holder-shown.json" 2>&1
   check "nothing reached the account service while the code is shown, a local program's I saved it included: no one holds alice, and the box's key names no account" \
     python3 -I -c '
 import json, sys
@@ -443,7 +443,7 @@ sys.exit(0 if rows and all(r["provisioned_at"] and not r["provisioning_failure"]
   shell_page saved
   check "the recovery code is gone from the screen once saved" sh -c '! grep -q "Your recovery code" "$1"' sh "$GUEST_DIR/shell-saved.html"
   guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/v1/handles/alice" >"$GUEST_DIR/handle-saved.json" 2>&1
-  guest_ssh 'cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder-saved.json" 2>&1
+  guest_ssh 'cat ~/.cyfr/device/holder.json' >"$GUEST_DIR/holder-saved.json" 2>&1
   id=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("identifier", ""))' "$GUEST_DIR/handle-saved.json" 2>/dev/null)
   guest_ssh "curl -s --max-time 5 '$ACCOUNT_SERVICE/directory/v1/$id?after=-1'" >"$GUEST_DIR/log-saved.json" 2>&1
   check "the account service holds the account named alice, its log listing the box's key, and the box's record names it" \
@@ -455,7 +455,7 @@ kid = "sha256:" + hashlib.sha256(pub).hexdigest()
 added = [e["key"]["kid"] for e in log["entries"] if e["kind"] == "add_key"]
 sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifier"] and kid in added else 1)' \
     "$GUEST_DIR/handle-saved.json" "$GUEST_DIR/holder-saved.json" "$GUEST_DIR/log-saved.json"
-  check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/cyfr/.cyfr/screen/client.json'
+  check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/.cyfr/device/client.json'
   check "Chrome holds the session cookie Prism opened with" screen_cookie prism
   check "the home serves that cookie on a page that needs a session" cookie_is in prism
   guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/open" >"$GUEST_DIR/open-forged.txt" 2>&1
@@ -569,7 +569,7 @@ screen_confirms() {
   sleep 6
   check "screenshot screen-key-made.png" guest_screenshot screen-key-made.png
   confirmation_state confirmed "$ref"
-  client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/cyfr/.cyfr/screen/client.json")
+  client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/.cyfr/device/client.json")
   check "the home records it confirmed by this screen's own client ($client) and consumed by the key's making" \
     json_is "$GUEST_DIR/confirmation-confirmed.json" "{\"state\": \"consumed\", \"confirmed_client_id\": \"$client\"}"
 }
@@ -817,7 +817,7 @@ clean_install() {
   guest_ssh "sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env" >"$WORK/token" 2>&1
   guest_ssh 'ps -eo args' >"$GUEST_DIR/processes.txt" 2>&1
   check "the setup token is in no process's arguments" sh -c '[ -s "$1" ] && ! grep -qF "$(cat "$1")" "$2"' sh "$WORK/token" "$GUEST_DIR/processes.txt"
-  check "no screen file holds the setup token" guest_ssh "! grep -rqF \"\$(sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env)\" --exclude-dir=chrome ~/cyfr/.cyfr/screen"
+  check "no screen file holds the setup token" guest_ssh "! grep -rqF \"\$(sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env)\" --exclude-dir=chrome ~/cyfr/.cyfr/screen ~/.cyfr/device"
 
   step "setup on the screen, typed: a name and the PIN (or passphrase) twice"
   if [ "$GUEST_TPM" = none ]; then
@@ -840,7 +840,7 @@ clean_install() {
     sleep 5
     shell_page six-digits
     check "without a chip six digits are refused" grep -q 'needs the six-word passphrase' "$GUEST_DIR/shell-six-digits.html"
-    check "a refused PIN made no key" guest_ssh '! test -e ~/cyfr/.cyfr/screen/holder.json'
+    check "a refused PIN made no key" guest_ssh '! test -e ~/.cyfr/device/holder.json'
     KIND=software
   else
     SECRET=$(printf '%06d' $((RANDOM % 1000000)))
@@ -848,7 +848,7 @@ clean_install() {
   fi
   printf 'alice\t%s\t%s\n' "$SECRET" "$SECRET" | guest_keys || fail "QMP did not type"
   sleep 15
-  guest_ssh 'stat -c %a ~/cyfr/.cyfr/screen/holder.json && cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder.txt" 2>&1
+  guest_ssh 'stat -c %a ~/.cyfr/device/holder.json && cat ~/.cyfr/device/holder.json' >"$GUEST_DIR/holder.txt" 2>&1
   check "the key record is the box's alone, mode 600" sh -c '[ "$(head -n 1 "$1")" = 600 ]' sh "$GUEST_DIR/holder.txt"
   check "the key is held by the $KIND holder" grep -qE "\"kind\": *\"$KIND\"" "$GUEST_DIR/holder.txt"
   check "the key record holds neither the PIN nor the passphrase" sh -c '! grep -qF -- "$1" "$2"' sh "$SECRET" "$GUEST_DIR/holder.txt"

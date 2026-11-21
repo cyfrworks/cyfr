@@ -189,6 +189,15 @@ jobs:
           go test ./cmd/ -race -count=1 -v -run '^TestUpdateHandsOverForReal$' 2>&1 | tee "$RUNNER_TEMP/handover-test.log"
           grep -q -- "--- PASS: TestUpdateHandsOverForReal " "$RUNNER_TEMP/handover-test.log" || { echo "::error::the handover test did not run and pass"; exit 1; }
 
+      # The device folder, which keeps the device's key, made private by its
+      # access list, the platform's own. It must run and pass here.
+      - name: go test (the device folder's access ran and passed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./internal/shell/ -race -count=1 -v -run '^TestDeviceDirKeepsAnExistingFolderPrivate$' 2>&1 | tee "$RUNNER_TEMP/device-folder-test.log"
+          grep -q -- "--- PASS: TestDeviceDirKeepsAnExistingFolderPrivate " "$RUNNER_TEMP/device-folder-test.log" || { echo "::error::the device folder's access test did not run and pass"; exit 1; }
+
       # cyfr restore's durable write, where a directory handle cannot be
       # flushed: the rename is written through and the write answers no
       # error. It must run and pass here.

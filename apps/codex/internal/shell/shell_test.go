@@ -49,18 +49,29 @@ type box struct {
 
 func newBox(t *testing.T, home *fakeHome, dir string) *box {
 	t.Helper()
+	return newBoxAt(t, home, dir, home.accounts.URL())
+}
+
+// newBoxAt is newBox at a CYFR whose account service is directory, its
+// configuration changed by each of edit.
+func newBoxAt(t *testing.T, home *fakeHome, dir, directory string, edit ...func(*Config)) *box {
+	t.Helper()
 	b := &box{t: t, home: home, dir: dir, record: filepath.Join(dir, "holder.json")}
 	b.now.Store(time.Now().UnixNano())
-	sh, err := New(Config{
+	cfg := Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
-		Directory: home.accounts.URL(),
+		Directory: directory,
 		Tokens:    func() string { return home.setupToken },
 		SetupOpen: home.setupOpen,
 		Restart:   func() { b.restarts.Add(1) },
 		Detect:    func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
 		Now:       func() time.Time { return time.Unix(0, b.now.Load()) },
 		Chip:      func() bool { return false },
-	})
+	}
+	for _, e := range edit {
+		e(&cfg)
+	}
+	sh, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1271,5 +1282,101 @@ func TestPasskey_ALostSendIsSettledOnlyByAnAnswerThatShowsTheLog(t *testing.T) {
 				t.Fatalf("sent %d, listed %v:\n%s", transport.sends, listed, page)
 			}
 		})
+	}
+}
+
+// A CYFR that requires a company sign-in closes the channel 1013 with the
+// class forbidden; any other try-again close is a CYFR not reachable now.
+// The page says which, and the app's own words for the first.
+func TestChannel_ACompanySignInIsToldApartFromAnUnreachableCYFR(t *testing.T) {
+	for _, tc := range []struct{ reason, want string }{
+		{"forbidden", CompanySignIn},
+		{"unavailable", "CYFR could not be reached"},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			home := newFakeHome(t)
+			b := newBox(t, home, t.TempDir())
+			setUpAndOpen(t, home, b)
+			home.mu.Lock()
+			conns := home.conns
+			home.conns = nil
+			home.mu.Unlock()
+			for _, c := range conns {
+				c.Close(websocket.StatusTryAgainLater, tc.reason)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for b.shell.Unlocked() && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond) // sleep-ok: polls the lock the close starts, bounded by deadline
+			}
+			if page := b.page(); b.shell.Unlocked() || !strings.Contains(html.UnescapeString(page), tc.want) {
+				t.Fatalf("the box did not lock saying %q: %s", tc.want, page)
+			}
+		})
+	}
+}
+
+// Adding the device to an account reads that account's log at the
+// account service the registry names. One other than this CYFR's, the one
+// approved for it, is never contacted: the page says where the account is.
+func TestEnroll_AnAccountServiceOtherThanThisCYFRsIsNeverContacted(t *testing.T) {
+	var contacted atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contacted.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer other.Close()
+	var registry *httptest.Server
+	registry = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/account/config.json":
+			_ = json.NewEncoder(w).Encode(map[string]any{"directory": registry.URL, "registry": registry.URL, "policy": nil})
+		case "/v1/handles/alice":
+			_ = json.NewEncoder(w).Encode(map[string]any{"protocol": "cyfr-handle/v1", "registry": "127.0.0.1", "handle": "alice",
+				"identifier": "per_" + strings.Repeat("ab", 32), "directory": other.URL})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer registry.Close()
+	b := newBoxAt(t, newFakeHome(t), t.TempDir(), registry.URL)
+	p := b.shown()
+	b.post("/make", url.Values{"secret": {p}, "again": {p}})
+	b.post("/enroll", url.Values{"name": {"alice"}})
+	page := html.UnescapeString(b.page())
+	if !strings.Contains(page, "@alice's account is at the account service "+other.URL+", not at "+registry.URL) {
+		t.Fatalf("the page did not say where the account is:\n%s", page)
+	}
+	if n := contacted.Load(); n != 0 {
+		t.Fatalf("the account service the registry named was contacted %d times", n)
+	}
+}
+
+// A remote CYFR selected over a local project's working record that
+// refuses the device's first hello (4403) changes nothing in the record:
+// only an admission that succeeded replaces a working client.
+func TestSelection_ARefusedFirstHelloLeavesTheWorkingRecord(t *testing.T) {
+	home := newFakeHome(t)
+	// Someone is set up there already, and the door admits no one new.
+	home.mu.Lock()
+	home.setupUsed = true
+	home.mu.Unlock()
+	file := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	if err := file.Save(ClientRecord{Project: "/home/ada/cyfr", ClientID: "pcl_box", Certificate: json.RawMessage(`{"box":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(string(file))
+	sel, err := file.Select(home.address(), home.accounts.URL(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), func(c *Config) { c.Clients = sel })
+	b.setUp("alice")
+	b.post("/saved", nil)
+	if b.shell.Unlocked() || len(home.hellosSeen()) != 1 {
+		t.Fatalf("the CYFR did not refuse the first hello: hellos %v", home.hellosSeen())
+	}
+	if after, _ := os.ReadFile(string(file)); string(after) != string(before) {
+		t.Fatalf("a refused first hello replaced the working record:\n%s", after)
 	}
 }

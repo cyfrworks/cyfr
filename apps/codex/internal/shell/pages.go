@@ -52,7 +52,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 </form>{{end}}
 {{else if eq .Page "enroll"}}
 <h1>Add this box to your account</h1>
-<p>On a device of yours, scan this code or open the address below, and check that it shows <b>{{.Code}}</b>.</p>
+<p>On a device of yours, scan this code or open the address below. Approve only if that device shows <b>{{.Code}}</b> at the account service <b>{{.Service}}</b>.</p>
 <div class="qr">{{.QR}}</div>
 <p class="code">{{.AddURL}}</p>
 <form method="post" action="/enroll">{{template "proof"}}<label>Your name: @<input name="name" autocomplete="off" required></label><button>I approved it</button></form>

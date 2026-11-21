@@ -43,10 +43,10 @@ func (m *memoryClients) Load() (ClientRecord, error) {
 	defer m.mu.Unlock()
 	return m.c, nil
 }
-func (m *memoryClients) Save(c ClientRecord) error {
+func (m *memoryClients) Update(change func(*ClientRecord) bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.c = c
+	change(&m.c)
 	return nil
 }
 
@@ -232,11 +232,132 @@ func TestUnlock_RenewsAnExpiredCertificate(t *testing.T) {
 	_ = json.Unmarshal(renewed.Certificate, &cert)
 	cert["kid"] = "sha256:" + strings.Repeat("1", 64)
 	renewed.Certificate, _ = json.Marshal(cert)
-	_ = clients.Save(renewed)
+	_ = clients.Update(func(c *ClientRecord) bool { *c = renewed; return true })
 	hellos := len(home.hellosSeen())
 	again := device(t, home, dir, clients, "")
 	again.Unlock(t.Context(), []byte(string(p)))
 	if !again.Unlocked() || len(home.hellosSeen()) != hellos+1 {
 		t.Fatalf("a certificate of another key: unlocked %v, %d hellos", again.Unlocked(), len(home.hellosSeen()))
+	}
+}
+
+// One account's device connects to one CYFR. Selecting a remote CYFR
+// changes nothing until it succeeds: the app opens it over a record with
+// no working client, or that CYFR admits this device. A local project's
+// working record survives a selection that never got that far, and a
+// project never takes a remote CYFR's place.
+func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
+	f := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	working := ClientRecord{Project: "/home/ada/cyfr", ClientID: "pcl_box", Certificate: json.RawMessage(`{"box":1}`)}
+	if err := f.Save(working); err != nil {
+		t.Fatal(err)
+	}
+	sel, err := f.Select("https://cyfr.example.com", "https://cyfr.run", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := sel.Load(); c.Project != "" || c.ClientID != "" || c.Home != "https://cyfr.example.com" {
+		t.Fatalf("the selection reads as %+v", c)
+	}
+	if err := sel.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Load(); !sameRecord(c, working) {
+		t.Fatalf("an opened selection replaced a working record before its CYFR admitted this device: %+v", c)
+	}
+	admitted := ClientRecord{Home: "https://cyfr.example.com", Directory: "https://cyfr.run", ClientID: "pcl_1", Certificate: json.RawMessage(`{"a":1}`)}
+	if err := sel.Update(func(c *ClientRecord) bool {
+		c.ClientID, c.Certificate = admitted.ClientID, admitted.Certificate
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Load(); !sameRecord(c, admitted) {
+		t.Fatalf("the admission did not replace the record: %+v", c)
+	}
+	if err := f.SelectProject("/home/ada/cyfr"); err == nil || !strings.Contains(err.Error(), "https://cyfr.example.com") {
+		t.Fatalf("a local project took the app's CYFR's place: %v", err)
+	}
+
+	again, _ := f.Select("https://cyfr.example.com", "https://accounts.example.com", true)
+	if c, _ := again.Load(); c.ClientID != "pcl_1" || c.Directory != "https://accounts.example.com" {
+		t.Fatalf("a new directory for the same CYFR dropped its client: %+v", c)
+	}
+	if err := again.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Load(); c.ClientID != "pcl_1" || c.Directory != "https://accounts.example.com" {
+		t.Fatalf("committed %+v", c)
+	}
+	if err := f.EndApproval("https://cyfr.example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Load(); c.Directory != "" || c.ClientID != "pcl_1" {
+		t.Fatalf("the approval did not end alone: %+v", c)
+	}
+
+	empty := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	first, _ := empty.Select("https://cyfr.example.com", "https://cyfr.run", true)
+	if err := first.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := empty.Load(); c.Home != "https://cyfr.example.com" || c.Directory != "https://cyfr.run" {
+		t.Fatalf("an opened selection over nothing was not remembered: %+v", c)
+	}
+
+	// A local project the screen selected, not yet admitted anywhere, is
+	// still the account's selection: an opened remote one leaves it, or
+	// the screen would refuse the record at its next start.
+	screen := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	if err := screen.SelectProject("/home/ada/cyfr"); err != nil {
+		t.Fatal(err)
+	}
+	remote, _ := screen.Select("https://cyfr.example.com", "https://cyfr.run", true)
+	if err := remote.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := screen.Load(); c.Project != "/home/ada/cyfr" || c.Home != "" {
+		t.Fatalf("an opened selection replaced the screen's project: %+v", c)
+	}
+
+	g := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	for range 2 {
+		if err := g.SelectProject("/home/ada/cyfr"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := g.SelectProject("/home/ada/other"); err == nil {
+		t.Fatal("a second project took the first one's place")
+	}
+}
+
+// sameRecord is whether two records hold the same fields, the certificates
+// compared as JSON.
+func sameRecord(a, b ClientRecord) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
+}
+
+// Two writers of the record lose neither change: an approval ending while
+// the shell, holding its copy of the record, renews the certificate.
+func TestAnApprovalEndingAndARenewalBothStand(t *testing.T) {
+	f := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	if err := f.Save(ClientRecord{Home: "https://cyfr.example.com", Directory: "https://accounts.example.com",
+		ClientID: "pcl_1", Certificate: json.RawMessage(`{"n":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	sel, err := f.Select("https://cyfr.example.com", "https://accounts.example.com", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.EndApproval("https://cyfr.example.com", "https://elsewhere.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sel.Update(func(c *ClientRecord) bool { c.Certificate = json.RawMessage(`{"n":2}`); return true }); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Load(); c.Directory != "" || !strings.Contains(string(c.Certificate), `"n": 2`) {
+		t.Fatalf("a change was lost: %+v", c)
 	}
 }
