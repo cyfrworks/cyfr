@@ -93,7 +93,10 @@ defmodule Cyfr.Test.ChatFixture do
   `:attach`, the need attaching the key as `x-api-key` to the loopback
   upstream (`upstream!/1`), whose address, scheme and method its egress
   names. `opts[:limits]` is merged over the limits the fixture's manifest
-  asks for, which the consent minted for it grants.
+  asks for, which the consent minted for it grants. `opts[:seated]`
+  (true) lays a crew member `fixture` on the fixture and seats the soul on
+  it; false lays no crew member and a soul that names none, as CYFR's own
+  seed ships.
   """
   @spec lay_seed!(Path.t(), keyword()) :: Path.t()
   def lay_seed!(seed, opts) do
@@ -157,7 +160,8 @@ defmodule Cyfr.Test.ChatFixture do
     You answer the person.
     """)
 
-    Cyfr.Test.SeedBundle.seat!(seed, member: "fixture", catalyst_ref: @ref, model: @name)
+    if Keyword.get(opts, :seated, true),
+      do: Cyfr.Test.SeedBundle.seat!(seed, member: "fixture", catalyst_ref: @ref, model: @name)
 
     seed
   end

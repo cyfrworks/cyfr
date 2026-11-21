@@ -671,7 +671,8 @@ defmodule Prima.Refusal do
   defp row({:aqua_runs_on, :none, _member}),
     do:
       {:setup_required,
-       "Aqua runs on no crew member yet — choose one on Aqua's card on the Aqua page"}
+       "Aqua isn't set up yet — on your Aqua page, connect a brain, make a crew member and " <>
+         "choose the one Aqua runs on"}
 
   defp row({:aqua_runs_on, :invalid, member}) when is_binary(member),
     do:

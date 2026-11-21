@@ -44,7 +44,7 @@ defmodule PrismWeb.AquaLiveTest do
   # The crew members these tests make, as the person makes one on the Aqua
   # page: the seed ships none.
   @members %{
-    "claude-code" => %{"title" => "Claude Code", "program" => "claude", "model" => "opus"},
+    "claude-code" => %{"title" => "Claude Code", "program" => "claude-code", "model" => "opus"},
     "openai-codex" => %{
       "title" => "OpenAI Codex",
       "program" => "openai-codex",
@@ -232,6 +232,21 @@ defmodule PrismWeb.AquaLiveTest do
     |> Enum.flat_map(&LazyHTML.attribute(&1, "id"))
   end
 
+  # The setup's rows of the program brains CYFR ships, after the API ones.
+  defp program_rows,
+    do: Enum.map(Opus.Programs.Definition.brains(), &("aqua-setup-brain-" <> &1.name))
+
+  # What a program with no sign-in answers its listing with.
+  @signed_out "Claude Code is not signed in: sign it in on its terminal."
+
+  # What the setup says while nothing is connected and nothing ticked.
+  @setup_needs "Tick the brains you have: a key from a model provider, or Claude Code or " <>
+                 "OpenAI Codex on your own plan."
+
+  # The setup read again, as the page reads it after a write of its own:
+  # each standing program brain's listing is asked once more.
+  defp reread_setup(view), do: send(view.pid, {:refresh, :setup})
+
   defp soul_names_missing_catalyst!(ctx),
     do: soul_names_catalyst!(ctx, "catalyst:moonmoon69.claude")
 
@@ -299,7 +314,7 @@ defmodule PrismWeb.AquaLiveTest do
         })
 
       {:ok, roster} = Aqua.AgentConfig.roster(ctx)
-      assert Aqua.Models.model_status(ctx, roster)["aqua"] == {:program_missing, "claude"}
+      assert Aqua.Models.model_status(ctx, roster)["aqua"] == {:program_missing, "claude-code"}
       {view, _html} = mount_athanor(conn, "/aqua")
       sentence = Prima.Refusal.message({:crew_unready, "Claude Code", :program_missing})
 
@@ -309,7 +324,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(
                view,
                ~s(#aqua-card-claude-code [data-test="install-program"]),
-               "install claude"
+               "install claude-code"
              )
 
       refute has_element?(view, ~s(#aqua-card-claude-code [data-test="program-refused"]))
@@ -395,23 +410,30 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # Set up is the person's press: it starts the program in its row's
-    # folder, at a size the frame corrects when it attaches, and shows its
-    # terminal with the way back here.
+    # Set up is the person's press, offered while the program's listing is
+    # refused, as a program with no sign-in refuses it: it starts the
+    # program in its row's folder, at a size the frame corrects when it
+    # attaches, and shows its terminal with the way back here.
     test "Set up on the card starts the program and shows its terminal, which comes back here",
          %{conn: conn, ctx: ctx} do
       :ok = member!(ctx, "claude-code")
-
-      row =
-        program_row!(ctx, "claude", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323")
-
+      row = brain_row!(ctx, "claude-code")
       home = row.id
-      backends!()
+      fake = backends!()
+      set_up = ~s(#aqua-card-claude-code [data-test="set-up-program"])
 
       {view, _html} = mount_athanor(conn, "/aqua")
+      lists!(fake, row, fn -> has_element?(view, set_up) end, {:refused, @signed_out})
+
+      assert has_element?(
+               view,
+               ~s(#aqua-card-claude-code [data-test="program-signed-out"]),
+               @signed_out
+             )
+
       refute_received {:session, "open", %{"mode" => "terminal"}, _fields}
 
-      view |> element(~s(#aqua-card-claude-code [data-test="set-up-program"])) |> render_click()
+      view |> element(set_up) |> render_click()
 
       assert_receive {:session, "open",
                       %{"home_id" => ^home, "argv" => [], "rows" => 24, "cols" => 80}, _fields},
@@ -432,20 +454,20 @@ defmodule PrismWeb.AquaLiveTest do
          %{conn: conn, ctx: ctx} do
       :ok = member!(ctx, "claude-code")
       fake = backends!()
-
-      row =
-        program_row!(ctx, "claude", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323")
-
+      row = brain_row!(ctx, "claude-code")
       home = row.id
       set_up = ~s(#aqua-card-claude-code [data-test="set-up-program"])
+      signed_out = {:refused, @signed_out}
 
       {view, _html} = mount_athanor(conn, "/aqua")
+      lists!(fake, row, fn -> has_element?(view, set_up) end, signed_out)
       view |> element(set_up) |> render_click()
       first = set_up_terminal!(view)
       assert opened(home) == [first]
 
       # Set up again shows the same terminal and opens none.
       {view, _html} = mount_athanor(conn, "/aqua")
+      lists!(fake, row, fn -> has_element?(view, set_up) end, signed_out)
       view |> element(set_up) |> render_click()
       assert set_up_terminal!(view) == first
       assert opened(home) -- [first] == []
@@ -459,6 +481,7 @@ defmodule PrismWeb.AquaLiveTest do
       )
 
       {view, _html} = mount_athanor(conn, "/aqua")
+      lists!(fake, row, fn -> has_element?(view, set_up) end, signed_out)
       view |> element(set_up) |> render_click()
       second = set_up_terminal!(view)
       refute second == first
@@ -490,10 +513,12 @@ defmodule PrismWeb.AquaLiveTest do
     # A crew member whose brain is a program names the row by its name.
     # While the athanor has no row of that name, its card offers to install
     # it, through the Programs page's form for a program of that name;
-    # once the row stands as a brain's, to set it up, where the person signs
-    # it in. Either way it offers no other brain, and its models and
-    # efforts are the ones its program lists, read from the row's driver;
-    # before the row is there the member's own model stands alone.
+    # once the row stands as a brain's and its program's listing is
+    # refused, as a program with no sign-in refuses it, to set it up, where
+    # the person signs it in; once the listing answers, it is connected.
+    # Either way it offers no other brain, and its models and efforts are
+    # the ones its program lists, read from the row's driver; before the
+    # row is there the member's own model stands alone.
     test "a crew member on a program brain offers its install, then its set up, " <>
            "with the models and efforts its program lists",
          %{conn: conn, ctx: ctx} do
@@ -504,13 +529,19 @@ defmodule PrismWeb.AquaLiveTest do
           "action" => "create",
           "name" => "coder",
           "title" => "Coder",
-          "program" => "claude",
+          "program" => "claude-code",
           "model" => "opus"
         })
 
       card = "#aqua-card-coder"
       {view, _html} = mount_athanor(conn, "/aqua")
-      assert has_element?(view, card <> ~s( a[data-test="install-program"]), "install claude")
+
+      assert has_element?(
+               view,
+               card <> ~s( a[data-test="install-program"]),
+               "install claude-code"
+             )
+
       assert has_element?(view, card, "Its brain runs a program you have not installed")
 
       [href] =
@@ -522,7 +553,10 @@ defmodule PrismWeb.AquaLiveTest do
 
       assert URI.parse(href).path == athanor_path("/programs")
 
-      assert URI.decode_query(URI.parse(href).query) == %{"add" => "claude", "from" => "aqua"}
+      assert URI.decode_query(URI.parse(href).query) == %{
+               "add" => "claude-code",
+               "from" => "aqua"
+             }
 
       refute has_element?(view, card <> ~s( [data-test="set-up-program"]))
       refute has_element?(view, card <> ~s( [data-test="connect"]))
@@ -531,12 +565,24 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-card-coder-options")
       refute_received {:session, "open", _open, _fields}
 
-      row =
-        program_row!(ctx, "claude", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323")
-
+      row = brain_row!(ctx, "claude-code")
       send_update_agents(view, load: true)
+      reread_setup(view)
       refute has_element?(view, card <> ~s( a[data-test="install-program"]))
-      assert has_element?(view, card <> ~s( [data-test="set-up-program"]), "Set up claude")
+
+      # The row's driver refuses the listing while the program is not signed
+      # in: the card offers its set up, in the refusal's words, and is not
+      # connected.
+      lists!(
+        fake,
+        row,
+        fn -> has_element?(view, card <> ~s( [data-test="set-up-program"])) end,
+        {:refused, @signed_out}
+      )
+
+      assert has_element?(view, card <> ~s( [data-test="set-up-program"]), "Set up claude-code")
+      assert has_element?(view, card <> ~s( [data-test="program-signed-out"]), @signed_out)
+      refute has_element?(view, card, "Model connected")
       refute has_element?(view, card <> " button[phx-click=open_consent]")
 
       # The row's driver lists its program's models, for the person here:
@@ -548,7 +594,10 @@ defmodule PrismWeb.AquaLiveTest do
         {"haiku", "Haiku"}
       ]
 
+      reread_setup(view)
       lists!(fake, row, fn -> model_choices(view, "coder") == listed end)
+      assert has_element?(view, card, "Model connected")
+      refute has_element?(view, card <> ~s( [data-test="set-up-program"]))
 
       assert texts(view, "#aqua-card-coder-option-effort option") == [
                "default",
@@ -562,7 +611,7 @@ defmodule PrismWeb.AquaLiveTest do
       |> element("#aqua-card-coder-model")
       |> render_change(%{"name" => "coder", "brain" => "program", "value" => "haiku"})
 
-      assert {:ok, %{"program" => "claude", "catalyst_ref" => nil, "model" => "haiku"}} =
+      assert {:ok, %{"program" => "claude-code", "catalyst_ref" => nil, "model" => "haiku"}} =
                Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => "coder"})
     end
 
@@ -1446,7 +1495,8 @@ defmodule PrismWeb.AquaLiveTest do
       {view, _html} = mount_athanor(conn, "/aqua")
       assert has_element?(view, "#aqua-setup[open]")
 
-      assert setup_rows(view) == ["aqua-setup-brain-keyed", "aqua-setup-brain-open"]
+      assert setup_rows(view) ==
+               ["aqua-setup-brain-keyed", "aqua-setup-brain-open" | program_rows()]
 
       assert has_element?(
                view,
@@ -1457,11 +1507,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-setup-brain-open label", "needs only your grant")
 
       # With nothing ticked, the setup says what Aqua needs.
-      assert has_element?(
-               view,
-               ~s([data-test="setup-needs"]),
-               "Aqua needs a key or a plan to answer: tick one you have."
-             )
+      assert has_element?(view, ~s([data-test="setup-needs"]), @setup_needs)
 
       refute has_element?(view, "#aqua-setup-steps")
 
@@ -1493,7 +1539,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert setup_rows(view) == [
                "aqua-setup-brain-keyed",
                "aqua-setup-brain-later",
-               "aqua-setup-brain-open"
+               "aqua-setup-brain-open" | program_rows()
              ]
     end
 
@@ -1542,11 +1588,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-setup-brain-open label", "needs only your grant")
       refute has_element?(view, "#aqua-setup-brain-open", "connected")
 
-      assert has_element?(
-               view,
-               ~s([data-test="setup-needs"]),
-               "Aqua needs a key or a plan to answer: tick one you have."
-             )
+      assert has_element?(view, ~s([data-test="setup-needs"]), @setup_needs)
 
       view |> element("#aqua-setup-brain-open input") |> render_click()
       assert has_element?(view, "#aqua-setup-step-open", "open: grant it to connect.")
@@ -1570,65 +1612,261 @@ defmodule PrismWeb.AquaLiveTest do
         "the brain connected"
       )
 
-      # Aqua's step is the crew member it runs on; a brain is a member's.
-      assert has_element?(view, "#aqua-setup-member", "Which crew member does Aqua run on?")
+      # A connected brain is a member's: the crew's step suggests one on it,
+      # and Aqua's waits for a member to run on.
+      assert has_element?(view, "#aqua-setup-suggest-open")
+      refute has_element?(view, ~s([data-test="setup-crew-waits"]))
+      assert has_element?(view, ~s([data-test="setup-aqua-waits"]), "Make a crew member first.")
+      refute has_element?(view, "#aqua-setup-member")
       refute has_element?(view, "#aqua-setup-pick")
 
       # The brain's models call runs beside the page; it ends before the test does.
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # The shipped brains are API catalysts, so each program the crew
-    # names is one row on the setup, its plan, and no catalyst's row reads
-    # the same name beside it.
-    test "with the shipped brains installed, the setup offers each as a brain and each program " <>
-           "the crew names once, as its plan",
+    # A new athanor: the seed ships no crew and its Aqua runs on no one, so
+    # the setup is open on its first step, the crew's step waits on a
+    # brain and Aqua's on a member, and the daily thread says what is left
+    # to do, with the way here.
+    test "a new athanor's setup waits on a brain, then a member, and its daily thread says so",
+         %{conn: conn, athanor: athanor} do
+      {view, _html} = mount_athanor(conn, "/aqua")
+      assert has_element?(view, "#aqua-setup[open]")
+
+      assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="false"]), "1. Brains")
+
+      assert has_element?(
+               view,
+               ~s(#aqua-setup-step-brains [data-test="setup-needs"]),
+               @setup_needs
+             )
+
+      for %{name: name} <- Opus.Programs.Definition.brains(),
+          do:
+            assert(
+              has_element?(view, ~s(#aqua-setup-brain-#{name}[data-state="program_missing"]))
+            )
+
+      assert has_element?(view, ~s(#aqua-setup-step-crew[data-done="false"]), "2. Crew")
+
+      assert has_element?(
+               view,
+               ~s(#aqua-setup-step-crew [data-test="setup-crew-waits"]),
+               "Connect a brain first."
+             )
+
+      refute has_element?(view, ~s(form[id^="aqua-setup-suggest-"]))
+      refute has_element?(view, "#aqua-setup-members")
+      assert has_element?(view, ~s(#aqua-setup-step-aqua[data-done="false"]), "3. Aqua")
+
+      assert has_element?(
+               view,
+               ~s(#aqua-setup-step-aqua [data-test="setup-aqua-waits"]),
+               "Make a crew member first."
+             )
+
+      refute has_element?(view, "#aqua-setup-member")
+
+      # The daily thread's pane says it in Aqua's own sentence, with the way
+      # to this page.
+      {:ok, pane, _html} =
+        live_isolated(conn, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => athanor.id})
+
+      sentence = Prima.Refusal.message({:aqua_runs_on, :none, nil})
+
+      settled(
+        fn -> has_element?(pane, ~s([data-test="model-unseated"]), sentence) end,
+        "the pane's sentence"
+      )
+
+      assert has_element?(
+               pane,
+               ~s(a[data-test="model-connect"][href="#{athanor_path("/aqua?setup=1", athanor)}"]),
+               "Open your Aqua page."
+             )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # A program brain whose row stands: while its program's listing is
+    # refused, as a program with no sign-in refuses it, the setup says so
+    # in the refusal's words, its step signs it in on its terminal, and no
+    # member is suggested on it; once the listing answers it is signed in,
+    # and the crew's step suggests the member CYFR suggests for it, with the
+    # models its program lists. Make with a model writes that member on the
+    # program and asks its consent at once; with none it writes nothing.
+    test "a program brain signs in on the setup, and Make writes the member it suggests",
+         %{conn: conn, ctx: ctx} do
+      fake = backends!()
+      %{name: name, title: title} = Opus.Programs.Definition.brain("claude-code")
+      row = brain_row!(ctx, name)
+      brain = "#aqua-setup-brain-" <> name
+      step = "#aqua-setup-step-program-" <> name
+      suggest = "#aqua-setup-suggest-" <> name
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      view |> element(brain <> " input") |> render_click()
+
+      lists!(
+        fake,
+        row,
+        fn -> has_element?(view, brain <> ~s([data-state="signed_out"])) end,
+        {:refused, @signed_out}
+      )
+
+      assert has_element?(view, brain <> ~s( [data-test="setup-signed-out"]), @signed_out)
+      assert has_element?(view, step, "#{title}: sign it in on its terminal.")
+      assert has_element?(view, step <> ~s( button[data-test="set-up-program"]), "Set up #{name}")
+      refute has_element?(view, suggest)
+      assert has_element?(view, ~s([data-test="setup-crew-waits"]), "Connect a brain first.")
+
+      # Signed in: its listing answers.
+      reread_setup(view)
+      lists!(fake, row, fn -> has_element?(view, suggest) end)
+      assert has_element?(view, brain <> ~s([data-state="signed_in"]), "signed in")
+      assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="true"]))
+      refute has_element?(view, step)
+      refute has_element?(view, ~s([data-test="setup-crew-waits"]))
+
+      assert choices(view, suggest <> " select option") == [
+               {"", "Choose a model"},
+               {"default", "Default (recommended)"},
+               {"opus", "Opus"},
+               {"haiku", "Haiku"}
+             ]
+
+      assert has_element?(view, suggest <> ~s( button[type="submit"]), "Make #{title}")
+
+      # No model, no member.
+      assert view |> form(suggest, %{"model" => ""}) |> render_submit() =~ "Choose a model first."
+      assert {:error, _} = get_agent(ctx, name)
+
+      view |> form(suggest, %{"model" => "opus"}) |> render_submit()
+      suggested = Aqua.Crew.suggestion({:program, name, title})
+
+      assert {:ok,
+              %{
+                "title" => ^title,
+                "program" => ^name,
+                "catalyst_ref" => nil,
+                "model" => "opus",
+                "mode" => "auto"
+              } = made} = get_agent(ctx, name)
+
+      assert {made["description"], made["avoid"]} == {suggested.description, suggested.avoid}
+      assert render(view) =~ "Made #{title}."
+
+      settled(
+        fn ->
+          has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.#{name}")
+        end,
+        "the member's consent"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Several members may run on one brain: once the member suggested for
+    # it is made, the suggestion is gone, and + New crew member makes
+    # another, whose card's pick puts it on the same brain.
+    test "after the member suggested on a brain is made, another made by hand runs on the same " <>
+           "brain, and none is suggested again",
+         %{conn: conn, ctx: ctx} do
+      :ok = open_brain!(ctx)
+      suggest = "#aqua-setup-suggest-open"
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      assert choices(view, suggest <> " select option") == [
+               {"", "Choose a model"},
+               {"open-1", "open-1"}
+             ]
+
+      view |> form(suggest, %{"model" => "open-1"}) |> render_submit()
+
+      assert {:ok, %{"catalyst_ref" => "catalyst:local.open", "model" => "open-1"}} =
+               get_agent(ctx, "open")
+
+      settled(fn -> not has_element?(view, suggest) end, "the suggestion made")
+
+      view
+      |> form("form[phx-submit=editor_create_member]", %{"name" => "second"})
+      |> render_submit()
+
+      settled(fn -> has_element?(view, "#aqua-card-second-model") end, "the second card")
+
+      view
+      |> element("#aqua-card-second-model")
+      |> render_change(%{"name" => "second", "value" => "open::open-1"})
+
+      for name <- ~w(open second) do
+        assert {:ok, %{"catalyst_ref" => "catalyst:local.open", "model" => "open-1"}} =
+                 get_agent(ctx, name)
+      end
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      assert has_element?(view, "#aqua-setup-made-open")
+      assert has_element?(view, "#aqua-setup-made-second")
+      assert has_element?(view, "#aqua-card-open") and has_element?(view, "#aqua-card-second")
+      refute has_element?(view, ~s(form[id^="aqua-setup-suggest-"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # What the setup makes, the person made: the member is the athanor's
+    # own, and a restore of the shipped files keeps it as it is.
+    test "a member made from the setup is the athanor's own, and a restore keeps its file",
+         %{conn: conn, ctx: ctx} do
+      :ok = open_brain!(ctx)
+      actor = Sanctum.Context.actor(ctx)
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      view |> form("#aqua-setup-suggest-open", %{"model" => "open-1"}) |> render_submit()
+      settled(fn -> has_element?(view, "#aqua-card-open", "yours") end, "the made member's card")
+      refute has_element?(view, "#aqua-card-open", "shipped")
+      {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.crew_file("open"))
+
+      view |> element("#aqua-restore button[phx-click=restore_shipped]") |> render_click()
+      assert has_element?(view, "#aqua-restore-result", "Kept (1)")
+      assert render(view) =~ "aqua/crew/open.md"
+      assert {:ok, ^bytes} = Arca.get(actor, Compendium.AquaPath.crew_file("open"))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # The shipped API brains are catalysts, and each program brain CYFR
+    # ships is one row of its own after them, which no catalyst's row
+    # reads the same name beside.
+    test "with the shipped brains installed, the setup offers each API brain, then each " <>
+           "program brain CYFR ships, once each",
          %{conn: conn, ctx: ctx} do
       shipped = Enum.map(Cyfr.Test.SeedBundle.model_chat_units(), & &1.name)
       Cyfr.Test.SeedBundle.lay!(shipped)
       :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
-      for name <- ~w(claude-code openai-codex), do: :ok = member!(ctx, name)
       {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
       {:ok, _} = Compendium.AgentIndex.sync(ctx)
       {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
 
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      brains = for "aqua-setup-brain-" <> name <- setup_rows(view), do: name
+      programs = Enum.map(Opus.Programs.Definition.brains(), & &1.name)
 
-      ids = fn selector ->
-        view
-        |> render()
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.query(selector)
-        |> Enum.flat_map(&LazyHTML.attribute(&1, "id"))
-      end
-
-      brains = for "aqua-setup-brain-" <> name <- ids.("#aqua-setup-brains > li"), do: name
-      plans = for "aqua-setup-plan-" <> name <- ids.(~s(li[id^="aqua-setup-plan-"])), do: name
-      assert Enum.sort(brains) == Enum.sort(shipped)
-      assert plans == ["claude-code", "openai-codex"]
-      assert brains -- plans == brains, "a plan's name is no brain's beside it"
+      assert Enum.sort(brains -- programs) == Enum.sort(shipped)
+      assert brains -- shipped == programs
+      assert Enum.uniq(brains) == brains, "a program brain's name is no catalyst's beside it"
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # Each program the crew's files name is a plan on the setup, named by
-    # the member that names it and worded from that member's title.
-    # Ticked, its install is the Programs page's form for a program of that
-    # name; once its row stands, Set up opens its terminal and a crew
-    # member's picker offers, under the plan member's name, the models its
+    # Each program brain CYFR ships is a row of the setup, named by its
+    # title. Ticked, its install is the Programs page's form for it; once
+    # its row stands and its program's listing is refused, as a program
+    # with no sign-in refuses it, its step is to sign it in on its
+    # terminal; once the listing answers it is signed in, and a crew
+    # member's picker offers, under the brain's title, the models its
     # program lists. Picking one makes that crew member name the program,
     # with that model and no catalyst, and asks its consent at once; a
     # key's model takes the program away again.
-    for {member, title, program, command, model} <- [
-          {"claude-code", "Claude Code", "claude",
-           "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323", "opus"},
-          {"openai-codex", "OpenAI Codex", "openai-codex",
-           "cyfr-codex npx -y @openai/codex@0.169.0", "gpt-6.1-sol"}
-        ] do
-      @tag plan: {member, title, program, command, model}
-      test "the setup offers #{member}'s program as a plan, installs it, signs it in and " <>
-             "makes it a crew member's brain; a key's model takes it back",
-           %{conn: conn, ctx: ctx, plan: {member, title, program, command, model}} do
-        :ok = member!(ctx, member)
+    for %{name: name, title: title, command: command} <- Opus.Programs.Definition.brains() do
+      @tag brain: {name, title, command}
+      test "the setup offers #{name} as a program brain, installs it, signs it in and makes it " <>
+             "a crew member's brain; a key's model takes it back",
+           %{conn: conn, ctx: ctx, brain: {name, title, command}} do
         fake = backends!()
         publish_brain!(ctx, "open", %{})
         grant!(ctx, "catalyst:local.open", %{bindings: []})
@@ -1638,22 +1876,22 @@ defmodule PrismWeb.AquaLiveTest do
         assert before["program"] == nil
 
         {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
-        plan = "#aqua-setup-plan-" <> member
-        assert has_element?(view, plan <> ~s([data-state="program_missing"]))
+        brain = "#aqua-setup-brain-" <> name
+        assert has_element?(view, brain <> ~s([data-state="program_missing"]))
 
-        assert texts(view, plan <> " label span") == [
-                 member,
+        assert texts(view, brain <> " label span") == [
+                 title,
                  "a plan: to run #{title} in its own folder, signed in to your own plan"
                ]
 
-        view |> element(plan <> " input") |> render_click()
-        step = "#aqua-setup-step-plan-" <> member
-        assert has_element?(view, step, "#{member}: install its program, then sign it in.")
+        view |> element(brain <> " input") |> render_click()
+        step = "#aqua-setup-step-program-" <> name
+        assert has_element?(view, step, "#{title}: install its program, then sign it in.")
 
         assert has_element?(
                  view,
                  step <> ~s( a[data-test="install-program"]),
-                 "install #{program}"
+                 "install #{name}"
                )
 
         [href] =
@@ -1664,33 +1902,51 @@ defmodule PrismWeb.AquaLiveTest do
           |> LazyHTML.attribute("href")
 
         assert URI.parse(href).path == athanor_path("/programs")
+        assert URI.decode_query(URI.parse(href).query) == %{"add" => name, "from" => "aqua"}
 
-        assert URI.decode_query(URI.parse(href).query) == %{"add" => program, "from" => "aqua"}
+        # Its row stands, and its program has no sign-in yet.
+        row = program_row!(ctx, name, command)
+        reread_setup(view)
 
-        row = program_row!(ctx, program, command)
-        send_update_agents(view, load: true)
-        assert has_element?(view, plan <> ~s([data-state="ready"]), "connected")
-        assert has_element?(view, step <> ~s( [data-test="set-up-program"]), "Set up #{program}")
+        lists!(
+          fake,
+          row,
+          fn -> has_element?(view, brain <> ~s([data-state="signed_out"])) end,
+          {:refused, @signed_out}
+        )
+
+        assert has_element?(view, brain <> ~s( [data-test="setup-signed-out"]), @signed_out)
+        assert has_element?(view, step, "#{title}: sign it in on its terminal.")
+        assert has_element?(view, step <> ~s( [data-test="set-up-program"]), "Set up #{name}")
         refute has_element?(view, step <> ~s( a[data-test="install-program"]))
+        assert program_choices(view, title) == []
 
-        listing = [%{"id" => model, "name" => "The model"}, %{"id" => "other", "name" => "Other"}]
-        lists!(fake, row, fn -> plan_choices(view, member) != [] end, listing)
+        # Signed in: its listing answers.
+        listing = [
+          %{"id" => "the-model", "name" => "The model"},
+          %{"id" => "other", "name" => "Other"}
+        ]
 
-        assert plan_choices(view, member) == [
-                 {"::program::#{program}::#{model}", "The model"},
-                 {"::program::#{program}::other", "Other"}
+        reread_setup(view)
+        lists!(fake, row, fn -> program_choices(view, title) != [] end, listing)
+        assert has_element?(view, brain <> ~s([data-state="signed_in"]), "signed in")
+        refute has_element?(view, step)
+
+        assert program_choices(view, title) == [
+                 {"::program::#{name}::the-model", "The model"},
+                 {"::program::#{name}::other", "Other"}
                ]
 
         view
-        |> form("#aqua-setup-pick", %{"value" => "::program::#{program}::#{model}"})
+        |> form("#aqua-setup-pick", %{"value" => "::program::#{name}::the-model"})
         |> render_change()
 
         assert get_agent(ctx, "mine") ==
                  {:ok,
                   %{
                     before
-                    | "program" => program,
-                      "model" => model,
+                    | "program" => name,
+                      "model" => "the-model",
                       "catalyst_ref" => nil
                   }}
 
@@ -1738,50 +1994,6 @@ defmodule PrismWeb.AquaLiveTest do
       assert get_agent(ctx, "mine") ==
                {:ok,
                 %{before | "catalyst_ref" => "catalyst:local.program", "model" => "vendor::model"}}
-
-      Cyfr.Test.Sandbox.end_views()
-    end
-
-    # A program two members name is one plan, named by the first of them
-    # by name; picking it makes the member name that program.
-    test "a program two crew members name is one plan, named by the first of them",
-         %{conn: conn, ctx: ctx} do
-      fake = backends!()
-
-      {:ok, _} =
-        Cyfr.Test.AquaTool.call(ctx, %{
-          "action" => "create",
-          "name" => "aaa",
-          "title" => "AAA",
-          "program" => "claude",
-          "model" => "opus"
-        })
-
-      :ok = member!(ctx, "claude-code")
-
-      row =
-        program_row!(ctx, "claude", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323")
-
-      {:ok, _} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "create", "name" => "mine"})
-      {:ok, before} = get_agent(ctx, "mine")
-
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
-      assert has_element?(view, "#aqua-setup-plan-aaa")
-      refute has_element?(view, "#aqua-setup-plan-claude-code")
-      lists!(fake, row, fn -> plan_choices(view, "aaa") != [] end)
-
-      view
-      |> form("#aqua-setup-pick", %{"value" => "::program::claude::opus"})
-      |> render_change()
-
-      assert get_agent(ctx, "mine") ==
-               {:ok,
-                %{
-                  before
-                  | "program" => "claude",
-                    "model" => "opus",
-                    "catalyst_ref" => nil
-                }}
 
       Cyfr.Test.Sandbox.end_views()
     end
@@ -2385,17 +2597,37 @@ defmodule PrismWeb.AquaLiveTest do
     terminal
   end
 
-  # Each model the setup's picker offers under `member`'s plan, as its value
-  # and the words it shows.
-  defp plan_choices(view, member) do
+  # Each model the setup's picker offers under a program brain's title, as
+  # its value and the words it shows.
+  defp program_choices(view, title) do
     view
     |> render()
     |> LazyHTML.from_fragment()
-    |> LazyHTML.query(~s(#aqua-setup-pick optgroup[label="#{member}"] option))
+    |> LazyHTML.query(~s(#aqua-setup-pick optgroup[label="#{title}"] option))
     |> Enum.map(fn option ->
       {option |> LazyHTML.attribute("value") |> List.first(),
        option |> LazyHTML.text() |> String.trim()}
     end)
+  end
+
+  # Each option `selector` finds, as its value and the words it shows.
+  defp choices(view, selector) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> Enum.map(fn option ->
+      {option |> LazyHTML.attribute("value") |> List.first(),
+       option |> LazyHTML.text() |> String.trim()}
+    end)
+  end
+
+  # The brain `open`, which needs nothing of the person, granted, with the
+  # one model the kept catalogue lists for it.
+  defp open_brain!(ctx) do
+    publish_brain!(ctx, "open", %{})
+    grant!(ctx, "catalyst:local.open", %{bindings: []})
+    remember_catalogue!(%{"open" => ["open-1"]}, %{"open" => "catalyst:local.open:0.1.0"})
   end
 
   # Each choice of a member's Model, as its value and the words it shows.
@@ -2423,7 +2655,8 @@ defmodule PrismWeb.AquaLiveTest do
   # Plays the driver of `row` for every listing a page asks of it, a new
   # driver process each, until `shown` holds: its hello, as the row's
   # driver, once the session stands, then the models `listing` names and
-  # the efforts its program lists.
+  # the efforts its program lists, or, for `{:refused, sentence}`, the
+  # refusal a program with no sign-in answers.
   defp lists!(fake, row, shown, listing \\ @listing),
     do: lists!(fake, row, shown, listing, System.monotonic_time(:millisecond) + 10_000)
 
@@ -2435,7 +2668,7 @@ defmodule PrismWeb.AquaLiveTest do
         :ok
 
       System.monotonic_time(:millisecond) > deadline ->
-        flunk("the card did not show its program's listing")
+        flunk("the page did not show what its program's listing said")
 
       true ->
         receive do
@@ -2453,12 +2686,7 @@ defmodule PrismWeb.AquaLiveTest do
           {:session, "send", %{"lines" => [line]}, _fields} ->
             case Jason.decode!(line) do
               %{"t" => "models", "id" => id} ->
-                say(fake, row, %{
-                  "t" => "models",
-                  "id" => id,
-                  "models" => listing,
-                  "efforts" => ["low", "high", "max"]
-                })
+                say(fake, row, listed(id, listing))
 
               _another ->
                 :ok
@@ -2470,6 +2698,12 @@ defmodule PrismWeb.AquaLiveTest do
         lists!(fake, row, shown, listing, deadline)
     end
   end
+
+  defp listed(id, {:refused, sentence}),
+    do: %{"t" => "refused", "id" => id, "reason" => sentence}
+
+  defp listed(id, models),
+    do: %{"t" => "models", "id" => id, "models" => models, "efforts" => ["low", "high", "max"]}
 
   # The text of each element `selector` finds, trimmed.
   defp texts(view, selector) do
@@ -2501,6 +2735,11 @@ defmodule PrismWeb.AquaLiveTest do
     assert_receive {:control, "reconcile", _reconcile, _fields}, 2_000
     fake
   end
+
+  # The kept driven row of the program brain `name`, its command as the
+  # brain's definition holds it (`Opus.Programs.Definition.brains/0`).
+  defp brain_row!(ctx, name),
+    do: program_row!(ctx, name, Opus.Programs.Definition.brain(name).command)
 
   # The athanor's kept driven program row `name`, as an install confirmed
   # on the Programs page leaves it.

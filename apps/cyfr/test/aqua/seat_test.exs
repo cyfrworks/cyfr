@@ -612,7 +612,8 @@ defmodule Aqua.SeatTest do
     sentence = Prima.Refusal.message({:aqua_runs_on, :none, nil})
 
     assert sentence ==
-             "Aqua runs on no crew member yet — choose one on Aqua's card on the Aqua page"
+             "Aqua isn't set up yet — on your Aqua page, connect a brain, make a crew member " <>
+               "and choose the one Aqua runs on"
 
     assert {:ok, %{status: "failed", error: ^sentence}} = Tape.turn(ctx, turn.id)
     assert system_lines(ctx, room) == [sentence]
