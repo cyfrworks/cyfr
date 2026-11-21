@@ -4,7 +4,7 @@
 #
 # scripts/stage.sh against a toy repository with a toy table and a stand-in
 # scripts/heavy-check.sh that records each call and runs its command (a
-# command holding `#queue-deadline` is answered 75, as a queue deadline is,
+# command holding `#refused` is answered 69, as a queue that cannot start is,
 # and a folder's ticket ends STUB_TICKET_EXIT after its chain when that is set)
 # and a stand-in scripts/test-partitioned.sh that records each call;
 # scripts/lib/nightly.py's flakes and weights on planted run directories;
@@ -59,7 +59,7 @@ EOF
 cat >"$repo/scripts/heavy-check.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_CALLS"
-case "$*" in *'#queue-deadline'*) exit 75 ;; esac
+case "$*" in *'#refused'*) exit 69 ;; esac
 while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift
 case "$*" in *stage-chain.sh*) [ -z "${STUB_TICKET_EXIT:-}" ] || { "$@"; exit "$STUB_TICKET_EXIT"; } ;; esac
@@ -78,9 +78,9 @@ toy_rows=(
   'handoff|dialyzer|1|60|-|apps/*/lib/**|echo dialyzer'
   'handoff|arca|1|60|-|apps/arca/**|echo arca'
   'handoff|tests|1|60|-|tests|printf "%s\n" $STAGE_TESTS >"$STAGE_LOGDIR/tests.txt"'
-  'handoff|env|4|60|-|always|printf "%s;%s;%s;%s\n" "$STAGE" "$STAGE_TESTS" "$STAGE_LOGDIR" "${PROOF_RUN_PREFIX-unset}" >"$STAGE_LOGDIR/env.txt"'
-  'handoff|notes|4|60|-|notes/**|echo notes'
-  'save|close|4|60|-|always|echo close'
+  'handoff|env|1|60|-|always|printf "%s;%s;%s;%s\n" "$STAGE" "$STAGE_TESTS" "$STAGE_LOGDIR" "${PROOF_RUN_PREFIX-unset}" >"$STAGE_LOGDIR/env.txt"'
+  'handoff|notes|1|60|-|notes/**|echo notes'
+  'save|close|1|60|-|always|echo close'
 )
 table "${toy_rows[@]}"
 git -C "$repo" add -A
@@ -117,12 +117,9 @@ diff "$S/want" "$S/got" >/dev/null || fail "the rows said: $(tr '\n' ';' <"$S/go
 [ "$(cat "$S/logs-run/env.txt")" = "handoff;apps/cyfr/test/cyfr/a_test.exs;$S/logs-run;unset" ] ||
   fail "the row environment: $(cat "$S/logs-run/env.txt")"
 grep -qx 'compile' "$S/logs-run/compile.log" || fail 'a row log does not hold its output'
-# A row queues with its hold alone: its wait for the host is heavy-check's
-# default queue deadline, which tests/heavy-check-test.sh holds above every
-# hold of the real table.
-grep -qx -- '-q 1 -t 60 -- bash -c echo compile' "$STUB_CALLS" || fail "a row on one quarter did not queue -q 1 -t 60: $(cat "$STUB_CALLS")"
-grep -qx -- '-q 1 -t 60 -- bash -c git grep -q . -- README.md' "$STUB_CALLS" || fail 'the format row did not queue -q 1'
-grep -q -- '^-q 4 -t 60 -- bash -c printf' "$STUB_CALLS" || fail 'a row on four quarters did not queue -q 4'
+# A row queues with its hold alone: its wait for a quarter has no deadline.
+grep -qx -- '-t 60 -- bash -c echo compile' "$STUB_CALLS" || fail "a row did not queue with its hold -t 60: $(cat "$STUB_CALLS")"
+grep -qx -- '-t 60 -- bash -c git grep -q . -- README.md' "$STUB_CALLS" || fail 'the format row did not queue'
 grep -qF "stage: handoff logs in $S/logs-run" "$S/run.err" || fail 'the log directory is not named'
 
 begin 'the changed set holds deleted paths for the rows, and the touched tests hold only tests that exist'
@@ -186,13 +183,13 @@ stage spaced2 -l "$S/logs-spaced2" handoff
 [ ! -s "$STUB_CALLS" ] || fail 'a row ran before the refusal'
 reset_tree
 
-begin 'a row whose queue deadline passes or whose prerequisite is missing is not run, another that fails is failed, each fails the stage, and the rows after them still run'
-table "${toy_rows[@]}" 'nightly|queue|1|60|-|always|echo #queue-deadline' 'nightly|missing|1|60|-|always|exit 69' \
+begin 'a row the queue refuses or whose prerequisite is missing is not run, another that fails is failed, each fails the stage, and the rows after them still run'
+table "${toy_rows[@]}" 'nightly|queue|1|60|-|always|echo #refused' 'nightly|missing|1|60|-|always|exit 69' \
   'nightly|broken|1|60|-|always|exit 3' 'nightly|after|1|60|-|always|echo after'
 stage deadline -l "$S/logs-deadline" nightly
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
 framed deadline 1
-grep -qx 'queue: not run 75 [0-9]*s' "$S/deadline.out" || fail "the deadline row said: $(cat "$S/deadline.out")"
+grep -qx 'queue: not run 69 [0-9]*s' "$S/deadline.out" || fail "the refused row said: $(cat "$S/deadline.out")"
 grep -qx 'missing: not run 69 [0-9]*s' "$S/deadline.out" || fail "the row missing a prerequisite said: $(cat "$S/deadline.out")"
 grep -qx 'broken: failed 3 [0-9]*s' "$S/deadline.out" || fail "the failing row said: $(cat "$S/deadline.out")"
 grep -qx 'after: ok [0-9]*s' "$S/deadline.out" || fail 'the row after them did not run'
@@ -208,7 +205,7 @@ printf '# edit\n' >>"$repo/notes/today.md"
 stage dry -n handoff
 [ "$rc" = 0 ] || fail "exited $rc"
 framed dry 0
-grep -qxF 'would run notes (4 quarters): echo notes' "$S/dry.out" || fail "$(cat "$S/dry.out")"
+grep -qxF 'would run notes (1 quarter): echo notes' "$S/dry.out" || fail "$(cat "$S/dry.out")"
 grep -qxF 'would skip compile: no changed path matches apps/**,config/**' "$S/dry.out" || fail "$(cat "$S/dry.out")"
 [ ! -s "$STUB_CALLS" ] || fail 'a dry run queued a row'
 reset_tree
@@ -223,7 +220,7 @@ stage unqueued -l "$S/logs-unqueued" handoff
 framed unqueued 1
 [ "$(sed -n '2,$p' "$S/unqueued.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'quick: ok;slow: failed 124;queued: ok;failing: failed 7;' ] ||
   fail "the rows said: $(cat "$S/unqueued.out")"
-[ "$(cat "$STUB_CALLS")" = '-q 1 -t 60 -- bash -c echo queued' ] || fail "a row of no quarter was queued: $(cat "$STUB_CALLS")"
+[ "$(cat "$STUB_CALLS")" = '-t 60 -- bash -c echo queued' ] || fail "a row of no quarter was queued: $(cat "$STUB_CALLS")"
 grep -qx said "$S/logs-unqueued/quick.log" || fail "the row's log: $(cat "$S/logs-unqueued/quick.log")"
 [ "$(cat "$S/logs-unqueued/quick.txt")" = 'handoff;apps/cyfr/test/cyfr/a_test.exs' ] || fail "the row's environment: $(cat "$S/logs-unqueued/quick.txt")"
 grep -qx '==> stage: hold deadline after 1s: the command was stopped' "$S/logs-unqueued/slow.log" || fail "the held row's log: $(cat "$S/logs-unqueued/slow.log")"
@@ -288,15 +285,15 @@ refused() { # LINE WHY ROW: the toy table with ROW appended at line LINE
 }
 refused 9 "no stage is called 'deploy'" 'deploy|x|1|60|-|always|echo x'
 refused 9 "no stage is called 'save handoff'" 'save handoff|x|1|60|-|always|echo x'
-refused 9 "a row takes 1, 4 or - quarters, not '2'" 'nightly|x|2|60|-|always|echo x'
-refused 9 "a row takes 1, 4 or - quarters, not 'scoped'" 'nightly|x|scoped|60|-|always|echo x'
-refused 9 "a row takes 1, 4 or - quarters, not 'exclusive'" 'nightly|x|exclusive|60|-|always|echo x'
+refused 9 "a row takes 1 or - quarters, not '2'" 'nightly|x|2|60|-|always|echo x'
+refused 9 "a row takes 1 or - quarters, not 'scoped'" 'nightly|x|scoped|60|-|always|echo x'
+refused 9 "a row takes 1 or - quarters, not 'exclusive'" 'nightly|x|exclusive|60|-|always|echo x'
 refused 9 "'apps/**,,config/**' is not always, tests, named or comma-separated globs" 'handoff|x|1|60|-|apps/**,,config/**|echo x'
 refused 9 "'apps/** config/**' is not always, tests, named or comma-separated globs" 'handoff|x|1|60|-|apps/** config/**|echo x'
 refused 9 'handoff has a second check called compile' 'handoff|compile|1|60|-|always|echo x'
 refused 9 'only save and handoff rows take tests' 'nightly|x|1|60|-|tests|echo x'
 refused 9 'only save and handoff rows take globs' 'nightly|x|1|60|-|apps/**|echo x'
-refused 9 "a row takes 1, 4 or - quarters, not 'none'" 'handoff|x|none|-|-|always|git grep x'
+refused 9 "a row takes 1 or - quarters, not 'none'" 'handoff|x|none|-|-|always|git grep x'
 refused 9 "the hold '-' is not seconds" 'handoff|x|1|-|-|always|echo x'
 refused 9 "the check 'Compile' is not [a-z0-9-]+" 'handoff|Compile|1|60|-|always|echo x'
 refused 9 'a row has seven fields separated by single tabs' 'handoff|x|1|60|-|echo x'
@@ -305,6 +302,7 @@ refused 9 "the folder 'prod' is not dev, dev_pg, test, test_pg or -" 'handoff|x|
 refused 9 "the folder '_build/test' is not dev, dev_pg, test, test_pg or -" 'handoff|x|1|60|_build/test|always|echo x'
 refused 9 'no check is called deps' 'handoff|deps|1|60|-|always|echo x'
 refused 9 'a row of no quarter names no build folder' 'handoff|x|-|60|dev|always|echo x'
+refused 9 "a row takes 1 or - quarters, not '4'" 'nightly|x|4|60|-|always|echo x'
 refused 9 'only handoff rows are named' 'save|x|1|60|-|named|echo x'
 refused 9 'only handoff rows are named' 'nightly|x|1|60|-|named|echo x'
 table "${toy_rows[@]}"
@@ -429,12 +427,12 @@ printf '%s\n' 'default|||deps.get' 'default|sqlite|dev|deps.loadpaths' '_build/t
 diff "$S/want" "$FAKE_MIX_CALLS" >/dev/null || fail "the dependencies were fetched and compiled as: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
 [ "$(head -n 4 "$EVENTS" | tr '\n' ';')" = 'fetch before;prebuilt;deps default;deps _build/test;' ] || fail "a folder's row started before the dependencies were fetched and compiled: $(tr '\n' ';' <"$EVENTS")"
 grep -qx '==> test' "$S/logs-lanes/deps.log" || fail "deps.log holds: $(cat "$S/logs-lanes/deps.log")"
-grep -qx -- '-q 1 -t 1800 -- bash scripts/lib/stage-deps.sh --compile dev test' "$STUB_CALLS" || fail "the dependency compile was not queued on one quarter: $(cat "$STUB_CALLS")"
+grep -qx -- '-t 1800 -- bash scripts/lib/stage-deps.sh --compile dev test' "$STUB_CALLS" || fail "the dependency compile was not queued on one quarter: $(cat "$STUB_CALLS")"
 # One ticket per folder, holding each of its rows' holds and a minute
 # for each stop; a row of no folder on a ticket of its own.
-[ "$(grep -c -- '^-q 1 -t 60 -- bash -c ' "$STUB_CALLS")" = 2 ] || fail "the rows of no folder were not queued alone: $(cat "$STUB_CALLS")"
-grep -q -- "^-q 1 -t 360 -- bash scripts/lib/stage-chain.sh [0-9]* $S/logs-lanes/dev.results 0 first 60  echo first" "$STUB_CALLS" &&
-  grep -q -- "^-q 1 -t 120 -- bash scripts/lib/stage-chain.sh [0-9]* $S/logs-lanes/test.results 3 beside 60  echo beside" "$STUB_CALLS" ||
+[ "$(grep -c -- '^-t 60 -- bash -c ' "$STUB_CALLS")" = 2 ] || fail "the rows of no folder were not queued alone: $(cat "$STUB_CALLS")"
+grep -q -- "^-t 360 -- bash scripts/lib/stage-chain.sh [0-9]* $S/logs-lanes/dev.results 0 first 60  echo first" "$STUB_CALLS" &&
+  grep -q -- "^-t 120 -- bash scripts/lib/stage-chain.sh [0-9]* $S/logs-lanes/test.results 3 beside 60  echo beside" "$STUB_CALLS" ||
   fail "a folder's rows were not queued on one ticket each: $(cat "$STUB_CALLS")"
 [ "$(wc -l <"$STUB_CALLS")" = 5 ] || fail "the stage queued other tickets: $(cat "$STUB_CALLS")"
 [ -e "$S/logs-lanes/dev.queue.log" ] && [ -e "$S/logs-lanes/test.queue.log" ] || fail 'a ticket kept no log'
@@ -694,12 +692,12 @@ stage held -l "$S/logs-held" handoff
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
 grep -qx 'held: failed 124 [0-9]*s' "$S/held.out" && grep -qx 'next: ok [0-9]*s' "$S/held.out" || fail "the rows said: $(cat "$S/held.out")"
 grep -qx '==> stage: hold deadline after 1s: the command was stopped' "$S/logs-held/held.log" || fail "the held row's log: $(cat "$S/logs-held/held.log")"
-grep -q -- '^-q 1 -t 181 -- ' "$STUB_CALLS" || fail "the ticket's hold: $(cat "$STUB_CALLS")"
+grep -q -- '^-t 181 -- ' "$STUB_CALLS" || fail "the ticket's hold: $(cat "$STUB_CALLS")"
 ! pgrep -f '^sleep 6121$' >/dev/null || fail 'the held row outlived its hold'
-table 'handoff|q1|1|60|dev|always|echo one #queue-deadline' 'handoff|q2|1|60|dev|always|echo two' 'handoff|free|1|60|-|always|true'
+table 'handoff|q1|1|60|dev|always|echo one #refused' 'handoff|q2|1|60|dev|always|echo two' 'handoff|free|1|60|-|always|true'
 stage queued -l "$S/logs-queued" handoff
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
-[ "$(sed -n '2,$p' "$S/queued.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'deps: ok;q1: not run 75;q2: not run 75;free: ok;dev ticket: not run 75;' ] ||
+[ "$(sed -n '2,$p' "$S/queued.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'deps: ok;q1: not run 69;q2: not run 69;free: ok;dev ticket: not run 69;' ] ||
   fail "the rows said: $(cat "$S/queued.out")"
 
 begin "a ticket killed outright fails the row it ran and every row after it, none of which starts, and its row's command is stopped"
@@ -843,7 +841,7 @@ table "${toy_rows[@]}" "${night_rows[@]}" 'nightly|x|2|60|-|always|echo x'
 nightly early -l "$S/logs-early"
 [ "$rc" = 65 ] || fail "exited $rc, not 65"
 call_is early "$head with changes" 65 '' "$S/logs-early"
-grep -qF "a row takes 1, 4 or - quarters, not '2'" "$S/logs-early/stage.err" || fail "the stage's refusal is not kept: $(cat "$S/logs-early/stage.err")"
+grep -qF "a row takes 1 or - quarters, not '2'" "$S/logs-early/stage.err" || fail "the stage's refusal is not kept: $(cat "$S/logs-early/stage.err")"
 reset_tree
 
 begin 'a green night whose report does not reach GitHub exits 1 and says so'
@@ -929,7 +927,7 @@ report() { # STATUS SUMMARY [COMMIT [LOGS]]: runs the report step; its exit in $
   : >"$S/step-summary"
   rc=0
   env -i PATH="$PATH" GITHUB_STEP_SUMMARY="$S/step-summary" STATUS="$1" SUMMARY="$2" COMMIT="${3-$sha40}" \
-    LOGS="${4-/tmp/cyfr-stage.nightly.Ab1sCd}" bash --noprofile --norc -eo pipefail "$S/wf-report.sh" >"$S/report.out" 2>&1 || rc=$?
+    LOGS="${4-/var/tmp/cyfr/cyfr-stage.nightly.Ab1sCd}" bash --noprofile --norc -eo pipefail "$S/wf-report.sh" >"$S/report.out" 2>&1 || rc=$?
 }
 refused() { # WHAT: the report just run exited 1 and printed nothing it was sent
   [ "$rc" = 1 ] && [ ! -s "$S/step-summary" ] && ! grep -qi 'planted' "$S/report.out" ||
@@ -966,7 +964,7 @@ report $'0\r' "$green_rows"
 refused 'a carriage return in the status'
 report 0 "$green_rows" "$sha40"$'\r'
 refused 'a carriage return in the commit'
-report 0 "$green_rows" "$sha40" $'/tmp/cyfr-stage.nightly.Ab1sCd\r'
+report 0 "$green_rows" "$sha40" $'/var/tmp/cyfr/cyfr-stage.nightly.Ab1sCd\r'
 refused 'a carriage return in the log path'
 
 begin "the workflow's watchdog passes only on a report run that completed within 26 hours, never on its own"
@@ -1106,7 +1104,7 @@ cat >"$rrepo/scripts/heavy-check.sh" <<'EOF'
 #!/usr/bin/env bash
 while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift
-case "$*" in *test-partitioned*) [ -z "${RECEIPT_QUEUE_DEADLINE:-}" ] || exit 75 ;; esac
+case "$*" in *test-partitioned*) [ -z "${RECEIPT_REFUSED:-}" ] || exit 69 ;; esac
 exec "$@"
 EOF
 printf '%s\n' \
@@ -1255,29 +1253,21 @@ rstage full handoff
   ! grep -q '^stage: receipt: handoff' "$S/full.err" && [ ! -e "$S/logs-full/receipt" ] && [ ! -L "$S/logs-full/receipt" ] ||
   fail "a receipt the disk refused gave $rc: $(cat "$S/full.err"; ls -l "$S/logs-full")"
 printf '# edit\n' >>"$rrepo/apps/cyfr/lib/cyfr/a.ex"
-RECEIPT_QUEUE_DEADLINE=1 rstage unqueued handoff
+RECEIPT_REFUSED=1 rstage unqueued handoff
 [ "$rc" = 1 ] || fail "a stage whose test rows never started exited $rc"
 grep -qx 'selected unit sqlite apps/cyfr/test/cyfr/a_test.exs' "$S/logs-unqueued/receipt" &&
-  grep -qx 'row unit: not run 75 [0-9]*s' "$S/logs-unqueued/receipt" &&
+  grep -qx 'row unit: not run 69 [0-9]*s' "$S/logs-unqueued/receipt" &&
   ! grep -qE '^(tests|row unit: ok)' "$S/logs-unqueued/receipt" || fail "the unstarted row's receipt: $(cat "$S/logs-unqueued/receipt")"
 git -C "$rrepo" checkout -q -- .
 
-begin 'the real table reads whole, no save or handoff row takes more than one quarter, the rows the pull request alone runs are named, and every self-test a handoff row runs is one a pull-request workflow runs'
+begin 'the real table reads whole, the rows the pull request alone runs are named, and every self-test a handoff row runs is one a pull-request workflow runs'
 status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/real.out" 2>"$S/real.err" || status=$?
 [ "$status" = 0 ] || fail "the real table was refused: $(cat "$S/real.err")"
 grep -qxF 'would run janitor (1 quarter): scripts/janitor.sh' "$S/real.out" || fail "$(cat "$S/real.out")"
-# What needs the whole machine is the pull request's run's: the save and
-# handoff rows each queue for one quarter.
-whole_rows() { # TABLE: prints each save or handoff row of TABLE on more than one quarter
-  awk -F'\t' '!/^#/ && ($1 == "save" || $1 == "handoff") && $3 != "1" && $3 != "-" { print $1 "/" $2 }' "$1"
-}
-[ -z "$(whole_rows "$ROOT/scripts/stages.tsv")" ] || fail "a row takes the whole machine: $(whole_rows "$ROOT/scripts/stages.tsv" | tr '\n' ' ')"
-{ cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe-one\t1\t60\t-\talways\ttrue\nhandoff\tprobe-none\t-\t60\t-\talways\ttrue\nhandoff\tprobe\t4\t60\t-\talways\ttrue\nsave\tprobe\t4\t60\t-\talways\ttrue\nnightly\tprobe\t4\t60\t-\talways\ttrue\n'; } >"$S/stages-whole.tsv"
-[ "$(whole_rows "$S/stages-whole.tsv" | tr '\n' ' ')" = 'handoff/probe save/probe ' ] || fail "the whole-machine rows were not caught alone: $(whole_rows "$S/stages-whole.tsv")"
-# PostgreSQL, Dialyzer, Locus alone and the load check's self-test are the
-# pull request's: no change selects them, and --reproduce runs them.
+# PostgreSQL, Dialyzer and Locus alone are the pull request's: no change
+# selects them, and --reproduce runs them.
 named=$(awk -F'\t' '!/^#/ && $1 == "handoff" && $6 == "named" { print $2 }' "$ROOT/scripts/stages.tsv" | tr '\n' ' ')
-[ "$named" = 'compile-postgres tests-postgres arca-postgres dialyzer load-check-test locus-alone ' ] || fail "the named rows are: $named"
+[ "$named" = 'compile-postgres tests-postgres arca-postgres dialyzer locus-alone ' ] || fail "the named rows are: $named"
 guard() { # TABLE [WORKFLOWS]: prints each self-test a handoff row of TABLE runs that no pull-request workflow runs
   python3 -I - "${2:-$ROOT/.github/workflows}" "$1" <<'PY'
 import glob, os, re, sys, yaml
@@ -1502,8 +1492,8 @@ grep -v $'^handoff\trosters\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
 ! rosters_held "$S/stages-short.tsv" || fail 'a table without the rosters row was not caught'
 sed $'/^handoff\trosters\t/s/\talways\t/\ttests\t/' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
 ! rosters_held "$S/stages-short.tsv" || fail 'a rosters row that does not run always was not caught'
-sed $'/^handoff\trosters\t/s/\t1\t/\t4\t/' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
-! rosters_held "$S/stages-short.tsv" || fail 'a rosters row on four quarters was not caught'
+sed $'/^handoff\trosters\t/s/\t1\t/\t-\t/' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
+! rosters_held "$S/stages-short.tsv" || fail 'a rosters row of no quarter was not caught'
 # A workflow runs a self-test where the shell runs it: not in a comment, an
 # echo's arguments or a heredoc's body, and a real command with a comment
 # after it, or after &&, does. An image suite given its image does not run
@@ -1576,7 +1566,7 @@ for spec in \
     if grep -q "^would run $check " "$S/real-rows.out"; then got+="$check "; fi
   done
   [ "$got" = "${want:+$want }" ] || fail "a change to $path runs '${got% }', not '$want'"
-  ! grep -q '^would run \(compile-postgres\|tests-postgres\|arca-postgres\|dialyzer\|load-check-test\|locus-alone\) ' "$S/real-rows.out" ||
+  ! grep -q '^would run \(compile-postgres\|tests-postgres\|arca-postgres\|dialyzer\|locus-alone\) ' "$S/real-rows.out" ||
     fail "a change to $path runs a named row: $(grep '^would run' "$S/real-rows.out")"
 done
 
@@ -1644,25 +1634,21 @@ rm -r "$isle/_tools"
 rc=0; (cd "$isle" && TMPDIR="$S/island-tmp" scripts/locus-island.sh) >"$S/island-missing.err" 2>&1 || rc=$?
 [ "$rc" = 69 ] && grep -qF '_tools is missing' "$S/island-missing.err" || fail "a missing _tools gave $rc: $(cat "$S/island-missing.err")"
 
-begin "the real table's nightly runs the janitor, install and handle on one quarter, then both reference canvas viewports on four, one after another"
+begin "the real table's nightly runs the janitor, then the install and handle proofs, each on one quarter, one after another"
 status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/nightly-real.out" 2>"$S/nightly-real.err" || status=$?
 [ "$status" = 0 ] || fail "the nightly stage was refused: $(cat "$S/nightly-real.err")"
 grep -qxF 'would run janitor (1 quarter): scripts/janitor.sh' "$S/nightly-real.out" &&
   grep -qx 'would run install-screen-proof (1 quarter): .* && tests/install-screen-proof/run.sh' "$S/nightly-real.out" &&
   grep -qxF 'would run handle-proof (1 quarter): tests/handle-proof/run.sh' "$S/nightly-real.out" ||
   fail "the nightly would run: $(cat "$S/nightly-real.out")"
-for viewport in desktop 720x720; do
-  grep -qxF "would run canvas-proof-$viewport (4 quarters): env CANVAS_PROOF_HOST_CLASS=reference CANVAS_PROOF_VIEWPORT=$viewport PROOF_OUT=\"\$STAGE_LOGDIR/canvas/$viewport\" tests/canvas-proof/run.sh" "$S/nightly-real.out" ||
-    fail "the nightly does not run the reference canvas proof at $viewport on the whole machine with its records kept: $(cat "$S/nightly-real.out")"
-done
 # The report's grammar holds no skipped row: every nightly row runs always.
 selected=$(awk -F'\t' '!/^#/ && $1 == "nightly" && $6 != "always" { print $2 }' "$ROOT/scripts/stages.tsv")
 [ -z "$selected" ] || fail "a nightly row has a selector: $selected"
 # The nightly runs its rows one after another in the table's order, as
 # every stage but save and handoff does, the janitor before the proofs: a
 # stand-in queue records each row's start and end and runs nothing.
-[ "$(awk -F'\t' '!/^#/ && $1 == "nightly" { print $2 }' "$ROOT/scripts/stages.tsv" | tr '\n' ' ')" = 'janitor install-screen-proof handle-proof canvas-proof-desktop canvas-proof-720x720 ' ] ||
-  fail 'the nightly does not hold the janitor, then the install-screen and handle proofs, then both canvas viewports'
+[ "$(awk -F'\t' '!/^#/ && $1 == "nightly" { print $2 }' "$ROOT/scripts/stages.tsv" | tr '\n' ' ')" = 'janitor install-screen-proof handle-proof ' ] ||
+  fail 'the nightly does not hold the janitor, then the install-screen and handle proofs'
 night="$S/night-repo"
 git init -q -b main "$night"
 mkdir -p "$night/scripts"

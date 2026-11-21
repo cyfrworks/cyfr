@@ -17,6 +17,12 @@
 #       Prints `cyfr-<seed>-<pid>-`, where the seed is DIR's and the pid is
 #       the calling shell's `$$`, which a command substitution keeps.
 #       Returns what run_names_seed returns.
+#   run_names_root
+#       Prints /var/tmp/cyfr, the folder on disk (never the memory-backed
+#       /tmp) where runs keep their logs, run directories and scratch,
+#       making it this user's alone (mode 0700) when it is missing. Returns
+#       1, saying why on stderr, when it is a symlink, not a folder, or
+#       another user's: a folder planted there is never written into.
 #   RUN_NAMES_PATTERN
 #       The extended regular expression a name made from a prefix matches,
 #       capturing the seed and the pid. It is the one definition a cleanup
@@ -37,6 +43,16 @@
 RUN_NAMES_PATTERN='^cyfr-([0-9a-f]{10})-([0-9]+)-'
 RUN_NAMES_PORT_FIRST=20000
 RUN_NAMES_PORT_LAST=29999
+
+run_names_root() {
+  local root=/var/tmp/cyfr
+  mkdir -p -m 700 "$root" 2>/dev/null
+  if [ -L "$root" ] || [ ! -d "$root" ] || [ ! -O "$root" ]; then
+    echo "$root is not a folder of this user's own" >&2
+    return 1
+  fi
+  printf '%s\n' "$root"
+}
 
 # The SHA-256 of $1's bytes, as 64 lowercase hex digits.
 _run_names_sha256() {

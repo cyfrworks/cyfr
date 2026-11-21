@@ -23,7 +23,7 @@ elif [ "$#" != 0 ]; then
 fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 runner="$root/scripts/test-partitioned.sh"
-scratch=$(mktemp -d /tmp/cyfr-runner-test.XXXXXX)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-runner-test.XXXXXX")
 real_elixir=$(command -v elixir)
 export REAL_ELIXIR="$real_elixir"
 cleanup() {
@@ -43,7 +43,7 @@ cleanup() {
   fi
   if [ -f "$scratch/trace/prepared" ]; then
     while IFS= read -r directory; do
-      case "$directory" in /tmp/cyfr-t.*|/private/tmp/cyfr-t.*)
+      case "$directory" in /var/tmp/cyfr/cyfr-t.*|/private/var/tmp/cyfr/cyfr-t.*)
         rm -rf "$directory"
         # The test ends by showing that no run directory it made remains.
         if [ -e "$directory" ]; then
@@ -829,13 +829,11 @@ lines_of "$scratch/lines" -n 2 -a postgres -- --only cluster
   [ "$(tail -n 1 "$scratch/lines")" = "_EXIT=$lines_pid 64" ]; } || fail 'a refusal after the options lacks its terminal lines'
 lines_of "$scratch/lines" -n 0
 { [ "$lines_status" = 64 ] && [ ! -s "$scratch/lines" ]; } || fail 'an invalid -n wrote terminal lines'
-for held in 4 1; do
-  "${clean[@]}" HEAVY_CHECK_HELD=$held bash "$runner" -n 1 >"$scratch/held" 2>&1 || fail "a run on $held quarters failed"
-  if grep -qE '_(START|EXIT)=' "$scratch/held"; then fail "terminal lines written under HEAVY_CHECK_HELD=$held"; fi
-done
+"${clean[@]}" HEAVY_CHECK_HELD=1 bash "$runner" -n 1 >"$scratch/held" 2>&1 || fail 'a run on one quarter failed'
+if grep -qE '_(START|EXIT)=' "$scratch/held"; then fail 'terminal lines written under HEAVY_CHECK_HELD=1'; fi
 
 # On one quarter a resolved count above one is refused before anything is
-# prepared; on four it is not.
+# prepared.
 quarter() { status_of "${clean[@]}" HEAVY_CHECK_HELD=1 bash "$runner" "$@"; }
 before=$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)
 [ "$(quarter -n 4)" = 64 ] || fail 'a run on one quarter took four partitions'
@@ -846,7 +844,6 @@ grep -qx 'a check on one quarter runs one partition: -n 1' "$scratch/status" || 
 [ "$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)" = "$before" ] || fail 'a refused run on one quarter prepared or reached Mix'
 [ "$(quarter -a sqlite -n 1)" = 0 ] || fail 'a run on one quarter refused one partition'
 [ "$(quarter -n 4 -n 1)" = 0 ] || fail 'a run on one quarter refused a last -n of one'
-[ "$(status_of "${clean[@]}" HEAVY_CHECK_HELD=4 bash "$runner" -n 2)" = 0 ] || fail "a run on four quarters refused two partitions: $(cat "$scratch/status")"
 
 # A second pass in one VM would run after the suite's after_suite cleanups:
 # --repeat-until-failure is refused, in every spelling and on any quarters, before

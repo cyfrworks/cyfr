@@ -14,7 +14,7 @@
 #   stage<TAB>check<TAB>quarters<TAB>hold<TAB>folder<TAB>when<TAB>command
 #   stage    one of the three above
 #   check    [a-z0-9-]+, unique within its stage
-#   quarters 1 or 4, the quarters of the machine it takes, heavy-check's -q;
+#   quarters 1, the row takes a quarter of the machine (scripts/heavy-check.sh);
 #            or - for a row that takes none and runs at once, beside every
 #            ticket, contained (scripts/lib/stage-chain.sh): a script over
 #            files that starts no compiler, BEAM, container or test runner
@@ -23,11 +23,8 @@
 #   hold     the seconds the command may run before it is stopped. A row
 #            of no folder is heavy-check's -t; the rows of one folder
 #            share a ticket whose -t is the sum of their holds and 60 s
-#            each for a stop. A ticket waits for the host as long as
-#            heavy-check's default queue deadline, which is longer than
-#            every ticket's hold here (tests/heavy-check-test.sh holds the
-#            two together), so a ticket queued behind any one other still
-#            runs
+#            each for a stop. A ticket waits for its quarter as long as
+#            it takes, every holder's run being bounded by its own hold
 #   folder   the build folder the command compiles into or reads, which
 #            another row of the stage may use too: dev (Mix's default
 #            _build/dev), dev_pg, test or test_pg, the _build folder of
@@ -43,8 +40,8 @@
 # Lines that start with #, and blank lines, are skipped. The whole table
 # is read, and every row's when decided on the changed set as the stage
 # found it, before any row runs. In save and handoff the rows of one
-# folder that run take one heavy-check ticket, on the most quarters one of
-# them takes, and run under it one after another in the table's order
+# folder that run take one heavy-check ticket and run under it one after
+# another in the table's order
 # (scripts/lib/stage-chain.sh), and every other row runs beside them on a
 # ticket of its own, or on none; every ticket queues when the stage starts,
 # so a stage can hold every quarter at once. The nightly runs its rows one
@@ -112,8 +109,9 @@
 # $STAGE_LOGDIR/<check>.log. A folder's ticket writes heavy-check's own
 # lines to <folder>.queue.log and each of its rows' ends to
 # <folder>.results. Without -l the log directory is a fresh
-# /tmp/cyfr-stage.<stage>.XXXXXX, the name scripts/janitor.sh removes after
-# seven days; it is named on stderr. The name carries no PROOF_RUN_PREFIX:
+# cyfr-stage.<stage>.XXXXXX in scripts/lib/run-names.sh's run_names_root,
+# on disk, which scripts/janitor.sh sweeps after seven days; it is named
+# on stderr, and a refused root is 69. The name carries no PROOF_RUN_PREFIX:
 # logs outlive the run that wrote them, and the janitor finds them by this
 # name alone (its rule 5).
 #
@@ -125,9 +123,8 @@
 # `<check>: skipped (<reason>) <seconds>s`, the seconds from the row's
 # start, its wait for the host included: a folder's first row starts when
 # its ticket queues and each next one when the one before it ends. Not
-# run is a status of 69, a prerequisite the check names is missing, or
-# 75, heavy-check's queue deadline passed before it started; it counts as
-# failed. A folder's ticket that ends with any status but 0 fails the
+# run is a status of 69, a prerequisite the check names is missing; it
+# counts as failed. A folder's ticket that ends with any status but 0 fails the
 # stage whatever its rows read, and says `<folder> ticket: failed
 # <status> <seconds>s` (or not run) after every row's line, the seconds
 # from when it queued; a row of the folder it left without a line reads
@@ -137,7 +134,7 @@
 # `would run deps (the fetch on no quarter[, a stale folder's compile on 1
 # quarter]): <folders>` when it would, the compile's part for two folders
 # or more, then `would
-# run <check> (<n> quarter[s]): <command>`, `would run <check> (no
+# run <check> (1 quarter): <command>`, `would run <check> (no
 # quarter): <command>` or `would skip <check>: <reason>` per row, and runs
 # nothing.
 #
@@ -324,7 +321,9 @@ make_logdir() {
   if [ -n "$logdir" ]; then
     mkdir -p "$logdir" && logdir=$(cd "$logdir" && pwd -P) || refuse 64 "cannot use $logdir for the logs"
   else
-    logdir=$(mktemp -d "/tmp/cyfr-stage.$stage.XXXXXX") || refuse 69 'cannot make a log directory'
+    # shellcheck source=lib/run-names.sh
+    logdir=$(. "$here/lib/run-names.sh" && root=$(run_names_root) && mktemp -d "$root/cyfr-stage.$stage.XXXXXX") ||
+      refuse 69 'cannot make a log directory'
   fi
   logdir_made=true
   echo "stage: $stage logs in $logdir" >&2
@@ -357,8 +356,8 @@ while IFS= read -r line || [ -n "$line" ]; do
   [ -z "${seen[$r_stage/$r_check]+set}" ] || refuse 65 "$table:$number: $r_stage has a second check called $r_check"
   seen[$r_stage/$r_check]=1
   case $r_quarters in
-    1|4|-) ;;
-    *) refuse 65 "$table:$number: a row takes 1, 4 or - quarters, not '$r_quarters'" ;;
+    1|-) ;;
+    *) refuse 65 "$table:$number: a row takes 1 or - quarters, not '$r_quarters'" ;;
   esac
   [[ $r_hold =~ ^[1-9][0-9]{0,5}$ ]] || refuse 65 "$table:$number: the hold '$r_hold' is not seconds"
   case $r_folder in
@@ -664,8 +663,7 @@ if $dry; then
     reason=${reasons[$i]}
     if [ -n "$reason" ]; then echo "would skip $check: $reason"
     elif [ "$quarters" = - ]; then echo "would run $check (no quarter): $command"
-    elif [ "$quarters" = 1 ]; then echo "would run $check (1 quarter): $command"
-    else echo "would run $check ($quarters quarters): $command"; fi
+    else echo "would run $check (1 quarter): $command"; fi
   done
   finished=true
   exit 0
@@ -678,17 +676,17 @@ export STAGE="$stage" STAGE_TESTS="${tests[*]+${tests[*]}}" STAGE_LOGDIR="$logdi
 result() {
   case $2 in
     0) echo "$1: ok $3s" ;;
-    69 | 75) echo "$1: not run $2 $3s" ;;
+    69) echo "$1: not run $2 $3s" ;;
     *) echo "$1: failed $2 $3s" ;;
   esac
 }
-# launch ENTRY QUARTERS HOLD LOG COMMAND...: COMMAND queued for the host in
+# launch ENTRY HOLD LOG COMMAND...: COMMAND queued for a quarter in
 # the background, its heavy-check's pid recorded with ENTRY, its output
 # added to LOG, which the caller starts.
 launch() {
-  local entry=$1 quarters=$2 hold=$3 log=$4
-  shift 4
-  scripts/heavy-check.sh -q "$quarters" -t "$hold" -- "$@" >>"$log" 2>&1 &
+  local entry=$1 hold=$2 log=$3
+  shift 3
+  scripts/heavy-check.sh -t "$hold" -- "$@" >>"$log" 2>&1 &
   running[$!]=$entry
 }
 # unqueued ENTRY CHECK HOLD TESTS COMMAND: COMMAND, contained and held by
@@ -719,14 +717,14 @@ start_row() { # INDEX: the row on a ticket of its own
   if [ "$quarters" = - ]; then
     unqueued "$1" "$check" "$hold" "${row_tests[$1]}" "$command"
   else
-    launch "$1" "$quarters" "$hold" "$logdir/$check.log" bash -c "$command"
+    launch "$1" "$hold" "$logdir/$check.log" bash -c "$command"
   fi
 }
 # start_lane FOLDER: the stage lane's next row on a ticket of its own, or
 # every row of a build folder on one ticket.
 chains=0
 start_lane() {
-  local folder=$1 left=${lane[$1]-} i check quarters hold command most=1 total=0 args=()
+  local folder=$1 left=${lane[$1]-} i check hold command total=0 args=()
   [ -n "$left" ] || return 0
   if [ "$folder" = stage ]; then
     lane[$folder]=${left#* }
@@ -734,8 +732,7 @@ start_lane() {
     return 0
   fi
   for i in $left; do
-    IFS=$'\t' read -r _ _ check quarters hold _ _ command <<<"${rows[$i]}"
-    [ "$quarters" -le "$most" ] || most=$quarters
+    IFS=$'\t' read -r _ _ check _ hold _ _ command <<<"${rows[$i]}"
     total=$((total + hold + 60))
     printf '%s' "${notes[$i]}" >"$logdir/$check.log"
     args+=("$i" "$check" "$hold" "${row_tests[$i]}" "$command")
@@ -743,7 +740,7 @@ start_lane() {
   : >"$logdir/$folder.results"
   chain_began[$folder]=$EPOCHSECONDS chain_last[$folder]=$EPOCHSECONDS chain_read[$folder]=0
   : >"$logdir/$folder.queue.log"
-  launch "chain $folder" "$most" "$total" "$logdir/$folder.queue.log" \
+  launch "chain $folder" "$total" "$logdir/$folder.queue.log" \
     bash scripts/lib/stage-chain.sh "$$" "$logdir/$folder.results" "${args[@]}"
   chains=$((chains + 1))
   tick

@@ -36,7 +36,11 @@
 #      or that has none, keeps no proof image), no live pid in <h>.uses
 #      names it, no container in any state uses it, and it was created
 #      more than 24 hours ago. `docker image rm` runs without force, still under the
-#      lock. Then dangling images carrying the label are pruned.
+#      lock. Then dangling images carrying the label are pruned. Then every
+#      other tag of the cyfr and cyfr-locus repositories, one made by hand
+#      (cyfr-locus:ci-test), goes when no container in any state uses it
+#      and it was created more than seven days ago, with `docker image rm`
+#      without force; no other repository's tag is touched.
 #   3. Old build cache. `docker builder prune -f --filter until=168h`
 #      removes BuildKit cache unused for seven days, for every project on
 #      this Docker daemon, since the cache cannot be attributed to one.
@@ -51,9 +55,13 @@
 #      first drop: one it cannot read keeps the directory and every
 #      database it names. A drop that fails keeps the directory, names what
 #      was dropped and what is left, and fails the run.
-#   5. Old logs and evidence. $JANITOR_TMP/cyfr-stage.* and
-#      $JANITOR_TMP/cyfr-evidence.* log and evidence directories of this
-#      user more than seven days old.
+#   5. Old logs and scratch. Every entry of this user's directly in
+#      $JANITOR_TMP, a file or a directory, unchanged for seven days: the
+#      stages' logs (cyfr-stage.*), the proofs' evidence (cyfr-evidence.*)
+#      and whatever a check or its tools left in the TMPDIR
+#      scripts/heavy-check.sh gave them. A run directory (rule 4), an
+#      install-screen scratch directory (rule 1) and the record of the
+#      host's load and its previous file (rule 8) are not this rule's.
 #   6. Old records. Under each image's lock, the dead pids in <h>.uses go.
 #      No lock file is ever removed.
 #   7. Unpinned base images. The install-screen proof's cache of Ubuntu
@@ -70,6 +78,11 @@
 #      replaces a set, waiting up to two hours for it; a dry run holds it
 #      only where it exists. Nothing else in the cache is touched:
 #      prepare.sh removes the .fetch-<pid> directories it works in.
+#   8. The record of the host's load. HEAVY_CHECK_RECORDS (default
+#      heavy-check.log in $JANITOR_TMP, where scripts/heavy-check.sh
+#      appends), once it is larger than 64 MiB, is renamed with .1 after
+#      its name, replacing the file there, so the two files hold the last
+#      64 to 128 MiB of lines.
 #
 # It prints `removed <kind> <name>`, or `would remove <kind> <name>` with
 # --dry-run, which removes nothing, and `kept <kind> <name>: <reason>` for
@@ -80,12 +93,14 @@
 # objects. The per-image lock and the run-finished test,
 # not the queue, protect an image between its choice and its
 # container's start and a run until its end, so it takes one quarter
-# (scripts/heavy-check.sh -q 1) beside any other check.
+# (scripts/heavy-check.sh) beside any other check.
 #
 # HEAVY_CHECK_LOCK (default /tmp/cyfr-heavy-check.lock) names heavy-check's
-# lock, beside which the holder records lie; JANITOR_TMP (default /tmp)
-# the directory the runner and the stages make theirs in; the
-# image lock directory is the one `scripts/image.sh --lock-dir` prints.
+# lock, beside which the holder records lie; JANITOR_TMP (default the
+# folder scripts/lib/run-names.sh's run_names_root gives, /var/tmp/cyfr)
+# the folder of the runs' logs and scratch alone, since rule 5 sweeps
+# everything old of this user's in it; the image lock directory is the one
+# `scripts/image.sh --lock-dir` prints.
 #
 # Every listing a rule reads (Docker's objects, the worktrees, the
 # directories) is checked before the rule uses it: one that fails is named
@@ -97,7 +112,8 @@
 # It runs on Linux: it reads Docker's image dates with GNU `date -d`.
 #
 # Exits 0; 1 naming each removal or listing that failed; 64 on usage; 69
-# without docker, a Docker daemon, git, flock or pgrep.
+# without docker, a Docker daemon, git, flock or pgrep, or when the default
+# folder is refused (a symlink or another user's).
 set -uo pipefail
 
 usage() { echo "usage: $0 [--dry-run] [--keep-build-cache]"; }
@@ -121,7 +137,9 @@ done
 docker version -f '{{.Server.Os}}' >/dev/null 2>&1 || { echo 'janitor: no Docker daemon answers (docker version)' >&2; exit 69; }
 
 LOCK=${HEAVY_CHECK_LOCK:-/tmp/cyfr-heavy-check.lock}
-TMP_ROOT=${JANITOR_TMP:-/tmp}
+TMP_ROOT=${JANITOR_TMP:-}
+if [ -z "$TMP_ROOT" ]; then TMP_ROOT=$(run_names_root) || exit 69; fi
+RECORDS=${HEAVY_CHECK_RECORDS:-$TMP_ROOT/heavy-check.log}
 STATE=$("$root/scripts/image.sh" --lock-dir) || exit 69
 failed=0
 
@@ -153,10 +171,13 @@ alive() {
 }
 
 # The holder record that names pid $1, as its group= and watchdog= values
-# ("-" for one it lacks); nothing when no record names the pid.
+# ("-" for one it lacks); nothing when no record names the pid. Every
+# holder record beside the lock is read, whatever its name: one roster
+# here would call a run dead whose record a worktree on another version of
+# heavy-check wrote, such as the whole-machine record $LOCK.holder.
 record_of() {
   local file line
-  for file in "$LOCK".holder "$LOCK".*.holder; do
+  for file in "$LOCK"*.holder; do
     [ -s "$file" ] || continue
     IFS= read -r line <"$file" || [ -n "$line" ] || continue
     line=" ${line%% command=*} "
@@ -342,6 +363,28 @@ elif out=$(docker image prune -f --filter label=works.cyfr.image-inputs 2>&1); t
 else
   failure images dangling "$out"
 fi
+# The tags made by hand: the cyfr and cyfr-locus repositories' others.
+listed tags 'image tags' docker image ls --format '{{.Repository}}:{{.Tag}}' || :
+while IFS= read -r tag; do
+  [[ $tag =~ ^(cyfr|cyfr-locus):[^:]+$ ]] || continue
+  [[ ! $tag =~ ^(cyfr-locus|cyfr):in-[0-9a-f]{20}$ ]] && [ "${tag#*:}" != '<none>' ] || continue
+  created=$(docker image inspect -f '{{.Created}}' "$tag" 2>/dev/null) || continue
+  created=$(date -d "$created" +%s 2>/dev/null) || created=
+  # A lookup that fails says nothing of the tag's containers: it is kept.
+  if ! used=$(docker ps -a --filter "ancestor=$tag" --format '{{.ID}}' 2>&1); then
+    failure image "$tag" "its containers could not be listed: $used"
+  elif [ -n "$used" ]; then
+    kept image "$tag" 'a container uses it'
+  elif [ -z "$created" ] || [ $((now - created)) -le 604800 ]; then
+    kept image "$tag" 'it is younger than seven days'
+  elif $dry; then
+    removed image "$tag"
+  elif out=$(docker image rm "$tag" 2>&1); then
+    removed image "$tag"
+  else
+    failure image "$tag" "$out"
+  fi
+done <"$lists/tags"
 
 # Rule 3.
 if $keep_cache; then
@@ -426,13 +469,15 @@ while IFS= read -r -d '' dir; do
 done <"$lists/runs"
 
 # Rule 5.
-listed logs 'log and evidence directories' \
-  find "$TMP_ROOT" -maxdepth 1 \( -name 'cyfr-stage.*' -o -name 'cyfr-evidence.*' \) -type d -mmin +10080 -print0
-while IFS= read -r -d '' dir; do
-  [ -O "$dir" ] || continue
-  if $dry; then removed directory "$dir"
-  elif rm -rf "$dir"; then removed directory "$dir"
-  else failure directory "$dir" 'rm -rf failed'
+listed logs 'old logs and scratch' \
+  find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -user "$(id -u)" -mmin +10080 \
+    ! -name 'cyfr-t.*' ! -name 'cyfr-*-install-screen.*' ! -path "$RECORDS" ! -path "$RECORDS.1" -print0
+while IFS= read -r -d '' entry; do
+  [ -O "$entry" ] || continue
+  if [ -d "$entry" ] && [ ! -L "$entry" ]; then kind=directory; else kind=file; fi
+  if $dry; then removed "$kind" "$entry"
+  elif rm -rf "$entry"; then removed "$kind" "$entry"
+  else failure "$kind" "$entry" 'rm -rf failed'
   fi
 done <"$lists/logs"
 
@@ -496,6 +541,17 @@ if [ -n "$cache" ] && [ -n "$base_lock" ] && [ -d "$cache" ]; then
       fi
     done <"$lists/sets"
     exec 7>&- 2>/dev/null || :
+  fi
+fi
+
+# Rule 8. An append that opened the file before the rename lands in the .1.
+if [ -f "$RECORDS" ] && size=$(stat -c %s "$RECORDS" 2>/dev/null) && [ "$size" -gt $((64 * 1024 * 1024)) ]; then
+  if $dry; then
+    echo "would rotate record $RECORDS"
+  elif out=$(mv -f "$RECORDS" "$RECORDS.1" 2>&1); then
+    echo "rotated record $RECORDS"
+  else
+    failure record "$RECORDS" "$out"
   fi
 fi
 

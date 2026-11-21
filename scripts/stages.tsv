@@ -7,16 +7,16 @@
 # builds only where no other row of its stage does names none (-). In save
 # and handoff the rows of one folder run in order on one ticket and the rest
 # side by side; every other stage runs its rows in order.
-# No save or handoff row takes more than one quarter: the harness self-tests
-# that need the whole machine, and go test -race, run on the pull request's run
-# on GitHub. A row takes no quarter (-) when it names no folder, runs none of
+# No row takes more than one quarter, since no check here takes the whole
+# machine: the harness self-tests that would, go test -race and the full
+# suites run on the pull request's run on GitHub. A row takes no quarter (-) when it names no folder, runs none of
 # docker, mix, elixir, cargo, go, node or npm, and took under 15 s when it was
 # classed. A handoff row is named when no path rule selects it: it runs on
 # every pull request whose paths select its job, and here only to
 # reproduce a red of that run
-# (scripts/stage.sh --reproduce). The PostgreSQL rows, Dialyzer, Locus alone
-# and the load check's self-test are named: what they catch the pull
-# request's run catches too, and no path rule picks it out beforehand.
+# (scripts/stage.sh --reproduce). The PostgreSQL rows, Dialyzer and Locus
+# alone are named: what they catch the pull request's run catches too, and
+# no path rule picks it out beforehand.
 # tests/stage-test.sh holds that, and that every self-test a handoff row runs is
 # one a pull-request workflow runs too.
 save	format	1	600	dev	always	mix format --check-formatted
@@ -58,7 +58,6 @@ handoff	stage-test	1	600	-	scripts/stage.sh,scripts/stages.tsv,scripts/lib/stage
 handoff	run-names-test	-	600	-	scripts/lib/run-names.sh,tests/run-names-test.sh	bash tests/run-names-test.sh
 handoff	image-test	-	600	-	scripts/image.sh,tests/image-stub.sh,tests/image-test.sh	bash tests/image-test.sh
 handoff	janitor-test	1	900	-	scripts/janitor.sh,scripts/image.sh,scripts/lib/run-names.sh,tests/image-stub.sh,tests/janitor-test.sh,tests/install-screen-proof/prepare.sh,tests/install-screen-proof/base-image.sh	bash tests/janitor-test.sh
-handoff	load-check-test	1	900	-	named	bash tests/load-check/run-test.sh
 handoff	release-boot-names-test	-	600	-	tests/release-boot/**	bash tests/release-boot/names-test.sh
 handoff	imagesuite-test	1	600	-	tests/imagesuite.py,tests/imagesuite_test.py	python3 -I tests/imagesuite_test.py
 handoff	registry-stand-in-test	-	600	-	tests/registry-stand-in/**	python3 -I tests/registry-stand-in/standin_test.py
@@ -98,7 +97,3 @@ nightly	janitor	1	1800	-	always	scripts/janitor.sh
 # timer's unit sets (CONTRIBUTING.md).
 nightly	install-screen-proof	1	3600	-	always	tests/install-screen-proof/prepare.sh && scripts/image.sh --undated app && tests/install-screen-proof/run.sh
 nightly	handle-proof	1	3600	-	always	tests/handle-proof/run.sh
-# The canvas proof builds its release and prepares its browser image and
-# library itself. Its 100 ms reference budget needs all four quarters.
-nightly	canvas-proof-desktop	4	3600	-	always	env CANVAS_PROOF_HOST_CLASS=reference CANVAS_PROOF_VIEWPORT=desktop PROOF_OUT="$STAGE_LOGDIR/canvas/desktop" tests/canvas-proof/run.sh
-nightly	canvas-proof-720x720	4	3600	-	always	env CANVAS_PROOF_HOST_CLASS=reference CANVAS_PROOF_VIEWPORT=720x720 PROOF_OUT="$STAGE_LOGDIR/canvas/720x720" tests/canvas-proof/run.sh

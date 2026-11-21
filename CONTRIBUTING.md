@@ -218,7 +218,7 @@ same worktree refuses, naming the run that holds it.
   and `handoff` the checks that use one build folder (`_build/dev`,
   `dev_pg`, `test` or `test_pg`, the table's folder column) run one after
   another on one queue ticket and the rest side by side, each on its own,
-  so one stage can hold all four quarters for a while; a touched test
+  so one stage can hold several quarters; a touched test
   that two test checks of one folder name runs once, in the one that names
   it. The nightly runs its checks one after another. A stage's
   summary lists every check in the table's order. The
@@ -248,8 +248,7 @@ same worktree refuses, naming the run that holds it.
     `scripts/stage.sh handoff --reproduce RUN tests-postgres,dialyzer
     [-- <test paths>]`, and the receipt records both;
   - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
-    proof, which no workflow runs, each on one quarter, then the canvas
-    proof at both viewports on all four with its reference budget. The host's
+    proof, which no workflow runs, each on one quarter. The host's
     timer runs it once a day on main's head through `scripts/nightly.sh`, which
     reports the night to GitHub (the nightly, below).
 
@@ -303,15 +302,14 @@ same worktree refuses, naming the run that holds it.
   submodule's contents are outside the snapshots. The receipt is evidence,
   not a lock: nothing refuses a push without one.
 
-  The self-tests that need the whole machine, those a workflow runs and
-  no handoff row does, and `go test ./... -race` are the pull request's
-  run's alone: a defect in one shows there. A pull request's run starts
+  The self-tests a workflow runs and no handoff row does, and `go test
+  ./... -race`, are the pull request's run's alone: a defect in one shows
+  there. A pull request's run starts
   the host and partitions harness self-test jobs only when it changes a
   path their scripts read (`scripts/ci/self-test-scope.sh` holds each
   job's paths); it shows a job it leaves out as skipped, not needed, and
-  a push to main, a release and the nightly run both. To have one's
-  answer before the pull request, run it here by name on all four
-  quarters, as its workflow step runs it:
+  a push to main, a release and the nightly run both. To reproduce a red
+  of one, run its workflow step's command here on one quarter:
   `scripts/heavy-check.sh bash tests/heavy-check-test.sh`, or
   `scripts/heavy-check.sh bash -c 'cd apps/codex && go test ./... -race'`.
 
@@ -319,9 +317,10 @@ same worktree refuses, naming the run that holds it.
   update`, `update-refused`, `update-fail` and `update-interrupt`: `cyfr
   update` between two releases made from the tree) run on main's push
   run, a release's and the nightly, never on a pull request's run; main's
-  push run is their check. To run one here, on all four quarters for the
-  shipped compose file's fixed subnets, with an app image and a Locus
-  image of the tree (`scripts/image.sh app`, `scripts/image.sh locus`):
+  push run is their check. To reproduce one here, with an app image and a
+  Locus image of the tree (`scripts/image.sh app`, `scripts/image.sh
+  locus`), one at a time on a host, since the shipped compose file's
+  subnets are fixed:
   `scripts/heavy-check.sh env COMPOSE_PROOF_IMAGE=cyfr:in-H
   COMPOSE_PROOF_SKIP_BUILD=1 tests/compose-proof/run.sh --case update
   --locus-image cyfr-locus:in-H`.
@@ -347,26 +346,24 @@ same worktree refuses, naming the run that holds it.
   each build's post hook): one built with a build tag or holding the
   update proof's code fails the release.
 - `scripts/heavy-check.sh` queues the checks of everyone sharing a host.
-  It cuts the machine's cores into four quarters of whole cores. A check
-  takes all four by default and runs alone: a full or
-  multi-partition suite, `go test -race`, a harness self-test that needs
-  the machine, the canvas proof, the compose proof. With `-q 1` it takes
-  one quarter: named test paths in one partition, a compile, dialyzer,
-  credo, a light self-test, any other browser proof or an install proof,
-  an image suite or build, a release boot. Four of those run side by
-  side, each on its own quarter's processors, which it is told as
-  `HEAVY_CHECK_CPUS` for the containers it starts. Checks start in the
-  order they queued, none past an earlier one, and
-  `scripts/heavy-check.sh --status` shows who holds which quarters and
-  who waits.
-- `tests/load-check/run.sh` measures whether each check still passes, and
-  how much slower it runs, on a quarter of the host's cores beside busy
-  neighbours or a second copy of itself. It takes the whole machine for
-  hours: `tests/load-check/run.sh -n` prints the plan and its time, `-s`,
-  `-c` and `-r` bound a run to subjects, conditions and rounds, and
-  `scripts/heavy-check.sh -t 28800 -- tests/load-check/run.sh` runs it,
-  again whenever the host, its subject table or the quarters change
-  (`tests/load-check/README.md`).
+  It cuts the machine's cores into four quarters of whole cores, and a
+  check takes one: named test paths in one partition, a compile,
+  dialyzer, credo, a self-test, a proof, an image suite or build, a
+  release boot. Four run side by side, each on its own quarter's
+  processors, which it is told as `HEAVY_CHECK_CPUS` for the containers it
+  starts. Nothing here takes the whole machine: a full or multi-partition
+  suite, `go test -race` and the harness self-tests that would are the
+  pull request's run's. A freed quarter goes to the first check to
+  arrive. `scripts/heavy-check.sh --status`
+  shows who holds which quarters and who waits, and every check that
+  queued leaves a line in `/var/tmp/cyfr/heavy-check.log` (its header
+  gives the fields).
+- Logs and scratch live on disk in `/var/tmp/cyfr`, never in the
+  memory-backed `/tmp`: the stages' logs (`cyfr-stage.*`), the partition
+  runner's run directories (`cyfr-t.*`), the proofs' evidence, and the
+  `TMPDIR` a check gets when its caller set none. Make a scratch copy of
+  a tree there too. The nightly janitor removes what has not changed for
+  a week (`scripts/janitor.sh`, its rule 5).
 - Local runs take the Locus and app images from `scripts/image.sh locus`
   and `scripts/image.sh app`, which tag each by a hash of its inputs, so
   every checkout at the same inputs shares one build.

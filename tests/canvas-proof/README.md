@@ -44,20 +44,17 @@ WebKit alike.
 ## Running it
 
 ```
-CANVAS_PROOF_VIEWPORT=desktop tests/canvas-proof/run.sh
-CANVAS_PROOF_VIEWPORT=720x720 tests/canvas-proof/run.sh
+CANVAS_PROOF_VIEWPORT=desktop CANVAS_PROOF_HOST_CLASS=github-hosted tests/canvas-proof/run.sh
+CANVAS_PROOF_VIEWPORT=720x720 CANVAS_PROOF_HOST_CLASS=github-hosted tests/canvas-proof/run.sh
 ```
 
-On a host whose checks queue through `scripts/heavy-check.sh` the proof
-takes the whole machine, since a busy neighbour breaks the measurement's
-budgets (below): `scripts/heavy-check.sh -- env CANVAS_PROOF_VIEWPORT=desktop
-tests/canvas-proof/run.sh`. On one quarter (`-q 1`) it refuses with 64
-before anything starts.
-
-The host's nightly stage runs both viewports on all four quarters, with
-the `reference` budget. Each row builds its release and prepares its pinned
-browser image and library; its records stay under the stage's log directory
-in `canvas/desktop` and `canvas/720x720`.
+Every pull request's run holds both viewports to the `github-hosted`
+budget (below). On a host whose checks queue through
+`scripts/heavy-check.sh` the proof takes one quarter, as any check does:
+`scripts/heavy-check.sh -- env CANVAS_PROOF_VIEWPORT=desktop
+CANVAS_PROOF_HOST_CLASS=github-hosted tests/canvas-proof/run.sh`. No run
+holds the `reference` budget: it needs a machine with nothing else on it,
+which neither the host nor a GitHub runner is.
 
 `desktop` is the PC (1280×900, posture `desk`); `720x720` is the phone
 (posture `hand`). Any other value fails the run before the server starts.

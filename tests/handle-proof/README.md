@@ -20,7 +20,7 @@ run and why, and exits 69, which the stage reports as not run and counts as
 not passed.
 
 ```bash
-CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -q 1 -- tests/handle-proof/run.sh
+CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -- tests/handle-proof/run.sh
 ```
 
 ## What runs
@@ -34,7 +34,7 @@ CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -q 1 -- tests/handle-pro
 The model checks run independently with
 `node --test tests/handle-proof/models-test.mjs`. The PostgreSQL tamper
 helper's checks run with
-`scripts/heavy-check.sh -q 1 -- bash tests/handle-proof/registry-test.sh`.
+`scripts/heavy-check.sh -- bash tests/handle-proof/registry-test.sh`.
 
 The directory's rows are read from `directory.entries` in the registry's
 PostgreSQL. Their canonical entries, hashes, lengths and timestamps are

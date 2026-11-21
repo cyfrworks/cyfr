@@ -510,10 +510,6 @@ jobs:
           bash tests/stage-test.sh
           bash tests/image-test.sh
           bash tests/janitor-test.sh
-      # The load check (tests/load-check/README.md) against stub subjects,
-      # on four of the runner's processors.
-      - name: The load check
-        run: bash tests/load-check/run-test.sh
 
   # The partition runner against a stand-in Mix and a toy umbrella of its
   # own, and its environment helper's unit tests: Erlang and Elixir, and
@@ -773,7 +769,7 @@ jobs:
             kept=
             if [ "${#named[@]}" -ne 1 ]; then
               echo "::warning::the runner named ${#named[@]} kept directories, not one, in $1; nothing of that run is uploaded"
-            elif ! [[ "${named[0]}" =~ ^/tmp/cyfr-t\.[A-Za-z0-9]{6}$ ]] || [ -L "${named[0]}" ] || [ ! -d "${named[0]}" ] || [ ! -O "${named[0]}" ]; then
+            elif ! [[ "${named[0]}" =~ ^/var/tmp/cyfr/cyfr-t\.[A-Za-z0-9]{6}$ ]] || [ -L "${named[0]}" ] || [ ! -d "${named[0]}" ] || [ ! -O "${named[0]}" ]; then
               echo "::warning::the runner's kept directory is not one it made: ${named[0]}; it is not uploaded"
             else
               kept=${named[0]}

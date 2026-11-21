@@ -2,8 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The host's four quarters, sourced by scripts/heavy-check.sh, which places
-# each check on them, and by tests/load-check/run.sh, which measures checks
-# on them, so both cut the same ones.
+# each check on them.
 #
 # quarters_cut ROOT reads ROOT, a sysfs processor directory such as
 # /sys/devices/system/cpu: the online processors group into whole cores,

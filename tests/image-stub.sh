@@ -17,6 +17,8 @@
 #   build-fail                        holds the status a build exits with
 #   build-sleep                       holds the seconds a build takes
 #   rm-fail                           `docker image rm` fails
+#   ps-fail                           `docker ps` fails when its arguments
+#                                     hold the file's content
 #   run-fail                          `docker run` fails, every run when it is
 #                                     empty, else each run whose arguments
 #                                     hold its content
@@ -91,6 +93,9 @@ case ${1:-} in
   ps)
     ancestor=
     all="$*"
+    if [ -s "$D/ps-fail" ]; then
+      case $all in *"$(cat "$D/ps-fail")"*) echo 'stub: the listing failed' >&2; exit 1 ;; esac
+    fi
     case $all in *ancestor=*) ancestor=${all##*ancestor=}; ancestor=${ancestor%% *} ;; esac
     for f in "$D"/containers/*; do
       [ -f "$f" ] || continue

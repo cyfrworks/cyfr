@@ -48,8 +48,8 @@
 # account_service).
 #
 # Evidence goes under DIR (default a fresh
-# /tmp/cyfr-evidence.install-screen.XXXXXX, printed, which scripts/janitor.sh
-# removes a week later, its rule 5), the guest's in clean/. The run's
+# ${TMPDIR:-/tmp}/<run prefix>cyfr-evidence.install-screen.XXXXXX, printed, which
+# scripts/janitor.sh removes a week later, its rule 5), the guest's in clean/. The run's
 # scratch directory, <run prefix>install-screen.XXXXXX under
 # ${TMPDIR:-/tmp}, holds the guest's SSH key and password and the setup
 # token: the teardown removes it, and scripts/janitor.sh's rule 1 removes
@@ -63,7 +63,7 @@
 # Every name the run gives Docker begins with PROOF_RUN_PREFIX, which
 # scripts/heavy-check.sh sets; unset, it is scripts/lib/run-names.sh's prefix
 # with this script's pid. It takes one quarter:
-#   scripts/heavy-check.sh -q 1 -t 3600 -- tests/install-screen-proof/run.sh
+#   scripts/heavy-check.sh -t 3600 -- tests/install-screen-proof/run.sh
 #
 # Needs docker with the host's /dev/kvm, ssh, ssh-keygen, git, go, python3,
 # timeout, flock, getent, and the guest's network: Ubuntu's archive,
@@ -134,7 +134,7 @@ done
 docker version --format '{{.Server.Version}}' >/dev/null 2>&1 || { echo "install proof: no Docker daemon answers" >&2; exit 69; }
 
 if [ -z "$OUT" ]; then
-  OUT=$(mktemp -d "/tmp/cyfr-evidence.install-screen.XXXXXX") || exit 1
+  OUT=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-evidence.install-screen.XXXXXX") || exit 1
 else
   mkdir -p "$OUT" || exit 1
 fi
