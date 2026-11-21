@@ -413,7 +413,11 @@ defmodule Aqua.SeatTest do
     assert {:ok, %{status: "failed", root_execution_id: nil}} = Tape.turn(ctx, turn.id)
     room_id = room.id
 
-    assert_receive %ThreadEvent{thread_id: ^room_id, kind: :consent_required, data: %{ref: @soul}},
+    assert_receive %ThreadEvent{
+                     thread_id: ^room_id,
+                     kind: :consent_required,
+                     data: %{ref: @soul}
+                   },
                    5_000
   end
 
