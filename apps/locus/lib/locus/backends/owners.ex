@@ -54,9 +54,14 @@ defmodule Locus.Backends.Owners do
   that ended, of this owner or of the one it replaced, whose launcher has
   not yet said nothing of its process is left, or a process a table no
   longer follows) is held, and holds nothing: no reservation, no uid and
-  no place among the owner's sessions. Once no process of its key may run,
-  or its owner is retired, it is opened again from the start, so it meets
-  every refusal an open meets. It is held at most the stop grace and the
+  no place among the owner's sessions. The key is asked twice: as the
+  open is admitted, so a held open never competes for the memory and uid
+  its key's last process is about to give back, and as its process is
+  about to start once its preparation ends, which finds a process that
+  began ending meanwhile, its reservation given back before it is held.
+  Once no process of its key may run, or its owner is retired, it is
+  opened again from the start, so it meets every refusal an open meets.
+  It is held at most the stop grace and the
   release bound together (`Locus.Backends.Backend.release_timeout_ms/0`),
   then refused `unavailable`, and its caller's exit withdraws it. So a
   program started again under its key, a coding harness's driver among
@@ -860,7 +865,7 @@ defmodule Locus.Backends.Owners do
   # An open from the start: its owner admitted, then its session.
   defp open(state, invoke, message, from) do
     case admit_owner(state, invoke) do
-      {:ok, owner, state} -> open_session(state, owner, message, from)
+      {:ok, owner, state} -> open_session(state, owner, invoke, message, from)
       {:error, code, state} -> {:reply, {:error, code}, state}
     end
   end
@@ -926,14 +931,14 @@ defmodule Locus.Backends.Owners do
     end)
   end
 
-  defp open_session(state, owner, message, from) do
+  defp open_session(state, owner, invoke, message, from) do
     case Enum.find(owner.definition, &(&1.name == message.program)) do
       nil -> {:reply, {:error, :unknown_program}, state}
-      program -> open_program(state, owner, program, message, from)
+      program -> open_program(state, owner, program, invoke, message, from)
     end
   end
 
-  defp open_program(state, owner, program, message, from) do
+  defp open_program(state, owner, program, invoke, message, from) do
     ask = %{
       owner: owner.id,
       session: "ss_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower),
@@ -944,7 +949,10 @@ defmodule Locus.Backends.Owners do
       mode: message.mode,
       argv: message.argv,
       size: if(message.mode == :terminal, do: %{rows: message.rows, cols: message.cols}),
-      memory_bytes: program.memory_bytes || state.memory_bytes
+      memory_bytes: program.memory_bytes || state.memory_bytes,
+      # What it is opened again from, should it be held once prepared.
+      invoke: invoke,
+      message: message
     }
 
     with :ok <- shape(program, message),
@@ -1098,18 +1106,26 @@ defmodule Locus.Backends.Owners do
   end
 
   # The open's work done: the session started, or the refusal, with which
-  # nothing was asked of the launcher and the reservation is released.
+  # nothing was asked of the launcher and the reservation is released. Its
+  # key is asked again as its process is about to start: a process of the
+  # key that began ending while it was prepared holds it as one found at
+  # admission does, its reservation given back first.
   defp opened(state, from, ask, result) do
     with {:ok, owner} <- still_open(state, ask),
          program = Enum.find(owner.definition, &(&1.name == ask.program)),
          :ok <- claimed(state, program, ask, result) do
-      case running(owner, ask.key) do
+      with :error <- running(owner, ask.key),
+           :ok <- gone_before(state, owner, ask.key) do
+        start_session(state, owner, program, ask, from)
+      else
         {:ok, session_id} ->
           GenServer.reply(from, {:ok, opened_answer(session_id, true)})
           reservation(state, {ask.owner, ask.session}, :abandoned)
 
-        :error ->
-          start_session(state, owner, program, ask, from)
+        :behind ->
+          state
+          |> reservation({ask.owner, ask.session}, :abandoned)
+          |> hold(ask.invoke, ask.message, from)
       end
     else
       {:error, code, state} ->

@@ -107,8 +107,19 @@ defmodule Locus.Backends.OwnersTest do
     # direct launcher.
     def pool_stats(agent, "backends") do
       case Agent.get(agent, & &1.pool) do
-        :hang -> Process.sleep(:infinity)
-        answer -> answer
+        :hang ->
+          Process.sleep(:infinity)
+
+        # Each read told to the test and answered when it says so.
+        {:held, test, answer} ->
+          send(test, {:pool_read, self()})
+
+          receive do
+            :answer -> answer
+          end
+
+        answer ->
+          answer
       end
     end
 
@@ -1723,6 +1734,103 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{session: next, resumed: false}} = open(owners, "a", {1, 1}, "writer")
       assert next != first
       assert File.read!(late) == "late\n"
+    end
+
+    # Two opens of one key prepared at once: the first starts its process,
+    # which is closed, and the second ends its preparation while that
+    # process still runs.
+    defp prepared_pair(ctx, owners) do
+      set_pool(ctx, {:held, self(), pool(4)})
+      first = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      assert_receive {:pool_read, first_read}, 2_000
+      second = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      assert_receive {:pool_read, second_read}, 2_000
+      send(first_read, :answer)
+      assert {:ok, %{session: id, resumed: false}} = Task.await(first)
+      {id, second, second_read}
+    end
+
+    defp ended?(owners, id),
+      do: Enum.any?(held(owners), fn {_id, o} -> match?(%{running: false}, o.sessions[id]) end)
+
+    test "an open prepared while its key's process began ending waits for that process too",
+         ctx do
+      owners = start_owners(ctx, pool_timeout_ms: 10_000)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      {id, second, second_read} = prepared_pair(ctx, owners)
+      {backend, handle} = hold_release(owners, "a", {1, 1}, id)
+      :ok = Backend.close(backend)
+      wait_until(fn -> ended?(owners, id) end, 2_000)
+
+      # Prepared, it is held, its reservation given back: only the ending
+      # process holds a bound.
+      send(second_read, :answer)
+      wait_until(fn -> holding(owners) == 1 end, 2_000)
+      assert held_bytes(owners) == 256 * @mib
+      assert sessions_of(owners, "a") == [id]
+      assert File.exists?("/proc/#{handle.pid}")
+
+      # Woken, it is opened again from the start, its pool read again.
+      set_pool(ctx, pool(4))
+      :sys.resume(handle.server)
+      assert {:ok, %{session: next, resumed: false}} = Task.await(second, 10_000)
+      assert next != id
+      refute File.exists?("/proc/#{handle.pid}")
+    end
+
+    test "an open prepared while its key's session is closed and released starts once, as before",
+         ctx do
+      owners = start_owners(ctx, pool_timeout_ms: 10_000)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      {id, second, second_read} = prepared_pair(ctx, owners)
+      :ok = Backend.close(session_pid(owners, "a", {1, 1}, id))
+      wait_until(fn -> held_bytes(owners) == 256 * @mib end, 10_000)
+
+      send(second_read, :answer)
+      assert {:ok, %{session: next, resumed: false}} = Task.await(second, 10_000)
+      assert next != id
+      assert holding(owners) == 0
+      assert %{programs: [%{sessions: 1}]} = status(owners, "a")
+    end
+
+    test "two opens held for one key and woken by the same release start one process", ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
+      {backend, handle} = hold_release(owners, "a", {1, 1}, id)
+      :ok = Backend.close(backend)
+
+      tasks = for _ <- 1..2, do: Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      wait_until(fn -> holding(owners) == 2 end, 5_000)
+
+      :sys.resume(handle.server)
+      answers = Enum.map(tasks, &Task.await(&1, 10_000))
+
+      assert [{:ok, %{session: next, resumed: false}}, {:ok, %{session: next, resumed: true}}] =
+               Enum.sort_by(answers, fn {:ok, answer} -> answer.resumed end)
+
+      assert next != id
+      assert sessions_of(owners, "a") |> Enum.sort() == Enum.sort([id, next])
+      assert %{programs: [%{sessions: 1}]} = status(owners, "a")
+    end
+
+    test "at its athanor's ceiling, an open of a key whose last process is ending is held, not refused",
+         ctx do
+      owners = start_owners(ctx)
+
+      assert {:ok, _} =
+               sync(owners, "a", {1, 1}, idle_programs(1), athanor_memory_bytes: 256 * @mib)
+
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
+      {backend, handle} = hold_release(owners, "a", {1, 1}, id)
+      :ok = Backend.close(backend)
+
+      task = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      wait_until(fn -> holding(owners) == 1 end, 5_000)
+
+      :sys.resume(handle.server)
+      assert {:ok, %{session: next, resumed: false}} = Task.await(task, 10_000)
+      assert next != id
     end
 
     test "a key whose last process outlives its release bound starts nothing until the launcher says it is gone",
