@@ -110,10 +110,9 @@ defmodule Sanctum.Consent.Bootstrap do
 
   The crew's one grant, Aqua's agent source (`agent:local.aqua`, read
   through the component-facts port), is a source here too, minted after
-  the components it runs on: its closure holds every brain the athanor
-  can connect, each edge selecting that brain's `default` profile as
-  above, so a key bound there is what every crew member runs that brain
-  with. A crew member is no source. A source is minted only while it is
+  the components it runs on: its closure holds the hands its tools name
+  and no brain, since a turn's model call runs under the brain's own
+  grant. A crew member is no source. A source is minted only while it is
   vouched for — the seed's own bytes, or a head that already names it
   unchanged. A person-made component, and an edited shipped copy,
   consent through the walk.

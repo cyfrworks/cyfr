@@ -4,9 +4,9 @@
 defmodule Compendium.AgentSourceTest do
   @moduledoc """
   The crew's one grant is a consent source: Aqua's row, projected from
-  its file and the athanor's brains, with its tools as caps and its hands
-  and every brain the athanor can connect as dependencies, never a crew
-  member or a member's brain, model or mode; a crew member is no source;
+  its file, with its tools as caps and its hands as dependencies, never a
+  brain, a crew member or a member's brain, model or mode, since a turn's
+  model call runs under the brain's own grant; a crew member is no source;
   the same lookups that serve component nodes serve it, its activation
   walks the closure, and only what the crew may use moves its digests.
   """
@@ -130,7 +130,7 @@ defmodule Compendium.AgentSourceTest do
     assert {:ok, member.capability_digest} == AquaAgent.capability_digest(member.agent)
   end
 
-  test "the grant names Aqua's tools, its hands and every brain, never a member's model", %{
+  test "the grant names Aqua's tools and its hands, never a brain or a member's model", %{
     ctx: ctx
   } do
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
@@ -145,16 +145,18 @@ defmodule Compendium.AgentSourceTest do
     refute Map.has_key?(manifest, "agent")
     refute Map.has_key?(manifest, "model")
 
-    # Every installed catalyst that speaks the model contract is a brain
-    # of the grant, the one Aqua's member runs on and the explorer's alike;
-    # the hands beside them; and no crew member.
-    assert {:ok, ["catalyst:local.claude", "catalyst:local.gemini"]} = AgentSource.brains(ctx)
-
+    # The hands its tools name, and no brain, the one Aqua's member runs
+    # on and the explorer's alike, and no crew member: a turn's model call
+    # runs under the brain's own grant.
     assert Enum.map(manifest["dependencies"]["static"], & &1["ref"]) ==
-             ~w(catalyst:local.claude catalyst:local.files catalyst:local.gemini catalyst:local.http)
+             ~w(catalyst:local.files catalyst:local.http)
+
+    # A brain installed, one CYFR does not ship, moves nothing of it.
+    Arca.Test.UnitFixtures.chat_catalyst!(ctx, "made")
+    assert {:ok, ^soul} = AgentSource.latest_row(ctx, "aqua")
   end
 
-  test "the grant's activation walks every brain and the hands, and no crew member", %{
+  test "the grant's activation walks the hands, and no brain or crew member", %{
     ctx: ctx
   } do
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
@@ -163,7 +165,7 @@ defmodule Compendium.AgentSourceTest do
     keys = Map.keys(live.graph) |> Enum.sort()
     assert @soul in keys
     assert Enum.filter(keys, &String.starts_with?(&1, "agent:")) == [@soul]
-    assert "catalyst:local.claude" in keys and "catalyst:local.gemini" in keys
+    refute "catalyst:local.claude" in keys or "catalyst:local.gemini" in keys
     assert "catalyst:local.files" in keys and "catalyst:local.http" in keys
     assert Enum.all?(live.nodes, fn {_key, node} -> node.integrity == :ok end)
 

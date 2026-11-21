@@ -361,10 +361,10 @@ defmodule Aqua.SeatTest do
     refute system =~ "for that one act: nothing but this instruction stops you"
   end
 
-  # A brain picked for the member Aqua runs on asks nothing: the crew's one
-  # grant names every brain the athanor can connect, so Aqua's turn and a
-  # job of the member's own run on the new brain at once, each with that
-  # brain's own key, under the one grant.
+  # A brain picked for the member Aqua runs on asks nothing: Aqua's grant
+  # names no brain, so Aqua's turn and a job of the member's own run on the
+  # new brain at once, each model call under that brain's own grant and
+  # key.
   test "the member Aqua runs on, its brain moved, runs Aqua's turn and a job of its own on the " <>
          "new brain at once, with that brain's key",
        %{ctx: ctx, room: room, holder: holder} do
@@ -386,7 +386,7 @@ defmodule Aqua.SeatTest do
       assert [%{input: %{"params" => %{"model" => "gemini-pro-latest"}}, authority: authority}] =
                chats(ctx, name)
 
-      assert authority.chain == [@soul, @gemini]
+      assert authority.chain == [@gemini, @gemini]
       assert authority.resources.vault.entry_id == key.id
     end
 
@@ -656,9 +656,11 @@ defmodule Aqua.SeatTest do
       :ok = Aqua.Runner.subscribe(child.id, ctx.athanor_id)
       {:ok, %{turn_id: job}} = Aqua.Runner.send_message(ctx, child.id, "tidy the notes")
       pids = running!(child)
-      assert {:ok, %{agent: ^holder, consent_id: claimed}} = Tape.turn(ctx, job)
 
-      consent!(ctx, @soul, [%{dep: @model, label: "default"}])
+      assert {:ok, %{agent: ^holder, consent_id: claimed, brain_consent_id: brain}} =
+               Tape.turn(ctx, job)
+
+      consent!(ctx, @soul, [])
       assert {:ok, %{consent_id: newer}} = Opus.authority_for(ctx, :default, @soul)
       refute newer == claimed
 
@@ -666,7 +668,37 @@ defmodule Aqua.SeatTest do
       send(dead, :continue)
       assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, job)
       assert answers(ctx, child, job) == []
-      assert [%{authority: %{consent_id: ^claimed}}] = chats(ctx, holder)
+      assert [%{authority: %{consent_id: ^brain}}] = chats(ctx, holder)
+    end
+
+    # A member's turn keeps the brain's own grant it pinned at its start,
+    # beside Aqua's: the brain's key bound again while the job is open, a
+    # rebuilt loop finds that grant moved and is refused, and nothing runs
+    # under the newer one.
+    test "a member's job open while its brain's own grant is given again is refused once " <>
+           "taken over, never run under the newer grant",
+         %{ctx: ctx, room: room, holder: holder} do
+      script!([{:probe, self()}])
+      {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
+      :ok = Aqua.Runner.subscribe(child.id, ctx.athanor_id)
+      {:ok, %{turn_id: job}} = Aqua.Runner.send_message(ctx, child.id, "tidy the notes")
+      pids = running!(child)
+
+      assert {:ok, %{agent: ^holder, brain_profile_id: brain, brain_consent_id: pinned}} =
+               Tape.turn(ctx, job)
+
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-newer"})
+
+      assert {:ok, %{profile_id: ^brain, consent_id: newer}} =
+               Opus.authority_for(ctx, :default, @model)
+
+      refute newer == pinned
+
+      dead = take_over!(pids)
+      send(dead, :continue)
+      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, job)
+      assert answers(ctx, child, job) == []
+      assert [%{authority: %{profile_id: ^brain, consent_id: ^pinned}}] = chats(ctx, holder)
     end
   end
 

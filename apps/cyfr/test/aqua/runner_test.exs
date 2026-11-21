@@ -136,9 +136,9 @@ defmodule Aqua.RunnerTest do
   end
 
   # A crew member the athanor made, on the scripted model: it is offered
-  # the soul's tools and holds no consent of its own, running under the
-  # crew's one grant, whose edge into the model selects the key bound on
-  # the model's default profile. Making it asks nothing.
+  # the soul's tools and holds no consent of its own: its model calls run
+  # under the model's own grant, whose default profile binds the key.
+  # Making it asks nothing.
   defp member!(ctx, name) do
     :ok =
       Arca.put(
@@ -818,10 +818,9 @@ defmodule Aqua.RunnerTest do
     assert ScriptedWorker.calls() == ran
   end
 
-  # The crew's grant names its brains as the component index holds them: an
-  # index that cannot catch up refuses the turn's claim as it refuses any
-  # root's, and the failed turn says so in the index's own sentence, never
-  # its atom.
+  # A turn's brain grant is read as the component index holds it: an index
+  # that cannot catch up refuses the turn before its brain is asked, and
+  # the failed turn says so in the refusal's own sentence, never its atom.
   test "a turn refused while the component index catches up is told to retry in its sentence",
        %{ctx: ctx, thread: thread} do
     script!([reply("Aqua ran.")])
@@ -847,14 +846,11 @@ defmodule Aqua.RunnerTest do
       )
 
     turn = accept.("go")
-    assert {:failed, :projection_unavailable} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
-
-    assert {:ok,
-            %{
-              status: "failed",
-              root_execution_id: nil,
-              error: "The component index is catching up with its files — retry shortly"
-            }} = Tape.turn(ctx, turn.id)
+    refusal = {:unavailable, "The component graph"}
+    assert {:failed, ^refusal} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+    sentence = Aqua.Ops.render_refusal(refusal)
+    assert sentence =~ "retry"
+    assert {:ok, %{status: "failed", error: ^sentence}} = Tape.turn(ctx, turn.id)
 
     assert ScriptedWorker.calls() == ran
   end
@@ -893,8 +889,11 @@ defmodule Aqua.RunnerTest do
     assert %{authority: authority} =
              Enum.find(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
-    assert authority.chain == ["agent:local.aqua", @model]
-    assert authority.profile_id == grant.id
+    # Its model call runs under the brain's own grant, pinned on the turn.
+    {:ok, brain} = Opus.authority_for(ctx, :default, @model)
+    assert {turn.brain_profile_id, turn.brain_consent_id} == {brain.profile_id, brain.consent_id}
+    assert authority.chain == [@model, @model]
+    assert authority.profile_id == brain.profile_id
     assert authority.resources.vault.entry_id == entry.id
   end
 

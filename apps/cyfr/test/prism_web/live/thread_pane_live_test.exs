@@ -2213,7 +2213,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
 
     test "a damaged second profile row of the model's catalyst reads damaged",
-         %{conn: conn, athanor: athanor, ctx: ctx, soul: soul} do
+         %{conn: conn, athanor: athanor, ctx: ctx} do
       :ok =
         Sanctum.Test.ConsentFixtures.seed_profile!(ctx, %{
           id: "prof_claude_twin",
@@ -2231,8 +2231,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           set: [kind: "sideways"]
         )
 
-      assert {:error, {:lender_corrupt, "catalyst:local.claude", "prof_claude_twin"}} =
-               Opus.authority_for(ctx, :default, soul)
+      # The model's own grant, the one its calls run under, cannot be
+      # chosen past the damaged row.
+      assert {:error, refused} = Opus.authority_for(ctx, :default, "catalyst:local.claude")
+      assert {:error, :corrupt} = Aqua.ConsentStatus.classify_refusal(refused)
 
       model_consent_reads!(conn, athanor, @damaged)
     end

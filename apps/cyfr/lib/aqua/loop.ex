@@ -92,11 +92,11 @@ defmodule Aqua.Loop do
   # beside the retry's (`Aqua.Loop.Stream`).
   @recoverable ~w(rate_limited overloaded incomplete_stream)
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
-  # A refusal for want of a key bound to the brain asks the person for its
-  # consent; a key the provider refused (`authentication`) is the
-  # provider's to say, as a line in the thread, since the grant would bind
-  # the same key again.
-  @setup ~w(secret_denied)
+  # A refusal for want of a key bound to the brain is the brain's own
+  # state, a key to enter (`Aqua.Loop.Turn.key_refusals/0`); a key the
+  # provider refused (`authentication`) is the provider's to say, as a
+  # line in the thread, since entering the same key again changes nothing.
+  @setup Turn.key_refusals()
   @refused_key "authentication"
   # A note flush offers this action alone, and keeps a note this large at most.
   @flush_tool "notes"
@@ -232,26 +232,13 @@ defmodule Aqua.Loop do
 
   # The root is held but the turn never ran: ended with the actor's own
   # context, since no spec was built to carry it, and the root closed by
-  # the release when the turn never came to carry it. A model its catalyst
-  # could not describe for want of a key asks the person for the
-  # catalyst's consent.
+  # the release when the turn never came to carry it. A brain not set up
+  # is said as the brain's own state (`Aqua.Loop.Turn`), a line that
+  # points at the Aqua page.
   defp never_ran(ctx, claim, turn, reason) do
-    case needs_setup(reason) do
-      nil ->
-        say_unrun(ctx, turn, reason)
-        end_unrun(ctx, claim, turn, describe(reason))
-        {:failed, reason}
-
-      catalyst ->
-        end_unrun(ctx, claim, turn, "setup_required")
-
-        Tape.announce(ctx, turn.thread_id, :consent_required, %{
-          ref: catalyst,
-          user_id: ctx.user_id
-        })
-
-        {:failed, :setup_required}
-    end
+    say_unrun(ctx, turn, reason)
+    end_unrun(ctx, claim, turn, describe(reason))
+    {:failed, reason}
   end
 
   # A turn that never ran says why in the thread where the person can act
@@ -307,13 +294,6 @@ defmodule Aqua.Loop do
     _ = Tape.finish(ctx, turn, "failed", %{error: error})
     Opus.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
   end
-
-  defp needs_setup({:setup_required, catalyst}), do: catalyst
-
-  defp needs_setup({:model_refused, catalyst, %{"type" => type}}) when type in @setup,
-    do: catalyst
-
-  defp needs_setup(_reason), do: nil
 
   defp setup_required(ctx, turn) do
     _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
@@ -599,9 +579,11 @@ defmodule Aqua.Loop do
   end
 
   # The brain the turn runs on, pinned once: its program row, or its
-  # catalyst release.
+  # catalyst release with the brain's own grant its model calls run under.
   defp pin_brain(ctx, turn, %Turn{program: %{row: row}}), do: Tape.pin_program(ctx, turn, row)
-  defp pin_brain(ctx, turn, %Turn{catalyst: catalyst}), do: Tape.pin_catalyst(ctx, turn, catalyst)
+
+  defp pin_brain(ctx, turn, %Turn{catalyst: catalyst, brain_authority: authority}),
+    do: Tape.pin_catalyst(ctx, turn, catalyst, authority)
 
   # A schedule's turn admits its root as that schedule's fire, which starts
   # its occurrence (`Opus.TurnRoot`).
@@ -1099,6 +1081,16 @@ defmodule Aqua.Loop do
   defp earlier_turns(%State{turn: turn}, rows),
     do: rows |> Tape.writing_turns() |> Enum.reject(&(&1 == turn.id))
 
+  # A brain whose grant holds no key to use is said as the brain's own
+  # state, a line pointing at the Aqua page (`Aqua.Crew.unready/1`'s
+  # `:no_key`), where its row in Aqua's setup takes the key.
+  defp no_key(%State{} = state, step, error) do
+    _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error})
+    unready = {:crew_unready, Turn.brain_title(state.spec.agent), :no_key}
+    _ = system_row(state, Prima.Refusal.message(unready))
+    {:halt, {:failed, unready}, state}
+  end
+
   defp ask_model(%State{} = state, step, request, retained, retries) do
     case model_call(state, step, request, retained, true) do
       {:ok, data} ->
@@ -1123,15 +1115,13 @@ defmodule Aqua.Loop do
           {:error, reason} -> {:halt, {:failed, reason}, state}
         end
 
+      # The brain's grant stands but holds no key to use, as the catalyst
+      # says or as its admission refuses it: the brain's own state.
       {:error, %{"type" => type} = error} when type in @setup ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error["message"]})
+        no_key(state, step, error["message"])
 
-        announce(state, :consent_required, %{
-          ref: state.spec.catalyst,
-          user_id: ctx(state).user_id
-        })
-
-        {:halt, {:failed, :setup_required}, state}
+      {:error, {:setup_required, _detail}} ->
+        no_key(state, step, "setup_required")
 
       {:error, %{"type" => @refused_key} = error} ->
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error["message"]})
@@ -1155,7 +1145,8 @@ defmodule Aqua.Loop do
     end
   end
 
-  # The catalyst runs as a child of the root, in a worker: the answer is
+  # The catalyst runs as a child of the root, in a worker, under the
+  # brain's own grant the turn pinned (`Aqua.Loop.Turn`): the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
   # worker's death. The worker is waited for until the run ends, as every
   # worker of the loop is (`worker/1`). A chat step's text streams to the
@@ -1177,7 +1168,7 @@ defmodule Aqua.Loop do
     stream = streamed && Aqua.Loop.Stream.open(guest, step.child_execution_id, streamed)
 
     run = fn ->
-      Opus.run_child(spec.authority, spec.catalyst, nil, input,
+      Opus.run_child(spec.brain_authority, spec.catalyst, nil, input,
         ctx: guest,
         execution_id: step.child_execution_id,
         step_id: step.id,

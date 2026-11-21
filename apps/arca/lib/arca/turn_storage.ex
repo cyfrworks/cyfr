@@ -1947,27 +1947,44 @@ defmodule Arca.TurnStorage do
   def start(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  Pin the exact catalyst release the turn runs on, under `:fence`. A turn
-  pins once: pinning the release already pinned answers the turn, and a
-  different one is `{:error, :catalyst_pinned}`; a turn that is over pins
-  nothing (`{:error, :not_open}`).
+  Pin the exact catalyst release the turn runs on, with the brain's own
+  grant its model calls run under (`brain`: `%{profile_id, consent_id}`),
+  under `:fence`, in one write. A turn pins once: pinning what is already
+  pinned answers the turn, and a different release or grant is
+  `{:error, :catalyst_pinned}`; a turn that is over pins nothing
+  (`{:error, :not_open}`).
   """
-  @spec pin_catalyst(Prima.Actor.t(), String.t(), String.t(), map()) ::
+  @spec pin_catalyst(Prima.Actor.t(), String.t(), {String.t(), map()}, map()) ::
           {:ok, map()} | {:error, term()}
-  def pin_catalyst(%Prima.Actor{athanor_id: athanor_id}, turn_id, catalyst_ref, attrs)
+  def pin_catalyst(
+        %Prima.Actor{athanor_id: athanor_id},
+        turn_id,
+        {catalyst_ref, %{profile_id: profile_id, consent_id: consent_id}},
+        attrs
+      )
       when is_binary(athanor_id) and athanor_id != "" and is_binary(catalyst_ref) and
-             is_map(attrs) do
+             is_binary(profile_id) and is_binary(consent_id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pin_catalyst", fn ->
       Arca.Repo.locking_transaction(fn ->
         case open!(own!(athanor_id, turn_id, attrs)) do
           %Turn{catalyst_ref: nil} ->
             {1, _} =
               from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
-              |> Arca.Repo.update_all(set: [catalyst_ref: catalyst_ref])
+              |> Arca.Repo.update_all(
+                set: [
+                  catalyst_ref: catalyst_ref,
+                  brain_profile_id: profile_id,
+                  brain_consent_id: consent_id
+                ]
+              )
 
             turn!(athanor_id, turn_id)
 
-          %Turn{catalyst_ref: ^catalyst_ref} = turn ->
+          %Turn{
+            catalyst_ref: ^catalyst_ref,
+            brain_profile_id: ^profile_id,
+            brain_consent_id: ^consent_id
+          } = turn ->
             turn
 
           %Turn{} ->

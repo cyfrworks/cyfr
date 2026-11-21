@@ -238,6 +238,8 @@ defmodule Aqua.Providers.WorkspaceTest do
     Arca.ConsumerReceipts.outcome(actor(ctx), "crew_delivery", Prima.OutboxRecord.source(record))
   end
 
+  # The model calls whose grant chain starts at `chain_head`: a turn's
+  # calls run under its brain's own grant.
   defp chats(chain_head) do
     Enum.filter(
       ScriptedWorker.calls(),
@@ -365,7 +367,7 @@ defmodule Aqua.Providers.WorkspaceTest do
 
       # Its first turn reads its envelope: the ask, attributed to the person.
       first =
-        Enum.find(chats("agent:local.aqua"), &(sent(&1) =~ "asked, in this workspace thread"))
+        Enum.find(chats(@model), &(sent(&1) =~ "asked, in this workspace thread"))
 
       assert sent(first) =~ ~s(asked, in this workspace thread \\"Moon report\\")
       assert sent(first) =~ "write the moon report"
@@ -379,7 +381,7 @@ defmodule Aqua.Providers.WorkspaceTest do
 
       assert first.input["params"]["system"] =~ "> write the moon report"
 
-      daily_call = Enum.find(chats("agent:local.aqua"), &(sent(&1) =~ "make me a moon report"))
+      daily_call = Enum.find(chats(@model), &(sent(&1) =~ "make me a moon report"))
       assert daily_call.input["params"]["system"] =~ "## Where you are"
       assert daily_call.input["params"]["system"] =~ "on the person's daily thread"
       refute daily_call.input["params"]["system"] =~ "working the workspace thread"
@@ -784,7 +786,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert %{"outcome" => "done", "from_turn" => ^turn_id} = Tape.payload(report)
 
       await_status(ctx, daily_turn, "completed")
-      assert [read | _] = chats("agent:local.aqua") |> Enum.filter(&(sent(&1) =~ "Report from"))
+      assert [read | _] = chats(@model) |> Enum.filter(&(sent(&1) =~ "Report from"))
       assert sent(read) =~ ~s(Report from the workspace thread \\"Moon report\\")
       assert sent(read) =~ "The moon report is written."
 

@@ -40,8 +40,9 @@ defmodule PrismWeb.ConnCase do
   Make `athanor_id` an athanor a turn can run in: the shipped tree and the
   catalysts the soul runs on, laid in a seed of the test's own
   (`Cyfr.Test.SeedBundle.lay!/2`), copied in, indexed, the baseline
-  consent the soul pins minted — as a fill leaves it — and a key connected
-  to the Claude catalyst, which its runs unseal when they attach.
+  consents a turn pins minted, the soul's and its brain's, as a fill leaves
+  them, and a key connected to the Claude catalyst, which its runs unseal
+  when they attach.
   `user_id` is the athanor's person, whom the bootstrap runs as. The
   context it answers is that person in Prism, so its origin is
   `interactive`, as a turn sent from the console is.

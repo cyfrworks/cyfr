@@ -283,11 +283,7 @@ defmodule Aqua.CrewTest do
     assert %{outcome: "ok"} = Enum.find(steps, &(&1.tool == "crew" and &1.action == "list"))
 
     # The tool's answer, as the soul's next model round carries it.
-    [_ask, answered] =
-      Enum.filter(
-        ScriptedWorker.calls(),
-        &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == "agent:local.aqua")
-      )
+    [_ask, answered] = member_chats(ctx, "aqua")
 
     # The result rides the messages as JSON text inside the request's own.
     sent = Jason.encode!(answered.input["params"]["messages"])
@@ -530,22 +526,24 @@ defmodule Aqua.CrewTest do
     elem(Tape.turn(ctx, turn_id), 1)
   end
 
-  # The crew's one grant: every member's job runs under it, each brain's
-  # edge carrying that brain's own key, so two members on two brains share
-  # the grant and nothing of each other's credential. A member made on a
-  # connected brain takes a job at once: nothing is asked and nothing is
-  # granted for it.
-  test "two members on different brains run under the one grant, each with its own brain's key",
+  # The crew's one grant names no brain: every member's job claims under
+  # Aqua's grant, and its model call runs under its brain's own grant, the
+  # profile the person (or, for a shipped brain, provisioning) gave that
+  # brain, so two members on two brains share Aqua's grant and nothing of
+  # each other's brain: neither its grant, its key nor its destination. A
+  # member made on a connected brain takes a job at once: nothing is asked
+  # and nothing is granted.
+  test "two members on different brains run under the one grant, each call under its own " <>
+         "brain's grant, key and destination alone",
        %{ctx: ctx, room: room} do
     {:ok, [grant]} = Arca.ConsentStorage.profiles(actor(ctx), "agent:local.aqua")
     {:ok, head, _refs} = Arca.ConsentStorage.get_head(actor(ctx), grant.id)
-    {:ok, claude} = Opus.authority_for(ctx, :default, "agent:local.aqua")
-
-    {:ok, claude_edge} =
-      Prima.Authority.Blob.lookup_edge(claude.policy, "agent:local.aqua", @model, "")
+    {:ok, claude} = Opus.authority_for(ctx, :default, @model)
 
     gemini =
       Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
+
+    {:ok, gemini_grant} = Opus.authority_for(ctx, :default, @gemini)
 
     :ok =
       Arca.put(
@@ -568,20 +566,24 @@ defmodule Aqua.CrewTest do
     planned = job!(ctx, room, "planner", "plan it")
     found = job!(ctx, room, "scout", "find it")
 
-    for {turn, member, brain, entry} <- [
-          {planned, "planner", @model, claude_edge.vault.entry_id},
-          {found, "scout", @gemini, gemini.id}
+    for {turn, member, brain, own, host} <- [
+          {planned, "planner", @model, claude, "api.anthropic.com"},
+          {found, "scout", @gemini, gemini_grant, "generativelanguage.googleapis.com"}
         ] do
       assert %{agent: ^member} = turn
       assert turn.profile_id == grant.id
+      assert {turn.brain_profile_id, turn.brain_consent_id} == {own.profile_id, own.consent_id}
 
       assert [%{authority: authority}] = member_chats(ctx, member)
-      assert authority.chain == ["agent:local.aqua", brain]
-      assert authority.profile_id == grant.id
-      assert authority.resources.vault.entry_id == entry
+      assert authority.chain == [brain, brain]
+      assert {authority.profile_id, authority.consent_id} == {own.profile_id, own.consent_id}
+      assert Map.keys(authority.policy.nodes) == [brain]
+      assert authority.resources.vault.entry_id == own.resources.vault.entry_id
+      assert authority.resources.egress.domains == [host]
     end
 
-    refute claude_edge.vault.entry_id == gemini.id
+    refute claude.resources.vault.entry_id == gemini.id
+    assert gemini_grant.resources.vault.entry_id == gemini.id
     assert planned.consent_id == found.consent_id
 
     # Nothing was granted for either member: the head is the fill's.
@@ -589,138 +591,258 @@ defmodule Aqua.CrewTest do
     assert still.revision == head.revision
   end
 
-  # A member's brain reads what its own plan requires of Aqua's grant. A
-  # brain that requires no key asks nothing of the grant but its edge, so
-  # the member on it is ready. A grant the person gave before a brain had
-  # its key leaves that key out of it: while the key is missing the member
-  # on that brain is told to connect it, and once the brain holds its key
-  # it is not told to connect a brain that is connected, but to grant Aqua
-  # again.
-  test "a member's brain reads ready, a key to connect or Aqua's grant to give again, " <>
-         "by what the brain's own plan requires",
+  # A member's brain reads on its own setup alone: a key to connect, then
+  # ready the moment it is connected, with nothing asked of Aqua.
+  test "a member's brain reads a key to connect or ready by its own setup alone, and " <>
+         "connecting it asks nothing of Aqua",
        %{ctx: ctx, room: room} do
-    soul = "agent:local.aqua"
-    open = "catalyst:local.open"
-    Arca.Test.UnitFixtures.chat_catalyst!(ctx, "open")
-    walk!(ctx, %{ref: open})
-    walk!(ctx, %{ref: soul, selections: [%{dep: @model, label: "default"}]})
-
-    {:ok, authority} = Opus.authority_for(ctx, :default, soul)
-    {:ok, edge} = Prima.Authority.Blob.lookup_edge(authority.policy, soul, open, "")
-    refute Prima.Authority.Blob.bound_vault?(edge.vault)
-
-    for {name, brain, model} <- [{"scout", @gemini, "gemini-pro-latest"}, {"drafter", open, "m"}] do
-      :ok =
-        Arca.put(
-          actor(ctx),
-          Compendium.AquaPath.crew_file(name),
-          "---\ntitle: #{name}\ndescription: Searches.\navoid: Building.\n" <>
-            "catalyst_ref: #{brain}\nmodel: #{model}\n---\n"
-        )
-    end
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("scout"),
+        "---\ntitle: scout\ndescription: Searches.\navoid: Building.\n" <>
+          "catalyst_ref: #{@gemini}\nmodel: gemini-pro-latest\n---\n"
+      )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, roster} = Aqua.AgentConfig.roster(ctx)
-    status = Aqua.Models.model_status(ctx, roster)
-    assert {:needs_key, _resolved} = status["scout"]
-    assert {:ready, _resolved} = status["drafter"]
+    {:ok, %{consent_id: aqua}} = Opus.authority_for(ctx, :default, "agent:local.aqua")
+    assert {:needs_key, _resolved} = Aqua.Models.model_status(ctx, roster)["scout"]
+
+    assert {:error, {:crew_unready, "scout", :no_key}} =
+             Runner.send_message(ctx, room.id, "@scout look into this")
 
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
 
     status = Aqua.Models.model_status(ctx, roster)
-    assert {:consent_stale, _resolved} = status["scout"]
-    assert {:ready, _resolved} = status["drafter"]
+    assert {:ready, _resolved} = status["scout"]
     assert {:ready, _resolved} = status["planner"]
-
-    assert {:error, {:crew_unready, "scout", :consent_stale} = refusal} =
-             Runner.send_message(ctx, room.id, "@scout look into this")
-
-    assert Aqua.Ops.render_refusal(refusal) ==
-             "What Aqua and its crew members may use changed since you granted it — " <>
-               "grant it again on the Aqua page"
+    assert {:ok, %{consent_id: ^aqua}} = Opus.authority_for(ctx, :default, "agent:local.aqua")
   end
 
-  # A brain whose own plan requires no key, whose key Aqua's grant selected:
-  # the brain's key bound again with other destination restrictions leaves
-  # that selection unresolved, which a turn's setup refuses. The member on
-  # it reads Aqua's grant to give again, never ready, until the person
-  # grants Aqua again, and then takes a job with the key bound since.
-  test "a member whose brain's selected key Aqua's grant no longer resolves is told to grant " <>
-         "Aqua again, and takes a job once granted",
-       %{ctx: ctx, room: room} do
+  # Aqua's own grant names no brain: given again as the page opens it,
+  # with gemini not connected, it commits, and given after the person took
+  # it back it commits too.
+  test "Aqua's grant, given again or given as the page opens it, commits while a shipped " <>
+         "brain is not connected",
+       %{ctx: ctx} do
     soul = "agent:local.aqua"
-    optional = "catalyst:local.optional"
+    assert {:needs_key, _} = Aqua.Models.model_status(ctx, soul_on(@gemini))["aqua"]
 
+    assert {:ok, %{status: "committed"}} = page_grant(ctx, soul)
+    {:ok, [grant]} = Arca.ConsentStorage.profiles(actor(ctx), soul)
+    {:ok, head, _refs} = Arca.ConsentStorage.get_head(actor(ctx), grant.id)
+    assert head.granted_via == "interactive"
+
+    {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, soul)
+    assert {:consent_absent, _} = Aqua.Models.model_status(ctx, soul_on(@model))["aqua"]
+    assert {:ok, %{status: "committed"}} = page_grant(ctx, soul)
+    assert {:ready, _} = Aqua.Models.model_status(ctx, soul_on(@model))["aqua"]
+  end
+
+  # What the person narrows on a brain's own grant is what every crew
+  # member's call to it runs with: its network and its limits, never a
+  # wider copy.
+  test "a member's model call runs with the network and limits its brain's own grant was " <>
+         "narrowed to",
+       %{ctx: ctx, room: room} do
+    narrowing = %{
+      @model => %{"egress" => %{"methods" => ["POST"]}, "limits" => %{"timeout" => "30s"}}
+    }
+
+    assert {:ok, %{status: "committed"}} = page_grant(ctx, @model, narrowing)
+    {:ok, own} = Opus.authority_for(ctx, :default, @model)
+
+    script!([reply("Planned.")])
+    assert %{status: "completed"} = job!(ctx, room, "planner", "plan it")
+    assert [%{authority: authority}] = member_chats(ctx, "planner")
+    assert {authority.profile_id, authority.consent_id} == {own.profile_id, own.consent_id}
+    assert authority.resources.egress.methods == ["POST"]
+    assert Prima.Authority.limits(authority).timeout == "30s"
+  end
+
+  # A brain CYFR does not ship is the person's to connect, its own grant
+  # given as they connect it, as any component they install: from then on
+  # a crew member on it takes a job, and Aqua's grant never moved.
+  test "a brain CYFR does not ship, connected by the person, takes a member's job, and " <>
+         "Aqua's grant does not move",
+       %{ctx: ctx, room: room} do
+    {:ok, before} = Opus.authority_for(ctx, :default, "agent:local.aqua")
+    made = required_brain!(ctx, "made")
+    entry = Sanctum.Test.ConsentFixtures.bind_key!(ctx, made, %{"MADE_API_KEY" => "m-1"})
+    keeper!(ctx, made)
+
+    assert :ok = Crew.ready(ctx, "keeper")
+    assert {:ready, _} = Aqua.Models.model_status(ctx, soul_on(@model))["aqua"]
+
+    ScriptedWorker.fresh_limits!(ctx, [made])
+    start_supervised!({ScriptedWorker, ref: [made], script: [reply("Kept.")]})
+    assert %{agent: "keeper", status: "completed"} = job!(ctx, room, "keeper", "keep it")
+    assert [%{authority: kept}] = member_chats(ctx, "keeper")
+    assert kept.resources.vault.entry_id == entry.id
+
+    assert {:ok, %{consent_id: consent_id}} =
+             Opus.authority_for(ctx, :default, "agent:local.aqua")
+
+    assert consent_id == before.consent_id
+  end
+
+  # A brain installed that nobody connected is no crew member's: no
+  # machine walk grants it, and a member on it is refused with the brain's
+  # own state.
+  test "a brain installed that nobody connected is made usable by no machine walk",
+       %{ctx: ctx, room: room} do
+    Arca.Test.UnitFixtures.chat_catalyst!(ctx, "drift")
+    made = "catalyst:local.drift"
+
+    {:ok, walk} = Sanctum.Consent.Bootstrap.run(ctx)
+    assert {made, :not_vouched} in walk.skipped
+    refute "agent:local.aqua" in walk.minted
+    assert {:ok, []} = Arca.ConsentStorage.profiles(actor(ctx), made)
+
+    keeper!(ctx, made)
+    assert {:error, {:crew_unready, "keeper", :no_grant}} = Crew.ready(ctx, "keeper")
+
+    assert {:error, {:crew_unready, "keeper", :no_grant}} =
+             Runner.send_message(ctx, room.id, "@keeper keep it")
+  end
+
+  # A brain's key bound again, after the person granted Aqua themselves,
+  # with other destination restrictions: the crew's next turn runs with it,
+  # and nothing is asked.
+  test "a brain's key changed after the person granted Aqua reaches the crew's next turn",
+       %{ctx: ctx, room: room} do
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
+    assert {:ok, %{status: "committed"}} = page_grant(ctx, "agent:local.aqua")
+
+    rebound =
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-2"},
+        destination: %{"hosts" => ["api.anthropic.com"], "scheme" => "https", "paths" => ["/v1/"]}
+      )
+
+    assert :ok = Crew.ready(ctx, "planner")
+    script!([reply("Planned.")])
+    assert %{status: "completed"} = job!(ctx, room, "planner", "plan it")
+    assert [%{authority: authority}] = member_chats(ctx, "planner")
+    assert authority.resources.vault.entry_id == rebound.id
+  end
+
+  # A person takes a brain's own grant back (Revoke on Components): the
+  # brain is not set up, its own state. A post to a member on it is refused
+  # with the brain's sentence, Aqua's own turn says it as a line pointing
+  # at the Aqua page and never as a profile to grant, and the brain reads a
+  # key to enter where it is said. A boot's walk that gives the brain a
+  # baseline again, with no key, leaves it said the same way. Its key
+  # entered again, the crew answers.
+  test "a brain whose own grant the person took back reads a key to enter, said where the " <>
+         "brain is said, and set up again the crew answers",
+       %{ctx: ctx, room: room} do
+    script!([reply("Before."), reply("After."), reply("Planned.")])
+    said = fn -> for %{kind: "system", content: text} <- rows(ctx, room.id), do: text end
+    line = "brain has no key bound yet — connect one from its card on the Aqua page"
+
+    {:ok, %{turn_id: first}} = Runner.send_message(ctx, room.id, "hello")
+    await_status(ctx, first, "completed")
+
+    {:ok, [brain]} = Arca.ConsentStorage.profiles(actor(ctx), @model)
+
+    assert {:ok, %{status: "revoked"}} =
+             Sanctum.Providers.Profile.handle(ctx, %{
+               "action" => "revoke",
+               "profile_id" => brain.id
+             })
+
+    for {walk?, count} <- [{false, 1}, {true, 2}] do
+      # A boot's walk gives the brain a baseline again, with no key.
+      if walk? do
+        {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run(ctx)
+        assert @model in minted
+      end
+
+      assert {:error, {:crew_unready, "planner", :no_key} = refusal} =
+               Runner.send_message(ctx, room.id, "@planner plan it")
+
+      assert Aqua.Ops.render_refusal(refusal) == "planner's " <> line
+
+      {:ok, %{turn_id: refused}} = Runner.send_message(ctx, room.id, "hello again")
+      await_status(ctx, refused, "failed")
+      assert Enum.count(said.(), &String.ends_with?(&1, line)) == count
+      refute Enum.any?(said.(), &(&1 =~ "grant it a profile"))
+
+      # Where the brain is said, a key to enter, which the card connects.
+      assert {:needs_key, _} = Aqua.Models.model_status(ctx, soul_on(@model))["aqua"]
+      {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+      assert {:needs_key, _} = Aqua.Models.model_status(ctx, roster)["planner"]
+    end
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-again"})
+    {:ok, %{turn_id: again}} = Runner.send_message(ctx, room.id, "back?")
+    await_status(ctx, again, "completed")
+    assert %{status: "completed"} = job!(ctx, room, "planner", "plan it")
+  end
+
+  defp soul_on(brain), do: [%{"name" => "aqua", "catalyst_ref" => brain}]
+
+  # A brain the seed does not ship, whose one need is a required key.
+  defp required_brain!(ctx, name) do
     need = %{
-      "type" => "api_key:optional.test",
+      "type" => "api_key:#{name}.test",
       "reason" => "to call the model with your key",
-      "fields" => ["OPTIONAL_API_KEY"],
-      "required" => false,
-      "hosts" => ["api.optional.test"]
+      "fields" => ["MADE_API_KEY"],
+      "required" => true,
+      "hosts" => ["api.#{name}.test"]
     }
 
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
-        name: "optional",
+        name: name,
         version: "0.1.0",
         type: "catalyst",
         manifest:
           Jason.encode!(%{
             "contracts" => [Prima.Model.chat_contract()],
             "needs" => %{"api_key" => need},
-            "caps" => %{"egress" => %{"domains" => ["api.optional.test"]}}
+            "caps" => %{"egress" => %{"domains" => ["api.#{name}.test"]}}
           })
       })
 
-    Sanctum.Test.ConsentFixtures.bind_key!(ctx, optional, %{"OPTIONAL_API_KEY" => "o-1"})
-    selections = [%{dep: @model, label: "default"}, %{dep: optional, label: "default"}]
-    walk!(ctx, %{ref: soul, selections: selections})
+    "catalyst:local." <> name
+  end
 
+  defp keeper!(ctx, brain) do
     :ok =
       Arca.put(
         actor(ctx),
         Compendium.AquaPath.crew_file("keeper"),
         "---\ntitle: keeper\ndescription: Keeps.\navoid: Building.\n" <>
-          "catalyst_ref: #{optional}\nmodel: optional-1\n---\n"
+          "catalyst_ref: #{brain}\nmodel: keeper-1\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
-    assert {:ready, _resolved} = Aqua.Models.model_status(ctx, roster)["keeper"]
-
-    rebound =
-      Sanctum.Test.ConsentFixtures.bind_key!(ctx, optional, %{"OPTIONAL_API_KEY" => "o-2"},
-        destination: %{"hosts" => ["api.optional.test"], "scheme" => "https", "paths" => ["/v1/"]}
-      )
-
-    {:ok, authority} = Opus.authority_for(ctx, :default, soul)
-    {:ok, edge} = Prima.Authority.Blob.lookup_edge(authority.policy, soul, optional, "")
-    assert %{via: %{label: "default"}} = edge.vault
-    assert {:consent_stale, _resolved} = Aqua.Models.model_status(ctx, roster)["keeper"]
-
-    walk!(ctx, %{ref: soul, selections: selections})
-    assert {:ready, _resolved} = Aqua.Models.model_status(ctx, roster)["keeper"]
-
-    ScriptedWorker.fresh_limits!(ctx, [optional])
-    start_supervised!({ScriptedWorker, ref: [optional], script: [reply("Kept.")]})
-    assert %{agent: "keeper", status: "completed"} = job!(ctx, room, "keeper", "keep it")
-    assert [%{authority: kept}] = member_chats(ctx, "keeper")
-    assert kept.resources.vault.entry_id == rebound.id
   end
 
-  # A person's walk of `decisions`, from plan to commit.
-  defp walk!(ctx, %{ref: ref} = decisions) do
+  # A grant as the page opens it and the person presses it: the page's
+  # own choices (`Prism.ConsentChoices`) and the head's narrowing, or the
+  # one given, through the profile tool's preview and commit.
+  defp page_grant(ctx, ref, subset \\ nil) do
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+    choices = Prism.ConsentChoices.initial_choices(plan, DateTime.utc_now())
+    decisions = Prism.ConsentChoices.decisions(ref, nil, subset || plan.head_narrowing, choices)
 
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
+    with {:ok, preview} <-
+           Sanctum.Providers.Profile.handle(ctx, %{
+             "action" => "preview",
+             "decisions" => decisions
+           }) do
+      Sanctum.Providers.Profile.handle(ctx, %{
+        "action" => "commit",
+        "decisions" => decisions,
+        "plan_token" => plan.plan_token,
+        "proof" => preview.proof,
+        "commit_digest" => preview.commit_digest,
+        "expected_consent_revision" => plan.expected_consent_revision
       })
+    end
   end
 
   # Another athanor's crew runs under its own athanor's grant, read from the
@@ -750,8 +872,16 @@ defmodule Aqua.CrewTest do
 
     turn = job!(other, their_room, "planner", "plan it")
     assert turn.profile_id == theirs.id
+    {:ok, their_brain} = Opus.authority_for(other, :default, @model)
+    {:ok, our_brain} = Opus.authority_for(ctx, :default, @model)
+    refute their_brain.profile_id == our_brain.profile_id
     assert [%{authority: authority}] = member_chats(other, "planner")
-    assert authority.profile_id == theirs.id
+    assert authority.profile_id == their_brain.profile_id
+    assert authority.resources.vault.entry_id == their_brain.resources.vault.entry_id
+    refute authority.resources.vault.entry_id == our_brain.resources.vault.entry_id
+
+    assert {:error, {:not_found, _id}} =
+             Opus.authority_for(other, {:id, our_brain.profile_id}, @model)
 
     # Here the same member's job is refused for want of this athanor's grant.
     assert {:ok, %{admitted: :request, message_id: request}} =
@@ -1088,12 +1218,13 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
 
-    # The member's job runs under the crew's one grant, Aqua's, as the
-    # soul's turn does, and is offered every tool the soul is: nothing
-    # narrows one job below another.
+    # The member's job claims under the crew's one grant, Aqua's, as the
+    # soul's turn does, its model calls run under their brain's own grant,
+    # and it is offered every tool the soul is: nothing narrows one job
+    # below another.
     chats = for %{input: %{"operation" => "chat"}} = call <- ScriptedWorker.calls(), do: call
     assert length(chats) >= 2
-    assert Enum.all?(chats, &(hd(&1.authority.chain) == "agent:local.aqua"))
+    assert Enum.all?(chats, &(&1.authority.chain == [@model, @model]))
     assert chats |> Enum.map(& &1.authority.consent_id) |> Enum.uniq() |> length() == 1
 
     offered =

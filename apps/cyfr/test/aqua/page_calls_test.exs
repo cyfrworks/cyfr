@@ -246,7 +246,7 @@ defmodule Aqua.PageCallsTest do
                "tools_remove" => tools
              })
 
-    walk!(ctx, %{ref: @soul, selections: [%{dep: @model, label: "default"}]})
+    walk!(ctx, %{ref: @soul})
   end
 
   # A tincture version in the athanor, declaring `deps` as its static

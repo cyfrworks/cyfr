@@ -12,8 +12,8 @@ defmodule Cyfr.Cluster.Person do
   console does (`context/1`), in an athanor filled through the explicit
   provision verb on the member that makes the person, which answers once
   the fill has run there: the fixture's Aqua tree and shipped catalysts copied in,
-  indexed, and the crew's one grant, Aqua's, consented; a crew member holds
-  none of its own. The model's key is then entered and
+  indexed, and Aqua's grant and the model's own consented; a crew member
+  holds none of its own. The model's key is then entered and
   bound through the consent walk (`person!/0`). What such a
   person does then goes through the runner (`send/3`), the console's
   opening of a thread (`open/2`), the consent
@@ -140,8 +140,8 @@ defmodule Cyfr.Cluster.Person do
   @doc """
   A crew member of the person's athanor named `name`, on the model's
   brain: its file written to the athanor's crew and indexed. It asks
-  nothing: it runs under the crew's one grant, whose edge into the model
-  takes the key the model's default profile binds.
+  nothing: its model calls run under the model's own grant, whose default
+  profile binds the key.
   """
   @spec crew_member!(String.t(), String.t()) :: :ok
   def crew_member!(token, name) do

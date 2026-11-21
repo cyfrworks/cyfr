@@ -532,9 +532,10 @@ defmodule Aqua.ScheduleTurnsTest do
 
       # Aqua's turn, on the brain and model of the crew member Aqua runs on
       # (`Cyfr.Test.SeedBundle.seat!/2`): Aqua's file names none of its own.
+      # Its model calls run under the brain's own grant.
       assert "catalyst:local.claude:" <> _ = turn.catalyst_ref
 
-      assert [{@aqua, "claude-sonnet-5-5"}] =
+      assert [{@model, "claude-sonnet-5-5"}] =
                Enum.uniq(
                  for %{input: %{"operation" => "chat"} = input, authority: authority} <-
                        ScriptedWorker.calls(),

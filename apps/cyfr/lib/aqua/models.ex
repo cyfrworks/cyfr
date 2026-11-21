@@ -34,19 +34,15 @@ defmodule Aqua.Models do
   release the agent's ref resolves to; `:missing` and `:model_unavailable`
   carry the ref the agent names, whether or not the listing resolved it:
 
-    * `:ready` — the crew's grant runs it with what its own plan
-      requires: its bound key, or for a brain that requires no need an
-      edge into it that selects no key it cannot resolve;
+    * `:ready` — its own grant holds what its own plan requires, which
+      every crew member's turn on it runs under;
     * `:needs_key` — a key to connect;
     * `:needs_grant` — the person's grant of the brain is all it asks, as
       Aqua's setup reads it (`t:provider/0`): a brain that needs nothing
       else;
-    * `:consent_stale` — the crew's grant does not cover what the crew
-      may use: on Aqua, its tools, or the brains and hands it names,
-      changed since it was granted; on any agent, its brain requires a
-      key it holds but the grant's edge into it binds none, or the edge
-      selects a key it can no longer resolve. It runs once the person
-      grants Aqua again;
+    * `:consent_stale` — Aqua only: the crew's grant does not cover the
+      tools and hands Aqua names as they stand, changed since it was
+      granted. Aqua runs once the person grants it again;
     * `:consent_absent` — Aqua only: the crew's grant was never given,
       or was revoked; Aqua runs once the person grants it;
     * `:consent_damaged`, `:consent_unavailable` — the brain's own grant,
@@ -526,25 +522,22 @@ defmodule Aqua.Models do
   catalyst_ref}` — or, for a brain that is a program, how its row stands
   (`t:status/0`). An agent that names no brain has no entry. A crew
   member holds no consent of its own: it is ready when its brain is
-  connected, the brain's own grant binding its key and the crew's one
-  grant (`Compendium.AgentSource`) running it with that key, so making a
-  member on a connected brain, or choosing it as Aqua's, asks nothing.
+  connected, since every turn's model call runs under the brain's own
+  grant, its key, network and limits (`Aqua.Loop`), so making a member
+  on a connected brain, or choosing it as Aqua's, asks nothing.
 
   A brain is connected on a bound need of either kind: a key the
   catalyst's requests carry, or a program row whose folder it runs its
-  program in (`Sanctum.Mount`) — the setup plan and the edge read both
-  the same way. The brain's own grant that is damaged, or that the store
-  could not answer, is `:consent_damaged` or `:consent_unavailable`,
-  never a key to connect over a consent that exists. The crew's grant is
-  read once, as a turn loads it: where it loads, a brain whose edge
-  selects a key it cannot resolve, or whose own plan requires a key its
-  edge binds none of, reads `:consent_stale`, Aqua's to grant again, and
-  any other edge reads ready; where it does not, Aqua reads why
-  (`Aqua.ConsentStatus.classify_refusal/1`: a stale grant is
-  `:consent_stale`, a grant to give again, one never given or revoked
-  `:consent_absent`, a grant to give, and damage or an outage as above),
-  on a program brain as on a catalyst, which is said once, on Aqua, and
-  never on a member. A catalyst
+  program in (`Sanctum.Mount`), as the setup plan reads it. The brain's
+  own grant that is damaged, or that the store could not answer, is
+  `:consent_damaged` or `:consent_unavailable`, never a key to connect
+  over a consent that exists. The crew's grant names no brain: it is
+  read once, for Aqua alone, as a turn loads it, and where it does not
+  load Aqua reads why (`Aqua.ConsentStatus.classify_refusal/1`: a stale
+  grant is `:consent_stale`, a grant to give again, one never given or
+  revoked `:consent_absent`, a grant to give, and damage or an outage as
+  above), on a program brain as on a catalyst, which is said once, on
+  Aqua, and never on a member. A catalyst
   listing that cannot be read is not an empty one, and a setup plan
   refused for any reason but the component's absence
   (`{:not_found, {:component, _}}`,
@@ -570,43 +563,36 @@ defmodule Aqua.Models do
           brain <- List.wrap(brain_of(agent)),
           into: %{} do
         case brain do
-          {:program, id} -> {name, soul_program(name, program_status(ctx, id))}
-          {:catalyst, ref} -> {name, catalyst_status(ctx, listing, ref)}
+          {:program, id} -> {name, soul_brain(name, program_status(ctx, id))}
+          {:catalyst, ref} -> {name, soul_brain(name, catalyst_status(ctx, listing, ref))}
         end
       end
 
-    # The crew's one grant, loaded once, and only after every brain's own
-    # plan has read connected, as a turn reaches the grant after its brain.
+    # The crew's one grant, loaded once, and only after Aqua's brain has
+    # read ready, as a turn reaches the grant after its brain.
     grant =
-      if Enum.any?(statuses, &match?({_name, {:connected, _, _, _}}, &1)) or
-           Enum.any?(statuses, &match?({_name, {:connected_program, _}}, &1)),
-         do: Opus.authority_for(ctx, :default, @grant)
+      if Enum.any?(statuses, &match?({_name, {:soul_ready, _}}, &1)),
+        do: Opus.authority_for(ctx, :default, @grant)
 
     Map.new(statuses, fn
-      {name, {:connected, ref, resolved, plan}} ->
-        {name, granted_status(grant, name, ref, resolved, plan)}
-
-      {name, {:connected_program, program}} ->
-        {name, granted_program(grant, program)}
-
-      settled ->
-        settled
+      {name, {:soul_ready, brain}} -> {name, granted(grant, brain)}
+      settled -> settled
     end)
   end
 
-  # Aqua on a member whose brain is a program that stands: the crew's grant
-  # is Aqua's still, whatever brain its member runs on, so it is read too.
-  # A crew member's program brain reads its row alone.
-  defp soul_program(name, {:ready, program}) do
-    if Prima.AgentRef.soul?(name), do: {:connected_program, program}, else: {:ready, program}
+  # Aqua on a brain that reads ready: the crew's grant is Aqua's, whatever
+  # brain its member runs on, so it is read too. A crew member's brain
+  # reads on its own setup alone.
+  defp soul_brain(name, {:ready, brain}) do
+    if Prima.AgentRef.soul?(name), do: {:soul_ready, brain}, else: {:ready, brain}
   end
 
-  defp soul_program(_name, status), do: status
+  defp soul_brain(_name, status), do: status
 
-  # A program brain is no edge of the grant: Aqua on it is ready when the
-  # grant loads, and otherwise reads the grant's own state (`soul_grant/2`).
-  defp granted_program({:ok, _authority}, program), do: {:ready, program}
-  defp granted_program({:error, reason}, program), do: soul_grant(reason, program)
+  # No brain is an edge of the grant: Aqua is ready when the grant loads,
+  # and otherwise reads the grant's own state (`soul_grant/2`).
+  defp granted({:ok, _authority}, brain), do: {:ready, brain}
+  defp granted({:error, reason}, brain), do: soul_grant(reason, brain)
 
   # Why the crew's grant did not load, as Aqua reads it whatever brain its
   # member runs on, through `Aqua.ConsentStatus.classify_refusal/1`: stale,
@@ -689,11 +675,8 @@ defmodule Aqua.Models do
   defp suited({:error, :not_found}), do: {:error, :program_missing}
   defp suited({:error, _unanswered}), do: {:error, :unavailable}
 
-  # A brain is ready when its own profile binds what it needs AND the
-  # crew's grant selects that profile on its edge to the catalyst — what
-  # every member actually runs it with, resolved as a turn would resolve
-  # it. A bound key the grant's edge does not select is still one to
-  # connect.
+  # A brain is ready when its own profile binds what it needs: the grant
+  # every member's turn on it runs under.
   defp catalyst_status(_ctx, {:error, _unread}, ref), do: {:model_unavailable, ref}
 
   defp catalyst_status(ctx, {:ok, listing}, ref) do
@@ -708,8 +691,8 @@ defmodule Aqua.Models do
   # every other refusal (a store that could not answer, which the
   # component domain answers as a sentence, a damaged row, a timeout, a
   # forbidden call, anything else) leaves whether it is installed unknown.
-  # A brain whose own plan reads ready is `{:connected, ref, resolved,
-  # plan}`, which the crew's grant then settles (`granted_status/5`).
+  # A brain whose own plan reads ready is ready: every turn's model call
+  # runs under that grant.
   defp planned_status(ctx, ref, resolved) do
     case Aqua.Ops.call_tool("component", ctx, %{
            "action" => "setup_plan",
@@ -717,7 +700,7 @@ defmodule Aqua.Models do
          }) do
       {:ok, plan} ->
         case plan_state(plan, resolved) do
-          :ready -> {:connected, ref, resolved, plan}
+          :ready -> {:ready, resolved}
           state -> {state, resolved}
         end
 
@@ -726,47 +709,6 @@ defmodule Aqua.Models do
 
       {:error, _refused} ->
         {:model_unavailable, ref}
-    end
-  end
-
-  # The crew's grant, loaded as a turn would load it, settles a brain whose
-  # own plan reads ready by its edge into the brain (`lent?/4`): the edge
-  # is ready when it carries no selection it cannot resolve and binds what
-  # the brain's plan requires. A brain that holds its own key but whose
-  # edge in the grant binds none (a grant the person gave before the brain
-  # was connected), whose edge selects a key it can no longer resolve (the
-  # brain's key bound again since), or that the grant names no edge into,
-  # is not one to connect: granting Aqua again is the next step, said as
-  # the grant's stale state. A grant that does not load is Aqua's to say
-  # (`soul_grant/2`), never a key to connect over a brain whose own plan
-  # reads ready. A crew member reads its brain alone, which its own grant
-  # answers: it holds no consent, and the grant's state is said once, on
-  # Aqua.
-  defp granted_status({:ok, authority}, _name, catalyst_ref, resolved, plan) do
-    if lent?(authority, @grant, catalyst_ref, plan),
-      do: {:ready, resolved},
-      else: {:consent_stale, resolved}
-  end
-
-  defp granted_status({:error, reason}, name, _catalyst_ref, resolved, _plan) do
-    if Prima.AgentRef.soul?(name),
-      do: soul_grant(reason, resolved),
-      else: {:ready, resolved}
-  end
-
-  # Whether a turn on the brain runs on the grant's edge into it with what
-  # the brain's own plan requires: a bound vault, an entry or a key
-  # provided alike (`Prima.Authority.Blob.bound_vault?/1`), or no vault at
-  # all when the plan requires no need (`need_of/1`). A selection the load
-  # could not resolve is no bound vault, and a turn's setup refuses it
-  # (`Opus.Attempt`), so it is never ready, whatever the plan requires.
-  defp lent?(authority, source, catalyst_ref, plan) do
-    case Prima.Authority.Blob.lookup_edge(authority.policy, source, catalyst_ref, "") do
-      {:ok, %{vault: vault}} ->
-        Prima.Authority.Blob.bound_vault?(vault) or (is_nil(vault) and is_nil(need_of(plan)))
-
-      _no_edge ->
-        false
     end
   end
 

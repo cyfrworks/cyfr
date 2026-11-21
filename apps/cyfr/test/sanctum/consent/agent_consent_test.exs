@@ -4,9 +4,8 @@
 defmodule Sanctum.Consent.AgentConsentTest do
   @moduledoc """
   The crew consents as one source, Aqua's (`agent:local.aqua`): the fill
-  mints its grant after every brain the athanor can connect, its edge
-  into each brain selecting the brain's default profile, and no crew
-  member is a source or a node of it; the shape reads Aqua's tools and
+  mints its grant over the hands its tools name, after each shipped
+  brain's own grant, and no brain and no crew member is a node of it; the shape reads Aqua's tools and
   never a member's brain, model or mode, the member Aqua runs on or the
   prompt; a crew member a person makes asks nothing and leaves the grant
   alone; and the loaded authority carries the tools Aqua's list names,
@@ -116,7 +115,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
   end
 
-  test "the fill mints the crew's one grant after every brain, an edge into each", %{
+  test "the fill mints the crew's one grant after each brain's own, and names no brain", %{
     ctx: ctx
   } do
     {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
@@ -140,33 +139,20 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert profile.label == "default" and profile.kind == :owner
     assert head.granted_via == "bootstrap"
 
-    # Every selection in the graph is a binding of its own: one row each,
-    # naming the label it borrows and pinning nothing, none naming an entry.
-    selections =
-      for {node, %{"edges" => edges}} <- Jason.decode!(head.resolved_policy)["nodes"],
-          {edge_key, %{"vault" => %{"via" => via}}} <- edges,
-          do: {Blob.binding_key(node, edge_key, nil), via["label"], via["binding_digest"]}
+    # No brain is a node of the grant, and it binds no key: a turn's model
+    # call runs under the brain's own grant, which each shipped brain holds
+    # with its own destination.
+    nodes = Map.keys(Jason.decode!(head.resolved_policy)["nodes"])
+    refute "catalyst:local.claude" in nodes or "catalyst:local.gemini" in nodes
+    assert refs == []
 
-    assert Enum.sort(selections) == [
-             {"#{@soul}|catalyst:local.claude|default", "default", nil},
-             {"#{@soul}|catalyst:local.gemini|default", "default", nil}
-           ]
-
-    assert Enum.sort(Enum.map(refs, &{&1.binding_key, &1.via_label, &1.binding_digest})) ==
-             Enum.sort(selections)
-
-    assert Enum.all?(refs, &(&1.vault_entry_id == nil and &1.share_id == nil))
-
-    # The grant's edge into each brain selects the brain's default profile,
-    # to the brain's own destination; its edges into its hands carry the
-    # hands' own grants; no crew member is a node of its graph.
     for {brain, host} <- [
           {"catalyst:local.claude", "api.anthropic.com"},
           {"catalyst:local.gemini", "generativelanguage.googleapis.com"}
         ] do
-      edge = edge!(head.resolved_policy, @soul, brain)
-      assert %{via: %{label: "default"}} = edge.vault
-      assert host in edge.egress.domains
+      {:ok, own} = Opus.authority_for(ctx, :default, brain)
+      assert own.source_ref == brain
+      assert host in own.resources.egress.domains
     end
 
     assert edge!(head.resolved_policy, @soul, "catalyst:local.files").storage.paths == ["data/"]
@@ -258,19 +244,13 @@ defmodule Sanctum.Consent.AgentConsentTest do
   test "a grant narrowed to fewer tools keeps the provider's search it does not untick",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
-    # The soul's edge into its model lends the model's own profile, which
-    # holds the key.
     _entry = bind_claude!(ctx)
     {_, head, _} = head!(ctx, @soul)
     tools = edge!(head.resolved_policy, @soul, "@ingress").tools
     assert "native_search" in tools and "aqua.list" in tools
     kept = tools -- ["aqua.list"]
 
-    decisions = %{
-      ref: @soul,
-      selections: [%{dep: "catalyst:local.claude", label: "default"}],
-      subset: %{@soul => %{"tools" => kept}}
-    }
+    decisions = %{ref: @soul, subset: %{@soul => %{"tools" => kept}}}
 
     {:ok, plan} = Plan.plan(ctx, %{ref: @soul})
     assert {:ok, preview} = Commit.preview(ctx, decisions)
@@ -302,33 +282,24 @@ defmodule Sanctum.Consent.AgentConsentTest do
     end)
   end
 
-  # A machine grant reaches only the brains the seed ships: Aqua's grant
-  # names every installed brain, so with one the seed does not ship
-  # installed, a person's own or a person's newer release of a shipped
-  # one, the mint is a person's to make, before a first grant and after a
-  # person revoked one alike.
-  test "a person-made brain installed, the walk mints no grant for Aqua", %{ctx: ctx} do
-    Arca.Test.UnitFixtures.chat_catalyst!(ctx, "made")
-
-    {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
-    refute @soul in minted
-    assert {@soul, :not_vouched} in skipped
-  end
-
-  test "a person-made brain installed after Aqua's grant was revoked, the walk mints it no grant again",
+  # A brain CYFR does not ship is the person's to grant, as any component
+  # they install: no walk grants it, and Aqua's grant, which names no
+  # brain, is minted all the same. A person's own newer release of a
+  # shipped brain is theirs too.
+  test "a brain CYFR does not ship, installed, is granted by no walk, and Aqua's grant is " <>
+         "minted all the same",
        %{ctx: ctx} do
-    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert @soul in minted
-    assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, @soul)
-
     Arca.Test.UnitFixtures.chat_catalyst!(ctx, "made")
 
     {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
-    refute @soul in minted
-    assert {@soul, :not_vouched} in skipped
+    assert @soul in minted
+    assert {"catalyst:local.made", :not_vouched} in skipped
+
+    assert {:ok, []} =
+             Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.made")
   end
 
-  test "a shipped brain whose newest release is a person's own, the walk mints no grant for Aqua",
+  test "a shipped brain whose newest release is a person's own is granted by no walk",
        %{ctx: ctx} do
     unit =
       Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "claude", "9.0.0",
@@ -345,8 +316,8 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
 
     {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
-    refute @soul in minted
-    assert {@soul, :not_vouched} in skipped
+    assert @soul in minted
+    assert {"catalyst:local.claude", :not_vouched} in skipped
   end
 
   test "the shape never reads the prompt", %{ctx: ctx} do
@@ -387,7 +358,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     # bound on claude — a selection needs a bound lender.
     bind_claude!(ctx)
     {:ok, plan} = Plan.plan(ctx, %{ref: @soul})
-    decisions = %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]}
+    decisions = %{ref: @soul}
     assert {:ok, preview} = Commit.preview(ctx, decisions)
 
     assert {:ok, _} =
@@ -406,42 +377,6 @@ defmodule Sanctum.Consent.AgentConsentTest do
     refute Enum.any?(ingress.tools, &String.starts_with?(&1, "explorer."))
   end
 
-  # A brain whose publish the component index has not caught up with yet:
-  # the grant's brain set is read at the state of the index its graph is
-  # read at, so Aqua's first plan names the brain and the plan a person
-  # confirms commits.
-  test "a brain published while the component index is behind is in Aqua's first plan, which commits",
-       %{ctx: ctx} do
-    bind_claude!(ctx)
-
-    Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "late", "0.1.0",
-      manifest: %{
-        "name" => "late",
-        "type" => "catalyst",
-        "version" => "0.1.0",
-        "publisher" => "local",
-        "contracts" => [Prima.Model.chat_contract()]
-      },
-      wasm: Cyfr.Test.Guests.wasm(:catalyst)
-    )
-
-    {:ok, plan} = Plan.plan(ctx, %{ref: @soul})
-    decisions = %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]}
-    assert {:ok, preview} = Commit.preview(ctx, decisions)
-
-    assert {:ok, _} =
-             Commit.commit(ctx, %{
-               decisions: decisions,
-               plan_token: plan.plan_token,
-               proof: preview.proof,
-               commit_digest: preview.commit_digest,
-               expected_consent_revision: plan.expected_consent_revision
-             })
-
-    {_, head, _} = head!(ctx, @soul)
-    assert %Blob.Edge{} = edge!(head.resolved_policy, @soul, "catalyst:local.late")
-  end
-
   test "a grant whose tools moved is not re-minted", %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, first, _} = head!(ctx, @soul)
@@ -455,6 +390,8 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert still.revision == first.revision
   end
 
+  # The seed bumps a hand Aqua's tools name (a brain is no node of the
+  # grant, so its bump moves nothing here).
   test "a prose-only soul edit still re-mints under a seed bump", %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, first, _} = head!(ctx, @soul)
@@ -464,14 +401,14 @@ defmodule Sanctum.Consent.AgentConsentTest do
     seed_dir = Application.get_env(:arca, :seed_path)
 
     current =
-      [seed_dir, "components", "catalysts", "local", "claude", "*"]
+      [seed_dir, "components", "catalysts", "local", "http", "*"]
       |> Path.join()
       |> Path.wildcard()
       |> Enum.map(&Path.basename/1)
       |> hd()
 
-    src = Path.join([seed_dir, "components", "catalysts", "local", "claude", current])
-    dest = Path.join([seed_dir, "components", "catalysts", "local", "claude", "9.0.0"])
+    src = Path.join([seed_dir, "components", "catalysts", "local", "http", current])
+    dest = Path.join([seed_dir, "components", "catalysts", "local", "http", "9.0.0"])
     File.mkdir_p!(dest)
     File.cp!(Path.join(src, "catalyst.wasm"), Path.join(dest, "catalyst.wasm"))
 
@@ -481,7 +418,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
       |> File.read!()
       |> Jason.decode!()
       |> Map.put("version", "9.0.0")
-      |> put_in(["caps", "egress", "methods"], ["GET", "POST", "DELETE"])
+      |> put_in(["caps", "egress", "methods"], ["GET", "POST", "HEAD", "DELETE"])
 
     File.write!(Path.join(dest, "cyfr-manifest.json"), Jason.encode!(manifest))
     File.rm_rf!(src)
@@ -497,23 +434,21 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert healed.granted_via == "bootstrap"
   end
 
-  test "the soul's authority loads with its tools and its edge into the model", %{ctx: ctx} do
+  test "the soul's authority loads with its tools and no edge into a brain, whose own grant " <>
+         "holds its key",
+       %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
 
     assert {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
     assert authority.source_ref == @soul
     assert "component.list" in authority.resources.tools
     assert "aqua.list" in authority.resources.tools
+    refute Map.has_key?(authority.policy.nodes, "catalyst:local.claude")
 
-    # Nothing is bound on claude yet: the selection stays a selection.
-    {:ok, edge} = Blob.lookup_edge(authority.policy, @soul, "catalyst:local.claude", "")
-    assert %{via: %{label: "default"}} = edge.vault
-
-    # The person binds the key on claude; the soul's edge resolves to it.
+    # The person binds the key on claude; claude's own grant holds it.
     entry = bind_claude!(ctx)
-    {:ok, lent} = Opus.authority_for(ctx, :default, @soul)
-    {:ok, edge} = Blob.lookup_edge(lent.policy, @soul, "catalyst:local.claude", "")
-    assert edge.vault.entry_id == entry.id
+    {:ok, own} = Opus.authority_for(ctx, :default, "catalyst:local.claude")
+    assert own.resources.vault.entry_id == entry.id
 
     # The revision a turn would pin is retrievable as it was.
     {:ok, rows} = Compendium.AgentIndex.list(ctx)

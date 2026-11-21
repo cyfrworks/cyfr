@@ -614,7 +614,10 @@ defmodule Arca.TurnTransitionContractTest do
 
       held = %{fence: over.fence}
 
-      assert {:error, :not_open} = TurnStorage.pin_catalyst(actor, turn.id, "cat@1", held)
+      brain = %{profile_id: "prof_brain", consent_id: "con_brain"}
+
+      assert {:error, :not_open} =
+               TurnStorage.pin_catalyst(actor, turn.id, {"cat@1", brain}, held)
 
       assert {:error, :not_open} =
                TurnStorage.append_turn_row(
