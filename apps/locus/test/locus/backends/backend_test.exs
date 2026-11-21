@@ -141,6 +141,28 @@ defmodule Locus.Backends.BackendTest do
     assert_receive {Backend, ^session, :vacated}, 5_000
   end
 
+  # A program asked to end may write as it goes, as a coding harness
+  # writes its interrupted call into its transcript: whoever acts on the
+  # folder after the close (the removal of a forgotten session's
+  # transcript) acts after the last of those writes.
+  @tag :tmp_dir
+  test "a close answers once nothing of its process is left, after what it wrote on its way out",
+       %{supervisor: supervisor, tmp_dir: dir} do
+    late = Path.join(dir, "late")
+
+    session =
+      start_session(
+        supervisor,
+        "trap 'sleep 0.2; echo late > #{late}; exit 0' TERM; echo up; while :; do sleep 0.05; done"
+      )
+
+    assert read(session, 0, 1) == ["up"]
+    assert :ok = Backend.close(session)
+
+    assert File.read!(late) == "late\n"
+    assert_received {Backend, ^session, :vacated}
+  end
+
   test "an exit of its own is a crash unless its status is 0, its status is answered, and its last lines stay readable",
        %{supervisor: supervisor} do
     crashed = start_session(supervisor, "echo last; exit 3")

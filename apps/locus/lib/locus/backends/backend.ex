@@ -34,7 +34,7 @@ defmodule Locus.Backends.Backend do
   reset or retirement) and `stop/2` (its owner retired) end the process
   with the stop grace; none of them is a crash. A session ended this way
   answers `running: false` at once, however long its process takes to
-  go.
+  go; `close/1` and `stop/2` themselves answer once it has gone.
 
   ## Masking
 
@@ -129,9 +129,15 @@ defmodule Locus.Backends.Backend do
   def recv(server, after_seq, max_wait_ms),
     do: GenServer.call(server, {:recv, after_seq, max_wait_ms}, max_wait_ms + @call_margin_ms)
 
-  @doc "End the session's process: answered at once, the process going within its grace."
+  @doc """
+  End the session's process, answered once nothing of it is left, or its
+  bound passes, as `stop/2` is: a program asked to end may still write to
+  its folder within its grace, and whoever acts on that folder after the
+  close (the removal of a forgotten session's transcript) acts after it.
+  The session answers `running: false` from the close on.
+  """
   @spec close(GenServer.server()) :: :ok
-  def close(server), do: GenServer.call(server, {:end, :closed, nil}, @call_margin_ms)
+  def close(server), do: GenServer.call(server, :close, @call_margin_ms)
 
   @doc "End the session for `reason` (its owners' reason, no crash), at once."
   @spec end_session(GenServer.server(), String.t()) :: :ok
@@ -251,8 +257,16 @@ defmodule Locus.Backends.Backend do
     end
   end
 
-  def handle_call({:end, kind, reason}, _from, state),
-    do: {:reply, :ok, finish(state, kind, reason)}
+  # A close answers once its process is released. One never spawned, or
+  # whose spawn the launcher did not answer, leaves nothing here to wait
+  # on, and is answered at once.
+  def handle_call(:close, from, %{handle: handle} = state) do
+    state = finish(state, :closed, nil)
+
+    if state.released or is_nil(handle),
+      do: {:reply, :ok, state},
+      else: {:noreply, %{state | stoppers: [from | state.stoppers]}}
+  end
 
   def handle_call(:status, _from, state) do
     {:reply,
