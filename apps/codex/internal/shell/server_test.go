@@ -179,7 +179,7 @@ func TestServer_EntriesAreTheFixtures(t *testing.T) {
 	}
 	b := newBox(t, newFakeHome(t), t.TempDir())
 	w := b.do(sh.Passkey.Method, sh.Passkey.Path+"?"+sh.Passkey.Query[0]+"=pkw_x", "", nil)
-	if w.Code != http.StatusOK || !strings.Contains(body(w), "Unlock this screen first, then approve the passkey again from Your devices.") {
+	if w.Code != http.StatusOK || !strings.Contains(body(w), "Unlock this device first, then approve the passkey again from Your devices.") {
 		t.Fatalf("the fixture's passkey entry answered %d:\n%s", w.Code, body(w))
 	}
 }
@@ -342,7 +342,7 @@ func TestServer_MakingTheAccountOfAKeyMadeBeforeAsksThePIN(t *testing.T) {
 	b := newBox(t, home, t.TempDir())
 	p := b.shown()
 	b.post("/make", url.Values{"secret": {p}, "again": {p}})
-	if b.proof != "" || !strings.Contains(b.page(), "Add this box to your account") {
+	if b.proof != "" || !strings.Contains(b.page(), "Add this device to your account") {
 		t.Fatalf("making the key handed over %q, or shows:\n%s", b.proof, b.page())
 	}
 	for name, fields := range map[string]url.Values{
@@ -352,7 +352,7 @@ func TestServer_MakingTheAccountOfAKeyMadeBeforeAsksThePIN(t *testing.T) {
 	} {
 		w := b.post("/create", fields)
 		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" || w.Body.Len() != 0 || b.proof != "" ||
-			b.shell.View().Page != PageEnroll || b.shell.View().RecoveryCode != "" || !strings.Contains(b.page(), "not this screen") {
+			b.shell.View().Page != PageEnroll || b.shell.View().RecoveryCode != "" || !strings.Contains(b.page(), "not this device") {
 			t.Fatalf("%s answered %d %q, the box shows %s", name, w.Code, w.Header().Get("Location"), b.shell.View().Page)
 		}
 	}

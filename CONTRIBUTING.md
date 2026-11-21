@@ -237,7 +237,9 @@ same worktree refuses, naming the run that holds it.
     declarations) and CI's vocabulary scan (`scripts/ci/vocabulary.sh`) on
     every change, the configuration check when an `apps` source changed,
     `go test` of the CLI and of the keeper when a path their workflows
-    watch changed, the model catalysts' `cargo test` and the test WASM
+    watch changed, the CYFR app's unit tests (`desktop-js`) when the app,
+    the account pages' code it bundles or their shared fixtures changed,
+    the model catalysts' `cargo test` and the test WASM
     fixtures' check when their sources changed, and the light self-test of
     every harness script you touched. PostgreSQL, Dialyzer, the apps
     compiled and tested alone (CI's island jobs), the proofs under `tests/`
@@ -251,6 +253,16 @@ same worktree refuses, naming the run that holds it.
     proof, which no workflow runs, each on one quarter. The host's
     timer runs it once a day on main's head through `scripts/nightly.sh`, which
     reports the night to GitHub (the nightly, below).
+
+  Codex CI's `desktop-native` job builds the CYFR app's package from the
+  tree's `cyfr` on Linux amd64 and arm64, macOS and Windows, installs it
+  as a person does (DEB, DMG, MSI) and runs
+  `tests/desktop-proof/native/smoke.sh` against the installed app with no
+  CYFR server and no signing credentials: the refused switches,
+  startup and the chooser on 127.0.0.1:7340, the renderers' sandbox on
+  Linux, a second launch, a lost renderer or `cyfr`, an occupied port and
+  the app's end. Its header names what the smoke leaves to the real-home
+  proof and to a person at the machine.
 
   Past `handoff`, the pull request's run on GitHub is the check, and it
   runs every check in parallel; a CI job is reproduced here by running

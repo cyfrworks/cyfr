@@ -174,7 +174,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	origin := r.Header.Get("Origin")
 	if origin != Origin && !(action.prism && origin == srv.homeOrigin() && origin != "") {
-		http.Error(w, "not from this screen's pages", http.StatusForbidden)
+		http.Error(w, "not from this device's pages", http.StatusForbidden)
 		return
 	}
 	if mt := r.Header.Get("Content-Type"); !strings.HasPrefix(mt, "application/x-www-form-urlencoded") {
@@ -350,7 +350,7 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 			to = ticket
 		case errors.Is(err, errNoProof):
 			srv.Shell.mu.Lock()
-			srv.Shell.say("Only the page this screen was unlocked on opens CYFR: lock it, then unlock it here.")
+			srv.Shell.say("Only the page this device was unlocked on opens CYFR: lock it, then unlock it here.")
 			srv.Shell.mu.Unlock()
 		default:
 			srv.Shell.mu.Lock()
@@ -419,10 +419,10 @@ func warnings(r disk.Report) []string {
 	}{{"system disk", r.Root}, {"CYFR data volume", r.Data}} {
 		switch v.state {
 		case disk.Unencrypted:
-			out = append(out, "This box keeps its data unencrypted, whoever takes it reads everything: its "+v.name+" is not encrypted. "+
-				"Keep the box where only people you trust can reach it, or install Ubuntu again with disk encryption turned on.")
+			out = append(out, "This device keeps its data unencrypted, whoever takes it reads everything: its "+v.name+" is not encrypted. "+
+				"Keep this device where only people you trust can reach it, or install its system again with disk encryption turned on.")
 		case disk.Unknown:
-			out = append(out, "Whether this box's "+v.name+" is encrypted could not be determined.")
+			out = append(out, "Whether this device's "+v.name+" is encrypted could not be determined.")
 		}
 	}
 	return out

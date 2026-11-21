@@ -1,6 +1,6 @@
 # Identity and Recovery
 
-How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed on its account pages or from the box's screen: a CYFR's setup link or an invitation link, opened in a browser, and the box's **Set up CYFR** make one, and `/account/add` adds a device to it. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, **Settings → Keys on your account** lists your account's keys and your sessions at that CYFR, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
+How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed on its account pages or from a device: a CYFR's setup link or an invitation link, opened in a browser, and **Set up CYFR** on the box's screen or in the CYFR app make one, and `/account/add` adds a device to it. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, **Settings → Keys on your account** lists your account's keys and your sessions at that CYFR, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
 
 ---
 
@@ -17,7 +17,7 @@ The account service keeps your account's log: every change to its keys, in one o
 
 ### The account pages
 
-The account service serves these pages, `https://cyfr.run/account/…` unless your CYFR names another. The box's screen also makes an account ([Creating Your Account](#creating-your-account)), and adds itself to one through `/account/add` ([devices-guide.md](devices-guide.md)):
+The account service serves these pages, `https://cyfr.run/account/…` unless your CYFR names another. The box's screen and the CYFR app also make an account ([Creating Your Account](#creating-your-account)), and add themselves to one through `/account/add` ([devices-guide.md](devices-guide.md)):
 
 | Page | What you do there |
 |---|---|
@@ -60,9 +60,9 @@ A tab closed before **I saved it** sent nothing and kept nothing; the passkey it
 
 Your recovery code never passes through an address, a server or the browser's storage; the page holds it in memory until it is done and drops it.
 
-### On a box
+### On a box or in the CYFR app
 
-A CYFR box with its own screen makes your account at setup: **Set up CYFR** takes your name, a PIN (or the passphrase it shows) and the terms, and shows your recovery code as a QR code to scan or print; **I saved it** makes the account with the box as its first device, and **Open CYFR** opens it.
+A CYFR box with its own screen makes your account at setup: **Set up CYFR** takes your name, a PIN (or the passphrase it shows) and the terms, and shows your recovery code as a QR code to scan or print; **I saved it** makes the account with the box as its first device, and **Open CYFR** opens it. The CYFR app, with **Use this computer's key** or on Linux, makes one the same way with the computer as its first device, at the CYFR it connected to, which admits you by its own rules ([devices-guide.md](devices-guide.md#the-cyfr-app)).
 
 ---
 
@@ -85,9 +85,11 @@ Anyone holding a copy of your recovery code can do everything above, at once and
 
 ## Signing In at a CYFR
 
-**Sign in with your account** on a CYFR's sign-in page sends your browser to `/account/sign`, which says "Sign in to" that CYFR's address. Your passkey signs that CYFR's request, and the browser returns there; the CYFR checks the signature against your account's keys, asks its own allowlist, and signs you in. The request is that CYFR's own, bound to the browser that asked, used once, and gone after five minutes. The box's screen signs in the same way on its own, after its local unlock ([devices-guide.md](devices-guide.md)).
+**Sign in with your account** on a CYFR's sign-in page sends your browser to `/account/sign`, which says "Sign in to" that CYFR's address. Your passkey signs that CYFR's request, and the browser returns there; the CYFR checks the signature against your account's keys, asks its own allowlist, and signs you in. The request is that CYFR's own, bound to the browser that asked, used once, and gone after five minutes. The box's screen, and the CYFR app using the computer's key, sign in the same way on their own, after their local unlock ([devices-guide.md](devices-guide.md)).
 
-A browser that holds no passkey of yours, as one does when you made your account on a CYFR box, has two ways on once it is refused: **Add a passkey with your recovery code**, or **No passkey in this browser?**, which asks your name, makes a passkey for that account in this browser and returns it to the CYFR, which shows its code. On your box's screen, **Your devices** shows "A browser asks to add a passkey" with that code: check it is the same, press **Approve**, and type the box's PIN; the box's key adds the passkey to your account. Then sign in again in the browser with the new passkey. A passkey nobody approves adds nothing and is forgotten after five minutes.
+In the CYFR app on macOS and Windows, **Sign in with your passkey** opens that CYFR's sign-in page, and `/account/sign` opens in a window of the app's own, which shows only the account service's sign-in and recovery pages and returns the answer only to the CYFR window that asked. When the CYFR names an account service other than cyfr.run, the app shows its address and asks you to approve it before anything is sent there ([devices-guide.md](devices-guide.md#the-cyfr-app)).
+
+A browser that holds no passkey of yours, as one does when you made your account on a CYFR box, has two ways on once it is refused: **Add a passkey with your recovery code**, or **No passkey in this browser?**, which asks your name, makes a passkey for that account in this browser and returns it to the CYFR, which shows its code. On your box's screen, or in the CYFR app unlocked with the computer's key, **Your devices** shows "A browser asks to add a passkey" with that code: check it is the same, press **Approve**, and type that device's PIN or passphrase; its key adds the passkey to your account. Then sign in again in the browser with the new passkey. A passkey nobody approves adds nothing and is forgotten after five minutes.
 
 Each CYFR decides who it admits:
 
@@ -122,6 +124,8 @@ A CYFR run for a company may require each person there to sign in with their com
 
 While your company sign-in is missing or past its days, every page of that CYFR sends you to its company page. **Sign in with your company** takes you to your company's sign-in and back, and **Sign out** ends your session. Nothing else there opens until your company sign-in stands, and the API keys you made and the devices you connected there are refused. Your session, API keys, devices and thread seats all stay, and work again once you sign in with your company.
 
+The CYFR app does not offer a company sign-in: at such a CYFR it says "This CYFR requires company sign-in. Open its address in a browser to continue.", and you open the CYFR's address in a browser instead.
+
 The CYFR binds your company account to you by the subject your company's sign-in names for it, never by an email address. A company account already bound to someone else there is refused, and once one is bound to you, another is refused too. When the CYFR moves to another company configuration (another issuer, client or organization), everyone there signs in with their company again, and the new sign-in replaces the old binding.
 
 ---
@@ -152,7 +156,7 @@ A CYFR that serves its own account service keeps its people's account logs in it
 
 ## Your Saved Addresses Are Your Device's
 
-The address of each CYFR you use, saved as a tab, a bookmark or a command line's context, belongs to the device that saved it. No CYFR and no account service stores, synchronizes or backs up your list, and a new browser starts with none. Saving an address grants no access, and forgetting one revokes nothing: you add each address again from a device that still holds it, from your bookmarks or from an invitation, and sign in at each CYFR with your account.
+The address of each CYFR you use, saved as a tab, a bookmark, a command line's context or the CYFR app's last connection, belongs to the device that saved it. No CYFR and no account service stores, synchronizes or backs up your list, and a new browser starts with none. Saving an address grants no access, and forgetting one revokes nothing: you add each address again from a device that still holds it, from your bookmarks or from an invitation, and sign in at each CYFR with your account.
 
 ---
 

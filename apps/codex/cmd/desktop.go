@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -54,6 +55,7 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 	to := desktop.NewWriter(out)
 	host, _ := os.Hostname()
 	svc := &desktop.Service{
+		AccountRoad: runtime.GOOS == "darwin" || runtime.GOOS == "windows",
 		Token:       desktop.NewToken(),
 		Clients:     shell.ClientFile(filepath.Join(dir, "client.json")),
 		Record:      filepath.Join(dir, "holder.json"),
@@ -69,6 +71,13 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 		defer cancel()
 		_ = hs.Shutdown(sctx)
 	}()
+	// What cannot be watched is known before the chooser first asks.
+	watching, stopWatching := context.WithCancel(ctx)
+	defer stopWatching()
+	watchSessionLock(watching, svc.Lock, func(sentence string) {
+		svc.Warn(sentence)
+		fmt.Fprintln(os.Stderr, "cyfr: "+sentence)
+	})
 	if err := to.Send(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
 		return err
 	}

@@ -131,14 +131,29 @@ defmodule PrismWeb.BrowserLogoutTest do
     assert get_resp_header(failed, "location") == []
     assert failed.resp_body =~ "still signed in"
 
-    allow_deletes()
-    assert signs_in?(browser.cookie)
+    # What the browser holds after that answer: the cookie it set, if any,
+    # or none if it dropped it; the page and the retry go with that.
+    held = carried(failed, browser.cookie)
 
-    retired = sign_out(conn, browser)
+    allow_deletes()
+    assert held && signs_in?(held)
+
+    retired = sign_out(conn, %{browser | cookie: held})
 
     assert redirected_to(retired) == "/login?error=signed_out"
     assert get_resp_header(retired, "cyfr-session-retired") == ["1"]
     refute signs_in?(browser.cookie)
+  end
+
+  # The session cookie a browser holds after `answer`, which held `cookie`
+  # before it: the one the answer set, nil when the answer dropped it, and
+  # `cookie` when the answer left it alone.
+  defp carried(answer, cookie) do
+    case answer.resp_cookies[@cookie] do
+      nil -> cookie
+      %{max_age: 0} -> nil
+      %{value: value} -> value
+    end
   end
 
   test "the same cookie signed out again is told again that its session is gone",
