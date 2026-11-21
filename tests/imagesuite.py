@@ -13,8 +13,8 @@ depend on the service (`Stack`: its project name, its project directory
 and `down`). What differs between them (compose files, services, the
 seccomp copy, their logs) stays in each harness's own subclass.
 
-Importing this module calls no Docker and binds nothing: the gate's static
-step imports the runtime harness on every commit.
+Importing this module calls no Docker and binds nothing: CI's static job
+imports the runtime harness on every change.
 """
 
 import atexit

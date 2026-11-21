@@ -109,6 +109,12 @@ defmodule Opus.StepSpansTest do
     test = self()
 
     probe = fn %{ctx: ctx, request: request, fetches: fetches} ->
+      # The step's turn asked for the athanor's fill and went on at once; a
+      # root admits only in a filled athanor (`Sanctum.Provisioning.ready/1`),
+      # so the chats wait for that fill to end.
+      :ok = Cyfr.Test.Fill.ended!(test)
+      assert Sanctum.Provisioning.status(ctx) == :ready
+
       line = Jason.encode!(%{"bench_fetch" => request})
 
       inputs = [

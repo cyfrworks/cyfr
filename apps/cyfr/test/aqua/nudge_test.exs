@@ -177,6 +177,20 @@ defmodule Aqua.NudgeTest do
 
     assert List.last(sent()) =~ Nudge.nudge_line()
 
+    # The opening's turn and the nudge's are Aqua's, on the brain and model
+    # of the crew member Aqua runs on (`Cyfr.Test.SeedBundle.seat!/2`):
+    # Aqua's file names none of its own.
+    for id <- [opening, turn_id] do
+      assert {:ok, %{agent: "aqua", catalyst_ref: @model <> ":" <> _}} = Tape.turn(ctx, id)
+    end
+
+    assert [{"agent:local.aqua", "claude-sonnet-5-5"}] =
+             Enum.uniq(
+               for %{input: %{"operation" => "chat"} = input, authority: authority} <-
+                     ScriptedWorker.calls(),
+                   do: {hd(authority.chain), input["params"]["model"]}
+             )
+
     # It ended with no report: the thread still works, and is not quiet
     # again until the quiet period has passed since that end.
     assert state(ctx, workspace.id) == "open"

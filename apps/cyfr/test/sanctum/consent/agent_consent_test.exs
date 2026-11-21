@@ -194,9 +194,10 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, explorer} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
 
     # What of its tools a member runs grants nothing the consent does not:
-    # the soul read-only, the soul's and the crew's shapes stand, and
-    # nothing compares as changed.
-    write_agent!(ctx, "aqua", &%{&1 | mode: "read-only"})
+    # the soul read-only, through the mode of the crew member it runs on,
+    # the soul's and the crew's shapes stand, and nothing compares as
+    # changed.
+    write_agent!(ctx, Cyfr.Test.SeedBundle.seat_member(), &%{&1 | mode: "read-only"})
     assert {:ok, %{mode: "read-only"}} = AquaAgent.get(ctx, "aqua")
     assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, head.shape_digest}
     assert ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, explorer}

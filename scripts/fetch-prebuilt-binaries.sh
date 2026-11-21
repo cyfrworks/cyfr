@@ -22,8 +22,8 @@
 #                                                   where; fetch nothing
 #
 # A build that starts from fresh deps runs the first after `mix deps.get`
-# and before the deps compile (both images' builder stages, CI's jobs, the
-# commit gate, a fresh checkout), and the second once config/ is there and
+# and before the deps compile (both images' builder stages, CI's jobs, a
+# fresh checkout), and the second once config/ is there and
 # before `mix assets.deploy` or `mix tailwind` (the app image's builder
 # stage, the release proofs' build) or the dev server's first tailwind
 # watcher. tests/fetch-prebuilt-binaries-test.sh holds every tracked

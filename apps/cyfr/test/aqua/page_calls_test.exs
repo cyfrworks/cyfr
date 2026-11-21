@@ -225,12 +225,13 @@ defmodule Aqua.PageCallsTest do
     profile_id
   end
 
-  # Aqua switched to `mode`, as the Aqua page switches it.
+  # Aqua switched to `mode`, as the Aqua page switches it: the mode of the
+  # crew member it runs on.
   defp mode!(ctx, mode) do
-    assert {:ok, %{"updated" => "aqua"}} =
+    assert {:ok, %{"updated" => "claude"}} =
              Cyfr.Test.AquaTool.call(ctx, %{
                "action" => "update",
-               "name" => "aqua",
+               "name" => Cyfr.Test.SeedBundle.seat_member(),
                "mode" => mode
              })
   end

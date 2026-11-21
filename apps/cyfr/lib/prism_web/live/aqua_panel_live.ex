@@ -325,6 +325,25 @@ defmodule PrismWeb.AquaPanelLive do
     |> switch_pane(thread)
   end
 
+  # The thread shown was deleted, `removed` itself or its room: a crew
+  # member's thread whose room stands goes back to that room, and any
+  # other to today's thread as the panel holds it, or to the blank slate
+  # when today's is the one gone, where the next post makes it again. A
+  # closed panel only keeps where its next open lands.
+  defp leave(socket, removed) do
+    landing =
+      case socket.assigns.thread do
+        %{kind: "crew", parent_id: room} when room != removed -> own_thread(socket, room)
+        _room -> nil
+      end || socket.assigns.today
+
+    cond do
+      not socket.assigns.open -> assign(socket, :thread, landing)
+      landing -> reach(socket, landing)
+      true -> show(socket, nil)
+    end
+  end
+
   # The person's workspace threads as the list shows them, read under the
   # panel's context; a read that fails keeps what was shown.
   defp read_works(socket) do
@@ -540,15 +559,23 @@ defmodule PrismWeb.AquaPanelLive do
   def handle_info(%ThreadListed{kind: :workspace}, %{assigns: %{phase: :ready}} = socket),
     do: {:noreply, read_works_if_open(socket)}
 
-  # Today's thread deleted: the next open makes it again.
-  def handle_info(
-        %ThreadListed{kind: :removed, id: id},
-        %{assigns: %{today: %{id: id}}} = socket
-      ),
-      do: {:noreply, socket |> assign(:today, nil) |> assign(:unread, 0)}
+  # A thread deleted: today's is made again by the next open, and the
+  # thread shown, or the room of the crew member's thread shown, leaves
+  # the panel (`leave/2`).
+  def handle_info(%ThreadListed{kind: :removed, id: id}, socket) do
+    socket =
+      case socket.assigns do
+        %{today: %{id: ^id}} -> socket |> assign(:today, nil) |> assign(:unread, 0)
+        _assigns -> socket
+      end
 
-  def handle_info(%ThreadListed{kind: :removed}, %{assigns: %{phase: :ready}} = socket),
-    do: {:noreply, read_works_if_open(socket)}
+    case socket.assigns do
+      %{thread: %{id: ^id}} -> {:noreply, leave(socket, id)}
+      %{thread: %{parent_id: ^id}} -> {:noreply, leave(socket, id)}
+      %{phase: :ready} -> {:noreply, read_works_if_open(socket)}
+      _assigns -> {:noreply, socket}
+    end
+  end
 
   def handle_info(%ThreadListed{}, socket), do: {:noreply, socket}
 

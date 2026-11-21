@@ -62,9 +62,8 @@
 # (scripts/lib/run-names.sh's prefix for its worktree with this script's
 # pid), HEAVY_CHECK_CPUS (its processors, as docker's --cpuset-cpus takes
 # them), LOAD_CHECK_OUT (an empty directory of the run's own) and
-# LOAD_CHECK_PARTS (the partitions scripts/commit-gate.sh runs on that
-# many processors; tests/load-check/run-test.sh holds the two rules
-# together).
+# LOAD_CHECK_PARTS (the partitions a whole suite runs in on that many
+# processors: eight on sixteen or more, four on fewer).
 #
 # The report, in OUTDIR: report.tsv (one line per run), skips.tsv,
 # masks.tsv (processes and containers outside their processors),
@@ -138,8 +137,9 @@ for n in "$GRACE" "$SAMPLE"; do
   case $n in ''|0*|*[!0-9]*) refuse 64 'LOAD_CHECK_GRACE and LOAD_CHECK_SAMPLE are positive whole seconds' ;; esac
 done
 
-# The partitions scripts/commit-gate.sh runs on $1 processors.
-gate_parts() { if [ "$1" -ge 16 ]; then echo 8; else echo 4; fi; }
+# The partitions a whole suite runs in on $1 processors, two schedulers
+# each on sixteen or more.
+suite_parts() { if [ "$1" -ge 16 ]; then echo 8; else echo 4; fi; }
 
 # --- the quarters ------------------------------------------------------------
 
@@ -492,7 +492,7 @@ launch() {
   J_DUE[$k]=$((SECONDS + $6))
   if ! contain_start -g "$GRACE" taskset -c "$3" \
       env -u MIX_BUILD_PATH -u MIX_DEPS_PATH -u CYFR_TEST_CORES -u CARGO_BUILD_JOBS -u ERL_FLAGS \
-      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="$3" LOAD_CHECK_OUT="$5" LOAD_CHECK_PARTS="$(gate_parts "$(quarters_count "$3")")" \
+      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="$3" LOAD_CHECK_OUT="$5" LOAD_CHECK_PARTS="$(suite_parts "$(quarters_count "$3")")" \
       "$BASH" -c "$LEADER" load-check-run "${WT[$role]}" "$7" >"$4" 2>&1 </dev/null; then
     J_PID[$k]=
     J_END[$k]=${J_START[$k]} J_STATUS[$k]=1 J_NOTE[$k]='could not start'
@@ -602,7 +602,7 @@ start_worker() {
   W_LABEL[$k]="${base##*/} on quarter $quarter" W_CPUS[$k]=${QUARTER[$quarter]} W_FILE[$k]=$base.status W_PID[$k]=
   if ! contain_start -g "$GRACE" taskset -c "${QUARTER[$quarter]}" \
       env -u MIX_BUILD_PATH -u MIX_DEPS_PATH -u CYFR_TEST_CORES -u CARGO_BUILD_JOBS -u ERL_FLAGS \
-      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="${QUARTER[$quarter]}" LOAD_CHECK_OUT="$base.out" LOAD_CHECK_PARTS="$(gate_parts "$(quarters_count "${QUARTER[$quarter]}")")" \
+      PROOF_RUN_PREFIX="${PREFIX_OF[$role]}" HEAVY_CHECK_CPUS="${QUARTER[$quarter]}" LOAD_CHECK_OUT="$base.out" LOAD_CHECK_PARTS="$(suite_parts "$(quarters_count "${QUARTER[$quarter]}")")" \
       "$BASH" -c "$WORKER" load-check-worker "${WT[$role]}" "$base.status" "$@" >"$base.log" 2>&1 </dev/null; then
     BUSY_VOID="the busy load's ${W_LABEL[$k]} could not start"
     return 1

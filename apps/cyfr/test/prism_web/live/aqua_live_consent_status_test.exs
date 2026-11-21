@@ -91,30 +91,37 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
     {:ok, conn: conn, ctx: ctx}
   end
 
-  # Point the soul at `ref`, and put it back afterwards.
+  # Seat the soul on a crew member of its own that names `ref`, and put
+  # it back afterwards: Aqua runs on the brain of the member it names.
   defp soul_names_catalyst!(ctx, ref) do
     {:ok, soul} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => "aqua"})
-    was = soul["catalyst_ref"] || ""
+    was = soul["member"]
 
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => "aqua",
+        "action" => "create",
+        "name" => "brain",
+        "title" => "Brain",
         "catalyst_ref" => ref
       })
+
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => "brain"})
 
     on_exit(fn ->
       assert {:ok, _} =
                Cyfr.Test.AquaTool.call(ctx, %{
                  "action" => "update",
                  "name" => "aqua",
-                 "catalyst_ref" => was
+                 "member" => was
                })
+
+      assert {:ok, _} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "delete", "name" => "brain"})
 
       assert {:ok, restored} =
                Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => "aqua"})
 
-      assert (restored["catalyst_ref"] || "") == was
+      assert restored["member"] == was
     end)
 
     # Stop live readers before restoring the soul they read.

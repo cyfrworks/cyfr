@@ -204,17 +204,35 @@ defmodule Aqua.Loop do
   # before the file is read: the soul's own refusal is the reason then,
   # and a file still holding the retired `tool_policy`, or a `tools`
   # entry that names no one action, gets its line.
+  #
+  # A soul whose crew member does not stand has a consent of a shape that
+  # names no brain, so its root is refused before its file is pinned: that
+  # member's sentence is the reason then, as the turn's would be.
   defp unclaimed(ctx, %{agent: agent}, reason) do
     with true <- Prima.AgentRef.soul?(agent),
-         {:ok, _roster, refused} <- Aqua.AgentConfig.roster_and_soul(ctx),
-         true <- soul_line?(refused) do
-      refused
+         {:ok, roster, refused} <- Aqua.AgentConfig.roster_and_soul(ctx) do
+      cond do
+        soul_line?(refused) -> refused
+        unheld = unheld(roster) -> unheld
+        true -> reason
+      end
     else
       _other -> reason
     end
   end
 
+  defp unheld(roster) do
+    case Enum.find(roster, &Prima.AgentRef.soul?(&1["name"])) do
+      %{"holder" => %{state: state, name: member}} when state != :held ->
+        {:aqua_runs_on, state, member}
+
+      _held_or_none ->
+        nil
+    end
+  end
+
   defp soul_line?(:tool_policy_retired), do: true
+  defp soul_line?(:seat_has_brain), do: true
   defp soul_line?({:tools_invalid_entry, _entry}), do: true
   defp soul_line?(_refused), do: false
 
@@ -244,14 +262,27 @@ defmodule Aqua.Loop do
 
   # A turn that never ran says why in the thread where the person can act
   # on it: a brain whose provider refused its key, in the provider's
-  # words, and a member whose file still holds the retired `tool_policy`
-  # or a `tools` entry that names no one action, in the sentence that
-  # says what to change.
+  # words, a member whose file still holds the retired `tool_policy`
+  # or a `tools` entry that names no one action, and a soul's file that
+  # names a brain of its own, in the sentence that says what to change,
+  # and Aqua whose crew member does not stand, or a program brain whose
+  # row does not, in the sentence the Aqua page says.
   defp say_unrun(ctx, turn, {:model_refused, _catalyst, %{"type" => @refused_key} = error}),
     do: unrun_line(ctx, turn, refused_key_line(error))
 
   defp say_unrun(ctx, turn, :tool_policy_retired),
     do: unrun_line(ctx, turn, Prima.AgentRef.tool_policy_retired())
+
+  defp say_unrun(ctx, turn, :seat_has_brain),
+    do: unrun_line(ctx, turn, Prima.AgentRef.seat_has_brain())
+
+  # Aqua whose crew member does not stand, and a brain that is a program
+  # whose row does not, in the sentence the Aqua page says too.
+  defp say_unrun(ctx, turn, {:aqua_runs_on, _state, _member} = reason),
+    do: unrun_line(ctx, turn, describe(reason))
+
+  defp say_unrun(ctx, turn, {:crew_unready, _member, _state} = reason),
+    do: unrun_line(ctx, turn, describe(reason))
 
   defp say_unrun(ctx, turn, {:tools_invalid_entry, _entry} = reason),
     do: unrun_line(ctx, turn, describe(reason))
@@ -3202,6 +3233,12 @@ defmodule Aqua.Loop do
   defp describe({:read_only_unheld, title, brain}), do: Aqua.Models.unheld_sentence(title, brain)
 
   defp describe(:tool_policy_retired), do: Prima.AgentRef.tool_policy_retired()
+
+  defp describe(:seat_has_brain), do: Prima.AgentRef.seat_has_brain()
+
+  defp describe({:aqua_runs_on, _state, _member} = reason), do: Prima.Refusal.message(reason)
+
+  defp describe({:crew_unready, _member, _state} = reason), do: Prima.Refusal.message(reason)
 
   defp describe({:tools_invalid_entry, entry}),
     do: Prima.AgentRef.tools_entry_invalid(entry)

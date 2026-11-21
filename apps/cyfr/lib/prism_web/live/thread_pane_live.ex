@@ -54,7 +54,10 @@ defmodule PrismWeb.ThreadPaneLive do
   A room lists its crew members' threads; a member's thread names its
   member, leads back to its room and, while it stands, can be archived
   (`thread.archive`). The pane opens neither: it asks its host to open
-  the thread, `{:open_thread, id}`.
+  the thread, `{:open_thread, id}`. Any thread it shows is deleted from
+  its menu (`thread.delete`), a room with its crew threads, once the
+  person says yes to what goes and what stays; the host leaves a thread
+  the person's list announces removed.
 
   The pane sits beside the shared thread the chat overlay shows, when it
   shows one (`PrismWeb.RoomFeed`, the session's `room_feed` and `room`):
@@ -648,6 +651,29 @@ defmodule PrismWeb.ThreadPaneLive do
 
   def handle_event("archive", _params, socket), do: {:noreply, socket}
 
+  # The person's delete of the thread shown, and with a room the crew
+  # threads under it (`thread.delete`), asked first by the menu's
+  # question. The tool refuses a thread whose turn still runs, so work the
+  # pane sees running is the person's stop first (`thread.stop`). The
+  # removal reaches every screen as the person's list announces it, and
+  # each host leaves the thread there, this one included.
+  def handle_event("delete", _params, %{assigns: %{thread: %{id: id}}} = socket) do
+    stopped =
+      if socket.assigns.running,
+        do: PrismWeb.Ops.call_tool(socket, "thread/stop", %{"thread" => id}),
+        else: {:ok, :idle}
+
+    with {:ok, _} <- stopped,
+         {:ok, _} <- PrismWeb.Ops.call_tool(socket, "thread/delete", %{"thread" => id}) do
+      {:noreply, socket}
+    else
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not delete it: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("delete", _params, socket), do: {:noreply, socket}
+
   # Beside a shared thread: whether each send reads it.
   def handle_event("toggle_read_room", _params, socket) do
     {:noreply, assign(socket, :read_room?, not socket.assigns.read_room?)}
@@ -732,6 +758,17 @@ defmodule PrismWeb.ThreadPaneLive do
   # moved, read again; gone, its cards with it.
   def handle_info(%ThreadListed{kind: :workspace, id: id}, socket),
     do: {:noreply, reread_works(socket, [id])}
+
+  # The crew member's thread shown was deleted and its room stands: the
+  # host opens the room, whichever host it is. A room deleted with it is
+  # its host's to leave.
+  def handle_info(
+        %ThreadListed{kind: :removed, id: id},
+        %{assigns: %{thread: %{id: id, kind: "crew", parent_id: room}}} = socket
+      ) do
+    if thread_of(socket.assigns.context, room), do: tell_host(socket, {:open_thread, room})
+    {:noreply, socket}
+  end
 
   def handle_info(%ThreadListed{kind: :removed, id: id}, socket) do
     if Map.has_key?(socket.assigns.works, id),
@@ -1430,14 +1467,31 @@ defmodule PrismWeb.ThreadPaneLive do
   # consent that exists. One that waits on the person's grant alone says
   # so. A soul on a program the athanor has no row of, or whose row is
   # disabled or no brain's, says which, as a turn on it is refused
-  # (`Prima.Refusal`).
+  # (`Prima.Refusal`), naming whose brain it is: the crew member Aqua runs
+  # on, whose card installs or opens it. Aqua whose crew member does not
+  # stand, or that names none, says so in the sentence its card says and
+  # its turn is refused with (`aqua.list`'s `member_refusal`), never as
+  # a model to connect.
   # An agents list that could not be read is not a room with no model.
   defp model_ready(_ctx, :unread), do: :agents_unavailable
 
   defp model_ready(ctx, agents) do
+    case Enum.find_value(agents, & &1["member_refusal"]) do
+      sentence when is_binary(sentence) -> {:unseated, sentence}
+      nil -> model_status_ready(ctx, agents)
+    end
+  end
+
+  defp model_status_ready(ctx, agents) do
     case Aqua.model_status(ctx, agents) do
-      empty when map_size(empty) == 0 -> :no_model
-      statuses -> unready_model(Map.values(statuses))
+      empty when map_size(empty) == 0 ->
+        :no_model
+
+      statuses ->
+        case unready_model(Map.values(statuses)) do
+          {:program, state} -> {:program, state, Enum.find_value(agents, & &1["member_title"])}
+          ready -> ready
+        end
     end
   end
 
@@ -1445,10 +1499,11 @@ defmodule PrismWeb.ThreadPaneLive do
   # with detail, as the Aqua page's agents panel reads it: the roster names
   # who can be addressed and carries no model, so a model's status read
   # from it would always be none. Whether Aqua can answer is the soul's to
-  # say, so the crew is left out. The soul is put in the roster's
-  # string-keyed projection, its catalyst or the name of its program,
-  # which `Aqua.model_status/2` reads. A list
-  # that cannot be read is `:unread`, never no agents.
+  # say, so the crew is left out but for the title of the member it runs
+  # on. The soul is put in the roster's string-keyed projection, its
+  # catalyst or the name of its program, which `Aqua.model_status/2`
+  # reads, with the sentence the list says while its member does not
+  # stand. A list that cannot be read is `:unread`, never no agents.
   defp agents(ctx) do
     soul = Compendium.agent_soul_type()
 
@@ -1459,7 +1514,9 @@ defmodule PrismWeb.ThreadPaneLive do
             "name" => guide.name,
             "type" => guide.type,
             "catalyst_ref" => guide[:catalyst_ref],
-            "program" => guide[:program]
+            "program" => guide[:program],
+            "member_refusal" => guide[:member_refusal],
+            "member_title" => Enum.find_value(guides, &(&1.name == guide[:member] && &1[:title]))
           }
         end
 
@@ -1681,12 +1738,15 @@ defmodule PrismWeb.ThreadPaneLive do
               else: assistant_label(current_assistant(@assistant, @roster))}
           </span>
         </div>
-        <div :if={room?(@thread)} class="aqua-panel-menu-row">
-          <span :if={@thread.archived_at} title="New work here takes it out of the archive">
+        <div :if={@thread} class="aqua-panel-menu-row">
+          <span
+            :if={room?(@thread) and @thread.archived_at}
+            title="New work here takes it out of the archive"
+          >
             Archived
           </span>
           <button
-            :if={is_nil(@thread.archived_at)}
+            :if={room?(@thread) and is_nil(@thread.archived_at)}
             id={@dom <> "-archive"}
             type="button"
             phx-click="archive"
@@ -1694,6 +1754,16 @@ defmodule PrismWeb.ThreadPaneLive do
             class="rounded px-1.5 py-0.5 text-text-secondary hover:bg-surface-base hover:text-text-primary"
           >
             Archive
+          </button>
+          <button
+            id={@dom <> "-delete"}
+            type="button"
+            phx-click="delete"
+            data-confirm={delete_question(@children, @running)}
+            title="Its posts, files and turns are removed"
+            class="rounded px-1.5 py-0.5 text-text-secondary hover:bg-surface-base hover:text-text-primary"
+          >
+            Delete
           </button>
         </div>
         <div class="aqua-panel-menu-row">
@@ -1790,6 +1860,15 @@ defmodule PrismWeb.ThreadPaneLive do
             <%= cond do %>
               <% @model_ready == :pending -> %>
                 <span data-test="model-pending">Reading the model…</span>
+              <% match?({:unseated, _}, @model_ready) -> %>
+                <span data-test="model-unseated">{elem(@model_ready, 1)}</span>
+                <.link
+                  navigate={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
+                  data-test="model-connect"
+                  class="text-blue-400 hover:underline"
+                >
+                  Open your Aqua page.
+                </.link>
               <% @model_ready in [:no_model, :no_key] -> %>
                 <span>{athanor_label(@athanor, @context)} has no model yet.</span>
                 <.link
@@ -1799,10 +1878,11 @@ defmodule PrismWeb.ThreadPaneLive do
                 >
                   Connect one on your Aqua page.
                 </.link>
-              <% match?({:program, _}, @model_ready) -> %>
+              <% match?({:program, _, _}, @model_ready) -> %>
                 <span data-test="model-program">
                   {Prima.Refusal.message(
-                    {:crew_unready, athanor_label(@athanor, @context), elem(@model_ready, 1)}
+                    {:crew_unready, elem(@model_ready, 2) || athanor_label(@athanor, @context),
+                     elem(@model_ready, 1)}
                   )}
                 </span>
               <% @model_ready == :needs_grant -> %>
@@ -2465,6 +2545,31 @@ defmodule PrismWeb.ThreadPaneLive do
        do: :request
 
   defp crew(_row), do: nil
+
+  # What the menu's Delete asks before anything goes: what a delete
+  # removes (`Arca.ThreadStorage.delete/3`) and what it leaves, the crew
+  # threads under a room named, and the stop the pane makes first when it
+  # sees work running.
+  defp delete_question(children, running) do
+    stops = if running, do: " The work running in it stops.", else: ""
+
+    {under, of} =
+      case Enum.map(children, &"#{&1.agent}'s") do
+        [] -> {"", "it"}
+        [one] -> {", with #{one} thread under it", "them"}
+        many -> {", with #{and_list(many)} threads under it", "them"}
+      end
+
+    "Delete this thread?#{stops} Its posts, files and turns go#{under}, " <>
+      "and any record a program keeps of #{of}. The records of what ran stay on the " <>
+      "Executions page and in the logs, as do a program's sign-in and every other thread. " <>
+      "This cannot be undone."
+  end
+
+  defp and_list(names) do
+    {init, [last]} = Enum.split(names, -1)
+    Enum.join(init, ", ") <> " and " <> last
+  end
 
   # The room a crew thread works under: a daily thread by its day's date,
   # a workspace thread by its title.

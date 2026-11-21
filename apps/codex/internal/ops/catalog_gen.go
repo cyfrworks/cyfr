@@ -582,7 +582,7 @@ type AquaUpdateArgs struct {
 	Options Field[*map[string]any] `json:"options,omitzero"`
 	// update only: the brain options to change, applied to the options as they are when the write lands — a value sets an option, null takes it off; options not named are kept, so two edits of different options at once keep both. Not with options.
 	OptionsPatch Field[map[string]*any] `json:"options_patch,omitzero"`
-	// What of its offered tools this member runs (create/update; the soul or a crew member): 'read-only' runs only reads, then answers, and every other call is refused; 'auto' runs every tool it is offered, deleting included. A file without it is auto.
+	// What of its offered tools this member runs (create/update; a crew member, whose mode Aqua runs in when it runs on it): 'read-only' runs only reads, then answers, and every other call is refused; 'auto' runs every tool it is offered, deleting included. A file without it is auto.
 	Mode Field[string] `json:"mode,omitzero"`
 	// The soul's tools, which every crew member is offered too (a crew member has none of its own): each one action, 'tool.action', 'native_search' (the provider's own search) or an outside server's 'server:tool', with no wildcard: every action of a tool is listed by name. A tool missing from the list is not callable at all; null offers nothing.
 	Tools Field[*[]string] `json:"tools,omitzero"`
@@ -594,6 +594,8 @@ type AquaUpdateArgs struct {
 	Content Field[string] `json:"content,omitzero"`
 	// Take a crew member out of the crew without deleting its file (for update; shipped members cannot be deleted — disable them instead)
 	Disabled Field[*bool] `json:"disabled,omitzero"`
+	// update only, the soul ('aqua'): the crew member Aqua runs on, whose brain, model, options and mode it takes; null names none. The soul has no brain of its own.
+	Member Field[*string] `json:"member,omitzero"`
 	// update only: the content_digest that get answered for the soul's prompt being edited. The update is refused as a conflict when the prompt has changed since, so one edit never writes over another.
 	ExpectedDigest Field[string] `json:"expected_digest,omitzero"`
 }

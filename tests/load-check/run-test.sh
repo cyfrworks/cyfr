@@ -246,7 +246,7 @@ no_work() {
   [ -z "$(ls -A "$S/probe")" ] || { echo "a row ran: $(ls "$S/probe")"; return 1; }
 }
 # placed NAME: each copy and a process it started saw its processors alone,
-# and was told them as HEAVY_CHECK_CPUS, with the gate's partitions.
+# and was told them as HEAVY_CHECK_CPUS, with the suites' partitions.
 placed() {
   local o=$S/out/$1 c
   for c in busy pair; do
@@ -566,25 +566,7 @@ mutant redact '        note="exited ${J_STATUS[$i]}: $(redact "${why:-a missing 
 fresh; lc mutant-redact -- -s leaky -c alone
 grep -qF "$SECRET2" "$S/mutant-redact.out" || fail 'the note control did not print the password'
 
-begin 'the partitions a run is told are the commit gate'"'"'s, and every container the browser harness and the install proof start is placed'
-# gate_rule SCRIPT N: what the gate's own lines pick on N processors;
-# load_rule N: what the load check's gate_parts picks.
-gate_rule() {
-  local block n=$2
-  block=$(awk '/^if \[ -z "\$PARTS" \]; then$/ { on = 1 } on { print } on && /^fi$/ { exit }' "$1")
-  [ -n "$block" ] || return 1
-  (PARTS= && sysctl() { return 1; } && nproc() { echo "$n"; } && eval "$block" && echo "$PARTS")
-}
-load_rule() { (eval "$(sed -n '/^gate_parts() {/p' "$ROOT/tests/load-check/run.sh")" && gate_parts "$1"); }
-parity() {
-  local n
-  for n in $(seq 1 64); do
-    [ "$(gate_rule "$1" "$n")" = "$(load_rule "$n")" ] || { echo "on $n processors the gate picks '$(gate_rule "$1" "$n")', the load check $(load_rule "$n")"; return 1; }
-  done
-}
-parity "$ROOT/scripts/commit-gate.sh" || fail "$(parity "$ROOT/scripts/commit-gate.sh")"
-mutant gate 'if [ "$cores" -ge 16 ]; then PARTS=8; else PARTS=4; fi' 'if [ "$cores" -ge 12 ]; then PARTS=8; else PARTS=4; fi' "$ROOT/scripts/commit-gate.sh"
-! parity "$S/mutant-gate" >/dev/null || fail 'parity passed a gate that picks otherwise'
+begin 'every container the browser harness and the install proof start is placed'
 # placed_containers FILE...: every docker run and docker create in FILE
 # passes the processors it is given.
 placed_containers() {

@@ -401,6 +401,39 @@ defmodule Arca.CrewStorageTest do
   end
 
   describe "deleting a room" do
+    test "a deleted room answers its surviving asker but not the asks made inside it",
+         %{actor: actor, room: room} do
+      {:ok, outside} = Arca.Test.Days.thread(actor)
+      request = request!(actor, outside, "aqua", "work", "aqua")
+
+      {:ok, %{turn: own}} =
+        TurnStorage.accept_message(actor, room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "aqua",
+            content: request.content,
+            payload: %{"request_id" => request.id}
+          },
+          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive},
+          reply_address: %{asking_thread_id: outside.id, request_id: request.id}
+        })
+
+      {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+      nested = delivered!(actor, room, child, request!(actor, room, "planner", "plan"))
+      outside_before = Threads.get(actor, outside.id)
+
+      assert {:ok, %{cancelled: cancelled}} = Threads.delete(actor, room.id)
+      assert Enum.sort(Enum.map(cancelled, & &1.turn_id)) == Enum.sort([own.id, nested.id])
+      assert Threads.get(actor, outside.id) == outside_before
+      assert {:error, :not_found} = Threads.get(actor, room.id)
+      assert {:error, :not_found} = Threads.get(actor, child.id)
+      assert [reply] = replies(actor)
+      assert reply.snapshot["asking_thread_id"] == outside.id
+      assert reply.snapshot["request_ids"] == [request.id]
+      assert reply.snapshot["outcome"] == "cancelled"
+      assert reply.snapshot["text"] == "the room was deleted"
+    end
+
     test "decides before any byte goes: a refusal keeps every blob",
          %{actor: actor, room: room} do
       {:ok, planner} = Threads.crew_thread(actor, room.id, "planner")

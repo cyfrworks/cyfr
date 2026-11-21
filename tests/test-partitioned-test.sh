@@ -979,7 +979,7 @@ while read -r leader; do
 done < "$TRACE/resistant-leaders"
 echo "eight resistant partitions stopped in ${took}s"
 
-# Nested, as under heavy-check or the gate, the runner owns no registry and
+# Nested, as under heavy-check, the runner owns no registry and
 # sweeps none, so its own stop is all that ends its partitions: every
 # leader is dead when it exits, and on PostgreSQL before any drop runs.
 alive() {

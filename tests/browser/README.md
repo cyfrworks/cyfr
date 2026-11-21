@@ -227,9 +227,9 @@ containers, networks and volumes under it, an image, a container, a
 directory under `TMPDIR`. Each puts `PROOF_RUN_PREFIX` before those names,
 as do the image suites (`tests/imagesuite.py`) and the release boot
 (`tests/release-boot/`). It is empty unless set, so CI and a run by hand
-name as before; the commit gate sets it to `cyfr-gate-<pid>-<leg>-`, so
-what a proof it killed leaves is the gate's to find and remove by name
-(`scripts/commit-gate.sh`).
+name as before; `scripts/heavy-check.sh` sets it to the run prefix of
+`scripts/lib/run-names.sh`, so what a proof it stopped leaves is the
+janitor's to find and remove by name (`scripts/janitor.sh`, its rule 1).
 
 ## The proofs
 
@@ -269,12 +269,7 @@ proof's own README holds how to run it and its steps.
 | canvas | `tests/canvas-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 | g (desktop) and h (720×720); all three |
 
 Shard d also runs the shipped Caddyfile's HSTS check
-(`tests/proxy-hsts/`), which starts no release and no browser. The commit
-gate's close (`scripts/commit-gate.sh --close`) runs the eight shards one
-after another as the job runs them, each step read from the workflow, on
-this host's pull of the pinned image; a shard of one viewport reuses the
-release the shard before it built (approval's c's, the canvas proof's
-d's) and fails when there is none.
+(`tests/proxy-hsts/`), which starts no release and no browser.
 
 In CI every proof writes its records under
 `$RUNNER_TEMP/proofs/<proof>`, or

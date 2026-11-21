@@ -657,8 +657,7 @@ print(json.dumps([c for c in calls if c[:2] == ["docker", "run"]]))
 
 class OneOffNames(unittest.TestCase):
     """A one-off container a suite starts is named only under
-    PROOF_RUN_PREFIX, so CI starts it unnamed, as it did before the gate
-    named its runs."""
+    PROOF_RUN_PREFIX, so CI, which sets none, starts it unnamed."""
 
     def started(self, suite, case, prefix):
         env = {k: v for k, v in os.environ.items() if k != "PROOF_RUN_PREFIX"}
@@ -674,18 +673,18 @@ class OneOffNames(unittest.TestCase):
     def test_run_name_is_nothing_without_the_prefix(self):
         with mock.patch.object(imagesuite, "PROJECT_PREFIX", ""):
             self.assertEqual(imagesuite.run_name("x"), [])
-        with mock.patch.object(imagesuite, "PROJECT_PREFIX", "cyfr-gate-1-harness-"):
-            self.assertEqual(imagesuite.run_name("cyfr-gate-1-harness-x"), ["--name", "cyfr-gate-1-harness-x"])
+        with mock.patch.object(imagesuite, "PROJECT_PREFIX", "cyfr-0123456789-1-"):
+            self.assertEqual(imagesuite.run_name("cyfr-0123456789-1-x"), ["--name", "cyfr-0123456789-1-x"])
 
     def test_each_one_off_container_is_named_only_under_the_prefix(self):
         for suite, case in (("locus-runtime-image", "keeper_run"), ("locus-runtime-image", "prerequisites"),
                             ("locus-runtime-image", "dial")):
             with self.subTest(case=case):
                 self.assertNotIn("--name", self.started(suite, case, None))
-                args = self.started(suite, case, "cyfr-gate-1-harness-")
+                args = self.started(suite, case, "cyfr-0123456789-1-")
                 self.assertIn("--name", args)
                 name = args[args.index("--name") + 1]
-                self.assertTrue(name.startswith("cyfr-gate-1-harness-") or name.startswith("project-"), name)
+                self.assertTrue(name.startswith("cyfr-0123456789-1-") or name.startswith("project-"), name)
 
 
 class Bytecode(unittest.TestCase):

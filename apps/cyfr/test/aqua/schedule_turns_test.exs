@@ -245,12 +245,13 @@ defmodule Aqua.ScheduleTurnsTest do
         do: Map.take(row, [:kind, :author, :sent_by, :content, :client_id, :turn_id])
   end
 
-  # The soul switched to read-only, as the Aqua page switches it.
+  # Aqua switched to read-only, as the Aqua page switches it: the crew
+  # member Aqua runs on, whose mode Aqua runs in.
   defp read_only!(ctx) do
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
-        "name" => Compendium.AquaPath.soul_name(),
+        "name" => Cyfr.Test.SeedBundle.seat_member(),
         "mode" => "read-only"
       })
   end
@@ -528,6 +529,18 @@ defmodule Aqua.ScheduleTurnsTest do
                turn
 
       assert user_id == ctx.user_id
+
+      # Aqua's turn, on the brain and model of the crew member Aqua runs on
+      # (`Cyfr.Test.SeedBundle.seat!/2`): Aqua's file names none of its own.
+      assert "catalyst:local.claude:" <> _ = turn.catalyst_ref
+
+      assert [{@aqua, "claude-sonnet-5-5"}] =
+               Enum.uniq(
+                 for %{input: %{"operation" => "chat"} = input, authority: authority} <-
+                       ScriptedWorker.calls(),
+                     do: {hd(authority.chain), input["params"]["model"]}
+               )
+
       assert threads(ctx) == [thread_id]
       refute Map.has_key?(row!(ctx, id), :thread_id)
 

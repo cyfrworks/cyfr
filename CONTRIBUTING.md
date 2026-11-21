@@ -190,10 +190,8 @@ same worktree refuses, naming the run that holds it.
   (`cargo install cargo-component --locked`) with the `wasm32-wasip1` and
   `wasm32-wasip2` targets on rustup's default toolchain: a build runs
   outside the checkout, where `rust-toolchain.toml` does not choose the
-  toolchain. `scripts/commit-gate.sh` looks for it in
-  `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
-  Checking the test WASM fixtures (`scripts/check-test-wasm.sh`, a handoff
-  check too) also needs the Rust release their recipes pin
+  toolchain. Checking the test WASM fixtures (`scripts/check-test-wasm.sh`,
+  a handoff check too) also needs the Rust release their recipes pin
   (`rustc_version` in `apps/cyfr/test/support/test_wasm/build-fixture.sh`)
   with the same two targets; a handoff check missing its toolchain reads
   `not run 69`.
@@ -215,7 +213,7 @@ same worktree refuses, naming the run that holds it.
   another on one queue ticket and the rest side by side, each on its own,
   so one stage can hold all four quarters for a while; a touched test
   that two test checks of one folder name runs once, in the one that names
-  it. Every other stage runs its checks one after another. A stage's
+  it. The nightly runs its checks one after another. A stage's
   summary lists every check in the table's order. The
   host answers while you edit and keeps itself; GitHub proves the tree:
   - `save`, after an edit: the format and credo checks, an incremental
@@ -239,34 +237,32 @@ same worktree refuses, naming the run that holds it.
     and tested alone (CI's island jobs), the proofs under `tests/` and the
     tests no change reaches are the pull request's run's, and the install
     proof the nightly's;
-  - `pull-request`: the pull request's run on GitHub is the check, and it
-    runs every check in parallel. `scripts/stage.sh pull-request` runs
-    `scripts/commit-gate.sh`, CI's checks on this host, for working
-    offline or reproducing a failing CI job. Whoever merges reads the
-    push runs on main that cover the merge with
-    `python3 -I scripts/ci/main-run.py [-n] [COMMIT]`, again until it
-    exits 0: it reruns a red run's failed jobs once, and its exit status
-    says whether every run is green, one still runs, a rerun started, or
-    one is red twice, which opens a regression job. It reads only the
-    runs GitHub made, so a run that was due and never made is not
-    detected. A Test run, a pull request's or a push's on main, that
-    fails its first attempt has its failed jobs rerun once without a
-    person (`.github/workflows/rerun.yml`, which decides through
-    `scripts/ci/reds.py`), so `main-run.py` usually reads such a run
-    already rerun, green or red twice. A rerun that passes is a flake:
-    it adds a comment naming the run, the commit, the jobs that failed
-    and the failing tests their logs name to the open issue "Flaky
-    tests". A rerun that fails again on main adds one to "Test is red
-    twice on main"; on a pull request it stands for its author. An
-    intermittent defect in the product gets the same second chance to
-    pass as a flaky test, and the flake record is what keeps it visible;
-  - `release`: the gate's close, which holds the host for over an hour,
-    run by `scripts/release.sh --gate` for a HEAD with no run on GitHub;
   - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
     proof, which no workflow runs, each on one quarter, then the canvas
     proof at both viewports on all four with its reference budget. The host's
     timer runs it once a day on main's head through `scripts/nightly.sh`, which
     reports the night to GitHub (the nightly, below).
+
+  Past `handoff`, the pull request's run on GitHub is the check, and it
+  runs every check in parallel; a CI job is reproduced here by running
+  that job's own commands. Whoever merges reads the push runs on main
+  that cover the merge with
+  `python3 -I scripts/ci/main-run.py [-n] [COMMIT]`, again until it
+  exits 0: it reruns a red run's failed jobs once, and its exit status
+  says whether every run is green, one still runs, a rerun started, or
+  one is red twice, which opens a regression job. It reads only the
+  runs GitHub made, so a run that was due and never made is not
+  detected. A Test run, a pull request's or a push's on main, that
+  fails its first attempt has its failed jobs rerun once without a
+  person (`.github/workflows/rerun.yml`, which decides through
+  `scripts/ci/reds.py`), so `main-run.py` usually reads such a run
+  already rerun, green or red twice. A rerun that passes is a flake:
+  it adds a comment naming the run, the commit, the jobs that failed
+  and the failing tests their logs name to the open issue "Flaky
+  tests". A rerun that fails again on main adds one to "Test is red
+  twice on main"; on a pull request it stands for its author. An
+  intermittent defect in the product gets the same second chance to
+  pass as a flaky test, and the flake record is what keeps it visible.
 
   The touched tests are the changed test files and, for each changed or
   deleted `apps/<app>/lib/<path>.ex`, `apps/<app>/test/<path>_test.exs`
@@ -301,18 +297,12 @@ same worktree refuses, naming the run that holds it.
   no handoff row does, and `go test ./... -race` are the pull request's
   run's alone: a defect in one shows there. A pull request's run starts
   the host and partitions harness self-test jobs only when it changes a
-  path their scripts read, and the commit gate's only when it changes
-  the gate, its self-test, `scripts/lib`, a workflow or the
-  setup-elixir action (`scripts/ci/self-test-scope.sh` holds each job's
-  paths); it shows a
-  job it leaves out as skipped, not needed, and a push to main, a
-  release and the nightly run all three. The gate's paths are narrower
-  than what its self-test reads, so a change elsewhere that breaks it
-  shows on main's push run after the merge, where a red job is rerun
-  once and a second red opens an issue. To have one's answer before
-  the pull request, run it here by name on all four quarters, as its
-  workflow step runs it:
-  `scripts/heavy-check.sh bash tests/commit-gate-test.sh`, or
+  path their scripts read (`scripts/ci/self-test-scope.sh` holds each
+  job's paths); it shows a job it leaves out as skipped, not needed, and
+  a push to main, a release and the nightly run both. To have one's
+  answer before the pull request, run it here by name on all four
+  quarters, as its workflow step runs it:
+  `scripts/heavy-check.sh bash tests/heavy-check-test.sh`, or
   `scripts/heavy-check.sh bash -c 'cd apps/codex && go test ./... -race'`.
 
   The Compose proof's update cases (`tests/compose-proof/run.sh --case
@@ -338,23 +328,17 @@ same worktree refuses, naming the run that holds it.
   push started the run for (`scripts/ci/release-note.sh`). A note is at
   most 64 KiB, and a longer one is refused before anything is made;
   `--push` pushes main and the tag together,
-  by full refs, in one atomic push. `--gate` is the fallback for a HEAD with no
-  run: it runs the release stage, the gate's close, here first. Right
-  before it tags it runs the dependency audits again
-  (`scripts/dependency-audit.sh`, the same ones CI runs), because the
-  advisory feeds they read change independently of the tree, and a tag
-  whose own run fails them publishes nothing. The gate's
-  header lists what it runs and which of CI's checks stay CI's alone.
-  Besides `cargo-component` it needs `go` at the version both `go.mod`
-  files name and a running Docker daemon, and it refuses to run without
-  them; it installs `govulncheck` and the close's `trivy` itself, at the
-  versions CI pins. The tag's GoReleaser run checks every command line
-  binary it builds before archiving any (`scripts/ci/release-binary-check.sh`,
+  by full refs, in one atomic push. Right before it tags it runs the
+  dependency audits again (`scripts/dependency-audit.sh`, the same ones
+  CI runs), because the advisory feeds they read change independently of
+  the tree, and a tag whose own run fails them publishes nothing. The
+  tag's GoReleaser run checks every command line binary it builds before
+  archiving any (`scripts/ci/release-binary-check.sh`,
   each build's post hook): one built with a build tag or holding the
   update proof's code fails the release.
 - `scripts/heavy-check.sh` queues the checks of everyone sharing a host.
   It cuts the machine's cores into four quarters of whole cores. A check
-  takes all four by default and runs alone: a gate, a full or
+  takes all four by default and runs alone: a full or
   multi-partition suite, `go test -race`, a harness self-test that needs
   the machine, the canvas proof, the compose proof. With `-q 1` it takes
   one quarter: named test paths in one partition, a compile, dialyzer,
@@ -381,7 +365,10 @@ same worktree refuses, naming the run that holds it.
 - The nightly runs on GitHub (`.github/workflows/nightly.yml`), each day
   at 02:37 Taipei time and on demand: one run of the Test workflow on
   main's head under its `nightly` input, in which each test shard runs
-  its suite twice with the timing formatter, then a job that runs
+  its suite twice with the timing formatter, beside the other workflows a
+  release tag's run calls, which a pull request and a push to main run
+  only when their paths change (Dialyzer, Codex CI, Keeper CI, License
+  lint and Security), then a job that runs
   `scripts/lib/nightly.py` over every shard's two runs. Its summary and artifacts carry the flake list
   (each test that failed in one run and passed in the other, or failed in
   both) and the regenerated `scripts/test-partition-weights.tsv`. When
