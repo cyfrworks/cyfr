@@ -1998,6 +1998,82 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # As a browser drives the form: each field's change is sent with the
+    # form as it stands, and Make sends the form with nothing added. What
+    # the form holds survives each render (a field the page did not show
+    # again would be sent empty), so the member made is what was chosen.
+    test "the form driven as a browser does, a change for each field and then Make, makes the " <>
+           "member chosen",
+         %{conn: conn, ctx: ctx} do
+      described_open!(ctx, %{
+        "open-1" => [],
+        "open-2" => [
+          %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]},
+          %{"name" => "budget", "kind" => "integer"}
+        ]
+      })
+
+      new = "#aqua-setup-new-member"
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      settled(
+        fn -> has_element?(view, new <> ~s( option[value="catalyst:open"])) end,
+        "the key offered"
+      )
+
+      change = fn field -> view |> form(new, field) |> render_change() end
+      change.(%{"name" => "Sonnet"})
+      change.(%{"description" => "Quick edits"})
+      change.(%{"brain" => "catalyst:open"})
+      change.(%{"model" => "open-2"})
+      settled(fn -> has_element?(view, new <> ~s( [name="options[effort]"])) end, "the options")
+      change.(%{"options" => %{"effort" => "low"}})
+      change.(%{"options" => %{"budget" => "7"}})
+      change.(%{"avoid" => "Long jobs"})
+
+      # Both showings of the form hold what was entered.
+      for form <- [new, "#aqua-new-member"] do
+        assert has_element?(view, form <> ~s( input[name="name"][value="Sonnet"]))
+        assert has_element?(view, form <> ~s( option[value="catalyst:open"][selected]))
+        assert has_element?(view, form <> ~s( option[value="open-2"][selected]))
+
+        assert has_element?(
+                 view,
+                 form <> ~s( [name="options[effort]"] option[value="low"][selected])
+               )
+
+        assert has_element?(view, form <> ~s( input[name="options[budget]"][value="7"]))
+        assert has_element?(view, form <> ~s( input[name="description"][value="Quick edits"]))
+      end
+
+      assert view |> form(new) |> render_submit() =~ "Made Sonnet."
+
+      assert {:ok,
+              %{
+                "title" => "Sonnet",
+                "catalyst_ref" => "catalyst:local.open",
+                "model" => "open-2",
+                "description" => "Quick edits",
+                "avoid" => "Long jobs",
+                "options" => %{"effort" => "low", "budget" => 7}
+              }} = get_agent(ctx, "Sonnet")
+
+      # Another harness or key lists other models and options: choosing one
+      # drops the model and the options chosen on the last.
+      change.(%{"name" => "Haiku"})
+      change.(%{"brain" => "catalyst:open"})
+      change.(%{"model" => "open-2"})
+      settled(fn -> has_element?(view, new <> ~s( [name="options[effort]"])) end, "the options")
+      change.(%{"options" => %{"effort" => "high"}})
+      change.(%{"brain" => ""})
+      refute has_element?(view, new <> ~s( select[name="model"]))
+      change.(%{"brain" => "catalyst:open"})
+      refute has_element?(view, new <> ~s( option[value="open-2"][selected]))
+      refute has_element?(view, new <> ~s( [name="options[effort]"]))
+      assert has_element?(view, new <> ~s( input[name="name"][value="Haiku"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     # Make writes an option only if the model it names offers it: one left
     # from the model picked before, sent with another that offers none
     # (or whose options have not answered yet), writes nothing, says to
@@ -2055,7 +2131,7 @@ defmodule PrismWeb.AquaLiveTest do
     # new one does not list is taken off in the same write.
     test "a card names the member's harness or key and moves it to another, whose models and " <>
            "options it then offers",
-         %{conn: conn, ctx: ctx} do
+         %{conn: conn, ctx: ctx, athanor: athanor} do
       Cyfr.Test.SeedBundle.lay!(~w(files http))
       :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
       :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
@@ -2161,6 +2237,50 @@ defmodule PrismWeb.AquaLiveTest do
              ]
 
       refute has_element?(view, "#aqua-card-Opus-access")
+
+      # A key has no default model: with none chosen the member is not
+      # ready, its card says a model is to be chosen, the setup's list
+      # says it is not ready, and Aqua's Runs on names it so.
+      unchosen = Prima.Refusal.message({:crew_unready, "Opus", :no_model})
+      assert unchosen == "Opus has no model chosen yet — choose one on its card on the Aqua page"
+      assert has_element?(view, ~s(#aqua-card-Opus [data-test="needs-model"]), unchosen)
+      refute has_element?(view, "#aqua-card-Opus", "Model connected")
+      assert has_element?(view, "#aqua-setup-made-Opus", "not ready yet")
+
+      assert {"Opus", "Opus — open, no model chosen yet"} in choices(
+               view,
+               "#aqua-card-aqua-member option"
+             )
+
+      # Aqua on that member has no model to answer with, and its thread
+      # says so, with the way to the Aqua page.
+      on_exit(fn ->
+        Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => nil})
+      end)
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => "Opus"})
+
+      {:ok, pane, _html} =
+        live_isolated(conn, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => athanor.id})
+
+      settled(
+        fn ->
+          has_element?(pane, ~s(a[data-test="model-connect"]), "Connect one on your Aqua page.")
+        end,
+        "the pane's line"
+      )
+
+      # A model chosen, it is ready.
+      view
+      |> element("#aqua-card-Opus-model")
+      |> render_change(%{"name" => "Opus", "value" => "open::open-2"})
+
+      settled(fn -> has_element?(view, "#aqua-setup-made-Opus", "ready.") end, "ready again")
+      refute has_element?(view, ~s(#aqua-card-Opus [data-test="needs-model"]))
+      assert has_element?(view, "#aqua-card-Opus", "Model connected")
+
+      assert {"Opus", "Opus — open, open-2"} in choices(view, "#aqua-card-aqua-member option")
 
       # One not connected here writes nothing.
       before = get_agent(ctx, "Opus")

@@ -329,6 +329,7 @@ defmodule Aqua.Crew do
   Why a crew member cannot take a job, all of it its brain's, since a
   member holds no consent of its own: no brain named, its catalyst not
   installed, no key bound, only the person's grant of the brain to give,
+  no model chosen on a key,
   the brain's own grant damaged, for a brain that is a program its row
   gone, disabled or not a program a brain runs in, or the reads that
   would tell unavailable.
@@ -338,6 +339,7 @@ defmodule Aqua.Crew do
           | :not_installed
           | :no_key
           | :no_grant
+          | :no_model
           | :consent_damaged
           | :program_missing
           | :program_disabled
@@ -393,6 +395,7 @@ defmodule Aqua.Crew do
   def unready({:missing, _}), do: :not_installed
   def unready({:needs_key, _}), do: :no_key
   def unready({:needs_grant, _}), do: :no_grant
+  def unready({:needs_model, _}), do: :no_model
   def unready({:consent_damaged, _}), do: :consent_damaged
   def unready({:program_missing, _}), do: :program_missing
   def unready({:program_disabled, _}), do: :program_disabled

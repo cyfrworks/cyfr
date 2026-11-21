@@ -1260,7 +1260,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
     case harness(agent) do
       {nil, nil} -> "#{title} — no harness or key yet"
-      {_value, on} -> "#{title} — #{on}, #{agent["model"] || "its default model"}"
+      {"catalyst:" <> _key, on} -> "#{title} — #{on}, #{agent["model"] || "no model chosen yet"}"
+      {_program, on} -> "#{title} — #{on}, #{agent["model"] || "its default model"}"
     end
   end
 
@@ -1835,6 +1836,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </span>
         <span :if={match?({:needs_grant, _}, @model_status)} class="text-amber-300">
           Not connected — it needs only your grant
+        </span>
+        <%!-- A key with no model chosen on it runs nothing: said as a job
+             handed to the member is refused, on Aqua's card of the member
+             it runs on. --%>
+        <span
+          :if={match?({:needs_model, _}, @model_status)}
+          data-test="needs-model"
+          class="text-amber-300"
+        >
+          {Prima.Refusal.message({:crew_unready, brain_title(@agent, @crew, @is_soul), :no_model})}
         </span>
         <span :if={match?({:missing, _}, @model_status)} class="text-amber-300">
           The model's catalyst is not installed here yet
