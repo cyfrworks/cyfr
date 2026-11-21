@@ -23,9 +23,14 @@ defmodule Prima.Authority.RootSelect do
   must preserve a selected authority pass an explicit profile id.
 
   `{:id, _}` and `{:label, _}` are strict — a stored id matches an id and
-  nothing else. `decode/1` is the one place a caller-supplied string
-  becomes one of them, by the `prof_` prefix; `valid_label?/1` is what
-  keeps that decode total, and the profile surfaces hold labels to it.
+  nothing else. `{:owner_label, _}` is `{:label, _}` among the owner
+  profiles alone: a profile published to the public takes its owner's
+  label, so a selection that must stand on the owner's own grant (a
+  lender's edge, a brain's own grant) names it this way, and a public
+  profile of the label is never taken in its place. `decode/1` is the one
+  place a caller-supplied string becomes `{:id, _}` or `{:label, _}`, by
+  the `prof_` prefix; `valid_label?/1` is what keeps that decode total,
+  and the profile surfaces hold labels to it.
   """
 
   @id_prefix "prof_"
@@ -36,8 +41,10 @@ defmodule Prima.Authority.RootSelect do
     * `:default` — the single active owner profile, or a refusal
     * `{:id, id}` — that exact profile id
     * `{:label, label}` — that exact label, among the candidates given
+    * `{:owner_label, label}` — that exact label, among the owner profiles
   """
-  @type selector :: :default | {:id, String.t()} | {:label, String.t()}
+  @type selector ::
+          :default | {:id, String.t()} | {:label, String.t()} | {:owner_label, String.t()}
 
   @type status :: :active | :needs_consent | :revoked
 
@@ -141,8 +148,8 @@ defmodule Prima.Authority.RootSelect do
   end
 
   @doc """
-  Select the root profile: by explicit id or label, or — with `:default` —
-  the single active owner profile.
+  Select the root profile: by explicit id or label, by label among the
+  owner profiles, or — with `:default` — the single active owner profile.
 
   An inactive match is reported as unavailable, never silently skipped in
   favor of another profile.
@@ -167,6 +174,12 @@ defmodule Prima.Authority.RootSelect do
       [%{status: status}] -> {:error, {:profile_unavailable, status}}
       many -> {:error, {:ambiguous, ids(many)}}
     end
+  end
+
+  def select(candidates, {:owner_label, label}) when is_list(candidates) and is_binary(label) do
+    candidates
+    |> Enum.filter(&(&1.kind == :owner))
+    |> select({:label, label})
   end
 
   @type route_error :: select_error() | :no_public_profile | :unauthenticated

@@ -233,6 +233,35 @@ defmodule Arca.TurnTransitionContractTest do
   # The root's grant and the lease
   # ---------------------------------------------------------------------------
 
+  describe "a turn's brain is pinned with its start, once" do
+    # The release and the brain's own grant are written in the start's own
+    # write, all three or none, and no later start writes another: the row
+    # is the turn's one source of it.
+    test "the start writes the brain's pin, and no second start replaces it",
+         %{actor: actor, thread: thread} do
+      turn = accept!(actor, thread)
+      root = root!(actor, turn.id)
+
+      assert {:error, :illegal_transition} =
+               TurnStorage.start(
+                 actor,
+                 turn.id,
+                 start_attrs(turn, root, %{catalyst_ref: "cat@1", brain_profile_id: "prof_brain"})
+               )
+
+      pin = %{catalyst_ref: "cat@1", brain_profile_id: "prof_brain", brain_consent_id: "con_one"}
+      {:ok, started} = TurnStorage.start(actor, turn.id, start_attrs(turn, root, pin))
+      assert Map.take(started, Map.keys(pin)) == pin
+
+      other = %{pin | brain_consent_id: "con_two"}
+
+      assert {:error, :not_accepted} =
+               TurnStorage.start(actor, turn.id, start_attrs(turn, root, other))
+
+      assert {:ok, %{brain_consent_id: "con_one"}} = TurnStorage.get(actor, turn.id)
+    end
+  end
+
   describe "the root's grant is required where the write must stand" do
     test "a resume, a completion, a takeover and a set-down without a check are refused",
          %{actor: actor, thread: thread} do
@@ -598,7 +627,7 @@ defmodule Arca.TurnTransitionContractTest do
   # A turn that is over
   # ---------------------------------------------------------------------------
 
-  describe "a turn that is over takes no row, pin or bookkeeping" do
+  describe "a turn that is over takes no row or bookkeeping" do
     test "each write is refused :not_open under the fence that still matches",
          %{actor: actor, thread: thread} do
       {turn, _root} = started!(actor, thread)
@@ -608,8 +637,6 @@ defmodule Arca.TurnTransitionContractTest do
         TurnStorage.finish(actor, turn.id, "cancelled", Map.put(@standing, :fence, turn.fence))
 
       held = %{fence: over.fence}
-
-      assert {:error, :not_open} = TurnStorage.pin_catalyst(actor, turn.id, "cat@1", held)
 
       assert {:error, :not_open} =
                TurnStorage.append_turn_row(

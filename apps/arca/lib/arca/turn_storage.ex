@@ -1877,8 +1877,12 @@ defmodule Arca.TurnStorage do
   Start an accepted turn: `accepted → running` with its root execution,
   attempt, budget and pins (`:root_execution_id`, `:attempt`,
   `:budget_id`, `:profile_id`, `:consent_id`, `:agent_revision_digest`,
-  `:agent_capability_digest`), its recovery limit (`:recovery_limit`, a positive count, required), and
-  the consumption boundary set to the highest seq the turn may read now.
+  `:agent_capability_digest`), its recovery limit (`:recovery_limit`, a
+  positive count, required), the brain it runs on when it asks a catalyst
+  brain's model (`:catalyst_ref`, `:brain_profile_id` and
+  `:brain_consent_id`, all three or none: the release and the brain's own
+  grant, written here and nowhere else), and the consumption boundary set
+  to the highest seq the turn may read now.
   Event `turn.started`.
 
   The root is read from its rows, not taken from the map: it must be a
@@ -1910,19 +1914,20 @@ defmodule Arca.TurnStorage do
         claim_thread!(athanor_id, turn, attrs)
         window = boundary(athanor_id, turn)
 
-        sets = [
-          status: "running",
-          root_execution_id: root.execution_id,
-          attempt: root.attempt,
-          budget_id: root.budget_id,
-          profile_id: root.profile_id,
-          consent_id: Map.get(attrs, :consent_id),
-          agent_revision_digest: Map.get(attrs, :agent_revision_digest),
-          agent_capability_digest: Map.get(attrs, :agent_capability_digest),
-          recovery_limit: limit,
-          runner_id: Prima.Boot.id(),
-          window_upto_seq: window
-        ]
+        sets =
+          [
+            status: "running",
+            root_execution_id: root.execution_id,
+            attempt: root.attempt,
+            budget_id: root.budget_id,
+            profile_id: root.profile_id,
+            consent_id: Map.get(attrs, :consent_id),
+            agent_revision_digest: Map.get(attrs, :agent_revision_digest),
+            agent_capability_digest: Map.get(attrs, :agent_capability_digest),
+            recovery_limit: limit,
+            runner_id: Prima.Boot.id(),
+            window_upto_seq: window
+          ] ++ brain_pin!(attrs)
 
         moved =
           from(t in Turn,
@@ -1942,44 +1947,21 @@ defmodule Arca.TurnStorage do
 
   def start(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
 
-  @doc """
-  Pin the exact catalyst release the turn runs on, under `:fence`. A turn
-  pins once: pinning the release already pinned answers the turn, and a
-  different one is `{:error, :catalyst_pinned}`; a turn that is over pins
-  nothing (`{:error, :not_open}`).
-  """
-  @spec pin_catalyst(Prima.Actor.t(), String.t(), String.t(), map()) ::
-          {:ok, map()} | {:error, term()}
-  def pin_catalyst(%Prima.Actor{athanor_id: athanor_id}, turn_id, catalyst_ref, attrs)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(catalyst_ref) and
-             is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pin_catalyst", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        case open!(own!(athanor_id, turn_id, attrs)) do
-          %Turn{catalyst_ref: nil} ->
-            {1, _} =
-              from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
-              |> Arca.Repo.update_all(set: [catalyst_ref: catalyst_ref])
+  # The brain a turn pins with its start: a catalyst release with the
+  # brain's own grant, all three or none.
+  defp brain_pin!(%{catalyst_ref: ref, brain_profile_id: profile, brain_consent_id: consent})
+       when is_binary(ref) and is_binary(profile) and is_binary(consent),
+       do: [catalyst_ref: ref, brain_profile_id: profile, brain_consent_id: consent]
 
-            turn!(athanor_id, turn_id)
-
-          %Turn{catalyst_ref: ^catalyst_ref} = turn ->
-            turn
-
-          %Turn{} ->
-            Arca.Repo.rollback(:catalyst_pinned)
-        end
-      end)
-    end)
-    |> Arca.Data.project()
+  defp brain_pin!(attrs) do
+    if Enum.any?([:catalyst_ref, :brain_profile_id, :brain_consent_id], &Map.has_key?(attrs, &1)),
+      do: Arca.Repo.rollback(:illegal_transition),
+      else: []
   end
 
-  def pin_catalyst(%Prima.Actor{}, _turn_id, _catalyst_ref, _attrs), do: {:error, :no_athanor}
-
   @doc """
-  Pin the program row a turn's brain runs on, once, as `pin_catalyst/4`
-  pins a catalyst: the same row again is the turn as it stands, another
-  is `{:error, :program_pinned}`.
+  Pin the program row a turn's brain runs on, once: the same row again is
+  the turn as it stands, another is `{:error, :program_pinned}`.
   """
   @spec pin_program(Prima.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, map()} | {:error, term()}

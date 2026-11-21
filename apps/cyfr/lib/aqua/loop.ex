@@ -89,11 +89,11 @@ defmodule Aqua.Loop do
   # beside the retry's (`Aqua.Loop.Stream`).
   @recoverable ~w(rate_limited overloaded incomplete_stream)
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
-  # A refusal for want of a key bound to the brain asks the person for its
-  # consent; a key the provider refused (`authentication`) is the
-  # provider's to say, as a line in the thread, since the grant would bind
-  # the same key again.
-  @setup ~w(secret_denied)
+  # A refusal for want of a key bound to the brain is the brain's own
+  # state, a key to enter (`Aqua.Loop.Turn.key_refusals/0`); a key the
+  # provider refused (`authentication`) is the provider's to say, as a
+  # line in the thread, since entering the same key again changes nothing.
+  @setup Turn.key_refusals()
   @refused_key "authentication"
   # A note flush offers this action alone, and keeps a note this large at most.
   @flush_tool "notes"
@@ -225,26 +225,13 @@ defmodule Aqua.Loop do
 
   # The root is held but the turn never ran: ended with the actor's own
   # context, since no spec was built to carry it, and the root closed by
-  # the release when the turn never came to carry it. A model its catalyst
-  # could not describe for want of a key asks the person for the
-  # catalyst's consent.
+  # the release when the turn never came to carry it. A brain not set up
+  # is said as the brain's own state (`Aqua.Loop.Turn`), a line that
+  # points at the Aqua page.
   defp never_ran(ctx, claim, turn, reason) do
-    case needs_setup(reason) do
-      nil ->
-        say_unrun(ctx, turn, reason)
-        end_unrun(ctx, claim, turn, describe(reason))
-        {:failed, reason}
-
-      catalyst ->
-        end_unrun(ctx, claim, turn, "setup_required")
-
-        Tape.announce(ctx, turn.thread_id, :consent_required, %{
-          ref: catalyst,
-          user_id: ctx.user_id
-        })
-
-        {:failed, :setup_required}
-    end
+    say_unrun(ctx, turn, reason)
+    end_unrun(ctx, claim, turn, describe(reason))
+    {:failed, reason}
   end
 
   # A turn that never ran says why in the thread where the person can act
@@ -298,13 +285,6 @@ defmodule Aqua.Loop do
     Opus.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
   end
 
-  defp needs_setup({:setup_required, catalyst}), do: catalyst
-
-  defp needs_setup({:model_refused, catalyst, %{"type" => type}}) when type in @setup,
-    do: catalyst
-
-  defp needs_setup(_reason), do: nil
-
   defp setup_required(ctx, turn) do
     _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
 
@@ -333,15 +313,8 @@ defmodule Aqua.Loop do
     hold(turn_id, fn ->
       with {:ok, turn} <- Tape.turn(ctx, turn_id),
            {:ok, claim, turn} <- reclaim(ctx, turn, mode),
-           {:ok, authority} <- pinned_authority(ctx, turn),
-           {:ok, spec} <-
-             Turn.build(ctx, turn,
-               authority: authority,
-               excerpt?: false,
-               asks_model?: asks_model?(ctx, turn)
-             ),
-           {:ok, turn} <- pin_brain(ctx, turn, spec) do
-        spec = Turn.with_turn(spec, turn)
+           {:ok, spec} <- rebuilt(ctx, turn) do
+        turn = spec.turn
 
         state = %State{
           spec: spec,
@@ -361,6 +334,24 @@ defmodule Aqua.Loop do
         end
       end
     end)
+  end
+
+  # The spec of a continued turn, built from its row alone. A pin that no
+  # longer loads, Aqua's or its brain's, bound again or taken back, ends
+  # the turn as one that moved on, said in its thread as it is mid-turn;
+  # the runner ends it with the same sentence as its error.
+  defp rebuilt(ctx, turn) do
+    with {:ok, authority} <- pinned_authority(ctx, turn),
+         {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false) do
+      {:ok, spec}
+    else
+      {:error, :consent_moved} = moved ->
+        _ = unrun_line(ctx, turn, describe(:consent_moved))
+        moved
+
+      refused ->
+        refused
+    end
   end
 
   @doc """
@@ -549,34 +540,45 @@ defmodule Aqua.Loop do
            ) do
       with {:ok, snapshot} <- Compendium.agent_snapshot(ctx, turn.agent),
            :ok <- consented_release(ctx, claim.authority, snapshot),
-           {:ok, started} <-
-             Tape.start_turn(ctx, turn, %{
-               root_execution_id: claim.execution_id,
-               attempt: claim.attempt,
-               budget_id: claim.budget_id,
-               profile_id: claim.authority.profile_id,
-               consent_id: claim.authority.consent_id,
-               agent_revision_digest: snapshot.revision_digest,
-               agent_capability_digest: snapshot.capability_digest,
-               recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
-             }),
            # A server's line that no longer stands as its turn first starts
            # asks no model: the turn ends with nothing run. A store that
            # cannot say ends it as any store failure after the claim does.
-           {:ok, stands?} <- Tape.line_stands(ctx, started),
-           {:ok, spec} <-
-             Turn.build(ctx, started,
-               authority: claim.authority,
-               asks_model?: stands? and asks_model?(ctx, started)
+           {:ok, stands?} <- Tape.line_stands(ctx, turn),
+           # The brain's own grant is on the turn's row from its start, in
+           # the write that holds Aqua's, so no runner's death leaves a
+           # started turn whose recovery could choose a brain grant: a turn
+           # that asks no model pins none and loads none.
+           {:ok, brain} <-
+             Turn.brain_pin(
+               ctx,
+               turn,
+               snapshot.agent,
+               claim.budget_id,
+               stands? and asks_model?(ctx, turn)
              ),
-           {:ok, started} <- pin_brain(ctx, started, spec) do
+           {:ok, started} <-
+             Tape.start_turn(
+               ctx,
+               turn,
+               Map.merge(brain, %{
+                 root_execution_id: claim.execution_id,
+                 attempt: claim.attempt,
+                 budget_id: claim.budget_id,
+                 profile_id: claim.authority.profile_id,
+                 consent_id: claim.authority.consent_id,
+                 agent_revision_digest: snapshot.revision_digest,
+                 agent_capability_digest: snapshot.capability_digest,
+                 recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+               })
+             ),
+           {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority) do
         {:ok,
          %State{
            model?: stands?,
            program: spec.program,
-           spec: Turn.with_turn(spec, started),
+           spec: spec,
            claim: claim,
-           turn: started,
+           turn: spec.turn,
            generation: spec.thread.brain_generation,
            since: now(),
            active_ms: started.active_ms
@@ -586,11 +588,6 @@ defmodule Aqua.Loop do
       end
     end
   end
-
-  # The brain the turn runs on, pinned once: its program row, or its
-  # catalyst release.
-  defp pin_brain(ctx, turn, %Turn{program: %{row: row}}), do: Tape.pin_program(ctx, turn, row)
-  defp pin_brain(ctx, turn, %Turn{catalyst: catalyst}), do: Tape.pin_catalyst(ctx, turn, catalyst)
 
   # A schedule's turn admits its root as that schedule's fire, which starts
   # its occurrence (`Opus.TurnRoot`).
@@ -927,6 +924,23 @@ defmodule Aqua.Loop do
     |> Map.new()
   end
 
+  # A turn whose row pins no brain grant asks no model (a page's call, a
+  # server's line that no longer stood): nothing it holds runs under a
+  # brain, and it ends with what its steps did. A turn that was to ask its
+  # model pins its brain at its start or is refused there
+  # (`Turn.brain_pin/5`); one that reaches here holding none never ends
+  # as answered: it ends with the brain's sentence, as its line and error.
+  defp model_round(%State{spec: %Turn{catalyst: catalyst, brain_authority: nil}} = state)
+       when is_binary(catalyst) do
+    if asks_model?(guest(state), state.turn) do
+      unread = {:crew_unready, Turn.brain_title(state.spec.agent), :unavailable}
+      _ = system_row(state, describe(unread))
+      {:halt, {:failed, unread}, state}
+    else
+      {:halt, :completed, state}
+    end
+  end
+
   defp model_round(%State{} = state) do
     with {:ok, _drained} <- Tape.drain_steer(guest(state), state.turn),
          {:ok, rows} <- Tape.projection(guest(state), state.turn),
@@ -1088,6 +1102,25 @@ defmodule Aqua.Loop do
   defp earlier_turns(%State{turn: turn}, rows),
     do: rows |> Tape.writing_turns() |> Enum.reject(&(&1 == turn.id))
 
+  # A brain whose grant holds no key to use is said as the brain's own
+  # state, a line pointing at the Aqua page (`Aqua.Crew.unready/1`'s
+  # `:no_key`), where its row in Aqua's setup takes the key.
+  defp no_key(%State{} = state, step, error) do
+    _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error})
+    unready = {:crew_unready, Turn.brain_title(state.spec.agent), :no_key}
+    _ = system_row(state, Prima.Refusal.message(unready))
+    {:halt, {:failed, unready}, state}
+  end
+
+  # A model call refused because the brain's grant the turn pinned moved
+  # since: the turn ends as one whose grant moved at its rebuild does, in
+  # the thread and as its error.
+  defp moved(%State{} = state, step) do
+    _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: "consent_moved"})
+    _ = system_row(state, describe(:consent_moved))
+    {:halt, {:failed, :consent_moved}, state}
+  end
+
   defp ask_model(%State{} = state, step, request, retained, retries) do
     case model_call(state, step, request, retained, true) do
       {:ok, data} ->
@@ -1112,15 +1145,18 @@ defmodule Aqua.Loop do
           {:error, reason} -> {:halt, {:failed, reason}, state}
         end
 
+      # The brain's grant stands but holds no key to use, as the catalyst
+      # says or as its admission refuses it: the brain's own state.
       {:error, %{"type" => type} = error} when type in @setup ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error["message"]})
+        no_key(state, step, error["message"])
 
-        announce(state, :consent_required, %{
-          ref: state.spec.catalyst,
-          user_id: ctx(state).user_id
-        })
+      # The brain's grant the turn pinned moved since (its key bound
+      # again): admission refuses the call, and the turn moved on.
+      {:error, {:setup_required, %{reason: "consent_moved"}}} ->
+        moved(state, step)
 
-        {:halt, {:failed, :setup_required}, state}
+      {:error, {:setup_required, _detail}} ->
+        no_key(state, step, "setup_required")
 
       {:error, %{"type" => @refused_key} = error} ->
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error["message"]})
@@ -1144,7 +1180,8 @@ defmodule Aqua.Loop do
     end
   end
 
-  # The catalyst runs as a child of the root, in a worker: the answer is
+  # The catalyst runs as a child of the root, in a worker, under the
+  # brain's own grant the turn pinned (`Aqua.Loop.Turn`): the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
   # worker's death. The worker is waited for until the run ends, as every
   # worker of the loop is (`worker/1`). A chat step's text streams to the
@@ -1166,7 +1203,7 @@ defmodule Aqua.Loop do
     stream = streamed && Aqua.Loop.Stream.open(guest, step.child_execution_id, streamed)
 
     run = fn ->
-      Opus.run_child(spec.authority, spec.catalyst, nil, input,
+      Opus.run_child(spec.brain_authority, spec.catalyst, nil, input,
         ctx: guest,
         execution_id: step.child_execution_id,
         step_id: step.id,
@@ -2364,10 +2401,19 @@ defmodule Aqua.Loop do
 
   defp startup_context(_state, []), do: {:ok, []}
 
-  defp opened_on_call?(%State{} = state), do: not asks_model?(guest(state), state.turn)
+  # Whether a recovered turn goes on to ask its model. A turn on a
+  # catalyst brain asks it only when its row pins the brain's grant, which
+  # its start wrote for a turn that asked its model then; one that pins
+  # none (a page's call, a server's line that no longer stood) is never
+  # rebuilt as one that asks, nor asks one later (`model_round/1`). A
+  # program brain's turn asks unless a page's call opened it.
+  defp asks_on_recovery?(%State{spec: %Turn{catalyst: catalyst} = spec}) when is_binary(catalyst),
+    do: spec.brain_authority != nil
 
-  # A turn opened on a page's call asks no model, so its brain is not
-  # described when the turn is built (`Turn.build/3`).
+  defp asks_on_recovery?(%State{} = state), do: asks_model?(guest(state), state.turn)
+
+  # A turn opened on a page's call asks no model, so its start pins no
+  # brain grant (`Turn.brain_pin/5`).
   defp asks_model?(ctx, %{message_id: id}) when is_binary(id),
     do: not match?({:ok, %{kind: "page_call"}}, Tape.message(ctx, id))
 
@@ -2596,7 +2642,7 @@ defmodule Aqua.Loop do
         state
         | restricted?: open != [] or Tape.restricted?(guest, state.turn),
           steps: Enum.count(steps, &(&1.kind == "model")),
-          model?: not opened_on_call?(state) and not answered?(steps)
+          model?: asks_on_recovery?(state) and not answered?(steps)
       }
 
       cond do
@@ -3199,11 +3245,17 @@ defmodule Aqua.Loop do
   defp describe(reason) when is_binary(reason), do: reason
 
   # A refusal for ownership (this server has not won its slot, or has lost
-  # it), or a component index still catching up with its files, reads as
-  # its declared sentence, which says to retry: the turn did not run, and
-  # the message can be sent again.
+  # it), a component index still catching up with its files, or a pinned
+  # grant that moved, reads as its declared sentence, which says to retry:
+  # the turn did not run on, and the message can be sent again.
   defp describe(reason)
-       when reason in [:not_owner, :control_plane_lost, :slot_not_held, :projection_unavailable],
+       when reason in [
+              :not_owner,
+              :control_plane_lost,
+              :slot_not_held,
+              :projection_unavailable,
+              :consent_moved
+            ],
        do: Prima.Refusal.message(reason)
 
   defp describe(reason) when is_atom(reason), do: Atom.to_string(reason)

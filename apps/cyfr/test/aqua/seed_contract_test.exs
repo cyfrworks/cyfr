@@ -410,7 +410,7 @@ defmodule Aqua.SeedContractTest do
 
     soul_tools =
       soul
-      |> Compendium.AgentSource.manifest([])
+      |> Compendium.AgentSource.manifest()
       |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
       |> Map.fetch!(:tools)
 
@@ -450,7 +450,7 @@ defmodule Aqua.SeedContractTest do
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
 
     soul
-    |> Compendium.AgentSource.manifest([])
+    |> Compendium.AgentSource.manifest()
     |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
     |> Map.fetch!(:tools)
     |> Enum.uniq()

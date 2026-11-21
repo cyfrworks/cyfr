@@ -2829,6 +2829,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :model, :string
       # The exact catalyst release the turn runs on, pinned at its first build.
       add :catalyst_ref, :string
+      # The brain's own grant its model calls run under, pinned with the
+      # release: the profile and its consent at the pin.
+      add :brain_profile_id, :string
+      add :brain_consent_id, :string
       # The program row the turn's brain runs on, pinned at its first build.
       add :program, :string
       add :options, :text

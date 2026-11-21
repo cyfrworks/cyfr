@@ -112,11 +112,9 @@ defmodule Compendium.ConsentFacts do
     end
   end
 
-  # The seed's own Aqua file, projected as the crew's grant over the
-  # brains the seed ships (`AgentSource.shipped_row/2`): a prose-only edit
-  # of the athanor's copy leaves this digest alone, a tools edit of the
-  # seed file moves it, and a brain the seed does not ship keeps it from
-  # matching the installed row.
+  # The seed's own Aqua file, projected as the crew's grant
+  # (`AgentSource.shipped_row/2`): a prose-only edit of the athanor's copy
+  # leaves this digest alone, and a tools edit of the seed file moves it.
   defp seed_agent_digest(ctx, name) do
     with {:ok, row} <- AgentSource.shipped_row(ctx, name) do
       {:ok, Map.get(row, :release_digest)}

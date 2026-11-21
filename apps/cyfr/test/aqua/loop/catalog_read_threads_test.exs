@@ -219,7 +219,7 @@ defmodule Aqua.Loop.CatalogReadThreadsTest do
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, Map.merge(%{"action" => "update", "name" => "aqua"}, edit))
 
-    decisions = %{ref: @soul, selections: [%{dep: @model, label: "default"}]}
+    decisions = %{ref: @soul}
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, Map.take(decisions, [:ref, :label]))
     {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
 

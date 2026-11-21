@@ -388,6 +388,43 @@ defmodule Sanctum.Test.ConsentFixtures do
   end
 
   @doc """
+  A store that stops answering one profile's head, and only it: each read
+  of the head's row finds the table of its vault references gone, and the
+  read that fails there puts the table back, so every other read answers.
+  Answers the telemetry handler's id, which the test's end detaches and
+  `:telemetry.detach/1` ends sooner.
+  """
+  def head_outage!(%Context{} = ctx, profile_id) do
+    {:ok, %{head_consent_id: head_id}} = Arca.ProfileStorage.get(Context.actor(ctx), profile_id)
+    away = :atomics.new(1, [])
+    handler = "head-outage-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          cond do
+            meta[:source] == "consents" and head_id in List.wrap(meta[:params]) and
+                :atomics.compare_exchange(away, 1, 0, 1) == :ok ->
+              Arca.Repo.query!("ALTER TABLE consent_vault_refs RENAME TO consent_vault_refs_away")
+
+            meta[:source] == "consent_vault_refs" and match?({:error, _}, meta[:result]) and
+                :atomics.compare_exchange(away, 1, 1, 0) == :ok ->
+              Arca.Repo.query!("ALTER TABLE consent_vault_refs_away RENAME TO consent_vault_refs")
+
+            true ->
+              :ok
+          end
+        end,
+        nil
+      )
+
+    ExUnit.Callbacks.on_exit(fn -> :telemetry.detach(handler) end)
+    handler
+  end
+
+  @doc """
   Write `changes` straight onto the profile's head revision, past every
   writer's guard — a hand edit, a restored backup, or any write path that
   reaches the column.

@@ -178,12 +178,13 @@ defmodule Aqua.NudgeTest do
 
     # The opening's turn and the nudge's are Aqua's, on the brain and model
     # of the crew member Aqua runs on (`Cyfr.Test.SeedBundle.seat!/2`):
-    # Aqua's file names none of its own.
+    # Aqua's file names none of its own. Their model calls run under the
+    # brain's own grant.
     for id <- [opening, turn_id] do
       assert {:ok, %{agent: "aqua", catalyst_ref: @model <> ":" <> _}} = Tape.turn(ctx, id)
     end
 
-    assert [{"agent:local.aqua", "claude-sonnet-5-5"}] =
+    assert [{@model, "claude-sonnet-5-5"}] =
              Enum.uniq(
                for %{input: %{"operation" => "chat"} = input, authority: authority} <-
                      ScriptedWorker.calls(),

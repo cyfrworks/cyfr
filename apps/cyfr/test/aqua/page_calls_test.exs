@@ -233,7 +233,7 @@ defmodule Aqua.PageCallsTest do
                "tools_remove" => tools
              })
 
-    walk!(ctx, %{ref: @soul, selections: [%{dep: @model, label: "default"}]})
+    walk!(ctx, %{ref: @soul})
   end
 
   # A tincture version in the athanor, declaring `deps` as its static
@@ -498,16 +498,29 @@ defmodule Aqua.PageCallsTest do
   # What Aqua is offered
   # ---------------------------------------------------------------------------
 
+  # A turn opened on a page's call asks no model, so it needs no brain:
+  # the brain's own grant taken away once the pages are open, a component
+  # call and a catalog call still run.
   test "a granted component with no egress, or with egress, runs once in two workspace " <>
-         "threads, as a model's launch runs",
+         "threads, as a model's launch runs, with the brain's grant taken away",
        %{ctx: ctx, driver: driver} do
     quiet = app!(ctx)
     reaching = app!(ctx, @exit)
     worker!([quiet, reaching])
 
-    for {{app, room}, id} <-
-          Enum.with_index([{quiet, workspace!(ctx)}, {reaching, workspace!(ctx)}], 1) do
-      put = put!(ctx, room, @html)
+    opened =
+      for {app, room} <- [{quiet, workspace!(ctx)}, {reaching, workspace!(ctx)}],
+          do: {app, room, put!(ctx, room, @html)}
+
+    {:ok, [brain]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @model)
+
+    assert {:ok, %{status: "revoked"}} =
+             Sanctum.Providers.Profile.handle(ctx, %{
+               "action" => "revoke",
+               "profile_id" => brain.id
+             })
+
+    for {{app, room, put}, id} <- Enum.with_index(opened, 1) do
       ScriptedWorker.script([{:output, %{"answered" => id}}])
       asked = chats()
 
@@ -563,6 +576,13 @@ defmodule Aqua.PageCallsTest do
 
       assert chats() == asked
     end
+
+    # A catalog call opens a turn that asks no model too, and runs.
+    {_app, room, _put} = List.last(opened)
+    asked = chats()
+    action(driver, room, 3, "crew.list")
+    assert {200, %{"ok" => true}} = answered!(3)
+    assert chats() == asked
   end
 
   # ---------------------------------------------------------------------------

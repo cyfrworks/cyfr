@@ -90,6 +90,16 @@ defmodule Aqua.SeatTest do
       "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
     }
 
+  defp tool_calls(blocks),
+    do: %{
+      "content" =>
+        Enum.map(blocks, fn {id, name, args} ->
+          %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => args}
+        end),
+      "stop_reason" => "tool_call",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+    }
+
   defp accept!(ctx, thread, text, agent \\ "aqua") do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
@@ -175,6 +185,37 @@ defmodule Aqua.SeatTest do
 
     for %{author: ^agent, turn_id: ^turn_id} = row <- Threads.messages(actor(ctx), thread.id),
         do: row.content
+  end
+
+  # The next read of an agent's pinned bytes, which a turn makes only once
+  # it has started (`Aqua.Loop.Turn.build/3`), held in the process that
+  # makes it until it is killed, the test told as a scripted probe tells
+  # it (`running!/1`).
+  defp hold_at_pinned_agent_read! do
+    test = self()
+    armed = :atomics.new(1, [])
+    :ok = :atomics.put(armed, 1, 1)
+    handler = "seat-pinned-read-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if meta[:source] == "agent_revisions" and
+               String.starts_with?(meta[:query] || "", "SELECT") and
+               :atomics.compare_exchange(armed, 1, 1, 0) == :ok do
+            send(test, {:scripted_probe, self(), :pinned_agent_read})
+
+            receive do
+              :continue -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
   end
 
   defp restart_runner_supervisor! do
@@ -313,10 +354,10 @@ defmodule Aqua.SeatTest do
         do: assert(Threads.pending_requests(actor(ctx), thread_id: thread.id) == [])
   end
 
-  # A brain picked for the member Aqua runs on asks nothing: the crew's one
-  # grant names every brain the athanor can connect, so Aqua's turn and a
-  # job of the member's own run on the new brain at once, each with that
-  # brain's own key, under the one grant.
+  # A brain picked for the member Aqua runs on asks nothing: Aqua's grant
+  # names no brain, so Aqua's turn and a job of the member's own run on the
+  # new brain at once, each model call under that brain's own grant and
+  # key.
   test "the member Aqua runs on, its brain moved, runs Aqua's turn and a job of its own on the " <>
          "new brain at once, with that brain's key",
        %{ctx: ctx, room: room, holder: holder} do
@@ -338,7 +379,7 @@ defmodule Aqua.SeatTest do
       assert [%{input: %{"params" => %{"model" => "gemini-pro-latest"}}, authority: authority}] =
                chats(ctx, name)
 
-      assert authority.chain == [@soul, @gemini]
+      assert authority.chain == [@gemini, @gemini]
       assert authority.resources.vault.entry_id == key.id
     end
 
@@ -606,9 +647,11 @@ defmodule Aqua.SeatTest do
       :ok = Aqua.Runner.subscribe(child.id, ctx.athanor_id)
       {:ok, %{turn_id: job}} = Aqua.Runner.send_message(ctx, child.id, "tidy the notes")
       pids = running!(child)
-      assert {:ok, %{agent: ^holder, consent_id: claimed}} = Tape.turn(ctx, job)
 
-      consent!(ctx, @soul, [%{dep: @model, label: "default"}])
+      assert {:ok, %{agent: ^holder, consent_id: claimed, brain_consent_id: brain}} =
+               Tape.turn(ctx, job)
+
+      consent!(ctx, @soul, [])
       assert {:ok, %{consent_id: newer}} = Opus.authority_for(ctx, :default, @soul)
       refute newer == claimed
 
@@ -616,8 +659,321 @@ defmodule Aqua.SeatTest do
       send(dead, :continue)
       assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, job)
       assert answers(ctx, child, job) == []
-      assert [%{authority: %{consent_id: ^claimed}}] = chats(ctx, holder)
+      assert [%{authority: %{consent_id: ^brain}}] = chats(ctx, holder)
     end
+
+    # A member's turn keeps the brain's own grant it pinned at its start,
+    # beside Aqua's: the brain's key bound again while the job is open, a
+    # rebuilt loop finds that grant moved and is refused, and nothing runs
+    # under the newer one.
+    test "a member's job open while its brain's own grant is given again is refused once " <>
+           "taken over, never run under the newer grant",
+         %{ctx: ctx, room: room, holder: holder} do
+      script!([{:probe, self()}])
+      {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
+      :ok = Aqua.Runner.subscribe(child.id, ctx.athanor_id)
+      {:ok, %{turn_id: job}} = Aqua.Runner.send_message(ctx, child.id, "tidy the notes")
+      pids = running!(child)
+
+      assert {:ok, %{agent: ^holder, brain_profile_id: brain, brain_consent_id: pinned}} =
+               Tape.turn(ctx, job)
+
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-newer"})
+
+      assert {:ok, %{profile_id: ^brain, consent_id: newer}} =
+               Opus.authority_for(ctx, :default, @model)
+
+      refute newer == pinned
+
+      dead = take_over!(pids)
+      send(dead, :continue)
+      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, job)
+      assert answers(ctx, child, job) == []
+      assert [%{authority: %{profile_id: ^brain, consent_id: ^pinned}}] = chats(ctx, holder)
+    end
+
+    # The brain's own grant is on the turn's row before anything runs under
+    # it, its description included: the runner dying while the brain is
+    # described, after its key was bound again, the recovered turn finds
+    # the grant it pinned moved and is refused, and is never answered under
+    # the newer one.
+    test "a turn whose runner dies while its brain is described, its key bound again " <>
+           "meanwhile, is refused once taken over, never answered under the newer grant",
+         %{ctx: ctx, room: room} do
+      start_supervised!(
+        {ScriptedWorker,
+         ref: @model, describe: {:hold, self()}, script: [reply("Under the newer grant.")]}
+      )
+
+      {:ok, %{profile_id: brain, consent_id: before}} = Opus.authority_for(ctx, :default, @model)
+      {turn, pids} = open_turn!(ctx, room, "first")
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-newer"})
+
+      assert {:ok, %{profile_id: ^brain, consent_id: newer}} =
+               Opus.authority_for(ctx, :default, @model)
+
+      refute newer == before
+
+      held = take_over!(pids)
+      send(held, :continue)
+      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
+      assert system_lines(ctx, room) == [@moved_on]
+      assert answers(ctx, room, turn) == []
+      assert chats(ctx, "aqua") == []
+
+      assert {:ok, %{brain_profile_id: ^brain, brain_consent_id: ^before}} =
+               Tape.turn(ctx, turn)
+    end
+
+    # The same, the brain's grant taken back instead of its key bound
+    # again: the pinned grant no longer loads, and the recovered turn ends
+    # as one that moved on, never as a key to enter.
+    test "a turn whose runner dies while its brain is described, its grant taken back " <>
+           "meanwhile, ends as a turn that moved on once taken over",
+         %{ctx: ctx, room: room} do
+      start_supervised!(
+        {ScriptedWorker,
+         ref: @model, describe: {:hold, self()}, script: [reply("Under no grant.")]}
+      )
+
+      {:ok, %{profile_id: brain}} = Opus.authority_for(ctx, :default, @model)
+      {turn, pids} = open_turn!(ctx, room, "first")
+
+      assert {:ok, %{status: "revoked"}} =
+               Sanctum.Providers.Profile.handle(ctx, %{
+                 "action" => "revoke",
+                 "profile_id" => brain
+               })
+
+      held = take_over!(pids)
+      send(held, :continue)
+      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
+      assert system_lines(ctx, room) == [@moved_on]
+      assert answers(ctx, room, turn) == []
+      assert chats(ctx, "aqua") == []
+    end
+
+    # The span from the turn's start to its first model call, with the
+    # brain's description already cached so nothing is described: the
+    # runner dying there, after the brain's key was bound again, the
+    # recovered turn finds the grant its start pinned moved and is
+    # refused, never answered under the newer one.
+    test "a turn whose runner dies after its start, its brain's description cached and its " <>
+           "key bound again meanwhile, is refused once taken over",
+         %{ctx: ctx, room: room} do
+      script!([reply("Warm."), reply("Under the newer grant.")])
+
+      {:ok, %{turn_id: warm}} = Aqua.Runner.send_message(ctx, room.id, "@aqua warm up")
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, warm)
+      asked = chats(ctx, "aqua")
+
+      {:ok, %{profile_id: brain, consent_id: before}} = Opus.authority_for(ctx, :default, @model)
+      hold_at_pinned_agent_read!()
+      {turn, pids} = open_turn!(ctx, room, "first")
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn)
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-newer"})
+      refute match?({:ok, %{consent_id: ^before}}, Opus.authority_for(ctx, :default, @model))
+
+      _ = take_over!(pids)
+      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
+      assert answers(ctx, room, turn) == []
+      assert chats(ctx, "aqua") == asked
+
+      assert {:ok, %{brain_profile_id: ^brain, brain_consent_id: ^before}} =
+               Tape.turn(ctx, turn)
+    end
+
+    # A model call refused because the brain's grant the turn pinned moved
+    # since, its key bound again or the grant taken back while the turn
+    # waited on its model, ends the turn as one that moved on, in the
+    # thread and as its error: never as a key to enter.
+    test "a turn whose brain's key is bound again, or whose brain's grant is taken back, while " <>
+           "it waits on its model ends as a turn that moved on at its next model call",
+         %{ctx: ctx, room: room} do
+      script!([])
+
+      {:ok, %{profile_id: brain}} = Opus.authority_for(ctx, :default, @model)
+
+      moves = [
+        fn ->
+          Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{
+            "ANTHROPIC_API_KEY" => "sk-newer"
+          })
+        end,
+        fn ->
+          assert {:ok, %{status: "revoked"}} =
+                   Sanctum.Providers.Profile.handle(ctx, %{
+                     "action" => "revoke",
+                     "profile_id" => brain
+                   })
+        end
+      ]
+
+      for {move, n} <- Enum.with_index(moves, 1) do
+        :ok =
+          ScriptedWorker.script([
+            {:hold, self()},
+            tool_calls([{"e#{n}", "thread", %{"action" => "events", "thread" => room.id}}]),
+            reply("Under a grant that moved.")
+          ])
+
+        {turn, pids} = open_turn!(ctx, room, "turn #{n}")
+        assert {:ok, %{brain_profile_id: ^brain, brain_consent_id: pinned}} = Tape.turn(ctx, turn)
+        move.()
+        refute match?({:ok, %{consent_id: ^pinned}}, Opus.authority_for(ctx, :default, @model))
+
+        finish!(pids)
+        assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
+        assert system_lines(ctx, room) == List.duplicate(@moved_on, n)
+        refute "Under a grant that moved." in answers(ctx, room, turn)
+      end
+
+      assert [_first, _second] = chats(ctx, "aqua")
+    end
+  end
+
+  # A post that names its own model, the member Aqua runs on naming none:
+  # the turn's start decides the brain from the model the build will use,
+  # pins that brain's grant in its starting write, and the turn answers,
+  # its attachment sent.
+  test "a post naming its own model, the member naming none, starts with its brain's grant " <>
+         "pinned and answers with its attachment",
+       %{ctx: ctx, room: room, holder: holder} do
+    script!([reply("A square.")])
+    :ok = member!(ctx, holder, %{"model" => nil})
+    {:ok, %{profile_id: brain, consent_id: granted}} = Opus.authority_for(ctx, :default, @model)
+    message_id = Prima.UUID7.generate_id("msg")
+    png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
+    {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
+
+    {:ok, %{turn_id: turn}} =
+      Aqua.Runner.send_message(ctx, room.id, "@aqua what is this?",
+        id: message_id,
+        attachments: refs,
+        model: "claude-sonnet-5-5"
+      )
+
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+
+    assert {:ok, %{status: "completed", brain_profile_id: ^brain, brain_consent_id: ^granted}} =
+             Tape.turn(ctx, turn)
+
+    assert answers(ctx, room, turn) == ["A square."]
+
+    assert [%{input: %{"params" => %{"model" => "claude-sonnet-5-5"} = params}}] =
+             chats(ctx, "aqua")
+
+    assert params |> inspect() |> String.contains?("image/png")
+  end
+
+  # The start decides the brain once: the brain's catalogue entry unread
+  # at the start and read again by the time the turn would build, the post
+  # is refused at its start with the brain's sentence, as its line and its
+  # error, and never completes with nothing said. The listing is unread
+  # while its unit's edit is pending: query hooks in the turn's process
+  # begin the edit at its first read of a message after it records the
+  # agent's revision, its root claimed and its release checked, just
+  # before its brain is resolved, and end it at the starting write, before
+  # any later read of the listing.
+  test "a post whose brain's catalogue entry cannot be read at its start is refused there " <>
+         "with a line, never completed empty when a later read finds it",
+       %{ctx: ctx, room: room} do
+    script!([reply("Answered without a pin.")])
+    {:ok, listing} = Aqua.AgentConfig.catalyst_listing(ctx)
+    {:ok, release} = Aqua.AgentConfig.resolve_catalyst(listing, @model)
+
+    {:ok, %{namespace: namespace, name: name, version: version}} =
+      Prima.ComponentRef.parse(release)
+
+    unit = "catalysts/#{namespace}/#{name}/#{version}"
+    actor = actor(ctx)
+    test = self()
+    hide = "seat-test-hide-#{System.unique_integer([:positive])}"
+    show = "seat-test-show-#{System.unique_integer([:positive])}"
+    on_exit(fn -> Enum.each([hide, show], &:telemetry.detach/1) end)
+
+    finish = fn pending ->
+      {:ok, _generation} =
+        Arca.StorageProjectionChanges.finish_edit(actor, "components", unit, pending)
+    end
+
+    :ok =
+      :telemetry.attach(
+        hide,
+        [:arca, :repo, :query],
+        fn _event, _measurements, %{query: query}, _config ->
+          cond do
+            query =~ ~s(INSERT INTO "agent_revisions") ->
+              Process.put(hide, :armed)
+
+            Process.get(hide) == :armed and query =~ ~s(FROM "messages") ->
+              :telemetry.detach(hide)
+              {:ok, pending} = Arca.StorageProjectionChanges.begin_edit(actor, "components", unit)
+              Process.put(hide, pending)
+              send(test, {:hidden, pending})
+
+            true ->
+              :ok
+          end
+        end,
+        nil
+      )
+
+    :ok =
+      :telemetry.attach(
+        show,
+        [:arca, :repo, :query],
+        fn _event, _measurements, %{query: query}, _config ->
+          if is_integer(Process.get(hide)) and query =~ ~s(UPDATE "turns") and
+               query =~ ~s("window_upto_seq") do
+            :telemetry.detach(show)
+            send(test, {:shown, finish.(Process.delete(hide))})
+          end
+        end,
+        nil
+      )
+
+    {:ok, %{turn_id: turn}} = Aqua.Runner.send_message(ctx, room.id, "@aqua anyone there?")
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+    assert_received {:hidden, pending}
+
+    receive do
+      {:shown, _finished} -> :ok
+    after
+      0 -> finish.(pending)
+    end
+
+    assert [line] = system_lines(ctx, room)
+    assert line =~ "brain cannot be read right now — retry shortly"
+    assert {:ok, %{status: "failed", error: ^line, brain_profile_id: nil}} = Tape.turn(ctx, turn)
+    assert answers(ctx, room, turn) == []
+    assert chats(ctx, "aqua") == []
+  end
+
+  # A brain's own grant is its profile labelled "default", the one its
+  # setup's key entry writes: a second profile the person keeps on the
+  # brain, under another label, leaves Aqua answering under that one.
+  test "Aqua answers under its brain's profile labelled default while the person keeps " <>
+         "another profile on the brain",
+       %{ctx: ctx, room: room} do
+    script!([reply("Under default.")])
+    {:ok, %{profile_id: default, consent_id: granted}} = Opus.authority_for(ctx, :default, @model)
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-work"},
+      label: "work"
+    )
+
+    {:ok, profiles} = Arca.ConsentStorage.profiles(actor(ctx), @model)
+    assert profiles |> Enum.map(& &1.label) |> Enum.sort() == ["default", "work"]
+
+    {:ok, %{turn_id: turn}} = Aqua.Runner.send_message(ctx, room.id, "@aqua hello")
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+    assert {:ok, %{status: "completed", brain_profile_id: ^default}} = Tape.turn(ctx, turn)
+    assert answers(ctx, room, turn) == ["Under default."]
+
+    assert [%{authority: %{profile_id: ^default, consent_id: ^granted}}] =
+             chats(ctx, "aqua")
   end
 
   # Each way the member can fail to stand, said as the turn refuses it

@@ -3,13 +3,13 @@
 
 defmodule Sanctum.Consent.BootstrapSelectionTest do
   @moduledoc """
-  The shipped soul's baseline consent selects, on its edge to the shipped
-  catalyst it runs on, that catalyst's default profile — so the key a
-  person binds on the catalyst is what the assistant runs it with. The
-  repository's seed names no crew member Aqua runs on, so the seed here
-  seats it on one on claude (`Cyfr.Test.SeedBundle.seat!/2`), as an
-  operator's seed may. A
-  person's own formula is not machine-minted.
+  A shipped formula's baseline consent selects, on its edge to a shipped
+  catalyst, that catalyst's default profile — so the key a person binds
+  on the catalyst is what the formula runs it with. Aqua's grant names no
+  brain, so it selects none: a turn's model call runs under the brain's
+  own grant. The repository's seed names no crew member Aqua runs on, so
+  the seed here seats it on one on claude (`Cyfr.Test.SeedBundle.seat!/2`),
+  as an operator's seed may. A person's own formula is not machine-minted.
   A boot re-mints a bootstrap-only consent that lacks the
   selections its dependencies offer, or whose closure the seed moved,
   and leaves a person's consent and a person's closure alone.
@@ -24,6 +24,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   @bundle Path.join(@repo_root, "seed/components")
   @aqua "agent:local.aqua"
   @claude "catalyst:local.claude"
+  @list "formula:local.list-models"
 
   setup tags do
     Arca.Cache.init()
@@ -77,30 +78,35 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     edge
   end
 
-  test "the shipped soul selects its model's default profile", %{ctx: ctx} do
+  test "a shipped formula selects its catalyst's default profile; Aqua's grant selects no brain",
+       %{ctx: ctx} do
     {:ok, %{minted: minted, revised: []}} = Bootstrap.run(ctx)
-    assert @aqua in minted and @claude in minted
+    assert @aqua in minted and @claude in minted and @list in minted
 
     {claude, claude_head, claude_refs} = head!(ctx, @claude)
     assert claude.label == "default" and claude.kind == :owner
     assert claude_refs == []
     assert edge!(claude_head.resolved_policy, @claude, "@ingress") |> then(& &1.vault) == nil
 
-    {_aqua, aqua_head, aqua_refs} = head!(ctx, @aqua)
+    {_list, list_head, list_refs} = head!(ctx, @list)
 
     # Each selection is stored as its own binding's row: the lender's label,
     # and no entry of the athanor's own and no share.
-    assert aqua_refs != []
-    assert "#{@aqua}|#{@claude}|default" in Enum.map(aqua_refs, & &1.binding_key)
+    assert list_refs != []
+    assert "#{@list}|#{@claude}|default" in Enum.map(list_refs, & &1.binding_key)
 
-    for ref <- aqua_refs do
+    for ref <- list_refs do
       assert %{via_label: "default", vault_entry_id: nil, share_id: nil} = ref
     end
 
-    edge = edge!(aqua_head.resolved_policy, @aqua, @claude)
+    edge = edge!(list_head.resolved_policy, @list, @claude)
     assert edge.vault == %{via: %{label: "default", binding_digest: nil}}
 
-    # A dependency without a credential need is not selected.
+    # Aqua's grant names no brain and binds nothing; a dependency without
+    # a credential need is not selected.
+    {_aqua, aqua_head, aqua_refs} = head!(ctx, @aqua)
+    assert aqua_refs == []
+    refute Map.has_key?(Jason.decode!(aqua_head.resolved_policy)["nodes"], @claude)
     assert edge!(aqua_head.resolved_policy, @aqua, "catalyst:local.files").vault == nil
 
     # Idempotent: nothing to mint or revise on the next boot.
@@ -160,8 +166,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     ctx: ctx
   } do
     {:ok, _} = Bootstrap.run(ctx)
-    {_aqua, first, _} = head!(ctx, @aqua)
-    {_, list_first, _} = head!(ctx, "formula:local.list-models")
+    {_aqua, aqua_first, _} = head!(ctx, @aqua)
+    {_, first, _} = head!(ctx, @list)
     old_digest = first.activation |> Jason.decode!() |> Map.fetch!(@claude)
 
     # A release retires the claude version this athanor holds and ships a
@@ -183,9 +189,9 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
              ])
 
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
-    {_, kept, _} = head!(ctx, @aqua)
+    {_, kept, _} = head!(ctx, @list)
     assert kept.revision == first.revision
-    assert %{via: %{label: "default"}} = edge!(kept.resolved_policy, @aqua, @claude).vault
+    assert %{via: %{label: "default"}} = edge!(kept.resolved_policy, @list, @claude).vault
 
     # The athanor takes the new release: the assistant's closure moves, and
     # every node of it is the seed's own or unchanged since the head.
@@ -193,27 +199,22 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
 
     # The catalyst's own head re-mints too: its new release widened its
-    # caps, and that closure is the seed's alone.
-    # Every shipped agent whose closure holds claude moves with it; nothing
-    # else does.
+    # caps, and that closure is the seed's alone. The formula whose
+    # closure holds claude moves with it; Aqua's grant, which names no
+    # brain, does not.
     {:ok, %{minted: [], revised: revised}} = Bootstrap.run(ctx)
-    assert @claude in revised and @aqua in revised and "formula:local.list-models" in revised
+    assert Enum.sort(revised) == Enum.sort([@claude, @list])
+    {_, aqua_still, _} = head!(ctx, @aqua)
+    assert aqua_still.revision == aqua_first.revision
 
-    assert Enum.all?(
-             revised -- [@claude, "formula:local.list-models"],
-             &String.starts_with?(&1, "agent:")
-           )
-
-    {_, healed, _} = head!(ctx, @aqua)
+    {_, healed, _} = head!(ctx, @list)
     assert healed.revision == first.revision + 1
     assert healed.granted_via == "bootstrap"
     assert healed.shape_digest != first.shape_digest
     new_digest = healed.activation |> Jason.decode!() |> Map.fetch!(@claude)
     assert new_digest != old_digest
     # The selection rides into the re-mint.
-    assert %{via: %{label: "default"}} = edge!(healed.resolved_policy, @aqua, @claude).vault
-    {_, list_healed, _} = head!(ctx, "formula:local.list-models")
-    assert list_healed.revision == list_first.revision + 1
+    assert %{via: %{label: "default"}} = edge!(healed.resolved_policy, @list, @claude).vault
 
     # Idempotent once re-minted.
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
@@ -236,8 +237,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
 
     {:ok, _} = Compendium.Registry.register_from_arca(ctx, own)
     assert {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
-    assert {@aqua, :shape_moved} in skipped
-    {_, still, _} = head!(ctx, @aqua)
+    assert {@list, :shape_moved} in skipped
+    {_, still, _} = head!(ctx, @list)
     assert still.revision == healed.revision
   end
 

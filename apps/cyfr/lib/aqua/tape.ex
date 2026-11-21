@@ -417,14 +417,6 @@ defmodule Aqua.Tape do
   defp standing(attrs, :retiring),
     do: Map.merge(attrs, %{grant: :stored, verify: &Sanctum.ExecutionStanding.stamp_only/1})
 
-  @doc "Pin the exact catalyst release the turn runs on (`TurnStorage.pin_catalyst/4`)."
-  @spec pin_catalyst(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
-  def pin_catalyst(%Context{} = ctx, turn, catalyst_ref),
-    do:
-      TurnStorage.pin_catalyst(Sanctum.Context.actor(ctx), turn.id, catalyst_ref, %{
-        fence: turn.fence
-      })
-
   @doc "Pin the program row the turn's brain runs on (`TurnStorage.pin_program/4`)."
   @spec pin_program(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
   def pin_program(%Context{} = ctx, turn, row_id),

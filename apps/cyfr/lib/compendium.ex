@@ -625,8 +625,8 @@ defmodule Compendium do
   defdelegate agent_snapshot(ctx, name), to: AgentIndex, as: :snapshot
 
   @doc """
-  The consent row of the crew's one grant, Aqua's, as the tree and the
-  installed brains stand now (`Compendium.AgentSource.latest_row/2`).
+  The consent row of the crew's one grant, Aqua's, as the tree stands
+  now (`Compendium.AgentSource.latest_row/2`).
   """
   @spec crew_grant_row(Context.t()) :: {:ok, map()} | {:error, term()}
   def crew_grant_row(%Context{} = ctx), do: AgentSource.latest_row(ctx, AquaPath.soul_name())

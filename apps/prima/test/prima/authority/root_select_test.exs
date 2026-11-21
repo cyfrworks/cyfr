@@ -104,6 +104,39 @@ defmodule Prima.Authority.RootSelectTest do
   end
 
   # ============================================================================
+  # select/2 — {:owner_label, _}: the owner's own profile of a label
+  # ============================================================================
+
+  describe "select/2 with an owner label" do
+    # A profile published to the public takes its owner's label.
+    @published %{@owner | id: "prof_published", kind: :public}
+
+    test "the owner profile of the label is taken, beside a public one of the same label" do
+      assert {:ok, @owner} =
+               RootSelect.select([@published, @owner], {:owner_label, "default"})
+    end
+
+    test "a public profile of the label is never taken" do
+      assert {:error, {:not_found, "default"}} =
+               RootSelect.select([@published], {:owner_label, "default"})
+
+      needs = profile(%{status: :needs_consent})
+
+      assert {:error, {:profile_unavailable, :needs_consent}} =
+               RootSelect.select([needs, @published], {:owner_label, "default"})
+    end
+
+    test "no profile of the label is not found, whatever else stands" do
+      work = profile(%{id: "prof_work", label: "work"})
+
+      assert {:error, {:not_found, "default"}} =
+               RootSelect.select([work, @public], {:owner_label, "default"})
+
+      assert {:error, {:not_found, "default"}} = RootSelect.select([], {:owner_label, "default"})
+    end
+  end
+
+  # ============================================================================
   # select/2 — :default: single active owner or fail
   # ============================================================================
 

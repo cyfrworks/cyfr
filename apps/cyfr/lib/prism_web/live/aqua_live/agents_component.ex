@@ -1709,10 +1709,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={@connected} class="text-emerald-400">
           Model connected
         </span>
-        <%!-- The crew's grant, which a member holds none of its own of:
-             its every state on Aqua's card, and stale on a member's whose
-             brain holds its key but is not in the grant; a brain's own
-             grant damaged or unread is said the same way. --%>
+        <%!-- The crew's grant, which a member holds none of its own of
+             and which names no brain: its every state on Aqua's card. A
+             brain's own grant damaged or unread is said the same way. --%>
         <.grant_line state={elem(@model_status, 0)} />
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet

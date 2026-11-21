@@ -984,9 +984,11 @@ defmodule Locus.Runtime.ModelContractTest do
 
     assert {:ok, %{affected: [_ | _]}} = Sanctum.Shares.revoke(admin, share.id)
     played = play(ctx, attached_step(port, "Revoked."))
-    # The revoke blocked the fixture's profile, which the soul's edge to it
-    # selects: the turn asks for setup before the model runs.
-    assert %{status: "failed", error: "Setup required" <> _} = played.turn
+    # The revoke blocked the fixture's own profile, whose grant the turn's
+    # model call runs under: the turn says the brain has no key before the
+    # model runs.
+    no_key = Prima.Refusal.message({:crew_unready, "fixture", :no_key})
+    assert %{status: "failed", error: ^no_key} = played.turn
     assert [] = agent_rows(played)
     refute_received {Fixture, :upstream, _request}
     assert used(admin, share) == 2

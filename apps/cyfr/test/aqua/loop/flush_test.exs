@@ -182,8 +182,8 @@ defmodule Aqua.Loop.FlushTest do
       })
 
     # The crew's grant walked again for the shape that moved, as a person
-    # grants it.
-    decisions = %{ref: @soul, selections: [%{dep: @model, label: "default"}]}
+    # grants it: it names no brain, whose own grant holds its key.
+    decisions = %{ref: @soul, selections: []}
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @soul})
     {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
 
