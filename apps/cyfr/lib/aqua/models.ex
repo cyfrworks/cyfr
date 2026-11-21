@@ -14,8 +14,8 @@ defmodule Aqua.Models do
       installed catalyst that speaks the contract and has what it needs
       connected asked for its models;
     * `model_status/2` — whether each agent's brain is ready: installed,
-      and bound to a key or a program the agent runs it with, or, for a
-      brain that is a program, the program row of its name standing
+      and bound to the key the crew's grant runs it with, or, for a brain
+      that is a program, the program row of its name standing
       (`t:status/0`);
     * `providers/1` — every brain the athanor can connect, with what it
       needs and how it stands, which Aqua's setup offers;
@@ -34,15 +34,18 @@ defmodule Aqua.Models do
   release the agent's ref resolves to; `:missing` and `:model_unavailable`
   carry the ref the agent names, whether or not the listing resolved it:
 
-    * `:ready` — the agent runs it with a bound key;
+    * `:ready` — the crew's grant runs it with a bound key;
     * `:needs_key` — a key to connect;
-    * `:needs_grant` — the person's grant is all it asks, as Aqua's
-      setup reads it (`t:provider/0`): a brain that needs nothing else;
-    * `:consent_stale` — the agent's own consent no longer covers its
-      shape (its brain, model, options or capabilities changed since it
-      was consented), so it runs again once the person consents again;
-    * `:consent_damaged`, `:consent_unavailable` — a consent it runs
-      under is damaged, or the store could not answer it;
+    * `:needs_grant` — the person's grant of the brain is all it asks, as
+      Aqua's setup reads it (`t:provider/0`): a brain that needs nothing
+      else;
+    * `:consent_stale` — Aqua's alone: the crew's grant no longer covers
+      what the crew may use (Aqua's tools, or the brains and hands it
+      names, changed since it was granted), so every member runs again
+      once the person grants it again;
+    * `:consent_damaged`, `:consent_unavailable` — the brain's own grant,
+      or for Aqua the crew's, is damaged, or the store could not answer
+      it;
     * `:missing` — the athanor's catalysts, read, hold no such model, or
       its setup plan answers that the registry holds no such component;
     * `:model_unavailable` — the athanor's catalysts could not be read,
@@ -82,6 +85,9 @@ defmodule Aqua.Models do
   # The brains' drivers whose harness cannot start read-only in the box
   # (`holds_read_only?/1`).
   @unheld_drivers ~w(cyfr-codex)
+  # The crew's one grant, which runs every member's brain
+  # (`Compendium.AgentSource`).
+  @grant Prima.AgentRef.soul_ref()
 
   @doc """
   The capabilities of `model` on `resolved_ref`: the catalyst's
@@ -508,28 +514,31 @@ defmodule Aqua.Models do
   @doc """
   For each agent given (the roster's string-keyed projection: `"name"`,
   `"catalyst_ref"` and `"program"`), its brain: the installed release its
-  catalyst resolves to and whether the consent it runs under is complete —
+  catalyst resolves to and whether it is connected —
   `%{name => t:status/0}`: `{:ready | :needs_key | :needs_grant |
   :consent_stale | :consent_damaged | :consent_unavailable,
   resolved_ref}`, or `{:missing | :model_unavailable,
   catalyst_ref}` — or, for a brain that is a program, how its row stands
-  (`t:status/0`). An agent that names no brain has no entry. Each
-  agent is read on its own consent, the soul's or the crew member's
-  (`Compendium.AgentSource`), so a member whose brain is not installed
-  or not bound reads so while the soul reads ready.
+  (`t:status/0`). An agent that names no brain has no entry. A crew
+  member holds no consent of its own: it is ready when its brain is
+  connected, the brain's own grant binding its key and the crew's one
+  grant (`Compendium.AgentSource`) running it with that key, so making a
+  member on a connected brain, or choosing it as Aqua's, asks nothing.
 
-  A brain is ready on a bound need of either kind: a key the catalyst's
-  requests carry, or a program row whose folder it runs its program in
-  (`Sanctum.Mount`) — the setup plan and the edge read both the same
-  way. A consent the brain runs under that is damaged, or that the
-  store could not answer, is `:consent_damaged` or
-  `:consent_unavailable`, never a key to connect over a consent that
-  exists: the brain's own consent, as its setup plan reads it, and, once
-  that reads ready, the agent's own load
-  (`Aqua.ConsentStatus.classify_refusal/1`), whose stale consent is
-  `:consent_stale`, a consent to give again. A catalyst listing that
-  cannot be read is not an empty one, and a setup plan refused for any
-  reason but the component's absence (`{:not_found, {:component, _}}`,
+  A brain is connected on a bound need of either kind: a key the
+  catalyst's requests carry, or a program row whose folder it runs its
+  program in (`Sanctum.Mount`) — the setup plan and the edge read both
+  the same way. The brain's own grant that is damaged, or that the store
+  could not answer, is `:consent_damaged` or `:consent_unavailable`,
+  never a key to connect over a consent that exists. The crew's grant is
+  read once, as a turn loads it: where it loads, a brain its edge binds
+  no key on is one to connect; where it does not, Aqua reads why
+  (`Aqua.ConsentStatus.classify_refusal/1`: a stale grant is
+  `:consent_stale`, a grant to give again, and damage or an outage as
+  above), which is said once, on Aqua, and never on a member. A catalyst
+  listing that cannot be read is not an empty one, and a setup plan
+  refused for any reason but the component's absence
+  (`{:not_found, {:component, _}}`,
   `Compendium.Component.resolve_component/2`'s one absence) is not an
   absence: each is `:model_unavailable`, never a model to install.
 
@@ -545,14 +554,17 @@ defmodule Aqua.Models do
     # The listing's refusal is kept: a listing that cannot be read never
     # resolves a model against no catalysts.
     listing = Aqua.AgentConfig.catalyst_listing(ctx)
+    brains = for %{"name" => name} = agent <- agents, is_binary(name), do: {name, brain_of(agent)}
 
-    for %{"name" => name} = agent <- agents,
-        is_binary(name),
-        brain <- List.wrap(brain_of(agent)),
-        into: %{} do
+    # The crew's one grant, loaded once for every catalyst brain given.
+    grant =
+      if Enum.any?(brains, &match?({_name, {:catalyst, _}}, &1)),
+        do: Opus.authority_for(ctx, :default, @grant)
+
+    for {name, brain} <- brains, brain != nil, into: %{} do
       case brain do
         {:program, id} -> {name, program_status(ctx, id)}
-        {:catalyst, ref} -> {name, catalyst_status(ctx, listing, name, ref)}
+        {:catalyst, ref} -> {name, catalyst_status(ctx, listing, grant, name, ref)}
       end
     end
   end
@@ -625,16 +637,16 @@ defmodule Aqua.Models do
   defp suited({:error, _unanswered}), do: {:error, :unavailable}
 
   # A brain is ready when its own profile binds what it needs AND the
-  # agent's consent selects that profile on its edge to the catalyst —
-  # what the agent actually runs it with, resolved as a turn would resolve
-  # it. A bound key the agent's edge does not select is still one to
+  # crew's grant selects that profile on its edge to the catalyst — what
+  # every member actually runs it with, resolved as a turn would resolve
+  # it. A bound key the grant's edge does not select is still one to
   # connect.
-  defp catalyst_status(_ctx, {:error, _unread}, _name, ref),
+  defp catalyst_status(_ctx, {:error, _unread}, _grant, _name, ref),
     do: {:model_unavailable, ref}
 
-  defp catalyst_status(ctx, {:ok, listing}, name, ref) do
+  defp catalyst_status(ctx, {:ok, listing}, grant, name, ref) do
     case Aqua.AgentConfig.resolve_catalyst(listing, ref) do
-      {:ok, resolved} -> planned_status(ctx, name, ref, resolved)
+      {:ok, resolved} -> planned_status(ctx, grant, name, ref, resolved)
       {:error, _no_such_catalyst} -> {:missing, ref}
     end
   end
@@ -644,14 +656,14 @@ defmodule Aqua.Models do
   # every other refusal (a store that could not answer, which the
   # component domain answers as a sentence, a damaged row, a timeout, a
   # forbidden call, anything else) leaves whether it is installed unknown.
-  defp planned_status(ctx, name, ref, resolved) do
+  defp planned_status(ctx, grant, name, ref, resolved) do
     case Aqua.Ops.call_tool("component", ctx, %{
            "action" => "setup_plan",
            "reference" => resolved
          }) do
       {:ok, plan} ->
         case plan_state(plan, resolved) do
-          :ready -> agent_status(ctx, name, ref, resolved, connect_state(plan))
+          :ready -> granted_status(grant, name, ref, resolved, connect_state(plan))
           state -> {state, resolved}
         end
 
@@ -663,29 +675,31 @@ defmodule Aqua.Models do
     end
   end
 
-  # The agent's own load, as a turn would make it, read through
-  # `Aqua.ConsentStatus.classify_refusal/1`: a load that refuses for
-  # damage (the agent's head, a lender, a stored grant that fails its
-  # checks), because the store could not answer, or because the agent's
-  # shape moved since its consent is said as such, never as a key to
-  # connect; every other refusal, and an edge that binds nothing, is
-  # `connect`, what connecting its brain asks (`connect_state/1`).
-  defp agent_status(ctx, name, catalyst_ref, resolved, connect) do
-    source = Prima.AgentRef.ref(name)
+  # The crew's grant, loaded as a turn would load it: where its edge to
+  # the brain binds nothing, connecting the brain is what it asks
+  # (`connect_state/1`). A grant that does not load is Aqua's to say,
+  # read through `Aqua.ConsentStatus.classify_refusal/1`: damage (the
+  # grant's head, a lender, a stored grant that fails its checks), an
+  # outage, or a grant whose shape moved since it was given, never a key
+  # to connect, and a grant there is none of is the brain's to connect. A
+  # crew member reads its brain alone, which its own grant answers: it
+  # holds no consent, and the grant's state is said once, on Aqua.
+  defp granted_status({:ok, authority}, _name, catalyst_ref, resolved, connect) do
+    if lent?(authority, @grant, catalyst_ref),
+      do: {:ready, resolved},
+      else: {connect, resolved}
+  end
 
-    case Opus.authority_for(ctx, :default, source) do
-      {:ok, authority} ->
-        if lent?(authority, source, catalyst_ref),
-          do: {:ready, resolved},
-          else: {connect, resolved}
-
-      {:error, reason} ->
-        case Aqua.ConsentStatus.classify_refusal(reason) do
-          {:ok, :stale} -> {:consent_stale, resolved}
-          {:error, :corrupt} -> {:consent_damaged, resolved}
-          {:error, :unavailable} -> {:consent_unavailable, resolved}
-          _absent_or_forbidden -> {connect, resolved}
-        end
+  defp granted_status({:error, reason}, name, _catalyst_ref, resolved, connect) do
+    if Prima.AgentRef.soul?(name) do
+      case Aqua.ConsentStatus.classify_refusal(reason) do
+        {:ok, :stale} -> {:consent_stale, resolved}
+        {:error, :corrupt} -> {:consent_damaged, resolved}
+        {:error, :unavailable} -> {:consent_unavailable, resolved}
+        _absent_or_forbidden -> {connect, resolved}
+      end
+    else
+      {:ready, resolved}
     end
   end
 
