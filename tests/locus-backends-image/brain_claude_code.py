@@ -14,13 +14,12 @@ its message is one of the events, with exactly its members.
 
 - A run session's first line is the driver's `hello`, naming the wire's
   version and a boot of its own; `models` with no harness running starts one
-  for the listing alone and leaves no process of it.
-- A start with no read_only runs the harness as before, its own tools
-  allowed, seen as the harness's whole command line and the driver's whole
-  answers. A read-only start runs with the driver's arguments alone, so
-  this row's command, `node` and the stand-in's script, which carries an
-  argument past the program's name, ends the driver before anything runs,
-  with no line written.
+  for the listing alone and leaves no process of it, and lists the one
+  access the driver honours, Default mode.
+- A start naming Default mode, or no access, runs the harness in its default
+  permission mode, its own tools allowed, seen as the harness's whole command
+  line and the driver's whole answers. A start naming an access the driver
+  does not list ends the driver before anything runs, with no line written.
 - A start runs the harness with the start's configuration as its flags,
   and `started` names the new session; a work sets CYFR's tools on the stub;
   a post is a turn, streamed as `text` and said whole, its usage each
@@ -160,8 +159,9 @@ def main():
         d.send({"t": "models", "id": "mdl_1"})
         listed = d.expect("models", "models with no harness running is listed from a harness of its own")
         expect([m["id"] for m in listed["models"]] == ["default", "fake-opus", "fake-haiku"]
-               and listed["efforts"] == ["low", "medium", "high", "max"],
-               "the listing is the harness's, with the efforts any model takes", listed)
+               and listed["efforts"] == ["low", "medium", "high", "max"]
+               and listed["access"] == [{"id": "default", "name": "Default mode"}],
+               "the listing is the harness's, with the efforts any model takes and the driver's one access", listed)
         eventually(lambda: not harnesses(stack), "the listing's harness to end")
 
         # ————— a start, a work and a post —————
@@ -221,20 +221,24 @@ def main():
         said = [e["text"] for e in d.until("idle") if e["t"] == "said"]
         expect(said and f"session {session}, model fake-opus" in said[0], "the new process runs the new flags", said)
 
-        # ————— a read-only start of this row's command runs nothing —————
+        # ————— a start naming an access the driver does not list runs nothing —————
         d.close()
-        r = Driver(c, "brain-read-only")
-        r.expect("hello", "a driver to refuse a read-only start")
-        status, answer = c.send(OWNER, r.session, [json.dumps({"t": "start", "gen": 7, "config": {"model": "fake-haiku", "read_only": True}})])
-        expect(status == 200, "the read-only start is written", answer)
+        r = Driver(c, "brain-unlisted-access")
+        r.expect("hello", "a driver to refuse an unlisted access")
+        status, answer = c.send(OWNER, r.session, [json.dumps({"t": "start", "gen": 7, "config": {"model": "fake-haiku", "access": "bypassPermissions"}})])
+        expect(status == 200, "the start is written", answer)
         lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
-        expect(not running and lines == [], "a read-only start of a command carrying the harness's arguments ends the driver and writes nothing", lines)
+        expect(not running and lines == [], "a start naming an access the driver does not list ends it and writes nothing", lines)
         r.close()
 
-        # ————— a start that is not read-only, whole —————
-        for key, config, mode, behaviour in (
-            ("brain-auto", {"model": "fake-haiku"}, [], "allow"),
-        ):
+        # ————— a start in Default mode, named or not, whole —————
+        base = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                "--include-partial-messages", "--strict-mcp-config", "--permission-prompt-tool", "stdio"]
+        inputs = [{"file_path": "made.txt", "content": "x"}, {"command": "touch made.txt"}]
+        allowed = [{"type": "control_response", "response": {"subtype": "success", "request_id": f"ask-{i}",
+                    "response": {"behavior": "allow", "updatedInput": inputs[i - 1]}}} for i in (1, 2)]
+        for key, config in (("brain-access-absent", {"model": "fake-haiku"}),
+                            ("brain-access-default", {"model": "fake-haiku", "access": "default"})):
             m = Driver(c, key)
             m.expect("hello", f"{key}: the driver says hello")
             m.send({"t": "start", "gen": 7, "config": config})
@@ -246,17 +250,10 @@ def main():
             turn = m.until("idle")
             expect(not any(e["t"] == "ask" for e in turn), f"{key}: the harness's own tools are never asked of CYFR", turn)
             got = json.loads([e["text"] for e in turn if e["t"] == "said"][0])
-            base = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                    "--include-partial-messages", "--strict-mcp-config", "--permission-prompt-tool", "stdio"]
-            expect(got["argv"] == base + ["--session-id", fresh, "--model", "fake-haiku"] + mode,
-                   f"{key}: the harness starts with exactly the start's command line", got["argv"])
-            answer = ({"behavior": "allow", "updatedInput": None} if behaviour == "allow"
-                      else {"behavior": "deny", "message": "This crew member is read-only."})
-            inputs = [{"file_path": "made.txt", "content": "x"}, {"command": "touch made.txt"}]
-            wanted = [{"type": "control_response", "response": {"subtype": "success", "request_id": f"ask-{i}",
-                       "response": dict(answer, updatedInput=inputs[i - 1]) if behaviour == "allow" else answer}}
-                      for i in (1, 2)]
-            expect(got["answers"] == wanted, f"{key}: the driver answers the harness's own Write and Bash exactly",
+            expect(got["argv"] == base + ["--session-id", fresh, "--model", "fake-haiku", "--permission-mode", "default"],
+                   f"{key}: the harness starts with exactly the start's command line, in its default permission mode",
+                   got["argv"])
+            expect(got["answers"] == allowed, f"{key}: the driver allows the harness's own Write and Bash exactly",
                    got["answers"])
             seen += m.lines
             m.close()

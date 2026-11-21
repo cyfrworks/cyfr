@@ -8,8 +8,8 @@ defmodule Aqua.Loop.Turn do
   runs (a crew member offered the soul's tools, the soul seated on the
   crew member its bytes name, `Compendium.resolve_agent/3`), whose
   capability digest must equal the
-  one the turn started under — the roster, the member's mode and the set
-  it is offered (`Aqua.Offered`), the same on every job, the resolved
+  one the turn started under — the roster, the member's options and the
+  set it is offered (`Aqua.Offered`), the same on every job, the resolved
   model catalyst with its capabilities
   and the request size its consent caps it at (`request_cap`), the brain
   options — the agent file's own, over which a crew request's
@@ -53,10 +53,9 @@ defmodule Aqua.Loop.Turn do
     :thread,
     :agent,
     :roster,
-    # What the turn may call (`Aqua.Offered`) and the member's mode, which
-    # decides what of it runs (`Aqua.Loop.Policy`).
+    # What the turn may call (`Aqua.Offered`), decided call by call
+    # (`Aqua.Loop.Policy`).
     :offered,
-    :mode,
     :authority,
     # The grant a catalyst brain's model calls run under: the brain's own,
     # never Aqua's (`brain_grant/3`). Nil for a program brain.
@@ -148,10 +147,6 @@ defmodule Aqua.Loop.Turn do
         agent: agent,
         roster: roster,
         offered: offered,
-        # The mode the turn's row pinned at its start, from the same
-        # snapshot whose capability digest the agent was just checked
-        # against.
-        mode: turn.agent_mode,
         authority: authority,
         brain_authority: brain_authority,
         catalyst: catalyst,
@@ -287,7 +282,6 @@ defmodule Aqua.Loop.Turn do
       "description" => parsed.description,
       "avoid" => parsed.avoid,
       "prompt" => parsed.prompt,
-      "mode" => parsed.mode,
       "tools" => parsed.tools,
       "catalyst_ref" => parsed.catalyst_ref,
       "program" => Map.get(parsed, :program),
@@ -321,10 +315,8 @@ defmodule Aqua.Loop.Turn do
   # is the one the turn's `program.start` names, which `Opus.Brain` holds
   # every write to. A program brain names its harness's model, if any, as
   # the agent's `model`; the harness's default stands for none.
-  defp program_model(turn, agent, {:ok, program}) do
-    with :ok <- holds(turn, agent, {:driver, program.driver}, program.name),
-         do: {:ok, {nil, Map.delete(program, :driver)}, turn.model || agent["model"]}
-  end
+  defp program_model(turn, agent, {:ok, program}),
+    do: {:ok, {nil, program}, turn.model || agent["model"]}
 
   # A program row that does not stand is said as the member's card says
   # it, naming whose brain it is: Aqua's is its member's, whose card
@@ -350,30 +342,11 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  # A read-only member's program brain, Aqua's member's included, must be
-  # one CYFR keeps read-only (`Aqua.Models.holds_read_only?/1`): this is
-  # the first point the turn reads its program row, after the root's
-  # claim and before anything runs, and a turn refused here ends unrun
-  # with the sentence as a line in its thread (`Aqua.Loop`). The mode is
-  # the one the turn's row stored at its start (`turns.agent_mode`).
-  # Aqua's mode is its member's, so the sentence names the member whose
-  # mode the person switches.
-  defp holds(%{agent_mode: "read-only"}, agent, brain, name) do
-    if Aqua.Models.holds_read_only?(brain),
-      do: :ok,
-      else: {:error, {:read_only_unheld, brain_title(agent), name}}
-  end
-
-  defp holds(_auto, _agent, _brain, _name), do: :ok
-
   @doc "A catalyst's refusal types that say its key is not there to use."
   @spec key_refusals() :: [String.t()]
   def key_refusals, do: @key_refusals
 
-  @doc """
-  Whose brain and mode the agent's are, as a person reads them: Aqua's are
-  its member's.
-  """
+  @doc "Whose brain the agent's is, as a person reads it: Aqua's is its member's."
   @spec brain_title(map()) :: String.t()
   def brain_title(%{"holder" => %{title: title}}) when is_binary(title), do: title
   def brain_title(agent), do: title(agent)
@@ -709,7 +682,7 @@ defmodule Aqua.Loop.Turn do
   mid-turn writes the store; nothing rebuilds the snapshot a running loop
   decides from, so a call that has not dispatched yet is decided again
   here. The authored half is the pinned agent definition and is never
-  re-read here; a mode switched mid-turn reaches the member's next turn.
+  re-read here; a member changed mid-turn reaches its next turn.
   """
   @spec current_offered(t()) :: Aqua.Offered.t()
   def current_offered(%__MODULE__{ctx: ctx, agent: agent}),

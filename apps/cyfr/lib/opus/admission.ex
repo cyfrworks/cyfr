@@ -79,8 +79,8 @@ defmodule Opus.Admission do
   `{:id, _}` or `{:label, _}` to pin, `:default` for the single active
   owner profile — which fails on ambiguity rather than choosing.
 
-  A turn's calls run under this authority, so the mode that decides a
-  call never supplies authority. A turn starts here: `Aqua.Loop`
+  A turn's calls run under this authority, so the policy that decides a
+  call (`Aqua.Loop.Policy`) never supplies authority. A turn starts here: `Aqua.Loop`
   resolves and pins the profile, composes the system prompt from what the
   authority grants, and only then dispatches under `{:id, pinned}`.
 

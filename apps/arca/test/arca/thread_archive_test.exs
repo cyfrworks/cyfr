@@ -124,7 +124,6 @@ defmodule Arca.ThreadArchiveTest do
         root_execution_id: execution.id,
         attempt: attempt.attempt,
         budget_id: budget_id,
-        agent_mode: "auto",
         recovery_limit: 3,
         fence: turn.fence
       })

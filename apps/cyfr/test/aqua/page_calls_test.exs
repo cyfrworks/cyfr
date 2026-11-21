@@ -12,12 +12,10 @@ defmodule Aqua.PageCallsTest do
 
   A tincture's page calls only what its manifest declares, and a call it
   does not declare leaves no step; a plain page's call is held to no
-  declaration. A call is decided under Aqua's mode in the turn it joins
-  or opens, and nothing asks: on auto what Aqua is offered runs at once,
-  a component whatever of the page its grant lets out, and on read-only
-  a read runs and any other call is refused in the read-only sentence,
-  the thread told once. A call Aqua is not offered is refused, and a turn
-  a schedule started is decided as any other. A request that is gone
+  declaration. A call is decided in the turn it joins or opens, and
+  nothing asks: what Aqua is offered runs at once, a component whatever
+  of the page its grant lets out. A call Aqua is not offered is refused,
+  and a turn a schedule started is decided as any other. A request that is gone
   runs nothing, a call its runner dies holding is answered unavailable,
   and a call over the rate is refused.
   """
@@ -223,17 +221,6 @@ defmodule Aqua.PageCallsTest do
       })
 
     profile_id
-  end
-
-  # Aqua switched to `mode`, as the Aqua page switches it: the mode of the
-  # crew member it runs on.
-  defp mode!(ctx, mode) do
-    assert {:ok, %{"updated" => "claude"}} =
-             Cyfr.Test.AquaTool.call(ctx, %{
-               "action" => "update",
-               "name" => Cyfr.Test.SeedBundle.seat_member(),
-               "mode" => mode
-             })
   end
 
   # Aqua offered its tools less `tools`, as the Aqua page writes it, and
@@ -507,39 +494,8 @@ defmodule Aqua.PageCallsTest do
     }
   end
 
-  # The thread's rows, oldest first, each whole but for its id and clock,
-  # which are minted.
-  defp rows!(ctx, thread) do
-    for row <- Threads.messages(Sanctum.Context.actor(ctx), thread.id),
-        do: Map.drop(row, [:id, :inserted_at])
-  end
-
-  # A row of `thread` as `rows!/2` reads it: `fields` over the columns a
-  # row leaves empty.
-  defp row(thread, fields) do
-    Map.merge(
-      %{
-        thread_id: thread.id,
-        athanor_id: thread.athanor_id,
-        payload: nil,
-        status: nil,
-        resolved_by: nil,
-        carried_by: nil,
-        resolved_at: nil,
-        execution_id: nil,
-        turn_id: nil,
-        client_id: nil,
-        addressee: nil,
-        reply_to: nil,
-        outcome: nil,
-        workspace_id: nil
-      },
-      fields
-    )
-  end
-
   # ---------------------------------------------------------------------------
-  # On auto
+  # What Aqua is offered
   # ---------------------------------------------------------------------------
 
   # A turn opened on a page's call asks no model, so it needs no brain:
@@ -672,8 +628,8 @@ defmodule Aqua.PageCallsTest do
     assert [_one] = runs_of(ctx, declared)
   end
 
-  test "a plain page's call is held to no declaration and is decided by Aqua's mode alone: " <>
-         "on auto each runs at once, a step that does more than read among them",
+  test "a plain page's call is held to no declaration: each runs at once, a step that does " <>
+         "more than read among them",
        %{ctx: ctx, driver: driver} do
     app = app!(ctx)
     worker!([app])
@@ -691,14 +647,14 @@ defmodule Aqua.PageCallsTest do
     assert {200, %{"ok" => true}} = answered!(3)
     settled!(ctx, room)
 
-    # Each opened work of its own on auto, which ran it at once.
+    # Each opened work of its own, which ran it at once.
     [launch, list, keep] = requests(ctx, room)
 
     assert [{%{id: first}, _}, {%{id: second}, _}, {%{id: third}, _}] =
              turns_after(ctx, room, put)
 
     for id <- [first, second, third],
-        do: assert(%{status: "completed", agent_mode: "auto", error: nil} = ended!(ctx, id))
+        do: assert(%{status: "completed", error: nil} = ended!(ctx, id))
 
     assert [steps!(ctx, first), steps!(ctx, second), steps!(ctx, third)] == [
              [page_step(1, first, launch, "execution.run", "ok")],
@@ -711,64 +667,8 @@ defmodule Aqua.PageCallsTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Aqua's mode and its tools
+  # Aqua's tools
   # ---------------------------------------------------------------------------
-
-  test "on read-only a page's read runs and any other call is refused in the read-only " <>
-         "sentence, the thread told once, and nothing pauses",
-       %{ctx: ctx, driver: driver} do
-    app = app!(ctx)
-    worker!([@http, app])
-    room = workspace!(ctx)
-    put = put!(ctx, room, @html)
-    mode!(ctx, "read-only")
-
-    # The page's fetch opens work of its own and is held there, so the
-    # keep and the launch after it are steps of that work, decided in its
-    # next round.
-    {fetch, work} = held_fetch!(ctx, driver, room, put)
-    invoke(driver, room, 3, app <> ":1.0.0")
-    proposed!(ctx, room, put, 2)
-    send(fetch, :continue)
-
-    sentence = Aqua.Loop.Policy.read_only_sentence("Aqua")
-    assert answered!(1) == {200, result(@fetched)}
-    assert answered!(2) == {403, refused(sentence)}
-    assert answered!(3) == {403, refused(sentence)}
-
-    assert %{status: "completed", agent_mode: "read-only", error: nil, root_execution_id: root} =
-             ended!(ctx, work)
-
-    refute_received %ThreadEvent{kind: :turn_paused}
-    [get, keep, launch] = requests(ctx, room)
-
-    assert steps!(ctx, work) == [
-             page_step(1, work, get, "http.get", "ok"),
-             page_step(2, work, keep, "notes.keep", "denied", sentence),
-             page_step(3, work, launch, "execution.run", "denied", sentence)
-           ]
-
-    # The thread is told once, right after the first refusal's answer.
-    rows = rows!(ctx, room)
-    [said] = for %{kind: "system"} = row <- rows, do: row
-    [_fetched, first_refused, _second] = for %{kind: "page_result"} = row <- rows, do: row.seq
-
-    assert said ==
-             row(room, %{
-               seq: said.seq,
-               author: Prima.Author.system(),
-               kind: "system",
-               content: sentence,
-               execution_id: root,
-               turn_id: work,
-               client_id: "read-only:" <> work,
-               sent_by: "aqua"
-             })
-
-    assert said.seq == first_refused + 1
-    assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
-    assert runs_of(ctx, app) == [] and app_runs() == 0
-  end
 
   test "a call Aqua is not offered is refused, a launch among them, and nothing of it runs",
        %{ctx: ctx, driver: driver} do
@@ -776,7 +676,7 @@ defmodule Aqua.PageCallsTest do
     worker!([app])
     room = workspace!(ctx)
     put = put!(ctx, room, @html)
-    # Granted and on auto, the launch would run but for the tools.
+    # Granted, the launch would run but for the tools.
     unoffer!(ctx, ["crew.list", "execution.run"])
 
     action(driver, room, 1, "component.list")
@@ -849,8 +749,8 @@ defmodule Aqua.PageCallsTest do
     assert length(runs_of(ctx, app)) == 2
   end
 
-  test "in a turn a schedule started, a page's call is decided by the mode as any turn's: " <>
-         "on auto it runs, and on read-only it is refused and the turn completes",
+  test "in a turn a schedule started, a page's call is decided as any turn's: it runs, and " <>
+         "the turn completes",
        %{ctx: ctx, driver: driver} do
     app = app!(ctx, @exit)
     worker!([app])
@@ -866,29 +766,10 @@ defmodule Aqua.PageCallsTest do
     assert answered!(1) == {200, result(%{"run" => 1})}
     settled!(ctx, room)
 
-    mode!(ctx, "read-only")
-    sentence = Aqua.Loop.Policy.read_only_sentence("Aqua")
-    invoke(driver, room, 2, app <> ":1.0.0")
-    assert answered!(2) == {403, refused(sentence)}
-    settled!(ctx, room)
-
-    [ran, stopped] = requests(ctx, room)
-    assert [{%{id: first}, _}, {%{id: second}, _}] = turns_after(ctx, room, put)
-
-    # Neither ended failed: the refusal is no question, and the turn went on.
-    assert Enum.map([first, second], fn id ->
-             turn = ended!(ctx, id)
-             {turn.status, turn.origin, turn.agent_mode, turn.error}
-           end) == [
-             {"completed", "schedule", "auto", nil},
-             {"completed", "schedule", "read-only", nil}
-           ]
-
-    assert [steps!(ctx, first), steps!(ctx, second)] == [
-             [page_step(1, first, ran, "execution.run", "ok")],
-             [page_step(1, second, stopped, "execution.run", "denied", sentence)]
-           ]
-
+    [ran] = requests(ctx, room)
+    assert [{%{id: first}, _}] = turns_after(ctx, room, put)
+    assert %{status: "completed", origin: "schedule", error: nil} = ended!(ctx, first)
+    assert steps!(ctx, first) == [page_step(1, first, ran, "execution.run", "ok")]
     assert length(runs_of(ctx, app)) == 1
   end
 

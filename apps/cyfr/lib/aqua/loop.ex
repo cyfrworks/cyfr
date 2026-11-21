@@ -10,12 +10,9 @@ defmodule Aqua.Loop do
   the agent keeps notes without asking), records the model call
   before making it, makes it in a worker, persists the whole response
   before any of its calls runs, and dispatches the calls: each is
-  decided under the member's mode (`Aqua.Loop.Policy`) and nothing is
-  asked, a refusal is closed as its own result, reads run beside each
+  decided (`Aqua.Loop.Policy`) and nothing is asked, a refusal is closed as its own result, reads run beside each
   other and everything else alone, each in a worker of its own. A round
-  with no calls ends the turn. The first call a read-only member is
-  refused in a turn also writes that sentence once as a line in the
-  thread. A launch stands on its component's grant: `Aqua.Launch`
+  with no calls ends the turn. A launch stands on its component's grant: `Aqua.Launch`
   consumes it while the root is paused around it, so the application
   takes a root of its own, and holds it to what the decision read; the
   pause ends when the launch does, and a continuation resumes the turn
@@ -35,8 +32,8 @@ defmodule Aqua.Loop do
   ## A scheduled turn
 
   A turn a schedule's line started (origin `schedule`, `Aqua.ScheduleTurns`)
-  runs as any turn of its member's mode. A refused call is no question,
-  so the turn goes on without it.
+  runs as any turn of its member. A refused call is no question, so the
+  turn goes on without it.
 
   ## The turn's read threads
 
@@ -137,10 +134,6 @@ defmodule Aqua.Loop do
       excerpt_sent?: false,
       # A call's outcome is unknown: only replay-safe reads run from here.
       restricted?: false,
-      # The turn's line that its member is read-only was written: once per
-      # turn, and once across a continuation by the line's own id
-      # (`say_read_only/2`).
-      read_only_said?: false,
       # Whether the next round asks the model: not once its answer called
       # nothing, so a page's call proposed after it runs and the turn ends
       # without asking again, and never in a turn opened on a page's call.
@@ -266,9 +259,6 @@ defmodule Aqua.Loop do
     do: unrun_line(ctx, turn, describe(reason))
 
   defp say_unrun(ctx, turn, {:tools_invalid_entry, _entry} = reason),
-    do: unrun_line(ctx, turn, describe(reason))
-
-  defp say_unrun(ctx, turn, {:read_only_unheld, _title, _brain} = reason),
     do: unrun_line(ctx, turn, describe(reason))
 
   defp say_unrun(_ctx, _turn, _reason), do: :ok
@@ -561,7 +551,6 @@ defmodule Aqua.Loop do
                  consent_id: claim.authority.consent_id,
                  agent_revision_digest: snapshot.revision_digest,
                  agent_capability_digest: snapshot.capability_digest,
-                 agent_mode: snapshot.agent.mode,
                  recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
                })
              ),
@@ -1495,7 +1484,7 @@ defmodule Aqua.Loop do
     decision =
       if not_offered?(state, step, call),
         do: {:deny, "#{call.model_name} is not one of the tools this work has"},
-        else: Policy.decide(call, state.spec.offered, state.spec.mode, place(state, step))
+        else: Policy.decide(call, state.spec.offered, place(state, step))
 
     case decision do
       :run ->
@@ -1511,35 +1500,10 @@ defmodule Aqua.Loop do
         close(state, step, call, {:error, {:denied, not_granted(app, account)}})
         {runnable, state, setup || {app, need, account}}
 
-      {:read_only, message} ->
-        close(state, step, call, {:error, {:denied, message}})
-        {runnable, say_read_only(state, message), setup}
-
       {refused, message} when refused in [:deny, :refuse] ->
         close(state, step, call, {:error, {:denied, message}})
         {runnable, state, setup}
     end
-  end
-
-  # The first call a read-only member is refused in a turn writes the
-  # sentence once as a line in the thread, by the writer a refused key's
-  # line uses. The line carries the turn's own id as its sender id, which
-  # the thread holds once, so a continued turn writes no second.
-  defp say_read_only(%State{read_only_said?: true} = state, _message), do: state
-
-  defp say_read_only(%State{turn: turn} = state, message) do
-    _ =
-      Tape.append(ctx(state), turn.thread_id, %{
-        author: Prima.Author.system(),
-        sent_by: turn.agent,
-        kind: "system",
-        content: message,
-        client_id: "read-only:" <> turn.id,
-        turn_id: turn.id,
-        execution_id: turn.root_execution_id
-      })
-
-    %{state | read_only_said?: true}
   end
 
   # What a launch naming an account its app does not bind answers: the
@@ -1694,9 +1658,9 @@ defmodule Aqua.Loop do
   # window between a response landing and its calls dispatching, and the
   # window while an earlier call of the same response runs, belonged to a
   # setting that may have gone. Every call is decided again as it
-  # dispatches, on the offered set as it stands now; the mode is pinned.
+  # dispatches, on the offered set as it stands now.
   defp still_offered(%State{spec: spec} = state, item, %Call{} = call) do
-    case Policy.decide(call, Turn.current_offered(spec), spec.mode, place(state, item.step)) do
+    case Policy.decide(call, Turn.current_offered(spec), place(state, item.step)) do
       :run -> :ok
       {:run, _decided} -> :ok
       {:setup_required, _app, _need} -> {:denied, "#{call.tool}.#{call.action} is not allowed"}
@@ -1704,11 +1668,10 @@ defmodule Aqua.Loop do
     end
   end
 
-  # Where a call is made (`Aqua.Loop.Policy.decide/4`): the member's title
-  # a read-only refusal names and the member's context a launch's account
-  # is resolved under. The host's `program.start` of a program brain is
-  # the brain's own start, not a call of its job, so the mode does not
-  # refuse it: the holder starts it as the mode says (`Opus.Brain`).
+  # Where a call is made (`Aqua.Loop.Policy.decide/3`): the member's title
+  # a refusal names and the member's context a launch's account is
+  # resolved under. The host's `program.start` of a program brain is the
+  # brain's own start, not a call of its job, so no offered set refuses it.
   defp place(%State{} = state, step) do
     if host_start?(state, step),
       do: Keyword.put(place(state), :host_start, true),
@@ -2336,8 +2299,7 @@ defmodule Aqua.Loop do
   # A turn on a program brain opens with the host's `program.start` of the
   # brain's row at its epoch, recorded with its call's `tool_call` row as a
   # model's is (`Opus.Brain` reads the admitting call there) and decided by
-  # the code that decides every call: it runs in either mode, and the
-  # holder starts the program as the turn's mode says. Its dispatch attends the session
+  # the code that decides every call, which runs it. Its dispatch attends the session
   # (`Aqua.Program`), never the terminal start a model's call makes.
   defp open_program(%State{program: %{row: row, epoch: epoch}} = state) do
     args = %{"action" => "start", "program" => row, "epoch" => epoch}
@@ -2540,7 +2502,7 @@ defmodule Aqua.Loop do
     if state.restricted? and not Policy.replay_safe?(call) do
       running
     else
-      case Policy.decide(call, state.spec.offered, state.spec.mode, place(state, step)) do
+      case Policy.decide(call, state.spec.offered, place(state, step)) do
         :run ->
           task = Aqua.Loop.Worker.async(fn -> run_one(state, item) end)
           Map.put(running, task.ref, %{item: item, task: task})
@@ -2548,10 +2510,6 @@ defmodule Aqua.Loop do
         # A launch lets the root go around its run: it runs once the model
         # has answered.
         {:run, _decided} ->
-          running
-
-        # Decided again with the round's own calls, which write the line.
-        {:read_only, _message} ->
           running
 
         {refused, message} when refused in [:deny, :refuse] ->
@@ -2776,8 +2734,8 @@ defmodule Aqua.Loop do
   end
 
   # One silent request before older rows are summarized away, so the model
-  # can keep notes: `notes.keep` alone, when the member's mode runs it and
-  # its offered set holds it, in a turn no unknown outcome
+  # can keep notes: `notes.keep` alone, when the policy runs it and its
+  # offered set holds it, in a turn no unknown outcome
   # restricts, with room left for the flush, the summary and the next chat
   # request, and only when the request fits the catalyst's cap.
   defp flush(%State{spec: spec} = state, rows, probe) do
@@ -2796,8 +2754,8 @@ defmodule Aqua.Loop do
     end
   end
 
-  # A flush runs only where a keep would: the member is offered it and is
-  # in `auto`. Each kept note is decided again as it dispatches.
+  # A flush runs only where a keep would: the member is offered it. Each
+  # kept note is decided again as it dispatches.
   defp flush_runs?(%State{} = state, offered) do
     probe = %Call{
       kind: :catalog,
@@ -2807,7 +2765,7 @@ defmodule Aqua.Loop do
       model_name: @flush_key
     }
 
-    Policy.decide(probe, offered, state.spec.mode, place(state)) == :run
+    Policy.decide(probe, offered, place(state)) == :run
   end
 
   # The gate a flush passes before the offered set is read: a turn no
@@ -3235,8 +3193,6 @@ defmodule Aqua.Loop do
     do: "setup_required: the account #{inspect(account)} is not granted to #{app}"
 
   defp describe({:unknown_model, model}), do: "#{model} is not a model its catalyst knows"
-
-  defp describe({:read_only_unheld, title, brain}), do: Aqua.Models.unheld_sentence(title, brain)
 
   defp describe(:tool_policy_retired), do: Prima.AgentRef.tool_policy_retired()
 

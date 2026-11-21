@@ -60,7 +60,6 @@ defmodule Arca.CrewStorageTest do
         root_execution_id: root.execution.id,
         attempt: root.attempt.attempt,
         budget_id: root.budget_id,
-        agent_mode: "auto",
         recovery_limit: 3,
         fence: turn.fence
       })
@@ -364,7 +363,6 @@ defmodule Arca.CrewStorageTest do
                  root_execution_id: root.execution.id,
                  attempt: root.attempt.attempt,
                  budget_id: root.budget_id,
-                 agent_mode: "auto",
                  recovery_limit: 3,
                  fence: turn.fence
                })

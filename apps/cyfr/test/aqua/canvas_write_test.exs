@@ -3,11 +3,10 @@
 
 defmodule Aqua.CanvasWriteTest do
   @moduledoc """
-  Aqua writes a canvas itself, through `canvas.write`. In `auto` a
-  scripted turn's call runs as the model made it: the new version is laid
-  whole, registered and allocated, while the turn opens no stream and the
-  request log holds each file as its size and digest. A read-only soul is
-  refused the call in its mode's sentence, and nothing is written.
+  Aqua writes a canvas itself, through `canvas.write`. A scripted turn's
+  call runs as the model made it: the new version is laid whole,
+  registered and allocated, while the turn opens no stream and the
+  request log holds each file as its size and digest.
   """
 
   use ExUnit.Case, async: false
@@ -69,7 +68,7 @@ defmodule Aqua.CanvasWriteTest do
     {:ok, ctx: ctx, thread: thread}
   end
 
-  test "in auto the write runs as the model made it: the version laid whole, registered and " <>
+  test "the write runs as the model made it: the version laid whole, registered and " <>
          "allocated, no stream opened and each file logged as its size and digest",
        %{ctx: ctx, thread: thread} do
     turn = asked!(ctx, thread)
@@ -115,25 +114,6 @@ defmodule Aqua.CanvasWriteTest do
 
     assert Jason.decode!(write.input)["files"] ==
              Map.new(@files, fn {path, text} -> {path, measured(text)} end)
-  end
-
-  test "a read-only soul is refused the write in its mode's sentence, and nothing is written",
-       %{ctx: ctx, thread: thread} do
-    {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => Cyfr.Test.SeedBundle.seat_member(),
-        "mode" => "read-only"
-      })
-
-    turn = asked!(ctx, thread)
-
-    assert %{dispatch_state: "closed", outcome: "denied", result_message_id: refused} =
-             canvas_step(ctx, turn)
-
-    assert {:ok, %{content: content}} = Tape.message(ctx, refused)
-    assert content == Aqua.Loop.Policy.read_only_sentence("Aqua")
-    assert_nothing_written(ctx)
   end
 
   # The turn that asks to write the canvas, run to its end.
@@ -186,17 +166,6 @@ defmodule Aqua.CanvasWriteTest do
     {:ok, steps} = Tape.steps(ctx, turn)
     [step] = for %{kind: "tool", tool: "canvas", action: "write"} = step <- steps, do: step
     step
-  end
-
-  defp assert_nothing_written(ctx) do
-    actor = Sanctum.Context.actor(ctx)
-    assert {:error, :not_found} = Arca.CanvasVersions.get(actor, @canvas)
-
-    refute Arca.exists?(
-             actor,
-             Compendium.ComponentPath.version_dir("tincture", "local", @canvas, "0.1.0") ++
-               ["cyfr-manifest.json"]
-           )
   end
 
   defp measured(bytes) do

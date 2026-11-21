@@ -370,8 +370,6 @@ type AquaCreateArgs struct {
 	Model Field[string] `json:"model,omitzero"`
 	// What the soul should never hand a crew member (create/update; crew members only)
 	Avoid Field[string] `json:"avoid,omitzero"`
-	// What of its offered tools the member runs: 'read-only' or 'auto' (the default)
-	Mode Field[string] `json:"mode,omitzero"`
 	// The options this agent's brain is asked with on every request — names and values its describe declares (create/update)
 	Options Field[map[string]any] `json:"options,omitzero"`
 }
@@ -417,7 +415,7 @@ func (args AquaGetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaListArgs carries arguments for aqua.list.
 type AquaListArgs struct {
-	// For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, mode, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent
+	// For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, tools, disabled, and the soul's prompt as content) — one call instead of a get per agent
 	Detail Field[bool] `json:"detail,omitzero"`
 	// For list: include crew members set aside with disabled: true, which the roster otherwise leaves out
 	IncludeDisabled Field[bool] `json:"include_disabled,omitzero"`
@@ -574,12 +572,10 @@ type AquaUpdateArgs struct {
 	Model Field[*string] `json:"model,omitzero"`
 	// What the soul should never hand a crew member (create/update; crew members only)
 	Avoid Field[*string] `json:"avoid,omitzero"`
-	// The options this agent's brain is asked with on every request — names and values its describe declares (create/update)
+	// The options this agent's brain is asked with on every request — names and values its describe declares; for a program brain, 'effort' and 'access', each one of the values its program lists (create/update)
 	Options Field[*map[string]any] `json:"options,omitzero"`
 	// update only: the brain options to change, applied to the options as they are when the write lands — a value sets an option, null takes it off; options not named are kept, so two edits of different options at once keep both. Not with options.
 	OptionsPatch Field[map[string]*any] `json:"options_patch,omitzero"`
-	// What of its offered tools this member runs (create/update; a crew member, whose mode Aqua runs in when it runs on it): 'read-only' runs only reads, then answers, and every other call is refused; 'auto' runs every tool it is offered, deleting included. A file without it is auto.
-	Mode Field[string] `json:"mode,omitzero"`
 	// The soul's tools, which every crew member is offered too (a crew member has none of its own): each one action, 'tool.action', 'native_search' (the provider's own search) or an outside server's 'server:tool', with no wildcard: every action of a tool is listed by name. A tool missing from the list is not callable at all; null offers nothing.
 	Tools Field[*[]string] `json:"tools,omitzero"`
 	// update only: tools to add to the soul's list as it is when the write lands, so two edits of different tools at once keep both. Not with tools.
@@ -590,7 +586,7 @@ type AquaUpdateArgs struct {
 	Content Field[string] `json:"content,omitzero"`
 	// Take a crew member out of the crew without deleting its file (for update; shipped members cannot be deleted — disable them instead)
 	Disabled Field[*bool] `json:"disabled,omitzero"`
-	// update only, the soul ('aqua'): the crew member Aqua runs on, whose brain, model, options and mode it takes; null names none. The soul has no brain of its own.
+	// update only, the soul ('aqua'): the crew member Aqua runs on, whose brain, model and options it takes; null names none. The soul has no brain of its own.
 	Member Field[*string] `json:"member,omitzero"`
 	// update only: the content_digest that get answered for the soul's prompt being edited. The update is refused as a conflict when the prompt has changed since, so one edit never writes over another.
 	ExpectedDigest Field[string] `json:"expected_digest,omitzero"`

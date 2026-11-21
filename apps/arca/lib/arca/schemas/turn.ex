@@ -48,7 +48,6 @@ defmodule Arca.Schemas.Turn do
     field :consent_id, :string
     field :agent_revision_digest, :string
     field :agent_capability_digest, :string
-    field :agent_mode, :string
     field :budget_id, :string
     field :model, :string
     field :catalyst_ref, :string

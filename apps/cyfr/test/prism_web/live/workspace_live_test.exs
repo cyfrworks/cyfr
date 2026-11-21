@@ -353,29 +353,6 @@ defmodule PrismWeb.WorkspaceLiveTest do
     assert has_element?(pane, ~s(textarea[placeholder^="Ask Aqua…"]))
     refute render(pane) =~ "Ask aqua…"
 
-    # Switched to read-only, the next turn's step that does more than read
-    # is refused in a line that names the soul so too, and the turn goes
-    # on to its end: nothing waits on the person.
-    assert {:ok, %{updated: "claude"}} =
-             Compendium.Providers.Aqua.handle(me, %{
-               "action" => "update",
-               "name" => Cyfr.Test.SeedBundle.seat_member(),
-               "mode" => "read-only"
-             })
-
-    Cyfr.Test.ScriptedWorker.script([
-      model_call("c1", "files", %{"action" => "delete", "path" => "notes.md"}),
-      model_reply("Your notes stay.")
-    ])
-
-    pane |> form("form", %{"message" => "delete my notes"}) |> render_submit()
-
-    refused = Aqua.Loop.Policy.read_only_sentence("Aqua")
-    wait_until(fn -> render(pane) =~ "Your notes stay." end, 60_000)
-    assert render(pane) =~ refused
-    refute render(pane) =~ "aqua is read-only"
-    assert has_element?(view, ~s(#workspace-state[data-state="open"]))
-
     Cyfr.Test.Sandbox.end_views()
   end
 

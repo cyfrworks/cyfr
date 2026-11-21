@@ -5,9 +5,8 @@ defmodule Aqua.Kinds do
   @moduledoc """
   What an operation is to the assistant: its kind and the verbs a tool
   has — read from the catalog's annotations and the virtual-tool
-  catalog, one rule for the Aqua page and the runtime alike, whose
-  read-only mode runs an action only when its kind is a read. The
-  classification is the gate's (`Sanctum.Catalog.tool_kind/2`,
+  catalog, one rule for the Aqua page and the runtime alike: reads run
+  beside each other (`Aqua.Loop.Policy.overlap/1`). The classification is the gate's (`Sanctum.Catalog.tool_kind/2`,
   `Sanctum.Catalog.tool_actions/1`).
   """
 

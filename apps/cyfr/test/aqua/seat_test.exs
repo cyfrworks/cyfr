@@ -5,7 +5,7 @@ defmodule Aqua.SeatTest do
   @moduledoc """
   Aqua as a seat, through the real loop and a scripted model: Aqua runs on
   the crew member its file names, with that member's brain, model and
-  mode and its own prompt and tools, its prompt in two parts (its file's,
+  options and its own prompt and tools, its prompt in two parts (its file's,
   then CYFR's) with the job apart from both; a turn pins Aqua's file, so a
   member chosen while a turn is open does not retarget it, recovery
   included, and the next turn runs on the new one once its consent is
@@ -297,7 +297,7 @@ defmodule Aqua.SeatTest do
     assert Jason.encode!(content) =~ "say hello to the fern"
 
     {:ok, pinned} = Tape.turn(ctx, turn.id)
-    assert %{agent: "aqua", agent_mode: "auto"} = pinned
+    assert %{agent: "aqua"} = pinned
     assert String.starts_with?(pinned.catalyst_ref, @model <> ":")
   end
 
@@ -352,54 +352,6 @@ defmodule Aqua.SeatTest do
 
     for thread <- [room, child],
         do: assert(Threads.pending_requests(actor(ctx), thread_id: thread.id) == [])
-  end
-
-  # CYFR's part is one text for both modes: a read-only member is offered
-  # a write and refused it, and the request that offered it says what
-  # read-only runs, never that every tool it holds runs as it is called.
-  test "a read-only worker is not told that its offered writes run",
-       %{ctx: ctx, room: room, holder: holder} do
-    member!(ctx, holder, %{"mode" => "read-only"})
-
-    script!([
-      %{
-        "content" => [
-          %{
-            "type" => "tool_call",
-            "id" => "write",
-            "name" => "files",
-            "arguments" => %{"action" => "delete", "path" => "data/review-missing"}
-          }
-        ],
-        "stop_reason" => "tool_call",
-        "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
-      },
-      reply("Read only.")
-    ])
-
-    {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
-    turn = accept!(ctx, child, "inspect only", holder)
-    assert :completed = run(ctx, turn)
-    assert {:ok, %{agent_mode: "read-only"}} = Tape.turn(ctx, turn.id)
-
-    assert [%{input: %{"params" => params}}, %{input: %{"params" => followup}}] =
-             chats(ctx, holder)
-
-    assert Enum.any?(params["tools"], &(&1["name"] == "files"))
-
-    assert %{
-             "type" => "tool_result",
-             "tool_call_id" => "write",
-             "name" => "files",
-             "content" => Aqua.Loop.Policy.read_only_sentence(holder),
-             "is_error" => true
-           } in Enum.flat_map(followup["messages"], & &1["content"])
-
-    system = params["system"]
-    assert system =~ "In read-only only reads run, and any other call comes back with a sentence"
-    refute system =~ "- Every tool you hold runs as you call it"
-    refute system =~ "build one by hand. A component the person granted runs"
-    refute system =~ "for that one act: nothing but this instruction stops you"
   end
 
   # A brain picked for the member Aqua runs on asks nothing: Aqua's grant
@@ -538,9 +490,9 @@ defmodule Aqua.SeatTest do
     {:ok, spec} = Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false)
     assert %{state: :held, name: ^holder} = spec.agent["holder"]
     assert String.starts_with?(spec.catalyst, @model <> ":")
-    assert {spec.model, spec.mode} == {"claude-sonnet-5-5", "auto"}
+    assert spec.model == "claude-sonnet-5-5"
 
-    # The next turn is the new member's: its brain, model and mode.
+    # The next turn is the new member's: its brain and model.
     {:ok, next} = Compendium.agent_snapshot(ctx, "aqua")
 
     assert %{
@@ -592,8 +544,7 @@ defmodule Aqua.SeatTest do
           "name" => "twin",
           "title" => "Twin",
           "catalyst_ref" => @model,
-          "model" => "claude-sonnet-5-5",
-          "mode" => "read-only"
+          "model" => "claude-opus-5-5"
         })
 
       # The loop holds what it built: another member chosen mid-call, it
@@ -601,18 +552,17 @@ defmodule Aqua.SeatTest do
       {live, pids} = open_turn!(ctx, room, "first")
       :ok = aqua!(ctx, %{"member" => "explorer"})
       finish!(pids)
-      assert {:ok, %{status: "completed", agent_mode: "auto"}} = Tape.turn(ctx, live)
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, live)
       assert answers(ctx, room, live) == ["On claude."]
       :ok = aqua!(ctx, %{"member" => holder})
 
-      # A member on the same brain in another mode, chosen mid-call: taken
-      # over, the turn runs on the member its pin names, in its mode.
+      # A member on the same brain with another model, chosen mid-call:
+      # taken over, the turn runs on the member its pin names, its model.
       {same, pids} = open_turn!(ctx, room, "second")
       :ok = aqua!(ctx, %{"member" => "twin"})
       dead = take_over!(pids)
 
-      assert {:ok, %{status: "completed", recovery_attempts: 1, agent_mode: "auto"}} =
-               Tape.turn(ctx, same)
+      assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, same)
 
       assert answers(ctx, room, same) == ["Taken over."]
       :ok = aqua!(ctx, %{"member" => holder})
@@ -642,8 +592,8 @@ defmodule Aqua.SeatTest do
       assert {:ok, %{consent_id: ^grant}} = Opus.authority_for(ctx, :default, @soul)
     end
 
-    test "a member whose brain moves while the turn is open never runs it on the new brain: " <>
-           "the loop finishes on the brain it started with; taken over, it is refused",
+    test "a member whose brain or access moves while the turn is open never runs it on the " <>
+           "new one: the loop finishes on what it started with; taken over, it is refused",
          %{ctx: ctx, room: room, holder: holder} do
       script!([{:probe, self()}, reply("On sonnet."), {:probe, self()}, {:probe, self()}])
       edit = &member!(ctx, holder, &1)
@@ -668,18 +618,18 @@ defmodule Aqua.SeatTest do
 
       edit.(%{"model" => "claude-sonnet-5-5"})
 
-      # Taken over after its mode moved, which the consent does not hold
-      # and the turn's capability digest does: refused as a turn that
-      # moved on.
-      {mode, pids} = open_turn!(ctx, room, "third")
-      edit.(%{"mode" => "read-only"})
+      # Taken over after its access moved, an option the turn's capability
+      # digest holds as it holds the model: refused as a turn that moved
+      # on, and never run with the new access.
+      {access, pids} = open_turn!(ctx, room, "third")
+      edit.(%{"options_patch" => %{"access" => "another"}})
       gone = take_over!(pids)
 
       assert {:ok, %{status: "failed", error: @moved_on}} =
-               Tape.turn(ctx, mode)
+               Tape.turn(ctx, access)
 
       for call <- [dead, gone], do: send(call, :continue)
-      assert answers(ctx, room, model) ++ answers(ctx, room, mode) == []
+      assert answers(ctx, room, model) ++ answers(ctx, room, access) == []
 
       assert List.duplicate("claude-sonnet-5-5", 3) ==
                Enum.map(chats(ctx, "aqua"), & &1.input["params"]["model"])
@@ -1073,8 +1023,7 @@ defmodule Aqua.SeatTest do
           {"program", "claude"},
           {"model", "opus"},
           {"options", %{"effort" => "high"}},
-          {"options_patch", %{"effort" => "high"}},
-          {"mode", "read-only"}
+          {"options_patch", %{"effort" => "high"}}
         ] do
       assert {:error, {:invalid_argument, said}} =
                Compendium.Providers.Aqua.handle(ctx, %{
@@ -1102,7 +1051,7 @@ defmodule Aqua.SeatTest do
 
     :ok = aqua!(ctx, %{"member" => "explorer"})
 
-    assert {:ok, %{"member" => "explorer", "catalyst_ref" => @gemini, "mode" => "auto"} = got} =
+    assert {:ok, %{"member" => "explorer", "catalyst_ref" => @gemini} = got} =
              Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => "aqua"})
 
     refute Map.has_key?(got, "member_refusal")

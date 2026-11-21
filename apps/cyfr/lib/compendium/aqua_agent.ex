@@ -25,7 +25,6 @@ defmodule Compendium.AquaAgent do
       avoid: Changing the athanor's files or components
       catalyst_ref: catalyst:local.gemini
       model: gemini-pro-latest
-      mode: read-only
       options:
         effort: high
       ---
@@ -38,20 +37,20 @@ defmodule Compendium.AquaAgent do
   the same row in every athanor), and `model`, the model it asks for
   (for a program, one its harness lists); `options`, the brain
   options its every request sets (a flat map of strings, integers and
-  booleans, which the brain's `describe` declares); `disabled: true`, how
-  a shipped member is taken out of the crew (shipped files revert, they
-  don't delete); and `mode`, `read-only` or `auto`, which decides what of
-  its offered tools it runs (`Aqua.Loop.Policy`; a file without the line
-  is `auto`).
+  booleans, which the brain's `describe` declares; for a program, its
+  `effort` and its `access`, one of the access choices the program's
+  driver lists, `Aqua.Models.program_listing/2`); and `disabled: true`,
+  how a shipped member is taken out of the crew (shipped files revert,
+  they don't delete).
 
   The soul is a seat, not a brain: its file holds its `title`, its
   prompt, `tools`, the tools it and every crew member are offered (each
   `tool.action`, `native_search` or `server:tool`, one action an entry:
   there is no wildcard, every action of a tool is listed by name; an
   absent list offers nothing), `disabled`, and `member`, the name of the
-  crew member that holds it, whose brain, model, options and mode the
-  soul runs with (`resolve/3`, `seated/2`). A soul file that names a
-  brain, a model, options or a mode of its own is refused
+  crew member that holds it, whose brain, model and options the soul
+  runs with (`resolve/3`, `seated/2`). A soul file that names a brain, a
+  model or options of its own is refused
   (`:seat_has_brain`), with the sentence `Prima.AgentRef.seat_has_brain/0`
   says, and so is a `member` that is not text (`{:member_invalid,
   value}`). A seat that names no member, a name no crew member can have
@@ -92,7 +91,6 @@ defmodule Compendium.AquaAgent do
           program: String.t() | nil,
           model: String.t() | nil,
           options: %{String.t() => option_value()},
-          mode: mode(),
           tools: [String.t()],
           prompt: String.t() | nil,
           member: String.t() | nil,
@@ -114,14 +112,9 @@ defmodule Compendium.AquaAgent do
           state: :held | :none | :invalid | :missing | :disabled | :refused
         }
 
-  @typedoc "What of its offered tools a member runs: reads alone, or all of them."
-  @type mode :: String.t()
-
-  @modes ["read-only", "auto"]
-
   # What a member's file says of its brain, which the soul's never does:
   # the soul runs on the brain of the member it names.
-  @brain_keys ~w(catalyst_ref program model options mode)
+  @brain_keys ~w(catalyst_ref program model options)
 
   # ---------------------------------------------------------------------------
   # Format
@@ -130,11 +123,9 @@ defmodule Compendium.AquaAgent do
   @doc """
   Parse one agent file as it is written. The name comes from the filename
   (`<name>.md`), never from the frontmatter — the tree is the roster. A
-  `tool_policy` in any file (`:tool_policy_retired`), a brain, model,
-  options or mode in the soul's file (`:seat_has_brain`), a
-  soul's `member` that is not text (`{:member_invalid, value}`),
-  a `mode` that is
-  neither `read-only` nor `auto` (`{:mode_invalid, value}`), a `tools`
+  `tool_policy` in any file (`:tool_policy_retired`), a brain, model or
+  options in the soul's file (`:seat_has_brain`), a soul's `member` that
+  is not text (`{:member_invalid, value}`), a `tools`
   list outside the grammar (`check_tools/1`), a `tools` list in a crew
   member's file (`:crew_has_no_tools`), anything below a crew member's
   frontmatter (`:crew_has_no_prompt`), `options` that are not a flat map
@@ -155,7 +146,6 @@ defmodule Compendium.AquaAgent do
          :ok <- not_retired(meta),
          :ok <- no_seat_brain(name, meta),
          {:ok, member} <- member_of(name, meta),
-         {:ok, mode} <- mode_of(meta),
          {:ok, tools} <- tools_of(name, meta),
          {:ok, options} <- options_of(meta["options"]),
          {:ok, prompt} <- prompt_of(name, body),
@@ -169,7 +159,6 @@ defmodule Compendium.AquaAgent do
            program: blank_to_nil(meta["program"]),
            model: blank_to_nil(meta["model"]),
            options: options,
-           mode: mode,
            tools: tools,
            prompt: prompt,
            member: member,
@@ -205,8 +194,8 @@ defmodule Compendium.AquaAgent do
   offered, and the soul's the brain it runs on. A turn pins the soul's
   bytes, so the member they name is the one it runs on, in recovery too;
   that member's file is read as it stands, as the soul's tools are for a
-  crew member, and a brain, options or mode moved since the turn started
-  moves the digest the turn checks.
+  crew member, and a brain or options moved since the turn started moves
+  the digest the turn checks.
   """
   @spec resolve(Context.t(), String.t(), binary()) :: {:ok, t()} | {:error, term()}
   def resolve(%Context{} = ctx, name, binary) when is_binary(name) and is_binary(binary) do
@@ -224,15 +213,14 @@ defmodule Compendium.AquaAgent do
   member's file parsed, or `:none`, `:invalid`, `:missing` or
   `{:refused, reason}`. A
   member in the crew gives the soul its brain (a catalyst or a program),
-  model, options and mode. Anything else
-  leaves the soul with no brain, in `auto`, and says why in its
-  `holder` (`t:holder/0`). The soul keeps its own title, prompt and tools.
+  model and options. Anything else leaves the soul with no brain, and
+  says why in its `holder` (`t:holder/0`). The soul keeps its own title, prompt and tools.
   Pure, so the seed's soul and an athanor's resolve alike.
   """
   @spec seated(t(), {:ok, t()} | :none | :invalid | :missing | {:refused, term()}) :: t()
   def seated(%{name: name} = soul, holder) do
     true = AquaPath.soul?(name)
-    unheld = %{soul | catalyst_ref: nil, program: nil, model: nil, options: %{}, mode: "auto"}
+    unheld = %{soul | catalyst_ref: nil, program: nil, model: nil, options: %{}}
 
     case holder do
       {:ok, %{disabled: false} = member} ->
@@ -242,7 +230,6 @@ defmodule Compendium.AquaAgent do
             program: member.program,
             model: member.model,
             options: member.options,
-            mode: member.mode,
             holder: %{name: member.name, title: member.title, state: :held}
         }
 
@@ -297,8 +284,7 @@ defmodule Compendium.AquaAgent do
 
   @doc """
   A crew member under the soul's tools: every member is offered the
-  soul's whole list on every job. Its mode stays its own. The soul itself is
-  answered as it is.
+  soul's whole list on every job. The soul itself is answered as it is.
   """
   @spec under_soul(t(), [String.t()]) :: t()
   def under_soul(%{name: name} = agent, soul_tools) when is_list(soul_tools) do
@@ -327,8 +313,7 @@ defmodule Compendium.AquaAgent do
   @doc """
   Serialize an agent back to its file — the inverse of `parse/2`. A crew
   member's file carries no tools, no member and no body, whatever the
-  agent map holds, and a member in `auto` names its mode, as the shipped
-  files do; the soul's carries its title, its member, its tools and its
+  agent map holds; the soul's carries its title, its member, its tools and its
   prompt, and no brain of its own.
   """
   @spec serialize(t()) :: binary()
@@ -351,7 +336,6 @@ defmodule Compendium.AquaAgent do
           {"catalyst_ref", agent.catalyst_ref},
           {"program", Map.get(agent, :program)},
           {"model", agent.model},
-          {"mode", Map.get(agent, :mode) || "auto"},
           {"disabled", if(agent.disabled, do: true)}
         ]
       end
@@ -500,9 +484,10 @@ defmodule Compendium.AquaAgent do
   @doc """
   The security-relevant subset of an agent, as a manifest: what it is
   (soul or crew), which brain (a catalyst or a program row) and model run
-  it with which options, whether it is disabled, its mode and the tools
-  it is offered (a crew member's are the soul's; the soul's brain,
-  options and mode are those of the crew member it runs on, `seated/2`,
+  it with which options, its access among them, whether it is disabled
+  and the tools it is offered (a crew member's are the soul's; the
+  soul's brain and options are those of the crew member it runs on,
+  `seated/2`,
   so they move its capability as the member's own move). The program is the
   name the file declares, never the row found by it now. Nothing else —
   not the prompt, the title, the description, what to avoid or the name
@@ -522,7 +507,6 @@ defmodule Compendium.AquaAgent do
       "name" => name,
       "type" => type_of(agent),
       "disabled" => agent.disabled == true,
-      "mode" => Map.get(agent, :mode) || "auto",
       "tools" => Map.get(agent, :tools) || []
     }
     |> Prima.MapUtil.put_present("catalyst_ref", agent.catalyst_ref)
@@ -601,15 +585,6 @@ defmodule Compendium.AquaAgent do
     end
   end
 
-  # A member's mode as written; a file without the line runs `auto`.
-  defp mode_of(meta) do
-    case Map.fetch(meta, "mode") do
-      :error -> {:ok, "auto"}
-      {:ok, mode} when mode in @modes -> {:ok, mode}
-      {:ok, other} -> {:error, {:mode_invalid, other}}
-    end
-  end
-
   # The soul's tools are checked as written, an absent list offering
   # nothing; a crew member's file holds none.
   defp tools_of(name, meta) do
@@ -620,10 +595,6 @@ defmodule Compendium.AquaAgent do
       {false, {:ok, _tools}} -> {:error, :crew_has_no_tools}
     end
   end
-
-  @doc "The modes a member may be in, as the file spells them."
-  @spec modes() :: [mode()]
-  def modes, do: @modes
 
   @typedoc """
   Why a `tools` list is refused: not a list of strings, or an entry that

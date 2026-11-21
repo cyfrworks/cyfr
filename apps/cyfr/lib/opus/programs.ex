@@ -58,7 +58,7 @@ defmodule Opus.Programs do
 
   A turn's session (`by: :aqua`): that turn alone types on it, reads
   what it printed (`read/3`, `wait/4`) and closes it; its words are the
-  turn's own, run as its member's mode decides (`Aqua.Loop.Policy`). A
+  turn's own, decided as any of its calls (`Aqua.Loop.Policy`). A
   turn holds a few at
   once; they end with the turn, and one whose program exited answers its
   last output until then.
@@ -442,8 +442,8 @@ defmodule Opus.Programs do
   #{Prima.LocusBackends.max_argv()} words, each readable text
   (`Opus.Programs.Words.readable?/1`) of at most 4096 bytes, as an `Opus.Programs.Words` (a plain list is
   wrapped here), which the session holds wrapped: a person's words are
-  what that person typed; a turn's are its own, run as its member's mode
-  decides. Neither is ever resolved from a vault. With `epoch`, the row must
+  what that person typed; a turn's are its own, decided as any of its
+  calls. Neither is ever resolved from a vault. With `epoch`, the row must
   still be at that epoch (the one the call names), else `:row_changed`.
   A turn holds at most #{@turn_sessions} sessions at once, ended ones it has not
   stopped among them: the next is refused `:too_many_sessions`. Answers

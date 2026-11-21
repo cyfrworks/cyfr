@@ -208,7 +208,6 @@ defmodule Aqua.Loop.AbortTest do
     {:ok, started} =
       TurnStorage.start(Sanctum.Context.actor(ctx), turn.id, %{
         fence: turn.fence,
-        agent_mode: "auto",
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 

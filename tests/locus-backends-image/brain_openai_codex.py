@@ -14,29 +14,30 @@ with exactly its members.
 
 - A run session's first line is the driver's `hello`, naming the wire's
   version and a boot of its own; `models` with no harness running starts an
-  app-server for the listing alone and leaves no process of it.
+  app-server for the listing alone and leaves no process of it, and lists the
+  one access the driver honours, full access with no approvals.
 - A start runs the app-server and starts a thread with the start's tools as
   its dynamic tools, its system prompt as developer instructions, its model,
-  and Codex's own sandbox and asking off, and `started` names the new
-  thread; a work writes nothing; a post is a turn, streamed as `text` and
-  said whole, the start's effort its own, its own command shown by name
-  only and its patch approval allowed, its usage the thread's total, and
-  its `idle` naming the post, every event naming the post's work.
+  and, in the full access it names, Codex's own sandbox and asking off, and
+  `started` names the new thread; a work writes nothing; a post is a turn,
+  streamed as `text` and said whole, the start's effort its own, its own
+  command shown by name only and its patch approval allowed, its usage the
+  thread's total, and its `idle` naming the post, every event naming the
+  post's work.
 - A post while the turn works is added to it (`turn/steer`), and the turn's
   `idle` names both posts.
 - An ask of CYFR's tool is passed up with its arguments, held, and answered
   by an `answer`, which reaches Codex as the call's result.
-- A new process, started resuming the thread, holds it, and `held` names
-  the post its rollout holds and not one it never had.
+- A new process, started resuming the thread with no access named, holds
+  it, and `held` names the post its rollout holds and not one it never had.
 - A resume of a thread the folder does not hold is `gone`, and a fresh
   start runs in the same driver.
 - `forget` removes that thread's rollout and the shell snapshot Codex
   leaves, and leaves another thread's and the sign-in; the running thread
   is not forgotten.
 - Every command line the vectors refuse (their `refuse` lines from the
-  holder) ends the driver with no line written, and so does a read-only
-  start, fresh or resuming: Codex's read-only sandbox cannot start in the
-  box.
+  holder) ends the driver with no line written, and so does a start naming
+  an access the driver does not list, fresh or resuming.
 - Nothing of the harness's standard error, its folder, its sign-in or its
   account reaches a line of the driver's.
 - On a terminal, the driver runs the harness's command unchanged: the
@@ -167,13 +168,14 @@ def main():
         d.send({"t": "models", "id": "mdl_1"})
         listed = d.expect("models", "models with no harness running is listed from an app-server of its own")
         expect([m["id"] for m in listed["models"]] == ["fake-sol", "fake-mini"]
-               and listed["efforts"] == ["low", "high", "medium", "xhigh"],
-               "the listing is Codex's, with the efforts any model takes", listed)
+               and listed["efforts"] == ["low", "high", "medium", "xhigh"]
+               and listed["access"] == [{"id": "full-access", "name": "Full access, no approvals"}],
+               "the listing is Codex's, with the efforts any model takes and the driver's one access", listed)
         eventually(lambda: not harnesses(stack), "the listing's app-server to end")
 
         # ————— a start, a work and a post —————
-        d.send({"t": "start", "gen": 4, "config": {"model": "fake-mini", "effort": "xhigh"}, "system": SYSTEM,
-                "tools": [FILES]})
+        d.send({"t": "start", "gen": 4, "config": {"model": "fake-mini", "effort": "xhigh", "access": "full-access"},
+                "system": SYSTEM, "tools": [FILES]})
         started = d.expect("started", "a fresh start answers started")
         thread = started["session"]
         expect(started["fresh"] is True and started["held"] == [] and len(thread) == 36, "a new thread holding nothing",
@@ -243,8 +245,10 @@ def main():
         d.expect("accepted", "the resumed thread's work is accepted")
         d.send({"t": "post", "id": "stp_post_5", "work": "trn_brain_2", "content": [{"type": "text", "text": "say hello"}]})
         said = [e["text"] for e in d.until("idle") if e["t"] == "said"]
-        expect(said and f"thread {thread}, model fake-sol" in said[0] and "tools files" in said[0],
-               "the new process runs the thread with the new model and the tools it started with", said)
+        expect(said and f"thread {thread}, model fake-sol" in said[0] and "tools files" in said[0]
+               and "policy never/danger-full-access" in said[0],
+               "the new process runs the thread with the new model, the tools it started with and the first access's policy",
+               said)
 
         # ————— a thread the folder does not hold —————
         seen += d.lines
@@ -285,14 +289,14 @@ def main():
             lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
             expect(not running and lines == [], f"the driver ends on it and writes nothing: {refused['name']}", lines)
             r.close()
-        for key, start in (("brain-read-only", {"t": "start", "gen": 7, "config": {"read_only": True}, "tools": [FILES]}),
-                           ("brain-read-only-resumed", {"t": "start", "gen": 7, "session": other, "config": {"read_only": True}})):
+        for key, start in (("brain-unlisted-access", {"t": "start", "gen": 7, "config": {"access": "workspace-write"}, "tools": [FILES]}),
+                           ("brain-unlisted-access-resumed", {"t": "start", "gen": 7, "session": other, "config": {"access": "default"}})):
             r = Driver(c, key)
-            r.expect("hello", f"{key}: a driver to refuse a read-only start")
+            r.expect("hello", f"{key}: a driver to refuse an unlisted access")
             status, answer = c.send(OWNER, r.session, [json.dumps(start)])
             expect(status == 200, f"{key}: the start is written", answer)
             lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
-            expect(not running and lines == [], f"{key}: a read-only start ends the driver and writes nothing", lines)
+            expect(not running and lines == [], f"{key}: a start naming an access the driver does not list ends it and writes nothing", lines)
             r.close()
 
         # ————— nothing of stderr, the folder, the sign-in or the account —————

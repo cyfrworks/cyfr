@@ -754,7 +754,6 @@ defmodule Aqua.TurnReadThreadsTest do
         attempt: attempt.attempt,
         profile_id: "prof_src",
         consent_id: "consent_src",
-        agent_mode: "auto",
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 
@@ -763,7 +762,7 @@ defmodule Aqua.TurnReadThreadsTest do
 
   # A turn of a daily thread of its own that reads `gone`'s events and
   # then launches an app of the person's own through the loop
-  # (`execution.run`, decided in auto and run at once by `Aqua.Launch`,
+  # (`execution.run`, decided and run at once by `Aqua.Launch`,
   # which seeds the root with the turn's read threads), whose run writes
   # `path` through its own guest storage call before it answers. Answers
   # the launching turn and the root's id.

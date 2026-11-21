@@ -6,9 +6,7 @@ defmodule Arca.TurnStorageTest do
   The turn store owns persistence and the transactional guards, not
   policy: its vocabulary is `Prima.TurnState`'s, it keeps no recovery cap
   of its own, and the limit a turn is held to is the one its row stores,
-  written from the caller's policy when the turn starts. A start stores
-  the mode it names, `read-only` or `auto`, and one naming neither is
-  refused with nothing written.
+  written from the caller's policy when the turn starts.
   """
 
   use ExUnit.Case, async: false
@@ -43,80 +41,10 @@ defmodule Arca.TurnStorageTest do
       {:ok, started} =
         TurnStorage.start(actor, turn.id, %{
           fence: turn.fence,
-          agent_mode: "auto",
           recovery_limit: 5
         })
 
       assert started.recovery_limit == 5
-    end
-  end
-
-  describe "the stored mode" do
-    setup tags do
-      Arca.Test.Sandbox.setup!(tags)
-      Arca.Test.Actor.athanor!()
-      actor = Arca.Test.Actor.local()
-      {:ok, thread} = Arca.Test.Days.thread(actor)
-      {:ok, actor: actor, thread: thread}
-    end
-
-    test "a start naming no mode, or one that is neither read-only nor auto, is refused " <>
-           "with the turn and its thread unchanged",
-         %{actor: actor, thread: thread} do
-      turn = accept!(actor, thread)
-
-      rows = fn ->
-        {Arca.Repo.get!(Turn, turn.id), Arca.Repo.get!(Arca.Schemas.Thread, thread.id)}
-      end
-
-      before = rows.()
-      attrs = %{fence: turn.fence, recovery_limit: 5}
-
-      for named <- [
-            %{},
-            %{agent_mode: nil},
-            %{agent_mode: ""},
-            %{agent_mode: "ask"},
-            %{agent_mode: "read_only"},
-            %{agent_mode: "Auto"},
-            %{agent_mode: :auto},
-            %{"agent_mode" => "auto"}
-          ] do
-        assert TurnStorage.start(actor, turn.id, Map.merge(attrs, named)) ==
-                 {:error, :illegal_transition}
-
-        assert rows.() == before
-      end
-
-      # The same start naming a mode runs: the mode alone refused it.
-      assert {:ok, %{status: "running", agent_mode: "auto"}} =
-               TurnStorage.start(actor, turn.id, Map.put(attrs, :agent_mode, "auto"))
-    end
-
-    test "a start stores the mode it names, read-only or auto", %{actor: actor} do
-      for mode <- ["read-only", "auto"] do
-        {:ok, thread} = Arca.Test.Days.thread(actor)
-        turn = accept!(actor, thread)
-        before = Arca.Repo.get!(Turn, turn.id)
-
-        assert {:ok, %{agent_mode: ^mode}} =
-                 TurnStorage.start(actor, turn.id, %{
-                   fence: turn.fence,
-                   agent_mode: mode,
-                   recovery_limit: 5
-                 })
-
-        stored = Arca.Repo.get!(Turn, turn.id)
-
-        assert stored == %{
-                 before
-                 | status: "running",
-                   agent_mode: mode,
-                   recovery_limit: 5,
-                   runner_id: Prima.Boot.id(),
-                   window_upto_seq: stored.window_upto_seq
-               }
-      end
     end
   end
 
