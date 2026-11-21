@@ -1025,6 +1025,10 @@ defmodule Aqua.Tape do
   def drain_steer(%Context{} = ctx, turn),
     do: TurnStorage.drain_steer(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
 
+  @doc "Whether `row`, of a turn of `agent`, is a post written into it (`TurnStorage.post?/2`)."
+  @spec post?(row(), String.t()) :: boolean()
+  defdelegate post?(row, agent), to: TurnStorage
+
   @doc "Whether a steer row waits past the turn's boundary."
   @spec steer_pending?(Context.t(), turn()) :: boolean()
   def steer_pending?(%Context{} = ctx, turn),

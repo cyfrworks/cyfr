@@ -365,7 +365,10 @@ defmodule Arca.TurnInputsStorageTest do
 
     assert {said.kind, said.sent_by} == {"text", "aqua"}
     assert {:error, :not_waiting} = carry(actor, turn, "post", said)
+    {:ok, _} = commit(actor, daily, turn, %{answered: [step.id], busy: false})
 
+    # The program answered everything it took; a report joins before its
+    # attendant carries it, and the turn cannot complete past it.
     {:ok, %{message: joined}} =
       TurnStorage.accept_message(actor, daily.id, %{
         message: report(workspace, "Also: the tides."),
@@ -373,12 +376,18 @@ defmodule Arca.TurnInputsStorageTest do
       })
 
     assert joined.turn_id == turn.id
+    assert {:error, :steer_pending} = finish(actor, turn, "completed")
     assert {:ok, [%{id: waiting}]} = TurnStorage.brain_posts(actor, turn.id)
     assert waiting == joined.id
     assert {:ok, %{step: joined_step}} = carry(actor, turn, "post", joined)
     assert {:error, :carried} = carry(actor, turn, "post", joined)
     assert carried_by(joined) == joined_step.id
     assert {:ok, []} = TurnStorage.brain_posts(actor, turn.id)
+
+    {:ok, _} =
+      commit(actor, daily, turn, %{accepted: [joined_step.id], answered: [joined_step.id]})
+
+    assert {:ok, %{status: "completed"}} = finish(actor, turn, "completed")
   end
 
   # ---- batches ----------------------------------------------------------------

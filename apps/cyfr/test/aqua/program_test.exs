@@ -457,6 +457,45 @@ defmodule Aqua.ProgramTest do
       assert step_fields(carried) == input_fields("post", turn.message_id, "ok")
       refute_receive {:session, "send", _wire, _fields}, 500
     end
+
+    test "one that joins Aqua's turn as the program answers its last post is carried before " <>
+           "the turn ends, and answered in that turn",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      workspace = workspace!(ctx, thread)
+      turn = accept!(ctx, thread, row, "build me a tip calculator")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      # Written below the thread's events, so the attendant is not told of
+      # it: the turn's end is what finds it.
+      text = "Done: the tip calculator is built."
+
+      {:ok, %{message: joined}} =
+        TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "report",
+            workspace_id: workspace.id,
+            content: text
+          },
+          steer_turn_id: turn.id
+        })
+
+      say(fake, row, idle(turn, [input.id]))
+      handed = sent()
+      [_first, second] = inputs(ctx, turn)
+      assert second.message_id == joined.id
+      assert handed == posted(second, turn, text)
+      say(fake, row, accepted(second))
+      say(fake, row, idle(turn, [second.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_receive {:session, "send", _wire, _fields}, 500
+    end
   end
 
   describe "a post's files" do
