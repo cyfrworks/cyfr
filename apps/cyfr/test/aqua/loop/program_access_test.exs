@@ -80,9 +80,7 @@ defmodule Aqua.Loop.ProgramAccessTest do
 
   describe "an OpenAI Codex member" do
     setup do
-      fake = Scripted.start(self(), @root)
-      _controller = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
-      assert_receive {:control, "reconcile", _message, _fields}, 2_000
+      fake = backends!()
       script!([])
       {:ok, fake: fake}
     end
@@ -126,6 +124,87 @@ defmodule Aqua.Loop.ProgramAccessTest do
 
       assert Task.await(loop, 30_000) == :completed
       started!(ctx, thread, turn, row)
+    end
+  end
+
+  # Aqua hands a job to a crew member with `crew.ask`. The member's access
+  # is the person's to set on its card: a job's options cannot name it,
+  # and the job's other options merge over the member's own.
+  describe "Aqua's hand-off to an OpenAI Codex member" do
+    setup do
+      {:ok, fake: backends!()}
+    end
+
+    test "naming an access is refused and queues nothing; with an effort it runs with that " <>
+           "effort and the member's saved access",
+         %{ctx: ctx, room: room, fake: fake} do
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "openai-codex",
+          "title" => "OpenAI Codex",
+          "program" => "openai-codex",
+          "model" => "gpt-6.1-sol",
+          "options" => %{"effort" => "high", "access" => "full-access"}
+        })
+
+      row =
+        program_row!(ctx, "openai-codex", Opus.Programs.Definition.brain("openai-codex").command)
+
+      ask = %{"action" => "ask", "member" => "openai-codex", "task" => "fix the build"}
+
+      script!([
+        call("a1", "crew", Map.put(ask, "options", %{"access" => "full-access"})),
+        call("a2", "crew", Map.put(ask, "options", %{"effort" => "low"})),
+        reply("Asked.")
+      ])
+
+      aqua = accept_in!(ctx, room, "aqua", "fix the build")
+      assert Aqua.Loop.run(ctx: ctx, turn_id: aqua.id) == :completed
+
+      # The first hand-off is refused with where access is set.
+      sentence =
+        "crew.ask's options cannot name access: a crew member's access is set by the " <>
+          "person, on the member's card on the Aqua page"
+
+      [_first, second, _third] = chat_messages()
+
+      assert [%{"is_error" => true, "content" => refused}] =
+               for(
+                 %{"content" => content} <- second,
+                 %{"type" => "tool_result", "tool_call_id" => "a1"} = result <- List.wrap(content),
+                 do: result
+               )
+
+      assert refused =~ sentence
+
+      # Only the second is queued, with its own options.
+      assert [%{id: request_id, addressee: "openai-codex"}] = Tape.pending_requests(ctx, room.id)
+
+      {:ok, [record]} =
+        Arca.Outbox.pending(Sanctum.Context.actor(ctx), "crew_delivery", "crew_request")
+
+      assert record.snapshot["options"] == %{"effort" => "low"}
+
+      # Delivered, the member's program starts with the job's effort and
+      # the member's saved access.
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+      [child] = Threads.children(Sanctum.Context.actor(ctx), room.id)
+
+      turn_id =
+        Enum.find_value(
+          Threads.messages(Sanctum.Context.actor(ctx), child.id),
+          &(Tape.payload(&1)["request_id"] == request_id && &1.turn_id)
+        )
+
+      {:ok, turn} = Tape.turn(ctx, turn_id)
+      {start, _work} = played!(fake, row, turn)
+
+      assert start["config"] == %{
+               "model" => "gpt-6.1-sol",
+               "effort" => "low",
+               "access" => "full-access"
+             }
     end
   end
 
@@ -221,6 +300,20 @@ defmodule Aqua.Loop.ProgramAccessTest do
   defp script!(items),
     do: start_supervised!({ScriptedWorker, ref: [@api], script: items})
 
+  defp call(id, name, args),
+    do: %{
+      "content" => [%{"type" => "tool_call", "id" => id, "name" => name, "arguments" => args}],
+      "stop_reason" => "tool_call",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+    }
+
+  # The messages of each chat request the model was sent, in order.
+  defp chat_messages do
+    for %{input: %{"operation" => "chat", "params" => %{"messages" => messages}}} <-
+          ScriptedWorker.calls(),
+        do: messages
+  end
+
   defp reply(text),
     do: %{
       "content" => [%{"type" => "text", "text" => text}],
@@ -278,6 +371,15 @@ defmodule Aqua.Loop.ProgramAccessTest do
 
   # ---------------------------------------------------------------------------
   # The program's driver, as `Aqua.ProgramTest` plays it
+
+  # The programs controller on a scripted backends service, which plays the
+  # program's driver.
+  defp backends! do
+    fake = Scripted.start(self(), @root)
+    _controller = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
+    assert_receive {:control, "reconcile", _message, _fields}, 2_000
+    fake
+  end
 
   defp say(fake, row, event), do: Scripted.write(fake, row.id, Jason.encode!(event))
 

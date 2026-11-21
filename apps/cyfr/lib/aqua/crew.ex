@@ -222,7 +222,9 @@ defmodule Aqua.Crew do
   `args["title"]` (what a desktop shows for the job: trimmed, 1 to
   `title_max/0` code points of plain text on one line, and none when
   absent or blank) and `args["options"]` (the brain's options for the
-  job). Answers the
+  job, merged over the member's own). A member's access is its own, set
+  by the person on its card: options that name it are refused before
+  anything is written. Answers the
   request's id; `{:error, :not_addressable}` when the calling turn is not
   the soul's in a room or the member is not of the crew.
   """
@@ -519,6 +521,13 @@ defmodule Aqua.Crew do
   # (`Prima.Model`); which names and values the member's brain takes is
   # checked when the job's turn opens (`Aqua.Loop.Turn`).
   defp options(nil), do: {:ok, %{}}
+
+  defp options(%{"access" => _access}),
+    do:
+      {:error,
+       {:invalid_argument,
+        "crew.ask's options cannot name access: a crew member's access is set by the " <>
+          "person, on the member's card on the Aqua page"}}
 
   defp options(%{} = options) do
     if Enum.all?(options, fn {name, value} ->
