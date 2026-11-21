@@ -927,7 +927,7 @@ report() { # STATUS SUMMARY [COMMIT [LOGS]]: runs the report step; its exit in $
   : >"$S/step-summary"
   rc=0
   env -i PATH="$PATH" GITHUB_STEP_SUMMARY="$S/step-summary" STATUS="$1" SUMMARY="$2" COMMIT="${3-$sha40}" \
-    LOGS="${4-/tmp/cyfr-stage.nightly.Ab1sCd}" bash --noprofile --norc -eo pipefail "$S/wf-report.sh" >"$S/report.out" 2>&1 || rc=$?
+    LOGS="${4-/var/tmp/cyfr/cyfr-stage.nightly.Ab1sCd}" bash --noprofile --norc -eo pipefail "$S/wf-report.sh" >"$S/report.out" 2>&1 || rc=$?
 }
 refused() { # WHAT: the report just run exited 1 and printed nothing it was sent
   [ "$rc" = 1 ] && [ ! -s "$S/step-summary" ] && ! grep -qi 'planted' "$S/report.out" ||
@@ -964,7 +964,7 @@ report $'0\r' "$green_rows"
 refused 'a carriage return in the status'
 report 0 "$green_rows" "$sha40"$'\r'
 refused 'a carriage return in the commit'
-report 0 "$green_rows" "$sha40" $'/tmp/cyfr-stage.nightly.Ab1sCd\r'
+report 0 "$green_rows" "$sha40" $'/var/tmp/cyfr/cyfr-stage.nightly.Ab1sCd\r'
 refused 'a carriage return in the log path'
 
 begin "the workflow's watchdog passes only on a report run that completed within 26 hours, never on its own"

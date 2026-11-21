@@ -370,7 +370,10 @@ while IFS= read -r tag; do
   [[ ! $tag =~ ^(cyfr-locus|cyfr):in-[0-9a-f]{20}$ ]] && [ "${tag#*:}" != '<none>' ] || continue
   created=$(docker image inspect -f '{{.Created}}' "$tag" 2>/dev/null) || continue
   created=$(date -d "$created" +%s 2>/dev/null) || created=
-  if [ -n "$(docker ps -a --filter "ancestor=$tag" --format '{{.ID}}' 2>/dev/null)" ]; then
+  # A lookup that fails says nothing of the tag's containers: it is kept.
+  if ! used=$(docker ps -a --filter "ancestor=$tag" --format '{{.ID}}' 2>&1); then
+    failure image "$tag" "its containers could not be listed: $used"
+  elif [ -n "$used" ]; then
     kept image "$tag" 'a container uses it'
   elif [ -z "$created" ] || [ $((now - created)) -le 604800 ]; then
     kept image "$tag" 'it is younger than seven days'

@@ -149,6 +149,8 @@ plant_image cyfr-locus:c2c6 '' "$OLD"
 plant_image cyfr:hand-used '' "$OLD"
 plant_container uses-hand cyfr:hand-used
 plant_image cyfr:hand-young '' "$NOW"
+# Six and a half days old: inside the week by half a day.
+plant_image cyfr:hand-sixdays '' "$(date -u -d '156 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
 plant_image other-project:old '' "$OLD"
 # A worktree whose tag could be read before, and no longer can.
 printf '# wt3\n' >>"$S/wt3/config/config.exs"
@@ -220,6 +222,12 @@ mkdir -p "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-stage.save.c" \
 mkdir -p "$S/tmp/go-build123/x"
 echo leak >"$S/tmp/tmp.Ab12Cd"; echo young >"$S/tmp/tmp.Ef34Gh"
 echo line >"$S/tmp/heavy-check.log"; echo line >"$S/tmp/heavy-check.log.1"
+# An old entry that is a symlink to a folder outside, which is not the
+# janitor's to empty.
+mkdir -p "$S/outside"; echo theirs >"$S/outside/kept"
+ln -s "$S/outside" "$S/tmp/link"
+touch -h -d '8 days ago' "$S/tmp/link"
+age 8 "$S/outside" "$S/outside/kept"
 age 4 "$S"/tmp/cyfr-t.r1 "$S"/tmp/cyfr-t.r2 "$S"/tmp/cyfr-t.r3 "$S"/tmp/cyfr-t.r7 "$S"/tmp/cyfr-t.r8
 age 1 "$S/tmp/cyfr-t.r5" "$S/tmp/cyfr-stage.save.c" "$S/tmp/cyfr-evidence.install-screen-case3.e" "$S/tmp/tmp.Ef34Gh"
 # A run directory and an install-screen scratch directory are rule 4's and
@@ -302,6 +310,7 @@ gone "$(image_file cyfr-locus:c2c6)"; has main 'removed image cyfr-locus:c2c6'
 grep -qxF 'image rm cyfr-locus:c2c6' "$DOCKER_STUB/calls" || fail 'the hand tag went other than by image rm without force'
 has main 'kept image cyfr:hand-used: a container uses it'; there "$(image_file cyfr:hand-used)"
 has main 'kept image cyfr:hand-young: it is younger than seven days'; there "$(image_file cyfr:hand-young)"
+has main 'kept image cyfr:hand-sixdays: it is younger than seven days'; there "$(image_file cyfr:hand-sixdays)"
 there "$(image_file other-project:old)"; lacks main other-project
 grep -qxF "image rm $t0" "$DOCKER_STUB/calls" || fail 'the old image went other than by image rm without force'
 grep -qxF 'image prune -f --filter label=works.cyfr.image-inputs' "$DOCKER_STUB/calls" || fail 'no labelled dangling prune'
@@ -347,6 +356,31 @@ gone "$S/tmp/tmp.Ab12Cd"; has main "removed file $S/tmp/tmp.Ab12Cd"
 there "$S/tmp/tmp.Ef34Gh"; lacks main tmp.Ef34Gh
 there "$S/tmp/cyfr-t.r4"; there "$scratch_live"
 there "$S/tmp/heavy-check.log"; there "$S/tmp/heavy-check.log.1"; lacks main heavy-check.log
+[ ! -e "$S/tmp/link" ] && [ ! -L "$S/tmp/link" ] || fail 'an old symlink stayed'
+has main "removed file $S/tmp/link"
+there "$S/outside/kept"
+
+begin "rule 5: an old entry that is not this user's stays"
+# The janitor is told it is another user, so nothing in the folder is its
+# own: the stand-in for an entry another user left there.
+mkdir -p "$S/other-user"
+printf '#!/bin/sh\nif [ "$1" = -u ]; then echo %s; else exec /usr/bin/id "$@"; fi\n' "$(( $(id -u) + 1 ))" >"$S/other-user/id"
+chmod +x "$S/other-user/id"
+echo theirs >"$S/tmp/tmp.Foreign"; age 8 "$S/tmp/tmp.Foreign"
+PATH="$S/other-user:$PATH" janitor foreign || fail "the janitor exited $?"
+there "$S/tmp/tmp.Foreign"; lacks foreign tmp.Foreign
+rm -f "$S/tmp/tmp.Foreign"
+
+begin "rule 2: a hand tag whose containers cannot be listed is kept, and the run says so and fails"
+plant_image cyfr:hand-unlisted '' "$OLD"
+echo 'ancestor=cyfr:hand-unlisted' >"$DOCKER_STUB/ps-fail"
+status=0; janitor unlisted || status=$?
+rm -f "$DOCKER_STUB/ps-fail"
+[ "$status" != 0 ] || fail 'a failed listing left the run green'
+has unlisted 'failed image cyfr:hand-unlisted: its containers could not be listed: stub: the listing failed'
+there "$(image_file cyfr:hand-unlisted)"
+! grep -qxF 'image rm cyfr:hand-unlisted' "$DOCKER_STUB/calls" || fail 'a tag whose containers could not be listed was removed'
+rm -f "$(image_file cyfr:hand-unlisted)"
 
 begin 'rule 7: a base-image set no worktree pins goes once a day old; pinned, young and other entries stay'
 has main "kept base-image $S/cache/$sum0: a worktree pins it"; there "$S/cache/$sum0/ubuntu-26.04-server-cloudimg-amd64.img"
@@ -556,9 +590,15 @@ echo older >"$S/tmp/heavy-check.log.1"
 janitor rotate-dry --dry-run || fail "the dry run exited $?"
 has rotate-dry "would rotate record $S/tmp/heavy-check.log"
 [ "$(stat -c %s "$S/tmp/heavy-check.log")" = $((65 * 1024 * 1024)) ] || fail 'the dry run rotated the record'
+# A check that opened the record before the rotation appends after it.
+record_inode=$(inode "$S/tmp/heavy-check.log")
+exec {writer}>>"$S/tmp/heavy-check.log"
 janitor rotate || fail "the janitor exited $?"
+echo 'end=late' >&"$writer"; exec {writer}>&-
 has rotate "rotated record $S/tmp/heavy-check.log"
-[ ! -e "$S/tmp/heavy-check.log" ] && [ "$(stat -c %s "$S/tmp/heavy-check.log.1")" = $((65 * 1024 * 1024)) ] ||
+[ "$(inode "$S/tmp/heavy-check.log.1")" = "$record_inode" ] && [ "$(tail -c 9 "$S/tmp/heavy-check.log.1")" = 'end=late' ] ||
+  fail "a line appended across the rotation is not in the .1, which is not the file renamed"
+[ ! -e "$S/tmp/heavy-check.log" ] && [ "$(stat -c %s "$S/tmp/heavy-check.log.1")" = $((65 * 1024 * 1024 + 9)) ] ||
   fail "after the rotation: $(ls -l "$S/tmp"/heavy-check.log* 2>&1)"
 echo line >"$S/tmp/heavy-check.log"
 janitor small || fail "the janitor exited $?"
