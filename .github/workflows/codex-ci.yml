@@ -336,7 +336,9 @@ jobs:
           echo "APP=/Applications/CYFR.app/Contents/MacOS/CYFR" >> "$GITHUB_ENV"
 
       # The MSI installs for this account alone, under its local programs
-      # folder, and must find exactly one CYFR.exe there.
+      # folder, and must find exactly one CYFR.exe there, the name matched
+      # with its case: Windows matches a filter without it, and the bundled
+      # resources\cyfr.exe is another program.
       - name: Install the app (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -345,7 +347,7 @@ jobs:
           $log = Join-Path $env:RUNNER_TEMP "cyfr-msi.log"
           $install = Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
           if ($install.ExitCode -ne 0) { Get-Content $log -Tail 50; throw "msiexec exited $($install.ExitCode)" }
-          $found = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs") -Recurse -Filter CYFR.exe -ErrorAction SilentlyContinue)
+          $found = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs") -Recurse -Filter CYFR.exe -ErrorAction SilentlyContinue | Where-Object { $_.Name -ceq "CYFR.exe" })
           if ($found.Count -ne 1) { throw "the MSI installed $($found.Count) CYFR.exe under $env:LOCALAPPDATA\Programs" }
           "APP=$($found[0].FullName)" >> $env:GITHUB_ENV
 
