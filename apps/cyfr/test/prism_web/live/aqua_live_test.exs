@@ -2215,6 +2215,99 @@ defmodule PrismWeb.AquaLiveTest do
       end
     end
 
+    # A member moved from one program brain to the other keeps each option
+    # whose value the new program lists, and drops any other: the access
+    # the first driver listed is none of the second's, so it goes, and the
+    # member's turn on the second program starts with no access named,
+    # taking that driver's first choice, and answers.
+    for {from, to} <- [{"claude-code", "openai-codex"}, {"openai-codex", "claude-code"}] do
+      @tag move: {from, to}
+      test "a member moved from #{from} to #{to} drops the access #{to} does not list, and " <>
+             "answers on #{to}",
+           %{conn: conn, ctx: ctx, move: {from, to}} do
+        # The crew's grant, as the fill mints it over a seed whose hands
+        # Aqua's tools need are installed.
+        Cyfr.Test.SeedBundle.lay!(~w(files http))
+        :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+
+        :ok =
+          Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+
+        {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+        {:ok, _} = Compendium.AgentIndex.sync(ctx)
+        {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+
+        fake = backends!()
+        from_row = brain_row!(ctx, from)
+        to_row = brain_row!(ctx, to)
+        [from_access] = driver_access(Arca.McpServerStorage.driver(from_row))
+        [to_access] = driver_access(Arca.McpServerStorage.driver(to_row))
+
+        {:ok, _} =
+          Cyfr.Test.AquaTool.call(ctx, %{
+            "action" => "create",
+            "name" => "mine",
+            "title" => "Mine",
+            "program" => from,
+            "model" => "opus",
+            "options" => %{"effort" => "high", "access" => from_access["id"]}
+          })
+
+        {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+        to_title = Opus.Programs.Definition.brain(to).title
+        access = "#aqua-card-mine-access select[disabled]"
+
+        lists_each!(fake, [from_row, to_row], fn ->
+          program_choices(view, to_title) != [] and has_element?(view, access)
+        end)
+
+        assert choices(view, access <> " option") == [{from_access["id"], from_access["name"]}]
+
+        view
+        |> form("#aqua-setup-pick", %{"value" => "::program::#{to}::opus"})
+        |> render_change()
+
+        assert {:ok,
+                %{
+                  "program" => ^to,
+                  "model" => "opus",
+                  "catalyst_ref" => nil,
+                  "options" => options
+                }} = get_agent(ctx, "mine")
+
+        assert options == %{"effort" => "high"}
+
+        lists_each!(fake, [from_row, to_row], fn ->
+          choices(view, access <> " option") == [{to_access["id"], to_access["name"]}]
+        end)
+
+        Cyfr.Test.Sandbox.end_views()
+
+        # A post to the member runs on the new program, which starts with
+        # the effort kept and no access named.
+        actor = Sanctum.Context.actor(ctx)
+        {:ok, room} = Arca.Test.Days.thread(actor)
+        {:ok, thread} = Aqua.Tape.crew_thread(ctx, room.id, "mine")
+
+        assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
+                 Aqua.Runner.send_message(%{ctx | origin: :interactive}, thread.id, "hello")
+
+        answers!(fake, to_row, "Hello from #{to}.", fn ->
+          match?({:ok, %{status: "completed"}}, Aqua.Tape.turn(ctx, turn_id))
+        end)
+
+        assert_received {:driver_start, %{"config" => config}}
+        assert config == %{"model" => "opus", "effort" => "high"}
+
+        assert ["Hello from #{to}."] ==
+                 for(
+                   %{turn_id: ^turn_id, sent_by: "mine", kind: "text", content: said} <-
+                     Arca.ThreadStorage.messages(actor, thread.id),
+                   do: said
+                 )
+      end
+    end
+
     test "a catalyst called program keeps its model containing the picker separator",
          %{conn: conn, ctx: ctx} do
       publish_brain!(ctx, "program", %{})
@@ -2842,6 +2935,50 @@ defmodule PrismWeb.AquaLiveTest do
     end
   end
 
+  # Plays the driver of each of `rows` for every listing a page asks of
+  # it, each answering for its own row, until `shown` holds.
+  defp lists_each!(fake, rows, shown),
+    do: lists_each!(fake, rows, shown, System.monotonic_time(:millisecond) + 10_000)
+
+  defp lists_each!(fake, rows, shown, deadline) do
+    by_id = Map.new(rows, &{&1.id, &1})
+
+    cond do
+      shown.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("the page did not show what its programs' listings said")
+
+      true ->
+        receive do
+          {:session, "recv", %{"after" => 0}, %{server: server}} when is_map_key(by_id, server) ->
+            row = by_id[server]
+
+            say(fake, row, %{
+              "t" => "hello",
+              "v" => Opus.Brain.Wire.version(),
+              "driver" => Arca.McpServerStorage.driver(row),
+              "boot" => "b#{System.unique_integer([:positive])}"
+            })
+
+          {:session, "send", %{"lines" => [line]}, %{server: server}}
+          when is_map_key(by_id, server) ->
+            case Jason.decode!(line) do
+              %{"t" => "models", "id" => id} ->
+                say(fake, by_id[server], listed(id, @listing, by_id[server]))
+
+              _another ->
+                :ok
+            end
+        after
+          100 -> :ok
+        end
+
+        lists_each!(fake, rows, shown, deadline)
+    end
+  end
+
   # Plays the driver of `row` for Aqua's turn on it until `done` holds: its
   # hello, the harness started, the turn's work and its post taken, `said`
   # said and the post answered; a listing asked meanwhile is answered.
@@ -2883,6 +3020,8 @@ defmodule PrismWeb.AquaLiveTest do
         say(fake, row, listed(line["id"], @listing, row))
 
       t == "start" ->
+        send(self(), {:driver_start, line})
+
         say(fake, row, %{
           "t" => "started",
           "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
