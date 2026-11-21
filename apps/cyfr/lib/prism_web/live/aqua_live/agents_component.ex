@@ -18,7 +18,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   A crew member is made in one form (`member_form/1`), shown in the
   setup's step for the crew and above the cards alike: the name the
   person gives it, the harness or key it runs on among the connected
-  ones (`brains/3`), a model that one lists, each option it declares for
+  ones (`brains/4`), a model that one lists, each option it declares for
   that model, a program's access, and what it is good at and should
   avoid. CYFR names no member. A card shows the same as labelled fields
   and changes them, the harness or key among them: a member moved to
@@ -217,6 +217,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {:noreply, socket}
 
         :error ->
+          send(self(), {:refresh, :setup})
           {:noreply, put_flash(socket, :error, "That brain is not connected here.")}
 
         {:error, reason} ->
@@ -1131,6 +1132,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       {:noreply, socket |> assign(:draft, %{}) |> drafted() |> put_flash(:info, "Made #{name}.")}
     else
       :error ->
+        send(self(), {:refresh, :setup})
         {:noreply, put_flash(socket, :error, "That brain is not connected here.")}
 
       :not_offered ->
@@ -1175,38 +1177,58 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp chosen(_none, _declared), do: {:ok, %{}}
 
   # A connected harness or key as a crew file names it, by the value the
-  # forms name it with (`brains/3`): a program by its row's name, a key by
+  # forms name it with (`brains/4`): a program by its row's name, a key by
   # its catalyst's reference without a version. One not connected here is
-  # `:error`.
+  # `:error`: one the forms do not offer, or one that no longer reads
+  # ready where a member on it would (`Aqua.model_status/2`), read now and
+  # not from what the page holds.
   defp named(value, socket) do
     assigns = socket.assigns
 
-    connected? =
+    offered? =
       (assigns[:models_by_provider] || %{})
-      |> brains(assigns[:catalyst_refs] || %{}, assigns.program_listings)
+      |> brains(assigns[:catalyst_refs] || %{}, assigns.program_listings, assigns[:providers])
       |> Enum.any?(&(&1.value == value))
 
-    case {connected?, value} do
-      {true, "program:" <> name} ->
-        {:ok, %{"program" => name, "catalyst_ref" => nil}}
+    named =
+      case {offered?, value} do
+        {true, "program:" <> name} ->
+          %{"program" => name, "catalyst_ref" => nil}
 
-      {true, "catalyst:" <> provider} ->
-        {:ok, %{"program" => nil, "catalyst_ref" => versionless(assigns.catalyst_refs[provider])}}
+        {true, "catalyst:" <> provider} ->
+          %{"program" => nil, "catalyst_ref" => versionless(assigns.catalyst_refs[provider])}
 
-      _not_connected ->
-        :error
+        _not_offered ->
+          nil
+      end
+
+    with %{} <- named,
+         %{^value => {:ready, _brain}} <-
+           Aqua.model_status(assigns.context, [Map.put(named, "name", value)]) do
+      {:ok, named}
+    else
+      _not_connected -> :error
     end
   end
 
   @doc """
   The harnesses and keys a crew member can run on here, the connected
   ones: each program brain whose program's listing answered, by its
-  title, then each key whose provider listed models, by its provider.
-  Each is `%{value, title, kind, models}`: the value the forms name it
-  with, `:harness` or `:key`, and its models as `{id, name}`.
+  title, then each key the setup's read (`Aqua.providers/1`) says is
+  ready and whose provider listed models, by its provider. The model
+  catalogue is kept a while, so a key it still lists is no proof the key
+  is connected. Each is `%{value, title, kind, models}`: the value the
+  forms name it with, `:harness` or `:key`, and its models as
+  `{id, name}`.
   """
-  @spec brains(map(), map(), map()) :: [map()]
-  def brains(models_by_provider, catalyst_refs, listings) do
+  @spec brains(map(), map(), map(), term()) :: [map()]
+  def brains(models_by_provider, catalyst_refs, listings, providers) do
+    ready =
+      case providers do
+        {:ok, read} -> for %{state: :ready, provider: provider} <- read, do: provider
+        _unread -> []
+      end
+
     harnesses =
       for {name, {:ok, %{models: models}}} <- Enum.sort(listings),
           do: %{
@@ -1219,6 +1241,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     keys =
       for {provider, [_ | _] = models} <- Enum.sort(models_by_provider),
           is_binary(catalyst_refs[provider]),
+          provider in ready,
           do: %{
             value: "catalyst:" <> provider,
             title: provider,
@@ -1373,7 +1396,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         brains(
           assigns[:models_by_provider] || %{},
           assigns[:catalyst_refs] || %{},
-          assigns.program_listings
+          assigns.program_listings,
+          assigns[:providers]
         )
       )
 
@@ -2280,7 +2304,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   @doc """
   The form that makes a crew member, the one way to make one: the name
   the person gives it, the harness or key it runs on among the connected
-  ones (`brains/3`), a model that one lists, each option it declares for
+  ones (`brains/4`), a model that one lists, each option it declares for
   that model, a program's Access selection (`access_select/1`), and what
   it is good at and should avoid. `draft` is what the form holds and what
   its harness or key declares, as the roster keeps it (`empty_draft/0`

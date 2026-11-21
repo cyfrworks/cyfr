@@ -701,7 +701,8 @@ defmodule PrismWeb.AquaLive do
         AgentsComponent.brains(
           assigns.models_by_provider,
           assigns.catalyst_refs,
-          assigns.listings
+          assigns.listings,
+          assigns.providers
         )
       )
       |> assign(:unconnected, read[:unconnected] || [])
@@ -1162,6 +1163,7 @@ defmodule PrismWeb.AquaLive do
         models_by_provider={@models_by_provider}
         catalyst_refs={@catalyst_refs}
         program_listings={@listings}
+        providers={@providers}
       />
 
       <.live_component module={NotesComponent} id="aqua-notes-section" context={@context} />

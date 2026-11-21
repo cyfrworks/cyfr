@@ -2296,6 +2296,81 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # The model catalogue is kept a minute, so a key it still lists may
+    # no longer be connected: the form offers only a key the setup reads
+    # as connected, and Make reads that again, so a page that still shows
+    # the key makes nothing and says why.
+    test "Make on a key no longer connected makes nothing", %{conn: conn, ctx: ctx} do
+      :ok = open_brain!(ctx)
+      form = "#aqua-setup-new-member"
+      on_exit(fn -> Cyfr.Test.AquaTool.call(ctx, %{"action" => "delete", "name" => "Late"}) end)
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      choose!(view, form, "Late", "catalyst:open")
+      {:ok, %{revoked: [_ | _]}} = Sanctum.Consent.revoke_source(ctx, "catalyst:local.open")
+
+      assert view
+             |> form(form, %{"name" => "Late", "brain" => "catalyst:open", "model" => "open-1"})
+             |> render_submit() =~ "That brain is not connected here."
+
+      assert {:error, _} = get_agent(ctx, "Late")
+
+      # The refusal reads the setup again, and the key is offered no more.
+      settled(
+        fn -> not has_element?(view, ~s(option[value="catalyst:open"])) end,
+        "the key withdrawn"
+      )
+
+      # A page opened now, the catalogue still listing the key's models,
+      # does not offer it.
+      {fresh, _html} = mount_athanor(conn, "/aqua?setup=1")
+      settled(fn -> has_element?(fresh, "#aqua-setup-brain-open") end, "the setup read")
+      assert {%{"open" => ["open-1"]}, _refs} = picker(fresh)
+      refute has_element?(fresh, ~s(option[value="catalyst:open"]))
+      refute has_element?(fresh, form)
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a card moves no member to a key no longer connected", %{conn: conn, ctx: ctx} do
+      :ok = open_brain!(ctx)
+      field = "#aqua-card-Mover-harness"
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "Mover",
+          "title" => "Mover",
+          "catalyst_ref" => "catalyst:moonmoon69.claude"
+        })
+
+      on_exit(fn -> Cyfr.Test.AquaTool.call(ctx, %{"action" => "delete", "name" => "Mover"}) end)
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      settled(
+        fn -> has_element?(view, field <> ~s( option[value="catalyst:open"])) end,
+        "the card offers the key"
+      )
+
+      {:ok, %{revoked: [_ | _]}} = Sanctum.Consent.revoke_source(ctx, "catalyst:local.open")
+      before = get_agent(ctx, "Mover")
+
+      assert view |> form(field, %{"harness" => "catalyst:open"}) |> render_change() =~
+               "That brain is not connected here."
+
+      assert get_agent(ctx, "Mover") == before
+
+      settled(
+        fn -> not has_element?(view, field <> ~s( option[value="catalyst:open"])) end,
+        "the key withdrawn"
+      )
+
+      {fresh, _html} = mount_athanor(conn, "/aqua")
+      settled(fn -> has_element?(fresh, field) end, "the card read")
+      assert {%{"open" => ["open-1"]}, _refs} = picker(fresh)
+      refute has_element?(fresh, ~s(option[value="catalyst:open"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     # What the setup makes, the person made: the member is the athanor's
     # own, and a restore of the shipped files keeps it as it is.
     test "a member made from the setup is the athanor's own, and a restore keeps its file",
@@ -2945,16 +3020,17 @@ defmodule PrismWeb.AquaLiveTest do
 
       on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor.id) end)
 
-      # The form that makes a member reads the catalogue: its key is
-      # offered, with its model once chosen.
+      # The page reads the kept catalogue. A key only the catalogue lists
+      # is not a connected one, so no form offers it.
       :ok = member!(ctx, "explorer")
       {view, _html} = mount_athanor(conn, "/aqua")
-      choose!(view, "#aqua-new-member", "Opus", "catalyst:kept")
 
-      assert choices(view, ~s(#aqua-new-member select[name="model"] option)) == [
-               {"", "Choose a model"},
-               {"kept-model-1", "kept-model-1"}
-             ]
+      settled(
+        fn -> elem(picker(view), 0) == %{"kept" => ["kept-model-1"]} end,
+        "the kept catalogue read"
+      )
+
+      refute has_element?(view, ~s(option[value="catalyst:kept"]))
 
       # The grant is asked in the page's system layer; confirmed there, the
       # page hears it.
