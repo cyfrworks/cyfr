@@ -442,6 +442,11 @@ defmodule Prima.Refusal do
   defp row({:invalid_caps, _detail} = failure),
     do: {:invalid_argument, "The manifest is refused: #{Prima.Manifest.Caps.words(failure)}."}
 
+  # A manifest whose needs block its grammar refuses, as a pull or a
+  # publish meets it, in the grammar's own words.
+  defp row({:invalid_needs, _detail} = failure),
+    do: {:invalid_argument, "The manifest is refused: #{Prima.Manifest.Needs.words(failure)}."}
+
   # An OAuth grant or refresh for a provider this athanor holds no OAuth
   # client for (`Sanctum.ProviderCredentials`): the client is set on the
   # Vault page, which shows the return address to register with it.

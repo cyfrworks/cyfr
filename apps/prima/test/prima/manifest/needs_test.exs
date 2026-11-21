@@ -402,10 +402,19 @@ defmodule Prima.Manifest.NeedsTest do
   describe "login" do
     # A program's sign-in lives in its row's kept folder, which no need
     # reaches: a manifest declaring a `login` need is refused.
-    test "is no need type: a manifest declaring one is refused" do
+    test "is no need type: a manifest declaring one is refused, saying which key or type" do
       assert {:unknown_keys, "api_key", ["program"]} = refused(login())
       assert {:invalid_type, "api_key", "login"} = refused(Map.delete(login(), "program"))
       refute "login" in Needs.binding_kinds()
+
+      assert Prima.Refusal.message({:invalid_needs, refused(login())}) ==
+               "The manifest is refused: needs.api_key has no key program."
+
+      assert Prima.Refusal.message({:invalid_needs, refused(Map.delete(login(), "program"))}) ==
+               "The manifest is refused: needs.api_key has the type login, which is no need type."
+
+      assert Prima.Refusal.message({:invalid_needs, {:not_a_map, 7}}) ==
+               "The manifest is refused: its needs are not valid."
     end
   end
 end

@@ -116,6 +116,20 @@ defmodule Prima.Manifest.Needs do
   def validate(%{"needs" => other}), do: {:error, {:invalid_needs, {:not_a_map, other}}}
   def validate(manifest) when is_map(manifest), do: :ok
 
+  @doc """
+  A `validate/1` refusal in a person's words: the key or the type it
+  refused, named with the need it sits in, and otherwise that the needs
+  are not valid. Never its term.
+  """
+  @spec words(error()) :: String.t()
+  def words({:invalid_needs, {:unknown_keys, name, [_ | _] = keys}}) when is_binary(name),
+    do: "needs.#{name} has no key #{Enum.join(keys, ", ")}"
+
+  def words({:invalid_needs, {:invalid_type, name, type}})
+      when is_binary(name) and is_binary(type),
+      do: "needs.#{name} has the type #{type}, which is no need type"
+
+  def words({:invalid_needs, _detail}), do: "its needs are not valid"
 
   @doc """
   The normalized needs for a decoded manifest: a sorted list of
