@@ -96,10 +96,7 @@ defmodule PrismWeb.AquaSetupTest do
 
     assert first == ["aqua-setup-brain-chat-fixture"]
 
-    # The member's model is picked on its own setup, the shared key first
-    # there too: picking asks nothing.
-    {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=scout")
-
+    # The member's model is picked on its card: picking asks nothing.
     assert has_element?(
              view,
              ~s(#aqua-setup-brain-chat-fixture[data-state="ready"] [data-test="setup-shared"]),
@@ -107,7 +104,7 @@ defmodule PrismWeb.AquaSetupTest do
            )
 
     wait_until(
-      fn -> has_element?(view, "#aqua-setup-pick option[value^=\"chat-fixture::\"]") end,
+      fn -> has_element?(view, "#aqua-card-scout-model option[value^=\"chat-fixture::\"]") end,
       10_000,
       "the fixture's models"
     )
@@ -116,10 +113,10 @@ defmodule PrismWeb.AquaSetupTest do
       view
       |> render()
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query(~s(#aqua-setup-pick option[value^="chat-fixture::"]))
+      |> LazyHTML.query(~s(#aqua-card-scout-model option[value^="chat-fixture::"]))
       |> Enum.flat_map(&LazyHTML.attribute(&1, "value"))
 
-    view |> form("#aqua-setup-pick", %{"value" => choice}) |> render_change()
+    view |> form("#aqua-card-scout-model", %{"value" => choice}) |> render_change()
     _ = render(view)
     refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 

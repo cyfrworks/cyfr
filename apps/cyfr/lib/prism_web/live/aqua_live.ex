@@ -50,8 +50,7 @@ defmodule PrismWeb.AquaLive do
   a model and the options that one lists; Make asks nothing, and as many
   members run on one harness as the person makes.
   Aqua: which crew member it runs on, whose brain, model and options Aqua
-  takes, which asks nothing either (or, with
-  `agent=<name>`, which connected brain that crew member runs on). A
+  takes, which asks nothing either. A
   source whose consent moved is consented again in the page's system
   layer.
   """
@@ -63,7 +62,6 @@ defmodule PrismWeb.AquaLive do
 
   alias PrismWeb.AquaLive.{
     AgentsComponent,
-    Catalog,
     NotesComponent,
     RestoreComponent,
     ScrollsComponent
@@ -99,7 +97,6 @@ defmodule PrismWeb.AquaLive do
       # member holds, and whether its last step leads to the
       # administrator's own setup.
       |> assign(:setup_asked, false)
-      |> assign(:setup_for, nil)
       |> assign(:providers, nil)
       |> assign(:ticked, MapSet.new())
       |> assign(:answers, %{})
@@ -125,17 +122,10 @@ defmodule PrismWeb.AquaLive do
     {:ok, socket}
   end
 
-  # `?setup=1` opens Aqua's setup; `agent` names the crew member whose
-  # brain it picks, the soul's otherwise.
+  # `?setup=1` opens Aqua's setup.
   @impl true
-  def handle_params(params, _uri, socket) do
-    agent = params["agent"]
-
-    {:noreply,
-     socket
-     |> assign(:setup_asked, params["setup"] == "1")
-     |> assign(:setup_for, if(is_binary(agent) and agent != "", do: agent))}
-  end
+  def handle_params(params, _uri, socket),
+    do: {:noreply, assign(socket, :setup_asked, params["setup"] == "1")}
 
   @impl true
   def handle_event("open_consent", %{"ref" => ref}, socket) when is_binary(ref) and ref != "" do
@@ -654,9 +644,9 @@ defmodule PrismWeb.AquaLive do
   members made, each ready or what it waits on. Aqua: which crew member
   it runs on, done once Aqua reads ready, and until then the state of
   the crew's grant it waits on, with its Grant
-  (`AgentsComponent.grant_line/1`). Or, for a crew member the setup is
-  for, which connected brain it runs on; the crew members whose brain is not connected; and,
-  for an administrator who has not seen it, their own setup next.
+  (`AgentsComponent.grant_line/1`). Then the crew members whose brain is
+  not connected and, for an administrator who has not seen it, their own
+  setup next.
   """
   attr :open, :boolean, required: true
   attr :providers, :any, required: true
@@ -665,7 +655,6 @@ defmodule PrismWeb.AquaLive do
   attr :ticked, :any, required: true
   attr :answers, :map, required: true
   attr :agents_read, :any, required: true
-  attr :setup_for, :string, default: nil
   attr :models_by_provider, :map, required: true
   attr :catalyst_refs, :map, required: true
   attr :member_draft, :map, required: true
@@ -688,10 +677,8 @@ defmodule PrismWeb.AquaLive do
       assigns
       |> assign(:brains, providers)
       |> assign(:programs, programs)
-      |> assign(:target, assigns.setup_for || read[:soul])
       |> assign(:steps, Enum.filter(providers, &step?(&1, assigns.ticked)))
       |> assign(:program_steps, Enum.filter(programs, &program_step?(&1, assigns)))
-      |> assign(:listed, listed_programs(signed_in, assigns.listings))
       |> assign(
         :connected?,
         Enum.any?(providers, &(&1.state == :ready)) or signed_in != []
@@ -916,7 +903,7 @@ defmodule PrismWeb.AquaLive do
           <%!-- Aqua runs on a crew member, whose brain it takes: the setup
                 names which, and choosing asks nothing. --%>
           <form
-            :if={(@members != [] and @target) && @target == @soul}
+            :if={@members != [] and is_binary(@soul)}
             id="aqua-setup-member"
             phx-change="editor_set_member"
             phx-target="#aqua-agents"
@@ -957,38 +944,6 @@ defmodule PrismWeb.AquaLive do
             <AgentsComponent.grant_line state={@soul_state} />
           </p>
         </section>
-
-        <form
-          :if={(@connected? and @target) && @target != @soul}
-          id="aqua-setup-pick"
-          phx-change="editor_set_model"
-          phx-target="#aqua-agents"
-          phx-auto-recover="ignore"
-        >
-          <input type="hidden" name="name" value={@target} />
-          <label class="block text-gray-400 mb-1">
-            {pick_label(@target, @agents_read)}
-          </label>
-          <select
-            name="value"
-            aria-label="Brain"
-            class="w-full md:w-1/2 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
-          >
-            <option value="-" selected>Choose a connected brain</option>
-            <%= for {provider, models} <- @models_by_provider, models != [] do %>
-              <optgroup label={provider}>
-                <option :for={m <- models} value={Catalog.model_choice(provider, m)}>{m}</option>
-              </optgroup>
-            <% end %>
-            <%= for {program, models} <- @listed do %>
-              <optgroup label={program.title}>
-                <option :for={m <- models} value={Catalog.program_choice(program.name, m.id)}>
-                  {m.name}
-                </option>
-              </optgroup>
-            <% end %>
-          </select>
-        </form>
 
         <p :if={@unconnected != []} data-test="setup-unconnected" class="text-gray-400">
           No connected brain yet for {Enum.join(@unconnected, ", ")}. Pick one on its card below.
@@ -1050,13 +1005,6 @@ defmodule PrismWeb.AquaLive do
     end
   end
 
-  # Each signed-in program brain with the models its listing gave.
-  defp listed_programs(signed_in, listings) do
-    for %{name: name} = program <- signed_in,
-        {:ok, %{models: [_ | _] = models}} <- [listings[name]],
-        do: {program, models}
-  end
-
   defp program_need_line(%{title: title}),
     do: "a plan: to run #{title} in its own folder, signed in to your own plan"
 
@@ -1108,8 +1056,6 @@ defmodule PrismWeb.AquaLive do
   defp answer_class({:error, _}), do: "text-red-300"
   defp answer_class(_answer), do: "text-gray-400"
 
-  defp pick_label(target, _read), do: "Which connected brain does #{target} run on?"
-
   defp short_ref("formula:local." <> name), do: name
   defp short_ref("agent:local." <> name), do: name
   defp short_ref(ref), do: ref
@@ -1146,7 +1092,6 @@ defmodule PrismWeb.AquaLive do
         ticked={@ticked}
         answers={@answers}
         agents_read={@agents_read}
-        setup_for={@setup_for}
         models_by_provider={@models_by_provider}
         catalyst_refs={@catalyst_refs}
         member_draft={@member_draft}

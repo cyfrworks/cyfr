@@ -462,9 +462,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # the picker below, where its value would read as another brain's.
   def handle_event("editor_set_model", %{"brain" => "program"}, socket), do: {:noreply, socket}
 
-  # A member's brain or model changed on its card or the setup's pick: an
-  # option the new brain and model do not list is taken off in the same
-  # write (`moved/4`); with no brain, every one is.
+  # A key's model chosen on a member's card: an option that model does not
+  # list is taken off in the same write (`moved/4`).
   def handle_event("editor_set_model", %{"name" => name, "value" => value}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       ctx = socket.assigns.context
@@ -473,15 +472,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
       result =
         case choice do
-          {:inherit} ->
-            call_aqua(ctx, %{
-              "action" => "update",
-              "name" => name,
-              "model" => nil,
-              "catalyst_ref" => nil,
-              "options" => %{}
-            })
-
           {:model, provider, model} ->
             # No hardcoded publisher fallback. A ref built from a personal
             # namespace resolves to nothing on any other deployment, so the
@@ -500,14 +490,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               "model" => model,
               "catalyst_ref" => catalyst_ref,
               "program" => nil
-            })
-
-          # A program brain the setup offers, and a model its program lists.
-          {:program, program, model} ->
-            moved(socket, name, declared("program:" <> program, model, socket), %{
-              "model" => model,
-              "catalyst_ref" => nil,
-              "program" => program
             })
 
           :noop ->
@@ -967,17 +949,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     refused = Map.put(socket.assigns.set_up_refused, program, error_message(reason))
     assign(socket, :set_up_refused, refused)
   end
-
-  # Aqua's setup, for the agent whose card links to it: the soul's by
-  # default, a crew member's named.
-  defp setup_path(athanor, _agent, true), do: PrismWeb.Focus.path(athanor, "/aqua?setup=1")
-
-  defp setup_path(athanor, agent, false),
-    do:
-      PrismWeb.Focus.path(
-        athanor,
-        "/aqua?" <> URI.encode_query(%{"setup" => "1", "agent" => agent["name"]})
-      )
 
   # Enumerate `(tool, [actions...])` from the live MCP registry — populated
   # once per page open, so the matrix UI can render real (tool, action)
@@ -1831,22 +1802,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </p>
       </form>
 
-      <%!-- A member with no brain yet is connected through the setup like
-           any other. --%>
-      <div
-        :if={not @is_soul and @agent["catalyst_ref"] in [nil, ""] and is_nil(@program)}
-        class="flex flex-wrap items-center gap-2 text-[11px]"
-      >
-        <span class="text-amber-300">No brain yet</span>
-        <.link
-          patch={setup_path(@athanor, @agent, @is_soul)}
-          data-test="connect"
-          class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
-        >
-          Connect
-        </.link>
-      </div>
-
       <div :if={@model_status} class="flex flex-wrap items-center gap-2 text-[11px]">
         <span :if={@connected} class="text-emerald-400">
           Model connected
@@ -1922,7 +1877,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               @model_status
             )
           }
-          patch={setup_path(@athanor, @agent, @is_soul)}
+          patch={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
           data-test="connect"
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
         >
