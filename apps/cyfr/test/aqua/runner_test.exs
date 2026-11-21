@@ -818,6 +818,47 @@ defmodule Aqua.RunnerTest do
     assert ScriptedWorker.calls() == ran
   end
 
+  # The crew's grant names its brains as the component index holds them: an
+  # index that cannot catch up refuses the turn's claim as it refuses any
+  # root's, and the failed turn says so in the index's own sentence, never
+  # its atom.
+  test "a turn refused while the component index catches up is told to retry in its sentence",
+       %{ctx: ctx, thread: thread} do
+    script!([reply("Aqua ran.")])
+
+    accept = fn content ->
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: content},
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      turn
+    end
+
+    assert :completed = Aqua.Loop.run(ctx: ctx, turn_id: accept.("first").id)
+    ran = ScriptedWorker.calls()
+
+    {:ok, _pending} =
+      Arca.StorageProjectionChanges.begin_edit(
+        Sanctum.Context.actor(ctx),
+        "components",
+        "catalysts/local/claude/1.0.0"
+      )
+
+    turn = accept.("go")
+    assert {:failed, :projection_unavailable} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+
+    assert {:ok,
+            %{
+              status: "failed",
+              root_execution_id: nil,
+              error: "The component index is catching up with its files — retry shortly"
+            }} = Tape.turn(ctx, turn.id)
+
+    assert ScriptedWorker.calls() == ran
+  end
+
   test "a crew member asked by name works in its child thread under the crew's one grant, with its brain's key",
        %{ctx: ctx, thread: thread} do
     entry =
