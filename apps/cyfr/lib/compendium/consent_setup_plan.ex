@@ -321,16 +321,14 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   # The bindings the component reads itself: the bound entries whose edge
-  # carries no attach rule, apart from a login need's program row, which is
-  # mounted and read by nobody (`Sanctum.Mount`). An unreadable policy
-  # names none, which leaves every row to its own check.
+  # carries no attach rule. An unreadable policy names none, which leaves
+  # every row to its own check.
   defp read_itself_keys(consent) do
     case Prima.Authority.Blob.parse(consent.resolved_policy) do
       {:ok, %Prima.Authority.Blob{nodes: nodes}} ->
         for {_node, %{edges: edges}} <- nodes,
             {_key, %{vault: %{entry_id: _, attach: nil} = vault}} <- edges,
             bound <- [vault | Map.values(Map.get(vault, :named, %{}))],
-            not mounted?(bound),
             into: MapSet.new(),
             do: bound.binding_key
 
@@ -338,11 +336,6 @@ defmodule Compendium.ConsentSetupPlan do
         MapSet.new()
     end
   end
-
-  defp mounted?(%{destination: %Prima.Destination{program: program}}) when is_binary(program),
-    do: true
-
-  defp mounted?(_bound), do: false
 
   defp remedy(ctx, binding_key) do
     with {:ok, {node, edge_key, _slot}} <- Prima.Authority.Blob.parse_binding_key(binding_key),
@@ -418,19 +411,6 @@ defmodule Compendium.ConsentSetupPlan do
   # a key this person cannot use.
   defp check_ref(_ctx, {:share, id, {:error, _unread}}),
     do: {id, false, "the shared key cannot be read right now — try again"}
-
-  # A login need's program row, standing at the digest approved.
-  defp check_ref(_ctx, {:program, id, {:ok, row}}),
-    do: {id, true, "bound to the program #{row.name}"}
-
-  defp check_ref(_ctx, {:program, id, {:error, :binding_went_stale}}),
-    do: {id, false, "the bound program changed since this consent — re-approve to continue"}
-
-  defp check_ref(_ctx, {:program, id, {:error, :not_found}}),
-    do: {id, false, "the bound program no longer exists"}
-
-  defp check_ref(_ctx, {:program, id, {:error, _unread}}),
-    do: {id, false, "the bound program cannot be read right now — try again"}
 
   defp check_ref(_ctx, :malformed), do: {nil, false, "the binding names no entry"}
 

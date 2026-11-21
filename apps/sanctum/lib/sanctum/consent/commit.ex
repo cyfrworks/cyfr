@@ -1816,47 +1816,10 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # What a binding names, live: for a login need, the athanor's own
-  # program row that fits it (`Sanctum.Mount`), at its binding digest, and
-  # never an entry or a share; for any other, the athanor's own entry,
-  # active, at the digest its row derives, or a share offered to the
-  # person (`Sanctum.Shares.binding/2`), at the digest its source derives.
+  # What a binding names, live: the athanor's own entry, active, at the
+  # digest its row derives, or a share offered to the person
+  # (`Sanctum.Shares.binding/2`), at the digest its source derives.
   # Nothing is unsealed.
-  defp fetch_bound(ctx, {:own, id}, %{kind: "login"} = declared_need, need) do
-    with {:ok, row} <- fetch_program(ctx, id),
-         :exact <- Prima.Manifest.Needs.fit(declared_need, row),
-         {:ok, digest} <- program_digest(row) do
-      {:ok, destination} = Prima.Destination.from_map(%{"program" => row.name})
-
-      {:ok,
-       %{
-         source: "own",
-         id: row.id,
-         entry: %{
-           id: row.id,
-           name: row.name,
-           provider_hint: "",
-           attach_only: true,
-           destination: Prima.Destination.canonical(destination)
-         },
-         digest: digest,
-         scope: "athanor",
-         kind: "program",
-         provider: "",
-         disclosed: false,
-         field_names: [],
-         oauth_scopes: [],
-         destination: Prima.Destination.to_map(destination)
-       }}
-    else
-      :none -> {:error, {:entry_mismatch, need}}
-      {:error, _} = refused -> refused
-    end
-  end
-
-  defp fetch_bound(_ctx, {:share, _id}, %{kind: "login"}, need),
-    do: {:error, {:entry_mismatch, need}}
-
   defp fetch_bound(ctx, {:own, id}, _declared_need, _need) do
     with {:ok, entry} <- fetch_bindable_entry(ctx, id),
          {:ok, digest} <- VaultReader.binding_digest(entry) do
@@ -1913,9 +1876,6 @@ defmodule Sanctum.Consent.Commit do
   # declares neither.
   defp check_fit(_bound, _destination, nil, _need), do: :ok
 
-  # A login need's program row was fit when it was read (`fetch_bound/4`).
-  defp check_fit(%{kind: "program"}, _destination, %{kind: "login"}, _need), do: :ok
-
   defp check_fit(bound, destination, declared_need, need) do
     if Plan.entry_fit(declared_need, %{kind: bound.kind, destination: destination}) == :none,
       do: {:error, {:entry_mismatch, need}},
@@ -1923,10 +1883,7 @@ defmodule Sanctum.Consent.Commit do
   end
 
   # A need the component reads itself takes a disclosed entry of the
-  # athanor; a share is never disclosed. A need met by mounting is neither
-  # disclosed nor attached: its program row is admitted as it is.
-  defp check_disclosure(_bound, %{kind: "login"}, _need), do: :ok
-
+  # athanor; a share is never disclosed.
   defp check_disclosure(bound, declared_need, need) do
     reads_itself? =
       declared_need == nil or Prima.Manifest.Needs.disclose_only?(declared_need) or
@@ -1953,8 +1910,7 @@ defmodule Sanctum.Consent.Commit do
   defp attach_rule(%{attach: %{} = rule}), do: Prima.Manifest.Needs.attach_to_map(rule)
   defp attach_rule(_declared_need), do: nil
 
-  # The needs a binding meets, an entry's or a program row's; the others
-  # name a component.
+  # The needs a binding meets, an entry's; the others name a component.
   @credential_kinds Prima.Manifest.Needs.binding_kinds()
 
   defp check_known_need(@ingress, nil), do: {:ok, nil}
@@ -2083,23 +2039,6 @@ defmodule Sanctum.Consent.Commit do
   defp empty_projection(name, key) do
     {:invalid_argument,
      "The binding for #{name} names no #{key}; a projection names the #{key} it reads"}
-  end
-
-  # A program row of the athanor's own, as a login need's binding names it.
-  defp fetch_program(ctx, id) do
-    case Sanctum.Mount.program(ctx, id) do
-      {:ok, row} -> {:ok, row}
-      {:error, reason} -> {:error, {:entry_unavailable, id, reason}}
-    end
-  end
-
-  # A login need binds a program row at its definition's digest
-  # (`Sanctum.Mount`); a row whose definition does not read is bound by none.
-  defp program_digest(row) do
-    case Sanctum.ToolServerDigest.definition(row) do
-      {:ok, digest} -> {:ok, digest}
-      {:error, _unrecorded} -> {:error, {:entry_unavailable, row.id, :unrecorded}}
-    end
   end
 
   # An entry the plan offers (`Sanctum.Consent.Plan.bindable?/1`): an
@@ -2315,7 +2254,6 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp head_identity(%{vault_entry_id: id}) when is_binary(id), do: {:ok, {:own, id}}
-  defp head_identity(%{mcp_server_id: id}) when is_binary(id), do: {:ok, {:own, id}}
   defp head_identity(%{share_id: id}) when is_binary(id), do: {:ok, {:share, id}}
   defp head_identity(%{via_label: label}) when is_binary(label), do: {:ok, {:label, label}}
   defp head_identity(_ref), do: {:error, {:preview_unrepresentable, :removed}}
@@ -2864,10 +2802,6 @@ defmodule Sanctum.Consent.Commit do
       {:ok, view} -> {:ok, view.binding_digest}
       {:error, refused} -> {:error, share_refusal(refused, id, Map.get(binding, :need))}
     end
-  end
-
-  defp live_digest(ctx, %{destination: %{"program" => _program}, entry_id: id}) do
-    with {:ok, row} <- fetch_program(ctx, id), do: program_digest(row)
   end
 
   defp live_digest(ctx, %{entry_id: id}) do

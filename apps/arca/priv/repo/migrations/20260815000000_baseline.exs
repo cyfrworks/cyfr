@@ -1869,21 +1869,17 @@ defmodule Arca.Repo.Migrations.Baseline do
           "(audience = 'everyone' AND thread_id IS NULL)"
     }
 
-    # A binding names exactly one of an athanor's entry, an athanor's
-    # program row (a login need's), a share and a selection's label; an
-    # entry, a program row or a share is bound at a digest, and a
+    # A binding names exactly one of an athanor's entry, a share and a
+    # selection's label; an entry or a share is bound at a digest, and a
     # selection pins one only when it was chosen against one.
     ref_names_one = %{
       name: "consent_vault_refs_names_one",
       expr:
-        "(vault_entry_id IS NOT NULL AND mcp_server_id IS NULL AND share_id IS NULL " <>
-          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
-          "(mcp_server_id IS NOT NULL AND vault_entry_id IS NULL AND share_id IS NULL " <>
-          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
-          "(share_id IS NOT NULL AND vault_entry_id IS NULL AND mcp_server_id IS NULL " <>
-          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
-          "(via_label IS NOT NULL AND vault_entry_id IS NULL AND mcp_server_id IS NULL " <>
-          "AND share_id IS NULL)"
+        "(vault_entry_id IS NOT NULL AND share_id IS NULL AND via_label IS NULL " <>
+          "AND binding_digest IS NOT NULL) OR " <>
+          "(share_id IS NOT NULL AND vault_entry_id IS NULL AND via_label IS NULL " <>
+          "AND binding_digest IS NOT NULL) OR " <>
+          "(via_label IS NOT NULL AND vault_entry_id IS NULL AND share_id IS NULL)"
     }
 
     ref_lifetime = %{
@@ -2057,16 +2053,12 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # One row per binding of a revision, keyed by its `binding_key`
     # (`<source node reference>|<edge key>|<slot>`): the athanor's own
-    # entry it binds, the athanor's own program row a login need binds,
-    # the share it binds (a bare id: the share is another athanor's row),
-    # or the label of the profile a selection borrows from, and the
-    # binding's own lifetime; the one that is set is the binding's scope
-    # (`Arca.Schemas.ConsentVaultRef.scope/1`). An entry may appear in
-    # several rows of one consent. `consumed_by_root` is the root
-    # execution a `once` binding was consumed under. A program row is
-    # deleted, not tombstoned as an entry is, so its bindings go with it;
-    # its delete first blocks the profiles whose head stands on it
-    # (`Arca.McpServerStorage.delete/3`), which then ask again.
+    # entry it binds, the share it binds (a bare id: the share is another
+    # athanor's row), or the label of the profile a selection borrows
+    # from, and the binding's own lifetime; the one that is set is the
+    # binding's scope (`Arca.Schemas.ConsentVaultRef.scope/1`). An entry
+    # may appear in several rows of one consent. `consumed_by_root` is the
+    # root execution a `once` binding was consumed under.
     create table(:consent_vault_refs, primary_key: false) do
       add :consent_id, references(:consents, column: :id, type: :string), null: false
       add :athanor_id, :string, null: false
@@ -2075,14 +2067,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :vault_entry_id,
           references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id]),
           check: if(sqlite?, do: ref_names_one)
-
-      add :mcp_server_id,
-          references(:mcp_servers,
-            column: :id,
-            type: :string,
-            with: [athanor_id: :athanor_id],
-            on_delete: :delete_all
-          )
 
       add :share_id, :string
       add :via_label, :string
@@ -2101,7 +2085,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:consent_vault_refs, [:consent_id, :binding_key])
     create index(:consent_vault_refs, [:vault_entry_id, :athanor_id])
-    create index(:consent_vault_refs, [:mcp_server_id, :athanor_id])
     create index(:consent_vault_refs, [:share_id])
 
     # Single-use, delete-on-read. No foreign keys by design: a proof outlives
@@ -2286,8 +2269,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     checked(sqlite?, :mcp_servers, [home_known])
     create unique_index(:mcp_servers, [:athanor_id, :name])
-    # A consent binding names a program row with its athanor.
-    create unique_index(:mcp_servers, [:athanor_id, :id])
 
     create table(:webhooks, primary_key: false) do
       add :id, :string, primary_key: true, null: false

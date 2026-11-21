@@ -701,54 +701,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
            ]
   end
 
-  test "a login need names its program, and its program row is mounted, never sent to a host" do
-    login = fn name, candidates, opts ->
-      name
-      |> key_need(
-        "to run Claude Code on your own plan",
-        candidates,
-        [kind: "login", provider: nil, hosts: nil, fields: []] ++ opts
-      )
-      |> Map.put(:program, "claude")
-    end
-
-    entry =
-      own("mcp_claude", "claude", %{
-        kind: "program",
-        provider: "",
-        destination: %{"program" => "claude"},
-        label_match: false,
-        field_names: [],
-        fields: %{}
-      })
-
-    plan = %{
-      source_ref: "catalyst:local.sheet-login",
-      candidates: [],
-      dependency_needs: [],
-      needs: [
-        login.("claude", [entry], suggested: %{entry_id: "mcp_claude"}),
-        login.("other", [], required: false)
-      ]
-    }
-
-    html = sheet(plan, athanor_route: "@me")
-    claude = need_html(html, "claude")
-
-    assert texts(claude, ".consent-sheet__need-what") == ["login for claude, required"]
-
-    assert texts(claude, ~s([data-test="grant-pick"] .consent-sheet__fields)) == [
-             "a program of this athanor, mounted into claude's kept folder"
-           ]
-
-    assert texts(need_html(html, "other"), ".consent-sheet__empty") == [
-             "Set up the program claude with a kept folder first."
-           ]
-
-    refute html =~ "://"
-    refute html =~ "CYFR attaches"
-  end
-
   describe "a tool server asked for again" do
     @server_ref "catalyst:local.sheet-server"
 

@@ -649,7 +649,6 @@ defmodule Locus.Runtime.AttachedFetchTest do
         vault_entry_id: nil,
         share_id: share.id,
         via_label: nil,
-        mcp_server_id: nil,
         binding_digest: entry.binding_digest,
         lifetime_kind: "standing",
         expires_at: nil,

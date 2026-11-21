@@ -77,7 +77,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @live_cache_ttl_ms :timer.seconds(60)
 
   # The list each bound need kind's projection names: an OAuth need's
-  # scopes, every other kind's fields (a login need's none). The kinds not
+  # scopes, every other kind's fields. The kinds not
   # here are component-typed and project nothing.
   @projection_lists Map.new(
                       Prima.Manifest.Needs.binding_kinds(),
@@ -198,10 +198,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
   mode is not in it: what of its tools a member runs grants nothing the
   consent does not (`ARCHITECTURE.md` §5.4), so switching a member's mode
   re-asks nothing.
-
-  A login need (`Prima.Manifest.Needs.mount_only?/1`) enters the shape
-  with the program it mounts into and the row it suggests, so a change to
-  either asks again.
   """
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref), do: shape_input(ctx, source_ref, :latest)
@@ -474,8 +470,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # instead, where the manifest's author can be told.
   defp check_vault_projections(needs, source_ref) do
     Enum.find_value(needs, :ok, fn need ->
-      with false <- Needs.mount_only?(need),
-           {:ok, list} <- Map.fetch(@projection_lists, need.kind),
+      with {:ok, list} <- Map.fetch(@projection_lists, need.kind),
            [] <- Map.fetch!(need, list) do
         {:error,
          {:invalid_argument,
@@ -488,8 +483,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   # The digest's need rows: name/type/fields/scopes, and the attach rule,
-  # hosts, paths, a true `disclose`, and a login need's program and the
-  # row it suggests where the need declares them — the
+  # hosts, paths and a true `disclose` where the need declares them — the
   # reason is prose and required-ness surfaces on the sheet, neither is
   # shape. A field the need does not declare is left out of its row.
   defp digest_needs(needs) do
@@ -504,17 +498,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
       |> Prima.MapUtil.put_present(:hosts, non_empty(need.hosts))
       |> Prima.MapUtil.put_present(:paths, non_empty(need.paths))
       |> Prima.MapUtil.put_present(:disclose, if(need.disclose == true, do: true))
-      |> Prima.MapUtil.put_present(:program, Map.get(need, :program))
-      |> Prima.MapUtil.put_present(:install, install_row(Map.get(need, :install)))
     end)
-  end
-
-  defp install_row(nil), do: nil
-
-  defp install_row(%{} = install) do
-    install
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-    |> Map.new(fn {key, value} -> {to_string(key), value} end)
   end
 
   defp non_empty([]), do: nil

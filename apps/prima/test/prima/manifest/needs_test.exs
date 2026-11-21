@@ -10,9 +10,7 @@ defmodule Prima.Manifest.NeedsTest do
   names no template takes the bearer header; a rule's template holds
   `{value}` once and its header name is a token; a component-typed need
   takes none of the four. `fit/2` reads whether an entry's destination
-  covers what a need declares. A login need names a program, is mounted
-  rather than attached or disclosed, and carries the program row it
-  suggests (`install`), held to the backend command rule.
+  covers what a need declares. A `login` need is no need type.
   """
 
   use ExUnit.Case, async: true
@@ -402,152 +400,12 @@ defmodule Prima.Manifest.NeedsTest do
   end
 
   describe "login" do
-    test "is read with its program and install, mounted and never disclosed" do
-      install = %{"command" => "npx -y @anthropic-ai/claude-code"}
-
-      read = normalized(login(%{"install" => install, "required" => false}))
-
-      assert read == %{
-               name: "api_key",
-               kind: "login",
-               qualifier: nil,
-               program: "claude",
-               install: %{command: "npx -y @anthropic-ai/claude-code"},
-               reason: "to run Claude Code",
-               fields: [],
-               scopes: [],
-               required: false,
-               attach: nil,
-               hosts: [],
-               paths: [],
-               disclose: false
-             }
-
-      assert Needs.mount_only?(read)
-      refute Needs.disclose_only?(read)
-
-      bare = normalized(login())
-      assert bare.install == nil and bare.required
-
-      # The suggested command is optional.
-      assert normalized(login(%{"install" => %{"command" => "claude"}})).install ==
-               %{command: "claude"}
-
-      assert normalized(login(%{"install" => %{}})).install == %{command: nil}
-
-      # Every other need is attached or disclosed, never mounted.
-      refute Needs.mount_only?(normalized(need()))
-      refute Needs.mount_only?(normalized(%{"type" => "catalyst:local.files", "reason" => "r"}))
-    end
-
-    test "declares no host, path, rule, disclosure, field or scope" do
-      for {key, value} <- [
-            {"hosts", ["api.anthropic.com"]},
-            {"paths", ["/v1"]},
-            {"attach", %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}},
-            {"disclose", false},
-            {"fields", ["TOKEN"]},
-            {"scopes", ["read"]}
-          ] do
-        entry = login(%{key => value})
-        assert {:not_for_login, "api_key", [^key]} = refused(entry), key
-        assert Needs.from_manifest(manifest(entry)) == nil
-      end
-
-      assert {:unknown_keys, "api_key", ["home"]} = refused(login(%{"home" => "kept"}))
-    end
-
-    # A component with a login need runs a program of its own, which a
-    # read-only member's mode never reaches (`Aqua.Models.holds_read_only?/1`):
-    # the need is found by its kind among the others, in a manifest's
-    # normalized needs and in a setup plan's, which carry the same `kind`.
-    test "login?/1 says whether normalized needs hold a login need, by its kind alone" do
-      key = normalized(need())
-      sign_in = normalized(login())
-
-      assert Needs.login?([sign_in])
-      assert Needs.login?([key, sign_in])
-      assert Needs.login?(Needs.from_manifest(%{"needs" => %{"a" => need(), "b" => login()}}))
-      assert Needs.login?([%{kind: "login", name: "plan_need"}])
-
-      refute Needs.login?([key])
-      refute Needs.login?([normalized(%{"type" => "catalyst:local.files", "reason" => "r"})])
-      refute Needs.login?([])
-      refute Needs.login?(nil)
-      refute Needs.login?(Needs.from_manifest(%{}))
-      refute Needs.login?([%{kind: "api_key", program: "claude"}])
-    end
-
-    test "names a program in the destination's grammar" do
-      for program <- [nil, "", "Claude", "-claude", "claude code", String.duplicate("a", 33), 7] do
-        entry =
-          if program, do: login(%{"program" => program}), else: Map.delete(login(), "program")
-
-        assert {:invalid_program, "api_key", ^program} = refused(entry), inspect(program)
-      end
-
-      assert {:reason_required, "api_key"} = refused(login(%{"reason" => " "}))
-      assert {:invalid_required, "api_key", "yes"} = refused(login(%{"required" => "yes"}))
-    end
-
-    test "suggests an install held to the backend command rule" do
-      long = String.duplicate("a", Prima.LocusBackends.max_command_bytes() + 1)
-
-      for {install, reason} <- [
-            {"npx claude", :not_a_map},
-            {%{"command" => nil}, {:command, :not_a_string}},
-            {%{"command" => "  "}, {:command, :empty}},
-            {%{"command" => long}, {:command, :too_long}},
-            {%{"command" => "claude\0"}, {:command, :nul}},
-            {%{"command" => "claude --key VAULT:anthropic"}, {:command, :vault_reference}},
-            {%{"command" => "claude", "login_command" => "claude login"},
-             {:unknown_keys, ["login_command"]}},
-            {%{"command" => "claude", "env" => %{}}, {:unknown_keys, ["env"]}}
-          ] do
-        assert {:invalid_install, "api_key", ^reason} =
-                 refused(login(%{"install" => install})),
-               inspect(install)
-      end
-    end
-
-    test "is spelled `login` alone, and its members belong to it alone" do
-      qualified = %{"type" => "login:claude", "reason" => "r"}
-      assert {:invalid_type, "api_key", "login:claude"} = refused(qualified)
-
-      for key <- ["program", "install"] do
-        assert {:unknown_keys, "api_key", [^key]} = refused(need(%{key => "claude"})), key
-      end
-    end
-
-    test "fits a driven program row of its program with a kept home, and nothing else" do
-      row = %{transport: "program", mark: "driven", home: "kept", name: "claude"}
-      {:ok, claude} = Prima.Destination.from_map(%{"program" => "claude"})
-      {:ok, hosts} = Prima.Destination.from_map(%{"hosts" => ["api.anthropic.com"]})
-
-      assert Needs.fit(normalized(login()), row) == :exact
-
-      for unfit <- [
-            %{row | name: "codex"},
-            %{row | mark: "mcp"},
-            %{row | home: "scratch"},
-            %{row | transport: "http"}
-          ] do
-        assert Needs.fit(normalized(login()), unfit) == :none, inspect(unfit)
-      end
-
-      # No destination meets it, a program's included, and no vault entry
-      # carries one.
-      assert Needs.fit(normalized(login()), claude) == :none
-      assert Needs.fit(normalized(login()), hosts) == :none
-      assert Needs.fit(normalized(need(%{"hosts" => ["api.anthropic.com"]})), claude) == :none
-      assert Needs.fit(normalized(need(%{"hosts" => ["api.anthropic.com"]})), row) == :none
-    end
-
-    test "is bound as a credential need is, and mounted, never attached or disclosed" do
-      assert "login" in Needs.binding_kinds()
-      refute "login" in Prima.CredentialKinds.all()
-      assert Needs.mount_only?(normalized(login()))
-      refute Needs.disclose_only?(normalized(login()))
+    # A program's sign-in lives in its row's kept folder, which no need
+    # reaches: a manifest declaring a `login` need is refused.
+    test "is no need type: a manifest declaring one is refused" do
+      assert {:unknown_keys, "api_key", ["program"]} = refused(login())
+      assert {:invalid_type, "api_key", "login"} = refused(Map.delete(login(), "program"))
+      refute "login" in Needs.binding_kinds()
     end
   end
 end

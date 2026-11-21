@@ -2,57 +2,27 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Mount do
   @moduledoc """
-  A catalyst's login need mounted into the program row it is bound to.
+  What stands on a program row, read for the programs controller and the
+  row's removal.
 
   A program row with a kept home (`mcp_servers`, `home: "kept"`) has one
   folder, its own: the home's id is the row's id, made with the row and
   retired with it. The box that holds the home (the backends service)
   keeps what the program keeps there, under a uid of the home's own that
   it draws when it first makes the home, and no CYFR process can read it.
-  A grant of a catalyst's login need binds the need to the row: the
-  binding's value is the row's id.
 
-  A consent offers a login need the athanor's own program rows that fit
-  it (`programs/1`, `Prima.Manifest.Needs.fit/2`) and binds one by its id
-  at its definition's digest, read again at the commit (`program/2`); a
-  share is never offered for it.
-
-  `orphaned_homes/1` is the read the programs controller makes of the
-  same rows: the homes a box holds that no kept row holds any more.
+  `granted_to/2` names the grants of a row's tools, which a change or
+  removal of the row asks again; `orphaned_homes/1` names the homes a box
+  holds that no kept row holds any more.
   """
-
-  alias Sanctum.Context
 
   @typedoc "A kept home's id: its program row's id."
   @type home_id :: String.t()
 
   @doc """
-  The program rows of the context's athanor, the ones a login need's
-  candidates are chosen from: `{:error, {:unavailable, "Programs"}}` when
-  the store cannot answer, so an outage never reads as none; a context
-  with no athanor has none.
-  """
-  @spec programs(Context.t()) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
-  def programs(%Context{} = ctx) do
-    case Arca.McpServerStorage.list(Context.actor(ctx)) do
-      {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.transport == "program"))}
-      {:error, :no_athanor} -> {:ok, []}
-      {:error, _unanswered} -> {:error, {:unavailable, "Programs"}}
-    end
-  end
-
-  @doc """
-  The program row `row_id` of the context's athanor, as a binding names
-  it; another athanor's row is not found.
-  """
-  @spec program(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def program(%Context{} = ctx, row_id) when is_binary(row_id),
-    do: Arca.McpServerStorage.get_by_id(Context.actor(ctx), row_id)
-
-  @doc """
   The grants that stand on the row `row` (`%{id, name}`) of `athanor_id`:
-  the source of each profile there, not revoked, whose head binds the
-  row to a login need or grants its tools
+  the source of each profile there, not revoked, whose head grants the
+  row's tools
   (`Arca.ConsentStorage.head_profiles_on_row/2`, the same answer the
   row's delete blocks); sorted, each once. They are the grants a change
   or removal of the row asks again, which its confirmation names before

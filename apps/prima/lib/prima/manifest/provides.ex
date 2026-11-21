@@ -80,7 +80,6 @@ defmodule Prima.Manifest.Provides do
   def read_entry(%{"destination" => destination, "values" => values} = raw)
       when map_size(raw) == 2 do
     with {:ok, destination} <- Destination.from_map(destination),
-         :ok <- of_hosts(destination),
          :ok <- check_values(values) do
       {:ok, %{destination: destination, values: values}}
     end
@@ -102,11 +101,6 @@ defmodule Prima.Manifest.Provides do
   # ---------------------------------------------------------------------------
   # Reading
   # ---------------------------------------------------------------------------
-
-  # A provided value is attached to requests, so its destination names
-  # hosts, never a program.
-  defp of_hosts(%Destination{program: nil}), do: :ok
-  defp of_hosts(%Destination{}), do: {:error, {:invalid_destination, :hosts_required}}
 
   defp read(nil), do: {:ok, %{}}
 

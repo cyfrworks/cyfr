@@ -351,8 +351,8 @@ var Actions = map[string][]string{
 	"workspace":           {"list", "open"},
 }
 
-// BindingKinds lists every need kind a consent binds: the credential kinds, and login, which binds a program.
-var BindingKinds = []string{"api_key", "oauth", "bundle", "login"}
+// BindingKinds lists every need kind a consent binds: the credential kinds.
+var BindingKinds = []string{"api_key", "oauth", "bundle"}
 
 // AquaCreateArgs carries arguments for aqua.create.
 type AquaCreateArgs struct {

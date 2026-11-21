@@ -58,17 +58,13 @@ defmodule PrismWeb.ProgramsLive do
   disabled, and when the list says it is disabled, so a disabled program
   reads as stopped.
 
-  `?install=<component_ref>&need=<need>` opens the program form, driven,
-  prefilled from that component's login need (`component.setup_plan`): the program
-  named, its command as the need's install block suggests, its home kept,
-  every field editable. Installing it defines the row, once confirmed, and
-  opens its terminal in its folder, where the person signs it in as the
-  program asks; a grant of the component then binds the row.
-  `?install_for=<crew member>` opens the same form for a crew member whose
-  brain is a program the athanor has no row of: named as the member's file
-  names it, its command as the file's `install` suggests, confirmed and
-  signed in the same way. The member's file is not written, and a row of
-  that name that exists is opened, never replaced. `?name=` (the
+  `?install_for=<crew member>` opens the program form, driven, for a crew
+  member whose brain is a program the athanor has no row of: named as the
+  member's file names it, its command as the file's `install` suggests,
+  its home kept, every field editable. Installing it defines the row, once
+  confirmed, and opens its terminal in its folder, where the person signs
+  it in as the program asks. The member's file is not written, and a row
+  of that name that exists is opened, never replaced. `?name=` (the
   `ui.mcp_server.focus` intent) expands one row.
 
   A definition the catalog refuses says why in its form. A server saved
@@ -435,9 +431,6 @@ defmodule PrismWeb.ProgramsLive do
       end
 
       case params do
-        %{"install" => ref, "need" => need} when ref != "" and need != "" ->
-          send(self(), {:install, ref, need})
-
         %{"install_for" => member} when member != "" ->
           send(self(), {:install_for, member})
 
@@ -476,9 +469,6 @@ defmodule PrismWeb.ProgramsLive do
       do: {:noreply, socket},
       else: {:noreply, expand_server(socket, name)}
   end
-
-  def handle_info({:install, ref, need}, socket),
-    do: {:noreply, prefill_install(socket, ref, need)}
 
   def handle_info({:install_for, member}, socket),
     do: {:noreply, prefill_member(socket, member)}
@@ -580,7 +570,7 @@ defmodule PrismWeb.ProgramsLive do
 
   # What the page says while a change's call runs.
   defp working({:create, name}), do: "Adding #{name}…"
-  defp working({:install, name, _from_need?}), do: "Adding #{name}…"
+  defp working({:install, name, _for_member?}), do: "Adding #{name}…"
   defp working({:open, name}), do: "Opening #{name}…"
   defp working({:update, name}), do: "Saving #{name}…"
   defp working({:set_hosts, name}), do: "Saving #{name}'s hosts…"
@@ -699,15 +689,15 @@ defmodule PrismWeb.ProgramsLive do
     |> warnings_flash(result)
   end
 
-  # A new driven program: the row, then, for one installed from a
-  # component's need, its terminal, where the person signs it in.
-  defp answered(socket, {:install, name, from_need?}, {:ok, result}) do
+  # A new driven program: the row, then, for one installed for a crew
+  # member, its terminal, where the person signs it in.
+  defp answered(socket, {:install, name, for_member?}, {:ok, result}) do
     socket =
       socket
       |> assign(:install, nil)
       |> answered({:create, name}, {:ok, result})
 
-    if from_need?, do: open_program(socket, name, []), else: socket
+    if for_member?, do: open_program(socket, name, []), else: socket
   end
 
   defp answered(socket, {:open, _name}, {:ok, %{session: session}}),
@@ -921,37 +911,7 @@ defmodule PrismWeb.ProgramsLive do
     end)
   end
 
-  # ————— installing from a component's need —————
-
-  # The program form, driven and kept, prefilled from the component's login
-  # need: what the need's install block suggests, every field the person's
-  # to change.
-  defp prefill_install(socket, ref, need_name) do
-    with {:ok, plan} <-
-           call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}),
-         %{} = need <- Enum.find(field(plan, :needs) || [], &login_need?(&1, need_name)) do
-      install = field(need, :install) || %{}
-
-      socket
-      |> assign(:show_add, "program")
-      |> assign(:form_error, nil)
-      |> assign(:editing, nil)
-      |> assign(:install, %{for: ref, reason: field(need, :reason)})
-      |> assign(:prefill, %{
-        "mark" => "driven",
-        "home" => "kept",
-        "name" => field(need, :program),
-        "command" => field(install, :command)
-      })
-    else
-      _ ->
-        put_flash(
-          socket,
-          :error,
-          "#{ref} declares no login need named '#{need_name}' to install from."
-        )
-    end
-  end
+  # ————— installing a crew member's program —————
 
   # The program form, driven and kept, for the crew member whose brain is
   # the program its file names: the name as the file names it, the command
@@ -972,7 +932,7 @@ defmodule PrismWeb.ProgramsLive do
         |> assign(:form_error, nil)
         |> assign(:editing, nil)
         |> assign(:adding_browser, false)
-        |> assign(:install, %{for: field(agent, :title) || member, reason: nil})
+        |> assign(:install, %{for: field(agent, :title) || member})
         |> assign(:prefill, %{
           "mark" => "driven",
           "home" => "kept",
@@ -1010,9 +970,6 @@ defmodule PrismWeb.ProgramsLive do
       "disk_mib" => Integer.to_string(div(browser["home_max_bytes"], @mib))
     })
   end
-
-  defp login_need?(need, name),
-    do: field(need, :kind) == "login" and field(need, :name) == name
 
   # ————— terminals —————
 
@@ -1216,9 +1173,7 @@ defmodule PrismWeb.ProgramsLive do
         <form id="add-program" phx-submit="add_program" class="space-y-4">
           <p :if={@install} class="text-sm text-gray-300" data-test="install-from">
             Install <span class="font-mono">{@prefill["name"]}</span>
-            for
-            <span class="font-mono">{@install.for}</span><span :if={@install.reason}>
-              — {@install.reason}</span>. This is the program as it will run; change anything first.
+            for <span class="font-mono">{@install.for}</span>. This is the program as it will run; change anything first.
             Installing it asks you to confirm the program, then opens its terminal in the
             program's own folder.
           </p>

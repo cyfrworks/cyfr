@@ -441,10 +441,8 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   @doc """
   The `consent_vault_refs` row of one vault resource under `binding_key`:
-  a bound entry (`vault_entry_id` for the athanor's own, `mcp_server_id`
-  for the program row a login need binds, as its destination names a
-  program, `share_id` for a share, as its `scope` says, and
-  `binding_digest`) or a selection
+  a bound entry (`vault_entry_id` for the athanor's own, `share_id` for a
+  share, as its `scope` says, and `binding_digest`) or a selection
   (`via`: its `label` and pinned `binding_digest`), with the lifetime and
   `renew` `vault_resource/1` recorded beside it, standing until revoked
   when it recorded none (a resource read back from a stored blob).
@@ -466,11 +464,6 @@ defmodule Sanctum.Consent.BlobBuilder do
       # A share's bound resource names the share as its entry.
       %{"scope" => "share"} ->
         %{binding_key: binding_key, share_id: entry_id, binding_digest: digest}
-
-      # A login need's names the program row it mounts, as its destination
-      # names the program.
-      %{"destination" => %{"program" => _program}} ->
-        %{binding_key: binding_key, mcp_server_id: entry_id, binding_digest: digest}
 
       _athanor ->
         %{binding_key: binding_key, vault_entry_id: entry_id, binding_digest: digest}

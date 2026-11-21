@@ -51,34 +51,6 @@ defmodule Sanctum.Consent.BootstrapTest do
     component
   end
 
-  # A need met by mounting is a need like any other the walk leaves for
-  # its person to bind: a closure that declares one, in the source or a
-  # dependency, is minted as one with an unbound credential need is.
-  test "a closure with a need met by mounting is minted like any other", %{ctx: ctx} do
-    login = %{
-      "needs" => %{
-        "claude" => %{
-          "type" => "login",
-          "program" => "claude",
-          "reason" => "to run Claude Code on your own plan"
-        }
-      }
-    }
-
-    ship!(ctx, "boot-mount-dep", "reagent", login)
-
-    ship!(ctx, "boot-mount-app", "reagent", %{
-      "dependencies" => %{"static" => [%{"ref" => "reagent:local.boot-mount-dep"}]}
-    })
-
-    assert {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
-
-    for ref <- ~w(reagent:local.boot-mount-dep reagent:local.boot-mount-app) do
-      refute Enum.any?(skipped, &match?({^ref, _reason}, &1)), inspect(skipped)
-      assert ref in minted
-    end
-  end
-
   test "mints a loadable consent whose blob mirrors effective policy", %{ctx: ctx} do
     ship!(ctx, "boot-plain", "reagent")
 
@@ -330,7 +302,6 @@ defmodule Sanctum.Consent.BootstrapTest do
                  athanor_id: ctx.athanor_id,
                  binding_key: "#{@model}|@ingress|default",
                  vault_entry_id: nil,
-                 mcp_server_id: nil,
                  share_id: share_id,
                  via_label: nil,
                  binding_digest: digest,

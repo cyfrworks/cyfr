@@ -316,7 +316,7 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
-  describe "the program rows a revision binds" do
+  describe "the program rows a revision stands on" do
     # A program row of `athanor`, as the row store writes one.
     defp program!(athanor, name) do
       Arca.Repo.insert!(%Arca.Schemas.McpServer{
@@ -334,103 +334,17 @@ defmodule Arca.ConsentStorageTest do
       })
     end
 
-    defp program_ref(row_id), do: Map.put(ref(nil), :mcp_server_id, row_id)
-
-    test "the athanor's own is bound by its id; another athanor's or none writes nothing",
-         %{athanor: athanor} do
-      actor = Prima.Actor.in_athanor(athanor)
-      profile = profile!(athanor, "prof_program_1")
-      own = program!(athanor, "claude")
-      elsewhere = program!("ath_other", "claude")
-
-      assert {:ok, _} =
-               ConsentStorage.insert_revision(
-                 consent_attrs(athanor, profile.id, 1),
-                 [program_ref(own.id)],
-                 nil
-               )
-
-      {:ok, head, refs} = ConsentStorage.get_head(actor, profile.id)
-      assert [%{mcp_server_id: id, vault_entry_id: nil}] = refs
-      assert id == own.id
-
-      assert {:ok, %{vault_refs: [%{mcp_server_id: ^id, scope: "athanor"}]}} =
-               ConsentStorage.head_consent(actor, profile.id)
-
-      for id <- [elsewhere.id, "mcp_never_existed"] do
-        assert {:error, :not_found} =
-                 ConsentStorage.insert_revision(
-                   consent_attrs(athanor, profile.id, 2),
-                   [program_ref(id)],
-                   head.id
-                 )
-      end
-
-      assert {:ok, ^head, _refs} = ConsentStorage.get_head(actor, profile.id)
-    end
-
-    test "the baseline refuses a row naming another athanor's program row, written around " <>
-           "the storage",
-         %{athanor: athanor} do
-      profile = profile!(athanor, "prof_program_raw")
-      elsewhere = program!("ath_other", "claude")
-
-      {:ok, consent} =
-        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
-
-      row = %{
-        consent_id: consent.id,
-        athanor_id: athanor,
-        binding_key: "k|@ingress|default",
-        vault_entry_id: nil,
-        mcp_server_id: elsewhere.id,
-        share_id: nil,
-        via_label: nil,
-        binding_digest: "sha256:b",
-        lifetime_kind: "standing",
-        expires_at: nil
-      }
-
-      assert :refused = raw_insert(row)
-      own = program!(athanor, "claude")
-      assert :ok = raw_insert(%{row | mcp_server_id: own.id})
-      assert :refused = raw_insert(%{row | binding_key: "k|x|default", vault_entry_id: "vlt_x"})
-    end
-
-    test "a deleted row takes its bindings and blocks the profiles whose head bound it",
-         %{athanor: athanor} do
-      actor = Prima.Actor.in_athanor(athanor)
-      profile = profile!(athanor, "prof_program_gone")
-      row = program!(athanor, "claude")
-
-      {:ok, _} =
-        ConsentStorage.insert_revision(
-          consent_attrs(athanor, profile.id, 1),
-          [program_ref(row.id)],
-          nil
-        )
-
-      assert {:ok, [profile_id]} = ConsentStorage.head_profiles_on_row(actor, row)
-      assert profile_id == profile.id
-
-      assert {:ok, %{id: id}} = Arca.McpServerStorage.delete(actor, "claude")
-      assert id == row.id
-
-      assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, profile.id)
-      assert {:ok, _head, []} = ConsentStorage.get_head(actor, profile.id)
-    end
-
     # A grant of a program's tools names the row in the head's blob, on an
-    # edge's `tool_servers`, not in a binding row: it stands on the row as
-    # a login binding does, so the row's removal names it and blocks it.
+    # edge's `tool_servers`, not in a binding row: it stands on the row, so
+    # the row's removal names it and blocks it.
     test "a head that grants a row's tools stands on it, and the row's delete blocks it",
          %{athanor: athanor} do
       actor = Prima.Actor.in_athanor(athanor)
       row = program!(athanor, "github")
       program!(athanor, "another")
 
-      [granting, bound, elsewhere] =
-        for label <- ["granted", "bound", "elsewhere"] do
+      [granting, elsewhere] =
+        for label <- ["granted", "elsewhere"] do
           {:ok, profile} =
             Writers.put_profile(%{
               id: "prof_tools_" <> label,
@@ -459,20 +373,12 @@ defmodule Arca.ConsentStorageTest do
           )
       end
 
-      {:ok, _} =
-        ConsentStorage.insert_revision(
-          consent_attrs(athanor, bound.id, 1),
-          [program_ref(row.id)],
-          nil
-        )
-
-      assert {:ok, standing} = ConsentStorage.head_profiles_on_row(actor, row)
-      assert standing == Enum.sort([granting.id, bound.id])
+      assert {:ok, [standing]} = ConsentStorage.head_profiles_on_row(actor, row)
+      assert standing == granting.id
 
       assert {:ok, _} = Arca.McpServerStorage.delete(actor, "github")
 
       assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, granting.id)
-      assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, bound.id)
       assert {:ok, %{status: "active"}} = ProfileStorage.get(actor, elsewhere.id)
     end
 

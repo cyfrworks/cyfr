@@ -408,7 +408,7 @@ async function main() {
     // and the ids its sources showed.
     const bindingRow = {
       consent_id: shareHead.consent_id, athanor_id: me.athanor_id, share_id: seeded.share_id,
-      binding_key: bindingKey, vault_entry_id: null, mcp_server_id: null, via_label: null, binding_digest: requested.binding_digest,
+      binding_key: bindingKey, vault_entry_id: null, via_label: null, binding_digest: requested.binding_digest,
       lifetime_kind: "standing", expires_at: null, consumed_by_root: null,
     };
     const shareRow = {

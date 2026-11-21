@@ -1189,70 +1189,71 @@ defmodule Opus.ProgramsTest do
     |> Arca.Repo.all()
   end
 
-  # A crew member `harness` whose brain, a catalyst with one login need of
-  # the program `claude`, mounts the program row `entry`: bound on the
-  # catalyst's own consent and selected on the member's edge into it, as a
-  # person's walk binds it. Answers the context, under a storage root of
-  # the test's own.
-  defp harness_member!(ctx, entry) do
-    root = Path.join(System.tmp_dir!(), "programs_member_#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(root) end)
-    Prima.Test.Env.put_app_env(:arca, :base_path, root)
-    ctx = %{ctx | origin: :interactive}
-    actor = Sanctum.Context.actor(ctx)
-    ref = "catalyst:local.harnessbrain"
+  # A profile of `source` whose head grants the tools of the row named
+  # `server`, as a commit of that grant writes it, on the source's own
+  # edge: a change or removal of the row names it among the grants that
+  # ask again (`Sanctum.Mount.granted_to/2`).
+  defp tools_granted!(ctx, source, server) do
+    profile_id = "prof_tools_#{System.unique_integer([:positive])}"
 
-    unit =
-      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harnessbrain", "0.1.0",
-        manifest: %{
-          "name" => "harnessbrain",
-          "type" => "catalyst",
-          "version" => "0.1.0",
-          "publisher" => "local",
-          "needs" => %{
-            "claude" => %{
-              "type" => "login",
-              "program" => "claude",
-              "reason" => "to run the harness on your own plan",
-              "required" => true
-            }
+    {:ok, _} =
+      Arca.Test.Writers.put_profile(%{
+        id: profile_id,
+        athanor_id: ctx.athanor_id,
+        source_ref: source,
+        kind: "owner",
+        label: "default",
+        status: "active"
+      })
+
+    grant = %{
+      "server_digest" => "sha256:granted",
+      "server_name" => server,
+      "tool_patterns" => ["*"],
+      "record" => %{"address" => "npx -y server", "env" => [], "folder" => "scratch"}
+    }
+
+    policy =
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          source => %{
+            "limits" => %{
+              "timeout" => "1m",
+              "max_memory_bytes" => 67_108_864,
+              "max_request_size" => 1_048_576,
+              "max_response_size" => 5_242_880,
+              "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+              "max_concurrent_tasks" => 10,
+              "batch_timeout" => "1m"
+            },
+            "edges" => %{"@ingress" => %{"tool_servers" => [grant]}}
           }
+        }
+      })
+
+    {:ok, _} =
+      Arca.ConsentStorage.insert_revision(
+        %{
+          athanor_id: ctx.athanor_id,
+          profile_id: profile_id,
+          revision: 1,
+          scope: "versionless",
+          pinned_version: "",
+          invoke_mode: "open_inert",
+          shape_digest: "sha256:shape",
+          commit_digest: "sha256:commit",
+          blob_digest: Prima.Digest.sha256(policy),
+          resolved_policy: policy,
+          activation: "{}",
+          granted_by: "test",
+          granted_via: "bootstrap"
         },
-        wasm: Cyfr.Test.Guests.wasm(:catalyst)
+        [],
+        nil
       )
 
-    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
-    :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), "---\n---\n\nsoul\n")
-
-    :ok =
-      Arca.put(
-        actor,
-        Compendium.AquaPath.crew_file("harness"),
-        "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n"
-      )
-
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: entry}]})
-
-    commit!(ctx, Prima.AgentRef.ref("harness"), %{
-      selections: [%{dep: ref, need: "claude", entry_id: entry}]
-    })
-
-    ctx
-  end
-
-  # Whether the login binding the crew member's brain holds still binds
-  # its program row as the row stands now (`Sanctum.Consent.row_binding/3`).
-  defp binding_of_brain(ctx) do
-    actor = Sanctum.Context.actor(ctx)
-    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(actor, "catalyst:local.harnessbrain")
-    {:ok, consent} = Sanctum.Consent.head_consent(ctx, profile.id)
-    [ref] = Enum.filter(consent.vault_refs, &is_binary(&1.mcp_server_id))
-
-    case Sanctum.Consent.row_binding(ctx, consent, ref) do
-      {:program, _id, {:ok, _row}} -> :ok
-      {:program, _id, refused} -> refused
-    end
+    profile_id
   end
 
   defp commit!(ctx, ref, over) do
@@ -1855,9 +1856,8 @@ defmodule Opus.ProgramsTest do
     # A literal environment value is part of what a program is: with
     # `sh -c "$DEBUG"`, DEBUG from "printf safe" to "cat .credentials" is
     # another program in the same signed-in folder. The change asks, and
-    # the login grant made for the old definition is stale once it lands.
-    test "a literal environment value changed asks again, and the login grant made for the " <>
-           "old definition no longer binds the row",
+    # names the grants of the row's tools, which ask again.
+    test "a literal environment value changed asks again, naming the grants of the row's tools",
          %{ctx: ctx, admin: admin, row: row} do
       {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
       actor = Sanctum.Context.actor(ctx)
@@ -1882,8 +1882,7 @@ defmodule Opus.ProgramsTest do
       assert {:ok, %{epoch: 2}} =
                Sanctum.TestContext.confirming(person, &update.(&1, row.epoch, "printf safe"))
 
-      ctx = harness_member!(ctx, row.id)
-      assert binding_of_brain(ctx) == :ok
+      tools_granted!(ctx, "reagent:local.tool-user", "claude")
 
       assert {:error, {:confirmation_required, %{id: id}}} =
                update.(person, 2, "cat .credentials")
@@ -1896,16 +1895,12 @@ defmodule Opus.ProgramsTest do
                "operation" => "mcp_servers.update",
                "details" => %{
                  "environment" => ["DEBUG (a literal, not shown)"],
-                 "grants_asking_again" => [
-                   "agent:local.harness",
-                   "catalyst:local.harnessbrain"
-                 ]
+                 "grants_asking_again" => ["reagent:local.tool-user"]
                }
              } = preview(person, id)
 
       Sanctum.TestContext.prove!(person, id)
       assert {:ok, %{epoch: 3}} = update.(%{person | confirmation_id: id}, 2, "cat .credentials")
-      assert binding_of_brain(ctx) == {:error, :binding_went_stale}
     end
 
     # Leaving the programs is a program's removal and asks as one, naming
@@ -1915,7 +1910,8 @@ defmodule Opus.ProgramsTest do
          %{ctx: ctx, admin: admin, row: row} do
       Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
       start_supervised!(Emissary.External.Reconciler)
-      ctx = harness_member!(ctx, row.id)
+      ctx = %{ctx | origin: :interactive}
+      tools_granted!(ctx, "reagent:local.tool-user", "claude")
       {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
       actor = Sanctum.Context.actor(ctx)
 
@@ -1942,10 +1938,7 @@ defmodule Opus.ProgramsTest do
                  "folder" => folder,
                  "becomes" => "https://example.com/mcp",
                  "becomes_headers" => "none",
-                 "grants_asking_again" => [
-                   "agent:local.harness",
-                   "catalyst:local.harnessbrain"
-                 ]
+                 "grants_asking_again" => ["reagent:local.tool-user"]
                }
              } = preview(person, id)
 
@@ -2101,9 +2094,8 @@ defmodule Opus.ProgramsTest do
       assert standing == second.id
     end
 
-    # A grant of a program's tools stands on the row as a login grant
-    # does: its removal names it, and blocks it in the delete's
-    # transaction.
+    # A grant of a program's tools stands on the row: its removal names
+    # it, and blocks it in the delete's transaction.
     test "removing a program names and asks again the grants of its tools",
          %{ctx: ctx, admin: admin} do
       vault_entry(ctx)
@@ -2139,12 +2131,12 @@ defmodule Opus.ProgramsTest do
     end
 
     # Removing a program ends its sessions and retires its folder, and every
-    # grant that binds it asks again: the confirmation says so, and names
-    # them, before it is given. The grants' bindings go with the row, and a
-    # run under them is refused for its consent.
+    # grant of its tools asks again: the confirmation says so, and names
+    # them, before it is given.
     test "a removal asks, names the grants that use it, and asks them again",
          %{ctx: ctx, admin: admin, row: row} do
-      ctx = harness_member!(ctx, row.id)
+      ctx = %{ctx | origin: :interactive}
+      tools_granted!(ctx, "reagent:local.tool-user", "claude")
       {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
       actor = Sanctum.Context.actor(ctx)
       delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "claude"})
@@ -2157,10 +2149,7 @@ defmodule Opus.ProgramsTest do
                "resource" => "claude",
                "details" => %{
                  "folder" => folder,
-                 "grants_asking_again" => [
-                   "agent:local.harness",
-                   "catalyst:local.harnessbrain"
-                 ]
+                 "grants_asking_again" => ["reagent:local.tool-user"]
                }
              } = preview(person, id)
 
@@ -2169,31 +2158,8 @@ defmodule Opus.ProgramsTest do
       Sanctum.TestContext.prove!(person, id)
       assert {:ok, %{deleted: "claude"}} = delete.(%{person | confirmation_id: id})
 
-      bound =
-        Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef, where: r.mcp_server_id == ^row.id)
-        |> Arca.Repo.all()
-
-      assert bound == []
-
-      for source <- ["catalyst:local.harnessbrain", "agent:local.harness"] do
-        assert {:ok, [%{status: "needs_consent"}]} =
-                 Arca.ProfileStorage.list_for_source(actor, source)
-      end
-
-      # A run of the brain stands on no grant now: it is refused for its
-      # consent, and nothing reaches the row that is gone.
-      Sanctum.TestContext.ready!(ctx.athanor_id)
-
-      assert {:error, refused} =
-               Aqua.Ops.call_tool("execution", ctx, %{
-                 "action" => "run",
-                 "reference" => "catalyst:local.harnessbrain",
-                 "type" => "catalyst",
-                 "input" => %{"operation" => "models", "params" => %{}}
-               })
-
-      assert Sanctum.Refusals.render(refused) =~ "needs_consent"
-      refute_received {:session, "open", _message, _fields}
+      assert {:ok, [%{status: "needs_consent"}]} =
+               Arca.ProfileStorage.list_for_source(actor, "reagent:local.tool-user")
     end
 
     # A row whose stored hosts do not read has no record, so its removal
