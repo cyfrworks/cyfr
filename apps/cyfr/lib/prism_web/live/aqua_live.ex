@@ -45,11 +45,10 @@ defmodule PrismWeb.AquaLive do
   is asked for its program's listing (`Aqua.program_listing/2`) on each
   read of the setup: it is signed in once that answers, and its refusal
   (a program with no sign-in is refused) says what is left to do. The
-  crew: for each connected brain no crew member runs on, the member CYFR
-  suggests for it (`Aqua.crew_suggestion/1`), made only when the person
-  picks a model from the brain's own listing, an effort where that model
-  lists efforts and, on a program, an access its driver lists, and
-  presses Make, which asks nothing; more by hand with + New crew member.
+  crew: the form that makes a crew member (`AgentsComponent.member_form/1`),
+  under the name the person gives it, on a connected harness or key, with
+  a model and the options that one lists; Make asks nothing, and as many
+  members run on one harness as the person makes.
   Aqua: which crew member it runs on, whose brain, model and options Aqua
   takes, which asks nothing either (or, with
   `agent=<name>`, which connected brain that crew member runs on). A
@@ -96,9 +95,9 @@ defmodule PrismWeb.AquaLive do
       # Aqua's setup: whether the address asked for it and for whom, the
       # brains it offers, the ones ticked, each connected brain's answer to
       # its `models` call, how the roster's brains stand, the program
-      # brains and each one's listing, the model picked on each row
-      # suggested on an API brain with that model's efforts, and whether its
-      # last step leads to the administrator's own setup.
+      # brains and each one's listing, what the form that makes a crew
+      # member holds, and whether its last step leads to the
+      # administrator's own setup.
       |> assign(:setup_asked, false)
       |> assign(:setup_for, nil)
       |> assign(:providers, nil)
@@ -108,7 +107,7 @@ defmodule PrismWeb.AquaLive do
       |> assign(:programs, nil)
       |> assign(:listings, %{})
       |> assign(:listing, :idle)
-      |> assign(:suggested, %{})
+      |> assign(:member_draft, AgentsComponent.empty_draft())
       |> assign(:admin_next, admin_next?(socket.assigns[:context]))
 
     # Subscribe before the load asks whether the athanor is ready: a fill
@@ -246,10 +245,10 @@ defmodule PrismWeb.AquaLive do
     {:noreply, socket |> assign(:agents_read, read) |> ask_listings(unasked)}
   end
 
-  # The model picked on each setup row suggested on an API brain, with the
-  # efforts the roster read from its brain's `describe` for that model.
-  def handle_info({:suggested, suggested}, socket),
-    do: {:noreply, assign(socket, :suggested, suggested)}
+  # What the form that makes a crew member holds, as the roster keeps it:
+  # the setup shows the same form.
+  def handle_info({:member_draft, draft}, socket),
+    do: {:noreply, assign(socket, :member_draft, draft)}
 
   # A connected brain's answer to its one `models` call, for the focus it
   # was asked under.
@@ -650,12 +649,8 @@ defmodule PrismWeb.AquaLive do
   program brains CYFR ships (`Opus.Programs.Definition.brains/0`), each
   with what it needs; one step for each brain ticked; each connected
   brain's answer to its `models` call, and a program brain signed in once
-  its program's listing answers. The crew: for each connected brain no
-  crew member runs on, the member CYFR suggests for it (`Aqua.crew_suggestion/1`),
-  with a model from that brain's own listing, the efforts that model
-  lists (a program's from its listing, an API brain's from its
-  `describe` once a model is picked), a program's Access selection
-  (`AgentsComponent.access_select/1`) and its Make, and the
+  its program's listing answers. The crew: the form that makes a crew
+  member (`AgentsComponent.member_form/1`), and the
   members made, each ready or what it waits on. Aqua: which crew member
   it runs on, done once Aqua reads ready, and until then the state of
   the crew's grant it waits on, with its Grant
@@ -672,7 +667,8 @@ defmodule PrismWeb.AquaLive do
   attr :agents_read, :any, required: true
   attr :setup_for, :string, default: nil
   attr :models_by_provider, :map, required: true
-  attr :suggested, :map, default: %{}
+  attr :catalyst_refs, :map, required: true
+  attr :member_draft, :map, required: true
   attr :athanor, :any, required: true
   attr :admin_next, :boolean, required: true
 
@@ -701,8 +697,12 @@ defmodule PrismWeb.AquaLive do
         Enum.any?(providers, &(&1.state == :ready)) or signed_in != []
       )
       |> assign(
-        :suggestions,
-        suggestions(providers, signed_in, assigns, taken(read[:brains] || []))
+        :crew_brains,
+        AgentsComponent.brains(
+          assigns.models_by_provider,
+          assigns.catalyst_refs,
+          assigns.listings
+        )
       )
       |> assign(:unconnected, read[:unconnected] || [])
       |> assign(:soul, read[:soul])
@@ -886,67 +886,13 @@ defmodule PrismWeb.AquaLive do
             Connect a brain first.
           </p>
 
-          <%!-- A suggested member is made only when the person presses
-                Make, with the model they pick from its brain's own
-                listing; connecting a brain makes none. --%>
-          <form
-            :for={{suggested, brain, models, efforts, access, picked} <- @suggestions}
-            id={"aqua-setup-suggest-" <> suggested.name}
-            phx-change="suggest_model"
-            phx-submit="make_member"
-            phx-target="#aqua-agents"
-            class="space-y-1"
-          >
-            <input type="hidden" name="brain" value={brain} />
-            <p class="font-medium text-gray-100">{suggested.title}</p>
-            <div class="flex flex-wrap items-center gap-2">
-              <select
-                name="model"
-                aria-label={"Model for " <> suggested.title}
-                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
-              >
-                <option value="">Choose a model</option>
-                <option :for={{id, name} <- models} value={id} selected={id == picked}>
-                  {name}
-                </option>
-              </select>
-              <select
-                :if={efforts != []}
-                name="effort"
-                aria-label={"Effort for " <> suggested.title}
-                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
-              >
-                <option value="">{default_effort(brain)}</option>
-                <option :for={effort <- efforts} value={effort}>{effort}</option>
-              </select>
-              <AgentsComponent.access_select
-                :if={access != []}
-                access={access}
-                name="access"
-                label={"Access for " <> suggested.title}
-              />
-              <input
-                type="text"
-                name="description"
-                aria-label={"Good at, for " <> suggested.title}
-                placeholder="Good at (optional)"
-                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
-              />
-              <input
-                type="text"
-                name="avoid"
-                aria-label={"Avoid, for " <> suggested.title}
-                placeholder="Avoid (optional)"
-                class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
-              />
-              <button
-                type="submit"
-                class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
-              >
-                Make {suggested.title}
-              </button>
-            </div>
-          </form>
+          <%!-- A member is made only when the person presses Make, under
+                the name they give it; connecting a brain makes none. --%>
+          <AgentsComponent.member_form
+            id="aqua-setup-new-member"
+            brains={@crew_brains}
+            draft={@member_draft}
+          />
 
           <ul :if={@members != []} id="aqua-setup-members" class="space-y-1">
             <li :for={member <- @members} id={"aqua-setup-made-" <> member.name}>
@@ -957,10 +903,6 @@ defmodule PrismWeb.AquaLive do
               <% end %>
             </li>
           </ul>
-
-          <p :if={@connected?} class="text-gray-500">
-            For another member on a brain, make one with + New crew member below.
-          </p>
         </section>
 
         <section id="aqua-setup-step-aqua" data-done={to_string(@soul_ready)} class="space-y-2">
@@ -991,7 +933,7 @@ defmodule PrismWeb.AquaLive do
                 value={member.name}
                 selected={member.name == @member}
               >
-                {member.title}
+                {member.label}
               </option>
             </select>
             <p class="mt-1 text-gray-500">
@@ -1114,49 +1056,6 @@ defmodule PrismWeb.AquaLive do
         do: {program, models}
   end
 
-  # The brains the crew's members run on, each by its identity: a catalyst
-  # by its versionless reference, a program by its row's name.
-  defp taken(brains) do
-    for brain <- brains, into: MapSet.new() do
-      case brain do
-        {:program, name} -> {:program, name}
-        {:catalyst, ref} -> {:catalyst, identity(ref)}
-      end
-    end
-  end
-
-  # The member suggested for each connected brain no crew member runs on,
-  # with the value its Make names the brain by, the models its own listing
-  # gave (a catalyst's from the catalogue, a program's from its program),
-  # the efforts it offers, the access choices a program's driver lists and
-  # the model picked on its row: a program's efforts are its listing's, a
-  # catalyst's those its `describe` declares for the model picked, none
-  # before one is; a catalyst has no access choice.
-  defp suggestions(providers, signed_in, assigns, taken) do
-    catalysts =
-      for %{state: :ready, provider: provider, ref: ref} <- providers,
-          not MapSet.member?(taken, {:catalyst, identity(ref)}),
-          {picked, efforts} = Map.get(assigns.suggested, provider, {nil, []}),
-          do:
-            {Aqua.crew_suggestion({:catalyst, provider}), "catalyst:" <> provider,
-             Enum.map(Map.get(assigns.models_by_provider, provider) || [], &{&1, &1}), efforts,
-             [], picked}
-
-    programs =
-      for %{name: name, title: title} <- signed_in,
-          not MapSet.member?(taken, {:program, name}),
-          {:ok, %{models: models} = listing} <- [assigns.listings[name]],
-          do:
-            {Aqua.crew_suggestion({:program, name, title}), "program:" <> name,
-             Enum.map(models, &{&1.id, &1.name}), Map.get(listing, :efforts, []),
-             Map.get(listing, :access, []), nil}
-
-    catalysts ++ programs
-  end
-
-  defp default_effort("program:" <> _name), do: "The program's default effort"
-  defp default_effort(_catalyst), do: "The model's default effort"
-
   defp program_need_line(%{title: title}),
     do: "a plan: to run #{title} in its own folder, signed in to your own plan"
 
@@ -1248,7 +1147,8 @@ defmodule PrismWeb.AquaLive do
         agents_read={@agents_read}
         setup_for={@setup_for}
         models_by_provider={@models_by_provider}
-        suggested={@suggested}
+        catalyst_refs={@catalyst_refs}
+        member_draft={@member_draft}
         athanor={@athanor}
         admin_next={@admin_next}
       />

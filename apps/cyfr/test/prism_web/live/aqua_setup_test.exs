@@ -181,13 +181,13 @@ defmodule PrismWeb.AquaSetupTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  # CYFR's own seed ships no crew member: the setup suggests the member on
-  # the brain the shared key connects, which the person makes with a model
-  # from that brain's own listing. A member holds no grant of its own:
+  # CYFR's own seed ships no crew member: the setup offers to make one on
+  # the brain the shared key connects, which the person makes under a
+  # name of their own with a model from that brain's own listing. A member holds no grant of its own:
   # making it asks nothing and it is ready at once, and choosing it for
   # Aqua asks nothing and leaves Aqua's grant as it was. Aqua then
-  # answers. A member made is suggested no more, and a second Make of it
-  # writes nothing.
+  # answers. A second Make under the name of the member made writes
+  # nothing.
   #
   # Without Aqua's grant (here, the person revoked it), the brain's own
   # grant standing, choosing grants nothing either: the step for Aqua is
@@ -196,7 +196,7 @@ defmodule PrismWeb.AquaSetupTest do
   # and Aqua answers.
   for grant <- [:standing, :revoked] do
     @tag seated: false, grant: grant
-    test "a newcomer with no crew makes the member the setup suggests on the shared key's brain, " <>
+    test "a newcomer with no crew makes a member under a name of their own on the shared key, " <>
            "chooses it for Aqua, and Aqua answers, Aqua's grant #{grant}",
          %{conn: conn, ctx: ctx, port: port, grant: grant} do
       walk!(conn, ctx, port, grant)
@@ -211,8 +211,9 @@ defmodule PrismWeb.AquaSetupTest do
     end
 
     person = %{ctx | origin: :interactive}
-    member = "chat-fixture"
-    suggest = "#aqua-setup-suggest-" <> member
+    member = "Opus"
+    key = "catalyst:chat-fixture"
+    new = "#aqua-setup-new-member"
     made = "#aqua-setup-made-" <> member
     sheet = ~s(#system-layer-dialog [data-kind="grant"])
 
@@ -224,28 +225,31 @@ defmodule PrismWeb.AquaSetupTest do
 
     {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
-    # The shared key's brain stands connected; the crew's step suggests a
-    # member on it, with the brain's own models, and Aqua's waits for one.
+    # The shared key's brain stands connected; the crew's step offers to
+    # make a member on it, with the key's own models once it is chosen, and
+    # Aqua's waits for one.
     assert has_element?(view, ~s(#aqua-setup-brain-chat-fixture[data-state="ready"]))
     assert has_element?(view, ~s([data-test="setup-aqua-waits"]), "Make a crew member first.")
 
     wait_until(
-      fn -> has_element?(view, suggest <> ~s| select option[value]:not([value=""])|) end,
+      fn -> has_element?(view, new <> ~s| select[name="brain"] option[value="#{key}"]|) end,
       10_000,
-      "the suggestion's models"
+      "the key offered"
     )
+
+    view |> form(new, %{"name" => member, "brain" => key}) |> render_change()
 
     [model | _] =
       for option <-
             view
             |> render()
             |> LazyHTML.from_fragment()
-            |> LazyHTML.query(suggest <> " select option"),
+            |> LazyHTML.query(new <> ~s| select[name="model"] option|),
           [value] = LazyHTML.attribute(option, "value"),
           value != "",
           do: value
 
-    view |> form(suggest, %{"model" => model}) |> render_submit()
+    view |> form(new, %{"name" => member, "brain" => key, "model" => model}) |> render_submit()
 
     # Made, it asks nothing, holds no grant of its own and is ready, since
     # its brain is connected.
@@ -254,7 +258,6 @@ defmodule PrismWeb.AquaSetupTest do
 
     wait_until(fn -> has_element?(view, made, "ready.") end, 10_000, "the member ready")
     refute has_element?(view, sheet)
-    refute has_element?(view, suggest)
     assert {:ok, []} = Arca.ConsentStorage.profiles(actor, Prima.AgentRef.ref(member))
 
     # Chosen for Aqua, it asks nothing either, and Aqua's grant is what it
@@ -318,8 +321,8 @@ defmodule PrismWeb.AquaSetupTest do
     sent = Fixture.upstream_request!()
     assert for({"x-api-key", value} <- sent.headers, do: value) == [@key]
 
-    # Read again, the setup suggests no member on that brain, and a second
-    # Make of the one it made writes nothing over it.
+    # Read again, a second Make under the member's name writes nothing over
+    # it.
     {again, _html} = mount_athanor(conn, "/aqua?setup=1")
 
     wait_until(
@@ -330,13 +333,12 @@ defmodule PrismWeb.AquaSetupTest do
       "the catalogue read again"
     )
 
-    refute has_element?(again, suggest)
     {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.crew_file(member))
 
     html =
       again
       |> with_target("#aqua-agents")
-      |> render_submit("make_member", %{"brain" => "catalyst:" <> member, "model" => model})
+      |> render_submit("make_member", %{"name" => member, "brain" => key, "model" => model})
 
     assert html =~ "Make failed: Crew member &#39;#{member}&#39; already exists"
     assert {:ok, ^bytes} = Arca.get(actor, Compendium.AquaPath.crew_file(member))

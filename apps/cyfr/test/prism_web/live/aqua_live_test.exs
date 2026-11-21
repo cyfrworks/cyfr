@@ -720,19 +720,14 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-restore-result", "aqua/crew/scout.md")
     end
 
-    test "a new crew member is a name: it is offered the soul's tools and holds none of its own",
+    test "a crew member made here is offered the soul's tools and holds none of its own",
          %{conn: conn, ctx: ctx} do
       {:ok, %{"tools" => soul_tools}} = get_agent(ctx, "aqua")
       assert soul_tools != []
+      :ok = open_brain!(ctx)
 
       {view, _html} = mount_athanor(conn, "/aqua")
-
-      html =
-        view
-        |> form("form[phx-submit=editor_create_member]", %{"name" => "scout"})
-        |> render_submit()
-
-      assert html =~ "Added &#39;scout&#39; to the crew"
+      assert make!(view, "#aqua-new-member", "scout", "catalyst:open", "open-1") =~ "Made scout."
 
       assert {:ok, %{"type" => "crew", "tools" => ^soul_tools}} = get_agent(ctx, "scout")
 
@@ -742,8 +737,10 @@ defmodule PrismWeb.AquaLiveTest do
         Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.crew_file("scout"))
 
       refute bytes =~ "tools:"
-      # Nor a prompt: its file is its frontmatter alone.
-      assert bytes == "---\ntitle: scout\n---\n"
+      # Nor a prompt: its file is its frontmatter alone, its title and what
+      # it runs on.
+      assert bytes ==
+               "---\ntitle: scout\ncatalyst_ref: catalyst:local.open\nmodel: open-1\n---\n"
 
       # Its card says what it is good at and what to avoid, and edits no
       # capabilities, which are the soul's, and no prompt, which only the
@@ -1031,18 +1028,27 @@ defmodule PrismWeb.AquaLiveTest do
             "Nothing kept yet.",
             "No scrolls here.",
             "Shipped files",
-            "+ New crew member"
+            "New crew member",
+            "to make a crew member"
           ] do
         refute html =~ line, "the dead render says #{inspect(line)}"
       end
 
-      # Loaded, the sections are there, and the form with them.
+      # Loaded, the sections are there, and where a member is made with
+      # them: with no harness or key connected, the line that says to
+      # connect one, in place of a form that could make nothing.
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "Shipped files"
       assert has_element?(view, "#aqua-about")
       assert has_element?(view, "#aqua-notes")
       assert has_element?(view, "#aqua-scrolls")
-      assert has_element?(view, "form[phx-submit=editor_create_member]")
+      refute has_element?(view, "#aqua-new-member")
+
+      assert has_element?(
+               view,
+               ~s([data-test="new-member-waits"]),
+               "Connect a harness or a key in the setup above to make a crew member."
+             )
     end
 
     # A store that cannot give the agents: the page says so in place of the
@@ -1062,7 +1068,7 @@ defmodule PrismWeb.AquaLiveTest do
              )
 
       refute render(view) =~ "No soul here"
-      refute has_element?(view, "form[phx-submit=editor_create_member]")
+      refute has_element?(view, ~s(#aqua-new-member, [data-test="new-member-waits"]))
       refute has_element?(view, "button[phx-click=install_catalyst]")
       refute has_element?(view, "button[phx-click=open_consent]")
     end
@@ -1513,13 +1519,17 @@ defmodule PrismWeb.AquaLiveTest do
              ]
     end
 
-    test "a new crew member's card offers Connect, which opens the setup for that member",
-         %{conn: conn} do
-      {view, _html} = mount_athanor(conn, "/aqua")
+    test "the card of a crew member with no brain offers Connect, which opens the setup for " <>
+           "that member",
+         %{conn: conn, ctx: ctx} do
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "proofreader",
+          "title" => "proofreader"
+        })
 
-      view
-      |> form("form[phx-submit=editor_create_member]", %{"name" => "proofreader"})
-      |> render_submit()
+      {view, _html} = mount_athanor(conn, "/aqua")
 
       settled(fn -> has_element?(view, "#aqua-card-proofreader") end, "the new card")
       assert has_element?(view, "#aqua-card-proofreader", "No brain yet")
@@ -1582,9 +1592,9 @@ defmodule PrismWeb.AquaLiveTest do
         "the brain connected"
       )
 
-      # A connected brain is a member's: the crew's step suggests one on it,
-      # and Aqua's waits for a member to run on.
-      assert has_element?(view, "#aqua-setup-suggest-open")
+      # A connected brain is a member's: the crew's step waits on none, and
+      # Aqua's waits for a member to run on. (The form offers a key once
+      # its provider lists models, which this one's does not.)
       refute has_element?(view, ~s([data-test="setup-crew-waits"]))
       assert has_element?(view, ~s([data-test="setup-aqua-waits"]), "Make a crew member first.")
       refute has_element?(view, "#aqua-setup-member")
@@ -1625,7 +1635,7 @@ defmodule PrismWeb.AquaLiveTest do
                "Connect a brain first."
              )
 
-      refute has_element?(view, ~s(form[id^="aqua-setup-suggest-"]))
+      refute has_element?(view, "#aqua-setup-new-member")
       refute has_element?(view, "#aqua-setup-members")
       assert has_element?(view, ~s(#aqua-setup-step-aqua[data-done="false"]), "3. Aqua")
 
@@ -1661,10 +1671,11 @@ defmodule PrismWeb.AquaLiveTest do
     # A program brain whose row stands: while its program's listing is
     # refused, as a program with no sign-in refuses it, the setup says so
     # in the refusal's words, its step signs it in on its terminal, and no
-    # member is suggested on it; once the listing answers it is signed in,
-    # and the crew's step suggests the member CYFR suggests for it, with the
-    # models its program lists. Make with a model writes that member on the
-    # program and asks nothing; with none it writes nothing. Chosen for
+    # member can be made on it; once the listing answers it is signed in,
+    # and the crew's step offers it among the harnesses, with the models
+    # its program lists once it is chosen. Make with a name and a model
+    # writes that member on the program and asks nothing; with either
+    # missing it writes nothing. Chosen for
     # Aqua, the member asks nothing and Aqua's grant stays as it was, and
     # Aqua answers on the program. Without Aqua's grant (the person revoked
     # it), choosing grants nothing either: the step for Aqua is not done
@@ -1672,8 +1683,8 @@ defmodule PrismWeb.AquaLiveTest do
     # there, the step is done and Aqua answers.
     for grant <- [:standing, :revoked] do
       @tag grant: grant
-      test "a program brain signs in on the setup, Make writes the member it suggests, and Aqua " <>
-             "answers on it, Aqua's grant #{grant}",
+      test "a program brain signs in on the setup, Make writes the member the person names, " <>
+             "and Aqua answers on it, Aqua's grant #{grant}",
            %{conn: conn, ctx: ctx, grant: grant} do
         on_exit(fn ->
           Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => nil})
@@ -1702,7 +1713,9 @@ defmodule PrismWeb.AquaLiveTest do
         row = brain_row!(ctx, name)
         brain = "#aqua-setup-brain-" <> name
         step = "#aqua-setup-step-program-" <> name
-        suggest = "#aqua-setup-suggest-" <> name
+        new = "#aqua-setup-new-member"
+        harness = "program:" <> name
+        member = "Opus"
 
         {view, _html} = mount_athanor(conn, "/aqua?setup=1")
         view |> element(brain <> " input") |> render_click()
@@ -1723,89 +1736,125 @@ defmodule PrismWeb.AquaLiveTest do
                  "Set up #{name}"
                )
 
-        refute has_element?(view, suggest)
+        refute has_element?(view, new)
         assert has_element?(view, ~s([data-test="setup-crew-waits"]), "Connect a brain first.")
 
-        # Signed in: its listing answers.
+        # Signed in: its listing answers, and the form offers it as a
+        # harness, by its title; the form below the setup is the same one.
         reread_setup(view)
-        lists!(fake, row, fn -> has_element?(view, suggest) end)
+        offered = ~s( select[name="brain"] optgroup[label="Harnesses"] option)
+        lists!(fake, row, fn -> has_element?(view, new <> offered) end)
+        assert choices(view, new <> offered) == [{harness, title}]
+        assert choices(view, "#aqua-new-member" <> offered) == [{harness, title}]
         assert has_element?(view, brain <> ~s([data-state="signed_in"]), "signed in")
         assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="true"]))
         refute has_element?(view, step)
         refute has_element?(view, ~s([data-test="setup-crew-waits"]))
 
-        assert choices(view, suggest <> ~s( select[name="model"] option)) == [
+        # No model is offered before a harness is chosen.
+        refute has_element?(view, new <> ~s( select[name="model"]))
+        view |> form(new, %{"name" => member, "brain" => harness}) |> render_change()
+
+        assert choices(view, new <> ~s( select[name="model"] option)) == [
                  {"", "Choose a model"},
                  {"default", "Default (recommended)"},
                  {"opus", "Opus"},
                  {"haiku", "Haiku"}
                ]
 
-        assert has_element?(view, suggest <> ~s( button[type="submit"]), "Make #{title}")
+        assert has_element?(view, new <> ~s( button[type="submit"]), "Make crew member")
+        # What the form holds, the form below the setup holds too.
+        assert has_element?(view, ~s(#aqua-new-member input[name="name"][value="#{member}"]))
 
-        # No model, no member.
-        assert view |> form(suggest, %{"model" => ""}) |> render_submit() =~
-                 "Choose a model first."
+        # No name, no harness or no model, no member.
+        for {sent, said} <- [
+              {%{"name" => " ", "model" => "opus"}, "Give the crew member a name first."},
+              {%{"brain" => "", "model" => "opus"}, "Choose a harness or key first."},
+              {%{"model" => ""}, "Choose a model first."}
+            ] do
+          assert view
+                 |> with_target("#aqua-agents")
+                 |> render_submit(
+                   "make_member",
+                   Map.merge(%{"name" => member, "brain" => harness}, sent)
+                 ) =~ said
+        end
 
-        assert {:error, _} = get_agent(ctx, name)
+        assert {:error, _} = get_agent(ctx, member)
 
-        # A member is its brain, its model, its effort and its access: the
-        # row offers the efforts the program lists and the access choices its
+        # A member is its harness, its model, its effort and its access: the
+        # form offers the efforts the program lists and the access choices its
         # driver lists, in the driver's words, closed while it offers one and
         # carried as a hidden value; what it is good at and should avoid are
         # the person's to write, or to leave empty.
-        assert texts(view, suggest <> ~s( select[name="effort"] option)) ==
-                 ["The program's default effort", "low", "high", "max"]
+        assert texts(view, new <> ~s( select[name="options[effort]"] option)) ==
+                 ["default", "low", "high", "max"]
 
-        assert choices(view, suggest <> ~s( select[name="access"][disabled] option)) == [
+        assert choices(view, new <> ~s( select[name="options[access]"][disabled] option)) == [
                  {"default", "Default mode"}
                ]
 
         assert has_element?(
                  view,
-                 suggest <> ~s( input[type="hidden"][name="access"][value="default"])
+                 new <> ~s( input[type="hidden"][name="options[access]"][value="default"])
                )
 
-        # An access the driver does not list writes nothing, and the row
+        # An access the driver does not list writes nothing, and the form
         # shows the driver's own choices again.
         assert view
-               |> form(suggest)
-               |> render_submit(%{"model" => "opus", "access" => "plan"}) =~
+               |> form(new)
+               |> render_submit(%{"model" => "opus", "options" => %{"access" => "plan"}}) =~
                  "That brain does not offer what was chosen — choose again."
 
-        assert {:error, _} = get_agent(ctx, name)
+        assert {:error, _} = get_agent(ctx, member)
 
         assert has_element?(
                  view,
-                 suggest <> ~s| input[name="description"][placeholder="Good at (optional)"]|
+                 new <> ~s| input[name="description"][placeholder="Good at (optional)"]|
                )
 
         assert has_element?(
                  view,
-                 suggest <> ~s| input[name="avoid"][placeholder="Avoid (optional)"]|
+                 new <> ~s| input[name="avoid"][placeholder="Avoid (optional)"]|
                )
 
         view
-        |> form(suggest, %{
+        |> form(new, %{
           "model" => "opus",
-          "effort" => "high",
+          "options" => %{"effort" => "high"},
           "description" => " Builds things "
         })
         |> render_submit()
 
+        # The member is the person's name for it, never the harness's.
         assert {:ok,
                 %{
-                  "title" => ^title,
+                  "title" => ^member,
                   "program" => ^name,
                   "catalyst_ref" => nil,
                   "model" => "opus",
                   "description" => "Builds things",
                   "avoid" => "",
                   "options" => %{"effort" => "high", "access" => "default"}
-                }} = get_agent(ctx, name)
+                }} = get_agent(ctx, member)
 
-        assert render(view) =~ "Made #{title}."
-        settled(fn -> has_element?(view, "#aqua-setup-made-" <> name, "ready.") end, "ready")
+        assert {:error, _} = get_agent(ctx, name)
+        assert render(view) =~ "Made #{member}."
+        settled(fn -> has_element?(view, "#aqua-setup-made-" <> member, "ready.") end, "ready")
+
+        # Made, the form holds nothing, and its card names its harness.
+        refute has_element?(view, new <> ~s( input[name="name"][value]))
+
+        assert choices(view, "#aqua-card-#{member}-harness option[selected]") == [
+                 {harness, title}
+               ]
+
+        # Aqua's Runs on names the member with its harness and model, here
+        # and on Aqua's card.
+        for runs_on <- ["#aqua-setup-member", "#aqua-card-aqua-member"] do
+          assert {member, "#{member} — #{title}, opus"} in choices(view, runs_on <> " option")
+        end
+
         refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
         # Chosen for Aqua: nothing is asked, and Aqua's grant is what it was.
@@ -1813,7 +1862,7 @@ defmodule PrismWeb.AquaLiveTest do
         granted = aqua_grant!(actor)
         # Revoked, Aqua holds no grant at all; standing, the one the fill made.
         assert granted == [] == (grant == :revoked)
-        view |> form("#aqua-setup-member", %{"member" => name}) |> render_change()
+        view |> form("#aqua-setup-member", %{"member" => member}) |> render_change()
 
         if grant == :revoked do
           line = ~s([data-test="setup-aqua-grant"])
@@ -1836,7 +1885,7 @@ defmodule PrismWeb.AquaLiveTest do
 
         settled(
           fn ->
-            has_element?(view, ~s([data-test="setup-aqua-done"]), "Aqua runs on #{title}.")
+            has_element?(view, ~s([data-test="setup-aqua-done"]), "Aqua runs on #{member}.")
           end,
           "Aqua seated"
         )
@@ -1868,77 +1917,43 @@ defmodule PrismWeb.AquaLiveTest do
       end
     end
 
-    # Several members may run on one brain: once the member suggested for
-    # it is made, the suggestion is gone, and + New crew member makes
-    # another, whose card's pick puts it on the same brain.
-    test "after the member suggested on a brain is made, another made by hand runs on the same " <>
-           "brain, and none is suggested again",
+    # As many members run on one harness or key as the person makes, each
+    # under the name they gave it; CYFR names none after what it runs on.
+    test "two members made on one key run on it under the names the person gave them",
          %{conn: conn, ctx: ctx} do
       :ok = open_brain!(ctx)
-      suggest = "#aqua-setup-suggest-open"
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
-      assert choices(view, suggest <> ~s( select[name="model"] option)) == [
-               {"", "Choose a model"},
-               {"open-1", "open-1"}
-             ]
+      for {form, name} <- [{"#aqua-setup-new-member", "Opus"}, {"#aqua-new-member", "Sonnet"}] do
+        assert make!(view, form, name, "catalyst:open", "open-1") =~ "Made #{name}."
 
-      view |> form(suggest, %{"model" => "open-1"}) |> render_submit()
-
-      assert {:ok, %{"catalyst_ref" => "catalyst:local.open", "model" => "open-1"}} =
-               get_agent(ctx, "open")
-
-      settled(fn -> not has_element?(view, suggest) end, "the suggestion made")
-
-      view
-      |> form("form[phx-submit=editor_create_member]", %{"name" => "second"})
-      |> render_submit()
-
-      settled(fn -> has_element?(view, "#aqua-card-second-model") end, "the second card")
-
-      view
-      |> element("#aqua-card-second-model")
-      |> render_change(%{"name" => "second", "value" => "open::open-1"})
-
-      for name <- ~w(open second) do
-        assert {:ok, %{"catalyst_ref" => "catalyst:local.open", "model" => "open-1"}} =
+        assert {:ok, %{"title" => ^name, "catalyst_ref" => "catalyst:local.open"}} =
                  get_agent(ctx, name)
       end
 
+      assert {:error, _} = get_agent(ctx, "open")
+
+      # The form is still there for a third, and a name a member holds is
+      # refused as a member that exists.
+      assert make!(view, "#aqua-new-member", "Opus", "catalyst:open", "open-1") =~
+               "Make failed: Crew member &#39;Opus&#39; already exists"
+
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
-      assert has_element?(view, "#aqua-setup-made-open")
-      assert has_element?(view, "#aqua-setup-made-second")
-      assert has_element?(view, "#aqua-card-open") and has_element?(view, "#aqua-card-second")
-      refute has_element?(view, ~s(form[id^="aqua-setup-suggest-"]))
+      assert has_element?(view, "#aqua-setup-made-Opus")
+      assert has_element?(view, "#aqua-setup-made-Sonnet")
+      assert has_element?(view, "#aqua-card-Opus") and has_element?(view, "#aqua-card-Sonnet")
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # An API brain's efforts are what its `describe` declares for the model
-    # picked on its row, read as a card reads a brain's options: none
-    # before a model is picked, none for a model that declares none, and
-    # Make writes the one chosen, as it does for a program.
-    test "an API brain's row offers the efforts of the model picked, and Make writes the one " <>
-           "chosen",
+    # A key's options are what its `describe` declares for the model
+    # picked in the form, read as a card reads a brain's options: none
+    # before a model is picked, none for a model that declares none, every
+    # one it declares for one that does, and Make writes each one chosen,
+    # cast to its kind, as it does for a program.
+    test "the form offers every option a key declares for the model picked, and Make writes " <>
+           "the ones chosen",
          %{conn: conn, ctx: ctx} do
-      # Installed, as the card's read of a brain's options lists it.
-      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "open", "0.1.0",
-        manifest: %{
-          "name" => "open",
-          "type" => "catalyst",
-          "version" => "0.1.0",
-          "publisher" => "local",
-          "contracts" => [Prima.Model.chat_contract()]
-        },
-        wasm: Cyfr.Test.Guests.wasm(:catalyst)
-      )
-
-      grant!(ctx, "catalyst:local.open", %{bindings: []})
-
-      remember_catalogue!(%{"open" => ["open-1", "open-2"]}, %{
-        "open" => "catalyst:local.open:0.1.0"
-      })
-
-      described!(ctx, "catalyst:local.open:0.1.0", %{
+      described_open!(ctx, %{
         "open-1" => [
           %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]},
           %{"name" => "budget", "kind" => "integer", "default" => 4}
@@ -1946,81 +1961,81 @@ defmodule PrismWeb.AquaLiveTest do
         "open-2" => []
       })
 
-      suggest = "#aqua-setup-suggest-open"
-      effort = suggest <> ~s( select[name="effort"])
+      new = "#aqua-setup-new-member"
+      effort = new <> ~s( select[name="options[effort]"])
+      budget = new <> ~s( input[name="options[budget]"][type="number"])
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
-      assert has_element?(view, suggest)
+      choose!(view, new, "Opus", "catalyst:open")
       refute has_element?(view, effort)
-      # An API brain has no access to choose.
-      refute has_element?(view, suggest <> ~s( [name="access"]))
+      # A key has no access to choose.
+      refute has_element?(view, new <> ~s( [name="options[access]"]))
 
-      view |> form(suggest, %{"model" => "open-1"}) |> render_change()
-      settled(fn -> has_element?(view, effort) end, "the model's efforts")
-      assert texts(view, effort <> " option") == ["The model's default effort", "low", "high"]
-      assert has_element?(view, suggest <> ~s( option[value="open-1"][selected]))
+      pick = %{"name" => "Opus", "brain" => "catalyst:open"}
+      view |> form(new, Map.put(pick, "model", "open-1")) |> render_change()
+      settled(fn -> has_element?(view, effort) end, "the model's options")
+      assert texts(view, effort <> " option") == ["default", "low", "high"]
+      assert has_element?(view, budget <> ~s|[placeholder="default (4)"]|)
+      assert has_element?(view, new <> ~s( option[value="open-1"][selected]))
 
-      view |> form(suggest, %{"model" => "open-2"}) |> render_change()
-      settled(fn -> not has_element?(view, effort) end, "no efforts for open-2")
+      view |> form(new, Map.put(pick, "model", "open-2")) |> render_change()
+      settled(fn -> not has_element?(view, effort) end, "no options for open-2")
+      refute has_element?(view, budget)
 
-      view |> form(suggest, %{"model" => "open-1"}) |> render_change()
-      settled(fn -> has_element?(view, effort) end, "open-1's efforts again")
-      view |> form(suggest, %{"model" => "open-1", "effort" => "high"}) |> render_submit()
+      view |> form(new, Map.put(pick, "model", "open-1")) |> render_change()
+      settled(fn -> has_element?(view, effort) end, "open-1's options again")
+
+      view
+      |> form(new, Map.merge(pick, %{"options" => %{"effort" => "high", "budget" => "9"}}))
+      |> render_submit()
 
       assert {:ok,
               %{
                 "catalyst_ref" => "catalyst:local.open",
                 "model" => "open-1",
-                "options" => %{"effort" => "high"}
-              }} = get_agent(ctx, "open")
+                "options" => %{"effort" => "high", "budget" => 9}
+              }} = get_agent(ctx, "Opus")
 
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # Make writes an effort only if the model it names offers it: one left
+    # Make writes an option only if the model it names offers it: one left
     # from the model picked before, sent with another that offers none
-    # (or whose efforts have not answered yet), writes nothing, says to
-    # choose again, and the row then shows that model's own choices.
+    # (or whose options have not answered yet), writes nothing, says to
+    # choose again, and the form then shows that model's own choices.
     test "Make refuses an effort the model it names does not offer, and writes the member " <>
            "once chosen again",
          %{conn: conn, ctx: ctx} do
-      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "open", "0.1.0",
-        manifest: %{
-          "name" => "open",
-          "type" => "catalyst",
-          "version" => "0.1.0",
-          "publisher" => "local",
-          "contracts" => [Prima.Model.chat_contract()]
-        },
-        wasm: Cyfr.Test.Guests.wasm(:catalyst)
-      )
-
-      grant!(ctx, "catalyst:local.open", %{bindings: []})
-
-      remember_catalogue!(%{"open" => ["open-1", "open-2"]}, %{
-        "open" => "catalyst:local.open:0.1.0"
-      })
-
-      described!(ctx, "catalyst:local.open:0.1.0", %{
+      described_open!(ctx, %{
         "open-1" => [%{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]}],
         "open-2" => []
       })
 
-      suggest = "#aqua-setup-suggest-open"
-      effort = suggest <> ~s( select[name="effort"])
+      new = "#aqua-setup-new-member"
+      effort = new <> ~s( select[name="options[effort]"])
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      choose!(view, new, "Opus", "catalyst:open")
+      pick = %{"name" => "Opus", "brain" => "catalyst:open"}
 
-      view |> form(suggest, %{"model" => "open-1"}) |> render_change()
+      view |> form(new, Map.put(pick, "model", "open-1")) |> render_change()
       settled(fn -> has_element?(view, effort) end, "open-1's efforts")
 
       # Switched to open-2 as Make is pressed, open-1's effort still chosen.
-      html = view |> form(suggest, %{"model" => "open-2", "effort" => "high"}) |> render_submit()
+      html =
+        view
+        |> with_target("#aqua-agents")
+        |> render_submit(
+          "make_member",
+          Map.merge(pick, %{"model" => "open-2", "options" => %{"effort" => "high"}})
+        )
+
       assert html =~ "That brain does not offer what was chosen — choose again."
       refute html =~ "Made "
-      assert {:error, _} = get_agent(ctx, "open")
-      assert has_element?(view, suggest <> ~s( option[value="open-2"][selected]))
+      assert {:error, _} = get_agent(ctx, "Opus")
+      assert has_element?(view, new <> ~s( option[value="open-2"][selected]))
+      assert has_element?(view, new <> ~s( input[name="name"][value="Opus"]))
       settled(fn -> not has_element?(view, effort) end, "open-2's own choices")
 
-      view |> form(suggest, %{"model" => "open-2"}) |> render_submit()
+      view |> form(new, Map.put(pick, "model", "open-2")) |> render_submit()
 
       assert {:ok,
               %{
@@ -2028,9 +2043,136 @@ defmodule PrismWeb.AquaLiveTest do
                 "model" => "open-2",
                 "options" => options
               }} =
-               get_agent(ctx, "open")
+               get_agent(ctx, "Opus")
 
       assert options == %{}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # A member's card names the harness or key it runs on as a field of
+    # its own, and changes it: moved, the member has no model yet, its
+    # card offers the new one's own models and options, and an option the
+    # new one does not list is taken off in the same write.
+    test "a card names the member's harness or key and moves it to another, whose models and " <>
+           "options it then offers",
+         %{conn: conn, ctx: ctx} do
+      Cyfr.Test.SeedBundle.lay!(~w(files http))
+      :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+      :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+      {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+      {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+
+      described_open!(ctx, %{
+        "open-1" => [
+          %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]},
+          %{"name" => "budget", "kind" => "integer"}
+        ],
+        "open-2" => []
+      })
+
+      fake = backends!()
+      %{name: program, title: title} = Opus.Programs.Definition.brain("claude-code")
+      row = brain_row!(ctx, program)
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "Opus",
+          "title" => "Opus",
+          "catalyst_ref" => "catalyst:local.open",
+          "model" => "open-1",
+          "options" => %{"effort" => "high", "budget" => 9}
+        })
+
+      field = "#aqua-card-Opus-harness"
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      lists!(fake, row, fn ->
+        has_element?(view, field <> ~s( option[value="program:#{program}"]))
+      end)
+
+      assert has_element?(view, field, "Harness or key")
+
+      assert choices(view, field <> " option") == [
+               {"program:" <> program, title},
+               {"catalyst:open", "open"}
+             ]
+
+      assert choices(view, field <> " option[selected]") == [{"catalyst:open", "open"}]
+
+      assert model_choices(view, "Opus") == [
+               {"open::open-1", "open-1"},
+               {"open::open-2", "open-2"}
+             ]
+
+      # Moved to the program: no model yet, the effort the program lists
+      # too is kept, and the option it does not list is taken off.
+      view |> form(field, %{"harness" => "program:" <> program}) |> render_change()
+
+      assert {:ok,
+              %{
+                "program" => ^program,
+                "catalyst_ref" => nil,
+                "model" => nil,
+                "options" => %{"effort" => "high"}
+              }} = get_agent(ctx, "Opus")
+
+      settled(
+        fn -> has_element?(view, field <> ~s( option[value="program:#{program}"][selected])) end,
+        "the card on the program"
+      )
+
+      assert model_choices(view, "Opus") == [
+               {"", "The program's default"},
+               {"default", "Default (recommended)"},
+               {"opus", "Opus"},
+               {"haiku", "Haiku"}
+             ]
+
+      assert texts(view, "#aqua-card-Opus-option-effort option") ==
+               ["default", "low", "high", "max"]
+
+      assert has_element?(view, ~s(#aqua-card-Opus-access [data-test="access"]))
+
+      # Moved back to the key: no model yet, and every option goes, since
+      # a key declares its options for a model.
+      view |> form(field, %{"harness" => "catalyst:open"}) |> render_change()
+
+      assert {:ok,
+              %{
+                "program" => nil,
+                "catalyst_ref" => "catalyst:local.open",
+                "model" => nil,
+                "options" => options
+              }} = get_agent(ctx, "Opus")
+
+      assert options == %{}
+
+      settled(
+        fn -> has_element?(view, field <> ~s( option[value="catalyst:open"][selected])) end,
+        "the card on the key"
+      )
+
+      assert model_choices(view, "Opus") == [
+               {"-", "Choose a model"},
+               {"open::open-1", "open-1"},
+               {"open::open-2", "open-2"}
+             ]
+
+      refute has_element?(view, "#aqua-card-Opus-access")
+
+      # One not connected here writes nothing.
+      before = get_agent(ctx, "Opus")
+
+      assert view
+             |> with_target("#aqua-agents")
+             |> render_change("editor_set_harness", %{
+               "name" => "Opus",
+               "harness" => "program:openai-codex"
+             }) =~ "That brain is not connected here."
+
+      assert get_agent(ctx, "Opus") == before
       Cyfr.Test.Sandbox.end_views()
     end
 
@@ -2041,15 +2183,15 @@ defmodule PrismWeb.AquaLiveTest do
       :ok = open_brain!(ctx)
       actor = Sanctum.Context.actor(ctx)
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
-      view |> form("#aqua-setup-suggest-open", %{"model" => "open-1"}) |> render_submit()
-      settled(fn -> has_element?(view, "#aqua-card-open", "yours") end, "the made member's card")
-      refute has_element?(view, "#aqua-card-open", "shipped")
-      {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.crew_file("open"))
+      make!(view, "#aqua-setup-new-member", "Opus", "catalyst:open", "open-1")
+      settled(fn -> has_element?(view, "#aqua-card-Opus", "yours") end, "the made member's card")
+      refute has_element?(view, "#aqua-card-Opus", "shipped")
+      {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.crew_file("Opus"))
 
       view |> element("#aqua-restore button[phx-click=restore_shipped]") |> render_click()
       assert has_element?(view, "#aqua-restore-result", "Kept (1)")
-      assert render(view) =~ "aqua/crew/open.md"
-      assert {:ok, ^bytes} = Arca.get(actor, Compendium.AquaPath.crew_file("open"))
+      assert render(view) =~ "aqua/crew/Opus.md"
+      assert {:ok, ^bytes} = Arca.get(actor, Compendium.AquaPath.crew_file("Opus"))
       Cyfr.Test.Sandbox.end_views()
     end
 
@@ -2628,7 +2770,10 @@ defmodule PrismWeb.AquaLiveTest do
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
       assert has_element?(view, ~s(#aqua-setup-brain-open[data-state="ready"]))
       assert has_element?(view, "#aqua-setup-member", "Which crew member does Aqua run on?")
-      assert has_element?(view, ~s(#aqua-setup-member option[value="mine"]), "Mine")
+      # Each member is named with the harness or key and the model Aqua
+      # would run on.
+      assert {"mine", "Mine — open, open-1"} in choices(view, "#aqua-setup-member option")
+      assert {"mine", "Mine — open, open-1"} in choices(view, "#aqua-card-aqua-member option")
 
       view |> form("#aqua-setup-member", %{"member" => "mine"}) |> render_change()
 
@@ -2673,14 +2818,23 @@ defmodule PrismWeb.AquaLiveTest do
       athanor = seated_athanor()
 
       :ok =
-        PrismWeb.ModelCatalog.remember(athanor.id, %{"models" => %{"kept" => ["kept-model-1"]}})
+        PrismWeb.ModelCatalog.remember(athanor.id, %{
+          "models" => %{"kept" => ["kept-model-1"]},
+          "refs" => %{"kept" => "catalyst:local.kept"}
+        })
 
       on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor.id) end)
 
-      # A member on a key's model, whose card's picker reads the catalogue.
+      # The form that makes a member reads the catalogue: its key is
+      # offered, with its model once chosen.
       :ok = member!(ctx, "explorer")
-      {view, html} = mount_athanor(conn, "/aqua")
-      assert html =~ "kept-model-1"
+      {view, _html} = mount_athanor(conn, "/aqua")
+      choose!(view, "#aqua-new-member", "Opus", "catalyst:kept")
+
+      assert choices(view, ~s(#aqua-new-member select[name="model"] option)) == [
+               {"", "Choose a model"},
+               {"kept-model-1", "kept-model-1"}
+             ]
 
       # The grant is asked in the page's system layer; confirmed there, the
       # page hears it.
@@ -2859,7 +3013,7 @@ defmodule PrismWeb.AquaLiveTest do
              ]
 
       refute has_element?(view, "[id^=aqua-card-]")
-      refute has_element?(view, "form[phx-submit=editor_create_member]")
+      refute has_element?(view, ~s(#aqua-new-member, [data-test="new-member-waits"]))
       refute render(view) =~ "No soul here"
       assert has_element?(view, "#aqua-notes")
     end
@@ -3069,6 +3223,51 @@ defmodule PrismWeb.AquaLiveTest do
       {option |> LazyHTML.attribute("value") |> List.first(),
        option |> LazyHTML.text() |> String.trim()}
     end)
+  end
+
+  # The form `form` with a name and a harness or key chosen, once the form
+  # offers that one.
+  defp choose!(view, form, name, brain) do
+    settled(
+      fn -> has_element?(view, form <> ~s( select[name="brain"] option[value="#{brain}"])) end,
+      "#{brain} offered"
+    )
+
+    view |> form(form, %{"name" => name, "brain" => brain}) |> render_change()
+  end
+
+  # A crew member made in `form`: its name, its harness or key and a model
+  # that one lists; what the page then says.
+  defp make!(view, form, name, brain, model) do
+    choose!(view, form, name, brain)
+
+    view
+    |> form(form, %{"name" => name, "brain" => brain, "model" => model})
+    |> render_submit()
+  end
+
+  # The brain `open` installed and granted, as the card's read of a
+  # brain's options lists it, with two models and the options its
+  # `describe` declares for each.
+  defp described_open!(ctx, options_by_model) do
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "open", "0.1.0",
+      manifest: %{
+        "name" => "open",
+        "type" => "catalyst",
+        "version" => "0.1.0",
+        "publisher" => "local",
+        "contracts" => [Prima.Model.chat_contract()]
+      },
+      wasm: Cyfr.Test.Guests.wasm(:catalyst)
+    )
+
+    grant!(ctx, "catalyst:local.open", %{bindings: []})
+
+    remember_catalogue!(%{"open" => ["open-1", "open-2"]}, %{
+      "open" => "catalyst:local.open:0.1.0"
+    })
+
+    described!(ctx, "catalyst:local.open:0.1.0", options_by_model)
   end
 
   # The brain `open`, which needs nothing of the person, granted, with the

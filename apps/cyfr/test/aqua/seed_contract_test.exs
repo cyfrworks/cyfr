@@ -123,42 +123,10 @@ defmodule Aqua.SeedContractTest do
   end
 
   test "the seed ships no crew member: a new athanor's crew is the person's to make" do
-    # The setup suggests a member on each brain the person connects
-    # (`Aqua.Crew.suggestion/1`); the seed itself lays none.
+    # The person makes each member, under a name they give it; the seed
+    # lays none.
     refute File.exists?(Path.join(@seed, Compendium.AquaPath.crew_dirname()))
     assert Enum.map(seed_agents(), & &1.name) == [Compendium.AquaPath.soul_name()]
-  end
-
-  test "every brain the seed can connect has a suggested crew member, named for its brain" do
-    catalysts =
-      for manifest <-
-            Path.wildcard(
-              Path.join(@seed, "../components/catalysts/local/*/*/cyfr-manifest.json")
-            ),
-          %{"name" => name} = shape = Jason.decode!(File.read!(manifest)),
-          Prima.Model.chat_contract() in Map.get(shape, "contracts", []),
-          uniq: true,
-          do: name
-
-    assert catalysts != []
-
-    # Each shipped catalyst's member is named for it and titled as CYFR
-    # ships it; nothing is said of what it is good at: the person writes it.
-    for provider <- catalysts do
-      assert %{name: ^provider, title: title} =
-               suggested = Aqua.Crew.suggestion({:catalyst, provider})
-
-      assert title != provider, provider
-      assert suggested |> Map.keys() |> Enum.sort() == [:name, :title]
-    end
-
-    for %{name: name, title: title} <- Opus.Programs.Definition.brains() do
-      assert Aqua.Crew.suggestion({:program, name, title}) == %{name: name, title: title}
-    end
-
-    # A brain CYFR does not ship is offered under a name a member can hold.
-    assert %{name: "acme-mistral", title: "acme.mistral"} =
-             Aqua.Crew.suggestion({:catalyst, "acme.mistral"})
   end
 
   test "the shipped soul is offered its crew, and the search gate passes through as written" do
