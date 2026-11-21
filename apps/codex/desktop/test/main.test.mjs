@@ -315,3 +315,21 @@ test("cyfr's own locked naming a CYFR main never kept to leaves it keeping to no
   assert.match(chooser.webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//)
   assert.equal(navigate(chooser, HOME + "/threads").prevented, true)
 })
+
+test("a confirmation window loads the address it was opened for, whatever frame the engine names, and nothing else", async () => {
+  await signedIn()
+  const page = content()
+  const url = "http://127.0.0.1:7340/confirm?ref=cfm_1"
+  assert.equal(page.webContents.opens({url}).action, "allow")
+  const child = new BrowserWindow({webPreferences: {session: page.webContents.session}})
+  page.webContents.emit("did-create-window", child)
+  const load = (to, initiator) => {
+    const event = {url: to, isMainFrame: true, initiator, prevented: false, preventDefault() { this.prevented = true }}
+    child.webContents.emit("will-navigate", event)
+    return !event.prevented
+  }
+  const canvas = {processId: 1, routingId: 20} // a frame of the opener, as the engine named it
+  assert.equal(load(url, canvas), true, "its first load, of the address the handler opened it for")
+  assert.equal(load("http://127.0.0.1:7340/passkey?ref=pk_1", canvas), false, "a later load a frame asks for")
+  assert.equal(page.webContents.opens({url: "https://evil.example/"}).action, "deny")
+})

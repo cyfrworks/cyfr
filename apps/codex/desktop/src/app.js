@@ -176,11 +176,16 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   }
 
   // A window of the content's own (`which`: the content window or a
-  // confirmation window) asks step about each of its loads.
-  function confine(contents, which, lost) {
+  // confirmation window) asks step about each of its loads. A
+  // confirmation window's first load is of the address the window handler
+  // opened it for (`first`), which that handler decided: the engine names
+  // some frame of the opener as its initiator, not reliably the top one.
+  function confine(contents, which, lost, first = null) {
     const ask = (event) => {
+      const opening = first !== null && event.isMainFrame && event.url === first
+      if (event.isMainFrame) first = null
       const decided = on({type: "navigate", window: which, url: event.url, target: event.isMainFrame ? "top" : "frame",
-        asker: askerOf(event, contents), showing: contents.getURL()})
+        asker: opening ? "top" : askerOf(event, contents), showing: contents.getURL()})
       if (!decided.allow) event.preventDefault()
     }
     contents.on("will-navigate", ask)
@@ -205,16 +210,20 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     // not say which frame asked; Prism's own frame rules refuse every frame
     // it serves a window and the top frame (Compendium.Tincture.Rules), and
     // the asker check refuses a frame's navigation of the top frame.
+    let opening = null
     contents.setWindowOpenHandler(({url}) => {
       if (on({type: "open-window", url}).open !== "child") return {action: "deny"}
+      opening = url
       return {action: "allow", overrideBrowserWindowOptions: {
         width: 520, height: 640, parent: w, autoHideMenuBar: true, webPreferences: {...SECURE, session: contentSession}
       }}
     })
     contents.on("did-create-window", (opened) => {
+      const first = opening
+      opening = null
       children.add(opened)
       opened.on("closed", () => children.delete(opened))
-      confine(opened.webContents, "child", "a window's page stopped")
+      confine(opened.webContents, "child", "a window's page stopped", first)
     })
     contents.on("did-finish-load", () => {
       if (content === w) on({type: "page", url: contents.getURL()})
