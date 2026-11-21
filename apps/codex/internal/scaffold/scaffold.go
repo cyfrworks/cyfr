@@ -253,7 +253,7 @@ var Guides = []string{
 
 // IsManaged returns true for files that are maintained by cyfr and should be
 // overwritten during an update (guides, WIT interface definitions, the
-// keeper's seccomp profile, and the shipped Aqua soul, crew and scrolls).
+// keeper's seccomp profile, and the shipped Aqua soul and scrolls).
 // It is the one policy for what `cyfr update` overwrites, snapshots and
 // `cyfr restore` puts back.
 func IsManaged(path string) bool {

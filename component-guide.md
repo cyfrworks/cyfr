@@ -28,7 +28,7 @@ your-project/
         │   ├── catalysts/local/   #   name/version/catalyst.wasm + cyfr-manifest.json + src/
         │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
         │   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
-        ├── aqua/          # The athanor's Aqua: the soul, its roles, its scrolls
+        ├── aqua/          # The athanor's Aqua: the soul, its crew, its scrolls
         ├── threads/ # Chat attachment files
         ├── notes/         # What was kept out of a thread — host-only, never a guest scope
         ├── payloads/      # Retained execution inputs and results — host-only, by digest
@@ -1449,12 +1449,13 @@ counted in its storage. The rules:
   (`forked_from`); when a newer version of that upstream line is present
   locally, status flags it `upstream_superseded`.
 
-The Aqua tree — the soul, its roles and its scrolls — follows the same
-model: provisioning copies the shipped tree into the athanor's `aqua/`, an
-edited file reads as edited by its bytes, and the `aqua` tool's `reset`
-action (from the Aqua page or over MCP) restores edited copies — one role by name, or every one —
-while keeping the roles and scrolls the athanor made; `skill_reset` restores
-one scroll.
+The Aqua tree — the soul and its scrolls, and the crew members the
+athanor makes — follows the same model: provisioning copies the shipped
+tree, the soul and the scrolls, into the athanor's `aqua/`, an edited file
+reads as edited by its bytes, and the `aqua` tool's `reset` action (from
+the Aqua page or over MCP) restores edited copies — one by name, or every
+one — while keeping the crew members and scrolls the athanor made;
+`skill_reset` restores one scroll.
 
 ### The Files page
 
