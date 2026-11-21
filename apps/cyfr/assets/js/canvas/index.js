@@ -298,9 +298,8 @@ const Canvas = {
     const strip = event.target && typeof event.target.closest === "function" ? event.target.closest(SHELF) : null
     if (!strip) return
     this._swipe = {pointer: event.pointerId, x: event.clientX, y: event.clientY}
-    // A press on one of the shelf's buttons keeps its click, which a
-    // capture by the shelf would take.
-    if (event.target.closest("button")) return
+    // Shelf buttons and links need their clicks. Capturing on the shelf would take them.
+    if (event.target.closest("button, a")) return
     if (typeof strip.setPointerCapture === "function") strip.setPointerCapture(event.pointerId)
   },
 
