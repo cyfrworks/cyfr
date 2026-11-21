@@ -14,6 +14,10 @@
 #   box.py confirmation DATABASE REF
 #       prints, as JSON, the state and confirming client of the pending
 #       confirmation REF in CYFR's SQLite database DATABASE
+#   box.py athanors DATABASE
+#       prints, as JSON, each athanor of CYFR's SQLite database DATABASE
+#       with how its fill ended: when it was provisioned, or the failure
+#       recorded on it
 # Chrome keeps its profile's databases locked while it runs, so each is
 # read from a copy, as anyone who copies the profile reads it. Chrome on
 # Linux without a keyring (the screen's labwc session has none) encrypts a
@@ -111,6 +115,12 @@ def confirmation(database, ref):
     return {"ref": ref, "state": row[0], "confirmed_client_id": row[1], "proof": row[2]}
 
 
+def athanors(database):
+    db = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    rows = db.execute("SELECT id, provisioned_at, provisioning_failure FROM athanors ORDER BY id").fetchall()
+    return [{"id": i, "provisioned_at": at, "provisioning_failure": failure} for i, at, failure in rows]
+
+
 def main(argv):
     if len(argv) == 5 and argv[1] == "cookie":
         print(cookie(argv[2], argv[3], argv[4]))
@@ -119,9 +129,11 @@ def main(argv):
             print(url)
     elif len(argv) == 4 and argv[1] == "confirmation":
         print(json.dumps(confirmation(argv[2], argv[3])))
+    elif len(argv) == 3 and argv[1] == "athanors":
+        print(json.dumps(athanors(argv[2])))
     else:
-        print("usage: box.py cookie PROFILE HOST NAME | visits PROFILE SINCE TEXT | confirmation DATABASE REF",
-              file=sys.stderr)
+        print("usage: box.py cookie PROFILE HOST NAME | visits PROFILE SINCE TEXT | confirmation DATABASE REF"
+              " | athanors DATABASE", file=sys.stderr)
         return 64
     return 0
 

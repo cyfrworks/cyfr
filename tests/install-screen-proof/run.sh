@@ -40,9 +40,10 @@
 #
 # After the script, this tree's cyfr takes the installed one's place, and
 # after init this tree's server image (scripts/image.sh's) takes the
-# release's in docker-compose.yml, stand-ins for a signed candidate, which
+# release's in docker-compose.yml and this tree's seed/aqua the release's
+# aqua/, stand-ins for a signed candidate, which
 # results.txt says (lib.sh, candidate_build and candidate_server_use);
-# candidate.txt records the tree's commit and both artifacts. Nothing reaches cyfr.run: each guest drops every packet to its
+# candidate.txt records the tree's commit and each artifact. Nothing reaches cyfr.run: each guest drops every packet to its
 # addresses, and the box serves its own account service, the directory and
 # registry it names (lib.sh, cyfr_run_guard, account_settings and
 # account_service).
@@ -433,6 +434,12 @@ sys.exit(0 if handle["errors"][0]["code"] == "HANDLE_NOT_FOUND" and not holder.g
   printf '\n' | guest_keys || fail "QMP did not press I saved it"
   sleep 15
   check "screenshot screen-prism.png" guest_screenshot screen-prism.png
+  athanors_filled
+  check "the sign-in filled the person's athanor, which is what grants them what the seed ships (the home holds $(tr -d '\n' <"$GUEST_DIR/athanors.json"))" \
+    python3 -I -c '
+import json, sys
+rows = json.load(open(sys.argv[1]))
+sys.exit(0 if rows and all(r["provisioned_at"] and not r["provisioning_failure"] for r in rows) else 1)' "$GUEST_DIR/athanors.json"
   shell_page saved
   check "the recovery code is gone from the screen once saved" sh -c '! grep -q "Your recovery code" "$1"' sh "$GUEST_DIR/shell-saved.html"
   guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/v1/handles/alice" >"$GUEST_DIR/handle-saved.json" 2>&1
@@ -593,6 +600,25 @@ confirm_page_until() {
 # confirm_page NAME: the shell's page asked for the confirmation
 # CONFIRM_REF names, in GUEST_DIR/shell-NAME.html.
 confirm_page() { guest_ssh "curl -s 'http://127.0.0.1:7340/confirm?ref=$CONFIRM_REF'" >"$GUEST_DIR/shell-$1.html" 2>&1; }
+
+# athanors_filled: the home's athanors, read from its SQLite database as
+# root into GUEST_DIR/athanors.json each 5 s until every fill has ended,
+# provisioned or failed, and there is one; the last read after 90 s
+# without that.
+athanors_filled() {
+  local closes
+  budget 90 || return 0
+  closes=$((SECONDS + BUDGET))
+  while :; do
+    guest_root_out "python3 -I /home/proof/box.py athanors /home/proof/cyfr/data/cyfr.db" >"$GUEST_DIR/athanors.json"
+    python3 -I -c '
+import json, sys
+rows = json.load(open(sys.argv[1]))
+sys.exit(0 if rows and all(r["provisioned_at"] or r["provisioning_failure"] for r in rows) else 1)' "$GUEST_DIR/athanors.json" 2>/dev/null && return 0
+    [ "$SECONDS" -lt "$closes" ] || return 0
+    sleep 5
+  done
+}
 
 # confirmation_state NAME REF: the home's record of the confirmation REF,
 # read from its SQLite database as root, in GUEST_DIR/confirmation-NAME.json.
