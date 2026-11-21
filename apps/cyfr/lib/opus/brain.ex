@@ -124,7 +124,9 @@ defmodule Opus.Brain do
       the key a holder of that session runs under: a holder there on the
       record's row whose session generation is the record's or older is
       ended first (`:forgotten`), so the box closes the driver's process
-      that ran the session before the one that forgets it opens; one of a
+      that ran the session before the one that forgets it opens, and the
+      backends service starts the forgetting driver under the thread's key
+      only once nothing of that process is left; one of a
       later generation is a successor, one on another row holds nothing
       of that row's folder, and the removal waits for either, staying
       owed until that holder ends. A thread that holds the record's

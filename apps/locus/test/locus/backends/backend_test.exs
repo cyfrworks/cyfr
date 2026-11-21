@@ -141,6 +141,41 @@ defmodule Locus.Backends.BackendTest do
     assert_receive {Backend, ^session, :vacated}, 5_000
   end
 
+  # A person's Close of a terminal, and every close a holder makes, is
+  # answered as soon as the process is asked to end: what waits for the
+  # process to be gone is the next open of its key (`Locus.Backends.Owners`).
+  test "a close answers at once, and again after its release bound, while its process runs", %{
+    supervisor: supervisor
+  } do
+    session =
+      start_session(supervisor, "echo up; exec cat", stop_grace_ms: 2_000, release_timeout_ms: 25)
+    assert read(session, 0, 1) == ["up"]
+    handle = :sys.get_state(session).handle
+
+    on_exit(fn ->
+      try do
+        :sys.resume(handle.server)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    :sys.suspend(handle.server)
+    :erlang.trace(session, true, [:receive])
+    assert {elapsed, :ok} = :timer.tc(fn -> Backend.close(session) end, :millisecond)
+    assert elapsed < 1_000
+    assert_receive {:trace, ^session, :receive, :release_timeout}, 5_000
+    :erlang.trace(session, false, [:receive])
+
+    assert {elapsed, :ok} = :timer.tc(fn -> Backend.close(session) end, :millisecond)
+    assert elapsed < 1_000
+    assert File.exists?("/proc/#{handle.pid}")
+    refute_received {Backend, ^session, :vacated}
+
+    :sys.resume(handle.server)
+    assert_receive {Backend, ^session, :vacated}, 5_000
+  end
+
   test "an exit of its own is a crash unless its status is 0, its status is answered, and its last lines stay readable",
        %{supervisor: supervisor} do
     crashed = start_session(supervisor, "echo last; exit 3")

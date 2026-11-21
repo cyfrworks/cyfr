@@ -8,7 +8,8 @@ defmodule Locus.Backends.Reservations do
   Data only: the owner table holds it and acts on what it answers.
 
   A reservation is a session's heir tag (`t:tag/0`: its ledger, its session,
-  its athanor, its memory bound and its kept home) and its state:
+  its athanor, its row, its session key, its memory bound and its kept
+  home) and its state:
 
   | State | Holds | Event | Next | Authority |
   |---|---|---|---|---|
@@ -34,6 +35,9 @@ defmodule Locus.Backends.Reservations do
 
   Every state holds the session's memory bound; every state but `reserved`
   holds a scratch session's uid of the pool, which only its process takes.
+  Every state but `reserved` stands for a process the launcher may still
+  run under its tag's row and key (`process?/4`). A tag that names no row
+  or key names a process of no key.
   """
 
   @typedoc "A session's heir tag, which a table that adopts it holds by."
@@ -41,6 +45,8 @@ defmodule Locus.Backends.Reservations do
           ledger: term(),
           session: key(),
           athanor: String.t(),
+          server: String.t(),
+          key: term(),
           memory_bytes: pos_integer(),
           home_id: String.t() | nil
         }
@@ -121,6 +127,22 @@ defmodule Locus.Backends.Reservations do
   @doc "Whether `key` holds a reservation."
   @spec held?(t(), key()) :: boolean()
   def held?(reservations, key), do: Map.has_key?(reservations, key)
+
+  @doc """
+  Whether the launcher may still run a process of the session key `key` of
+  `athanor`'s row `server`: a reservation past its open's preparation whose
+  tag names them.
+  """
+  @spec process?(t(), String.t(), String.t(), term()) :: boolean()
+  def process?(reservations, athanor, server, key) do
+    Enum.any?(reservations, fn
+      {_key, %{state: state, tag: %{athanor: ^athanor, server: ^server, key: ^key}}} ->
+        state != :reserved
+
+      _other ->
+        false
+    end)
+  end
 
   @doc "The bytes the reservations of the athanors `athanor?` takes hold."
   @spec held_bytes(t(), (String.t() -> boolean())) :: non_neg_integer()
