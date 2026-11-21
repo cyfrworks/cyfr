@@ -13,10 +13,11 @@ defmodule Arca.Schemas.Turn do
   node — a running turn whose holder is not local belongs to a peer, not to
   recovery.
 
-  `sent_by` is who opened the turn, `"person"` or an agent name, the one
-  a later send must match to steer it; `asking_thread_id` with
-  `request_id` is the reply address of a turn a crew request opened, and
-  the turn's terminal write records its reply for that address.
+  `sent_by` records who opened the turn, `"person"` or an agent name.
+  `Aqua.Runner` decides who can steer. The person Aqua opened an
+  interactive crew job for can steer it even when Aqua is its sender.
+  `asking_thread_id` and `request_id` give a crew job's reply address.
+  The turn's terminal write records its reply for that address.
   """
 
   use Ecto.Schema

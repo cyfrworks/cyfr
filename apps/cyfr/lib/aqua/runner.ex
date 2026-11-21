@@ -22,10 +22,10 @@ defmodule Aqua.Runner do
   the athanor being filled (`:not_provisioned`, nothing written), the
   engine being up (`:execution_unavailable`), and the queue having room
   (`:busy`). Only then is the message accepted, atomically with the
-  turn — or attached to the running or paused turn as a steer when its
-  user, sender, agent and origin are the turn's (`steer?/2`), or queued
-  behind it as a turn of its own. A request is accepted with the outbox
-  record that delivers it (`Aqua.Crew`), and room content opens nothing.
+  turn — or attached to the running or paused turn as a steer
+  (`steer?/2`), or queued behind it as a turn of its own. A request is
+  accepted with the outbox record that delivers it (`Aqua.Crew`), and
+  room content opens nothing.
   A `client_id` the thread already accepted answers the same identity.
 
   A send the crew's delivery consumer makes carries its receipt, which
@@ -131,6 +131,8 @@ defmodule Aqua.Runner do
 
   @registry Aqua.RunnerRegistry
   @supervisor Aqua.RunnerSupervisor
+  @aqua Prima.AgentRef.soul_name()
+  @person Admission.person()
   # Turns waiting behind the running one; beyond it a sender is told `:busy`.
   @queue_max 8
   # A runner with nothing to do for this long stops; the next send starts it again.
@@ -729,37 +731,43 @@ defmodule Aqua.Runner do
   defp send_of(%Context{} = ctx, name, opts) do
     %{
       user_id: ctx.user_id,
-      sent_by: Keyword.get(opts, :sent_by, Admission.person()),
+      sent_by: Keyword.get(opts, :sent_by, @person),
       agent: name,
       origin: ctx.origin,
-      job: job(Keyword.get(opts, :crew))
+      job: job(Keyword.get(opts, :crew)),
+      direct?: not Keyword.has_key?(opts, :request)
     }
   end
 
   @doc """
   Whether a send steers `turn`, the running or paused turn as the runner
-  holds it from its row: only when the send's user, sender (`sent_by`),
-  agent, origin and job all equal the turn's (`turns.requested_by`,
-  `turns.sent_by`, `turns.agent`, `turns.origin`, and the brain options
-  its options name), so a paused or recovered turn steers by the same
-  rule as a running one. Any other send is a turn of its own: an API
-  key's `programmatic` line never acts inside an `interactive` turn, a
-  request from the soul never joins one a person opened, and a turn keeps
-  the brain options it opened with.
+  holds it from its row. The user, agent and origin match. Ordinarily
+  the sender and job options also match. A person's direct interactive
+  post to a member can join a job Aqua handed to that member for them,
+  using the turn's pinned options. Each job Aqua hands over opens its
+  own turn. A paused or recovered turn uses the same rule.
   """
   @spec steer?(map(), %{
           user_id: String.t(),
           sent_by: String.t(),
           agent: String.t(),
           origin: atom(),
-          job: job()
+          job: job(),
+          direct?: boolean()
         }) ::
           boolean()
+  def steer?(
+        %{user_id: user_id, sent_by: @aqua, agent: agent} = turn,
+        %{user_id: user_id, sent_by: @person, agent: agent, origin: :interactive, direct?: true}
+      )
+      when is_binary(user_id) and agent != @aqua,
+      do: same_origin?(:interactive, turn)
+
   def steer?(
         %{user_id: user_id, sent_by: sent_by, agent: agent, job: job} = turn,
         %{user_id: user_id, sent_by: sent_by, agent: agent, origin: origin, job: job}
       )
-      when is_binary(sent_by),
+      when is_binary(sent_by) and (sent_by != @aqua or agent == @aqua),
       do: same_origin?(origin, turn)
 
   def steer?(_turn, _send), do: false
