@@ -60,7 +60,6 @@ defmodule Aqua.TapeTest do
         attempt: attempt.attempt,
         profile_id: "prof_x",
         consent_id: "consent_x",
-        agent_mode: "auto",
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 

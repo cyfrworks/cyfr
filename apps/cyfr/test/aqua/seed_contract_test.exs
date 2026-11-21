@@ -59,18 +59,13 @@ defmodule Aqua.SeedContractTest do
     workspace.list workspace.open workspace.report
   )
 
-  test "the shipped soul is offered exactly its shipped list, and names no mode" do
+  test "the shipped soul is offered exactly its shipped list" do
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     assert soul.tools == @shipped_tools
     assert length(soul.tools) == 90
     # The browser's switch is the person's alone: no member is offered it.
     refute "browser.turn_on" in soul.tools
-
-    # Aqua runs in the mode of the crew member it runs on
-    # (`Compendium.AquaAgent.seated/2`), so the soul's file names none.
-    {:ok, meta, _body} = Compendium.AquaAgent.parse_frontmatter(File.read!(soul_file()))
-    refute Map.has_key?(meta, "mode")
   end
 
   test "the shipped soul's list names no tool the catalog lacks" do
@@ -150,16 +145,15 @@ defmodule Aqua.SeedContractTest do
     # Each shipped catalyst's member is named for it and titled as CYFR
     # ships it; nothing is said of what it is good at: the person writes it.
     for provider <- catalysts do
-      assert %{name: ^provider, title: title, mode: "auto"} =
+      assert %{name: ^provider, title: title} =
                suggested = Aqua.Crew.suggestion({:catalyst, provider})
 
       assert title != provider, provider
-      assert suggested |> Map.keys() |> Enum.sort() == [:mode, :name, :title]
+      assert suggested |> Map.keys() |> Enum.sort() == [:name, :title]
     end
 
     for %{name: name, title: title} <- Opus.Programs.Definition.brains() do
-      assert Aqua.Crew.suggestion({:program, name, title}) ==
-               %{name: name, title: title, mode: "auto"}
+      assert Aqua.Crew.suggestion({:program, name, title}) == %{name: name, title: title}
     end
 
     # A brain CYFR does not ship is offered under a name a member can hold.
@@ -281,8 +275,8 @@ defmodule Aqua.SeedContractTest do
     end
   end
 
-  # Nothing asks Aqua's leave: each member's mode decides what of its
-  # offered tools runs. So no prose the Aqua tree ships, the soul's or a
+  # Nothing asks Aqua's leave: every tool a member is offered runs as it
+  # is called. So no prose the Aqua tree ships, the soul's or a
   # scroll's, promises a yes, a standing yes or an answer to
   # wait for, or tells a member to propose a call for one. A frame's
   # request to the person (`cyfr.request`) is the person's own prompt and
@@ -387,9 +381,9 @@ defmodule Aqua.SeedContractTest do
   end
 
   # A feed is the person's: the soul is offered the list and the binding
-  # and removal of one, and no press. Listing is a read, so a read-only
-  # member runs it; binding is external in kind, so a read-only member
-  # refuses it (`Aqua.Loop.Policy`).
+  # and removal of one, and no press. Listing is a read, which runs beside
+  # other reads; binding is external in kind, and runs alone
+  # (`Aqua.Loop.Policy.overlap/1`).
   test "the soul is offered the feeds' list, binding and removal, and no press" do
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 

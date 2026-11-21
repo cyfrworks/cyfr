@@ -57,20 +57,16 @@ defmodule Opus.Brain do
   holds (`started.held`).
 
   A `work` runs with the configuration its caller names, or the running
-  harness's own when it names none, with the turn's stored mode set in it
-  (below). One that differs from the configuration the running harness
-  was started with writes nothing: the driver's process is closed and a new one opened in the same
-  holder, `{:ok, :restarted}`, and the attendant starts it again, resuming.
-  A `post` or an `answer` never reaches a harness started in another mode
-  than its turn's stored one: it writes nothing and is refused.
-
-  The configuration's `read_only` is the holder's to set, never the
-  caller's: in every `start` and every `work` it is the mode the turn's
-  row stored when it started (`turns.agent_mode`), read with the binding, and a
-  read-only one also drops the harness's own `permission_mode` and
-  `harness_tools`. A mode switched between turns therefore makes the next
-  `work`'s configuration differ, and the program is started again in the
-  mode of the turn it now works for.
+  harness's own when it names none: the member's model and options, its
+  access among them, which the driver translates into the harness's own
+  settings (`brain_wire.json`). One that differs from the configuration
+  the running harness was started with writes nothing: the driver's
+  process is closed and a new one opened in the same holder, `{:ok,
+  :restarted}`, and the attendant starts it again, resuming. A member
+  whose access or effort changed between turns therefore runs the next
+  turn in a harness started with it. The configuration is the caller's
+  word to the driver and grants nothing: every call the harness asks for
+  is still decided by CYFR's gate.
 
   ## The binding to admitted work
 
@@ -138,8 +134,8 @@ defmodule Opus.Brain do
       and session, or not a removal.
     * **Discovery** (`models/2`) runs only for a person at a screen, an
       interactive caller of the row's athanor (`Opus.Programs.caller/1`),
-      for a brain's row of that athanor: the models and efforts the
-      harness itself lists. A turn's caller is a stranger to it.
+      for a brain's row of that athanor: the models, efforts and access
+      choices the harness's driver lists. A turn's caller is a stranger to it.
 
   A forgetting transaction answers the sessions it owed
   (`t:Arca.ThreadStorage.forgotten/0`), and its caller closes their holders
@@ -267,17 +263,15 @@ defmodule Opus.Brain do
   `answer`) under `binding`, read again from the store just before it is
   written (moduledoc). `opts`: `config`, the configuration a `work`'s turn
   runs with, the running harness's own when absent. Answers `:ok` once the
-  service took it, `{:ok, :restarted}` for a `work` whose configuration,
-  with the turn's stored mode set in it, differs from the running
-  harness's (nothing written; a new process runs), or `{:error, reason}` with
+  service took it, `{:ok, :restarted}` for a `work` whose configuration
+  differs from the running harness's (nothing written; a new process
+  runs), or `{:error, reason}` with
   nothing written: `:not_a_delivery` (a `models` or a `forget`, which no
   binding writes), `:busy` (before the `hello`, or while the last
   command's answer is outstanding), `:not_attached`, `:unreadable`,
   `:running` (a `start` while a harness runs), `:not_started`,
   `:not_this_work`, `:not_this_generation` (a `start` naming another
-  generation than the binding's), `:not_this_mode` (a `post` or an
-  `answer` whose turn's stored mode is not the running harness's),
-  `{:not_admitted, reason}`; or
+  generation than the binding's), `{:not_admitted, reason}`; or
   `{:error, :uncertain}`, a write that may have reached the driver, after
   which the session ends.
   """
@@ -387,9 +381,11 @@ defmodule Opus.Brain do
   end
 
   @doc """
-  The models and efforts the harness of the brain's row `row_id` lists,
-  for a person at a screen (moduledoc, "Two paths no turn admits"):
-  `{:ok, %{models: [%{id, name}], efforts: [effort]}}`; `{:error,
+  The models, efforts and access choices the driver of the brain's row
+  `row_id` lists, for a person at a screen (moduledoc, "Two paths no turn
+  admits"): `{:ok, %{models: [%{id, name}], efforts: [effort], access:
+  [%{id, name}]}}`, each access choice named in the driver's words;
+  `{:error,
   :not_interactive}` for any other caller, a turn's among them;
   `:not_standing` or `:unavailable` as `Opus.Programs.caller/1` answers;
   `{:error, :row_not_found}`, `:not_a_brain_row`, `:no_driver` or
@@ -399,7 +395,12 @@ defmodule Opus.Brain do
   not come.
   """
   @spec models(Sanctum.Context.t(), String.t()) ::
-          {:ok, %{models: [%{id: String.t(), name: String.t()}], efforts: [String.t()]}}
+          {:ok,
+           %{
+             models: [%{id: String.t(), name: String.t()}],
+             efforts: [String.t()],
+             access: [%{id: String.t(), name: String.t()}]
+           }}
           | {:error, term()}
   def models(%Sanctum.Context{athanor_id: athanor_id} = ctx, row_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
@@ -418,11 +419,19 @@ defmodule Opus.Brain do
              {:once, owner(athanor_id, row), %{"t" => "models", "id" => id}},
              @once_ms + @answer_margin_ms
            ) do
-        {:ok, %{"t" => "models", "id" => ^id, "models" => models, "efforts" => efforts}} ->
+        {:ok,
+         %{
+           "t" => "models",
+           "id" => ^id,
+           "models" => models,
+           "efforts" => efforts,
+           "access" => access
+         }} ->
           {:ok,
            %{
              models: Enum.map(models, &%{id: &1["id"], name: &1["name"]}),
-             efforts: efforts
+             efforts: efforts,
+             access: Enum.map(access, &%{id: &1["id"], name: &1["name"]})
            }}
 
         {:ok, %{"t" => "refused", "reason" => reason}} ->
@@ -1257,19 +1266,11 @@ defmodule Opus.Brain do
   defp deliver(state, binding, %{"t" => t} = command, opts) when is_binary(t) do
     with :ok <- this_place(state, binding),
          :ok <- in_turn(state, binding, command),
-         {:ok, turn} <- admitted(binding, t),
-         command = held(command, turn),
+         {:ok, _turn} <- admitted(binding, t),
          {:ok, line} <- encode(command) do
-      cond do
-        t == "start" or state.config == held_config(work_config(t, opts) || state.config, turn) ->
-          send_line(state, command, line)
-
-        t == "work" ->
-          restarted(state)
-
-        true ->
-          {:reply, {:error, :not_this_mode}, state}
-      end
+      if t == "work" and changed?(state.config, opts[:config]),
+        do: restarted(state),
+        else: send_line(state, command, line)
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -1277,28 +1278,10 @@ defmodule Opus.Brain do
 
   defp deliver(state, _binding, _command, _opts), do: {:reply, {:error, :unreadable}, state}
 
-  # Only a work runs with a configuration its caller names; every other
-  # delivery is compared under the running harness's own.
-  defp work_config("work", opts), do: opts[:config]
-  defp work_config(_delivery, _opts), do: nil
-
-  # A start's configuration as the holder sets it from the turn it is
-  # admitted for (moduledoc, "Writing").
-  defp held(%{"t" => "start"} = command, turn),
-    do: Map.put(command, "config", held_config(command["config"], turn))
-
-  defp held(command, _turn), do: command
-
-  # The configuration's `read_only` is the turn's stored mode, whatever
-  # the caller named; a read-only one carries none of the harness's own
-  # permission mode or tools, which the driver refuses beside it.
-  defp held_config(config, %{agent_mode: "read-only"}) do
-    (config || %{})
-    |> Map.drop(["permission_mode", "harness_tools"])
-    |> Map.put("read_only", true)
-  end
-
-  defp held_config(config, _auto), do: Map.put(config || %{}, "read_only", false)
+  # Only a work runs with a configuration its caller names, the running
+  # harness's own when it names none.
+  defp changed?(_running, nil), do: false
+  defp changed?(running, config), do: running != config
 
   # A binding is of this holder's athanor, thread and row, and of the
   # agent whose work opened it.

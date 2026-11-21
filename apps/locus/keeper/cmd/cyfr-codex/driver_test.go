@@ -700,18 +700,14 @@ func TestALineTheDriverCannotReadIsPassedOver(t *testing.T) {
 	}
 }
 
-// A start Codex cannot honour ends the driver before anything starts: a
-// read-only one, since Codex's read-only sandbox cannot start in the box,
-// a permission mode, the harness's own tools, a tool name Codex does not
-// take, its own `mcp` and `mcp__…` among them, or one named twice.
+// A start Codex cannot honour ends the driver before anything starts: the
+// harness's own tools, a tool name Codex does not take, its own `mcp` and
+// `mcp__…` among them, or one named twice.
 func TestAStartCodexCannotHonourEndsTheDriver(t *testing.T) {
 	tool := func(name string) []any {
 		return []any{map[string]any{"name": name, "description": "", "parameters": map[string]any{}}}
 	}
 	for name, start := range map[string]map[string]any{
-		"read-only":           {"t": "start", "gen": 0, "config": map[string]any{"read_only": true}},
-		"read-only resumed":   {"t": "start", "gen": 0, "session": "019a0000-0000-7000-8000-00000000aaaa", "config": map[string]any{"read_only": true}},
-		"a permission mode":   {"t": "start", "gen": 0, "config": map[string]any{"permission_mode": "plan"}},
 		"the harness's tools": {"t": "start", "gen": 0, "config": map[string]any{"harness_tools": []any{}}},
 		"a tool name":         {"t": "start", "gen": 0, "config": map[string]any{}, "tools": tool("files.read")},
 		"the name mcp":        {"t": "start", "gen": 0, "config": map[string]any{}, "tools": tool("mcp")},
@@ -732,24 +728,71 @@ func TestAStartCodexCannotHonourEndsTheDriver(t *testing.T) {
 		if matches, _ := filepath.Glob(filepath.Join(s.home, ".codex", "sessions", "*", "*", "*", "*")); len(matches) != 0 {
 			t.Fatalf("%s: no thread was started: %v", name, matches)
 		}
-		if strings.HasPrefix(name, "read-only") && !strings.Contains(s.stderr.String(), "cyfr-codex: Codex cannot run read-only inside CYFR, so nothing ran.\n") {
-			t.Fatalf("%s: the driver says why in words a person reads: %q", name, s.stderr.String())
-		}
 	}
 }
 
-// A start whose read_only is false starts the thread exactly as one with
-// no read_only: never asking, outside any sandbox of Codex's own.
-func TestAStartWhoseReadOnlyIsFalseRunsAsBefore(t *testing.T) {
-	for _, config := range []map[string]any{{}, {"read_only": false}} {
+// A start naming an access the driver does not list, fresh or resuming,
+// ends it with 2 before it starts any app-server, writing no line and
+// saying why on its standard error. The harness's command names nothing
+// here, so a start of it would say it did not start, as the listed
+// access's does.
+func TestAStartNamingAnAccessCodexDoesNotListEndsTheDriver(t *testing.T) {
+	for name, start := range map[string]map[string]any{
+		"an empty access":        {"t": "start", "gen": 0, "config": map[string]any{"access": ""}},
+		"another sandbox":        {"t": "start", "gen": 0, "config": map[string]any{"access": "workspace-write"}},
+		"another driver's":       {"t": "start", "gen": 0, "config": map[string]any{"access": "default"}},
+		"a resume of another":    {"t": "start", "gen": 0, "session": "019a0000-0000-7000-8000-00000000aaaa", "config": map[string]any{"access": "default"}},
+		"a case it does not use": {"t": "start", "gen": 0, "config": map[string]any{"access": "Full-Access"}},
+	} {
+		s := startDriverWith(t, t.TempDir(), []string{filepath.Join(t.TempDir(), "no-such-harness")})
+		s.expect("hello")
+		s.send(start)
+		if status := s.end(); status != 2 {
+			t.Fatalf("%s: the driver ends with 2: %d", name, status)
+		}
+		for e := range s.events {
+			t.Fatalf("%s: the driver writes no line after its hello: %v", name, e)
+		}
+		if got := s.stderr.String(); got != "cyfr-codex: "+unlistedAccess+"\n" {
+			t.Fatalf("%s: the driver says why, and starts nothing: %q", name, got)
+		}
+	}
+	s := startDriverWith(t, t.TempDir(), []string{filepath.Join(t.TempDir(), "no-such-harness")})
+	s.expect("hello")
+	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"access": "full-access"}})
+	if status := s.end(); status != 1 || !strings.Contains(s.stderr.String(), "cyfr-codex: the harness did not start") {
+		t.Fatalf("the listed access starts the harness (a positive control): %d %q", status, s.stderr.String())
+	}
+}
+
+// A start runs its thread in the access it names, or in the first the
+// driver lists when it names none, a resume as a fresh start: Codex's own
+// sandbox off and asking for nothing.
+func TestAStartRunsItsThreadInItsAccess(t *testing.T) {
+	t.Setenv("FAKE_NO_REPEAT", "1")
+	for name, config := range map[string]map[string]any{
+		"absent":      {},
+		"full access": {"access": "full-access"},
+	} {
 		s := startDriver(t)
-		startFresh(s, config)
+		session := startFresh(s, config)
 		work(s, "stp_work", "trn_1")
-		postText(s, "stp_post", "trn_1", "hello")
-		if said := saidOf(s.until("idle")); !strings.Contains(said, "policy never/danger-full-access,") {
-			t.Fatalf("%v: the thread never asks and runs outside Codex's sandbox: %q", config, said)
+		thread := sent(s, "stp_post", "trn_1")["thread"].(map[string]any)
+		if thread["sandbox"] != "danger-full-access" || thread["approvalPolicy"] != "never" {
+			t.Fatalf("%s: the thread starts outside Codex's sandbox, never asking: %v", name, thread)
 		}
 		s.end()
+
+		again := startDriverIn(t, s.home)
+		again.expect("hello")
+		again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": config, "system": "be brief"})
+		again.expect("started")
+		work(again, "stp_work_2", "trn_2")
+		resumed := sent(again, "stp_post_2", "trn_2")["thread"].(map[string]any)
+		if resumed["threadId"] != session || resumed["sandbox"] != "danger-full-access" || resumed["approvalPolicy"] != "never" {
+			t.Fatalf("%s: the thread resumes outside Codex's sandbox, never asking: %v", name, resumed)
+		}
+		again.end()
 	}
 }
 
@@ -1050,9 +1093,13 @@ func TestModelsAreListedWithOrWithoutAStart(t *testing.T) {
 		fmt.Sprint(listed["efforts"]) != "[low high medium]" {
 		t.Fatalf("every page of Codex's listing, with the efforts any model takes: %v", listed)
 	}
+	access := []any{map[string]any{"id": "full-access", "name": "Full access, no approvals"}}
+	if !reflect.DeepEqual(listed["access"], access) {
+		t.Fatalf("the listing's access is the one choice the driver honours: %v", listed["access"])
+	}
 	started(s, map[string]any{})
 	s.send(map[string]any{"t": "models", "id": "m2"})
-	if again := s.expect("models"); fmt.Sprint(again["models"]) != fmt.Sprint(listed["models"]) {
+	if again := s.expect("models"); fmt.Sprint(again["models"]) != fmt.Sprint(listed["models"]) || !reflect.DeepEqual(again["access"], access) {
 		t.Fatalf("a running app-server lists the same: %v", again)
 	}
 }

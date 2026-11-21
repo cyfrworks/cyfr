@@ -372,7 +372,7 @@ defmodule Sanctum.Consent.Authz do
   `authorize_interactive/1` is dropped here for all of them. What stands
   in for it is the chain's own gate: the authority's tool grant, minted
   from the caps a person consented to, was applied at the dispatch
-  chokepoint before this runs, and an action the member's mode runs
+  chokepoint before this runs, and an action the turn's policy runs
   reaches here on the strength of that consent alone. The surface half
   stays — only an `:oidc` session's chain gets
   through, so a key- or schedule-started run of the same formula is

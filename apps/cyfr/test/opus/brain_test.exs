@@ -16,10 +16,10 @@ defmodule Opus.BrainTest do
   that row and epoch, one closed denied or skipped, and a turn that is
   not running; a paused turn's
   proof writes a post or an answer of its own work and nothing else; a
-  stale open ends no successor. The configuration's `read_only` is the
-  stored turn's mode in every start and work, whatever the caller names,
-  and a work for a turn of the other mode starts the program again in
-  that mode. A line that does not read, one past the bound, one lost
+  stale open ends no successor. A start writes the caller's configuration
+  unchanged, the member's access among it, and a work whose configuration
+  differs from the running harness's, a later turn's changed access among
+  them, starts the program again with it. A line that does not read, one past the bound, one lost
   unread, a read the box refuses, the row's change, the driver's end, a
   lost answer to a write and a take-over each end the session, its box
   session closed.
@@ -108,8 +108,8 @@ defmodule Opus.BrainTest do
         turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 
-    # Running in the mode a start stores (`TurnStorage.start/3`).
-    set_turn(turn, status: "running", agent_mode: "auto")
+    # Running, as a start leaves it (`TurnStorage.start/3`).
+    set_turn(turn, status: "running")
     {:ok, turn} = TurnStorage.get(actor, turn.id)
     {:ok, thread} = Arca.ThreadStorage.get(actor, thread.id)
     {turn, thread}
@@ -157,10 +157,9 @@ defmodule Opus.BrainTest do
     later
   end
 
-  # `turn` running in `mode` with its `program.start` of `row` admitted:
-  # its binding.
-  defp admitted!(ctx, binding, turn, row, mode \\ "auto") do
-    set_turn(turn, status: "running", agent_mode: mode)
+  # `turn` running with its `program.start` of `row` admitted: its binding.
+  defp admitted!(ctx, binding, turn, row) do
+    set_turn(turn, status: "running")
     {:ok, turn} = TurnStorage.get(Sanctum.Context.actor(ctx), turn.id)
     step = start_step!(ctx, turn, row)
 
@@ -347,7 +346,7 @@ defmodule Opus.BrainTest do
       assert Brain.write(brain, binding, %{
                "t" => "start",
                "gen" => 0,
-               "config" => %{"read_only" => true}
+               "config" => %{"access" => "default"}
              }) ==
                {:error, :unavailable}
 
@@ -488,87 +487,53 @@ defmodule Opus.BrainTest do
     end
   end
 
-  describe "the configuration's mode" do
-    # What a caller names beside the stored mode: a model, and the
-    # harness's own permission mode and tools.
+  describe "the configuration" do
+    # What a caller names: the member's model and options, its access
+    # among them, and the harness's own tools.
     @named %{
       "model" => "opus",
-      "permission_mode" => "acceptEdits",
+      "effort" => "high",
+      "access" => "default",
       "harness_tools" => ["Read", "Grep"]
     }
 
-    # A work written as it came, on the process that was running: its
-    # configuration, held as the start's was, is the running one.
-    defp worked!(fake, row, brain, binding, work, config) do
+    # A work written as it came, on the process that was running.
+    defp worked!(fake, row, brain, binding, work, config, boot \\ "boot-one") do
       [{running, _}] = running_sessions(fake, row)
       assert :ok = Brain.write(brain, binding, work, config: config)
       assert sent() == work
-      accepted!(fake, row, brain, work["id"])
+      accepted!(fake, row, brain, work["id"], boot)
       assert [{^running, %{running: true}}] = running_sessions(fake, row)
     end
 
-    test "a turn stored read-only starts and works read-only, with none of the harness's own " <>
-           "permission mode or tools, whatever the caller names",
-         %{fake: fake, row: row, binding: binding, turn: turn} do
-      set_turn(turn, agent_mode: "read-only")
-      named = Map.put(@named, "read_only", false)
+    test "a start writes the caller's configuration unchanged, its access among it",
+         %{fake: fake, row: row, binding: binding} do
       brain = opened!(fake, row, binding)
-
-      assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => 0, "config" => named})
-
-      assert sent() == %{
-               "t" => "start",
-               "gen" => 0,
-               "config" => %{"model" => "opus", "read_only" => true}
-             }
-
+      start = %{"t" => "start", "gen" => 0, "config" => @named}
+      assert :ok = Brain.write(brain, binding, start)
+      assert sent() == start
       harness_started!(fake, row, brain)
       work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
-      worked!(fake, row, brain, binding, work, named)
+      worked!(fake, row, brain, binding, work, @named)
     end
 
-    test "a turn stored auto starts and works with read_only false, keeping the caller's " <>
-           "permission mode and tools",
-         %{fake: fake, row: row, binding: binding, turn: turn} do
-      set_turn(turn, agent_mode: "auto")
-      named = Map.put(@named, "read_only", true)
-      brain = opened!(fake, row, binding)
-
-      assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => 0, "config" => named})
-
-      assert sent() == %{
-               "t" => "start",
-               "gen" => 0,
-               "config" => Map.put(@named, "read_only", false)
-             }
-
-      harness_started!(fake, row, brain)
-      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
-      worked!(fake, row, brain, binding, work, named)
-    end
-
-    test "a later turn of the same mode works on the running process; one of the other mode " <>
-           "starts the program again, resuming, in its own mode",
+    test "a later turn of the same access works on the running process; one whose access " <>
+           "changed starts the program again, resuming, with its own",
          %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
       brain = started!(fake, row, binding, @named)
       [{first, _}] = running_sessions(fake, row)
 
-      same = admitted!(ctx, binding, next_turn!(ctx, thread.id, turn, "aqua"), row, "auto")
+      same = admitted!(ctx, binding, next_turn!(ctx, thread.id, turn, "aqua"), row)
       work = %{"t" => "work", "id" => "stp_same", "work" => same.turn_id, "tools" => []}
       worked!(fake, row, brain, same, work, @named)
 
       other =
-        admitted!(
-          ctx,
-          binding,
-          next_turn!(ctx, thread.id, %{id: same.turn_id}, "aqua"),
-          row,
-          "read-only"
-        )
+        admitted!(ctx, binding, next_turn!(ctx, thread.id, %{id: same.turn_id}, "aqua"), row)
 
+      changed = %{@named | "access" => "another"}
       flush_opens_and_closes()
       switched = %{work | "id" => "stp_switched", "work" => other.turn_id}
-      assert {:ok, :restarted} = Brain.write(brain, other, switched, config: @named)
+      assert {:ok, :restarted} = Brain.write(brain, other, switched, config: changed)
       refute_sent()
 
       assert [{"close", %{"session" => ^first}}, {"open", %{"home_id" => home}}] =
@@ -586,155 +551,13 @@ defmodule Opus.BrainTest do
         "t" => "start",
         "gen" => 0,
         "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
-        "config" => @named
+        "config" => changed
       }
 
       assert :ok = Brain.write(brain, other, resume)
-      assert sent() == %{resume | "config" => %{"model" => "opus", "read_only" => true}}
-    end
-  end
-
-  # The holder's own guarantee: the stored mode is set in every work's
-  # configuration, so a caller that names none cannot keep auto running.
-  describe "the stored mode on every work" do
-    test "a new read-only work restarts an auto session even without caller config",
-         %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
-      brain = started!(fake, row, binding)
-      other = admitted!(ctx, binding, next_turn!(ctx, thread.id, turn, "aqua"), row, "read-only")
-      work = %{"t" => "work", "id" => "stp_no_config", "work" => other.turn_id, "tools" => []}
-      assert {:ok, :restarted} = Brain.write(brain, other, work)
-      refute_sent()
-    end
-  end
-
-  describe "a mode switched between turns" do
-    for {before_mode, after_mode} <- [{"auto", "read-only"}, {"read-only", "auto"}],
-        caller_config? <- [false, true] do
-      test "a work from #{before_mode} to #{after_mode}, caller config #{caller_config?}, restarts before every delivery",
-           %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
-        set_turn(turn, agent_mode: unquote(before_mode))
-        brain = started!(fake, row, binding)
-
-        other =
-          admitted!(
-            ctx,
-            binding,
-            next_turn!(ctx, thread.id, turn, "aqua"),
-            row,
-            unquote(after_mode)
-          )
-
-        work = %{"t" => "work", "id" => "stp_mode_work", "work" => other.turn_id, "tools" => []}
-
-        opts =
-          if unquote(caller_config?),
-            do: [config: %{"read_only" => unquote(before_mode == "read-only")}],
-            else: []
-
-        assert {:ok, :restarted} = Brain.write(brain, other, work, opts)
-        refute_sent()
-        say(fake, row, hello("boot-two"))
-        assert {"boot-two", [{1, %{"t" => "hello"}}]} = batch(brain)
-        :ok = Brain.read_on(brain, "boot-two", 1)
-
-        resume = %{
-          "t" => "start",
-          "gen" => 0,
-          "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
-          "config" => %{}
-        }
-
-        assert :ok = Brain.write(brain, other, resume)
-        assert sent()["config"] == %{"read_only" => unquote(after_mode == "read-only")}
-        harness_started!(fake, row, brain, "boot-two")
-        assert :ok = Brain.write(brain, other, work, opts)
-        assert sent() == work
-        accepted!(fake, row, brain, work["id"], "boot-two")
-        assert :ok = Brain.write(brain, other, post(other))
-        assert sent() == post(other)
-        accepted!(fake, row, brain, "stp_post", "boot-two")
-
-        say(fake, row, %{
-          "t" => "ask",
-          "gen" => 0,
-          "work" => other.turn_id,
-          "ask" => "ask-mode",
-          "name" => "files",
-          "arguments" => %{}
-        })
-
-        {"boot-two", [{seq, _ask}]} = batch(brain)
-        :ok = Brain.read_on(brain, "boot-two", seq)
-
-        answer = %{
-          "t" => "answer",
-          "id" => "stp_answer",
-          "ask" => "ask-mode",
-          "content" => "ok",
-          "is_error" => false
-        }
-
-        assert :ok = Brain.write(brain, other, answer)
-        assert sent() == answer
-      end
-
-      test "a post or an answer from #{before_mode} to #{after_mode}, caller config #{caller_config?}, never reaches the old mode",
-           %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
-        set_turn(turn, agent_mode: unquote(before_mode))
-        brain = started!(fake, row, binding)
-
-        old_work = %{
-          "t" => "work",
-          "id" => "stp_old_work",
-          "work" => binding.turn_id,
-          "tools" => []
-        }
-
-        assert :ok = Brain.write(brain, binding, old_work)
-        assert sent() == old_work
-        accepted!(fake, row, brain, old_work["id"])
-
-        other =
-          admitted!(
-            ctx,
-            binding,
-            next_turn!(ctx, thread.id, turn, "aqua"),
-            row,
-            unquote(after_mode)
-          )
-
-        opts =
-          if unquote(caller_config?),
-            do: [config: %{"read_only" => unquote(after_mode == "read-only")}],
-            else: []
-
-        assert {:error, :not_this_mode} = Brain.write(brain, other, post(other), opts)
-        refute_sent()
-
-        say(fake, row, %{
-          "t" => "ask",
-          "gen" => 0,
-          "work" => other.turn_id,
-          "ask" => "ask-mode",
-          "name" => "files",
-          "arguments" => %{}
-        })
-
-        {"boot-one", [{seq, _ask}]} = batch(brain)
-        :ok = Brain.read_on(brain, "boot-one", seq)
-
-        answer = %{
-          "t" => "answer",
-          "id" => "stp_answer",
-          "ask" => "ask-mode",
-          "content" => "ok",
-          "is_error" => false
-        }
-
-        assert {:error, :not_this_mode} = Brain.write(brain, other, answer, opts)
-        refute_sent()
-        assert Process.alive?(elem(brain, 0))
-      end
+      assert sent() == resume
+      harness_started!(fake, row, brain, "boot-two")
+      worked!(fake, row, brain, other, switched, changed, "boot-two")
     end
   end
 
@@ -992,7 +815,7 @@ defmodule Opus.BrainTest do
 
       set_turn(turn, status: "running", paused_reason: nil)
       assert :ok = Brain.write(brain, binding, start)
-      assert sent() == %{start | "config" => %{"read_only" => false}}
+      assert sent() == start
       harness_started!(fake, row, brain)
 
       say(fake, row, %{
@@ -1819,14 +1642,16 @@ defmodule Opus.BrainTest do
         "t" => "models",
         "id" => id,
         "models" => [%{"id" => "opus", "name" => "Opus"}, %{"id" => "haiku", "name" => "Haiku"}],
-        "efforts" => ["low", "high"]
+        "efforts" => ["low", "high"],
+        "access" => [%{"id" => "default", "name" => "Default mode"}]
       })
 
       assert Task.await(task, 10_000) ==
                {:ok,
                 %{
                   models: [%{id: "opus", name: "Opus"}, %{id: "haiku", name: "Haiku"}],
-                  efforts: ["low", "high"]
+                  efforts: ["low", "high"],
+                  access: [%{id: "default", name: "Default mode"}]
                 }}
 
       assert running_sessions(fake, row) == []

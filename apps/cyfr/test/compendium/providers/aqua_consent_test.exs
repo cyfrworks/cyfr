@@ -72,4 +72,88 @@ defmodule Compendium.Providers.AquaConsentTest do
     shown = get_in(aqua, ["inputSchema", "properties", "action", "enum"])
     assert Enum.sort(shown) == Enum.sort(@reads)
   end
+
+  # Inside a turn's chain the class keeps its surface half: a turn the
+  # person's own session started writes a scroll, and one a schedule or a
+  # key started is refused before the tool, whatever its member is
+  # offered, and writes nothing.
+  test "a turn a schedule or a key started cannot write a scroll from its chain" do
+    auth = granting(["aqua.skill_create"])
+    # The turn's root, as the person's session admitted it; the surface a
+    # call is refused on is the one its context names.
+    ctx = Sanctum.TestContext.local(:prism)
+    lineage = caller!(ctx)
+
+    create = fn ctx, name ->
+      Sanctum.Gate.call_in_chain(
+        "aqua",
+        Sanctum.Context.enter_guest(ctx),
+        %{"action" => "skill_create", "name" => name, "description" => "d", "content" => "c"},
+        auth,
+        lineage: lineage
+      )
+    end
+
+    for method <- [:scheduled, :api_key] do
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                reason: {:consent_class_required, {:surface_not_permitted, ^method}}
+              }} = create.(%{ctx | auth_method: method}, "by-#{method}")
+
+      assert {:error, {:not_found, "Scroll", _}} =
+               Tool.handle(ctx, %{"action" => "skill_get", "name" => "by-#{method}"})
+    end
+
+    assert {:ok, _created} = create.(ctx, "by-person")
+
+    assert {:ok, %{name: "by-person"}} =
+             Tool.handle(ctx, %{"action" => "skill_get", "name" => "by-person"})
+  end
+
+  # A chain authority granting exactly `tools`, the shape the consent blob
+  # mints from a manifest's `caps.tools`.
+  defp granting(tools) do
+    node = "formula:local.assistant"
+
+    {:ok, blob} =
+      Prima.Authority.Blob.parse(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          node => %{
+            "limits" => %{
+              "timeout" => "1m",
+              "max_memory_bytes" => 67_108_864,
+              "max_request_size" => 1_048_576,
+              "max_response_size" => 5_242_880,
+              "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+              "max_concurrent_tasks" => 10,
+              "batch_timeout" => "1m"
+            },
+            "edges" => %{"@ingress" => %{"tools" => tools}}
+          }
+        }
+      })
+
+    {:ok, auth} =
+      Prima.Authority.root(
+        %{
+          profile_id: "prof-scrolls",
+          consent_id: "consent-scrolls",
+          source_ref: node,
+          kind: :owner,
+          invoke_mode: :open_inert,
+          activation: %{node => "sha256:scrolls"}
+        },
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
+      )
+
+    auth
+  end
+
+  # An in-chain call comes from a real execution's attempt, which the host
+  # names in its lineage.
+  defp caller!(ctx),
+    do: ctx |> Cyfr.Test.AttemptFixtures.lineage!() |> Map.take([:parent_execution_id, :attempt])
 end

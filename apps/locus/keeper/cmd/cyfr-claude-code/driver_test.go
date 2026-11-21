@@ -281,7 +281,7 @@ func TestAResultsUsageIsEachModelsOnceAndUnknownStaysUnknown(t *testing.T) {
 
 func TestATurnStreamsSaysCountsAndGoesIdleNamingThePost(t *testing.T) {
 	s := startDriver(t)
-	startFresh(s, map[string]any{"model": "fake-opus", "effort": "high", "permission_mode": "plan", "harness_tools": []any{"Read", "Grep"}})
+	startFresh(s, map[string]any{"model": "fake-opus", "effort": "high", "access": "default", "harness_tools": []any{"Read", "Grep"}})
 	work(s, "stp_work", []any{filesTool})
 	postText(s, "stp_post", "hello")
 	got := s.until("idle")
@@ -305,7 +305,7 @@ func TestATurnStreamsSaysCountsAndGoesIdleNamingThePost(t *testing.T) {
 			idle = e
 		}
 	}
-	want := "Hello from the fake harness: model=fake-opus effort=high permission=plan tools=Read,Grep"
+	want := "Hello from the fake harness: model=fake-opus effort=high permission=default tools=Read,Grep"
 	if text != want || said != want {
 		t.Fatalf("the reply streams and is said whole, with the start's flags: %q %q", text, said)
 	}
@@ -717,10 +717,14 @@ func TestModelsAreListedWithOrWithoutAStart(t *testing.T) {
 		fmt.Sprint(listed["efforts"]) != "[low high medium max]" {
 		t.Fatalf("the harness's listing, with the efforts any model takes: %v", listed)
 	}
+	access := []any{map[string]any{"id": "default", "name": "Default mode"}}
+	if !reflect.DeepEqual(listed["access"], access) {
+		t.Fatalf("the listing's access is the one choice the driver honours: %v", listed["access"])
+	}
 	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{}})
 	s.expect("started")
 	s.send(map[string]any{"t": "models", "id": "m2"})
-	if again := s.expect("models"); fmt.Sprint(again["models"]) != fmt.Sprint(listed["models"]) {
+	if again := s.expect("models"); fmt.Sprint(again["models"]) != fmt.Sprint(listed["models"]) || !reflect.DeepEqual(again["access"], access) {
 		t.Fatalf("a running harness's listing is its start's: %v", again)
 	}
 }
@@ -1139,99 +1143,6 @@ func TestForgetReadsTheHelpersTranscriptsForTheirPlanFiles(t *testing.T) {
 	}
 }
 
-// The launcher's part of the row's command and the harness's own
-// arguments: the shipped row's command and a program's name alone carry
-// none; any other argument, or a flag of npx's that chooses what runs,
-// is the harness's.
-func TestHarnessOptionsAreTheRowCommandsArgumentsPastItsLauncher(t *testing.T) {
-	for _, c := range []struct {
-		command []string
-		options []string
-	}{
-		{[]string{"npx", "-y", "@anthropic-ai/claude-code@2.1.323"}, []string{}},
-		{[]string{"/usr/bin/npx", "--yes", "@anthropic-ai/claude-code@2.1.323"}, []string{}},
-		{[]string{"npx", "@anthropic-ai/claude-code@2.1.323"}, []string{}},
-		{[]string{"claude"}, []string{}},
-		{[]string{"/home/a/.local/bin/claude"}, []string{}},
-		{[]string{"npx", "-y", "@anthropic-ai/claude-code@2.1.323", "--settings", "x.json"}, []string{"--settings", "x.json"}},
-		{[]string{"npx", "-c", "claude --settings x.json"}, []string{"npx", "-c", "claude --settings x.json"}},
-		{[]string{"npx", "-y", "-p", "@anthropic-ai/claude-code", "claude"}, []string{"npx", "-y", "-p", "@anthropic-ai/claude-code", "claude"}},
-		{[]string{"npx", "-y"}, []string{"npx", "-y"}},
-		{[]string{"npx"}, []string{"npx"}},
-		{[]string{"npx", "--call=claude --settings hook.json"}, []string{"npx", "--call=claude --settings hook.json"}},
-		{[]string{"env", "X=y", "npx", "-y", "@anthropic-ai/claude-code@2.1.323"}, []string{"X=y", "npx", "-y", "@anthropic-ai/claude-code@2.1.323"}},
-		{[]string{"X=y", "claude"}, []string{"claude"}},
-		{[]string{"sh", "-c", "claude --settings hook.json"}, []string{"-c", "claude --settings hook.json"}},
-		{[]string{"/usr/local/bin/npx", "--package=other", "claude"}, []string{"/usr/local/bin/npx", "--package=other", "claude"}},
-		{[]string{"claude", "--plugin-dir", "p"}, []string{"--plugin-dir", "p"}},
-		{[]string{"node", "/probe/fake-claude.mjs"}, []string{"/probe/fake-claude.mjs"}},
-	} {
-		if got := harnessOptions(c.command); !reflect.DeepEqual(append([]string{}, got...), c.options) {
-			t.Fatalf("%v: the harness's own arguments are %v, not %v", c.command, c.options, got)
-		}
-	}
-}
-
-// #10262's note: a launcher named npx with no package after it, bare or
-// with only -y or --yes, refuses a read-only start before spawning.
-func TestAReadOnlyStartRefusesAnNpxWithNoPackage(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv(fakeEnv, "1")
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	launcher := filepath.Join(t.TempDir(), "npx")
-	if err := os.Symlink(os.Args[0], launcher); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{nil, {"-y"}, {"--yes"}} {
-		command := append([]string{launcher}, args...)
-		s := startDriverWith(t, home, command)
-		s.expect("hello")
-		s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"read_only": true}})
-		if status := s.end(); status != 2 {
-			t.Fatalf("%v: an npx with no package refuses before spawning: %d", command, status)
-		}
-	}
-}
-
-// #10196's first finding: a read-only start runs with the driver's own
-// arguments and none of the row's. One whose row command carries an
-// argument of the harness's own (here --settings, which loads a hook
-// whatever --setting-sources says) ends the driver before anything is
-// spawned, saying why; one whose read_only is false keeps the row's
-// arguments exactly.
-func TestAReadOnlyStartRefusesARowCommandCarryingTheHarnessesOptions(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv(fakeEnv, "1")
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	settings := filepath.Join(home, "explicit-settings.json")
-	writeAll(t, map[string]string{settings: `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch marker"}]}]}}`})
-	command := []string{os.Args[0], "--settings", settings}
-	s := startDriverWith(t, home, command)
-	s.expect("hello")
-	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"read_only": true}})
-	if status := s.end(); status != 2 {
-		t.Fatalf("the driver ends with 2: %d", status)
-	}
-	if !strings.Contains(s.stderr.String(), "cyfr-claude-code: The program's command carries options a read-only crew member cannot run with, so nothing ran.\n") {
-		t.Fatalf("the driver says why: %q", s.stderr.String())
-	}
-	if matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", "*")); len(matches) != 0 {
-		t.Fatalf("no harness ran: %v", matches)
-	}
-
-	auto := startDriverWith(t, home, command)
-	session := startFresh(auto, map[string]any{"read_only": false})
-	work(auto, "stp_work", []any{})
-	argv, _ := modesOf(t, auto, "stp_post")
-	want := append(strs("--settings", settings), append(strs(baseArgv...), strs("--session-id", session)...)...)
-	if !reflect.DeepEqual(argv, want) {
-		t.Fatalf("a start that is not read-only keeps the row's arguments exactly:\n%v\nnot\n%v", want, argv)
-	}
-	auto.end()
-}
-
 // openPTY opens a pseudo-terminal pair: the driver's input is its other end.
 func openPTY(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
@@ -1345,121 +1256,79 @@ func strs(xs ...string) []any {
 	return out
 }
 
-// A read-only start gives the harness only its reading tools, runs it in
-// its default permission mode, loading no settings file of the user's or
-// the project's, and denies every ask of its own tools; one whose
-// read_only is false or absent runs as it always did, its own tools
-// allowed. Both are seen
-// whole: the harness's command line and the driver's answers.
-func TestAReadOnlyStartRunsDefaultModeAndDeniesTheHarnessesOwnTools(t *testing.T) {
+// A start runs Claude Code in the access it names, or in the first the
+// driver lists when it names none, a resume as a fresh start: Default
+// mode, the harness's default permission mode, its own tools allowed.
+// Both are seen whole: the harness's command line and the driver's
+// answers.
+func TestAStartRunsInItsAccessAndAllowsTheHarnessesOwnTools(t *testing.T) {
 	write := map[string]any{"file_path": "/work/new.txt", "content": "x"}
 	bash := map[string]any{"command": "touch new.txt"}
 	allowed := []any{
 		permissionAnswer("ask-1", map[string]any{"behavior": "allow", "updatedInput": write}),
 		permissionAnswer("ask-2", map[string]any{"behavior": "allow", "updatedInput": bash}),
 	}
-	denied := []any{
-		permissionAnswer("ask-1", map[string]any{"behavior": "deny", "message": "This crew member is read-only."}),
-		permissionAnswer("ask-2", map[string]any{"behavior": "deny", "message": "This crew member is read-only."}),
-	}
-	for _, c := range []struct {
-		name    string
-		config  map[string]any
-		mode    []string
-		answers []any
-	}{
-		{"absent", map[string]any{"model": "fake-opus"}, nil, allowed},
-		{"false", map[string]any{"model": "fake-opus", "read_only": false}, nil, allowed},
-		{"false beside a permission mode", map[string]any{"model": "fake-opus", "read_only": false, "permission_mode": "acceptEdits"}, []string{"--permission-mode", "acceptEdits"}, allowed},
-		{"true", map[string]any{"model": "fake-opus", "read_only": true}, []string{"--permission-mode", "default", "--setting-sources", "", "--tools", "Read,Grep,Glob"}, denied},
+	for name, config := range map[string]map[string]any{
+		"absent":  {"model": "fake-opus"},
+		"default": {"model": "fake-opus", "access": "default"},
 	} {
 		s := startDriver(t)
-		session := startFresh(s, c.config)
+		session := startFresh(s, config)
 		work(s, "stp_work", []any{})
 		argv, answers := modesOf(t, s, "stp_post")
-		want := append(append(strs(baseArgv...), strs("--session-id", session, "--model", "fake-opus")...), strs(c.mode...)...)
+		want := append(strs(baseArgv...), strs("--session-id", session, "--model", "fake-opus", "--permission-mode", "default")...)
 		if !reflect.DeepEqual(argv, want) {
-			t.Fatalf("%s: the harness starts with exactly\n%v\nnot\n%v", c.name, want, argv)
+			t.Fatalf("%s: the harness starts with exactly\n%v\nnot\n%v", name, want, argv)
 		}
-		if !reflect.DeepEqual(answers, c.answers) {
-			t.Fatalf("%s: the driver answers the harness's own tools exactly\n%v\nnot\n%v", c.name, c.answers, answers)
+		if !reflect.DeepEqual(answers, allowed) {
+			t.Fatalf("%s: the driver allows the harness's own tools exactly\n%v\nnot\n%v", name, allowed, answers)
 		}
 		s.end()
 
-		// A resume starts in the same mode.
 		again := startDriverIn(t, s.home)
 		again.expect("hello")
-		again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": c.config})
+		again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": config})
 		again.expect("started")
 		work(again, "stp_work_2", []any{})
 		argv, answers = modesOf(t, again, "stp_post_2")
-		want = append(append(strs(baseArgv...), strs("--resume", session, "--model", "fake-opus")...), strs(c.mode...)...)
-		if !reflect.DeepEqual(argv, want) || !reflect.DeepEqual(answers, c.answers) {
-			t.Fatalf("%s: a resume starts and answers as the fresh start did: %v %v", c.name, argv, answers)
+		want = append(strs(baseArgv...), strs("--resume", session, "--model", "fake-opus", "--permission-mode", "default")...)
+		if !reflect.DeepEqual(argv, want) || !reflect.DeepEqual(answers, allowed) {
+			t.Fatalf("%s: a resume starts and answers as the fresh start did: %v %v", name, argv, answers)
 		}
 		again.end()
 	}
 }
 
-// CYFR's own tools are CYFR's to decide in either mode: a read-only start
-// still shows their asks.
-func TestAReadOnlyStartStillShowsCYFRsToolsAsAsks(t *testing.T) {
-	s := startDriver(t)
-	startFresh(s, map[string]any{"read_only": true})
-	work(s, "stp_work", []any{filesTool})
-	postText(s, "stp_post", "read")
-	if e := s.expect("ask"); e["name"] != "files" {
-		t.Fatalf("CYFR's tool is asked about: %v", e)
-	}
-}
-
-// A read-only start that also names a permission mode or the harness's
-// own tools is no start the driver can honour: it ends with 2 and starts
-// no harness.
-// A start naming a permission mode under which the harness would run
-// CYFR's tools without asking the driver ends it before any harness runs,
-// saying why; each of the three it asks under starts as named.
-func TestAStartNamingAPermissionModeThatAsksNothingEndsTheDriver(t *testing.T) {
-	for _, mode := range []string{"bypassPermissions", "dontAsk", "auto"} {
-		s := startDriver(t)
-		s.expect("hello")
-		s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"permission_mode": mode}})
-		if status := s.end(); status != 2 {
-			t.Fatalf("%s: the driver ends with 2: %d", mode, status)
-		}
-		if !strings.Contains(s.stderr.String(), "cyfr-claude-code: "+unaskingMode+"\n") {
-			t.Fatalf("%s: the driver says why: %q", mode, s.stderr.String())
-		}
-		if matches, _ := filepath.Glob(filepath.Join(s.home, ".claude", "projects", "*", "*")); len(matches) != 0 {
-			t.Fatalf("%s: no harness ran: %v", mode, matches)
-		}
-	}
-	for _, mode := range []string{"default", "acceptEdits", "plan"} {
-		s := startDriver(t)
-		session := startFresh(s, map[string]any{"permission_mode": mode})
-		work(s, "stp_work", []any{})
-		argv, _ := modesOf(t, s, "stp_post")
-		want := append(strs(baseArgv...), strs("--session-id", session, "--permission-mode", mode)...)
-		if !reflect.DeepEqual(argv, want) {
-			t.Fatalf("%s starts as named:\n%v\nnot\n%v", mode, want, argv)
-		}
-		s.end()
-	}
-}
-
-func TestAReadOnlyStartNamingAPermissionModeOrToolsEndsTheDriver(t *testing.T) {
-	for name, config := range map[string]map[string]any{
-		"a permission mode":   {"read_only": true, "permission_mode": "plan"},
-		"the harness's tools": {"read_only": true, "harness_tools": []any{"Read", "Write"}},
+// A start naming an access the driver does not list, fresh or resuming,
+// ends it with 2 before it starts any harness, writing no line and saying
+// why on its standard error. The harness's command names nothing here, so
+// a start of it would say it did not start, as the listed access's does.
+func TestAStartNamingAnAccessTheDriverDoesNotListEndsIt(t *testing.T) {
+	session := "3b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	for name, start := range map[string]map[string]any{
+		"an empty access":        {"t": "start", "gen": 0, "config": map[string]any{"access": ""}},
+		"another mode":           {"t": "start", "gen": 0, "config": map[string]any{"access": "bypassPermissions"}},
+		"another driver's":       {"t": "start", "gen": 0, "config": map[string]any{"access": "full-access"}},
+		"a resume of another":    {"t": "start", "gen": 0, "session": session, "config": map[string]any{"access": "plan"}},
+		"a case it does not use": {"t": "start", "gen": 0, "config": map[string]any{"access": "Default"}},
 	} {
-		s := startDriver(t)
+		s := startDriverWith(t, t.TempDir(), []string{filepath.Join(t.TempDir(), "no-such-harness")})
 		s.expect("hello")
-		s.send(map[string]any{"t": "start", "gen": 0, "config": config})
+		s.send(start)
 		if status := s.end(); status != 2 {
 			t.Fatalf("%s: the driver ends with 2: %d", name, status)
 		}
-		if matches, _ := filepath.Glob(filepath.Join(s.home, ".claude", "projects", "*", "*")); len(matches) != 0 {
-			t.Fatalf("%s: no harness ran: %v", name, matches)
+		for e := range s.events {
+			t.Fatalf("%s: the driver writes no line after its hello: %v", name, e)
 		}
+		if got := s.stderr.String(); got != "cyfr-claude-code: "+unlistedAccess+"\n" {
+			t.Fatalf("%s: the driver says why, and starts nothing: %q", name, got)
+		}
+	}
+	s := startDriverWith(t, t.TempDir(), []string{filepath.Join(t.TempDir(), "no-such-harness")})
+	s.expect("hello")
+	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"access": "default"}})
+	if status := s.end(); status != 1 || !strings.Contains(s.stderr.String(), "cyfr-claude-code: the harness did not start") {
+		t.Fatalf("the listed access starts the harness (a positive control): %d %q", status, s.stderr.String())
 	}
 }

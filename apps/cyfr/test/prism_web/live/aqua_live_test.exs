@@ -333,9 +333,7 @@ defmodule PrismWeb.AquaLiveTest do
 
     # A new athanor's Aqua runs on no one; the card names who it runs on and,
     # while that member does not stand, says why in the sentence Aqua's
-    # turn is refused with (`Prima.Refusal`). A member in read-only whose
-    # brain CYFR cannot keep read-only leaves Aqua unable to run, in the
-    # member's own sentence.
+    # turn is refused with (`Prima.Refusal`).
     test "Aqua's card names the member it runs on and says why it cannot run, as its turn does",
          %{conn: conn, ctx: ctx} do
       said = fn view ->
@@ -348,7 +346,6 @@ defmodule PrismWeb.AquaLiveTest do
       end
 
       :ok = member!(ctx, "explorer")
-      :ok = member!(ctx, "openai-codex")
       {view, _html} = mount_athanor(conn, "/aqua")
       assert has_element?(view, ~s(#aqua-card-aqua-member option[value=""][selected]))
       assert said.(view) == Prima.Refusal.message({:aqua_runs_on, :none, nil})
@@ -381,32 +378,6 @@ defmodule PrismWeb.AquaLiveTest do
 
       send_update_agents(view, load: true)
       assert said.(view) == Prima.Refusal.message({:aqua_runs_on, :disabled, "explorer"})
-
-      # On a read-only member whose program CYFR cannot hold read-only.
-      _row = program_row!(ctx, "openai-codex", "cyfr-codex npx -y @openai/codex@0.169.0")
-
-      {:ok, _} =
-        Cyfr.Test.AquaTool.call(ctx, %{
-          "action" => "update",
-          "name" => "openai-codex",
-          "mode" => "read-only"
-        })
-
-      {:ok, _} =
-        Cyfr.Test.AquaTool.call(ctx, %{
-          "action" => "update",
-          "name" => "aqua",
-          "member" => "openai-codex"
-        })
-
-      send_update_agents(view, load: true)
-
-      assert has_element?(
-               view,
-               ~s(#aqua-card-aqua [data-test="read-only-unheld"]),
-               Aqua.Models.unheld_sentence("OpenAI Codex", "openai-codex")
-             )
-
       Cyfr.Test.Sandbox.end_views()
     end
 
@@ -763,8 +734,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       assert html =~ "Added &#39;scout&#39; to the crew"
 
-      assert {:ok, %{"type" => "crew", "tools" => ^soul_tools, "mode" => "auto"}} =
-               get_agent(ctx, "scout")
+      assert {:ok, %{"type" => "crew", "tools" => ^soul_tools}} = get_agent(ctx, "scout")
 
       assert {:ok, %{"tools" => ^soul_tools}} = get_agent(ctx, "aqua")
 
@@ -773,7 +743,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       refute bytes =~ "tools:"
       # Nor a prompt: its file is its frontmatter alone.
-      assert bytes == "---\ntitle: scout\nmode: auto\n---\n"
+      assert bytes == "---\ntitle: scout\n---\n"
 
       # Its card says what it is good at and what to avoid, and edits no
       # capabilities, which are the soul's, and no prompt, which only the
@@ -787,7 +757,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(
                view,
                "#aqua-card-scout",
-               "Offered the soul's tools on every job; its mode decides what of them it runs."
+               "Offered the soul's tools on every job."
              )
 
       refute has_element?(view, "#aqua-card-scout input[phx-click=editor_toggle_capability]")
@@ -1779,11 +1749,31 @@ defmodule PrismWeb.AquaLiveTest do
 
         assert {:error, _} = get_agent(ctx, name)
 
-        # A member is its brain, its model and its effort: the row offers the
-        # efforts the program lists, and what it is good at and should avoid
-        # are the person's to write, or to leave empty.
+        # A member is its brain, its model, its effort and its access: the
+        # row offers the efforts the program lists and the access choices its
+        # driver lists, in the driver's words, closed while it offers one and
+        # carried as a hidden value; what it is good at and should avoid are
+        # the person's to write, or to leave empty.
         assert texts(view, suggest <> ~s( select[name="effort"] option)) ==
                  ["The program's default effort", "low", "high", "max"]
+
+        assert choices(view, suggest <> ~s( select[name="access"][disabled] option)) == [
+                 {"default", "Default mode"}
+               ]
+
+        assert has_element?(
+                 view,
+                 suggest <> ~s( input[type="hidden"][name="access"][value="default"])
+               )
+
+        # An access the driver does not list writes nothing, and the row
+        # shows the driver's own choices again.
+        assert view
+               |> form(suggest)
+               |> render_submit(%{"model" => "opus", "access" => "plan"}) =~
+                 "That brain does not offer what was chosen — choose again."
+
+        assert {:error, _} = get_agent(ctx, name)
 
         assert has_element?(
                  view,
@@ -1809,10 +1799,9 @@ defmodule PrismWeb.AquaLiveTest do
                   "program" => ^name,
                   "catalyst_ref" => nil,
                   "model" => "opus",
-                  "mode" => "auto",
                   "description" => "Builds things",
                   "avoid" => "",
-                  "options" => %{"effort" => "high"}
+                  "options" => %{"effort" => "high", "access" => "default"}
                 }} = get_agent(ctx, name)
 
         assert render(view) =~ "Made #{title}."
@@ -1962,6 +1951,8 @@ defmodule PrismWeb.AquaLiveTest do
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
       assert has_element?(view, suggest)
       refute has_element?(view, effort)
+      # An API brain has no access to choose.
+      refute has_element?(view, suggest <> ~s( [name="access"]))
 
       view |> form(suggest, %{"model" => "open-1"}) |> render_change()
       settled(fn -> has_element?(view, effort) end, "the model's efforts")
@@ -2023,7 +2014,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       # Switched to open-2 as Make is pressed, open-1's effort still chosen.
       html = view |> form(suggest, %{"model" => "open-2", "effort" => "high"}) |> render_submit()
-      assert html =~ "That model does not offer the effort chosen — choose again."
+      assert html =~ "That brain does not offer what was chosen — choose again."
       refute html =~ "Made "
       assert {:error, _} = get_agent(ctx, "open")
       assert has_element?(view, suggest <> ~s( option[value="open-2"][selected]))
@@ -2093,8 +2084,9 @@ defmodule PrismWeb.AquaLiveTest do
     # member's picker offers, under the brain's title, the models its
     # program lists. Picking one makes that crew member name the program,
     # with that model and no catalyst, and asks nothing, since a member
-    # holds no consent of its own; a key's model takes the program away
-    # again.
+    # holds no consent of its own. Its access saved, a key's model takes
+    # the program away again, and the access with it in the same write, so
+    # the member answers on the key's brain.
     for %{name: name, title: title, command: command} <- Opus.Programs.Definition.brains() do
       @tag brain: {name, title, command}
       test "the setup offers #{name} as a program brain, installs it, signs it in and makes it " <>
@@ -2187,13 +2179,229 @@ defmodule PrismWeb.AquaLiveTest do
         _ = render(view)
         refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
-        # A key's model is a catalyst's: the program goes.
+        # Its card shows the access its program's driver lists, in the
+        # driver's words, closed while the driver offers one choice.
+        access = "#aqua-card-mine-access select[disabled]"
+        settled(fn -> has_element?(view, access) end, "the card's access")
+        [choice] = driver_access(command)
+        assert choices(view, access <> " option") == [{choice["id"], choice["name"]}]
+
+        # Saved on the card, the access is the member's own.
+        view |> form("#aqua-card-mine-access") |> render_change()
+        saved = %{"access" => choice["id"]}
+
+        assert get_agent(ctx, "mine") ==
+                 {:ok,
+                  %{
+                    before
+                    | "program" => name,
+                      "model" => "the-model",
+                      "catalyst_ref" => nil,
+                      "options" => saved
+                  }}
+
+        # A key's model is a catalyst's: the program goes, and so does the
+        # access, in the same write: an API brain has none to choose.
         view |> form("#aqua-setup-pick", %{"value" => "open::open-1"}) |> render_change()
 
         assert get_agent(ctx, "mine") ==
                  {:ok, %{before | "catalyst_ref" => "catalyst:local.open", "model" => "open-1"}}
 
+        settled(fn -> not has_element?(view, "#aqua-card-mine-access") end, "no access")
+
+        # And the member answers a post on its new brain.
         Cyfr.Test.Sandbox.end_views()
+        answered_on_open!(ctx, "mine")
+      end
+    end
+
+    # A pick takes off only what the new brain does not list, applied to
+    # the member's options as they stand when it lands: an option set
+    # elsewhere since the page read them is kept.
+    test "a pick keeps an option set elsewhere since the page read it", %{conn: conn, ctx: ctx} do
+      fake = backends!()
+      claude = brain_row!(ctx, "claude-code")
+      codex = brain_row!(ctx, "openai-codex")
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "mine",
+          "title" => "Mine",
+          "program" => "claude-code",
+          "model" => "opus",
+          "options" => %{"effort" => "high", "access" => "default"}
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      codex_title = Opus.Programs.Definition.brain("openai-codex").title
+
+      lists_each!(fake, [claude, codex], fn ->
+        program_choices(view, codex_title) != [] and
+          has_element?(view, "#aqua-card-mine-access select[disabled]")
+      end)
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "mine",
+          "options_patch" => %{"effort" => "low"}
+        })
+
+      view
+      |> form("#aqua-setup-pick", %{"value" => "::program::openai-codex::opus"})
+      |> render_change()
+
+      assert {:ok, %{"program" => "openai-codex", "model" => "opus", "options" => options}} =
+               get_agent(ctx, "mine")
+
+      assert options == %{"effort" => "low"}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # What a pick takes off is held to the member's options as they stand
+    # when it lands: a value saved elsewhere since the page read them, one
+    # the new model does not list, goes, and the member answers on it.
+    test "a pick takes off a value saved elsewhere since the page read it that the new " <>
+           "model does not list",
+         %{conn: conn, ctx: ctx} do
+      publish_brain!(ctx, "open", %{})
+      grant!(ctx, "catalyst:local.open", %{bindings: []})
+
+      remember_catalogue!(%{"open" => ["open-1", "open-2"]}, %{
+        "open" => "catalyst:local.open:0.1.0"
+      })
+
+      described!(ctx, "catalyst:local.open:0.1.0", %{
+        "open-1" => [%{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]}],
+        "open-2" => [%{"name" => "effort", "kind" => "enum", "values" => ["low"]}]
+      })
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "mine",
+          "title" => "Mine",
+          "catalyst_ref" => "catalyst:local.open",
+          "model" => "open-1",
+          "options" => %{"effort" => "low"}
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      settled(fn -> has_element?(view, "#aqua-setup-pick") end, "the pick")
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "mine",
+          "options_patch" => %{"effort" => "high"}
+        })
+
+      view |> form("#aqua-setup-pick", %{"value" => "open::open-2"}) |> render_change()
+
+      assert {:ok,
+              %{
+                "catalyst_ref" => "catalyst:local.open",
+                "model" => "open-2",
+                "options" => options
+              }} =
+               get_agent(ctx, "mine")
+
+      assert options == %{}
+      Cyfr.Test.Sandbox.end_views()
+      answered_on_open!(ctx, "mine")
+    end
+
+    # A member moved from one program brain to the other keeps each option
+    # whose value the new program lists, and drops any other: the access
+    # the first driver listed is none of the second's, so it goes, and the
+    # member's turn on the second program starts with no access named,
+    # taking that driver's first choice, and answers.
+    for {from, to} <- [{"claude-code", "openai-codex"}, {"openai-codex", "claude-code"}] do
+      @tag move: {from, to}
+      test "a member moved from #{from} to #{to} drops the access #{to} does not list, and " <>
+             "answers on #{to}",
+           %{conn: conn, ctx: ctx, move: {from, to}} do
+        # The crew's grant, as the fill mints it over a seed whose hands
+        # Aqua's tools need are installed.
+        Cyfr.Test.SeedBundle.lay!(~w(files http))
+        :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+
+        :ok =
+          Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+
+        {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+        {:ok, _} = Compendium.AgentIndex.sync(ctx)
+        {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+
+        fake = backends!()
+        from_row = brain_row!(ctx, from)
+        to_row = brain_row!(ctx, to)
+        [from_access] = driver_access(Arca.McpServerStorage.driver(from_row))
+        [to_access] = driver_access(Arca.McpServerStorage.driver(to_row))
+
+        {:ok, _} =
+          Cyfr.Test.AquaTool.call(ctx, %{
+            "action" => "create",
+            "name" => "mine",
+            "title" => "Mine",
+            "program" => from,
+            "model" => "opus",
+            "options" => %{"effort" => "high", "access" => from_access["id"]}
+          })
+
+        {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+        to_title = Opus.Programs.Definition.brain(to).title
+        access = "#aqua-card-mine-access select[disabled]"
+
+        lists_each!(fake, [from_row, to_row], fn ->
+          program_choices(view, to_title) != [] and has_element?(view, access)
+        end)
+
+        assert choices(view, access <> " option") == [{from_access["id"], from_access["name"]}]
+
+        view
+        |> form("#aqua-setup-pick", %{"value" => "::program::#{to}::opus"})
+        |> render_change()
+
+        assert {:ok,
+                %{
+                  "program" => ^to,
+                  "model" => "opus",
+                  "catalyst_ref" => nil,
+                  "options" => options
+                }} = get_agent(ctx, "mine")
+
+        assert options == %{"effort" => "high"}
+
+        lists_each!(fake, [from_row, to_row], fn ->
+          choices(view, access <> " option") == [{to_access["id"], to_access["name"]}]
+        end)
+
+        Cyfr.Test.Sandbox.end_views()
+
+        # A post to the member runs on the new program, which starts with
+        # the effort kept and no access named.
+        actor = Sanctum.Context.actor(ctx)
+        {:ok, room} = Arca.Test.Days.thread(actor)
+        {:ok, thread} = Aqua.Tape.crew_thread(ctx, room.id, "mine")
+
+        assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
+                 Aqua.Runner.send_message(%{ctx | origin: :interactive}, thread.id, "hello")
+
+        answers!(fake, to_row, "Hello from #{to}.", fn ->
+          match?({:ok, %{status: "completed"}}, Aqua.Tape.turn(ctx, turn_id))
+        end)
+
+        assert_received {:driver_start, %{"config" => config}}
+        assert config == %{"model" => "opus", "effort" => "high"}
+
+        assert ["Hello from #{to}."] ==
+                 for(
+                   %{turn_id: ^turn_id, sent_by: "mine", kind: "text", content: said} <-
+                     Arca.ThreadStorage.messages(actor, thread.id),
+                   do: said
+                 )
       end
     end
 
@@ -2228,7 +2436,7 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # Aqua answers with the brain, model and mode of the crew member it
+    # Aqua answers with the brain, model and options of the crew member it
     # runs on: the crew's grant does not follow that member, so choosing
     # one asks nothing and grants nothing.
     test "choosing the crew member Aqua runs on asks nothing",
@@ -2266,7 +2474,6 @@ defmodule PrismWeb.AquaLiveTest do
       # The card names who Aqua runs on, and has no model of its own.
       assert has_element?(view, ~s(#aqua-card-aqua-member option[value="mine"][selected]))
       refute has_element?(view, "#aqua-card-aqua-model")
-      refute has_element?(view, "#aqua-card-aqua-mode")
 
       Cyfr.Test.Sandbox.end_views()
     end
@@ -2465,148 +2672,9 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, before} == get_agent(ctx, "aqua")
     end
 
-    # Each crew member's mode is its own: its switch shows it, and a choice
-    # writes it into the member's file. Aqua runs in the mode of the crew
-    # member it runs on, and its card has no switch of its own.
-    test "each member's switch shows its mode, and a choice writes it to the member's file",
-         %{conn: conn, ctx: ctx} do
-      :ok = member!(ctx, "explorer")
-      actor = Sanctum.Context.actor(ctx)
-      {view, _html} = mount_athanor(conn, "/aqua")
-      refute has_element?(view, "#aqua-card-aqua-mode")
-
-      for name <- ["explorer"] do
-        assert mode_shown(view, name) == ["auto"]
-
-        assert has_element?(
-                 view,
-                 mode_choice(name, "read-only"),
-                 "Read-only: runs only reads, then answers; every other call is refused"
-               )
-
-        assert has_element?(
-                 view,
-                 mode_choice(name, "auto"),
-                 "Auto: runs every tool it is offered, deleting included"
-               )
-
-        refute has_element?(view, mode_choice(name, "read-only") <> "[disabled]")
-        refute has_element?(view, "#aqua-card-#{name} [data-test=read-only-unheld]")
-      end
-
-      for name <- ["explorer"] do
-        {:ok, before} = get_agent(ctx, name)
-        assert before["mode"] == "auto"
-
-        view |> element(mode_choice(name, "read-only")) |> render_click()
-        assert {:ok, %{before | "mode" => "read-only"}} == get_agent(ctx, name)
-        {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.agent_file(name))
-        assert bytes =~ "\nmode: read-only\n"
-
-        settled(
-          fn -> mode_shown(view, name) == ["read-only"] end,
-          "#{name}'s switch on read-only"
-        )
-
-        view |> element(mode_choice(name, "auto")) |> render_click()
-        assert {:ok, before} == get_agent(ctx, name)
-        settled(fn -> mode_shown(view, name) == ["auto"] end, "#{name}'s switch back on auto")
-      end
-
-      # Only the two modes are written.
-      {:ok, before} = get_agent(ctx, "explorer")
-
-      view
-      |> with_target("#aqua-agents")
-      |> render_click("editor_set_mode", %{"name" => "explorer", "mode" => "ask"})
-
-      assert {:ok, before} == get_agent(ctx, "explorer")
-    end
-
-    # A brain CYFR cannot keep read-only closes the read-only choice and
-    # says why beneath it: a program row whose driver cannot start its
-    # harness read-only, an OpenAI Codex member's own row among
-    # them. A file set to read-only by hand on such a brain shows it
-    # chosen, with the same sentence, since its turns are refused. A brain
-    # on a key, or a row CYFR keeps read-only, leaves the choice open.
-    test "a member whose brain cannot be kept read-only has its read-only choice closed, " <>
-           "with why beneath it",
-         %{conn: conn, ctx: ctx} do
-      publish_brain!(ctx, "keyed", %{
-        "api_key" => %{
-          "type" => "api_key:keyed.test",
-          "reason" => "to call Keyed with your key (keyed.test/keys)",
-          "fields" => ["KEYED_API_KEY"],
-          "required" => true,
-          "hosts" => ["api.keyed.example"]
-        }
-      })
-
-      codex = program_row!(ctx, "openai-codex", "cyfr-codex npx -y @openai/codex@0.169.0")
-      claude = program_row!(ctx, "claude", "cyfr-claude-code")
-      :ok = member!(ctx, "openai-codex")
-
-      members = [
-        {"by-hand", "By Hand", %{"program" => codex.name}},
-        {"keyed", "Keyed", %{"catalyst_ref" => "catalyst:local.keyed"}},
-        {"coder", "Coder", %{"program" => codex.name}},
-        {"held", "Held", %{"program" => claude.name}}
-      ]
-
-      for {name, title, brain} <- members do
-        {:ok, _} =
-          Cyfr.Test.AquaTool.call(
-            ctx,
-            Map.merge(
-              %{
-                "action" => "create",
-                "name" => name,
-                "title" => title
-              },
-              brain
-            )
-          )
-      end
-
-      # Set to read-only by hand, as an edit made off this page would.
-      {:ok, _} =
-        Cyfr.Test.AquaTool.call(ctx, %{
-          "action" => "update",
-          "name" => "by-hand",
-          "mode" => "read-only"
-        })
-
-      {view, _html} = mount_athanor(conn, "/aqua")
-
-      for {name, title, brain, shown} <- [
-            {"by-hand", "By Hand", "openai-codex", ["read-only"]},
-            {"coder", "Coder", "openai-codex", ["auto"]},
-            {"openai-codex", "OpenAI Codex", "openai-codex", ["auto"]}
-          ] do
-        assert has_element?(view, mode_choice(name, "read-only") <> "[disabled]")
-        refute has_element?(view, mode_choice(name, "auto") <> "[disabled]")
-        assert mode_shown(view, name) == shown
-
-        assert texts(view, "#aqua-card-#{name} [data-test=read-only-unheld]") ==
-                 [Aqua.Models.unheld_sentence(title, brain)]
-      end
-
-      for name <- ["keyed", "held"] do
-        assert mode_shown(view, name) == ["auto"]
-        refute has_element?(view, mode_choice(name, "read-only") <> "[disabled]")
-        refute has_element?(view, "#aqua-card-#{name} [data-test=read-only-unheld]")
-      end
-
-      # The auto choice stays open: the member set to read-only by hand
-      # is switched to auto from its card.
-      {:ok, before} = get_agent(ctx, "by-hand")
-      view |> element(mode_choice("by-hand", "auto")) |> render_click()
-      assert {:ok, %{before | "mode" => "auto"}} == get_agent(ctx, "by-hand")
-    end
-
-    # Every athanor made before modes holds a soul whose file lists its
-    # tools under the retired `tool_policy`: the section says what to
-    # change in place of every card, and the rest of the page renders.
+    # A soul whose file lists its tools under the retired `tool_policy`:
+    # the section says what to change in place of every card, and the
+    # rest of the page renders.
     test "a soul that still holds tool_policy says what to change in place of every card",
          %{conn: conn, ctx: ctx} do
       :ok =
@@ -2787,19 +2855,6 @@ defmodule PrismWeb.AquaLiveTest do
   # answers, so a card's new state is awaited rather than read at once.
   defp settled(fun, label), do: Prima.Test.Wait.wait_until(fun, 2_000, label)
 
-  # One choice of a member's mode switch.
-  defp mode_choice(name, mode),
-    do: ~s(#aqua-card-#{name}-mode button[role=radio][phx-value-mode="#{mode}"])
-
-  # The modes a member's switch shows chosen.
-  defp mode_shown(view, name) do
-    view
-    |> render()
-    |> LazyHTML.from_fragment()
-    |> LazyHTML.query(~s(#aqua-card-#{name}-mode [role=radio][aria-checked="true"]))
-    |> Enum.flat_map(&LazyHTML.attribute(&1, "phx-value-mode"))
-  end
-
   # The terminal sessions opened in `home`'s folder so far, by their key,
   # each once.
   defp opened(home, keys \\ []) do
@@ -2854,6 +2909,58 @@ defmodule PrismWeb.AquaLiveTest do
     publish_brain!(ctx, "open", %{})
     grant!(ctx, "catalyst:local.open", %{bindings: []})
     remember_catalogue!(%{"open" => ["open-1"]}, %{"open" => "catalyst:local.open:0.1.0"})
+  end
+
+  # The person's post to `member`, in its own thread off a room, answered
+  # on the brain `open`, a worker playing the brain's answer, under the
+  # crew's grant as the fill mints it.
+  defp answered_on_open!(ctx, member) do
+    ref = "catalyst:local.open"
+    Cyfr.Test.SeedBundle.lay!(~w(files http))
+    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+    :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+    grant!(ctx, Prima.AgentRef.soul_ref(), %{})
+    Cyfr.Test.ScriptedWorker.fresh_limits!(ctx, [ref])
+
+    start_supervised!(
+      {Cyfr.Test.ScriptedWorker,
+       ref: [ref],
+       script: [
+         %{
+           "content" => [%{"type" => "text", "text" => "Hello from open."}],
+           "stop_reason" => "end_turn",
+           "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
+         }
+       ]}
+    )
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, room} = Arca.Test.Days.thread(actor)
+    {:ok, thread} = Aqua.Tape.crew_thread(ctx, room.id, member)
+
+    assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
+             Aqua.Runner.send_message(%{ctx | origin: :interactive}, thread.id, "hello")
+
+    Prima.Test.Wait.wait_until(
+      fn ->
+        {:ok, %{status: status}} = Aqua.Tape.turn(ctx, turn_id)
+        status in Prima.TurnState.terminal_statuses()
+      end,
+      30_000,
+      "the member's turn to end"
+    )
+
+    assert {:ok, %{status: "completed", error: nil}} = Aqua.Tape.turn(ctx, turn_id)
+
+    assert ["Hello from open."] =
+             for(
+               %{turn_id: ^turn_id, sent_by: ^member, kind: "text", content: said} <-
+                 Arca.ThreadStorage.messages(actor, thread.id),
+               do: said
+             )
   end
 
   # Each choice of a member's Model, as its value and the words it shows.
@@ -2912,7 +3019,7 @@ defmodule PrismWeb.AquaLiveTest do
           {:session, "send", %{"lines" => [line]}, _fields} ->
             case Jason.decode!(line) do
               %{"t" => "models", "id" => id} ->
-                say(fake, row, listed(id, listing))
+                say(fake, row, listed(id, listing, row))
 
               _another ->
                 :ok
@@ -2922,6 +3029,50 @@ defmodule PrismWeb.AquaLiveTest do
         end
 
         lists!(fake, row, shown, listing, deadline)
+    end
+  end
+
+  # Plays the driver of each of `rows` for every listing a page asks of
+  # it, each answering for its own row, until `shown` holds.
+  defp lists_each!(fake, rows, shown),
+    do: lists_each!(fake, rows, shown, System.monotonic_time(:millisecond) + 10_000)
+
+  defp lists_each!(fake, rows, shown, deadline) do
+    by_id = Map.new(rows, &{&1.id, &1})
+
+    cond do
+      shown.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("the page did not show what its programs' listings said")
+
+      true ->
+        receive do
+          {:session, "recv", %{"after" => 0}, %{server: server}} when is_map_key(by_id, server) ->
+            row = by_id[server]
+
+            say(fake, row, %{
+              "t" => "hello",
+              "v" => Opus.Brain.Wire.version(),
+              "driver" => Arca.McpServerStorage.driver(row),
+              "boot" => "b#{System.unique_integer([:positive])}"
+            })
+
+          {:session, "send", %{"lines" => [line]}, %{server: server}}
+          when is_map_key(by_id, server) ->
+            case Jason.decode!(line) do
+              %{"t" => "models", "id" => id} ->
+                say(fake, by_id[server], listed(id, @listing, by_id[server]))
+
+              _another ->
+                :ok
+            end
+        after
+          100 -> :ok
+        end
+
+        lists_each!(fake, rows, shown, deadline)
     end
   end
 
@@ -2963,9 +3114,11 @@ defmodule PrismWeb.AquaLiveTest do
   defp answer!(fake, row, said, %{"t" => t} = line) do
     cond do
       t == "models" ->
-        say(fake, row, listed(line["id"], @listing))
+        say(fake, row, listed(line["id"], @listing, row))
 
       t == "start" ->
+        send(self(), {:driver_start, line})
+
         say(fake, row, %{
           "t" => "started",
           "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
@@ -3029,11 +3182,25 @@ defmodule PrismWeb.AquaLiveTest do
     end
   end
 
-  defp listed(id, {:refused, sentence}),
+  defp listed(id, {:refused, sentence}, _row),
     do: %{"t" => "refused", "id" => id, "reason" => sentence}
 
-  defp listed(id, models),
-    do: %{"t" => "models", "id" => id, "models" => models, "efforts" => ["low", "high", "max"]}
+  defp listed(id, models, row),
+    do: %{
+      "t" => "models",
+      "id" => id,
+      "models" => models,
+      "efforts" => ["low", "high", "max"],
+      "access" => driver_access(Arca.McpServerStorage.driver(row))
+    }
+
+  # The one access choice each shipped driver lists, in its own words, as
+  # the driver answers a listing (apps/locus/keeper/cmd).
+  defp driver_access("cyfr-claude-code" <> _rest),
+    do: [%{"id" => "default", "name" => "Default mode"}]
+
+  defp driver_access("cyfr-codex" <> _rest),
+    do: [%{"id" => "full-access", "name" => "Full access, no approvals"}]
 
   # The text of each element `selector` finds, trimmed.
   defp texts(view, selector) do

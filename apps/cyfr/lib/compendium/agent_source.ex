@@ -35,9 +35,9 @@ defmodule Compendium.AgentSource do
       so connecting a brain is the one grant of its key. A brain that is a
       program is no dependency: each of its turns is admitted by that
       turn's own `program.start` step, never by this consent.
-    * Nothing of a crew member: no brain, model, options or mode is in it,
-      and the mode a member runs in grants nothing the consent does not
-      (`ARCHITECTURE.md` §5.4).
+    * Nothing of a crew member: no brain, model or options are in it, and
+      a member's access, its harness's own setting, grants nothing the
+      consent does not (`ARCHITECTURE.md` §5.4).
 
   The artifact digest is the digest of the manifest, so the release moves
   exactly when what the grant covers moves. Aqua's prompt is not in it,

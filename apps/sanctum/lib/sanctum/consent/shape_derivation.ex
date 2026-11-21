@@ -194,7 +194,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @doc """
   The `ShapeDigest.compute/1` input derived from live state. The crew's
   grant, Aqua's agent source, names every brain the athanor can connect
-  as a dependency and no crew member's brain, model or mode
+  as a dependency and no crew member's brain, model or options
   (`Compendium.AgentSource`): choosing a member, its brain or its model
   re-asks nothing, and what of its tools a member runs grants nothing the
   consent does not (`ARCHITECTURE.md` §5.4).
@@ -415,7 +415,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   names, never by a pattern (`*`, `feed.*`, `layout.*` or any other),
   whatever the component's type. A component other than an agent may not
   name one (`Prima.Manifest.Caps`), so no other component's grant holds
-  one; an agent that names one exactly keeps it, and the member's mode
+  one; an agent that names one exactly keeps it, and the turn's policy
   decides whether it runs.
   """
   @spec expand_tools([String.t()]) :: [String.t()]

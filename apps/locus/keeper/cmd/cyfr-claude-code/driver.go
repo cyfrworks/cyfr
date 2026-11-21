@@ -46,9 +46,6 @@ type driver struct {
 	h        *brainwire.Process
 	starting *starting
 	gen      uint64
-	// readOnly is the running start's: every ask of the harness's own
-	// tools is denied.
-	readOnly bool
 	session  string
 	listing  json.RawMessage
 	// What the native turns under way name: each post's line by its uuid,
@@ -121,17 +118,9 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if raw, ok := members["pending"]; ok {
 		_ = json.Unmarshal(raw, &pending)
 	}
-	if config.ReadOnly && config.PermissionMode != "" {
-		return &brainwire.Fatal{Status: 2, Reason: "a read-only start names a permission mode"}
-	}
-	if config.ReadOnly && config.HarnessTools != nil {
-		return &brainwire.Fatal{Status: 2, Reason: "a read-only start names the harness's own tools"}
-	}
-	if config.ReadOnly && len(harnessOptions(d.harnessCommand)) > 0 {
-		return &brainwire.Fatal{Status: 2, Reason: "The program's command carries options a read-only crew member cannot run with, so nothing ran."}
-	}
-	if config.PermissionMode != "" && !permissionModes[config.PermissionMode] {
-		return &brainwire.Fatal{Status: 2, Reason: unaskingMode}
+	access, listed := brainwire.Choose(accessChoices, config.Access)
+	if !listed {
+		return &brainwire.Fatal{Status: 2, Reason: unlistedAccess}
 	}
 	session := str("session")
 	resume := session != ""
@@ -142,14 +131,13 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if !resume {
 		session = brainwire.NewUUID()
 	}
-	h, err := d.c.Spawn(harnessArgv(d.harnessCommand, session, resume, config))
+	h, err := d.c.Spawn(harnessArgv(d.harnessCommand, session, resume, config, access.Native))
 	if err != nil {
 		// Spawn has said why on the driver's standard error.
 		return &brainwire.Fatal{Status: 1}
 	}
 	d.h = h
 	d.gen = gen
-	d.readOnly = config.ReadOnly
 	d.starting = &starting{session: session, resume: resume, pending: pending, config: config}
 	// A harness started to resume a session it holds no transcript of
 	// says so and ends at once, perhaps before this line reached it: what
@@ -261,8 +249,12 @@ func (d *driver) models(id string) error {
 			}
 		}
 	}
-	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", models).Set("efforts", efforts))
+	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", models).Set("efforts", efforts).Set("access", accessChoices))
 }
+
+// unlistedAccess ends the driver on a start naming an access it does not
+// list.
+const unlistedAccess = "The crew member's access is not one CYFR runs Claude Code with, so nothing ran."
 
 // signedOutSentence refuses a one-off listing while Claude Code has no
 // sign-in and no key it can run with, as its `initialize` answer says.
@@ -441,11 +433,7 @@ func (d *driver) controlRequest(l harnessLine) error {
 	name, ours := strings.CutPrefix(request.ToolName, toolPrefix)
 	if !ours {
 		// The harness's own tool runs in its box: allowed, and shown by its
-		// tool_use (assistant) by name only; under a read-only start it is
-		// denied.
-		if d.readOnly {
-			return d.h.Write(denyLine(l.RequestID, readOnlyDenial))
-		}
+		// tool_use (assistant) by name only.
 		return d.h.Write(allowLine(l.RequestID, request.Input))
 	}
 	arguments := callArguments(request.Input)

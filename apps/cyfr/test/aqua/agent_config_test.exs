@@ -2,8 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.AgentConfigTest do
-  # An agent's mode and the soul's tools are DECLARED, read from the
-  # athanor's own copy of the shipped template.
+  # The soul's tools are DECLARED, read from the athanor's own copy of
+  # the shipped template.
   use ExUnit.Case, async: false
 
   alias Aqua.AgentConfig
@@ -36,7 +36,7 @@ defmodule Aqua.AgentConfigTest do
     {:ok, guide} =
       Sanctum.Gate.call_external("aqua", ctx, %{"action" => "get", "name" => name})
 
-    Map.take(Aqua.AgentConfig.stringify_deep(guide), ["mode", "tools"])
+    Map.take(Aqua.AgentConfig.stringify_deep(guide), ["tools"])
   end
 
   # Every Aqua unit the athanor holds is an unedited copy of what ships.
@@ -46,7 +46,7 @@ defmodule Aqua.AgentConfigTest do
   end
 
   test "the shipped roster is read from the athanor's own copy", %{ctx: ctx} do
-    assert %{"mode" => "auto", "tools" => tools} = declared(ctx, "aqua")
+    assert %{"tools" => tools} = declared(ctx, "aqua")
     assert "files.read" in tools
     assert Arca.exists?(Sanctum.Context.actor(ctx), Compendium.AquaPath.agent_file("aqua"))
     assert pristine?(ctx)

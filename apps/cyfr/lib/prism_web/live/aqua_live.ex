@@ -47,10 +47,11 @@ defmodule PrismWeb.AquaLive do
   (a program with no sign-in is refused) says what is left to do. The
   crew: for each connected brain no crew member runs on, the member CYFR
   suggests for it (`Aqua.crew_suggestion/1`), made only when the person
-  picks a model from the brain's own listing, and an effort where that
-  model lists efforts, and presses Make, which asks nothing; more by hand
-  with + New crew member. Aqua: which crew member it runs on, whose
-  brain, model and mode Aqua takes, which asks nothing either (or, with
+  picks a model from the brain's own listing, an effort where that model
+  lists efforts and, on a program, an access its driver lists, and
+  presses Make, which asks nothing; more by hand with + New crew member.
+  Aqua: which crew member it runs on, whose brain, model and options Aqua
+  takes, which asks nothing either (or, with
   `agent=<name>`, which connected brain that crew member runs on). A
   source whose consent moved is consented again in the page's system
   layer.
@@ -653,7 +654,8 @@ defmodule PrismWeb.AquaLive do
   crew member runs on, the member CYFR suggests for it (`Aqua.crew_suggestion/1`),
   with a model from that brain's own listing, the efforts that model
   lists (a program's from its listing, an API brain's from its
-  `describe` once a model is picked) and its Make, and the
+  `describe` once a model is picked), a program's Access selection
+  (`AgentsComponent.access_select/1`) and its Make, and the
   members made, each ready or what it waits on. Aqua: which crew member
   it runs on, done once Aqua reads ready, and until then the state of
   the crew's grant it waits on, with its Grant
@@ -888,7 +890,7 @@ defmodule PrismWeb.AquaLive do
                 Make, with the model they pick from its brain's own
                 listing; connecting a brain makes none. --%>
           <form
-            :for={{suggested, brain, models, efforts, picked} <- @suggestions}
+            :for={{suggested, brain, models, efforts, access, picked} <- @suggestions}
             id={"aqua-setup-suggest-" <> suggested.name}
             phx-change="suggest_model"
             phx-submit="make_member"
@@ -917,6 +919,12 @@ defmodule PrismWeb.AquaLive do
                 <option value="">{default_effort(brain)}</option>
                 <option :for={effort <- efforts} value={effort}>{effort}</option>
               </select>
+              <AgentsComponent.access_select
+                :if={access != []}
+                access={access}
+                name="access"
+                label={"Access for " <> suggested.title}
+              />
               <input
                 type="text"
                 name="description"
@@ -986,7 +994,9 @@ defmodule PrismWeb.AquaLive do
                 {member.title}
               </option>
             </select>
-            <p class="mt-1 text-gray-500">Aqua answers with that member's brain, model and mode.</p>
+            <p class="mt-1 text-gray-500">
+              Aqua answers with that member's brain, model and options.
+            </p>
           </form>
 
           <p :if={@soul_ready and @member_title} data-test="setup-aqua-done" class="text-emerald-400">
@@ -1118,9 +1128,10 @@ defmodule PrismWeb.AquaLive do
   # The member suggested for each connected brain no crew member runs on,
   # with the value its Make names the brain by, the models its own listing
   # gave (a catalyst's from the catalogue, a program's from its program),
-  # the efforts it offers and the model picked on its row: a program's
-  # efforts are its listing's, a catalyst's those its `describe` declares
-  # for the model picked, none before one is.
+  # the efforts it offers, the access choices a program's driver lists and
+  # the model picked on its row: a program's efforts are its listing's, a
+  # catalyst's those its `describe` declares for the model picked, none
+  # before one is; a catalyst has no access choice.
   defp suggestions(providers, signed_in, assigns, taken) do
     catalysts =
       for %{state: :ready, provider: provider, ref: ref} <- providers,
@@ -1129,7 +1140,7 @@ defmodule PrismWeb.AquaLive do
           do:
             {Aqua.crew_suggestion({:catalyst, provider}), "catalyst:" <> provider,
              Enum.map(Map.get(assigns.models_by_provider, provider) || [], &{&1, &1}), efforts,
-             picked}
+             [], picked}
 
     programs =
       for %{name: name, title: title} <- signed_in,
@@ -1137,7 +1148,8 @@ defmodule PrismWeb.AquaLive do
           {:ok, %{models: models} = listing} <- [assigns.listings[name]],
           do:
             {Aqua.crew_suggestion({:program, name, title}), "program:" <> name,
-             Enum.map(models, &{&1.id, &1.name}), Map.get(listing, :efforts, []), nil}
+             Enum.map(models, &{&1.id, &1.name}), Map.get(listing, :efforts, []),
+             Map.get(listing, :access, []), nil}
 
     catalysts ++ programs
   end
