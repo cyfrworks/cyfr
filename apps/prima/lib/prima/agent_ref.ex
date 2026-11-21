@@ -73,17 +73,16 @@ defmodule Prima.AgentRef do
 
   @doc """
   The sentence a person reads where the soul's file still names a brain,
-  a model, options or a mode of its own
-  (`Compendium.AquaAgent`), which Aqua takes from the crew member it runs
-  on: on the Aqua page, as the line a thread is given, and for a post
-  that names no one. It says what to delete and where to choose instead.
+  a model or options of its own (`Compendium.AquaAgent`), which Aqua
+  takes from the crew member it runs on: on the Aqua page, as the line a
+  thread is given, and for a post that names no one. It says what to delete and where to choose instead.
   """
   @spec seat_has_brain() :: String.t()
   def seat_has_brain,
     do:
       "Aqua's file still names a brain of its own, and Aqua now runs on a crew member you " <>
         "choose, so Aqua can't answer. In Files, open aqua/aqua.md and delete its " <>
-        "`catalyst_ref`, `program`, `model`, `options` and `mode` lines, then on " <>
+        "`catalyst_ref`, `program`, `model` and `options` lines, then on " <>
         "the Aqua page choose the crew member Aqua runs on."
 
   @doc """
