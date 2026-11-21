@@ -35,6 +35,12 @@ jobs:
   test:
     if: github.repository == 'cyfrworks/cyfr'
     uses: ./.github/workflows/test.yml
+    # A called job holds no more than its caller grants. Test's image jobs
+    # ask for packages: write for their layer cache, which a tag's run only
+    # reads (test.yml's locus-image says how).
+    permissions:
+      contents: read
+      packages: write
 
   dialyzer:
     if: github.repository == 'cyfrworks/cyfr'
@@ -150,8 +156,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # APT_REFRESH is the UTC date, so each image's upgrade layer refreshes
-      # daily and is shared by every build of one day.
+      # APT_REFRESH is the UTC date, so each image's upgrade layer is that
+      # day's.
       - name: Extract metadata
         id: meta
         env:
@@ -160,6 +166,8 @@ jobs:
           echo "arch=${PLATFORM#linux/}" >> "$GITHUB_OUTPUT"
           echo "apt-refresh=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
+      # No layer cache, read or written: a released image is built from its
+      # sources alone.
       - name: Build
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -175,8 +183,6 @@ jobs:
           outputs: |
             type=docker,name=cyfr-scan/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
             type=image,name=${{ env.REGISTRY }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }}
-          cache-to: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }},mode=max
 
       # A fixable HIGH or CRITICAL finding fails the release. The findings
       # .trivyignore.yaml lists are npm's bundled dependencies, which the

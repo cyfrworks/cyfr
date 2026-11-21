@@ -1162,10 +1162,24 @@ jobs:
   # builder-image, locus-runtime-image, locus-backends-image,
   # app-image-locus-suites and the browser-tincture job's tincture proof
   # each load this build under their own tag.
+  #
+  # The two image jobs keep their layers in one public package,
+  # ghcr.io/cyfrworks/cyfr-buildcache, a tag an image. Every run reads it,
+  # anonymously; only a run on main (a push's, the nightly's) writes it, so
+  # a pull request's run (ref refs/pull/N/merge) and a tag's never do. A
+  # cache that cannot be read (missing, private, the registry down) is a
+  # warning and a cold build in BuildKit, and a write that fails is ignored
+  # (ignore-error), so the cache never turns a run red. packages: write is
+  # the write's. A permission takes no expression, so a same-repository pull
+  # request's run holds it too, and no step of that run logs in with it; a
+  # fork's token is read-only whatever a job asks.
   locus-image:
     name: The Locus image, built once for this run
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The image's upgrade layer refreshes once a UTC day and is shared
@@ -1174,6 +1188,15 @@ jobs:
         id: apt-refresh
         run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # On main alone, for the layer cache's write. A login the registry
+      # refuses or cannot answer leaves the write without credentials, and
+      # that write is ignored: a cold cache, not a red run.
+      - name: Log in to the layer cache's registry
+        if: github.ref == 'refs/heads/main'
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin || echo "::warning::no login to ghcr.io, so this run writes no layer cache"
       - name: Build the Locus image once
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -1183,8 +1206,8 @@ jobs:
             APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
           load: true
           tags: cyfr-locus:ci
-          cache-from: type=gha,scope=locus
-          cache-to: type=gha,scope=locus,mode=max
+          cache-from: type=registry,ref=ghcr.io/cyfrworks/cyfr-buildcache:locus
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=registry,ref=ghcr.io/cyfrworks/cyfr-buildcache:locus,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true' || '' }}
       - name: Save the Locus image
         run: |
           set -euo pipefail
@@ -1209,6 +1232,10 @@ jobs:
     name: The app image, built once for this run
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # The layer cache's write, as the Locus image's job says.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The image's upgrade layer refreshes once a UTC day and is shared
@@ -1217,6 +1244,13 @@ jobs:
         id: apt-refresh
         run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # As the Locus image's job logs in.
+      - name: Log in to the layer cache's registry
+        if: github.ref == 'refs/heads/main'
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin || echo "::warning::no login to ghcr.io, so this run writes no layer cache"
       - name: Build the app image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -1226,8 +1260,8 @@ jobs:
             APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
           load: true
           tags: cyfr:push
-          cache-from: type=gha,scope=cyfr-push
-          cache-to: type=gha,scope=cyfr-push,mode=max
+          cache-from: type=registry,ref=ghcr.io/cyfrworks/cyfr-buildcache:app
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=registry,ref=ghcr.io/cyfrworks/cyfr-buildcache:app,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true' || '' }}
       - name: Save the app image
         run: |
           set -euo pipefail

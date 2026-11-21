@@ -15,8 +15,10 @@
 # groups, the Elixir shards, the browser shards' viewports and the app
 # image's groups (it reads test.yml through PyYAML), for what lets a check
 # pass in every workflow (a trivy scan's pin and inputs, continue-on-error,
-# the MinIO image's digest, the npm audit's lockfiles), and for the run
-# prefix the proof scripts name what they make under.
+# the MinIO image's digest, the npm audit's lockfiles), for the image
+# builds' layer cache (no write from a pull request's run, none in
+# release.yml), and for the run prefix the proof scripts name what they
+# make under.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -1486,6 +1488,56 @@ a step that audits one lockfile#for lock in "${locks[@]}"; do#for lock in "${loc
 a step at a laxer level#--audit-level=high#--audit-level=critical#is audited at a laxer level
 a step that passes on a failed audit#) || status=1#) || :#the audit step passed with an audit failing
 a step that passes with no lockfile#  exit 1\n#  exit 0\n#the audit step passed with no lockfile to read
+CASES
+
+# --- the image builds' layer cache ---
+
+# layer_caches WORKFLOW_DIR: a docker/build-push-action step writes a layer
+# cache only through test.yml's form, an expression that is empty unless the
+# run is on main, so a pull request's run (ref refs/pull/N/merge) writes
+# none; and release.yml's builds read and write none, a released image being
+# built from its sources alone. Each error is a line.
+layer_caches() {
+  python3 -I - "$1" <<'PY'
+import glob, os, re, sys, yaml
+ON_MAIN = re.compile(r"\$\{\{ github\.ref == 'refs/heads/main' && '[^']+' \|\| '' \}\}")
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml"))):
+    wf = os.path.basename(path)
+    for job, body in (yaml.safe_load(open(path)).get("jobs") or {}).items():
+        for step in body.get("steps") or []:
+            if str(step.get("uses", "")).split("@")[0] != "docker/build-push-action":
+                continue
+            where = f"{wf} {job}: '{step.get('name', 'a build-push-action step')}'"
+            given = step.get("with") or {}
+            if wf == "release.yml":
+                for k in ("cache-from", "cache-to"):
+                    if k in given:
+                        print(f"{where} sets {k}, a layer cache in a release build")
+            elif "cache-to" in given and not ON_MAIN.fullmatch(str(given["cache-to"])):
+                print(f"{where} writes its layer cache on a run off main: {given['cache-to']}")
+PY
+}
+label="workflows: a layer cache is written only from main, and a release build has none"
+layer_caches "$root/.github/workflows" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+while IFS='|' read -r kind wf cache want; do
+  label="workflows: the layer cache check refuses $kind"
+  fixture_workflow "$wf" <<YML
+jobs:
+  image:
+    steps:
+      - name: Build
+        uses: docker/build-push-action@0000000000000000000000000000000000000000
+        with:
+          $cache
+YML
+  layer_caches "$scratch/fixture" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+a write on every event|test|cache-to: type=registry,ref=example/cache:app,mode=max|test.yml image: 'Build' writes its layer cache on a run off main: type=registry,ref=example/cache:app,mode=max
+a release build that reads one|release|cache-from: type=registry,ref=example/cache:app|release.yml image: 'Build' sets cache-from, a layer cache in a release build
 CASES
 
 # --- the proofs' run prefix ---
