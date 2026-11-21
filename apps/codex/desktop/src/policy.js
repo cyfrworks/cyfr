@@ -29,21 +29,39 @@ export function parse(address) {
 }
 
 /**
- * Where a content window's top-level load of `address` goes: "allow",
- * "hop" (the account service's sign-in page, opened in the account
- * window), "company" (the CYFR's company sign-in, which the app does not
- * offer) or "block". `state` names the selected CYFR, once main is ready
- * for it, and its account service.
+ * What a content window does with a navigation to `url`: in its top
+ * frame (`mainFrame`), started by the page at `from`, or in one of its
+ * frames. "allow", "block", "hop" (a ceremony: the selected CYFR's own
+ * page sends its top frame to the account service's sign-in or recovery
+ * route, which opens in the account window, also where the CYFR serves
+ * those routes itself) or "company" (the CYFR's company sign-in, which
+ * the app does not offer). A frame never hops, by navigation or by
+ * redirect, and never loads a ceremony's route. `state` names the CYFR
+ * main keeps to and its account service.
  */
-export function contentLoad(address, state) {
-  const u = parse(address)
+export function contentNavigation({url, mainFrame, from}, state) {
+  const u = parse(url)
   if (!u) return "block"
+  if (!mainFrame) return frameLoad(u, state)
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home) return "block"
+  if (ceremony(u, state)) return state.accountRoad && parse(from)?.origin === state.home ? "hop" : "block"
   if (u.origin === state.home) return u.pathname === "/company-login" ? "company" : "allow"
-  if (state.accountRoad && u.origin === state.account && u.pathname === "/account/sign") return "hop"
   return "block"
 }
+
+// A frame of a content page: the device's pages and the selected CYFR's,
+// none of its ceremony or company sign-in routes, and documents of no
+// origin.
+function frameLoad(u, state) {
+  if (["about:", "blob:", "data:"].includes(u.protocol)) return "allow"
+  if (u.origin === LOOPBACK) return "allow"
+  if (!state.home || ceremony(u, state)) return "block"
+  return u.origin === state.home && u.pathname !== "/company-login" ? "allow" : "block"
+}
+
+// Whether u is one of the account service's ceremony routes.
+const ceremony = (u, state) => u.origin === state.account && ACCOUNT_PAGES.includes(u.pathname)
 
 /**
  * What a content page's window.open of `address` opens: "child" (the
@@ -58,19 +76,23 @@ export function contentOpen(address, state) {
   return "deny"
 }
 
+// The request purpose each kind of hop carries: a sign-in hops the top
+// frame, a confirmation opens a window.
+const PURPOSE = {"sign-in": "sign_in", "confirmation": "confirm"}
+
 /**
- * The sign-in or confirmation a hop to `address` carries, when it is one
- * the selected CYFR issued for itself and still current: the request read
- * as the account pages read it, for that CYFR, returning to its /login,
- * not expired. Anything else is null.
+ * The sign-in or confirmation a hop of `kind` ("sign-in" or
+ * "confirmation") to `address` carries, when it is one the selected CYFR
+ * issued for itself and still current: the request read as the account
+ * pages read it, of the purpose its kind carries, for that CYFR,
+ * returning to its /login, not expired. Anything else is null.
  */
-export function readHop(address, state, now = Date.now()) {
+export function readHop(address, state, kind, now = Date.now()) {
   const u = parse(address)
   if (!u || u.origin !== state.account || u.pathname !== "/account/sign" || u.search !== "") return null
   try {
     const request = readRequest(parseFragment(u.hash.slice(1)))
-    const purposeOK = request.purpose === "sign_in" || request.purpose === "confirm"
-    if (!purposeOK || request.audience !== state.home || request.return !== state.home + "/login" ||
+    if (!PURPOSE[kind] || request.purpose !== PURPOSE[kind] || request.audience !== state.home || request.return !== state.home + "/login" ||
         request.expires_at <= now) return null
     return request
   } catch {
@@ -79,14 +101,15 @@ export function readHop(address, state, now = Date.now()) {
 }
 
 /**
- * Where the account window's top-level load of `address` goes: "allow"
- * (the account service's sign-in page or its recovery continuation),
- * "return" (the selected CYFR's /login, which carries the answer back to
- * the session that hopped) or "block".
+ * Where the account window's load of `address` goes: "allow" (the
+ * account service's sign-in page or its recovery continuation in its top
+ * frame), "return" (the selected CYFR's /login in its top frame, which
+ * carries the answer back to the session that hopped) or "block": a frame
+ * loads nothing there.
  */
-export function accountLoad(address, state) {
+export function accountLoad(address, state, mainFrame = true) {
   const u = parse(address)
-  if (!u) return "block"
+  if (!u || !mainFrame) return "block"
   if (u.origin === state.account && ACCOUNT_PAGES.includes(u.pathname)) return "allow"
   if (u.origin === state.home && u.pathname === "/login" && u.search === "") return "return"
   return "block"
@@ -130,13 +153,45 @@ export function documentHeaders(kind, resourceType, headers) {
 }
 
 /**
- * Whether a sign-out's direct answer says the CYFR retired the session
- * it was sent under: the signed-out redirect with cyfr-session-retired: 1.
+ * Whether a sign-out's direct answer says the selected CYFR at `home`
+ * retired the session it was sent under: a redirect whose location,
+ * resolved against `home`, is exactly its signed-out address, with
+ * cyfr-session-retired: 1.
  */
-export function retired(status, headers) {
-  const location = headers.get("location") || ""
+export function retired(status, headers, home) {
+  let to = ""
+  try {
+    to = new URL(headers.get("location") ?? "", home + "/auth/logout").href
+  } catch {
+    return false
+  }
   return (status === 302 || status === 303) && headers.get("cyfr-session-retired") === "1" &&
-    (location === "/login?error=signed_out" || location.endsWith("/login?error=signed_out"))
+    to === home + "/login?error=signed_out"
+}
+
+/**
+ * The switches the app takes on its command line: the selected CYFR's
+ * route, which main relaunches itself with. The engine takes every other
+ * switch, from opening a debugging port to trusting any certificate, so
+ * the app refuses them all.
+ */
+export const SWITCHES = ["proxy-server", "host-resolver-rules"]
+
+/**
+ * The first switch of `args` (the command line after the executable) the
+ * app does not take, as the engine reads switches on `platform`: "-" or
+ * "--" before a name, "/" too on Windows, up to an "=" and its value,
+ * until a bare "--". null when every switch is one the app takes.
+ */
+export function unlistedSwitch(args, platform) {
+  for (const arg of args) {
+    if (arg === "--") return null
+    const prefix = /^--?/.exec(arg) ?? (platform === "win32" ? /^\//.exec(arg) : null)
+    if (!prefix) continue
+    const name = arg.slice(prefix[0].length).split("=")[0].toLowerCase()
+    if (!SWITCHES.includes(name)) return name || arg
+  }
+  return null
 }
 
 /** Whether `home` and `account` name a CYFR and an account service's origin. */

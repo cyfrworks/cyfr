@@ -7,10 +7,12 @@
 # macOS and Windows (Git Bash). Each check prints one PASS or FAIL line, and
 # one FAIL fails the run:
 #
-#   refused    each switch that would open a debugging port or lift the
-#              renderers' sandbox or web security (--remote-debugging-port,
-#              --inspect, --no-sandbox, --disable-web-security) ends the app
-#              with 2, naming the switch
+#   refused    each switch the app does not take, which would open a
+#              debugging port, lift the renderers' sandbox or web security,
+#              or trust any certificate (--remote-debugging-port, --inspect,
+#              --no-sandbox, --disable-web-security,
+#              --ignore-certificate-errors), ends the app with 2, naming
+#              the switch
 #   startup    the app says ready and the chooser answers 200 on
 #              127.0.0.1:7340
 #   sandbox    (Linux) every live renderer of the app runs under seccomp
@@ -211,7 +213,7 @@ fi
 
 # ---- refused: each a launch of its own, which ends before anything else ----
 
-for switch in --remote-debugging-port=9229 --inspect=9229 --no-sandbox --disable-web-security; do
+for switch in --remote-debugging-port=9229 --inspect=9229 --no-sandbox --disable-web-security --ignore-certificate-errors; do
   name=${switch%%=*}
   name=${name#--}
   launch "refused-$name" "$switch"

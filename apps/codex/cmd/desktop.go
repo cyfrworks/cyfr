@@ -71,13 +71,15 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 		defer cancel()
 		_ = hs.Shutdown(sctx)
 	}()
-	if err := to.Send(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
-		return err
-	}
+	// What cannot be watched is known before the chooser first asks.
 	watching, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
-	if err := watchSessionLock(watching, svc.Lock); err != nil {
-		fmt.Fprintf(os.Stderr, "cyfr: %v: this computer's lock and sleep do not lock CYFR\n", err)
+	watchSessionLock(watching, svc.Lock, func(sentence string) {
+		svc.Warn(sentence)
+		fmt.Fprintln(os.Stderr, "cyfr: "+sentence)
+	})
+	if err := to.Send(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
+		return err
 	}
 	ran := make(chan error, 1)
 	go func() { ran <- svc.Run(in) }()

@@ -11,6 +11,7 @@ export const MAX_LINE = 64 * 1024
 const FIELDS = {
   ready: {required: ["url"]},
   home: {required: ["home", "account"], optional: ["proxy", "resolver"]},
+  opened: {required: ["home"]},
   locked: {required: []},
   "pick-folder": {required: ["id", "suggested"]},
   "home-ready": {required: ["home"]},
@@ -19,7 +20,7 @@ const FIELDS = {
   "folder-picked": {required: ["id", "path"]}
 }
 
-const FROM_CYFR = ["ready", "home", "locked", "pick-folder"]
+const FROM_CYFR = ["ready", "home", "opened", "locked", "pick-folder"]
 const FROM_MAIN = ["home-ready", "lock", "shutdown", "folder-picked"]
 
 export class Refused extends Error {
@@ -80,5 +81,38 @@ export function lines(line) {
       line(one)
     }
     if (held.length > MAX_LINE) throw new Refused("size")
+  }
+}
+
+/**
+ * The CYFR main keeps to. cyfr proposes one with home, and holds it as
+ * selected only once it has committed it, which opened says: until then
+ * a lock (`cancel`) or a failure leaves main able to take cyfr's next
+ * proposal, for the same CYFR or another. Once one is selected, another
+ * proposal is not a message cyfr sends.
+ */
+export function selection() {
+  const s = {home: "", account: "", selected: false}
+  return {
+    get home() { return s.home },
+    get account() { return s.account },
+    get selected() { return s.selected },
+    /** Take home's proposal; false once a CYFR is selected. */
+    propose(m) {
+      if (s.selected) return false
+      s.home = m.home
+      s.account = m.account
+      return true
+    },
+    /** cyfr committed `home`; false unless it is the one proposed. */
+    opened(home) {
+      if (s.selected || !s.home || home !== s.home) return false
+      s.selected = true
+      return true
+    },
+    /** A lock ends a proposal cyfr has not committed. */
+    cancel() {
+      if (!s.selected) s.home = s.account = ""
+    }
   }
 }

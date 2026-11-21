@@ -108,6 +108,15 @@ func (a *app) next(t *testing.T) Message {
 	return Message{}
 }
 
+// opened is cyfr telling main it committed home, which it says once a
+// selection opened and never before.
+func (a *app) opened(t *testing.T, home string) {
+	t.Helper()
+	if m := a.next(t); m.Type != TypeOpened || m.Home != home {
+		t.Fatalf("main heard %+v, not that %s opened", m, home)
+	}
+}
+
 func (a *app) quiet(t *testing.T) {
 	t.Helper()
 	select {
@@ -212,6 +221,7 @@ func TestACYFROnTheDefaultDirectoryOpensOnceMainIsReady(t *testing.T) {
 	if got := answered(t, done); got.Next != "/" || got.Error != "" {
 		t.Fatalf("answered %+v", got)
 	}
+	a.opened(t, "https://cyfr.example.com")
 	if w := a.get("/"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Set up CYFR") {
 		t.Fatalf("the device's pages are not served: %d %s", w.Code, w.Body)
 	}
@@ -287,6 +297,7 @@ func TestAnotherDirectoryIsApprovedBeforeAnythingContactsIt(t *testing.T) {
 	if got := answered(t, done); got.Next != "/" {
 		t.Fatalf("answered %+v", got)
 	}
+	a.opened(t, "https://cyfr.example.com")
 
 	again := newApp(t, dir, service.Client())
 	again.directory.Store(custom)
@@ -369,6 +380,16 @@ func TestALockEndsASelectionWaitingForMain(t *testing.T) {
 	if w := a.get("/"); w.Code != http.StatusSeeOther {
 		t.Fatal("the device's pages were served after the lock")
 	}
+	// main keeps no CYFR from this Connect: cyfr never said it opened one,
+	// and proposes again for the next.
+	a.quiet(t)
+	again := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	if m := a.next(t); m.Type != TypeHome {
+		t.Fatalf("the next Connect proposed nothing: %+v", m)
+	}
+	a.HomeReady("https://cyfr.example.com")
+	answered(t, again)
+	a.opened(t, "https://cyfr.example.com")
 }
 
 var (
@@ -401,6 +422,7 @@ func TestALockBeforeTheFirstConnectionErasesTheKeyAndTheProof(t *testing.T) {
 	a.next(t)
 	a.HomeReady("https://cyfr.example.com")
 	answered(t, done)
+	a.opened(t, "https://cyfr.example.com")
 
 	drawn := codeShape.FindStringSubmatch(a.form("/passphrase", nil).Body.String())
 	if drawn == nil {
@@ -621,6 +643,7 @@ func TestAConnectThatFailsAfterHomeReadyLeavesTheServiceFree(t *testing.T) {
 	if got := answered(t, again); got.Next != "/" {
 		t.Fatalf("the next Connect answered %+v", got)
 	}
+	a.opened(t, "https://cyfr.example.com")
 }
 
 // Where the app signs in with the account's passkey, an open CYFR's
@@ -641,10 +664,30 @@ func TestAnOpenCYFROffersThePasskeyRoadWhereTheAppHasIt(t *testing.T) {
 		if got := answered(t, done); got != want {
 			t.Fatalf("account road %v: answered %+v", road, got)
 		}
+		a.opened(t, "https://cyfr.example.com")
 		a.Lock("Locked.")
 		a.next(t)
 		if got := a.post(t, "/bootstrap/state", map[string]string{}); got != want {
 			t.Fatalf("account road %v: the chooser after a lock shows %+v", road, got)
 		}
+	}
+}
+
+// What this app cannot do here (Warn) the chooser shows on every state it
+// is asked for, before a CYFR opens and after.
+func TestTheChooserShowsWhatTheAppCannotDoHere(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	const sentence = "CYFR cannot tell when this computer locks here."
+	a.Warn(sentence)
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Warning != sentence {
+		t.Fatalf("the chooser shows %+v", got)
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	a.next(t)
+	a.HomeReady("https://cyfr.example.com")
+	answered(t, done)
+	a.opened(t, "https://cyfr.example.com")
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Warning != sentence || got.Next != "/" {
+		t.Fatalf("the chooser of an open CYFR shows %+v", got)
 	}
 }

@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/godbus/dbus/v5"
@@ -21,44 +20,68 @@ const (
 	sessionLock = "Lock"
 )
 
+// The sentences the chooser shows where this computer's lock is not
+// heard, and the lock's when hearing it stops.
+const (
+	notWatched     = "CYFR cannot tell when this computer locks or sleeps here, so it does not lock when the computer does."
+	sessionUnheard = "CYFR cannot tell when this computer locks here, only when it sleeps, so it does not lock when the computer locks."
+	watchLost      = "Locked: CYFR stopped hearing this computer's lock."
+)
+
 // watchSessionLock calls lock whenever this login session locks (logind's
 // Lock signal, or its LockedHint turning true) or the computer is about
-// to sleep (PrepareForSleep), until ctx ends. Sleep is watched on the
-// system bus whatever the session; a process outside any login session
-// watches sleep alone, and says so.
-func watchSessionLock(ctx context.Context, lock func(why string)) error {
+// to sleep (PrepareForSleep), until ctx ends. It fails closed and never
+// silently: what it cannot watch from the start it tells warn, in the
+// sentence the chooser shows, and losing the system bus while running
+// locks and tells warn too.
+func watchSessionLock(ctx context.Context, lock func(why string), warn func(sentence string)) {
 	conn, err := dbus.ConnectSystemBus(dbus.WithContext(ctx))
 	if err != nil {
-		return fmt.Errorf("the system bus cannot be reached (%v)", err)
+		warn(notWatched)
+		return
 	}
 	if err := conn.AddMatchSignal(dbus.WithMatchInterface(login1Seat), dbus.WithMatchMember("PrepareForSleep")); err != nil {
 		conn.Close()
-		return err
+		warn(notWatched)
+		return
 	}
 	var session dbus.ObjectPath
 	call := conn.Object(login1, login1Path).CallWithContext(ctx, login1Seat+".GetSessionByPID", 0, uint32(os.Getpid()))
-	if call.Err == nil && call.Store(&session) == nil {
-		_ = conn.AddMatchSignal(dbus.WithMatchObjectPath(session), dbus.WithMatchInterface(login1Sess), dbus.WithMatchMember(sessionLock))
-		_ = conn.AddMatchSignal(dbus.WithMatchObjectPath(session), dbus.WithMatchInterface(dbusProps), dbus.WithMatchMember("PropertiesChanged"))
-	} else {
-		fmt.Fprintln(os.Stderr, "cyfr: this process is in no login session: only sleep locks CYFR here, not the session's lock")
+	if call.Err != nil || call.Store(&session) != nil ||
+		conn.AddMatchSignal(dbus.WithMatchObjectPath(session), dbus.WithMatchInterface(login1Sess), dbus.WithMatchMember(sessionLock)) != nil ||
+		conn.AddMatchSignal(dbus.WithMatchObjectPath(session), dbus.WithMatchInterface(dbusProps), dbus.WithMatchMember("PropertiesChanged")) != nil {
+		session = ""
+		warn(sessionUnheard)
 	}
 	signals := make(chan *dbus.Signal, 16)
 	conn.Signal(signals)
 	go func() {
 		defer conn.Close()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case sig := <-signals:
-				if why := lockSignal(sig, session); why != "" {
-					lock(why)
+		watchSignals(ctx, signals, session, lock, warn)
+	}()
+}
+
+// watchSignals locks on each of signals that locks this session (or any
+// session's sleep), until ctx ends. A channel that closes, or a nil
+// signal, while ctx runs is the bus lost: it locks and warns.
+func watchSignals(ctx context.Context, signals <-chan *dbus.Signal, session dbus.ObjectPath, lock func(string), warn func(string)) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sig, ok := <-signals:
+			if !ok || sig == nil {
+				if ctx.Err() == nil {
+					warn(notWatched)
+					lock(watchLost)
 				}
+				return
+			}
+			if why := lockSignal(sig, session); why != "" {
+				lock(why)
 			}
 		}
-	}()
-	return nil
+	}
 }
 
 // lockSignal is why sig locks the device, or "".

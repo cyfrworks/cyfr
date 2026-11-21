@@ -8,8 +8,9 @@
 // The production entry (src/main.js) is bundled into one main.js; the
 // app is exactly app.asar/{package.json,main.js} beside the verified cyfr
 // at PATH, which goes outside the archive as resources/cyfr[.exe]. Before
-// anything is signed or packed the unpacked app is checked against that
-// staging (check-package.mjs), and a package that differs is not made.
+// anything is signed or packed every file of the unpacked app is checked
+// against that staging and the pinned Electron distribution
+// (check-package.mjs), and a package that differs is not made.
 // The package is cyfr-desktop_VERSION_OS_ARCH, a DEB on Linux (installed
 // at /opt/cyfr/CYFR, the bundled cyfr linked as /usr/bin/cyfr, its
 // sandbox's AppArmor profile loaded), a DMG on macOS and an MSI on
@@ -25,7 +26,7 @@ import {parseArgs} from "node:util"
 import {build as bundle} from "esbuild"
 import {Arch, Platform, build} from "electron-builder"
 
-import {checkPackage} from "./check-package.mjs"
+import {checkPackage, filesOf} from "./check-package.mjs"
 
 // Every file the package installs is root's alone to change.
 process.umask(0o022)
@@ -65,6 +66,8 @@ const executable = os === "windows" ? "cyfr.exe" : "cyfr"
 const helper = path.join(stage, executable)
 copyFileSync(values.cyfr, helper)
 const staged = {
+  product: "CYFR",
+  distribution: null,
   files: {"package.json": readFileSync(path.join(app, "package.json")), "main.js": readFileSync(path.join(app, "main.js"))},
   helper: {name: executable, sha256: createHash("sha256").update(readFileSync(helper)).digest("hex")}
 }
@@ -107,6 +110,11 @@ await build({
       // Flipping fuses breaks the ad hoc signature an arm64 Mac app needs
       // to launch at all; an unsigned build is signed ad hoc again.
       resetAdHocDarwinSignature: os === "darwin" && values.arch === "arm64"
+    },
+    // The pinned Electron distribution as electron-builder extracted it,
+    // before the app is added: the guard's roster of Electron's files.
+    afterExtract: async (context) => {
+      staged.distribution = filesOf(context.appOutDir)
     },
     afterPack: async (context) => {
       checkPackage(context.appOutDir, staged, os)

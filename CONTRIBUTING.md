@@ -258,7 +258,7 @@ same worktree refuses, naming the run that holds it.
   tree's `cyfr` on Linux amd64 and arm64, macOS and Windows, installs it
   as a person does (DEB, DMG, MSI) and runs
   `tests/desktop-proof/native/smoke.sh` against the installed app with no
-  CYFR server and no signing credentials: the refused debugging switches,
+  CYFR server and no signing credentials: the refused switches,
   startup and the chooser on 127.0.0.1:7340, the renderers' sandbox on
   Linux, a second launch, a lost renderer or `cyfr`, an occupied port and
   the app's end. Its header names what the smoke leaves to the real-home

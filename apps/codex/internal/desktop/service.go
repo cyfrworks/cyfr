@@ -75,6 +75,17 @@ type Service struct {
 	selecting string
 	sh        *shell.Shell
 	pages     *shell.Server
+	// warning is what the chooser tells the person this app cannot do
+	// here (Warn).
+	warning string
+}
+
+// Warn has the chooser tell the person, in one sentence, what this app
+// cannot do on this computer, such as lock with it.
+func (s *Service) Warn(sentence string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.warning = sentence
 }
 
 type selection struct {
@@ -226,6 +237,9 @@ type answer struct {
 	Next    string `json:"next,omitempty"`
 	Passkey string `json:"passkey,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// Warning is what this app cannot do on this computer (Warn), which
+	// the chooser shows whatever else it shows.
+	Warning string `json:"warning,omitempty"`
 }
 
 // opened is the answer for the CYFR open at home.
@@ -243,12 +257,14 @@ func (s *Service) state(context.Context, uint64, request) answer {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
 	s.mu.Lock()
-	open := s.pages != nil
+	open, warning := s.pages != nil, s.warning
 	s.mu.Unlock()
+	a := answer{Home: c.Home}
 	if open {
-		return s.opened(c.Home)
+		a = s.opened(c.Home)
 	}
-	return answer{Home: c.Home}
+	a.Warning = warning
+	return a
 }
 
 // homeOf reads a typed address as a CYFR's https origin: a bare name is
@@ -380,6 +396,9 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
+	// main holds home as selected from now on (TypeOpened); a main that
+	// does not hear it keeps to home all the same, as its proposal.
+	_ = s.Send(Message{Type: TypeOpened, Home: home})
 	return s.opened(home)
 }
 

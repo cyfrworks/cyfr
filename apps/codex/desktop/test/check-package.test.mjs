@@ -15,7 +15,10 @@ import {PROOF_MARKER, Refused, checkPackage} from "../scripts/check-package.mjs"
 const main = Buffer.from("startApp({cyfr: path.join(process.resourcesPath, 'cyfr')})\n")
 const pkg = Buffer.from('{"name":"cyfr-desktop","main":"main.js"}\n')
 const cyfr = Buffer.from("the verified cyfr")
-const staged = {files: {"package.json": pkg, "main.js": main},
+// Electron's distribution as electron-builder extracts it, before the
+// executable takes the product's name.
+const distribution = ["LICENSE.electron.txt", "chrome-sandbox", "electron", "locales/en-US.pak", "resources.pak"]
+const staged = {files: {"package.json": pkg, "main.js": main}, product: "CYFR", distribution,
   helper: {name: "cyfr", sha256: createHash("sha256").update(cyfr).digest("hex")}}
 
 // An unpacked Linux app as electron-builder leaves it, changed by `spoil`.
@@ -32,7 +35,11 @@ async function unpacked(t, spoil = () => {}) {
   await createPackage(src, path.join(out, "resources", "app.asar"))
   writeFileSync(path.join(out, "resources", "cyfr"), cyfr)
   writeFileSync(path.join(out, "resources", "apparmor-profile"), "profile CYFR {}\n")
-  writeFileSync(path.join(out, "CYFR"), "the Electron executable")
+  for (const file of distribution) {
+    const at = path.join(out, file === "electron" ? "CYFR" : file)
+    mkdirSync(path.dirname(at), {recursive: true})
+    writeFileSync(at, `Electron's ${file}`)
+  }
   return out
 }
 
@@ -57,6 +64,14 @@ test("a contaminated package is refused", async (t) => {
   const second = await unpacked(t)
   writeFileSync(path.join(second, "resources", "proof.asar"), "x")
   assert.throws(() => checkPackage(second, staged, "linux"), Refused, "a second archive")
+  const beside = await unpacked(t)
+  writeFileSync(path.join(beside, "helper"), "an inert executable")
+  assert.throws(() => checkPackage(beside, staged, "linux"), Refused, "a file beside resources")
+  const deeper = await unpacked(t)
+  writeFileSync(path.join(deeper, "locales", "proof.js"), "x")
+  assert.throws(() => checkPackage(deeper, staged, "linux"), Refused, "a file among Electron's")
+  const unread = await unpacked(t)
+  assert.throws(() => checkPackage(unread, {...staged, distribution: null}, "linux"), Refused, "no distribution read")
   const swapped = await unpacked(t)
   writeFileSync(path.join(swapped, "resources", "cyfr"), "another program")
   assert.throws(() => checkPackage(swapped, staged, "linux"), Refused, "another cyfr")

@@ -9,4 +9,4 @@ import "context"
 
 // watchSessionLock is the app's main process's own on macOS and Windows,
 // which hears the system's lock and sleep and sends lock.
-func watchSessionLock(context.Context, func(string)) error { return nil }
+func watchSessionLock(context.Context, func(string), func(string)) {}

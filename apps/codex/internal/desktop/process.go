@@ -33,6 +33,9 @@ const (
 	// how to reach it; main answers home-ready once its window keeps to
 	// them.
 	TypeHome = "home"
+	// Opened says cyfr committed the CYFR home proposed: main holds it as
+	// selected from then on, and until then takes cyfr's next proposal.
+	TypeOpened = "opened"
 	// Locked says the device locked: main destroys its content windows and
 	// shows the device's pages.
 	TypeLocked = "locked"
@@ -53,6 +56,7 @@ const (
 var fields = map[string]struct{ required, optional []string }{
 	TypeReady:        {required: []string{"url"}},
 	TypeHome:         {required: []string{"home", "account"}, optional: []string{"proxy", "resolver"}},
+	TypeOpened:       {required: []string{"home"}},
 	TypeLocked:       {},
 	TypePickFolder:   {required: []string{"id", "suggested"}},
 	TypeHomeReady:    {required: []string{"home"}},

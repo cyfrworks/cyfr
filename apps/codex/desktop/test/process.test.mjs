@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import {test} from "node:test"
 
-import {MAX_LINE, Refused, VERSION, lines, readFromCyfr, toCyfr} from "../src/process.js"
+import {MAX_LINE, Refused, VERSION, lines, readFromCyfr, selection, toCyfr} from "../src/process.js"
 
 const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
 
@@ -39,7 +39,7 @@ test("main refuses each line refused to it, with its reason", () => {
 })
 
 test("main sends nothing cyfr sends", () => {
-  for (const type of ["ready", "home", "locked", "pick-folder", "unlock"]) {
+  for (const type of ["ready", "home", "opened", "locked", "pick-folder", "unlock"]) {
     assert.throws(() => toCyfr(type, {}))
   }
 })
@@ -52,4 +52,28 @@ test("lines are whole lines, however the stream cuts them", () => {
   feed('"type":"locked"}\n')
   assert.deepEqual(got, ['{"version":1,"type":"locked"}', '{"version":1,"type":"locked"}'])
   assert.throws(() => lines(() => {})("x".repeat(MAX_LINE + 1)), (e) => e.reason === "size")
+})
+
+// cyfr's messages in an interrupted Connect (internal/desktop's
+// TestALockEndsASelectionWaitingForMain): home, a lock before cyfr
+// commits it, then home again for the same CYFR, which opens.
+test("main holds a CYFR as selected only once cyfr says it opened it", () => {
+  const home = {version: 1, type: "home", home: "https://cyfr.example.com", account: "https://cyfr.run"}
+  const chosen = selection()
+  assert.equal(chosen.propose(home), true)
+  assert.equal(chosen.home, home.home)
+  chosen.cancel()
+  assert.equal(chosen.home, "", "a lock ends the proposal cyfr did not commit")
+  assert.equal(chosen.propose(home), true, "the same CYFR proposed again")
+  assert.equal(chosen.opened("https://another.example.com"), false)
+  assert.equal(chosen.opened(home.home), true)
+  chosen.cancel()
+  assert.equal(chosen.home, home.home, "a lock keeps the CYFR cyfr committed")
+  assert.equal(chosen.propose({...home, home: "https://another.example.com"}), false)
+  assert.equal(chosen.opened(home.home), false, "opened twice")
+
+  const failed = selection()
+  failed.propose(home)
+  assert.equal(failed.propose({...home, home: "https://another.example.com"}), true, "after a failure, another CYFR")
+  assert.equal(failed.opened("https://another.example.com"), true)
 })

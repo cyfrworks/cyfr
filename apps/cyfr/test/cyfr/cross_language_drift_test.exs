@@ -663,6 +663,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
     ],
     "sign_in.json" => [
+      {"apps/codex/desktop/test/main.test.mjs", ~w(home requests)},
       {"apps/codex/desktop/test/policy.test.mjs", ~w(home max_fragment_bytes requests)},
       {"apps/codex/internal/account/wire_test.go",
        ~w(answer_refusals answers keys request_refusals requests)},

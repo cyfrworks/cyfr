@@ -15,7 +15,7 @@ import (
 const (
 	bootstrapStyle = `body{background:#0b1418;color:#e8f1f2;font:1.25rem system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:90vh}
 main{max-width:34rem;padding:1rem}label{display:block;margin:1rem 0}input{display:block;width:100%;font:inherit;padding:.5rem;margin-top:.25rem;box-sizing:border-box}
-button{font:inherit;padding:.5rem 1rem;margin:.5rem .5rem 0 0}.quiet{background:none;color:inherit;border:1px solid #567}.code{font-family:monospace;word-break:break-all}`
+button{font:inherit;padding:.5rem 1rem;margin:.5rem .5rem 0 0}.warn{color:#ffb4a2}.quiet{background:none;color:inherit;border:1px solid #567}.code{font-family:monospace;word-break:break-all}`
 	bootstrapScript = `const s=sessionStorage,f=new URLSearchParams(location.hash.slice(1)),$=i=>document.getElementById(i);
 if(f.get("token"))s.setItem("token",f.get("token"));history.replaceState(null,"",location.pathname);
 const notices={company:"This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet.",
@@ -27,7 +27,7 @@ function show(a){say(a.error);asked=a.confirm?a:null;$("confirm").hidden=!asked;
 if(asked){$("home").textContent=a.home;$("service").textContent=a.confirm}
 if(a.passkey){$("open").textContent=a.home;$("passkey").onclick=()=>location.assign(a.passkey);$("words").onclick=()=>location.assign(a.next)}
 else if(a.next)location.replace(a.next)}
-post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;show(a);if(!a.error)say(notices[f.get("notice")])});
+post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;$("warning").textContent=a.warning||"";show(a);if(!a.error)say(notices[f.get("notice")])});
 $("connect").addEventListener("submit",e=>{e.preventDefault();say("Connecting\u2026");post("/bootstrap/connect",{address:$("address").value}).then(show)});
 $("approve").addEventListener("click",()=>{say("Connecting\u2026");post("/bootstrap/approve",{home:asked.home,directory:asked.confirm}).then(show)});
 $("decline").addEventListener("click",()=>{show({});say("Nothing was sent to that account service.")});`
@@ -65,4 +65,5 @@ const bootstrapPage = `<!doctype html>
 <button id="approve">Go on</button><button id="decline" class="quiet">Cancel</button>
 </section>
 <p id="notice" role="status"></p>
+<p id="warning" class="warn" role="status"></p>
 </main><script>` + bootstrapScript + `</script></html>`

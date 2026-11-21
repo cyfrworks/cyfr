@@ -20,19 +20,15 @@ import {spawn} from "node:child_process"
 
 import {BrowserWindow, app, dialog, powerMonitor, session} from "electron"
 
-import {lines, readFromCyfr, toCyfr} from "./process.js"
+import {lines, readFromCyfr, selection, toCyfr} from "./process.js"
 import {
-  LOOPBACK, accountLoad, contentLoad, contentOpen, documentHeaders, grants, homeMessage, readHop, relyingParty, retired
+  LOOPBACK, accountLoad, contentNavigation, contentOpen, documentHeaders, grants, homeMessage, readHop, relyingParty,
+  retired, unlistedSwitch
 } from "./policy.js"
 
 const READY_WITHIN_MS = 20_000
+const UNCONFIRMED = "The CYFR did not confirm that it signed this computer out. That sign-in ends when it expires, or when you sign it out under Settings, Keys on your account."
 const ACCOUNT_PARTITION = "persist:cyfr-account"
-
-// The switches that open a debugging port, run main's code otherwise, or
-// lift the renderers' sandbox or web security: the app refuses to start
-// under any of them.
-const DEBUGGING = ["remote-debugging-port", "remote-debugging-pipe", "inspect", "inspect-brk", "inspect-port", "js-flags",
-  "no-sandbox", "disable-web-security", "disable-site-isolation-trials"]
 
 const SECURE = {
   sandbox: true,
@@ -54,12 +50,14 @@ const SECURE = {
  */
 export function startApp({cyfr, accountRoad = process.platform === "darwin" || process.platform === "win32",
   touchIdGroup = "", say = (line) => process.stderr.write(`CYFR: ${line}\n`)}) {
-  for (const s of DEBUGGING) {
-    if (app.commandLine.hasSwitch(s)) {
-      say(`refused: --${s} is not taken`)
-      app.exit(2)
-      return
-    }
+  // Every switch but the few the app takes (policy.js SWITCHES) is
+  // refused: the engine would open a debugging port, lift the sandbox or
+  // web security, or trust any certificate for one.
+  const unlisted = unlistedSwitch(process.argv.slice(1), process.platform)
+  if (unlisted !== null) {
+    say(`refused: --${unlisted} is not taken`)
+    app.exit(2)
+    return
   }
   app.enableSandbox()
   if (!app.requestSingleInstanceLock()) {
@@ -68,13 +66,21 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     return
   }
 
-  const state = {home: "", account: "", accountRoad, readyURL: ""}
+  // The CYFR main keeps to is cyfr's proposal until cyfr says it opened
+  // it (process.js selection); the policies read it through `state`.
+  const chosen = selection()
+  const state = {get home() { return chosen.home }, get account() { return chosen.account }, accountRoad, readyURL: ""}
   let child = null
   let send = () => {}
   let content = null // the one content window
   const children = new Set() // its confirmation windows
   let accountWindow = null
   let hop = null // {kind, request, from, timer}
+  // What signing the content's session out needs, held apart from its
+  // window so that closing the window at once loses nothing: the session
+  // and the forgery token of the CYFR's last page, where the passkey road
+  // opened a session.
+  let held = null
   let generation = 0
   let ended = false
   let quitting = false
@@ -112,20 +118,28 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const ses = contentSession()
     const w = window(ses)
     content = w
+    held = state.accountRoad ? {ses, token: ""} : null
     const contents = w.webContents
-    const load = (event, url) => {
-      const where = contentLoad(url, state)
+    // A top frame's navigation may hop or meet the company sign-in; a
+    // frame's is allowed or refused, never more (policy.js).
+    const load = (event) => {
+      const where = contentNavigation({url: event.url, mainFrame: event.isMainFrame, from: contents.getURL()}, state)
       if (where === "allow") return
       event.preventDefault()
-      if (where === "hop") startHop(url, "sign-in", w)
+      if (!event.isMainFrame) return
+      if (where === "hop") startHop(event.url, "sign-in", w)
       if (where === "company") lock("company")
     }
     contents.on("will-navigate", load)
     contents.on("will-redirect", load)
     contents.on("will-frame-navigate", (event) => {
-      if (!event.isMainFrame && contentLoad(event.url, state) !== "allow" && !/^(about|blob|data):/.test(event.url)) {
-        event.preventDefault()
-      }
+      if (!event.isMainFrame) load(event)
+    })
+    contents.on("did-finish-load", () => {
+      if (!held || !contents.getURL().startsWith(state.home + "/")) return
+      const keep = held
+      contents.executeJavaScript("document.querySelector('meta[name=\"csrf-token\"]')?.content ?? ''", false)
+        .then((token) => { if (held === keep && typeof token === "string" && token) keep.token = token }, () => {})
     })
     contents.setWindowOpenHandler(({url}) => {
       const what = contentOpen(url, state)
@@ -139,11 +153,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       children.add(child)
       child.on("closed", () => children.delete(child))
       child.webContents.setWindowOpenHandler(() => ({action: "deny"}))
-      const confine = (event, url) => {
-        if (contentLoad(url, state) !== "allow") event.preventDefault()
-      }
-      child.webContents.on("will-navigate", confine)
-      child.webContents.on("will-redirect", confine)
+      confine(child.webContents)
       child.webContents.on("render-process-gone", () => lock("a window's page stopped"))
     })
     contents.on("render-process-gone", () => lock("the page stopped"))
@@ -156,20 +166,39 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     w.loadURL(address)
   }
 
+  // A window of the content's own: the CYFR's pages and the device's, no
+  // hop and no other address, in any frame.
+  function confine(contents) {
+    const stay = (event) => {
+      const where = contentNavigation({url: event.url, mainFrame: event.isMainFrame, from: contents.getURL()}, state)
+      if (where !== "allow") event.preventDefault()
+    }
+    contents.on("will-navigate", stay)
+    contents.on("will-redirect", stay)
+    contents.on("will-frame-navigate", (event) => {
+      if (!event.isMainFrame) stay(event)
+    })
+  }
+
   function openAccount(address) {
     const ses = session.fromPartition(ACCOUNT_PARTITION)
     const w = window(ses, {width: 560, height: 760, parent: content ?? undefined})
     accountWindow = w
     const contents = w.webContents
-    const load = (event, url) => {
-      const where = accountLoad(url, state)
+    // Only its top frame returns; a frame there loads nothing.
+    const load = (event) => {
+      const where = accountLoad(event.url, state, event.isMainFrame)
       if (where === "allow") return
       event.preventDefault()
-      if (where === "return") finishHop(url)
+      if (!event.isMainFrame) return
+      if (where === "return") finishHop(event.url)
       else endHop()
     }
     contents.on("will-navigate", load)
     contents.on("will-redirect", load)
+    contents.on("will-frame-navigate", (event) => {
+      if (!event.isMainFrame) load(event)
+    })
     contents.on("did-start-navigation", (details) => {
       if (details.isMainFrame && accountLoad(details.url, state) === "block") endHop()
     })
@@ -202,7 +231,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // ---- the account road: a hop, its window, its return ----
 
   function startHop(url, kind, from) {
-    const request = readHop(url, state)
+    const request = readHop(url, state, kind)
     if (!request || hop) return
     hop = {kind, request, from, timer: setTimeout(endHop, Math.max(0, request.expires_at - Date.now()))}
     openAccount(url)
@@ -222,11 +251,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     children.add(w)
     w.on("closed", () => children.delete(w))
-    const confine = (event, next) => {
-      if (contentLoad(next, state) !== "allow") event.preventDefault()
-    }
-    w.webContents.on("will-navigate", confine)
-    w.webContents.on("will-redirect", confine)
+    confine(w.webContents)
     w.webContents.setWindowOpenHandler(() => ({action: "deny"}))
     w.loadURL(url)
   }
@@ -266,84 +291,83 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   // ---- lock: close the content, sign out, show the chooser again ----
 
-  async function signOut(w) {
-    if (!state.accountRoad || !state.home || !w || w.isDestroyed()) return "none"
-    const url = w.webContents.getURL()
-    if (!url.startsWith(state.home + "/")) return "none"
-    const ses = w.webContents.session
-    let token = ""
+  // Sign out the session `out` held, at the selected CYFR's /auth/logout,
+  // and forget it: whether the CYFR said it retired it (policy.js
+  // retired). Without a token there is nothing to send, and nothing
+  // confirmed.
+  async function retire(out) {
     try {
-      token = await Promise.race([
-        w.webContents.executeJavaScript("document.querySelector('meta[name=\"csrf-token\"]')?.content ?? ''", false),
-        new Promise((resolve) => setTimeout(() => resolve(""), 1000))
-      ])
-    } catch {
-      token = ""
-    }
-    return {ses, token}
-  }
-
-  async function retire({ses, token}) {
-    try {
-      if (!token) return false
-      const answer = await ses.fetch(state.home + "/auth/logout", {
+      if (!out.token) return false
+      const answer = await out.ses.fetch(state.home + "/auth/logout", {
         method: "POST", redirect: "manual", credentials: "include",
         headers: {"content-type": "application/x-www-form-urlencoded"},
-        body: "_csrf_token=" + encodeURIComponent(token),
+        body: "_csrf_token=" + encodeURIComponent(out.token),
         signal: AbortSignal.timeout(10_000)
       })
-      return retired(answer.status, answer.headers)
+      return retired(answer.status, answer.headers, state.home)
     } catch {
       return false
     } finally {
-      await ses.clearStorageData().catch(() => {})
+      await out.ses.clearStorageData().catch(() => {})
     }
   }
 
-  let locking = null
-
+  // Close the content at once: the ceremony cancelled and every content
+  // window destroyed, before anything is awaited and whatever a page
+  // does. What the sign-out needs is answered, for whoever closes.
   function closeContent() {
     endHop()
     const windows = [...children, content].filter((w) => w && !w.isDestroyed())
     children.clear()
     content = null
     for (const w of windows) w.destroy()
+    const out = held
+    held = null
+    return out
   }
 
-  async function settle(notice) {
-    const w = content
-    const out = await signOut(w)
-    closeContent()
-    let note = notice
-    if (out !== "none" && !(await retire(out))) note = note || "unconfirmed"
-    if (!ended) openContent(state.readyURL + (note ? `&notice=${note}` : ""))
-  }
+  // Whether the session `out` held is signed out, or there was none.
+  const signedOut = async (out) => !out || !out.token || await retire(out)
 
-  // A lock of the app: close the content and sign out here, and lock cyfr,
-  // whose locked brings the chooser back. Without cyfr, the content stays
-  // closed.
-  function lock(why) {
+  // Each lock's sign-out and chooser, one after another.
+  let locking = Promise.resolve()
+  // The locked answers owed for locks main sent cyfr: each is that lock's
+  // echo, whose content is closed already.
+  let echoes = 0
+
+  // A lock of the app, the system's, a lost page or window, or cyfr's own
+  // (`ours` false): the content closes now, cyfr is told (`ours`), and
+  // then the session is signed out and the chooser shown, with the
+  // unconfirmed notice when the CYFR did not say it retired the session.
+  function lock(why, ours = true) {
     if (ended || !state.readyURL) return
-    say(`locked: ${why}`)
-    if (!locking) {
-      locking = settle(why === "company" ? "company" : "").finally(() => { locking = null })
+    if (ours) say(`locked: ${why}`)
+    const out = closeContent()
+    chosen.cancel()
+    if (ours) {
+      echoes++
+      send("lock")
     }
-    send("lock")
-  }
-
-  function locked() {
-    if (!locking) locking = settle("").finally(() => { locking = null })
+    locking = locking.then(async () => {
+      const note = why === "company" ? "company" : (await signedOut(out)) ? "" : "unconfirmed"
+      if (!ended && !content) openContent(state.readyURL + (note ? `&notice=${note}` : ""))
+    })
   }
 
   // ---- cyfr ----
 
+  // cyfr's end: the content closes now and stays closed, the session is
+  // signed out as at a lock, and the person is told, with the unconfirmed
+  // sentence when the CYFR did not say it retired the session.
   function end(why) {
     if (ended) return
     ended = true
     say(`cyfr ended: ${why}`)
-    closeContent()
+    const out = closeContent()
     if (child && child.exitCode === null) child.kill()
-    if (!quitting) message(`CYFR stopped: ${why}. Quit the app and open it again.`)
+    if (quitting) return
+    signedOut(out).then((done) => message(`CYFR stopped: ${why}. Quit the app and open it again.` +
+      (done ? "" : ` ${UNCONFIRMED}`)))
   }
 
   function heard(m) {
@@ -356,7 +380,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         openContent(m.url)
         return
       case "home": {
-        if (!state.readyURL || state.home || !homeMessage(m)) return end("it named a CYFR this app does not open")
+        if (!state.readyURL || chosen.selected || !homeMessage(m)) return end("it named a CYFR this app does not open")
         const proxy = m.proxy ?? "", resolver = m.resolver ?? ""
         if (proxy !== app.commandLine.getSwitchValue("proxy-server") ||
             resolver !== app.commandLine.getSwitchValue("host-resolver-rules")) {
@@ -368,14 +392,17 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
           app.exit(0)
           return
         }
-        state.home = m.home
-        state.account = m.account
+        chosen.propose(m)
         say(`home: ${m.home}`)
         send("home-ready", {home: m.home})
         return
       }
+      case "opened":
+        if (!chosen.opened(m.home)) return end("it opened a CYFR this app was not keeping to")
+        return
       case "locked":
-        locked()
+        if (echoes > 0) echoes--
+        else lock("the device locked", false)
         return
       case "pick-folder":
         send("folder-picked", {id: m.id, path: null})
@@ -437,14 +464,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // Closing the content window quits (openContent); a lock or cyfr's end
   // closes every window before it opens the next, which must not.
   app.on("window-all-closed", () => {})
+  // Quitting closes the content at once and signs its session out before
+  // the app ends; there is no chooser left to tell an unconfirmed one.
   app.on("before-quit", (event) => {
     if (quitting || ended) return
     event.preventDefault()
     quitting = true
-    const out = signOut(content)
-    out.then(async (o) => {
-      closeContent()
-      if (o !== "none") await retire(o)
+    signedOut(closeContent()).then(() => {
       if (child && child.exitCode === null) {
         send("shutdown")
         child.stdin.end()
