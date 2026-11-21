@@ -1519,6 +1519,7 @@ defmodule PrismWeb.ThreadPaneLive do
             "name" => guide.name,
             "type" => guide.type,
             "catalyst_ref" => guide[:catalyst_ref],
+            "model" => guide[:model],
             "program" => guide[:program],
             "member_refusal" => guide[:member_refusal],
             "member_title" => Enum.find_value(guides, &(&1.name == guide[:member] && &1[:title]))
@@ -1542,6 +1543,7 @@ defmodule PrismWeb.ThreadPaneLive do
       Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
       Enum.any?(statuses, &match?({:model_unavailable, _}, &1)) -> :model_unavailable
       Enum.any?(statuses, &match?({:needs_grant, _}, &1)) -> :needs_grant
+      Enum.any?(statuses, &match?({:needs_model, _}, &1)) -> :no_model
       program = Enum.find_value(statuses, &program_state/1) -> program
       true -> :no_key
     end
@@ -1739,8 +1741,8 @@ defmodule PrismWeb.ThreadPaneLive do
               <span>Reading the models…</span>
           <% end %>
         </div>
-        <div class="aqua-panel-menu-row" title="The soul or crew member this thread is on">
-          <span>Soul or crew member</span>
+        <div class="aqua-panel-menu-row" title="Aqua or the crew member this thread is on">
+          <span>Aqua or crew member</span>
           <span class="truncate">
             {if @roster == [],
               do: "No assistant here",

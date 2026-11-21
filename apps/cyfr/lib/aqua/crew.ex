@@ -27,15 +27,6 @@ defmodule Aqua.Crew do
   `failed` with that reason when its delivery comes (an outage of the
   reads waits for the next drain instead).
 
-  ## Suggested members
-
-  `suggestion/1` is the member Aqua's setup offers to make on a brain the
-  person connected: its name and its title, read by the setup and by
-  nothing else. A member is its brain, its model, its effort and, on a
-  program, its access together, which the person picks, with what it is good at and what to
-  avoid, which the person writes. Making it is the person's press, and
-  asks nothing: a member holds no grant of its own.
-
   ## The hand-off
 
   `ask/2` is `crew.ask {member, task, title?, options?}`, called
@@ -170,47 +161,6 @@ defmodule Aqua.Crew do
           | :busy
           | {:stopped, term()}
           | {:error, term()}
-
-  # ---------------------------------------------------------------------------
-  # Suggested members
-  # ---------------------------------------------------------------------------
-
-  # The title a member on each model catalyst CYFR ships is offered under.
-  @catalyst_titles %{
-    "claude" => "Claude",
-    "gemini" => "Gemini",
-    "openai" => "OpenAI",
-    "grok" => "Grok",
-    "openrouter" => "OpenRouter"
-  }
-
-  @typedoc """
-  A connected brain, as Aqua's setup names it: a program brain by its
-  row's name and its title (`Opus.Programs.Definition.brains/0`), or a
-  model catalyst by its provider (`Aqua.Models.providers/1`).
-  """
-  @type brain :: {:program, String.t(), String.t()} | {:catalyst, String.t()}
-
-  @doc """
-  The crew member Aqua's setup offers to make on `brain`: its `name`, the
-  brain's own (a catalyst's provider with any character a member's name
-  cannot hold made `-`), and its `title`. What a member is good at and
-  should avoid depends on the model and the effort the person picks for
-  it, so nothing is said of it here: the person writes it, on the setup's
-  row or on the member's card.
-  """
-  @spec suggestion(brain()) :: %{name: String.t(), title: String.t()}
-  def suggestion({:program, name, title}) when is_binary(name) and is_binary(title),
-    do: suggested(name, title)
-
-  def suggestion({:catalyst, provider}) when is_binary(provider),
-    do:
-      suggested(
-        String.replace(provider, ~r/[^A-Za-z0-9_-]/, "-"),
-        Map.get(@catalyst_titles, provider, provider)
-      )
-
-  defp suggested(name, title), do: %{name: name, title: title}
 
   # ---------------------------------------------------------------------------
   # The hand-off
@@ -379,6 +329,7 @@ defmodule Aqua.Crew do
   Why a crew member cannot take a job, all of it its brain's, since a
   member holds no consent of its own: no brain named, its catalyst not
   installed, no key bound, only the person's grant of the brain to give,
+  no model chosen on a key,
   the brain's own grant damaged, for a brain that is a program its row
   gone, disabled or not a program a brain runs in, or the reads that
   would tell unavailable.
@@ -388,6 +339,7 @@ defmodule Aqua.Crew do
           | :not_installed
           | :no_key
           | :no_grant
+          | :no_model
           | :consent_damaged
           | :program_missing
           | :program_disabled
@@ -443,6 +395,7 @@ defmodule Aqua.Crew do
   def unready({:missing, _}), do: :not_installed
   def unready({:needs_key, _}), do: :no_key
   def unready({:needs_grant, _}), do: :no_grant
+  def unready({:needs_model, _}), do: :no_model
   def unready({:consent_damaged, _}), do: :consent_damaged
   def unready({:program_missing, _}), do: :program_missing
   def unready({:program_disabled, _}), do: :program_disabled

@@ -75,6 +75,7 @@ defmodule Aqua.Models do
            | :consent_damaged
            | :consent_unavailable
            | :missing
+           | :needs_model
            | :model_unavailable
            | :program_missing
            | :program_disabled
@@ -518,7 +519,11 @@ defmodule Aqua.Models do
   :consent_stale | :consent_damaged | :consent_unavailable,
   resolved_ref}`, or `{:missing | :model_unavailable,
   catalyst_ref}` — or, for a brain that is a program, how its row stands
-  (`t:status/0`). An agent that names no brain has no entry. A crew
+  (`t:status/0`). An agent that names no brain has no entry. An agent
+  whose map carries its model, as the roster's projection does, and
+  names none on a catalyst whose key is connected reads `:needs_model`,
+  never ready: a catalyst has no default model, so a turn on it would ask
+  none. A map that carries no model asks how the brain alone stands. A crew
   member holds no consent of its own: it is ready when its brain is
   connected, since every turn's model call runs under the brain's own
   grant, its key, network and limits (`Aqua.Loop`), so making a member
@@ -561,8 +566,11 @@ defmodule Aqua.Models do
           brain <- List.wrap(brain_of(agent)),
           into: %{} do
         case brain do
-          {:program, id} -> {name, soul_brain(name, program_status(ctx, id))}
-          {:catalyst, ref} -> {name, soul_brain(name, catalyst_status(ctx, listing, ref))}
+          {:program, id} ->
+            {name, soul_brain(name, program_status(ctx, id))}
+
+          {:catalyst, ref} ->
+            {name, soul_brain(name, modelled(agent, catalyst_status(ctx, listing, ref)))}
         end
       end
 
@@ -577,6 +585,12 @@ defmodule Aqua.Models do
       settled -> settled
     end)
   end
+
+  # A connected catalyst the agent names no model on is not ready.
+  defp modelled(%{"model" => model}, {:ready, brain}) when model in [nil, ""],
+    do: {:needs_model, brain}
+
+  defp modelled(_agent, status), do: status
 
   # Aqua on a brain that reads ready: the crew's grant is Aqua's, whatever
   # brain its member runs on, so it is read too. A crew member's brain

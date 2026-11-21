@@ -947,7 +947,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     thread: thread
   } do
     html = render(open_pane(conn, athanor, thread))
-    assert html =~ "The soul or crew member this thread is on"
+    assert html =~ "Aqua or the crew member this thread is on"
     refute html =~ "autofocus"
     refute html =~ ~r/\bagent\b/
     refute html =~ "A.Q.U.A."

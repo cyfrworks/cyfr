@@ -74,6 +74,73 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "a crew member on a program brain" do
+    test "the person's post joins Aqua's running job and the asker gets one final answer",
+         %{ctx: ctx, thread: room, fake: fake} do
+      ctx = %{ctx | origin: :interactive}
+      actor = Sanctum.Context.actor(ctx)
+      :ok = claude_code!(ctx)
+      row = brain_row!(ctx, "claude")
+
+      {:ok, %{message: request}} =
+        Tape.accept(ctx, room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "aqua",
+            addressee: "claude-code",
+            status: "pending",
+            content: "Review the plan."
+          },
+          request: %{
+            member: "claude-code",
+            task: "Review the plan.",
+            person_id: ctx.user_id,
+            origin: :interactive,
+            options: %{"effort" => "high"}
+          }
+        })
+
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+      [child] = Arca.ThreadStorage.children(actor, room.id)
+      %{start: start} = started!(fake, row)
+      opening = sent()
+      assert {:ok, [turn]} = Tape.open_turns(ctx, child.id)
+      assert start["config"] == %{"model" => "opus", "effort" => "high"}
+      [first] = inputs(ctx, turn)
+      assert opening == posted(first, turn, "Review the plan.")
+      say(fake, row, accepted(first))
+      committed!(ctx, child, 4)
+
+      assert {:ok, %{admitted: :steer, turn_id: id, message_id: person_post}} =
+               Aqua.Runner.send_message(ctx, child.id, "Include PAPAYA.")
+
+      assert id == turn.id
+      assert {:ok, [%{id: ^id}]} = Tape.open_turns(ctx, child.id)
+      second = sent()
+      [_, input] = inputs(ctx, turn)
+      assert input.idempotency_key == "0:post:#{person_post}"
+      assert second == posted(input, turn, "Include PAPAYA.")
+
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "Reviewed the plan, including PAPAYA."))
+      say(fake, row, idle(turn, [first.id, input.id]))
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, id)) end,
+        10_000,
+        "the handed job to complete"
+      )
+
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+
+      assert [%{content: "Reviewed the plan, including PAPAYA.", outcome: "done"}] =
+               Enum.filter(
+                 Arca.ThreadStorage.messages(actor, room.id),
+                 &(&1.reply_to == request.id)
+               )
+
+      assert {:ok, []} = Tape.open_turns(ctx, child.id)
+    end
+
     # CYFR's words for every member, then what a program's brain is told
     # besides: its own tools work in its own folder (`Aqua.Prompt.crew_briefing/2`).
     @briefing "## Crew member\n\nYou are a crew member of this athanor's Aqua. A job arrives " <>

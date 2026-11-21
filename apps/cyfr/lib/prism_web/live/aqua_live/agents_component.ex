@@ -15,13 +15,21 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   do. A crew member whose file still holds a prompt is
   refused, and the sentence that says what to change stands in place of
   its card.
+  A crew member is made in one form (`member_form/1`), shown in the
+  setup's step for the crew and above the cards alike: the name the
+  person gives it, the harness or key it runs on among the connected
+  ones (`brains/4`), a model that one lists, each option it declares for
+  that model, a program's access, and what it is good at and should
+  avoid. CYFR names no member. A card shows the same as labelled fields
+  and changes them, the harness or key among them: a member moved to
+  another is offered that one's models and options, and an option it
+  does not list is taken off in the same write.
   Each brain's models come from the model catalogue and its options from
   the brain's own `describe` (`Aqua.brain_options/2`), read the same way
-  for the model picked on a setup row the page suggests on an API brain,
-  whose efforts the row then offers; a brain that is a
+  for the model picked in the form on a key; a brain that is a
   program, named by its row's name, offers the models, efforts and
-  access choices its program lists (`Aqua.program_listing/2`) and no
-  other brain: its Access selection names the driver's choices in the
+  access choices its program lists (`Aqua.program_listing/2`): its
+  Access selection names the driver's choices in the
   driver's words, closed while the driver offers one, and its
   card offers to install the program while the athanor has no row of
   that name, prefilled from the program brain's definition
@@ -67,9 +75,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:browser, nil)
      |> assign(:model_status, %{})
      |> assign(:brain_options, %{})
-     # The model picked on each setup row suggested on an API brain, by
-     # the brain's provider: its options are read with the cards'.
-     |> assign(:picked, %{})
+     # What the form that makes a crew member holds, as its last change
+     # sent it: the options of a model picked on a key are read with the
+     # cards'.
+     |> assign(:draft, %{})
      |> assign(:program_listings, %{})
      |> assign(:installing, nil)
      |> assign(:setting_up, nil)
@@ -132,106 +141,93 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # A new crew member starts with a name and nothing else: it holds the
-  # soul's hands like every member, its brain is picked on its card, and
-  # it has no prompt to write.
-  def handle_event("editor_create_member", _params, %{assigns: %{loading: true}} = socket) do
-    {:noreply, put_flash(socket, :error, "Still loading — try again in a moment.")}
-  end
-
-  def handle_event("editor_create_member", %{"name" => name}, socket) when name != "" do
+  # The form that makes a crew member changed: what it holds is kept, so a
+  # render shows it again. Another harness or key lists other models and
+  # options, so the model and the options chosen are dropped with the one
+  # they were chosen on; a model picked on a key has its options read from
+  # the key's own `describe` with the cards'.
+  def handle_event("draft_member", params, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case call_aqua(socket.assigns.context, %{
-             "action" => "create",
-             "name" => name,
-             "title" => name
-           }) do
-        {:ok, _created} ->
-          send(self(), {:refresh, :agents})
+      was = socket.assigns.draft
+      draft = Map.take(params, ~w(name brain model options description avoid))
 
-          {:noreply,
-           put_flash(
-             socket,
-             :info,
-             "Added '#{name}' to the crew — pick its brain and say what it is good at."
-           )}
+      draft =
+        if draft["brain"] == was["brain"],
+          do: draft,
+          else: Map.merge(draft, %{"model" => "", "options" => %{}})
 
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Create failed: #{error_message(reason)}")}
-      end
-    end)
-  end
+      socket = assign(socket, :draft, draft)
 
-  def handle_event("editor_create_member", _params, socket), do: {:noreply, socket}
-
-  # Make on a member the setup suggests for a connected brain
-  # (`Aqua.crew_suggestion/1`): the member written once, under the name
-  # the suggestion gives it (a second Make, or one after a reload, is
-  # refused as a member that exists), on that brain, with the model, the
-  # effort and, on a program, the access the person picked from the
-  # brain's own listing and what
-  # they wrote it is good at and should avoid. A member holds no grant of
-  # its own, so making one asks nothing. Its effort and access must be
-  # ones the brain offers, checked as a turn checks the options a member
-  # sets (`Prima.Model.check_chat_request/2`): an effort another model
-  # offered, an access its program does not list, or one asked before the
-  # brain's own choices answered, writes nothing, and the row then shows
-  # the brain's own choices.
-  def handle_event("make_member", %{"brain" => brain, "model" => model} = params, socket)
-      when is_binary(brain) and is_binary(model) and model != "" do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      with {:ok, %{"title" => title} = args} <-
-             made(brain, params, socket.assigns[:catalyst_refs] || %{}),
-           :ok <- offered(args["options"], brain, model, socket),
-           {:ok, _created} <- call_aqua(socket.assigns.context, Map.put(args, "action", "create")) do
-        send(self(), {:refresh, :agents})
-        send(self(), {:refresh, :setup})
-
-        {:noreply,
-         socket
-         |> assign(:picked, Map.delete(socket.assigns.picked, provider_of(brain)))
-         |> put_flash(:info, "Made #{title}.")}
-      else
-        :error ->
-          {:noreply, put_flash(socket, :error, "That brain is not connected here.")}
-
-        :not_offered ->
+      if picked(draft) == picked(was),
+        do: {:noreply, drafted(socket)},
+        else:
           {:noreply,
            socket
-           |> pick(brain, model)
-           |> put_flash(:error, "That brain does not offer what was chosen — choose again.")}
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Make failed: #{error_message(reason)}")}
-      end
+           |> drafted()
+           |> load_brain_options(socket.assigns.agents, socket.assigns.model_status)}
     end)
   end
 
-  def handle_event("make_member", _params, socket),
-    do: {:noreply, put_flash(socket, :error, "Choose a model first.")}
+  # Make: the member written once, under the name the person gave it (a
+  # name a member holds already is refused as a member that exists), on
+  # the harness or key chosen, with the model and each option picked from
+  # that one's own listing and what the person wrote it is good at and
+  # should avoid. A member holds no grant of its own, so making one asks
+  # nothing. Each option must be one the brain declares for that model,
+  # cast to its kind and checked as a turn checks the options a member
+  # sets (`Prima.Model.check_chat_request/2`): an effort another model
+  # offered, an access its program does not list, or one asked before the
+  # brain's own choices answered, writes nothing, and the form then shows
+  # the brain's own choices.
+  def handle_event("make_member", params, socket) do
+    name = String.trim(params["name"] || "")
+    brain = params["brain"] || ""
+    model = params["model"] || ""
 
-  # A model picked on a setup row suggested on an API brain: the row then
-  # offers that model's efforts, read from the brain's own `describe` with
-  # the cards' options. Any other change of the row's fields, or of a
-  # program brain's row, whose efforts its listing gave, reads nothing.
-  def handle_event("suggest_model", %{"brain" => "catalyst:" <> provider} = params, socket) do
+    cond do
+      name == "" ->
+        {:noreply, put_flash(socket, :error, "Give the crew member a name first.")}
+
+      brain == "" ->
+        {:noreply, put_flash(socket, :error, "Choose a harness or key first.")}
+
+      model == "" ->
+        {:noreply, put_flash(socket, :error, "Choose a model first.")}
+
+      true ->
+        CyfrWeb.ContextGuard.guard(socket, &make(&1, name, brain, model, params))
+    end
+  end
+
+  # A member moved to another harness or key on its card: it has no model
+  # there yet, which its card then offers from that one's own listing, and
+  # every option the new one does not list is taken off in the same write
+  # (`moved/4`). One that is not connected here writes nothing.
+  def handle_event("editor_set_harness", %{"name" => name, "harness" => harness}, socket)
+      when is_binary(harness) and harness != "" do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      picked = socket.assigns.picked
-
-      case {params["model"], picked[provider]} do
-        {same, same} ->
+      with true <- harness != harness_of(member(socket, name)),
+           {:ok, named} <- named(harness, socket),
+           {:ok, _} <-
+             moved(socket, name, declared(harness, nil, socket), Map.put(named, "model", nil)) do
+        send(self(), {:refresh, :agents})
+        {:noreply, socket}
+      else
+        false ->
           {:noreply, socket}
 
-        {model, _was} when model in [nil, ""] ->
-          {:noreply, socket |> assign(:picked, Map.delete(picked, provider)) |> suggested()}
+        :error ->
+          send(self(), {:refresh, :setup})
+          {:noreply, put_flash(socket, :error, "That brain is not connected here.")}
 
-        {model, _was} when is_binary(model) ->
-          {:noreply, pick(socket, "catalyst:" <> provider, model)}
+        {:error, reason} ->
+          send(self(), {:refresh, :agents})
+          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
       end
     end)
   end
 
-  def handle_event("suggest_model", _params, socket), do: {:noreply, socket}
+  def handle_event("editor_set_harness", _params, socket), do: {:noreply, socket}
 
   def handle_event(
         "editor_update_field",
@@ -466,9 +462,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # the picker below, where its value would read as another brain's.
   def handle_event("editor_set_model", %{"brain" => "program"}, socket), do: {:noreply, socket}
 
-  # A member's brain or model changed on its card or the setup's pick: an
-  # option the new brain and model do not list is taken off in the same
-  # write (`moved/4`); with no brain, every one is.
+  # A key's model chosen on a member's card: an option that model does not
+  # list is taken off in the same write (`moved/4`).
   def handle_event("editor_set_model", %{"name" => name, "value" => value}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       ctx = socket.assigns.context
@@ -477,15 +472,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
       result =
         case choice do
-          {:inherit} ->
-            call_aqua(ctx, %{
-              "action" => "update",
-              "name" => name,
-              "model" => nil,
-              "catalyst_ref" => nil,
-              "options" => %{}
-            })
-
           {:model, provider, model} ->
             # No hardcoded publisher fallback. A ref built from a personal
             # namespace resolves to nothing on any other deployment, so the
@@ -504,14 +490,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               "model" => model,
               "catalyst_ref" => catalyst_ref,
               "program" => nil
-            })
-
-          # A program brain the setup offers, and a model its program lists.
-          {:program, program, model} ->
-            moved(socket, name, declared("program:" <> program, model, socket), %{
-              "model" => model,
-              "catalyst_ref" => nil,
-              "program" => program
             })
 
           :noop ->
@@ -632,7 +610,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       CyfrWeb.ContextGuard.deliver(
         socket,
         tag,
-        &{:noreply, &1 |> assign(:brain_options, options) |> suggested()}
+        &{:noreply, &1 |> assign(:brain_options, options) |> drafted()}
       )
 
   def handle_async(:brain_options, {:exit, _reason}, socket), do: {:noreply, socket}
@@ -736,10 +714,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         for(
           m <- crew,
           not m["disabled"],
-          do: %{name: m["name"], title: m["title"], ready: ready?.(m["name"])}
+          do: %{
+            name: m["name"],
+            title: m["title"],
+            agent: m,
+            ready: ready?.(m["name"])
+          }
         ),
       unconnected: for(m <- crew, not m["disabled"], not ready?.(m["name"]), do: m["name"]),
-      brains: for(m <- crew, brain = brain_of(m), do: brain),
       listable:
         for(
           m <- crew,
@@ -754,18 +736,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp state_of({state, _brain}), do: state
   defp state_of(nil), do: nil
 
-  # The brain a member's file names, as the setup tells brains apart.
-  defp brain_of(%{"program" => program}) when is_binary(program) and program != "",
-    do: {:program, program}
-
-  defp brain_of(%{"catalyst_ref" => ref}) when is_binary(ref) and ref != "", do: {:catalyst, ref}
-  defp brain_of(_member), do: nil
-
   # Each ready catalyst brain's options, from its own `describe` — a
   # catalyst run each, so read off the page's process and delivered for
   # the focus they were read under — and, under `{:picked, provider,
-  # model}`, those of each model picked on a setup row suggested on an API
-  # brain. A program brain's models, efforts and access choices are its
+  # model}`, those of the model picked on a key in the form that makes a
+  # member. A program brain's models, efforts and access choices are its
   # program's own listing, which the page asks once for each program
   # (`program_listings`). A brain
   # that is not ready, or whose `describe` or listing does not answer,
@@ -782,7 +757,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       )
 
     picked =
-      for {provider, model} <- socket.assigns.picked,
+      for {provider, model} <- List.wrap(picked(socket.assigns.draft)),
           ref = refs[provider],
           is_binary(ref),
           do: %{
@@ -797,28 +772,57 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # The page's setup rows suggested on an API brain: each picked model,
-  # with the efforts its brain's `describe` declares for it (none while
-  # unread, or where it declares none).
-  defp suggested(socket) do
-    options = socket.assigns.brain_options
+  # The key and the model picked on it in the form that makes a member,
+  # nil while the form names a program, no key or no model.
+  defp picked(%{"brain" => "catalyst:" <> provider, "model" => model})
+       when is_binary(model) and model != "",
+       do: {provider, model}
 
-    send(
-      self(),
-      {:suggested,
-       Map.new(socket.assigns.picked, fn {provider, model} ->
-         {provider, {model, efforts_of(options[{:picked, provider, model}] || [])}}
-       end)}
-    )
+  defp picked(_draft), do: nil
 
+  # The page's setup shows the same form: it is told what the form holds,
+  # with the options and the access choices its harness or key and model
+  # declare.
+  defp drafted(socket) do
+    send(self(), {:member_draft, draft_view(socket.assigns)})
     socket
   end
 
-  defp efforts_of(options) do
-    Enum.flat_map(options, fn
-      %{"name" => "effort", "values" => values} when is_list(values) -> values
-      _other -> []
-    end)
+  @doc """
+  What the form that makes a crew member shows when nothing was entered:
+  no field filled, and no option or access choice, since none is declared
+  before a harness or key is chosen.
+  """
+  @spec empty_draft() :: %{params: map(), options: [map()], access: [map()]}
+  def empty_draft, do: %{params: %{}, options: [], access: []}
+
+  # What the form holds, with what its harness or key declares for the
+  # model picked: a program's efforts and access choices as its listing
+  # gave them, a key's options from its `describe` (none while unread).
+  defp draft_view(assigns) do
+    draft = assigns.draft
+
+    case draft["brain"] do
+      "program:" <> name ->
+        case assigns.program_listings[name] do
+          {:ok, %{efforts: efforts, access: access}} ->
+            %{params: draft, options: efforts_option(efforts), access: access}
+
+          _unlisted ->
+            %{params: draft, options: [], access: []}
+        end
+
+      _key_or_none ->
+        %{
+          params: draft,
+          options:
+            case picked(draft) do
+              {provider, model} -> assigns.brain_options[{:picked, provider, model}] || []
+              nil -> []
+            end,
+          access: []
+        }
+    end
   end
 
   defp describe_brains(socket, ready) do
@@ -946,17 +950,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     assign(socket, :set_up_refused, refused)
   end
 
-  # Aqua's setup, for the agent whose card links to it: the soul's by
-  # default, a crew member's named.
-  defp setup_path(athanor, _agent, true), do: PrismWeb.Focus.path(athanor, "/aqua?setup=1")
-
-  defp setup_path(athanor, agent, false),
-    do:
-      PrismWeb.Focus.path(
-        athanor,
-        "/aqua?" <> URI.encode_query(%{"setup" => "1", "agent" => agent["name"]})
-      )
-
   # Enumerate `(tool, [actions...])` from the live MCP registry — populated
   # once per page open, so the matrix UI can render real (tool, action)
   # pairs the user can toggle. native_search is included as a bare key
@@ -1023,25 +1016,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp cast_option(%{"kind" => "string"}, value), do: {:ok, value}
   defp cast_option(_declared, _value), do: {:refused, "That value does not fit the option"}
 
-  # The model picked on an API brain's setup row, its efforts read from
-  # the brain's own `describe`; a program brain's row offers its listing's.
-  defp pick(socket, "catalyst:" <> provider, model) do
-    socket = assign(socket, :picked, Map.put(socket.assigns.picked, provider, model))
-
-    socket
-    |> suggested()
-    |> load_brain_options(socket.assigns.agents, socket.assigns.model_status)
-  end
-
-  defp pick(socket, _program, _model), do: socket
-
-  # Whether a Make's options are ones the model it names offers: on an API
-  # brain those its `describe` declared for that model, as the row read
-  # them, none while unread; on a program brain its listing's efforts and
-  # access.
-  defp offered(options, brain, model, socket),
-    do: offered(options, declared(brain, model, socket))
-
+  # Whether `options` are ones `declared` offers, checked as a turn checks
+  # the options a member sets.
   defp offered(options, declared) do
     case Prima.Model.check_chat_request(%{"options" => options}, declared) do
       :ok -> :ok
@@ -1097,71 +1073,221 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # The member a Make writes: the suggestion for its brain, with the brain
-  # named as a crew file names one and the model picked.
-  defp made("catalyst:" <> provider, params, catalyst_refs) do
-    case catalyst_refs[provider] do
-      ref when is_binary(ref) ->
-        {:ok,
-         {:catalyst, provider}
-         |> Aqua.crew_suggestion()
-         |> member_args(params)
-         |> Map.put("catalyst_ref", versionless(ref))}
+  # Make's one write, and what the form holds after it: nothing once the
+  # member is made, and what was sent, less its options, when one of them
+  # is not the brain's to offer, so the form shows the brain's own choices.
+  defp make(socket, name, brain, model, params) do
+    declared = declared(brain, model, socket)
 
-      _unknown ->
-        :error
+    with {:ok, named} <- named(brain, socket),
+         {:ok, options} <- chosen(params["options"], declared),
+         :ok <- offered(options, declared),
+         {:ok, _created} <-
+           call_aqua(
+             socket.assigns.context,
+             # A create names the one brain it is made on; an update
+             # clears the other.
+             Map.merge(Map.reject(named, fn {_brain, value} -> is_nil(value) end), %{
+               "action" => "create",
+               "name" => name,
+               "title" => name,
+               "description" => String.trim(params["description"] || ""),
+               "avoid" => String.trim(params["avoid"] || ""),
+               "model" => model,
+               "options" => options
+             })
+           ) do
+      send(self(), {:refresh, :agents})
+      send(self(), {:refresh, :setup})
+
+      {:noreply, socket |> assign(:draft, %{}) |> drafted() |> put_flash(:info, "Made #{name}.")}
+    else
+      :error ->
+        send(self(), {:refresh, :setup})
+        {:noreply, put_flash(socket, :error, "That brain is not connected here.")}
+
+      :not_offered ->
+        draft =
+          params
+          |> Map.take(~w(name brain model description avoid))
+          |> Map.put("options", %{})
+
+        socket = assign(socket, :draft, draft)
+
+        {:noreply,
+         socket
+         |> drafted()
+         |> load_brain_options(socket.assigns.agents, socket.assigns.model_status)
+         |> put_flash(:error, "That brain does not offer what was chosen — choose again.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Make failed: #{error_message(reason)}")}
     end
   end
 
-  defp made("program:" <> name, params, _catalyst_refs) do
+  # The options a Make sent, each cast to the kind the brain declares for
+  # it; one left empty is the brain's own default and is not written, and
+  # one the brain does not declare, or whose value does not fit, is not
+  # the brain's to offer.
+  defp chosen(%{} = options, declared) do
+    Enum.reduce_while(options, {:ok, %{}}, fn
+      {_option, ""}, kept ->
+        {:cont, kept}
+
+      {option, value}, {:ok, kept} when is_binary(value) ->
+        case cast_option(Enum.find(declared, &(&1["name"] == option)), value) do
+          {:ok, cast} -> {:cont, {:ok, Map.put(kept, option, cast)}}
+          {:refused, _sentence} -> {:halt, :not_offered}
+        end
+
+      _other, _kept ->
+        {:halt, :not_offered}
+    end)
+  end
+
+  defp chosen(_none, _declared), do: {:ok, %{}}
+
+  # A connected harness or key as a crew file names it, by the value the
+  # forms name it with (`brains/4`): a program by its row's name, a key by
+  # its catalyst's reference without a version. One not connected here is
+  # `:error`: one the forms do not offer, or one that no longer reads
+  # ready where a member on it would (`Aqua.model_status/2`), read now and
+  # not from what the page holds.
+  defp named(value, socket) do
+    assigns = socket.assigns
+
+    offered? =
+      (assigns[:models_by_provider] || %{})
+      |> brains(assigns[:catalyst_refs] || %{}, assigns.program_listings, assigns[:providers])
+      |> Enum.any?(&(&1.value == value))
+
+    named =
+      case {offered?, value} do
+        {true, "program:" <> name} ->
+          %{"program" => name, "catalyst_ref" => nil}
+
+        {true, "catalyst:" <> provider} ->
+          %{"program" => nil, "catalyst_ref" => versionless(assigns.catalyst_refs[provider])}
+
+        _not_offered ->
+          nil
+      end
+
+    with %{} <- named,
+         %{^value => {:ready, _brain}} <-
+           Aqua.model_status(assigns.context, [Map.put(named, "name", value)]) do
+      {:ok, named}
+    else
+      _not_connected -> :error
+    end
+  end
+
+  @doc """
+  The harnesses and keys a crew member can run on here, the connected
+  ones: each program brain whose program's listing answered, by its
+  title, then each key the setup's read (`Aqua.providers/1`) says is
+  ready and whose provider listed models, by its provider. The model
+  catalogue is kept a while, so a key it still lists is no proof the key
+  is connected. Each is `%{value, title, kind, models}`: the value the
+  forms name it with, `:harness` or `:key`, and its models as
+  `{id, name}`.
+  """
+  @spec brains(map(), map(), map(), term()) :: [map()]
+  def brains(models_by_provider, catalyst_refs, listings, providers) do
+    ready =
+      case providers do
+        {:ok, read} -> for %{state: :ready, provider: provider} <- read, do: provider
+        _unread -> []
+      end
+
+    harnesses =
+      for {name, {:ok, %{models: models}}} <- Enum.sort(listings),
+          do: %{
+            value: "program:" <> name,
+            title: program_title(name),
+            kind: :harness,
+            models: Enum.map(models, &{&1.id, &1.name})
+          }
+
+    keys =
+      for {provider, [_ | _] = models} <- Enum.sort(models_by_provider),
+          is_binary(catalyst_refs[provider]),
+          provider in ready,
+          do: %{
+            value: "catalyst:" <> provider,
+            title: provider,
+            kind: :key,
+            models: Enum.map(models, &{&1, &1})
+          }
+
+    harnesses ++ keys
+  end
+
+  defp program_title(name) do
     case Opus.Programs.Definition.brain(name) do
-      %{title: title} ->
-        {:ok,
-         {:program, name, title}
-         |> Aqua.crew_suggestion()
-         |> member_args(params)
-         |> Map.put("program", name)}
-
-      nil ->
-        :error
+      %{title: title} -> title
+      nil -> name
     end
   end
 
-  defp made(_brain, _params, _catalyst_refs), do: :error
+  # The harness or key a member's file names, by the value the forms name
+  # it with and the name a person reads; nil for a member with neither.
+  defp harness_of(agent), do: elem(harness(agent), 0)
+
+  defp harness(agent) do
+    case {program_of(agent), agent_provider_for_select(agent)} do
+      {program, _provider} when is_binary(program) ->
+        {"program:" <> program, program_title(program)}
+
+      {nil, provider} when is_binary(provider) ->
+        {"catalyst:" <> provider, provider}
+
+      {nil, nil} ->
+        {nil, nil}
+    end
+  end
+
+  @doc """
+  A crew member as Aqua's "Runs on" names it: its name, then the harness
+  or key and the model it would run Aqua on, the model by the name its
+  program's listing gives it, as the member's Model field shows it.
+  """
+  @spec runs_on_label(map(), map()) :: String.t()
+  def runs_on_label(agent, listings) do
+    title = agent["title"] || agent["name"]
+
+    case harness(agent) do
+      {nil, nil} ->
+        "#{title} — no harness or key yet"
+
+      {"catalyst:" <> _key, on} ->
+        "#{title} — #{on}, #{agent["model"] || "no model chosen yet"}"
+
+      {_program, on} ->
+        model =
+          Enum.find_value(listing_models(listings, agent) || [], agent["model"], fn listed ->
+            if listed.id == agent["model"], do: listed.name
+          end)
+
+        "#{title} — #{on}, #{model || "its default model"}"
+    end
+  end
 
   # A catalyst's reference as a crew file names it: without its version.
   defp versionless(ref), do: Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, "")
-
-  defp provider_of("catalyst:" <> provider), do: provider
-  defp provider_of(_brain), do: nil
-
-  # A member is its brain, its model, its effort and, on a program, its
-  # access together, with what it is good at and what to avoid as the
-  # person wrote them, or nothing: a member with neither said is a member
-  # all the same.
-  defp member_args(suggested, params) do
-    options =
-      for option <- ["effort", "access"],
-          value = String.trim(params[option] || ""),
-          value != "",
-          into: %{},
-          do: {option, value}
-
-    %{
-      "name" => suggested.name,
-      "title" => suggested.title,
-      "description" => String.trim(params["description"] || ""),
-      "avoid" => String.trim(params["avoid"] || ""),
-      "model" => params["model"],
-      "options" => options
-    }
-  end
 
   # The program a member's brain is, by its row's name, or nil.
   defp program_of(%{"program" => program}) when is_binary(program) and program != "",
     do: program
 
   defp program_of(_agent), do: nil
+
+  # The models a key's card offers: the ones its provider listed, and the
+  # member's own when that list does not name it, as a program's.
+  defp key_choices(listed, model) do
+    listed = listed || []
+    if is_binary(model) and model not in listed, do: listed ++ [model], else: listed
+  end
 
   # The models a program brain's card offers: the ones its program lists,
   # and the member's own model when the listing does not name it (or was
@@ -1248,34 +1374,29 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   @impl true
   def render(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :brains,
+        brains(
+          assigns[:models_by_provider] || %{},
+          assigns[:catalyst_refs] || %{},
+          assigns.program_listings,
+          assigns[:providers]
+        )
+      )
+
     ~H"""
     <div id="aqua-agents" phx-target={@myself} class="space-y-6">
       <.section_flash flash={@flash} target={@myself} />
 
-      <%!-- Offered once the roster is read: a new member is a name, then
-            its card. --%>
-      <div class="flex justify-end">
-        <form
-          :if={@loaded and is_nil(@agents_unread)}
-          phx-submit="editor_create_member"
-          phx-target={@myself}
-          class="flex items-center gap-2"
-        >
-          <input
-            type="text"
-            name="name"
-            placeholder="new-member"
-            pattern="[a-z0-9_-]+"
-            required
-            class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 focus:border-blue-500 w-44 font-mono"
-          />
-          <button
-            type="submit"
-            class="rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 text-xs font-medium text-white"
-          >
-            + New crew member
-          </button>
-        </form>
+      <%!-- Offered once the roster is read: the one form that makes a
+            crew member, as the setup's step for the crew shows it. --%>
+      <div :if={@loaded and is_nil(@agents_unread)} class="text-xs text-gray-300">
+        <.member_form id="aqua-new-member" brains={@brains} draft={draft_view(assigns)} />
+        <p :if={@brains == []} data-test="new-member-waits" class="text-gray-400">
+          Connect a harness or a key in the setup above to make a crew member.
+        </p>
       </div>
 
       <%!-- Why the roster could not be read: a fault's words, or the
@@ -1293,7 +1414,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         :if={@loaded and @soul == nil and is_nil(@agents_unread)}
         class="text-xs text-gray-500 py-8 text-center border border-dashed border-gray-800 rounded"
       >
-        No soul here. The soul ships with the server — restore the shipped files below to bring it back.
+        Aqua's own file is missing. It ships with the server — restore the shipped files below to bring it back.
       </div>
 
       <.agent_card
@@ -1315,6 +1436,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         connected={connected?(Map.get(@model_status, @soul["name"]), @soul, @program_listings)}
         browser={@browser}
         crew={@crew}
+        listings={@program_listings}
       />
 
       <div :if={@crew != []} class="space-y-3 border-l border-gray-800 pl-4 ml-2">
@@ -1336,6 +1458,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           program_models={listing_models(@program_listings, member)}
           connected={connected?(Map.get(@model_status, member["name"]), member, @program_listings)}
           access={card_access(@program_listings, member)}
+          brains={@brains}
         />
       </div>
 
@@ -1480,11 +1603,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :access, :list, default: []
   attr :browser, :map, default: nil
   attr :crew, :list, default: []
+  attr :listings, :map, default: %{}
+  attr :brains, :list, default: []
 
   defp agent_card(assigns) do
+    {harness, harness_title} = harness(assigns.agent)
+
     assigns =
       assigns
       |> assign(:current_provider, agent_provider_for_select(assigns.agent))
+      |> assign(:harness, harness)
+      |> assign(:harness_title, harness_title)
       |> assign(:tools, assigns.agent["tools"] || [])
       |> assign(:removal, removal(assigns.agent))
       |> assign(:disabled?, assigns.agent["disabled"] == true)
@@ -1525,14 +1654,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                 else: "bg-blue-900/40 text-blue-300"
               )
             ]}>
-              {@agent["type"]}
+              {if @is_soul, do: "Aqua", else: @agent["type"]}
             </span>
             <code class="text-[11px] text-gray-500 font-mono">{@agent["name"]}</code>
             <.provenance_chip state={@agent["provenance"]} />
             <span
               :if={@disabled?}
               class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-800 text-gray-400"
-              title="Out of the crew — the soul does not see this member until it is enabled"
+              title="Out of the crew — Aqua does not see this member until it is enabled"
             >
               disabled
             </span>
@@ -1577,8 +1706,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       <form
         :for={
           {field, label, placeholder} <- [
-            {"description", "Good at", "What the soul hands this member…"},
-            {"avoid", "Avoid", "What the soul should never hand it…"}
+            {"description", "Good at", "What Aqua hands this member…"},
+            {"avoid", "Avoid", "What Aqua should never hand it…"}
           ]
         }
         :if={!@is_soul}
@@ -1677,7 +1806,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             value={member["name"]}
             selected={member["name"] == @agent["member"]}
           >
-            {member["title"]}
+            {runs_on_label(member, @listings)}
           </option>
         </select>
         <p
@@ -1688,22 +1817,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {@agent["member_refusal"]}
         </p>
       </form>
-
-      <%!-- A member with no brain yet is connected through the setup like
-           any other. --%>
-      <div
-        :if={not @is_soul and @agent["catalyst_ref"] in [nil, ""] and is_nil(@program)}
-        class="flex flex-wrap items-center gap-2 text-[11px]"
-      >
-        <span class="text-amber-300">No brain yet</span>
-        <.link
-          patch={setup_path(@athanor, @agent, @is_soul)}
-          data-test="connect"
-          class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
-        >
-          Connect
-        </.link>
-      </div>
 
       <div :if={@model_status} class="flex flex-wrap items-center gap-2 text-[11px]">
         <span :if={@connected} class="text-emerald-400">
@@ -1718,6 +1831,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </span>
         <span :if={match?({:needs_grant, _}, @model_status)} class="text-amber-300">
           Not connected — it needs only your grant
+        </span>
+        <%!-- A key with no model chosen on it runs nothing: said as a job
+             handed to the member is refused, on Aqua's card of the member
+             it runs on. --%>
+        <span
+          :if={match?({:needs_model, _}, @model_status)}
+          data-test="needs-model"
+          class="text-amber-300"
+        >
+          {Prima.Refusal.message({:crew_unready, brain_title(@agent, @crew, @is_soul), :no_model})}
         </span>
         <span :if={match?({:missing, _}, @model_status)} class="text-amber-300">
           The model's catalyst is not installed here yet
@@ -1770,7 +1893,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               @model_status
             )
           }
-          patch={setup_path(@athanor, @agent, @is_soul)}
+          patch={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
           data-test="connect"
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
         >
@@ -1790,12 +1913,41 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </button>
       </div>
 
+      <%!-- What a crew member runs on, among the connected harnesses and
+            keys and the one its file names: moved to another, it is offered
+            that one's models and options below. --%>
+      <form
+        :if={not @is_soul}
+        id={"aqua-card-#{@agent["name"]}-harness"}
+        phx-change="editor_set_harness"
+        phx-auto-recover="ignore"
+        phx-target={@myself}
+      >
+        <input type="hidden" name="name" value={@agent["name"]} />
+        <p class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Harness or key</p>
+        <select
+          name="harness"
+          aria-label="Harness or key"
+          class="w-full md:w-1/2 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+        >
+          <option :if={is_nil(@harness)} value="" selected>Choose a harness or key</option>
+          <option
+            :if={@harness && not Enum.any?(@brains, &(&1.value == @harness))}
+            value={@harness}
+            selected
+          >
+            {@harness_title}
+          </option>
+          <.brain_choices brains={@brains} chosen={@harness} />
+        </select>
+      </form>
+
       <%!-- Each change writes the agent's model, so a reconnect replays no
             change: the choice the page held may be older than the model
             another session wrote meanwhile. --%>
       <%!-- A program brain's models are the ones its program lists, and
-            none other: its brain is the program it names. While its row is
-            not there to list them, the member's model stands alone. --%>
+            none other. While its row is not there to list them, the
+            member's model stands alone. --%>
       <form
         :if={@program && !@is_soul}
         id={"aqua-card-#{@agent["name"]}-model"}
@@ -1825,8 +1977,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </select>
       </form>
 
+      <%!-- A key's models are the ones its provider listed, and the
+            member's own when that list does not name it. --%>
       <form
-        :if={is_nil(@program) and not @is_soul}
+        :if={is_binary(@current_provider) and is_nil(@program) and not @is_soul}
         id={"aqua-card-#{@agent["name"]}-model"}
         phx-change="editor_set_model"
         phx-auto-recover="ignore"
@@ -1839,20 +1993,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           aria-label="Model"
           class="w-full md:w-1/2 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
         >
-          <option value="" selected={is_nil(@agent["model"])}>
-            No model
+          <option :if={is_nil(@agent["model"])} value="-" selected>Choose a model</option>
+          <option
+            :for={m <- key_choices(@models_by_provider[@current_provider], @agent["model"])}
+            value={Catalog.model_choice(@current_provider, m)}
+            selected={@agent["model"] == m}
+          >
+            {m}
           </option>
-          <%= for {provider, models} <- @models_by_provider, models != [] do %>
-            <optgroup label={provider}>
-              <option
-                :for={m <- models}
-                value={Catalog.model_choice(provider, m)}
-                selected={@agent["model"] == m and @current_provider == provider}
-              >
-                {m}
-              </option>
-            </optgroup>
-          <% end %>
         </select>
       </form>
 
@@ -1875,7 +2023,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             <input type="hidden" name="name" value={@agent["name"]} />
             <input type="hidden" name="option" value={option["name"]} />
             <label class="text-[11px] font-mono text-gray-400 w-32 shrink-0">{option["name"]}</label>
-            <.option_input option={option} value={Map.get(@agent["options"] || %{}, option["name"])} />
+            <.option_input
+              option={option}
+              name="value"
+              value={Map.get(@agent["options"] || %{}, option["name"])}
+            />
           </form>
         </div>
       </div>
@@ -1899,7 +2051,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       </form>
 
       <p :if={!@is_soul} class="text-[11px] text-gray-500">
-        Offered the soul's tools on every job.
+        Offered Aqua's tools on every job.
       </p>
 
       <div :if={@is_soul}>
@@ -2057,6 +2209,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   attr :option, :map, required: true
+  attr :name, :string, required: true
   attr :value, :any, default: nil
 
   # One option's input, by the kind the brain declares: a choice for an
@@ -2072,7 +2225,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
     ~H"""
     <select
-      name="value"
+      name={@name}
       aria-label={@option["name"]}
       class="flex-1 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
     >
@@ -2088,7 +2241,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     ~H"""
     <input
       type={if @option["kind"] == "integer", do: "number", else: "text"}
-      name="value"
+      name={@name}
       value={@value}
       phx-debounce="blur"
       aria-label={@option["name"]}
@@ -2100,6 +2253,135 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp default_label(%{"default" => default}), do: " (#{default})"
   defp default_label(_option), do: ""
+
+  attr :brains, :list, required: true
+  attr :chosen, :string, default: nil
+
+  # The connected harnesses, then the connected keys, each group named.
+  defp brain_choices(assigns) do
+    ~H"""
+    <%= for {kind, label} <- [harness: "Harnesses", key: "Keys"],
+            listed = Enum.filter(@brains, &(&1.kind == kind)),
+            listed != [] do %>
+      <optgroup label={label}>
+        <option :for={brain <- listed} value={brain.value} selected={brain.value == @chosen}>
+          {brain.title}
+        </option>
+      </optgroup>
+    <% end %>
+    """
+  end
+
+  @doc """
+  The form that makes a crew member, the one way to make one: the name
+  the person gives it, the harness or key it runs on among the connected
+  ones (`brains/4`), a model that one lists, each option it declares for
+  that model, a program's Access selection (`access_select/1`), and what
+  it is good at and should avoid. `draft` is what the form holds and what
+  its harness or key declares, as the roster keeps it (`empty_draft/0`
+  before anything is entered). Its events are the roster's. Nothing is
+  shown while no harness or key is connected.
+  """
+  attr :id, :string, required: true
+  attr :brains, :list, required: true
+  attr :draft, :map, required: true
+
+  def member_form(%{brains: []} = assigns), do: ~H""
+
+  def member_form(assigns) do
+    params = assigns.draft.params
+
+    assigns =
+      assigns
+      |> assign(:params, params)
+      |> assign(:brain, Enum.find(assigns.brains, &(&1.value == params["brain"])))
+      |> assign(:chosen, params["options"] || %{})
+
+    ~H"""
+    <form
+      id={@id}
+      phx-change="draft_member"
+      phx-submit="make_member"
+      phx-auto-recover="ignore"
+      phx-target="#aqua-agents"
+      class="space-y-1"
+    >
+      <p class="font-medium text-gray-100">New crew member</p>
+      <div class="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          name="name"
+          value={@params["name"]}
+          aria-label="Name"
+          placeholder="Name, such as Opus"
+          pattern="[A-Za-z0-9][A-Za-z0-9_-]*"
+          title="Letters, digits, - and _"
+          required
+          class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+        />
+        <select
+          name="brain"
+          aria-label="Harness or key"
+          class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+        >
+          <option value="">Choose a harness or key</option>
+          <.brain_choices brains={@brains} chosen={@params["brain"]} />
+        </select>
+        <select
+          :if={@brain}
+          name="model"
+          aria-label="Model"
+          class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+        >
+          <option value="">Choose a model</option>
+          <option :for={{id, name} <- @brain.models} value={id} selected={id == @params["model"]}>
+            {name}
+          </option>
+        </select>
+        <label
+          :for={option <- @draft.options}
+          class="flex items-center gap-2 text-[11px] text-gray-400"
+        >
+          <span class="text-[10px] uppercase tracking-wider text-gray-500">{option["name"]}</span>
+          <.option_input
+            option={option}
+            name={"options[" <> option["name"] <> "]"}
+            value={@chosen[option["name"]]}
+          />
+        </label>
+        <.access_select
+          :if={@draft.access != []}
+          access={@draft.access}
+          value={@chosen["access"]}
+          name="options[access]"
+          label="Access"
+        />
+        <input
+          type="text"
+          name="description"
+          value={@params["description"]}
+          aria-label="Good at"
+          placeholder="Good at (optional)"
+          class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+        />
+        <input
+          type="text"
+          name="avoid"
+          value={@params["avoid"]}
+          aria-label="Avoid"
+          placeholder="Avoid (optional)"
+          class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+        />
+        <button
+          type="submit"
+          class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
+        >
+          Make crew member
+        </button>
+      </div>
+    </form>
+    """
+  end
 
   @doc """
   A program brain's Access selection: the choices its driver listed
