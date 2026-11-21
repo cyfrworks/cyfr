@@ -442,7 +442,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
       "the catalogue in the panel's menu"
     )
 
-    assert has_element?(pane, menu, "Soul or crew member")
+    assert has_element?(pane, menu, "Aqua or crew member")
     assert has_element?(pane, menu, "0 in · 0 out")
 
     pane

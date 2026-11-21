@@ -921,7 +921,7 @@ defmodule PrismWeb.AquaLive do
                 value={member.name}
                 selected={member.name == @member}
               >
-                {member.label}
+                {AgentsComponent.runs_on_label(member.agent, @listings)}
               </option>
             </select>
             <p class="mt-1 text-gray-500">
@@ -1076,7 +1076,7 @@ defmodule PrismWeb.AquaLive do
       <div>
         <h3 class="text-sm font-medium text-gray-200">Aqua</h3>
         <p class="text-[11px] text-gray-500 mt-0.5">
-          One assistant — the soul — and its crew: who it hands a job to, each on a brain of its own. Aqua runs on the crew member you choose. How a job is done is a scroll any of them reads.
+          One assistant, Aqua, and its crew: who it hands a job to, each on a brain of its own. Aqua runs on the crew member you choose. How a job is done is a scroll any of them reads.
         </p>
       </div>
 

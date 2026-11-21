@@ -717,7 +717,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           do: %{
             name: m["name"],
             title: m["title"],
-            label: runs_on_label(m),
+            agent: m,
             ready: ready?.(m["name"])
           }
         ),
@@ -1247,15 +1247,29 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # A crew member as Aqua's "Runs on" names it: its name, then the harness
-  # or key and the model it would run Aqua on.
-  defp runs_on_label(agent) do
+  @doc """
+  A crew member as Aqua's "Runs on" names it: its name, then the harness
+  or key and the model it would run Aqua on, the model by the name its
+  program's listing gives it, as the member's Model field shows it.
+  """
+  @spec runs_on_label(map(), map()) :: String.t()
+  def runs_on_label(agent, listings) do
     title = agent["title"] || agent["name"]
 
     case harness(agent) do
-      {nil, nil} -> "#{title} — no harness or key yet"
-      {"catalyst:" <> _key, on} -> "#{title} — #{on}, #{agent["model"] || "no model chosen yet"}"
-      {_program, on} -> "#{title} — #{on}, #{agent["model"] || "its default model"}"
+      {nil, nil} ->
+        "#{title} — no harness or key yet"
+
+      {"catalyst:" <> _key, on} ->
+        "#{title} — #{on}, #{agent["model"] || "no model chosen yet"}"
+
+      {_program, on} ->
+        model =
+          Enum.find_value(listing_models(listings, agent) || [], agent["model"], fn listed ->
+            if listed.id == agent["model"], do: listed.name
+          end)
+
+        "#{title} — #{on}, #{model || "its default model"}"
     end
   end
 
@@ -1400,7 +1414,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         :if={@loaded and @soul == nil and is_nil(@agents_unread)}
         class="text-xs text-gray-500 py-8 text-center border border-dashed border-gray-800 rounded"
       >
-        No soul here. The soul ships with the server — restore the shipped files below to bring it back.
+        Aqua's own file is missing. It ships with the server — restore the shipped files below to bring it back.
       </div>
 
       <.agent_card
@@ -1422,6 +1436,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         connected={connected?(Map.get(@model_status, @soul["name"]), @soul, @program_listings)}
         browser={@browser}
         crew={@crew}
+        listings={@program_listings}
       />
 
       <div :if={@crew != []} class="space-y-3 border-l border-gray-800 pl-4 ml-2">
@@ -1588,6 +1603,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :access, :list, default: []
   attr :browser, :map, default: nil
   attr :crew, :list, default: []
+  attr :listings, :map, default: %{}
   attr :brains, :list, default: []
 
   defp agent_card(assigns) do
@@ -1638,14 +1654,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                 else: "bg-blue-900/40 text-blue-300"
               )
             ]}>
-              {@agent["type"]}
+              {if @is_soul, do: "Aqua", else: @agent["type"]}
             </span>
             <code class="text-[11px] text-gray-500 font-mono">{@agent["name"]}</code>
             <.provenance_chip state={@agent["provenance"]} />
             <span
               :if={@disabled?}
               class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-800 text-gray-400"
-              title="Out of the crew — the soul does not see this member until it is enabled"
+              title="Out of the crew — Aqua does not see this member until it is enabled"
             >
               disabled
             </span>
@@ -1690,8 +1706,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       <form
         :for={
           {field, label, placeholder} <- [
-            {"description", "Good at", "What the soul hands this member…"},
-            {"avoid", "Avoid", "What the soul should never hand it…"}
+            {"description", "Good at", "What Aqua hands this member…"},
+            {"avoid", "Avoid", "What Aqua should never hand it…"}
           ]
         }
         :if={!@is_soul}
@@ -1790,7 +1806,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             value={member["name"]}
             selected={member["name"] == @agent["member"]}
           >
-            {runs_on_label(member)}
+            {runs_on_label(member, @listings)}
           </option>
         </select>
         <p
@@ -2035,7 +2051,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       </form>
 
       <p :if={!@is_soul} class="text-[11px] text-gray-500">
-        Offered the soul's tools on every job.
+        Offered Aqua's tools on every job.
       </p>
 
       <div :if={@is_soul}>

@@ -754,7 +754,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(
                view,
                "#aqua-card-scout",
-               "Offered the soul's tools on every job."
+               "Offered Aqua's tools on every job."
              )
 
       refute has_element?(view, "#aqua-card-scout input[phx-click=editor_toggle_capability]")
@@ -1023,7 +1023,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert html =~ "Loading Aqua…"
 
       for line <- [
-            "No soul here",
+            "own file is missing",
             "Nothing pinned yet.",
             "Nothing kept yet.",
             "No scrolls here.",
@@ -1067,13 +1067,13 @@ defmodule PrismWeb.AquaLiveTest do
                "Aqua and its crew members cannot be read right now — try again."
              )
 
-      refute render(view) =~ "No soul here"
+      refute render(view) =~ "own file is missing"
       refute has_element?(view, ~s(#aqua-new-member, [data-test="new-member-waits"]))
       refute has_element?(view, "button[phx-click=install_catalyst]")
       refute has_element?(view, "button[phx-click=open_consent]")
     end
 
-    test "a store that answers with no agents still says no soul is here", %{
+    test "a store that answers with no agents still says Aqua's own file is missing", %{
       conn: conn,
       ctx: ctx
     } do
@@ -1086,7 +1086,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       {view, _html} = mount_athanor(conn, "/aqua")
 
-      assert render(view) =~ "No soul here"
+      assert render(view) =~ "own file is missing"
       refute has_element?(view, ~s([data-test="agents-unavailable"]))
     end
 
@@ -1847,10 +1847,11 @@ defmodule PrismWeb.AquaLiveTest do
                  {harness, title}
                ]
 
-        # Aqua's Runs on names the member with its harness and model, here
-        # and on Aqua's card.
+        # Aqua's Runs on names the member with its harness and its model,
+        # the model by the name the listing gives it ("Opus" for the id
+        # "opus"), here and on Aqua's card.
         for runs_on <- ["#aqua-setup-member", "#aqua-card-aqua-member"] do
-          assert {member, "#{member} — #{title}, opus"} in choices(view, runs_on <> " option")
+          assert {member, "#{member} — #{title}, Opus"} in choices(view, runs_on <> " option")
         end
 
         refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
@@ -2366,6 +2367,35 @@ defmodule PrismWeb.AquaLiveTest do
       settled(fn -> has_element?(fresh, field) end, "the card read")
       assert {%{"open" => ["open-1"]}, _refs} = picker(fresh)
       refute has_element?(fresh, ~s(option[value="catalyst:open"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # A person reads Aqua, crew member, harness, key and scroll: nothing
+    # the Aqua page shows them, in its text or in a hint, a placeholder or
+    # a confirmation, says "soul".
+    test "nothing a person reads on the Aqua page says soul", %{conn: conn, ctx: ctx} do
+      :ok = open_brain!(ctx)
+      :ok = member!(ctx, "explorer")
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      settled(
+        fn ->
+          has_element?(view, "#aqua-card-explorer") and has_element?(view, "#aqua-restore")
+        end,
+        "the page read"
+      )
+
+      page = view |> render() |> LazyHTML.from_fragment()
+
+      hints =
+        for attribute <- ~w(title placeholder aria-label data-confirm alt),
+            said <- LazyHTML.attribute(LazyHTML.query(page, "[#{attribute}]"), attribute),
+            do: said
+
+      read = [LazyHTML.text(page) | hints]
+
+      assert read |> Enum.join("\n") |> String.contains?("Aqua")
+      assert Enum.filter(read, &(&1 =~ ~r/soul/i)) == []
       Cyfr.Test.Sandbox.end_views()
     end
 
@@ -3219,7 +3249,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       refute has_element?(view, "[id^=aqua-card-]")
       refute has_element?(view, ~s(#aqua-new-member, [data-test="new-member-waits"]))
-      refute render(view) =~ "No soul here"
+      refute render(view) =~ "own file is missing"
       assert has_element?(view, "#aqua-notes")
     end
 
