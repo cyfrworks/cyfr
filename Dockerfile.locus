@@ -161,6 +161,7 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     locales \
     build-essential \
     iptables \
+    procps \
     && apt-get install -y --no-install-recommends \
     fonts-liberation \
     libasound2t64 \
