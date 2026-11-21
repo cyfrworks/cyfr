@@ -78,18 +78,12 @@ defmodule Aqua do
   @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
   defdelegate model_status(ctx, agents), to: Models
 
-  @doc "Whether a brain runs on a program's own sign-in. See `Aqua.Models.signs_in?/1`."
-  @spec brain_signs_in?(map()) :: boolean()
-  defdelegate brain_signs_in?(plan), to: Models, as: :signs_in?
-
   @doc """
   The members whose brain CYFR cannot keep read-only, each with its
-  sentence. See `Aqua.Models.read_only_unheld/3`.
+  sentence. See `Aqua.Models.read_only_unheld/2`.
   """
-  @spec read_only_unheld(Context.t(), [map()], %{String.t() => map()}) :: %{
-          String.t() => String.t()
-        }
-  defdelegate read_only_unheld(ctx, members, plans), to: Models
+  @spec read_only_unheld(Context.t(), [map()]) :: %{String.t() => String.t()}
+  defdelegate read_only_unheld(ctx, members), to: Models
 
   @doc "The options an agent's brain declares. See `Aqua.Models.brain_options/2`."
   @spec brain_options(Context.t(), map()) :: {:ok, [map()]} | {:error, term()}

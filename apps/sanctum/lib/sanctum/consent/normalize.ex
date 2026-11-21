@@ -162,7 +162,7 @@ defmodule Sanctum.Consent.Normalize do
     with :ok <-
            only_keys(
              need,
-             ~w(name type fields scopes attach hosts paths disclose program install)a,
+             ~w(name type fields scopes attach hosts paths disclose)a,
              tag
            ),
          {:ok, name} <- required_string(need, :name, tag),
@@ -173,17 +173,13 @@ defmodule Sanctum.Consent.Normalize do
          {:ok, hosts} <- declared_set(need, :hosts, tag),
          :ok <- credential_hosts(type, hosts, tag),
          {:ok, paths} <- declared_set(need, :paths, tag),
-         {:ok, disclose} <- declared_disclose(need, tag),
-         {:ok, program} <- program(type, need, tag),
-         {:ok, install} <- install(need, tag) do
+         {:ok, disclose} <- declared_disclose(need, tag) do
       {:ok,
        %{"name" => name, "type" => type, "fields" => fields, "scopes" => scopes}
        |> put_optional("attach", attach)
        |> put_optional("hosts", hosts)
        |> put_optional("paths", paths)
-       |> put_optional("disclose", disclose)
-       |> put_optional("program", program)
-       |> put_optional("install", install)}
+       |> put_optional("disclose", disclose)}
     end
   end
 
@@ -217,8 +213,7 @@ defmodule Sanctum.Consent.Normalize do
     end
   end
 
-  # A credential need names the hosts it calls (`Prima.Manifest.Needs`);
-  # a login need names its program instead, and calls nothing itself.
+  # A credential need names the hosts it calls (`Prima.Manifest.Needs`).
   defp credential_hosts(type, nil, tag) do
     kind = hd(String.split(type, ":", parts: 2))
 
@@ -228,46 +223,6 @@ defmodule Sanctum.Consent.Normalize do
   end
 
   defp credential_hosts(_type, _hosts, _tag), do: :ok
-
-  # A login need names the program it mounts into, and only a login need
-  # names one: which program's row it binds is what the person consents
-  # to.
-  defp program(type, need, tag) do
-    login? = hd(String.split(type, ":", parts: 2)) == "login"
-
-    case Map.get(need, :program) do
-      program when login? and is_binary(program) and program != "" ->
-        {:ok, program}
-
-      nil when not login? ->
-        {:ok, nil}
-
-      _other ->
-        {:error, {tag, :program, "a login need, and only a login need, names its program"}}
-    end
-  end
-
-  # The program row a login need suggests (`Prima.Manifest.Needs`), when it
-  # suggests one: its command, a string where named.
-  defp install(need, tag) do
-    case Map.get(need, :install) do
-      nil ->
-        {:ok, nil}
-
-      %{} = install ->
-        install = Map.new(install, fn {key, value} -> {to_string(key), value} end)
-
-        if Map.keys(install) -- ~w(command) == [] and
-             Enum.all?(Map.values(install), &(is_nil(&1) or is_binary(&1))) do
-          {:ok, install |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()}
-        else
-          {:error, {tag, :install, "names a command as a string"}}
-        end
-
-      _other ->
-        {:error, {tag, :install, "names a command as a string"}}
-    end
-  end
 
   # `disclose` enters only when true: a need that never says it and one
   # that says false are the same input.

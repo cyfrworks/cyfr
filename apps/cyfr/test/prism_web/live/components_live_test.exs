@@ -698,35 +698,6 @@ defmodule PrismWeb.ComponentsLiveTest do
       )
   end
 
-  test "a login need names its program", %{conn: conn, ctx: ctx} do
-    manifest = %{
-      "name" => "harness",
-      "type" => "catalyst",
-      "version" => "1.0.0",
-      "publisher" => "local",
-      "needs" => %{
-        "claude" => %{
-          "type" => "login",
-          "program" => "claude",
-          "reason" => "to run Claude Code on your own plan",
-          "install" => %{"command" => "npx -y @anthropic-ai/claude-code"}
-        }
-      }
-    }
-
-    {:ok, _} =
-      Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "harness", "1.0.0",
-        manifest: manifest,
-        wasm: Cyfr.Test.Guests.wasm(:catalyst)
-      )
-
-    {view, _html} = mount_athanor(conn, "/components")
-    render_click(view, "toggle_expand", %{"ref" => "catalyst:local.harness"})
-    html = render(view)
-    assert html =~ "program claude"
-    refute html =~ "login:"
-  end
-
   test "an expanded component shows its description and tags", %{conn: conn} do
     ctx = %{Sanctum.TestContext.local(:prism) | athanor_id: seated_athanor().id}
 

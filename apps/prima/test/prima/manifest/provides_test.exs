@@ -100,11 +100,10 @@ defmodule Prima.Manifest.ProvidesTest do
     assert {:invalid_entry, @dependency, "db", {:invalid_destination, {:invalid_host, "*"}}} =
              refused(manifest(%{@dependency => %{"db" => bad}}))
 
-    # A provided value is attached to requests, so a program's destination
-    # names no host it could go to.
+    # A destination names hosts: one naming a program is no destination.
     program = entry(%{"destination" => %{"program" => "claude"}})
 
-    assert {:invalid_entry, @dependency, "db", {:invalid_destination, :hosts_required}} =
+    assert {:invalid_entry, @dependency, "db", {:invalid_destination, {:unknown_key, "program"}}} =
              refused(manifest(%{@dependency => %{"db" => program}}))
   end
 

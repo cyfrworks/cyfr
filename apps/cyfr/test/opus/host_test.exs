@@ -1024,58 +1024,6 @@ defmodule Opus.HostTest do
     end
   end
 
-  describe "a program's pipe" do
-    @tag :capture_log
-    test "an attempt whose component declares no login need is refused its open, holds no session, and keeps running" do
-      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
-
-      assert %{"v" => 1, "error" => "denied"} ==
-               AttemptFixtures.call(fixture, "pipe_open", %{
-                 "need" => "claude",
-                 "key" => "chat_1",
-                 "argv" => ["--print"]
-               })
-
-      assert %{"v" => 1, "error" => "guest_error", "type" => "ended"} =
-               AttemptFixtures.call(fixture, "pipe_send", %{
-                 "session" => "ses_1",
-                 "lines" => ["hello"]
-               })
-
-      assert %{"v" => 1, "ok" => %{"lines" => [], "dropped" => 0, "running" => false}} ==
-               AttemptFixtures.call(fixture, "pipe_recv", %{
-                 "session" => "ses_1",
-                 "after" => 0,
-                 "max_wait_ms" => 0
-               })
-
-      assert %{"v" => 1, "ok" => true} ==
-               AttemptFixtures.call(fixture, "pipe_close", %{"session" => "ses_1"})
-
-      assert Process.alive?(fixture.pid)
-    end
-
-    @tag :capture_log
-    test "pipe args that do not read are lost, a wait past the bound among them" do
-      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
-      over = Prima.HostAPI.max_pipe_wait_ms() + 1
-
-      calls = [
-        {"pipe_open", %{"need" => "", "key" => "chat_1", "argv" => []}},
-        {"pipe_open", %{"need" => "claude", "key" => "chat_1", "argv" => [1]}},
-        {"pipe_send", %{"session" => "ses_1", "lines" => "hello"}},
-        {"pipe_recv", %{"session" => "ses_1", "after" => -1, "max_wait_ms" => 0}},
-        {"pipe_recv", %{"session" => "ses_1", "after" => 0, "max_wait_ms" => over}},
-        {"pipe_close", %{}}
-      ]
-
-      for {op, args} <- calls do
-        assert %{"v" => 1, "error" => "lost"} == AttemptFixtures.call(fixture, op, args),
-               "#{op} #{inspect(args)}"
-      end
-    end
-  end
-
   describe "the vectors of tests/fixtures/host_api.json" do
     @tag :capture_log
     test "every call's body reads, and its answer is written as the vector writes it" do
@@ -1557,9 +1505,6 @@ defmodule Opus.HostTest do
 
   defp expected("fetch_artifact"), do: "not_found"
   defp expected("release_child"), do: "lost"
-  defp expected("pipe_open"), do: "denied"
-  defp expected("pipe_send"), do: "guest_error"
-  defp expected(op) when op in ~w(pipe_recv pipe_close), do: "ok"
   defp expected(op) when op in ~w(question_ask question_wait), do: "ok"
 
   defp expected(op) when op in ~w(oauth_token storage admit_child tool_call attached_fetch),
@@ -1577,15 +1522,6 @@ defmodule Opus.HostTest do
     assert %{"lease_until" => until} = renewals[fixture.attempt]
     assert is_integer(until) and renewals["att_other"] == "lost"
   end
-
-  # A session the attempt holds none of: no lines, not running; and its
-  # close is the vector's.
-  defp answered("pipe_recv", %{"ok" => recv}, %{"ok" => wire}, _fixture, _before) do
-    assert recv == %{"lines" => [], "dropped" => 0, "running" => false}
-    assert Map.keys(recv) == Map.keys(wire)
-  end
-
-  defp answered("pipe_close", answer, vector, _fixture, _before), do: assert(answer == vector)
 
   # A fixture's component declares no action and its run acts as no
   # person, so its ask, and a wait on it, is answered at once: invalid.

@@ -858,8 +858,7 @@ defmodule Prima.LocusBackends do
   on the service can read a command line, so a credential never goes in
   one. Refused `:not_a_string`, `:empty`, `:too_long`, `:nul` or
   `:vault_reference`. A program's command
-  (`Opus.Programs.Definition`) and the program a manifest's
-  login need suggests (`Prima.Manifest.Needs`) are held to it.
+  (`Opus.Programs.Definition`) is held to it.
   """
   @spec check_command(term()) ::
           :ok | {:error, :not_a_string | :empty | :too_long | :nul | :vault_reference}

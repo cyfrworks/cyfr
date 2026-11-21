@@ -53,8 +53,6 @@ defmodule Locus.Runtime.Engine do
   @max_instances 10
   @max_tables 10
   @max_table_elements 20_000
-  # The largest `u32`, the WIT type of a pipe answer's `dropped` count.
-  @max_u32 4_294_967_295
 
   # wasmtime's words for an instantiation its store limits refused: a count
   # past its bound, or a memory or table declared larger than its bound.
@@ -326,9 +324,6 @@ defmodule Locus.Runtime.Engine do
         %{}
       end
 
-    pipe_imports =
-      if component_type == :catalyst, do: build_pipe_imports(host, limits), else: %{}
-
     question_imports =
       if component_type == :catalyst, do: build_question_imports(host), else: %{}
 
@@ -349,7 +344,6 @@ defmodule Locus.Runtime.Engine do
       |> Map.merge(storage_imports)
       |> Map.merge(oauth_imports)
       |> Map.merge(emit_imports)
-      |> Map.merge(pipe_imports)
       |> Map.merge(question_imports)
       |> Map.merge(formula_imports)
 
@@ -371,69 +365,6 @@ defmodule Locus.Runtime.Engine do
         "emit" => {:fn, fn json_event -> emit(host, limits, json_event) end}
       }
     }
-  end
-
-  # A catalyst's `cyfr:process/pipe` import: each call is the host call of
-  # its name (`c:Prima.HostAPI.pipe_open/4` and the rest), and CYFR decides
-  # the need, the binding and the session. A send's lines and an open's
-  # arguments the backends wire would refuse are refused here, before they
-  # cross. Every refusal reaches the guest as `err(code)`.
-  defp build_pipe_imports(host, limits) do
-    %{
-      "cyfr:process/pipe@0.1.0" => %{
-        "open" => {:fn, fn need, key, argv -> pipe_open(host, need, key, argv) end},
-        "send" => {:fn, fn session, lines -> pipe_send(host, limits, session, lines) end},
-        "recv" =>
-          {:fn,
-           fn session, after_seq, max_wait_ms ->
-             pipe_recv(host, session, after_seq, max_wait_ms)
-           end},
-        "close" => {:fn, fn session -> pipe_close(host, session) end}
-      }
-    }
-  end
-
-  defp pipe_open(host, need, key, argv) do
-    with :ok <- pipe_checked(Locus.Runtime.EdgeGuard.check_pipe_argv(argv)),
-         {:ok, %{session: session, resumed: resumed}} <-
-           Locus.Runtime.HostClient.pipe_open(host, need, key, argv) do
-      {:ok, %{session: session, resumed: resumed}}
-    else
-      {:error, reason} -> {:error, pipe_code(reason)}
-    end
-  end
-
-  defp pipe_send(host, limits, session, lines) do
-    with :ok <- pipe_checked(Locus.Runtime.EdgeGuard.check_pipe_lines(limits, lines)),
-         :ok <- Locus.Runtime.HostClient.pipe_send(host, session, lines) do
-      :ok
-    else
-      {:error, reason} -> {:error, pipe_code(reason)}
-    end
-  end
-
-  defp pipe_recv(host, session, after_seq, max_wait_ms) do
-    wait = min(max_wait_ms, Prima.HostAPI.max_pipe_wait_ms())
-
-    case Locus.Runtime.HostClient.pipe_recv(host, session, after_seq, wait) do
-      {:ok, %{lines: lines, dropped: dropped, running: running}} ->
-        {:ok,
-         %{
-           lines: Enum.map(lines, &%{seq: &1.seq, text: &1.text}),
-           dropped: min(dropped, @max_u32),
-           running: running
-         }}
-
-      {:error, reason} ->
-        {:error, pipe_code(reason)}
-    end
-  end
-
-  defp pipe_close(host, session) do
-    case Locus.Runtime.HostClient.pipe_close(host, session) do
-      :ok -> :ok
-      {:error, reason} -> {:error, pipe_code(reason)}
-    end
   end
 
   # A catalyst's `cyfr:question/ask` import: each call of `ask` takes the
@@ -501,20 +432,6 @@ defmodule Locus.Runtime.Engine do
   # sent; anything else, CYFR's `lost` among it, leaves nobody to answer.
   defp unanswered(:too_large), do: {:none, :invalid}
   defp unanswered(_lost_or_unavailable), do: {:none, :unavailable}
-
-  defp pipe_checked(:ok), do: :ok
-  defp pipe_checked({:error, code, _message}), do: {:error, {:local, code}}
-
-  # The code a pipe call's guest is handed: a guest error's type,
-  # the pipe's own refusals by name, and `lost` for a lost or uncertain
-  # answer and anything else, since the attempt cannot tell what happened.
-  defp pipe_code({:local, code}), do: code
-  defp pipe_code({:guest_error, type, _message}), do: type
-  defp pipe_code({:guest_error, type, _message, _remediation}), do: type
-  defp pipe_code(:denied), do: "denied"
-  defp pipe_code(:unavailable), do: "unavailable"
-  defp pipe_code(:too_large), do: "too_large"
-  defp pipe_code(_lost_or_uncertain), do: "lost"
 
   @doc """
   Deliver one guest event through the attempt's host client, answering the

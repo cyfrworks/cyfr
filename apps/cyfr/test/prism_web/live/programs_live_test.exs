@@ -11,8 +11,8 @@ defmodule PrismWeb.ProgramsLiveTest do
   Restart for an mcp program only, replaces a program's whole definition
   keeping its folder, removes a program once its removal is confirmed,
   and shows a disabled program as stopped. It prefills the program form
-  from a component's login need and opens the program's terminal in the
-  row's folder once the install is confirmed. A program opens on a
+  for a crew member whose brain is a program and opens the program's
+  terminal in the row's folder once the install is confirmed. A program opens on a
   terminal the server owns for the person: the page attaches once the
   frame's hook stands, hands each write to the hook and keeps none of it,
   types and resizes, lists and closes the person's running sessions, and
@@ -493,72 +493,6 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert cells.("claude") == [{"home", "kept"}, {"status", "—"}, {"tools", "—"}]
     assert [{"home", "scratch"}, {"status", status}, {"tools", "0"}] = cells.("piped")
     refute status in ["", "—"]
-  end
-
-  # A catalyst that runs a program with the person's own sign-in.
-  defp harness!(athanor) do
-    ctx = Sanctum.Context.internal(user_id: "_test", athanor_id: athanor.id, scope: :athanor)
-
-    manifest = %{
-      "name" => "harness",
-      "type" => "catalyst",
-      "version" => "1.0.0",
-      "publisher" => "local",
-      "needs" => %{
-        "claude" => %{
-          "type" => "login",
-          "program" => "claude",
-          "reason" => "to run Claude Code on your own plan",
-          "install" => %{"command" => "npx -y @anthropic-ai/claude-code@2.1.316"}
-        }
-      }
-    }
-
-    # Laid in this athanor alone, never in the run's shared seed tree, so
-    # no other test's athanor reads it through.
-    unit =
-      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harness", "1.0.0",
-        manifest: manifest,
-        wasm: Cyfr.Test.Guests.wasm(:catalyst)
-      )
-
-    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
-    "catalyst:local.harness:1.0.0"
-  end
-
-  test "an install opens the program form prefilled from the component's login need",
-       %{conn: conn, athanor: athanor} do
-    ref = harness!(athanor)
-    query = URI.encode_query(%{"install" => ref, "need" => "claude"})
-    {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
-    html = render(view)
-
-    assert has_element?(
-             view,
-             ~s([data-test="install-from"]),
-             "to run Claude Code on your own plan"
-           )
-
-    assert has_element?(view, ~s(form#add-program input[name="name"][value="claude"]))
-
-    assert has_element?(
-             view,
-             ~s(form#add-program input[name="command"][value="npx -y @anthropic-ai/claude-code@2.1.316"])
-           )
-
-    refute has_element?(view, ~s(form#add-program input[name="login_command"]))
-
-    assert html =~ "Install"
-  end
-
-  test "an install naming no login need of the component says so", %{conn: conn, athanor: athanor} do
-    ref = harness!(athanor)
-    query = URI.encode_query(%{"install" => ref, "need" => "codex"})
-    {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
-    render(view)
-
-    assert flash(view, "error") == "#{ref} declares no login need named 'codex' to install from."
-    refute has_element?(view, "form#add-program")
   end
 
   alias Cyfr.Test.ScriptedBackends, as: Scripted
@@ -1173,34 +1107,6 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert {:ok, %{id: id}} = Opus.Browser.row(athanor.id, :apart)
     assert id == row.id
     assert {:error, :not_added} = Opus.Browser.row(athanor.id)
-  end
-
-  test "an install from a component's need asks once, then opens its terminal in the row's folder",
-       %{conn: conn, athanor: athanor, user: user} do
-    controller!()
-    ref = harness!(athanor)
-    query = URI.encode_query(%{"install" => ref, "need" => "claude"})
-    {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
-    render(view)
-
-    assert has_element?(view, ~s([data-test="install-from"]), "asks you to confirm the program")
-    view |> form("form#add-program", %{}) |> render_submit()
-    answered(view)
-
-    assert %{"details" => %{"command" => "npx -y @anthropic-ai/claude-code@2.1.316"}} =
-             asked(user, athanor, "mcp_servers.create")
-
-    confirm!(view, user, athanor, "mcp_servers.create")
-
-    assert {:ok, %{id: home, mark: "driven", home: "kept"}} =
-             Arca.McpServerStorage.get(ctx(athanor), "claude")
-
-    assert_receive {:session, "open", %{"mode" => "terminal", "home_id" => ^home}, _fields},
-                   2_000
-
-    opened_session(view)
-    assert has_element?(view, ~s([data-test="terminal-name"]), "claude")
-    assert open_confirmations(user, athanor) == []
   end
 
   # A crew member whose brain is a program the athanor has no row of: its

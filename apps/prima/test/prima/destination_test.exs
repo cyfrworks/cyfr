@@ -9,8 +9,7 @@ defmodule Prima.DestinationTest do
   malformed member with its own reason, and admits a request only inside
   every bound it names, its path compared segment by segment after the
   path grammar refused what an upstream could normalize elsewhere. A
-  program's destination names one program and nothing beside it, and
-  admits no request.
+  destination names hosts: one naming a program is refused.
   """
 
   use ExUnit.Case, async: true
@@ -457,42 +456,11 @@ defmodule Prima.DestinationTest do
   end
 
   describe "a program" do
-    test "reads to its canonical form and back" do
-      destination = new!(%{"program" => "claude"})
+    test "is no destination: a map naming one is refused, beside hosts or alone" do
+      assert {:unknown_key, "program"} = refused(%{"program" => "claude"})
 
-      assert destination ==
-               %Destination{hosts: nil, scheme: nil, program: "claude"}
-
-      assert Destination.to_map(destination) == %{"program" => "claude"}
-      assert Destination.from_map(Destination.to_map(destination)) == {:ok, destination}
-      assert Destination.canonical(destination) == ~s({"program":"claude"})
-      assert Destination.valid_program?("claude-code-2")
-    end
-
-    test "is named in the row grammar and stands alone" do
-      for program <- ["", "Claude", "-claude", "claude code", String.duplicate("a", 33), nil, 7] do
-        assert {:invalid_program, ^program} = refused(%{"program" => program}), inspect(program)
-        refute Destination.valid_program?(program)
-      end
-
-      assert {:program_with, "hosts"} =
+      assert {:unknown_key, "program"} =
                refused(%{"program" => "claude", "hosts" => ["api.anthropic.com"]})
-
-      for key <- ["scheme", "port", "methods", "paths", "other"] do
-        assert {:program_with, ^key} = refused(%{"program" => "claude", key => "x"}), key
-      end
-    end
-
-    test "admits no request and contains only itself" do
-      claude = new!(%{"program" => "claude"})
-      hosts = new!(%{"hosts" => ["api.anthropic.com"]})
-
-      refute Destination.matches?(claude, URI.parse("https://api.anthropic.com/"), "POST")
-
-      assert Destination.within?(claude, claude)
-      refute Destination.within?(claude, new!(%{"program" => "codex"}))
-      refute Destination.within?(claude, hosts)
-      refute Destination.within?(hosts, claude)
     end
   end
 end

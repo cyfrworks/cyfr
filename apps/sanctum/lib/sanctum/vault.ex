@@ -311,9 +311,7 @@ defmodule Sanctum.Vault do
     * `:destination` (required) — where the material may go, a
       `Prima.Destination` map (string or atom keys); absent is
       `:destination_required` and one outside the grammar
-      `{:invalid_destination, reason}`, both before anything is asked; a
-      program's destination (`{"program": name}`) names no host, and is
-      refused `{:invalid_destination, :hosts_required}`
+      `{:invalid_destination, reason}`, both before anything is asked
     * `:disclose` — `true` to let a component read the fields; `false`
       when absent, so the entry is attach-only unless it says otherwise
 
@@ -775,16 +773,12 @@ defmodule Sanctum.Vault do
   # A destination as a caller names it, string or atom keys, held to
   # `Prima.Destination`'s athanor-entry grammar and answered as its
   # canonical text. `Sanctum.Vault.OAuthGrant` holds a new entry's to the
-  # same rule. A program's destination names no host: no entry has one,
-  # and a create, a rebind and a new OAuth entry refuse it alike.
+  # same rule.
   @spec destination_text(term()) :: {:ok, String.t()} | {:error, term()}
   def destination_text(%{} = destination) when not is_struct(destination) do
     case Prima.Destination.from_map(string_keys(destination)) do
-      {:ok, %Prima.Destination{program: nil} = parsed} ->
+      {:ok, parsed} ->
         {:ok, Prima.Destination.canonical(parsed)}
-
-      {:ok, %Prima.Destination{}} ->
-        {:error, {:invalid_destination, :hosts_required}}
 
       {:error, _reason} = refused ->
         refused

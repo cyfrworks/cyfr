@@ -512,7 +512,7 @@ defmodule Sanctum.VaultTest do
 
       refute "login" in kinds
 
-      assert {:error, {:invalid_destination, :hosts_required}} =
+      assert {:error, {:invalid_destination, {:unknown_key, "program"}}} =
                Vault.create(ctx, %{
                  name: "claude",
                  kind: "api_key",
@@ -522,7 +522,7 @@ defmodule Sanctum.VaultTest do
 
       view = create!(ctx)
 
-      assert {:error, {:invalid_destination, :hosts_required}} =
+      assert {:error, {:invalid_destination, {:unknown_key, "program"}}} =
                Vault.rebind(ctx, %{id: view.id, destination: %{"program" => "claude"}})
 
       assert row!(ctx, view.id).destination == @destination_text

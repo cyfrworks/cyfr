@@ -442,12 +442,10 @@ defmodule Prima.Refusal do
   defp row({:invalid_caps, _detail} = failure),
     do: {:invalid_argument, "The manifest is refused: #{Prima.Manifest.Caps.words(failure)}."}
 
-  # A login need's mount (`Sanctum.Mount`): the program row its binding
-  # names is not set up as a program with a kept home.
-  defp row({:program_unavailable, name}) when is_binary(name),
-    do:
-      {:setup_required,
-       "The program #{name} is not set up with a kept home; set it up on Programs."}
+  # A manifest whose needs block its grammar refuses, as a pull or a
+  # publish meets it, in the grammar's own words.
+  defp row({:invalid_needs, _detail} = failure),
+    do: {:invalid_argument, "The manifest is refused: #{Prima.Manifest.Needs.words(failure)}."}
 
   # An OAuth grant or refresh for a provider this athanor holds no OAuth
   # client for (`Sanctum.ProviderCredentials`): the client is set on the
@@ -718,12 +716,6 @@ defmodule Prima.Refusal do
     do:
       {:setup_required,
        "#{member}'s brain needs only your grant — connect it from its card on the Aqua page"}
-
-  defp row({:crew_unready, member, :no_program}) when is_binary(member),
-    do:
-      {:setup_required,
-       "#{member}'s program is not set up — set it up on the Programs page, then connect " <>
-         "it from its card on the Aqua page"}
 
   # A brain that is a program stands on the row of its name alone
   # (`Aqua.Models`).

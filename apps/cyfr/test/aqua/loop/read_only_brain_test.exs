@@ -4,15 +4,14 @@
 defmodule Aqua.Loop.ReadOnlyBrainTest do
   @moduledoc """
   A read-only crew member whose brain runs a program CYFR cannot keep
-  read-only, through the real loop: a catalyst whose manifest declares a
-  `login` need (one the test publishes in the athanor),
-  or a program row whose driver is `cyfr-codex`, the shipped OpenAI
-  Codex member's own among them. Its turn ends unrun
+  read-only, through the real loop: a program row whose driver is
+  `cyfr-codex`, the shipped OpenAI Codex member's own among them. Its
+  turn ends unrun
   before anything runs: the sentence that says to switch it to auto is a
   line in its thread and the turn's error, no model is asked, no step is
   written, no session opens and the root starts no child. The same member
   in auto runs, so only the mode refuses it; a read-only member on a
-  key-only catalyst runs, and one on a `cyfr-claude-code` row passes the
+  catalyst runs, and one on a `cyfr-claude-code` row passes the
   check and reaches the program's holder, which starts it read-only.
   """
 
@@ -28,7 +27,6 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   alias Sanctum.Consent.Bootstrap
 
   @api "catalyst:local.claude"
-  @signs_in "catalyst:local.planned"
   @root :crypto.strong_rand_bytes(32)
   @session "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
   # The title of the crew member the seed's Aqua runs on, whose mode Aqua
@@ -66,42 +64,14 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, _} = Bootstrap.run(ctx)
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @api, %{"ANTHROPIC_API_KEY" => "sk-test"})
-    Arca.Test.UnitFixtures.login_catalyst!(ctx, "planned", "planner")
-    ScriptedWorker.fresh_limits!(ctx, [@api, @signs_in])
+    ScriptedWorker.fresh_limits!(ctx, [@api])
 
     {:ok, room} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, room: room}
   end
 
   describe "a crew member" do
-    test "read-only on a catalyst that signs in to a program of its own ends unrun with " <>
-           "the line and dispatches nothing; in auto it runs",
-         %{ctx: ctx, room: room} do
-      member!(ctx, "coder", "Coder", @signs_in, "default")
-      signed_in!(ctx, "coder", @signs_in, "planner")
-      mode!(ctx, "coder", "read-only")
-      script!([reply("built")])
-
-      {thread, turn} = accept!(ctx, room, "coder", "build the page")
-
-      assert Aqua.Loop.run(ctx: ctx, turn_id: turn.id) ==
-               {:failed, {:read_only_unheld, "Coder", "planned"}}
-
-      line =
-        "Coder can't run read-only: its brain, planned, runs a program CYFR can't keep " <>
-          "read-only, so nothing ran. Switch Coder to auto on the Aqua page to use it."
-
-      assert Aqua.Models.unheld_sentence("Coder", "planned") == line
-      refused!(ctx, thread, turn, "build the page", line)
-
-      # The same member, switched to auto, runs on the same brain.
-      mode!(ctx, "coder", "auto")
-      again = accept_in!(ctx, thread, "coder", "build the page")
-      assert Aqua.Loop.run(ctx: ctx, turn_id: again.id) == :completed
-      ran!(ctx, thread, again, "auto", @signs_in, "build the page", "built")
-    end
-
-    test "read-only on a catalyst that runs no program of its own runs",
+    test "read-only on a catalyst runs",
          %{ctx: ctx, room: room} do
       member!(ctx, "reader", "Reader", @api, "claude-sonnet-5-5")
       keyed!(ctx, "reader")
@@ -117,8 +87,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   # Both shipped harness members name a program row: Claude Code's driver
   # holds a read-only start ("the soul on a program row"), and Codex's
   # cannot, so the shipped OpenAI Codex member is refused before its row's
-  # session opens. A made member's refusal on a catalyst that signs in is
-  # above.
+  # session opens.
   describe "the shipped OpenAI Codex member" do
     setup do
       fake = Scripted.start(self(), @root)
@@ -287,18 +256,6 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   defp keyed!(ctx, name),
     do: commit!(ctx, Prima.AgentRef.ref(name), %{selections: [%{dep: @api, label: "default"}]})
 
-  # The member's brain signed in to a program row of its own, the one its
-  # login need names (the need is named for its program): bound on the
-  # catalyst's consent and on the member's edge into it.
-  defp signed_in!(ctx, name, catalyst, program) do
-    row = program_row!(ctx, program, "npx -y #{program}")
-    commit!(ctx, catalyst, %{bindings: [%{need: program, entry_id: row.id}]})
-
-    commit!(ctx, Prima.AgentRef.ref(name), %{
-      selections: [%{dep: catalyst, need: program, entry_id: row.id}]
-    })
-  end
-
   defp commit!(ctx, ref, over) do
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
     decisions = Map.merge(%{ref: ref}, over)
@@ -366,7 +323,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   end
 
   defp script!(items),
-    do: start_supervised!({ScriptedWorker, ref: [@api, @signs_in], script: items})
+    do: start_supervised!({ScriptedWorker, ref: [@api], script: items})
 
   defp reply(text),
     do: %{

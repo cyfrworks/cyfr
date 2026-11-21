@@ -604,7 +604,12 @@ defmodule Arca.CrewStorageTest do
       room: room
     } do
       turn = running!(actor, room)
-      assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^room.id),
+          inc: [brain_generation: 1]
+        )
+
       keep_session!(room, "session-since")
 
       assert {:ok, 0} =
@@ -720,28 +725,29 @@ defmodule Arca.CrewStorageTest do
       assert {:error, :not_found} = Threads.get(actor, child.id)
     end
 
-    test "forgetting the sessions of members forgets theirs alone, in the actor's athanor", %{
-      actor: actor,
-      room: room
-    } do
+    test "a home's forget reaches the threads that store its row, in the actor's athanor alone",
+         %{actor: actor, room: room} do
       {:ok, planner} = Threads.crew_thread(actor, room.id, "planner")
       {:ok, builder} = Threads.crew_thread(actor, room.id, "builder")
 
       elsewhere = Prima.Actor.in_athanor("ath_other")
       {:ok, theirs} = Arca.Test.Days.thread(elsewhere)
 
-      # Another athanor's thread whose agent is planner as well.
-      for {thread, agent, session} <- [
-            {planner, "planner", "s-planner"},
-            {builder, "builder", "s-builder"},
-            {theirs, "planner", "s-x"}
+      # Another athanor's thread that names the same row as well. No row of
+      # that id stands here, so a forget owes no removal.
+      for {thread, row, session} <- [
+            {planner, "mcp_home", "s-planner"},
+            {builder, "mcp_other", "s-builder"},
+            {theirs, "mcp_home", "s-x"}
           ] do
         {1, _} =
           from(t in Arca.Schemas.Thread, where: t.id == ^thread.id)
-          |> Arca.Repo.update_all(set: [agent: agent, brain_session: session])
+          |> Arca.Repo.update_all(
+            set: [brain_session: session, brain_progress: Jason.encode!(%{"row" => row})]
+          )
       end
 
-      assert {:ok, []} = Threads.forget_sessions(actor, ["planner"])
+      assert {:ok, _forgotten} = Threads.forget_sessions(actor, "mcp_home")
       assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, planner.id)
 
       assert {:ok, %{brain_session: "s-builder", brain_generation: 0}} =
@@ -749,12 +755,6 @@ defmodule Arca.CrewStorageTest do
 
       assert {:ok, %{brain_session: "s-x", brain_generation: 0}} =
                Threads.get(elsewhere, theirs.id)
-
-      # A thread keeping no session moves on too: a turn of it may still
-      # be opening one.
-      assert {:ok, []} = Threads.forget_sessions(actor, ["planner"])
-      assert {:ok, %{brain_generation: 2}} = Threads.get(actor, planner.id)
-      assert {:ok, []} = Threads.forget_sessions(actor, [])
     end
   end
 end

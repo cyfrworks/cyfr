@@ -3,7 +3,7 @@
 
 defmodule Arca.BrainForgetRaceTest do
   @moduledoc """
-  A home's cleanup (`Arca.ThreadStorage.forget_sessions/3`) chooses the
+  A home's cleanup (`Arca.ThreadStorage.forget_sessions/2`) chooses the
   threads it may reach before it takes their locks, and decides which of
   them it clears from what it reads under the locks: a turn pinned to the
   row that ended while the cleanup waited, its thread's session committed
@@ -102,7 +102,7 @@ defmodule Arca.BrainForgetRaceTest do
         unboxed(fn ->
           %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
           send(test, {:cleaning, backend})
-          Threads.forget_sessions(actor, [], old.id)
+          Threads.forget_sessions(actor, old.id)
         end)
       end)
 

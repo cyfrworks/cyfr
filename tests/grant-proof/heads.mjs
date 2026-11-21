@@ -164,7 +164,7 @@ export const revokedHeld = (answer, { consent, refusal, boundUs }) =>
 // field a row lacks fails as missing.
 export const SHARE_FIELDS = {
   consent_vault_refs: {
-    exact: ["binding_key", "vault_entry_id", "mcp_server_id", "via_label", "lifetime_kind", "expires_at", "consumed_by_root"],
+    exact: ["binding_key", "vault_entry_id", "via_label", "lifetime_kind", "expires_at", "consumed_by_root"],
     derived: ["binding_digest"],
     bound: { ids: ["consent_id", "athanor_id", "share_id"], times: [], days: [] },
   },

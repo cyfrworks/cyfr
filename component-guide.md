@@ -159,7 +159,6 @@ path = "wit"
 # "cyfr:emit" = { path = "wit/deps/cyfr-emit" }      # uncomment if you import emit
 # "cyfr:storage" = { path = "wit/deps/cyfr-storage" }  # uncomment if you import storage
 # "cyfr:oauth" = { path = "wit/deps/cyfr-oauth" }      # uncomment if you import oauth
-# "cyfr:process" = { path = "wit/deps/cyfr-process" }  # uncomment if you import pipe
 # "cyfr:question" = { path = "wit/deps/cyfr-question" }  # uncomment if you import ask
 ```
 
@@ -205,17 +204,6 @@ interface run { run: func(input: string) -> string; }
 world catalyst {
     export run;
     import cyfr:storage/files@0.1.0;
-}
-```
-
-**Catalyst (a program's pipe)** — e.g. an adapter that drives a coding harness on the person's own plan:
-```wit
-package cyfr:catalyst@0.1.0;
-interface run { run: func(input: string) -> string; }
-world catalyst {
-    export run;
-    import cyfr:process/pipe@0.1.0;
-    import cyfr:emit/events@0.1.0;
 }
 ```
 
@@ -565,7 +553,7 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | (key) | string | Yes | The need name — the slot the operator binds a vault entry to. Lowercase, matching `^[a-z][a-z0-9_-]{0,31}$` |
-| `type` | string | Yes | `kind:qualifier` — kind is a credential kind (`api_key`, `oauth`, `bundle`) or a component type (`catalyst`, `reagent`, `formula`); or `login` alone, for a program the component runs (below) |
+| `type` | string | Yes | `kind:qualifier` — kind is a credential kind (`api_key`, `oauth`, `bundle`) or a component type (`catalyst`, `reagent`, `formula`) |
 | `reason` | string | Yes | Prose the operator sees on the consent sheet instead of your key names |
 | `fields` | string[] | No | The names your component reads the credential under: exactly one for an attached API key or bundle, which CYFR attaches; for a disclosed need, the names your binary passes to `cyfr:vault/read.get`. The person's entry need not use these names: the grant maps each to one of the entry's fields, by itself when the names are equal or both sides hold one field, otherwise as the person chooses |
 | `scopes` | string[] | OAuth only | OAuth scopes the grant must cover. Only valid on `oauth:*` types |
@@ -589,19 +577,6 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 ```
 
 An OAuth need declares the provider, its scopes and the hosts the token is sent to (`"type": "oauth:google"`, `"scopes": [...]`, `"hosts": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
-
-A **login need** names a program the component runs with the person's own sign-in: `"type": "login"`, `"program"` the name of the program's row (lowercase letters, digits and hyphens), `reason` and `required`, and no `hosts`, `paths`, `attach`, `disclose`, `fields` or `scopes`. It is satisfied by the athanor's own program row of that name, a driven program with a kept folder, which the grant binds: the program runs in the row's own folder, where its own sign-in lives, and nothing is attached to the component's requests or disclosed to it. A program's folder is never shared, so no share meets a login need. An optional `install` block suggests the row: `command`, what fetches or runs the program, held to the rules of a program's command (at most 4096 bytes, no NUL, no `vault:`). The component's setup plan and the Aqua page offer **install `<program>`** with it shown and editable; the person decides, confirms the program's whole definition once, and accepting defines the row and opens the program's terminal in its folder, where the person signs it in as the program asks; the component's grant then binds the row. Pin the version your component was tested against in `command`. The component reaches the program through its pipe ([`cyfr:process/pipe`](#cyfrprocesspipe--a-programs-session)), naming the need.
-
-```json
-"needs": {
-  "claude": {
-    "type": "login",
-    "program": "claude",
-    "reason": "to run Claude Code on your own plan",
-    "install": {"command": "npx -y @anthropic-ai/claude-code@2.1.318"}
-  }
-}
-```
 
 ### `caps` Section
 
@@ -963,37 +938,6 @@ Error: `{"error": {"type": "...", "message": "..."}}`.
 `storage_conflict` is the opposite and needs no check: it is a definite loss to another writer, nothing was written, and the same call made again is the ordinary way to resolve it.
 
 > For extended file operations (read_lines, edit, search, grep, tree), use the `files` catalyst (`catalyst:local.files`) via formula invoke — those are catalyst-level features, not host function actions.
-
-### `cyfr:process/pipe` — a program's session
-
-A catalyst drives a program its `login` need names (see [`needs` Section](#needs-section)) over lines: it writes lines to the program's standard input and reads the lines it writes, each numbered in the session's sequence. The program runs in its own box, in the folder of the program row the grant binds, under the person's own sign-in; the component never holds a credential or an address of its own, and CYFR checks every call against the run's grant.
-
-| Function | Answers |
-|---|---|
-| `open(need, key, argv) -> result<opened, string>` | `opened { session, resumed }` |
-| `send(session, lines) -> result<_, string>` | nothing |
-| `recv(session, after, max-wait-ms) -> result<recv-result, string>` | `recv-result { lines: list<line { seq, text }>, dropped, running }` |
-| `close(session) -> result<_, string>` | nothing |
-
-- **`open`** names the login need (its key in the manifest, never an entry) and `key`, the catalyst's name for the session. `argv` is appended to the program's command, as the admin defined it on the Programs page; it shapes only what runs inside the box. A session belongs to the program and the key, not to one run: a later run opening the same key attaches to it while its program runs (`resumed: true`). When the program had ended (it exits, or no line went either way for the program's idle period) the open starts it again with this `argv` and answers `resumed: false`: a catalyst that speaks a protocol over the session starts that protocol again, and passes in `argv` what resumes its work. A repeat open by the same run answers as the first did. Keys are the component's own: another component bound to the same program never reaches its sessions. Each run opens before it sends, reads or closes.
-- **`send`** writes each line, in order, with its newline. A line has no newline or NUL, is at most 1 MiB, and one call's lines fit the component's `max_request_size`. A send is never repeated by the host: one whose answer was lost, between the runner and CYFR or between CYFR and the program's box, is `lost`, and its lines may have arrived.
-- **`recv`** answers the lines past `after` (0 for the first read), waiting at most `max-wait-ms` (at most 20 000) for one when there is none. A line is kept until a later call names an `after` at or past it, so asking again with the same `after` answers the same lines; an answer carries as many lines as fit, and the next read names the last `seq` it got. A reader that falls behind loses the oldest lines past the session's buffer (8 MiB), counted in `dropped`. `running: false` says the program ended; a session no longer held answers no lines and `running: false`.
-- **`close`** ends the session and its program; a repeat is harmless.
-
-A session also ends when its program row is disabled or deleted.
-
-An error is a code:
-
-| Code | What it means |
-|---|---|
-| `denied` | The manifest declares no `login` need of that name, the run's grant binds no program row to it or binds another program's, or the session is not one this run opened |
-| `setup_required` | The bound program row or the grant no longer serves (deleted, disabled, revoked, expired), or the program's folder is past its cap |
-| `busy` | The box runs as many programs as it may; try again later |
-| `ended` | A send to a session whose program ended: open the key again |
-| `invalid_request` | A key over 256 bytes, an argument or line the pipe refuses |
-| `too_large` | A line no answer can carry, or lines past `max_request_size` |
-| `unavailable` | CYFR or the box could not answer, and nothing was done; asking again later is safe |
-| `lost` | The run is no longer current; or a send's answer was lost on its way back, so its lines may have reached the program: read what the program wrote before sending them again, never send them again blind |
 
 ### `cyfr:question/ask` — asking before an action
 

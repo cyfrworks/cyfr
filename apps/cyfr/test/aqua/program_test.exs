@@ -3255,7 +3255,7 @@ defmodule Aqua.ProgramTest do
       thread_id = thread.id
 
       assert {:ok, [%{thread_id: ^thread_id}] = forgotten} =
-               Arca.ThreadStorage.forget_sessions(Sanctum.Context.actor(ctx), [turn.agent])
+               Arca.ThreadStorage.forget_sessions(Sanctum.Context.actor(ctx), row.id)
 
       :ok = Opus.Brain.forgotten(ctx.athanor_id, forgotten)
 

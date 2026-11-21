@@ -668,7 +668,7 @@ defmodule PrismWeb.AquaLive do
 
         <%!-- A plan is a program the crew's files name, run in the program
               row of that name, signed in on its own terminal, and named by
-              the member that names it, as its catalyst once was. --%>
+              the member that names it. --%>
         <ul :if={@plans != []} id="aqua-setup-plans" class="space-y-1.5">
           <li
             :for={plan <- @plans}
@@ -722,14 +722,6 @@ defmodule PrismWeb.AquaLive do
                 >
                   Grant
                 </button>
-              <% brain.state == :needs_program -> %>
-                {brain.provider}: set up {brain.need.program} on the Programs page, then grant it here.
-                <.link
-                  navigate={programs_path(@athanor, brain)}
-                  class="text-blue-400 hover:underline"
-                >
-                  Open Programs
-                </.link>
               <% true -> %>
                 {brain.provider}: enter your key.
                 <button
@@ -851,7 +843,7 @@ defmodule PrismWeb.AquaLive do
   # A brain ticked that is not yet connected is a step; a damaged or
   # unreadable consent is no step the person can take here.
   defp step?(%{state: state, provider: provider}, ticked),
-    do: state in [:needs_grant, :needs_key, :needs_program] and MapSet.member?(ticked, provider)
+    do: state in [:needs_grant, :needs_key] and MapSet.member?(ticked, provider)
 
   # A plan ticked is a step while its program is to install or to sign
   # in: the card cannot tell whether a row that stands is signed in, so a
@@ -871,14 +863,9 @@ defmodule PrismWeb.AquaLive do
         do: {plan, listed}
   end
 
-  # A plan's line, in the words a catalyst's login need gave it, from the
-  # title of the member that names its program.
+  # A plan's line, from the title of the member that names its program.
   defp plan_need_line(%{title: title}),
-    do:
-      need_line(%{
-        kind: "login",
-        reason: "to run #{title} in its own folder, signed in to your own plan"
-      })
+    do: "a plan: to run #{title} in its own folder, signed in to your own plan"
 
   defp plan_line(:program_disabled), do: "it is disabled — enable it on the Programs page"
 
@@ -910,10 +897,6 @@ defmodule PrismWeb.AquaLive do
 
   defp need_line(nil), do: "needs nothing to connect"
 
-  defp need_line(%{kind: "login", reason: reason}) when is_binary(reason),
-    do: "a plan: " <> reason
-
-  defp need_line(%{kind: "login"}), do: "a plan you sign in to"
   defp need_line(%{reason: reason}) when is_binary(reason), do: "a key: " <> reason
   defp need_line(%{qualifier: provider}) when is_binary(provider), do: "a key from " <> provider
   defp need_line(_need), do: "a key"
@@ -933,13 +916,6 @@ defmodule PrismWeb.AquaLive do
   defp answer_class(_answer), do: "text-gray-400"
 
   defp pick_label(target, _read), do: "Which connected brain does #{target} run on?"
-
-  defp programs_path(athanor, %{ref: ref, need: %{name: need}}),
-    do:
-      PrismWeb.Focus.path(
-        athanor,
-        "/programs?" <> URI.encode_query(%{"install" => ref, "need" => need})
-      )
 
   defp short_ref("formula:local." <> name), do: name
   defp short_ref("agent:local." <> name), do: name

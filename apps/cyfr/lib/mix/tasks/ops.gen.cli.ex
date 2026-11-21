@@ -86,8 +86,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   @spec rosters() :: [roster()]
   def rosters do
     [
-      {"BindingKinds",
-       "every need kind a consent binds: the credential kinds, and login, which binds a program",
+      {"BindingKinds", "every need kind a consent binds: the credential kinds",
        Prima.Manifest.Needs.binding_kinds()}
     ]
   end

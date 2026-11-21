@@ -316,7 +316,7 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
-  describe "the program rows a revision binds" do
+  describe "the program rows a revision stands on" do
     # A program row of `athanor`, as the row store writes one.
     defp program!(athanor, name) do
       Arca.Repo.insert!(%Arca.Schemas.McpServer{
@@ -334,103 +334,17 @@ defmodule Arca.ConsentStorageTest do
       })
     end
 
-    defp program_ref(row_id), do: Map.put(ref(nil), :mcp_server_id, row_id)
-
-    test "the athanor's own is bound by its id; another athanor's or none writes nothing",
-         %{athanor: athanor} do
-      actor = Prima.Actor.in_athanor(athanor)
-      profile = profile!(athanor, "prof_program_1")
-      own = program!(athanor, "claude")
-      elsewhere = program!("ath_other", "claude")
-
-      assert {:ok, _} =
-               ConsentStorage.insert_revision(
-                 consent_attrs(athanor, profile.id, 1),
-                 [program_ref(own.id)],
-                 nil
-               )
-
-      {:ok, head, refs} = ConsentStorage.get_head(actor, profile.id)
-      assert [%{mcp_server_id: id, vault_entry_id: nil}] = refs
-      assert id == own.id
-
-      assert {:ok, %{vault_refs: [%{mcp_server_id: ^id, scope: "athanor"}]}} =
-               ConsentStorage.head_consent(actor, profile.id)
-
-      for id <- [elsewhere.id, "mcp_never_existed"] do
-        assert {:error, :not_found} =
-                 ConsentStorage.insert_revision(
-                   consent_attrs(athanor, profile.id, 2),
-                   [program_ref(id)],
-                   head.id
-                 )
-      end
-
-      assert {:ok, ^head, _refs} = ConsentStorage.get_head(actor, profile.id)
-    end
-
-    test "the baseline refuses a row naming another athanor's program row, written around " <>
-           "the storage",
-         %{athanor: athanor} do
-      profile = profile!(athanor, "prof_program_raw")
-      elsewhere = program!("ath_other", "claude")
-
-      {:ok, consent} =
-        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
-
-      row = %{
-        consent_id: consent.id,
-        athanor_id: athanor,
-        binding_key: "k|@ingress|default",
-        vault_entry_id: nil,
-        mcp_server_id: elsewhere.id,
-        share_id: nil,
-        via_label: nil,
-        binding_digest: "sha256:b",
-        lifetime_kind: "standing",
-        expires_at: nil
-      }
-
-      assert :refused = raw_insert(row)
-      own = program!(athanor, "claude")
-      assert :ok = raw_insert(%{row | mcp_server_id: own.id})
-      assert :refused = raw_insert(%{row | binding_key: "k|x|default", vault_entry_id: "vlt_x"})
-    end
-
-    test "a deleted row takes its bindings and blocks the profiles whose head bound it",
-         %{athanor: athanor} do
-      actor = Prima.Actor.in_athanor(athanor)
-      profile = profile!(athanor, "prof_program_gone")
-      row = program!(athanor, "claude")
-
-      {:ok, _} =
-        ConsentStorage.insert_revision(
-          consent_attrs(athanor, profile.id, 1),
-          [program_ref(row.id)],
-          nil
-        )
-
-      assert {:ok, [profile_id]} = ConsentStorage.head_profiles_on_row(actor, row)
-      assert profile_id == profile.id
-
-      assert {:ok, %{id: id}} = Arca.McpServerStorage.delete(actor, "claude")
-      assert id == row.id
-
-      assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, profile.id)
-      assert {:ok, _head, []} = ConsentStorage.get_head(actor, profile.id)
-    end
-
     # A grant of a program's tools names the row in the head's blob, on an
-    # edge's `tool_servers`, not in a binding row: it stands on the row as
-    # a login binding does, so the row's removal names it and blocks it.
+    # edge's `tool_servers`, not in a binding row: it stands on the row, so
+    # the row's removal names it and blocks it.
     test "a head that grants a row's tools stands on it, and the row's delete blocks it",
          %{athanor: athanor} do
       actor = Prima.Actor.in_athanor(athanor)
       row = program!(athanor, "github")
       program!(athanor, "another")
 
-      [granting, bound, elsewhere] =
-        for label <- ["granted", "bound", "elsewhere"] do
+      [granting, elsewhere] =
+        for label <- ["granted", "elsewhere"] do
           {:ok, profile} =
             Writers.put_profile(%{
               id: "prof_tools_" <> label,
@@ -459,20 +373,12 @@ defmodule Arca.ConsentStorageTest do
           )
       end
 
-      {:ok, _} =
-        ConsentStorage.insert_revision(
-          consent_attrs(athanor, bound.id, 1),
-          [program_ref(row.id)],
-          nil
-        )
-
-      assert {:ok, standing} = ConsentStorage.head_profiles_on_row(actor, row)
-      assert standing == Enum.sort([granting.id, bound.id])
+      assert {:ok, [standing]} = ConsentStorage.head_profiles_on_row(actor, row)
+      assert standing == granting.id
 
       assert {:ok, _} = Arca.McpServerStorage.delete(actor, "github")
 
       assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, granting.id)
-      assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, bound.id)
       assert {:ok, %{status: "active"}} = ProfileStorage.get(actor, elsewhere.id)
     end
 
@@ -1773,98 +1679,6 @@ defmodule Arca.ConsentStorageTest do
     :ok
   rescue
     _refused in Arca.Repo.Errors.db_errors() -> :refused
-  end
-
-  describe "head_edges_binding/2" do
-    # A binding of `entry_id` at `key`.
-    defp bound(key, entry_id), do: ref(entry_id, %{binding_key: key})
-
-    # A selection of the profile `label` of the edge's target at `key`.
-    defp lent(key, label),
-      do: ref(nil, %{binding_key: key, via_label: label, binding_digest: nil})
-
-    # The member's edge into its brain selects the brain's profile `work`,
-    # whose own ingress binds the entry; a head of its own binds it on its
-    # edge directly.
-    test "answers an edge that binds the entry and one that selects a lender whose ingress binds it",
-         %{athanor: athanor} do
-      entry = entry!(athanor)
-      other = entry!(athanor)
-
-      using!(athanor, "prof_e_brain", "catalyst:local.brain", "work", [
-        bound("catalyst:local.brain|@ingress|default", entry.id)
-      ])
-
-      using!(athanor, "prof_e_other", "catalyst:local.other", "work", [
-        bound("catalyst:local.other|@ingress|default", other.id)
-      ])
-
-      using!(athanor, "prof_e_direct", "agent:local.direct", "default", [
-        bound("agent:local.direct|catalyst:local.brain|claude|default", entry.id)
-      ])
-
-      using!(athanor, "prof_e_member", "agent:local.member", "default", [
-        lent("agent:local.member|catalyst:local.brain|claude|default", "work")
-      ])
-
-      # The same label of another target, which lends another entry, and
-      # another label of the lender's target.
-      using!(athanor, "prof_e_elsewhere", "agent:local.elsewhere", "default", [
-        lent("agent:local.elsewhere|catalyst:local.other|default", "work")
-      ])
-
-      using!(athanor, "prof_e_unlent", "agent:local.unlent", "default", [
-        lent("agent:local.unlent|catalyst:local.brain|default", "home")
-      ])
-
-      # A named account's binding, which no mount reads.
-      using!(athanor, "prof_e_named", "agent:local.named", "default", [
-        bound("agent:local.named|catalyst:local.brain|claude|name:spare", entry.id)
-      ])
-
-      # A head that no longer binds what an earlier revision did.
-      earlier =
-        using!(athanor, "prof_e_moved", "agent:local.moved", "default", [
-          bound("agent:local.moved|catalyst:local.brain|default", entry.id)
-        ])
-
-      {:ok, _} =
-        ConsentStorage.insert_revision(
-          consent_attrs(athanor, "prof_e_moved", 2),
-          [bound("agent:local.moved|catalyst:local.brain|default", other.id)],
-          earlier.id
-        )
-
-      assert {:ok, edges} = ConsentStorage.head_edges_binding(actor(athanor), entry.id)
-
-      assert Enum.sort(edges) == [
-               {"agent:local.direct", "agent:local.direct", "catalyst:local.brain"},
-               {"agent:local.member", "agent:local.member", "catalyst:local.brain"}
-             ]
-    end
-
-    # A selection borrows the lender's ingress alone: what an edge of the
-    # lender's own binds is not lent.
-    test "a selection does not reach what the lender binds on an edge of its own",
-         %{athanor: athanor} do
-      home = entry!(athanor)
-      brain_home = entry!(athanor)
-
-      using!(athanor, "prof_r_brain", "catalyst:local.brain", "work", [
-        bound("catalyst:local.brain|@ingress|default", brain_home.id),
-        bound("catalyst:local.brain|catalyst:local.hand|default", home.id)
-      ])
-
-      using!(athanor, "prof_r_member", "agent:local.member", "default", [
-        lent("agent:local.member|catalyst:local.brain|default", "work")
-      ])
-
-      assert {:ok, [{"catalyst:local.brain", "catalyst:local.brain", "catalyst:local.hand"}]} =
-               ConsentStorage.head_edges_binding(actor(athanor), home.id)
-
-      assert {:ok, [{"agent:local.member", "agent:local.member", "catalyst:local.brain"}]} =
-               ConsentStorage.head_edges_binding(actor(athanor), brain_home.id)
-    end
   end
 end
 

@@ -1863,70 +1863,41 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
+  # On a ready athanor, Aqua on a crew member whose brain is a catalyst
+  # that needs nothing of the person, never granted: the person's grant is
+  # all it waits on, given on the Aqua page, never a model to connect.
+  test "a model that needs only the grant says so, given on the Aqua page",
+       %{conn: conn, athanor: athanor, here: here} do
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
+    :ok = soul_on_claude!(here)
+    Arca.Test.UnitFixtures.chat_catalyst!(here, "claude")
+
+    pane = empty_pane(conn, athanor)
+
+    assert has_element?(
+             pane,
+             ~s([data-test="model-grant"]),
+             "your Aqua's model needs only your grant."
+           )
+
+    assert has_element?(
+             pane,
+             ~s(a[href="#{athanor_path("/aqua?setup=1", athanor)}"]),
+             "Grant it on your Aqua page."
+           )
+
+    refute render(pane) =~ "has no model yet"
+    refute render(pane) =~ @connect
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   describe "the pane's empty state over a model that runs a program" do
-    # The athanor is ready, and its soul's model runs a program on its own
-    # sign-in, never granted. Aqua runs on a crew member on that model.
-    setup %{athanor: athanor, here: here} do
+    # The athanor is ready; each test seats Aqua on a crew member whose
+    # brain is the program row named `claude`.
+    setup %{athanor: athanor} do
       {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
-      :ok = soul_on_claude!(here)
-
-      {:ok, _} =
-        Compendium.Registry.publish_bytes(here, Cyfr.Test.Guests.wasm(:catalyst), %{
-          name: "claude",
-          version: "0.1.0",
-          type: "catalyst",
-          manifest:
-            Jason.encode!(%{
-              "needs" => %{
-                "claude" => %{
-                  "type" => "login",
-                  "program" => "claude",
-                  "reason" => "to run Claude Code on your own plan",
-                  "required" => true
-                }
-              }
-            })
-        })
-
       :ok
-    end
-
-    test "with its program's row set up, it says it needs only the grant, given on the Aqua page",
-         %{conn: conn, athanor: athanor, here: here} do
-      pane = empty_pane(conn, athanor)
-      assert render(pane) =~ "has no model yet"
-      refute has_element?(pane, ~s([data-test="model-grant"]))
-      Cyfr.Test.Sandbox.end_views()
-
-      {:ok, _row} =
-        Arca.McpServerStorage.insert(Sanctum.Context.actor(here), %{
-          cap: 0,
-          name: "claude",
-          transport: "program",
-          mark: "driven",
-          url: nil,
-          home: "kept",
-          config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
-        })
-
-      pane = empty_pane(conn, athanor)
-
-      assert has_element?(
-               pane,
-               ~s([data-test="model-grant"]),
-               "your Aqua's model needs only your grant."
-             )
-
-      assert has_element?(
-               pane,
-               ~s(a[href="#{athanor_path("/aqua?setup=1", athanor)}"]),
-               "Grant it on your Aqua page."
-             )
-
-      refute render(pane) =~ "has no model yet"
-      refute render(pane) =~ @connect
-
-      Cyfr.Test.Sandbox.end_views()
     end
 
     # A soul whose brain is a program names its row by name: the pane reads

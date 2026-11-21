@@ -2659,7 +2659,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   # whether the component reads it.
   defp credential_sentence(node, values) do
     name = values["name"]
-    source = binding_words(values["source"], values["destination"], node)
+    source = source_words(values["source"], node)
 
     used =
       case values["edge"] do
@@ -2706,11 +2706,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   # Whose credential a binding is: the athanor's own entry, a key another
   # person shares (its name already says whose, "Shared by" its owner), or
   # the public configuration the app's publisher ships.
-  # What a binding is: a program of the athanor's, which a login need
-  # binds and whose destination names it, or whose credential it is.
-  defp binding_words(_source, %{"program" => _program}, _node), do: "a program of this athanor"
-  defp binding_words(source, _destination, node), do: source_words(source, node)
-
   defp source_words("own", _node), do: "an entry of this athanor"
   defp source_words("share", _node), do: "a key shared with you"
 
@@ -2737,32 +2732,17 @@ defmodule PrismWeb.ConsentSheetComponent do
     end
   end
 
-  # Where a need nothing meets yet is met from, and what to do there: a
-  # login need's program row is set up on Programs, every other need's
+  # Where a need nothing meets yet is met from, and what to do there: its
   # entry is added to the vault.
-  defp empty_offer(need) do
-    case field(need, :program) do
-      program when is_binary(program) ->
-        {"/programs", "Set up the program", "#{program} with a kept folder first."}
+  defp empty_offer(need), do: {"/vault", "Add a vault entry", "for #{need_for(need)} first."}
 
-      _credential ->
-        {"/vault", "Add a vault entry", "for #{need_for(need)} first."}
-    end
-  end
-
-  # What a need is for: the program a login need runs, else the hosts
-  # it calls, as it declares them.
-  defp need_for(need) do
-    case field(need, :program) do
-      program when is_binary(program) -> program
-      _hosts -> need |> field(:hosts) |> List.wrap() |> Enum.join(", ")
-    end
-  end
+  # What a need is for: the hosts it calls, as it declares them.
+  defp need_for(need), do: need |> field(:hosts) |> List.wrap() |> Enum.join(", ")
 
   # Whose an entry is and where it may go; one that meets the need only
   # through a `*.` host says how wide each such host is.
   defp candidate_words(candidate) do
-    whose = binding_words(field(candidate, :source), field(candidate, :destination), nil)
+    whose = source_words(field(candidate, :source), nil)
 
     case field(candidate, :destination) do
       %{} = destination ->
@@ -2796,10 +2776,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     "#{dep} uses it through its '#{field(lender, :label)}' profile, which lends #{lends}"
   end
 
-  # Where a credential goes: a login need's program row is mounted, its
-  # kept folder named by the program its destination names, and every
-  # other entry is sent only to its destination.
-  defp where_words(%{"program" => program}), do: "mounted into #{program}'s kept folder"
+  # Where a credential goes: only to its destination.
   defp where_words(destination), do: "sent only to #{destination_label(destination)}"
 
   # Where a credential may go: its scheme and hosts, its port, and the
@@ -2816,12 +2793,9 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp destination_label(_destination), do: ""
 
-  # A program row is mounted, never attached or disclosed. A value not
-  # disclosed to the component is one CYFR attaches to the requests bound
-  # for the entry's destination, and the component never holds it.
-  defp disclosure_label(%{"destination" => %{"program" => _program}}),
-    do: "Nothing is attached and the component never holds it."
-
+  # A value not disclosed to the component is one CYFR attaches to the
+  # requests bound for the entry's destination, and the component never
+  # holds it.
   defp disclosure_label(%{"disclosed" => true}), do: "The component reads the value itself."
 
   defp disclosure_label(_not_disclosed),

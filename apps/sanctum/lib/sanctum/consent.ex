@@ -289,8 +289,7 @@ defmodule Sanctum.Consent do
 
   @doc """
   What one vault row of the head revision `consent` (from
-  `head_consent/2`) binds now, read by its tag: the athanor's own entry,
-  the athanor's own program row a login need binds, read live, a
+  `head_consent/2`) binds now, read by its tag: the athanor's own entry, a
   selection of another profile's key resolved as a run resolves it, a
   share read live as the context's person
   is offered it and held to the row's digest, or a row naming none
@@ -298,7 +297,6 @@ defmodule Sanctum.Consent do
   """
   @spec row_binding(Sanctum.Context.t(), map(), map()) ::
           {:entry, String.t(), String.t()}
-          | {:program, String.t(), {:ok, map()} | {:error, term()}}
           | {:selection, String.t(), {:ok, map()} | {:error, term()}}
           | {:share, String.t(), {:ok, map()} | {:error, term()}}
           | :malformed

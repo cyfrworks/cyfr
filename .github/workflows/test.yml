@@ -1696,11 +1696,10 @@ jobs:
         if: contains(matrix.cases, 'e2e')
         run: python3 tests/locus-backends-image/e2e.py cyfr-locus:backends
 
-      # A program's pipe: a pipe row's cat in a kept home under the home's
-      # uid, attached to by its key, a read replayed by its after, retired
-      # once idle and started again (resumed: false), its oldest lines
-      # dropped and counted past the buffer, ended with its home; and,
-      # driven by cyfr, a session ended by its login entry's revoke.
+      # A program's lines: a driven row's cat in a kept home under the
+      # home's uid, attached to by its key, a read replayed by its after,
+      # retired once idle and started again (resumed: false), its oldest
+      # lines dropped and counted past the buffer, ended with its home.
       - name: A program's pipe
         if: contains(matrix.cases, 'pipe')
         run: python3 tests/locus-backends-image/pipe.py cyfr-locus:backends

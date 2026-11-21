@@ -342,15 +342,14 @@ defmodule Aqua.Loop.Turn do
       end
 
     with {:ok, catalyst, model} <- catalyst(listing, turn, agent),
-         :ok <- speaks_chat(listing, catalyst),
-         :ok <- holds(turn, agent, {:needs, needs(listing, catalyst)}, brain_name(catalyst)) do
+         :ok <- speaks_chat(listing, catalyst) do
       if is_binary(model), do: {:ok, {catalyst, nil}, model}, else: {:error, :no_model}
     end
   end
 
-  # A read-only member's brain, Aqua's member's included, must be one CYFR keeps read-only
-  # (`Aqua.Models.holds_read_only?/1`): this is the first point the turn
-  # reads its catalyst's manifest or its program row, after the root's
+  # A read-only member's program brain, Aqua's member's included, must be
+  # one CYFR keeps read-only (`Aqua.Models.holds_read_only?/1`): this is
+  # the first point the turn reads its program row, after the root's
   # claim and before anything runs, and a turn refused here ends unrun
   # with the sentence as a line in its thread (`Aqua.Loop`). The mode is
   # the one the turn's row stored at its start (`turns.agent_mode`).
@@ -369,18 +368,6 @@ defmodule Aqua.Loop.Turn do
   defp brain_title(agent), do: title(agent)
 
   defp title(agent), do: agent["title"] || agent["name"]
-
-  defp needs(listing, catalyst) do
-    row = Enum.find(listing, &(&1["component_ref"] == catalyst)) || %{}
-    Prima.Manifest.Needs.from_manifest(row["manifest"])
-  end
-
-  defp brain_name(catalyst) do
-    case Prima.ComponentRef.parse(catalyst) do
-      {:ok, %{name: name}} when is_binary(name) -> name
-      _unread -> catalyst
-    end
-  end
 
   defp catalyst(listing, %{catalyst_ref: pinned} = turn, agent) when is_binary(pinned) do
     if Enum.any?(listing, &(&1["component_ref"] == pinned)),

@@ -79,8 +79,7 @@ defmodule Opus.ProgramsTest do
 
   defp supervise_controller(opts), do: Scripted.supervise_controller(opts)
 
-  # A pipe call's deadline, as the host call gives one (`Opus.Host.Pipe.deadline/1`):
-  # Unix milliseconds, here a window no case outlasts.
+  # An open's deadline: Unix milliseconds, here a window no case outlasts.
   defp soon, do: System.system_time(:millisecond) + 25_000
 
   defp tick(controller) do
@@ -1190,70 +1189,71 @@ defmodule Opus.ProgramsTest do
     |> Arca.Repo.all()
   end
 
-  # A crew member `harness` whose brain, a catalyst with one login need of
-  # the program `claude`, mounts the program row `entry`: bound on the
-  # catalyst's own consent and selected on the member's edge into it, as a
-  # person's walk binds it. Answers the context, under a storage root of
-  # the test's own.
-  defp harness_member!(ctx, entry) do
-    root = Path.join(System.tmp_dir!(), "programs_member_#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(root) end)
-    Prima.Test.Env.put_app_env(:arca, :base_path, root)
-    ctx = %{ctx | origin: :interactive}
-    actor = Sanctum.Context.actor(ctx)
-    ref = "catalyst:local.harnessbrain"
+  # A profile of `source` whose head grants the tools of the row named
+  # `server`, as a commit of that grant writes it, on the source's own
+  # edge: a change or removal of the row names it among the grants that
+  # ask again (`Sanctum.Mount.granted_to/2`).
+  defp tools_granted!(ctx, source, server) do
+    profile_id = "prof_tools_#{System.unique_integer([:positive])}"
 
-    unit =
-      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harnessbrain", "0.1.0",
-        manifest: %{
-          "name" => "harnessbrain",
-          "type" => "catalyst",
-          "version" => "0.1.0",
-          "publisher" => "local",
-          "needs" => %{
-            "claude" => %{
-              "type" => "login",
-              "program" => "claude",
-              "reason" => "to run the harness on your own plan",
-              "required" => true
-            }
+    {:ok, _} =
+      Arca.Test.Writers.put_profile(%{
+        id: profile_id,
+        athanor_id: ctx.athanor_id,
+        source_ref: source,
+        kind: "owner",
+        label: "default",
+        status: "active"
+      })
+
+    grant = %{
+      "server_digest" => "sha256:granted",
+      "server_name" => server,
+      "tool_patterns" => ["*"],
+      "record" => %{"address" => "npx -y server", "env" => [], "folder" => "scratch"}
+    }
+
+    policy =
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          source => %{
+            "limits" => %{
+              "timeout" => "1m",
+              "max_memory_bytes" => 67_108_864,
+              "max_request_size" => 1_048_576,
+              "max_response_size" => 5_242_880,
+              "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+              "max_concurrent_tasks" => 10,
+              "batch_timeout" => "1m"
+            },
+            "edges" => %{"@ingress" => %{"tool_servers" => [grant]}}
           }
+        }
+      })
+
+    {:ok, _} =
+      Arca.ConsentStorage.insert_revision(
+        %{
+          athanor_id: ctx.athanor_id,
+          profile_id: profile_id,
+          revision: 1,
+          scope: "versionless",
+          pinned_version: "",
+          invoke_mode: "open_inert",
+          shape_digest: "sha256:shape",
+          commit_digest: "sha256:commit",
+          blob_digest: Prima.Digest.sha256(policy),
+          resolved_policy: policy,
+          activation: "{}",
+          granted_by: "test",
+          granted_via: "bootstrap"
         },
-        wasm: Cyfr.Test.Guests.wasm(:catalyst)
+        [],
+        nil
       )
 
-    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
-    :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), "---\n---\n\nsoul\n")
-
-    :ok =
-      Arca.put(
-        actor,
-        Compendium.AquaPath.crew_file("harness"),
-        "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n"
-      )
-
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: entry}]})
-
-    commit!(ctx, Prima.AgentRef.ref("harness"), %{
-      selections: [%{dep: ref, need: "claude", entry_id: entry}]
-    })
-
-    ctx
-  end
-
-  # Whether the login binding the crew member's brain holds still binds
-  # its program row as the row stands now (`Sanctum.Consent.row_binding/3`).
-  defp binding_of_brain(ctx) do
-    actor = Sanctum.Context.actor(ctx)
-    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(actor, "catalyst:local.harnessbrain")
-    {:ok, consent} = Sanctum.Consent.head_consent(ctx, profile.id)
-    [ref] = Enum.filter(consent.vault_refs, &is_binary(&1.mcp_server_id))
-
-    case Sanctum.Consent.row_binding(ctx, consent, ref) do
-      {:program, _id, {:ok, _row}} -> :ok
-      {:program, _id, refused} -> refused
-    end
+    profile_id
   end
 
   defp commit!(ctx, ref, over) do
@@ -1856,9 +1856,8 @@ defmodule Opus.ProgramsTest do
     # A literal environment value is part of what a program is: with
     # `sh -c "$DEBUG"`, DEBUG from "printf safe" to "cat .credentials" is
     # another program in the same signed-in folder. The change asks, and
-    # the login grant made for the old definition is stale once it lands.
-    test "a literal environment value changed asks again, and the login grant made for the " <>
-           "old definition no longer binds the row",
+    # names the grants of the row's tools, which ask again.
+    test "a literal environment value changed asks again, naming the grants of the row's tools",
          %{ctx: ctx, admin: admin, row: row} do
       {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
       actor = Sanctum.Context.actor(ctx)
@@ -1883,8 +1882,7 @@ defmodule Opus.ProgramsTest do
       assert {:ok, %{epoch: 2}} =
                Sanctum.TestContext.confirming(person, &update.(&1, row.epoch, "printf safe"))
 
-      ctx = harness_member!(ctx, row.id)
-      assert binding_of_brain(ctx) == :ok
+      tools_granted!(ctx, "reagent:local.tool-user", "claude")
 
       assert {:error, {:confirmation_required, %{id: id}}} =
                update.(person, 2, "cat .credentials")
@@ -1897,16 +1895,12 @@ defmodule Opus.ProgramsTest do
                "operation" => "mcp_servers.update",
                "details" => %{
                  "environment" => ["DEBUG (a literal, not shown)"],
-                 "grants_asking_again" => [
-                   "agent:local.harness",
-                   "catalyst:local.harnessbrain"
-                 ]
+                 "grants_asking_again" => ["reagent:local.tool-user"]
                }
              } = preview(person, id)
 
       Sanctum.TestContext.prove!(person, id)
       assert {:ok, %{epoch: 3}} = update.(%{person | confirmation_id: id}, 2, "cat .credentials")
-      assert binding_of_brain(ctx) == {:error, :binding_went_stale}
     end
 
     # Leaving the programs is a program's removal and asks as one, naming
@@ -1916,7 +1910,8 @@ defmodule Opus.ProgramsTest do
          %{ctx: ctx, admin: admin, row: row} do
       Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
       start_supervised!(Emissary.External.Reconciler)
-      ctx = harness_member!(ctx, row.id)
+      ctx = %{ctx | origin: :interactive}
+      tools_granted!(ctx, "reagent:local.tool-user", "claude")
       {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
       actor = Sanctum.Context.actor(ctx)
 
@@ -1943,10 +1938,7 @@ defmodule Opus.ProgramsTest do
                  "folder" => folder,
                  "becomes" => "https://example.com/mcp",
                  "becomes_headers" => "none",
-                 "grants_asking_again" => [
-                   "agent:local.harness",
-                   "catalyst:local.harnessbrain"
-                 ]
+                 "grants_asking_again" => ["reagent:local.tool-user"]
                }
              } = preview(person, id)
 
@@ -2102,9 +2094,8 @@ defmodule Opus.ProgramsTest do
       assert standing == second.id
     end
 
-    # A grant of a program's tools stands on the row as a login grant
-    # does: its removal names it, and blocks it in the delete's
-    # transaction.
+    # A grant of a program's tools stands on the row: its removal names
+    # it, and blocks it in the delete's transaction.
     test "removing a program names and asks again the grants of its tools",
          %{ctx: ctx, admin: admin} do
       vault_entry(ctx)
@@ -2140,12 +2131,12 @@ defmodule Opus.ProgramsTest do
     end
 
     # Removing a program ends its sessions and retires its folder, and every
-    # grant that binds it asks again: the confirmation says so, and names
-    # them, before it is given. The grants' bindings go with the row, and a
-    # run under them is refused for its consent.
+    # grant of its tools asks again: the confirmation says so, and names
+    # them, before it is given.
     test "a removal asks, names the grants that use it, and asks them again",
          %{ctx: ctx, admin: admin, row: row} do
-      ctx = harness_member!(ctx, row.id)
+      ctx = %{ctx | origin: :interactive}
+      tools_granted!(ctx, "reagent:local.tool-user", "claude")
       {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
       actor = Sanctum.Context.actor(ctx)
       delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "claude"})
@@ -2158,10 +2149,7 @@ defmodule Opus.ProgramsTest do
                "resource" => "claude",
                "details" => %{
                  "folder" => folder,
-                 "grants_asking_again" => [
-                   "agent:local.harness",
-                   "catalyst:local.harnessbrain"
-                 ]
+                 "grants_asking_again" => ["reagent:local.tool-user"]
                }
              } = preview(person, id)
 
@@ -2170,31 +2158,8 @@ defmodule Opus.ProgramsTest do
       Sanctum.TestContext.prove!(person, id)
       assert {:ok, %{deleted: "claude"}} = delete.(%{person | confirmation_id: id})
 
-      bound =
-        Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef, where: r.mcp_server_id == ^row.id)
-        |> Arca.Repo.all()
-
-      assert bound == []
-
-      for source <- ["catalyst:local.harnessbrain", "agent:local.harness"] do
-        assert {:ok, [%{status: "needs_consent"}]} =
-                 Arca.ProfileStorage.list_for_source(actor, source)
-      end
-
-      # A run of the brain stands on no grant now: it is refused for its
-      # consent, and nothing reaches the row that is gone.
-      Sanctum.TestContext.ready!(ctx.athanor_id)
-
-      assert {:error, refused} =
-               Aqua.Ops.call_tool("execution", ctx, %{
-                 "action" => "run",
-                 "reference" => "catalyst:local.harnessbrain",
-                 "type" => "catalyst",
-                 "input" => %{"operation" => "models", "params" => %{}}
-               })
-
-      assert Sanctum.Refusals.render(refused) =~ "needs_consent"
-      refute_received {:session, "open", _message, _fields}
+      assert {:ok, [%{status: "needs_consent"}]} =
+               Arca.ProfileStorage.list_for_source(actor, "reagent:local.tool-user")
     end
 
     # A row whose stored hosts do not read has no record, so its removal
@@ -2267,7 +2232,8 @@ defmodule Opus.ProgramsTest do
          %{fake: fake, row: row, admin: admin} do
       # A live owner answers the terminal's hold at once, with the grant of
       # the boot it was synced under.
-      assert {:ok, %{session: _}} = Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
+      holder = box_holder(row)
+      assert {:ok, %{session: _}} = box_open(holder, "k")
       Scripted.restart(fake, "bb_second")
 
       assert {:ok, %{session: _session}} =
@@ -2295,38 +2261,6 @@ defmodule Opus.ProgramsTest do
                  "action" => "reset_home",
                  "name" => "nobody"
                })
-    end
-
-    # The session a member's brain kept lived in the home: after a reset its
-    # next request resumes nothing that is gone. A thread whose agent's
-    # brain runs elsewhere keeps its own. The home is the program row's,
-    # named by the id the head binds for the need
-    # (`Sanctum.Mount.agents_mounting/2`).
-    test "a reset forgets the brain session of every thread whose agent's brain mounts the home",
-         %{ctx: ctx, row: row} do
-      entry = row.id
-      ctx = harness_member!(ctx, entry)
-      actor = Sanctum.Context.actor(ctx)
-      {:ok, room} = Arca.Test.Days.thread(actor)
-      {:ok, member} = Arca.ThreadStorage.crew_thread(actor, room.id, "harness")
-      {:ok, other} = Arca.ThreadStorage.crew_thread(actor, room.id, "elsewhere")
-      keep_session!(member, "claude-session-1")
-      keep_session!(other, "other-session-1")
-
-      assert :ok = Programs.home(ctx.athanor_id, entry, :reset)
-
-      assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry}, _}, 2_000
-
-      # The next request reads the thread's session (`Aqua.Loop`), and there
-      # is none.
-      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
-      assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
-
-      # A retire forgets it too.
-      keep_session!(member, "claude-session-2")
-      assert :ok = Programs.home(ctx.athanor_id, entry, :retire)
-      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
-      assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
     end
 
     # A brain that is a program names its row by name, with no consent
@@ -2401,268 +2335,146 @@ defmodule Opus.ProgramsTest do
     assert_released(row, 1)
   end
 
-  # The pipe holders running on this member.
-  defp pipe_holders do
-    for {_id, pid, _type, [Opus.Programs.Pipe]} <-
-          DynamicSupervisor.which_children(Opus.Programs.Relays),
-        is_pid(pid),
-        do: pid
+  # A holder of its own, as `Opus.Brain` and a terminal are: it holds the
+  # row's owner, opens and closes its keys' sessions through the box
+  # (`Opus.Programs.box_open/4`, `box_close/3`) and tells the test what the
+  # box answered and anything else it heard. Its way out closes what it
+  # opened, then releases the owner, as theirs does.
+  defp box_holder(row) do
+    test = self()
+    owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch}
+
+    holder =
+      spawn(fn ->
+        {:ok, _grant} = Programs.hold(owner)
+        send(test, {:holding, self()})
+        holding(test, owner, [])
+      end)
+
+    assert_receive {:holding, ^holder}, 3_000
+    holder
   end
 
-  describe "pipes" do
+  defp holding(test, owner, keys) do
+    receive do
+      {:open, key, deadline} ->
+        params = %{
+          program: Opus.Programs.Definition.program_name(),
+          home_id: owner.server_id,
+          key: key,
+          mode: :run,
+          argv: Opus.Programs.Words.new([])
+        }
+
+        send(test, {:opened, self(), key, Programs.box_open(owner, self(), params, deadline)})
+        holding(test, owner, Enum.uniq([key | keys]))
+
+      {:close, key} ->
+        send(test, {:closed, self(), key, Programs.box_close(owner, owner.server_id, key)})
+        holding(test, owner, List.delete(keys, key))
+
+      :stop ->
+        for key <- keys, do: Programs.box_close(owner, owner.server_id, key)
+        Programs.release(owner)
+
+      heard ->
+        send(test, {:heard, self(), heard})
+        holding(test, owner, keys)
+    end
+  end
+
+  # The holder's open of `key`, awaited.
+  defp box_open(holder, key, deadline \\ soon()) do
+    send(holder, {:open, key, deadline})
+    assert_receive {:opened, ^holder, ^key, answer}, 5_000
+    answer
+  end
+
+  describe "a holder's sessions" do
     setup %{ctx: ctx} do
       row = driven_row(ctx, "claude")
       {:ok, row: row, home: row.id}
     end
 
-    test "a session is the row's and the key's: opened for one attempt, attached to by the next, started again once ended",
-         %{ctx: ctx, fake: fake, row: row, home: home} do
+    test "a second open of a running key attaches to its session, and one that ended starts again",
+         %{fake: fake, row: row, home: home} do
       start_controller(fake)
+      holder = box_holder(row)
 
-      assert {:ok, %{session: first, resumed: false}} =
-               Programs.pipe_open(row, "pipe-k1", ["--resume", "s1"], "att_1", soon())
+      assert {:ok, %{session: first, resumed: false}} = box_open(holder, "k1")
 
-      assert_receive {:session, "open",
-                      %{
-                        "mode" => "run",
-                        "home_id" => ^home,
-                        "key" => "pipe-k1",
-                        "argv" => ["--resume", "s1"]
-                      }, _},
+      assert_receive {:session, "open", %{"mode" => "run", "home_id" => ^home, "key" => "k1"}, _},
                      2_000
 
-      # A repeat by the same attempt answers as the first did, though the
-      # box now attaches to the running session.
-      assert {:ok, %{session: ^first, resumed: false}} =
-               Programs.pipe_open(row, "pipe-k1", ["--resume", "s1"], "att_1", soon())
+      assert {:ok, %{session: ^first, resumed: true}} = box_open(holder, "k1")
 
-      assert {:ok, %{session: ^first, resumed: true}} =
-               Programs.pipe_open(row, "pipe-k1", ["--resume", "s1"], "att_2", soon())
-
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", first, ["hello"], soon())
-      assert_receive {:session, "send", %{"lines" => ["hello"], "session" => ^first}, _}, 2_000
-      Scripted.write(fake, row.id, "world")
-
-      assert {:ok, %{lines: [%{text: "world"} = line], dropped: 0, running: true}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_2", first, 0, 1_000, soon())
-
-      # Read again by the same `after`, the same line.
-      assert {:ok, %{lines: [^line]}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0, soon())
-
-      # Only an attempt that opened the session uses it, and only in its
-      # own athanor.
-      flush_sessions()
-      assert {:error, :denied} = Programs.pipe_send(ctx.athanor_id, "att_3", first, ["x"], soon())
-      assert {:error, :denied} = Programs.pipe_recv(ctx.athanor_id, "att_3", first, 0, 0, soon())
-      assert {:error, :denied} = Programs.pipe_close(ctx.athanor_id, "att_3", first, soon())
-      assert {:error, :denied} = Programs.pipe_send("ath_other", "att_1", first, ["x"], soon())
-      refute_received {:session, _type, _message, _fields}
-
-      # Its program ends: a read says so, and the next open starts it again.
       Scripted.end_sessions(fake, row.id)
-
-      assert {:ok, %{running: false}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_2", first, line.seq, 0, soon())
-
-      assert {:ok, %{session: second, resumed: false}} =
-               Programs.pipe_open(row, "pipe-k1", ["--resume", "s1"], "att_2", soon())
-
+      assert {:ok, %{session: second, resumed: false}} = box_open(holder, "k1")
       refute second == first
-
-      # The ended session is no one's any more: no lines, not running.
-      assert {:ok, %{lines: [], dropped: 0, running: false}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0, soon())
-
-      assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", first, ["x"], soon())
     end
 
-    test "a pipe open after a backends restart is opened under the new boot, its owner synced again",
+    test "a holder that ends on its own closes its sessions before its owner is released",
          %{fake: fake, row: row} do
       start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(holder, "k")
 
-      assert {:ok, %{session: _first}} =
-               Programs.pipe_open(row, "pipe-k1", [], "att_1", soon())
-
-      Scripted.restart(fake, "bb_second")
-
-      # The box's resync under the new boot ends the key's holder, and the
-      # open is carried on by a fresh one.
-      assert {:ok, %{session: _second}} =
-               Programs.pipe_open(row, "pipe-k2", [], "att_2", soon())
-
-      assert_receive {:control, "sync", _message, %{boot: "bb_second"}}, 2_000
-      assert_receive {:session, "open", %{"key" => "pipe-k2"}, %{boot: "bb_second"}}, 2_000
-    end
-
-    test "a close ends the session and releases the owner; a repeat is harmless",
-         %{ctx: ctx, fake: fake, row: row} do
-      start_controller(fake)
-
-      assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
-
-      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session, soon())
+      send(holder, :stop)
       assert_closed_then_released(row, session)
-      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session, soon())
-
-      assert {:ok, %{lines: [], running: false}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0, soon())
-    end
-
-    test "a session no attempt uses for the idle period ends, and its owner is released",
-         %{fake: fake, row: row} do
-      start_controller(fake, idle_ms: 200)
-
-      assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
-
-      assert_closed_then_released(row, session, 5_000)
-      assert pipe_holders() == []
-    end
-
-    test "a deleted row ends every session of its own at once, and no other row's",
-         %{ctx: ctx, fake: fake, row: row} do
-      start_controller(fake)
-      other_row = driven_row(ctx, "claude-second")
-
-      assert {:ok, %{session: mine}} = Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
-
-      assert {:ok, %{session: kept}} =
-               Programs.pipe_open(other_row, "pipe-k", [], "att_1", soon())
-
-      flush_sessions()
-
-      assert :ok = Programs.end_mounts(ctx.athanor_id, row.id)
-      assert_receive {:session, "close", %{"session" => ^mine}, _}, 3_000
-      refute_received {:session, "close", %{"session" => ^kept}, _}
-
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", kept, ["still here"], soon())
-
-      assert {:error, :ended} =
-               Programs.pipe_send(ctx.athanor_id, "att_1", mine, ["gone"], soon())
-    end
-
-    test "a send whose connection is reset after it arrived is uncertain, never safe to repeat",
-         %{ctx: ctx, fake: fake, row: row} do
-      start_controller(fake)
-
-      assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
-
-      flush_sessions()
-      Scripted.set(fake, :reset_send, true)
-
-      assert {:error, :uncertain} =
-               Programs.pipe_send(ctx.athanor_id, "att_1", session, ["once"], soon())
-
-      # It reached the box.
-      assert_received {:session, "send", %{"lines" => ["once"]}, _}
     end
 
     test "a holder killed has its session closed by the box, its row's other holder untouched",
-         %{ctx: ctx, fake: fake, row: row} do
-      start_controller(fake)
-
-      assert {:ok, %{session: first}} =
-               Programs.pipe_open(row, "pipe-a", [], "att_1", soon())
-
-      assert {:ok, %{session: second}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
-
-      [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, first})
-      flush_sessions()
-
-      # Killed, it runs no terminate/2: well before the idle period, the box
-      # closes its program all the same, and keeps the owner for the other.
-      Process.exit(pid, :kill)
-      assert_receive {:session, "close", %{"session" => ^first}, _}, 2_000
-      refute_receive {:control, "release", _message, _fields}, 300
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", second, ["still here"], soon())
-    end
-
-    test "one deadline covers the owner's acquisition and the open; nothing of a late open runs",
          %{fake: fake, row: row} do
       start_controller(fake)
+      killed = box_holder(row)
+      kept = box_holder(row)
+      assert {:ok, %{session: first}} = box_open(killed, "a")
+      assert {:ok, %{session: second}} = box_open(kept, "b")
+      flush_sessions()
 
-      # Scaled from a 15 s acquisition and a 17 s open against a 30 s window:
-      # each fits alone, together they do not.
-      deadline = System.system_time(:millisecond) + 3_000
-      Scripted.hold(fake, "sync")
-      Scripted.hold(fake, "open")
-
-      opening =
-        Task.async(fn -> Programs.pipe_open(row, "pipe-k", [], "att_1", deadline) end)
-
-      assert_receive {:held, "sync", sync}, 2_000
-      # sleep-ok: the 1.5 s acquisition, which with the open's 1.7 s overruns the 3 s deadline
-      # under test
-      Process.sleep(1_500)
-      send(sync, :go)
-      assert_receive {:held, "open", open}, 2_000
-      # sleep-ok: the 1.7 s open, which with the 1.5 s acquisition overruns the 3 s deadline under
-      # test
-      Process.sleep(1_700)
-      send(open, :go)
-
-      assert {:error, :deadline} = Task.await(opening, 5_000)
-      assert System.system_time(:millisecond) < deadline + 2_000
-
-      # No holder keeps it, and the owner is released with it.
-      assert_released(row, 1)
-      assert pipe_holders() == []
+      # Killed, it closes nothing itself: the box closes its program, and
+      # keeps the owner for the other.
+      Process.exit(killed, :kill)
+      assert_receive {:session, "close", %{"session" => ^first}, _}, 2_000
+      refute_receive {:control, "release", _message, _fields}, 300
+      assert %{^second => %{running: true}} = Scripted.sessions(fake, row.id)
     end
 
     test "a holder killed before it hears the box's answer leaves the box its session to close",
-         %{ctx: ctx, fake: fake, row: row} do
+         %{fake: fake, row: row} do
       start_controller(fake)
-
-      assert {:ok, %{session: sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
-
+      kept = box_holder(row)
+      assert {:ok, %{session: sibling}} = box_open(kept, "b")
+      killed = box_holder(row)
       flush_sessions()
       Scripted.hold(fake, "opened")
 
-      opening =
-        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", soon()) end)
-
       # The backend's session stands; its answer is on its way when the
       # holder that asked is killed.
+      send(killed, {:open, "a", soon()})
       assert_receive {:held, "opened", answer}, 2_000
-      key = {:pipe, row.athanor_id, row.id, row.epoch, "pipe-a"}
-      [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
-      Process.exit(holder, :kill)
+      Process.exit(killed, :kill)
       send(answer, :go)
-      assert {:error, _} = Task.await(opening, 5_000)
 
       assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
       refute closed == sibling
       refute_receive {:control, "release", _message, _fields}, 300
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", sibling, ["still here"], soon())
+      assert %{^sibling => %{running: true}} = Scripted.sessions(fake, row.id)
     end
 
     # A close the box owes for an open whose holder died settles on the
     # service's `unknown_owner` once the owner it named is gone, where a
     # `lapsed` keeps it owed for the drain.
-    test "a late pipe close settles after its backend owner expires", %{
-      fake: fake,
-      row: row,
-      home: _home
-    } do
+    test "a late close settles after its backend owner expires", %{fake: fake, row: row} do
       controller = start_controller(fake, lease_ms: 500)
-
-      assert {:ok, %{session: _sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
-
+      kept = box_holder(row)
+      assert {:ok, %{session: _sibling}} = box_open(kept, "b")
+      killed = box_holder(row)
       Scripted.hold(fake, "opened")
 
-      opening =
-        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", soon()) end)
-
+      send(killed, {:open, "a", soon()})
       assert_receive {:held, "opened", answer}, 2_000
-      key = {:pipe, row.athanor_id, row.id, row.epoch, "pipe-a"}
-      [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
-      Process.exit(holder, :kill)
+      Process.exit(killed, :kill)
 
       eventually(
         fn ->
@@ -2676,7 +2488,6 @@ defmodule Opus.ProgramsTest do
       )
 
       send(answer, :go)
-      assert {:error, _} = Task.await(opening, 5_000)
 
       eventually(
         fn ->
@@ -2697,21 +2508,20 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a close refused once is owed by the box past its holder's release, and lands on the sweep",
-         %{ctx: ctx, fake: fake, row: row} do
+         %{fake: fake, row: row} do
       controller = start_controller(fake)
-
-      assert {:ok, %{session: _sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_1", soon())
-
-      assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, "pipe-a", [], "att_1", soon())
-
+      kept = box_holder(row)
+      assert {:ok, %{session: _sibling}} = box_open(kept, "b")
+      closing = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(closing, "a")
       flush_sessions()
       Scripted.refuse_once(fake, "close", "unavailable")
 
       # The holder closes and releases; the box's close is refused.
-      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session, soon())
+      send(closing, {:close, "a"})
       assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      assert_receive {:closed, ^closing, "a", {:error, :unanswered}}, 3_000
+      send(closing, :stop)
       refute_receive {:control, "release", _message, _fields}, 300
 
       # The sweep sends it again, and the program ends.
@@ -2721,91 +2531,67 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a late first answer never closes the session a second open of the key was given",
-         %{ctx: ctx, fake: fake, row: row} do
+         %{fake: fake, row: row} do
       start_controller(fake)
-
-      assert {:ok, %{session: _sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_0", soon())
-
+      holder = box_holder(row)
+      assert {:ok, %{session: _sibling}} = box_open(holder, "b")
       flush_sessions()
 
       # The first open's session stands at the backend, its answer held
       # past its caller's deadline.
       Scripted.hold(fake, "opened")
       deadline = System.system_time(:millisecond) + 1_000
-
-      first =
-        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", deadline) end)
-
+      send(holder, {:open, "a", deadline})
       assert_receive {:held, "opened", answer}, 2_000
-      assert {:error, :deadline} = Task.await(first, 3_000)
+      assert_receive {:opened, ^holder, "a", {:error, :deadline}}, 3_000
 
       # A second open of the key is given the session.
-      assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, "pipe-a", [], "att_2", soon())
-
+      assert {:ok, %{session: session}} = box_open(holder, "a")
       flush_sessions()
 
       # The first answer, late, closes nothing of it.
       send(answer, :go)
       refute_receive {:session, "close", %{"session" => ^session}, _}, 1_000
-      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", session, ["intact"], soon())
+      assert %{^session => %{running: true}} = Scripted.sessions(fake, row.id)
     end
 
     test "a success queued before the deadline and handled after it is closed, never given",
          %{fake: fake, row: row} do
       start_controller(fake)
-
-      assert {:ok, %{session: sibling}} =
-               Programs.pipe_open(row, "pipe-b", [], "att_0", soon())
-
+      holder = box_holder(row)
+      assert {:ok, %{session: sibling}} = box_open(holder, "b")
       flush_sessions()
       box = GenServer.whereis(Programs.via("local"))
 
       Scripted.hold(fake, "opened")
       deadline = System.system_time(:millisecond) + 1_500
-
-      opening =
-        Task.async(fn -> Programs.pipe_open(row, "pipe-a", [], "att_1", deadline) end)
-
+      send(holder, {:open, "a", deadline})
       assert_receive {:held, "opened", answer}, 2_000
 
       # The answer reaches the box before the deadline, and is handled
       # only after it.
       :sys.suspend(box)
       send(answer, :go)
-      # sleep-ok: the box is held 300 ms past the pipe-open deadline under test, so the answer is
+      # sleep-ok: the box is held 300 ms past the open's deadline under test, so the answer is
       # handled late
       Process.sleep(max(deadline - System.system_time(:millisecond), 0) + 300)
       :sys.resume(box)
 
-      assert {:error, :deadline} = Task.await(opening, 3_000)
+      assert_receive {:opened, ^holder, "a", {:error, :deadline}}, 3_000
       assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
       refute closed == sibling
     end
 
-    test "a row that is disabled stands its sessions down", %{
-      ctx: ctx,
-      fake: fake,
-      row: row,
-      home: _home
-    } do
+    test "a row that is disabled stands its holders down", %{ctx: ctx, fake: fake, row: row} do
       controller = start_controller(fake)
-
-      assert {:ok, %{session: session}} =
-               Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
-
-      [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, session})
-      monitor = Process.monitor(pid)
+      holder = box_holder(row)
+      assert {:ok, %{session: _session}} = box_open(holder, "k")
 
       {:ok, _} =
         Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "claude", %{enabled: false})
 
       tick(controller)
-      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 3_000
-
-      assert {:ok, %{lines: [], running: false}} =
-               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0, soon())
+      assert_receive {:heard, ^holder, {Opus.Programs, :stand_down, _key}}, 3_000
     end
   end
 
@@ -3080,11 +2866,12 @@ defmodule Opus.ProgramsTest do
     assert_receive {:control, "sync", %{"athanor_memory_bytes" => 268_435_456}, _}, 2_000
   end
 
-  test "a pipe open waits for the sync that carries a changed ceiling", %{ctx: ctx, fake: fake} do
+  test "an open waits for the sync that carries a changed ceiling", %{ctx: ctx, fake: fake} do
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 2_147_483_648)
     controller = start_controller(fake)
-    row = driven_row(ctx, "ceiling-pipe")
-    assert {:ok, _} = Programs.pipe_open(row, "before", [], "att_before", soon())
+    row = driven_row(ctx, "ceiling-open")
+    holder = box_holder(row)
+    assert {:ok, _} = box_open(holder, "before")
     assert_receive {:session, "open", %{"key" => "before"}, _}, 2_000
     Cyfr.Test.Settings.put("athanor_program_memory_bytes", 1)
     Scripted.hold(fake, "sync")
@@ -3093,8 +2880,7 @@ defmodule Opus.ProgramsTest do
     on_exit(fn -> send(held, :go) end)
     assert :sys.get_state(controller).athanor_memory_bytes == 1
 
-    opening =
-      Task.async(fn -> Programs.pipe_open(row, "after", [], "att_after", soon()) end)
+    send(holder, {:open, "after", soon()})
 
     overtook =
       receive do
@@ -3104,7 +2890,7 @@ defmodule Opus.ProgramsTest do
       end
 
     send(held, :go)
-    assert {:ok, _} = Task.await(opening, 5_000)
+    assert_receive {:opened, ^holder, "after", {:ok, _}}, 5_000
     await_idle(controller)
     refute overtook, "an open reached the service while its new ceiling sync was held"
   end

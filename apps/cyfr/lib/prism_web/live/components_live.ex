@@ -748,12 +748,7 @@ defmodule PrismWeb.ComponentsLive do
   defp assign_plan(socket, {:error, reason}),
     do: socket |> assign(:expanded_plan, nil) |> assign(:expanded_plan_refusal, reason)
 
-  defp need_type(need) do
-    case comp_field(need, :kind) do
-      "login" -> "program #{comp_field(need, :program)}"
-      kind -> "#{kind}:#{comp_field(need, :qualifier)}"
-    end
-  end
+  defp need_type(need), do: "#{comp_field(need, :kind)}:#{comp_field(need, :qualifier)}"
 
   defp do_registry_search(socket, query) do
     args = %{"action" => "search", "query" => query, "limit" => 30}

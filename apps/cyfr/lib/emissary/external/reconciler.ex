@@ -40,8 +40,8 @@ defmodule Emissary.External.Reconciler do
   of its server processes stopped.
 
   A kept home goes with its program row, whose id is the home's: a deleted
-  row (`row_deleted/2`, which the row's deletion sends) ends its sign-ins
-  and pipe sessions (`Opus.Programs.end_mounts/2`), then its home is
+  row (`row_deleted/2`, which the row's deletion sends) ends its
+  terminals and brain sessions (`Opus.Programs.end_mounts/2`), then its home is
   retired (`Opus.Programs.home/3`); an archived athanor has every kept
   row's home retired. The programs controller sends a retire again on
   every tick until the backends service acknowledges it. Neither path is
@@ -106,7 +106,7 @@ defmodule Emissary.External.Reconciler do
 
   @doc """
   The program row `row` (as it was deleted) of `athanor_id` is gone: its
-  sign-ins and pipe sessions end, then its kept home, when it kept one,
+  terminals and brain sessions end, then its kept home, when it kept one,
   is retired. Answers at once; with no reconciler running, the sweep
   retires the home.
   """

@@ -235,8 +235,7 @@ defmodule Arca.McpServerStorage do
   In one transaction the row is locked, every profile whose head stands
   on it is blocked to ask again (`Arca.ConsentStorage.head_profiles_on_row/2`
   through `block_dependents/4`, the order a revision binding the row
-  takes), and then the row is deleted; a login need's bindings go with it
-  (the baseline's cascade).
+  takes), and then the row is deleted.
 
   With `expected` (`%{id, epoch}`, the row a person confirmed removing),
   the row under `name` must still be that row at that epoch, compared
@@ -319,7 +318,7 @@ defmodule Arca.McpServerStorage do
   its home from kept is `{:error, :folder_kept}`; neither writes
   anything. The records the folder holds of the brain's sessions are that
   driver's harness's, which a removal owed for one of them asks that
-  driver to remove (`Arca.ThreadStorage.forget_sessions/3`), and the
+  driver to remove (`Arca.ThreadStorage.forget_sessions/2`), and the
   folder goes only with the row's deletion or its home's reset. A bare
   command that gains a driver, and a change after the driver's word,
   write as any other.

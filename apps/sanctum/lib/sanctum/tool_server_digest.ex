@@ -62,9 +62,7 @@ defmodule Sanctum.ToolServerDigest do
   Every row has this digest (`definition/1`), and it is the one answer to
   whether a row's definition changed: a program's change asks its
   confirmation exactly when it moves the digest
-  (`Emissary.External.Provider`), and a login need's binding of a driven
-  program is approved at it (`Sanctum.Mount`), so a binding made for one
-  definition does not mount another. A grant's tool_server resource pins
+  (`Emissary.External.Provider`). A grant's tool_server resource pins
   it only of a tool server (`from_server/1`): an `http` row or a program
   marked `mcp`; a `driven` program offers no tools.
 

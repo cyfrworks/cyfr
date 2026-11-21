@@ -291,12 +291,7 @@ defmodule Prima.ConsentPreviewTest do
     credentials = for %Row{kind: :credential, values: values} <- rows, do: values
 
     assert Enum.map(credentials, & &1["source"]) |> Enum.sort() ==
-             Enum.sort(ConsentPreview.Row.sources() ++ ["own", "own", "own"])
-
-    # One own binding is a login need's program row: its destination names
-    # the program, and the row is named as the program is.
-    assert [%{"name" => "claude", "disclosed" => false}] =
-             Enum.filter(credentials, &Map.has_key?(&1["destination"], "program"))
+             Enum.sort(ConsentPreview.Row.sources() ++ ["own", "own"])
 
     assert Enum.map(credentials, & &1["lifetime"]["kind"]) |> Enum.uniq() |> Enum.sort() ==
              Enum.sort(ConsentPreview.Row.lifetimes())

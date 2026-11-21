@@ -156,8 +156,7 @@ defmodule Sanctum.Consent.Plan do
   # proof (120s) is the short-lived one; the plan token only pins facts.
   @plan_ttl_ms 600_000
 
-  # The needs a binding meets, an entry's or a program row's; the others
-  # name a component.
+  # The needs a binding meets, an entry's; the others name a component.
   @credential_kinds Prima.Manifest.Needs.binding_kinds()
 
   @type t :: %{
@@ -254,14 +253,6 @@ defmodule Sanctum.Consent.Plan do
   "corrupt_manifest", missing: dep_ref}` (`closure_rows/3`), never a plan
   with that dependency's needs missing; one not installed leaves it
   unresolved as missing.
-
-  A need met by mounting a program row (`Prima.Manifest.Needs.mount_only?/1`)
-  is covered by the program it names, never by hosts: its row names the
-  `program`, its candidates are the athanor's own program rows that fit
-  it (`Prima.Manifest.Needs.fit/2`: a driven program of that name with a
-  kept home), each named by its row's id as `entry_id`, of kind
-  `program`, holding no fields, and never a vault entry; no share is
-  offered for it, since a program's folder is never shared.
   """
   @spec plan(Context.t(), map()) :: {:ok, t()} | {:error, term()}
   def plan(%Context{} = ctx, %{ref: ref} = params) when is_binary(ref) do
@@ -510,7 +501,6 @@ defmodule Sanctum.Consent.Plan do
             scopes: need.scopes,
             required: need.required
           }
-          |> Prima.MapUtil.put_present(:program, Map.get(need, :program))
           |> Map.merge(prefill(need))
           |> Map.merge(choice_row(sources, need))
           |> put_newer_shipped(need, newer)
@@ -603,12 +593,6 @@ defmodule Sanctum.Consent.Plan do
       "the value itself, and the vault has no disclosed one yet" <> newer_words(need) <> "."
   end
 
-  # A program's own sign-in is met by its program row, never a vault entry.
-  defp need_warning(%{kind: "login"} = need) do
-    "The #{need.need} need is met by the program #{Map.get(need, :program)} with a kept " <>
-      "folder, and none is set up yet. Set it up on the Programs page first."
-  end
-
   defp need_warning(need) do
     "The #{need.need} credential needs #{article(kind_words(need))}, and the vault has none yet."
   end
@@ -639,20 +623,19 @@ defmodule Sanctum.Consent.Plan do
   # ---------------------------------------------------------------------------
 
   @typedoc """
-  What a need's choice reads: the athanor's active entries, its program
-  rows, the shares offered to the person, the defaults.
+  What a need's choice reads: the athanor's active entries, the shares
+  offered to the person, the defaults.
   """
   @type choice_sources :: %{
           own: [map()],
-          programs: [map()],
           shares: [Sanctum.Shares.binding_view()],
           defaults: map()
         }
 
   @doc false
-  # Read once per plan or preview: the athanor's active entries, its
-  # program rows (`Sanctum.Mount.programs/1`), the shares offered to the
-  # context's person (none for a context with no person) and the
+  # Read once per plan or preview: the athanor's active entries, the
+  # shares offered to the context's person (none for a context with no
+  # person) and the
   # athanor's default per provider. A store that could not answer what is
   # offered is `{:unavailable, "Shares"}`: read as none offered, the walk
   # would offer to connect a key over keys that exist.
@@ -660,12 +643,10 @@ defmodule Sanctum.Consent.Plan do
   def choice_sources(ctx) do
     with {:ok, entries} <- Sanctum.Vault.list(ctx),
          {:ok, defaults} <- Sanctum.Vault.defaults(ctx),
-         {:ok, programs} <- Sanctum.Mount.programs(ctx),
          {:ok, shares} <- shares(ctx) do
       {:ok,
        %{
          own: Enum.filter(entries, &bindable?/1),
-         programs: programs,
          shares: shares,
          defaults: defaults
        }}
@@ -719,41 +700,11 @@ defmodule Sanctum.Consent.Plan do
     }
   end
 
-  # A login need is met by a program row alone, and every other need by an
-  # entry or a share.
-  defp offered(%{kind: "login"} = need, sources),
-    do: Enum.flat_map(sources.programs, &program_candidate(&1, need))
-
+  # A need is met by an entry or a share.
   defp offered(need, sources),
     do:
       Enum.flat_map(sources.own, &own_candidate(&1, need)) ++
         Enum.flat_map(sources.shares, &share_candidate(&1, need))
-
-  # A program row that fits the login need, named by its id as an entry
-  # is: it holds no field, and nothing of it is disclosed.
-  defp program_candidate(row, need) do
-    case Prima.Manifest.Needs.fit(need, row) do
-      :exact ->
-        [
-          %{
-            source: "own",
-            entry_id: row.id,
-            name: row.name,
-            kind: "program",
-            provider: "",
-            destination: %{"program" => row.name},
-            disclosed: false,
-            field_names: [],
-            fields: %{},
-            fit: "exact",
-            label_match: false
-          }
-        ]
-
-      :none ->
-        []
-    end
-  end
 
   # A need the component reads itself is met by a disclosed entry alone.
   defp reads_itself?(nil), do: true
@@ -1295,8 +1246,7 @@ defmodule Sanctum.Consent.Plan do
   end
 
   # A head row as a re-grant reopens it: its key, what it binds (the
-  # athanor's entry or program row, the share or the lending profile's
-  # label, never
+  # athanor's entry, the share or the lending profile's label, never
   # material), its lifetime and whether a root
   # consumed it, and, as the commit reads the row (`Commit.head_place/2`),
   # which of these it binds (`source`), where it sits and the need it was
@@ -1308,7 +1258,7 @@ defmodule Sanctum.Consent.Plan do
       consumed: is_binary(ref.consumed_by_root)
     }
     |> Prima.MapUtil.put_present(:fields, if(is_nil(ref.via_label), do: held[ref.binding_key]))
-    |> Prima.MapUtil.put_present(:entry_id, ref.vault_entry_id || ref.mcp_server_id)
+    |> Prima.MapUtil.put_present(:entry_id, ref.vault_entry_id)
     |> Prima.MapUtil.put_present(:share_id, ref.share_id)
     |> Prima.MapUtil.put_present(:label, ref.via_label)
     |> Map.merge(placed(reads, ref))
