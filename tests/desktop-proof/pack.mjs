@@ -16,13 +16,13 @@ import {mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs"
 import {createRequire} from "node:module"
 import {tmpdir} from "node:os"
 import path from "node:path"
-import {fileURLToPath} from "node:url"
+import {fileURLToPath, pathToFileURL} from "node:url"
 
 const desktop = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "apps", "codex", "desktop")
 const need = createRequire(path.join(desktop, "package.json"))
 const {build} = need("esbuild")
 const {createPackage} = need("@electron/asar")
-const {PROOF_MARKER} = await import(path.join(desktop, "scripts", "check-package.mjs"))
+const {PROOF_MARKER} = await import(pathToFileURL(path.join(desktop, "scripts", "check-package.mjs")).href)
 
 /** Bundle `entry` into the app archive at `out`. */
 export async function pack(entry, out) {

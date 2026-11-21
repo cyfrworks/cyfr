@@ -79,8 +79,13 @@ async function waitFor(check, what, ms = STEP_MS) {
     }
     await sleep(200)
   }
-  throw new Error(`timed out waiting for ${what} (${JSON.stringify(last)})`)
+  throw new Error(`timed out waiting for ${what} (${literal(last)})`)
 }
+
+// A value written into a script the proof runs in a page: JSON, with the
+// characters that could end a script or a line in it escaped.
+const literal = (value) => JSON.stringify(value).replace(/[<>\/\u2028\u2029]/g,
+  (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)
 
 const js = (wc, code) => wc.executeJavaScript(code, true)
 const text = (wc) => js(wc, "document.body ? document.body.innerText : ''")
@@ -115,12 +120,12 @@ async function submit(wc, action, fields = {}, button = null) {
   await js(wc, `(() => {
     const f = document.querySelector('form[action="${action}"]')
     if (!f) throw new Error("no form ${action} on " + location.origin + location.pathname)
-    for (const [k, v] of Object.entries(${JSON.stringify(fields)})) {
+    for (const [k, v] of Object.entries(${literal(fields)})) {
       const inputs = f.querySelectorAll('[name="' + k + '"]')
       if (!inputs.length) throw new Error("no field " + k)
       for (const i of inputs) i.value = v
     }
-    const b = ${button ? `f.querySelector(${JSON.stringify(button)})` : "null"}
+    const b = ${button ? `f.querySelector(${literal(button)})` : "null"}
     f.requestSubmit(b || undefined)
   })()`)
 }
@@ -147,7 +152,7 @@ async function fault(host, mode, fields = {}) {
   const r = await fetch(`${inputs.fronts[host]}/fault`, {method: "POST", headers: {"content-type": "application/json"},
     body: JSON.stringify({mode, ...fields})})
   const answer = await r.json()
-  if (r.status !== 200 || answer.mode !== mode) throw new Error(`the front of ${host} did not take ${mode}: ${r.status} ${JSON.stringify(answer)}`)
+  if (r.status !== 200 || answer.mode !== mode) throw new Error(`the front of ${host} did not take ${mode}: ${r.status} ${literal(answer)}`)
   return answer
 }
 
@@ -288,7 +293,7 @@ async function openCYFR(w, passphrase) {
 
 // The chooser's Connect for the CYFR, submitted.
 async function submitConnect(wc) {
-  await js(wc, `document.querySelector("#address").value = ${JSON.stringify(HOME)};
+  await js(wc, `document.querySelector("#address").value = ${literal(HOME)};
     document.querySelector("#connect").requestSubmit()`)
 }
 
@@ -347,7 +352,7 @@ async function connectPhase() {
   await load(second, `${DIRECTORY}/account/new#name=${NAME}`)
   await arm()
   await section(second, ["choose"])
-  await js(second, `document.querySelector("#name").value = ${JSON.stringify(NAME)};
+  await js(second, `document.querySelector("#name").value = ${literal(NAME)};
     document.querySelector("#name").dispatchEvent(new Event("input", {bubbles: true}));
     const a = document.querySelector("#acceptance:not([hidden]) #accept"); if (a) a.click();
     document.querySelector("#create").click()`)
@@ -515,18 +520,18 @@ async function connectPhase() {
   // the frame sent to the CYFR's company sign-in, and the frame sending
   // the top frame on, asked from inside the frame (the engine's initiator
   // is the frame).
-  const opened = await js(w.webContents, `window.open(${JSON.stringify(DIRECTORY + "/")}) === null`)
+  const opened = await js(w.webContents, `window.open(${literal(DIRECTORY + "/")}) === null`)
   const windowAnswer = (await waitFor(() => decisions.find((d) => d.window === w.webContents.id && d.name === "window-open" &&
     d.url === DIRECTORY + "/"), "main's decision on the window asked for elsewhere")).action
   const away = DIRECTORY + "/account/devices"
-  await js(w.webContents, `location.href = ${JSON.stringify(away)}; "asked"`)
+  await js(w.webContents, `location.href = ${literal(away)}; "asked"`)
   const awayPrevented = await decided(w.webContents, away, false, "main's decision on the top frame sent elsewhere")
   const xBefore = (await seen("x.test")).length
   const frame = (name) => w.webContents.mainFrame.frames.find((f) => f.name === name)
-  const companyAsked = await frame("proof-frame").executeJavaScript(`location.href = ${JSON.stringify(HOME + "/company-login")}; "asked"`, true)
+  const companyAsked = await frame("proof-frame").executeJavaScript(`location.href = ${literal(HOME + "/company-login")}; "asked"`, true)
   const companyPrevented = await decided(w.webContents, HOME + "/company-login", true, "main's decision on the frame sent to the company sign-in")
   const fromFrame = HOME + "/?from=frame"
-  const topAsked = await frame("proof-frame").executeJavaScript(`top.location.href = ${JSON.stringify(fromFrame)}; "asked"`, true)
+  const topAsked = await frame("proof-frame").executeJavaScript(`top.location.href = ${literal(fromFrame)}; "asked"`, true)
   const topPrevented = await decided(w.webContents, fromFrame, false, "main's decision on the frame sending the top frame on")
   const company = (await reachedSince("x.test", xBefore)).filter((r) => r.path === "/company-login").length
   const nav = {opened, windowAnswer, awayPrevented, companyAsked, companyPrevented, company,
@@ -539,7 +544,7 @@ async function connectPhase() {
   // device, in a window of the device's own, with the passphrase again.
   const segment = await js(w.webContents, `(() => { const a = [...document.querySelectorAll("a[href^='/a/']")][0];
     return a ? a.getAttribute("href").split("/")[2] : null })()`)
-  await js(w.webContents, `location.assign(${JSON.stringify(`/a/${segment}/api-keys`)})`)
+  await js(w.webContents, `location.assign(${literal(`/a/${segment}/api-keys`)})`)
   await waitFor(() => w.webContents.getURL().includes("/api-keys") && js(w.webContents, `!!document.querySelector(".phx-connected")`),
     "the API keys page")
   // prism_frame_rules: a frame Prism serves (a canvas, /_c/v1/) asking for
@@ -548,9 +553,9 @@ async function connectPhase() {
   // row shows the app keeps Prism's refusal, not a refusal of its own.
   const canvas = await waitFor(() => w.webContents.mainFrame.framesInSubtree.find((f) => f.url.includes("/_c/v1/")), "a frame Prism serves")
   const childrenBefore = appWindows().length
-  const canvasAsked = await canvas.executeJavaScript(`(() => { let w; try { w = window.open(${JSON.stringify(LOOPBACK + "/confirm?ref=cnr_proof")}) }
+  const canvasAsked = await canvas.executeJavaScript(`(() => { let w; try { w = window.open(${literal(LOOPBACK + "/confirm?ref=cnr_proof")}) }
     catch (e) { return "threw " + e.name } return w === null ? "null" : "a window" })()`, true)
-  const canvasTop = await canvas.executeJavaScript(`(() => { try { top.location.href = ${JSON.stringify(HOME + "/?from=canvas")} }
+  const canvasTop = await canvas.executeJavaScript(`(() => { try { top.location.href = ${literal(HOME + "/?from=canvas")} }
     catch (e) { return "threw " + e.name } return "asked" })()`, true)
   const prismFrame = {asked: canvasAsked, top: canvasTop, windows: appWindows().length - childrenBefore,
     reached: decisions.some((d) => d.url === HOME + "/?from=canvas")}
@@ -626,7 +631,10 @@ async function connectPhase() {
   w = await contentAt(atHome, "Prism again")
 
   // renderer_loss: Prism's page stopping locks the app and signs out.
-  out = await lockedOut(w, "Prism's page stopping", async () => w.webContents.forcefullyCrashRenderer())
+  out = await lockedOut(w, "Prism's page stopping", async () => {
+    log(`crashing the renderer of window ${w.webContents.id}, pid ${w.webContents.getOSProcessId()}, loading ${w.webContents.isLoading()}`)
+    w.webContents.forcefullyCrashRenderer()
+  })
   row("renderer_loss", said.includes("locked: the page stopped") && signedOut(out),
     "Prism's page stopping locks the app, and main's sign-out is acknowledged", lockDetail(out))
   await openCYFR(out.back, passphrase)
@@ -721,6 +729,9 @@ app.on("browser-window-created", (_event, win) => {
     if (isMainFrame) log(`window ${id} failed ${code} ${description} ${bare(url)}`)
   })
   wc.on("did-finish-load", () => log(`window ${id} loaded ${bare(wc.getURL())}`))
+  wc.on("render-process-gone", (_e, details) => log(`window ${id} renderer gone ${JSON.stringify(details)}`))
+  wc.on("unresponsive", () => log(`window ${id} unresponsive`))
+  wc.on("responsive", () => log(`window ${id} responsive`))
   for (const name of ["will-navigate", "will-redirect", "will-frame-navigate"]) {
     wc.on(name, (e) => process.nextTick(() => {
       decisions.push({window: id, name, url: e.url, main: e.isMainFrame, prevented: e.defaultPrevented})
@@ -729,6 +740,8 @@ app.on("browser-window-created", (_event, win) => {
     }))
   }
 })
+
+app.on("child-process-gone", (_e, details) => log(`process gone ${JSON.stringify(details)}`))
 
 // The process this one started whose command line holds `word`.
 function childOfThis(word) {
@@ -778,8 +791,9 @@ app.whenReady().then(PHASES[PHASE]).then(() => finish(record.rows.every((r) => r
     appendFileSync(path.join(OUT, "connect.txt"), `FAIL stopped: ${scrub(e.message)}\n`)
   }
   record.where = await where().catch((x) => String(x))
+  record.processes = app.getAppMetrics().map((m) => ({pid: m.pid, type: m.type, name: m.name ?? null}))
   record.agents = await Promise.all(Object.keys(inputs.fronts).map(async (h) =>
     [h, [...new Set((await seen(h).catch(() => [])).map((r) => r.agent))]])).catch(() => null)
-  log(`where: ${JSON.stringify(record.where)}`)
+  log(`where: ${literal(record.where)}`)
   finish(1)
 })
