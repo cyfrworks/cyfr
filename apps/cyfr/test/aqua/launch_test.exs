@@ -913,10 +913,9 @@ defmodule Aqua.LaunchTest do
 
     assert Map.keys(Arca.ExecutionEvents.data(started)) == ["attempt"]
 
-    # Its caller is the member whose turn launched it, which the stamp
-    # alone carries, not the person it runs as.
-    assert %{caller: caller} = Arca.Execution.get_tenant(actor, root_id)
-    assert caller == "agent:" <> turn.agent
+    # Its caller is Aqua, the crew's one caller whichever member's turn
+    # launched it, which the stamp alone carries, not the person it runs as.
+    assert %{caller: "agent:aqua"} = Arca.Execution.get_tenant(actor, root_id)
   end
 
   test "a decided launch whose turn read a thread since its decision runs, seeded with every " <>
