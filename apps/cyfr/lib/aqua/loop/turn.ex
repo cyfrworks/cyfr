@@ -399,7 +399,7 @@ defmodule Aqua.Loop.Turn do
   # athanor, never from anything a caller sends; each call is the brain's
   # own node invoking itself under it (`Prima.Authority.Transition`'s
   # self-invocation), as the brain runs when a person runs it. It is the
-  # brain's profile labelled "default", the one its setup's key entry
+  # brain's owner profile labelled "default", the one its setup's key entry
   # writes, however many other profiles the person keeps on it
   # (`brain_pin/5`). Once the turn has started, its row is the only source
   # of it: a turn loads exactly the grant it pinned, by its profile, in
@@ -413,8 +413,9 @@ defmodule Aqua.Loop.Turn do
   The brain `turn`, about to start, pins with its start
   (`Tape.start_turn/3`, in the write that holds Aqua's pin): for a turn
   that asks its model (`asks?`) on a catalyst brain, the release the
-  agent's catalyst (`parsed`, the agent as its snapshot resolved it)
-  resolves to and the brain's own grant, loaded with the
+  agent's catalyst (`parsed`, the agent as its snapshot resolved it, with
+  the model the turn's post names over the agent's, as `build/3` reads
+  them) resolves to and the brain's own grant, loaded with the
   turn's reservation `budget_id`, as `%{catalyst_ref, brain_profile_id,
   brain_consent_id}`; nothing (`%{}`) for a turn that asks no model, a
   program brain, or an agent whose brain does not resolve, which
@@ -435,12 +436,12 @@ defmodule Aqua.Loop.Turn do
   def brain_pin(%Context{}, %{program: row}, _parsed, _budget_id, _asks?) when is_binary(row),
     do: {:ok, %{}}
 
-  def brain_pin(%Context{} = ctx, _turn, parsed, budget_id, true = _asks?) do
+  def brain_pin(%Context{} = ctx, turn, parsed, budget_id, true = _asks?) do
     agent = agent_map(parsed)
 
     with %{"program" => nil} <- agent,
          {:ok, {catalyst, nil}, _model} <-
-           catalyst_model(ctx, %{catalyst_ref: nil, model: nil}, agent),
+           catalyst_model(ctx, %{catalyst_ref: nil, model: turn.model}, agent),
          {:ok, authority} <-
            brain_said(ctx, agent, catalyst, default_brain(ctx, catalyst, budget_id)) do
       {:ok,
@@ -462,7 +463,8 @@ defmodule Aqua.Loop.Turn do
   # pinned once; a catalyst brain's own grant, exactly the one the row
   # pinned. A turn whose row pins no brain grant asks no model (a page's
   # call, a server's line that no longer stands): it loads and checks none,
-  # recovered or not.
+  # recovered or not, and no steer gives it one: a person's post is a turn
+  # of its own, never a part of a page's call's turn.
   defp brain(_ctx, %{program: row} = turn, _agent, {nil, %{row: row}}), do: {:ok, turn, nil}
 
   defp brain(ctx, turn, _agent, {nil, %{row: row}}) do
@@ -477,44 +479,23 @@ defmodule Aqua.Loop.Turn do
 
   defp brain(_ctx, turn, _agent, _unpinned), do: {:ok, turn, nil}
 
-  @doc """
-  The spec with its brain's own grant loaded and pinned on the turn's row
-  (`turn`, as the loop holds it now), for a turn whose row pins none
-  because it asked no model when it started (a page's call) and that a
-  steer now asks one: nothing ran under any brain grant before, so its
-  first is the brain's grant as it stands, pinned before the model is
-  asked, and refused as `brain_pin/5` refuses it. A spec that holds its
-  grant, or whose brain is a program, is answered as it is.
-  """
-  @spec with_brain(t()) :: {:ok, t()} | {:error, term()}
-  def with_brain(%__MODULE__{catalyst: catalyst, brain_authority: nil} = spec)
-      when is_binary(catalyst) do
-    with {:ok, authority} <-
-           brain_said(
-             spec.ctx,
-             spec.agent,
-             catalyst,
-             default_brain(spec.ctx, catalyst, spec.turn.budget_id)
-           ),
-         {:ok, turn} <- Tape.pin_catalyst(spec.ctx, spec.turn, catalyst, authority) do
-      {:ok,
-       %{
-         spec
-         | turn: turn,
-           brain_authority: authority,
-           request_cap: request_cap(authority, catalyst),
-           deadline_ms: deadline_ms(spec.authority, brain_timeout_ms(authority, catalyst))
-       }}
-    end
-  end
-
-  def with_brain(%__MODULE__{} = spec), do: {:ok, spec}
-
+  # The brain's owner profile labelled "default", selected as a lender's
+  # edge selects it (`Sanctum.Consent.owner_profile/3`), never a public
+  # profile that carries the same label, then loaded by its id.
   defp default_brain(ctx, catalyst, budget_id) do
     with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst) do
-      ctx
-      |> Opus.authority_for({:label, @brain_label}, name_ref, budget_id: budget_id)
-      |> classified(catalyst)
+      case Sanctum.Consent.owner_profile(Context.actor(ctx), name_ref, @brain_label) do
+        {:ok, %{id: profile_id}} ->
+          ctx
+          |> Opus.authority_for({:id, profile_id}, name_ref, budget_id: budget_id)
+          |> classified(catalyst)
+
+        {:error, {:no_such_profile, _target, _label}} ->
+          classified({:error, :no_profile}, catalyst)
+
+        error ->
+          classified(error, catalyst)
+      end
     end
   end
 
@@ -529,8 +510,13 @@ defmodule Aqua.Loop.Turn do
         {:ok, _moved} ->
           {:error, :consent_moved}
 
+        # The pinned grant no longer loads because it was taken back or is
+        # gone: the turn moved on, as one whose grant was bound again.
         error ->
-          classified(error, catalyst)
+          case classified(error, catalyst) do
+            {:error, {:setup_required, ^catalyst}} -> {:error, :consent_moved}
+            damaged_or_unread -> damaged_or_unread
+          end
       end
     end
   end

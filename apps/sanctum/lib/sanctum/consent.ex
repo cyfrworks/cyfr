@@ -264,6 +264,14 @@ defmodule Sanctum.Consent do
   defdelegate tincture_grant(ctx, reference), to: Sanctum.Consent.TinctureGrant, as: :fetch
 
   @doc """
+  `target`'s active owner profile labelled `label`, as a lender's edge
+  selects it (`Sanctum.Consent.Loader.owner_profile/3`).
+  """
+  @spec owner_profile(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, term()}
+  defdelegate owner_profile(actor, target, label), to: Sanctum.Consent.Loader
+
+  @doc """
   Whether vault row `ref` of profile `profile_id`'s head revision `consent`
   (from `head_consent/2`) is live now, as a run's attach reads its
   lifetime (`Sanctum.Attach.lifetime/3`), without using it. The row is

@@ -774,6 +774,33 @@ defmodule Aqua.SeatTest do
                Tape.turn(ctx, turn)
     end
 
+    # The same, the brain's grant taken back instead of its key bound
+    # again: the pinned grant no longer loads, and the recovered turn ends
+    # as one that moved on, never as a key to enter.
+    test "a turn whose runner dies while its brain is described, its grant taken back " <>
+           "meanwhile, ends as a turn that moved on once taken over",
+         %{ctx: ctx, room: room} do
+      start_supervised!(
+        {ScriptedWorker,
+         ref: @model, describe: {:hold, self()}, script: [reply("Under no grant.")]}
+      )
+
+      {:ok, %{profile_id: brain}} = Opus.authority_for(ctx, :default, @model)
+      {turn, pids} = open_turn!(ctx, room, "first")
+
+      assert {:ok, %{status: "revoked"}} =
+               Sanctum.Providers.Profile.handle(ctx, %{
+                 "action" => "revoke",
+                 "profile_id" => brain
+               })
+
+      held = take_over!(pids)
+      send(held, :continue)
+      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
+      assert answers(ctx, room, turn) == []
+      assert chats(ctx, "aqua") == []
+    end
+
     # The span from the turn's start to its first model call, with the
     # brain's description already cached so nothing is described: the
     # runner dying there, after the brain's key was bound again, the
@@ -852,6 +879,40 @@ defmodule Aqua.SeatTest do
 
       assert [_first, _second] = chats(ctx, "aqua")
     end
+  end
+
+  # A post that names its own model, the member Aqua runs on naming none:
+  # the turn's start decides the brain from the model the build will use,
+  # pins that brain's grant in its starting write, and the turn answers,
+  # its attachment sent.
+  test "a post naming its own model, the member naming none, starts with its brain's grant " <>
+         "pinned and answers with its attachment",
+       %{ctx: ctx, room: room, holder: holder} do
+    script!([reply("A square.")])
+    :ok = member!(ctx, holder, %{"model" => nil})
+    {:ok, %{profile_id: brain, consent_id: granted}} = Opus.authority_for(ctx, :default, @model)
+    message_id = Prima.UUID7.generate_id("msg")
+    png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
+    {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
+
+    {:ok, %{turn_id: turn}} =
+      Aqua.Runner.send_message(ctx, room.id, "@aqua what is this?",
+        id: message_id,
+        attachments: refs,
+        model: "claude-sonnet-5-5"
+      )
+
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+
+    assert {:ok, %{status: "completed", brain_profile_id: ^brain, brain_consent_id: ^granted}} =
+             Tape.turn(ctx, turn)
+
+    assert answers(ctx, room, turn) == ["A square."]
+
+    assert [%{input: %{"params" => %{"model" => "claude-sonnet-5-5"} = params}}] =
+             chats(ctx, "aqua")
+
+    assert params |> inspect() |> String.contains?("image/png")
   end
 
   # A brain's own grant is its profile labelled "default", the one its

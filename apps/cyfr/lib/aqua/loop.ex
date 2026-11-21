@@ -918,24 +918,12 @@ defmodule Aqua.Loop do
     |> Map.new()
   end
 
-  # A turn built asking no model, a page's call, holds no brain grant: a
-  # steer that brings it a model round loads and pins its brain's own
-  # grant first (`Turn.with_brain/1`), and a brain that cannot be used
-  # ends it as a turn refused at its build does, with the brain's line.
+  # A turn whose row pins no brain grant asks no model (a page's call, a
+  # server's line that no longer stood): nothing it holds runs under a
+  # brain, and it ends with what its steps did.
   defp model_round(%State{spec: %Turn{catalyst: catalyst, brain_authority: nil}} = state)
-       when is_binary(catalyst) do
-    case Turn.with_brain(Turn.with_turn(state.spec, state.turn)) do
-      {:ok, spec} ->
-        model_round(%{state | spec: spec, turn: spec.turn})
-
-      {:error, {:crew_unready, _member, _state} = unready} ->
-        _ = system_row(state, describe(unready))
-        {:halt, {:failed, unready}, state}
-
-      {:error, reason} ->
-        {:halt, {:failed, reason}, state}
-    end
-  end
+       when is_binary(catalyst),
+       do: {:halt, :completed, state}
 
   defp model_round(%State{} = state) do
     with {:ok, _drained} <- Tape.drain_steer(guest(state), state.turn),
@@ -2428,9 +2416,8 @@ defmodule Aqua.Loop do
   # catalyst brain asks it only when its row pins the brain's grant, which
   # its start wrote for a turn that asked its model then; one that pins
   # none (a page's call, a server's line that no longer stood) is never
-  # rebuilt as one that asks, and only a steer brings it a model round
-  # (`model_round/1`). A program brain's turn asks unless a page's call
-  # opened it.
+  # rebuilt as one that asks, nor asks one later (`model_round/1`). A
+  # program brain's turn asks unless a page's call opened it.
   defp asks_on_recovery?(%State{spec: %Turn{catalyst: catalyst} = spec}) when is_binary(catalyst),
     do: spec.brain_authority != nil
 

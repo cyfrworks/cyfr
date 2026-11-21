@@ -781,6 +781,74 @@ defmodule Aqua.CrewTest do
     assert %{status: "completed"} = job!(ctx, room, "planner", "plan it")
   end
 
+  # A brain's own grant is its owner profile labelled "default", never a
+  # public profile its owner published, which carries the same label: with
+  # both standing, Aqua answers under the owner's.
+  test "with a public profile published from a brain's own, Aqua answers under the owner's",
+       %{ctx: ctx, room: room} do
+    script!([reply("Under the owner's.")])
+    {owner, _public} = publish_brain!(ctx)
+
+    {:ok, %{turn_id: turn}} = Runner.send_message(ctx, room.id, "hello")
+    await_status(ctx, turn, "completed")
+    owner_id = owner.id
+    assert {:ok, %{brain_profile_id: ^owner_id}} = Tape.turn(ctx, turn)
+    assert [%{authority: %{profile_id: ^owner_id}}] = brain_chats()
+  end
+
+  # The owner's profile taken back, the public one published from it does
+  # not stand in for it: the post is refused with the brain's sentence, as
+  # a grant taken back is, and nothing is asked.
+  test "a brain's own grant taken back is not stood in for by a public profile published from it",
+       %{ctx: ctx, room: room} do
+    script!([reply("Under the public one.")])
+    line = "brain has no key bound yet — connect one from its card on the Aqua page"
+    {owner, _public} = publish_brain!(ctx)
+
+    assert {:ok, %{status: "revoked"}} =
+             Sanctum.Providers.Profile.handle(ctx, %{
+               "action" => "revoke",
+               "profile_id" => owner.id
+             })
+
+    {:ok, %{turn_id: refused}} = Runner.send_message(ctx, room.id, "hello")
+    await_status(ctx, refused, "failed")
+    assert {:ok, %{error: error, brain_profile_id: nil}} = Tape.turn(ctx, refused)
+    assert String.ends_with?(error, line)
+    assert for(%{kind: "system", content: text} <- rows(ctx, room.id), do: text) == [error]
+    assert brain_chats() == []
+  end
+
+  defp brain_chats,
+    do: for(%{input: %{"operation" => "chat"}} = call <- ScriptedWorker.calls(), do: call)
+
+  # The brain's owner profile published to the public through the consent
+  # walk, which gives the public profile the owner's label.
+  defp publish_brain!(ctx) do
+    {:ok, [owner]} = Arca.ConsentStorage.profiles(actor(ctx), @model)
+
+    {:ok, staged} =
+      Sanctum.Consent.Commit.stage_publish(ctx, %{profile_id: owner.id, need_ids: ["@ingress"]})
+
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, staged.decisions)
+
+    {:ok, %{profile_id: public}} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: staged.decisions,
+        plan_token: staged.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: staged.expected_consent_revision
+      })
+
+    {:ok, profiles} = Arca.ConsentStorage.profiles(actor(ctx), @model)
+
+    assert Enum.sort(for p <- profiles, do: {p.label, p.kind, p.status}) ==
+             [{"default", :owner, :active}, {"default", :public, :active}]
+
+    {owner, public}
+  end
+
   defp soul_on(brain), do: [%{"name" => "aqua", "catalyst_ref" => brain}]
 
   # A brain the seed does not ship, whose one need is a required key.
