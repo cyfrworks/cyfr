@@ -14,8 +14,8 @@
 # for evidence and files apart from the terminal; guest_screenshot; and
 # proof_guest_stop (cleanup.sh). check records each verdict. Around the
 # stack: candidate_build and candidate_server_use once per run, this
-# tree's cyfr and server image; per guest cyfr_run_guard, which keeps it
-# from cyfr.run, candidate_server_load, account_settings and
+# tree's cyfr, server image and seed/aqua; per guest cyfr_run_guard, which
+# keeps it from cyfr.run, candidate_server_load, account_settings and
 # account_service, the box's own account service. On the screen:
 # guest_chord and screen_find drive its Chrome as a keyboard does, and
 # profile_cookie, screen_cookie and cookie_answer read the session cookie
@@ -529,7 +529,11 @@ candidate_build() {
 # puts it in each guest in place of the release's cyfr image, a stand-in
 # for a signed candidate server, which candidate.txt and results.txt say,
 # with the tree's commit and the image's id; the release's locus images
-# run beside it.
+# run beside it. The server reads its seed's Aqua files from the aqua/
+# folder beside docker-compose.yml, which a release ships from its own
+# seed/aqua (scripts/scaffold-tarball.sh), so this tree's seed/aqua goes
+# in with this tree's server, the third stand-in: a server reading
+# another release's soul may refuse it, and then fills no athanor.
 APP_IMAGE="" APP_IMAGE_ID=""
 candidate_server_use() {
   local tag
@@ -543,19 +547,27 @@ candidate_server_use() {
     fail "the run's use of $tag was not recorded ($OUT/candidate-server.log)"
   APP_IMAGE=$tag
   APP_IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$tag") || fail "$tag has no id"
-  STAND_IN="$STAND_IN; the cyfr service runs this tree's image $APP_IMAGE in place of the release's, beside the release's locus images"
+  STAND_IN="$STAND_IN; the cyfr service runs this tree's image $APP_IMAGE in place of the release's, reading this tree's seed/aqua in place of the release's aqua/, beside the release's locus images"
   {
     echo "stand-in: the cyfr service runs $APP_IMAGE, image id $APP_IMAGE_ID, in place of the release's image"
     echo "built by scripts/image.sh --undated app from $ROOT at $(git -C "$ROOT" rev-parse HEAD), with these changes:"
     git -C "$ROOT" status --short
+    echo "stand-in: the cyfr service reads that tree's seed/aqua, digest $(aqua_digest "$ROOT/seed"), in place of the release's aqua/"
   } >>"$OUT/candidate.txt"
   ok "using $APP_IMAGE ($APP_IMAGE_ID)"
 }
 
+# aqua_digest DIR: one digest over every file of DIR/aqua, by its path
+# and bytes; the guest runs the same line over its own folder.
+FOLDER_DIGEST='find aqua -type f | LC_ALL=C sort | xargs -d "\n" sha256sum | sha256sum | cut -d " " -f 1'
+aqua_digest() { (cd "$1" && sh -c "$FOLDER_DIGEST"); }
+
 # Loads the server image into the guest under way, whose Docker cyfr init
 # installed, and points the release's docker-compose.yml at it: the one
 # line naming the release's cyfr image changes, and nothing else. cyfr up
-# starts what that file names and pulls nothing the host holds.
+# starts what that file names and pulls nothing the host holds. Then this
+# tree's seed/aqua takes the place of the aqua/ cyfr init wrote from the
+# release.
 candidate_server_load() {
   local loaded
   docker save "$APP_IMAGE" | GUEST_SSH_TIMEOUT=600 guest_ssh_in 'cat >cyfr-candidate.tar' ||
@@ -569,6 +581,10 @@ candidate_server_load() {
     diff ~/docker-compose.release.yml docker-compose.yml" >"$GUEST_DIR/compose-candidate.diff" 2>&1
   check "docker-compose.yml names this tree's image for cyfr, its one changed line" \
     sh -c '[ "$(grep -c "^>" "$1")" = 1 ] && grep -qx ">.*image: $2" "$1" && grep -q "^<.*image: ghcr.io/cyfrworks/cyfr:" "$1"' sh "$GUEST_DIR/compose-candidate.diff" "$APP_IMAGE"
+  tar -C "$ROOT/seed" -cf - aqua | guest_ssh_in 'rm -rf ~/cyfr/aqua && tar -C ~/cyfr -xf -' ||
+    fail "this tree's seed/aqua was not copied into the guest"
+  check "the guest's aqua/ is this tree's seed/aqua, file for file" \
+    test "$(guest_ssh "cd ~/cyfr && $FOLDER_DIGEST")" = "$(aqua_digest "$ROOT/seed")"
 }
 
 # The box serves its own account service (CYFR_DIRECTORY_SERVE=writer):
