@@ -40,6 +40,8 @@ defmodule PrismWeb.AuthController do
   alias CyfrWeb.SignInResponse
   alias Sanctum.Session
 
+  @not_signed_out "The server could not sign you out just now, so you are still signed in. Try again."
+
   @doc """
   Begin the company sign-in for the browser's session (the module doc).
   """
@@ -101,16 +103,34 @@ defmodule PrismWeb.AuthController do
 
   POST, never GET, so signing someone out is not one `<img src>` away:
   the route's browser pipeline checks the forgery token first.
+
+  The signed-out redirect carries `cyfr-session-retired: 1` only when the
+  store deleted the session the cookie named, so a caller holding that
+  cookie (the CYFR app at its lock) can tell its retirement from a
+  sign-out of no session, which redirects without it. When the store
+  cannot delete it, the answer is `503` with neither the header nor the
+  redirect, and the cookie session is kept: the session still stands and
+  the same sign-out can be sent again.
   """
   def browser_logout(conn, _params) do
     case get_session(conn, SignInResponse.session_key()) do
-      token when is_binary(token) and token != "" -> Session.destroy(token)
-      _ -> :ok
-    end
+      token when is_binary(token) and token != "" ->
+        case Session.destroy(token) do
+          :ok ->
+            conn
+            |> put_resp_header("cyfr-session-retired", "1")
+            |> signed_out()
 
-    conn
-    |> configure_session(drop: true)
-    |> redirect(to: "/login?error=signed_out")
+          {:error, _reason} ->
+            conn
+            |> CallIdentity.refused(503, @not_signed_out)
+            |> put_resp_content_type("text/plain")
+            |> send_resp(503, @not_signed_out)
+        end
+
+      _none ->
+        signed_out(conn)
+    end
   end
 
   # ============================================================================
@@ -123,6 +143,12 @@ defmodule PrismWeb.AuthController do
     conn
     |> CallIdentity.refused(status, PrismWeb.CompanyLoginLive.sentence(error))
     |> redirect(to: "/company-login?error=" <> error)
+  end
+
+  defp signed_out(conn) do
+    conn
+    |> configure_session(drop: true)
+    |> redirect(to: "/login?error=signed_out")
   end
 
   defp to_login(conn, status, message) do
