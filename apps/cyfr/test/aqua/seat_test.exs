@@ -383,6 +383,54 @@ defmodule Aqua.SeatTest do
   # rebuilds it, it runs on the member it started on. Choosing another asks
   # nothing and changes no grant: the next turn runs on the new member's
   # brain under the same grant.
+  # The crew's grant is Aqua's whatever brain its member runs on: Aqua on a
+  # member whose brain is a program that stands reads the grant's stale
+  # state, as Aqua on a catalyst does, and its refused turn asks for the
+  # grant.
+  test "Aqua on a program brain reads the crew's stale grant, and its refused turn asks for it",
+       %{ctx: ctx, room: room} do
+    {:ok, _row} =
+      Arca.McpServerStorage.insert(actor(ctx), %{
+        cap: 0,
+        name: "claude",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "cyfr-claude-code claude", "env" => %{}})
+      })
+
+    :ok = aqua!(ctx, %{"member" => "claude-code"})
+    agents = [%{"name" => "aqua", "program" => "claude"}]
+    assert %{"aqua" => {:ready, "claude"}} = Aqua.Models.model_status(ctx, agents)
+
+    # A tool Aqua gains moves the grant's shape: stale until granted again.
+    :ok = aqua!(ctx, %{"tools_add" => [ungranted_action(ctx)]})
+    assert %{"aqua" => {:consent_stale, "claude"}} = Aqua.Models.model_status(ctx, agents)
+
+    turn = accept!(ctx, room, "hello?")
+    assert {:failed, :setup_required} = run(ctx, turn)
+    assert {:ok, %{status: "failed", root_execution_id: nil}} = Tape.turn(ctx, turn.id)
+    room_id = room.id
+
+    assert_receive %ThreadEvent{thread_id: ^room_id, kind: :consent_required, data: %{ref: @soul}},
+                   5_000
+  end
+
+  # A catalog action Aqua's list does not reach, of a tool no bundled
+  # catalyst serves, so granting it adds no dependency.
+  defp ungranted_action(ctx) do
+    {:ok, soul} = Compendium.AquaAgent.get(ctx, "aqua")
+    held = Sanctum.Consent.ShapeDerivation.expand_tools(soul.tools)
+
+    Enum.find(Sanctum.Catalog.tool_actions(), fn key ->
+      [tool, _action] = String.split(key, ".", parts: 2)
+
+      key not in held and key not in Prima.Manifest.Caps.agent_only_tools() and
+        Sanctum.VirtualTools.catalyst_for(tool) == nil
+    end)
+  end
+
   test "a member chosen during a turn does not retarget it; the next turn runs on the new one, asking nothing",
        %{ctx: ctx, room: room, holder: holder} do
     start_supervised!(

@@ -561,7 +561,7 @@ defmodule Aqua.Models do
           brain <- List.wrap(brain_of(agent)),
           into: %{} do
         case brain do
-          {:program, id} -> {name, program_status(ctx, id)}
+          {:program, id} -> {name, soul_program(name, program_status(ctx, id))}
           {:catalyst, ref} -> {name, catalyst_status(ctx, listing, ref)}
         end
       end
@@ -569,16 +569,43 @@ defmodule Aqua.Models do
     # The crew's one grant, loaded once, and only after every brain's own
     # plan has read connected, as a turn reaches the grant after its brain.
     grant =
-      if Enum.any?(statuses, &match?({_name, {:connected, _ref, _resolved, _connect}}, &1)),
-        do: Opus.authority_for(ctx, :default, @grant)
+      if Enum.any?(statuses, &match?({_name, {:connected, _, _, _}}, &1)) or
+           Enum.any?(statuses, &match?({_name, {:connected_program, _}}, &1)),
+         do: Opus.authority_for(ctx, :default, @grant)
 
     Map.new(statuses, fn
       {name, {:connected, ref, resolved, connect}} ->
         {name, granted_status(grant, name, ref, resolved, connect)}
 
+      {name, {:connected_program, program}} ->
+        {name, granted_program(grant, program)}
+
       settled ->
         settled
     end)
+  end
+
+  # Aqua on a member whose brain is a program that stands: the crew's grant
+  # is Aqua's still, whatever brain its member runs on, so it is read too.
+  # A crew member's program brain reads its row alone.
+  defp soul_program(name, {:ready, program}) do
+    if Prima.AgentRef.soul?(name), do: {:connected_program, program}, else: {:ready, program}
+  end
+
+  defp soul_program(_name, status), do: status
+
+  # A program brain is no edge of the grant: its stale, damaged or
+  # unreadable grant is said, and any other answer leaves it ready, the
+  # turn asking for a grant there is none of.
+  defp granted_program({:ok, _authority}, program), do: {:ready, program}
+
+  defp granted_program({:error, reason}, program) do
+    case Aqua.ConsentStatus.classify_refusal(reason) do
+      {:ok, :stale} -> {:consent_stale, program}
+      {:error, :corrupt} -> {:consent_damaged, program}
+      {:error, :unavailable} -> {:consent_unavailable, program}
+      _absent_or_forbidden -> {:ready, program}
+    end
   end
 
   # The brain an agent names: its program, by the row's name, or its

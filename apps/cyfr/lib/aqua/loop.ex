@@ -190,8 +190,12 @@ defmodule Aqua.Loop do
           {:error, {:after_claim, claim, turn, reason}} ->
             never_ran(ctx, claim, turn, reason)
 
-          # The source has no consent to run under: the person is asked for it.
+          # The source has no consent to run under, or one that no longer
+          # covers what the crew may use: the person is asked for it.
           {:error, :no_profile} ->
+            setup_required(ctx, turn)
+
+          {:error, {:consent_required, _}} ->
             setup_required(ctx, turn)
 
           {:error, {:profile_unavailable, _}} ->
