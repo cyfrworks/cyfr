@@ -221,7 +221,7 @@ defmodule Arca.TurnStorage do
     turn a direct post opened): the turn then replies to it. A turn's
     `sent_by` is its opening message's.
   - `:request` — the row is a request to a crew member: `%{member, task,
-    tools, options, person_id, origin}`, recorded as its `crew_request`
+    options, person_id, origin}`, recorded as its `crew_request`
     outbox record in this transaction (`Prima.OutboxRecord.crew_request/1`);
     the row's payload keeps `person_id` and `origin`, which its reply is
     recorded under.
@@ -538,7 +538,6 @@ defmodule Arca.TurnStorage do
         room_thread_id: thread.id,
         member: Map.fetch!(request, :member),
         task: Map.fetch!(request, :task),
-        tools: Map.get(request, :tools),
         options: Map.get(request, :options) || %{},
         person_id: Map.fetch!(request, :person_id),
         origin: Map.fetch!(request, :origin)

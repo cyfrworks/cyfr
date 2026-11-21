@@ -35,9 +35,8 @@ defmodule Prima.OutboxRecord do
   source is the request row (`message`), its revision the row's
   insertion instant, and its snapshot holds `room_thread_id` (the thread
   that asks), `request_id` (the request row), `member` (the crew member
-  asked), `task`, `tools` (the tool names the hand-off narrows the job
-  to; absent for the whole arsenal), `options` (the brain options set
-  for the job, an object), `person_id` and `origin` (whose request it is
+  asked), `task`, `options` (the brain options set for the job, an
+  object), `person_id` and `origin` (whose request it is
   and how it started, `Prima.Origin`'s spelling).
 
   `crew_reply` is the answer of a crew member's turn (`crew_reply/1`):
@@ -191,8 +190,8 @@ defmodule Prima.OutboxRecord do
   @doc """
   The record of a hand-off to a crew member, from what the request's
   transaction wrote: `athanor_id`, the request row's `request_id` and
-  `inserted_at`, `room_thread_id`, `member`, `task`, `tools` (nil for
-  the whole arsenal), `options`, `person_id` and `origin`.
+  `inserted_at`, `room_thread_id`, `member`, `task`, `options`,
+  `person_id` and `origin`.
   """
   @spec crew_request(map()) :: t()
   def crew_request(%{
@@ -202,7 +201,6 @@ defmodule Prima.OutboxRecord do
         room_thread_id: room_thread_id,
         member: member,
         task: task,
-        tools: tools,
         options: options,
         person_id: person_id,
         origin: origin
@@ -210,10 +208,8 @@ defmodule Prima.OutboxRecord do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(request_id) and
              request_id != "" and is_binary(room_thread_id) and room_thread_id != "" and
              is_binary(member) and member != "" and is_binary(task) and task != "" and
-             (is_nil(tools) or is_list(tools)) and is_map(options) and is_binary(person_id) and
-             person_id != "" and origin in @origins do
-    names!(tools || [], "tools")
-
+             is_map(options) and is_binary(person_id) and person_id != "" and
+             origin in @origins do
     %__MODULE__{
       source_kind: "message",
       source_id: request_id,
@@ -225,7 +221,6 @@ defmodule Prima.OutboxRecord do
         "request_id" => request_id,
         "member" => member,
         "task" => task,
-        "tools" => tools,
         "options" => options,
         "person_id" => person_id,
         "origin" => Prima.Origin.to_wire(origin)

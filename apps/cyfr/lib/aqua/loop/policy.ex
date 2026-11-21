@@ -8,17 +8,15 @@ defmodule Aqua.Loop.Policy do
 
   A call is decided in this order, and nothing is ever asked:
 
-    1. **Outside the job.** A call outside the tools a crew request
-       narrowed its job to is refused (`within?/2`).
-    2. **Shown, not run.** The `ui` event and `request_setup.open` run:
+    1. **Shown, not run.** The `ui` event and `request_setup.open` run:
        they only show the person something.
-    3. **Not offered.** A call whose key the turn's offered set
+    2. **Not offered.** A call whose key the turn's offered set
        (`Aqua.Offered`) does not hold is refused; a browser action the
        person's browser setting turned off is refused in the browser's
        own words. A launch is offered by `execution.run` or
        `execution.run_stream`, an outside server's tool by its
        `server:tool`.
-    4. **The mode.** `auto` runs every offered call. `read-only` runs a
+    3. **The mode.** `auto` runs every offered call. `read-only` runs a
        call whose action's declared kind is `:read` (`Aqua.Kinds`) and the
        turn's own start of its program brain, which the holder starts
        read-only (`Opus.Brain`); it refuses every other call, a launch and
@@ -70,8 +68,9 @@ defmodule Aqua.Loop.Policy do
   The decision for `call` among the `offered` set under `mode`
   (`read-only` or `auto`, `Compendium.AquaAgent`). A restricted turn's
   calls reach here only when replay-safe (`Aqua.Loop` denies the rest
-  first). `opts`: `:narrowed` (the tools a crew request narrowed the job
-  to, nil for none), `:host_start` (true for the turn's own start of its
+  first). Every member is offered the same set on every job, so the mode
+  is the one thing on the member's side that changes what a call may do.
+  `opts`: `:host_start` (true for the turn's own start of its
   program brain), `:title` (the member's title, which a read-only
   refusal names) and `:ctx` (the member's context a launch's account is
   resolved under). Without a context a launch naming an account is
@@ -80,37 +79,11 @@ defmodule Aqua.Loop.Policy do
   @spec decide(Call.t(), Aqua.Offered.t(), String.t(), keyword()) :: decision()
   def decide(%Call{} = call, offered, mode, opts) when is_map(offered) do
     cond do
-      not within?(call, Keyword.get(opts, :narrowed)) -> {:deny, outside(call)}
       call.kind == :ui -> :run
       Keyword.get(opts, :host_start) == true -> :run
       true -> decide_offered(call, offered, mode, opts)
     end
   end
-
-  @doc """
-  Whether `call` is among the tools a crew request narrowed its job to
-  (`names`, each a tool or a `tool.action`; nil when nothing was
-  narrowed): a bound on every kind of call, hands, catalog actions,
-  external tools and launches alike, judged when the call is decided and
-  again when it dispatches. The `ui` event and `request_setup` are the
-  console's and are never narrowed away.
-  """
-  @spec within?(Call.t(), [String.t()] | nil) :: boolean()
-  def within?(_call, nil), do: true
-  def within?(%Call{kind: :ui}, _names), do: true
-
-  def within?(%Call{kind: :external, tool: tool}, names) when is_list(names),
-    do: tool in names
-
-  def within?(%Call{tool: tool} = call, names) when is_list(names),
-    do: tool in names or key(call) in names
-
-  @doc "The sentence a call outside its job's tools is refused with."
-  @spec outside(Call.t()) :: String.t()
-  def outside(%Call{kind: :external, tool: tool}),
-    do: "#{tool} is outside the tools this job was narrowed to"
-
-  def outside(%Call{} = call), do: "#{key(call)} is outside the tools this job was narrowed to"
 
   @doc """
   The sentence a read-only member's refused call answers, and the line

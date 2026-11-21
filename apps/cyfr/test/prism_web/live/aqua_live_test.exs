@@ -732,7 +732,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(
                view,
                "#aqua-card-scout",
-               "Offered the soul's tools; a hand-off may narrow them for one job."
+               "Offered the soul's tools on every job; its mode decides what of them it runs."
              )
 
       refute has_element?(view, "#aqua-card-scout input[phx-click=editor_toggle_capability]")
@@ -1691,12 +1691,9 @@ defmodule PrismWeb.AquaLiveTest do
                       "catalyst_ref" => nil
                   }}
 
-        settled(
-          fn ->
-            has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.mine")
-          end,
-          "the member's consent asked again"
-        )
+        # A member holds no consent of its own: picking its brain asks nothing.
+        _ = render(view)
+        refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
         # A key's model is a catalyst's: the program and its install go.
         view |> form("#aqua-setup-pick", %{"value" => "open::open-1"}) |> render_change()
@@ -1783,9 +1780,9 @@ defmodule PrismWeb.AquaLiveTest do
     end
 
     # Aqua answers with the brain, model and mode of the crew member it
-    # runs on: choosing one asks Aqua's consent again at once, and grants
-    # nothing by itself.
-    test "choosing the crew member Aqua runs on asks for Aqua's consent again at once",
+    # runs on: the crew's grant does not follow that member, so choosing
+    # one asks nothing and grants nothing.
+    test "choosing the crew member Aqua runs on asks nothing",
          %{conn: conn, ctx: ctx} do
       publish_brain!(ctx, "open", %{})
       grant!(ctx, "catalyst:local.open", %{bindings: []})
@@ -1814,12 +1811,8 @@ defmodule PrismWeb.AquaLiveTest do
               %{"member" => "mine", "catalyst_ref" => "catalyst:local.open", "model" => "open-1"}} =
                get_agent(ctx, "aqua")
 
-      settled(
-        fn ->
-          has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]), "agent:local.aqua")
-        end,
-        "the soul's consent asked again"
-      )
+      _ = render(view)
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
       # The card names who Aqua runs on, and has no model of its own.
       assert has_element?(view, ~s(#aqua-card-aqua-member option[value="mine"][selected]))

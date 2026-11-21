@@ -225,10 +225,6 @@ defmodule PrismWeb.AquaLive do
   def handle_info({:plan_models, models}, socket),
     do: {:noreply, assign(socket, :plan_models, models)}
 
-  # A brain or model picked for an agent moved its consent's shape, which
-  # is asked again at once.
-  def handle_info({:ask_grant, ref}, socket), do: {:noreply, ask_grant(socket, ref)}
-
   # A connected brain's answer to its one `models` call, for the focus it
   # was asked under.
   def handle_info({:setup_answer, tag, ref, result}, socket),

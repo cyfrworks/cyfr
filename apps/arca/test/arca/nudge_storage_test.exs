@@ -219,7 +219,7 @@ defmodule Arca.NudgeStorageTest do
   end
 
   # A further opening of the workspace thread from the daily thread, under
-  # the schedule's narrower origin and tools, not yet delivered.
+  # the schedule's narrower origin, not yet delivered.
   defp further_opening!(actor, daily, workspace) do
     TurnStorage.open_workspace(actor, %{
       daily_id: daily.id,
@@ -230,7 +230,7 @@ defmodule Arca.NudgeStorageTest do
         id: Prima.UUID7.generate_id("msg"),
         author: actor.user_id,
         content: "do the next task",
-        payload: %{"ask" => "do the next task", "tools" => ["thread"]}
+        payload: %{"ask" => "do the next task"}
       },
       pointer: %{author: "aqua", sent_by: "aqua", content: "Moon report", payload: %{}},
       files: fn _thread, _message -> {:ok, []} end,

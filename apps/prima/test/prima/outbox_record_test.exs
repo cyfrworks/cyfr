@@ -26,7 +26,6 @@ defmodule Prima.OutboxRecordTest do
         room_thread_id: "thr_room",
         member: "reviewer",
         task: "read the diff",
-        tools: ["files", "web"],
         options: %{"effort" => "high"},
         person_id: "usr_1",
         origin: :interactive
@@ -189,18 +188,17 @@ defmodule Prima.OutboxRecordTest do
                  "request_id" => "msg_req",
                  "member" => "reviewer",
                  "task" => "read the diff",
-                 "tools" => ["files", "web"],
                  "options" => %{"effort" => "high"},
                  "person_id" => "usr_1",
                  "origin" => "interactive"
                } = snapshot
            } = OutboxRecord.crew_request(request())
 
-    assert map_size(snapshot) == 8
+    assert map_size(snapshot) == 7
 
-    # The whole arsenal leaves `tools` out of the stored text.
-    whole = OutboxRecord.crew_request(request(%{tools: nil, options: %{}}))
-    assert {:ok, text} = OutboxRecord.encode_snapshot(whole)
+    # A job names no tools: every member is offered the same ones.
+    plain = OutboxRecord.crew_request(request(%{options: %{}}))
+    assert {:ok, text} = OutboxRecord.encode_snapshot(plain)
     refute Map.has_key?(Jason.decode!(text), "tools")
     assert Jason.decode!(text)["options"] == %{}
   end
@@ -255,7 +253,6 @@ defmodule Prima.OutboxRecordTest do
           %{room_thread_id: nil},
           %{member: ""},
           %{task: ""},
-          %{tools: "files"},
           %{options: nil},
           %{person_id: ""},
           %{origin: "interactive"},
@@ -263,8 +260,6 @@ defmodule Prima.OutboxRecordTest do
         ] do
       assert_raise FunctionClauseError, fn -> OutboxRecord.crew_request(request(bad)) end
     end
-
-    assert_raise ArgumentError, fn -> OutboxRecord.crew_request(request(%{tools: [""]})) end
 
     for bad <- [
           %{turn_id: ""},

@@ -41,7 +41,7 @@ defmodule Aqua.Runner.AdmissionTest do
   end
 
   test "a send steers a turn only with the turn's user, sender, agent, origin and job" do
-    job = %{tools: nil, options: %{}}
+    job = %{options: %{}}
 
     turn = %{
       user_id: "usr_a",
@@ -66,9 +66,7 @@ defmodule Aqua.Runner.AdmissionTest do
     refute Runner.steer?(turn, %{send | origin: :programmatic})
     refute Runner.steer?(turn, %{send | origin: nil})
 
-    # One policy per turn: a request narrowed otherwise, or setting other
-    # brain options, is a turn of its own.
-    refute Runner.steer?(turn, %{send | job: %{job | tools: ["files.read"]}})
+    # A request setting other brain options is a turn of its own.
     refute Runner.steer?(turn, %{send | job: %{job | options: %{"effort" => "high"}}})
 
     # A turn whose row names no sender is steered by nobody.

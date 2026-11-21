@@ -133,7 +133,7 @@ defmodule Aqua.NudgeTest do
   defp tick(ctx), do: Map.get(Nudge.tick(), ctx.athanor_id, %{})
 
   # A further opening of the workspace thread from the daily thread's
-  # person's post, under the schedule's narrower origin and tools.
+  # person's post, under the schedule's narrower origin.
   defp further!(ctx, daily, workspace) do
     asked = Enum.find(rows(ctx, daily.id), &(&1.sent_by == "person"))
 
@@ -143,8 +143,7 @@ defmodule Aqua.NudgeTest do
       "thread" => daily.id,
       "refs" => [asked.id],
       "ask" => "only read the thread",
-      "workspace" => workspace.id,
-      "tools" => ["thread.events"]
+      "workspace" => workspace.id
     })
   end
 

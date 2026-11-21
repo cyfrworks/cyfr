@@ -1681,35 +1681,27 @@ defmodule Aqua.Loop do
   # window while an earlier call of the same response runs, belonged to a
   # setting that may have gone. Every call is decided again as it
   # dispatches, on the offered set as it stands now; the mode is pinned.
-  # A call outside the tools its job was narrowed to runs on no answer.
   defp still_offered(%State{spec: spec} = state, item, %Call{} = call) do
-    if not host_start?(state, item.step) and not Policy.within?(call, spec.narrowed) do
-      {:denied, Policy.outside(call)}
-    else
-      case Policy.decide(call, Turn.current_offered(spec), spec.mode, place(state, item.step)) do
-        :run -> :ok
-        {:run, _decided} -> :ok
-        {:setup_required, _app, _need} -> {:denied, "#{call.tool}.#{call.action} is not allowed"}
-        {_refused, message} -> {:denied, message}
-      end
+    case Policy.decide(call, Turn.current_offered(spec), spec.mode, place(state, item.step)) do
+      :run -> :ok
+      {:run, _decided} -> :ok
+      {:setup_required, _app, _need} -> {:denied, "#{call.tool}.#{call.action} is not allowed"}
+      {_refused, message} -> {:denied, message}
     end
   end
 
-  # Where a call is made (`Aqua.Loop.Policy.decide/4`): the job's
-  # narrowing, the member's title a read-only refusal names and the
-  # member's context a launch's account is resolved under. The host's `program.start`
-  # of a program brain is the brain's own start, not a call of its job, so
-  # no narrowing covers it and the mode does not refuse it: the holder
-  # starts it as the mode says (`Opus.Brain`).
+  # Where a call is made (`Aqua.Loop.Policy.decide/4`): the member's title
+  # a read-only refusal names and the member's context a launch's account
+  # is resolved under. The host's `program.start` of a program brain is
+  # the brain's own start, not a call of its job, so the mode does not
+  # refuse it: the holder starts it as the mode says (`Opus.Brain`).
   defp place(%State{} = state, step) do
     if host_start?(state, step),
-      do: place(state) |> Keyword.put(:narrowed, nil) |> Keyword.put(:host_start, true),
+      do: Keyword.put(place(state), :host_start, true),
       else: place(state)
   end
 
-  defp place(%State{spec: spec}) do
-    [narrowed: spec.narrowed, title: spec.agent["title"], ctx: spec.ctx]
-  end
+  defp place(%State{spec: spec}), do: [title: spec.agent["title"], ctx: spec.ctx]
 
   # The host's own `program.start` of a program brain's turn.
   defp host_start?(%State{program: %{}, turn: turn}, %{idempotency_key: key}),
@@ -2095,8 +2087,7 @@ defmodule Aqua.Loop do
   # ---------------------------------------------------------------------------
 
   # A launch is decided again as it dispatches, as every call is
-  # (`still_offered/3`): one outside the tools its job was narrowed to, or
-  # no longer offered, runs nothing.
+  # (`still_offered/3`): one no longer offered runs nothing.
   defp run_launch(%State{} = state, %{step: step, call: {:ok, %Call{} = launch}} = item) do
     case still_offered(state, item, launch) do
       :ok ->

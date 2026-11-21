@@ -63,9 +63,8 @@ defmodule Compendium.AquaAgent do
   still resolves, with no brain and its holder's state, which a turn
   refuses with its sentence and Aqua's card says (`Prima.Refusal`).
 
-  A crew member is offered the soul's tools (`under_soul/2`), narrowed
-  only by the request that asks it, so a `tools` list in a crew file
-  refuses the file, and so does anything below a crew file's frontmatter
+  A crew member is offered the soul's tools (`under_soul/2`) on every
+  job, so a `tools` list in a crew file refuses the file, and so does anything below a crew file's frontmatter
   (`:crew_has_no_prompt`), with the sentence `prompt_refused/1` says:
   nothing runs a prompt CYFR no longer shows. A file that still holds the
   retired `tool_policy` is refused, soul or crew (`:tool_policy_retired`),
@@ -304,8 +303,7 @@ defmodule Compendium.AquaAgent do
 
   @doc """
   A crew member under the soul's tools: every member is offered the
-  soul's whole list, and a request that asks it may narrow that for one
-  job (`Aqua.Loop.Turn`). Its mode stays its own. The soul itself is
+  soul's whole list on every job. Its mode stays its own. The soul itself is
   answered as it is.
   """
   @spec under_soul(t(), [String.t()]) :: t()

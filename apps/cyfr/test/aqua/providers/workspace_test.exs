@@ -313,8 +313,7 @@ defmodule Aqua.Providers.WorkspaceTest do
         call("w1", "workspace", %{
           "action" => "open",
           "title" => "Moon report",
-          "ask" => "write the moon report",
-          "tools" => ["files.read"]
+          "ask" => "write the moon report"
         }),
         reply("I opened a workspace thread for it."),
         reply("Working on the moon report.")
@@ -340,7 +339,6 @@ defmodule Aqua.Providers.WorkspaceTest do
                "asked_by" => asked_by,
                "from" => %{"thread" => ^daily_id, "message" => ^asked},
                "refs" => [],
-               "tools" => ["files.read"],
                "apart" => false,
                "title" => "Moon report"
              } = Tape.payload(opening)
@@ -355,7 +353,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert opening_id == opening.id
 
       # Delivered, the soul's turn there opens on the opening itself,
-      # narrowed to what it named and the means to post and report.
+      # offered every tool the soul holds: nothing narrows its work.
       assert {:ok, %{"applied" => 1}} = drain(ctx)
       %{turn_id: turn_id} = Enum.find(rows(ctx, workspace.id), &(&1.id == opening.id))
       await_status(ctx, turn_id, "completed")
@@ -363,8 +361,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert {:ok, %{message_id: ^opening_id, agent: "aqua", options: options}} =
                Tape.turn(ctx, turn_id)
 
-      assert %{"tools" => tools} = Jason.decode!(options)
-      assert Enum.sort(tools) == ~w(files.read thread.post workspace.report)
+      refute Map.has_key?(Jason.decode!(options), "tools")
 
       # Its first turn reads its envelope: the ask, attributed to the person.
       first =
@@ -559,8 +556,6 @@ defmodule Aqua.Providers.WorkspaceTest do
 
       assert {:error, {:invalid_argument, _}} =
                open(ctx, daily, %{"refs" => Enum.map(1..21, &"msg_#{&1}")})
-
-      assert {:error, {:invalid_argument, _}} = open(ctx, daily, %{"tools" => [""]})
 
       assert [_one] = Threads.list(actor(ctx), kind: "workspace")
     end

@@ -23,10 +23,10 @@ defmodule Aqua.Nudge do
   The line joins the turn that holds the thread when that turn is Aqua's
   and asks a model, whatever waits behind it, read at its next model
   round from storage on whichever member runs it, a steer that keeps that
-  turn's own person, origin and restrictions; with no turn open there it
-  opens one, bound to the thread's current work: the newest turn of
-  Aqua's there, whose person, origin and tools it keeps, the person's
-  standing asked again (`Sanctum.Tenancy.continuation/3`). While an
+  turn's own person, origin and brain options; with no turn open there
+  it opens one, bound to the thread's current work: the newest turn of
+  Aqua's there, whose person, origin and brain options it keeps, the
+  person's standing asked again (`Sanctum.Tenancy.continuation/3`). While an
   opening waits for its turn, or a turn is queued with nothing holding
   the thread, that is the work and no nudge opens a turn. The tick binds
   to the turn it read, and the acceptance refuses a binding the thread's
@@ -354,12 +354,11 @@ defmodule Aqua.Nudge do
          do: Sanctum.Tenancy.continuation(person, athanor_id, Prima.Origin.to_wire(:schedule))
   end
 
-  # What the work's turn was asked to work under: the tools it narrowed to
-  # and the brain options it set.
+  # What the work's turn was asked to work under: the brain options it set.
   defp nudge_attrs(%{options: options} = work, claim, slot) do
     kept =
       case is_binary(options) && Jason.decode(options) do
-        {:ok, %{} = stored} -> Map.take(stored, ["tools", "brain_options"])
+        {:ok, %{} = stored} -> Map.take(stored, ["brain_options"])
         _none -> %{}
       end
 
