@@ -15,7 +15,7 @@
 # row already running when OWNER goes runs to its end, as a row on a
 # ticket of its own does. Each row runs COMMAND as `bash -c` from the
 # current directory, contained (scripts/lib/contain.sh) and stopped at
-# HOLD seconds, with STAGE_TESTS set to TESTS, its output appended to
+# HOLD seconds (0 holds it to none), with STAGE_TESTS set to TESTS, its output appended to
 # $STAGE_LOGDIR/CHECK.log. When a row ends it appends `INDEX STATUS EPOCH` to RESULTS, EPOCH the second it
 # ended, which scripts/stage.sh reads while the chain still runs. A row
 # stopped at its hold reads 124 and says so in its log; a row a process of
@@ -66,7 +66,7 @@ while [ "$#" -gt 0 ]; do
   if [ "$status" = 0 ]; then
     contain_wait "$CONTAIN_PID" "$hold" 30 2>>"$log"
     status=$?
-    if [ "$status" = 124 ] && [ $((SECONDS - began)) -ge "$hold" ]; then
+    if [ "$status" = 124 ] && [ "$hold" != 0 ] && [ $((SECONDS - began)) -ge "$hold" ]; then
       echo "==> stage: hold deadline after ${hold}s: the command was stopped" >>"$log"
     fi
     if [ -n "$CONTAIN_SURVIVORS" ]; then
