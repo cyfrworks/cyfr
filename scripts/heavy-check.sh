@@ -31,13 +31,30 @@
 # a second quarter while another worktree's check waits, and a worktree
 # alone on the host takes every free quarter. Given the same arrivals and
 # the same ends, the order is the same: there is no priority and no
-# clock. A ticket is numbered, and a quarter is taken or given back by
-# the rule, under one lock, LOCK.admission, in a child process outside the
-# check's process group that holds it only for those file operations: a
-# check stopped or killed at any point, alone or with its whole process
-# group, never holds it. A stopped or dead waiter holds no one back. A
-# holder stopped after it took its quarter keeps it until it is continued
-# or ends; --status shows it held and stopped.
+# clock.
+#
+# What the order reads is the kernel's locks and the live waiters'
+# tickets, and nothing else. A quarter is held exactly while its lock,
+# LOCK.quarter<i>, is held. A worktree holds a quarter exactly while a
+# shared lock on its own file, LOCK.tree.<id>, is held: a holder keeps one
+# beside its quarter's lock, and the question is asked by trying the
+# exclusive lock without waiting. The holders' records (below) are for
+# people, --status and the janitor: the order never reads one.
+#
+# A ticket is numbered, and a quarter is taken or given back by the rule,
+# under one lock, LOCK.admission; the load record's line is appended
+# under that file's own lock. Each such step runs in a child process
+# outside the check's process group, with no terminal, that holds the
+# lock for file operations only: a check stopped or killed at any point,
+# alone or with its whole process group, never holds one. A stop aimed at
+# such a child's own pid holds its lock until it is continued. Admission
+# has one commit point, the removal of the ticket: a check whose step
+# ended any other way than by its own success is admitted if its ticket
+# is gone and not if it is there, and then gives back what the step took.
+# On its way out a check gives its quarter back before it does anything
+# that can wait. A stopped or dead waiter holds no one back. A holder
+# stopped after it took its quarter keeps it until it is continued or
+# ends; --status shows it held and stopped.
 #
 # Inside a check, a check runs its command in place, on its parent's
 # quarter.
@@ -85,7 +102,7 @@
 #   pid=41237 quarter=2 cpus=2,3,10,11 since=2026-10-28T21:14:03+0000 hold=2700s group=41251 watchdog=41250 checkout=/home/x/cyfr command=mix dialyzer
 # in LOCK.quarter<i>.holder, where cpus is its processors or `unplaced`,
 # checkout its worktree, group the command's process group and watchdog
-# its watchdog's pid; each waiter's ticket holds pid=, queued=, checkout=
+# its watchdog's pid; each waiter's ticket holds pid=, queued=, tree=, checkout=
 # and command= the same way (the grammar is at field() below). A record is
 # written whole under another name and renamed into place, so a reader
 # finds the one before or the new one, never part of one.
@@ -190,24 +207,29 @@ redacted() {
   printf '%s' "$out" | sed -E 's#([A-Za-z][A-Za-z0-9+.-]*://)[^/[:space:]]*@#\1[redacted]@#g'
 }
 
-# The process state of pid $1: empty when there is no such process.
-state_of() {
+# The process state of pid $1 in $STATE: empty when there is no such
+# process. It starts no process where /proc answers, since the queue is
+# read once for every ticket.
+state_into() {
   local s
+  STATE=
   if [ -r "/proc/$1/stat" ]; then
     read -r s 2>/dev/null <"/proc/$1/stat" || return 0
     s=${s##*) }
-    printf '%s' "${s%% *}"
+    STATE=${s%% *}
   else
     s=$(ps -o stat= -p "$1" 2>/dev/null) || return 0
-    printf '%s' "${s// /}"
+    STATE=${s// /}
   fi
 }
 alive() {
-  case "$(state_of "$1")" in ''|Z*|X*|x*) return 1 ;; esac
+  state_into "$1"
+  case "$STATE" in ''|Z*|X*|x*) return 1 ;; esac
 }
 # Whether pid $1 is stopped: state T (or t, traced).
 stopped() {
-  case "$(state_of "$1")" in T*|t*) return 0 ;; esac
+  state_into "$1"
+  case "$STATE" in T*|t*) return 0 ;; esac
   return 1
 }
 pid_ok() { case "${1:-}" in ''|0*|*[!0-9]*) return 1 ;; esac; }
@@ -226,14 +248,18 @@ encoded() {
 # encoded), so the first ` command=` on the line begins the command, which
 # is the rest of the line whatever it holds, and each other field is the
 # one word after its name before that point.
-# field NAME LINE: the value of that field, empty when the line has none.
-field() {
-  local line=" $2" v
+# field NAME LINE: the value of that field, empty when the line has none;
+# field_into leaves it in $FIELD.
+field_into() {
+  local line=" $2"
   case "$1" in
-    command) v=${line#* command=}; [ "$v" != "$line" ] || v= ;;
-    *) line=${line%% command=*}; v=${line#* "$1"=}; [ "$v" != "$line" ] || v=; v=${v%% *} ;;
+    command) FIELD=${line#* command=}; [ "$FIELD" != "$line" ] || FIELD= ;;
+    *) line=${line%% command=*}; FIELD=${line#* "$1"=}; [ "$FIELD" != "$line" ] || FIELD=; FIELD=${FIELD%% *} ;;
   esac
-  printf '%s' "$v"
+}
+field() {
+  field_into "$@"
+  printf '%s' "$FIELD"
 }
 # Whether the run a holder record names is unfinished: its heavy-check,
 # a process of its group or its watchdog still runs.
@@ -246,13 +272,11 @@ run_live() {
   if pid_ok "$watchdog" && alive "$watchdog"; then return 0; fi
   return 1
 }
-# The records of the runs that hold quarters and are not finished. A check
-# that has just taken quarter $1 leaves that quarter's record out: its lock
-# was free, so the record there is of a run that gave it up.
+# The records of the runs that hold quarters and are not finished, for
+# the queued lines: what a person reads, never what the order reads.
 holders() {
   local i file
   for i in 1 2 3 4; do
-    [ "$i" != "${1:-}" ] || continue
     file="$LOCK.quarter$i.holder"
     [ -s "$file" ] && run_live "$file" && head -n 1 "$file"
   done
@@ -275,10 +299,16 @@ tickets() {
     echo "$((10#$n)) $pid"
   done | sort -n
 }
+# Whether something holds the lock of ticket file $1. The file is opened
+# for reading, so a ticket removed meanwhile is not made again.
+ticket_locked() {
+  [ -e "$1" ] || return 1
+  ! { flock -n -x 9; } 9<"$1" 2>/dev/null
+}
 # Whether the ticket `$1 $2` is a live waiter's: locked, by an owner that
 # runs and is not stopped.
 waits() {
-  ! flock -n -x "$LOCK.arrival.$1.$2" true 2>/dev/null && alive "$2" && ! stopped "$2"
+  ticket_locked "$LOCK.arrival.$1.$2" && alive "$2" && ! stopped "$2"
 }
 
 status() {
@@ -331,7 +361,7 @@ cmd=
 survivors=
 run_group= run_watchdog=
 finished=false
-ticket= held_quarter= step= since=
+ticket= held_quarter= step= step_before= since= want_place= tree_id=
 # The worktree the check counts against in the queue's order, and its
 # written form.
 worktree=$(pwd -P)
@@ -344,8 +374,9 @@ command_text=$(redacted "$@")
 # Every exit after this point passes here, and only here is `_EXIT=`
 # written. In order: the command is stopped if it still runs, every
 # session in the registry is swept, survivors are waited for, then the
-# registry goes, and the holder's record when nothing of the run is left,
-# and the quarters are released by the exit itself. A 0 that is not the main
+# registry goes; the quarter and the worktree's lock are given back, and
+# the holder's record goes when nothing of the run is left; and only then
+# the load record's line, which can wait. A 0 that is not the main
 # path's own end is the status of whatever ran last before a signal Bash
 # dies of, so it is reported as 1.
 on_exit() {
@@ -353,16 +384,22 @@ on_exit() {
   trap '' HUP INT TERM
   trap - EXIT
   exec 1>&"$saved_out" 2>&"$saved_err"
-  # A locked step still under way holds nothing an exit must clean. What
-  # it put on disk says whether this check queued and what it holds.
-  if [ -n "$step" ]; then kill -KILL "$step" 2>/dev/null; wait "$step" 2>/dev/null; step=; fi
+  # A locked step still under way is stopped with all it started. What it
+  # put on disk says whether this check queued and whether it was admitted
+  # (the commit point: its ticket gone, and its record naming its quarter).
+  if [ "$step" = starting ]; then
+    step=
+    [ "${!:-}" = "$step_before" ] || step=$!
+  fi
+  if [ -n "$step" ]; then kill -KILL -- "-$step" 2>/dev/null; wait "$step" 2>/dev/null; step=; fi
   for f in "$LOCK".arrival.*."$$"; do [ ! -e "$f" ] || queued=true; done
   if [ -z "$held_quarter" ] && [ -n "$since" ]; then
-    for i in 1 2 3 4; do
-      f=$(head -n 1 "$LOCK.quarter$i.holder" 2>/dev/null)
-      [ "$(field pid "$f")" != "$$" ] || [ "$(field since "$f")" != "$since" ] ||
-        { held_quarter=$i record="$LOCK.quarter$i.holder" wrote_record=true; }
-    done
+    i=$(own_record)
+    if [ -n "$i" ] && $queued; then
+      rm -f "$LOCK.quarter$i.holder"
+    elif [ -n "$i" ]; then
+      held_quarter=$i record="$LOCK.quarter$i.holder" wrote_record=true
+    fi
   fi
   [ -z "$held_quarter" ] || queued=true
   if [ "$status" = 0 ] && ! $finished; then status=1; fi
@@ -389,9 +426,15 @@ on_exit() {
       waited=$((waited + 1))
     done
   fi
-  rm -f "$LOCK.arriving.$$" "$LOCK".arrival.*."$$" "$LOCK".quarter?.writing."$$"
+  rm -f "$LOCK.arriving.$$" "$LOCK".arrival.*."$$" "$LOCK".quarter?.writing."$$" "$LOCK.place.$$"
   if $owner; then rm -f "$CONTAIN_REGISTRY"; fi
-  if $wrote_record && [ -z "$survivors" ] && run_finished; then rm -f "$record"; fi
+  # The quarter first, then the worktree's lock, so that the worktree never
+  # reads as holding nothing while it holds a quarter; the watchdog's own
+  # hold on both ends when it exits, which run_finished has waited for.
+  f=false
+  if $wrote_record && [ -z "$survivors" ] && run_finished; then f=true; fi
+  give_back
+  if $f; then rm -f "$record"; fi
   if $queued; then log_run "$status"; fi
   if [ -n "$ran_at" ]; then
     say "exit $status after $((SECONDS - ran_at))s (queued $((ran_at - queued_at))s)"
@@ -400,10 +443,29 @@ on_exit() {
   printf '\n_EXIT=%s %s\n' "$$" "$status"
   exit "$status"
 }
+# The quarter of the holder record that names this check and the start of
+# its take, if there is one.
+own_record() {
+  local i line
+  for i in 1 2 3 4; do
+    line=$(head -n 1 "$LOCK.quarter$i.holder" 2>/dev/null) || continue
+    [ "$(field pid "$line")" = "$$" ] && [ "$(field since "$line")" = "$since" ] || continue
+    echo "$i"
+    return
+  done
+}
+# Closes every descriptor of a quarter's lock and of the worktree's lock
+# this check has, the quarter's first.
+give_back() {
+  local fd
+  exec 7>&- 8>&-
+  for fd in ${quarter_fd[@]+"${quarter_fd[@]}"} ${tree_fd:-}; do eval "exec $fd>&-"; done
+  quarter_fd=() tree_fd=
+}
 # log_run STATUS: this check's line in the record of the host's load (the
-# header's).
+# header's), appended in a locked child; this check holds nothing by now.
 log_run() {
-  local file=${HEAVY_CHECK_RECORDS:-} dir=/var/tmp/cyfr waited ran
+  local file=${HEAVY_CHECK_RECORDS:-} dir=/var/tmp/cyfr waited ran entry
   if [ -z "$file" ]; then
     mkdir -p -m 700 "$dir" 2>/dev/null
     if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -O "$dir" ]; then
@@ -413,11 +475,11 @@ log_run() {
     file=$dir/heavy-check.log
   fi
   if [ -n "$ran_at" ]; then waited=$((ran_at - queued_at)) ran=$((SECONDS - ran_at)); else waited=$((SECONDS - queued_at)) ran=0; fi
-  { flock 3 &&
-    printf 'end=%s quarter=%s waited=%s ran=%s exit=%s checkout=%s command=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
-      "${held_quarter:--}" "$waited" "$ran" "$1" "$checkout" "$command_text" >&3; } 3>>"$file" 2>/dev/null ||
+  entry="end=$(date '+%Y-%m-%dT%H:%M:%S%z') quarter=${held_quarter:--} waited=$waited ran=$ran exit=$1 checkout=$checkout command=$command_text"
+  locked "$file" append_line "$entry" ||
     say "no line in the record of the host's load: $file cannot be written"
 }
+append_line() { printf '%s\n' "$1" >&"$lock_fd"; }
 # Whether this check's run is finished: no process is left in its group and
 # its watchdog has exited. A retired watchdog exits at once; one that has
 # not within 5 s, such as a stopped one, still holds the quarters.
@@ -463,6 +525,9 @@ here=${BASH_SOURCE[0]%/*}
 # shellcheck source=lib/quarters.sh
 . "$here/lib/quarters.sh" || { echo "cannot load $here/lib/quarters.sh" >&2; exit 69; }
 command -v flock >/dev/null 2>&1 || { echo 'flock is required (util-linux; on macOS: brew install flock)' >&2; exit 69; }
+# The worktree's name among the locks: its path's checksum and length.
+tree_id=$(printf '%s' "$worktree" | cksum) || { echo 'cksum is required' >&2; exit 69; }
+tree_id=${tree_id// /-}
 
 # The time a stopped check has to stop what it started and clean up
 # before this script stops what remains.
@@ -494,21 +559,24 @@ fi
 # The processors of quarter $1, or `unplaced`.
 cpus_for() { if $placed; then echo "${QUARTER[$1]}"; else echo unplaced; fi; }
 
-# locked COMMAND...: the command in a child process that holds the queue's
-# lock, $LOCK.admission, while it runs; its status. Under the lock a ticket
-# is numbered, and a quarter is taken or given back by the rule, so each
-# is decided against tickets and holders no other check is changing. The
+# locked FILE COMMAND...: the command in a child process that holds the
+# lock of FILE while it runs, on the descriptor $lock_fd; its status. The
 # child is started as a job of its own, outside this check's process
-# group, and this check never holds the lock's descriptor: a stop of the
-# check or of its whole group (a suspended foreground run) leaves the
-# child to finish and release the lock, and a kill of the child releases
-# it. The child does file operations only.
+# group, with no terminal on its streams, and this check never holds the
+# lock's descriptor: a stop of the check or of its whole group (a
+# suspended foreground run), or a terminal that stops background writers,
+# leaves the child to finish and release the lock, and a kill of the child
+# releases it. The child does file operations only.
 locked() {
-  local s=0
+  local file=$1 s=0
+  shift
+  # A signal can end this check between the child's start and the next
+  # line: the exit then finds the child as the newest job, if there is one.
+  step_before=${!:-} step=starting
   set -m
   ( trap - EXIT HUP INT TERM
-    exec {queue_fd}>>"$LOCK.admission" && flock -x "$queue_fd" || exit 1
-    "$@" ) </dev/null &
+    exec {lock_fd}>>"$file" && flock -x "$lock_fd" || exit 1
+    "$@" ) </dev/null >/dev/null 2>&1 &
   step=$!
   set +m
   wait "$step" || s=$?
@@ -537,34 +605,51 @@ publish_ticket() {
   rm -f "$LOCK".arrival.*."$$"
   exec {ticket_fd}>"$LOCK.arriving.$$" || exit 1
   flock -n -x "$ticket_fd" || exit 1
-  printf 'pid=%s queued=%s checkout=%s command=%s\n' "$$" \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$checkout" "$command_text" >&"$ticket_fd" || exit 1
-  locked number_ticket || exit 1
+  printf 'pid=%s queued=%s tree=%s checkout=%s command=%s\n' "$$" \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$tree_id" "$checkout" "$command_text" >&"$ticket_fd" || exit 1
+  # Whatever the step's end, the ticket on disk is the arrival.
+  locked "$LOCK.admission" number_ticket || :
   ticket=$(tickets | sed -n "s/ $$\$//p")
   [ -n "$ticket" ] || exit 1
+}
+# Whether a check of the worktree $1 holds a quarter: something holds a
+# lock on the worktree's file. Asked only under the queue's lock (locked),
+# since the question is itself a lock, taken for an instant.
+tree_holds() {
+  [ -e "$LOCK.tree.$1" ] || return 1
+  ! { flock -n -x 9; } 9<"$LOCK.tree.$1" 2>/dev/null
 }
 # How many live waiters would be served before this one ($ahead) and how
 # many wait in all ($waiting), this one included: those of worktrees that
 # hold no quarter, in arrival order, then the rest, in arrival order (the
-# header's order). $1 is the quarter this check has just taken, if any
-# (holders). A ticket nothing locks is removed; a stopped or exited owner
-# holds no one back.
+# header's order). Run under the queue's lock: it reads the tickets and
+# asks the kernel which worktrees hold a quarter, and no record. A ticket
+# nothing locks is removed; a stopped or exited owner holds no one back.
 places() {
-  local n pid line mine theirs tree
+  local f n pid line mine=0 theirs tree
   local -A holding=()
   ahead=0 waiting=0
-  while IFS= read -r line; do
-    tree=$(field checkout "$line")
-    [ -z "$tree" ] || holding[$tree]=1
-  done < <(holders "${1:-}")
-  mine=0; [ -z "${holding[$checkout]+set}" ] || mine=1
+  if tree_holds "$tree_id"; then mine=1; fi
+  for f in "$LOCK".arriving.*; do
+    [ ! -e "$f" ] || ticket_locked "$f" || rm -f "$f"
+  done
+  for f in "$LOCK".place.*; do
+    [ ! -e "$f" ] || alive "${f##*.}" || rm -f "$f"
+  done
   while read -r n pid; do
     if [ "$pid" != "$$" ]; then
-      if flock -n -x "$LOCK.arrival.$n.$pid" true 2>/dev/null; then rm -f "$LOCK.arrival.$n.$pid"; continue; fi
+      f="$LOCK.arrival.$n.$pid"
+      if ! ticket_locked "$f"; then rm -f "$f"; continue; fi
       if ! alive "$pid" || stopped "$pid"; then continue; fi
-      line=$(head -n 1 "$LOCK.arrival.$n.$pid" 2>/dev/null) || continue
-      tree=$(field checkout "$line") theirs=0
-      [ -z "$tree" ] || [ -z "${holding[$tree]+set}" ] || theirs=1
+      IFS= read -r line 2>/dev/null <"$f" || continue
+      field_into tree "$line"
+      tree=$FIELD
+      [ -n "$tree" ] || continue
+      if [ -z "${holding[$tree]+set}" ]; then
+        holding[$tree]=0
+        if tree_holds "$tree"; then holding[$tree]=1; fi
+      fi
+      theirs=${holding[$tree]}
       if [ "$theirs" -lt "$mine" ] || { [ "$theirs" = "$mine" ] && [ "$n" -lt "$ticket" ]; }; then
         ahead=$((ahead + 1))
       fi
@@ -572,8 +657,12 @@ places() {
     waiting=$((waiting + 1))
   done < <(tickets)
 }
+# This check's place, for its queued line, when it has asked for it.
+tell_place() {
+  [ -z "$want_place" ] || echo "$ahead $waiting" > "$LOCK.place.$$"
+}
 
-# The locks: descriptor 7 holds the quarter taken.
+# The locks: descriptor 7 holds the quarter taken and 8 the worktree's.
 record_for() { echo "$LOCK.quarter$1.holder"; }
 # The record, whole, under a name no reader looks at, then renamed into
 # place.
@@ -585,25 +674,30 @@ write_record() {
     mv -f "$new" "$record" || { rm -f "$new"; return 1; }
 }
 # Run under the queue's lock (locked), so that the order is decided and
-# the quarter taken in one step, and so that a check stopped meanwhile
-# either holds its quarter with its record written or holds nothing. It
-# takes a free quarter's lock on the descriptors the check opened and,
-# holding it, reads the tickets and the holders: a quarter that frees
-# after that reading is another quarter, for the next to be served. If
-# the rule serves another waiter first it gives the quarter back; else it
-# writes the record and removes the ticket. It gives the lock back and
-# tries the next quarter if the record was not written, since the check,
-# stopped, may not close its descriptors for as long as it stays stopped.
-# Exits 10 + i when it took quarter i; 2 when it took all four in turn and
-# could write no record; 1 otherwise.
+# the quarter taken in one step. It takes a free quarter's lock on the
+# descriptors the check opened and, holding it, reads the tickets and asks
+# which worktrees hold a quarter: a quarter that frees after that is
+# another quarter, for the next to be served. If the rule serves another
+# waiter first it gives the quarter back. Else it takes the worktree's
+# lock, shared, writes the record, and removes the ticket, which is the
+# commit: before it this check is not admitted, whatever it holds, and
+# after it this check is admitted. It gives the quarter back and tries the
+# next if the record was not written. With no quarter free it reads the
+# queue only when the check wants its place. Exits 10 + i when it took
+# quarter i; 2 when it took all four in turn and could write no record; 1
+# otherwise, holding nothing.
 take_quarter() {
-  local i unwritable=0
+  local i unwritable=0 ranked=false
   for ((i=1; i<=4; i++)); do
     flock -n -x "${quarter_fd[$i]}" || continue
-    places "$i"
-    if [ "$ahead" != 0 ]; then
-      flock -u "${quarter_fd[$i]}"
-      exit 1
+    if ! $ranked; then
+      places
+      ranked=true
+      if [ "$ahead" != 0 ] || ! flock -n -s "$tree_fd"; then
+        flock -u "${quarter_fd[$i]}"
+        tell_place
+        exit 1
+      fi
     fi
     record=$(record_for "$i") cpus=$(cpus_for "$i") held_quarter=$i
     # What a holder killed as it wrote its record left of it.
@@ -615,31 +709,49 @@ take_quarter() {
     unwritable=$((unwritable + 1))
     flock -u "${quarter_fd[$i]}"
   done
+  if $ranked; then flock -u "$tree_fd"; elif [ -n "$want_place" ]; then places; fi
+  tell_place
   [ "$unwritable" != 4 ] || exit 2
   exit 1
 }
-# Opens the descriptors and takes a quarter in a child; returns 0 or 1,
-# and keeps the descriptor of the quarter it took as 7. Closing the rest
-# also gives back what a child that ended any other way, killed included,
-# took and could not give back.
+# Opens the descriptors and takes a quarter in a locked child; returns 0
+# or 1, and keeps the descriptor of the quarter it took as 7 and of the
+# worktree's lock as 8. Closing the rest also gives back what a child that
+# ended any other way, killed included, took and could not give back.
 admit() {
   local i fd s=0
   for ((i=1; i<=4; i++)); do
     exec {fd}>>"$LOCK.quarter$i" || exit 1
     quarter_fd[$i]=$fd
   done
+  exec {tree_fd}>>"$LOCK.tree.$tree_id" || exit 1
   since=$(date '+%Y-%m-%dT%H:%M:%S%z')
-  locked take_quarter || s=$?
+  locked "$LOCK.admission" take_quarter || s=$?
   case "$s" in
     1[1-4]) held_quarter=$((s - 10)) s=0 ;;
     2)
       say "no quarter's record can be written: $LOCK.quarter1.holder to $LOCK.quarter4.holder"
       exit 69 ;;
-    *) s=1 ;;
+    1) ;;
+    *)
+      # The step ended some other way, so the disk decides. Its ticket
+      # there: this check is not admitted, and a record of its own goes
+      # with what it took. Its ticket gone: it is admitted, and its own
+      # record, written before the ticket was removed and so always there,
+      # says which of its four descriptors holds its quarter. This names a
+      # descriptor; it orders nothing.
+      i=$(own_record)
+      if [ -e "$LOCK.arrival.$ticket.$$" ]; then
+        [ -z "$i" ] || rm -f "$LOCK.quarter$i.holder"
+        s=1
+      else
+        [ -n "$i" ] || exit 1
+        held_quarter=$i s=0
+      fi ;;
   esac
-  if [ "$s" = 0 ]; then exec 7>&"${quarter_fd[$held_quarter]}" || exit 1; fi
-  for i in "${quarter_fd[@]}"; do eval "exec $i>&-"; done
-  quarter_fd=()
+  if [ "$s" = 0 ]; then exec 7>&"${quarter_fd[$held_quarter]}" 8>&"$tree_fd" || exit 1; fi
+  for i in "${quarter_fd[@]}" "$tree_fd"; do eval "exec $i>&-"; done
+  quarter_fd=() tree_fd=
   return "$s"
 }
 
@@ -648,7 +760,8 @@ said_at=
 # after, with its place then and the holders' records.
 announce() {
   local held
-  [ -z "$said_at" ] || [ $((SECONDS - said_at)) -ge "$REPEAT" ] || return 0
+  [ -n "$want_place" ] || return 0
+  read -r ahead waiting 2>/dev/null <"$LOCK.place.$$" || return 0
   said_at=$SECONDS
   held=$(holders)
   say "queued, $((ahead + 1)) of $waiting waiting, behind:"
@@ -656,11 +769,13 @@ announce() {
 }
 
 ahead=0 waiting=1
-quarter_fd=()
+quarter_fd=() tree_fd=
 publish_ticket
 while :; do
-  places
-  if [ "$ahead" = 0 ] && admit; then break; fi
+  # The take reads this check's place when its queued line is due.
+  want_place=
+  if [ -z "$said_at" ] || [ $((SECONDS - said_at)) -ge "$REPEAT" ]; then want_place=1; fi
+  if admit; then break; fi
   announce
   sleep 0.5
 done
@@ -703,8 +818,8 @@ export ERL_FLAGS="${ERL_FLAGS:+$ERL_FLAGS }+S $share:$share"
 # killed outright keeps its quarter until its command's sessions are gone.
 # The command does not hold the saved streams either, so its descriptors
 # are its caller's.
-CONTAIN_CLOSE_FDS="7 $saved_out $saved_err"
-CONTAIN_HOLD_FDS="7"
+CONTAIN_CLOSE_FDS="7 8 $saved_out $saved_err"
+CONTAIN_HOLD_FDS="7 8"
 export -n CONTAIN_CLOSE_FDS CONTAIN_HOLD_FDS
 if $placed; then
   contain_start -g "$GRACE" taskset -c -- "$cpus" "$@"
