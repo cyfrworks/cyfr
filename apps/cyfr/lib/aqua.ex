@@ -9,9 +9,9 @@ defmodule Aqua do
   - `Aqua.Runner` — one process per thread; every send is admitted
     and accepted through it, and it owns the turns' lifecycle.
   - `Aqua.Loop` — one turn, run by the process that holds its root: the
-    model rounds, the dispatch, and each call decided under its member's
-    mode (`Aqua.Loop.Turn`, `Aqua.Loop.Binding`, `Aqua.Loop.Request`,
-    `Aqua.Loop.Planner`, `Aqua.Loop.Policy`).
+    model rounds, the dispatch, and each call decided (`Aqua.Loop.Turn`,
+    `Aqua.Loop.Binding`, `Aqua.Loop.Request`, `Aqua.Loop.Planner`,
+    `Aqua.Loop.Policy`).
   - `Aqua.Crew` — the crew index, the soul's hand-off to a crew member,
     worked in a child thread of the room, and the delivery of requests
     and replies.
@@ -78,18 +78,14 @@ defmodule Aqua do
   @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
   defdelegate model_status(ctx, agents), to: Models
 
-  @doc """
-  The members whose brain CYFR cannot keep read-only, each with its
-  sentence. See `Aqua.Models.read_only_unheld/2`.
-  """
-  @spec read_only_unheld(Context.t(), [map()]) :: %{String.t() => String.t()}
-  defdelegate read_only_unheld(ctx, members), to: Models
-
   @doc "The options an agent's brain declares. See `Aqua.Models.brain_options/2`."
   @spec brain_options(Context.t(), map()) :: {:ok, [map()]} | {:error, term()}
   defdelegate brain_options(ctx, agent), to: Models
 
-  @doc "The models and efforts a program brain's program lists. See `Aqua.Models.program_listing/2`."
+  @doc """
+  The models, efforts and access choices a program brain's program lists.
+  See `Aqua.Models.program_listing/2`.
+  """
   @spec program_listing(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   defdelegate program_listing(ctx, agent), to: Models
 

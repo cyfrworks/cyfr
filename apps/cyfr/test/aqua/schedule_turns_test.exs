@@ -5,8 +5,8 @@ defmodule Aqua.ScheduleTurnsTest do
   @moduledoc """
   A schedule that holds a line for Aqua: who may make and change one, what
   its fire writes, the turn each fire becomes on the person's daily thread
-  current when it fires (what it may do with nobody present in each mode,
-  which day it joins), and the one end of its occurrence. The consumer is
+  current when it fires (what it may do with nobody present, which day it
+  joins), and the one end of its occurrence. The consumer is
   off in the suite (`:schedule_turns_enabled`), so each case drains by
   hand, which is what its wake-up and its tick do.
   """
@@ -243,17 +243,6 @@ defmodule Aqua.ScheduleTurnsTest do
     for %{kind: kind} = row <- Threads.messages(actor(ctx), thread_id),
         kind in ~w(text error system),
         do: Map.take(row, [:kind, :author, :sent_by, :content, :client_id, :turn_id])
-  end
-
-  # Aqua switched to read-only, as the Aqua page switches it: the crew
-  # member Aqua runs on, whose mode Aqua runs in.
-  defp read_only!(ctx) do
-    {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => Cyfr.Test.SeedBundle.seat_member(),
-        "mode" => "read-only"
-      })
   end
 
   # A fire of a new schedule whose turn reads the day's threads, keeps a
@@ -690,74 +679,12 @@ defmodule Aqua.ScheduleTurnsTest do
       assert %{state: "completed"} = ended!(ctx, late, "completed")
     end
 
-    test "in read-only, the write a fire's turn calls is refused in the read-only sentence, its read runs, and the turn goes on to its reply with nobody asked",
-         %{ctx: ctx} do
-      read_only!(ctx)
-      {id, occurrence, turn} = fire_keeping!(ctx)
-      said = Aqua.Loop.Policy.read_only_sentence("Aqua")
-      system = Prima.Author.system()
-
-      assert %{agent_mode: "read-only", error: nil, paused_at: nil} = turn
-
-      # The keep is refused before it dispatches, the sentence its result.
-      # Auto runs the same call (below): the mode alone refused it.
-      assert [read, refused] = steps(ctx, turn)
-
-      assert outcomes(ctx, turn) == [
-               %{tool: "threads", action: "list", outcome: "ok", error: nil},
-               %{tool: "notes", action: "keep", outcome: "denied", error: said}
-             ]
-
-      # The read's result holds what it read.
-      assert {:ok, %{content: listed}} = Tape.message(ctx, read.result_message_id)
-      assert listed =~ "count"
-
-      assert refused.started_at == nil
-      assert {:ok, %{content: content}} = Tape.message(ctx, refused.result_message_id)
-      assert content == said
-      assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
-
-      # The thread holds the line, the mode's sentence once and the reply:
-      # nothing waits on the person.
-      assert posts(ctx, turn.thread_id) == [
-               %{
-                 kind: "text",
-                 author: system,
-                 sent_by: "person",
-                 content: "look, then keep the plan",
-                 client_id: client_id(occurrence),
-                 turn_id: turn.id
-               },
-               %{
-                 kind: "system",
-                 author: system,
-                 sent_by: "aqua",
-                 content: said,
-                 client_id: "read-only:" <> turn.id,
-                 turn_id: turn.id
-               },
-               %{
-                 kind: "text",
-                 author: Prima.Author.agent(),
-                 sent_by: "aqua",
-                 content: "Done.",
-                 client_id: nil,
-                 turn_id: turn.id
-               }
-             ]
-
-      assert %{state: "completed", execution_id: root} = ended!(ctx, occurrence, "completed")
-      assert root == turn.root_execution_id
-      assert %{run_count: 1, last_error: nil} = row!(ctx, id)
-      assert {:ok, []} = Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
-    end
-
-    test "in auto, the same fire's turn keeps the note: its read and its write run, and the thread is told nothing of a mode",
+    test "a fire's turn keeps the note: its read and its write run, and the turn goes on to its reply with nobody asked",
          %{ctx: ctx} do
       {id, occurrence, turn} = fire_keeping!(ctx)
       system = Prima.Author.system()
 
-      assert %{agent_mode: "auto", error: nil, paused_at: nil} = turn
+      assert %{error: nil, paused_at: nil} = turn
 
       assert outcomes(ctx, turn) == [
                %{tool: "threads", action: "list", outcome: "ok", error: nil},

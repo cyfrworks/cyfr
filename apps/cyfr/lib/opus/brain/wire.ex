@@ -3,7 +3,7 @@
 
 defmodule Opus.Brain.Wire do
   @moduledoc """
-  The brain wire, version 2, the holder's side (`Opus.Brain`): one JSON
+  The brain wire, version 3, the holder's side (`Opus.Brain`): one JSON
   object per line over a brain driver's `run` session, commands from the
   holder and events from the driver. `tests/fixtures/brain_wire.json` binds
   this module and every driver's side (`apps/locus/keeper/internal/brainwire`,
@@ -21,7 +21,7 @@ defmodule Opus.Brain.Wire do
   read.
   """
 
-  @version 2
+  @version 3
   @max_line_bytes 1_048_576
   @max_id_bytes 256
   @max_list 1_000
@@ -30,9 +30,8 @@ defmodule Opus.Brain.Wire do
   @config %{
     "model" => :string,
     "effort" => :string,
-    "permission_mode" => :string,
-    "harness_tools" => :strings,
-    "read_only" => :boolean
+    "access" => :string,
+    "harness_tools" => :strings
   }
   @counts ~w(input_tokens output_tokens cache_read_tokens cache_write_tokens)
   @accountings ~w(complete partial unavailable)
@@ -103,7 +102,8 @@ defmodule Opus.Brain.Wire do
       {~w(t gen type message), ~w(work),
        %{"gen" => :count, "work" => :id, "type" => :error_type, "message" => :string}},
     "models" =>
-      {~w(t id models efforts), [], %{"id" => :id, "models" => :models, "efforts" => :strings}},
+      {~w(t id models efforts access), [],
+       %{"id" => :id, "models" => :models, "efforts" => :strings, "access" => :choices}},
     "forgot" => {~w(t id session), [], %{"id" => :id, "session" => :id}}
   }
 
@@ -250,7 +250,8 @@ defmodule Opus.Brain.Wire do
   defp of_type?(:strings, value), do: list?(value, &is_binary/1)
   defp of_type?(:content, value), do: list?(value, &block?/1)
   defp of_type?(:tools, value), do: list?(value, &tool?/1)
-  defp of_type?(:models, value), do: list?(value, &model?/1)
+  defp of_type?(:models, value), do: list?(value, &choice?/1)
+  defp of_type?(:choices, value), do: list?(value, &choice?/1)
   defp of_type?(:model_counts, value), do: list?(value, &model_counts?/1)
   defp of_type?(:phase, value), do: value in @phases
   defp of_type?(:error_type, value), do: value in @error_types
@@ -288,10 +289,11 @@ defmodule Opus.Brain.Wire do
 
   defp tool?(_tool), do: false
 
-  defp model?(%{"id" => id, "name" => name} = model) when map_size(model) == 2,
+  # A model or an access choice: its id and the name a person reads.
+  defp choice?(%{"id" => id, "name" => name} = choice) when map_size(choice) == 2,
     do: id?(id) and is_binary(name)
 
-  defp model?(_model), do: false
+  defp choice?(_choice), do: false
 
   defp model_counts?(%{"model" => model, "counts" => counts} = entry) when map_size(entry) == 2,
     do: id?(model) and of_type?(:counts, counts)

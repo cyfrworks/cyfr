@@ -9,8 +9,7 @@ defmodule Aqua.RunnerTest do
   cannot answer when its file is refused; one turn runs at a time, the
   sender's own line steers it and a line to a crew member or under
   another origin waits; a stop cuts the turn and drops the queue; a step
-  that does more than read runs at once on auto and is refused on
-  read-only, the thread told once, and neither pauses the turn; a page's
+  that does more than read runs at once and does not pause the turn; a page's
   call is a step of the turn that runs, waits with no step while the turn
   is paused around a launch and is a step of it once it runs again, and
   opens work of its own with no turn; a call whose request ended runs
@@ -194,17 +193,6 @@ defmodule Aqua.RunnerTest do
   # A script the model's runs and the fetches' runs play in turn.
   defp script_http!(items),
     do: start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: items})
-
-  # The soul switched between its modes, as the Aqua page switches it: the
-  # mode of the crew member it runs on.
-  defp mode!(ctx, mode) do
-    assert {:ok, %{updated: "claude"}} =
-             Compendium.Providers.Aqua.handle(ctx, %{
-               "action" => "update",
-               "name" => Cyfr.Test.SeedBundle.seat_member(),
-               "mode" => mode
-             })
-  end
 
   # The sender's line over the API: a turn of its own behind the running
   # one, never a steer of it, since a steer keeps its turn's origin.
@@ -920,15 +908,14 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, fresh)
   end
 
-  test "on auto a step that does more than read runs at once; on read-only it is refused, " <>
-         "the thread told once, and the turn goes on: neither pauses it",
+  test "a step that does more than read runs at once, and does not pause the turn",
        %{ctx: ctx, thread: thread} do
     script!([keep("c1", "first"), reply("kept it")])
 
     {:ok, %{turn_id: auto}} = Runner.send_message(ctx, thread.id, "@aqua keep it")
     assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     refute_received %ThreadEvent{kind: :turn_paused}
-    assert {:ok, %{status: "completed", agent_mode: "auto"}} = Tape.turn(ctx, auto)
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, auto)
 
     assert [
              model_step(ctx, auto, 1, nil),
@@ -938,48 +925,6 @@ defmodule Aqua.RunnerTest do
 
     assert {:ok, %{content: "x"}} = Aqua.Notes.read(ctx, "first")
     refute Enum.any?(rows!(ctx, thread.id), &(&1.kind == "system"))
-
-    # On read-only each such step is refused in the sentence, and the
-    # thread is told it once, after the first.
-    mode!(ctx, "read-only")
-    ScriptedWorker.script([keep("c2", "second"), keep("c3", "third"), reply("left them")])
-
-    {:ok, %{turn_id: refused}} = Runner.send_message(ctx, thread.id, "@aqua keep two")
-    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
-    refute_received %ThreadEvent{kind: :turn_paused}
-
-    assert {:ok, %{status: "completed", agent_mode: "read-only", root_execution_id: root}} =
-             Tape.turn(ctx, refused)
-
-    sentence = Aqua.Loop.Policy.read_only_sentence("Aqua")
-
-    assert [
-             model_step(ctx, refused, 1, nil),
-             call_step(ctx, refused, 2, "notes.keep", "c2", "denied", sentence),
-             model_step(ctx, refused, 3, nil),
-             call_step(ctx, refused, 4, "notes.keep", "c3", "denied", sentence),
-             model_step(ctx, refused, 5, "text")
-           ] == steps!(ctx, refused)
-
-    rows = rows!(ctx, thread.id)
-    [said] = for %{kind: "system"} = row <- rows, do: row
-    [first_refused | _] = for %{kind: "tool_result", turn_id: ^refused} = row <- rows, do: row.seq
-
-    assert said ==
-             row(thread, %{
-               seq: said.seq,
-               author: Prima.Author.system(),
-               kind: "system",
-               content: sentence,
-               execution_id: root,
-               turn_id: refused,
-               client_id: "read-only:" <> refused,
-               sent_by: "aqua"
-             })
-
-    assert said.seq == first_refused + 1
-    assert {:error, _} = Aqua.Notes.read(ctx, "second")
-    assert {:error, _} = Aqua.Notes.read(ctx, "third")
   end
 
   test "a runner that starts runs the accepted turn it finds and takes over the running one", %{
@@ -1033,7 +978,6 @@ defmodule Aqua.RunnerTest do
         consent_id: claim.authority.consent_id,
         agent_revision_digest: revision,
         agent_capability_digest: capability,
-        agent_mode: "auto",
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 

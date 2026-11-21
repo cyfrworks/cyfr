@@ -7,7 +7,7 @@ defmodule Aqua.AgentConfig do
   @moduledoc """
   The soul's and the crew's definitions, and the catalysts they run on,
   as a turn reads them. A crew member's `"tools"` are the soul's
-  (`Compendium.AquaAgent.under_soul/2`); its `"mode"` is its own.
+  (`Compendium.AquaAgent.under_soul/2`).
 
   `roster/1` reads the athanor's `aqua/` tree in-process through the
   `Compendium` facade — the same files the `aqua` tool serves, without the
@@ -30,7 +30,7 @@ defmodule Aqua.AgentConfig do
   The athanor's agents, read once: the soul first, then the crew by name,
   disabled ones dropped — each as the string-keyed map the `aqua` tool's
   `list` with `detail` answers (`"name"`, `"title"`, `"description"`,
-  `"avoid"`, `"type"`, `"mode"`, `"tools"`, `"catalyst_ref"`,
+  `"avoid"`, `"type"`, `"tools"`, `"catalyst_ref"`,
   `"program"`, `"model"`, `"options"`, and the soul's `"holder"`, who it
   runs on, `Compendium.AquaAgent.seated/2`); the soul's prompt, which no
   reader of the roster needs, is not in it.
@@ -94,7 +94,6 @@ defmodule Aqua.AgentConfig do
       "description" => agent.description,
       "avoid" => agent.avoid,
       "type" => Compendium.agent_type_of(agent),
-      "mode" => agent.mode,
       "tools" => agent.tools,
       "catalyst_ref" => agent.catalyst_ref,
       "program" => agent.program,

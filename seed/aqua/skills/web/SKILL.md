@@ -8,8 +8,8 @@ description: "Read a known URL directly — a page as Markdown, an API's respons
 How to read a known URL directly — read a page, fetch from an API,
 check a URL. Any URL works, including localhost and internal services.
 This only reads: a request that changes anything (POST, PUT, PATCH or
-DELETE) is no read, which a read-only member is refused and an auto one
-sends, so send one only when the job asks for it. Research that
+DELETE) is no read, and it is sent, so send one only when the job asks
+for it. Research that
 needs a search engine follows the `research` scroll.
 
 ## Working Style

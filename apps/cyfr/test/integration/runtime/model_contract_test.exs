@@ -525,7 +525,7 @@ defmodule Locus.Runtime.ModelContractTest do
 
     played = play(ctx, steps)
 
-    assert %{status: "completed", agent_mode: "auto"} = played.turn
+    assert %{status: "completed"} = played.turn
 
     assert [
              %{kind: "model", outcome: "ok"},

@@ -1066,7 +1066,7 @@ defmodule Sanctum.Catalog do
   Whether `tool.action` follows the person's own browser setting
   (`Prima.Operation`'s `follows_setting`): the browser tool's actions
   alone declare it, so with the setting off they are refused, and with it
-  on the member's mode decides them as any offered call. No other action,
+  on they are decided as any offered call. No other action,
   external or not, follows the setting.
   """
   @spec follows_setting?(String.t(), String.t()) :: boolean()

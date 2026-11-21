@@ -5,7 +5,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   @moduledoc """
   The soul and its crew. The soul has a prompt and the tools every crew
   member is offered too, and runs on the crew member its card names,
-  whose brain, model, options and mode it takes; while that member does
+  whose brain, model and options it takes; while that member does
   not stand, the card says why in the sentence Aqua's turn is refused
   with. Every member runs under the crew's one grant, Aqua's
   (`Compendium.AgentSource`): choosing Aqua's member, making a member or
@@ -14,16 +14,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   what to avoid, and no prompt: CYFR briefs it and the job says what to
   do. A crew member whose file still holds a prompt is
   refused, and the sentence that says what to change stands in place of
-  its card. Each of them has a mode,
-  read-only or auto, which decides what of its offered tools it runs; the
-  read-only choice is closed, with the reason beneath it, for a member
-  whose brain CYFR cannot keep read-only (`Aqua.read_only_unheld/2`).
+  its card.
   Each brain's models come from the model catalogue and its options from
   the brain's own `describe` (`Aqua.brain_options/2`), read the same way
   for the model picked on a setup row the page suggests on an API brain,
   whose efforts the row then offers; a brain that is a
-  program, named by its row's name, offers the models and efforts its
-  program lists (`Aqua.program_listing/2`) and no other brain, and its
+  program, named by its row's name, offers the models, efforts and
+  access choices its program lists (`Aqua.program_listing/2`) and no
+  other brain: its Access selection names the driver's choices in the
+  driver's words, closed while the driver offers one, and its
   card offers to install the program while the athanor has no row of
   that name, prefilled from the program brain's definition
   (`Opus.Programs.Definition.brains/0`), then to set it up, where
@@ -54,14 +53,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # included, from an event the templates never send.
   @editable_fields ~w(title description avoid)
 
-  # Each mode a member may be in, as its file spells it, with the words
-  # its choice on the card reads.
-  @modes [
-    {"read-only", "Read-only: runs only reads, then answers; every other call is refused"},
-    {"auto", "Auto: runs every tool it is offered, deleting included"}
-  ]
-  @mode_names Enum.map(@modes, &elem(&1, 0))
-
   @impl true
   def mount(socket) do
     {:ok,
@@ -80,7 +71,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      # the brain's provider: its options are read with the cards'.
      |> assign(:picked, %{})
      |> assign(:program_listings, %{})
-     |> assign(:unheld, %{})
      |> assign(:installing, nil)
      |> assign(:setting_up, nil)
      |> assign(:set_up_refused, %{})
@@ -177,14 +167,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # Make on a member the setup suggests for a connected brain
   # (`Aqua.crew_suggestion/1`): the member written once, under the name
   # the suggestion gives it (a second Make, or one after a reload, is
-  # refused as a member that exists), on that brain, with the model and
-  # the effort the person picked from the brain's own listing and what
+  # refused as a member that exists), on that brain, with the model, the
+  # effort and, on a program, the access the person picked from the
+  # brain's own listing and what
   # they wrote it is good at and should avoid. A member holds no grant of
-  # its own, so making one asks nothing. Its effort must be one the model
-  # submitted offers, checked as a turn checks the options a member sets
-  # (`Prima.Model.check_chat_request/2`): an effort another model offered,
-  # or one asked before the model's own efforts answered, writes nothing,
-  # and the row then shows that model's own choices.
+  # its own, so making one asks nothing. Its effort and access must be
+  # ones the brain offers, checked as a turn checks the options a member
+  # sets (`Prima.Model.check_chat_request/2`): an effort another model
+  # offered, an access its program does not list, or one asked before the
+  # brain's own choices answered, writes nothing, and the row then shows
+  # the brain's own choices.
   def handle_event("make_member", %{"brain" => brain, "model" => model} = params, socket)
       when is_binary(brain) and is_binary(model) and model != "" do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
@@ -207,7 +199,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {:noreply,
            socket
            |> pick(brain, model)
-           |> put_flash(:error, "That model does not offer the effort chosen — choose again.")}
+           |> put_flash(:error, "That brain does not offer what was chosen — choose again.")}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Make failed: #{error_message(reason)}")}
@@ -317,29 +309,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       end
     end)
   end
-
-  # A member's mode, the soul's or a crew member's: what of its offered
-  # tools it runs from its next turn on. Only the two modes are written;
-  # any other value is no edit.
-  def handle_event("editor_set_mode", %{"name" => name, "mode" => mode}, socket)
-      when mode in @mode_names do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case call_aqua(socket.assigns.context, %{
-             "action" => "update",
-             "name" => name,
-             "mode" => mode
-           }) do
-        {:ok, _} ->
-          send(self(), {:refresh, :agents})
-          {:noreply, socket}
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
-      end
-    end)
-  end
-
-  def handle_event("editor_set_mode", _params, socket), do: {:noreply, socket}
 
   # Offer one tool to the soul, or take it off: a `tool.action`, or the
   # provider's own `native_search`. The direction is read from the soul's
@@ -702,7 +671,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           "catalyst_ref" => g.catalyst_ref,
           "program" => g[:program],
           "options" => g[:options] || %{},
-          "mode" => g[:mode] || "auto",
           "tools" => g[:tools] || [],
           "disabled" => g.disabled == true,
           "member" => g[:member],
@@ -730,7 +698,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign(:crew, crew)
     |> assign(:refused, refused)
     |> assign(:model_status, status)
-    |> assign(:unheld, Aqua.read_only_unheld(ctx, listed))
     |> load_brain_options(agents, status)
     |> ensure_tool_actions_loaded()
     |> assign(:browser, browser_status(ctx))
@@ -787,9 +754,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # catalyst run each, so read off the page's process and delivered for
   # the focus they were read under — and, under `{:picked, provider,
   # model}`, those of each model picked on a setup row suggested on an API
-  # brain. A program brain's models and efforts are its program's own
-  # listing, which the page asks once for each program
-  # (`program_listings`), its efforts the one option it offers. A brain
+  # brain. A program brain's models, efforts and access choices are its
+  # program's own listing, which the page asks once for each program
+  # (`program_listings`). A brain
   # that is not ready, or whose `describe` or listing does not answer,
   # offers none.
   defp load_brain_options(socket, agents, status) do
@@ -861,6 +828,22 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp efforts_option([]), do: []
   defp efforts_option(efforts), do: [%{"name" => "effort", "kind" => "enum", "values" => efforts}]
+
+  # A program's access as the option its member's file sets, its values
+  # the ids of the choices its driver listed.
+  defp access_option([]), do: []
+
+  defp access_option(access),
+    do: [%{"name" => "access", "kind" => "enum", "values" => Enum.map(access, & &1.id)}]
+
+  # The access choices a program brain's card offers, as its listing gave
+  # them; none for a catalyst's, or a listing that did not answer.
+  defp card_access(listings, agent) do
+    case listings[program_of(agent)] do
+      {:ok, %{access: access}} -> access
+      _unlisted -> []
+    end
+  end
 
   # The program offers a card shows, a program brain's, from the row of
   # its name as its status reads it: none of that name is offered to
@@ -936,14 +919,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp brain_title(agent, _crew, _soul?), do: agent["title"] || agent["name"]
 
-  # Aqua runs in its member's mode: a member in read-only whose brain CYFR
-  # cannot keep read-only leaves Aqua unable to run, in the member's
-  # sentence (`Aqua.read_only_unheld/2`).
-  defp soul_unheld(unheld, %{"mode" => "read-only", "member" => member}) when is_binary(member),
-    do: Map.get(unheld, member)
-
-  defp soul_unheld(_unheld, _soul), do: nil
-
   # A brain that is a program runs on that program's own sign-in, bound to
   # the one row named as its program, so its card offers no key to change
   # to.
@@ -1003,10 +978,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # Helpers
   # ============================================================================
 
-  # The option as the brain's `describe` declared it on this page's read.
+  # The option as this page read its declaration: a catalyst's from the
+  # brain's `describe`, a program's from its program's listing, its
+  # access among them.
   defp declared_option(socket, name, option) do
+    agent = Enum.find(socket.assigns.agents, %{"name" => name}, &(&1["name"] == name))
+    listings = socket.assigns.program_listings
+
     socket.assigns.brain_options
-    |> Map.get(name, [])
+    |> card_options(listings, agent)
+    |> Kernel.++(access_option(card_access(listings, agent)))
     |> Enum.find(&(&1["name"] == option))
   end
 
@@ -1045,7 +1026,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # Whether a Make's options are ones the model it names offers: on an API
   # brain those its `describe` declared for that model, as the row read
-  # them, none while unread; on a program brain its listing's efforts.
+  # them, none while unread; on a program brain its listing's efforts and
+  # access.
   defp offered(options, brain, model, socket) do
     case Prima.Model.check_chat_request(%{"options" => options}, declared(brain, model, socket)) do
       :ok -> :ok
@@ -1058,8 +1040,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp declared("program:" <> name, _model, socket) do
     case socket.assigns.program_listings[name] do
-      {:ok, %{efforts: efforts}} -> efforts_option(efforts)
-      _unlisted -> []
+      {:ok, %{efforts: efforts, access: access}} ->
+        efforts_option(efforts) ++ access_option(access)
+
+      _unlisted ->
+        []
     end
   end
 
@@ -1101,20 +1086,25 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp provider_of("catalyst:" <> provider), do: provider
   defp provider_of(_brain), do: nil
 
-  # A member is its brain, its model and its effort together, with what
-  # it is good at and what to avoid as the person wrote them, or nothing:
-  # a member with neither said is a member all the same.
+  # A member is its brain, its model, its effort and, on a program, its
+  # access together, with what it is good at and what to avoid as the
+  # person wrote them, or nothing: a member with neither said is a member
+  # all the same.
   defp member_args(suggested, params) do
-    effort = String.trim(params["effort"] || "")
+    options =
+      for option <- ["effort", "access"],
+          value = String.trim(params[option] || ""),
+          value != "",
+          into: %{},
+          do: {option, value}
 
     %{
       "name" => suggested.name,
       "title" => suggested.title,
       "description" => String.trim(params["description"] || ""),
       "avoid" => String.trim(params["avoid"] || ""),
-      "mode" => suggested.mode,
       "model" => params["model"],
-      "options" => if(effort == "", do: %{}, else: %{"effort" => effort})
+      "options" => options
     }
   end
 
@@ -1177,10 +1167,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # How many of a kind's rows the soul's tools name.
   defp count_in_list(tools, rows),
     do: Enum.count(rows, fn {t, a} -> "#{t}.#{a}" in tools end)
-
-  # What each mode does with a kind: a read-only member runs reads alone.
-  defp kind_hint(:read), do: "runs in either mode"
-  defp kind_hint(_kind), do: "runs only in auto"
 
   # Kind sections in fixed display order, with their visual treatment:
   # read = calm green, write = near-neutral slate, execute = amber,
@@ -1278,7 +1264,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         signs_in?={signs_in?(@soul)}
         program_models={listing_models(@program_listings, @soul)}
         connected={connected?(Map.get(@model_status, @soul["name"]), @soul, @program_listings)}
-        unheld={soul_unheld(@unheld, @soul)}
         browser={@browser}
         crew={@crew}
       />
@@ -1301,7 +1286,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           signs_in?={signs_in?(member)}
           program_models={listing_models(@program_listings, member)}
           connected={connected?(Map.get(@model_status, member["name"]), member, @program_listings)}
-          unheld={Map.get(@unheld, member["name"])}
+          access={card_access(@program_listings, member)}
         />
       </div>
 
@@ -1443,7 +1428,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :signs_in?, :boolean, default: false
   attr :program_models, :list, default: nil
   attr :connected, :boolean, default: false
-  attr :unheld, :string, default: nil
+  attr :access, :list, default: []
   attr :browser, :map, default: nil
   attr :crew, :list, default: []
 
@@ -1452,7 +1437,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       assigns
       |> assign(:current_provider, agent_provider_for_select(assigns.agent))
       |> assign(:tools, assigns.agent["tools"] || [])
-      |> assign(:mode, assigns.agent["mode"] || "auto")
       |> assign(:removal, removal(assigns.agent))
       |> assign(:disabled?, assigns.agent["disabled"] == true)
       |> assign(:program, program_of(assigns.agent))
@@ -1620,10 +1604,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </span>
       </div>
 
-      <%!-- Aqua runs on a crew member, whose brain, model, options and
-           mode it takes: the member's own card sets those. While the
-           member does not stand, the sentence Aqua's turn is refused
-           with says why. --%>
+      <%!-- Aqua runs on a crew member, whose brain, model and options
+           it takes: the member's own card sets those. While the member
+           does not stand, the sentence Aqua's turn is refused with says
+           why. --%>
       <form
         :if={@is_soul}
         id={"aqua-card-#{@agent["name"]}-member"}
@@ -1653,9 +1637,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           class="mt-1 text-[11px] text-amber-300"
         >
           {@agent["member_refusal"]}
-        </p>
-        <p :if={@unheld} data-test="read-only-unheld" class="mt-1 text-[11px] text-amber-300">
-          {@unheld}
         </p>
       </form>
 
@@ -1850,45 +1831,26 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </div>
       </div>
 
-      <%!-- The member's mode. A brain CYFR cannot keep read-only closes
-            the read-only choice, and a file set to it by hand shows it
-            chosen with the same reason, since its turns are refused. --%>
-      <div
-        :if={not @is_soul}
-        id={"aqua-card-#{@agent["name"]}-mode"}
-        role="radiogroup"
-        aria-label="Mode"
+      <%!-- A program brain's access: its driver's choices, in its words. --%>
+      <form
+        :if={@access != []}
+        id={"aqua-card-#{@agent["name"]}-access"}
+        phx-change="editor_set_option"
+        phx-auto-recover="ignore"
+        phx-target={@myself}
       >
-        <p class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Mode</p>
-        <div class="flex flex-col md:flex-row gap-2">
-          <button
-            :for={{mode, words} <- modes()}
-            type="button"
-            role="radio"
-            aria-checked={to_string(@mode == mode)}
-            phx-click="editor_set_mode"
-            phx-target={@myself}
-            phx-value-name={@agent["name"]}
-            phx-value-mode={mode}
-            disabled={mode == "read-only" and @unheld != nil}
-            class={[
-              "flex-1 rounded border px-2 py-1 text-left text-[11px] disabled:cursor-not-allowed disabled:opacity-60",
-              if(@mode == mode,
-                do: "border-blue-500 bg-blue-950/40 text-gray-100",
-                else: "border-gray-700 bg-gray-950 text-gray-400 hover:border-gray-500"
-              )
-            ]}
-          >
-            {words}
-          </button>
-        </div>
-        <p :if={@unheld} data-test="read-only-unheld" class="mt-1 text-[11px] text-amber-300">
-          {@unheld}
-        </p>
-      </div>
+        <input type="hidden" name="name" value={@agent["name"]} />
+        <input type="hidden" name="option" value="access" />
+        <.access_select
+          access={@access}
+          value={Map.get(@agent["options"] || %{}, "access")}
+          name="value"
+          label={"Access for " <> (@agent["title"] || @agent["name"])}
+        />
+      </form>
 
       <p :if={!@is_soul} class="text-[11px] text-gray-500">
-        Offered the soul's tools on every job; its mode decides what of them it runs.
+        Offered the soul's tools on every job.
       </p>
 
       <div :if={@is_soul}>
@@ -1896,7 +1858,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           <p class="block text-[10px] uppercase tracking-wider text-gray-500">
             Capabilities
             <span class="normal-case text-gray-600">
-              — the tools Aqua and every crew member are offered; each one's mode decides which of them it runs.
+              — the tools Aqua and every crew member are offered.
             </span>
           </p>
         </div>
@@ -1916,7 +1878,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                   ]}>
                     {kind_label}
                   </span>
-                  <span class="text-[10px] text-gray-600">{kind_hint(kind)}</span>
                   <span class="ml-auto text-[10px] text-gray-600">
                     {count_in_list(@tools, rows)}/{length(rows)}
                   </span>
@@ -2091,5 +2052,37 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp default_label(%{"default" => default}), do: " (#{default})"
   defp default_label(_option), do: ""
 
-  defp modes, do: @modes
+  @doc """
+  A program brain's Access selection: the choices its driver listed
+  (`Aqua.program_listing/2`), each in the driver's own words, the
+  member's stored one chosen, else the first, the driver's own default.
+  While the driver offers one choice the selection is closed and names
+  it, and a hidden field carries it, so a form sends what it shows.
+  """
+  attr :access, :list, required: true
+  attr :value, :string, default: nil
+  attr :name, :string, required: true
+  attr :label, :string, required: true
+
+  def access_select(assigns) do
+    assigns = assign(assigns, :closed?, match?([_one], assigns.access))
+
+    ~H"""
+    <label class="flex items-center gap-2 text-[11px] text-gray-400">
+      <span class="text-[10px] uppercase tracking-wider text-gray-500">Access</span>
+      <select
+        name={@name}
+        aria-label={@label}
+        disabled={@closed?}
+        data-test="access"
+        class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-70"
+      >
+        <option :for={choice <- @access} value={choice.id} selected={choice.id == @value}>
+          {choice.name}
+        </option>
+      </select>
+      <input :if={@closed?} type="hidden" name={@name} value={hd(@access).id} />
+    </label>
+    """
+  end
 end

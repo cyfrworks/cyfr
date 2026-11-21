@@ -28,15 +28,21 @@ import (
 // appServer is the harness's command line's own argument.
 const appServer = "app-server"
 
-// How a thread runs inside the keeper's box (the user's ruling D2): the box
-// is the only boundary. Codex's own sandbox is off, since it would nest a
+// threadPolicy is how a thread runs: Codex's own sandbox and approval
+// policy, given on `thread/start` and `thread/resume`.
+type threadPolicy struct{ sandbox, approvalPolicy string }
+
+// accessChoices are the access choices the driver lists, each with the
+// policy a thread starts and resumes under in it; a start naming none runs
+// in the first. Full access is the keeper's box as the only boundary (the
+// user's ruling D2): Codex's own sandbox is off, since it would nest a
 // second sandbox inside the box's and its namespaces are not the box's to
 // grant, and it asks for nothing: its commands and patches run as the box
 // lets them, and are shown by name only.
-const (
-	approvalPolicy = "never"
-	sandbox        = "danger-full-access"
-)
+var accessChoices = []brainwire.Access[threadPolicy]{
+	{Choice: brainwire.Choice{ID: "full-access", Name: "Full access, no approvals"},
+		Native: threadPolicy{sandbox: "danger-full-access", approvalPolicy: "never"}},
+}
 
 // subAgentCall is the type of a thread's item that starts a sub-agent, a
 // thread of its own, or speaks to one.
@@ -113,11 +119,12 @@ func dynamicTools(tools []brainwire.Tool) ([]map[string]any, error) {
 	return out, nil
 }
 
-// threadStart starts a new thread under the box's policy, with CYFR's system
-// prompt as developer instructions beside Codex's own, CYFR's tools as its
-// dynamic tools, which the thread keeps for its life, and the start's model.
-func threadStart(id string, system string, tools []map[string]any, config brainwire.Config) []byte {
-	params := map[string]any{"approvalPolicy": approvalPolicy, "sandbox": sandbox, "dynamicTools": tools}
+// threadStart starts a new thread under its access's policy, with CYFR's
+// system prompt as developer instructions beside Codex's own, CYFR's tools
+// as its dynamic tools, which the thread keeps for its life, and the
+// start's model.
+func threadStart(id string, system string, tools []map[string]any, config brainwire.Config, policy threadPolicy) []byte {
+	params := map[string]any{"approvalPolicy": policy.approvalPolicy, "sandbox": policy.sandbox, "dynamicTools": tools}
 	if system != "" {
 		params["developerInstructions"] = system
 	}
@@ -128,9 +135,9 @@ func threadStart(id string, system string, tools []map[string]any, config brainw
 }
 
 // threadResume resumes the thread the folder holds, which keeps the dynamic
-// tools it was started with.
-func threadResume(id, thread, system string, config brainwire.Config) []byte {
-	params := map[string]any{"threadId": thread, "approvalPolicy": approvalPolicy, "sandbox": sandbox, "excludeTurns": true}
+// tools it was started with, under its access's policy.
+func threadResume(id, thread, system string, config brainwire.Config, policy threadPolicy) []byte {
+	params := map[string]any{"threadId": thread, "approvalPolicy": policy.approvalPolicy, "sandbox": policy.sandbox, "excludeTurns": true}
 	if system != "" {
 		params["developerInstructions"] = system
 	}

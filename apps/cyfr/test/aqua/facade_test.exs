@@ -30,7 +30,6 @@ defmodule Aqua.FacadeTest do
     program_listing: 2,
     providers: 1,
     put_time_zone: 2,
-    read_only_unheld: 2,
     room_excerpt: 2,
     roster: 1,
     stale_consent_refs: 1,

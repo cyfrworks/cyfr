@@ -28,15 +28,11 @@
 // the stub (`mcp_set_servers`), a `post` writes a user line under a uuid
 // derived from the post's id, an `answer` allows the ask it names with
 // CYFR's answer in its input; each is `accepted` once the harness's input
-// took it. The harness's own tools run in its box: their asks are allowed
-// and they are shown by name. A read-only start (`config.read_only`) runs
-// the harness with only its own reading tools (Read, Grep, Glob), in its
-// default permission mode, loading no settings file of the user's or the
-// project's, and denies every ask of its own tools; one that also names a
-// permission mode or the harness's tools, or whose row command carries an
-// argument of the harness's own, ends the driver. Any start naming a
-// permission mode but default, acceptEdits or plan, those under which the
-// harness asks before it runs one of CYFR's tools, ends the driver too.
+// took it. A start runs the harness in the access it names, one of those
+// `models` lists (accessChoices: Default mode, the harness's default
+// permission mode), or in the first when it names none; a start naming
+// another ends the driver before anything runs. The harness's own tools
+// run in its box: their asks are allowed and they are shown by name.
 // The driver keeps no account of calls: which post a result answers is
 // the result's own naming of the posts' uuids, which `idle` passes on.
 //

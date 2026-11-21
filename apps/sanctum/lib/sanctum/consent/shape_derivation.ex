@@ -415,7 +415,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   names, never by a pattern (`*`, `feed.*`, `layout.*` or any other),
   whatever the component's type. A component other than an agent may not
   name one (`Prima.Manifest.Caps`), so no other component's grant holds
-  one; an agent that names one exactly keeps it, and the member's mode
+  one; an agent that names one exactly keeps it, and the turn's policy
   decides whether it runs.
   """
   @spec expand_tools([String.t()]) :: [String.t()]

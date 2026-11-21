@@ -52,9 +52,11 @@ defmodule Aqua.ScheduleTurns do
 
   ## What the turn may do
 
-  What any turn of Aqua's mode may do (`Aqua.Loop.Policy`): in auto
-  every tool Aqua is offered, in read-only its reads alone. A refused
-  call is no question, so the turn goes on without it (`Aqua.Loop`).
+  What any turn of Aqua's may do (`Aqua.Loop.Policy`): every tool Aqua is
+  offered, each call decided by the gate, which refuses a schedule's turn
+  what only the person's own session may do, writing a scroll among it.
+  A refused call is no question, so the turn goes on without it
+  (`Aqua.Loop`).
 
   ## Its end
 

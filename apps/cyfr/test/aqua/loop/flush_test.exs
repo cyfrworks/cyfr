@@ -5,7 +5,7 @@ defmodule Aqua.Loop.FlushTest do
   @moduledoc """
   The note flush before a compaction: one silent request offering
   `notes.keep` alone, made only where a kept note would run (the member
-  is offered `notes.keep` and is in `auto`), whose unknown outcomes are
+  is offered `notes.keep`), whose unknown outcomes are
   recorded without a replay and without restricting the turn.
 
   The scripted model lists a small window, so a large message fills it: the
@@ -71,7 +71,7 @@ defmodule Aqua.Loop.FlushTest do
     thread
   end
 
-  test "in auto and offered notes.keep, the model keeps a note before the summary, and says nothing",
+  test "offered notes.keep, the model keeps a note before the summary, and says nothing",
        %{ctx: ctx, thread: thread} do
     turn = accept_large!(ctx, thread)
 
@@ -169,15 +169,31 @@ defmodule Aqua.Loop.FlushTest do
     refute kept =~ "ROOM-ONLY-LINE"
   end
 
-  # It differs from an auto member offered notes.keep, whose flush runs
-  # above, in one thing alone: its mode.
-  test "a read-only member makes no flush request and keeps no note, and the summary still lands",
+  # It differs from a member offered notes.keep, whose flush runs above,
+  # in one thing alone: its offered set.
+  test "a member not offered notes.keep makes no flush request and keeps no note, and the " <>
+         "summary still lands",
        %{ctx: ctx, thread: thread} do
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
-        "name" => Cyfr.Test.SeedBundle.seat_member(),
-        "mode" => "read-only"
+        "name" => "aqua",
+        "tools_remove" => ["notes.keep"]
+      })
+
+    # The crew's grant walked again for the shape that moved, as a person
+    # grants it.
+    decisions = %{ref: @soul, selections: [%{dep: @model, label: "default"}]}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @soul})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
       })
 
     turn = accept_large!(ctx, thread)

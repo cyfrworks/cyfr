@@ -16,7 +16,7 @@ defmodule Aqua.Providers.Browser do
   turn's chain and nowhere else (`planes: [:in_chain]`), only for a
   person's own sign-in (`consent: :interactive`), and each follows the
   person's browser setting (`follows_setting`): with it on, every one
-  runs as the member's mode decides; with it off, every one is
+  is decided as any offered call; with it off, every one is
   refused here before any Chrome starts, and Aqua says the browser is
   turned off. `read` and `screenshot` are reads, `close` a write, and the
   rest reach the outside.

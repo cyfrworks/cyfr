@@ -249,12 +249,8 @@ defmodule PrismWeb.AquaSetupTest do
 
     # Made, it asks nothing, holds no grant of its own and is ready, since
     # its brain is connected.
-    assert {:ok,
-            %{
-              "catalyst_ref" => "catalyst:local.chat-fixture",
-              "model" => ^model,
-              "mode" => "auto"
-            }} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => member})
+    assert {:ok, %{"catalyst_ref" => "catalyst:local.chat-fixture", "model" => ^model}} =
+             Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => member})
 
     wait_until(fn -> has_element?(view, made, "ready.") end, 10_000, "the member ready")
     refute has_element?(view, sheet)

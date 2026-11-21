@@ -8,7 +8,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf16"
@@ -57,76 +56,19 @@ const (
 	maxResultChars = 50000
 )
 
-// readOnlyArgv is what a read-only start adds. Its own tools are only the
-// three that read the folder (`--tools` removes every other built-in tool
-// from the session, so none that writes, runs a command, switches the
-// permission mode or starts a helper is there to call); CYFR's tools are
-// no built-in ones and still reach the driver as asks. The harness runs in
-// its default permission mode, every ask denied (readOnlyDenial), and with
-// no settings file of the user's or the project's, local ones included, so
-// no hook or allow rule of theirs applies. The folder is the box's kept
-// one, which the person, or an auto member's session on the same row, may
-// have written; the sign-in is no setting and stays. The harness runs with
-// these and the driver's other arguments alone: a row whose command
-// carries an argument of the harness's own (harnessOptions) is refused,
-// since one such as --settings puts back what these take away. A
-// permission mode alone is not it: plan mode on 2.1.323 runs a Bash
-// command that writes without asking, and a default-mode session enters
-// plan mode by its own EnterPlanMode, unasked. Not vetted: the row's
-// environment, the person's, which the launcher and the harness inherit;
-// a plugin or other switch set there is not proved to keep a read-only
-// start read-only.
-var readOnlyArgv = []string{"--permission-mode", "default", "--setting-sources", "", "--tools", strings.Join(readOnlyTools, ",")}
-
-// readOnlyTools are a read-only start's own tools.
-var readOnlyTools = []string{"Read", "Grep", "Glob"}
-
-// permissionModes are the permission modes a start may name
-// (`--permission-mode`), which the harness lists nowhere: the ones under
-// which it still asks the driver before it runs one of CYFR's tools.
-// Under `bypassPermissions`, `dontAsk` or `auto` it would call the stub
-// unasked, which answers such a call as an error, so every call of CYFR's
-// would fail.
-var permissionModes = map[string]bool{"default": true, "acceptEdits": true, "plan": true}
-
-// unaskingMode is what the person reads when a start names any other mode.
-const unaskingMode = "The crew member's permission mode is not one CYFR runs Claude Code in (default, acceptEdits or plan), so nothing ran."
-
-// harnessOptions are the arguments of the row's command that are the
-// harness's own, not its launcher's. The command is either the program's
-// name alone, and then every argument after it is the harness's; or
-// `npx`, any of its own `-y` and `--yes`, and the package, and then every
-// argument after the package is the harness's; with any other flag of
-// npx's before the package (`-c` and `-p` choose what runs), or no
-// package at all, a bare `npx` included, the whole command counts. A
-// read-only start runs with the driver's arguments alone, so it refuses a
-// command for which this is not empty: a list of options to strip would
-// name only the ones known.
-func harnessOptions(command []string) []string {
-	if len(command) == 0 {
-		return nil
-	}
-	if filepath.Base(command[0]) != "npx" {
-		return command[1:]
-	}
-	rest := command[1:]
-	for len(rest) > 0 && (rest[0] == "-y" || rest[0] == "--yes") {
-		rest = rest[1:]
-	}
-	if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
-		return command
-	}
-	return rest[1:]
+// accessChoices are the access choices the driver lists, each with the
+// arguments Claude Code starts and resumes with in it; a start naming none
+// runs in the first. Default mode is the harness's default permission
+// mode: it asks the driver before each of its own tools, which the driver
+// allows, and before each of CYFR's, which CYFR's gate decides.
+var accessChoices = []brainwire.Access[[]string]{
+	{Choice: brainwire.Choice{ID: "default", Name: "Default mode"}, Native: []string{"--permission-mode", "default"}},
 }
 
-// readOnlyDenial is what the harness reads when a read-only start denies
-// one of its own tools.
-const readOnlyDenial = "This crew member is read-only."
-
 // harnessArgv is the harness's command line: its own command, then the
-// base, the session and the start's configuration, a read-only start's
-// last, since it names no permission mode or tools of its own (start).
-func harnessArgv(command []string, session string, resume bool, config brainwire.Config) []string {
+// base, the session, the start's model and effort, its access's arguments
+// and the harness's own tools.
+func harnessArgv(command []string, session string, resume bool, config brainwire.Config, access []string) []string {
 	argv := append([]string{}, command...)
 	argv = append(argv, baseArgv...)
 	if resume {
@@ -137,15 +79,12 @@ func harnessArgv(command []string, session string, resume bool, config brainwire
 	for _, pair := range [][2]string{
 		{"--model", config.Model},
 		{"--effort", config.Effort},
-		{"--permission-mode", config.PermissionMode},
 	} {
 		if pair[1] != "" {
 			argv = append(argv, pair[0], pair[1])
 		}
 	}
-	if config.ReadOnly {
-		argv = append(argv, readOnlyArgv...)
-	}
+	argv = append(argv, access...)
 	if config.HarnessTools != nil {
 		argv = append(argv, "--tools", strings.Join(*config.HarnessTools, ","))
 	}
@@ -219,20 +158,6 @@ func allowLine(id string, input any) []byte {
 			"subtype":    "success",
 			"request_id": id,
 			"response":   map[string]any{"behavior": "allow", "updatedInput": input},
-		},
-	})
-	return line
-}
-
-// denyLine denies a permission ask of the harness's, which reads `message`
-// as the reason.
-func denyLine(id, message string) []byte {
-	line, _ := brainwire.Marshal(map[string]any{
-		"type": "control_response",
-		"response": map[string]any{
-			"subtype":    "success",
-			"request_id": id,
-			"response":   map[string]any{"behavior": "deny", "message": message},
 		},
 	})
 	return line

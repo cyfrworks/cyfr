@@ -73,6 +73,7 @@ type driver struct {
 	session  string
 	model    string
 	config   brainwire.Config
+	policy   threadPolicy
 	signedIn bool
 	requests int
 	// others is set from the first sign of a thread not the session's (a
@@ -136,11 +137,10 @@ func (d *driver) Command(t string, members map[string]json.RawMessage) error {
 }
 
 // start starts Codex's app-server, and in it a new thread with the start's
-// tools or the thread the start names. A configuration Codex cannot honour
-// ends the driver: Codex has no permission mode of CYFR's to take, since
-// the box is its one boundary, and its own tools have no switch; nor can
-// it run read-only, since its read-only sandbox needs the namespaces the
-// box refuses, so a read-only start starts nothing.
+// tools or the thread the start names, under the policy of the start's
+// access. A configuration Codex cannot honour ends the driver: an access
+// the driver does not list, and the harness's own tools, which Codex has
+// no switch for.
 func (d *driver) start(members map[string]json.RawMessage, str func(string) string) error {
 	if d.h != nil {
 		return &brainwire.Fatal{Status: 2, Reason: "a start while the harness runs"}
@@ -156,11 +156,9 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if raw, ok := members["tools"]; ok {
 		_ = json.Unmarshal(raw, &tools)
 	}
-	if config.ReadOnly {
-		return &brainwire.Fatal{Status: 2, Reason: "Codex cannot run read-only inside CYFR, so nothing ran."}
-	}
-	if config.PermissionMode != "" {
-		return &brainwire.Fatal{Status: 2, Reason: "a start names a permission mode, which Codex in its box does not take"}
+	access, listed := brainwire.Choose(accessChoices, config.Access)
+	if !listed {
+		return &brainwire.Fatal{Status: 2, Reason: unlistedAccess}
 	}
 	if config.HarnessTools != nil {
 		return &brainwire.Fatal{Status: 2, Reason: "a start names the harness's own tools, which Codex has no switch for"}
@@ -185,10 +183,15 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	d.h = h
 	d.config = config
+	d.policy = access.Native
 	d.starting = &starting{resume: resume, session: session, pending: pending, system: str("system"), tools: dynamic, stage: "initialize"}
 	d.starting.request = d.nextID("initialize")
 	return d.h.Write(initializeLine(d.starting.request))
 }
+
+// unlistedAccess ends the driver on a start naming an access it does not
+// list.
+const unlistedAccess = "The crew member's access is not one CYFR runs OpenAI Codex with, so nothing ran."
 
 // work begins a work: Codex takes its tools at a thread's start only, and a
 // resumed thread keeps its own, so nothing is written to it. A tool the
@@ -294,7 +297,7 @@ func (d *driver) listed(id string, listing []json.RawMessage) error {
 			}
 		}
 	}
-	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", models).Set("efforts", efforts))
+	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", models).Set("efforts", efforts).Set("access", accessChoices))
 }
 
 // ---------------------------------------------------------------------------
@@ -440,9 +443,9 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		s.stage = "thread"
 		s.request = d.nextID("thread")
 		if s.resume {
-			return d.h.Write(threadResume(s.request, s.session, s.system, d.config))
+			return d.h.Write(threadResume(s.request, s.session, s.system, d.config, d.policy))
 		}
-		return d.h.Write(threadStart(s.request, s.system, s.tools, d.config))
+		return d.h.Write(threadStart(s.request, s.system, s.tools, d.config, d.policy))
 	case "thread":
 		if m.Error != nil {
 			// A thread the folder holds no rollout of, or an empty one, is

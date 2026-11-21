@@ -52,7 +52,6 @@ defmodule Arca.TurnFenceRaceTest do
       unboxed(fn ->
         TurnStorage.start(actor, turn.id, %{
           fence: turn.fence,
-          agent_mode: "auto",
           recovery_limit: 3
         })
       end)

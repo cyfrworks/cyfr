@@ -5,8 +5,8 @@ defmodule Aqua.Loop.CatalogReadThreadsTest do
   @moduledoc """
   A catalog call's answer joins its turn's read threads as its operation
   declares them, read under the caller's actor, and one that declares
-  none joins nothing; and a registry mutation runs under the soul's
-  `auto` and is refused under its `read-only`.
+  none joins nothing; and a registry mutation the soul is offered is
+  made.
 
   The loop and the gate are real; the model is scripted and the registry
   is an HTTP stub.
@@ -185,43 +185,18 @@ defmodule Aqua.Loop.CatalogReadThreadsTest do
           {"tokens_revoke", %{"slug" => "acme", "token_id" => "tok_1"}},
           {"report", %{"category" => "spam", "details" => "junk", "target_namespace" => "acme"}}
         ] do
-      test "registry.#{action} runs in auto and is refused in read-only", %{
-        ctx: ctx,
-        thread: thread
-      } do
+      test "registry.#{action} the soul is offered is made", %{ctx: ctx, thread: thread} do
         action = unquote(action)
         args = unquote(Macro.escape(args))
-        sentence = Aqua.Loop.Policy.read_only_sentence("Aqua")
         soul!(ctx, %{"tools_add" => ["registry.#{action}"]})
+        script!([calls([{"c1", "registry.#{action}", args}]), reply("done")])
 
-        script!([
-          calls([{"c1", "registry.#{action}", args}]),
-          reply("done"),
-          calls([{"c2", "registry.#{action}", args}]),
-          reply("refused")
-        ])
-
-        # In auto the call is made: no push token is held here, so the
-        # registry is never reached and the handler answers the refusal.
+        # The call is made: no push token is held here, so the registry is
+        # never reached and the handler answers the refusal.
         ran = accept!(ctx, thread, "@aqua do it")
         assert :completed = run(ctx, ran)
         assert %{outcome: "error", content: content} = step_result(ctx, ran, "c1")
         assert content =~ "no push token"
-
-        # In read-only it does more than read, and is refused before the
-        # handler is asked. Aqua runs in the mode of the crew member it runs
-        # on (`Cyfr.Test.SeedBundle.seat!/2`).
-        {:ok, _} =
-          Cyfr.Test.AquaTool.call(ctx, %{
-            "action" => "update",
-            "name" => Cyfr.Test.SeedBundle.seat_member(),
-            "mode" => "read-only"
-          })
-
-        refused = accept!(ctx, thread, "@aqua do it again")
-        assert :completed = run(ctx, refused)
-        assert {:ok, %{agent_mode: "read-only"}} = Tape.turn(ctx, refused.id)
-        assert step_result(ctx, refused, "c2") == %{outcome: "denied", content: sentence}
       end
     end
   end

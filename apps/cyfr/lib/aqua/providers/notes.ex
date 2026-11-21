@@ -14,7 +14,7 @@ defmodule Aqua.Providers.Notes do
   gate and does not see the tool in `tools/list`.
 
   The actions are reachable in-chain too, which is how an agent keeps a
-  note at all: run as its member's mode decides, inside the chain under
+  note at all: decided as any offered call, inside the chain under
   the turn's authority. Of the writes, `pin` is the about-you page and
   `workspace` the notes of the workspace thread the turn runs in, which
   the lineage names and no argument does. A turn's
@@ -62,8 +62,8 @@ defmodule Aqua.Providers.Notes do
   @doc false
   def definition do
     alias Prima.{Arg, Operation}
-    # In-chain as well as at the door: from a chain each action runs as
-    # the member's mode decides, and the reads are bounded to the athanor
+    # In-chain as well as at the door: from a chain each action is decided
+    # as any offered call, and the reads are bounded to the athanor
     # by the domain. `workspace` is a chain's alone: the turn
     # names its thread. Interactive on every action — the credential
     # gate is the same on both planes.

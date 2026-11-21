@@ -1877,9 +1877,7 @@ defmodule Arca.TurnStorage do
   Start an accepted turn: `accepted → running` with its root execution,
   attempt, budget and pins (`:root_execution_id`, `:attempt`,
   `:budget_id`, `:profile_id`, `:consent_id`, `:agent_revision_digest`,
-  `:agent_capability_digest`), the agent's mode from the snapshot whose
-  capability digest it pins (`:agent_mode`, `read-only` or `auto`, required),
-  its recovery limit (`:recovery_limit`, a positive count, required), and
+  `:agent_capability_digest`), its recovery limit (`:recovery_limit`, a positive count, required), and
   the consumption boundary set to the highest seq the turn may read now.
   Event `turn.started`.
 
@@ -1908,7 +1906,6 @@ defmodule Arca.TurnStorage do
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status != "accepted", do: Arca.Repo.rollback(:not_accepted)
         limit = recovery_limit!(turn, attrs)
-        agent_mode = agent_mode!(attrs)
         root = root_of!(athanor_id, turn, attrs)
         claim_thread!(athanor_id, turn, attrs)
         window = boundary(athanor_id, turn)
@@ -1922,7 +1919,6 @@ defmodule Arca.TurnStorage do
           consent_id: Map.get(attrs, :consent_id),
           agent_revision_digest: Map.get(attrs, :agent_revision_digest),
           agent_capability_digest: Map.get(attrs, :agent_capability_digest),
-          agent_mode: agent_mode,
           recovery_limit: limit,
           runner_id: Prima.Boot.id(),
           window_upto_seq: window
@@ -5818,15 +5814,6 @@ defmodule Arca.TurnStorage do
   defp recovery_limit!(%Turn{}, attrs) do
     case Map.get(attrs, :recovery_limit) do
       limit when is_integer(limit) and limit > 0 -> limit
-      _ -> Arca.Repo.rollback(:illegal_transition)
-    end
-  end
-
-  # The mode a start pins: one of the agent file's two, or no start.
-  # arca:db-raise-ok inside the caller's transaction
-  defp agent_mode!(attrs) do
-    case Map.get(attrs, :agent_mode) do
-      mode when mode in ["read-only", "auto"] -> mode
       _ -> Arca.Repo.rollback(:illegal_transition)
     end
   end

@@ -6,7 +6,7 @@ defmodule Compendium.AgentSourceTest do
   The crew's one grant is a consent source: Aqua's row, projected from
   its file and the athanor's brains, with its tools as caps and its hands
   and every brain the athanor can connect as dependencies, never a crew
-  member or a member's brain, model or mode; a crew member is no source;
+  member or a member's brain, model or options; a crew member is no source;
   the same lookups that serve component nodes serve it, its activation
   walks the closure, and only what the crew may use moves its digests.
   """
@@ -178,9 +178,9 @@ defmodule Compendium.AgentSourceTest do
              })
   end
 
-  # The grant follows no crew member: a member's brain, model, options and
-  # mode, the member Aqua runs on and Aqua's prompt move nothing; Aqua's
-  # tools move it.
+  # The grant follows no crew member: a member's brain, model and options,
+  # the member Aqua runs on and Aqua's prompt move nothing; Aqua's tools
+  # move it.
   test "only Aqua's tools move the grant; a member, its brain and Aqua's seat move nothing", %{
     ctx: ctx
   } do
@@ -188,7 +188,6 @@ defmodule Compendium.AgentSourceTest do
 
     write_agent!(ctx, "aqua", &%{&1 | prompt: &1.prompt <> "\n\nSay less."})
     write_agent!(ctx, "explorer", &%{&1 | model: "another-model", options: %{"effort" => "high"}})
-    write_agent!(ctx, "explorer", &%{&1 | mode: "read-only"})
     write_agent!(ctx, "explorer", &%{&1 | catalyst_ref: nil, program: "mcp_019a2b3c"})
     write_agent!(ctx, "aqua", &%{&1 | member: "explorer"})
     write_agent!(ctx, "explorer", &%{&1 | disabled: true})

@@ -3,7 +3,7 @@
 
 defmodule Aqua.LaunchTest do
   @moduledoc """
-  A launch is an `execution.run` of a component that a member in auto
+  A launch is an `execution.run` of a component that a member offered it
   runs at once. Decided on the call its step's row records, it runs once
   as the turn's person, under the origin the turn's row stores — a
   programmatic turn's launch stays programmatic, and no turn is written
@@ -134,7 +134,6 @@ defmodule Aqua.LaunchTest do
         Map.merge(pins, %{
           root_execution_id: execution.id,
           attempt: attempt.attempt,
-          agent_mode: "auto",
           recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
         })
       )
@@ -169,12 +168,12 @@ defmodule Aqua.LaunchTest do
 
   @offered %{"execution.run" => "offered"}
 
-  # The loop's decision for a launch of `args` in a turn under `mode`,
-  # among `offered`: made on the call and the account it names, reading
-  # nothing of the turn.
-  defp decide(ctx, _turn, args, mode \\ "auto", offered \\ @offered) do
+  # The loop's decision for a launch of `args` in a turn, among `offered`:
+  # made on the call and the account it names, reading nothing of the
+  # turn.
+  defp decide(ctx, _turn, args, offered \\ @offered) do
     {:ok, call} = Aqua.Loop.Binding.resolve("execution.run", args)
-    Aqua.Loop.Policy.decide(call, offered, mode, ctx: ctx, title: "Aqua")
+    Aqua.Loop.Policy.decide(call, offered, ctx: ctx, title: "Aqua")
   end
 
   # The decision a launch of `args` runs on: its call and the account it
@@ -965,9 +964,8 @@ defmodule Aqua.LaunchTest do
   # The decision, and what a launch's sends reach
   # ---------------------------------------------------------------------------
 
-  test "under auto a launch is decided to run on its call whatever the turn read, with a " <>
-         "grant or with none, binding no grant; read-only refuses it, and one not offered is " <>
-         "denied",
+  test "a launch is decided to run on its call whatever the turn read, with a grant or " <>
+         "with none, binding no grant, and one not offered is denied",
        %{ctx: ctx, thread: thread, pins: pins} do
     ungranted = publish_app!(ctx)
 
@@ -987,10 +985,7 @@ defmodule Aqua.LaunchTest do
     end
 
     for args <- apps do
-      assert decide(ctx, turn, args, "read-only") ==
-               {:read_only, Aqua.Loop.Policy.read_only_sentence("Aqua")}
-
-      assert decide(ctx, turn, args, "auto", %{}) ==
+      assert decide(ctx, turn, args, %{}) ==
                {:deny, "execution.run is not among the tools Aqua is offered"}
     end
   end
@@ -1063,7 +1058,7 @@ defmodule Aqua.LaunchTest do
     assert %{path: "/hello"} = upstream!()
   end
 
-  test "under auto a launch naming an account decides on the entry it resolves to, and a name " <>
+  test "a launch naming an account decides on the entry it resolves to, and a name " <>
          "its app does not bind is setup required",
        %{ctx: ctx, thread: thread, pins: pins} do
     %{app: app, work: work, args: args} = work_app!(ctx)
@@ -1077,7 +1072,7 @@ defmodule Aqua.LaunchTest do
              {:setup_required, versioned, {nil, "Home"}}
   end
 
-  test "under auto a launch naming an account of an app with no grant is setup required, and " <>
+  test "a launch naming an account of an app with no grant is setup required, and " <>
          "one naming a profile that cannot be told is refused, never a setup",
        %{ctx: ctx, thread: thread, pins: pins} do
     %{app: app, args: args} = granted_app!(ctx)
@@ -1094,7 +1089,7 @@ defmodule Aqua.LaunchTest do
                 Aqua.Ops.render_refusal({:not_found, "elsewhere"})}
   end
 
-  test "under auto a launch of an app with no grant runs on none: the gate answers that the " <>
+  test "a launch of an app with no grant runs on none: the gate answers that the " <>
          "app is not granted, and nothing of it runs",
        %{ctx: ctx, thread: thread, pins: pins} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
@@ -1258,7 +1253,7 @@ defmodule Aqua.LaunchTest do
       %{app: app, work: work, args: args} = work_app!(ctx)
       profile_id = own_profile_id(ctx, app)
       {:ok, call} = Aqua.Loop.Binding.resolve("execution.run", args)
-      decide = fn -> Aqua.Loop.Policy.decide(call, @offered, "auto", ctx: ctx) end
+      decide = fn -> Aqua.Loop.Policy.decide(call, @offered, ctx: ctx) end
 
       assert decide.() == run_on(args, %{vault_entry: work.id, name: "Work"})
 
@@ -1271,7 +1266,7 @@ defmodule Aqua.LaunchTest do
     end
   end
 
-  test "under auto a launch whose app's grant cannot be read is decided, and its root refuses " <>
+  test "a launch whose app's grant cannot be read is decided, and its root refuses " <>
          "it as the damaged head, never as an app to grant",
        %{ctx: ctx, thread: thread, pins: pins} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
