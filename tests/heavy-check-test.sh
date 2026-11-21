@@ -881,6 +881,7 @@ t_waiters_skipped() {
   until_true 10 has_line '^==> heavy-check: queued, ' "$scratch/ws.err" || fail 'the waiter did not queue'
   kill -STOP "$a"
   until_true 5 is_stopped "$a" || fail 'the waiter was not stopped'
+  rm -f "$scratch/wl.err"
   "${hc[@]}" -- sh -c "echo later >> $scratch/order" >/dev/null 2>"$scratch/wl.err" &
   b=$!; started+=("$b")
   until_true 10 has_line '^==> heavy-check: queued, 1 of 1 waiting' "$scratch/wl.err" ||
@@ -1439,6 +1440,9 @@ t_record_line() {
     fail "the line is not in the documented form: $(cat "$scratch/records")"
   : >"$scratch/records"
   hold_quarters rl
+  # The cases before this one left their own queued lines in q.err: read as
+  # this check's, they would have it stopped before its traps exist.
+  rm -f "$scratch/q.out" "$scratch/q.err"
   "${hc[@]}" -- env CYFR_DATABASE_URL=postgres://u:secret@h/db true >"$scratch/q.out" 2>"$scratch/q.err" &
   q=$!; started+=("$q")
   until_true 10 has_line '^==> heavy-check: queued, ' "$scratch/q.err" || fail 'the check did not queue'
