@@ -41,12 +41,16 @@ const SECURE = {
 }
 
 // Who asked for a navigation of `contents`, as the engine reports its
-// initiator: its top frame, a frame, or none.
+// initiator: its top frame ("top"), a frame asking for itself or a frame
+// inside it ("frame-inside"), a frame asking for any other
+// ("frame-outside"), or none.
 function askerOf(event, contents) {
   const i = event.initiator
   if (!i) return "none"
-  const top = contents.mainFrame
-  return i.processId === top.processId && i.routingId === top.routingId ? "top" : "frame"
+  const same = (a, b) => !!a && !!b && a.processId === b.processId && a.routingId === b.routingId
+  if (same(i, contents.mainFrame)) return "top"
+  for (let f = event.frame; f; f = f.parent) if (same(f, i)) return "frame-inside"
+  return "frame-outside"
 }
 
 /**
@@ -80,10 +84,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   const children = new Set() // its confirmation windows
   let accountWindow = null
   let hop = null // {kind, request, from, timer}
-  // What signing the content's session out needs, held apart from its
-  // window so that closing the window at once loses nothing: the session
-  // and the forgery token of the last page of the CYFR main keeps to.
-  let held = null
+  // The forgery token of the last page of the CYFR main keeps to, held
+  // apart from the content window so that closing it at once loses
+  // nothing; step says when the session is held (states.js `held`).
+  let holder = null
   let contentSession = null
   let generation = 0
   // The sign-out a lock, cyfr's loss or quitting started: whether the
@@ -104,8 +108,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.close) closeContent()
     if (effect.send) send(effect.send.type, effect.send.fields)
     if (effect.retire) {
-      const out = {held, ses: contentSession}
-      held = null
+      const out = {held: effect.retire.held ? holder ?? {token: ""} : null, ses: contentSession}
+      holder = null
       // A sign-out still running from before is waited for too.
       const before = retiring
       retiring = retire(out).then(async (confirmed) => (await before) && confirmed)
@@ -116,8 +120,11 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       say("starting again with the CYFR's route")
       const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a))
       if (effect.relaunch.proxy) args.push(`--proxy-server=${effect.relaunch.proxy}`, `--host-resolver-rules=${effect.relaunch.resolver}`)
-      app.relaunch({args})
-      app.exit(0)
+      retiring.then(() => {
+        if (child && child.exitCode === null) child.kill()
+        app.relaunch({args})
+        app.exit(0)
+      })
     }
     if (effect.end) {
       say(`cyfr ended: ${effect.end}`)
@@ -135,9 +142,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         app.quit()
       })
     }
-    if (effect.hold && content) {
-      held = held ?? {token: ""}
-      const keep = held
+    if (effect.hold) holder = holder ?? {token: ""}
+    if (effect.token && content && holder) {
+      const keep = holder
       content.webContents.executeJavaScript("document.querySelector('meta[name=\"csrf-token\"]')?.content ?? ''", false)
         .then((token) => { if (typeof token === "string" && token) keep.token = token }, () => {})
     }
@@ -193,6 +200,11 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     content = w
     const contents = w.webContents
     confine(contents, "content", "the page stopped")
+    // The window handler opens only the device's two loopback confirmation
+    // routes and the confirmation hop (step's open-window). Electron does
+    // not say which frame asked; Prism's own frame rules refuse every frame
+    // it serves a window and the top frame (Compendium.Tincture.Rules), and
+    // the asker check refuses a frame's navigation of the top frame.
     contents.setWindowOpenHandler(({url}) => {
       if (on({type: "open-window", url}).open !== "child") return {action: "deny"}
       return {action: "allow", overrideBrowserWindowOptions: {
@@ -204,9 +216,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       opened.on("closed", () => children.delete(opened))
       confine(opened.webContents, "child", "a window's page stopped")
     })
-    contents.on("did-navigate", (_event, url) => on({type: "page", url}))
     contents.on("did-finish-load", () => {
-      if (held && content === w) on({type: "page", url: contents.getURL()})
+      if (content === w) on({type: "page", url: contents.getURL()})
     })
     w.on("closed", () => {
       if (content === w) {

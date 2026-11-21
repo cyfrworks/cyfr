@@ -20,7 +20,7 @@ const before = {home: "", account: "", accountRoad: true}
 
 // A navigation of a content window's top frame from `from`, or of a frame.
 const top = (url, state, showing = home + "/login", asker = "top") => contentNavigation({url, target: "top", asker, showing}, state)
-const frame = (url, state) => contentNavigation({url, target: "frame", asker: "frame", showing: home + "/"}, state)
+const frame = (url, state, asker = "frame-inside") => contentNavigation({url, target: "frame", asker, showing: home + "/"}, state)
 
 test("a content window loads the device's pages, then the selected CYFR, and nothing else", () => {
   assert.equal(top(LOOPBACK + "/bootstrap/", before, ""), "allow")
@@ -51,10 +51,16 @@ test("a CYFR that serves its own account pages hops to them, never loads them as
   assert.equal(top(home + "/threads", same), "allow")
 })
 
-test("a frame asking is refused whatever it targets, the top frame included", () => {
+test("a frame navigates itself or a frame inside it to what a frame may load, and never the top frame or another frame", () => {
   for (const url of [account + "/account/sign#x", home + "/threads", home + "/company-login", LOOPBACK + "/lock"]) {
-    assert.equal(top(url, ready, home + "/", "frame"), "block", url)
+    for (const asker of ["frame-inside", "frame-outside"]) {
+      assert.equal(top(url, ready, home + "/", asker), "block", `${asker}: the top frame to ${url}`)
+    }
   }
+  assert.equal(frame(home + "/threads", ready, "frame-outside"), "block", "a sibling frame")
+  assert.equal(frame(home + "/threads", ready, "frame-inside"), "allow", "itself, to an address a frame may load")
+  assert.equal(frame(home + "/threads", ready, "top"), "allow", "the top frame's own frame")
+  assert.equal(frame("https://evil.example/", ready, "frame-inside"), "block", "itself, to an address no frame loads")
 })
 
 test("a frame never hops and never loads a ceremony's route, by navigation or by redirect", () => {
@@ -140,14 +146,16 @@ test("content documents deny both passkey calls and workers, keeping their own p
   assert.deepEqual(got["Content-Security-Policy"], ["default-src 'self'", "worker-src 'none'"])
   assert.deepEqual(got["X-Frame-Options"], ["DENY"])
   assert.ok(!("permissions-policy" in got))
-  assert.ok(!got["Content-Security-Policy"].some((p) => p.startsWith("sandbox")), "the top frame is no sandbox")
   const frame = documentHeaders("content", "subFrame", {})
   assert.deepEqual(frame["Permissions-Policy"], ["publickey-credentials-get=(), publickey-credentials-create=()"])
-  const sandbox = frame["Content-Security-Policy"].find((p) => p.startsWith("sandbox"))
-  assert.ok(sandbox, "every frame is sandboxed")
-  for (const token of ["allow-popups", "allow-top-navigation", "allow-popups-to-escape-sandbox"]) {
-    assert.ok(!sandbox.split(" ").some((t) => t.startsWith(token)), `a frame's sandbox carries ${token}`)
-  }
+  // A tincture frame's document as Prism sends it keeps every grant, its
+  // pointer lock among them: the app adds the two denials and nothing more.
+  const tincture = documentHeaders("content", "subFrame", {
+    "Content-Security-Policy": ["sandbox allow-scripts allow-pointer-lock; default-src 'none'"],
+    "Permissions-Policy": ["fullscreen=(self)"]
+  })
+  assert.deepEqual(tincture["Content-Security-Policy"], ["sandbox allow-scripts allow-pointer-lock; default-src 'none'", "worker-src 'none'"])
+  assert.deepEqual(tincture["Permissions-Policy"], ["fullscreen=(self), publickey-credentials-get=(), publickey-credentials-create=()"])
   const script = {"Content-Type": ["text/javascript"]}
   assert.equal(documentHeaders("content", "script", script), script)
 })

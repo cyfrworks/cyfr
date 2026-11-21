@@ -164,9 +164,16 @@ async function signedIn() {
   child.say({type: "home", home: HOME, account: ACCOUNT})
   child.say({type: "opened", home: HOME})
   await settled()
-  content().loadURL(HOME + "/")
-  await settled()
+  await give(content())
   return said
+}
+
+// The content window given HOME, as the device's pages open it, and its
+// page loaded.
+async function give(w) {
+  navigate(w, HOME + "/")
+  w.loadURL(HOME + "/")
+  await settled()
 }
 
 test("an interrupted Connect, through main: a proposal a lock ended gives way to the next, a committed one to none", async () => {
@@ -240,15 +247,14 @@ test("a lock on the company page signs its session out", async () => {
   assert.match(content().webContents.url, /notice=company,unconfirmed$/)
 })
 
-test("a lock before the forgery token was read is unconfirmed, and the session's storage is cleared", async () => {
+test("a lock in open H before any page committed is unconfirmed, and the session's storage is cleared", async () => {
   await started(true)
   world.page = () => new Promise(() => {}) // the token never arrives
   child.say({type: "home", home: HOME, account: ACCOUNT})
   child.say({type: "opened", home: HOME})
   await settled()
   const page = content()
-  page.loadURL(HOME + "/")
-  await settled()
+  navigate(page, HOME + "/") // given the CYFR; no page has committed
   world.powerMonitor.emit("lock-screen")
   await settled()
   assert.deepEqual(world.fetched, [], "nothing to send without the token")
@@ -282,4 +288,30 @@ test("a frame asking the top frame to go to the sign-in route is refused and ope
   page.webContents.emit("will-navigate", event)
   assert.ok(event.prevented)
   assert.equal(live().length, 1, "no account window")
+})
+
+test("a CYFR rerouted is a relaunch only after the content closed and its session was signed out", async () => {
+  await started(true)
+  child.say({type: "home", home: HOME, account: ACCOUNT})
+  await settled()
+  await give(content())
+  world.relaunched = null
+  world.app.relaunch = (options) => { world.relaunched = options }
+  const page = content()
+  child.say({type: "home", home: "https://bob.example", account: ACCOUNT, proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
+  await settled()
+  assert.ok(page.destroyed)
+  assert.deepEqual(world.fetched.map((f) => f.url), [HOME + "/auth/logout"])
+  await settled()
+  assert.ok(world.relaunched?.args.includes("--proxy-server=socks5://127.0.0.1:1055"))
+})
+
+test("cyfr's own locked naming a CYFR main never kept to leaves it keeping to none", async () => {
+  await started(false)
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  await settled()
+  const chooser = content()
+  assert.match(chooser.webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//)
+  assert.equal(navigate(chooser, HOME + "/threads").prevented, true)
 })

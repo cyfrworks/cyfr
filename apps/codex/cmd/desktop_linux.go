@@ -42,25 +42,51 @@ func watchSessionLock(ctx context.Context, lock func(why string), warn func(sent
 		warn(notWatched)
 		return
 	}
-	if err := conn.AddMatchSignal(dbus.WithMatchInterface(login1Seat), dbus.WithMatchMember("PrepareForSleep")); err != nil ||
-		conn.AddMatchSignal(dbus.WithMatchSender(dbusName), dbus.WithMatchInterface(dbusName),
-			dbus.WithMatchMember("NameOwnerChanged"), dbus.WithMatchArg(0, login1)) != nil {
-		conn.Close()
+	watchBus(ctx, systemBus{conn}, lock, warn)
+}
+
+// bus is what watching needs of the system bus.
+type bus interface {
+	Signal(ch chan<- *dbus.Signal)
+	AddMatchSignal(options ...dbus.MatchOption) error
+	// sessionOf is logind's login session of this process.
+	sessionOf(ctx context.Context) (dbus.ObjectPath, error)
+	Close() error
+}
+
+type systemBus struct{ *dbus.Conn }
+
+func (b systemBus) sessionOf(ctx context.Context) (dbus.ObjectPath, error) {
+	var session dbus.ObjectPath
+	call := b.Object(login1, login1Path).CallWithContext(ctx, login1Seat+".GetSessionByPID", 0, uint32(os.Getpid()))
+	if call.Err != nil {
+		return "", call.Err
+	}
+	return session, call.Store(&session)
+}
+
+// watchBus subscribes on b and watches it. The channel that receives the
+// signals is registered first, so logind leaving while the matches are
+// added and the session resolved is seen all the same.
+func watchBus(ctx context.Context, b bus, lock func(string), warn func(string)) {
+	signals := make(chan *dbus.Signal, 16)
+	b.Signal(signals)
+	if b.AddMatchSignal(dbus.WithMatchSender(dbusName), dbus.WithMatchInterface(dbusName),
+		dbus.WithMatchMember("NameOwnerChanged"), dbus.WithMatchArg(0, login1)) != nil ||
+		b.AddMatchSignal(dbus.WithMatchInterface(login1Seat), dbus.WithMatchMember("PrepareForSleep")) != nil {
+		b.Close()
 		warn(notWatched)
 		return
 	}
-	var session dbus.ObjectPath
-	call := conn.Object(login1, login1Path).CallWithContext(ctx, login1Seat+".GetSessionByPID", 0, uint32(os.Getpid()))
-	if call.Err != nil || call.Store(&session) != nil ||
-		conn.AddMatchSignal(dbus.WithMatchObjectPath(session), dbus.WithMatchInterface(login1Sess), dbus.WithMatchMember(sessionLock)) != nil ||
-		conn.AddMatchSignal(dbus.WithMatchObjectPath(session), dbus.WithMatchInterface(dbusProps), dbus.WithMatchMember("PropertiesChanged")) != nil {
+	session, err := b.sessionOf(ctx)
+	if err != nil ||
+		b.AddMatchSignal(dbus.WithMatchObjectPath(session), dbus.WithMatchInterface(login1Sess), dbus.WithMatchMember(sessionLock)) != nil ||
+		b.AddMatchSignal(dbus.WithMatchObjectPath(session), dbus.WithMatchInterface(dbusProps), dbus.WithMatchMember("PropertiesChanged")) != nil {
 		session = ""
 		warn(sessionUnheard)
 	}
-	signals := make(chan *dbus.Signal, 16)
-	conn.Signal(signals)
 	go func() {
-		defer conn.Close()
+		defer b.Close()
 		watchSignals(ctx, signals, session, lock, warn)
 	}()
 }

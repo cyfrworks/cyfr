@@ -124,3 +124,41 @@ func TestLosingTheSystemBusLocksAndSaysSo(t *testing.T) {
 	close(ended)
 	watchSignals(ctx, ended, "", func(string) { t.Error("the run's end locked") }, func(string) { t.Error("the run's end warned") })
 }
+
+// fakeBus answers the session at once and sends each signal of leaving
+// to the channels registered by then, at the moment the session is
+// resolved.
+type fakeBus struct {
+	channels []chan<- *dbus.Signal
+	leaving  []*dbus.Signal
+}
+
+func (b *fakeBus) Signal(ch chan<- *dbus.Signal)            { b.channels = append(b.channels, ch) }
+func (b *fakeBus) AddMatchSignal(...dbus.MatchOption) error { return nil }
+func (b *fakeBus) Close() error                             { return nil }
+func (b *fakeBus) sessionOf(context.Context) (dbus.ObjectPath, error) {
+	for _, sig := range b.leaving {
+		for _, ch := range b.channels {
+			ch <- sig
+		}
+	}
+	return "/org/freedesktop/login1/session/_32", nil
+}
+
+// logind leaving between the subscription and the session's resolution is
+// seen as a loss: the channel was registered before either.
+func TestLogindLeavingWhileTheWatchIsSetUpIsALoss(t *testing.T) {
+	b := &fakeBus{leaving: []*dbus.Signal{{Name: dbusName + ".NameOwnerChanged", Body: []any{login1, ":1.2", ""}}}}
+	locked := make(chan string, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	watchBus(ctx, b, func(why string) { locked <- why }, func(string) {})
+	select {
+	case why := <-locked:
+		if why != logindLost {
+			t.Fatalf("locked: %q", why)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("logind left while the watch was set up, unseen")
+	}
+}

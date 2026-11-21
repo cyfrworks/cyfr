@@ -31,22 +31,25 @@ export function parse(address) {
 /**
  * What a window of the content's own does with a navigation to `url`:
  * of its top frame or of a frame (`target`), asked for by its top frame,
- * by a frame or by no frame (`asker`, as the engine reports the
- * initiator), while its top frame shows `showing`. "allow", "block",
+ * by a frame for itself or a frame inside it, by a frame for any other,
+ * or by no frame (`asker`: "top", "frame-inside", "frame-outside",
+ * "none", as the engine reports the initiator), while its top frame shows
+ * `showing`. "allow", "block",
  * "hop" (a ceremony: the top frame, showing the selected CYFR's page,
  * sends itself to the account service's sign-in route, which opens in
  * the account window, also where the CYFR serves that route itself) or
  * "company" (the CYFR's company sign-in, which the app does not offer).
- * A frame asking is refused whatever it targets, and a frame loads no
- * ceremony route. The recovery route is reached from the sign-in inside
+ * What a frame may ask, once: it may navigate itself or a frame inside it
+ * to an address a frame may load, and never the top frame or a frame not
+ * inside it; it never hops or returns. A frame loads no ceremony route. The recovery route is reached from the sign-in inside
  * the account window, never from here. `state` names the CYFR main keeps
  * to and its account service.
  */
 export function contentNavigation({url, target, asker, showing}, state) {
   const u = parse(url)
   if (!u) return "block"
-  if (target !== "top") return frameLoad(u, state)
-  if (asker === "frame") return "block"
+  if (target !== "top") return asker === "frame-outside" ? "block" : frameLoad(u, state)
+  if (asker === "frame-inside" || asker === "frame-outside") return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home) return "block"
   if (ceremony(u, state)) {
@@ -128,18 +131,11 @@ export function grants(permission) {
 
 const PASSKEYS_DENIED = "publickey-credentials-get=(), publickey-credentials-create=()"
 
-// Every frame of a content page runs sandboxed without popups and without
-// navigating the top frame: the engine itself refuses a frame's
-// window.open, which main cannot tell from its page's. A frame's own
-// sandbox, which Prism's frames carry, still narrows it.
-const FRAME_SANDBOX = "sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads"
-
 /**
  * A document's response headers as a session of `kind` ("content" or
  * "account") keeps them. Content documents, frames among them, deny both
  * passkey calls, with any feature they named first kept, and run no
- * worker, and their frames open no window and leave the top frame alone;
- * the account window's document frames nothing. Each adds to the
+ * worker; the account window's document frames nothing. Each adds to the
  * document's own policies, which keep restricting it.
  */
 export function documentHeaders(kind, resourceType, headers) {
@@ -157,7 +153,7 @@ export function documentHeaders(kind, resourceType, headers) {
     const kept = policies.flatMap((p) => p.split(",")).map((m) => m.trim())
       .filter((m) => m && !/^publickey-credentials-(get|create)\s*=/.test(m))
     out["Permissions-Policy"] = [[...kept, PASSKEYS_DENIED].join(", ")]
-    out["Content-Security-Policy"] = [...csp, "worker-src 'none'", ...(resourceType === "subFrame" ? [FRAME_SANDBOX] : [])]
+    out["Content-Security-Policy"] = [...csp, "worker-src 'none'"]
   } else {
     if (policies.length) out["Permissions-Policy"] = policies
     out["Content-Security-Policy"] = resourceType === "mainFrame" ? [...csp, "frame-src 'none'"] : csp

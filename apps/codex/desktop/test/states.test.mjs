@@ -28,6 +28,8 @@ function run(events, accountRoad = false) {
 }
 
 const ready = {type: "ready", url: READY}
+// The content window's top frame given HOME, as the device's pages open it.
+const given = {type: "navigate", window: "content", url: HOME + "/", target: "top", asker: "top", showing: READY}
 const proposed = [ready, home()]
 const open = [...proposed, {type: "opened", home: HOME}]
 
@@ -49,11 +51,22 @@ test("a proposal is answered home-ready and replaced by the next until cyfr says
   assert.equal(run([ready, {type: "opened", home: HOME}]).s.name, "ended", "opened with nothing proposed")
 })
 
-test("a home on another route starts the app again with it", () => {
-  const {s, effects} = run([ready, {type: "home", message: {type: "home", home: HOME, account: ACCOUNT, proxy: "socks5://127.0.0.1:1055",
-    resolver: "MAP * ~NOTFOUND"}}])
+test("a home on another route starts the app again with it, closing and signing out first", () => {
+  const rerouted = {type: "home", message: {type: "home", home: "https://bob.example", account: ACCOUNT,
+    proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}}
+  const {s, effects} = run([...proposed, given, rerouted])
   assert.equal(s.name, "ended")
-  assert.deepEqual(effects.at(-1), {relaunch: {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}})
+  assert.deepEqual(effects.slice(-3), [{close: true}, {retire: {held: true}},
+    {relaunch: {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}}])
+})
+
+test("nothing loads and no window opens before ready", () => {
+  const s = initial(false)
+  for (const e of [{type: "navigate", window: "content", url: READY, target: "top", asker: "top", showing: ""},
+    {type: "account-navigate", url: HOME + "/login", target: "top"}]) {
+    assert.equal(step(s, e).allow, false, e.type)
+  }
+  assert.equal(step(s, {type: "open-window", url: "http://127.0.0.1:7340/confirm?ref=c"}).open, "deny")
 })
 
 test("a lock from any state closes the content first, then tells cyfr and signs out, and waits for both", () => {
@@ -82,6 +95,13 @@ test("the lock is a barrier: what cyfr sent before its locked is dropped, and it
   assert.deepEqual(committed.effects.at(-1), {chooser: []})
   const cancelled = run([...proposed, {type: "lock", why: "x"}, home(), locked(), {type: "signed-out", confirmed: true}])
   assert.equal(cancelled.s.name, "chooser")
+  const unasked = run([ready, {type: "lock", why: "x"}, locked(HOME), {type: "signed-out", confirmed: true}])
+  assert.equal(unasked.s.name, "chooser", "a locked naming a CYFR main kept to none before")
+  assert.equal(unasked.s.home, "")
+  const other = run([...open, {type: "lock", why: "x"}, locked("https://bob.example"), {type: "signed-out", confirmed: true}])
+  assert.equal(other.s.name, "chooser", "a locked naming another CYFR")
+  const own = run([ready, locked(HOME), {type: "signed-out", confirmed: true}])
+  assert.equal(own.s.name, "chooser", "cyfr's own locked naming a CYFR main never kept to")
   assert.equal(cancelled.s.home, "")
   assert.equal(run([...proposed, {type: "lock", why: "x"}, locked(), {type: "signed-out", confirmed: true}, home()]).s.name, "proposed",
     "the next proposal after the lock")
@@ -121,11 +141,19 @@ test("quitting closes, signs out and quits, from any state", () => {
   }
 })
 
-test("a page of the CYFR main keeps to marks the session held; no other page does", () => {
-  assert.deepEqual(run([...open, {type: "page", url: HOME + "/threads"}]).effects.at(-1), {hold: true})
-  assert.deepEqual(run([...proposed, {type: "page", url: HOME + "/login"}]).effects.at(-1), {hold: true})
-  assert.notDeepEqual(run([...open, {type: "page", url: READY}]).effects.at(-1), {hold: true})
-  assert.notDeepEqual(run([ready, {type: "page", url: HOME + "/"}]).effects.at(-1), {hold: true})
+test("the session is held from the moment the content window is given the CYFR, and then a lock signs it out", () => {
+  assert.deepEqual(run([...open, given]).effects.at(-1), {hold: true})
+  assert.equal(run([...open, given]).s.held, true)
+  assert.equal(run([...open, {...given, url: READY}]).s.held, false, "the device's pages hold nothing")
+  assert.equal(run([...open, {...given, target: "frame", asker: "top"}]).s.held, false, "a frame is not the window")
+  // A lock before any page committed: the sign-out is tried, unconfirmed
+  // without a token, and the storage cleared (app.js retire).
+  const early = run([...open, given, {type: "lock", why: "lock-screen"}])
+  assert.deepEqual(early.effects.at(-1), {retire: {held: true}})
+  assert.deepEqual(run([...open, given, {type: "page", url: HOME + "/"}]).effects.at(-1), {token: true})
+  assert.deepEqual(run([...open, {type: "page", url: HOME + "/"}]).effects, run(open).effects, "no token without the session held")
+  assert.equal(run([...open, given, {type: "lock", why: "x"}, locked(HOME), {type: "signed-out", confirmed: false}]).s.held, false,
+    "a new content window holds nothing yet")
 })
 
 test("a hop is the content window's top frame asking; a frame asking, or a confirmation window, is refused", () => {
@@ -133,7 +161,7 @@ test("a hop is the content window's top frame asking; a frame asking, or a confi
     showing: HOME + "/login", ...over})
   const s = run(open, true).s
   assert.deepEqual(step(s, nav({})).do, [{hop: {url: ACCOUNT + "/account/sign#x", kind: "sign-in"}}])
-  for (const refused of [{asker: "frame"}, {target: "frame"}, {window: "child"}, {asker: "none"}]) {
+  for (const refused of [{asker: "frame-inside"}, {asker: "frame-outside"}, {target: "frame"}, {window: "child"}, {asker: "none"}]) {
     const r = step(s, nav(refused))
     assert.equal(r.allow, false, JSON.stringify(refused))
     assert.deepEqual(r.do, [], JSON.stringify(refused))
@@ -144,7 +172,7 @@ test("a hop is the content window's top frame asking; a frame asking, or a confi
 
 test("the account window's top frame returns; its frames load nothing and end nothing", () => {
   const s = run(open, true).s
-  assert.deepEqual(step(s, {type: "account-navigate", url: HOME + "/login#a", target: "top"}).do, [{return: {url: HOME + "/login#a"}}])
+  assert.deepEqual(step(s, {type: "account-navigate", url: HOME + "/login#a", target: "top"}).do, [{return: {url: HOME + "/login#a"}}, {hold: true}])
   assert.deepEqual(step(s, {type: "account-navigate", url: HOME + "/login#a", target: "frame"}), {state: s, allow: false, do: []})
   assert.deepEqual(step(s, {type: "account-navigate", url: HOME + "/", target: "top"}).do, [{unhop: true}])
 })
