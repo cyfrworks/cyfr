@@ -1429,6 +1429,46 @@ defmodule Aqua.CrewTest do
     assert %{status: "answered"} = row(ctx, soul.id)
   end
 
+  test "another person, athanor, origin or job cannot join Aqua's running member job",
+       %{ctx: ctx, room: room} do
+    script!([{:hold, self()}, reply("first"), reply("from the API"), reply("second")])
+    first = soul_request!(ctx, room, "planner", "first job")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    assert_receive {:scripted_probe, worker, _}, 60_000
+    child = child!(ctx, room, "planner")
+    running = delivered_turn(ctx, child, first.id)
+
+    local = Sanctum.TestContext.local(:prism)
+    user_id = "local|local|outsider-#{System.unique_integer([:positive])}"
+    {other, user} = Sanctum.TestContext.person!(%{local | user_id: user_id})
+    other = %{other | athanor_id: Sanctum.Test.People.athanor!(user).id, origin: :interactive}
+    assert {:error, :not_found} = Runner.send_message(other, child.id, "another athanor")
+
+    assert {:error, :not_member} =
+             Runner.send_message(
+               %{other | athanor_id: ctx.athanor_id},
+               child.id,
+               "another person"
+             )
+
+    assert {:ok, %{admitted: :turn, turn_id: api}} =
+             Runner.send_message(%{ctx | origin: :programmatic}, child.id, "from the API")
+
+    assert api != running
+    assert {:ok, %{status: "accepted", origin: "programmatic"}} = Tape.turn(ctx, api)
+
+    second = soul_request!(ctx, room, "planner", "second job")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    queued = delivered_turn(ctx, child, second.id)
+    assert queued != running
+    assert {:ok, %{status: "accepted", request_id: request_id}} = Tape.turn(ctx, queued)
+    assert request_id == second.id
+    assert %{running: true, queued: 2} = Runner.state(child.id, ctx.athanor_id)
+
+    send(worker, :continue)
+    for id <- [running, api, queued], do: await_status(ctx, id, "completed")
+  end
+
   test "a busy child thread leaves the request pending, and the next tick delivers it",
        %{ctx: ctx, room: room} do
     # The soul's request holds the member's thread while its model request
