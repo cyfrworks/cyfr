@@ -202,15 +202,18 @@ jobs:
       # cyfr init and update write the scaffold, and the update's snapshot
       # reads it, through one os.Root of the project, which on Windows is
       # the platform's handle-relative opens: a folder linked outside the
-      # project refuses, one linked inside is followed. A test skips where
-      # no symbolic link can be made, so each must run and pass here.
+      # project refuses, one linked inside is followed, and update's rollback
+      # removes nothing through the first. A test or case skips where no
+      # symbolic link can be made, so each must run and pass here and none
+      # may skip.
       - name: go test (the scaffold's folder links ran and passed)
         shell: bash
         run: |
           set -euo pipefail
-          LINK_TESTS="TestWriteRefusesAFolderLinkedOutside TestWriteFollowsAFolderLinkThatStaysInside TestSnapshotReadsNoScaffoldFileThroughAFolderLinkedOutside TestInitStopsOnAFolderLinkedOutside"
+          LINK_TESTS="TestWriteRefusesAFolderLinkedOutside TestWriteFollowsAFolderLinkThatStaysInside TestWriteRefusesALinkTheRootDoesNotFollow TestSnapshotReadsNoScaffoldFileThroughAFolderLinkedOutside TestInitStopsOnAFolderLinkedOutside TestRollbackRemovesNoScaffoldFileThroughAFolderLinkedOutside"
           go test ./internal/scaffold/ ./cmd/ -race -count=1 -v -run "^(${LINK_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/link-tests.log"
           for t in $LINK_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/link-tests.log" || { echo "::error::the scaffold link test $t did not run and pass"; exit 1; }; done
+          if grep -- "--- SKIP: " "$RUNNER_TEMP/link-tests.log"; then echo "::error::a scaffold link test or case skipped"; exit 1; fi
 
   test-macos:
     # The CLI ships for macOS; this runs its checks on the platform's own

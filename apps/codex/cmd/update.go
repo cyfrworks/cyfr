@@ -1427,7 +1427,7 @@ func (u *updater) pull() error {
 
 // fetchScaffold fetches the release's scaffold, whose checksums the
 // scaffold fetch verifies itself, and refuses a folder it writes in that is
-// a link leading outside the project (scaffold.ErrLinkOutside) and a
+// a link it does not follow (scaffold.ErrLinkNotFollowed) and a
 // managed path that is there as something other than a regular file, which
 // the snapshot cannot hold; both before the stack stops.
 func (u *updater) fetchScaffold() error {

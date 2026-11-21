@@ -95,7 +95,7 @@ func TestUpdateRefusesAFolderLinkedOutsideBeforeTheStop(t *testing.T) {
 		return checkedScaffold{fakeScaffold{s, v}, real}, nil
 	}
 	out, err := s.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "wit is a link that leads outside this install, so cyfr writes no scaffold file through it: make wit a real folder, or point the link at a folder inside the install; nothing was changed") {
+	if err == nil || !strings.Contains(err.Error(), "wit is a link cyfr does not write through: make wit a real folder, or a relative link to a folder inside the install; nothing was changed") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
 	s.nothingStopped()
@@ -147,7 +147,7 @@ func TestInitStopsOnAFolderLinkedOutside(t *testing.T) {
 	refusal := witRelease(t).Write(false)
 	var warn bytes.Buffer
 	err := scaffoldDownloadFailure("0.9.0", fmt.Errorf("extract: %w", refusal), &warn)
-	if err == nil || !errors.Is(err, scaffold.ErrLinkOutside) || !strings.HasSuffix(err.Error(), "; no scaffold file was written") || warn.Len() != 0 {
+	if err == nil || !errors.Is(err, scaffold.ErrLinkNotFollowed) || !strings.HasSuffix(err.Error(), "; no scaffold file was written") || warn.Len() != 0 {
 		t.Fatalf("init answered %v and warned %q", err, warn.String())
 	}
 }

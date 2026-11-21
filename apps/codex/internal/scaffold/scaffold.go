@@ -89,16 +89,17 @@ func (r *Release) File(name string) ([]byte, bool) {
 	return nil, false
 }
 
-// ErrLinkOutside marks a folder on a scaffold path that is a link leading
-// outside the project: Write and Check refuse it, and the snapshot reads
-// nothing through it, since its scaffold files would be another
-// directory's.
-var ErrLinkOutside = errors.New("is a link that leads outside this install")
+// ErrLinkNotFollowed marks a folder on a scaffold path that is a link the
+// project's os.Root does not follow: one that leads outside the project, an
+// absolute one (even to a folder inside), or a loop. Write and Check refuse
+// it, and the snapshot reads nothing through it. A relative link to a
+// folder inside the project is followed.
+var ErrLinkNotFollowed = errors.New("is a link cyfr does not write through")
 
-// Check refuses, with ErrLinkOutside, a folder the release writes in, or
-// one on the way to it, that is a link leading outside the working
-// directory; a link that stays inside it is followed. It writes nothing,
-// so `cyfr update` refuses before the stack stops.
+// Check refuses, with ErrLinkNotFollowed, a folder the release writes in,
+// or one on the way to it, that is a link the working directory's os.Root
+// does not follow. It writes nothing, so `cyfr update` refuses before the
+// stack stops.
 func (r *Release) Check() error {
 	root, err := os.OpenRoot(".")
 	if err != nil {
@@ -120,9 +121,9 @@ func (r *Release) check(root *os.Root) error {
 	return checkDirs(root, dirs...)
 }
 
-// checkDirs refuses, with ErrLinkOutside, each of dirs, a path in root, or
-// a folder on the way to it, that is a link leading outside root. A folder
-// that does not exist yet is none.
+// checkDirs refuses, with ErrLinkNotFollowed, each of dirs, a path in
+// root, or a folder on the way to it, that is a link root does not follow.
+// A folder that does not exist yet is none.
 func checkDirs(root *os.Root, dirs ...string) error {
 	seen := map[string]bool{}
 	for _, dir := range dirs {
@@ -146,10 +147,11 @@ func checkDirs(root *os.Root, dirs ...string) error {
 			if info.Mode()&fs.ModeSymlink == 0 {
 				continue
 			}
-			// os.Root follows a link that stays inside it and refuses
-			// one that leads out; a link to nothing inside is no escape.
+			// os.Root follows a relative link that stays inside it and
+			// refuses one that leads out, an absolute one and a loop; a
+			// link to nothing inside is followed to nothing.
 			if _, err := root.Stat(filepath.FromSlash(at)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return fmt.Errorf("%s %w, so cyfr writes no scaffold file through it: make %s a real folder, or point the link at a folder inside the install", at, ErrLinkOutside, at)
+				return fmt.Errorf("%s %w: make %s a real folder, or a relative link to a folder inside the install", at, ErrLinkNotFollowed, at)
 			}
 		}
 	}
@@ -158,12 +160,12 @@ func checkDirs(root *os.Root, dirs ...string) error {
 
 // Write extracts the release into the current working directory, every
 // directory and file made in it through one os.Root, so no link carries a
-// write outside it. Check runs first, so a folder linked outside refuses
-// before anything is written. When overwriteManaged is true, managed files
+// write outside it. Check runs first, so a folder link it does not follow
+// refuses before anything is written. When overwriteManaged is true, managed files
 // are replaced with the tarball contents, each through a temporary file
 // renamed over it, so a managed file is its old bytes or its new ones;
 // other files retain the skip-if-exists behavior, and one reached through
-// a folder linked outside refuses rather than skips.
+// such a folder link refuses rather than skips.
 func (r *Release) Write(overwriteManaged bool) error {
 	root, err := os.OpenRoot(".")
 	if err != nil {

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -21,6 +20,10 @@ func plantLink(t *testing.T, target, link string) {
 		t.Skipf("this system makes no symbolic link here: %v", err)
 	}
 }
+
+// refusal is what Write and Check answer for wit/ as a link they do not
+// follow.
+const refusal = "wit is a link cyfr does not write through: make wit a real folder, or a relative link to a folder inside the install"
 
 // linkedRelease writes in wit/ and at the project's root.
 func linkedRelease() *Release {
@@ -93,7 +96,7 @@ func TestWriteRefusesAFolderLinkedOutside(t *testing.T) {
 				before = listTree(t, outside)
 			}
 			err := linkedRelease().Write(c.overwrite)
-			if !errors.Is(err, ErrLinkOutside) || !strings.Contains(err.Error(), "wit is a link that leads outside this install") || !strings.Contains(err.Error(), "make wit a real folder, or point the link at a folder inside the install") {
+			if !errors.Is(err, ErrLinkNotFollowed) || err.Error() != refusal {
 				t.Fatalf("Write answered %v", err)
 			}
 			if got := listTree(t, outside); !slices.Equal(got, before) {
@@ -105,7 +108,7 @@ func TestWriteRefusesAFolderLinkedOutside(t *testing.T) {
 			if got, _ := os.ReadFile(filepath.Join(outside, "cyfr", "added.wit")); c.existing && string(got) != "theirs\n" {
 				t.Errorf("the file outside reads %q", got)
 			}
-			if err := linkedRelease().Check(); !errors.Is(err, ErrLinkOutside) {
+			if err := linkedRelease().Check(); !errors.Is(err, ErrLinkNotFollowed) {
 				t.Errorf("Check answered %v", err)
 			}
 		})
@@ -136,5 +139,49 @@ func TestWriteFollowsAFolderLinkThatStaysInside(t *testing.T) {
 		if info, err := os.Lstat("wit"); err != nil || info.Mode()&os.ModeSymlink == 0 {
 			t.Errorf("wit is no longer the link (%v)", err)
 		}
+	}
+}
+
+// An absolute link, even to a folder inside the project, and a loop of
+// links inside it are refused as links the root does not follow, before
+// anything is written; the refusal's advice works: wit made a relative
+// link to a folder inside, the write goes through.
+func TestWriteRefusesALinkTheRootDoesNotFollow(t *testing.T) {
+	for _, c := range []string{"absolute link to a folder inside", "loop inside"} {
+		t.Run(c, func(t *testing.T) {
+			project := t.TempDir()
+			t.Chdir(project)
+			if err := os.Mkdir("interfaces", 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if c == "loop inside" {
+				plantLink(t, "alias", "wit")
+				plantLink(t, "wit", "alias")
+			} else {
+				plantLink(t, filepath.Join(project, "interfaces"), "wit")
+			}
+			if err := linkedRelease().Check(); err == nil || err.Error() != refusal {
+				t.Fatalf("Check answered %v", err)
+			}
+			if err := linkedRelease().Write(true); err == nil || err.Error() != refusal {
+				t.Fatalf("Write answered %v", err)
+			}
+			if got := listTree(t, "interfaces"); len(got) != 0 {
+				t.Errorf("written before the refusal: %v", got)
+			}
+			if _, err := os.Lstat("configuration-guide.md"); err == nil {
+				t.Error("the guide was written before the refusal")
+			}
+			if err := os.Remove("wit"); err != nil {
+				t.Fatal(err)
+			}
+			plantLink(t, "interfaces", "wit")
+			if err := linkedRelease().Write(true); err != nil {
+				t.Fatalf("Write through a relative link inside: %v", err)
+			}
+			if got, err := os.ReadFile(filepath.Join("interfaces", "cyfr", "added.wit")); err != nil || string(got) != "package cyfr:added;\n" {
+				t.Errorf("interfaces/cyfr/added.wit is %q (%v)", got, err)
+			}
+		})
 	}
 }

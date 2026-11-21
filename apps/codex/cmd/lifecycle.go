@@ -42,14 +42,14 @@ import (
 // (release.ErrUnverified) stops init, since the scaffold carries the
 // compose file naming the images `cyfr up` runs, and the scaffold refuses
 // before extracting a byte. A folder the scaffold writes in that is a link
-// leading outside the project (scaffold.ErrLinkOutside) stops it too,
-// before a file is written. Any other failure is a transport failure: it
+// it does not follow (scaffold.ErrLinkNotFollowed) stops it too, before a
+// file is written. Any other failure is a transport failure: it
 // warns on warn, and init continues with the files already present.
 func scaffoldDownloadFailure(rel string, err error, warn io.Writer) error {
 	if errors.Is(err, release.ErrUnverified) {
 		return fmt.Errorf("the scaffold of release %s failed verification, so nothing was extracted: %w", rel, err)
 	}
-	if errors.Is(err, scaffold.ErrLinkOutside) {
+	if errors.Is(err, scaffold.ErrLinkNotFollowed) {
 		return fmt.Errorf("%w; no scaffold file was written", err)
 	}
 	fmt.Fprintf(warn, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
@@ -600,7 +600,7 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	// services' env examples). Idempotent — existing files kept. No-op
 	// for dev builds (version.Version=="dev"/""). A download that fails
 	// warns and init goes on; a release that fails verification, or a
-	// folder linked outside the project, stops it
+	// folder link the scaffold does not follow, stops it
 	// (scaffoldDownloadFailure).
 	begin(initStepFiles)
 	if err := downloadScaffold(version.Version); err != nil {
