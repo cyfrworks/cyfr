@@ -765,14 +765,30 @@ defmodule Aqua.RunnerTest do
              Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
   end
 
-  # The crew has one grant, Aqua's: revoked, it refuses every member's
-  # turn as it refuses Aqua's, before a root is claimed, and asks for that
-  # one grant.
+  # The crew has one grant, Aqua's: under it Aqua's turn and a member's
+  # run; revoked, it refuses every member's turn as it refuses Aqua's,
+  # before a root is claimed or a model is asked, and asks for that one
+  # grant.
   test "with the crew's grant revoked, Aqua's turn and every member's claim no root and ask for it",
        %{ctx: ctx, thread: thread} do
     member!(ctx, "planner")
     {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(ctx), thread.id, "planner")
     :ok = Runner.subscribe(child.id, ctx.athanor_id)
+    script!([reply("Aqua ran."), reply("The planner ran.")])
+
+    for {room, agent} <- [{thread, "aqua"}, {child, "planner"}] do
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, room.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "first"},
+          turn: %{agent: agent, requested_by: ctx.user_id}
+        })
+
+      assert :completed = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+    end
+
+    ran = ScriptedWorker.calls()
+    assert Enum.count(ran, &(&1.input["operation"] == "chat")) == 2
+
     assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "agent:local.aqua")
     user = ctx.user_id
 
@@ -798,6 +814,8 @@ defmodule Aqua.RunnerTest do
                      },
                      5_000
     end
+
+    assert ScriptedWorker.calls() == ran
   end
 
   test "a crew member asked by name works in its child thread under the crew's one grant, with its brain's key",
