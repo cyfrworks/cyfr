@@ -10,7 +10,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 LIB="$root/scripts/lib/contain.sh"
-S=$(mktemp -d /tmp/cyfr-contain-test.XXXXXX)
+S=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-contain-test.XXXXXX")
 export LIB S
 unset HEAVY_CHECK_HELD CONTAIN_REGISTRY CONTAIN_CLOSE_FDS CONTAIN_HOLD_FDS CONTAIN_FD_BASE
 

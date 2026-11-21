@@ -144,6 +144,14 @@ plant_container uses-t3 "$t3"
 plant_image "$t4" "${t4##*:in-}" "$NOW"
 plant_image "$t5" 'another-label' "$OLD"
 plant_image cyfr-locus:c2c6 '' "$OLD"
+# Tags made by hand: one a container uses, one made today, and another
+# project's, beside the old unused cyfr-locus:c2c6.
+plant_image cyfr:hand-used '' "$OLD"
+plant_container uses-hand cyfr:hand-used
+plant_image cyfr:hand-young '' "$NOW"
+# Six and a half days old: inside the week by half a day.
+plant_image cyfr:hand-sixdays '' "$(date -u -d '156 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+plant_image other-project:old '' "$OLD"
 # A worktree whose tag could be read before, and no longer can.
 printf '# wt3\n' >>"$S/wt3/config/config.exs"
 t6=$(cd "$S/wt3" && scripts/image.sh --tag-only locus)
@@ -209,9 +217,23 @@ db2=cyfr_test_11111111111111111111111111111111_p2
 run_dir cyfr-t.r8 "$(dead_pid)"; receipt "$S/tmp/cyfr-t.r8" 1 "$db1"; receipt "$S/tmp/cyfr-t.r8" 2 "$db2" mismatched
 mkdir -p "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-stage.save.c" \
   "$S/tmp/cyfr-evidence.install-screen-case2.d" "$S/tmp/cyfr-evidence.install-screen-case3.e"
-age 4 "$S"/tmp/cyfr-t.r1 "$S"/tmp/cyfr-t.r2 "$S"/tmp/cyfr-t.r3 "$S"/tmp/cyfr-t.r4 "$S"/tmp/cyfr-t.r7 "$S"/tmp/cyfr-t.r8
-age 1 "$S/tmp/cyfr-t.r5" "$S/tmp/cyfr-stage.save.c" "$S/tmp/cyfr-evidence.install-screen-case3.e"
-age 8 "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-evidence.install-screen-case2.d"
+# Rule 5: what a check left in the folder, old and young, and the record
+# of the host's load with its previous file, which rule 8 keeps.
+mkdir -p "$S/tmp/go-build123/x"
+echo leak >"$S/tmp/tmp.Ab12Cd"; echo young >"$S/tmp/tmp.Ef34Gh"
+echo line >"$S/tmp/heavy-check.log"; echo line >"$S/tmp/heavy-check.log.1"
+# An old entry that is a symlink to a folder outside, which is not the
+# janitor's to empty.
+mkdir -p "$S/outside"; echo theirs >"$S/outside/kept"
+ln -s "$S/outside" "$S/tmp/link"
+touch -h -d '8 days ago' "$S/tmp/link"
+age 8 "$S/outside" "$S/outside/kept"
+age 4 "$S"/tmp/cyfr-t.r1 "$S"/tmp/cyfr-t.r2 "$S"/tmp/cyfr-t.r3 "$S"/tmp/cyfr-t.r7 "$S"/tmp/cyfr-t.r8
+age 1 "$S/tmp/cyfr-t.r5" "$S/tmp/cyfr-stage.save.c" "$S/tmp/cyfr-evidence.install-screen-case3.e" "$S/tmp/tmp.Ef34Gh"
+# A run directory and an install-screen scratch directory are rule 4's and
+# rule 1's, however old.
+age 8 "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-evidence.install-screen-case2.d" "$S/tmp/cyfr-t.r4" "$scratch_live" \
+  "$S/tmp/go-build123" "$S/tmp/tmp.Ab12Cd" "$S/tmp/heavy-check.log" "$S/tmp/heavy-check.log.1"
 
 # Rule 6: uses with dead and live pids.
 h6=66666666666666666666
@@ -239,6 +261,8 @@ has dry "would remove image $tq"
 has dry "would remove directory $S/tmp/cyfr-evidence.install-screen-case2.d"
 has dry "would remove base-image $S/cache/$sum3"
 has dry "would remove directory $scratch_done"
+has dry "would remove image cyfr-locus:c2c6"
+has dry "would remove file $S/tmp/tmp.Ab12Cd"
 
 lock_inode=$(inode "$STATE/$h6.lock")
 begin 'rule 1: a finished run, by its record or by no record and no process, loses its objects'
@@ -278,8 +302,16 @@ has main "kept image $base: a worktree produces it"
 has main "kept image $t2: a live use names it (pid $user)"
 has main "kept image $t3: a container uses it"
 has main "kept image $t4: it is younger than 24 hours"
-for t in "$base" "$t2" "$t3" "$t4" "$t5" cyfr-locus:c2c6; do there "$(image_file "$t")"; done
-lacks main "$t5"; lacks main cyfr-locus:c2c6
+for t in "$base" "$t2" "$t3" "$t4" "$t5"; do there "$(image_file "$t")"; done
+lacks main "$t5"
+
+begin "rule 2: a tag made by hand of cyfr or cyfr-locus goes once a week old and unused; another project's is not touched"
+gone "$(image_file cyfr-locus:c2c6)"; has main 'removed image cyfr-locus:c2c6'
+grep -qxF 'image rm cyfr-locus:c2c6' "$DOCKER_STUB/calls" || fail 'the hand tag went other than by image rm without force'
+has main 'kept image cyfr:hand-used: a container uses it'; there "$(image_file cyfr:hand-used)"
+has main 'kept image cyfr:hand-young: it is younger than seven days'; there "$(image_file cyfr:hand-young)"
+has main 'kept image cyfr:hand-sixdays: it is younger than seven days'; there "$(image_file cyfr:hand-sixdays)"
+there "$(image_file other-project:old)"; lacks main other-project
 grep -qxF "image rm $t0" "$DOCKER_STUB/calls" || fail 'the old image went other than by image rm without force'
 grep -qxF 'image prune -f --filter label=works.cyfr.image-inputs' "$DOCKER_STUB/calls" || fail 'no labelled dangling prune'
 
@@ -314,11 +346,41 @@ there "$S/tmp/cyfr-t.r8/p1/database-created"; there "$S/tmp/cyfr-t.r8/p2/databas
 if grep -qF "$db1" "$DOCKER_STUB/calls"; then fail "the readable partition's database was dropped: $(grep -F "$db1" "$DOCKER_STUB/calls")"; fi
 lacks main "removed database $db1"
 
-begin 'rule 5: log and evidence directories older than seven days go'
+begin "rule 5: everything of this user's in the folder unchanged for seven days goes, but the run directories, the install-screen scratch and the record of the host's load"
 gone "$S/tmp/cyfr-stage.nightly.a"; there "$S/tmp/cyfr-stage.save.c"
 has main "removed directory $S/tmp/cyfr-stage.nightly.a"
 gone "$S/tmp/cyfr-evidence.install-screen-case2.d"; has main "removed directory $S/tmp/cyfr-evidence.install-screen-case2.d"
 there "$S/tmp/cyfr-evidence.install-screen-case3.e"; lacks main cyfr-evidence.install-screen-case3.e
+gone "$S/tmp/go-build123"; has main "removed directory $S/tmp/go-build123"
+gone "$S/tmp/tmp.Ab12Cd"; has main "removed file $S/tmp/tmp.Ab12Cd"
+there "$S/tmp/tmp.Ef34Gh"; lacks main tmp.Ef34Gh
+there "$S/tmp/cyfr-t.r4"; there "$scratch_live"
+there "$S/tmp/heavy-check.log"; there "$S/tmp/heavy-check.log.1"; lacks main heavy-check.log
+[ ! -e "$S/tmp/link" ] && [ ! -L "$S/tmp/link" ] || fail 'an old symlink stayed'
+has main "removed file $S/tmp/link"
+there "$S/outside/kept"
+
+begin "rule 5: an old entry that is not this user's stays"
+# The janitor is told it is another user, so nothing in the folder is its
+# own: the stand-in for an entry another user left there.
+mkdir -p "$S/other-user"
+printf '#!/bin/sh\nif [ "$1" = -u ]; then echo %s; else exec /usr/bin/id "$@"; fi\n' "$(( $(id -u) + 1 ))" >"$S/other-user/id"
+chmod +x "$S/other-user/id"
+echo theirs >"$S/tmp/tmp.Foreign"; age 8 "$S/tmp/tmp.Foreign"
+PATH="$S/other-user:$PATH" janitor foreign || fail "the janitor exited $?"
+there "$S/tmp/tmp.Foreign"; lacks foreign tmp.Foreign
+rm -f "$S/tmp/tmp.Foreign"
+
+begin "rule 2: a hand tag whose containers cannot be listed is kept, and the run says so and fails"
+plant_image cyfr:hand-unlisted '' "$OLD"
+echo 'ancestor=cyfr:hand-unlisted' >"$DOCKER_STUB/ps-fail"
+status=0; janitor unlisted || status=$?
+rm -f "$DOCKER_STUB/ps-fail"
+[ "$status" != 0 ] || fail 'a failed listing left the run green'
+has unlisted 'failed image cyfr:hand-unlisted: its containers could not be listed: stub: the listing failed'
+there "$(image_file cyfr:hand-unlisted)"
+! grep -qxF 'image rm cyfr:hand-unlisted' "$DOCKER_STUB/calls" || fail 'a tag whose containers could not be listed was removed'
+rm -f "$(image_file cyfr:hand-unlisted)"
 
 begin 'rule 7: a base-image set no worktree pins goes once a day old; pinned, young and other entries stay'
 has main "kept base-image $S/cache/$sum0: a worktree pins it"; there "$S/cache/$sum0/ubuntu-26.04-server-cloudimg-amd64.img"
@@ -521,6 +583,26 @@ holds_open() {
   done
   return 1
 }
+
+begin "rule 8: the record of the host's load past 64 MiB becomes its .1, replacing the one there; a dry run only says so"
+truncate -s 65M "$S/tmp/heavy-check.log"
+echo older >"$S/tmp/heavy-check.log.1"
+janitor rotate-dry --dry-run || fail "the dry run exited $?"
+has rotate-dry "would rotate record $S/tmp/heavy-check.log"
+[ "$(stat -c %s "$S/tmp/heavy-check.log")" = $((65 * 1024 * 1024)) ] || fail 'the dry run rotated the record'
+# A check that opened the record before the rotation appends after it.
+record_inode=$(inode "$S/tmp/heavy-check.log")
+exec {writer}>>"$S/tmp/heavy-check.log"
+janitor rotate || fail "the janitor exited $?"
+echo 'end=late' >&"$writer"; exec {writer}>&-
+has rotate "rotated record $S/tmp/heavy-check.log"
+[ "$(inode "$S/tmp/heavy-check.log.1")" = "$record_inode" ] && [ "$(tail -c 9 "$S/tmp/heavy-check.log.1")" = 'end=late' ] ||
+  fail "a line appended across the rotation is not in the .1, which is not the file renamed"
+[ ! -e "$S/tmp/heavy-check.log" ] && [ "$(stat -c %s "$S/tmp/heavy-check.log.1")" = $((65 * 1024 * 1024 + 9)) ] ||
+  fail "after the rotation: $(ls -l "$S/tmp"/heavy-check.log* 2>&1)"
+echo line >"$S/tmp/heavy-check.log"
+janitor small || fail "the janitor exited $?"
+lacks small 'rotated record'; there "$S/tmp/heavy-check.log"
 
 begin "rule 7: a set goes only under the cache's lock"
 sum6=6666666666666666666666666666666666666666666666666666666666666666

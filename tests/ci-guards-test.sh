@@ -2137,14 +2137,14 @@ if [ "$first" -eq 64 ] && [ "$code" -eq 64 ] && has_err 'usage:' && [ "$(calls)"
 
 # The host's nightly report and its watchdog.
 night() { # OUTCOME STATUS: the report job's facts
-  reds_run nightly OUTCOME="$1" COMMIT="$sha" STATUS="$2" LOGS=/tmp/cyfr-stage.nightly.Ab1sCd \
+  reds_run nightly OUTCOME="$1" COMMIT="$sha" STATUS="$2" LOGS=/var/tmp/cyfr/cyfr-stage.nightly.Ab1sCd \
     SUMMARY=$'janitor: ok 9s\nhandle-proof: failed 1 312s\ncanvas-proof-desktop: not run 69 0s' RUN_URL=https://example.invalid/runs/9
 }
 label="reds: a red night opens the nightly issue naming the commit, the exit, the rows that did not pass and the host's log folder"
 reds_state "1 open $silent"
 night failure 1
 if [ "$code" -eq 0 ] && state '[i["comments"] for i in issues["Host nightly is red"]] == [["The host'"'"'s [nightly report](https://example.invalid/runs/9) failed:\n\n" + "\n".join([
-  "    commit: '"$sha"'", "    exit: 1", "    logs on the host: /tmp/cyfr-stage.nightly.Ab1sCd", "    rows that did not pass:",
+  "    commit: '"$sha"'", "    exit: 1", "    logs on the host: /var/tmp/cyfr/cyfr-stage.nightly.Ab1sCd", "    rows that did not pass:",
   "      handle-proof: failed 1 312s", "      canvas-proof-desktop: not run 69 0s"])]]' && state 'not s["issues"][0]["comments"]'; then pass "$label"; else fail "$label"; fi
 
 label="reds: a second red night is one more comment on the open nightly issue"

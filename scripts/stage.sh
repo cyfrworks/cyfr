@@ -109,8 +109,9 @@
 # $STAGE_LOGDIR/<check>.log. A folder's ticket writes heavy-check's own
 # lines to <folder>.queue.log and each of its rows' ends to
 # <folder>.results. Without -l the log directory is a fresh
-# /tmp/cyfr-stage.<stage>.XXXXXX, the name scripts/janitor.sh removes after
-# seven days; it is named on stderr. The name carries no PROOF_RUN_PREFIX:
+# cyfr-stage.<stage>.XXXXXX in scripts/lib/run-names.sh's run_names_root,
+# on disk, which scripts/janitor.sh sweeps after seven days; it is named
+# on stderr, and a refused root is 69. The name carries no PROOF_RUN_PREFIX:
 # logs outlive the run that wrote them, and the janitor finds them by this
 # name alone (its rule 5).
 #
@@ -320,7 +321,9 @@ make_logdir() {
   if [ -n "$logdir" ]; then
     mkdir -p "$logdir" && logdir=$(cd "$logdir" && pwd -P) || refuse 64 "cannot use $logdir for the logs"
   else
-    logdir=$(mktemp -d "/tmp/cyfr-stage.$stage.XXXXXX") || refuse 69 'cannot make a log directory'
+    # shellcheck source=lib/run-names.sh
+    logdir=$(. "$here/lib/run-names.sh" && root=$(run_names_root) && mktemp -d "$root/cyfr-stage.$stage.XXXXXX") ||
+      refuse 69 'cannot make a log directory'
   fi
   logdir_made=true
   echo "stage: $stage logs in $logdir" >&2

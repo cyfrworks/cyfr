@@ -586,10 +586,14 @@ fi
 # A run its runner could not clean up (SIGKILLed) keeps its directory and
 # the disposable database URLs in its p*.env files; a finished run removes
 # each file but one whose partition's drop failed, which stays beside the
-# database's receipt for scripts/janitor.sh.
+# database's receipt for scripts/janitor.sh. Run directories are made in
+# scripts/lib/run-names.sh's run_names_root, on disk.
+# shellcheck source=lib/run-names.sh
+. "$script_dir/lib/run-names.sh" || exit 69
+runs_root=$(run_names_root) || exit 69
 name_stopped_runs() {
   local directory pid
-  for directory in /tmp/cyfr-t.*; do
+  for directory in "$runs_root"/cyfr-t.*; do
     [ -d "$directory" ] && [ -O "$directory" ] || continue
     set -- "$directory"/p*.env
     [ -e "$1" ] || continue
@@ -602,8 +606,9 @@ name_stopped_runs
 
 # UNIX socket paths have a small fixed ceiling on macOS. Do not nest under
 # the inherited TMPDIR (which may already consume most of that ceiling), and
-# canonicalize /tmp's symlink so storage paths have one spelling.
-out_dir=$(mktemp -d /tmp/cyfr-t.XXXXXX) || exit 1
+# canonicalize the root's symlinks (macOS's /var) so storage paths have one
+# spelling.
+out_dir=$(mktemp -d "$runs_root/cyfr-t.XXXXXX") || exit 1
 out_dir=$(cd "$out_dir" && pwd -P) || exit 1
 printf '%s\n' "$$" >"$out_dir/runner-pid" || exit 1
 

@@ -16,7 +16,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 check="$root/scripts/heavy-check.sh"
 await="$root/scripts/await-task.sh"
 contain_lib="$root/scripts/lib/contain.sh"
-scratch=$(mktemp -d /tmp/cyfr-heavy-test.XXXXXX)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-heavy-test.XXXXXX")
 unset HEAVY_CHECK_HELD CONTAIN_REGISTRY CONTAIN_CLOSE_FDS CONTAIN_HOLD_FDS CONTAIN_FD_BASE CYFR_TEST_CORES
 # A check started under a check gets its parent's prefix, processors and
 # count; every check here starts as an outermost one with none of them.
@@ -962,6 +962,13 @@ t_environment() {
   ERL_FLAGS='+sbwt none -kernel inet_dist_use_interface {127,0,0,1}' "${hc[@]}" -- sh -c 'echo "$ERL_FLAGS|$CYFR_TEST_CORES|$CARGO_BUILD_JOBS"' >"$scratch/out" 2>/dev/null
   [ "$(body "$scratch/out")" = "+sbwt none -kernel inet_dist_use_interface {127,0,0,1} +S 1:1|1|1" ] ||
     fail "the environment was $(body "$scratch/out")"
+  # A command gets the folder on disk as TMPDIR when its caller set none,
+  # and keeps a caller's own.
+  (env -u TMPDIR "${hc[@]}" -- sh -c 'echo "$TMPDIR"') >"$scratch/out" 2>/dev/null
+  [ "$(body "$scratch/out")" = /var/tmp/cyfr ] || fail "a check with no TMPDIR was given $(body "$scratch/out")"
+  [ -d /var/tmp/cyfr ] && [ ! -L /var/tmp/cyfr ] && [ -O /var/tmp/cyfr ] || fail '/var/tmp/cyfr is not a folder of this user'"'"'s own'
+  "${hc[@]}" -- sh -c 'echo "$TMPDIR"' >"$scratch/out" 2>/dev/null
+  [ "$(body "$scratch/out")" = "$TMPDIR" ] || fail "a caller's TMPDIR became $(body "$scratch/out")"
   # A caller's HEAVY_CHECK_CPUS is replaced by the check's own.
   HEAVY_CHECK_CPUS=stale "${hc[@]}" -- sh -c 'echo "$HEAVY_CHECK_CPUS"' >"$scratch/out" 2>/dev/null
   [ "$(body "$scratch/out")" = "${Q[1]}" ] || fail "a caller's HEAVY_CHECK_CPUS became $(body "$scratch/out")"

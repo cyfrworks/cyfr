@@ -23,7 +23,7 @@ elif [ "$#" != 0 ]; then
 fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 runner="$root/scripts/test-partitioned.sh"
-scratch=$(mktemp -d /tmp/cyfr-runner-test.XXXXXX)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-runner-test.XXXXXX")
 real_elixir=$(command -v elixir)
 export REAL_ELIXIR="$real_elixir"
 cleanup() {
@@ -43,7 +43,7 @@ cleanup() {
   fi
   if [ -f "$scratch/trace/prepared" ]; then
     while IFS= read -r directory; do
-      case "$directory" in /tmp/cyfr-t.*|/private/tmp/cyfr-t.*)
+      case "$directory" in /var/tmp/cyfr/cyfr-t.*|/private/var/tmp/cyfr/cyfr-t.*)
         rm -rf "$directory"
         # The test ends by showing that no run directory it made remains.
         if [ -e "$directory" ]; then

@@ -358,6 +358,12 @@ same worktree refuses, naming the run that holds it.
   shows who holds which quarters and who waits, and every check that
   queued leaves a line in `/var/tmp/cyfr/heavy-check.log` (its header
   gives the fields).
+- Logs and scratch live on disk in `/var/tmp/cyfr`, never in the
+  memory-backed `/tmp`: the stages' logs (`cyfr-stage.*`), the partition
+  runner's run directories (`cyfr-t.*`), the proofs' evidence, and the
+  `TMPDIR` a check gets when its caller set none. Make a scratch copy of
+  a tree there too. The nightly janitor removes what has not changed for
+  a week (`scripts/janitor.sh`, its rule 5).
 - Local runs take the Locus and app images from `scripts/image.sh locus`
   and `scripts/image.sh app`, which tag each by a hash of its inputs, so
   every checkout at the same inputs shares one build.
