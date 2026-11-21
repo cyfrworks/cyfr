@@ -2447,6 +2447,39 @@ defmodule PrismWeb.AquaLiveTest do
                get_agent(ctx, "mine")
     end
 
+    # A program's pick that names no program, or names one that is no
+    # text, changes nothing and leaves the page open.
+    test "a program's model pick that names no program changes nothing", %{conn: conn, ctx: ctx} do
+      open_brain!(ctx)
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "mine",
+          "title" => "Mine",
+          "catalyst_ref" => "catalyst:local.open",
+          "model" => "open-1"
+        })
+
+      {:ok, before} = get_agent(ctx, "mine")
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      settled(fn -> has_element?(view, "#aqua-card-mine-model") end, "the card")
+
+      for {program, value} <- [{"", ""}, {%{"a" => "b"}, "haiku"}] do
+        view
+        |> with_target("#aqua-agents")
+        |> render_change("editor_set_model", %{
+          "name" => "mine",
+          "brain" => "program",
+          "program" => program,
+          "value" => value
+        })
+
+        assert has_element?(view, "#aqua-card-mine-model")
+        assert get_agent(ctx, "mine") == {:ok, before}
+      end
+    end
+
     # A member moved from one program brain to the other keeps each option
     # whose value the new program lists, and drops any other: the access
     # the first driver listed is none of the second's, so it goes, and the

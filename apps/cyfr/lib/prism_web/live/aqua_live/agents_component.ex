@@ -439,7 +439,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         %{"name" => name, "brain" => "program", "program" => program, "value" => value},
         socket
       )
-      when program != "" do
+      when is_binary(program) and program != "" do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       model = if value == "", do: nil, else: value
 
@@ -461,6 +461,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       end
     end)
   end
+
+  # A program's pick that names no program is no pick: it never reaches
+  # the picker below, where its value would read as another brain's.
+  def handle_event("editor_set_model", %{"brain" => "program"}, socket), do: {:noreply, socket}
 
   # A member's brain or model changed on its card or the setup's pick: an
   # option the new brain and model do not list is taken off in the same
