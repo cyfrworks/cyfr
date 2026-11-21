@@ -133,9 +133,15 @@ defmodule Cyfr.Test.Sandbox do
   # the kills are sent.
   @runner_supervisor Aqua.RunnerSupervisor
 
-  # How long the sweep waits for each answer of the runners' supervisor as
+  # An attempt names where it came from as its start begins, and its
+  # supervisor answers a hold only between two starts: held while the
+  # sweep reads and kills, it has no attempt half started that the sweep
+  # would read before it had named a process the sweep then kills.
+  @attempt_supervisor Opus.Attempt.Supervisor
+
+  # How long the sweep waits for each answer of a supervisor it holds, as
   # it holds it and gives it back. It answers between two of its messages,
-  # and a runner's start is the longest of them.
+  # and a child's start is the longest of them.
   @hold_ms 5_000
 
   # How long `end_views/0` waits, in all, for the views and the work they
@@ -326,7 +332,8 @@ defmodule Cyfr.Test.Sandbox do
 
   defp stop_work(test, spared, passes) do
     sweeping(test)
-    ended = holding_runners(fn -> stop_descendants(test, spared, killed_roots()) end)
+    kill = fn -> stop_descendants(test, spared, killed_roots()) end
+    ended = holding_runners(fn -> holding_attempts(kill) end)
 
     stopped =
       Enum.flat_map(@supervisors, fn name ->
@@ -548,8 +555,25 @@ defmodule Cyfr.Test.Sandbox do
   """
   @spec holding_runners((-> result), pos_integer()) :: result when result: var
   def holding_runners(fun, wait_ms \\ @hold_ms)
-      when is_function(fun, 0) and is_integer(wait_ms) and wait_ms > 0 do
-    case Process.whereis(@runner_supervisor) do
+      when is_function(fun, 0) and is_integer(wait_ms) and wait_ms > 0,
+      do: holding(@runner_supervisor, fun, wait_ms)
+
+  @doc """
+  Run `fun`, the sweep's reads and kills, with `Opus.Attempt.Supervisor`
+  starting no attempt meanwhile: held as `holding_runners/2` holds the
+  runners' supervisor, and given back the same way. A start it was making
+  is finished first, so its attempt has named its opener before the
+  sweep reads it; a start asked of it meanwhile is made once it is given
+  back, and that attempt is its child, stopped in its turn. Nothing the
+  sweep finds is excused by the hold.
+  """
+  @spec holding_attempts((-> result), pos_integer()) :: result when result: var
+  def holding_attempts(fun, wait_ms \\ @hold_ms)
+      when is_function(fun, 0) and is_integer(wait_ms) and wait_ms > 0,
+      do: holding(@attempt_supervisor, fun, wait_ms)
+
+  defp holding(name, fun, wait_ms) do
+    case Process.whereis(name) do
       nil ->
         fun.()
 
@@ -557,29 +581,29 @@ defmodule Cyfr.Test.Sandbox do
         watch = watch_holder(supervisor)
 
         try do
-          held(supervisor, fun, wait_ms)
+          held(name, supervisor, fun, wait_ms)
         after
           send(watch, {:given_back, self()})
         end
     end
   end
 
-  defp held(supervisor, fun, wait_ms) do
+  defp held(name, supervisor, fun, wait_ms) do
     case suspend(supervisor, wait_ms) do
       :ok ->
         try do
           fun.()
         after
-          give_back(supervisor, wait_ms)
+          give_back(name, supervisor, wait_ms)
         end
 
       :late ->
-        replace(supervisor, wait_ms)
+        replace(name, supervisor, wait_ms)
         fun.()
 
         ExUnit.Assertions.flunk(
-          "#{inspect(@runner_supervisor)} did not stop for the sweep within #{wait_ms} ms, " <>
-            "so the sweep ran with nothing holding its restarts; it was replaced"
+          "#{inspect(name)} did not stop for the sweep within #{wait_ms} ms, " <>
+            "so the sweep ran with nothing holding its starts; it was replaced"
         )
 
       :gone ->
@@ -623,7 +647,7 @@ defmodule Cyfr.Test.Sandbox do
   # starts nothing. The supervisor's state is its own: one this cannot
   # read fails the replacement, as an error where a call that got no
   # answer is an exit, and the supervisor is replaced instead.
-  defp give_back(supervisor, wait_ms) do
+  defp give_back(name, supervisor, wait_ms) do
     :sys.replace_state(
       supervisor,
       fn %{children: children} = state ->
@@ -637,10 +661,10 @@ defmodule Cyfr.Test.Sandbox do
   catch
     kind, reason when kind in [:exit, :error] ->
       if Process.alive?(supervisor) do
-        replace(supervisor, wait_ms)
+        replace(name, supervisor, wait_ms)
 
         ExUnit.Assertions.flunk(
-          "#{inspect(@runner_supervisor)} could not be given back after the sweep's kills " <>
+          "#{inspect(name)} could not be given back after the sweep's kills " <>
             "(#{inspect(reason)}); it was replaced"
         )
       end
@@ -649,7 +673,7 @@ defmodule Cyfr.Test.Sandbox do
   end
 
   # The supervisor's tree starts a fresh one in its place.
-  defp replace(supervisor, wait_ms) do
+  defp replace(name, supervisor, wait_ms) do
     ref = Process.monitor(supervisor)
     Process.exit(supervisor, :kill)
 
@@ -658,9 +682,9 @@ defmodule Cyfr.Test.Sandbox do
     end
 
     Prima.Test.Wait.wait_until(
-      fn -> Process.whereis(@runner_supervisor) not in [nil, supervisor] end,
+      fn -> Process.whereis(name) not in [nil, supervisor] end,
       wait_ms,
-      "a fresh #{inspect(@runner_supervisor)} in place of the one the sweep killed"
+      "a fresh #{inspect(name)} in place of the one the sweep killed"
     )
   end
 

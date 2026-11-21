@@ -678,6 +678,95 @@ defmodule Cyfr.Test.SandboxTest do
     assert left == [], "#{length(left)} processes outlived a sweep that failed"
   end
 
+  describe "the attempts' supervisor, held while a sync test's sweep reads and kills" do
+    setup do
+      collector = spawn(fn -> collect(%{}) end)
+      supervisor = Process.whereis(Opus.Attempt.Supervisor)
+
+      # Registered before the sandbox, so it runs after the sweep, which a
+      # process it had not known would have failed: what the supervisor
+      # was starting went with the kills, and the supervisor is given back.
+      on_exit(fn ->
+        send(collector, {:reports, self()})
+        assert_receive {:reports, reports}, 5_000
+        left = for {:half_started, pid} <- Map.to_list(reports), Process.alive?(pid), do: pid
+        assert left == [], "the sweep left the child the supervisor was starting"
+        assert_given_back(Opus.Attempt.Supervisor, supervisor)
+      end)
+
+      Sandbox.setup!()
+      {:ok, collector: collector, supervisor: supervisor}
+    end
+
+    # An attempt names its opener in the first line of its start
+    # (`Opus.Attempt`'s `init/1`), and until then nothing leads from it
+    # back to the test. The child here stands for one read in that
+    # moment: it names its opener only once the opener has been killed,
+    # or once its start has taken as long as it takes by itself. The
+    # sweep that reads it unnamed kills the opener, finds the child
+    # naming a killed process, and fails the test. Held first, the
+    # supervisor answers only when the start is done: the child is named
+    # when the sweep reads it, and goes with the rest.
+    test "finishes the start it was making, whose child the sweep then knows",
+         %{collector: collector} do
+      test = self()
+
+      opener =
+        spawn(fn ->
+          DynamicSupervisor.start_child(Opus.Attempt.Supervisor, %{
+            id: :half_started,
+            restart: :temporary,
+            start:
+              {:proc_lib, :start_link, [__MODULE__, :half_started, [self(), test, collector]]}
+          })
+        end)
+
+      assert_receive {:starting, child}, 5_000
+      assert opener in Sandbox.descendants(test)
+      refute child in Sandbox.descendants(test)
+    end
+
+    # The hold excuses nothing: a child of the held supervisor that the
+    # sweep did not know, and that names a killed process once the kills
+    # are sent and goes on, is found, ended and fails the sweep, as it
+    # does with no hold.
+    test "leaves a child that names a killed process only after the kills to be found, " <>
+           "and the sweep fails",
+         %{supervisor: supervisor} do
+      test = self()
+
+      # Stands for a test: its one child is all the sweep knows of.
+      root =
+        spawn(fn ->
+          send(test, {:known, spawn(fn -> Process.sleep(:infinity) end)})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:known, known}
+      on_exit(fn -> Enum.each([root, known], &Process.exit(&1, :kill)) end)
+
+      {:ok, late} =
+        DynamicSupervisor.start_child(Opus.Attempt.Supervisor, %{
+          id: :late,
+          restart: :temporary,
+          start: {Task, :start_link, [fn -> names_late(test, known) end]}
+        })
+
+      assert_receive {:started, ^late}
+
+      error =
+        assert_raise ExUnit.AssertionError, fn ->
+          Sandbox.holding_attempts(fn -> Sandbox.stop_descendants(root, []) end)
+        end
+
+      assert error.message =~ ~r/found \d+ more that it had not known/
+
+      left = Enum.filter([known, late | started()], &Process.alive?/1)
+      assert left == [], "#{length(left)} processes outlived a sweep that failed"
+      assert_given_back(Opus.Attempt.Supervisor, supervisor)
+    end
+  end
+
   test "a kill pass gives the caller back the priority it had" do
     for priority <- [:low, :normal, :high, :max] do
       was = Process.flag(:priority, priority)
@@ -906,8 +995,11 @@ defmodule Cyfr.Test.SandboxTest do
 
   # The runners' supervisor after a sweep: this process, running and not
   # suspended, with no child, and able to start one.
-  defp assert_runners_given_back(supervisor) do
-    assert Process.whereis(Aqua.RunnerSupervisor) == supervisor
+  defp assert_runners_given_back(supervisor),
+    do: assert_given_back(Aqua.RunnerSupervisor, supervisor)
+
+  defp assert_given_back(name, supervisor) do
+    assert Process.whereis(name) == supervisor
 
     assert {:status, ^supervisor, _module, [_dictionary, :running | _]} =
              :sys.get_status(supervisor)
@@ -947,6 +1039,32 @@ defmodule Cyfr.Test.SandboxTest do
            end
          ]}
     }
+  end
+
+  # How long the start of `half_started/3` takes when nothing ends its
+  # opener: well inside the sweep's wait for a supervisor it holds, and
+  # long after a sweep with no hold has read the child.
+  @start_ms 1_000
+
+  @doc false
+  # A child whose start is under way: it names `opener` once `opener` has
+  # ended or `@start_ms` have passed, whichever is first, and only then
+  # answers its supervisor. It ends with the sweep.
+  def half_started(opener, test, collector) do
+    Process.flag(:priority, :high)
+    ref = Process.monitor(opener)
+    send(collector, {:report, :half_started, self()})
+    send(test, {:starting, self()})
+
+    receive do
+      {:DOWN, ^ref, :process, ^opener, _reason} -> :ok
+    after
+      @start_ms -> :ok
+    end
+
+    Process.put(:"$callers", [opener])
+    :proc_lib.init_ack({:ok, self()})
+    Process.sleep(:infinity)
   end
 
   # Names `origin` as where it came from once `origin` has ended, and then
