@@ -1519,8 +1519,7 @@ defmodule PrismWeb.AquaLiveTest do
              ]
     end
 
-    test "the card of a crew member with no brain offers Connect, which opens the setup for " <>
-           "that member",
+    test "the card of a crew member with no harness or key offers the choice in its field",
          %{conn: conn, ctx: ctx} do
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
@@ -1529,15 +1528,15 @@ defmodule PrismWeb.AquaLiveTest do
           "title" => "proofreader"
         })
 
-      {view, _html} = mount_athanor(conn, "/aqua")
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
       settled(fn -> has_element?(view, "#aqua-card-proofreader") end, "the new card")
-      assert has_element?(view, "#aqua-card-proofreader", "No brain yet")
 
-      view |> element(~s(#aqua-card-proofreader a[data-test="connect"])) |> render_click()
+      assert choices(view, "#aqua-card-proofreader-harness option[selected]") == [
+               {"", "Choose a harness or key"}
+             ]
 
-      assert_patch(view, athanor_path("/aqua?agent=proofreader&setup=1"))
-      assert has_element?(view, "#aqua-setup[open]")
+      refute has_element?(view, ~s(#aqua-card-proofreader a[data-test="connect"]))
       assert has_element?(view, ~s([data-test="setup-unconnected"]), "proofreader")
     end
 
@@ -1598,7 +1597,6 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, ~s([data-test="setup-crew-waits"]))
       assert has_element?(view, ~s([data-test="setup-aqua-waits"]), "Make a crew member first.")
       refute has_element?(view, "#aqua-setup-member")
-      refute has_element?(view, "#aqua-setup-pick")
 
       # The brain's models call runs beside the page; it ends before the test does.
       Cyfr.Test.Sandbox.end_views()
@@ -2418,16 +2416,16 @@ defmodule PrismWeb.AquaLiveTest do
     # its row stands and its program's listing is refused, as a program
     # with no sign-in refuses it, its step is to sign it in on its
     # terminal; once the listing answers it is signed in, and a crew
-    # member's picker offers, under the brain's title, the models its
-    # program lists. Picking one makes that crew member name the program,
-    # with that model and no catalyst, and asks nothing, since a member
-    # holds no consent of its own. Its access saved, a key's model takes
-    # the program away again, and the access with it in the same write, so
-    # the member answers on the key's brain.
+    # member's card offers it as a harness and then the models its
+    # program lists. Choosing it makes that crew member name the program
+    # and no catalyst, and asks nothing, since a member holds no consent
+    # of its own. Its access saved, a move to a key takes the program
+    # away again, and the access with it in the same write, so the member
+    # answers on the key's brain once a model of the key's is chosen.
     for %{name: name, title: title, command: command} <- Opus.Programs.Definition.brains() do
       @tag brain: {name, title, command}
       test "the setup offers #{name} as a program brain, installs it, signs it in and makes it " <>
-             "a crew member's brain; a key's model takes it back",
+             "a crew member's harness; a move to a key takes it back",
            %{conn: conn, ctx: ctx, brain: {name, title, command}} do
         fake = backends!()
         publish_brain!(ctx, "open", %{})
@@ -2437,8 +2435,9 @@ defmodule PrismWeb.AquaLiveTest do
         {:ok, before} = get_agent(ctx, "mine")
         assert before["program"] == nil
 
-        {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+        {view, _html} = mount_athanor(conn, "/aqua?setup=1")
         brain = "#aqua-setup-brain-" <> name
+        offered = ~s(#aqua-card-mine-harness option[value="program:#{name}"])
         assert has_element?(view, brain <> ~s([data-state="program_missing"]))
 
         assert texts(view, brain <> " label span") == [
@@ -2481,7 +2480,7 @@ defmodule PrismWeb.AquaLiveTest do
         assert has_element?(view, step, "#{title}: sign it in on its terminal.")
         assert has_element?(view, step <> ~s( [data-test="set-up-program"]), "Set up #{name}")
         refute has_element?(view, step <> ~s( a[data-test="install-program"]))
-        assert program_choices(view, title) == []
+        refute has_element?(view, offered)
 
         # Signed in: its listing answers.
         listing = [
@@ -2490,18 +2489,26 @@ defmodule PrismWeb.AquaLiveTest do
         ]
 
         reread_setup(view)
-        lists!(fake, row, fn -> program_choices(view, title) != [] end, listing)
+        lists!(fake, row, fn -> has_element?(view, offered) end, listing)
         assert has_element?(view, brain <> ~s([data-state="signed_in"]), "signed in")
         refute has_element?(view, step)
+        assert choices(view, offered) == [{"program:#{name}", title}]
 
-        assert program_choices(view, title) == [
-                 {"::program::#{name}::the-model", "The model"},
-                 {"::program::#{name}::other", "Other"}
-               ]
+        harness!(view, "mine", "program:#{name}")
+        assert get_agent(ctx, "mine") == {:ok, %{before | "program" => name}}
 
-        view
-        |> form("#aqua-setup-pick", %{"value" => "::program::#{name}::the-model"})
-        |> render_change()
+        settled(
+          fn ->
+            model_choices(view, "mine") == [
+              {"", "The program's default"},
+              {"the-model", "The model"},
+              {"other", "Other"}
+            ]
+          end,
+          "the program's models on the card"
+        )
+
+        model!(view, "mine", "the-model")
 
         assert get_agent(ctx, "mine") ==
                  {:ok,
@@ -2537,9 +2544,14 @@ defmodule PrismWeb.AquaLiveTest do
                       "options" => saved
                   }}
 
-        # A key's model is a catalyst's: the program goes, and so does the
-        # access, in the same write: an API brain has none to choose.
-        view |> form("#aqua-setup-pick", %{"value" => "open::open-1"}) |> render_change()
+        # A key is a catalyst: the program goes, and so does the access,
+        # in the same write: an API brain has none to choose.
+        harness!(view, "mine", "catalyst:open")
+
+        assert get_agent(ctx, "mine") ==
+                 {:ok, %{before | "catalyst_ref" => "catalyst:local.open"}}
+
+        model!(view, "mine", "open::open-1")
 
         assert get_agent(ctx, "mine") ==
                  {:ok, %{before | "catalyst_ref" => "catalyst:local.open", "model" => "open-1"}}
@@ -2552,10 +2564,10 @@ defmodule PrismWeb.AquaLiveTest do
       end
     end
 
-    # A pick takes off only what the new brain does not list, applied to
+    # A move takes off only what the new harness does not list, applied to
     # the member's options as they stand when it lands: an option set
     # elsewhere since the page read them is kept.
-    test "a pick keeps an option set elsewhere since the page read it", %{conn: conn, ctx: ctx} do
+    test "a move keeps an option set elsewhere since the page read it", %{conn: conn, ctx: ctx} do
       fake = backends!()
       claude = brain_row!(ctx, "claude-code")
       codex = brain_row!(ctx, "openai-codex")
@@ -2570,11 +2582,10 @@ defmodule PrismWeb.AquaLiveTest do
           "options" => %{"effort" => "high", "access" => "default"}
         })
 
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
-      codex_title = Opus.Programs.Definition.brain("openai-codex").title
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
       lists_each!(fake, [claude, codex], fn ->
-        program_choices(view, codex_title) != [] and
+        has_element?(view, ~s(#aqua-card-mine-harness option[value="program:openai-codex"])) and
           has_element?(view, "#aqua-card-mine-access select[disabled]")
       end)
 
@@ -2585,21 +2596,19 @@ defmodule PrismWeb.AquaLiveTest do
           "options_patch" => %{"effort" => "low"}
         })
 
-      view
-      |> form("#aqua-setup-pick", %{"value" => "::program::openai-codex::opus"})
-      |> render_change()
+      harness!(view, "mine", "program:openai-codex")
 
-      assert {:ok, %{"program" => "openai-codex", "model" => "opus", "options" => options}} =
+      assert {:ok, %{"program" => "openai-codex", "model" => nil, "options" => options}} =
                get_agent(ctx, "mine")
 
       assert options == %{"effort" => "low"}
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # What a pick takes off is held to the member's options as they stand
+    # What a model chosen takes off is held to the member's options as they stand
     # when it lands: a value saved elsewhere since the page read them, one
     # the new model does not list, goes, and the member answers on it.
-    test "a pick takes off a value saved elsewhere since the page read it that the new " <>
+    test "a model chosen takes off a value saved elsewhere since the page read it that the new " <>
            "model does not list",
          %{conn: conn, ctx: ctx} do
       publish_brain!(ctx, "open", %{})
@@ -2624,8 +2633,9 @@ defmodule PrismWeb.AquaLiveTest do
           "options" => %{"effort" => "low"}
         })
 
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
-      settled(fn -> has_element?(view, "#aqua-setup-pick") end, "the pick")
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      pick = ~s(#aqua-card-mine-model option[value="open::open-2"])
+      settled(fn -> has_element?(view, pick) end, "the card's models")
 
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
@@ -2634,7 +2644,7 @@ defmodule PrismWeb.AquaLiveTest do
           "options_patch" => %{"effort" => "high"}
         })
 
-      view |> form("#aqua-setup-pick", %{"value" => "open::open-2"}) |> render_change()
+      view |> form("#aqua-card-mine-model", %{"value" => "open::open-2"}) |> render_change()
 
       assert {:ok,
               %{
@@ -2677,7 +2687,7 @@ defmodule PrismWeb.AquaLiveTest do
           "options" => %{"effort" => "high"}
         })
 
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
       lists_each!(fake, [claude, codex], fn ->
         has_element?(view, ~s(#aqua-card-mine-model option[value="haiku"]))
@@ -2748,7 +2758,7 @@ defmodule PrismWeb.AquaLiveTest do
           "model" => "opus"
         })
 
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
       shown = ~s(#aqua-card-mine-model input[name="program"][value="claude-code"])
 
       lists_each!(fake, [claude], fn ->
@@ -2799,7 +2809,7 @@ defmodule PrismWeb.AquaLiveTest do
         })
 
       {:ok, before} = get_agent(ctx, "mine")
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
       settled(fn -> has_element?(view, "#aqua-card-mine-model") end, "the card")
 
       for {program, value} <- [{"", ""}, {%{"a" => "b"}, "haiku"}] do
@@ -2855,24 +2865,22 @@ defmodule PrismWeb.AquaLiveTest do
             "options" => %{"effort" => "high", "access" => from_access["id"]}
           })
 
-        {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
-        to_title = Opus.Programs.Definition.brain(to).title
+        {view, _html} = mount_athanor(conn, "/aqua?setup=1")
         access = "#aqua-card-mine-access select[disabled]"
 
         lists_each!(fake, [from_row, to_row], fn ->
-          program_choices(view, to_title) != [] and has_element?(view, access)
+          has_element?(view, ~s(#aqua-card-mine-harness option[value="program:#{to}"])) and
+            has_element?(view, access)
         end)
 
         assert choices(view, access <> " option") == [{from_access["id"], from_access["name"]}]
 
-        view
-        |> form("#aqua-setup-pick", %{"value" => "::program::#{to}::opus"})
-        |> render_change()
+        harness!(view, "mine", "program:#{to}")
 
         assert {:ok,
                 %{
                   "program" => ^to,
-                  "model" => "opus",
+                  "model" => nil,
                   "catalyst_ref" => nil,
                   "options" => options
                 }} = get_agent(ctx, "mine")
@@ -2880,8 +2888,15 @@ defmodule PrismWeb.AquaLiveTest do
         assert options == %{"effort" => "high"}
 
         lists_each!(fake, [from_row, to_row], fn ->
-          choices(view, access <> " option") == [{to_access["id"], to_access["name"]}]
+          choices(view, access <> " option") == [{to_access["id"], to_access["name"]}] and
+            has_element?(view, ~s(#aqua-card-mine-model option[value="opus"]))
         end)
+
+        # Its model chosen from the new program's listing, the effort stays.
+        model!(view, "mine", "opus")
+
+        assert {:ok, %{"program" => ^to, "model" => "opus", "options" => %{"effort" => "high"}}} =
+                 get_agent(ctx, "mine")
 
         Cyfr.Test.Sandbox.end_views()
 
@@ -2923,16 +2938,10 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, _} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "create", "name" => "mine"})
       {:ok, before} = get_agent(ctx, "mine")
 
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
-      assert has_element?(
-               view,
-               ~s(#aqua-setup-pick option[value="program::vendor::model"])
-             )
-
-      view
-      |> form("#aqua-setup-pick", %{"value" => "program::vendor::model"})
-      |> render_change()
+      harness!(view, "mine", "catalyst:program")
+      model!(view, "mine", "program::vendor::model")
 
       assert get_agent(ctx, "mine") ==
                {:ok,
@@ -3396,17 +3405,29 @@ defmodule PrismWeb.AquaLiveTest do
     terminal
   end
 
-  # Each model the setup's picker offers under a program brain's title, as
-  # its value and the words it shows.
-  defp program_choices(view, title) do
-    view
-    |> render()
-    |> LazyHTML.from_fragment()
-    |> LazyHTML.query(~s(#aqua-setup-pick optgroup[label="#{title}"] option))
-    |> Enum.map(fn option ->
-      {option |> LazyHTML.attribute("value") |> List.first(),
-       option |> LazyHTML.text() |> String.trim()}
-    end)
+  # The card of `member` moved to the harness or key `value`, once its
+  # field offers that one.
+  defp harness!(view, member, value) do
+    field = "#aqua-card-#{member}-harness"
+
+    settled(
+      fn -> has_element?(view, field <> ~s( option[value="#{value}"])) end,
+      "#{value} offered on the card"
+    )
+
+    view |> form(field, %{"harness" => value}) |> render_change()
+  end
+
+  # The model `value` chosen on the card of `member`, once its card lists it.
+  defp model!(view, member, value) do
+    field = "#aqua-card-#{member}-model"
+
+    settled(
+      fn -> has_element?(view, field <> ~s( option[value="#{value}"])) end,
+      "#{value} listed on the card"
+    )
+
+    view |> form(field, %{"value" => value}) |> render_change()
   end
 
   # Each option `selector` finds, as its value and the words it shows.
