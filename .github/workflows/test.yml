@@ -134,11 +134,12 @@ on:
         default: false
 permissions:
   contents: read
-# A newer push to a pull request cancels the run it supersedes. Elsewhere a
-# started run is never cancelled; GitHub keeps one waiting run per group,
-# so a waiting run on main gives way to a newer push's.
+# A newer push to a pull request cancels the run it supersedes. Every other
+# run is a group of its own, its run id, so a run on main neither waits for
+# nor gives way to another: each merge has its own run, and a rerun of its
+# failed jobs starts at once and no newer push cancels it.
 concurrency:
-  group: test-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: test-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   MIX_ENV: test
