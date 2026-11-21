@@ -49,6 +49,24 @@ defmodule Locus.Backends.Owners do
   oldest ended one whose process is gone is forgotten for a new one, and
   with none such an open is `capacity`.
 
+  A key runs one process at a time. An open that would start one while a
+  process of the same key of the same row may still run (a session of it
+  that ended, of this owner or of the one it replaced, whose launcher has
+  not yet said nothing of its process is left, or a process a table no
+  longer follows) is held, and holds nothing: no reservation, no uid and
+  no place among the owner's sessions. The key is asked twice: as the
+  open is admitted, so a held open never competes for the memory and uid
+  its key's last process is about to give back, and as its process is
+  about to start once its preparation ends, which finds a process that
+  began ending meanwhile, its reservation given back before it is held.
+  Once no process of its key may run, or its owner is retired, it is
+  opened again from the start, so it meets every refusal an open meets.
+  It is held at most the stop grace and the
+  release bound together (`Locus.Backends.Backend.release_timeout_ms/0`),
+  then refused `unavailable`, and its caller's exit withdraws it. So a
+  program started again under its key, a coding harness's driver among
+  them, starts only after the last write of the process before it.
+
   ## Admission by memory
 
   Every session reserves its memory bound (the program's `memory_bytes`,
@@ -300,7 +318,11 @@ defmodule Locus.Backends.Owners do
         queue: :queue.new(),
         busy: nil,
         pending: %{},
-        drainers: %{}
+        drainers: %{},
+        # Opens held while a process of their key may still run, each
+        # opened again from the start when woken.
+        held: %{},
+        waking: false
       }
 
       {:ok, adopt_at_start(state)}
@@ -366,9 +388,9 @@ defmodule Locus.Backends.Owners do
   end
 
   def handle_call({:open, invoke, message}, from, state) do
-    case admit_owner(state, invoke) do
-      {:ok, owner, state} -> open_session(state, owner, message, from)
-      {:error, code, state} -> {:reply, {:error, code}, state}
+    case open(state, invoke, message, from) do
+      {:hold, state} -> {:noreply, hold(state, invoke, message, from)}
+      answered -> answered
     end
   end
 
@@ -414,6 +436,20 @@ defmodule Locus.Backends.Owners do
 
   def handle_info({Backend, pid, event}, state), do: {:noreply, on_session(state, pid, event)}
 
+  def handle_info(:wake_held, state), do: {:noreply, wake_held(%{state | waking: false})}
+
+  def handle_info({:held_limit, ref}, state) do
+    case Map.pop(state.held, ref) do
+      {nil, _held} ->
+        {:noreply, state}
+
+      {entry, held} ->
+        Process.demonitor(entry.monitor, [:flush])
+        GenServer.reply(entry.from, {:error, :unavailable})
+        {:noreply, %{state | held: held}}
+    end
+  end
+
   # The launcher, as a spawn's heir: nothing of that session's process is
   # left.
   def handle_info({_launcher, {:heir, %{session: key}}, :released}, state),
@@ -433,6 +469,12 @@ defmodule Locus.Backends.Owners do
         Process.cancel_timer(entry.timer)
         {:noreply, continue(%{state | pending: pending}, entry.continuation, {:error, :down})}
 
+      # A held open's caller left: nothing is opened for it.
+      ref = held_by_monitor(state, monitor) ->
+        {entry, held} = Map.pop(state.held, ref)
+        Process.cancel_timer(entry.timer)
+        {:noreply, %{state | held: held}}
+
       true ->
         {:noreply, state}
     end
@@ -449,12 +491,13 @@ defmodule Locus.Backends.Owners do
   @impl GenServer
   def format_status(status) do
     Map.new(status, fn
-      {:state, %{owners: owners, pending: pending} = state} ->
+      {:state, %{owners: owners, pending: pending, held: held} = state} ->
         {:state,
          %{
            state
            | owners: Map.new(owners, fn {id, owner} -> {id, redacted(owner)} end),
-             pending: Map.new(pending, fn {ref, entry} -> {ref, elem(entry.continuation, 0)} end)
+             pending: Map.new(pending, fn {ref, entry} -> {ref, elem(entry.continuation, 0)} end),
+             held: map_size(held)
          }}
 
       other ->
@@ -819,14 +862,83 @@ defmodule Locus.Backends.Owners do
 
   # ————— opening a session —————
 
-  defp open_session(state, owner, message, from) do
-    case Enum.find(owner.definition, &(&1.name == message.program)) do
-      nil -> {:reply, {:error, :unknown_program}, state}
-      program -> open_program(state, owner, program, message, from)
+  # An open from the start: its owner admitted, then its session.
+  defp open(state, invoke, message, from) do
+    case admit_owner(state, invoke) do
+      {:ok, owner, state} -> open_session(state, owner, invoke, message, from)
+      {:error, code, state} -> {:reply, {:error, code}, state}
     end
   end
 
-  defp open_program(state, owner, program, message, from) do
+  # An open held: its caller watched, and its bound set.
+  defp hold(state, invoke, message, {pid, _tag} = from) do
+    ref = make_ref()
+
+    release_ms =
+      Keyword.get(state.session_opts, :release_timeout_ms, Backend.release_timeout_ms())
+
+    entry = %{
+      invoke: invoke,
+      message: message,
+      from: from,
+      monitor: Process.monitor(pid),
+      timer: Process.send_after(self(), {:held_limit, ref}, state.stop_grace_ms + release_ms)
+    }
+
+    %{state | held: Map.put(state.held, ref, entry)}
+  end
+
+  defp held_by_monitor(state, monitor),
+    do: Enum.find_value(state.held, fn {ref, entry} -> entry.monitor == monitor && ref end)
+
+  # Something a held open waits on may have changed: they are opened again
+  # once this message is handled, not inside the change.
+  defp wake(%{held: held} = state) when held == %{}, do: state
+  defp wake(%{waking: true} = state), do: state
+
+  defp wake(state) do
+    send(self(), :wake_held)
+    %{state | waking: true}
+  end
+
+  # Each held open opened again from the start: held again, under the bound
+  # it was first given, while a process of its key may still run.
+  defp wake_held(state) do
+    Enum.reduce(Map.keys(state.held), state, fn ref, state ->
+      case Map.pop(state.held, ref) do
+        {nil, _held} ->
+          state
+
+        {entry, held} ->
+          case open(%{state | held: held}, entry.invoke, entry.message, entry.from) do
+            {:hold, state} ->
+              %{state | held: Map.put(state.held, ref, entry)}
+
+            answered ->
+              Process.demonitor(entry.monitor, [:flush])
+              Process.cancel_timer(entry.timer)
+
+              case answered do
+                {:reply, reply, state} ->
+                  GenServer.reply(entry.from, reply)
+                  state
+
+                {:noreply, state} ->
+                  state
+              end
+          end
+      end
+    end)
+  end
+
+  defp open_session(state, owner, invoke, message, from) do
+    case Enum.find(owner.definition, &(&1.name == message.program)) do
+      nil -> {:reply, {:error, :unknown_program}, state}
+      program -> open_program(state, owner, program, invoke, message, from)
+    end
+  end
+
+  defp open_program(state, owner, program, invoke, message, from) do
     ask = %{
       owner: owner.id,
       session: "ss_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower),
@@ -837,12 +949,16 @@ defmodule Locus.Backends.Owners do
       mode: message.mode,
       argv: message.argv,
       size: if(message.mode == :terminal, do: %{rows: message.rows, cols: message.cols}),
-      memory_bytes: program.memory_bytes || state.memory_bytes
+      memory_bytes: program.memory_bytes || state.memory_bytes,
+      # What it is opened again from, should it be held once prepared.
+      invoke: invoke,
+      message: message
     }
 
     with :ok <- shape(program, message),
          :ok <- not_failed(owner, program, ask.key),
          :error <- running(owner, ask.key),
+         :ok <- gone_before(state, owner, ask.key),
          :ok <- home_open(state, message.home_id),
          :ok <- memory_room(state, owner, ask.memory_bytes),
          {:ok, admitted} <- room(state, owner) do
@@ -871,6 +987,9 @@ defmodule Locus.Backends.Owners do
       {:ok, session_id} ->
         {:reply, {:ok, opened_answer(session_id, true)}, state}
 
+      :behind ->
+        {:hold, state}
+
       {:error, code} ->
         {:reply, {:error, code}, state}
     end
@@ -887,6 +1006,13 @@ defmodule Locus.Backends.Owners do
   defp not_failed(owner, program, key) do
     if MapSet.member?(owner.programs[program.name].failed_keys, key),
       do: {:error, :program_failed},
+      else: :ok
+  end
+
+  # Nothing of a process of the key may still run, whoever followed it.
+  defp gone_before(state, owner, key) do
+    if Reservations.process?(state.reservations, owner.athanor, owner.server, key),
+      do: :behind,
       else: :ok
   end
 
@@ -980,18 +1106,26 @@ defmodule Locus.Backends.Owners do
   end
 
   # The open's work done: the session started, or the refusal, with which
-  # nothing was asked of the launcher and the reservation is released.
+  # nothing was asked of the launcher and the reservation is released. Its
+  # key is asked again as its process is about to start: a process of the
+  # key that began ending while it was prepared holds it as one found at
+  # admission does, its reservation given back first.
   defp opened(state, from, ask, result) do
     with {:ok, owner} <- still_open(state, ask),
          program = Enum.find(owner.definition, &(&1.name == ask.program)),
          :ok <- claimed(state, program, ask, result) do
-      case running(owner, ask.key) do
+      with :error <- running(owner, ask.key),
+           :ok <- gone_before(state, owner, ask.key) do
+        start_session(state, owner, program, ask, from)
+      else
         {:ok, session_id} ->
           GenServer.reply(from, {:ok, opened_answer(session_id, true)})
           reservation(state, {ask.owner, ask.session}, :abandoned)
 
-        :error ->
-          start_session(state, owner, program, ask, from)
+        :behind ->
+          state
+          |> reservation({ask.owner, ask.session}, :abandoned)
+          |> hold(ask.invoke, ask.message, from)
       end
     else
       {:error, code, state} ->
@@ -1479,19 +1613,25 @@ defmodule Locus.Backends.Owners do
 
   # Every change to what a session holds goes through its reservation's
   # lifecycle (`Reservations`).
-  defp reservation(state, key, event),
-    do: %{state | reservations: Reservations.event(state.reservations, key, event)}
+  defp reservation(state, key, event) do
+    reservations = Reservations.event(state.reservations, key, event)
+    state = %{state | reservations: reservations}
+    if Map.has_key?(reservations, key), do: state, else: wake(state)
+  end
 
   # A reservation this table no longer follows is an ending, fenced at once.
   defp unfollowed(state, key), do: state |> reservation(key, :unfollowed) |> ask_fence(key)
 
   # What a session's heir tag names: the ledger that may adopt it, the
-  # session, and what it holds, so a table that adopts it holds the same.
+  # session, what it holds, and the row and key it runs under, so a table
+  # that adopts it holds the same and holds back the next open of its key.
   defp heir_tag(state, owner, session_id, session) do
     %{
       ledger: state.ledger,
       session: {owner.id, session_id},
       athanor: owner.athanor,
+      server: owner.server,
+      key: session.key,
       memory_bytes: session.memory_bytes,
       home_id: session.home_id
     }
@@ -1712,7 +1852,7 @@ defmodule Locus.Backends.Owners do
         state
 
       owner ->
-        state = put_owner(state, %{owner | state: :draining, drain_started: true})
+        state = wake(put_owner(state, %{owner | state: :draining, drain_started: true}))
 
         pids = for {_sid, %{pid: pid}} <- owner.sessions, pid != nil, do: pid
 

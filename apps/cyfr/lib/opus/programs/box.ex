@@ -127,8 +127,9 @@ defmodule Opus.Programs.Box do
   open that asked when that open's caller still waits, the deadline has
   not passed, its holder holds the owner and no close of that session is
   owed, and the session a key held before is then closed, since two never
-  both stand. A terminal's key is its own id, so each start is a session
-  of its own and no other open ever shares it. Any other answer stays only as the session a later open of
+  both stand; the backends service starts a key's process only once
+  nothing of the one before it is left. A terminal's key is its own id, so
+  each start is a session of its own and no other open ever shares it. Any other answer stays only as the session a later open of
   the key was given, or one another open in flight for the key will be
   given; otherwise it is closed. A holder that dies, however it dies,
   leaves the box its sessions to close.

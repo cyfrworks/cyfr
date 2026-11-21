@@ -15,6 +15,7 @@ defmodule Opus.Brain.CleanupTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Prima.Test.Wait
 
   alias Cyfr.Test.ScriptedBackends, as: Scripted
   alias Opus.Brain.Cleanup
@@ -164,6 +165,83 @@ defmodule Opus.Brain.CleanupTest do
     # Nothing is owed any more: a drain opens nothing.
     assert Cleanup.drain(actor.athanor_id) == {:ok, %{}}
     refute_received {:session, "open", _open, _fields}
+  end
+
+  # A holder of the row's owner for the test: it holds the owner and, given
+  # `params`, opens the session they name as a brain holder of a thread
+  # opens its own. Supervised by the test, it stops before the controller
+  # started in the setup, as a brain holder would.
+  defp holder!(owner, params \\ nil) do
+    test = self()
+
+    holding = fn ->
+      {:ok, _grant} = Opus.Programs.hold(owner)
+
+      opened =
+        if params,
+          do:
+            Opus.Programs.box_open(
+              owner,
+              self(),
+              params,
+              System.system_time(:millisecond) + 10_000
+            )
+
+      send(test, {:holding, self(), opened})
+      Process.sleep(:infinity)
+    end
+
+    pid = start_supervised!(Supervisor.child_spec({Task, holding}, id: make_ref()))
+    assert_receive {:holding, ^pid, opened}, 10_000
+    {pid, opened}
+  end
+
+  test "a forget whose open meets a dead holder's session still being closed writes nothing to it and stays owed",
+       %{fake: fake, actor: actor, thread: thread, row: row} do
+    record = owed!(actor, thread.id, row)
+    owner = %{athanor_id: actor.athanor_id, server_id: row.id, epoch: row.epoch}
+
+    # The key a brain holder of the thread opens its session under.
+    key = "brain-" <> binary_part(Prima.Digest.sha256_hex(thread.id), 0, 40)
+
+    params = %{
+      program: Opus.Programs.Definition.program_name(),
+      home_id: row.id,
+      key: key,
+      mode: :run,
+      argv: Opus.Programs.Words.new([])
+    }
+
+    # Another thread's holder keeps the row's owner, so the dead holder's
+    # exit releases nothing.
+    {_keeper, nil} = holder!(owner)
+    {dying, {:ok, %{session: session, resumed: false}}} = holder!(owner, params)
+    assert_receive {:session, "open", %{"key" => ^key}, _fields}, 5_000
+
+    # Killed, it never closes: the box's own close of its session is held
+    # on its way, so the session still runs at the service.
+    Scripted.hold(fake, "close", 10_000)
+    Process.exit(dying, :kill)
+    assert_receive {:held, "close", closer}, 5_000
+
+    task = draining(actor)
+    assert_receive {:session, "open", %{"key" => ^key}, _fields}, 5_000
+    assert Task.await(task, 10_000) == {:ok, %{"owed" => 1}}
+    refute_received {:session, "recv", _message, _fields}
+    refute_received {:session, "send", _message, _fields}
+    assert pending(actor) == [record]
+    assert outcome(actor, record) == :none
+    assert %{running: true} = Scripted.sessions(fake, row.id)[session]
+
+    # The close lands; the next drain opens a driver of its own and forgets.
+    send(closer, :go)
+    wait_until(fn -> not Scripted.sessions(fake, row.id)[session].running end, 5_000)
+
+    task = draining(actor)
+    %{"t" => "forget", "id" => id, "session" => @session} = driver!(fake, row)
+    say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+    assert Task.await(task, 10_000) == {:ok, %{"applied" => 1}}
+    assert outcome(actor, record) == {:ok, "applied"}
   end
 
   test "a lost answer and a box away leave the removal owed until the box answers",
