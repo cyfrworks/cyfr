@@ -558,6 +558,49 @@ defmodule Aqua.CrewTest do
     assert still.revision == head.revision
   end
 
+  # A grant the person gave before a brain had its key leaves that brain
+  # out of it: once the brain holds its key, the member on it is not told
+  # to connect a brain that is connected, but to grant Aqua again.
+  test "a member whose brain holds its key but is not in Aqua's grant is told to grant Aqua again",
+       %{ctx: ctx, room: room} do
+    soul = "agent:local.aqua"
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: soul})
+    decisions = %{ref: soul, selections: [%{dep: @model, label: "default"}]}
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
+
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("scout"),
+        "---\ntitle: scout\ndescription: Searches.\navoid: Building.\n" <>
+          "catalyst_ref: #{@gemini}\nmodel: gemini-pro-latest\n---\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+    status = Aqua.Models.model_status(ctx, roster)
+    assert {:consent_stale, _resolved} = status["scout"]
+    assert {:ready, _resolved} = status["planner"]
+
+    assert {:error, {:crew_unready, "scout", :consent_stale} = refusal} =
+             Runner.send_message(ctx, room.id, "@scout look into this")
+
+    assert Aqua.Ops.render_refusal(refusal) ==
+             "What Aqua and its crew members may use changed since you granted it — " <>
+               "grant it again on the Aqua page"
+  end
+
   # Another athanor's crew runs under its own athanor's grant, read from the
   # authenticated context, never this one's: revoking this athanor's grant
   # leaves its member's job running there, and this one's refused.

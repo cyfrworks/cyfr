@@ -733,6 +733,14 @@ defmodule Prima.Refusal do
        "#{member}'s program is not one a brain can run in — on the Programs page, make it a " <>
          "driven program with a kept folder whose command starts with its driver"}
 
+  # Its brain holds its key, which the crew's grant does not name: Aqua's
+  # grant is the next step, never a key to connect.
+  defp row({:crew_unready, member, :consent_stale}) when is_binary(member),
+    do:
+      {:consent_required,
+       "What Aqua and its crew members may use changed since you granted it — " <>
+         "grant it again on the Aqua page"}
+
   defp row({:crew_unready, member, :consent_damaged}) when is_binary(member),
     do: {:corrupt, "#{member}'s brain's own grant is damaged — revoke it and grant it again"}
 

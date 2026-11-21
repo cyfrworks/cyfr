@@ -39,10 +39,11 @@ defmodule Aqua.Models do
     * `:needs_grant` — the person's grant of the brain is all it asks, as
       Aqua's setup reads it (`t:provider/0`): a brain that needs nothing
       else;
-    * `:consent_stale` — Aqua's alone: the crew's grant no longer covers
-      what the crew may use (Aqua's tools, or the brains and hands it
-      names, changed since it was granted), so every member runs again
-      once the person grants it again;
+    * `:consent_stale` — the crew's grant does not cover what the crew
+      may use: on Aqua, its tools, or the brains and hands it names,
+      changed since it was granted; on any agent, its brain holds its key
+      but the grant's edge into it binds none. It runs once the person
+      grants Aqua again;
     * `:consent_damaged`, `:consent_unavailable` — the brain's own grant,
       or for Aqua the crew's, is damaged, or the store could not answer
       it;
@@ -532,7 +533,8 @@ defmodule Aqua.Models do
   could not answer, is `:consent_damaged` or `:consent_unavailable`,
   never a key to connect over a consent that exists. The crew's grant is
   read once, as a turn loads it: where it loads, a brain its edge binds
-  no key on is one to connect; where it does not, Aqua reads why
+  no key on reads `:consent_stale`, Aqua's to grant again; where it does
+  not, Aqua reads why
   (`Aqua.ConsentStatus.classify_refusal/1`: a stale grant is
   `:consent_stale`, a grant to give again, and damage or an outage as
   above), which is said once, on Aqua, and never on a member. A catalyst
@@ -724,10 +726,14 @@ defmodule Aqua.Models do
   # to connect, and a grant there is none of is the brain's to connect. A
   # crew member reads its brain alone, which its own grant answers: it
   # holds no consent, and the grant's state is said once, on Aqua.
-  defp granted_status({:ok, authority}, _name, catalyst_ref, resolved, connect) do
+  # A brain that holds its own key but whose edge in the grant binds none
+  # (a grant the person gave before the brain was connected) is not one to
+  # connect: granting Aqua again is the next step, said as the grant's stale
+  # state.
+  defp granted_status({:ok, authority}, _name, catalyst_ref, resolved, _connect) do
     if lent?(authority, @grant, catalyst_ref),
       do: {:ready, resolved},
-      else: {connect, resolved}
+      else: {:consent_stale, resolved}
   end
 
   defp granted_status({:error, reason}, name, _catalyst_ref, resolved, connect) do

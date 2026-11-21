@@ -1401,8 +1401,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:ready, _}, @model_status)} class="text-emerald-400">
           Model connected
         </span>
-        <%!-- The crew's grant is said once, on Aqua's card: a member holds
-             none of its own. --%>
+        <%!-- The crew's grant, which a member holds none of its own of:
+             stale on Aqua's card, and on a member's whose brain holds its
+             key but is not in the grant. --%>
         <span :if={match?({:consent_stale, _}, @model_status)} class="text-amber-300">
           What Aqua and its crew members may use changed since you granted it.
         </span>
