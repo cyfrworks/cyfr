@@ -155,6 +155,9 @@ def main():
     seen = []
     try:
         stack.up()
+        processes = stack.exec("ps -p 1 -o pid=")
+        expect(processes.returncode == 0 and processes.stdout.strip() == "1",
+               "ps can inspect a process in the backends image for Codex's terminal", processes.stderr)
         c = stack.controller()
         expect(c.hello()[0] == 200, "the backends service is greeted")
         status, synced, _ = c.sync(OWNER, [PROGRAM, probe(home="kept")])
