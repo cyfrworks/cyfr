@@ -2215,6 +2215,103 @@ defmodule PrismWeb.AquaLiveTest do
       end
     end
 
+    # A pick takes off only what the new brain does not list, applied to
+    # the member's options as they stand when it lands: an option set
+    # elsewhere since the page read them is kept.
+    test "a pick keeps an option set elsewhere since the page read it", %{conn: conn, ctx: ctx} do
+      fake = backends!()
+      claude = brain_row!(ctx, "claude-code")
+      codex = brain_row!(ctx, "openai-codex")
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "mine",
+          "title" => "Mine",
+          "program" => "claude-code",
+          "model" => "opus",
+          "options" => %{"effort" => "high", "access" => "default"}
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      codex_title = Opus.Programs.Definition.brain("openai-codex").title
+
+      lists_each!(fake, [claude, codex], fn ->
+        program_choices(view, codex_title) != [] and
+          has_element?(view, "#aqua-card-mine-access select[disabled]")
+      end)
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "mine",
+          "options_patch" => %{"effort" => "low"}
+        })
+
+      view
+      |> form("#aqua-setup-pick", %{"value" => "::program::openai-codex::opus"})
+      |> render_change()
+
+      assert {:ok, %{"program" => "openai-codex", "model" => "opus", "options" => options}} =
+               get_agent(ctx, "mine")
+
+      assert options == %{"effort" => "low"}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # What a pick takes off is held to the member's options as they stand
+    # when it lands: a value saved elsewhere since the page read them, one
+    # the new model does not list, goes, and the member answers on it.
+    test "a pick takes off a value saved elsewhere since the page read it that the new " <>
+           "model does not list",
+         %{conn: conn, ctx: ctx} do
+      publish_brain!(ctx, "open", %{})
+      grant!(ctx, "catalyst:local.open", %{bindings: []})
+
+      remember_catalogue!(%{"open" => ["open-1", "open-2"]}, %{
+        "open" => "catalyst:local.open:0.1.0"
+      })
+
+      described!(ctx, "catalyst:local.open:0.1.0", %{
+        "open-1" => [%{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]}],
+        "open-2" => [%{"name" => "effort", "kind" => "enum", "values" => ["low"]}]
+      })
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "mine",
+          "title" => "Mine",
+          "catalyst_ref" => "catalyst:local.open",
+          "model" => "open-1",
+          "options" => %{"effort" => "low"}
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1&agent=mine")
+      settled(fn -> has_element?(view, "#aqua-setup-pick") end, "the pick")
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "mine",
+          "options_patch" => %{"effort" => "high"}
+        })
+
+      view |> form("#aqua-setup-pick", %{"value" => "open::open-2"}) |> render_change()
+
+      assert {:ok,
+              %{
+                "catalyst_ref" => "catalyst:local.open",
+                "model" => "open-2",
+                "options" => options
+              }} =
+               get_agent(ctx, "mine")
+
+      assert options == %{}
+      Cyfr.Test.Sandbox.end_views()
+      answered_on_open!(ctx, "mine")
+    end
+
     # A member moved from one program brain to the other keeps each option
     # whose value the new program lists, and drops any other: the access
     # the first driver listed is none of the second's, so it goes, and the

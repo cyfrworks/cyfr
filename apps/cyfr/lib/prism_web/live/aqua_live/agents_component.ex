@@ -429,8 +429,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # A program brain's model is one its program lists: its brain stays the
-  # program the member names, and its options are those its program
-  # lists (`moved_options/3`).
+  # program the member names, and an option its program does not list
+  # is taken off in the same write (`moved/4`).
   def handle_event(
         "editor_set_model",
         %{"name" => name, "brain" => "program", "value" => value},
@@ -441,12 +441,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       program = program_of(member(socket, name))
 
       result =
-        call_aqua(socket.assigns.context, %{
-          "action" => "update",
-          "name" => name,
-          "model" => model,
-          "options" => moved_options(socket, name, declared("program:#{program}", model, socket))
-        })
+        moved(socket, name, declared("program:#{program}", model, socket), %{"model" => model})
 
       send(self(), {:refresh, :agents})
 
@@ -460,9 +455,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # A member's brain or model changed on its card or the setup's pick: its
-  # options are those the new brain and model list, every other one
-  # dropped in the same write (`moved_options/3`).
+  # A member's brain or model changed on its card or the setup's pick: an
+  # option the new brain and model do not list is taken off in the same
+  # write (`moved/4`); with no brain, every one is.
   def handle_event("editor_set_model", %{"name" => name, "value" => value}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       ctx = socket.assigns.context
@@ -494,25 +489,18 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
             brain = %{"catalyst_ref" => catalyst_ref, "model" => model}
 
-            call_aqua(ctx, %{
-              "action" => "update",
-              "name" => name,
+            moved(socket, name, described(ctx, brain), %{
               "model" => model,
               "catalyst_ref" => catalyst_ref,
-              "program" => nil,
-              "options" => moved_options(socket, name, described(ctx, brain))
+              "program" => nil
             })
 
           # A program brain the setup offers, and a model its program lists.
           {:program, program, model} ->
-            call_aqua(ctx, %{
-              "action" => "update",
-              "name" => name,
+            moved(socket, name, declared("program:" <> program, model, socket), %{
               "model" => model,
               "catalyst_ref" => nil,
-              "program" => program,
-              "options" =>
-                moved_options(socket, name, declared("program:" <> program, model, socket))
+              "program" => program
             })
 
           :noop ->
@@ -1050,15 +1038,36 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # The member's options a brain and model it moves to list, each held to
-  # what they declare as Make holds a new member's: an effort another
-  # model offered, or an access its old program listed, is dropped, so
-  # the member never carries an option its brain refuses at its turn.
-  defp moved_options(socket, name, declared) do
-    for {option, value} <- member(socket, name)["options"] || %{},
-        offered(%{option => value}, declared) == :ok,
+  # Of `options`, those a brain and model the member moves to do not
+  # list, each held to what they declare as Make holds a new member's (an
+  # effort another model offered, an access its old program listed), as a
+  # patch that takes each off and leaves every other option as it is.
+  defp dropped_options(options, declared) do
+    for {option, value} <- options,
+        offered(%{option => value}, declared) != :ok,
         into: %{},
-        do: {option, value}
+        do: {option, nil}
+  end
+
+  # A pick's one write: the member's new brain or model (`changes`) and a
+  # patch taking off each option `declared` does not list, computed from
+  # the member's options as they stand when the pick lands, read through
+  # the door, not the page's copy. A read that fails writes nothing.
+  # A value landing between this read and the write is refused by the
+  # member's turn with its sentence, and the person sets it on the card.
+  defp moved(socket, name, declared, changes) do
+    ctx = socket.assigns.context
+
+    with {:ok, %{} = member} <- call_aqua(ctx, %{"action" => "get", "name" => name}) do
+      call_aqua(
+        ctx,
+        Map.merge(changes, %{
+          "action" => "update",
+          "name" => name,
+          "options_patch" => dropped_options(member[:options] || %{}, declared)
+        })
+      )
+    end
   end
 
   defp member(socket, name),
