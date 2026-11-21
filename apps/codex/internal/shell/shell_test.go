@@ -203,8 +203,8 @@ func TestSetup_MakesTheAccountAndOpensPrism(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
 
-	if !strings.Contains(b.page(), "This box keeps its data unencrypted, whoever takes it reads everything: its CYFR data volume is not encrypted. "+
-		"Keep the box where only people you trust can reach it, or install Ubuntu again with disk encryption turned on.") {
+	if !strings.Contains(b.page(), "This device keeps its data unencrypted, whoever takes it reads everything: its CYFR data volume is not encrypted. "+
+		"Keep this device where only people you trust can reach it, or install its system again with disk encryption turned on.") {
 		t.Fatal("setup does not warn about the unencrypted data volume")
 	}
 	home.accounts.Down = true
@@ -518,7 +518,7 @@ func TestCheckListed_ARemovedKeyIsAddedAgainAndSaysHello(t *testing.T) {
 	b.post("/unlock", url.Values{"secret": {p}})
 	code := account.ShortCode(account.Kid(rec.PublicKey))
 	page := b.page()
-	if !strings.Contains(page, "Your account no longer lists this screen's key.") || !strings.Contains(page, code) ||
+	if !strings.Contains(page, "Your account no longer lists this device's key.") || !strings.Contains(page, code) ||
 		strings.Contains(page, "cyfr device approve") || !strings.Contains(page, "<svg") {
 		t.Fatalf("the removed key's page:\n%s", page)
 	}
@@ -640,7 +640,7 @@ func TestLock_RetiresEachSessionAndUnlockNeedsTheSecretAgain(t *testing.T) {
 
 	ops := len(home.opsSeen())
 	b.post("/unlock", url.Values{"secret": {otherPassphrase(t, p)}})
-	if page := b.page(); !strings.Contains(page, "not this screen") || len(home.opsSeen()) != ops {
+	if page := b.page(); !strings.Contains(page, "not this device") || len(home.opsSeen()) != ops {
 		t.Fatalf("a wrong passphrase was not said, or reached CYFR:\n%s", page)
 	}
 	if ticket := ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home); ticket != "TICKET-ses_3" {
@@ -695,7 +695,7 @@ func TestChannel_ACertificateARestoreSuspendedIsToldAndHelloedAgain(t *testing.T
 	home.revoke()
 
 	b.post("/unlock", url.Values{"secret": {p}})
-	const told = "CYFR does not take this screen now: it was removed, CYFR does not admit your account, " +
+	const told = "CYFR does not take this device now: it was removed, CYFR does not admit your account, " +
 		"or CYFR was restored from a backup, which suspends every device. Unlocking it again asks CYFR again."
 	if page := b.page(); !strings.Contains(page, told) || b.shell.Unlocked() {
 		t.Fatalf("the refused certificate was not told as a restore may be why:\n%s", page)
@@ -826,11 +826,11 @@ func TestConfirm_DrawsTheHomesPreviewAndNeedsTheSecretAgain(t *testing.T) {
 		t.Fatalf("the confirmation page:\n%s", page)
 	}
 	w := b.post("/confirm/decide", url.Values{"ref": {"cnr_1"}, "decision": {"confirm"}, "secret": {otherPassphrase(t, p)}})
-	if len(home.confirmed) != 0 || !strings.Contains(body(w), "not this screen") {
+	if len(home.confirmed) != 0 || !strings.Contains(body(w), "not this device") {
 		t.Fatal("a wrong passphrase confirmed, or was not said")
 	}
 	w = b.post("/confirm/decide", url.Values{"ref": {"cnr_1"}, "decision": {"confirm"}, "secret": {p}})
-	if len(home.confirmed) != 1 || home.confirmed[0]["ref"] != "cnr_1" || !strings.Contains(body(w), "Confirmed on this screen") {
+	if len(home.confirmed) != 1 || home.confirmed[0]["ref"] != "cnr_1" || !strings.Contains(body(w), "Confirmed on this device") {
 		t.Fatalf("confirmed %v", home.confirmed)
 	}
 	if home.heard(p) {
@@ -871,7 +871,7 @@ func TestConfirm_ALockedBoxFetchesNothing(t *testing.T) {
 	b.post("/lock", nil)
 	ops := len(home.opsSeen())
 	w := b.do(http.MethodGet, "/confirm?ref=cnr_1", "", nil)
-	if len(home.opsSeen()) != ops || !strings.Contains(body(w), "Unlock this screen first") {
+	if len(home.opsSeen()) != ops || !strings.Contains(body(w), "Unlock this device first") {
 		t.Fatal("a locked box fetched a confirmation")
 	}
 }
@@ -1021,7 +1021,7 @@ func TestPasskey_AnUnapprovedRequestAddsNothing(t *testing.T) {
 
 	hold(key)
 	draw()
-	if page := decide("approve", otherPassphrase(t, p)); !strings.Contains(page, "That is not this screen's PIN or passphrase.") ||
+	if page := decide("approve", otherPassphrase(t, p)); !strings.Contains(page, "That is not this device's PIN or passphrase.") ||
 		!strings.Contains(page, `<p class="code">`+account.ShortCode(key.Kid)+`</p>`) {
 		t.Fatalf("a wrong passphrase:\n%s", page)
 	}
@@ -1039,7 +1039,7 @@ func TestPasskey_ALockedBoxAddsNothing(t *testing.T) {
 	b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
 	b.post("/lock", nil)
 	entries, ops := len(home.accounts.Log(rec.Identifier)), len(home.opsSeen())
-	says := "Unlock this screen first, then approve the passkey again from Your devices."
+	says := "Unlock this device first, then approve the passkey again from Your devices."
 	drawn := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil))
 	decided := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "decision": {"approve"}, "secret": {p}}))
 	if !strings.Contains(drawn, says) || !strings.Contains(decided, says) || len(home.opsSeen()) != ops ||
@@ -1071,7 +1071,7 @@ func TestPasskey_AnEarlierPageApprovesOnlyTheKeyItShowed(t *testing.T) {
 	changed := "That request changed since this window showed its code, so nothing was added. Approve it again from Your devices."
 	for _, secret := range []string{otherPassphrase(t, p), p} {
 		page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(first)}, "decision": {"approve"}, "secret": {secret}}))
-		if !strings.Contains(page, changed) || strings.Contains(page, "That is not this screen's PIN or passphrase.") ||
+		if !strings.Contains(page, changed) || strings.Contains(page, "That is not this device's PIN or passphrase.") ||
 			len(home.accounts.Log(rec.Identifier)) != entries {
 			t.Fatalf("the earlier page's approval:\n%s", page)
 		}
@@ -1138,7 +1138,7 @@ func TestPasskey_ALostAnswerIsNotSaidToAddNothing(t *testing.T) {
 	page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(key)}, "decision": {"approve"}, "secret": {p}}))
 	_, listed := home.accounts.State(t, rec.Identifier).Key(key.Kid)
 	if !listed || strings.Contains(page, "Nothing was added") || strings.Contains(page, "was not added") ||
-		!strings.Contains(page, "Your account's answer did not arrive, so this screen does not know whether the passkey was added. "+
+		!strings.Contains(page, "Your account's answer did not arrive, so this device does not know whether the passkey was added. "+
 			"Sign in with it in the browser that asked, or look at your account's devices page, which lists every key.") {
 		t.Fatalf("listed %v:\n%s", listed, page)
 	}
@@ -1205,7 +1205,7 @@ func TestPasskey_AnApprovalIsBoundToEveryFieldOfTheKeyShown(t *testing.T) {
 			b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)
 			for _, secret := range []string{otherPassphrase(t, p), p} {
 				page := body(b.post("/passkey/decide", url.Values{"ref": {"pkw_1"}, "key": {keyDigest(key)}, "decision": {"approve"}, "secret": {secret}}))
-				if !strings.Contains(page, changed) || strings.Contains(page, "That is not this screen's PIN or passphrase.") ||
+				if !strings.Contains(page, changed) || strings.Contains(page, "That is not this device's PIN or passphrase.") ||
 					len(home.accounts.Log(rec.Identifier)) != entries {
 					t.Fatalf("the earlier window's approval:\n%s", page)
 				}
@@ -1254,7 +1254,7 @@ func answered(status int, body string) *http.Response {
 // A rate limit or a server error says nothing of the first send, so the
 // page says it does not know. In each case the first send landed.
 func TestPasskey_ALostSendIsSettledOnlyByAnAnswerThatShowsTheLog(t *testing.T) {
-	unknown := "Your account's answer did not arrive, so this screen does not know whether the passkey was added."
+	unknown := "Your account's answer did not arrive, so this device does not know whether the passkey was added."
 	for _, c := range []struct {
 		name   string
 		second *http.Response

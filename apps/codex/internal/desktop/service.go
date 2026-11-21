@@ -55,6 +55,9 @@ type Service struct {
 	Discover func(ctx context.Context, client *http.Client, home string) (account.Discovered, error)
 	// Shell adapts a selected CYFR's shell configuration; nil leaves it.
 	Shell func(*shell.Config)
+	// AccountRoad is whether the app signs in with the account's passkey
+	// too (macOS and Windows), beside the device's six words.
+	AccountRoad bool
 
 	mu sync.Mutex
 	// epoch counts locks. A chooser request belongs to the epoch it
@@ -72,6 +75,20 @@ type Service struct {
 	selecting string
 	sh        *shell.Shell
 	pages     *shell.Server
+	// committed is the CYFR the device's pages serve, as home named it:
+	// every locked names it again.
+	committed Message
+	// warning is what the chooser tells the person this app cannot do
+	// here (Warn).
+	warning string
+}
+
+// Warn has the chooser tell the person, in one sentence, what this app
+// cannot do on this computer, such as lock with it.
+func (s *Service) Warn(sentence string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.warning = sentence
 }
 
 type selection struct {
@@ -213,11 +230,28 @@ type request struct {
 
 // answer is what the chooser does next: show a sentence, ask to approve a
 // directory for a CYFR, or go to the device's pages.
+//
+// Once a CYFR is open, Next is the device's pages and, where the app signs
+// in with the account's passkey (AccountRoad), Passkey is that CYFR's own
+// sign-in page, which the page offers first.
 type answer struct {
 	Home    string `json:"home,omitempty"`
 	Confirm string `json:"confirm,omitempty"`
 	Next    string `json:"next,omitempty"`
+	Passkey string `json:"passkey,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// Warning is what this app cannot do on this computer (Warn), which
+	// the chooser shows whatever else it shows.
+	Warning string `json:"warning,omitempty"`
+}
+
+// opened is the answer for the CYFR open at home.
+func (s *Service) opened(home string) answer {
+	a := answer{Home: home, Next: "/"}
+	if s.AccountRoad {
+		a.Passkey = home + "/login"
+	}
+	return a
 }
 
 func (s *Service) state(context.Context, uint64, request) answer {
@@ -225,7 +259,15 @@ func (s *Service) state(context.Context, uint64, request) answer {
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
-	return answer{Home: c.Home}
+	s.mu.Lock()
+	open, warning := s.pages != nil, s.warning
+	s.mu.Unlock()
+	a := answer{Home: c.Home}
+	if open {
+		a = s.opened(c.Home)
+	}
+	a.Warning = warning
+	return a
 }
 
 // homeOf reads a typed address as a CYFR's https origin: a bare name is
@@ -320,7 +362,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 	}
 	cfg := shell.Config{Address: home, Client: s.Client, DisplayName: s.DisplayName,
 		Record: s.Record, Clients: sel, Directory: found.Directory,
-		Detect: remoteDisks, Restart: func() { _ = s.Send(Message{Type: TypeLocked}) }}
+		Detect: remoteDisks, Restart: s.sayLocked}
 	if s.Shell != nil {
 		s.Shell(&cfg)
 	}
@@ -329,13 +371,14 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 		return answer{Error: err.Error()}
 	}
 	ready := make(chan struct{}, 1)
+	proposal := Message{Type: TypeHome, Home: home, Account: found.Origin}
 	s.mu.Lock()
 	if s.epoch != epoch {
 		s.mu.Unlock()
 		return answer{Error: lockedSentence}
 	}
 	s.ready, s.selecting = ready, home
-	err = s.Send(Message{Type: TypeHome, Home: home, Account: found.Origin})
+	err = s.Send(proposal)
 	s.mu.Unlock()
 	if err != nil {
 		return answer{Error: "The app did not take the CYFR (" + err.Error() + ")."}
@@ -356,8 +399,14 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 	if err := sel.Commit(); err != nil {
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
+	// The device's pages are served only once main was told home opened:
+	// a write that failed opens nothing.
+	if err := s.Send(Message{Type: TypeOpened, Home: home}); err != nil {
+		return answer{Error: "The app did not take the CYFR (" + err.Error() + ")."}
+	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
-	return answer{Next: "/"}
+	s.committed = proposal
+	return s.opened(home)
 }
 
 // remoteDisks is what a device of a remote CYFR reports: its own system
@@ -406,7 +455,16 @@ func (s *Service) Lock(why string) {
 			return
 		}
 	}
-	_ = s.Send(Message{Type: TypeLocked})
+	s.sayLocked()
+}
+
+// sayLocked tells main the device locked, naming the CYFR committed.
+func (s *Service) sayLocked() {
+	s.mu.Lock()
+	m := s.committed
+	s.mu.Unlock()
+	m.Type = TypeLocked
+	_ = s.Send(m)
 }
 
 // Run reads main's messages from in until shutdown or the end of in,

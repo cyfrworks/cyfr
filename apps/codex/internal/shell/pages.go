@@ -24,7 +24,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
 {{if .Waiting}}
 <h1>CYFR is starting</h1>
-<p>This screen opens CYFR once it answers. If it does not, run <code>cyfr up</code> in CYFR's directory; Ctrl+Alt+F2 opens a terminal.</p>
+<p>This device opens CYFR once it answers. If it does not, run <code>cyfr up</code> in CYFR's directory; Ctrl+Alt+F2 opens a terminal.</p>
 {{else if eq .Answer "answered"}}
 <h1>Done</h1><p>This window closes by itself.</p><script>{{.Close}}</script>
 {{else if eq .Answer "ended"}}
@@ -32,10 +32,10 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{else if eq .Page "setup"}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 <h1>Set up CYFR</h1>
-{{if .Passphrase}}<p>This box has no chip it can use to keep a short PIN safe, so it uses this passphrase. Write it down now: this screen shows it this once.</p>
+{{if .Passphrase}}<p>This device has no chip it can use to keep a short PIN safe, so it uses this passphrase. Write it down now: this device shows it this once.</p>
 <p class="code">{{.Passphrase}}</p>
-{{else if not .Digits}}{{if .Drawn}}<p>Type the passphrase this screen showed you. If you did not write it down, show a new one: the one shown before stops working.</p>
-{{else}}<p>This box has no chip it can use to keep a short PIN safe, so it uses a passphrase, which this screen shows once. Have something to write it down on.</p>{{end}}
+{{else if not .Digits}}{{if .Drawn}}<p>Type the passphrase this device showed you. If you did not write it down, show a new one: the one shown before stops working.</p>
+{{else}}<p>This device has no chip it can use to keep a short PIN safe, so it uses a passphrase, which this device shows once. Have something to write it down on.</p>{{end}}
 <form method="post" action="/passphrase">{{template "proof"}}<button{{if not .Drawn}} autofocus{{end}}>Show {{if .Drawn}}a new{{else}}the{{end}} passphrase</button></form>
 {{end}}
 {{if or .Digits .Drawn}}<form method="post" action="/setup">{{template "proof"}}
@@ -45,14 +45,14 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <button>Set up</button>
 </form>
 <h1>Already have an account?</h1>
-<p>Add this box to it instead, then approve it on a device of yours.</p>
+<p>Add this device to it instead, then approve it on another device of yours.</p>
 <form method="post" action="/make">{{template "proof"}}
 {{template "secret" .}}
-<button class="quiet">Add this box to my account</button>
+<button class="quiet">Add this device to my account</button>
 </form>{{end}}
 {{else if eq .Page "enroll"}}
-<h1>Add this box to your account</h1>
-<p>On a device of yours, scan this code or open the address below. Approve only if that device shows <b>{{.Code}}</b> at the account service <b>{{.Service}}</b>.</p>
+<h1>Add this device to your account</h1>
+<p>On another device of yours, scan this code or open the address below. Approve only if that device shows <b>{{.Code}}</b> at the account service <b>{{.Service}}</b>.</p>
 <div class="qr">{{.QR}}</div>
 <p class="code">{{.AddURL}}</p>
 <form method="post" action="/enroll">{{template "proof"}}<label>Your name: @<input name="name" autocomplete="off" required></label><button>I approved it</button></form>
@@ -64,7 +64,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <button class="quiet">Make my account</button></form>
 {{else if eq .Page "recovery"}}
 <h1>Your recovery code</h1>
-<p>If you ever lose your devices, this code brings your account @{{.Name}} back. Keep it off this box: scan it, or print it.</p>
+<p>If you ever lose your devices, this code brings your account @{{.Name}} back. Keep it off this device: scan it, or print it.</p>
 {{if .RecoveryCode}}<div class="qr">{{.QR}}</div>
 <p class="code">{{.RecoveryCode}}</p>
 <button id="print" type="button" class="quiet">Print</button><script>{{.Print}}</script>
@@ -77,7 +77,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <form method="post" action="/saved">{{template "proof"}}{{if .Accept}}{{template "terms" .}}{{end}}<button autofocus>Try again</button></form>
 {{else if eq .Page "resume"}}
 <h1>Finish your account</h1>
-<p>This box began making the account @{{.Name}}. Type its recovery code to finish it.</p>
+<p>This device began making the account @{{.Name}}. Type its recovery code to finish it.</p>
 <form method="post" action="/resume">{{template "proof"}}<label>Recovery code<input name="code" type="password" autocomplete="off" autofocus required></label><button>Finish</button></form>
 {{else if eq .Page "locked"}}
 <h1>CYFR is locked</h1>
@@ -92,7 +92,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <h1>A confirmation is open</h1>
 <p>It is shown in the window that asked for it.</p>
 {{else if eq .Page "confirm"}}
-<h1>Confirm on this screen</h1>
+<h1>Confirm on this device</h1>
 <p>CYFR asks to confirm <b>{{.Confirm.Operation}}</b>:</p>
 <dl>{{range .Fields}}<dt>{{index . 0}}</dt><dd>{{index . 1}}</dd>{{end}}</dl>
 <form method="post" action="/confirm/decide">{{template "proof"}}
@@ -124,7 +124,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{define "secret"}}{{if .Digits}}
 <label>Choose a six-digit PIN<input name="secret" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
 <label>The same PIN again<input name="again" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
-<p>The chip in this box keeps your PIN; it allows eight wrong tries, then one every ten minutes.</p>
+<p>The chip in this device keeps your PIN; it allows eight wrong tries, then one every ten minutes.</p>
 {{else}}
 <label>The passphrase<input name="secret" type="password" autocomplete="off" required></label>
 <label>The passphrase again<input name="again" type="password" autocomplete="off" required></label>

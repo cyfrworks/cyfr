@@ -1520,7 +1520,7 @@ planted 'python3 -I tests/stage-probe.py --self-check # no image'
 [ -z "$(guard "$S/stages-probe.tsv" "$S/workflows")" ] ||
   fail "a self-check with a comment after it was not counted: $(guard "$S/stages-probe.tsv" "$S/workflows")"
 
-begin "the Go rows' paths are their workflows' pull_request paths, each new handoff row of the real table runs for its own sources alone, and no change runs a named row"
+begin "the Go rows' paths are their workflows' pull_request paths, the Test workflow runs for every app and test change, each new handoff row of the real table runs for its own sources alone, and no change runs a named row"
 python3 -I - "$ROOT/scripts/stages.tsv" "$ROOT/.github/workflows" >"$S/go-paths.err" 2>&1 <<'PY' || fail "$(cat "$S/go-paths.err")"
 import sys, yaml
 table, workflows = sys.argv[1:3]
@@ -1530,6 +1530,15 @@ for check, workflow in (("go-codex", "codex-ci.yml"), ("go-keeper", "keeper-ci.y
     paths = (spec.get("on") or spec.get(True))["pull_request"]["paths"]
     if rows.get(check, "").split(",") != paths:
         sys.exit(f"{check} runs for {rows.get(check)}, not {workflow}'s pull_request paths {','.join(paths)}")
+# The Test workflow, whose jobs prove the app against a real CYFR, runs
+# for a change to a proof, the composer or a frame's response headers
+# alone: every app and every test.
+spec = yaml.safe_load(open(f"{workflows}/test.yml"))
+on = spec.get("on") or spec.get(True)
+for event in ("push", "pull_request"):
+    for path in ("apps/**", "tests/**"):
+        if path not in on[event]["paths"]:
+            sys.exit(f"the Test workflow's {event} paths leave out {path}")
 PY
 real="$S/real-repo"
 git init -q -b main "$real"
@@ -1537,15 +1546,23 @@ mkdir -p "$real/scripts"
 cp "$ROOT/scripts/stage.sh" "$ROOT/scripts/stages.tsv" "$real/scripts/"
 git -C "$real" add -A
 git -C "$real" -c user.name=test -c user.email=test@invalid commit -q -m 'the real table'
-new_rows='go-codex go-keeper catalysts test-wasm'
+new_rows='go-codex go-keeper js desktop-js catalysts test-wasm'
 for spec in \
   'apps/codex/cmd/x.go|go-codex' \
-  'seed/aqua/aqua.md|go-codex' \
+  'apps/codex/desktop/src/app.js|go-codex desktop-js' \
+  'tests/desktop-proof/native/smoke.sh|go-codex' \
+  'tests/desktop-proof/connect/run.sh|go-codex' \
+  'apps/cyfr/assets/js/hooks/aqua_chat.js|js' \
+  'apps/cyfr/lib/cyfr_web/plugs/browser_csp.ex|' \
+  'apps/cyfr/lib/emissary/web/tincture_assets.ex|' \
+  'apps/cyfr/lib/emissary/web/controllers/canvas_controller.ex|' \
+  'apps/cyfr/assets/account/sign_in.js|go-codex js desktop-js' \
+  'seed/aqua/aqua.md|go-codex js' \
   'apps/locus/keeper/main.go|go-keeper' \
   'tests/fixtures/residue-canary.go|go-codex go-keeper' \
   'apps/locus/lib/locus/x.ex|' \
   'stray.wasm|test-wasm' \
-  'seed/components/catalysts/local/claude/1.4.3/src/src/chat.rs|catalysts' \
+  'seed/components/catalysts/local/claude/1.4.3/src/src/chat.rs|js catalysts' \
   'apps/cyfr/test/support/test_wasm/chat_fixture/chat_fixture.wasm|test-wasm' \
   'apps/prima/lib/prima/cargo_toml.ex|test-wasm' \
   'wit/catalyst/world.wit|test-wasm' \

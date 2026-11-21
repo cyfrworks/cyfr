@@ -239,14 +239,19 @@ function stand(el, standing) {
 }
 
 // A pointer event on the edge strip, or elsewhere in the canvas layer.
-function pointer(type, {x, y, pointerId = 1, onStrip = true}) {
+function pointer(type, {x, y, pointerId = 1, onStrip = true, inside, capture = () => {}}) {
   const event = new Event(type)
-  const strip = {setPointerCapture() {}}
+  const strip = {setPointerCapture: capture}
   event.pointerId = pointerId
   event.clientX = x
   event.clientY = y
   Object.defineProperty(event, "target", {
-    value: {closest: (selector) => (onStrip && selector === "#canvas-shelf" ? strip : null)}
+    value: {
+      closest(selector) {
+        if (selector === "#canvas-shelf") return onStrip ? strip : null
+        return selector.split(",").map((tag) => tag.trim()).includes(inside) ? {} : null
+      }
+    }
   })
   return event
 }
@@ -509,6 +514,18 @@ describe("switching canvases", () => {
     el.dispatch(pointer("pointerup", {x: 300, y: 760}))
     assert.equal(pushedToView.length, 2)
   })
+
+  for (const [name, inside] of [["button", "button"], ["link", "a"]]) {
+    test(`a press inside a shelf ${name} keeps its click`, () => {
+      const el = canvasElement()
+      mountCanvas(el)
+
+      const captured = []
+      el.dispatch(pointer("pointerdown", {x: 400, y: 760, inside, capture: (id) => captured.push(id)}))
+
+      assert.deepEqual(captured, [])
+    })
+  }
 })
 
 describe("frame signals", () => {
