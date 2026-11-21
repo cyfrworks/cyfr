@@ -320,7 +320,7 @@ defmodule Sanctum.Consent.Commit do
     }
   end
 
-  # The head's narrowing, named again (`Plan.head_narrowing/5`, the one
+  # The head's narrowing, named again (`Plan.head_narrowing/4`, the one
   # definition a plan answers too): every field of a narrowable kind whose
   # grant on the head differs from the ask as it stands. A head no
   # narrowing touched grants the ask, and is re-issued as `asked` was. A
@@ -328,7 +328,7 @@ defmodule Sanctum.Consent.Commit do
   # narrowing unknown: re-issuing the ask could widen it, so nothing is
   # granted.
   defp keep_narrowing(ctx, decisions, asked, {profile_id, head}) do
-    case Plan.head_narrowing(profile_id, head, asked.source_ref, asked.blob_json, asked.component) do
+    case Plan.head_narrowing(profile_id, head, asked.source_ref, asked.blob_json) do
       {:ok, subset} when subset == %{} -> {:ok, asked}
       {:ok, subset} -> prepare(ctx, Map.put(decisions, :subset, subset))
       {:error, _corrupt} = refused -> refused

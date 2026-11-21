@@ -51,10 +51,9 @@ defmodule Sanctum.Consent.Plan do
   never wider, and a surface can offer to grant a consumed `once` binding
   again; `head_narrowing`, per consent-graph node the narrowing the head
   holds against the ask as it stands, in the decisions' `subset` shape
-  (`head_narrowing/5`, the one definition `Sanctum.Consent.Commit.grant/2`
+  (`head_narrowing/4`, the one definition `Sanctum.Consent.Commit.grant/2`
   re-issues too), so a re-grant opens as narrow as its head, and a method
-  newly asked for, or a dependency a release added, opens off, the
-  agent's own brain alone opening as asked; and, when
+  newly asked for, or a dependency a release added, opens off; and, when
   the component's shape moved since the head, `shape_diff`, the head as
   the person narrowed it against the live ask, every node of the closure,
   each entry naming its node and whether the head never held it or the
@@ -284,7 +283,7 @@ defmodule Sanctum.Consent.Plan do
          {:ok, {dependency_needs, provided_notes}} <-
            dependency_needs(ctx, sources, closure, closure_rows),
          {:ok, asked} <- held_ask(ctx, stored, source_ref, {closure, closure_rows}),
-         {:ok, head_narrowing} <- held_narrowing(stored, {source_ref, component}, asked),
+         {:ok, head_narrowing} <- held_narrowing(stored, source_ref, asked),
          {:ok, shape_diff} <- held_shape_diff(ctx, stored, shape_digest, source_ref, asked),
          {:ok, plan_token} <-
            mint_token(ctx, shape_digest, profile_id, expected_revision) do
@@ -960,18 +959,7 @@ defmodule Sanctum.Consent.Plan do
   A node the head never held, a dependency a release added, grants none
   of what it asks: each narrowable field the ask names is named empty, so
   it is granted only as the person grants it. Its limits, credentials,
-  tool servers and declarations are granted whole, as for any node. One
-  such node opens granted as it asks, as a first grant opens: the
-  agent's own brain, the catalyst the stored source's manifest names in
-  its `agent` block (`own_brain/1`), which for Aqua is the catalyst of
-  the member it runs on. The person chose that brain, by choosing the
-  member Aqua runs on or a member's brain on its card, so the grant they
-  are asked for is the brain they chose; the sheet still shows each of
-  its rows, which the person may narrow, and nothing is granted until
-  they confirm. A dependency of that brain, a dependency a release
-  added, and every other node the head never held open empty as before.
-  `source_row` is the stored source the plan or the commit read, never a
-  caller's word.
+  tool servers and declarations are granted whole, as for any node.
 
   `head` is the stored head revision, read as every head's bytes are
   read (`Sanctum.Consent.Loader.head_blob/1`: its policy hashes to its
@@ -985,14 +973,12 @@ defmodule Sanctum.Consent.Plan do
   `head_narrowing`, which the grant sheet opens on, and
   `Sanctum.Consent.Commit.grant/2` re-issues it.
   """
-  @spec head_narrowing(String.t(), map(), String.t(), String.t(), map()) ::
+  @spec head_narrowing(String.t(), map(), String.t(), String.t()) ::
           {:ok, map()} | {:error, {:corrupt, {:profile, String.t()}}}
-  def head_narrowing(profile_id, head, source_ref, asked_blob, source_row) do
+  def head_narrowing(profile_id, head, source_ref, asked_blob) do
     with {:ok, _blob} <- Sanctum.Consent.Loader.head_blob(head),
          {:ok, head_nodes} <- decoded_nodes(head.resolved_policy),
          {:ok, asked_nodes} <- decoded_nodes(asked_blob) do
-      brain = own_brain(source_row)
-
       held =
         for {node_key, head_node} <- head_nodes,
             Map.has_key?(asked_nodes, node_key),
@@ -1011,7 +997,6 @@ defmodule Sanctum.Consent.Plan do
       unheld =
         for {node_key, _asked_node} <- asked_nodes,
             not Map.has_key?(head_nodes, node_key),
-            node_key != brain,
             record = granting_none(BlobBuilder.node_resources(asked_nodes, source_ref, node_key)),
             record != %{},
             into: %{},
@@ -1022,22 +1007,6 @@ defmodule Sanctum.Consent.Plan do
       _unreadable -> {:error, {:corrupt, {:profile, profile_id}}}
     end
   end
-
-  # The agent's own brain: the catalyst the stored source's manifest names
-  # in its `agent` block, versionless, as the closure names its node; nil
-  # for a source that names none (a component, an agent on a program, a
-  # manifest that does not decode), so no node is excepted.
-  defp own_brain(%{manifest: manifest}) do
-    with {:ok, %{"agent" => %{"catalyst" => ref}}} when is_binary(ref) <-
-           Prima.Manifest.decode_strict(manifest),
-         {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(ref) do
-      name_ref
-    else
-      _none -> nil
-    end
-  end
-
-  defp own_brain(_row), do: nil
 
   defp decoded_nodes(json) do
     case Jason.decode(json) do
@@ -1243,23 +1212,23 @@ defmodule Sanctum.Consent.Plan do
   end
 
   # What the head's grant narrows of the ask as it stands
-  # (`head_narrowing/5`): the narrowing a re-grant opens on. A first
+  # (`head_narrowing/4`): the narrowing a re-grant opens on. A first
   # grant keeps none, nor does a closure that does not resolve, which has
   # no ask to hold the head against and offers nothing to commit.
-  defp held_narrowing(:none, _source, _asked), do: {:ok, %{}}
+  defp held_narrowing(:none, _source_ref, _asked), do: {:ok, %{}}
 
   # With no ask to hold it against, the head is still read as every head's
   # bytes are: one that fails its digest or does not parse is the damaged
   # profile it is, whatever the closure.
-  defp held_narrowing({:ok, head, profile_id}, _source, nil) do
+  defp held_narrowing({:ok, head, profile_id}, _source_ref, nil) do
     case Sanctum.Consent.Loader.head_blob(head) do
       {:ok, _blob} -> {:ok, %{}}
       {:error, _damaged} -> {:error, {:corrupt, {:profile, profile_id}}}
     end
   end
 
-  defp held_narrowing({:ok, head, profile_id}, {source_ref, component}, asked),
-    do: head_narrowing(profile_id, head, source_ref, asked, component)
+  defp held_narrowing({:ok, head, profile_id}, source_ref, asked),
+    do: head_narrowing(profile_id, head, source_ref, asked)
 
   # Each tool server the head grants, as its grant recorded it: what a
   # card compares the server asked for again with. A head that does not

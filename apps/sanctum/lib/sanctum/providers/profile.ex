@@ -977,7 +977,7 @@ defmodule Sanctum.Providers.Profile do
   # branches on that class. So, in `Prima.Refusal`'s rows, are the
   # profile's own head that cannot be trusted, its row not decoding or its
   # stored policy failing its digest or not parsing, whose narrowing a
-  # re-grant would keep (`Sanctum.Consent.Plan.head_narrowing/5`), the
+  # re-grant would keep (`Sanctum.Consent.Plan.head_narrowing/4`), the
   # corrupt profile; a component the athanor no longer holds; a store the
   # walk could not read (`{:unavailable, store}`: the components at every
   # verb, as the source's row is read, `Sanctum.Consent.Plan.fetch_component/2`,
