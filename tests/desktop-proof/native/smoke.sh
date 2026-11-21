@@ -135,6 +135,7 @@ within() {
   done
 }
 gone() { ! kill -0 "$1" 2>/dev/null; }
+has_renderer() { [ -n "$(renderers "$1")" ]; }
 said() { grep -qF -- "$2" "$RUN/$1.log" 2>/dev/null; }
 answers() {
   [ "$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' "$CHOOSER")" = 200 ]
@@ -238,6 +239,8 @@ if ready first "$FIRST"; then
 
   if [ "$OS" = linux ]; then
     app_ns=$(readlink "/proc/$FIRST_OS/ns/user") || app_ns=
+    # The chooser answers on 7340 before its window's renderer need run.
+    within 30 has_renderer "$FIRST_OS" || true
     list=$(renderers "$FIRST_OS")
     bad= n=0
     for r in $list; do
