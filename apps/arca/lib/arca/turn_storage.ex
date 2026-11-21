@@ -3647,8 +3647,9 @@ defmodule Arca.TurnStorage do
   while it worked and no step carried yet, and answer those rows in `seq`
   order: the steer the loop drains before its next model request, which
   its model step carries (`consumed!/3`). A post drained by a round that
-  died before its step is drained again by the next. A turn that is over
-  drains nothing (`{:error, :not_open}`).
+  died before its step is drained again by the next, and the boundary
+  never moves back: a post older than rows the turn already reads leaves
+  them read. A turn that is over drains nothing (`{:error, :not_open}`).
   """
   @spec drain_steer(Prima.Actor.t(), String.t(), map()) :: {:ok, [map()]} | {:error, term()}
   def drain_steer(actor, turn_id, attrs \\ %{})
@@ -3665,7 +3666,7 @@ defmodule Arca.TurnStorage do
             []
 
           rows ->
-            newest = rows |> Enum.map(& &1.seq) |> Enum.max()
+            newest = rows |> Enum.map(& &1.seq) |> Enum.max() |> max(turn.window_upto_seq || 0)
 
             {1, _} =
               from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)

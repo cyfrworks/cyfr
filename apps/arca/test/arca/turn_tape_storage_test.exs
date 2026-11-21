@@ -896,6 +896,50 @@ defmodule Arca.TurnTapeStorageTest do
       refute c_message.id in ids
     end
 
+    test "draining a post accepted while queued keeps the predecessor's final rows",
+         %{actor: actor, thread: thread} do
+      %{turn: first} = accept_turn!(actor, thread, "first")
+      {first, _} = start!(actor, first)
+      %{turn: queued} = accept_turn!(actor, thread, "second")
+
+      {:ok, %{message: post}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "and also"},
+          steer_turn_id: queued.id
+        })
+
+      {_model, %{text: answer, calls: [%{step: call}]}} =
+        respond!(actor, first, [{"c", "files", "read"}])
+
+      {:ok, _} = TurnStorage.dispatch_step(actor, call.id, %{fence: first.fence})
+
+      {:ok, %{result: result}} =
+        TurnStorage.close_step(actor, call.id, "ok", %{
+          result: %{content: "ok"},
+          fence: first.fence
+        })
+
+      {:ok, _} =
+        TurnStorage.finish(actor, first.id, "completed", %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: first.fence
+        })
+
+      {queued, _} = start!(actor, queued)
+      assert post.seq < answer.seq and answer.seq < result.seq
+      assert {:ok, before} = TurnStorage.projection(actor, queued.id)
+      assert answer.id in Enum.map(before, & &1.id)
+      assert result.id in Enum.map(before, & &1.id)
+
+      assert {:ok, [%{id: drained}]} =
+               TurnStorage.drain_steer(actor, queued.id, %{fence: queued.fence})
+
+      assert drained == post.id
+      assert {:ok, after_drain} = TurnStorage.projection(actor, queued.id)
+      assert Enum.map(after_drain, & &1.id) == Enum.map(before, & &1.id)
+    end
+
     test "the first message of an empty thread is inside the window", %{
       actor: actor,
       thread: thread
@@ -1126,6 +1170,28 @@ defmodule Arca.TurnTapeStorageTest do
         })
 
       assert TurnStorage.steer_pending?(actor, turn.id)
+
+      {:ok, resumed} =
+        TurnStorage.resume(actor, turn.id, %{
+          fence: turn.fence,
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1
+        })
+
+      assert {:ok, posts} = TurnStorage.drain_steer(actor, turn.id, %{fence: resumed.fence})
+      assert Enum.map(posts, & &1.content) == ["and also", "go on"]
+
+      {:ok, carrier} =
+        TurnStorage.put_step(actor, turn.id, %{
+          kind: "model",
+          purpose: "chat",
+          dispatch_state: "dispatched",
+          idempotency_key: "review:after-ack",
+          fence: resumed.fence
+        })
+
+      assert Arca.Repo.get!(Message, early.id).carried_by == carrier.id
+      refute TurnStorage.steer_pending?(actor, turn.id)
     end
 
     test "a mark takes the turn's fence and the step's generation", %{
