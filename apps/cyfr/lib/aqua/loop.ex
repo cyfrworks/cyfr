@@ -655,7 +655,7 @@ defmodule Aqua.Loop do
     with {:ok, row} <- Compendium.crew_grant_row(ctx),
          consented when is_binary(consented) <- Map.get(activation, @grant),
          true <- consented == row.release_digest,
-         true <- Enum.sort(agent.tools || []) == row.manifest["caps"]["tools"] do
+         true <- Enum.sort(agent.tools) == row.manifest["caps"]["tools"] do
       :ok
     else
       {:error, reason} when reason != :not_found -> {:error, reason}

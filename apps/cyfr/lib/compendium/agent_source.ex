@@ -170,8 +170,11 @@ defmodule Compendium.AgentSource do
   """
   @spec shipped_row(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shipped_row(%Context{} = ctx, name) when is_binary(name) do
-    with true <- Prima.AgentRef.soul?(name) || {:error, :not_found},
-         {:ok, soul} <- Compendium.AquaTemplate.shipped_agent(name),
+    if Prima.AgentRef.soul?(name), do: shipped_soul_row(ctx, name), else: {:error, :not_found}
+  end
+
+  defp shipped_soul_row(ctx, name) do
+    with {:ok, soul} <- Compendium.AquaTemplate.shipped_agent(name),
          :ok <- if(soul.disabled, do: {:error, :disabled}, else: :ok),
          {:ok, brains} <- brains(ctx) do
       {:ok, row(soul, brains)}
