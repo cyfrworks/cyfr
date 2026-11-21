@@ -229,7 +229,7 @@ row per field of each row of each step's objects:
 | setup:a.users[row] | display_name | exact | `null` |
 | setup:a.users[row] | namespace | exact | `"proof"`: the name the registry says the account holds, learned at the admission (`Sanctum.Newcomer`) |
 | setup:a.users[row] | status | exact | `"active"` |
-| setup:a.users[row] | prefs | exact | `"{}"` |
+| setup:a.users[row] | prefs | derived | the zone the proof's browser reports, kept as the desktop's socket joined |
 | setup:a.users[row] | first_seen_at | bound | a time inside setup at A |
 | setup:a.users[row] | last_seen_at | bound | a time inside setup at A up to setup:a.users's read |
 | setup:a.users[row] | denied_at | exact | `null` |
@@ -290,7 +290,7 @@ row per field of each row of each step's objects:
 | allow:b.users[row] | display_name | exact | `null` |
 | allow:b.users[row] | namespace | exact | `"me"`: the name the registry says the account holds, learned at the admission (`Sanctum.Newcomer`) |
 | allow:b.users[row] | status | exact | `"active"` |
-| allow:b.users[row] | prefs | exact | `"{}"` |
+| allow:b.users[row] | prefs | derived | the zone the proof's browser reports, kept as the desktop's socket joined |
 | allow:b.users[row] | first_seen_at | bound | a time inside B's administrator's account and setup at B |
 | allow:b.users[row] | last_seen_at | bound | a time inside B's administrator's account and setup at B up to allow:b.users's read |
 | allow:b.users[row] | denied_at | exact | `null` |
@@ -419,7 +419,7 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the person's] | display_name | exact | `null` |
 | sign_in:b.users[the person's] | namespace | exact | `"proof"`: the name the registry says the account holds, learned at the admission (`Sanctum.Newcomer`) |
 | sign_in:b.users[the person's] | status | exact | `"active"` |
-| sign_in:b.users[the person's] | prefs | exact | `"{}"` |
+| sign_in:b.users[the person's] | prefs | derived | the zone the proof's browser reports, kept as the desktop's socket joined |
 | sign_in:b.users[the person's] | first_seen_at | bound | a time inside the sign-in at B |
 | sign_in:b.users[the person's] | last_seen_at | bound | a time inside the sign-in at B up to sign_in:b.users's read |
 | sign_in:b.users[the person's] | denied_at | exact | `null` |
@@ -551,7 +551,7 @@ row per field of each row of each step's objects:
 | collision:b.users[the nameless person's] | display_name | exact | `null` |
 | collision:b.users[the nameless person's] | namespace | exact | `null`: the registry names no name for the account, so the admission learned none |
 | collision:b.users[the nameless person's] | status | exact | `"active"` |
-| collision:b.users[the nameless person's] | prefs | exact | `"{}"` |
+| collision:b.users[the nameless person's] | prefs | derived | the zone the proof's browser reports, kept as the desktop's socket joined |
 | collision:b.users[the nameless person's] | first_seen_at | bound | a time inside the nameless account's making, allow and sign-in at B |
 | collision:b.users[the nameless person's] | last_seen_at | bound | a time inside the nameless account's making, allow and sign-in at B up to collision:b.users's read |
 | collision:b.users[the nameless person's] | denied_at | exact | `null` |
@@ -744,7 +744,7 @@ row per field of each row of each step's objects:
 | sync:a.users[row] | last_seen_at | bound | as read at setup, or a time inside the sync |
 | sync:a.users[row] | namespace | exact | as read at setup |
 | sync:a.users[row] | platform_admin_at | exact | as read at setup |
-| sync:a.users[row] | prefs | derived | the registry's GET /v1/legal/version, recorded once the sync's signature completed |
+| sync:a.users[row] | prefs | derived | the registry's GET /v1/legal/version, recorded once the sync's signature completed, beside the zone the proof's browser reports, kept as the desktop's socket joined |
 | sync:a.users[row] | security_generation | exact | as read at setup |
 | sync:a.users[row] | status | exact | as read at setup |
 | sync:a.users[row] | updated_at | bound | a time inside the sync up to sync:a.users's read |
