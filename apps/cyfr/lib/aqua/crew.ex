@@ -33,7 +33,7 @@ defmodule Aqua.Crew do
   and by nothing else. A member is its brain, its model and its effort
   together, which the person picks, with what it is good at and what to
   avoid, which the person writes. Making it is the person's press, and
-  its consent is asked as any member's is.
+  asks nothing: a member holds no grant of its own.
 
   ## The hand-off
 

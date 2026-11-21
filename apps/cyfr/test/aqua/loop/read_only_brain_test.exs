@@ -94,9 +94,8 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       assert_receive {:control, "reconcile", _message, _fields}, 2_000
       script!([])
 
-      # Made as the setup makes it on the connected program, and consented
-      # as the person consents to it: a program brain is no dependency, so
-      # the walk selects nothing.
+      # Made as the setup makes it on the connected program; a crew member
+      # holds no grant of its own.
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "create",
@@ -106,14 +105,15 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
           "model" => "gpt-6.1-sol"
         })
 
-      commit!(ctx, Prima.AgentRef.ref("openai-codex"), %{selections: []})
       {:ok, fake: fake}
     end
 
     test "switched to read-only, is refused with its own title and its program's name before " <>
            "a session opens; in auto the holder starts it on its own model",
          %{ctx: ctx, room: room, fake: fake} do
-      row = program_row!(ctx, "openai-codex", "cyfr-codex npx -y @openai/codex@0.169.0")
+      row =
+        program_row!(ctx, "openai-codex", Opus.Programs.Definition.brain("openai-codex").command)
+
       mode!(ctx, "openai-codex", "read-only")
 
       {thread, turn} = accept!(ctx, room, "openai-codex", "fix the build")

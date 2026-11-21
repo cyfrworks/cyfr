@@ -3373,27 +3373,7 @@ defmodule Aqua.ProgramTest do
       Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => member})
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    consent!(ctx, Prima.AgentRef.soul_ref())
-  end
-
-  # A Claude Code crew member on the `claude` row, made as the setup makes
-  # it on the connected program: the seed ships no crew.
-  defp claude_code!(ctx) do
-    {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "create",
-        "name" => "claude-code",
-        "title" => "Claude Code",
-        "program" => "claude",
-        "model" => "opus"
-      })
-
-    consent!(ctx, Prima.AgentRef.ref("claude-code"))
-  end
-
-  # `ref`'s consent given as the person gives it: on a program brain, which
-  # is no dependency, the walk selects nothing.
-  defp consent!(ctx, ref) do
+    ref = Prima.AgentRef.soul_ref()
     decisions = %{ref: ref, selections: []}
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
     {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
@@ -3405,6 +3385,22 @@ defmodule Aqua.ProgramTest do
         proof: preview.proof,
         commit_digest: preview.commit_digest,
         expected_consent_revision: plan.expected_consent_revision
+      })
+
+    :ok
+  end
+
+  # A Claude Code crew member on the `claude` row, made as the setup makes
+  # it on the connected program: the seed ships no crew, and a member
+  # holds no grant of its own.
+  defp claude_code!(ctx) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "create",
+        "name" => "claude-code",
+        "title" => "Claude Code",
+        "program" => "claude",
+        "model" => "opus"
       })
 
     :ok
