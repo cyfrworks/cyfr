@@ -8,8 +8,10 @@
 # may write a package, release.yml's publishing aside, so it runs only on
 # a push to main and on a schedule just after the UTC date turns, when both
 # images' upgrade layers (APT_REFRESH) are due again. A failed login or
-# write is a red run here: this gates nothing, and a red run is how a cache
-# that is not being refreshed shows.
+# write is a red run here, with no fallback: it gates no Test run and no
+# merge, and a red run is how a cache that is not being refreshed shows.
+# scripts/release.sh waits for its run on HEAD as for every workflow's, a
+# release pushing to the same registry.
 name: Layer cache
 on:
   push:
@@ -17,11 +19,11 @@ on:
   schedule:
     - cron: '7 0 * * *'
 permissions: {}
-# A newer push's write replaces an older one still running, so the cache
-# ends as main's newest tree.
+# A running write finishes and the newest push's waits (GitHub keeps one
+# waiting run), so pushes faster than an export still refresh the cache.
 concurrency:
   group: layer-cache
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   write:
     name: The ${{ matrix.image }} image's layer cache
@@ -36,6 +38,10 @@ jobs:
       matrix:
         image: [app, locus]
     steps:
+      # Whether the branch filter matches a branch named Main is not
+      # documented; this comparison is exact.
+      - name: The ref is exactly main
+        run: '[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::the layer cache is written from refs/heads/main alone, not $GITHUB_REF"; exit 1; }'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

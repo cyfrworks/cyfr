@@ -1505,7 +1505,8 @@ import glob, os, sys, yaml
 WRITERS = {("layer-cache.yml", "write"), ("release.yml", "images"), ("release.yml", "merge")}
 def writes_packages(perms):
     return perms == "write-all" or (isinstance(perms, dict) and perms.get("packages") == "write")
-for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml"))):
+# GitHub runs a workflow file of either extension.
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml")) + glob.glob(os.path.join(sys.argv[1], "*.yaml"))):
     wf = os.path.basename(path)
     doc = yaml.safe_load(open(path)) or {}
     if writes_packages(doc.get("permissions")):
@@ -1536,14 +1537,15 @@ code=$?
 if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
 while IFS='|' read -r kind wf body want; do
   label="workflows: the layer cache's boundary check refuses $kind"
-  printf '%b' "$body" | fixture_workflow "$wf"
+  rm -rf "$scratch/fixture" && mkdir -p "$scratch/fixture" && printf '%b' "$body" > "$scratch/fixture/$wf"
   cache_boundary "$scratch/fixture" > "$scratch/out" 2> "$scratch/err"
   code=$?
   if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
 done <<'CASES'
-a Test job that writes a package|test|jobs:\n  image:\n    permissions:\n      packages: write\n    steps: []\n|test.yml image: the job asks for packages: write
-a release build that writes a cache|release|jobs:\n  images:\n    steps:\n      - name: Build\n        with:\n          cache-to: type=registry,ref=example/cache:app\n|release.yml images: 'Build' writes a layer cache
-a writer a pull request starts|layer-cache|on:\n  push:\n    branches: [main]\n  schedule:\n    - cron: '7 0 * * *'\n  pull_request:\njobs: {}\n|layer-cache.yml runs on {'push': {'branches': ['main']}, 'schedule': [{'cron': '7 0 * * *'}], 'pull_request': None}, not a push to main and a schedule alone
+a Test job that writes a package|test.yml|jobs:\n  image:\n    permissions:\n      packages: write\n    steps: []\n|test.yml image: the job asks for packages: write
+a release build that writes a cache|release.yml|jobs:\n  images:\n    steps:\n      - name: Build\n        with:\n          cache-to: type=registry,ref=example/cache:app\n|release.yml images: 'Build' writes a layer cache
+a writer a pull request starts|layer-cache.yml|on:\n  push:\n    branches: [main]\n  schedule:\n    - cron: '7 0 * * *'\n  pull_request:\njobs: {}\n|layer-cache.yml runs on {'push': {'branches': ['main']}, 'schedule': [{'cron': '7 0 * * *'}], 'pull_request': None}, not a push to main and a schedule alone
+a .yaml workflow that writes a package|plant.yaml|jobs:\n  image:\n    permissions:\n      packages: write\n    steps: []\n|plant.yaml image: the job asks for packages: write
 CASES
 
 # --- the proofs' run prefix ---
