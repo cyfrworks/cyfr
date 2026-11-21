@@ -8,11 +8,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -87,15 +89,93 @@ func (r *Release) File(name string) ([]byte, bool) {
 	return nil, false
 }
 
-// Write extracts the release into the current working directory. When
-// overwriteManaged is true, managed files are replaced with the tarball
-// contents, each through a temporary file renamed over it, so a managed
-// file is its old bytes or its new ones; other files retain the
-// skip-if-exists behavior.
-func (r *Release) Write(overwriteManaged bool) error {
+// ErrLinkOutside marks a folder on a scaffold path that is a link leading
+// outside the project: Write and Check refuse it, and the snapshot reads
+// nothing through it, since its scaffold files would be another
+// directory's.
+var ErrLinkOutside = errors.New("is a link that leads outside this install")
+
+// Check refuses, with ErrLinkOutside, a folder the release writes in, or
+// one on the way to it, that is a link leading outside the working
+// directory; a link that stays inside it is followed. It writes nothing,
+// so `cyfr update` refuses before the stack stops.
+func (r *Release) Check() error {
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return r.check(root)
+}
+
+func (r *Release) check(root *os.Root) error {
+	var dirs []string
 	for _, e := range r.entries {
 		if e.dir {
-			if err := MakeDir(e.name); err != nil {
+			dirs = append(dirs, e.name)
+		} else {
+			dirs = append(dirs, filepath.Dir(e.name))
+		}
+	}
+	return checkDirs(root, dirs...)
+}
+
+// checkDirs refuses, with ErrLinkOutside, each of dirs, a path in root, or
+// a folder on the way to it, that is a link leading outside root. A folder
+// that does not exist yet is none.
+func checkDirs(root *os.Root, dirs ...string) error {
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		at := ""
+		for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(dir)), "/") {
+			if part == "." {
+				break
+			}
+			at = path.Join(at, part)
+			if seen[at] {
+				continue
+			}
+			seen[at] = true
+			info, err := root.Lstat(filepath.FromSlash(at))
+			if errors.Is(err, fs.ErrNotExist) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			if info.Mode()&fs.ModeSymlink == 0 {
+				continue
+			}
+			// os.Root follows a link that stays inside it and refuses
+			// one that leads out; a link to nothing inside is no escape.
+			if _, err := root.Stat(filepath.FromSlash(at)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("%s %w, so cyfr writes no scaffold file through it: make %s a real folder, or point the link at a folder inside the install", at, ErrLinkOutside, at)
+			}
+		}
+	}
+	return nil
+}
+
+// Write extracts the release into the current working directory, every
+// directory and file made in it through one os.Root, so no link carries a
+// write outside it. Check runs first, so a folder linked outside refuses
+// before anything is written. When overwriteManaged is true, managed files
+// are replaced with the tarball contents, each through a temporary file
+// renamed over it, so a managed file is its old bytes or its new ones;
+// other files retain the skip-if-exists behavior, and one reached through
+// a folder linked outside refuses rather than skips.
+func (r *Release) Write(overwriteManaged bool) error {
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := r.check(root); err != nil {
+		return err
+	}
+	for _, e := range r.entries {
+		if e.dir {
+			if err := makeDir(root, e.name); err != nil {
 				return fmt.Errorf("mkdir %s: %w", e.name, err)
 			}
 			continue
@@ -103,23 +183,23 @@ func (r *Release) Write(overwriteManaged bool) error {
 		managed := overwriteManaged && IsManaged(e.name)
 		// Skip non-managed files that already exist (idempotent).
 		if !managed {
-			if _, err := os.Stat(e.name); err == nil {
+			if _, err := root.Lstat(e.name); err == nil {
 				continue
 			}
 		}
-		if err := MakeDir(filepath.Dir(e.name)); err != nil {
+		if err := makeDir(root, filepath.Dir(e.name)); err != nil {
 			return fmt.Errorf("mkdir parent %s: %w", e.name, err)
 		}
 		if managed {
-			if err := ReplaceFile(e.name, e.data, e.mode); err != nil {
+			if err := replaceFile(root, e.name, e.data, e.mode); err != nil {
 				return fmt.Errorf("write %s: %w", e.name, err)
 			}
 			continue
 		}
-		f, err := os.OpenFile(e.name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, e.mode)
+		f, err := root.OpenFile(e.name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, e.mode)
 		if err != nil {
 			if os.IsExist(err) {
-				continue // race: created between Stat and OpenFile
+				continue // race: created between Lstat and OpenFile
 			}
 			return fmt.Errorf("create %s: %w", e.name, err)
 		}
@@ -137,22 +217,36 @@ func (r *Release) Write(overwriteManaged bool) error {
 	return nil
 }
 
-// MakeDir makes the directory name and any missing parent with the mode
-// 0755, not the umask's narrowing of it: the stack's containers read the
-// scaffold's trees as an account of their own. A directory that exists
-// keeps its owner and mode, and anything else at the name is an error.
+// MakeDir makes the directory name and any missing parent in the working
+// directory, as makeDir does.
 func MakeDir(name string) error {
-	if info, err := os.Stat(name); err == nil && info.IsDir() {
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return makeDir(root, name)
+}
+
+// makeDir makes the directory name in root and any missing parent with
+// the mode 0755, not the umask's narrowing of it: the stack's containers
+// read the scaffold's trees as an account of their own. A directory that
+// exists keeps its owner and mode, and anything else at the name is an
+// error.
+func makeDir(root *os.Root, name string) error {
+	name = filepath.Clean(name)
+	if name == "." {
 		return nil
 	}
-	if parent := filepath.Dir(name); parent != name {
-		if err := MakeDir(parent); err != nil {
-			return err
-		}
+	if info, err := root.Stat(name); err == nil && info.IsDir() {
+		return nil
 	}
-	err := os.Mkdir(name, 0755)
+	if err := makeDir(root, filepath.Dir(name)); err != nil {
+		return err
+	}
+	err := root.Mkdir(name, 0755)
 	if os.IsExist(err) {
-		if info, statErr := os.Stat(name); statErr == nil && info.IsDir() {
+		if info, statErr := root.Stat(name); statErr == nil && info.IsDir() {
 			return nil
 		}
 		return err
@@ -160,23 +254,40 @@ func MakeDir(name string) error {
 	if err != nil {
 		return err
 	}
-	return os.Chmod(name, 0755)
+	return root.Chmod(name, 0755)
 }
 
-// ReplaceFile writes data over the file at name, mode, through a synced
-// temporary file beside it renamed into place, so name holds its old
-// bytes or data whole.
+// ReplaceFile writes data over the file at name in the working directory,
+// as replaceFile does.
 func ReplaceFile(name string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(name), "."+filepath.Base(name)+".scaffold-*")
+	root, err := os.OpenRoot(".")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
-	_, err = tmp.Write(data)
-	if err = errors.Join(err, tmp.Chmod(mode), tmp.Sync(), tmp.Close()); err != nil {
+	defer root.Close()
+	return replaceFile(root, name, data, mode)
+}
+
+// replaceFile writes data over the file at name in root, mode, through a
+// synced temporary file beside it renamed into place, so name holds its
+// old bytes or data whole; a link at name itself is replaced, never
+// followed.
+func replaceFile(root *os.Root, name string, data []byte, mode os.FileMode) error {
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), name)
+	tmp := filepath.Join(filepath.Dir(name), "."+filepath.Base(name)+".scaffold-"+hex.EncodeToString(suffix[:]))
+	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	defer root.Remove(tmp)
+	_, err = f.Write(data)
+	if err = errors.Join(err, f.Chmod(mode), f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	return root.Rename(tmp, name)
 }
 
 // The Aqua files the scaffold ships and owns, so `cyfr update` refreshes

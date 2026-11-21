@@ -199,6 +199,19 @@ jobs:
           go test ./cmd/ -race -count=1 -v -run '^TestWriteDurable_ReplacesTheFileOnEveryPlatform$' 2>&1 | tee "$RUNNER_TEMP/durable-test.log"
           grep -q -- "--- PASS: TestWriteDurable_ReplacesTheFileOnEveryPlatform " "$RUNNER_TEMP/durable-test.log" || { echo "::error::the restore's durable write test did not run and pass"; exit 1; }
 
+      # cyfr init and update write the scaffold, and the update's snapshot
+      # reads it, through one os.Root of the project, which on Windows is
+      # the platform's handle-relative opens: a folder linked outside the
+      # project refuses, one linked inside is followed. A test skips where
+      # no symbolic link can be made, so each must run and pass here.
+      - name: go test (the scaffold's folder links ran and passed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          LINK_TESTS="TestWriteRefusesAFolderLinkedOutside TestWriteFollowsAFolderLinkThatStaysInside TestSnapshotReadsNoScaffoldFileThroughAFolderLinkedOutside TestInitStopsOnAFolderLinkedOutside"
+          go test ./internal/scaffold/ ./cmd/ -race -count=1 -v -run "^(${LINK_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/link-tests.log"
+          for t in $LINK_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/link-tests.log" || { echo "::error::the scaffold link test $t did not run and pass"; exit 1; }; done
+
   test-macos:
     # The CLI ships for macOS; this runs its checks on the platform's own
     # filesystem, process and trust-store behavior.
