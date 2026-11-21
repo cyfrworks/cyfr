@@ -16,7 +16,7 @@
 
 import {spawn} from "node:child_process"
 
-import {BrowserWindow, app, dialog, powerMonitor, session} from "electron"
+import {BrowserWindow, app, dialog, net, powerMonitor, session} from "electron"
 
 import {lines, readFromCyfr, toCyfr} from "./process.js"
 import {accountLoad, documentHeaders, grants, readHop, relyingParty, retired, unlistedSwitch} from "./policy.js"
@@ -363,18 +363,38 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     try {
       if (!out) return true
       if (!out.token || !home) return false
-      const answer = await ses.fetch(home + "/auth/logout", {
-        method: "POST", redirect: "manual", credentials: "include",
-        headers: {"content-type": "application/x-www-form-urlencoded"},
-        body: "_csrf_token=" + encodeURIComponent(out.token),
-        signal: AbortSignal.timeout(10_000)
-      })
-      return retired(answer.status, answer.headers, home)
+      const answer = await direct(ses, home + "/auth/logout", "_csrf_token=" + encodeURIComponent(out.token))
+      return !!answer && retired(answer.status, answer.headers, home)
     } catch {
       return false
     } finally {
       await ses?.clearStorageData().catch(() => {})
     }
+  }
+
+  // The direct answer to a form POST of `body` to `url` in session `ses`,
+  // with its cookies, a redirect answered rather than followed: {status,
+  // headers}, or null when none came within 10 s. net.request, since
+  // session.fetch rejects a manual redirect rather than answer it.
+  function direct(ses, url, body) {
+    return new Promise((resolve) => {
+      const request = net.request({method: "POST", url, session: ses, useSessionCookies: true, redirect: "manual"})
+      const timer = setTimeout(() => done(null), 10_000)
+      function done(answer) {
+        clearTimeout(timer)
+        resolve(answer)
+        request.abort()
+      }
+      const headers = (raw) => new Headers(Object.entries(raw ?? {}).flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((x) => [k, x])))
+      request.on("redirect", (status, _method, _location, raw) => done({status, headers: headers(raw)}))
+      request.on("response", (response) => {
+        done({status: response.statusCode, headers: headers(response.headers)})
+        response.resume?.()
+      })
+      request.on("error", () => done(null))
+      request.setHeader("content-type", "application/x-www-form-urlencoded")
+      request.end(body)
+    })
   }
 
   // ---- cyfr ----

@@ -84,9 +84,11 @@ function fromPartition(partition) {
       webRequest: {onHeadersReceived() {}},
       setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDevicePermissionHandler() {},
       setDisplayMediaRequestHandler() {},
-      async fetch(url, init) {
-        world.fetched.push({partition, url, body: init.body})
-        return world.answer(url)
+      // As Electron's session.fetch does with a manual redirect, which the
+      // real-CYFR proof met: it rejects rather than answer it.
+      async fetch(_url, init) {
+        if (init?.redirect === "manual") throw new TypeError("Redirect was cancelled")
+        throw new Error("no fetch in this stand-in")
       },
       async clearStorageData() { world.cleared.push(partition) }
     })
@@ -125,9 +127,30 @@ function cyfr() {
   return child
 }
 
+// net.request, answering as world.answer says: a 3xx as a redirect, which
+// the app must answer rather than follow, anything else as a response.
+function request({method, url, session: ses, redirect}) {
+  const r = new EventEmitter()
+  let body = ""
+  Object.assign(r, {
+    setHeader() {},
+    abort() { r.aborted = true },
+    end(data) {
+      body = data
+      world.fetched.push({partition: ses.partition, url, body, method, redirect})
+      Promise.resolve(world.answer(url)).then((answer) => {
+        const raw = Object.fromEntries([...answer.headers].map(([k, v]) => [k, [v]]))
+        if (answer.status >= 300 && answer.status < 400) r.emit("redirect", answer.status, method, answer.headers.get("location"), raw)
+        else r.emit("response", {statusCode: answer.status, headers: raw, resume() {}})
+      })
+    }
+  })
+  return r
+}
+
 mock.module("electron", {exports: {
   BrowserWindow, app: world.app, dialog: {showMessageBox: async () => ({response: 0})},
-  powerMonitor: world.powerMonitor, session: {fromPartition}
+  powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request}
 }})
 let child = null
 mock.module("node:child_process", {exports: {spawn: () => (child = cyfr())}})
@@ -332,4 +355,15 @@ test("a confirmation window loads the address it was opened for, whatever frame 
   assert.equal(load(url, canvas), true, "its first load, of the address the handler opened it for")
   assert.equal(load("http://127.0.0.1:7340/passkey?ref=pk_1", canvas), false, "a later load a frame asks for")
   assert.equal(page.webContents.opens({url: "https://evil.example/"}).action, "deny")
+})
+
+test("the sign-out reads the redirect the CYFR answers, and an acknowledged one is confirmed", async () => {
+  await signedIn()
+  world.answer = () => ({status: 302, headers: new Headers({"location": "/login?error=signed_out", "cyfr-session-retired": "1"})})
+  world.powerMonitor.emit("lock-screen")
+  await settled()
+  assert.deepEqual(world.fetched.map((f) => [f.method, f.redirect]), [["POST", "manual"]])
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  assert.doesNotMatch(content().webContents.url, /unconfirmed/)
 })
