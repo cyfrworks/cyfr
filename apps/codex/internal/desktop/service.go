@@ -56,13 +56,16 @@ type Service struct {
 	// Shell adapts a selected CYFR's shell configuration; nil leaves it.
 	Shell func(*shell.Config)
 
-	mu      sync.Mutex
-	pending *selection
-	// gen is the time since the last lock: every chooser request runs
-	// under it from its first step (runUnder), and a lock ends it, so
-	// nothing a request began before a lock publishes anything after it.
-	gen    context.Context
-	endGen context.CancelFunc
+	mu sync.Mutex
+	// epoch counts locks. A chooser request belongs to the epoch it
+	// arrived in, taken before a byte of its body is read, and publishes
+	// nothing once a lock has moved it on.
+	epoch uint64
+	// connecting is whether a Connect (connect or approve) is in flight,
+	// and stop ends it: the chooser is one page, so a second is refused.
+	connecting bool
+	stop       context.CancelFunc
+	pending    *selection
 	// ready receives main's home-ready for selecting, the CYFR being
 	// selected.
 	ready     chan struct{}
@@ -74,6 +77,7 @@ type Service struct {
 type selection struct {
 	home  string
 	found account.Discovered
+	epoch uint64
 }
 
 // NewToken is a run token: 32 random bytes, unpadded base64url.
@@ -110,6 +114,9 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	epoch := s.epoch
+	s.mu.Unlock()
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	h.Set("Referrer-Policy", "no-referrer")
@@ -125,7 +132,7 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, bootstrapPage)
 		return
 	}
-	act, ok := map[string]func(context.Context, request) answer{
+	act, ok := map[string]func(context.Context, uint64, request) answer{
 		"/bootstrap/state":   s.state,
 		"/bootstrap/connect": s.connect,
 		"/bootstrap/approve": s.approve,
@@ -142,6 +149,7 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "JSON is expected", http.StatusUnsupportedMediaType)
 		return
 	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(10 * time.Second))
 	var req request
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	dec.DisallowUnknownFields()
@@ -155,36 +163,44 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	run, end := s.runUnder(ctx)
-	defer end()
 	h.Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(act(run, req))
+	_ = json.NewEncoder(w).Encode(act(ctx, epoch, req))
 }
 
-type genKey struct{}
+const (
+	lockedSentence = "CYFR locked. Connect again."
+	busySentence   = "This app is connecting already. Wait for it to finish."
+)
 
-// runUnder is ctx bound to the time since the last lock: it ends at the
-// next lock, and live tells whether that lock has come.
-func (s *Service) runUnder(ctx context.Context) (context.Context, context.CancelFunc) {
+// begin takes the one Connect a time for a request of epoch, or answers
+// why not; run ends at the next lock, and finish must follow.
+func (s *Service) begin(ctx context.Context, epoch uint64) (context.Context, *answer) {
 	s.mu.Lock()
-	if s.gen == nil {
-		s.gen, s.endGen = context.WithCancel(context.Background())
+	defer s.mu.Unlock()
+	switch {
+	case s.epoch != epoch:
+		return nil, &answer{Error: lockedSentence}
+	case s.connecting:
+		return nil, &answer{Error: busySentence}
+	case s.pages != nil:
+		return nil, &answer{Error: "This app is connected to a CYFR already. Quit it and open it again to connect to another."}
 	}
-	gen := s.gen
-	s.mu.Unlock()
-	run, cancel := context.WithCancel(context.WithValue(ctx, genKey{}, gen))
-	stop := context.AfterFunc(gen, cancel)
-	return run, func() { stop(); cancel() }
+	run, stop := context.WithCancel(ctx)
+	s.connecting, s.stop = true, stop
+	return run, nil
 }
 
-// live is whether no lock came since run began. The caller holds s.mu,
-// under which a lock ends the time it began in, so what the caller
-// publishes while it holds s.mu precedes that lock's locked.
-func (s *Service) live(run context.Context) bool {
-	return run.Err() == nil && s.gen != nil && run.Value(genKey{}) == s.gen
+// finish ends the Connect in flight, whatever its exit: unless it opened
+// its CYFR, the service takes the next as if it never ran.
+func (s *Service) finish() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stop()
+	s.connecting, s.stop = false, nil
+	if s.pages == nil {
+		s.ready, s.selecting = nil, ""
+	}
 }
-
-const lockedSentence = "CYFR locked. Connect again."
 
 // request is a chooser's request: the token, and the address typed or the
 // directory approved.
@@ -204,7 +220,7 @@ type answer struct {
 	Error   string `json:"error,omitempty"`
 }
 
-func (s *Service) state(context.Context, request) answer {
+func (s *Service) state(context.Context, uint64, request) answer {
 	c, err := s.Clients.Load()
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
@@ -223,7 +239,12 @@ func homeOf(address string) (string, bool) {
 	return a, strings.HasPrefix(a, "https://") && account.IsHome(a)
 }
 
-func (s *Service) connect(ctx context.Context, req request) answer {
+func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer {
+	run, refused := s.begin(ctx, epoch)
+	if refused != nil {
+		return *refused
+	}
+	defer s.finish()
 	home, ok := homeOf(req.Address)
 	if !ok {
 		return answer{Error: "Type the CYFR's address, such as https://cyfr.example.com."}
@@ -232,73 +253,70 @@ func (s *Service) connect(ctx context.Context, req request) answer {
 	if discover == nil {
 		discover = account.Discover
 	}
-	found, err := discover(ctx, s.Client, home)
+	found, err := discover(run, s.Client, home)
 	if err != nil {
+		if !s.live(epoch) {
+			return answer{Error: lockedSentence}
+		}
 		return answer{Error: fmt.Sprintf("%s did not answer as a CYFR (%v).", home, err)}
+	}
+	// An approval stands only while the CYFR names the address approved:
+	// naming anything else, cyfr.run included, ends it now, whatever the
+	// person or a lock does next.
+	if err := s.Clients.EndApproval(home, found.Directory); err != nil {
+		return answer{Error: "This computer could not forget the account service it approved before (" + err.Error() + ")."}
 	}
 	c, err := s.Clients.Load()
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
-	// An approval stands only while the CYFR names the address approved:
-	// naming anything else, cyfr.run included, ends it now, whatever the
-	// person or a lock does next.
-	if c.Home == home && c.Directory != "" && c.Directory != found.Directory {
-		if err := s.Clients.EndApproval(home); err != nil {
-			return answer{Error: "This computer could not forget the account service it approved before (" + err.Error() + ")."}
-		}
-	}
-	if found.Directory == account.DefaultDirectory || (c.Home == home && c.Directory == found.Directory) {
-		return s.selectHome(ctx, home, found)
+	switch {
+	case found.Directory == account.DefaultDirectory:
+		return s.selectHome(run, epoch, home, found, true)
+	case c.Home == home && c.Directory == found.Directory:
+		return s.selectHome(run, epoch, home, found, false)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.live(ctx) {
+	if s.epoch != epoch {
 		return answer{Error: lockedSentence}
 	}
-	s.pending = &selection{home: home, found: found}
+	s.pending = &selection{home: home, found: found, epoch: epoch}
 	return answer{Home: home, Confirm: found.Directory}
 }
 
-func (s *Service) approve(ctx context.Context, req request) answer {
+func (s *Service) approve(ctx context.Context, epoch uint64, req request) answer {
+	run, refused := s.begin(ctx, epoch)
+	if refused != nil {
+		return *refused
+	}
+	defer s.finish()
 	s.mu.Lock()
 	p := s.pending
 	s.pending = nil
 	s.mu.Unlock()
-	if p == nil || p.home != req.Home || p.found.Directory != req.Directory {
+	if p == nil || p.epoch != epoch || p.home != req.Home || p.found.Directory != req.Directory {
 		return answer{Error: "That is not the account service this app asked about. Connect again."}
 	}
-	return s.selectHome(ctx, p.home, p.found)
+	return s.selectHome(run, epoch, p.home, p.found, true)
+}
+
+// live is whether no lock came since epoch.
+func (s *Service) live(epoch uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.epoch == epoch
 }
 
 // selectHome makes the device's shell at home, with its directory, over
-// the selection (shell.Selection) and sends main home; once main answers
+// the selection (shell.Selection), and sends main home; once main answers
 // home-ready for it, the selection is remembered and the device's pages are
-// served. A lock meanwhile ends it unopened.
-func (s *Service) selectHome(ctx context.Context, home string, found account.Discovered) answer {
-	s.mu.Lock()
-	switch {
-	case !s.live(ctx):
-		s.mu.Unlock()
-		return answer{Error: lockedSentence}
-	case s.ready != nil || s.pages != nil:
-		s.mu.Unlock()
-		return answer{Error: "This app is connected to a CYFR already. Quit it and open it again to connect to another."}
-	}
-	ready := make(chan struct{}, 1)
-	s.ready, s.selecting = ready, home
-	s.mu.Unlock()
-	failed := func(sentence string) answer {
-		s.mu.Lock()
-		if s.ready == ready {
-			s.ready, s.selecting = nil, ""
-		}
-		s.mu.Unlock()
-		return answer{Error: sentence}
-	}
-	sel, err := s.Clients.Select(home, found.Directory)
+// served. Each step that publishes does so under s.mu while the epoch it
+// arrived in still runs, so a lock ends it unopened.
+func (s *Service) selectHome(run context.Context, epoch uint64, home string, found account.Discovered, approved bool) answer {
+	sel, err := s.Clients.Select(home, found.Directory, approved)
 	if err != nil {
-		return failed("This computer's CYFR record could not be read (" + err.Error() + ").")
+		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
 	cfg := shell.Config{Address: home, Client: s.Client, DisplayName: s.DisplayName,
 		Record: s.Record, Clients: sel, Directory: found.Directory,
@@ -308,33 +326,34 @@ func (s *Service) selectHome(ctx context.Context, home string, found account.Dis
 	}
 	sh, err := shell.New(cfg)
 	if err != nil {
-		return failed(err.Error())
+		return answer{Error: err.Error()}
 	}
+	ready := make(chan struct{}, 1)
 	s.mu.Lock()
-	if !s.live(ctx) {
+	if s.epoch != epoch {
 		s.mu.Unlock()
-		return failed(lockedSentence)
+		return answer{Error: lockedSentence}
 	}
+	s.ready, s.selecting = ready, home
 	err = s.Send(Message{Type: TypeHome, Home: home, Account: found.Origin})
 	s.mu.Unlock()
 	if err != nil {
-		return failed("The app did not take the CYFR (" + err.Error() + ").")
+		return answer{Error: "The app did not take the CYFR (" + err.Error() + ")."}
 	}
 	select {
 	case <-ready:
-	case <-ctx.Done():
-		if ctx.Value(genKey{}).(context.Context).Err() != nil {
-			return failed(lockedSentence)
+	case <-run.Done():
+		if !s.live(epoch) {
+			return answer{Error: lockedSentence}
 		}
-		return failed("The app did not get ready to open " + home + ". Connect again.")
+		return answer{Error: "The app did not get ready to open " + home + ". Connect again."}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.live(ctx) {
+	if s.epoch != epoch {
 		return answer{Error: lockedSentence}
 	}
 	if err := sel.Commit(); err != nil {
-		s.ready, s.selecting = nil, ""
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
@@ -370,10 +389,11 @@ func (s *Service) HomeReady(home string) {
 func (s *Service) Lock(why string) {
 	s.mu.Lock()
 	sh := s.sh
-	if s.endGen != nil {
-		s.endGen()
+	s.epoch++
+	if s.stop != nil {
+		s.stop()
 	}
-	s.gen, s.endGen, s.pending = nil, nil, nil
+	s.pending = nil
 	if s.pages == nil {
 		s.ready, s.selecting = nil, ""
 	}

@@ -1366,7 +1366,7 @@ func TestSelection_ARefusedFirstHelloLeavesTheWorkingRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(string(file))
-	sel, err := file.Select(home.address(), home.accounts.URL())
+	sel, err := file.Select(home.address(), home.accounts.URL(), true)
 	if err != nil {
 		t.Fatal(err)
 	}

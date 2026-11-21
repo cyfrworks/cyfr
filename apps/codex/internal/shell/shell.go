@@ -106,10 +106,12 @@ type ClientRecord struct {
 	Certificate json.RawMessage `json:"certificate,omitempty"`
 }
 
-// ClientStore keeps this device's ClientRecord at one CYFR.
+// ClientStore keeps this device's ClientRecord at one CYFR. Update reads
+// the record, lets change edit it and writes it in one step, when change
+// answers true, so no writer saves a copy read before another's write.
 type ClientStore interface {
 	Load() (ClientRecord, error)
-	Save(ClientRecord) error
+	Update(change func(*ClientRecord) bool) error
 }
 
 // ClientFile keeps a ClientRecord in a file of its own, private to its
@@ -149,20 +151,25 @@ func DeviceFolder() (string, error) {
 // held there when the record already selects it. A working client and its
 // certificate are replaced only by an admission that succeeded: until the
 // selected CYFR admits this device, the record changes only where it
-// selects nothing at all (Commit), and every other change the shell keeps
+// selects nothing at all (Commit), and every other change the shell makes
 // (a refused first hello's forget among them) stays in memory.
 type Selection struct {
 	file ClientFile
 	mu   sync.Mutex
 	rec  ClientRecord
+	// approved is whether the address in rec was approved in this
+	// selection (or is cyfr.run), rather than taken from an approval the
+	// record held, which may have ended since.
+	approved bool
 	// owns is whether the record is the selection's: it selected this CYFR
 	// already, or this CYFR admitted the device.
 	owns bool
 }
 
 // Select begins selecting home, a remote CYFR's origin, with directory the
-// account service approved for it; it writes nothing.
-func (f ClientFile) Select(home, directory string) (*Selection, error) {
+// account service for it, approved in this selection or not; it writes
+// nothing.
+func (f ClientFile) Select(home, directory string, approved bool) (*Selection, error) {
 	c, err := f.Load()
 	if err != nil {
 		return nil, err
@@ -172,7 +179,7 @@ func (f ClientFile) Select(home, directory string) (*Selection, error) {
 	if owns {
 		rec.ClientID, rec.Certificate = c.ClientID, c.Certificate
 	}
-	return &Selection{file: f, rec: rec, owns: owns}, nil
+	return &Selection{file: f, rec: rec, approved: approved, owns: owns}, nil
 }
 
 // Load is the selected CYFR's record.
@@ -182,47 +189,59 @@ func (s *Selection) Load() (ClientRecord, error) {
 	return s.rec, nil
 }
 
-// Save keeps the selected CYFR's client as the shell changes it. It
-// writes the record once the record is the selection's, or when c is an
-// admission (a client and the certificate this CYFR issued it), which
-// makes it so.
-func (s *Selection) Save(c ClientRecord) error {
+// Update applies change to the selected CYFR's record, and to the file
+// once the record is the selection's, or when the change is an admission
+// (a client and the certificate this CYFR issued it), which makes it so.
+func (s *Selection) Update(change func(*ClientRecord) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.rec = c
-	if !s.owns && (c.ClientID == "" || len(c.Certificate) == 0) {
-		return nil
-	}
-	s.owns = true
-	return s.file.Save(c)
+	change(&s.rec)
+	return s.file.Update(func(c *ClientRecord) bool {
+		switch {
+		case s.owns:
+			return change(c)
+		case s.rec.ClientID != "" && len(s.rec.Certificate) != 0:
+			*c, s.owns = s.rec, true
+			return true
+		}
+		return false
+	})
 }
 
 // Commit writes the selection once the app opened it, where the record
-// selects nothing yet or this CYFR already.
+// selects nothing yet or this CYFR already. It writes the account
+// service's address only when this selection approved it; one it took
+// from the record stays as the record holds it now, ended or not.
 func (s *Selection) Commit() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c, err := s.file.Load()
-	if err != nil {
-		return err
-	}
-	if !s.owns && (c.Home != "" || c.Project != "" || c.ClientID != "" || len(c.Certificate) != 0) {
-		return nil
-	}
-	s.owns = true
-	return s.file.Save(s.rec)
+	return s.file.Update(func(c *ClientRecord) bool {
+		switch {
+		case s.owns:
+			if !s.approved || c.Directory == s.rec.Directory {
+				return false
+			}
+			c.Directory = s.rec.Directory
+			return true
+		case c.Home == "" && c.Project == "" && c.ClientID == "" && len(c.Certificate) == 0 && s.approved:
+			*c, s.owns = s.rec, true
+			return true
+		}
+		return false
+	})
 }
 
-// EndApproval forgets the account service approved for home, which named
-// another since: whatever the person answers now, a later return to the
-// old address asks again.
-func (f ClientFile) EndApproval(home string) error {
-	c, err := f.Load()
-	if err != nil || c.Home != home || c.Directory == "" {
-		return err
-	}
-	c.Directory = ""
-	return f.Save(c)
+// EndApproval forgets the account service approved for home unless it is
+// keep, the address the CYFR names now: an approval stands only while the
+// CYFR names it.
+func (f ClientFile) EndApproval(home, keep string) error {
+	return f.Update(func(c *ClientRecord) bool {
+		if c.Home != home || c.Directory == "" || c.Directory == keep {
+			return false
+		}
+		c.Directory = ""
+		return true
+	})
 }
 
 // SelectProject remembers project, a local project's absolute directory,
@@ -230,19 +249,22 @@ func (f ClientFile) EndApproval(home string) error {
 // another CYFR, or holds a client of one, is refused: this user's device
 // connects to one CYFR.
 func (f ClientFile) SelectProject(project string) error {
-	c, err := f.Load()
-	if err != nil {
-		return err
-	}
-	switch {
-	case c.Project == project:
-		return nil
-	case c.Home != "":
-		return fmt.Errorf("this account's CYFR app is connected to %s, not to the CYFR in %s", c.Home, project)
-	case c.Project != "" || c.ClientID != "":
-		return fmt.Errorf("this account's device is connected to the CYFR in %s, not to the one in %s", c.Project, project)
-	}
-	return f.Save(ClientRecord{Project: project})
+	var refused error
+	err := f.Update(func(c *ClientRecord) bool {
+		switch {
+		case c.Project == project:
+			return false
+		case c.Home != "":
+			refused = fmt.Errorf("this account's CYFR app is connected to %s, not to the CYFR in %s", c.Home, project)
+			return false
+		case c.Project != "" || c.ClientID != "":
+			refused = fmt.Errorf("this account's device is connected to the CYFR in %s, not to the one in %s", c.Project, project)
+			return false
+		}
+		*c = ClientRecord{Project: project}
+		return true
+	})
+	return errors.Join(err, refused)
 }
 
 // Load reads the file; none is an empty record.
@@ -258,8 +280,32 @@ func (f ClientFile) Load() (ClientRecord, error) {
 	return c, json.Unmarshal(raw, &c)
 }
 
-// Save replaces the file in one step.
-func (f ClientFile) Save(c ClientRecord) error { return writeJSON(string(f), c) }
+// recordLocks holds one lock a client record's path: every writer of a
+// record in this process takes it, and only the process holding the
+// shell's listener writes one.
+var recordLocks sync.Map
+
+// Update reads the record, lets change edit it and, when change answers
+// true, writes it in one step, all under the record's one lock.
+func (f ClientFile) Update(change func(*ClientRecord) bool) error {
+	l, _ := recordLocks.LoadOrStore(string(f), &sync.Mutex{})
+	mu := l.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	c, err := f.Load()
+	if err != nil {
+		return err
+	}
+	if !change(&c) {
+		return nil
+	}
+	return writeJSON(string(f), c)
+}
+
+// Save replaces the record whole.
+func (f ClientFile) Save(c ClientRecord) error {
+	return f.Update(func(r *ClientRecord) bool { *r = c; return true })
+}
 
 // writeJSON replaces path in one step: a private temporary file in the
 // same directory, renamed over it.
@@ -1485,14 +1531,17 @@ func (s *Shell) admission(ctx context.Context) map[string]any {
 // the connection goes on.
 func (s *Shell) admitted(a Admitted) error {
 	s.here.ClientID, s.here.Certificate = a.ClientID, a.Certificate
-	return s.cfg.Clients.Save(s.here)
+	return s.cfg.Clients.Update(func(c *ClientRecord) bool {
+		c.ClientID, c.Certificate = a.ClientID, a.Certificate
+		return true
+	})
 }
 
 // forget drops the certificate of a standing that ended here, keeping the
 // client id, so the next unlock says hello without a capability.
 func (s *Shell) forget() {
 	s.here.Certificate = nil
-	_ = s.cfg.Clients.Save(s.here)
+	_ = s.cfg.Clients.Update(func(c *ClientRecord) bool { c.Certificate = nil; return true })
 }
 
 // renewed persists a certificate the CYFR issued. It arrives on the
@@ -1505,7 +1554,7 @@ func (s *Shell) renewed(cert json.RawMessage) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.here.Certificate = cert
-		_ = s.cfg.Clients.Save(s.here)
+		_ = s.cfg.Clients.Update(func(c *ClientRecord) bool { c.Certificate = cert; return true })
 	}()
 }
 

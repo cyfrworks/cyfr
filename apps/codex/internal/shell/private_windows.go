@@ -32,6 +32,12 @@ func privateFolder(dir string) error {
 	if err != nil {
 		return err
 	}
+	// Another user's folder is refused. The process's own default owner is
+	// accepted too: an elevated administrator's new objects belong to the
+	// Administrators group where Windows is set so, as on Windows Server,
+	// and an administrator of the machine can take ownership of any folder
+	// whatever this code does, as root can on Unix, so accepting that group
+	// gives no one a power an administrator lacks.
 	if !owner.Equals(user.User.Sid) && !owner.Equals(mine) {
 		return errors.New("another account owns it")
 	}

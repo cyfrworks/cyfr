@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -526,4 +528,97 @@ func TestAnApprovalEndsWhenTheCYFRNamesTheDefault(t *testing.T) {
 		t.Fatalf("a return to the address approved before went on unasked: %+v", got)
 	}
 	back.quiet(t)
+}
+
+// signalling is a request body that says when the handler first reads it.
+type signalling struct {
+	io.Reader
+	once    sync.Once
+	reading chan struct{}
+}
+
+func (b *signalling) Read(p []byte) (int, error) {
+	b.once.Do(func() { close(b.reading) })
+	return b.Reader.Read(p)
+}
+
+// A request belongs to the lock time it arrived in, taken before its body
+// is read: a Connect whose body is still arriving when the lock lands
+// publishes nothing after it.
+func TestAConnectStillArrivingWhenTheLockLandsPublishesNothing(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	pr, pw := io.Pipe()
+	body := &signalling{Reader: pr, reading: make(chan struct{})}
+	r := httptest.NewRequest(http.MethodPost, "http://"+shell.Listen+"/bootstrap/connect", body)
+	r.Host = shell.Listen
+	r.Header.Set("Origin", shell.Origin)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	served := make(chan struct{})
+	go func() { a.ServeHTTP(w, r); close(served) }()
+	<-body.reading
+	a.Lock("Locked.")
+	if m := a.next(t); m.Type != TypeLocked {
+		t.Fatalf("main heard %+v", m)
+	}
+	_, _ = io.WriteString(pw, `{"token":"the-run-token","address":"cyfr.example.com"}`)
+	pw.Close()
+	<-served
+	var got answer
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.Error != lockedSentence {
+		t.Fatalf("a Connect that arrived before the lock answered %+v", got)
+	}
+	a.HomeReady("https://cyfr.example.com")
+	a.quiet(t)
+	if n := a.discovered.Load(); n != 0 {
+		t.Fatalf("it read %d CYFRs", n)
+	}
+}
+
+// The chooser is one page: while one Connect is in flight a second is
+// refused, in words the page shows, and the first goes on unharmed.
+func TestASecondConnectWhileOneIsInFlightIsRefused(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	first := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	if m := a.next(t); m.Type != TypeHome {
+		t.Fatalf("main heard %+v", m)
+	}
+	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": "another.example.com"}); got.Error != busySentence {
+		t.Fatalf("a second Connect answered %+v", got)
+	}
+	a.quiet(t)
+	a.HomeReady("https://cyfr.example.com")
+	if got := answered(t, first); got.Next != "/" {
+		t.Fatalf("the first Connect answered %+v", got)
+	}
+}
+
+// Every exit of a Connect leaves the service able to take the next: one
+// whose CYFR main got ready for but that could not be remembered ends
+// unopened, and the next Connect goes on.
+func TestAConnectThatFailsAfterHomeReadyLeavesTheServiceFree(t *testing.T) {
+	dir := t.TempDir()
+	record := filepath.Join(dir, "client.json")
+	a := newApp(t, dir, offline())
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	a.next(t)
+	if err := os.Mkdir(record, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a.HomeReady("https://cyfr.example.com")
+	if got := answered(t, done); got.Next != "" || got.Error == "" {
+		t.Fatalf("a Connect that could not remember its CYFR answered %+v", got)
+	}
+	if err := os.Remove(record); err != nil {
+		t.Fatal(err)
+	}
+	again := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	if m := a.next(t); m.Type != TypeHome {
+		t.Fatalf("the next Connect did not go on: %+v", m)
+	}
+	a.HomeReady("https://cyfr.example.com")
+	if got := answered(t, again); got.Next != "/" {
+		t.Fatalf("the next Connect answered %+v", got)
+	}
 }
