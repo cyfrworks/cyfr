@@ -116,6 +116,7 @@ defmodule Prima.Manifest.Needs do
   def validate(%{"needs" => other}), do: {:error, {:invalid_needs, {:not_a_map, other}}}
   def validate(manifest) when is_map(manifest), do: :ok
 
+
   @doc """
   The normalized needs for a decoded manifest: a sorted list of
   `%{name, kind, qualifier, reason, fields, scopes, required, attach,
@@ -154,14 +155,6 @@ defmodule Prima.Manifest.Needs do
   end
 
   def from_manifest(_manifest), do: nil
-
-  @doc """
-  Whether a normalized needs list (`from_manifest/1`, or a setup plan's
-  needs, which carry the same `kind`) holds a login need.
-  """
-  @spec login?([map()] | nil) :: boolean()
-  def login?(needs) when is_list(needs), do: Enum.any?(needs, &(Map.get(&1, :kind) == "login"))
-  def login?(_none), do: false
 
   @doc """
   The kinds of need a consent binds: the credential kinds, each met by

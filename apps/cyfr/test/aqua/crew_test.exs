@@ -329,21 +329,21 @@ defmodule Aqua.CrewTest do
     assert pending_records(ctx) == []
   end
 
-  # A harness catalyst whose program row is set up waits on the person's
-  # grant alone: its refusal asks for that, never for the program it has,
-  # while a program brain whose row is not installed asks for its install,
-  # and one whose row of that name is a bare harness, as the catalyst's
-  # need sets one up, is said to be no brain's, never not installed.
-  test "a member whose program is set up and not granted is refused for the grant alone",
+  # A catalyst that needs nothing of the person waits on their grant
+  # alone: its refusal asks for that, never for a program, while a program
+  # brain whose row is not installed asks for its install, and one whose
+  # row of that name is a bare harness is said to be no brain's, never not
+  # installed.
+  test "a member whose brain needs only the grant is refused for the grant alone",
        %{ctx: ctx, room: room} do
-    Arca.Test.UnitFixtures.login_catalyst!(ctx, "signin", "openai-codex")
+    Arca.Test.UnitFixtures.chat_catalyst!(ctx, "open")
 
     :ok =
       Arca.put(
         actor(ctx),
         Compendium.AquaPath.crew_file("coder"),
         "---\ntitle: coder\ndescription: Codes.\navoid: Planning.\n" <>
-          "catalyst_ref: catalyst:local.signin\nmodel: default\n---\n"
+          "catalyst_ref: catalyst:local.open\nmodel: default\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -361,7 +361,7 @@ defmodule Aqua.CrewTest do
 
     {:ok, roster} = Aqua.AgentConfig.roster(ctx)
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["coder"] == {:needs_grant, "catalyst:local.signin:0.1.0"}
+    assert status["coder"] == {:needs_grant, "catalyst:local.open:0.1.0"}
     assert status["openai-codex"] == {:program_unfit, "openai-codex"}
     assert status["claude-code"] == {:program_missing, "claude"}
 

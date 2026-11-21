@@ -330,8 +330,7 @@ defmodule Aqua.Crew do
 
   @typedoc """
   Why a crew member cannot take a job: no brain named, its catalyst not
-  installed, no key bound, its program not set up and granted, only the
-  person's grant to give, a consent it runs under damaged, for a brain
+  installed, no key bound, only the person's grant to give, a consent it runs under damaged, for a brain
   that is a program its row gone, disabled or not a program a brain runs
   in, or the reads that would tell unavailable.
   """
@@ -340,7 +339,6 @@ defmodule Aqua.Crew do
           | :not_installed
           | :no_key
           | :no_grant
-          | :no_program
           | :consent_stale
           | :consent_damaged
           | :program_missing
@@ -391,7 +389,6 @@ defmodule Aqua.Crew do
   defp unready({:missing, _}), do: :not_installed
   defp unready({:needs_key, _}), do: :no_key
   defp unready({:needs_grant, _}), do: :no_grant
-  defp unready({:needs_program, _}), do: :no_program
   defp unready({:consent_stale, _}), do: :consent_stale
   defp unready({:consent_damaged, _}), do: :consent_damaged
   defp unready({:program_missing, _}), do: :program_missing

@@ -719,12 +719,6 @@ defmodule Prima.Refusal do
       {:setup_required,
        "#{member}'s brain needs only your grant — connect it from its card on the Aqua page"}
 
-  defp row({:crew_unready, member, :no_program}) when is_binary(member),
-    do:
-      {:setup_required,
-       "#{member}'s program is not set up — set it up on the Programs page, then connect " <>
-         "it from its card on the Aqua page"}
-
   # A brain that is a program stands on the row of its name alone
   # (`Aqua.Models`).
   defp row({:crew_unready, member, :program_missing}) when is_binary(member),

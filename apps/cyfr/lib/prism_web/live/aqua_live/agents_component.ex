@@ -14,7 +14,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   its card. Each of them has a mode,
   read-only or auto, which decides what of its offered tools it runs; the
   read-only choice is closed, with the reason beneath it, for a member
-  whose brain CYFR cannot keep read-only (`Aqua.read_only_unheld/3`).
+  whose brain CYFR cannot keep read-only (`Aqua.read_only_unheld/2`).
   Each brain's models come from the model catalogue and its options from
   the brain's own `describe` (`Aqua.brain_options/2`); a brain that is a
   program, named by its row's name, offers the models and efforts its
@@ -71,8 +71,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:model_status, %{})
      |> assign(:brain_options, %{})
      |> assign(:program_models, %{})
-     |> assign(:program_offers, %{})
-     |> assign(:signs_in, MapSet.new())
      |> assign(:unheld, %{})
      |> assign(:installing, nil)
      |> assign(:setting_up, nil)
@@ -670,7 +668,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign(:crew, crew)
     |> assign(:refused, refused)
     |> assign(:model_status, status)
-    |> assign_plans(ctx, agents, listed)
+    |> assign(:unheld, Aqua.read_only_unheld(ctx, listed))
     |> load_brain_options(agents, status)
     |> ensure_tool_actions_loaded()
     |> assign(:browser, browser_status(ctx))
@@ -780,54 +778,23 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp efforts_option([]), do: []
   defp efforts_option(efforts), do: [%{"name" => "effort", "kind" => "enum", "values" => efforts}]
 
-  # Each agent's catalyst, read once through its setup plan: the programs
-  # its login needs offer to install, and whether it runs on a program's
-  # own sign-in (`Aqua.brain_signs_in?/1`), whose binding is the one row
-  # named as its program, so its card offers no other to change to; and
-  # which members' brains CYFR cannot keep read-only
-  # (`Aqua.read_only_unheld/3`). A plan
-  # that cannot be read offers nothing.
-  defp assign_plans(socket, ctx, agents, listed) do
-    plans =
-      for ref <- agents |> Enum.map(& &1["catalyst_ref"]) |> Enum.uniq(),
-          is_binary(ref),
-          {:ok, plan} <- [
-            PrismWeb.Ops.call_tool(ctx, "component", %{
-              "action" => "setup_plan",
-              "reference" => ref
-            })
-          ],
-          do: {ref, plan}
-
-    socket
-    |> assign(:program_offers, program_offers(ctx, plans))
-    |> assign(
-      :signs_in,
-      for({ref, plan} <- plans, Aqua.brain_signs_in?(plan), into: MapSet.new(), do: ref)
-    )
-    |> assign(:unheld, Aqua.read_only_unheld(ctx, listed, Map.new(plans)))
-  end
-
-  # The program offers a card shows: a catalyst's, from its login needs
-  # (`program_offers/2`); a program brain's, from the row of its name as
-  # its status reads it: none of that name is offered to install, through
+  # The program offers a card shows, a program brain's, from the row of
+  # its name as its status reads it: none of that name is offered to
+  # install, through
   # the Programs page's form prefilled from the member's file, and one
   # that stands as a brain's to set up, its press starting it in a
   # terminal where the person signs it in. A row of that name that stands
   # disabled, unfit or unread offers neither: its status says why.
-  defp offers(_offers, {:program_missing, _name}, %{"program" => program} = agent)
+  defp offers({:program_missing, _name}, %{"program" => program} = agent)
        when is_binary(program) do
     query = %{"install_for" => agent["name"], "from" => "aqua"}
     [%{program: program, installed?: false, query: URI.encode_query(query)}]
   end
 
-  defp offers(_offers, {:ready, _name}, %{"program" => program}) when is_binary(program),
+  defp offers({:ready, _name}, %{"program" => program}) when is_binary(program),
     do: [%{program: program, installed?: true}]
 
-  defp offers(_offers, _status, %{"program" => program}) when is_binary(program), do: []
-
-  defp offers(program_offers, _status, agent),
-    do: Map.get(program_offers, agent["catalyst_ref"], [])
+  defp offers(_status, _agent), do: []
 
   # A brain picked for a crew member moves its consent's shape, and Aqua's
   # too when Aqua runs on it. The page asks one consent at a time: Aqua's
@@ -854,50 +821,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # Aqua runs in its member's mode: a member in read-only whose brain CYFR
   # cannot keep read-only leaves Aqua unable to run, in the member's
-  # sentence (`Aqua.read_only_unheld/3`).
+  # sentence (`Aqua.read_only_unheld/2`).
   defp soul_unheld(unheld, %{"mode" => "read-only", "member" => member}) when is_binary(member),
     do: Map.get(unheld, member)
 
   defp soul_unheld(_unheld, _soul), do: nil
 
-  # A brain that runs on a program's own sign-in is bound to the one row
-  # named as its program, so its card offers no other to change to.
-  defp signs_in?(_signs_in, %{"program" => program}) when is_binary(program), do: true
-  defp signs_in?(signs_in, agent), do: MapSet.member?(signs_in, agent["catalyst_ref"])
-
-  # For each catalyst, the programs its login needs name: one the athanor
-  # has no row for is offered to install (the Programs page's install
-  # form), and one it has is offered to set up: its press starts it in a
-  # terminal (`set_up_program`), where the person signs it in; either
-  # comes back to Aqua.
-  defp program_offers(ctx, plans) do
-    plans = for {ref, plan} <- plans, do: {ref, login_programs(plan)}
-
-    names =
-      if Enum.any?(plans, fn {_ref, needs} -> needs != [] end) do
-        case PrismWeb.Ops.call_tool(ctx, "mcp_servers/list", %{}) do
-          {:ok, %{servers: servers}} -> Enum.map(servers, & &1[:name])
-          _ -> []
-        end
-      else
-        []
-      end
-
-    for {ref, needs} <- plans, into: %{} do
-      offers =
-        for need <- needs, need.program in names or need.install? do
-          query = %{"install" => ref, "need" => need.name, "from" => "aqua"}
-
-          %{
-            program: need.program,
-            installed?: need.program in names,
-            query: URI.encode_query(query)
-          }
-        end
-
-      {ref, offers}
-    end
-  end
+  # A brain that is a program runs on that program's own sign-in, bound to
+  # the one row named as its program, so its card offers no key to change
+  # to.
+  defp signs_in?(%{"program" => program}) when is_binary(program), do: true
+  defp signs_in?(_agent), do: false
 
   defp set_up(socket, _program, {:ok, %{session: session}}) do
     query = URI.encode_query(%{"terminal" => session, "from" => "aqua"})
@@ -919,13 +853,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         athanor,
         "/aqua?" <> URI.encode_query(%{"setup" => "1", "agent" => agent["name"]})
       )
-
-  defp login_programs(plan) do
-    for need <- plan[:needs] || [],
-        need[:kind] == "login",
-        is_binary(need[:program]),
-        do: %{name: need[:name], program: need[:program], install?: is_map(need[:install])}
-  end
 
   # Enumerate `(tool, [actions...])` from the live MCP registry — populated
   # once per page open, so the matrix UI can render real (tool, action)
@@ -1154,7 +1081,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         set_up_refused={@set_up_refused}
         athanor={@athanor}
         offers={[]}
-        signs_in?={signs_in?(@signs_in, @soul)}
+        signs_in?={signs_in?(@soul)}
         program_models={Map.get(@program_models, @soul["name"])}
         unheld={soul_unheld(@unheld, @soul)}
         browser={@browser}
@@ -1175,8 +1102,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           setting_up={@setting_up}
           set_up_refused={@set_up_refused}
           athanor={@athanor}
-          offers={offers(@program_offers, Map.get(@model_status, member["name"]), member)}
-          signs_in?={signs_in?(@signs_in, member)}
+          offers={offers(Map.get(@model_status, member["name"]), member)}
+          signs_in?={signs_in?(member)}
           program_models={Map.get(@program_models, member["name"])}
           unheld={Map.get(@unheld, member["name"])}
         />
@@ -1507,9 +1434,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:needs_grant, _}, @model_status)} class="text-amber-300">
           Not connected — it needs only your grant
         </span>
-        <span :if={match?({:needs_program, _}, @model_status)} class="text-amber-300">
-          Not connected — set up its program on the Programs page, then grant it
-        </span>
         <%!-- A consent that exists but is damaged, or could not be read, is
              no key to connect: no Connect button is offered over it. --%>
         <span :if={match?({:consent_damaged, _}, @model_status)} class="text-red-300">
@@ -1565,7 +1489,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <.link
           :if={
             match?(
-              {status, _} when status in [:needs_key, :needs_grant, :needs_program],
+              {status, _} when status in [:needs_key, :needs_grant],
               @model_status
             )
           }

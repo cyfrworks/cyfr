@@ -49,12 +49,11 @@ defmodule Arca.Test.UnitFixtures do
   end
 
   @doc """
-  Lay and register a model catalyst under the context's athanor whose one
-  need is a sign-in of its own (`login`) to the program row `program`, as
-  a harness catalyst declares one; its artifact is the test catalyst
-  guest. Returns the unit's path segments.
+  Lay and register a model catalyst under the context's athanor that
+  needs nothing of the person; its artifact is the test catalyst guest.
+  Returns the unit's path segments.
   """
-  def login_catalyst!(ctx, name, program) do
+  def chat_catalyst!(ctx, name) do
     unit =
       tenant_component!(ctx, "catalyst", "local", name, "0.1.0",
         manifest: %{
@@ -62,15 +61,7 @@ defmodule Arca.Test.UnitFixtures do
           "type" => "catalyst",
           "version" => "0.1.0",
           "publisher" => "local",
-          "contracts" => [Prima.Model.chat_contract()],
-          "needs" => %{
-            program => %{
-              "type" => "login",
-              "program" => program,
-              "reason" => "to run the program on your own plan",
-              "required" => true
-            }
-          }
+          "contracts" => [Prima.Model.chat_contract()]
         },
         wasm: Cyfr.Test.Guests.wasm(:catalyst)
       )

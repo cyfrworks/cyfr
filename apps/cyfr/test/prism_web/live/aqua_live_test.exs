@@ -377,55 +377,21 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # On the card of the crew member Aqua runs on, which sets its brain.
-    test "a brain whose catalyst runs a program not installed offers its install on the card",
-         %{conn: conn, ctx: ctx} do
-      soul_runs_claude!(ctx)
-
-      {view, _html} = mount_athanor(conn, "/aqua")
-
-      assert has_element?(
-               view,
-               ~s(#aqua-card-brain a[data-test="install-program"]),
-               "install claude"
-             )
-
-      [href] =
-        view
-        |> render()
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.query(~s(#aqua-card-brain a[data-test="install-program"]))
-        |> LazyHTML.attribute("href")
-
-      assert %{"install" => "catalyst:local.harness", "need" => "claude", "from" => "aqua"} ==
-               URI.decode_query(URI.parse(href).query)
-
-      # Once the row is there, the card offers to set it up in its own
-      # terminal instead.
-      program_row!(ctx, "claude")
-      {view, _html} = mount_athanor(conn, "/aqua")
-      refute has_element?(view, ~s(#aqua-card-brain a[data-test="install-program"]))
-
-      assert has_element?(
-               view,
-               ~s(#aqua-card-brain [data-test="set-up-program"]),
-               "Set up claude"
-             )
-    end
-
     # Set up is the person's press: it starts the program in its row's
     # folder, at a size the frame corrects when it attaches, and shows its
     # terminal with the way back here.
     test "Set up on the card starts the program and shows its terminal, which comes back here",
          %{conn: conn, ctx: ctx} do
-      soul_runs_claude!(ctx)
-      home = program_row!(ctx, "claude").id
+      row =
+        program_row!(ctx, "claude", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323")
+
+      home = row.id
       backends!()
 
       {view, _html} = mount_athanor(conn, "/aqua")
-      refute_received {:session, "open", _message, _fields}
+      refute_received {:session, "open", %{"mode" => "terminal"}, _fields}
 
-      view |> element(~s(#aqua-card-brain [data-test="set-up-program"])) |> render_click()
+      view |> element(~s(#aqua-card-claude-code [data-test="set-up-program"])) |> render_click()
 
       assert_receive {:session, "open",
                       %{"home_id" => ^home, "argv" => [], "rows" => 24, "cols" => 80}, _fields},
@@ -478,104 +444,26 @@ defmodule PrismWeb.AquaLiveTest do
       assert second in opened(home)
     end
 
-    test "a refused Set up says why on the card and stays there", %{conn: conn, ctx: ctx} do
-      soul_runs_claude!(ctx)
+    # A crew member whose brain needs nothing of the person, never granted,
+    # waits on the person's grant alone: its card says so, never Model
+    # connected, and its Connect opens the setup.
+    test "a crew member whose brain needs only the grant says so on its card, with Connect",
+         %{conn: conn, ctx: ctx} do
+      publish_brain!(ctx, "open", %{})
 
-      {:ok, _row} =
-        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
-          cap: 0,
-          name: "claude",
-          transport: "http",
-          url: "https://tools.example.com/mcp",
-          config_json: Jason.encode!(%{})
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "opener",
+          "title" => "Opener",
+          "catalyst_ref" => "catalyst:local.open"
         })
 
       {view, _html} = mount_athanor(conn, "/aqua")
-      view |> element(~s(#aqua-card-brain [data-test="set-up-program"])) |> render_click()
-      render_async(view, 5_000)
-
-      assert has_element?(
-               view,
-               ~s(#aqua-card-brain [data-test="set-up-refused"]),
-               "'claude' is a tool server elsewhere; only a program opens here"
-             )
-
-      assert has_element?(
-               view,
-               ~s(#aqua-card-brain [data-test="set-up-program"]),
-               "Set up claude"
-             )
-    end
-
-    # A brain that runs a program on its own sign-in: with no row, its
-    # program is to set up and grant; with its row set up and not bound,
-    # its grant is all it needs, the brain's and then the member's own;
-    # bound to the program row, it is connected, the program signed in
-    # when it says so.
-    test "a crew member whose brain runs a program reads its program to set up, then its " <>
-           "grant, until the row is bound, then Model connected",
-         %{conn: conn, ctx: ctx} do
-      ctx = %{ctx | origin: :interactive}
-      actor = Sanctum.Context.actor(ctx)
-      ref = "catalyst:local.harness"
-
-      unit =
-        Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harness", "1.0.0",
-          manifest: %{
-            "name" => "harness",
-            "type" => "catalyst",
-            "version" => "1.0.0",
-            "publisher" => "local",
-            "needs" => %{
-              "claude" => %{
-                "type" => "login",
-                "program" => "claude",
-                "reason" => "to run Claude Code on your own plan",
-                "required" => true
-              }
-            }
-          },
-          wasm: Cyfr.Test.Guests.wasm(:catalyst)
-        )
-
-      {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
-
-      # A soul with no tools, so the member's closure is its brain alone.
-      :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), "---\ntitle: Aqua\n---\n\nsoul\n")
-
-      :ok =
-        Arca.put(
-          actor,
-          Compendium.AquaPath.crew_file("harness"),
-          "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n"
-        )
-
-      {:ok, _} = Compendium.AgentIndex.sync(ctx)
-
-      {view, _html} = mount_athanor(conn, "/aqua")
-      assert has_element?(view, "#aqua-card-harness", "set up its program on the Programs page")
-      refute has_element?(view, "#aqua-card-harness", "Model connected")
-
-      row = program_row!(ctx, "claude")
-      send_update_agents(view, load: true)
-      card_needs_grant!(view, "harness")
-
-      grant!(ctx, ref, %{bindings: [%{need: "claude", entry_id: row.id}]})
-      send_update_agents(view, load: true)
-      card_needs_grant!(view, "harness")
-
-      grant!(ctx, Prima.AgentRef.ref("harness"), %{
-        selections: [%{dep: ref, need: "claude", entry_id: row.id}]
-      })
-
-      send_update_agents(view, load: true)
-
-      assert has_element?(view, "#aqua-card-harness", "Model connected")
-      refute has_element?(view, "#aqua-card-harness", "set up its program")
-
-      # Its binding is the one row named as its program: no key, and no
-      # other binding, to change to.
-      refute has_element?(view, "#aqua-card-harness button[phx-click=open_consent]")
+      card = "#aqua-card-opener"
+      assert has_element?(view, card, "Not connected — it needs only your grant")
+      refute has_element?(view, card, "Model connected")
+      assert has_element?(view, card <> ~s( a[data-test="connect"]), "Connect")
     end
 
     # A crew member whose brain is a program names the row by its name.
@@ -1543,13 +1431,7 @@ defmodule PrismWeb.AquaLiveTest do
         }
       })
 
-      publish_brain!(ctx, "planned", %{
-        "plan" => %{
-          "type" => "login",
-          "program" => "planner",
-          "reason" => "to run Planner on your own plan"
-        }
-      })
+      publish_brain!(ctx, "open", %{})
 
       :ok = soul_names_catalyst!(ctx, "catalyst:local.keyed")
 
@@ -1558,7 +1440,7 @@ defmodule PrismWeb.AquaLiveTest do
       {view, _html} = mount_athanor(conn, "/aqua")
       assert has_element?(view, "#aqua-setup[open]")
 
-      assert setup_rows(view) == ["aqua-setup-brain-keyed", "aqua-setup-brain-planned"]
+      assert setup_rows(view) == ["aqua-setup-brain-keyed", "aqua-setup-brain-open"]
 
       assert has_element?(
                view,
@@ -1566,11 +1448,7 @@ defmodule PrismWeb.AquaLiveTest do
                "a key: to call Keyed with your key (keyed.test/keys)"
              )
 
-      assert has_element?(
-               view,
-               "#aqua-setup-brain-planned label",
-               "a plan: to run Planner on your own plan"
-             )
+      assert has_element?(view, "#aqua-setup-brain-open label", "needs only your grant")
 
       # With nothing ticked, the setup says what Aqua needs.
       assert has_element?(
@@ -1582,7 +1460,7 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-setup-steps")
 
       view |> element("#aqua-setup-brain-keyed input") |> render_click()
-      view |> element("#aqua-setup-brain-planned input") |> render_click()
+      view |> element("#aqua-setup-brain-open input") |> render_click()
       refute has_element?(view, ~s([data-test="setup-needs"]))
 
       assert has_element?(
@@ -1591,17 +1469,7 @@ defmodule PrismWeb.AquaLiveTest do
                "Enter the key"
              )
 
-      [href] =
-        view
-        |> render()
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.query("#aqua-setup-step-planned a")
-        |> LazyHTML.attribute("href")
-
-      assert URI.parse(href).path == athanor_path("/programs")
-
-      assert URI.decode_query(URI.parse(href).query) ==
-               %{"install" => "catalyst:local.planned", "need" => "plan"}
+      assert has_element?(view, "#aqua-setup-step-open button[phx-click=open_consent]", "Grant")
 
       # A brain installed afterwards is offered with no change to the setup.
       publish_brain!(ctx, "later", %{
@@ -1619,93 +1487,8 @@ defmodule PrismWeb.AquaLiveTest do
       assert setup_rows(view) == [
                "aqua-setup-brain-keyed",
                "aqua-setup-brain-later",
-               "aqua-setup-brain-planned"
+               "aqua-setup-brain-open"
              ]
-    end
-
-    # Its program installed (the Programs page's one confirmation), a brain
-    # that runs it asks only for its grant, which binds the program row.
-    test "a brain whose program is set up asks only for the grant, which binds the program's row",
-         %{conn: conn, ctx: ctx} do
-      publish_brain!(ctx, "planned", %{
-        "plan" => %{
-          "type" => "login",
-          "program" => "planner",
-          "reason" => "to run Planner on your own plan"
-        }
-      })
-
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
-      assert has_element?(view, ~s(#aqua-setup-brain-planned[data-state="needs_program"]))
-      view |> element("#aqua-setup-brain-planned input") |> render_click()
-
-      assert has_element?(
-               view,
-               "#aqua-setup-step-planned",
-               "planned: set up planner on the Programs page, then grant it here."
-             )
-
-      row = program_row!(ctx, "planner")
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
-      assert has_element?(view, ~s(#aqua-setup-brain-planned[data-state="needs_grant"]))
-      assert has_element?(view, "#aqua-setup-brain-planned label", "needs only your grant")
-
-      view |> element("#aqua-setup-brain-planned input") |> render_click()
-
-      view
-      |> element("#aqua-setup-step-planned button[phx-click=open_consent]", "Grant")
-      |> render_click()
-
-      settled(
-        fn -> has_element?(view, ~s(#system-layer-dialog [data-kind="grant"])) end,
-        "the grant asked"
-      )
-
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
-
-      Prima.Test.Wait.wait_until(
-        fn -> has_element?(view, ~s(#aqua-setup-brain-planned[data-state="ready"])) end,
-        5_000,
-        "the brain connected"
-      )
-
-      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, "catalyst:local.planned")
-      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
-      assert [%{mcp_server_id: bound}] = head.vault_refs
-      assert bound == row.id
-    end
-
-    # The step follows the brain's state: one that needs a key beside its
-    # program's sign-in reads as needing a key, whatever need comes first.
-    test "a brain that needs a key beside its program's sign-in steps to its key",
-         %{conn: conn, ctx: ctx} do
-      publish_brain!(ctx, "mixed", %{
-        "a_plan" => %{
-          "type" => "login",
-          "program" => "mixer",
-          "reason" => "to run Mixer on your own plan",
-          "required" => true
-        },
-        "b_key" => %{
-          "type" => "api_key:mixed.test",
-          "reason" => "to call Mixed with your key",
-          "fields" => ["MIXED_API_KEY"],
-          "required" => true,
-          "hosts" => ["api.mixed.example"]
-        }
-      })
-
-      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
-      assert has_element?(view, ~s(#aqua-setup-brain-mixed[data-state="needs_key"]))
-      view |> element("#aqua-setup-brain-mixed input") |> render_click()
-
-      assert has_element?(
-               view,
-               "#aqua-setup-step-mixed button[phx-click=open_consent]",
-               "Enter the key"
-             )
-
-      refute has_element?(view, "#aqua-setup-step-mixed", "Programs page")
     end
 
     test "a new crew member's card offers Connect, which opens the setup for that member",
@@ -1821,8 +1604,8 @@ defmodule PrismWeb.AquaLiveTest do
     end
 
     # Each program the crew's files name is a plan on the setup, named by
-    # the member that names it, in the words its catalyst's login need gave
-    # it. Ticked, its install is the Programs page's form prefilled from
+    # the member that names it and worded from that member's title.
+    # Ticked, its install is the Programs page's form prefilled from
     # that member's file; once its row stands, Set up opens its terminal and
     # a crew member's picker offers, under the plan member's name, the
     # models its program lists. Picking one makes that crew member name the
@@ -2293,23 +2076,14 @@ defmodule PrismWeb.AquaLiveTest do
     end
 
     # A brain CYFR cannot keep read-only closes the read-only choice and
-    # says why beneath it: a catalyst whose manifest declares a login need,
-    # or a program row whose driver cannot start its harness read-only, the
-    # shipped OpenAI Codex member's own row among them. A
-    # file set to read-only by hand on such a brain shows it chosen, with
-    # the same sentence, since its turns are refused. A brain on a key, or
-    # a row CYFR keeps read-only, leaves the choice open.
+    # says why beneath it: a program row whose driver cannot start its
+    # harness read-only, the shipped OpenAI Codex member's own row among
+    # them. A file set to read-only by hand on such a brain shows it
+    # chosen, with the same sentence, since its turns are refused. A brain
+    # on a key, or a row CYFR keeps read-only, leaves the choice open.
     test "a member whose brain cannot be kept read-only has its read-only choice closed, " <>
            "with why beneath it",
          %{conn: conn, ctx: ctx} do
-      publish_brain!(ctx, "planned", %{
-        "plan" => %{
-          "type" => "login",
-          "program" => "planner",
-          "reason" => "to run Planner on your own plan"
-        }
-      })
-
       publish_brain!(ctx, "keyed", %{
         "api_key" => %{
           "type" => "api_key:keyed.test",
@@ -2324,8 +2098,7 @@ defmodule PrismWeb.AquaLiveTest do
       claude = program_row!(ctx, "claude", "cyfr-claude-code")
 
       members = [
-        {"planner", "Planner", %{"catalyst_ref" => "catalyst:local.planned"}},
-        {"by-hand", "By Hand", %{"catalyst_ref" => "catalyst:local.planned"}},
+        {"by-hand", "By Hand", %{"program" => codex.name}},
         {"keyed", "Keyed", %{"catalyst_ref" => "catalyst:local.keyed"}},
         {"coder", "Coder", %{"program" => codex.name}},
         {"held", "Held", %{"program" => claude.name}}
@@ -2357,8 +2130,7 @@ defmodule PrismWeb.AquaLiveTest do
       {view, _html} = mount_athanor(conn, "/aqua")
 
       for {name, title, brain, shown} <- [
-            {"planner", "Planner", "planned", ["auto"]},
-            {"by-hand", "By Hand", "planned", ["read-only"]},
+            {"by-hand", "By Hand", "openai-codex", ["read-only"]},
             {"coder", "Coder", "openai-codex", ["auto"]},
             {"openai-codex", "OpenAI Codex", "openai-codex", ["auto"]}
           ] do
@@ -2693,47 +2465,6 @@ defmodule PrismWeb.AquaLiveTest do
     |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
   end
 
-  # A card whose brain waits on the person's grant alone: it says so, and
-  # its Connect opens the setup, whose step for the brain is the grant,
-  # never the Programs page.
-  defp card_needs_grant!(view, name) do
-    card = "#aqua-card-" <> name
-    assert has_element?(view, card, "Not connected — it needs only your grant")
-    refute has_element?(view, card, "set up its program")
-    refute has_element?(view, card, "Model connected")
-    assert has_element?(view, card <> ~s( a[data-test="connect"]), "Connect")
-  end
-
-  # A person's grant of `ref`, walked as their own page walks it.
-  # The athanor's kept driven program row `name`, as an install confirmed
-  # on the Programs page leaves it.
-  # The soul's brain is a catalyst whose login needs the `claude` program.
-  defp soul_runs_claude!(ctx) do
-    manifest = %{
-      "name" => "harness",
-      "type" => "catalyst",
-      "version" => "1.0.0",
-      "publisher" => "local",
-      "needs" => %{
-        "claude" => %{
-          "type" => "login",
-          "program" => "claude",
-          "reason" => "to run Claude Code on your own plan",
-          "install" => %{"command" => "npx -y @anthropic-ai/claude-code"}
-        }
-      }
-    }
-
-    unit =
-      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harness", "1.0.0",
-        manifest: manifest,
-        wasm: Cyfr.Test.Guests.wasm(:catalyst)
-      )
-
-    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
-    soul_names_catalyst!(ctx, "catalyst:local.harness")
-  end
-
   @backends_root :crypto.strong_rand_bytes(32)
 
   # The programs controller on a scripted backends service, put back
@@ -2756,6 +2487,8 @@ defmodule PrismWeb.AquaLiveTest do
     fake
   end
 
+  # The athanor's kept driven program row `name`, as an install confirmed
+  # on the Programs page leaves it.
   defp program_row!(ctx, name, command \\ nil) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
@@ -2771,6 +2504,7 @@ defmodule PrismWeb.AquaLiveTest do
     row
   end
 
+  # A person's grant of `ref`, walked as their own page walks it.
   defp grant!(ctx, ref, over) do
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
     decisions = Map.merge(%{ref: ref}, over)
