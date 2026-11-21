@@ -70,11 +70,12 @@ defmodule CyfrWeb.DeviceSessionPageTest do
     assert_redirect(view, "/login", 4_000)
   end
 
-  test "the Lock posts to the shell from a page that keeps its Origin", %{
-    conn: conn,
-    token: token,
-    athanor: athanor
-  } do
+  test "the Lock is a navigation to the shell's /lock, which an https CYFR reaches as no form can",
+       %{
+         conn: conn,
+         token: token,
+         athanor: athanor
+       } do
     conn = Plug.Test.init_test_session(conn, %{session_key() => token})
     page = get(conn, athanor_path("/settings", athanor))
     [policy] = get_resp_header(page, "referrer-policy")
@@ -82,11 +83,10 @@ defmodule CyfrWeb.DeviceSessionPageTest do
 
     html = html_response(page, 200)
     lock = PrismWeb.DeviceUnlockController.lock_url()
-    assert [form] = Regex.run(~r/<form[^>]*data-test="device-lock"[^>]*>/, html)
-    assert form =~ ~s(method="post")
-    assert form =~ ~s(action="#{lock}")
-    refute form =~ "rel="
-    refute form =~ "referrerpolicy"
+    assert [link] = Regex.run(~r/<a[^>]*data-test="device-lock"[^>]*>/, html)
+    assert link =~ ~s(href="#{lock}")
+    refute link =~ "target="
+    refute html =~ ~r/<form[^>]*action="#{Regex.escape(lock)}"/
   end
 
   test "a page whose device's channel slid its session stays", %{

@@ -28,9 +28,11 @@ defmodule PrismWeb.DeviceUnlockController do
 
   # The box's shell on its own loopback listener, and the session provider
   # its unlock's sessions carry (`tests/fixtures/device_unlock.json`,
-  # `exchange.shell`). Its Lock posts there, so the browser names this
-  # page's origin, which the shell requires; its confirm opens there with
-  # the public ref alone, so the asking page stays and repeats its change;
+  # `exchange.shell`). Its Lock is a navigation there, the one change the
+  # shell takes by GET, since an https page's form to that plain-http
+  # loopback would carry no origin the shell accepts; its confirm opens
+  # there with the public ref alone, so the asking page stays and repeats
+  # its change;
   # and so does the approval of a passkey a browser offered for the
   # account, which the shell reads from this CYFR by that ref.
   @shell_origin "http://127.0.0.1:7340"
@@ -41,7 +43,7 @@ defmodule PrismWeb.DeviceUnlockController do
   def shell?(%Sanctum.Context{authenticated: true, provider: @shell_provider}), do: true
   def shell?(_context), do: false
 
-  @doc "Where a box's screen locks: its shell's loopback `/lock`, posted to."
+  @doc "Where a box's screen locks: its shell's loopback `/lock`, navigated to."
   @spec lock_url() :: String.t()
   def lock_url, do: @shell_origin <> "/lock"
 
