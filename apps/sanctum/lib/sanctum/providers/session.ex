@@ -199,7 +199,7 @@ defmodule Sanctum.Providers.Session do
   def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
       when is_binary(hash) do
     case Sanctum.Session.destroy_by_hash(hash) do
-      :ok ->
+      {:ok, _gone} ->
         {:ok, %{message: "Logged out successfully"}}
 
       {:error, reason} ->

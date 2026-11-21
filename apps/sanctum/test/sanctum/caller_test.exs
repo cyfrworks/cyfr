@@ -212,7 +212,7 @@ defmodule Sanctum.CallerTest do
 
       assert {:ok, _ctx} = Caller.establish(session.token)
 
-      :ok = Sanctum.Session.destroy(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token)
       assert {:error, :unauthenticated} = Caller.establish(session.token)
     end
 
@@ -244,7 +244,7 @@ defmodule Sanctum.CallerTest do
       assert {:ok, _ctx} = Caller.establish(session.token)
       announced!()
 
-      :ok = Session.destroy(session.token)
+      {:ok, :removed} = Session.destroy(session.token)
 
       # The member that revoked dropped its own copy synchronously; this
       # is what reaches the rest of the cell.
@@ -279,7 +279,7 @@ defmodule Sanctum.CallerTest do
 
       assert {:ok, _ctx} = Caller.establish(session.token)
 
-      :ok = Arca.SessionStorage.delete_session(hash)
+      {:ok, :removed} = Arca.SessionStorage.delete_session(hash)
 
       # The window the TTL exists to bound: the row is gone and this
       # member has heard nothing.
@@ -309,7 +309,7 @@ defmodule Sanctum.CallerTest do
       assert left > 0 and left < 2_000
 
       # A row removed below the memo, with no invalidation: the memo answers.
-      :ok = Arca.SessionStorage.delete_session(hash)
+      {:ok, :removed} = Arca.SessionStorage.delete_session(hash)
       assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token)
       assert user_id == ctx.user_id
     end
@@ -325,7 +325,7 @@ defmodule Sanctum.CallerTest do
       assert {:ok, _ctx} = Caller.establish(session.token)
       assert Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) == []
 
-      :ok = Arca.SessionStorage.delete_session(hash)
+      {:ok, :removed} = Arca.SessionStorage.delete_session(hash)
       assert {:error, :unauthenticated} = Caller.establish(session.token)
     end
   end

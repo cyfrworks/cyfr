@@ -395,7 +395,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       # effect on the next call rather than when a cache entry expires.
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
       {:ok, session} = Sanctum.Session.create(ctx)
-      :ok = Sanctum.Session.destroy(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token)
 
       conn =
         conn

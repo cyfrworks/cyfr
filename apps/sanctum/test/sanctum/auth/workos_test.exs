@@ -324,7 +324,7 @@ defmodule Sanctum.Auth.WorkOSTest do
              "a held exchange binds when nothing commits during it"
 
       assert held_exchange(revoked_token, fn ->
-               assert Sanctum.Session.destroy(revoked_token) == :ok
+               assert Sanctum.Session.destroy(revoked_token) == {:ok, :removed}
              end) == {:error, :session_ended}
 
       assert {:ok, _row} = Arca.CompanyAuthorizations.get(Prima.Actor.system(), kept)

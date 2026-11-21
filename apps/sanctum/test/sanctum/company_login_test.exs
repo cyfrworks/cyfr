@@ -820,7 +820,7 @@ defmodule Sanctum.CompanyLoginTest do
     test "a callback whose session was revoked", %{user: user, token: token} do
       require!(:join)
       request = begun!(token)
-      :ok = Sanctum.Session.destroy(token)
+      {:ok, :removed} = Sanctum.Session.destroy(token)
 
       assert CompanyLogin.complete(signed_in(request, "sub-1"), token) ==
                {:error, :session_ended}
@@ -888,7 +888,7 @@ defmodule Sanctum.CompanyLoginTest do
       request = begun!(token)
       exchange = exchanging!(callback(request, {:ok, claims(request, "sub-1")}, :hold), token)
 
-      :ok = Sanctum.Session.destroy(token)
+      {:ok, :removed} = Sanctum.Session.destroy(token)
 
       assert released(exchange) == {:error, :session_ended}
       assert authorization(user.id) == nil
@@ -913,7 +913,7 @@ defmodule Sanctum.CompanyLoginTest do
       request = begun!(token)
       exchange = exchanging!(callback(request, {:ok, claims(request, "sub-1")}, :hold), token)
 
-      :ok = Sanctum.Session.destroy(token)
+      {:ok, :removed} = Sanctum.Session.destroy(token)
 
       assert released(exchange) == {:error, :session_ended}
       assert authorization(user.id) == before, "the binding was refreshed"

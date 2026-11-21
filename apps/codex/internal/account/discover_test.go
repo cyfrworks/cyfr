@@ -23,23 +23,22 @@ type loginDirectory struct {
 		HTML      string `json:"html"`
 		Directory string `json:"directory"`
 		Origin    string `json:"origin"`
-		RPID      string `json:"rp_id"`
 		Refused   string `json:"refused"`
 	} `json:"pages"`
 }
 
-func TestReadDirectoryVectors(t *testing.T) {
+func TestDirectoryVectors(t *testing.T) {
 	var v loginDirectory
 	fixture(t, "login_directory.json", &v)
 	if v.Attribute != directoryAttribute || v.Path != "/login" {
 		t.Fatalf("the vector names %s on %s; the reader reads %s on /login", v.Attribute, v.Path, directoryAttribute)
 	}
 	refusals := map[string]error{
-		"missing": ErrDirectoryMissing, "duplicate": ErrDirectoryDuplicate, "invalid": ErrDirectoryInvalid,
+		"missing": errDirectoryMissing, "duplicate": errDirectoryDuplicate, "invalid": errDirectoryInvalid,
 	}
 	for _, p := range v.Pages {
 		t.Run(p.Name, func(t *testing.T) {
-			got, err := ReadDirectory([]byte(p.HTML))
+			got, err := readDirectory([]byte(p.HTML))
 			if p.Refused != "" {
 				want, ok := refusals[p.Refused]
 				if !ok {
@@ -50,7 +49,7 @@ func TestReadDirectoryVectors(t *testing.T) {
 				}
 				return
 			}
-			want := Discovered{Directory: p.Directory, Origin: p.Origin, RPID: p.RPID}
+			want := Discovered{Directory: p.Directory, Origin: p.Origin}
 			if err != nil || got != want {
 				t.Fatalf("got %+v, %v; want %+v", got, err, want)
 			}
@@ -77,7 +76,7 @@ func TestDiscoverReadsTheSignInPageWithoutCredentials(t *testing.T) {
 	jar.SetCookies(u, []*http.Cookie{{Name: "_cyfr_key", Value: "session"}})
 
 	got, err := Discover(context.Background(), &http.Client{Jar: jar}, srv.URL)
-	want := Discovered{Directory: "https://accounts.example.com/cyfr", Origin: "https://accounts.example.com", RPID: "accounts.example.com"}
+	want := Discovered{Directory: "https://accounts.example.com/cyfr", Origin: "https://accounts.example.com"}
 	if err != nil || got != want {
 		t.Fatalf("got %+v, %v; want %+v", got, err, want)
 	}

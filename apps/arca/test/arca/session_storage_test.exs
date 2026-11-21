@@ -263,13 +263,17 @@ defmodule Arca.SessionStorageTest do
       hash = make_token_hash("delete")
       :ok = SessionStorage.create_session(hash, session_attrs(), Arca.Test.Actor.issuance())
 
-      assert :ok = SessionStorage.delete_session(hash)
+      assert {:ok, :removed} = SessionStorage.delete_session(hash)
       assert {:error, :not_found} = SessionStorage.get_session(hash)
     end
 
-    test "succeeds for nonexistent session" do
-      hash = make_token_hash("delete_missing")
-      assert :ok = SessionStorage.delete_session(hash)
+    test "says a session already deleted, or never made, was absent" do
+      hash = make_token_hash("delete_twice")
+      :ok = SessionStorage.create_session(hash, session_attrs(), Arca.Test.Actor.issuance())
+
+      assert {:ok, :removed} = SessionStorage.delete_session(hash)
+      assert {:ok, :absent} = SessionStorage.delete_session(hash)
+      assert {:ok, :absent} = SessionStorage.delete_session(make_token_hash("delete_missing"))
     end
   end
 

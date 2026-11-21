@@ -6,8 +6,8 @@ defmodule PrismWeb.LoginDirectoryTest do
   The directory the public sign-in page names (`PrismWeb.LoginLive`,
   `tests/fixtures/login_directory.json`): for each directory a CYFR may
   name, the page served to a signed-out browser carries it once, whole, in
-  the one attribute the CYFR app's reader reads, double-quoted as that
-  reader reads it.
+  the one attribute the CYFR app's reader reads, counted as HTML reads
+  attributes.
   """
 
   # Each case names a directory in the application environment, which
@@ -27,11 +27,15 @@ defmodule PrismWeb.LoginDirectoryTest do
           conn |> get(@vectors["path"]) |> html_response(200)
         end)
 
-      assert length(String.split(html, attribute)) == 2,
-             "#{directory}: the page names #{attribute} other than once"
+      # Attributes as HTML reads them: a directory whose address holds the
+      # attribute's name is still one attribute.
+      named =
+        html
+        |> LazyHTML.from_document()
+        |> LazyHTML.query("[#{attribute}]")
+        |> LazyHTML.attribute(attribute)
 
-      assert [_, named] = Regex.run(~r/\s#{attribute}="([^"]*)"/, html)
-      assert Phoenix.HTML.html_escape(directory) |> Phoenix.HTML.safe_to_string() == named
+      assert named == [directory], "#{directory}: the page names #{inspect(named)}"
     end
   end
 end

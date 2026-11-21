@@ -72,12 +72,15 @@ defmodule PrismWeb.LoginLive do
 
   **The directory it names.** The page's root carries this CYFR's
   directory URL whole, base path included (`data-account-directory`,
-  `Sanctum.directory_url/0`), once, to anyone: a signed-out visitor learns
-  the same by pressing sign in, which goes to that directory's account
-  pages, whose `/account/config.json` names it. A client that holds only
-  this CYFR's address (the CYFR app) reads it from here to know which
-  account service it will be sent to before any sign-in starts, and may
-  rely on it naming the directory this CYFR's sign-ins go to now
+  `Sanctum.directory_url/0`), once, to anyone. A signed-out visitor could
+  already learn the account service's origin by pressing sign in; its
+  path is published here alone. It is the address of a service every
+  device of this CYFR's people must reach, and one a person approving a
+  custom account service is shown whole, so it is not a secret, and a
+  device's enrolment needs it whole. A client that holds only this
+  CYFR's address (the CYFR app) reads it from here to know which account
+  service it will be sent to before any sign-in starts, and may rely on
+  it naming the directory this CYFR's sign-ins go to now
   (`tests/fixtures/login_directory.json`).
   """
 

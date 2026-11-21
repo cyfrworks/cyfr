@@ -8,61 +8,72 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 // Discovered is the directory a CYFR names on its sign-in page: the URL
-// whole, base path included, the origin its account pages are served at,
-// and the host that is their passkeys' relying party.
+// whole, base path included, and the origin its account pages are served
+// at.
 type Discovered struct {
 	Directory string
 	Origin    string
-	RPID      string
 }
 
 // Why a sign-in page names no directory the app can use
 // (tests/fixtures/login_directory.json, pages[].refused).
 var (
-	ErrDirectoryMissing   = errors.New("missing")
-	ErrDirectoryDuplicate = errors.New("duplicate")
-	ErrDirectoryInvalid   = errors.New("invalid")
+	errDirectoryMissing   = errors.New("missing")
+	errDirectoryDuplicate = errors.New("duplicate")
+	errDirectoryInvalid   = errors.New("invalid")
 )
 
 const directoryAttribute = "data-account-directory"
-
-var directoryAttr = regexp.MustCompile(`\s` + directoryAttribute + `="([^"]*)"`)
 
 // maxLoginPage bounds the sign-in page read: it is one server-rendered
 // page.
 const maxLoginPage = 1 << 20
 
-// ReadDirectory reads the directory from a sign-in page's HTML: the one
-// data-account-directory attribute, double-quoted and HTML-escaped as
-// Prism renders it, holding an https directory URL. No attribute, more
-// than one, or one in another form or naming anything else is refused.
-func ReadDirectory(page []byte) (Discovered, error) {
-	switch bytes.Count(page, []byte(directoryAttribute)) {
+// readDirectory reads the directory from a sign-in page's HTML: the one
+// data-account-directory attribute of any element, read as HTML reads
+// attributes, so the name in text or inside another attribute's value is
+// no attribute. Its value is an https directory URL. No such attribute,
+// more than one, or one naming anything else is refused.
+func readDirectory(page []byte) (Discovered, error) {
+	var values []string
+	z := html.NewTokenizer(bytes.NewReader(page))
+	for {
+		switch z.Next() {
+		case html.ErrorToken:
+			return directoryOf(values)
+		case html.StartTagToken, html.SelfClosingTagToken:
+			for _, a := range z.Token().Attr {
+				if a.Namespace == "" && a.Key == directoryAttribute {
+					values = append(values, a.Val)
+				}
+			}
+		}
+	}
+}
+
+func directoryOf(values []string) (Discovered, error) {
+	switch len(values) {
 	case 0:
-		return Discovered{}, ErrDirectoryMissing
+		return Discovered{}, errDirectoryMissing
 	case 1:
 	default:
-		return Discovered{}, ErrDirectoryDuplicate
+		return Discovered{}, errDirectoryDuplicate
 	}
-	m := directoryAttr.FindSubmatch(page)
-	if m == nil {
-		return Discovered{}, ErrDirectoryInvalid
-	}
-	dir := html.UnescapeString(string(m[1]))
-	origin, host, ok := DirectoryOrigin(dir)
+	dir := values[0]
+	origin, _, ok := DirectoryOrigin(dir)
 	if !ok || !strings.HasPrefix(dir, "https://") {
-		return Discovered{}, ErrDirectoryInvalid
+		return Discovered{}, errDirectoryInvalid
 	}
-	return Discovered{Directory: dir, Origin: origin, RPID: host}, nil
+	return Discovered{Directory: dir, Origin: origin}, nil
 }
 
 // Discover reads the directory home names on its sign-in page (/login)
@@ -100,7 +111,7 @@ func Discover(ctx context.Context, client *http.Client, home string) (Discovered
 	if len(page) > maxLoginPage {
 		return Discovered{}, fmt.Errorf("the sign-in page at %s is larger than a sign-in page", home)
 	}
-	d, err := ReadDirectory(page)
+	d, err := readDirectory(page)
 	if err != nil {
 		return Discovered{}, fmt.Errorf("the sign-in page at %s names no directory the app can use (%w)", home, err)
 	}

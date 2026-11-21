@@ -22,7 +22,7 @@ defmodule Sanctum.Session do
       {:ok, session} = Sanctum.Session.refresh(session.token)
 
       # Destroy session on logout
-      :ok = Sanctum.Session.destroy(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token)
 
   ## Session Format
 
@@ -581,10 +581,11 @@ defmodule Sanctum.Session do
 
   ## Examples
 
-      :ok = Sanctum.Session.destroy("abc123...")
+      {:ok, :removed} = Sanctum.Session.destroy("abc123...")
 
+  Answers as `destroy_by_hash/1` does.
   """
-  @spec destroy(String.t()) :: :ok | {:error, term()}
+  @spec destroy(String.t()) :: {:ok, :removed | :absent} | {:error, term()}
   def destroy(token) when is_binary(token) do
     destroy_by_hash(hash_token(token))
   end
@@ -650,14 +651,19 @@ defmodule Sanctum.Session do
   def end_own(%Context{}, _id), do: {:error, :unauthenticated}
 
   @doc """
-  Destroy a session addressed by its row key rather than its token.
+  Destroy a session addressed by its row key rather than its token:
+  `{:ok, :removed}` when this call removed its row, `{:ok, :absent}` when
+  there was none (`Arca.SessionStorage.delete_session/1`), and on either
+  the established-context memo of that key dropped. An error leaves the
+  session as it was.
   """
-  @spec destroy_by_hash(binary()) :: :ok | {:error, term()}
+  @spec destroy_by_hash(binary()) :: {:ok, :removed | :absent} | {:error, term()}
   def destroy_by_hash(hash) when is_binary(hash) do
-    with :ok <- Arca.SessionStorage.delete_session(hash) do
+    with {:ok, _gone} = gone <- Arca.SessionStorage.delete_session(hash) do
       # After the row delete, so an establish racing the logout cannot
       # re-cache a context the delete is about to orphan.
       Sanctum.Caller.invalidate_hash(hash)
+      gone
     end
   end
 

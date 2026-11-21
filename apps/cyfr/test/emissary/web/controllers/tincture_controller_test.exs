@@ -845,7 +845,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       credential = credential(ctx)
       assert get(conn, served(credential, ["app.js"])).status == 200
 
-      :ok = Sanctum.Session.destroy(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token)
       gone = get(build_conn(), served(credential, ["app.js"]))
       assert json_response(gone, 403)["code"] == "forbidden"
       refute gone.resp_body =~ "auth app"

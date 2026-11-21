@@ -9,10 +9,12 @@ defmodule PrismWeb.BrowserLogoutTest do
 
   When the store deletes the session the cookie names, the answer is the
   signed-out redirect with `cyfr-session-retired: 1`, and the cookie the
-  browser held is refused afterwards. When the store cannot delete it,
-  the answer is `503` with neither the header nor the redirect, and that
-  same cookie still signs the browser in, so the sign-out can be sent
-  again. A sign-out with no session redirects without the header.
+  browser held is refused afterwards; the same cookie signed out again
+  gets the header again, since no session of it stands. When the store
+  cannot delete it, the answer is `503` with neither the header nor the
+  redirect, and that same cookie still signs the browser in, so the
+  sign-out can be sent again. A sign-out with no session redirects
+  without the header.
   """
 
   # Installs a trigger on the sessions table, which is schema state every
@@ -136,6 +138,20 @@ defmodule PrismWeb.BrowserLogoutTest do
 
     assert redirected_to(retired) == "/login?error=signed_out"
     assert get_resp_header(retired, "cyfr-session-retired") == ["1"]
+    refute signs_in?(browser.cookie)
+  end
+
+  test "the same cookie signed out again is told again that no session of it stands",
+       %{conn: conn} do
+    browser = signed_in!(conn)
+
+    first = sign_out(conn, browser)
+    assert get_resp_header(first, "cyfr-session-retired") == ["1"]
+    refute signs_in?(browser.cookie)
+
+    again = sign_out(conn, browser)
+    assert redirected_to(again) == "/login?error=signed_out"
+    assert get_resp_header(again, "cyfr-session-retired") == ["1"]
     refute signs_in?(browser.cookie)
   end
 

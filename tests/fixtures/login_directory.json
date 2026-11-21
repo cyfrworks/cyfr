@@ -1,33 +1,43 @@
 {
-  "description": "The directory a CYFR names on its public sign-in page (PrismWeb.LoginLive): the attribute on the page's root, read by the CYFR app before any sign-in starts. Prism renders each of rendered's directories there once; the Go reader (apps/codex/internal/account/discover.go) reads each of pages, answering the directory, its account pages' origin and their relying party, or refusing.",
+  "description": "The directory a CYFR names on its public sign-in page (PrismWeb.LoginLive): the attribute on the page's root, read by the CYFR app before any sign-in starts. Prism renders each of rendered's directories there once; the Go reader (apps/codex/internal/account/discover.go) reads each of pages, counting attributes as HTML reads them, not occurrences of the name, and answers the directory and its account pages' origin, or refuses.",
   "path": "/login",
   "attribute": "data-account-directory",
   "rendered": [
     "https://cyfr.run",
     "https://accounts.example.com/cyfr/directory",
-    "https://accounts.example.com:8443"
+    "https://accounts.example.com:8443",
+    "https://accounts.example.com/data-account-directory"
   ],
   "pages": [
     {
       "name": "the default directory",
       "html": "<!doctype html><html><body><div class=\"min-h-screen\" data-account-directory=\"https://cyfr.run\"><h1>Welcome</h1></div></body></html>",
       "directory": "https://cyfr.run",
-      "origin": "https://cyfr.run",
-      "rp_id": "cyfr.run"
+      "origin": "https://cyfr.run"
     },
     {
       "name": "a directory under a base path",
       "html": "<div data-account-directory=\"https://accounts.example.com/cyfr/directory\" class=\"x\"></div>",
       "directory": "https://accounts.example.com/cyfr/directory",
-      "origin": "https://accounts.example.com",
-      "rp_id": "accounts.example.com"
+      "origin": "https://accounts.example.com"
     },
     {
       "name": "a directory on a port, escaped as HTML escapes an attribute",
       "html": "<div data-account-directory=\"https://accounts.example.com:8443/a&amp;b\"></div>",
       "directory": "https://accounts.example.com:8443/a&b",
-      "origin": "https://accounts.example.com:8443",
-      "rp_id": "accounts.example.com"
+      "origin": "https://accounts.example.com:8443"
+    },
+    {
+      "name": "a directory whose address holds the attribute's name",
+      "html": "<div data-account-directory=\"https://accounts.example.com/data-account-directory\"></div>",
+      "directory": "https://accounts.example.com/data-account-directory",
+      "origin": "https://accounts.example.com"
+    },
+    {
+      "name": "the attribute's name in text and in another attribute beside the attribute",
+      "html": "<div title=\"data-account-directory\" data-account-directory=\"https://cyfr.run\"><p>data-account-directory=\"https://evil.example\"</p></div>",
+      "directory": "https://cyfr.run",
+      "origin": "https://cyfr.run"
     },
     {
       "name": "no attribute",
@@ -45,9 +55,10 @@
       "refused": "duplicate"
     },
     {
-      "name": "single-quoted",
+      "name": "single-quoted, which HTML reads as the same attribute",
       "html": "<div data-account-directory='https://cyfr.run'></div>",
-      "refused": "invalid"
+      "directory": "https://cyfr.run",
+      "origin": "https://cyfr.run"
     },
     {
       "name": "plain http",

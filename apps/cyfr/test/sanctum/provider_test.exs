@@ -244,7 +244,7 @@ defmodule Sanctum.ProviderTest do
       assert DateTime.compare(answered, DateTime.utc_now()) == :gt
 
       # A session that ended answers none, as a key does.
-      :ok = Sanctum.Session.destroy(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token)
       {:ok, ended} = Provider.handle("session", session_ctx, %{"action" => "whoami"})
       assert ended.session_expires_at == nil
       assert Sanctum.Session.expires_at_by_hash(hash) == {:error, :invalid_session}

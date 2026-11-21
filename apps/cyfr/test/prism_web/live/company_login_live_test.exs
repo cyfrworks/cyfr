@@ -105,7 +105,7 @@ defmodule PrismWeb.CompanyLoginLiveTest do
                live(Plug.Test.init_test_session(conn, %{}), ~p"/company-login")
 
       signed_in = log_in_user(conn, test_user())
-      :ok = Sanctum.Session.destroy(token(signed_in))
+      {:ok, :removed} = Sanctum.Session.destroy(token(signed_in))
 
       assert {:error, {:redirect, %{to: "/login"}}} = live(signed_in, ~p"/company-login")
     end

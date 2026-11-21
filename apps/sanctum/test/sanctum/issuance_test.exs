@@ -537,7 +537,7 @@ defmodule Sanctum.IssuanceTest do
       assert id == key_ctx.api_key_id
 
       # A session's issuance refuses a retired session.
-      :ok = Sanctum.Session.destroy_by_hash(session_ctx.session_token_hash)
+      {:ok, :removed} = Sanctum.Session.destroy_by_hash(session_ctx.session_token_hash)
       assert {{:error, :unauthenticated}, retired} = mint(session_ctx)
       refute minted?(retired)
     end

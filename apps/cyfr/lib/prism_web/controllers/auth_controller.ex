@@ -104,19 +104,23 @@ defmodule PrismWeb.AuthController do
   POST, never GET, so signing someone out is not one `<img src>` away:
   the route's browser pipeline checks the forgery token first.
 
-  The signed-out redirect carries `cyfr-session-retired: 1` only when the
-  store deleted the session the cookie named, so a caller holding that
-  cookie (the CYFR app at its lock) can tell its retirement from a
-  sign-out of no session, which redirects without it. When the store
-  cannot delete it, the answer is `503` with neither the header nor the
-  redirect, and the cookie session is kept: the session still stands and
-  the same sign-out can be sent again.
+  `cyfr-session-retired: 1` on the signed-out redirect states a
+  condition, not an event: after this answer, no session of the presented
+  cookie stands at this CYFR. It is sent when the store answers that it
+  removed the session the cookie names or that there was none to remove
+  (`Sanctum.Session.destroy/1`), so a second sign-out with the same cookie
+  carries it too, and a caller holding that cookie (the CYFR app at its
+  lock) relies on it. A sign-out whose cookie names no session at all
+  redirects without it: it presents no session to state anything about.
+  When the store cannot answer, the answer is `503` with neither the
+  header nor the redirect, and the cookie session is kept: the session
+  may still stand and the same sign-out can be sent again.
   """
   def browser_logout(conn, _params) do
     case get_session(conn, SignInResponse.session_key()) do
       token when is_binary(token) and token != "" ->
         case Session.destroy(token) do
-          :ok ->
+          {:ok, _removed_or_absent} ->
             conn
             |> put_resp_header("cyfr-session-retired", "1")
             |> signed_out()
