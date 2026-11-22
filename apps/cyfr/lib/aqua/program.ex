@@ -11,13 +11,11 @@ defmodule Aqua.Program do
 
   It lives while a loop holds the turn. When the loop returns, at an end
   or at a pause, it closes the session and waits for the answer
-  (`close/2`, `Opus.Brain.close/1`), which is conveyed as Opus gave it:
-  the place is back, or it is not and these are the sessions whose close
-  Opus still owes. A start is handed the ones its thread still waits on,
-  asks Opus again and opens nothing until each is back, inside the start's
-  one clock. A loop that dies has the session closed by this
-  process, which stays a moment to tell that answer to whoever settles
-  the turn, and Stop closes it once the turn's fence moved and before the
+  (`close/2`, `Opus.Brain.close/1`): ok is the place back, and what is
+  unanswered Opus still owes. A start carries no word of a place: it opens
+  at once and is admitted or refused on what is true then. A loop that
+  dies has the session closed by this
+  process, and Stop closes it once the turn's fence moved and before the
   work stops. The native session stays in the program's folder, and the
   next turn's process, or a paused turn's next loop, resumes it.
 
@@ -121,7 +119,7 @@ defmodule Aqua.Program do
   One clock, the `program_silence_ms` setting (`Opus.Brain.silence_ms/0`,
   thirty minutes), ends the work. Over a start it runs from the open until
   the work is taken, whatever the driver says meanwhile, and ends it as a
-  start that failed, a wait for the last place among it. At work it runs
+  start that failed, an open still out among it. At work it runs
   whenever the program owes something, a delivery's acknowledgement among
   it, and is kept in the thread's `brain_progress`, read by the database's
   clock; each process's hello starts a whole interval. A timer's message
@@ -150,11 +148,7 @@ defmodule Aqua.Program do
   # The kinds of row a fresh session's context carries: the thread's posts.
   @context_kinds ~w(text opening report nudge pointer turn_aborted)
   # The phases of a start, which lasts until the work is taken.
-  @starting [:waiting, :opening, :starting, :started, :working]
-  # How often a start asks Opus again for a place that is not back.
-  @place_retry_ms 1_000
-  # How long a dead loop's attendant stays to convey an unanswered close.
-  @conveyed_ms 5_000
+  @starting [:opening, :starting, :started, :working]
   # A holder's refusals of a write after which it ends: its end follows.
   @ending [:ended, :not_written, :unavailable]
 
@@ -171,8 +165,7 @@ defmodule Aqua.Program do
           config: map(),
           system: String.t(),
           facts: String.t(),
-          tools: [map()],
-          unclosed: [Opus.Brain.brain()]
+          tools: [map()]
         }
 
   @typedoc """
@@ -238,38 +231,16 @@ defmodule Aqua.Program do
 
   @doc """
   The turn `turn_id` is held no longer, or is stopped: its session is
-  closed, its writes first, and this answers what Opus answered, once the
-  attendant is gone: `:ok` when every place it held or waited on is back,
-  `{:error, {:unanswered, brains}}` naming those that are not, and `:none`
-  when no attendant holds anything of the turn.
+  closed, its writes first, and this answers once Opus answered the close.
   """
-  @spec close(String.t(), String.t()) ::
-          :ok | :none | {:error, {:unanswered, [Opus.Brain.brain()]}}
+  @spec close(String.t(), String.t()) :: :ok
   def close(athanor_id, turn_id) do
     case whereis({athanor_id, turn_id}) do
-      nil -> :none
-      pid -> closed(pid)
+      nil -> :ok
+      pid -> GenServer.call(pid, :close, :infinity)
     end
-  end
-
-  # Gone before this answers, so the turn's next loop starts one of its own.
-  defp closed(pid) do
-    monitor = Process.monitor(pid)
-
-    answer =
-      try do
-        GenServer.call(pid, :close, :infinity)
-      catch
-        :exit, _ended -> :none
-      end
-
-    receive do
-      {:DOWN, ^monitor, :process, ^pid, _reason} -> answer
-    after
-      @conveyed_ms ->
-        Process.demonitor(monitor, [:flush])
-        answer
-    end
+  catch
+    :exit, _ -> :ok
   end
 
   defp whereis(key) do
@@ -306,7 +277,6 @@ defmodule Aqua.Program do
        phase: :closed,
        waiting: nil,
        outstanding: nil,
-       unclosed: work.unclosed,
        fresh?: false,
        facts?: false,
        how: :went_on,
@@ -319,25 +289,13 @@ defmodule Aqua.Program do
   end
 
   @impl true
-  def handle_call({:attend, work}, _from, %{phase: :over, loop: nil} = state),
-    do: {:reply, {:error, {:harness, work.title, {:start_failed, :died}}}, state}
-
   def handle_call({:attend, work}, from, state),
-    do: {:noreply, start_process(%{state | work: work, waiting: from})}
+    do: {:noreply, open(%{state | work: work, waiting: from})}
 
-  # Whoever else closes it is told the same word, and ends it.
-  def handle_call(:close, _from, %{loop: nil} = state) do
-    send(self(), :ended)
-    {:reply, word(state), state}
-  end
-
-  # The loop that closes it waits on it no more and is told nothing. It
-  # ends behind the closes that came meanwhile, which hear the same word.
+  # The loop that closes it waits on it no more and is told nothing.
   def handle_call(:close, {caller, _tag}, state) do
     state = if caller == state.loop, do: %{state | loop: nil}, else: state
-    state = %{shut(state) | loop: nil, phase: :over}
-    send(self(), :ended)
-    {:reply, word(state), state}
+    {:stop, :normal, :ok, shut(state)}
   end
 
   @impl true
@@ -374,25 +332,12 @@ defmodule Aqua.Program do
   # A timer cancelled or replaced since its message was sent.
   def handle_info({:timeout, _stale, :silence}, state), do: {:noreply, state}
 
-  def handle_info(:place, %{phase: :waiting} = state), do: {:noreply, place(state)}
-  def handle_info(:place, state), do: {:noreply, state}
-  def handle_info(:ended, state), do: {:stop, :normal, state}
-
   # A post or a result may now be owed: the thread moved.
   def handle_info(%Cyfr.Bus.ThreadEvent{}, state), do: {:noreply, deliver(state)}
 
   # The loop that held the turn died: nothing holds it.
-  def handle_info({:DOWN, _monitor, :process, pid, _reason}, %{loop: pid} = state) do
-    state = %{shut(%{state | loop: nil}) | phase: :over}
-
-    if state.unclosed == [] do
-      {:stop, :normal, state}
-    else
-      # Whoever settles the turn is told that the place is not back.
-      Process.send_after(self(), :ended, @conveyed_ms)
-      {:noreply, state}
-    end
-  end
+  def handle_info({:DOWN, _monitor, :process, pid, _reason}, %{loop: pid} = state),
+    do: {:stop, :normal, shut(%{state | loop: nil})}
 
   # A holder that was killed tells nobody. One that ended told first, so
   # only such a holder is still this session's here.
@@ -429,34 +374,13 @@ defmodule Aqua.Program do
   # ---------------------------------------------------------------------------
   # The session
 
-  # A process starts once every place the thread waits on is back, all
-  # inside the start's one clock.
-  defp start_process(state) do
+  # A start arms its clock and opens at once: an open that answers after
+  # the clock ended finds that message waiting, ahead of any line.
+  defp open(%{work: work} = state) do
     if state.timer, do: Process.cancel_timer(state.timer)
     timer = :erlang.start_timer(Opus.Brain.silence_ms(), self(), :silence)
-    place(%{state | phase: :waiting, timer: timer})
-  end
+    state = %{state | timer: timer}
 
-  defp place(state) do
-    case confirmed(state) do
-      %{unclosed: []} = state ->
-        open(state)
-
-      state ->
-        Process.send_after(self(), :place, @place_retry_ms)
-        state
-    end
-  end
-
-  # Opus's word on each place not known to be back: a close asked again
-  # waits on the one that is owed, and Opus alone retries it.
-  defp confirmed(state),
-    do: %{state | unclosed: Enum.reject(state.unclosed, &(Opus.Brain.close(&1) == :ok))}
-
-  defp word(%{unclosed: []}), do: :ok
-  defp word(%{unclosed: unclosed}), do: {:error, {:unanswered, unclosed}}
-
-  defp open(%{work: work} = state) do
     case Opus.Brain.open(bound(work)) do
       {:ok, {holder, _handle} = brain} ->
         Process.monitor(holder)
@@ -582,14 +506,15 @@ defmodule Aqua.Program do
   defp write_failed(%{work: work} = state, _refused),
     do: fail(shut(state), refused(work, :work_refused))
 
-  defp shut(%{brain: nil} = state), do: withdraw(confirmed(state))
+  defp shut(%{brain: nil} = state), do: withdraw(state)
 
+  # `:unanswered` is Opus's to close: nothing here holds the place.
   defp shut(%{brain: brain} = state) do
-    phase = if state.phase == :over, do: :over, else: :closed
-    unclosed = Enum.uniq(state.unclosed ++ [brain])
+    _closed_or_owed = Opus.Brain.close(brain)
 
-    %{state | brain: nil, boot: nil, phase: phase, outstanding: nil, unclosed: unclosed}
-    |> confirmed()
+    phase = if state.phase == :over, do: :over, else: :closed
+
+    %{state | brain: nil, boot: nil, phase: phase, outstanding: nil}
     |> withdraw()
     |> session_ended()
   end
@@ -1086,7 +1011,7 @@ defmodule Aqua.Program do
   defp continued(state) do
     case answered(state) do
       {:ok, true} -> done(state)
-      {:ok, false} -> start_process(%{state | recovering?: true})
+      {:ok, false} -> open(%{state | recovering?: true})
       {:error, _unread} -> unkept(state)
     end
   end
@@ -1360,7 +1285,7 @@ defmodule Aqua.Program do
   # follow, the holder's answer or its end; any other refusal ends the turn.
   defp not_written(state, _step, :uncertain) do
     state = shut(state)
-    if state.phase == :over, do: state, else: start_process(%{state | recovering?: true})
+    if state.phase == :over, do: state, else: open(%{state | recovering?: true})
   end
 
   defp not_written(%{work: work} = state, step, refused) do
@@ -1467,11 +1392,8 @@ defmodule Aqua.Program do
   # ---------------------------------------------------------------------------
   # Its end, and the clock
 
-  # A session that ended is no word that its place is back.
-  defp session_lost(%{brain: brain} = state, reason) do
-    unclosed = Enum.uniq(state.unclosed ++ [brain])
-
-    %{state | brain: nil, boot: nil, outstanding: nil, unclosed: unclosed}
+  defp session_lost(state, reason) do
+    %{state | brain: nil, boot: nil, outstanding: nil}
     |> withdraw()
     |> session_ended()
     |> ended(reason)
@@ -1487,7 +1409,7 @@ defmodule Aqua.Program do
     do: fail(state, refused(work, :start_failed))
 
   # One that dies at work is resumed, once for each death.
-  defp ended(state, _reason), do: start_process(%{state | recovering?: true})
+  defp ended(state, _reason), do: open(%{state | phase: :closed, recovering?: true})
 
   # The clock ran out: over a start that was not taken, or over the
   # program's silence at work, by the database's clock.

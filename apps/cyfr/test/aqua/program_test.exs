@@ -48,8 +48,9 @@ defmodule Aqua.ProgramTest do
   an ask's call runs; a delivery not acknowledged is owed. No failed read,
   failed write or lost session leaves a turn waiting. A loop writes under
   the fence it acquired, a write whose answer was lost is never sent
-  again, a close's answer is conveyed to who needs the place, and a turn
-  whose end could not be written is recovered before the queue advances.
+  again, a start opens at once inside its clock, and a turn whose end
+  could not be written is a loop that died: ended uncertain, or left to
+  the runner's next start with nothing behind it started.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -4441,141 +4442,36 @@ defmodule Aqua.ProgramTest do
       assert system_lines(ctx, thread, turn) == [line]
     end
 
-    test "an unanswered close is told by the loop, and a Runs-on switch's first post opens " <>
-           "nothing until Opus says that the place is back",
+    test "a start opens at once, and an open that answers after its clock ended leaves the " <>
+           "turn not started and no process",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      turn = accept!(ctx, thread, row, "first")
-      %{loop: loop, input: input} = working!(ctx, thread, row, fake, turn)
+      turn = accept!(ctx, thread, row, "work on it")
+      %{loop: loop} = working!(ctx, thread, row, fake, turn)
+      attendant = attendant!(ctx, turn)
+      silence!(2_000)
+
+      # The holder dies and its close is out, so the replacement's open is
+      # behind the key's last process until that close is answered.
       Scripted.hold(fake, "close", 30_000)
-      say(fake, row, idle(turn, [input.id]))
-      assert_receive {:held, "close", first}, 10_000
-      Scripted.refuse_once(fake, "close", "unavailable")
-      Scripted.hold(fake, "close", 30_000)
-      send(first, :go)
+      Process.exit(Opus.Brain.whereis(ctx.athanor_id, thread.id), :kill)
+      assert_receive {:held, "close", closing}, 10_000
+      assert_receive {:session, "open", %{"mode" => "run"}, _fields}, 10_000
 
-      assert {:unanswered, [_place] = unclosed, :completed} = Task.await(loop, 30_000)
+      Prima.Test.Wait.wait_until(
+        fn ->
+          {:messages, waiting} = Process.info(attendant, :messages)
+          Enum.any?(waiting, &match?({:timeout, _timer, :silence}, &1))
+        end,
+        10_000,
+        "the start's clock to end while its open is out"
+      )
 
-      moved = brain_row!(ctx, "claude-next")
-      next = accept!(ctx, thread, moved, "second")
-      switching = run(ctx, next, unclosed)
-      assert_receive {:held, "close", second}, 10_000
+      send(closing, :go)
 
-      # It asks again for as long as a start may take, and opens nothing.
-      Scripted.refuse_once(fake, "close", "unavailable")
-      Scripted.hold(fake, "close", 30_000)
-      send(second, :go)
-      refute_receive {:session, "open", _wire, _fields}, 500
-      assert_receive {:held, "close", third}, 10_000
-      refute_received {:session, "open", _wire, _fields}
-
-      send(third, :go)
-      opened!(fake, moved, "boot-two")
+      line = "#{@title} could not start."
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == [line]
       assert running_sessions(fake, row) == []
-      assert %{"t" => "start"} = sent()
-      session = "6f1e2d3c-0000-4968-8776-000000000002"
-      say(fake, moved, %{"t" => "started", "session" => session, "fresh" => true, "held" => []})
-      _work = accept_next!(fake, moved)
-      post = sent()
-      [handed] = inputs(ctx, next)
-      assert post["id"] == handed.id
-      say(fake, moved, accepted(handed))
-      say(fake, moved, %{idle(next, [handed.id]) | "gen" => 1})
-      assert :completed = Task.await(switching, 30_000)
-    end
-
-    test "a start whose last place is not back ends once the silence runs out, and says that " <>
-           "the place is still not back",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      turn = accept!(ctx, thread, row, "first")
-      %{loop: loop, input: input} = working!(ctx, thread, row, fake, turn)
-      Scripted.hold(fake, "close", 30_000)
-      say(fake, row, idle(turn, [input.id]))
-      assert_receive {:held, "close", first}, 10_000
-      Scripted.refuse_once(fake, "close", "unavailable")
-      Scripted.hold(fake, "close", 30_000)
-      send(first, :go)
-      assert {:unanswered, [_place] = unclosed, :completed} = Task.await(loop, 30_000)
-
-      Scripted.down(fake)
-      silence!(1_000)
-      next = accept!(ctx, thread, row, "second")
-      ended = Task.await(run(ctx, next, unclosed), 60_000)
-      Scripted.up(fake)
-
-      assert {:unanswered, ^unclosed, {:failed, "Aqua could not start."}} = ended
-      assert system_lines(ctx, thread, next) == ["Aqua could not start."]
-      refute_received {:session, "open", %{"mode" => "run"}, _fields}
-    end
-
-    test "Stop is told of a close Opus did not answer",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      turn = accept!(ctx, thread, row, "work on it")
-      %{loop: loop} = working!(ctx, thread, row, fake, turn)
-      {:ok, open} = Tape.turn(ctx, turn.id)
-      Scripted.hold(fake, "close", 30_000)
-      stopping = Task.async(fn -> Aqua.Loop.abort(ctx, open, "stopped", waiting_out(loop)) end)
-      assert_receive {:held, "close", service}, 10_000
-      Scripted.refuse_once(fake, "close", "unavailable")
-      send(service, :go)
-
-      assert {:unanswered, [_place], {:ok, aborted}} = Task.await(stopping, 30_000)
-      {:ok, _} = Tape.finish(ctx, aborted, "cancelled", %{error: "stopped"})
-      _ended = Task.await(loop, 30_000)
-    end
-
-    test "a Stop that meets the loop's own close hears the same word",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      turn = accept!(ctx, thread, row, "work on it")
-      %{loop: loop, input: input} = working!(ctx, thread, row, fake, turn)
-      attendant = attendant!(ctx, turn)
-      Scripted.hold(fake, "close", 30_000)
-      say(fake, row, idle(turn, [input.id]))
-      assert_receive {:held, "close", service}, 10_000
-
-      stopping =
-        Task.async(fn -> Aqua.Loop.abort_ended(ctx, turn.id, [], waiting_out(loop)) end)
-
-      Prima.Test.Wait.wait_until(
-        fn ->
-          {:messages, waiting} = Process.info(attendant, :messages)
-          Enum.any?(waiting, &match?({:"$gen_call", _from, :close}, &1))
-        end,
-        10_000,
-        "Stop's close to wait behind the loop's"
-      )
-
-      Scripted.refuse_once(fake, "close", "unavailable")
-      send(service, :go)
-
-      assert {:unanswered, [_place] = unclosed, :completed} = Task.await(loop, 30_000)
-      assert {:unanswered, ^unclosed, :ok} = Task.await(stopping, 30_000)
-    end
-
-    test "a dead loop's close that Opus did not answer is told to who settles the turn",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      turn = accept!(ctx, thread, row, "work on it")
-      %{loop: loop} = working!(ctx, thread, row, fake, turn)
-      attendant = attendant!(ctx, turn)
-      {:ok, open} = Tape.turn(ctx, turn.id)
-      Scripted.hold(fake, "close", 30_000)
-      :erlang.suspend_process(loop.pid)
-      Task.shutdown(loop, :brutal_kill)
-      assert_receive {:held, "close", service}, 10_000
-
-      settling = Task.async(fn -> Aqua.Loop.abort(ctx, open, "lost") end)
-
-      Prima.Test.Wait.wait_until(
-        fn ->
-          {:messages, waiting} = Process.info(attendant, :messages)
-          Enum.any?(waiting, &match?({:"$gen_call", _from, :close}, &1))
-        end,
-        10_000,
-        "the settling close to wait behind the attendant's"
-      )
-
-      Scripted.refuse_once(fake, "close", "unavailable")
-      send(service, :go)
-      assert {:unanswered, [_place], {:ok, _aborted}} = Task.await(settling, 30_000)
     end
 
     test "a timer that expired as the driver ended stops nothing of the process that replaces it",
@@ -4623,104 +4519,48 @@ defmodule Aqua.ProgramTest do
       {:ok, ctx: %{ctx | origin: :interactive}, row: brain_row!(ctx, "claude")}
     end
 
-    test "Stop's unanswered close is acted on: the next post opens nothing until the place is back",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      %{turn_id: first} = runner_working!(ctx, thread, row, fake)
-      loop = %{pid: Aqua.Loop.holder(first)}
-      loop_waits!(loop)
-      # Stop kills it there: killed in a query, it would take the sandbox's
-      # one connection from the runner.
-      true = :erlang.suspend_process(loop.pid)
-
-      Scripted.hold(fake, "close", 30_000)
-      stopping = Task.async(fn -> Aqua.Runner.stop_turn(ctx, thread.id) end)
-      assert_receive {:held, "close", first}, 10_000
-      Scripted.refuse_once(fake, "close", "unavailable")
-      Scripted.hold(fake, "close", 30_000)
-      send(first, :go)
-      assert :ok = Task.await(stopping, 60_000)
-
-      assert {:ok, %{turn_id: next}} = Aqua.Runner.send_message(ctx, thread.id, "second")
-      assert_receive {:held, "close", second}, 10_000
-      refute_receive {:session, "open", _wire, _fields}, 1_000
-
-      send(second, :go)
-      answered!(ctx, thread, row, fake, next, "boot-two")
-    end
-
-    test "a loop's unanswered close is acted on by the turn queued behind it",
+    test "a judged end that could not be written ends the turn uncertain, never completed, " <>
+           "and only then the queue advances",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       %{turn_id: first, input: input} = runner_working!(ctx, thread, row, fake)
       next = queued!(ctx, thread)
 
-      Scripted.hold(fake, "close", 30_000)
-      say(fake, row, idle(%{id: first}, [input.id]))
-      assert_receive {:held, "close", closing}, 10_000
-      Scripted.refuse_once(fake, "close", "unavailable")
-      Scripted.hold(fake, "close", 30_000)
-      send(closing, :go)
+      # The first fault alone: the failed end the loop judged.
+      refuse_end!(first, ~w(failed))
+      say(fake, row, %{idle(%{id: first}, [input.id]) | "stop" => "limit"})
 
-      assert_receive {:held, "close", again}, 10_000
-      refute_receive {:session, "open", _wire, _fields}, 1_000
-
-      send(again, :go)
       answered!(ctx, thread, row, fake, next, "boot-two")
+      assert {:ok, %{status: "uncertain"}} = Tape.turn(ctx, first)
+      assert Enum.map(inputs(ctx, %{id: first}), & &1.action) == ["post"]
+      allow_end!()
     end
 
-    test "a turn whose end could not be written is recovered before the queue advances, with " <>
-           "nothing of it run again",
+    test "an end that could be written neither way stops the runner with the queued post not " <>
+           "started, and its next start recovers the turn from its rows first",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       %{turn_id: first, input: input} = runner_working!(ctx, thread, row, fake)
       next = queued!(ctx, thread)
+      runner = Process.monitor(Aqua.Runner.whereis(thread.id))
       refuse_end!(first)
       say(fake, row, said(%{id: first}, "msg_1", "answered"))
       say(fake, row, idle(%{id: first}, [input.id]))
-      assert_receive {:session, "close", _wire, _fields}, 10_000
 
-      refute_receive {:session, "open", _wire, _fields}, 1_000
+      assert_receive {:DOWN, ^runner, :process, _pid, :normal}, 15_000
+      refute_received {:session, "open", _wire, _fields}
       assert {:ok, %{status: "running"}} = Tape.turn(ctx, first)
       assert {:ok, %{status: "accepted"}} = Tape.turn(ctx, next)
       allow_end!()
 
       # Only the queued turn's process opens: the recovered one was answered.
+      assert %{} = Aqua.Runner.state(thread.id, ctx.athanor_id)
       answered!(ctx, thread, row, fake, next, "boot-two")
       assert {:ok, %{status: "completed"}} = Tape.turn(ctx, first)
       assert [{_author, "aqua", "text", "answered", _}] = said_rows(ctx, thread, %{id: first})
       assert Enum.map(inputs(ctx, %{id: first}), & &1.action) == ["post"]
     end
 
-    test "a recovery that cannot write the end holds the queue and writes one aborted line",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      %{turn_id: first, input: input} = runner_working!(ctx, thread, row, fake)
-      next = queued!(ctx, thread)
-
-      {:ok, %{recovery_limit: limit}} = Tape.turn(ctx, first)
-
-      {1, _} =
-        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^first),
-          set: [recovery_attempts: limit]
-        )
-
-      refuse_end!(first)
-      say(fake, row, idle(%{id: first}, [input.id]))
-
-      Prima.Test.Wait.wait_until(
-        fn -> aborted_lines(thread, first) == 1 end,
-        15_000,
-        "the recovery to give the turn up"
-      )
-
-      # Past one retry of the end, which writes no second line.
-      refute_receive {:session, "open", _wire, _fields}, 6_000
-      assert aborted_lines(thread, first) == 1
-      allow_end!()
-
-      answered!(ctx, thread, row, fake, next, "boot-two")
-      assert {:ok, %{status: "uncertain"}} = Tape.turn(ctx, first)
-    end
-
-    test "a turn that never ran and whose end could not be written is recovered before the " <>
-           "queue advances",
+    test "a turn that never ran and whose end could not be written keeps the queued post " <>
+           "from starting",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       missing = brain_row!(ctx, "claude-gone")
       first = accept!(ctx, thread, missing, "first")
@@ -4728,13 +4568,17 @@ defmodule Aqua.ProgramTest do
       assert {:ok, _} = Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), missing.name)
       refuse_end!(first.id)
 
-      assert %{} = Aqua.Runner.state(thread.id, ctx.athanor_id)
-      refute_receive {:session, "open", _wire, _fields}, 3_000
+      {:ok, runner} = Aqua.Runner.ensure(thread.id, ctx.athanor_id)
+      stopped = Process.monitor(runner)
+      assert_receive {:DOWN, ^stopped, :process, _pid, reason}, 15_000
+      assert reason in [:normal, :noproc]
+      refute_received {:session, "open", _wire, _fields}
       assert {:ok, %{status: status}} = Tape.turn(ctx, first.id)
       assert status in ["accepted", "running"]
       assert {:ok, %{status: "accepted"}} = Tape.turn(ctx, next.id)
       allow_end!()
 
+      assert %{} = Aqua.Runner.state(thread.id, ctx.athanor_id)
       answered!(ctx, thread, row, fake, next.id, "boot-one")
       assert {:ok, %{status: "failed"}} = Tape.turn(ctx, first.id)
     end
@@ -5166,9 +5010,7 @@ defmodule Aqua.ProgramTest do
       "read_threads" => [thread]
     }
 
-  # `unclosed` is the word the thread's last loop returned of its places.
-  defp run(ctx, turn, unclosed \\ []),
-    do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id, unclosed: unclosed) end)
+  defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
   # The spec the loop built for the running turn, built again as a resumed
   # loop builds it: its system prompt and tools are what the driver is given.
@@ -5435,25 +5277,17 @@ defmodule Aqua.ProgramTest do
     )
   end
 
-  defp aborted_lines(thread, turn_id) do
-    Arca.Repo.aggregate(
-      from(m in Arca.Schemas.Message,
-        where: m.thread_id == ^thread.id and m.turn_id == ^turn_id,
-        where: m.kind == "turn_aborted" and m.content == "the turn was interrupted too many times"
-      ),
-      :count
-    )
-  end
-
   # The store refuses the end of the turn `id`, whatever it is. The trigger
   # and function are transactional test state.
-  defp refuse_end!(id) do
+  defp refuse_end!(id, refused \\ ~w(completed failed cancelled uncertain)) do
+    refused = Enum.map_join(refused, ", ", &"'#{&1}'")
+
     statements = %{
       Ecto.Adapters.Postgres => [
         """
         CREATE FUNCTION test_end_refusal() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
-          IF OLD.id = '#{id}' AND NEW.status IN ('completed', 'failed', 'cancelled', 'uncertain') THEN
+          IF OLD.id = '#{id}' AND NEW.status IN (#{refused}) THEN
             RAISE EXCEPTION 'test end refused';
           END IF;
           RETURN NEW;
@@ -5467,7 +5301,7 @@ defmodule Aqua.ProgramTest do
       Ecto.Adapters.SQLite3 => [
         """
         CREATE TRIGGER test_end_refusal BEFORE UPDATE ON turns
-        WHEN OLD.id = '#{id}' AND NEW.status IN ('completed', 'failed', 'cancelled', 'uncertain')
+        WHEN OLD.id = '#{id}' AND NEW.status IN (#{refused})
         BEGIN SELECT RAISE(ABORT, 'test end refused'); END
         """
       ]

@@ -41,12 +41,13 @@ defmodule Aqua.Runner do
   (`Sanctum.Tenancy.continuation/3`), or ends uncertain when the athanor
   is no longer that person's. A loop that dies without an answer is aborted
   from here (`Aqua.Loop.abort/4`) and its turn ended uncertain, or
-  cancelled when a cancel asked for it.
-
-  A loop's return and a Stop say whether the thread's program gave its
-  place back (`t:Aqua.Loop.conveyed/1`). What is not back is kept here and
-  handed to the thread's next loop, whose program opens nothing until
-  Opus says that it is.
+  cancelled when a cancel asked for it. A turn whose end could not be
+  written is settled as a loop's that died: ended uncertain and, when
+  that cannot be written either, left as it stands by a runner that
+  stops, with nothing behind it started, to the next start's recovery. An
+  end the runner writes on a loop's behalf presents the fence that loop
+  acquired, which the runner keeps from the turn's acceptance or
+  recovery, never one read again: a turn taken meanwhile is its taker's.
 
   A turn continued from its rows — a paused turn picked up again, or a
   turn recovered after a restart — continues under the origin its row
@@ -98,11 +99,6 @@ defmodule Aqua.Runner do
   waits for that process to end, holds the turns behind it, and recovers
   the turn then, while the member still holds its slot.
 
-  A turn whose end could not be written, by its loop or from here, is
-  recovered before the queue advances: it is held as a turn another
-  process holds is, planned again from its rows until its end lands, and
-  a recovery that gave it up writes only that end again.
-
   Every loop result, notification and timer checks the slot again. If it
   is lost or has expired, the runner stops its loop and exits without
   changing the tape or advancing queued turns. A holding runner recovers
@@ -150,6 +146,7 @@ defmodule Aqua.Runner do
   @resume_retry_ms 5_000
   # A write refused for one of these found the turn another's, or over.
   @taken [:superseded, :not_open, :already_finished]
+  @unwritten "the turn's terminal write did not land"
   @orphaned "the page's request ended with the runner that held it"
   # The boot's recovery scan, retried while the database cannot answer.
   @recovery_backoff_ms [1_000, 4_000, 16_000]
@@ -544,9 +541,6 @@ defmodule Aqua.Runner do
           partials: Aqua.Loop.Stream.new(),
           agent: thread.agent,
           idle_ref: nil,
-          # The thread's places not known to be back, by the loops' and
-          # the stops' word, for the next loop.
-          unclosed: [],
           # A page's calls waiting to become steps, oldest first.
           pages: [],
           # Every page's call handed here and not yet answered: its
@@ -641,8 +635,8 @@ defmodule Aqua.Runner do
     entries
     |> Enum.reduce_while({:ok, state}, fn %{turn_id: id, steps: steps}, {:ok, state} ->
       case stop_ended(state, id, steps) do
-        {:ok, state} -> {:cont, {:ok, retire_turn(state, id)}}
-        {{:error, reason}, state} -> {:halt, {:error, reason, state}}
+        :ok -> {:cont, {:ok, retire_turn(state, id)}}
+        {:error, reason} -> {:halt, {:error, reason, state}}
       end
     end)
     |> case do
@@ -859,7 +853,7 @@ defmodule Aqua.Runner do
   defp entry_of(paused),
     do:
       paused
-      |> Map.take([:turn_id, :user_id, :sent_by, :agent, :origin, :job])
+      |> Map.take([:turn_id, :user_id, :sent_by, :agent, :origin, :job, :fence])
       |> Map.put(:ctx, nil)
 
   defp accept_turn(state, ctx, name, text, opts) do
@@ -906,7 +900,9 @@ defmodule Aqua.Runner do
       agent: turn.agent,
       # What a continuation of this turn resumes under: the origin its
       # row stores, never the context's as it stands later.
-      origin: turn.origin
+      origin: turn.origin,
+      # What an end written on its loop's behalf presents.
+      fence: turn.fence
     }
 
     if busy?(state) do
@@ -1089,8 +1085,7 @@ defmodule Aqua.Runner do
   # ---------------------------------------------------------------------------
 
   defp start(state, %{turn_id: turn_id, ctx: ctx} = entry) do
-    unclosed = state.unclosed
-    run(state, entry, fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn_id, unclosed: unclosed) end)
+    run(state, entry, fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn_id) end)
   end
 
   # A turn continued from its rows runs as its sender under the origin its
@@ -1100,20 +1095,18 @@ defmodule Aqua.Runner do
   defp continue(state, %{turn_id: turn_id} = entry, mode) do
     case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id, entry.origin) do
       {:ok, actor} ->
-        unclosed = state.unclosed
-
         run(state, %{entry | ctx: actor}, fn ->
-          Aqua.Loop.run_nested(ctx: actor, turn_id: turn_id, mode: mode, unclosed: unclosed)
+          Aqua.Loop.run_nested(ctx: actor, turn_id: turn_id, mode: mode)
         end)
 
       {:error, :no_origin} ->
         state
-        |> end_turn(turn_id, "cancelled", unresumable(:no_origin), :recovery)
+        |> end_turn(entry, "cancelled", unresumable(:no_origin), :recovery)
         |> start_next()
 
       {:error, reason} ->
         state
-        |> end_turn(turn_id, "uncertain", unresumable(reason))
+        |> end_turn(entry, "uncertain", unresumable(reason))
         |> start_next()
     end
   end
@@ -1144,11 +1137,6 @@ defmodule Aqua.Runner do
     touch(state)
   end
 
-  # A held turn holds the turns behind it, one whose end is not written
-  # among them.
-  defp start_next(%{held: held} = state) when map_size(held) > 0,
-    do: touch(answer_ended(state))
-
   defp start_next(%{queue: [], pages: []} = state), do: touch(answer_ended(state))
 
   # The call is still waiting when the ended turn's calls are answered,
@@ -1168,7 +1156,7 @@ defmodule Aqua.Runner do
       not Users.own_athanor?(entry.user_id, state.athanor_id) ->
         state
         |> end_turn(
-          entry.turn_id,
+          entry,
           "cancelled",
           "the athanor is no longer the sender's",
           :recovery
@@ -1207,7 +1195,7 @@ defmodule Aqua.Runner do
     Process.demonitor(ref, [:flush])
 
     case Aqua.Loop.Worker.stop(state.live.task.pid) do
-      :ok -> {:noreply, after_loop(state, result)}
+      :ok -> returned(state, result)
       {:error, _} -> {:stop, :normal, retire_runtime(state)}
     end
   end
@@ -1295,14 +1283,6 @@ defmodule Aqua.Runner do
 
   defp handle_owned_info({:recover, _turn_id}, state), do: {:noreply, state}
 
-  defp handle_owned_info({:end_uncertain, %{id: id} = aborted, why}, %{held: held} = state)
-       when is_map_key(held, id) and :erlang.map_get(id, held) == nil do
-    state = end_uncertain(%{state | held: Map.delete(held, id)}, aborted, why)
-    {:noreply, if(busy?(state), do: touch(state), else: start_next(state))}
-  end
-
-  defp handle_owned_info({:end_uncertain, _aborted, _why}, state), do: {:noreply, state}
-
   # The athanor changed: an archive ends the runner, its turns cut.
   defp handle_owned_info(%Notify{kind: :athanor_changed}, state) do
     case Athanors.get(state.athanor_id) do
@@ -1336,15 +1316,26 @@ defmodule Aqua.Runner do
     state
   end
 
-  defp after_loop(%{live: live} = state, answer) do
-    # The loop's word is whole: what it was handed is among it or is back.
-    {result, unclosed} =
-      case answer do
-        {:unanswered, unclosed, result} -> {result, unclosed}
-        result -> {result, []}
-      end
+  # A turn's end that could not be written, by its loop or here for the
+  # refusal it answered, is settled as a loop's that died.
+  defp returned(state, {:unwritten, _result}), do: unwritten(state)
 
-    state = recount(%{state | live: nil, unclosed: unclosed})
+  defp returned(%{live: live} = state, {:error, reason} = refused) when reason != :held do
+    Logger.warning("[Aqua.Runner] turn #{live.turn_id} did not run: #{inspect(reason)}")
+
+    case write_end(state, live, "failed", describe(reason)) do
+      :ok -> {:noreply, after_loop(state, refused)}
+      {:error, _unwritten} -> unwritten(state)
+    end
+  end
+
+  defp returned(state, result), do: {:noreply, after_loop(state, result)}
+
+  defp unwritten(%{live: live} = state),
+    do: died(state, Tape.turn(state.ctx, live.turn_id), @unwritten, "uncertain")
+
+  defp after_loop(%{live: live} = state, result) do
+    state = recount(%{state | live: nil})
 
     case result do
       {:paused, reason} ->
@@ -1357,6 +1348,7 @@ defmodule Aqua.Runner do
               job: live.job,
               agent: live.agent,
               origin: live.origin,
+              fence: live.fence,
               reason: reason
             }
         }
@@ -1366,13 +1358,6 @@ defmodule Aqua.Runner do
 
       {:error, :held} ->
         hold_back(state, live.turn_id)
-
-      {:error, reason} ->
-        Logger.warning("[Aqua.Runner] turn #{live.turn_id} did not run: #{inspect(reason)}")
-        state |> end_turn(live.turn_id, "failed", describe(reason)) |> start_next()
-
-      {:unwritten, _result} ->
-        unended(state, live.turn_id)
 
       _ended ->
         start_next(state)
@@ -1400,6 +1385,7 @@ defmodule Aqua.Runner do
           job: live.job,
           agent: live.agent,
           origin: turn.origin,
+          fence: live.fence,
           reason: pause_reason(turn)
         }
 
@@ -1407,13 +1393,22 @@ defmodule Aqua.Runner do
         broadcast(state, :turn_paused, %{turn_id: live.turn_id, reason: paused.reason})
         {:noreply, settle_paused(state)}
 
-      _ ->
+      read ->
         status = if match?({:cancel_requested, _}, reason), do: "cancelled", else: "uncertain"
+        died(state, read, describe(reason), status)
+    end
+  end
 
-        case cancel_turn(state, live.turn_id, describe(reason), status) do
-          {:ok, state} -> {:noreply, state |> retire_turn(live.turn_id) |> start_next()}
-          {{:error, _reason}, state} -> {:stop, :normal, retire_runtime(state)}
-        end
+  # Ended under the fence the loop acquired, not the one just read. When
+  # that is not written the runner stops and starts nothing behind it.
+  defp died(%{live: live} = state, read, reason, status) do
+    cancelled =
+      with {:ok, turn} <- read,
+           do: cancel_turn(state, %{turn | fence: live.fence}, reason, status)
+
+    case cancelled do
+      :ok -> {:noreply, state |> retire_turn(live.turn_id) |> start_next()}
+      {:error, _reason} -> {:stop, :normal, retire_runtime(state)}
     end
   end
 
@@ -1477,8 +1472,8 @@ defmodule Aqua.Runner do
   defp stop_entries(state, entries) do
     Enum.reduce_while(entries, {:ok, state}, fn %{turn_id: id, steps: steps}, {:ok, state} ->
       case stop_ended(state, id, steps) do
-        {:ok, state} -> {:cont, {:ok, retire_turn(state, id)}}
-        {{:error, reason}, state} -> {:halt, {:error, reason, state}}
+        :ok -> {:cont, {:ok, retire_turn(state, id)}}
+        {:error, reason} -> {:halt, {:error, reason, state}}
       end
     end)
   end
@@ -1552,19 +1547,17 @@ defmodule Aqua.Runner do
   # left to read.
   defp stop_another(state, %{steps: []} = gone) do
     case stop_ended(state, gone.id, []) do
-      {:ok, state} -> retire_turn(state, gone.id)
-      {{:error, _reason}, state} -> state
+      :ok -> retire_turn(state, gone.id)
+      {:error, _reason} -> state
     end
   end
 
   defp stop_another(state, turn) do
-    with {:ok, steps} <- Tape.steps(state.ctx, turn) do
-      case stop_ended(state, turn.id, Enum.filter(steps, & &1.cancel_requested_at)) do
-        {:ok, state} -> retire_turn(state, turn.id)
-        {_not_stopped, state} -> state
-      end
+    with {:ok, steps} <- Tape.steps(state.ctx, turn),
+         :ok <- stop_ended(state, turn.id, Enum.filter(steps, & &1.cancel_requested_at)) do
+      retire_turn(state, turn.id)
     else
-      _unread -> state
+      _not_stopped -> state
     end
   end
 
@@ -1582,9 +1575,14 @@ defmodule Aqua.Runner do
       )
 
     Enum.reduce_while(targets, {:ok, state}, fn id, {:ok, state} ->
-      case cancel_turn(state, id, reason, "cancelled", by) do
-        {:ok, state} -> {:cont, {:ok, retire_turn(state, id)}}
-        {{:error, error}, state} -> {:halt, {:error, error, state}}
+      cancelled =
+        with :ok <- held(),
+             {:ok, turn} <- Tape.turn(state.ctx, id),
+             do: cancel_turn(state, turn, reason, "cancelled", by)
+
+      case cancelled do
+        :ok -> {:cont, {:ok, retire_turn(state, id)}}
+        {:error, error} -> {:halt, {:error, error, state}}
       end
     end)
     |> case do
@@ -1593,34 +1591,15 @@ defmodule Aqua.Runner do
     end
   end
 
-  # Answers with the state, which keeps the word of a close Opus did not
-  # answer.
-  defp cancel_turn(state, id, reason, status, by \\ nil) do
-    with :ok <- held(),
-         {:ok, turn} <- Tape.turn(state.ctx, id) do
-      if Tape.terminal?(turn),
-        do: cancel_ended(state, turn),
-        else: cancel_open(state, turn, reason, status, by)
+  defp cancel_turn(state, %{id: id} = turn, reason, status, by \\ nil) do
+    if Tape.terminal?(turn) do
+      with {:ok, steps} <- Tape.steps(state.ctx, turn),
+           do: stop_ended(state, id, Enum.filter(steps, & &1.cancel_requested_at))
     else
-      refused -> {refused, state}
-    end
-  end
-
-  defp cancel_ended(state, %{id: id} = turn) do
-    case Tape.steps(state.ctx, turn) do
-      {:ok, steps} -> stop_ended(state, id, Enum.filter(steps, & &1.cancel_requested_at))
-      unread -> {unread, state}
-    end
-  end
-
-  defp cancel_open(state, %{id: id} = turn, reason, status, by) do
-    {answer, state} =
-      state.ctx
-      |> Aqua.Loop.abort(turn, reason, fn -> Aqua.Loop.Worker.stop(local_holder(state, id)) end)
-      |> told(state)
-
-    cancelled =
-      with {:ok, aborted} <- answer,
+      with {:ok, aborted} <-
+             Aqua.Loop.abort(state.ctx, turn, reason, fn ->
+               Aqua.Loop.Worker.stop(local_holder(state, id))
+             end),
            :ok <- held(),
            {:ok, _} <- Tape.finish(state.ctx, aborted, status, ended(reason, by)) do
         :ok
@@ -1628,15 +1607,8 @@ defmodule Aqua.Runner do
         {:error, :not_open} -> terminal_target(state, id)
         error -> error
       end
-
-    {cancelled, state}
+    end
   end
-
-  # A stop's word of a place that is not back, kept for the next loop.
-  defp told({:unanswered, unclosed, answer}, state),
-    do: {answer, %{state | unclosed: Enum.uniq(state.unclosed ++ unclosed)}}
-
-  defp told(answer, state), do: {answer, state}
 
   defp ended(reason, nil), do: %{error: reason}
   defp ended(reason, by), do: %{error: reason, ended_by: by}
@@ -1646,11 +1618,9 @@ defmodule Aqua.Runner do
   # the child execution and catalog handler of each step it had dispatched
   # and storage cancel-marked.
   defp stop_ended(state, id, steps) do
-    state.ctx
-    |> Aqua.Loop.abort_ended(id, steps, fn ->
+    Aqua.Loop.abort_ended(state.ctx, id, steps, fn ->
       Aqua.Loop.Worker.stop(local_holder(state, id))
     end)
-    |> told(state)
   end
 
   # A concurrent ordinary completion is already settled. A fence loss is
@@ -1693,29 +1663,24 @@ defmodule Aqua.Runner do
   # `by` names who cancelled it: `:recovery` for a turn the server can
   # neither resume nor start for its sender, which its workspace thread
   # reads as an error.
-  defp end_turn(state, turn_id, status, error, by \\ nil) do
-    written =
-      with {:ok, turn} <- Tape.turn(state.ctx, turn_id),
-           false <- Tape.terminal?(turn) do
-        Tape.finish(state.ctx, turn, status, ended(error, by))
-      end
-
-    case written do
-      {:error, reason} when reason not in [:not_found | @taken] ->
-        Logger.warning("[Aqua.Runner] turn #{turn_id} not ended: #{inspect(reason)}")
-        unended(state, turn_id)
-
-      _ended_gone_or_anothers ->
-        touch(state)
-    end
+  defp end_turn(state, entry, status, error, by \\ nil) do
+    _ = write_end(state, entry, status, error, by)
+    touch(state)
   end
 
-  # A turn whose end could not be written is recovered before the queue
-  # advances: held, and planned again from its rows on the retry's timer,
-  # since a store that refused the end refuses it again at once.
-  defp unended(state, turn_id) do
-    state = %{state | held: Map.put(state.held, turn_id, nil)}
-    retry_timer({:recover, turn_id}, touch(state))
+  # The entry's fence is the loop's: only a take raises one, and a turn
+  # taken since is its taker's to end.
+  defp write_end(state, %{turn_id: id, fence: fence}, status, error, by \\ nil) do
+    turn = %{id: id, thread_id: state.id, fence: fence}
+
+    case Tape.finish(state.ctx, turn, status, ended(error, by)) do
+      {:error, reason} when reason not in @taken ->
+        Logger.warning("[Aqua.Runner] turn #{id} not ended: #{inspect(reason)}")
+        {:error, reason}
+
+      _ended_or_anothers ->
+        :ok
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1738,7 +1703,8 @@ defmodule Aqua.Runner do
   # What a predecessor runner held of a page's calls died with it.
   defp orphaned({:queue, turn}, state) do
     if opened_on_call?(state, turn),
-      do: {:skip, end_turn(state, turn.id, "cancelled", @orphaned)},
+      do:
+        {:skip, end_turn(state, %{turn_id: turn.id, fence: turn.fence}, "cancelled", @orphaned)},
       else: state
   end
 
@@ -1769,7 +1735,8 @@ defmodule Aqua.Runner do
           job: job_of(turn),
           ctx: nil,
           agent: turn.agent,
-          origin: turn.origin
+          origin: turn.origin,
+          fence: turn.fence
         }
 
         recovered_start(state, entry)
@@ -1782,6 +1749,7 @@ defmodule Aqua.Runner do
           job: job_of(turn),
           agent: turn.agent,
           origin: turn.origin,
+          fence: turn.fence,
           reason: pause_reason(turn)
         }
 
@@ -1795,7 +1763,8 @@ defmodule Aqua.Runner do
           job: job_of(turn),
           ctx: nil,
           agent: turn.agent,
-          origin: turn.origin
+          origin: turn.origin,
+          fence: turn.fence
         }
 
         if busy?(state),
@@ -1810,7 +1779,8 @@ defmodule Aqua.Runner do
           job: job_of(turn),
           ctx: nil,
           agent: turn.agent,
-          origin: turn.origin
+          origin: turn.origin,
+          fence: turn.fence
         }
 
         if busy?(state),
@@ -1832,31 +1802,12 @@ defmodule Aqua.Runner do
   # with and ended under the fence the abort raised. A fence that moved in
   # between belongs to whoever moved it, and the turn is left to them.
   defp give_up(state, turn, why) do
-    {answer, state} = state.ctx |> Aqua.Loop.abort(turn, why) |> told(state)
-
-    case answer do
-      {:ok, aborted} ->
-        end_uncertain(state, aborted, why)
-
-      {:error, reason} when reason in @taken ->
-        touch(state)
-
+    with {:ok, aborted} <- Aqua.Loop.abort(state.ctx, turn, why),
+         {:ok, _ended} <- Tape.finish(state.ctx, aborted, "uncertain", %{error: why}) do
+      touch(state)
+    else
       {:error, reason} ->
-        Logger.warning("[Aqua.Runner] turn #{turn.id} not given up: #{inspect(reason)}")
-        unended(state, turn.id)
-    end
-  end
-
-  # The end is written again alone: the abort before it already wrote its
-  # line and raised the fence this end presents.
-  defp end_uncertain(state, aborted, why) do
-    case Tape.finish(state.ctx, aborted, "uncertain", %{error: why}) do
-      {:error, reason} when reason not in @taken ->
-        Logger.warning("[Aqua.Runner] turn #{aborted.id} not ended: #{inspect(reason)}")
-        state = %{state | held: Map.put(state.held, aborted.id, nil)}
-        retry_timer({:end_uncertain, aborted, why}, touch(state))
-
-      _ended_or_anothers ->
+        Logger.warning("[Aqua.Runner] turn #{turn.id} not ended: #{inspect(reason)}")
         touch(state)
     end
   end
@@ -1908,7 +1859,7 @@ defmodule Aqua.Runner do
 
         {:error, reason} ->
           state
-          |> end_turn(entry.turn_id, "cancelled", unresumable(reason), :recovery)
+          |> end_turn(entry, "cancelled", unresumable(reason), :recovery)
           |> start_next()
       end
     end
@@ -2015,7 +1966,8 @@ defmodule Aqua.Runner do
         job: job_of(turn),
         ctx: actor,
         agent: put.agent,
-        origin: turn.origin
+        origin: turn.origin,
+        fence: turn.fence
       }
 
       {:ok, start(state, entry)}
