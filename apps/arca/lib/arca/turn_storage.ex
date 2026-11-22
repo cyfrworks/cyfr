@@ -4059,11 +4059,13 @@ defmodule Arca.TurnStorage do
 
   @doc """
   What the thread's native session was given, derived from its deliveries
-  in the session's generation: `seq`, the seq of the first post a program
-  took (an `input` step closed `ok`) in the newest turn that has one, or
-  nil for none, since that post carried the thread before it; and `taken`,
-  the posts after it the program took. Nothing else counts as given: a
-  delivery refused, uncertain or never sent leaves both where they were.
+  in the session's generation, whatever each carried (a post, a recovery
+  prompt or an answer): `seq`, the seq of the row of the first delivery the
+  program took (an `input` step closed `ok`) in the newest turn that has
+  one, or nil for none, since that delivery carried the thread before it;
+  and `taken`, the rows after it the program took. Nothing else counts as
+  given: a delivery refused, uncertain or never sent leaves both where
+  they were.
   """
   @spec brain_given(Prima.Actor.t(), String.t()) ::
           {:ok, %{seq: integer() | nil, taken: [String.t()]}} | {:error, term()}
@@ -4080,9 +4082,6 @@ defmodule Arca.TurnStorage do
   def brain_given(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
 
   defp given(athanor_id, %Thread{} = thread) do
-    # A delivery's key names the generation it was carried in (`carry/3`).
-    key = "#{thread.brain_generation}:post:%"
-
     taken =
       from(s in TurnStep,
         join: t in Turn,
@@ -4090,9 +4089,10 @@ defmodule Arca.TurnStorage do
         join: m in Message,
         on: m.id == s.message_id and m.athanor_id == s.athanor_id,
         where: s.athanor_id == ^athanor_id and t.thread_id == ^thread.id,
-        where: s.kind == "input" and s.action == "post" and like(s.idempotency_key, ^key),
+        # A delivery's key names the generation it was carried in (`carry/3`).
+        where: s.kind == "input" and like(s.idempotency_key, ^"#{thread.brain_generation}:%"),
         where: s.dispatch_state == "closed" and s.outcome == "ok",
-        select: %{turn: t.id, seq: m.seq, row: m.id}
+        select: %{turn: t.id, accepted_at: t.accepted_at, seq: m.seq, row: m.id}
       )
       |> Arca.Repo.all()
 
@@ -4101,9 +4101,22 @@ defmodule Arca.TurnStorage do
         %{seq: nil, taken: []}
 
       taken ->
-        newest = Enum.max_by(taken, & &1.seq).turn
+        # The newest turn, as a thread orders its turns (`latest/2`).
+        newest = Enum.max_by(taken, &{&1.accepted_at, &1.turn}, &newer?/2).turn
         seq = taken |> Enum.filter(&(&1.turn == newest)) |> Enum.map(& &1.seq) |> Enum.min()
-        %{seq: seq, taken: for(t <- taken, t.seq > seq, do: t.row)}
+
+        %{
+          seq: seq,
+          taken: taken |> Enum.filter(&(&1.seq > seq)) |> Enum.map(& &1.row) |> Enum.uniq()
+        }
+    end
+  end
+
+  defp newer?({at, id}, {other_at, other_id}) do
+    case DateTime.compare(at, other_at) do
+      :gt -> true
+      :lt -> false
+      :eq -> id >= other_id
     end
   end
 
@@ -4676,7 +4689,12 @@ defmodule Arca.TurnStorage do
       clock's interval (`:silence_ms`). A text row names its native
       message.
 
-  Answers `%{seen: boolean, said: [row], asks: [%{message: row, step: step}]}`.
+  The rows it writes, a text's and an ask's call, are written in the order
+  the events are given. Answers `%{seen: boolean, said: [row], asks:
+  [%{message: row, step: step}], rows: [row]}`, `rows` being every row
+  written in that order. Each ask answered is the step its own proposal
+  made, with that proposal's call row; an ask whose key was already
+  recorded makes none and is not answered.
   """
   @spec commit_events(Prima.Actor.t(), map(), map()) :: {:ok, map()} | {:error, term()}
   def commit_events(
@@ -4713,10 +4731,9 @@ defmodule Arca.TurnStorage do
     if step.turn_id != turn.id or step.kind != "model", do: Arca.Repo.rollback(:step_not_found)
     illegal_recovery!(events)
 
-    said = for {:text, text} <- events, do: said!(actor, thread, turn, text, step_id)
-
-    asks =
-      Enum.flat_map(for({:ask, ask} <- events, do: ask), &ask!(actor, athanor_id, turn, step, &1))
+    written = written!(actor, athanor_id, thread, turn, step, events)
+    said = for {:text, row} <- written, do: row
+    asks = for {:ask, ask} <- written, do: ask
 
     usage =
       for({:usage, usage} <- events, reduce: nil, do: (acc -> add_usage(acc, counts(usage))))
@@ -4742,7 +4759,7 @@ defmodule Arca.TurnStorage do
       "calls" => length(asks)
     })
 
-    %{seen: false, said: said, asks: asks}
+    %{seen: false, said: said, asks: asks, rows: rows(written)}
   end
 
   defp committed!(actor, athanor_id, thread, turn, scope, events, {:session, progress_attrs}) do
@@ -4755,7 +4772,7 @@ defmodule Arca.TurnStorage do
     owner!(progress, progress_attrs)
 
     if seen?(progress, progress_attrs) do
-      %{seen: true, said: [], asks: []}
+      %{seen: true, said: [], asks: [], rows: []}
     else
       illegal_recovery!(events)
       session!(actor, athanor_id, thread, turn, scope, events, progress, progress_attrs)
@@ -4801,19 +4818,9 @@ defmodule Arca.TurnStorage do
     session = Map.get(attrs, :session)
     keep_session!(athanor_id, thread, session)
 
-    said =
-      if turn,
-        do: for({:text, text} <- events, do: said!(actor, thread, turn, text, nil)),
-        else: []
-
-    asks =
-      if turn,
-        do:
-          Enum.flat_map(
-            for({:ask, ask} <- events, do: ask),
-            &ask!(actor, athanor_id, turn, nil, &1)
-          ),
-        else: []
+    written = if turn, do: written!(actor, athanor_id, thread, turn, nil, events), else: []
+    said = for {:text, row} <- written, do: row
+    asks = for {:ask, ask} <- written, do: ask
 
     took = for {:took, id} <- events, do: id
     refused = for {:refused, id} <- events, do: id
@@ -4846,7 +4853,30 @@ defmodule Arca.TurnStorage do
       |> Map.merge(if session, do: %{"row" => attrs.row_id, "epoch" => attrs.epoch}, else: %{})
 
     :ok = put_progress!(athanor_id, thread.id, progress)
-    %{seen: false, said: said, asks: asks}
+    %{seen: false, said: said, asks: asks, rows: rows(written)}
+  end
+
+  # The rows the events write, a text's and an ask's call, in the order
+  # the events were given, which is the order of their seq.
+  # arca:db-raise-ok inside the caller's transaction
+  defp written!(actor, athanor_id, thread, turn, step, events) do
+    Enum.flat_map(events, fn
+      {:text, text} ->
+        [{:text, said!(actor, thread, turn, text, step && step.id)}]
+
+      {:ask, ask} ->
+        for asked <- ask!(actor, athanor_id, turn, step, ask), do: {:ask, asked}
+
+      _other ->
+        []
+    end)
+  end
+
+  defp rows(written) do
+    Enum.map(written, fn
+      {:text, row} -> row
+      {:ask, %{message: row}} -> row
+    end)
   end
 
   # What the harness said in the open turn: a post of its agent, naming

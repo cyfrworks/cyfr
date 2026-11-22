@@ -609,15 +609,14 @@ defmodule Aqua.Tape do
   @doc """
   Commit what a harness said with its position (`Arca.TurnStorage.commit_events/3`):
   `scope` is `%{thread: id, agent: agent, turn: %{id: id, fence: n} | nil}`.
-  The posts it wrote and the calls it recorded are broadcast after the
-  commit, then the thread's place in its person's list.
+  The rows it wrote are broadcast after the commit, in the order they were
+  written, then the thread's place in its person's list.
   """
   @spec commit_events(Context.t(), map(), map()) :: {:ok, map()} | {:error, term()}
   def commit_events(%Context{} = ctx, %{thread: thread_id} = scope, commit) when is_map(commit) do
     with {:ok, committed} <-
            TurnStorage.commit_events(Sanctum.Context.actor(ctx), scope, commit) do
-      Enum.each(committed.said, &broadcast(ctx, thread_id, :message, &1))
-      Enum.each(committed.asks, &broadcast(ctx, thread_id, :message, &1.message))
+      Enum.each(committed.rows, &broadcast(ctx, thread_id, :message, &1))
       if committed.said != [], do: announce_lists(ctx, thread_id, nil)
       {:ok, committed}
     end

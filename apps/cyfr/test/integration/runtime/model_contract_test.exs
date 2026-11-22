@@ -1130,13 +1130,15 @@ defmodule Locus.Runtime.ModelContractTest do
   defp model_steps(played), do: Enum.filter(played.steps, &(&1.kind == "model"))
 
   # A model step's usage is counted as a program's start step's is: one
-  # result, by the model it ran, all of it counted.
+  # result, by the model the catalyst says answered, all of it counted.
   defp counted(usage) when is_binary(usage), do: counted(Jason.decode!(usage))
 
   defp counted(usage) do
     assert %{"models" => models, "results" => 1, "partial" => 0, "unknown" => 0} = usage
 
-    [{_model, counts}] = Map.to_list(models)
+    [{model, counts}] = Map.to_list(models)
+    # The model the catalyst says answered.
+    assert model == "chat-fixture"
     counts
   end
 

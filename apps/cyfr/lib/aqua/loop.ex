@@ -1295,16 +1295,14 @@ defmodule Aqua.Loop do
   defp on_response(%State{} = state, step, data) do
     content = List.wrap(data["content"])
     text = content |> Enum.filter(&(&1["type"] == "text")) |> Enum.map_join("", & &1["text"])
-    {resolved, asks} = resolve_calls(state, step, content)
+    asks = resolve_calls(state, step, content)
 
     with {:ok, %{asks: recorded}} <-
            commit_response(state, step, data, if(text == "", do: nil, else: text), asks) do
       state = count_usage(state, data)
 
-      items =
-        Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
-          %{step: call_step, call: call}
-        end)
+      # Each step runs the call its own row records (`asked/1`).
+      items = Enum.map(recorded, &asked/1)
 
       # A page's waiting calls are placed in front of the round's own,
       # with reads among them running beside each other as any batch's
@@ -1327,16 +1325,16 @@ defmodule Aqua.Loop do
   end
 
   defp resolve_calls(%State{} = state, step, content) do
-    resolved =
-      for %{"type" => "tool_call"} = block <- content do
-        name = block["name"] || ""
-        args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
-
-        {block, Binding.resolve(name, args, tool_call_id: block["id"])}
-      end
-
-    {resolved, Enum.map(resolved, fn {block, call} -> ask(state, step, block, call) end)}
+    for %{"type" => "tool_call"} = block <- content do
+      name = block["name"] || ""
+      args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
+      ask(state, step, block, Binding.resolve(name, args, tool_call_id: block["id"]))
+    end
   end
+
+  # An ask the writer recorded, with the call its own row records, as a
+  # recovery reads it (`recall/2`).
+  defp asked(%{step: step, message: row}), do: %{step: step, call: call_of(row)}
 
   # A model's call as the step proposed for it, with its `tool_call` row,
   # as a program's ask is (`Arca.TurnStorage.commit_events/3`).
@@ -1380,7 +1378,7 @@ defmodule Aqua.Loop do
     events =
       if(text, do: [{:text, %{text: text}}], else: []) ++
         Enum.map(asks, &{:ask, &1}) ++
-        [{:usage, usage_event(state, data["usage"])}, {:stop, data["stop_reason"]}]
+        [{:usage, usage_event(state, data)}, {:stop, data["stop_reason"]}]
 
     Tape.commit_events(
       guest(state),
@@ -1393,23 +1391,27 @@ defmodule Aqua.Loop do
     )
   end
 
-  # What the model ran and its counts, as a program's usage is told: none
-  # told is unknown, never zero.
-  defp usage_event(%State{spec: spec}, usage) do
-    counts = for {name, n} <- usage || %{}, is_integer(n), into: %{}, do: {name, n}
+  # What the model ran and its counts, as a program's usage is told: the
+  # model the catalyst says answered, else the one asked for; a count it
+  # did not tell is not a zero, so the result is partial, and with neither
+  # count it is unknown.
+  defp usage_event(%State{spec: spec}, data) do
+    usage = if is_map(data["usage"]), do: data["usage"], else: %{}
+    counts = for {name, n} <- usage, is_integer(n), into: %{}, do: {name, n}
+    told = Enum.count(~w(input_tokens output_tokens), &Map.has_key?(counts, &1))
+    model = if is_binary(data["model"]), do: data["model"], else: spec.model || "default"
 
-    if counts == %{},
-      do: %{"models" => [], "accounting" => "unavailable"},
-      else: %{
-        "models" => [%{"model" => spec.model || "default", "counts" => counts}],
-        "accounting" => "complete"
-      }
+    case told do
+      0 -> %{"models" => [], "accounting" => "unavailable"}
+      1 -> %{"models" => [%{"model" => model, "counts" => counts}], "accounting" => "partial"}
+      2 -> %{"models" => [%{"model" => model, "counts" => counts}], "accounting" => "complete"}
+    end
   end
 
   @doc false
-  # What a step records of a call as it was bound, a model's
-  # (`call_attrs/4`) or a page's (`Aqua.PageCalls.proposal/3`): one
-  # recording, so a page's call is recorded as Aqua's call of its kind is.
+  # What a step records of a call as it was bound, a model's (`ask/4`) or a
+  # page's (`Aqua.PageCalls.proposal/3`): one recording, so a page's call is
+  # recorded as Aqua's call of its kind is.
   @spec recorded(String.t(), {:ok, Call.t()} | {:error, term()}) :: map()
   def recorded(name, call) do
     {tool, action, kind, recovery, child, step_kind} =
@@ -2788,18 +2790,21 @@ defmodule Aqua.Loop do
 
   # The call a proposed step was recorded for, from its tool_call row.
   defp recall(%State{} = state, %{message_id: message_id}) when is_binary(message_id) do
-    with {:ok, row} <- Tape.message(guest(state), message_id) do
-      payload = Tape.payload(row)
-
-      Binding.resolve(payload["name"] || "", payload["arguments"] || %{},
-        tool_call_id: payload["tool_call_id"]
-      )
-    else
+    case Tape.message(guest(state), message_id) do
+      {:ok, row} -> call_of(row)
       _ -> {:error, "the call's row is gone"}
     end
   end
 
   defp recall(_state, _step), do: {:error, "the step names no call"}
+
+  defp call_of(row) do
+    payload = Tape.payload(row)
+
+    Binding.resolve(payload["name"] || "", payload["arguments"] || %{},
+      tool_call_id: payload["tool_call_id"]
+    )
+  end
 
   # ---------------------------------------------------------------------------
   # Compaction
@@ -2909,14 +2914,13 @@ defmodule Aqua.Loop do
   defp keep_notes(%State{} = state, step, request) do
     case model_call(state, step, request, nil) do
       {:ok, data} ->
-        {resolved, asks} = resolve_calls(state, step, List.wrap(data["content"]))
+        asks = resolve_calls(state, step, List.wrap(data["content"]))
 
         with {:ok, %{asks: recorded}} <- commit_response(state, step, data, nil, asks) do
           state = count_usage(state, data)
 
-          Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
-            keep_note(state, call_step, call)
-          end)
+          for %{step: call_step, call: call} <- Enum.map(recorded, &asked/1),
+              do: keep_note(state, call_step, call)
 
           {:flushed, state}
         else

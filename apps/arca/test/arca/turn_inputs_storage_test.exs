@@ -36,13 +36,21 @@ defmodule Arca.TurnInputsStorageTest do
   # A turn of Aqua's on a program brain, accepted on `message` in `thread`
   # (a person's post unless another is given) and started with its root,
   # as the loop starts one.
-  defp running!(actor, thread, message \\ nil) do
+  defp running!(actor, thread, message \\ nil),
+    do: started!(actor, accepted!(actor, thread, message))
+
+  defp accepted!(actor, thread, message) do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, thread.id, %{
         message: message || %{author: actor.user_id, sent_by: "person", content: "go"},
         turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
+    turn
+  end
+
+  # An accepted turn started with its root, as the loop starts one.
+  defp started!(actor, turn) do
     budget_id = "bgt_#{System.unique_integer([:positive])}"
 
     {:ok, %{execution: execution, attempt: attempt}} =
@@ -321,6 +329,49 @@ defmodule Arca.TurnInputsStorageTest do
 
     assert TurnStorage.brain_given(%{actor | athanor_id: "ath_another"}, daily.id) ==
              {:error, :thread_not_found}
+  end
+
+  test "what was given is the newest turn's first delivery taken, though an older turn's " <>
+         "later steer has the greater seq",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    {:ok, _} = TurnStorage.close_step(actor, start.id, "ok", %{fence: turn.fence})
+    {:ok, %{step: first}} = carry(actor, turn, "post", opening(actor, turn))
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [first.id]})
+
+    # Job B is queued, then job A is steered: A's steer is written after
+    # B's opening.
+    queued = accepted!(actor, daily, %{author: actor.user_id, sent_by: "person", content: "B"})
+    more = steer!(actor, daily, turn, "more for A")
+    {:ok, %{step: steered}} = carry(actor, turn, "post", more)
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [steered.id]})
+    {:ok, _} = finish(actor, turn, "failed")
+
+    next = started!(actor, queued)
+    next_start = start!(actor, next)
+    {:ok, _} = TurnStorage.close_step(actor, next_start.id, "ok", %{fence: next.fence})
+    opened = opening(actor, next)
+    {:ok, %{step: taken}} = carry(actor, next, "post", opened)
+    {:ok, _} = commit(actor, daily, next, %{accepted: [taken.id]})
+
+    assert opened.seq < more.seq
+    assert TurnStorage.brain_given(actor, daily.id) == {:ok, %{seq: opened.seq, taken: [more.id]}}
+  end
+
+  test "a recovery prompt the program took is given as a post is, and a session forgotten " <>
+         "since was given nothing",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    {:ok, _} = TurnStorage.close_step(actor, start.id, "ok", %{fence: turn.fence})
+    opened = opening(actor, turn)
+    # The post was written and its answer lost: a recovery prompt continues it.
+    {:ok, %{step: _lost}} = carry(actor, turn, "post", opened)
+    {:ok, %{step: noticed}} = carry(actor, turn, "notice", opened)
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [noticed.id]})
+    assert TurnStorage.brain_given(actor, daily.id) == {:ok, %{seq: opened.seq, taken: []}}
+
+    assert {:ok, 1} =
+             TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+
+    assert TurnStorage.brain_given(actor, daily.id) == {:ok, %{seq: nil, taken: []}}
   end
 
   test "a refused post is one whose delivery closed error: none still dispatched, taken or " <>
