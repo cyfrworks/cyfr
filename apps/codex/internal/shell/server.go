@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cyfr/codex/internal/disk"
@@ -76,10 +77,42 @@ const Origin = "http://" + Listen
 // learns none it could unlock with.
 type Server struct {
 	Shell *Shell
-	// Reachable is whether the home answers now; the pages wait while it
-	// does not.
+	// Reachable is whether the home answers now, set for a box's screen.
+	// No page waits for it: each shows what the last reading of it said,
+	// "starting" until one said yes, and starts the next (read).
 	Reachable func() bool
+
+	lastMu sync.Mutex
+	// answered is what the last finished reading said, and reading
+	// whether one is in flight, the one at a time.
+	answered, reading bool
 }
+
+// read starts the next reading, unless one is in flight, and answers what
+// the last one said. A page that makes an account has the account
+// service's terms read in it first, so that a first form shows them.
+func (srv *Server) read(page Page) (answered bool) {
+	srv.lastMu.Lock()
+	defer srv.lastMu.Unlock()
+	if !srv.reading {
+		srv.reading = true
+		go func() {
+			if page == PageSetup || page == PageEnroll {
+				ctx, cancel := context.WithTimeout(context.Background(), termsWithin)
+				srv.Shell.readTerms(ctx)
+				cancel()
+			}
+			now := srv.Reachable()
+			srv.lastMu.Lock()
+			srv.answered, srv.reading = now, false
+			srv.lastMu.Unlock()
+		}()
+	}
+	return srv.answered
+}
+
+// termsWithin bounds one reading of the account service's terms.
+const termsWithin = 3 * time.Second
 
 // The three scripts the pages run, each allowed by its hash alone:
 // printing the recovery code, closing a confirmation's window once
@@ -129,15 +162,17 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" {
-		v := srv.Shell.pageView(nil)
-		if v.Page == PageSetup || v.Page == PageEnroll {
+		v := srv.Shell.shownView()
+		if srv.Reachable == nil && (v.Page == PageSetup || v.Page == PageEnroll) {
 			// Reading the account service's configuration changes nothing:
-			// it names the terms the page asks to be accepted.
-			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			// it names the terms the page asks to be accepted. A screen's
+			// page leaves it to its reading (read).
+			ctx, cancel := context.WithTimeout(r.Context(), termsWithin)
 			srv.Shell.readTerms(ctx)
 			cancel()
+			v = srv.Shell.shownView()
 		}
-		srv.page(w, pageData{View: srv.Shell.pageView(nil), Reveal: true})
+		srv.page(w, pageData{View: v, Reveal: true})
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/lock" {
@@ -152,18 +187,36 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/confirm" {
+		if !srv.Shell.Unlocked() {
+			srv.pageLocked(w, unlockToConfirm)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
+		ctx, done := srv.Shell.acting(ctx)
+		defer done()
 		ref := r.URL.Query().Get("ref")
 		srv.Shell.Draw(ctx, ref)
+		if lockedMeanwhile(ctx, w, r) {
+			return
+		}
 		srv.page(w, pageData{View: srv.Shell.confirmView(ref)})
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/passkey" {
+		if !srv.Shell.Unlocked() {
+			srv.pageLocked(w, unlockToApprove)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
+		ctx, done := srv.Shell.acting(ctx)
+		defer done()
 		ref := r.URL.Query().Get("ref")
 		srv.Shell.DrawPasskey(ctx, ref)
+		if lockedMeanwhile(ctx, w, r) {
+			return
+		}
 		srv.page(w, pageData{View: srv.Shell.passkeyView(ref)})
 		return
 	}
@@ -187,14 +240,24 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer form.erase()
-	srv.Shell.Begin()
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+	// Prism's Lock begins nothing, which would wait for the action it is
+	// to cut short. Every other action a lock can cut from here on.
+	if !action.prism {
+		var done func()
+		ctx, done = srv.Shell.acting(ctx)
+		defer done()
+		srv.Shell.Begin(ctx)
+		if lockedMeanwhile(ctx, w, r) {
+			return
+		}
+	}
 	action.run(ctx, srv, w, r, form)
 }
 
-// An action is one POST: whether Prism's own pages may send it, and what
-// it does.
+// An action is one POST: whether Prism's own pages may send it, as they
+// may its Lock alone, and what it does.
 type action struct {
 	prism bool
 	run   func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form)
@@ -206,7 +269,7 @@ var actions = map[string]action{
 	}},
 	"/setup": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		proof, drawn := srv.Shell.setup(ctx, string(f.get("name")), srv.accepted(f), f.get("secret"), f.get("again"))
-		if drawn != "" {
+		if drawn != "" && !cutShort(ctx) {
 			srv.drawn(w, r, drawn)
 			return
 		}
@@ -229,7 +292,7 @@ var actions = map[string]action{
 	}},
 	"/saved": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		accepted := srv.accepted(f)
-		srv.Shell.asPage(f.get("proof"), func() { srv.Shell.saved(ctx, accepted) })
+		srv.Shell.asPage(ctx, f.get("proof"), func(ctx context.Context) { srv.Shell.saved(ctx, accepted) })
 		srv.onward(ctx, w, r, f, "")
 	}},
 	"/resume": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
@@ -247,7 +310,7 @@ var actions = map[string]action{
 		srv.onward(ctx, w, r, f, proof)
 	}},
 	"/name": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.asPage(f.get("proof"), func() { srv.Shell.rename(ctx, string(f.get("name"))) })
+		srv.Shell.asPage(ctx, f.get("proof"), func(ctx context.Context) { srv.Shell.rename(ctx, string(f.get("name"))) })
 		srv.onward(ctx, w, r, f, "")
 	}},
 	"/open": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
@@ -265,6 +328,9 @@ var actions = map[string]action{
 	}},
 	"/confirm/decide": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.Decide(ctx, string(f.get("ref")), string(f.get("decision")) == "confirm", f.get("secret"))
+		if lockedMeanwhile(ctx, w, r) {
+			return
+		}
 		v := srv.Shell.confirmView(string(f.get("ref")))
 		if v.Page == PageConfirm {
 			srv.page(w, pageData{View: v})
@@ -278,6 +344,9 @@ var actions = map[string]action{
 	"/passkey/decide": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		ref := string(f.get("ref"))
 		settled := srv.Shell.DecidePasskey(ctx, ref, string(f.get("key")), string(f.get("decision")) == "approve", f.get("secret"))
+		if lockedMeanwhile(ctx, w, r) {
+			return
+		}
 		v := srv.Shell.passkeyView(ref)
 		switch {
 		case v.Passkey != nil:
@@ -331,6 +400,9 @@ func (srv *Server) drawn(w http.ResponseWriter, r *http.Request, passphrase stri
 // one was issued and the recovery code when one is shown. Anything else
 // goes back to the shell's page, which says what happened.
 func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Request, f form, fresh string) {
+	if lockedMeanwhile(ctx, w, r) {
+		return
+	}
 	proof := f.get("proof")
 	if fresh != "" {
 		proof = []byte(fresh)
@@ -338,6 +410,9 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 	to := ""
 	if srv.Shell.pageView(nil).Page == PageUnlocked {
 		ticket, err := srv.Shell.Ticket(ctx, proof)
+		if lockedMeanwhile(ctx, w, r) {
+			return
+		}
 		switch {
 		case err == nil && fresh == "":
 			// The ticket travels in the fragment of a redirect: no request
@@ -363,6 +438,24 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// lockedMeanwhile sends an action a lock cut short back to the shell's
+// page, which says nothing of it, and is whether it did.
+func lockedMeanwhile(ctx context.Context, w http.ResponseWriter, r *http.Request) bool {
+	if !cutShort(ctx) {
+		return false
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+	return true
+}
+
+// pageLocked is what a locked device shows where it is asked to confirm or
+// approve: it fetches nothing, and waits for no unlock in flight.
+func (srv *Server) pageLocked(w http.ResponseWriter, why string) {
+	v := srv.Shell.shownView()
+	v.Notice = why
+	srv.page(w, pageData{View: v})
 }
 
 type pageData struct {
@@ -391,8 +484,8 @@ func (srv *Server) page(w http.ResponseWriter, d pageData) {
 	d.Print, d.Close, d.Keep = template.JS(printScript), template.JS(closeScript), template.JS(keepScript)
 	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && !v.Drawn)
 	d.Unwatched = srv.Shell.cfg.Unwatched()
-	if (v.Page == PageSetup || v.Page == PageLocked) && srv.Reachable != nil && !srv.Reachable() {
-		d.Waiting = true
+	if srv.Reachable != nil && (v.Page == PageSetup || v.Page == PageEnroll || v.Page == PageLocked) {
+		d.Waiting = !srv.read(v.Page) && v.Page != PageEnroll
 	}
 	d.Warn = warnings(v.Storage)
 	qr := v.RecoveryCode

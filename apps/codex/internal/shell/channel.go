@@ -591,8 +591,15 @@ func (c *Channel) Renew(ctx context.Context) error {
 	}
 }
 
+// drop ends a channel no session was reserved on, waiting for no answer
+// to its close.
+func (c *Channel) drop() {
+	c.end(errLocked)
+	_ = c.conn.CloseNow()
+}
+
 // Close ends the channel, and with it every session it holds at the home.
 func (c *Channel) Close() {
-	c.end(errors.New("locked"))
+	c.end(errLocked)
 	_ = c.conn.Close(websocket.StatusNormalClosure, "")
 }

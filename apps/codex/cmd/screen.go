@@ -449,7 +449,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 				browser <- err
 				return
 			}
-			if browsing.Err() == nil && sh.Unlocked() {
+			if browsing.Err() == nil && sh.InUse() {
 				sh.Lock("Locked because the browser closed.")
 			}
 			select {
