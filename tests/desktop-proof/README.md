@@ -181,6 +181,7 @@ account window makes. The app is launched four times (`run.sh`):
 | `renderer_killed` | a lost page is shown again and signs nobody out | as `connect/`'s |
 | `kept_policy` | in a kept session too, both passkey calls are refused by the app's policy | each call's refusal naming the denied feature |
 | `process_loss` | `cyfr`'s loss closes the content, tells the person and signs nobody out | the app's message; no sign-out; the cookie still opening a page |
+| `system_quit_lost`, `system_quit` | ended by the system, after `cyfr`'s loss or at the chooser, the app quits, and never from inside the engine's `before-quit`, from which a quit is lost | SIGTERM to the app's own process; the app's own quit asked after that event returned; the engine's `quit` within 20 s; the process then gone by itself within 30 s (`launch.sh`) |
 | `another_uncleared` | Connect to another CYFR does not advance past a clear that failed, and says so | the engine's clear made to fail; the ways on and the sentence; the proof's cookie and local storage item still kept |
 | `another` | signed out, Connect to another CYFR clears all that was kept of the CYFR left, and main keeps to it no more | those marks there before; no cookie of any site and no item of that origin after; the form; main's refusal of that CYFR's page |
 

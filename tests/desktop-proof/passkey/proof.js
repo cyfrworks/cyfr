@@ -12,7 +12,8 @@
 // The app is launched four times: `passkey`, the road itself, killed right
 // after a sign-in; `kept`, which is still signed in and then quits;
 // `closed`, still signed in after that, and then cyfr is lost; `left`,
-// still signed in after that, and then signed out, for another CYFR.
+// still signed in after that, and then signed out, for another CYFR. The
+// last two end as the system ends the app.
 
 import {readFileSync, writeFileSync} from "node:fs"
 import path from "node:path"
@@ -433,7 +434,9 @@ async function closedPhase() {
   const signOuts = await signOutsSince(from)
   row("process_loss", told.startsWith("CYFR stopped") && !content() && after.opens && signOuts.length === 0,
     "cyfr's loss closes the content and tells the person, and signs nobody out", {told, after, signOuts})
-  return "quit"
+  // system_quit_lost: the system ends the app that lost its cyfr.
+  return {system: ["system_quit_lost",
+    "ended by the system after cyfr's loss, the app quits, and never from inside the engine's before-quit"]}
 }
 
 async function leftPhase() {
@@ -472,6 +475,9 @@ async function leftPhase() {
   row("another", signedOutToWays(out) && leftRefused && gone.cookies.length === 0 && gone.local === null,
     "signed out, Connect to another CYFR clears all that was kept of the CYFR left, and main keeps to it no more",
     {leftRefused, gone})
+  // system_quit: the system ends the app at the chooser.
+  return {system: ["system_quit",
+    "ended by the system at the chooser, the app quits, and never from inside the engine's before-quit"]}
 }
 
 const MARK = "proof_left"

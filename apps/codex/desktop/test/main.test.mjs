@@ -757,15 +757,127 @@ test("Connect to another CYFR does not advance past a failed clear", async () =>
   assert.deepEqual(cookiesOnDisk(), ["ada at A"])
 })
 
+test("a quit the system begins is never answered from inside the engine's before-quit", async () => {
+  // SIGTERM, Cmd+Q and a logout reach Browser::Quit natively: the engine
+  // runs the microtasks before that event returns, and a quit made there
+  // re-enters the one under way.
+  for (const before of [() => {}, () => child.emit("exit", null, "SIGKILL")]) {
+    await signedIn()
+    before()
+    await settled()
+    const event = {prevented: false, preventDefault() { this.prevented = true }}
+    world.app.emit("before-quit", event)
+    assert.ok(event.prevented)
+    for (let turn = 0; turn < 20; turn++) await Promise.resolve()
+    assert.equal(world.quit, false, "not in the event's own turn")
+    await settled()
+    assert.equal(world.quit, true, "in the next")
+  }
+})
+
+const BOUND = 5000
+
+test("the app's end never waits without end on a clear, a take or a flush, and keeps clear before record", async () => {
+  const stuck = () => new Promise(() => {})
+  for (const [name, hang, act] of [
+    ["a take's clear", () => { world.clearing = stuck }, async () => { child.proposes(PORT_B) }],
+    ["a take's flush", (ses) => { ses.cookies.flushStore = stuck }, async () => { child.proposes(PORT_B) }],
+    ["a lock's clear", () => { world.clearing = stuck }, async () => {
+      assert.ok(await opens(PORT_A))
+      child.say({type: "locked", home: PORT_A, account: ACCOUNT})
+    }]]) {
+    for (const [how, end, ended] of [
+      ["quit", () => world.app.emit("before-quit", {preventDefault() {}}), () => world.quit],
+      ["relaunch", () => child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}),
+        () => !!world.relaunched]]) {
+      if (how === "relaunch" && name === "a lock's clear") continue // no proposal is taken while locking
+      await started(true)
+      await signsIn(PORT_A, "ada at A")
+      await started(true, {relaunch: true})
+      hang(content().webContents.session)
+      await act()
+      await settled()
+      await settled()
+      mock.timers.enable({apis: ["setTimeout"]})
+      try {
+        end()
+        await settled()
+        await settled()
+        mock.timers.tick(BOUND - 1)
+        await settled()
+        await settled()
+        assert.ok(!ended(), `${name}, ${how}: it waits for what is under way`)
+        mock.timers.tick(1)
+        await settled()
+        await settled()
+        assert.ok(ended(), `${name}, ${how}: and no longer`)
+      } finally {
+        mock.timers.reset()
+      }
+      assert.equal(ownerOnDisk(), PORT_A, `${name}, ${how}: nothing recorded for a clear that did not end`)
+      assert.ok(world.loads.every((l) => new URL(l.url).origin === PORT_A), `${name}, ${how}: nothing of another loads`)
+      await started(true, {relaunch: true})
+      assert.ok(await opens(PORT_B))
+      assert.deepEqual(world.loads, [{url: PORT_B + "/", cookies: []}], `${name}, ${how}: the next start clears first`)
+    }
+  }
+})
+
+test("a clear that ends after the app's end gave up opens nothing and records only what it cleared", async () => {
+  await started(true)
+  await signsIn(PORT_A, "ada at A")
+  await started(true, {relaunch: true})
+  const held = heldClears()
+  child.proposes(PORT_B)
+  await settled()
+  mock.timers.enable({apis: ["setTimeout"]})
+  try {
+    world.app.emit("before-quit", {preventDefault() {}})
+    await settled()
+    mock.timers.tick(BOUND)
+    await settled()
+    await settled()
+  } finally {
+    mock.timers.reset()
+  }
+  assert.equal(world.quit, true)
+  held[0].end()
+  await settled()
+  await settled()
+  assert.deepEqual(world.loads, [])
+  assert.ok(!child.heard.some((m) => m.type === "home-ready"), "nobody is answered")
+  assert.ok(ownerOnDisk() === PORT_A || cookiesOnDisk().length === 0, "the new owner never over the old storage")
+})
+
+test("closing the window that says cyfr stopped takes the same way out, and waits as it does", async () => {
+  await signedIn()
+  let cleared
+  world.clearing = () => new Promise((resolve) => { cleared = resolve })
+  await saysLocked()
+  child.emit("exit", null, "SIGKILL")
+  await settled()
+  live().find((w) => w.webContents.url.startsWith("data:")).destroy()
+  await settled()
+  await settled()
+  assert.equal(world.quit, false, "not over what is being forgotten")
+  cleared()
+  await settled()
+  await settled()
+  assert.equal(world.quit, true)
+})
+
 test("quitting waits for what a lock is forgetting", async () => {
   await signedIn()
   let cleared
   world.clearing = () => new Promise((resolve) => { cleared = resolve })
   await saysLocked()
   world.app.quit()
+  // Two turns: main never quits in the turn it is free to.
+  await settled()
   await settled()
   assert.equal(world.quit, false)
   cleared()
+  await settled()
   await settled()
   assert.equal(world.quit, true)
 })
@@ -786,6 +898,7 @@ test("closing the content window, and quitting, quit and sign nobody out", async
   for (const end of [() => content().destroy(), () => world.app.quit()]) {
     await signedIn()
     end()
+    await settled()
     await settled()
     assert.equal(world.quit, true)
     assert.deepEqual(child.heard.at(-1), {version: 1, type: "shutdown"})
@@ -853,6 +966,7 @@ test("a CYFR rerouted is a relaunch only after the content closed, and signs nob
   world.cleared = []
   const page = content()
   child.proposes("https://bob.example", {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
+  await settled()
   await settled()
   assert.ok(page.destroyed)
   signedNobodyOut()

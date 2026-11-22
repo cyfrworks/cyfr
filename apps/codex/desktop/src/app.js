@@ -27,6 +27,8 @@ import {accountLoad, documentHeaders, grants, readHop, relyingParty, unlistedSwi
 import {initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
+// How long the app's end waits for a clear, a take or a flush under way.
+const END_WAITS_MS = 5000
 const ACCOUNT_PARTITION = "persist:cyfr-account"
 const CONTENT_PARTITION = "persist:cyfr-content"
 
@@ -100,7 +102,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   let generation = 0
   let storage = null // the passkey road's kept storage (owner.js)
   // What is being forgotten or taken, one after the other, which quitting
-  // waits for.
+  // waits for, so long (ending).
   let forgetting = Promise.resolve()
 
   // ---- the one place: every event goes through step ----
@@ -138,7 +140,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       say("starting again with the CYFR's route")
       const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a))
       if (effect.relaunch.proxy) args.push(`--proxy-server=${effect.relaunch.proxy}`, `--host-resolver-rules=${effect.relaunch.resolver}`)
-      forgetting.then(() => {
+      ending(() => {
         if (child && child.exitCode === null) child.kill()
         app.relaunch({args})
         app.exit(0)
@@ -150,7 +152,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       message(`CYFR stopped: ${effect.end}. Quit the app and open it again.`)
     }
     if (effect.quit) {
-      forgetting.then(() => {
+      ending(() => {
         if (child && child.exitCode === null) {
           send("shutdown")
           child.stdin.end()
@@ -176,6 +178,23 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       if (content.isMinimized()) content.restore()
       content.focus()
     }
+  }
+
+  // The app's one way out, `end`. It waits END_WAITS_MS at the most for
+  // what is being forgotten or taken, and never runs in the turn that asked
+  // for it: where the system began the quit (SIGTERM, Cmd+Q, a logout) the
+  // engine runs the microtasks before its before-quit returns, and a quit
+  // made there re-enters the one under way, which then never ends. A clear
+  // the bound cuts off records no owner (owner.js records only after it),
+  // so the next start clears again before another CYFR is kept to.
+  function ending(end) {
+    let timer
+    const bound = new Promise((resolve) => { timer = setTimeout(resolve, END_WAITS_MS) })
+    const go = () => {
+      clearTimeout(timer)
+      setImmediate(end)
+    }
+    Promise.race([forgetting, bound]).then(go, go)
   }
 
   // The chooser's address: cyfr's own, with the road this app offers,
@@ -320,10 +339,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     w.webContents.on("will-navigate", block)
     w.webContents.on("will-redirect", block)
     w.webContents.setWindowOpenHandler(() => ({action: "deny"}))
-    w.on("closed", () => {
-      quitting = true
-      app.quit()
-    })
+    w.on("closed", () => on({type: "quit"}))
     const page = "<!doctype html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content=\"default-src 'none'; style-src 'unsafe-inline'\">" +
       "<title>CYFR</title><style>body{background:#0b1418;color:#e8f1f2;font:1.1rem system-ui,sans-serif;margin:2rem}</style>" +
       `<h1>CYFR</h1><p>${text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p>`

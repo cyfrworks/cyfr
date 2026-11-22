@@ -9,7 +9,8 @@
 # inputs are. The app is launched once for each PHASE, in order. Each
 # launch appends one PASS or FAIL line a row to FIXTURE_DIR/out/NAME.txt
 # and its RESULT line, and writes its record to NAME-PHASE.json; one FAIL,
-# or a launch that does not finish its record, fails the run. The app's own
+# or a launch that does not finish its record or does not end (an exit
+# neither the app's own nor the kill a phase ends by), fails the run. The app's own
 # output goes to FIXTURE_DIR/app-output alone, a pipe home.sh reads: it is
 # scrubbed there before any of it is written.
 #
@@ -61,5 +62,14 @@ for phase in "$@"; do
     cat "$OUT/$NAME.txt"
     exit 1
   fi
+  # 0 is the app's own end, 137 the kill a phase ends by.
+  case "$code" in
+    0 | 137) ;;
+    *)
+      cat "$OUT/$NAME.txt"
+      echo "FAIL proof: the $phase launch passed and did not end by itself (exit $code)"
+      exit 1
+      ;;
+  esac
 done
 cat "$OUT/$NAME.txt"

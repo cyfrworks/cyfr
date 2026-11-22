@@ -18,9 +18,11 @@
 // passed or failed) and writes NAME-PHASE.json. Nothing it records holds
 // a credential: no page text, only addresses, headings and notices, and
 // everything it writes is scrubbed first (write, scrub.mjs). A phase may
-// end as the person ends the app, by quitting, or as a kill ends it
-// (finish); either way its record is written first.
+// end as the person ends the app, by quitting, as a kill ends it
+// (finish), its record written first, or as the system ends it
+// (systemEnds), judged as the engine goes.
 
+import {spawn} from "node:child_process"
 import {createHash} from "node:crypto"
 import {appendFileSync, readFileSync, readdirSync, writeFileSync} from "node:fs"
 import path from "node:path"
@@ -554,11 +556,62 @@ export let proof = "proof"
 // The launch's end, its record written first: by the proof (nothing given),
 // by quitting as the person quits ("quit"), or by the kill signal ("kill").
 export function finish(code, end) {
-  write(`${proof}.txt`, `RESULT ${PHASE} ${code === 0 ? "passed" : "failed"}`)
-  writeFileSync(path.join(OUT, `${proof}-${PHASE}.json`), scrubbed(record, 2))
+  conclude(code)
   if (code === 0 && end === "quit") return app.quit()
   if (code === 0 && end === "kill") return process.kill(process.pid, "SIGKILL")
   app.exit(code)
+}
+
+function conclude(code) {
+  write(`${proof}.txt`, `RESULT ${PHASE} ${code === 0 ? "passed" : "failed"}`)
+  writeFileSync(path.join(OUT, `${proof}-${PHASE}.json`), scrubbed(record, 2))
+}
+
+// How long the app has to quit once the system ends it: its own wait for
+// a clear is 5 s, and the native smoke gives the process 30 s.
+const SYSTEM_QUIT_MS = 20_000
+
+// The app ended as the system ends it, by SIGTERM to this process, which
+// reaches the engine's quit natively, as app.quit from a script does not.
+// The row `name` holds that the engine quits within its bound and never
+// from inside its own before-quit, from which a quit is lost: on macOS
+// the process then stays. That the process goes is launch.sh's: one still
+// there 30 s after the signal is aborted, and launch.sh refuses that exit.
+function systemEnds(name, what) {
+  let inside = false
+  let first = true
+  let reentered = false
+  const at = Date.now()
+  const judge = (ok, detail) => {
+    try {
+      row(name, ok, what, {...detail, ms: Date.now() - at})
+    } catch (e) {
+      if (!(e instanceof Stop)) throw e
+    }
+    conclude(record.rows.every((r) => r.ok) ? 0 : 1)
+  }
+  // The app's own quit is the next before-quit. Judged there: with a
+  // window still open the engine's quit comes turns after it.
+  app.prependListener("before-quit", () => {
+    if (!first) {
+      reentered ||= inside
+      return
+    }
+    first = false
+    inside = true
+    setImmediate(() => { inside = false })
+  })
+  const late = setTimeout(() => { // sleep-ok: the bound on a quit that may never come
+    judge(false, {quit: false, reentered})
+    app.exit(1)
+  }, SYSTEM_QUIT_MS)
+  app.once("quit", () => {
+    clearTimeout(late)
+    judge(!reentered, {quit: true, reentered})
+  })
+  spawn("/bin/sh", ["-c", `i=0; while kill -0 ${process.pid} 2>/dev/null; do i=$((i + 1)); [ "$i" -lt 150 ] || { kill -ABRT ${process.pid}; exit; }; sleep 0.2; done`], // sleep-ok: polls the app's process until it is gone, 30 s at the most
+    {detached: true, stdio: "ignore"}).unref()
+  process.kill(process.pid, "SIGTERM")
 }
 
 // Where every window stood when the proof stopped: its address without
@@ -580,7 +633,8 @@ export async function where() {
  * `options` beside startApp's own (accountRoad), then the phase this
  * launch is (CYFR_DESKTOP_PROOF_PHASE) of `phases`, writing
  * FIXTURE/out/NAME.txt, NAME.log and NAME-PHASE.json, and ended as the
- * phase answers (finish).
+ * phase answers (finish): "quit", "kill", or {system: [row, what]}
+ * (systemEnds).
  */
 export function run(name, phases, options = {}) {
   proof = name
@@ -593,7 +647,8 @@ export function run(name, phases, options = {}) {
     log(`app: ${line}`)
   }})
   if (!phases[PHASE]) throw new Error(`no phase ${PHASE}`)
-  app.whenReady().then(phases[PHASE]).then((end) => finish(record.rows.every((r) => r.ok) ? 0 : 1, end), async (e) => {
+  app.whenReady().then(phases[PHASE]).then((end) => end?.system ? systemEnds(...end.system)
+    : finish(record.rows.every((r) => r.ok) ? 0 : 1, end), async (e) => {
     if (!(e instanceof Stop)) {
       record.stopped = e.stack ?? String(e)
       write(`${proof}.txt`, `FAIL stopped: ${e.message}`)

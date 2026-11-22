@@ -79,9 +79,10 @@
 //                            the kept storage being its own
 //   send {type, fields}      a message to cyfr
 //   chooser {notices}        open the content window at the chooser
-//   relaunch {proxy, resolver}  once forgotten
+//   relaunch {proxy, resolver}  once forgotten, or the wait for it is up
 //   end {why}                kill cyfr and tell the person
-//   quit                     once forgotten, shut cyfr down and quit
+//   quit                     once forgotten, or the wait for it is up,
+//                            shut cyfr down and quit
 //   hop {url, kind}, unhop
 //   deliver {url}            load a sign-in's answer into the content
 //                            window; answers delivered as that call
