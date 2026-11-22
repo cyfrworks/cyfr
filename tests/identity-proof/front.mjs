@@ -27,10 +27,9 @@
 //     redirect {"from": P, "to": U}  a request for the path P is answered
 //                                with a redirect to U
 //   GET /seen                 every request: method, path, user agent,
-//                             when it came, status, the
-//                             cyfr-session-retired header answered,
-//                             fault, and whether and when its client gave
-//                             up before the answer
+//                             when it came, status, fault, and whether
+//                             and when its client gave up before the
+//                             answer
 //   GET /health               200 once listening, with the TOKEN it was
 //                             started with, so front.sh accepts readiness
 //                             from its own container alone
@@ -56,7 +55,7 @@ const seen = [];
 let held = [];
 
 const front = createTls({ cert: readFileSync(cert), key: readFileSync(key) }, (req, res) => {
-  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, status: null, retired: null, fault: null, aborted: false };
+  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, status: null, fault: null, aborted: false };
   seen.push(account);
   res.on("close", () => {
     if (!res.writableFinished) {
@@ -104,7 +103,6 @@ function pass(req, res, account) {
     },
   }, (upstream) => {
     account.status = upstream.statusCode;
-    account.retired = upstream.headers["cyfr-session-retired"] ?? null;
     if (!rewrite) {
       res.writeHead(upstream.statusCode, upstream.rawHeaders);
       upstream.pipe(res);
@@ -135,7 +133,7 @@ function pass(req, res, account) {
 // front forwards any request's, then both ways byte for byte. Its status
 // is the one the upstream's answer begins with.
 front.on("upgrade", (req, socket, head) => {
-  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, status: null, retired: null, fault: null, aborted: false };
+  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, status: null, fault: null, aborted: false };
   seen.push(account);
   if (mode === "down") {
     account.fault = "down";

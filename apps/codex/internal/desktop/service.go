@@ -35,8 +35,14 @@ import (
 // directory approved for this CYFR before, goes on at once; any other is
 // shown whole beside the CYFR's address and goes on only once the person
 // approves it, and a decline contacts nothing there. Selecting sends main
-// home and waits for its home-ready; only then are the device's pages,
-// and the ticket they hand over, served.
+// home, numbered, and waits for that number's home-ready or home-failed;
+// only then are the device's pages, and the ticket they hand over, served,
+// and only after a home-ready. An answer to any other number is none.
+//
+// The road the app offers is main's alone to know (it says it in the
+// chooser's address, and decides every navigation): cyfr answers every
+// chooser alike. Main opens a CYFR committed at its root, and lets go of
+// one by leave.
 type Service struct {
 	// Token is the run token the chooser's requests carry.
 	Token string
@@ -55,9 +61,6 @@ type Service struct {
 	Discover func(ctx context.Context, client *http.Client, home string) (account.Discovered, error)
 	// Shell adapts a selected CYFR's shell configuration; nil leaves it.
 	Shell func(*shell.Config)
-	// AccountRoad is whether the app signs in with the account's passkey
-	// too (macOS and Windows), beside the device's six words.
-	AccountRoad bool
 
 	mu sync.Mutex
 	// epoch counts locks. A chooser request belongs to the epoch it
@@ -69,26 +72,25 @@ type Service struct {
 	connecting bool
 	stop       context.CancelFunc
 	pending    *selection
-	// ready receives main's home-ready for selecting, the CYFR being
-	// selected.
-	ready     chan struct{}
+	// attempts numbers each proposal of this run. ready receives main's
+	// answer to current, the one attempt that waits for it, whether it is
+	// ready for the CYFR selecting; with none waiting, ready is nil and no
+	// answer changes anything.
+	attempts  uint64
+	current   uint64
+	ready     chan bool
 	selecting string
 	sh        *shell.Shell
 	pages     *shell.Server
 	// committed is the CYFR the device's pages serve, as home named it:
 	// every locked names it again.
 	committed Message
-	// warning is what the chooser tells the person this app cannot do
-	// here (Warn).
-	warning string
-}
-
-// Warn has the chooser tell the person, in one sentence, what this app
-// cannot do on this computer, such as lock with it.
-func (s *Service) Warn(sentence string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.warning = sentence
+	// began is whether a Connect began in this run: the remembered CYFR
+	// is connected by itself once, as the app starts, and never again.
+	began bool
+	// ended is whether cyfr is ending, which main hears as its end and
+	// never as a lock.
+	ended bool
 }
 
 type selection struct {
@@ -185,8 +187,10 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	lockedSentence = "CYFR locked. Connect again."
-	busySentence   = "This app is connecting already. Wait for it to finish."
+	// noticeUncleared is the chooser's sentence for a clear that failed.
+	noticeUncleared = "uncleared"
+	lockedSentence  = "CYFR locked. Connect again."
+	busySentence    = "This app is connecting already. Wait for it to finish."
 )
 
 // begin takes the one Connect a time for a request of epoch, or answers
@@ -203,7 +207,7 @@ func (s *Service) begin(ctx context.Context, epoch uint64) (context.Context, *an
 		return nil, &answer{Error: "This app is connected to a CYFR already. Quit it and open it again to connect to another."}
 	}
 	run, stop := context.WithCancel(ctx)
-	s.connecting, s.stop = true, stop
+	s.connecting, s.stop, s.began = true, stop, true
 	return run, nil
 }
 
@@ -215,7 +219,7 @@ func (s *Service) finish() {
 	s.stop()
 	s.connecting, s.stop = false, nil
 	if s.pages == nil {
-		s.ready, s.selecting = nil, ""
+		s.ready, s.selecting, s.current = nil, "", 0
 	}
 }
 
@@ -231,27 +235,22 @@ type request struct {
 // answer is what the chooser does next: show a sentence, ask to approve a
 // directory for a CYFR, or go to the device's pages.
 //
-// Once a CYFR is open, Next is the device's pages and, where the app signs
-// in with the account's passkey (AccountRoad), Passkey is that CYFR's own
-// sign-in page, which the page offers first.
+// Once a CYFR is open, Next is the device's pages. Resume, before any
+// Connect of this run, is the remembered CYFR, which a chooser on the
+// passkey road connects by itself. Notice names a sentence of the
+// chooser's own, the one main's notices name.
 type answer struct {
 	Home    string `json:"home,omitempty"`
 	Confirm string `json:"confirm,omitempty"`
 	Next    string `json:"next,omitempty"`
-	Passkey string `json:"passkey,omitempty"`
+	Resume  string `json:"resume,omitempty"`
+	Notice  string `json:"notice,omitempty"`
 	Error   string `json:"error,omitempty"`
-	// Warning is what this app cannot do on this computer (Warn), which
-	// the chooser shows whatever else it shows.
-	Warning string `json:"warning,omitempty"`
 }
 
 // opened is the answer for the CYFR open at home.
 func (s *Service) opened(home string) answer {
-	a := answer{Home: home, Next: "/"}
-	if s.AccountRoad {
-		a.Passkey = home + "/login"
-	}
-	return a
+	return answer{Home: home, Next: "/"}
 }
 
 func (s *Service) state(context.Context, uint64, request) answer {
@@ -260,13 +259,15 @@ func (s *Service) state(context.Context, uint64, request) answer {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
 	s.mu.Lock()
-	open, warning := s.pages != nil, s.warning
+	open, began, home := s.pages != nil, s.began, s.committed.Home
 	s.mu.Unlock()
-	a := answer{Home: c.Home}
 	if open {
-		a = s.opened(c.Home)
+		return s.opened(home)
 	}
-	a.Warning = warning
+	a := answer{Home: c.Home}
+	if !began {
+		a.Resume = c.Home
+	}
 	return a
 }
 
@@ -370,21 +371,26 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 	if err != nil {
 		return answer{Error: err.Error()}
 	}
-	ready := make(chan struct{}, 1)
+	ready := make(chan bool, 1)
 	proposal := Message{Type: TypeHome, Home: home, Account: found.Origin}
 	s.mu.Lock()
 	if s.epoch != epoch {
 		s.mu.Unlock()
 		return answer{Error: lockedSentence}
 	}
-	s.ready, s.selecting = ready, home
+	s.attempts++
+	proposal.Attempt = s.attempts
+	s.ready, s.selecting, s.current = ready, home, s.attempts
 	err = s.Send(proposal)
 	s.mu.Unlock()
 	if err != nil {
 		return answer{Error: "The app did not take the CYFR (" + err.Error() + ")."}
 	}
 	select {
-	case <-ready:
+	case ok := <-ready:
+		if !ok {
+			return answer{Home: home, Notice: noticeUncleared}
+		}
 	case <-run.Done():
 		if !s.live(epoch) {
 			return answer{Error: lockedSentence}
@@ -417,14 +423,20 @@ func remoteDisks(string) disk.Report {
 	return r
 }
 
-// HomeReady is main's home-ready for home: the CYFR being selected, or
-// nothing.
-func (s *Service) HomeReady(home string) {
+// HomeReady is main's home-ready for an attempt at home: the one waiting,
+// or nothing.
+func (s *Service) HomeReady(home string, attempt uint64) { s.answered(home, attempt, true) }
+
+// HomeFailed is main's home-failed for an attempt at home: the one waiting
+// ends unopened, with no lock, or nothing.
+func (s *Service) HomeFailed(home string, attempt uint64) { s.answered(home, attempt, false) }
+
+func (s *Service) answered(home string, attempt uint64, ready bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ready != nil && s.pages == nil && home == s.selecting {
+	if s.ready != nil && s.pages == nil && attempt == s.current && home == s.selecting {
 		select {
-		case s.ready <- struct{}{}:
+		case s.ready <- ready:
 		default:
 		}
 	}
@@ -435,16 +447,34 @@ func (s *Service) HomeReady(home string) {
 // not, and the time since the last lock ends, so every chooser request
 // begun in it, in discovery, awaiting approval or awaiting main's
 // home-ready, publishes nothing more.
-func (s *Service) Lock(why string) {
+func (s *Service) Lock(why string) { s.lock(why, false) }
+
+// End locks as cyfr ends, whatever ends it, and says nothing to main,
+// which hears the end itself: an end is no lock of the person's, and main
+// forgets a sign-in at none.
+func (s *Service) End() {
+	s.mu.Lock()
+	s.ended = true
+	s.mu.Unlock()
+	s.lock("", false)
+}
+
+// lock is Lock, which lets go of the CYFR open as well when leave says to
+// (main's leave): the client record stays as it is until the next CYFR is
+// opened (shell.Selection).
+func (s *Service) lock(why string, leave bool) {
 	s.mu.Lock()
 	sh := s.sh
+	if leave {
+		s.sh, s.pages, s.committed = nil, nil, Message{}
+	}
 	s.epoch++
 	if s.stop != nil {
 		s.stop()
 	}
 	s.pending = nil
 	if s.pages == nil {
-		s.ready, s.selecting = nil, ""
+		s.ready, s.selecting, s.current = nil, "", 0
 	}
 	s.mu.Unlock()
 	if sh != nil {
@@ -461,37 +491,44 @@ func (s *Service) Lock(why string) {
 // sayLocked tells main the device locked, naming the CYFR committed.
 func (s *Service) sayLocked() {
 	s.mu.Lock()
-	m := s.committed
+	m, ended := s.committed, s.ended
 	s.mu.Unlock()
+	if ended {
+		return
+	}
 	m.Type = TypeLocked
 	_ = s.Send(m)
 }
 
 // Run reads main's messages from in until shutdown or the end of in,
-// which lock first; a line that is not one of main's messages locks and
-// ends the run with its refusal.
+// which end it (End); a line that is not one of main's messages ends it
+// with its refusal.
 func (s *Service) Run(in io.Reader) error {
 	lines := bufio.NewScanner(in)
 	lines.Buffer(make([]byte, 0, 4096), MaxLine+1)
 	for lines.Scan() {
 		m, err := ReadFromMain(lines.Bytes())
 		if err != nil {
-			s.Lock("")
+			s.End()
 			return err
 		}
 		switch m.Type {
 		case TypeHomeReady:
-			s.HomeReady(m.Home)
+			s.HomeReady(m.Home, m.Attempt)
+		case TypeHomeFailed:
+			s.HomeFailed(m.Home, m.Attempt)
 		case TypeLock:
 			s.Lock("Locked.")
+		case TypeLeave:
+			s.lock("", true)
 		case TypeShutdown:
-			s.Lock("")
+			s.End()
 			return nil
 		case TypeFolderPicked:
 			// No folder is asked for yet; an answer to none is ignored.
 		}
 	}
-	s.Lock("")
+	s.End()
 	if err := lines.Err(); err != nil {
 		return errors.Join(refuse("size"), err)
 	}

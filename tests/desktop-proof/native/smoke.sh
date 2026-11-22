@@ -19,9 +19,9 @@
 #              mode 2, in a user namespace other than the app's
 #   second     a second launch for the same account exits 0, saying the
 #              first is shown instead, and the first still serves
-#   renderer   with the content's renderer killed, the app locks ("the page
-#              stopped") and a renderer of its own shows the chooser again,
-#              which answers
+#   renderer   with the content's renderer killed, the app shows the page
+#              again in a renderer of its own, the chooser still answering,
+#              and locks nothing
 #   terminate  the app terminated (SIGTERM; on Windows the forced end Task
 #              Manager's End task gives) ends, its cyfr with it, and 7340
 #              stops answering
@@ -124,16 +124,20 @@ terminate() {
   if [ "$OS" = windows ]; then taskkill //F //PID "$2" >/dev/null 2>&1; else kill -TERM "$1" 2>/dev/null; fi
 }
 
-# within SECONDS COMMAND...: polls COMMAND until it succeeds, 1 when
-# SECONDS pass first.
-within() {
-  local until=$((SECONDS + $1))
-  shift
+# within_from CAUSE SECONDS COMMAND...: polls COMMAND until it succeeds, 1
+# unless it had SECONDS or fewer after CAUSE, a reading of the shell's
+# clock taken as the cause was done.
+within_from() {
+  local until=$(($1 + $2))
+  shift 2
   until "$@" >/dev/null 2>&1; do
     [ "$SECONDS" -lt "$until" ] || return 1
     sleep 0.2 # sleep-ok: the gap between two polls of an observable condition, bounded by SECONDS
   done
+  [ "$SECONDS" -le "$until" ]
 }
+# within SECONDS COMMAND...: the same, from now.
+within() { within_from "$SECONDS" "$@"; }
 gone() { ! kill -0 "$1" 2>/dev/null; }
 has_renderer() { [ -n "$(renderers "$1")" ]; }
 said() { grep -qF -- "$2" "$RUN/$1.log" 2>/dev/null; }
@@ -173,8 +177,9 @@ ready() {
 # ends NAME PID OSPID: the app terminated ends within 30 s, every process
 # below it with it, and 7340 stops answering; WHY says what stayed.
 ends() {
-  local below
+  local below ended
   below=$(descendants "$3" | awk '{ print $1 }' | tr '\n' ' ')
+  ended=$SECONDS
   terminate "$2" "$3"
   within 30 gone "$2" || { WHY="the app still ran 30 s after it was terminated"; return 1; }
   # shellcheck disable=SC2086 # the process ids, one word each
@@ -182,7 +187,7 @@ ends() {
     WHY="a process it started still ran 30 s after it ended: $(procs | awk -v want=" $below " 'index(want, " " $1 " ")')"
     return 1
   fi
-  within 20 silent || { WHY="127.0.0.1:7340 still answered 20 s after the app ended"; return 1; }
+  within_from "$ended" 20 silent || { WHY="127.0.0.1:7340 was not seen free within 20 s of the app being terminated"; return 1; }
 }
 
 cleanup() {
@@ -206,6 +211,23 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+
+# macOS keeps the key of the app's on-disk session in the default keychain,
+# found under HOME, and a fresh HOME has none: the app would wait on the
+# system's "Keychain Not Found" dialog, showing no window and not ending.
+# HOME is the run's by now, so security changes the run's keychain list
+# and never the account's own. create-keychain leaves the keychain unlocked,
+# and unlock-keychain refuses that passphrase for one named login.
+if [ "$OS" = macos ]; then
+  KEYCHAIN="$RUN/home/Library/Keychains/login.keychain-db"
+  if ! { mkdir -p "${KEYCHAIN%/*}" "$RUN/home/Library/Preferences" &&
+    security create-keychain -p smoke "$KEYCHAIN" &&
+    security list-keychains -d user -s "$KEYCHAIN" &&
+    security default-keychain -d user -s "$KEYCHAIN"; }; then
+    echo "smoke: the run's HOME could not be given a keychain" >&2
+    exit 1
+  fi
+fi
 
 if ! silent; then
   echo "smoke: $CHOOSER already answers: another program, or another CYFR app, holds 127.0.0.1:7340" >&2
@@ -281,14 +303,14 @@ if ready first "$FIRST"; then
     fail renderer "the app has no live renderer to lose"
   else
     for r in $old; do oskill "$r"; done
-    if ! within 30 said first 'CYFR: locked: the page stopped'; then
-      fail renderer "the app did not say 'locked: the page stopped' within 30 s of its renderer's end"
-    elif ! within 30 fresh; then
-      fail renderer "the app locked, and no new renderer showed the chooser within 30 s$(said first 'CYFR: cyfr ended: ' && echo ": its cyfr ended meanwhile")"
+    if ! within 30 fresh; then
+      fail renderer "no new renderer showed the page again within 30 s of its renderer's end$(said first 'CYFR: cyfr ended: ' && echo ": its cyfr ended meanwhile")"
+    elif said first 'CYFR: locked:'; then
+      fail renderer "the app locked as its renderer ended: $(grep -F 'CYFR: locked:' "$RUN/first.log" | head -1)"
     elif ! within 20 answers; then
-      fail renderer "the app locked, and $CHOOSER did not answer 200 again"
+      fail renderer "the page was shown again, and $CHOOSER did not answer 200"
     else
-      pass renderer "locked: the page stopped, and a new renderer shows the chooser, which answers"
+      pass renderer "a new renderer shows the page again, the app locked nothing and the chooser answers"
     fi
   fi
 
@@ -318,11 +340,12 @@ else
   if [ -z "$child" ]; then
     fail cyfr "no cyfr desktop-serve runs below the app"
   else
+    killed=$SECONDS
     oskill "$child"
     if ! within 30 said lost 'CYFR: cyfr ended: '; then
       fail cyfr "the app did not say 'cyfr ended' within 30 s of its cyfr's end"
-    elif ! within 20 silent; then
-      fail cyfr "127.0.0.1:7340 still answered 20 s after cyfr ended"
+    elif ! within_from "$killed" 20 silent; then
+      fail cyfr "127.0.0.1:7340 was not seen free within 20 s of cyfr's kill"
     elif gone "$LOST"; then
       exit_of "$LOST"
       fail cyfr "the app ended with its cyfr: exit $CODE"

@@ -12,8 +12,8 @@
 // sign-in started and nothing reaching the issuer.
 
 import {accountAndSetup, armWindow, connectApproved, enrolDevice, startSignIn, toSignIn, usePasskey} from "../account.js"
-import {HOME, afterLock, atDevice, content, history, inputs, js, passkeys, reachedSince, row, run, seen, submit, text,
-  waitFor} from "../lib.js"
+import {HOME, UNCLEARED, afterLock, atBootstrap, atDevice, closedAtLock, content, frontLength, history, inputs, js, passkeys,
+  row, run, seen, signOutsSince, submit, text, unclearable, waitFor} from "../lib.js"
 
 const COMPANY = "This CYFR requires company sign-in. Open its address in a browser to continue. " +
   "The CYFR app does not support company sign-in yet."
@@ -26,35 +26,48 @@ async function companySignIn() {
   return {issuer, started, none: issuer.length === 0 && started.length === 0}
 }
 
-// What the app's sign-out since `from` was answered, and what that says of
-// the forgery token it had: none sent is none to send, 403 is one the CYFR
-// no longer takes.
-async function signOut(from) {
-  const answers = (await reachedSince(new URL(HOME).hostname, from)).filter((r) => r.method === "POST" && r.path === "/auth/logout")
-    .map((r) => ({status: r.status, retired: r.retired}))
-  const token = answers.length === 0 ? "missing" : answers.some((a) => a.status === 403) ? "stale" : "taken"
-  return {answers, token}
-}
-
 async function passkeyPhase() {
   const {second} = await accountAndSetup(inputs)
   const mine = [...passkeys.values()].filter((c) => c.rpId === new URL(HOME).hostname)
   await connectApproved()
 
   // account_road: the account's passkey signs in at the CYFR, which then
-  // asks for its company sign-in: the app closes the CYFR, and the chooser
-  // stays with the words that send the person to a browser.
-  // The sign-out's answer is recorded, not asserted (../README.md).
+  // asks for its company sign-in: the app closes the CYFR, posting no
+  // sign-out, and the chooser stays with the words that send the person
+  // to a browser.
   const a = await startSignIn(await toSignIn())
   await armWindow(a, mine)
-  const from = (await seen(new URL(HOME).hostname)).length
+  const from = await frontLength()
   const shownBefore = history.length
+  const lockedBefore = closedAtLock.length
   await usePasskey(a)
-  const {back, told} = await afterLock(shownBefore, "the company page")
+  // Over the chooser keeping that notice: a reload of it, as Ctrl+R does,
+  // and a second lock, which Connect to another CYFR leaves when the
+  // engine cannot clear.
+  const over = [async (chooser) => {
+    const loaded = new Promise((resolve) => chooser.webContents.once("did-finish-load", resolve))
+    chooser.webContents.reload()
+    await loaded
+  }, (chooser) => unclearable(chooser, async () => {
+    await waitFor(() => js(chooser.webContents, `document.querySelector("#another").getClientRects().length > 0`), "Connect to another CYFR")
+    await js(chooser.webContents, `document.querySelector("#another").click(); 1`)
+    await waitFor(() => {
+      const at = content()
+      return at && at !== chooser && !at.webContents.isLoading() && atBootstrap(at.webContents.getURL())
+    }, "the chooser after the second lock")
+  })]
+  const {back, told, kept} = await afterLock(shownBefore, "the company page", {over})
   const afterAccount = await companySignIn()
-  row("account_road", !!told?.words.includes(COMPANY) && told.stayed && afterAccount.none,
+  const signOuts = await signOutsSince(from)
+  const atOnce = closedAtLock.slice(lockedBefore)
+  row("account_road", atOnce.length > 0 && atOnce.every(Boolean) && !!told?.words.includes(COMPANY) && told.stayed && afterAccount.none && signOuts.length === 0,
     "on the passkey road the company sign-in closes the CYFR in the app, the chooser stays with the words that send the person to a browser, and no company sign-in starts or reaches the issuer",
-    {chooser: told, ...afterAccount, signOut: await signOut(from)})
+    {chooser: told, ...afterAccount, signOuts})
+  // notice_kept: neither the reload nor the second lock erased what
+  // nobody had yet gone on from.
+  row("notice_kept", kept.length === over.length && kept.every((k) => k?.stayed) && kept[0].words === COMPANY &&
+    kept[1].words === `${COMPANY} ${UNCLEARED}`,
+  "a reload and a second lock over the chooser that is keeping a notice leave the notice there", {kept})
 
   // device_road: the six-word road's device, added to the account, is
   // refused by the CYFR for its company sign-in, and its page says so.

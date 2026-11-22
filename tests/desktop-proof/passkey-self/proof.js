@@ -8,11 +8,10 @@
 // holds the account's passkey, as this computer's platform would once the
 // person has one here.
 
-import {powerMonitor} from "electron"
-
-import {accountAndSetup, accountWindow, armWindow, connectApproved, passkeyFor, signedInPrism, startSignIn,
-  toSignIn, usePasskey} from "../account.js"
-import {HOME, atDevice, contentAt, decided, inputs, js, literal, passkeys, row, run, waitFor} from "../lib.js"
+import {accountAndSetup, accountWindow, armWindow, connectApproved, passkeyFor, signOutOfPrism, signedInPrism,
+  startSignIn, toSignIn, usePasskey} from "../account.js"
+import {HOME, UNCLEARED, atBootstrap, chooserWindow, content, decided, frontLength, inputs, js, literal,
+  passkeys, question, reachedSince, row, run, said, submitConnect, unclearable, waitFor} from "../lib.js"
 
 // The refusal the app's policy gives both passkey calls in a document.
 const policyRefuses = (answers) => /^NotAllowedError: .*'publickey-credentials-get' feature is not enabled/.test(answers[0]) &&
@@ -21,6 +20,7 @@ const policyRefuses = (answers) => /^NotAllowedError: .*'publickey-credentials-g
 async function passkeyPhase() {
   await accountAndSetup(inputs)
   const mine = [...passkeys.values()].filter((c) => c.rpId === new URL(HOME).hostname)
+  await unclearedConnect()
   await connectApproved()
 
   // same_origin_hop: the CYFR's sign-in hops to its own account pages,
@@ -54,14 +54,40 @@ async function passkeyPhase() {
 
   // home_paths: from the account window, the CYFR's own pages, at the same
   // origin as the account page, are refused and end the ceremony.
-  powerMonitor.emit("lock-screen")
-  await contentAt(atDevice, "the device's pages after the lock")
+  await signOutOfPrism(w)
   a = await startSignIn(await toSignIn())
   const account = {id: a.webContents.id}
   await js(a.webContents, `location.href = ${literal(HOME + "/")}; 1`)
   const refused = await decided(account, HOME + "/", false, "main's decision on the CYFR's page in the account window")
   const ended = await waitFor(() => !accountWindow(), "the ceremony ended")
   row("home_paths", refused && ended, "the account window refuses the CYFR's own page at the same origin, and the ceremony ends", {refused})
+}
+
+// uncleared: while the engine cannot clear the kept storage for the CYFR
+// proposed, nothing of it loads: that attempt alone fails, with no lock,
+// the same chooser's form says so and cyfr runs on.
+async function unclearedConnect() {
+  const chooser = await chooserWindow()
+  await submitConnect(chooser.webContents)
+  await question(chooser.webContents)
+  const from = await frontLength()
+  const saidBefore = said.length
+  const refused = await unclearable(chooser, async () => {
+    await js(chooser.webContents, `document.querySelector("#approve").click(); 1`)
+    return waitFor(async () => {
+      const at = content()
+      if (!at || at.webContents.isLoading() || !atBootstrap(at.webContents.getURL())) return null
+      const words = await js(at.webContents, `document.querySelector("#address").getClientRects().length > 0 &&
+        document.querySelector("#notice").textContent`)
+      return words && !words.startsWith("Connecting") ? {words, same: at === chooser} : null
+    }, "the chooser after the clear that failed")
+  })
+  const locks = said.slice(saidBefore).filter((line) => line.startsWith("locked:"))
+  const loaded = (await reachedSince(new URL(HOME).hostname, from)).filter((r) => r.path === "/").length
+  row("uncleared", refused.words === UNCLEARED && refused.same && locks.length === 0 && loaded === 0 &&
+    !said.some((l) => l.startsWith("cyfr ended")),
+  "a clear that fails opens nothing and locks nothing: the Connect fails, its chooser says so and cyfr runs on",
+  {...refused, locks, loaded})
 }
 
 run("passkey-self", {passkey: passkeyPhase}, {accountRoad: true})
