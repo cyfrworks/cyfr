@@ -467,6 +467,9 @@ async function choosersWord(w) {
       const before = decisions.length
       await js(wc, `location.assign(${literal(to)}); 1`)
       const navigated = await decided(wc, to, false, "main's decision on the page's load of the chooser")
+      // Each decision ends the look where main allowed it: what follows
+      // would be another page's.
+      if (navigated !== true) return [false, {navigated}]
       let redirected
       wc.session.webRequest.onBeforeRequest({urls: [HOME + hop]}, (_details, callback) => callback({redirectURL: to}))
       try {
@@ -476,13 +479,14 @@ async function choosersWord(w) {
       } finally {
         wc.session.webRequest.onBeforeRequest(null)
       }
+      if (redirected.prevented !== true) return [false, {navigated, redirected: redirected.prevented}]
       const backAt = decisions.length
       await js(wc, "window.history.back(); 1")
       const byHistory = await waitFor(() => decisions.slice(backAt).find((d) => d.window === wc.id && d.name === "will-navigate" && d.main &&
         atBootstrap(d.url)), "main's decision on the page's move back to the chooser", 30_000)
       await waitFor(() => !wc.isLoading(), "the window at rest")
       const stayed = await js(wc, "window.proofStays === true")
-      return [navigated === true && redirected.prevented === true && byHistory.prevented === true && stayed === true && atHome(wc.getURL()),
+      return [byHistory.prevented === true && stayed === true && atHome(wc.getURL()),
         {navigated, redirected: redirected.prevented, byHistory: byHistory.prevented, stayed, url: bare(wc.getURL()), asked: history.slice(from).map(bare)}]
     })
 
