@@ -14,7 +14,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/prompt"
@@ -36,15 +38,19 @@ func workStandIn() int {
 }
 
 // workSeesDocker has setup's work, a process of its own, reach the docker
-// on this test's PATH, which logs into dir: the work keeps the stand-ins'
-// own controls, which it needs under test alone.
+// on this test's PATH, which logs into dir.
 func workSeesDocker(t *testing.T, dir string) {
 	t.Helper()
 	t.Setenv("FAKE_DOCKER_DIR", dir)
-	saved := workKeeps
-	t.Cleanup(func() { workKeeps = saved })
+}
+
+// keepStandInControls has setup's work keep the stand-ins' own controls,
+// which it needs under test alone. It is set once, in TestMain: a reading
+// a page began can outlive the test that began it.
+func keepStandInControls() {
+	keeps := workKeeps
 	workKeeps = func(name string) bool {
-		return saved(name) || name == "FAKE_DOCKER_DIR" || strings.HasPrefix(name, "CYFR_CMD_TEST_")
+		return keeps(name) || name == "FAKE_DOCKER_DIR" || strings.HasPrefix(name, "CYFR_CMD_TEST_")
 	}
 }
 
@@ -166,6 +172,56 @@ func TestAReadingThatNeverCameBackBlamesNoDocker(t *testing.T) {
 				t.Fatalf("said %v, want %q", err, want)
 			}
 		})
+	}
+}
+
+// An ended folder starts setup's work for no reading, and its end waits
+// for a start in progress alone: the screen ends its folder as it ends,
+// so that no reading a page began outlives it.
+func TestAnEndedFolderStartsNoWork(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nCYFR_PORT=4100\nCYFR_LOCUS_BUILDS_URL=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	saved := startWork
+	t.Cleanup(func() { startWork = saved })
+	var starts atomic.Int32
+	starting, release := make(chan struct{}, 1), make(chan struct{})
+	startWork = func([]string) (*workProcess, error) {
+		starts.Add(1)
+		starting <- struct{}{}
+		<-release
+		_, in := io.Pipe()
+		return &workProcess{in: in, out: strings.NewReader(""), wait: func() error { return nil }}, nil
+	}
+	l, err := readLocal(dir, "the test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = l.Answers(t.Context()) }()
+	<-starting
+	ended := make(chan struct{})
+	go func() {
+		l.End()
+		close(ended)
+	}()
+	select {
+	case <-ended:
+		t.Fatal("the folder ended with a start in progress")
+	case <-time.After(100 * time.Millisecond): // sleep-ok: a bounded look for an end that must not come yet
+	}
+	close(release)
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the folder's end waited past the start")
+	}
+	err = l.Answers(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "what opened this CYFR has ended") {
+		t.Fatalf("a reading after the end said %v", err)
+	}
+	if n := starts.Load(); n != 1 {
+		t.Fatalf("%d starts, one before the end", n)
 	}
 }
 

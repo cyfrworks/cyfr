@@ -288,7 +288,12 @@ func startWorkProcess(args []string) (*workProcess, error) {
 // lock. A run is waited for to its end. Anything else is not waited for
 // past ctx.
 func setupWork(ctx context.Context, step func(string), args ...string) (workMessage, error) {
-	work, err := startWork(args)
+	return workBegunBy(ctx, startWork, step, args...)
+}
+
+// workBegunBy is setupWork with the work begun by begin.
+func workBegunBy(ctx context.Context, begin func([]string) (*workProcess, error), step func(string), args ...string) (workMessage, error) {
+	work, err := begin(args)
 	if err != nil {
 		return workMessage{}, fmt.Errorf("setup's work could not begin (%w)", err)
 	}

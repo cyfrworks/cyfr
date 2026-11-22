@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
@@ -123,6 +124,33 @@ type localFolder struct {
 	// name is the opened address's host and port, loopback where its
 	// container publishes it on this computer.
 	name, loopback string
+
+	// starting is held while setup's work starts for a reading, and
+	// ended once what opened the folder has ended (end).
+	starting sync.RWMutex
+	ended    bool
+}
+
+// begin starts setup's work for a reading of the folder, unless what
+// opened it has ended.
+func (f *localFolder) begin(args []string) (*workProcess, error) {
+	f.starting.RLock()
+	defer f.starting.RUnlock()
+	if f.ended {
+		return nil, errors.New("what opened this CYFR has ended")
+	}
+	return startWork(args)
+}
+
+// end starts setup's work for no reading of the folder from now on and
+// returns once none is starting. A reading that a page began outlives the
+// page, and its connection the request (net/http dials on its own), so
+// whatever opened the folder ends it as it ends. A start is a process
+// begun, so this waits for no Docker.
+func (f *localFolder) end() {
+	f.starting.Lock()
+	f.ended = true
+	f.starting.Unlock()
 }
 
 // dialTCP makes a connection once a localFolder allows it. A test stands
@@ -167,6 +195,7 @@ func readLocal(dir, holder string) (desktop.Local, error) {
 		SetupToken: f.setupToken,
 	}
 	l.Answers = func(ctx context.Context) error { return f.answers(ctx, client) }
+	l.End = f.end
 	return l, nil
 }
 
@@ -259,7 +288,7 @@ func (f *localFolder) dial(ctx context.Context, named *access.Published) (net.Co
 // names the CYFR opened and Docker's word of it names the container
 // serving.
 func (f *localFolder) look(ctx context.Context, args ...string) (folderLook, error) {
-	end, err := setupWork(ctx, nil, args...)
+	end, err := workBegunBy(ctx, f.begin, nil, args...)
 	var failed workFailure
 	switch {
 	case errors.As(err, &failed):

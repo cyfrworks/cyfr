@@ -88,6 +88,7 @@ func TestMain(m *testing.M) {
 	// and every run of this binary as cyfr, stands on testMachine unless
 	// it stands in for a machine of its own (standInMachine).
 	machine = testMachine(cmp.Or(os.Getenv(testSystem), "linux"))
+	keepStandInControls()
 	if status, ok := runStandIn(); ok {
 		os.Exit(status)
 	}
