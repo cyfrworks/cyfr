@@ -1677,7 +1677,13 @@ defmodule Opus.Programs.Box do
           grant_waiters(state, key)
         end
 
-      _gone_or_replaced ->
+      # Its last holder left while the sync was out, before a claim stood
+      # here to give up: it is given up now, as the last holder's exit does.
+      nil ->
+        state |> give_up_claim(key) |> pend_release(key, spec.epoch) |> enqueue_release()
+
+      # A newer epoch runs under the same claim.
+      _replaced ->
         state |> pend_release(key, spec.epoch) |> enqueue_release()
     end
   end

@@ -509,6 +509,104 @@ defmodule Opus.ProgramsTest do
     end
   end
 
+  describe "a sync that settles after its holder" do
+    setup %{ctx: ctx, fake: fake} do
+      controller = start_controller(fake)
+      row = driven_row(ctx, "left-behind")
+      owner = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1}
+      Scripted.hold(fake, "sync", 10_000)
+      {:ok, controller: controller, row: row, owner: owner}
+    end
+
+    for left <- [:killed, :timed_out] do
+      test "was #{left} gives the claim up with the owner it releases",
+           %{ctx: ctx, controller: controller, row: row, owner: owner} do
+        holder =
+          case unquote(left) do
+            :killed -> spawn(fn -> Programs.hold(owner) end)
+            :timed_out -> spawn(fn -> Programs.hold(owner, 300) end)
+          end
+
+        watched = Process.monitor(holder)
+        assert_receive {:held, "sync", syncing}, 2_000
+        if unquote(left) == :killed, do: Process.exit(holder, :kill)
+        assert_receive {:DOWN, ^watched, :process, ^holder, _reason}, 2_000
+        eventually(fn -> :sys.get_state(controller).owners == %{} end, "the holder's exit")
+
+        send(syncing, :go)
+        assert_released(row, 1)
+        settled = claim_row(ctx, row)
+        live? = JobClaims.live?(settled)
+
+        tick(controller)
+        ticked = claim_row(ctx, row)
+        state = :sys.get_state(controller)
+
+        released_again? =
+          receive do
+            {:control, "release", _release, _fields} -> true
+          after
+            0 -> false
+          end
+
+        after_it = %{
+          live: live?,
+          renewed: ticked != settled,
+          peer: elem(JobClaims.claim("mcp_backend", claim_key(ctx, row), @peer, 30_000), 0),
+          released_again: released_again?,
+          held: Map.take(state, [:owners, :claims, :releases, :releasing]),
+          at_the_service: Programs.status(ctx.athanor_id, row.id)
+        }
+
+        assert after_it == %{
+                 live: false,
+                 renewed: false,
+                 peer: :ok,
+                 released_again: false,
+                 held: %{owners: %{}, claims: %{}, releases: %{}, releasing: %{}},
+                 at_the_service: {:ok, nil}
+               }
+      end
+    end
+
+    test "was replaced by a newer epoch's keeps the claim for that one",
+         %{ctx: ctx, controller: controller, row: row, owner: owner} do
+      test = self()
+      spawn(fn -> Programs.hold(owner) end)
+      assert_receive {:held, "sync", syncing}, 2_000
+      taken = claim_row(ctx, row)
+
+      {:ok, _} = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), row.id)
+      newer = %{owner | epoch: 2}
+
+      holder =
+        spawn(fn ->
+          send(test, {:held_newer, Programs.hold(newer)})
+          receive do: (:done -> :ok)
+        end)
+
+      eventually(
+        fn -> match?([%{epoch: 2}], Map.values(:sys.get_state(controller).owners)) end,
+        "the newer epoch's hold"
+      )
+
+      send(syncing, :go)
+      assert_receive {:held_newer, {:ok, %{epoch: 2}}}, 3_000
+      # The version it replaced is released; the claim is not given up.
+      assert_released(row, 1)
+      await_idle(controller)
+
+      kept = claim_row(ctx, row)
+      assert kept.fence == taken.fence
+      assert JobClaims.live?(kept)
+
+      watched = Process.monitor(holder)
+      send(holder, :done)
+      assert_receive {:DOWN, ^watched, :process, ^holder, _reason}, 2_000
+      assert_released(row, 2)
+    end
+  end
+
   describe "every stop path releases the owner" do
     setup %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
