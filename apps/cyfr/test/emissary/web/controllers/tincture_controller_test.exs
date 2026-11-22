@@ -6,6 +6,9 @@ defmodule Emissary.Web.TinctureControllerTest do
 
   import Prima.Test.Wait
 
+  # What every answer of the tincture routes says of the devices.
+  @devices_refused ["camera=(), microphone=(), display-capture=()"]
+
   # A version's artifact digest, and its release digest (its bytes bound to
   # its manifest, `Compendium.ReleaseDigest`) as the registry records them:
   # the release digest is what an asset credential names.
@@ -442,6 +445,29 @@ defmodule Emissary.Web.TinctureControllerTest do
       refute csp =~ "default-src 'none'"
     end
 
+    test "its pages, its files and their refusals refuse the camera, the microphone and screen capture",
+         %{public: public} do
+      Arca.Test.UnitFixtures.unit_write!(
+        Sanctum.TestContext.local(),
+        public,
+        "page2.html",
+        "<html><body>Two</body></html>"
+      )
+
+      for {path, status} <- [
+            {"/t/@test/local/pub-dash", 200},
+            {"/t/@test/local/pub-dash/page2.html", 200},
+            {"/t/@test/local/pub-dash/style.css", 200},
+            {"/t/@test/local/no-such-dash", 404},
+            {"/t/@test/local/pub-dash/none.html", 404}
+          ] do
+        conn = get(build_conn(), path)
+
+        assert {path, conn.status, get_resp_header(conn, "permissions-policy")} ==
+                 {path, status, @devices_refused}
+      end
+    end
+
     test "a non-HTML asset keeps the locked-down header", %{conn: conn} do
       conn = get(conn, "/t/@test/local/pub-dash/style.css")
 
@@ -701,6 +727,22 @@ defmodule Emissary.Web.TinctureControllerTest do
 
       assert String.ends_with?(csp, "; sandbox allow-scripts")
       assert get_resp_header(page, "referrer-policy") == ["no-referrer"]
+    end
+
+    test "its pages, its files and their refusals refuse the camera, the microphone and screen capture",
+         %{ctx: ctx} do
+      credential = credential(ctx)
+
+      for {what, status, path} <- [
+            {"the entry", 200, served(credential, ["index.html"])},
+            {"a file", 200, served(credential, ["app.js"])},
+            {"no such file", 404, served(credential, ["none.html"])}
+          ] do
+        conn = get(build_conn(), path)
+
+        assert {what, conn.status, get_resp_header(conn, "permissions-policy")} ==
+                 {what, status, @devices_refused}
+      end
     end
 
     test "serves the version's files, cached for no longer than the credential has left",

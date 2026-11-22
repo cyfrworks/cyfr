@@ -13,6 +13,15 @@ defmodule CyfrWeb.Endpoint do
   tagged with the listener that accepted it before `call/2` below runs
   (`CyfrWeb.Ingress`): the tag, never a header, `Host` or `Origin`, is the
   boundary.
+
+  Every answer starts refusing the camera, the microphone and screen
+  capture (`call/2`): this is the one place that refusal lives, and
+  Prism's own pages alone replace it (`CyfrWeb.Plugs.BrowserCSP`). The user
+  has ruled that frames never get these devices, so no capability may
+  open them. It cannot reach an answer to a failure in the endpoint's own
+  plugs that is raised without its request (a static file's invalid
+  path), which Phoenix renders from the request as it arrived, or an app
+  Aqua put into its own browser, which is served there and not here.
   """
 
   use Boundary,
@@ -111,6 +120,8 @@ defmodule CyfrWeb.Endpoint do
     ],
     longpoll: false
 
+  @devices_refused "camera=(), microphone=(), display-capture=()"
+
   # A socket transport takes its request from `socket_dispatch`, the
   # plug `use Phoenix.Endpoint` declares ahead of every plug here; the
   # request carries its listener's tag already, set by the listener's plug
@@ -123,8 +134,13 @@ defmodule CyfrWeb.Endpoint do
   # carries no body. Every other one is refused before any byte of its
   # body is read, 413 (411 for a POST whose length is undeclared), and its
   # HTTP/1 connection ends.
+  #
+  # The devices' refusal is set ahead of that bound and that dispatch, so
+  # a socket's refusal carries it as a route's answer does.
   @impl Plug
   def call(conn, opts) do
+    conn = put_resp_header(conn, "permissions-policy", @devices_refused)
+
     case socket_body(conn) do
       :ok -> super(conn, opts)
       {:refused, status, reason} -> refuse_socket_body(conn, status, reason)
@@ -239,10 +255,11 @@ defmodule CyfrWeb.Endpoint do
 
   plug(Plug.Head)
   plug(:dynamic_session)
-  # Security headers are a pipeline concern: the API/MCP/webhook
-  # pipelines carry the closed set (`CyfrWeb.Plugs.ApiSecurityHeaders`),
-  # the browser pipeline the LiveView-compatible one
-  # (`CyfrWeb.Plugs.BrowserCSP`), and tinctures their own.
+  # Security headers but the devices' refusal (`call/2`) are a pipeline
+  # concern: the API/MCP/webhook pipelines carry the closed set
+  # (`CyfrWeb.Plugs.ApiSecurityHeaders`), the browser pipeline the
+  # LiveView-compatible one (`CyfrWeb.Plugs.BrowserCSP`), and tinctures
+  # their own.
   plug(CyfrWeb.Router)
 
   @parsers CyfrWeb.Plugs.ParserErrors.init(CyfrWeb.Plugs.RawBodyReader.parser_options())

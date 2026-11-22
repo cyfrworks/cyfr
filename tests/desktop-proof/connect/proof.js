@@ -154,8 +154,9 @@ async function connectPhase() {
   row("prism", !!first, "the admitted device opens Prism in the content window, signed in", {url: bare(w.webContents.getURL())})
 
   // A frame of Prism's page, of its own origin, which the page allows the
-  // camera and the microphone. Prism's page names no permissions policy of
-  // its own: what refuses here is the app's.
+  // camera and the microphone. Prism's own permissions policy leaves both
+  // to its origin and names neither passkey call: what refuses here is the
+  // app's.
   await js(w.webContents, `new Promise((done) => { const f = document.createElement("iframe"); f.id = "proof-frame"; f.name = "proof-frame";
     f.allow = "camera; microphone"; f.srcdoc = "<p>a frame</p>"; f.onload = () => done(); document.body.appendChild(f) })`)
 

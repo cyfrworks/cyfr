@@ -9,6 +9,11 @@ defmodule CyfrWeb.Plugs.BrowserCSP do
   nothing, itself included: `frame-ancestors 'none'` and
   `x-frame-options: DENY`. Install after `put_secure_browser_headers` to
   replace its default CSP. Every page connects to this origin alone.
+
+  The page's permissions policy replaces the endpoint's refusal
+  (`CyfrWeb.Endpoint`): it leaves the camera and the microphone to the
+  page's own origin, whose browser or app still decides each request, and
+  keeps screen capture refused.
   """
 
   @behaviour Plug
@@ -38,6 +43,10 @@ defmodule CyfrWeb.Plugs.BrowserCSP do
     conn
     |> put_resp_header("content-security-policy", @csp)
     |> put_resp_header("x-frame-options", "DENY")
+    |> put_resp_header(
+      "permissions-policy",
+      "camera=(self), microphone=(self), display-capture=()"
+    )
     |> put_resp_header("x-content-type-options", "nosniff")
     |> put_resp_header("referrer-policy", "strict-origin-when-cross-origin")
     |> CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts()

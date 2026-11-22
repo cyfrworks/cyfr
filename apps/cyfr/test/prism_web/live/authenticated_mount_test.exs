@@ -151,6 +151,16 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert has_element?(view, "#drawer-search")
   end
 
+  test "a signed-in page keeps the camera and microphone to itself and refuses screen capture",
+       %{conn: conn} do
+    page = conn |> log_in_user(test_user()) |> get(athanor_path("/settings"))
+
+    assert page.status == 200
+
+    assert get_resp_header(page, "permissions-policy") ==
+             ["camera=(self), microphone=(self), display-capture=()"]
+  end
+
   describe "a request a frame made" do
     # A sandboxed tincture frame may navigate itself to a Prism page, and
     # some browsers attach the session cookie: the page is refused before
