@@ -139,12 +139,11 @@ export async function signedInPrism() {
 // ---- the device, enrolled on the six-word road ----
 
 /**
- * The account @NAME made at the directory on the second client, the CYFR
- * set up with it there, and this computer's device enrolled through the
- * app's Connect: answers the second client, the passphrase, the account's
- * recovery code and the content window at Prism.
+ * The account @NAME made at the directory on the second client, and the
+ * CYFR set up with it there: answers the second client and the account's
+ * recovery code.
  */
-export async function accountAndDevice(inputs) {
+export async function accountAndSetup(inputs) {
   const second = await secondClient()
   await load(second, `${DIRECTORY}/account/new#name=${NAME}`)
   await arm()
@@ -167,15 +166,26 @@ export async function accountAndDevice(inputs) {
   await js(second, `document.querySelector("#use-passkey").click(); 1`)
   await waitFor(() => second.getURL().startsWith(HOME + "/") && !second.getURL().startsWith(HOME + "/login"),
     "the second client at the CYFR")
+  return {second, recovery}
+}
 
-  // Connect, the account service approved, the device's pages.
-  let w = await contentAt((u) => u.startsWith(LOOPBACK + "/bootstrap/"), "the chooser")
+/** The app's Connect to the CYFR, its account service approved: the device's pages. */
+export async function connectApproved() {
+  const w = await contentAt((u) => u.startsWith(LOOPBACK + "/bootstrap/"), "the chooser")
   await waitFor(() => js(w.webContents, `!document.querySelector("#choose").hidden`), "the chooser's form")
   await js(w.webContents, `document.querySelector("#address").value = ${literal(HOME)};
     document.querySelector("#connect").requestSubmit(); 1`)
   await waitFor(() => js(w.webContents, `!document.querySelector("#confirm").hidden`), "the account service asked about")
   await js(w.webContents, `document.querySelector("#approve").click(); 1`)
-  w = await contentAt(atDevice, "the device's pages")
+  return contentAt(atDevice, "the device's pages")
+}
+
+/**
+ * The device's key made on the device's pages in `w` and added to the
+ * account on the second client: answers the passphrase. The device is
+ * then asked into the CYFR (/enroll).
+ */
+export async function enrolDevice(w, second) {
   await submit(w.webContents, "/passphrase")
   const passphrase = await waitFor(() => js(w.webContents, `document.querySelector("p.code")?.textContent.trim() || null`), "the passphrase")
   await submit(w.webContents, "/make", {secret: passphrase, again: passphrase})
@@ -187,6 +197,18 @@ export async function accountAndDevice(inputs) {
   await js(second, `document.querySelector("#add").click(); 1`)
   await section(second, ["added"])
   await submit(w.webContents, "/enroll", {name: NAME})
+  return passphrase
+}
+
+/**
+ * The account and the CYFR set up on the second client, and this
+ * computer's device enrolled through the app's Connect, Prism opened:
+ * answers the second client, the passphrase and the recovery code.
+ */
+export async function accountAndDevice(inputs) {
+  const {second, recovery} = await accountAndSetup(inputs)
+  const w = await connectApproved()
+  const passphrase = await enrolDevice(w, second)
   await openCYFR(w, passphrase)
   return {second, passphrase, recovery}
 }
