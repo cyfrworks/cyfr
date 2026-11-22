@@ -51,8 +51,9 @@ defmodule Compendium.Builds.Client do
       the request was ended here.
     * `{:refused, refusal, diagnostics}` — the builder's own refusal by
       class (`t:Prima.BuilderProtocol.refusal/0`): `capacity`, `timeout`,
-      `memory` with its bound, `unavailable`, `failed` with a status or a
-      signal, `unauthorized`, `malformed`; with the build's log lines.
+      `memory` with its bound or its cause, `unavailable`, `failed` with a
+      status or a signal, `unauthorized`, `malformed`; with the build's log
+      lines.
     * `{:protocol_mismatch, builder, client}` — the builder speaks another
       version of the protocol, by its refusal or by the version its lines
       carry.

@@ -368,14 +368,16 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 type pageData struct {
 	View
 	Waiting bool
-	Answer  string
-	Warn    []string
-	QR      template.HTML
-	Digits  bool
-	Print   template.JS
-	Close   template.JS
-	Keep    template.JS
-	Fields  [][2]string
+	// Unwatched is why the device may not be unlocked now.
+	Unwatched string
+	Answer    string
+	Warn      []string
+	QR        template.HTML
+	Digits    bool
+	Print     template.JS
+	Close     template.JS
+	Keep      template.JS
+	Fields    [][2]string
 	// Proof is the proof this answer hands its page, To the ticket's
 	// address it goes on to, and Reveal whether a recovery page without its
 	// code asks for it with the proof the page keeps.
@@ -388,6 +390,7 @@ func (srv *Server) page(w http.ResponseWriter, d pageData) {
 	v := d.View
 	d.Print, d.Close, d.Keep = template.JS(printScript), template.JS(closeScript), template.JS(keepScript)
 	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && !v.Drawn)
+	d.Unwatched = srv.Shell.cfg.Unwatched()
 	if (v.Page == PageSetup || v.Page == PageLocked) && srv.Reachable != nil && !srv.Reachable() {
 		d.Waiting = true
 	}

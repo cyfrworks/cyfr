@@ -14,7 +14,9 @@ defmodule Locus.Backends.BackendTest do
   as they are, and an owner's secret masked though the process writes it
   in two parts, or stops part way through it. Against `Locus.Test.FakeKeeper` through
   `Locus.Keeper`: the spawn a session asks for is in the pool `backends`,
-  with its argv, its environment and its memory bound.
+  with its argv, its environment and its memory bound, its use is the
+  keeper's reading or unknown, and what memory ended it reaches its
+  owners before its settlement, also after a close was asked.
   """
 
   use ExUnit.Case, async: false
@@ -85,6 +87,23 @@ defmodule Locus.Backends.BackendTest do
       %{chunks: chunks} = Backend.recv(session, after_seq, 5_000)
       assert chunks != [], "no output came after #{inspect(seen)}"
       output(session, List.last(chunks).seq, done?, seen <> Enum.map_join(chunks, & &1.bytes))
+    end
+  end
+
+  # What a call answered, or that it exited in its caller.
+  defp answer(call) do
+    call.()
+  catch
+    :exit, _reason -> :exited
+  end
+
+  # What a session tells its owners from here to its settlement, in order.
+  defp until_vacated(session, events \\ []) do
+    receive do
+      {Backend, ^session, :vacated} -> Enum.reverse([:vacated | events])
+      {Backend, ^session, event} -> until_vacated(session, [event | events])
+    after
+      10_000 -> flunk("never vacated; told #{inspect(Enum.reverse(events))}")
     end
   end
 
@@ -277,6 +296,17 @@ defmodule Locus.Backends.BackendTest do
     refute whole =~ binary_part(first, 0, 4)
   end
 
+  test "a launcher with no reading leaves a session's use unknown, never zero", %{
+    supervisor: supervisor
+  } do
+    session = start_session(supervisor, "exec cat")
+    assert Backend.measure(session) == :unknown
+
+    assert :ok = Backend.stop(session, 0)
+    assert_receive {Backend, ^session, {:ended, ended}}, 10_000
+    assert ended == %{crash: false, error: nil}
+  end
+
   test "a session stopped before its delayed spawn starts nothing", %{supervisor: supervisor} do
     opts = [
       owner: @owner,
@@ -338,6 +368,80 @@ defmodule Locus.Backends.BackendTest do
         fn -> Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "release")) end,
         10_000
       )
+    end
+
+    test "it tells a kill at its cap from the machine's, from one not known and from any other",
+         %{supervisor: supervisor, fake: fake, keeper: keeper} do
+      for {spelled, told} <- [
+            {"cap", [memory: :cap]},
+            {"machine", [memory: :machine]},
+            {"either", [memory: :either]},
+            {nil, []}
+          ] do
+        :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: spelled}})
+
+        session =
+          start_session(supervisor, "unused", launcher: Locus.Keeper, launcher_server: keeper)
+
+        ended = %{crash: true, error: "exited code=null signal=SIGKILL", exit_code: nil}
+        assert until_vacated(session) == told ++ [{:ended, ended}, :vacated]
+      end
+    end
+
+    test "a session that dies while its use is read, and one already gone, is unknown to its caller",
+         %{supervisor: supervisor, fake: fake, keeper: keeper} do
+      session =
+        start_session(supervisor, "exec cat", launcher: Locus.Keeper, launcher_server: keeper)
+
+      :ok = FakeKeeper.mode(fake, :measure_held)
+      reading = Task.async(fn -> answer(fn -> Backend.measure(session) end) end)
+
+      wait_until(
+        fn -> Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "measure")) end,
+        5_000,
+        "the measurement to be pending"
+      )
+
+      Process.exit(session, :kill)
+      assert Task.await(reading, 5_000) == :unknown
+      assert answer(fn -> Backend.measure(session) end) == :unknown
+    end
+
+    test "a memory cause heard after a close was asked is kept for its settlement",
+         %{supervisor: supervisor, fake: fake, keeper: keeper} do
+      for {spelled, memory} <- [{"cap", :cap}, {"machine", :machine}] do
+        killed = %{code: nil, signal: "SIGKILL", memory: spelled}
+        :ok = FakeKeeper.mode(fake, {:exit_closed, killed})
+
+        session =
+          start_session(supervisor, "exec cat", launcher: Locus.Keeper, launcher_server: keeper)
+
+        assert :ok = Backend.close(session)
+
+        assert until_vacated(session) == [
+                 {:ended, %{crash: false, error: nil}},
+                 {:memory, memory},
+                 :vacated
+               ]
+      end
+    end
+
+    test "its use is the keeper's reading, and one not made is unknown, never zero",
+         %{supervisor: supervisor, fake: fake, keeper: keeper} do
+      session =
+        start_session(supervisor, "exec cat", launcher: Locus.Keeper, launcher_server: keeper)
+
+      assert Backend.measure(session) == :unknown
+
+      for lesser <- [false, true] do
+        reading = %{bytes: 268_435_456, lesser: lesser}
+        :ok = FakeKeeper.mode(fake, {:measured, reading})
+        assert Backend.measure(session) == {:ok, reading}
+      end
+
+      :ok = FakeKeeper.mode(fake, :normal)
+      assert :ok = Backend.stop(session, 0)
+      assert Backend.measure(session) == :unknown
     end
   end
 end
