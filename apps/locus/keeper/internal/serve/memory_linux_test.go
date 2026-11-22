@@ -259,13 +259,18 @@ func TestTwoSpawnsOfOneUIDAreMeasuredApartWithTheirTmpfs(t *testing.T) {
 	}
 
 	used := map[string]float64{}
-	for _, id := range []string{idle, writer} {
-		m := k.measure(t, id)
-		bytes, ok := m["bytes"].(float64)
-		if m["type"] != protocol.TypeMeasured || !ok || bytes <= 0 {
-			t.Fatalf("measuring %s answered %v", id, m)
+	for id, least := range map[string]float64{idle: 1, writer: 24 * mib} {
+		// The kernel folds memory.stat's counts in batches.
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+			m := k.measure(t, id)
+			if bytes, ok := m["bytes"].(float64); ok && m["type"] == protocol.TypeMeasured && bytes >= least {
+				used[id] = bytes
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("measuring %s answered %v, never %.0f bytes", id, m, least)
+			}
 		}
-		used[id] = bytes
 	}
 	if used[idle] >= 16*mib || used[writer] < 24*mib || used[writer] >= 40*mib {
 		t.Fatalf("the idle spawn uses %.0f bytes and the one that wrote 24 MiB of tmpfs %.0f", used[idle], used[writer])
@@ -276,6 +281,112 @@ func TestTwoSpawnsOfOneUIDAreMeasuredApartWithTheirTmpfs(t *testing.T) {
 	k.replies(t, idle, writer)
 	if m := k.measure(t, writer); m["code"] != protocol.CodeUnmeasured {
 		t.Fatalf("a retired spawn was measured %v", m)
+	}
+}
+
+// A file's cache is no use of the session that read it, read or mapped as a
+// program's code is, whatever the kernel's reclaim makes of it; a tmpfs's
+// pages, which only a write can free, are.
+func TestAFileReaderIsNotChargedItsCacheAndATmpfsWriterIsChargedItsPages(t *testing.T) {
+	const mib = 1 << 20
+	k := boundedKeeper(t)
+	var fs unix.Statfs_t
+	disk := filepath.Dir(k.homes)
+	if err := unix.Statfs(disk, &fs); err != nil || int64(fs.Type) == unix.TMPFS_MAGIC {
+		t.Fatalf("no disk to keep a file's cache of: %v", err)
+	}
+	uncached := func(name string) string {
+		path := filepath.Join(disk, name)
+		file, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		if _, err := file.Write(make([]byte, 64*mib)); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		// Out of the cache, so that the session is the one charged it.
+		if err := unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	written, err := os.CreateTemp("/dev/shm", "cyfr-written-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = written.Close()
+	t.Cleanup(func() { _ = os.Remove(written.Name()) })
+
+	measured := func(id string, uid int, script, counter string, atLeast int) float64 {
+		group, err := k.s.memory.Create(cgroup.Name(uid), 256*mib, protocol.CPUPeriod)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k.s.mu.Lock()
+		k.s.spawns[id] = &spawn{id: id, group: group}
+		k.s.mu.Unlock()
+		t.Cleanup(func() {
+			k.s.mu.Lock()
+			delete(k.s.spawns, id)
+			k.s.mu.Unlock()
+			group.Kill(0)
+			if err := group.Remove(); err != nil {
+				t.Error(err)
+			}
+		})
+		_, dir := k.runIn(t, group, script)
+		// The kernel's own count says when the pages are the group's.
+		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+			stat, err := os.ReadFile(filepath.Join(dir, "memory.stat"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pages int
+			for _, line := range strings.Split(string(stat), "\n") {
+				if value, ok := strings.CutPrefix(line, counter+" "); ok {
+					_, _ = fmt.Sscan(value, &pages)
+				}
+			}
+			if pages >= atLeast {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the group was never charged its %s:\n%s", counter, stat)
+			}
+		}
+		// Time to be taken as hot by a reclaim that ages what is mapped.
+		time.Sleep(time.Second)
+		m := k.measure(t, id)
+		bytes, ok := m["bytes"].(float64)
+		if !ok {
+			t.Fatalf("measuring %s answered %v", id, m)
+		}
+		return bytes
+	}
+
+	// Read again and again: active, and so charged by memory.current less
+	// inactive_file, where MGLRU is off.
+	read := uncached("read")
+	reader := measured(strings.Repeat("c", 32), testPoolFirst,
+		"for i in 1 2 3; do cat "+read+" > /dev/null; done; exec sleep 60", "file", 56*mib)
+	if reader >= 24*mib {
+		t.Errorf("a session that only reads a 64 MiB file uses %.0f bytes", reader)
+	}
+	// Faulted in cold, as a program's code is: active on any kernel.
+	code := uncached("code")
+	program := measured(strings.Repeat("b", 32), testPoolLast,
+		"exec "+k.s.self+" mapped "+code+" 60", "file_mapped", 56*mib)
+	if program >= 24*mib {
+		t.Errorf("a session whose program maps 64 MiB of code from a file uses %.0f bytes", program)
+	}
+	writer := measured(strings.Repeat("d", 32), testPoolLast+1,
+		"head -c 33554432 /dev/zero > "+written.Name()+" && exec sleep 60", "shmem", 30*mib)
+	if writer < 30*mib || writer >= 48*mib {
+		t.Errorf("a session that wrote 32 MiB of tmpfs uses %.0f bytes", writer)
 	}
 }
 

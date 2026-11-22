@@ -328,7 +328,8 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewError("31", "", CodeHostsUnresolved),
 		NewError("31", "", CodeGuardUnavailable),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byMachine),
-		NewMeasured("25", 256<<20),
+		NewMeasured("25", 256<<20, false),
+		NewMeasured("25", 192<<20, true),
 		NewError("25", "", CodeUnmeasured),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byEither),
 	}

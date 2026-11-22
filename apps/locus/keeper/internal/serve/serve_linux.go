@@ -649,7 +649,7 @@ func (s *server) handlePool(req *protocol.Request) {
 // under mu: a pooled spawn's group is named by its uid, which no other spawn
 // is given until mu has seen this one gone.
 func (s *server) handleMeasure(req *protocol.Request) {
-	var used uint64
+	var used cgroup.Use
 	var err error
 	s.mu.Lock()
 	sp := s.spawns[req.SpawnID]
@@ -664,7 +664,7 @@ func (s *server) handleMeasure(req *protocol.Request) {
 		s.send(protocol.NewError(req.ID, "", protocol.CodeUnmeasured))
 		return
 	}
-	s.send(protocol.NewMeasured(req.ID, used))
+	s.send(protocol.NewMeasured(req.ID, used.Bytes, used.Lesser))
 }
 
 func (s *server) handleSignal(req *protocol.Request) {

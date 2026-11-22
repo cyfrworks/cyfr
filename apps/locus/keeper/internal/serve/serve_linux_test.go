@@ -41,8 +41,8 @@ import (
 
 // TestMain lets the test binary stand in for cyfr-locus's helpers, which
 // the keeper under test starts as `<self> stage`, `<self> relay`,
-// `<self> retire` and `<self> home`, dispatched as main.go dispatches them. `<self> hold` is
-// the memory tests' command.
+// `<self> retire` and `<self> home`, dispatched as main.go dispatches them. `<self> hold` and
+// `<self> mapped` are the memory tests' commands.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -56,6 +56,8 @@ func TestMain(m *testing.M) {
 			os.Exit(home.HelperMain())
 		case "hold":
 			os.Exit(hold(os.Args[2:]))
+		case "mapped":
+			os.Exit(mapped(os.Args[2:]))
 		case "dial":
 			os.Exit(dial(os.Args[2:]))
 		}
@@ -94,6 +96,33 @@ func hold(args []string) int {
 	fmt.Println("held")
 	time.Sleep(time.Duration(seconds) * time.Second)
 	return int(held[0][0]) - 1
+}
+
+// mapped maps the file it is given, as a program maps its own code, touches
+// every page, and keeps it for the seconds it is told to.
+func mapped(args []string) int {
+	file, err := os.Open(args[0])
+	if err != nil {
+		return 1
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return 1
+	}
+	pages, err := unix.Mmap(int(file.Fd()), 0, int(info.Size()), unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		return 1
+	}
+	seconds, _ := strconv.Atoi(args[1])
+	var sum byte
+	for end := time.Now().Add(time.Duration(seconds) * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		for i := 0; i < len(pages); i += 4096 {
+			sum += pages[i]
+		}
+	}
+	runtime.KeepAlive(sum)
+	return 0
 }
 
 const (

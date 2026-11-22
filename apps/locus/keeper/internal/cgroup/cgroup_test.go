@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -413,111 +412,49 @@ func TestKilledForTellsTheSpawnsBoundFromALimitAbove(t *testing.T) {
 	}
 }
 
-// A group's use is what it is charged less the file pages the kernel gives
-// back first, and a reading that cannot be made is an error, never a zero.
-func TestUsedIsWhatIsChargedLessInactiveFilePages(t *testing.T) {
-	stat := "anon 4096\nfile 12288\ninactive_anon 4096\nshmem 4096\ninactive_file 8192\n"
-	for name, c := range map[string]struct {
-		files map[string]string
-		want  uint64
-		fails bool
-	}{
-		"charged less inactive file": {files: map[string]string{"memory.current": "20480\n", "memory.stat": stat}, want: 12288},
-		"nothing charged":            {files: map[string]string{"memory.current": "0\n", "memory.stat": "anon 0\nshmem 0\ninactive_file 0\n"}, fails: true},
-		"no memory.current":          {files: map[string]string{"memory.stat": stat}, fails: true},
-		"no memory.stat":             {files: map[string]string{"memory.current": "20480\n"}, fails: true},
-		"no inactive_file":           {files: map[string]string{"memory.current": "20480\n", "memory.stat": "anon 4096\n"}, fails: true},
-		"a count that does not read": {files: map[string]string{"memory.current": "max\n", "memory.stat": stat}, fails: true},
-		"more inactive than charged": {files: map[string]string{"memory.current": "4096\n", "memory.stat": stat}, fails: true},
-	} {
-		used, err := (&Group{path: namespaceRoot(t, c.files)}).Used()
-		if (err != nil) != c.fails || used != c.want {
-			t.Errorf("%s: Used = %d, %v", name, used, err)
-		}
-	}
-}
-
-// staged serves each of contents to one reader of path in turn, and the last
-// to every reader after: the kernel answering another snapshot at each read.
-func staged(t *testing.T, path string, contents ...string) {
-	t.Helper()
-	last := len(contents) - 1
-	next := func(i int, at string) error {
-		if i == last {
-			return os.WriteFile(at, []byte(contents[i]), 0o600)
-		}
-		return syscall.Mkfifo(at, 0o600)
-	}
-	if err := next(0, path); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		for i := 0; i < last; i++ {
-			w, err := os.OpenFile(path, os.O_WRONLY, 0)
-			if err != nil {
-				done <- err
-				return
-			}
-			// The reader has opened this one: the next read gets the next.
-			if err = next(i+1, path+".next"); err == nil {
-				err = os.Rename(path+".next", path)
-			}
-			if err == nil {
-				_, err = w.WriteString(contents[i])
-			}
-			w.Close()
-			if err != nil {
-				done <- err
-				return
-			}
-		}
-		done <- nil
-	}()
-	t.Cleanup(func() {
-		for {
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Error(err)
-				}
-				return
-			default:
-				_, _ = os.ReadFile(path)
-			}
-		}
-	})
-}
-
-// A live group never reads zero, or under what it holds, from a
-// memory.current and a memory.stat that are not of one moment.
-func TestUsedIsNeverReadFromTwoSnapshotsThatDisagree(t *testing.T) {
-	const mib = 1 << 20
-	stat := func(inactive, anon int) string {
-		return "anon " + strconv.Itoa(anon*mib) + "\nshmem 0\ninactive_file " + strconv.Itoa(inactive*mib) + "\n"
-	}
-	changing := make([]string, 0, 40)
-	for i := range 40 {
-		changing = append(changing, stat(i%2+1, 1))
-	}
+// A group's use is the memory that cannot be given back, summed from one
+// memory.stat of either shape: with a `kernel` line the whole, without one
+// the lesser, of the parts that kernel names. File cache is none of it,
+// whatever memory.current says, and no reading is zero.
+func TestUsedIsTheMemoryThatCannotBeGivenBack(t *testing.T) {
+	const whole = "anon 8192\nfile 2097152\nkernel 40960\nkernel_stack 16384\npagetables 4096\nsec_pagetables 0\n" +
+		"percpu 512\nsock 4096\nvmalloc 1024\nshmem 12288\ninactive_file 0\nactive_file 2084864\n" +
+		"slab_reclaimable 8192\nslab_unreclaimable 4096\n"
+	const v517 = "anon 8192\nfile 2097152\nkernel_stack 16384\npagetables 4096\npercpu 512\nsock 4096\nvmalloc 1024\n" +
+		"shmem 12288\ninactive_file 0\nactive_file 2084864\nslab_reclaimable 8192\nslab_unreclaimable 4096\nslab 12288\n"
+	const v54 = "anon 8192\nfile 2097152\nkernel_stack 16384\nslab 12288\nsock 4096\nshmem 12288\ninactive_file 0\n" +
+		"slab_reclaimable 8192\nslab_unreclaimable 4096\n"
 	for _, c := range []struct {
 		name    string
-		current int
-		stats   []string
+		stat    string
+		current string
 		want    uint64
+		lesser  bool
 		fails   bool
 	}{
-		{name: "file pages reclaimed and anonymous grown between the reads", current: 64, stats: []string{stat(64, 0), stat(0, 64)}, want: 64 * mib},
-		{name: "a stat that never holds still", current: 64, stats: changing, fails: true},
-		{name: "less left than the same stat says is anonymous", current: 64, stats: []string{stat(60, 16)}, fails: true},
-		{name: "all that is charged read as inactive", current: 64, stats: []string{stat(64, 0)}, fails: true},
+		{name: "with a kernel line", stat: whole, current: "2142208", want: 8192 + 12288 + 40960 - 8192},
+		{name: "with a kernel line, and memory.current never read", stat: whole, want: 8192 + 12288 + 40960 - 8192},
+		{name: "before 5.18", stat: v517, current: "2142208", want: 8192 + 12288 + 16384 + 4096 + 512 + 1024 + 4096, lesser: true},
+		{name: "5.4, which names fewer parts", stat: v54, current: "2142208", want: 8192 + 12288 + 16384 + 4096, lesser: true},
+		{name: "all cache", stat: "anon 0\nfile 4096\nkernel 4096\nshmem 0\ninactive_file 0\nslab_reclaimable 4096\n", current: "8192", fails: true},
+		{name: "nothing counted", stat: "anon 0\nkernel 0\nshmem 0\ninactive_file 0\nslab_reclaimable 0\n", current: "8192", fails: true},
+		{name: "more given back than held", stat: "anon 0\nkernel 0\nshmem 0\ninactive_file 0\nslab_reclaimable 4096\n", current: "8192", fails: true},
+		{name: "no anon", stat: "kernel 4096\nshmem 0\ninactive_file 0\nslab_reclaimable 0\n", current: "8192", fails: true},
+		{name: "no shmem", stat: "anon 4096\nkernel 4096\ninactive_file 0\nslab_reclaimable 0\n", current: "8192", fails: true},
+		{name: "a kernel line and no slab_reclaimable", stat: "anon 4096\nkernel 4096\nshmem 0\ninactive_file 0\n", current: "8192", fails: true},
+		{name: "a count that does not read", stat: "anon max\nkernel 4096\nshmem 0\ninactive_file 0\nslab_reclaimable 0\n", current: "8192", fails: true},
+		{name: "no memory.stat", current: "8192", fails: true},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			dir := namespaceRoot(t, map[string]string{"memory.current": strconv.Itoa(c.current*mib) + "\n"})
-			staged(t, filepath.Join(dir, "memory.stat"), c.stats...)
-			if used, err := (&Group{path: dir}).Used(); (err != nil) != c.fails || used != c.want {
-				t.Fatalf("Used = %d, %v; want %d, failing %t", used, err, c.want, c.fails)
-			}
-		})
+		files := map[string]string{}
+		if c.stat != "" {
+			files["memory.stat"] = c.stat
+		}
+		if c.current != "" {
+			files["memory.current"] = c.current + "\n"
+		}
+		used, err := (&Group{path: namespaceRoot(t, files)}).Used()
+		if (err != nil) != c.fails || used != (Use{Bytes: c.want, Lesser: c.lesser}) {
+			t.Errorf("%s: Used = %v, %v; want %d, lesser %t, failing %t", c.name, used, err, c.want, c.lesser, c.fails)
+		}
 	}
 }

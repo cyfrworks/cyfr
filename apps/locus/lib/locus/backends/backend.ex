@@ -43,8 +43,10 @@ defmodule Locus.Backends.Backend do
 
   ## Its use
 
-  `measure/1` answers the bytes the session's process uses, as its
-  launcher reads them, until nothing of it is left. With no process, a
+  `measure/1` answers what the session's process uses that cannot be
+  given back, as its launcher reads it, until nothing of it is left: its
+  `bytes`, and `lesser` where the kernel could count only part of its own
+  memory (`t:Prima.KeeperProtocol.reading/0`). With no process, a
   reading that failed, or a session that is gone or goes while it is read,
   its use is `:unknown`, never zero.
 
@@ -170,8 +172,8 @@ defmodule Locus.Backends.Backend do
         }
   def status(server, timeout), do: GenServer.call(server, :status, timeout)
 
-  @doc "The bytes the session's process uses, or `:unknown`: never a zero for a reading not made."
-  @spec measure(GenServer.server()) :: {:ok, pos_integer()} | :unknown
+  @doc "What the session's process uses, or `:unknown`: never a zero for a reading not made."
+  @spec measure(GenServer.server()) :: {:ok, Prima.KeeperProtocol.reading()} | :unknown
   def measure(server) do
     GenServer.call(server, :measure, @call_margin_ms)
   catch
@@ -296,7 +298,7 @@ defmodule Locus.Backends.Backend do
   # A reading is no use of the session: its idle period runs on.
   def handle_call(:measure, _from, state) do
     case state.launcher.measure(state.launcher_server, state.handle) do
-      {:ok, _bytes} = reading -> {:reply, reading, state}
+      {:ok, _reading} = answer -> {:reply, answer, state}
       {:error, _reason} -> {:reply, :unknown, state}
     end
   end

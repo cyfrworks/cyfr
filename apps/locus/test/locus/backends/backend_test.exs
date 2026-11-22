@@ -433,8 +433,11 @@ defmodule Locus.Backends.BackendTest do
 
       assert Backend.measure(session) == :unknown
 
-      :ok = FakeKeeper.mode(fake, {:measured, 268_435_456})
-      assert Backend.measure(session) == {:ok, 268_435_456}
+      for lesser <- [false, true] do
+        reading = %{bytes: 268_435_456, lesser: lesser}
+        :ok = FakeKeeper.mode(fake, {:measured, reading})
+        assert Backend.measure(session) == {:ok, reading}
+      end
 
       :ok = FakeKeeper.mode(fake, :normal)
       assert :ok = Backend.stop(session, 0)

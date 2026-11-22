@@ -371,7 +371,8 @@ defmodule Locus.KeeperVectorsTest do
     measured = reply(v, "measured")
 
     for {answer, read} <- [
-          {measured, {:ok, measured["bytes"]}},
+          {measured, {:ok, %{bytes: measured["bytes"], lesser: false}}},
+          {reply(v, "measured", & &1["lesser"]), {:ok, %{bytes: 201_326_592, lesser: true}}},
           {reply(v, "error", &(&1["code"] == "unmeasured")), {:error, {:refused, "unmeasured"}}},
           # A spawn retired while it is asked after has no reading.
           {reply(v, "released"), {:error, :unknown_spawn}}
@@ -403,7 +404,7 @@ defmodule Locus.KeeperVectorsTest do
     asked = next_request(peer)
     send_reply(peer, %{answering(late, reading) | "bytes" => 4_096})
     send_reply(peer, %{answering(asked, reading) | "bytes" => 8_192})
-    assert Task.await(second, 5_000) == {:ok, 8_192}
+    assert Task.await(second, 5_000) == {:ok, %{bytes: 8_192, lesser: false}}
 
     # Two waiting at once, answered in the other order.
     third = Task.async(fn -> Keeper.measure(name, handle) end)
@@ -414,7 +415,7 @@ defmodule Locus.KeeperVectorsTest do
     send_reply(peer, %{answering(third_asked, reading) | "bytes" => 12_288})
 
     assert {Task.await(third, 5_000), Task.await(fourth, 5_000)} ==
-             {{:ok, 12_288}, {:ok, 16_384}}
+             {{:ok, %{bytes: 12_288, lesser: false}}, {:ok, %{bytes: 16_384, lesser: false}}}
   end
 
   test "a measured of no bytes is refused as no reading, and settles no measurement",

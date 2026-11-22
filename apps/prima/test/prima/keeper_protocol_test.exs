@@ -495,7 +495,9 @@ defmodule Prima.KeeperProtocolTest do
   defp expected_reply(%{"type" => "exited"} = r),
     do: {:exited, r["spawn_id"], {:signal, r["signal"]}, memory(r["memory"])}
 
-  defp expected_reply(%{"type" => "measured"} = r), do: {:measured, r["id"], r["bytes"]}
+  defp expected_reply(%{"type" => "measured"} = r),
+    do: {:measured, r["id"], %{bytes: r["bytes"], lesser: r["lesser"]}}
+
   defp expected_reply(%{"type" => "released"} = r), do: {:released, r["spawn_id"]}
 
   defp expected_reply(%{"type" => "pool"} = r),
@@ -829,10 +831,20 @@ defmodule Prima.KeeperProtocolTest do
     end
 
     test "a measured's bytes is a whole number, and a reading not made is never one" do
-      measured = %{"v" => 2, "type" => "measured", "id" => "25"}
+      measured = %{"v" => 2, "type" => "measured", "id" => "25", "lesser" => false}
       decode = &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(measured, &1)))
 
-      assert decode.(%{"bytes" => 1}) == {:ok, {:measured, "25", 1}}
+      assert decode.(%{"bytes" => 1}) == {:ok, {:measured, "25", %{bytes: 1, lesser: false}}}
+
+      assert decode.(%{"bytes" => 1, "lesser" => true}) ==
+               {:ok, {:measured, "25", %{bytes: 1, lesser: true}}}
+
+      assert decode.(%{"bytes" => 1, "lesser" => "true"}) == {:error, {:wrong_type, "lesser"}}
+      assert decode.(%{"bytes" => 1, "lesser" => nil}) == {:error, {:wrong_type, "lesser"}}
+
+      assert KeeperProtocol.decode_reply(~s({"v":2,"type":"measured","id":"25","bytes":1})) ==
+               {:error, {:missing_field, "lesser"}}
+
       assert decode.(%{"bytes" => 0}) == {:error, {:invalid_field, "bytes"}}
       assert decode.(%{"bytes" => -1}) == {:error, {:invalid_field, "bytes"}}
       assert decode.(%{"bytes" => nil}) == {:error, {:wrong_type, "bytes"}}

@@ -461,7 +461,8 @@ defmodule Locus.Keeper do
   end
 
   @doc """
-  The bytes a long-lived spawn uses, read by cyfr-locus from its cgroup.
+  What a long-lived spawn uses that cannot be given back, read by
+  cyfr-locus from its cgroup (`t:Prima.KeeperProtocol.reading/0`).
   A spawn retired or no longer followed is `:unknown_spawn` and a reading
   cyfr-locus could not make `{:refused, "unmeasured"}`.
   """
@@ -1678,7 +1679,7 @@ defmodule Locus.Keeper do
     end)
   end
 
-  defp on_reply({:measured, id, bytes}, state), do: measured(state, id, {:ok, bytes})
+  defp on_reply({:measured, id, reading}, state), do: measured(state, id, {:ok, reading})
   defp on_reply({:released, spawn_id}, state), do: released(state, spawn_id)
 
   defp on_reply({:pool, id, _pool, size, free, quarantined}, state) do

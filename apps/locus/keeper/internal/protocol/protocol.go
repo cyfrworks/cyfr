@@ -22,7 +22,7 @@
 //	{"v":2,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
 //	{"v":2,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request)
 //	{"v":2,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
-//	{"v":2,"type":"measured","id":…,"bytes":…}
+//	{"v":2,"type":"measured","id":…,"bytes":…,"lesser":…}
 //	{"v":2,"type":"released","spawn_id":…}
 //	{"v":2,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
 //	{"v":2,"type":"home_made","id":…}
@@ -58,11 +58,14 @@
 // `memory_bytes` are refused as CodeBadRequest.
 //
 // A `measure` has an id of its own and names a spawn, and is answered under
-// that id alone, as a home request is: `measured` with the `bytes` the
-// spawn's cgroup uses, memory.current less inactive_file, so the tmpfs pages
-// it wrote count and file pages the kernel gives back first do not. A spawn
-// the keeper does not hold, a group it cannot read and two files that do not
-// agree are refused as CodeUnmeasured: no reading is ever answered as zero.
+// that id alone, as a home request is: `measured` with the `bytes` of the
+// spawn's cgroup that cannot be given back, anon + shmem + kernel -
+// slab_reclaimable from one read of its memory.stat, so the tmpfs pages it
+// wrote count and the file cache it was charged does not. Where the kernel's
+// memory.stat has no `kernel` line (before 5.18) `lesser` is true and
+// `bytes` the lesser sum, of the parts of it that it names. A spawn the
+// keeper does not hold and a group it cannot read are refused as
+// CodeUnmeasured: no reading is ever answered as zero.
 //
 // A spawn's required `cpu_quota`, from MinCPUQuota to MaxCPUQuota, is the
 // microseconds of CPU time its group may use in every CPUPeriod (100000
@@ -881,18 +884,20 @@ func NewExited(spawnID string, code *int, signal, memory *string) Exited {
 	return Exited{V: Version, Type: TypeExited, SpawnID: spawnID, Code: code, Signal: signal, Memory: memory}
 }
 
-// Measured answers the `measure` named by ID with the bytes its spawn's
-// cgroup uses.
+// Measured answers the `measure` named by ID with the bytes of its spawn's
+// cgroup that cannot be given back, and whether they are the lesser sum of a
+// kernel with no `kernel` count.
 type Measured struct {
-	V     int    `json:"v"`
-	Type  string `json:"type"`
-	ID    string `json:"id"`
-	Bytes uint64 `json:"bytes"`
+	V      int    `json:"v"`
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Bytes  uint64 `json:"bytes"`
+	Lesser bool   `json:"lesser"`
 }
 
 // NewMeasured builds a `measured` reply.
-func NewMeasured(id string, bytes uint64) Measured {
-	return Measured{V: Version, Type: TypeMeasured, ID: id, Bytes: bytes}
+func NewMeasured(id string, bytes uint64, lesser bool) Measured {
+	return Measured{V: Version, Type: TypeMeasured, ID: id, Bytes: bytes, Lesser: lesser}
 }
 
 // Released reports that a spawn's uid has been retired.

@@ -47,12 +47,15 @@ defmodule Prima.KeeperProtocol do
   and null for no kill or for counters that could not be read. A `measure`
   carries exactly `id` and `spawn_id` and is answered under that `id`
   alone, as a home request is, so a reply settles only the request it
-  answers: `measured`, with the `bytes` the spawn's group uses (its
-  `memory.current` less `inactive_file`), or an `error` `unmeasured` where
-  the keeper holds no such spawn or cannot take a reading that agrees with
-  itself. A reading not made is unknown, and zero is no reading: a
-  `measured` of no `bytes` is refused, where a `home_measured` of none is
-  an empty home.
+  answers: `measured`, or an `error` `unmeasured` where the keeper holds no
+  such spawn or cannot read its group. A `measured`'s `bytes` are what the
+  spawn's group uses that cannot be given back, `anon + shmem + kernel -
+  slab_reclaimable` from one read of its `memory.stat`: file cache is none
+  of it and a tmpfs's pages are. Its `lesser` is true where that kernel's
+  `memory.stat` has no `kernel` line (before 5.18), and `bytes` then the
+  lesser sum, of the parts of it that it names. A reading not made is
+  unknown, and zero is no reading: a `measured` of no `bytes` is refused,
+  where a `home_measured` of none is an empty home.
 
   `decode_reply/1` answers the reply or the first refusal, in this order:
   `:oversize_line`; `:malformed` (not one JSON object); `:bad_version`;
@@ -242,7 +245,7 @@ defmodule Prima.KeeperProtocol do
          memory: {:nullable, :memory_end}
        ]},
     "released" => {:released, [spawn_id: :spawn_id]},
-    "measured" => {:measured, [id: :id, bytes: :used_bytes]},
+    "measured" => {:measured, [id: :id, bytes: :used_bytes, lesser: :boolean]},
     "pool" => {:pool, [id: :id, pool: :pool, size: :count, free: :count, quarantined: :count]},
     "home_made" => {:home_made, [id: :id]},
     "home_measured" => {:home_measured, [id: :id, bytes: :measured_bytes]},
@@ -313,6 +316,12 @@ defmodule Prima.KeeperProtocol do
   @type memory_end :: :cap | :machine | :either | nil
 
   @typedoc """
+  What a spawn uses that cannot be given back, and whether that is the
+  lesser sum of a kernel that counts no `kernel` memory.
+  """
+  @type reading :: %{bytes: pos_integer(), lesser: boolean()}
+
+  @typedoc """
   A reply. An `error` names the request it refuses by `id` (a spawn, a
   pool, a home request or a measure) or `spawn_id` (a signal or a release); a
   request the keeper could not read is named by neither.
@@ -322,7 +331,7 @@ defmodule Prima.KeeperProtocol do
            pid :: non_neg_integer()}
           | {:error, id :: String.t() | nil, spawn_id :: String.t() | nil, code :: String.t()}
           | {:exited, spawn_id :: String.t(), exit_status(), memory_end()}
-          | {:measured, id :: String.t(), bytes :: pos_integer()}
+          | {:measured, id :: String.t(), reading()}
           | {:released, spawn_id :: String.t()}
           | {:pool, id :: String.t(), pool :: String.t(), size :: non_neg_integer(),
              free :: non_neg_integer(), quarantined :: non_neg_integer()}
@@ -888,6 +897,8 @@ defmodule Prima.KeeperProtocol do
   defp read(:used_bytes, name, 0), do: {:error, {:invalid_field, name}}
   defp read(:used_bytes, name, value), do: read(:measured_bytes, name, value)
 
+  defp read(:boolean, _name, value) when is_boolean(value), do: {:ok, value}
+
   defp read(:memory_end, _name, value) when is_map_key(@memory_ends, value),
     do: {:ok, Map.fetch!(@memory_ends, value)}
 
@@ -915,7 +926,9 @@ defmodule Prima.KeeperProtocol do
   defp reply(:exited, _read), do: {:error, :ambiguous_exit}
 
   defp reply(:released, %{spawn_id: spawn_id}), do: {:ok, {:released, spawn_id}}
-  defp reply(:measured, %{id: id, bytes: bytes}), do: {:ok, {:measured, id, bytes}}
+
+  defp reply(:measured, %{id: id, bytes: bytes, lesser: lesser}),
+    do: {:ok, {:measured, id, %{bytes: bytes, lesser: lesser}}}
 
   defp reply(:pool, %{id: id, pool: pool, size: size, free: free, quarantined: quarantined}),
     do: {:ok, {:pool, id, pool, size, free, quarantined}}

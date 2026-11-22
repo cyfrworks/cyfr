@@ -53,8 +53,9 @@ defmodule Locus.Launcher do
   `c:resize/3` sets its terminal's size;
   `c:release/3` ends it, a term signal first and the kill of everything it
   started once `grace_ms` pass, and answers at once, the `:released` event
-  following once nothing of it is left. `c:measure/2` answers the bytes
-  it uses, or an error where that is not known: no reading is ever a zero.
+  following once nothing of it is left. `c:measure/2` answers what
+  it uses that cannot be given back, or an error where that is not known:
+  no reading is ever a zero.
   `c:pool_stats/2` answers the pool's size, its free uids and its
   quarantined ones.
 
@@ -181,9 +182,9 @@ defmodule Locus.Launcher do
   @doc "End the process: a term signal, `grace_ms`, then the kill; `:released` follows."
   @callback release(GenServer.server() | keyword(), handle(), non_neg_integer()) :: :ok
 
-  @doc "The bytes the process uses; an error where that is not known, never a zero."
+  @doc "What the process uses that cannot be given back; an error where that is not known, never a zero."
   @callback measure(GenServer.server() | keyword(), handle()) ::
-              {:ok, pos_integer()} | {:error, error()}
+              {:ok, Prima.KeeperProtocol.reading()} | {:error, error()}
 
   @doc "The uids of `pool`."
   @callback pool_stats(GenServer.server() | keyword(), String.t()) ::

@@ -944,8 +944,9 @@ defmodule Locus.KeeperTest do
       assert {:ok, handle} = spawn_live(name, "exec cat")
       assert {:error, {:refused, "unmeasured"}} = Keeper.measure(name, handle)
 
-      :ok = FakeKeeper.mode(fake, {:measured, 268_435_456})
-      assert {:ok, 268_435_456} = Keeper.measure(name, handle)
+      reading = %{bytes: 268_435_456, lesser: true}
+      :ok = FakeKeeper.mode(fake, {:measured, reading})
+      assert {:ok, ^reading} = Keeper.measure(name, handle)
 
       vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "measure"))
       sent = %{vector | "spawn_id" => handle.spawn_id}

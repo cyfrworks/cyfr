@@ -20,7 +20,8 @@ defmodule Locus.Test.FakeKeeper do
     line and the leader is reported ended as `exited` says (`:code`,
     `:signal`, `:memory`), killed at its bound or the container's among
     them, in any pool
-  - `{:measured, bytes}`: a `measure` of any spawn is answered `bytes`
+  - `{:measured, reading}`: a `measure` of any spawn is answered `reading`
+    (`:bytes`, `:lesser`)
   - `:measure_held`: a `measure` is never answered
   - `{:exit_closed, exited}`: a long-lived command runs until it is ended,
     and its leader is then reported as `exited` says, as one the kernel
@@ -313,9 +314,9 @@ defmodule Locus.Test.FakeKeeper do
 
   defp handle_request(
          %{"type" => "measure", "id" => id},
-         %{mode: {:measured, bytes}} = state
+         %{mode: {:measured, reading}} = state
        ) do
-    send(self(), {:send, %{type: "measured", id: id, bytes: bytes}})
+    send(self(), {:send, Map.merge(%{type: "measured", id: id}, reading)})
     state
   end
 

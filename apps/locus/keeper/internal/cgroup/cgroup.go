@@ -75,8 +75,6 @@ const (
 	drainInterval = 50 * time.Millisecond
 	// boundLeaf is the bound inside a spawn's mark.
 	boundLeaf = "bound"
-	// usedAttempts bound the readings taken for one that agrees with itself.
-	usedAttempts = 5
 	// settleAttempts and settleInterval bound the wait for the group kill's
 	// count, which the kernel writes just after it signals the first victim.
 	settleAttempts = 20
@@ -384,40 +382,56 @@ func (g *Group) KilledFor() (Cause, error) {
 	}
 }
 
-// Used is the memory the group uses: its memory.current less the
-// inactive_file of its memory.stat, the file pages the kernel gives back
-// first. A tmpfs's pages are no inactive_file, so they count.
+// kernelParts are the kernel memory a memory.stat names where it has no
+// `kernel` line (before 5.18), each charged apart from the others and none
+// given back under pressure: not every kernel names each, and together they
+// are less than that line.
+var kernelParts = []string{"kernel_stack", "pagetables", "percpu", "vmalloc", "slab_unreclaimable"}
+
+// Use is one reading of what a group uses.
+type Use struct {
+	Bytes uint64
+	// Lesser says that the kernel counts no `kernel` line and Bytes is the
+	// lesser sum, of the parts of it that kernel names.
+	Lesser bool
+}
+
+// Used is the memory the group uses that cannot be given back, from one read
+// of its memory.stat, which is one snapshot: anon + shmem + kernel -
+// slab_reclaimable. File cache is none of it, a program's own code included,
+// whatever the kernel's reclaim takes for active: a session that only reads
+// must refuse no other while that memory is free. A tmpfs's pages are shmem.
+// Without a `kernel` line it is anon + shmem + kernelParts and says Lesser. A
+// stat that does not read, or that leaves nothing in use, is an error, never
+// a zero.
 //
-// The two files are not one snapshot, and memory.stat may lag the charge. A
-// reading is taken only where they agree: inactive_file is the same either
-// side of memory.current, and what that leaves is above zero and no less
-// than the anon and shmem the same memory.stat counts. Without one in
-// usedAttempts the use is unknown, an error, and never a zero.
-func (g *Group) Used() (uint64, error) {
-	file := filepath.Join(g.path, "memory.stat")
-	for attempt := 0; attempt < usedAttempts; attempt++ {
-		before, err := counters(file, "inactive_file", "anon", "shmem")
-		if err != nil {
-			return 0, err
+// The kernel writes the one snapshot from counts it folds in batches of 64
+// pages a CPU, or every two seconds: a reading may trail the charges by
+// that, so a session just started can be an error for that long and a small
+// one read low by up to its own size.
+func (g *Group) Used() (Use, error) {
+	stat, err := counters(filepath.Join(g.path, "memory.stat"), "anon", "shmem")
+	if err != nil {
+		return Use{}, err
+	}
+	held := stat["anon"] + stat["shmem"]
+	var givenBack uint64
+	kernel, whole := stat["kernel"]
+	if whole {
+		reclaimable, ok := stat["slab_reclaimable"]
+		if !ok {
+			return Use{}, errors.New("memory.stat: a kernel line and no slab_reclaimable line")
 		}
-		current, err := os.ReadFile(filepath.Join(g.path, "memory.current"))
-		if err != nil {
-			return 0, err
-		}
-		charged, err := strconv.ParseUint(strings.TrimSpace(string(current)), 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("memory.current: %w", err)
-		}
-		after, err := counters(file, "inactive_file")
-		if err != nil {
-			return 0, err
-		}
-		inactive, held := before["inactive_file"], before["anon"]+before["shmem"]
-		if after["inactive_file"] == inactive && charged > inactive && charged-inactive >= held {
-			return charged - inactive, nil
+		held, givenBack = held+kernel, reclaimable
+	} else {
+		for _, part := range kernelParts {
+			held += stat[part]
 		}
 	}
-	return 0, fmt.Errorf("memory.current and memory.stat did not agree in %d readings", usedAttempts)
+	if held <= givenBack {
+		return Use{}, errors.New("memory.stat counts nothing in use")
+	}
+	return Use{Bytes: held - givenBack, Lesser: !whole}, nil
 }
 
 // counters reads a cgroup file of `name count` lines that holds every name
