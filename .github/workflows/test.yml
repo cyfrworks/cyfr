@@ -420,6 +420,11 @@ jobs:
         run: |
           scripts/ci/retry.sh mix deps.get
           scripts/fetch-prebuilt-binaries.sh
+      # The pinned validator every component passes (scripts/wasm-tools.sh),
+      # at `_tools/wasm-tools`, where the test configuration names it: the
+      # plants' `mix test` starts Prima, which refuses to start without it.
+      - name: Install the pinned wasm-tools
+        run: scripts/wasm-tools.sh install _tools
       # Forced, as static's is: the cache keeps _build across commits.
       - name: Compile with warnings as errors
         run: mix compile --force --warnings-as-errors
@@ -1078,10 +1083,19 @@ jobs:
           mix compile --warnings-as-errors
           mix test
 
+  # On amd64 and on a native arm64 runner: the runtime's native guest
+  # tests (test_wasm/ and its hostile guests) run the engine's precompiled
+  # NIF and Cranelift's code for each architecture the Locus image ships.
   locus-independence:
-    name: Locus compiles and tests from its declared apps alone
-    runs-on: ubuntu-latest
+    name: Locus compiles and tests from its declared apps alone (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-latest}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The four islands fetch the same deps from the one lock and build
