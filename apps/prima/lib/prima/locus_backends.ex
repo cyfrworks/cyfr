@@ -106,7 +106,10 @@ defmodule Prima.LocusBackends do
   the same uid (`state` `empty`); `op` `retire` ends them and removes the
   home, freeing its uid (`state` `absent`). The box that holds a home
   draws its uid, from the kept-home range its keeper is given, when the
-  home is first made, at the first `open` that names it.
+  home is first made, at the first `open` that names it. A home that work
+  in flight will still make, an `open` being prepared in it or an earlier
+  make or reset of it, is refused `conflict`: it is busy, not gone, and the
+  same message is sent again once that has finished.
 
   An owner's `athanor` and `server` are signed field text
   (`Prima.MacEnvelope`); a generation `g` and an epoch `e` are positive
