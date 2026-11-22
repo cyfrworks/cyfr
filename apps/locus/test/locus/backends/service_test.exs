@@ -945,6 +945,22 @@ defmodule Locus.Backends.ServiceTest do
     end
 
     @tag launcher: :direct
+    test "a lapse alone, with no close asked, gives the place back, and only at the release",
+         ctx do
+      fetch_sync(ctx)
+      opened!(ctx)
+      {_pid, handle} = held_release(ctx)
+      held = fn -> map_size(:sys.get_state(ctx.owners).reservations) end
+
+      Agent.update(ctx.clock, &(&1 + 30_000))
+      assert :ok = LeaseSweeper.sweep(ctx.owners)
+      assert held.() == 1
+
+      resume(handle)
+      wait_until(fn -> held.() == 0 end, 5_000)
+    end
+
+    @tag launcher: :direct
     @tag session_opts: [release_timeout_ms: 25]
     @tag given: %{"memory_budget" => 536_870_912}
     test "past the bound a close is unavailable and the place stays held, until a retry finds it back",

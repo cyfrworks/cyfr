@@ -27,6 +27,7 @@ defmodule Opus.BrainTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Prima.Test.Wait, only: [wait_until: 2]
 
   alias Arca.TurnStorage
   alias Cyfr.Test.ScriptedBackends, as: Scripted
@@ -943,9 +944,54 @@ defmodule Opus.BrainTest do
       assert running_sessions(fake, row) == []
     end
 
-    test "a close says unanswered while the box still owes it", %{fake: fake, brain: brain} do
+    test "a close says unanswered while the box still owes it, to its attendant too", %{
+      fake: fake,
+      brain: {_pid, ref} = brain
+    } do
       Scripted.refuse_once(fake, "close", "unavailable")
       assert Brain.close(brain) == {:error, :unanswered}
+      assert_receive {Brain, ^ref, {:ended, reason}}, 2_000
+      assert reason == :unanswered
+    end
+
+    test "its attendant is told closed only once the close is confirmed", %{
+      fake: fake,
+      brain: {_pid, ref} = brain
+    } do
+      Scripted.hold(fake, "close")
+      closing = Task.async(fn -> Brain.close(brain) end)
+      assert_receive {:held, "close", service}, 5_000
+      refute_receive {Brain, ^ref, {:ended, _reason}}, 200
+      send(service, :go)
+      assert Task.await(closing) == :ok
+      assert_receive {Brain, ^ref, {:ended, :closed}}, 2_000
+    end
+
+    test "a close of a dead holder waits on a replacement box for what the holder left", %{
+      fake: fake,
+      brain: {pid, _ref} = brain
+    } do
+      box = GenServer.whereis(Opus.Programs.via("local"))
+      Scripted.hold(fake, "close", 50_000)
+      monitor = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 5_000
+      assert_receive {:held, "close", first}, 5_000
+      on_exit(fn -> send(first, :go) end)
+
+      Scripted.hold(fake, "close", 40_000)
+      down = Process.monitor(box)
+      Process.exit(box, :kill)
+      assert_receive {:DOWN, ^down, :process, ^box, _reason}, 5_000
+      wait_until(fn -> GenServer.whereis(Opus.Programs.via("local")) not in [nil, box] end, 5_000)
+      replacement = GenServer.whereis(Opus.Programs.via("local"))
+      wait_until(fn -> :sys.get_state(replacement).boot != nil end, 5_000)
+
+      closing = Task.async(fn -> Brain.close(brain) end)
+      assert Task.yield(closing, 500) == nil, "a close was answered from an empty record"
+      assert_receive {:held, "close", second}, 5_000
+      send(second, :go)
+      assert Task.await(closing) == :ok
     end
 
     test "a close of a holder that ended first waits on the close it left", %{

@@ -1290,6 +1290,10 @@ defmodule Locus.Backends.OwnersTest do
 
       :ok = Owners.sweep(owners)
       assert_receive {:adoption_snapshot, worker, ^owners, tag}, 2_000
+
+      # An adoption pending is shown as its kind, in a status that reads.
+      status = inspect(:sys.get_status(owners), limit: :infinity, printable_limit: :infinity)
+      assert status =~ "adopting: true"
       send(owners, {AdoptionRace, {:heir, tag}, :released})
       assert {:ok, %{memory: %{held_bytes: 0}}} = control(owners, 1, %{type: :status, owners: []})
       send(worker, :go)

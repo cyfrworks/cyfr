@@ -856,8 +856,8 @@ defmodule Locus.Backends.Owners do
     reservation(state, key, {:fence, answer})
   end
 
-  defp continue(state, :adopted, {:ok, tags}) when is_list(tags), do: adopted(state, tags)
-  defp continue(state, :adopted, _failed), do: %{state | adopting: false}
+  defp continue(state, {:adopted}, {:ok, tags}) when is_list(tags), do: adopted(state, tags)
+  defp continue(state, {:adopted}, _failed), do: %{state | adopting: false}
 
   defp continue(state, {:measured, home_id}, result), do: measured(state, home_id, result)
 
@@ -1753,7 +1753,7 @@ defmodule Locus.Backends.Owners do
     owners = self()
 
     {_ref, state} =
-      run(state, :adopted, @pool_timeout_ms, fn -> launcher.adopt(server, ledger, owners) end)
+      run(state, {:adopted}, @pool_timeout_ms, fn -> launcher.adopt(server, ledger, owners) end)
 
     %{state | adopting: true}
   end

@@ -523,6 +523,74 @@ defmodule Opus.Programs.TerminalTest do
       send(backend, :go)
     end
 
+    test "an unconfirmed close tells every tab unanswered, and a retry never says gone while it is owed",
+         %{ctx: ctx, row: row, fake: fake} do
+      {id, _session} = start!(ctx, row)
+      {:ok, _} = Programs.attach(ctx, id)
+      test = self()
+
+      second =
+        Task.async(fn ->
+          {:ok, _} = Programs.attach(ctx, id)
+          send(test, :second_attached)
+
+          receive do
+            {Opus.Programs, ^id, {:ended, reason}} -> reason
+          after
+            10_000 -> :not_told
+          end
+        end)
+
+      assert_receive :second_attached, 2_000
+      Scripted.refuse_once(fake, "close", "unavailable")
+      assert {:error, :unanswered} = Programs.close(ctx, id)
+
+      assert Task.await(second) == :unanswered
+      assert_receive {Opus.Programs, ^id, {:ended, mine}}, 2_000
+      assert mine == :unanswered
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: announced}, 2_000
+      assert announced == :unanswered
+      eventually(fn -> gone?(id) end, "the session to end")
+
+      Scripted.refuse_once(fake, "close", "unavailable")
+      assert {:error, :unanswered} = Programs.close(ctx, id)
+
+      # Another person learns nothing of it, owed or not.
+      {other, _user} = person!("owed-close-stranger")
+      assert {:ok, :already_gone} = Programs.close(other, id)
+
+      # Confirmed, it is gone.
+      assert {:ok, :already_gone} = Programs.close(ctx, id)
+    end
+
+    test "a close of a killed session's process waits on what it left",
+         %{ctx: ctx, row: row, fake: fake} do
+      {id, _session} = start!(ctx, row)
+      Scripted.hold(fake, "close")
+      Process.exit(terminal(id), :kill)
+      assert_receive {:held, "close", backend}, 2_000
+      eventually(fn -> gone?(id) end, "the session's process to be gone")
+
+      retry = Task.async(fn -> Programs.close(ctx, id) end)
+      assert Task.yield(retry, 300) == nil, "already gone was said of a close still owed"
+      send(backend, :go)
+      assert Task.await(retry) == {:ok, :already_gone}
+    end
+
+    test "a browser's session whose holder went is closed only once the close is confirmed",
+         %{ctx: ctx, fake: fake} do
+      browser = browser_row(ctx)
+      holder = spawn(fn -> Process.sleep(:infinity) end)
+      {:ok, id} = browser_start(ctx, browser.id, holder)
+      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+
+      Scripted.refuse_once(fake, "close", "unavailable")
+      Process.exit(holder, :kill)
+
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: reason}, 5_000
+      assert reason == :unanswered
+    end
+
     test "a close answers closed, already gone, or that the service did not answer",
          %{ctx: ctx, row: row, fake: fake, controller: controller} do
       {closed, _session} = start!(ctx, row)

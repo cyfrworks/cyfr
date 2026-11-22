@@ -795,6 +795,88 @@ defmodule PrismWeb.ProgramsLiveTest do
            )
   end
 
+  test "a second tab hears an unanswered Close as the first does, never as closed",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = driven_row!(athanor)
+
+    {:ok, session} =
+      Opus.Programs.start(person(user, athanor), row.id, %{rows: 24, cols: 80, args: []})
+
+    {first, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    ready!(first, session)
+    {second, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    ready!(second, session)
+    Scripted.refuse_once(fake, "close", "internal")
+
+    first |> element(~s([data-test="terminal-close"])) |> render_click()
+
+    assert eventually(fn -> has_element?(second, ~s([data-test="terminal-ended"])) end)
+
+    assert has_element?(
+             second,
+             ~s([data-test="terminal-ended"]),
+             "The close was not confirmed yet; CYFR ends the program."
+           )
+  end
+
+  test "a lost close task leaves the terminal's ending to be shown",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = driven_row!(athanor)
+
+    {:ok, session} =
+      Opus.Programs.start(person(user, athanor), row.id, %{rows: 24, cols: 80, args: []})
+
+    {view, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    ready!(view, session)
+    Scripted.hold(fake, "close")
+
+    task = close_task!(view)
+    assert_receive {:held, "close", service}, 2_000
+    Process.exit(task, :kill)
+    send(service, :go)
+
+    assert eventually(fn ->
+             has_element?(view, ~s([data-test="terminal-ended"]), "The program was closed.")
+           end)
+  end
+
+  test "a close task lost before it was answered gives the terminal back",
+       %{conn: conn, athanor: athanor, user: user} do
+    _fake = controller!()
+    row = driven_row!(athanor)
+
+    {:ok, session} =
+      Opus.Programs.start(person(user, athanor), row.id, %{rows: 24, cols: 80, args: []})
+
+    {view, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    ready!(view, session)
+    pid = terminal_pid(session)
+    :ok = :sys.suspend(pid)
+
+    try do
+      task = close_task!(view)
+      Process.exit(task, :kill)
+
+      assert eventually(fn -> render(view) =~ "Failed:" end),
+             "the page never heard that its Close was lost"
+
+      # Close is taken again.
+      assert is_pid(close_task!(view))
+    after
+      :sys.resume(pid)
+    end
+  end
+
+  # The task a click of Close started.
+  defp close_task!(view) do
+    before = Task.Supervisor.children(Prism.TaskSupervisor)
+    view |> element(~s([data-test="terminal-close"])) |> render_click()
+    assert [task] = Task.Supervisor.children(Prism.TaskSupervisor) -- before
+    task
+  end
+
   defp terminal_pid(session) do
     [{pid, _person}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
     pid

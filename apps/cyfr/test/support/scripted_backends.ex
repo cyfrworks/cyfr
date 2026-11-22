@@ -261,6 +261,12 @@ defmodule Cyfr.Test.ScriptedBackends do
       ]
   end
 
+  @doc """
+  The service's sweep: every owner whose lease has run out lapses, its
+  sessions ended, with no message of any client's to find it.
+  """
+  def lapse(%{agent: agent}), do: lapse_expired(agent)
+
   @doc "The sessions of `server`'s owner, by id."
   def sessions(%{agent: agent}, server) do
     Agent.get(agent, fn st ->
@@ -325,6 +331,9 @@ defmodule Cyfr.Test.ScriptedBackends do
   """
   def supervise_controller(opts) do
     opts = Keyword.merge([box: Opus.Programs.local(), name: Opus.Programs.via("local")], opts)
+    # The places outlive a box, as a test's box restarted must find them,
+    # and no test's outlive the test.
+    :ets.delete_all_objects(Opus.Programs.Box.Places)
     controller = ExUnit.Callbacks.start_supervised!({Opus.Programs.Box, opts})
     ExUnit.Callbacks.start_supervised!({Teardown, &quiesce/0}, shutdown: 10_000)
     controller

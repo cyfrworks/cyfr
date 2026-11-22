@@ -2369,6 +2369,24 @@ defmodule Opus.ProgramsTest do
         send(test, {:opened, self(), key, Programs.box_open(owner, self(), params, deadline)})
         holding(test, owner, Enum.uniq([key | keys]))
 
+      # As a terminal opens: by a courier, so the holder can close meanwhile.
+      {:open_beside, key, deadline} ->
+        holder = self()
+
+        params = %{
+          program: Opus.Programs.Definition.program_name(),
+          home_id: owner.server_id,
+          key: key,
+          mode: :run,
+          argv: Opus.Programs.Words.new([])
+        }
+
+        spawn(fn ->
+          send(test, {:opened, holder, key, Programs.box_open(owner, holder, params, deadline)})
+        end)
+
+        holding(test, owner, Enum.uniq([key | keys]))
+
       {:close, key} ->
         send(test, {:closed, self(), key, Programs.box_close(owner, owner.server_id, key)})
         holding(test, owner, List.delete(keys, key))
@@ -2384,6 +2402,18 @@ defmodule Opus.ProgramsTest do
         send(test, {:heard, self(), heard})
         holding(test, owner, keys)
     end
+  end
+
+  # The box killed, and the one its supervisor started in its place.
+  defp replaced_box!(controller) do
+    Process.exit(controller, :kill)
+
+    eventually(
+      fn -> GenServer.whereis(Programs.via("local")) not in [nil, controller] end,
+      "a box in the killed one's place"
+    )
+
+    GenServer.whereis(Programs.via("local"))
   end
 
   # The holder's open of `key`, awaited.
@@ -2594,6 +2624,12 @@ defmodule Opus.ProgramsTest do
       )
 
       tick(controller)
+
+      # The slot still lost, the service's own sweep gives the place back.
+      Scripted.lapse(fake)
+      assert %{^session => %{running: false}} = Scripted.sessions(fake, row.id)
+      refute Arca.ControlPlane.held?()
+
       send(holder, {:close, "k"})
       assert_receive {:closed, ^holder, "k", {:error, :unanswered}}, 1_000
       refute_received {:session, "close", _wire, _fields}
@@ -2643,6 +2679,138 @@ defmodule Opus.ProgramsTest do
       refute_receive {:session, "close", %{"session" => ^sibling}, _fields}, 200
     end
 
+    test "a close of a key another holder of the row holds is unanswered, never closed",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      a = box_holder(row)
+      b = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(a, "k")
+
+      send(b, {:close, "k"})
+      assert_receive {:closed, ^b, "k", answer}, 2_000
+      assert answer == {:error, :unanswered}
+      assert %{^session => %{running: true}} = Scripted.sessions(fake, row.id)
+    end
+
+    test "a close while the caller's open waits behind a ceiling's sync is unanswered, and that open never starts",
+         %{fake: fake, row: row} do
+      Cyfr.Test.Settings.put("athanor_program_memory_bytes", 2_147_483_648)
+      controller = start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, _} = box_open(holder, "before")
+      flush_sessions()
+
+      Cyfr.Test.Settings.put("athanor_program_memory_bytes", 1)
+      Scripted.hold(fake, "sync")
+      send(controller, :tick)
+      assert_receive {:held, "sync", held}, 2_000
+      on_exit(fn -> send(held, :go) end)
+
+      send(holder, {:open_beside, "after", soon()})
+
+      eventually(
+        fn ->
+          Enum.any?(:sys.get_state(controller).owners, fn {_key, entry} -> entry.parked != [] end)
+        end,
+        "the open to wait behind the sync"
+      )
+
+      send(holder, {:close, "after"})
+      assert_receive {:closed, ^holder, "after", answer}, 2_000
+      assert answer == {:error, :unanswered}
+
+      send(held, :go)
+      assert_receive {:opened, ^holder, "after", {:error, _withdrawn}}, 2_000
+      refute_receive {:session, "open", %{"key" => "after"}, _fields}, 300
+    end
+
+    test "an open whose worker was lost after dispatch leaves its key unanswered until an open of it answers",
+         %{fake: fake, row: row} do
+      controller = start_controller(fake)
+      holder = box_holder(row)
+      Scripted.hold(fake, "opened")
+
+      {:monitors, before} = Process.info(controller, :monitors)
+      send(holder, {:open_beside, "k", soon()})
+      assert_receive {:held, "opened", service}, 2_000
+      {:monitors, now} = Process.info(controller, :monitors)
+      assert [{:process, worker}] = now -- before
+
+      Process.exit(worker, :kill)
+      assert_receive {:opened, ^holder, "k", {:error, _lost}}, 2_000
+      send(service, :go)
+
+      send(holder, {:close, "k"})
+      assert_receive {:closed, ^holder, "k", answer}, 2_000
+      assert answer == {:error, :unanswered}
+      assert [{session, %{running: true}}] = Map.to_list(Scripted.sessions(fake, row.id))
+
+      assert {:ok, %{session: ^session, resumed: true}} = box_open(holder, "k")
+      send(holder, {:close, "k"})
+      assert_receive {:closed, ^holder, "k", :ok}, 3_000
+    end
+
+    test "a close asked of a dead holder waits for every place it left, the newest confirmed first",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      _kept = box_holder(row)
+      dying = box_holder(row)
+      assert {:ok, _} = box_open(dying, "a")
+      assert {:ok, _} = box_open(dying, "b")
+      flush_sessions()
+
+      Scripted.hold(fake, "close", 50_000)
+      send(dying, {:close, "a"})
+      assert_receive {:held, "close", first}, 2_000
+      on_exit(fn -> send(first, :go) end)
+
+      Scripted.hold(fake, "close", 40_000)
+      Process.exit(dying, :kill)
+      assert_receive {:held, "close", second}, 2_000
+      on_exit(fn -> send(second, :go) end)
+
+      left = Task.async(fn -> Programs.left_close(dying) end)
+      assert Task.yield(left, 100) == nil
+      send(second, :go)
+      assert Task.yield(left, 500) == nil, "one place's confirmation answered for both"
+      send(first, :go)
+      assert Task.await(left) == :ok
+    end
+
+    test "a replacement box waits on what a dead holder left, as the box before it would",
+         %{fake: fake, row: row} do
+      controller = start_controller(fake)
+      dying = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(dying, "k")
+      flush_sessions()
+
+      Scripted.hold(fake, "close", 50_000)
+      Process.exit(dying, :kill)
+      assert_receive {:held, "close", first}, 2_000
+      on_exit(fn -> send(first, :go) end)
+
+      Scripted.hold(fake, "close", 40_000)
+      replacement = replaced_box!(controller)
+
+      eventually(
+        fn -> :sys.get_state(replacement).boot end,
+        "the replacement to greet the service"
+      )
+
+      left = Task.async(fn -> Programs.left_close(dying) end)
+      assert Task.yield(left, 500) == nil, "a close was answered from an empty record"
+      assert_receive {:held, "close", second}, 3_000
+      send(second, :go)
+      assert Task.await(left) == :ok
+      assert %{^session => %{running: false}} = Scripted.sessions(fake, row.id)
+    end
+
+    test "a close of a holder the box has no confirmation for is never closed", %{fake: fake} do
+      start_controller(fake)
+      unknown = spawn(fn -> :ok end)
+      assert Programs.left_close(unknown) == {:error, :unanswered}
+    end
+
     test "a late first answer never closes the session a second open of the key was given",
          %{fake: fake, row: row} do
       start_controller(fake)
@@ -2666,6 +2834,36 @@ defmodule Opus.ProgramsTest do
       send(answer, :go)
       refute_receive {:session, "close", %{"session" => ^session}, _}, 1_000
       assert %{^session => %{running: true}} = Scripted.sessions(fake, row.id)
+    end
+
+    test "a late answer left for a second open that then fails is closed, so its key can be confirmed",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, _} = box_open(holder, "b")
+      flush_sessions()
+
+      # The first open's session stands, its answer past its deadline.
+      Scripted.hold(fake, "opened", 30_000)
+      send(holder, {:open_beside, "a", System.system_time(:millisecond) + 1_000})
+      assert_receive {:held, "opened", late}, 2_000
+      assert_receive {:opened, ^holder, "a", {:error, :deadline}}, 3_000
+
+      # The late answer comes while a second open is out, which then fails.
+      Scripted.hold(fake, "open", 30_000)
+      send(holder, {:open_beside, "a", soon()})
+      assert_receive {:held, "open", second}, 2_000
+      send(late, :go)
+      box = GenServer.whereis(Programs.via("local"))
+      eventually(fn -> map_size(:sys.get_state(box).opens) == 1 end, "the late answer to settle")
+
+      Scripted.refuse_once(fake, "open", "capacity")
+      send(second, :go)
+      assert_receive {:opened, ^holder, "a", {:error, _refused}}, 2_000
+
+      assert_receive {:session, "close", %{"session" => _late}, _fields}, 2_000
+      send(holder, {:close, "a"})
+      assert_receive {:closed, ^holder, "a", :ok}, 3_000
     end
 
     test "a success queued before the deadline and handled after it is closed, never given",

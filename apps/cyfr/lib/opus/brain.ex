@@ -144,7 +144,9 @@ defmodule Opus.Brain do
   ## Its end
 
   It ends, telling the attendant `{Opus.Brain, ref, {:ended, reason}}`
-  once, when it is told (`close/1`, `:closed`), when a later open replaces
+  once, when it is told (`close/1`: `:closed` once the box has confirmed
+  the close, `:unanswered` when it did not, and neither before it
+  answered), when a later open replaces
   it (`:replaced`), when its session is forgotten (`forgotten/2` or a
   cleanup of its thread, `:forgotten`), on a line lost unread
   (`:dropped`), on a line that does
@@ -291,11 +293,12 @@ defmodule Opus.Brain do
     do: GenServer.cast(pid, {:read_on, ref, self(), boot, seq})
 
   @doc """
-  End the session: its driver's process is closed, the attendant told
-  `:closed`. `:ok` means that the place is back; `{:error, :unanswered}`
-  that Opus still owes the close, which the box that opened the session
-  retries (`Opus.Programs.Box`, "Sessions"). A holder that ended before it
-  was asked left the same close, which is waited on as its own.
+  End the session: its driver's process is closed, then the attendant is
+  told `:closed` or `:unanswered` as this answers. `:ok` means that the
+  place is back; `{:error, :unanswered}` that Opus still owes the close,
+  which its box retries, or has no confirmation of it
+  (`Opus.Programs.Box`, "Places"). A holder that ended before it was asked
+  left its closes, and each is waited on.
   """
   @spec close(brain()) :: :ok | {:error, :unanswered}
   def close({pid, ref}) when is_reference(ref) do
@@ -914,8 +917,9 @@ defmodule Opus.Brain do
     do: {:reply, {:error, :not_attached}, state}
 
   def handle_call({:close, ref}, _from, %{ref: ref} = state) do
-    state = ended(state, :closed)
-    {:stop, :normal, disconnect(state), %{state | reader: nil, grant: nil, session: nil}}
+    closed = disconnect(state)
+    state = ended(state, if(closed == :ok, do: :closed, else: :unanswered))
+    {:stop, :normal, closed, %{state | reader: nil, grant: nil, session: nil}}
   end
 
   def handle_call({:close, _ref}, _from, state), do: {:reply, {:error, :unanswered}, state}
@@ -1127,14 +1131,15 @@ defmodule Opus.Brain do
     "brain-" <> binary_part(digest, 0, 40)
   end
 
-  # What the close of its session answered, `:ok` with none held.
+  # What the close of its session answered; with none held, nothing was
+  # confirmed.
   defp disconnect(state) do
     if state.reader, do: Process.exit(state.reader, :kill)
 
     closed =
       if state.session,
         do: Programs.box_close(state.owner, state.owner.server_id, key(state)),
-        else: :ok
+        else: {:error, :unanswered}
 
     if state.grant, do: Programs.release(state.owner)
     closed

@@ -136,11 +136,11 @@ defmodule Opus.Programs.Box do
 
   A close is an obligation the box keeps until the backend confirms it,
   which it does only once the session's place is back
-  (`Prima.LocusBackends`, "A close"). The box keeps with each session the
-  grant that opened it, and signs every try with that grant at the
-  service's current boot, so a close needs no owner: an owner dropped here,
-  released, replaced or stood down leaves its sessions as closes owed, and
-  each closes only what that grant opened.
+  (`Prima.LocusBackends`, "A close"). Every try is signed as the
+  generation and epoch that opened the session, at the service's current
+  boot, so a close needs no owner: an owner dropped here, released,
+  replaced or stood down leaves its sessions as closes owed, and each
+  closes only what that version opened.
 
   A close that fails is sent again on every tick, and once the service is
   greeted, while this member holds its slot. Without the slot, or before a
@@ -149,13 +149,34 @@ defmodule Opus.Programs.Box do
   again leaves the settling to the service, whose lease lapses and drains
   the session.
 
-  A holder closing its key's session is answered `:ok` once the backend
-  has confirmed the close, and `{:error, :unanswered}` when it answered
-  otherwise or its close window passed, the close still owed; a second
-  close of the key, or one asked after its holder died, waits on the
-  first. Only then does a holder release its share; and the box sends no
-  release of an owner while a close for it is out, so a release never
-  outruns a close the box owes.
+  ## Places
+
+  What may hold a place on the service is written to one table before the
+  service is asked (`init_places/0`): each open sent, by its reference
+  while the session it made is not known, then each session, by its id,
+  with its key, its holder and the version that opened it. The table
+  outlives the box, so a box in a dead one's place owes a close for every
+  session the dead one held or owed. Only the service settles a row: a
+  close it confirmed, a refusal that started nothing, or the key's next
+  open it answered, which either names the session an unanswered open
+  made or starts only once nothing of that one is left.
+
+  A close is answered from that table and the service's confirmations,
+  and from nothing else. It is `:ok` once the service confirmed every
+  place it asks of: every place of the key for a holder, every place it
+  left for a holder that died. It waits while each unconfirmed one is a
+  close owed. Otherwise it is `{:error, :unanswered}`: for a place another
+  holder holds, for an open whose session is not known, and where there is
+  no confirmation at all, since holding the row says nothing of a key. A
+  close also withdraws its holder's opens of the key still out, so one
+  parked never starts and one sent is closed once it answers.
+
+  A confirmation is kept while its holder lives, which may ask again,
+  and past that as long as a close's caller may wait
+  (`close_timeout_ms/0`), so a close asked as its holder ended still hears
+  it. A holder releases its share only after its close was answered; and
+  the box sends no release of an owner while a close for it is out, so a
+  release never outruns a close the box owes.
 
   ## Shares
 
@@ -183,6 +204,12 @@ defmodule Opus.Programs.Box do
   # margin is for its transport; a holder's call waits a margin beyond both.
   @close_transport_ms 3_000
   @close_call_margin_ms 2_000
+
+  # What may hold a place on the service ("Places").
+  @places Module.concat(__MODULE__, Places)
+  # An open's refusals that may follow its process's start: its answer was
+  # lost, its spawn was not confirmed, or its owner drained as it started.
+  @maybe_started [:backends_unavailable, :internal, :lapsed]
 
   @release_wait_ms 3_000
 
@@ -239,15 +266,17 @@ defmodule Opus.Programs.Box do
       homes: %{},
       # Sessions, all the box's: the session
       # each key's holder was given, {athanor, server, home_id, key} =>
-      # %{session, holder, grant}, the grant the one that opened it; each
-      # open in flight, ref => its record; the monitor of each open's
-      # process, monitor => ref; and each session the box owes a close,
-      # session => %{owner, key, holder, grant, owed_at, inflight, waiters},
-      # inflight the monitor of the process sending it.
+      # %{session, holder}; each open in flight, ref => its record; the
+      # monitor of each open's process, monitor => ref; each session the
+      # box owes a close, session => %{owner, version, inflight}, the
+      # version the one that opened it and inflight the monitor of the
+      # process sending it; and whoever waits on closes, each with the
+      # sessions not yet confirmed for it.
       sessions: %{},
       opens: %{},
       open_tasks: %{},
       closing: %{},
+      waits: [],
       # Lease maintenance, sent first; then syncs and status reads.
       urgent: :queue.new(),
       queue: :queue.new()
@@ -306,6 +335,29 @@ defmodule Opus.Programs.Box do
 
   defp close_window_ms, do: LocusBackends.close_wait_ms() + @close_transport_ms
 
+  @doc """
+  Make the table of places ("Places"), owned by the calling process, if
+  there is none: the process that supervises the programs' tree calls it
+  (`Opus.Programs.start_link/1`), so the table outlives that tree and
+  every box in it.
+  """
+  @spec init_places() :: :ok
+  def init_places do
+    if :ets.whereis(@places) == :undefined, do: :ets.new(@places, [:named_table, :public, :set])
+    :ok
+  end
+
+  @doc """
+  Who was given a place under the session key `key` that is still on
+  record: each holder, and whose the session is as its open named it
+  (`principal`).
+  """
+  @spec left(String.t()) :: [{pid(), term()}]
+  def left(key) when is_binary(key) do
+    for {_id, %{key: {_athanor, _server, _home, ^key}} = place} <- :ets.tab2list(@places),
+        do: {place.holder, place.principal}
+  end
+
   @doc "How long a status or a home message waits on a box."
   @spec control_timeout_ms() :: pos_integer()
   def control_timeout_ms, do: 2 * @control_timeout_ms
@@ -331,7 +383,7 @@ defmodule Opus.Programs.Box do
       })
 
     send(self(), :tick)
-    {:ok, state}
+    {:ok, inherited(state)}
   end
 
   @impl true
@@ -392,32 +444,21 @@ defmodule Opus.Programs.Box do
   end
 
   # A holder ends its key's session: closing it is the box's obligation
-  # from here until the backend confirms it, and a close already owed for
-  # the key is waited on. Nothing owed is `:ok` only to a holder of the
-  # owner with no open of the key out: of any other the box cannot say
-  # that nothing runs.
+  # from here until the backend confirms it, and the holder hears `:ok`
+  # only of every place of the key confirmed ("Places").
   def handle_call({:session_close, owner, home_id, session_key}, {pid, _tag} = from, state) do
-    key = {owner.athanor_id, owner.server_id}
     sk = {owner.athanor_id, owner.server_id, home_id, session_key}
-
-    case state.sessions[sk] do
-      %{holder: ^pid} = held ->
-        state = %{state | sessions: Map.delete(state.sessions, sk)}
-        {:noreply, owe_close(state, sk, held, from)}
-
-      _another_or_none ->
-        opening? = Enum.any?(state.opens, &match?({_ref, %{key: ^sk, holder: ^pid}}, &1))
-        none? = not opening? and holds?(state, %{owner: key, holder: pid})
-        await_close(state, from, &(&1.key == sk), none?)
-    end
+    state = withdraw_opens(state, &(&1 == sk and &2 == pid))
+    state = owe_sessions(state, &(&1 == sk and &2.holder == pid))
+    await_places(state, from, &(&1.key == sk))
   end
 
   # Asked of a holder that has died: what it left is owed, as at its exit,
-  # and the caller waits on that close.
+  # and the caller hears `:ok` only of every place it left confirmed.
   def handle_call({:left_close, holder}, from, state) do
+    state = withdraw_opens(state, fn _sk, opener -> opener == holder end)
     state = abandon_sessions(state, holder)
-    opening? = Enum.any?(state.opens, &match?({_ref, %{holder: ^holder}}, &1))
-    await_close(state, from, &(&1.holder == holder), not opening?)
+    await_places(state, from, &(&1.holder == holder))
   end
 
   # A holder is stopping: it holds the owner no more, and once no holder
@@ -508,6 +549,7 @@ defmodule Opus.Programs.Box do
   @impl true
   def handle_info(:tick, state) do
     state = periods(state)
+    forget_confirmed()
     Process.send_after(self(), :tick, state.tick_ms)
 
     state =
@@ -1793,9 +1835,6 @@ defmodule Opus.Programs.Box do
       |> Map.merge(params)
       |> Map.put(:timeout_ms, max(deadline - now_ms(), 0) + @late_open_ms)
 
-    {_pid, mref} =
-      spawn_monitor(fn -> send(box, {:session_opened, ref, Session.open(grant, params)}) end)
-
     open = %{
       owner: key,
       grant: grant,
@@ -1806,6 +1845,12 @@ defmodule Opus.Programs.Box do
       deadline: deadline,
       timer: Process.send_after(self(), {:open_deadline, ref}, max(deadline - now_ms(), 0))
     }
+
+    # On record before the service can have been asked.
+    put_place(ref, place(open))
+
+    {_pid, mref} =
+      spawn_monitor(fn -> send(box, {:session_opened, ref, Session.open(grant, params)}) end)
 
     %{
       state
@@ -1824,7 +1869,14 @@ defmodule Opus.Programs.Box do
     {open, opens} = Map.pop(state.opens, ref)
     if open.timer, do: Process.cancel_timer(open.timer)
     state = %{state | opens: opens}
+    open_answered(state, ref, open, result)
 
+    state
+    |> open_settled(open, result)
+    |> owe_unclaimed(open.key)
+  end
+
+  defp open_settled(state, open, result) do
     case result do
       {:ok, %{session: session, resumed: resumed}} ->
         if open.from != nil and now_ms() <= open.deadline and holds?(state, open) and
@@ -1833,7 +1885,7 @@ defmodule Opus.Programs.Box do
           give(state, open, session)
         else
           if open.from, do: GenServer.reply(open.from, {:error, :deadline})
-          unclaimed(state, open, session)
+          state
         end
 
       # Refused for a boot the service no longer runs: the box greets the
@@ -1876,30 +1928,33 @@ defmodule Opus.Programs.Box do
     state =
       case state.sessions[open.key] do
         %{session: ^session} -> state
-        %{session: _before} = held -> owe_close(state, open.key, held)
+        %{session: before} -> owe_close(state, open.key, before)
         nil -> state
       end
 
-    entry = %{
-      session: session,
-      holder: open.holder,
-      grant: open.grant,
-      ended: Map.get(open.params, :ended)
-    }
+    # The place is now this holder's, whichever open made it.
+    put_place(session, place(open))
+    entry = %{session: session, holder: open.holder, ended: Map.get(open.params, :ended)}
 
     %{state | sessions: Map.put(state.sessions, open.key, entry)}
   end
 
-  defp unclaimed(state, open, session) do
-    given? = match?(%{session: ^session}, state.sessions[open.key])
+  # A place of the key neither given, owed nor awaited by another open out
+  # for it is owed, however the open that just ended went: nothing else
+  # would ever close it.
+  defp owe_unclaimed(state, key) do
+    if Enum.any?(state.opens, &match?({_ref, %{key: ^key, from: {_, _}}}, &1)) do
+      state
+    else
+      given = with %{session: session} <- state.sessions[key], do: session
 
-    awaited? =
-      Enum.any?(state.opens, fn {_ref, other} ->
-        other.key == open.key and other.from != nil
-      end)
+      unclaimed =
+        for {session, %{key: ^key, closed_at: nil}} <- :ets.tab2list(@places),
+            is_binary(session) and session != given and not Map.has_key?(state.closing, session),
+            do: session
 
-    late = %{session: session, holder: open.holder, grant: open.grant}
-    if given? or awaited?, do: state, else: owe_close(state, open.key, late)
+      Enum.reduce(unclaimed, state, &owe_close(&2, key, &1))
+    end
   end
 
   # A holder that died leaves the box its sessions to close; its opens in
@@ -1914,7 +1969,7 @@ defmodule Opus.Programs.Box do
 
     Enum.reduce(gone, state, fn {{athanor, _server, _home, _key} = sk, held}, acc ->
       announce_ended(athanor, Map.get(held, :ended))
-      owe_close(acc, sk, held)
+      owe_close(acc, sk, held.session)
     end)
   end
 
@@ -1928,56 +1983,56 @@ defmodule Opus.Programs.Box do
     :ok
   end
 
-  # A close the box owes for a session it held, signed by the grant that
+  # A close the box owes for a session it held, signed as the version that
   # opened it: sent now, and again on every tick, until the backend
   # confirms it. Nothing else forgets it.
-  defp owe_close(state, sk, %{session: session, holder: holder, grant: grant}, waiter \\ nil) do
-    closing =
-      Map.put_new(state.closing, session, %{
-        owner: owner_of(sk),
-        key: sk,
-        holder: holder,
-        grant: grant,
-        owed_at: System.unique_integer([:monotonic]),
-        inflight: nil,
-        waiters: []
-      })
-
-    wait_on(%{state | closing: closing}, session, if(waiter, do: [waiter], else: []))
+  defp owe_close(state, sk, session) do
+    [{^session, %{version: version}}] = :ets.lookup(@places, session)
+    owed = %{owner: owner_of(sk), version: version, inflight: nil}
+    send_close(%{state | closing: Map.put_new(state.closing, session, owed)}, session)
   end
 
   defp owe_sessions(state, gone?) do
     {gone, kept} = Enum.split_with(state.sessions, fn {sk, held} -> gone?.(sk, held) end)
     state = %{state | sessions: Map.new(kept)}
-    Enum.reduce(gone, state, fn {sk, held}, acc -> owe_close(acc, sk, held) end)
+    Enum.reduce(gone, state, fn {sk, held}, acc -> owe_close(acc, sk, held.session) end)
   end
 
   defp owner_of({athanor, server, _home, _key}), do: {athanor, server}
 
-  # A close asked of a session no longer recorded waits on the last close
-  # owed that `owed?` takes: the service starts a key's process only once
-  # the one before it is gone. With none, `none?` says whether the box
-  # knows that nothing runs.
-  defp await_close(state, from, owed?, none?) do
-    owed = for {session, record} <- state.closing, owed?.(record), do: {record.owed_at, session}
+  # The one answer to a close ("Places"): `:ok` of places all confirmed, a
+  # wait while each other is a close owed, and unanswered otherwise, no
+  # place on record included.
+  defp await_places(state, from, asked?) do
+    places = for {id, place} <- :ets.tab2list(@places), asked?.(place), do: {id, place}
+    left = for {id, %{closed_at: nil}} <- places, do: id
 
-    case Enum.max(owed, fn -> nil end) do
-      nil -> {:reply, if(none?, do: :ok, else: {:error, :unanswered}), state}
-      {_owed_at, session} -> {:noreply, wait_on(state, session, [from])}
+    cond do
+      places == [] or not Enum.all?(left, &Map.has_key?(state.closing, &1)) ->
+        {:reply, {:error, :unanswered}, state}
+
+      left == [] ->
+        {:reply, :ok, state}
+
+      true ->
+        state = %{state | waits: [%{from: from, left: MapSet.new(left)} | state.waits]}
+        {:noreply, Enum.reduce(left, state, &send_close(&2, &1))}
     end
   end
 
-  defp wait_on(state, session, waiters) do
-    record = state.closing[session]
-    record = %{record | waiters: waiters ++ record.waiters}
-    send_close(%{state | closing: Map.put(state.closing, session, record)}, session)
+  # A confirmed close answers whoever waited on it alone; the rest wait on
+  # what else they asked of.
+  defp confirmed(state, session) do
+    waits = Enum.map(state.waits, &%{&1 | left: MapSet.delete(&1.left, session)})
+    {done, waits} = Enum.split_with(waits, &Enum.empty?(&1.left))
+    Enum.each(done, &GenServer.reply(&1.from, :ok))
+    %{state | waits: waits}
   end
 
-  # Whoever waits on a close hears `:ok` only of one the backend confirmed,
-  # and `{:error, :unanswered}` of one still owed.
-  defp answer_waiters(record, answer) do
-    Enum.each(record.waiters, &GenServer.reply(&1, answer))
-    %{record | waiters: []}
+  defp unanswered(state, session) do
+    {told, waits} = Enum.split_with(state.waits, &MapSet.member?(&1.left, session))
+    Enum.each(told, &GenServer.reply(&1.from, {:error, :unanswered}))
+    %{state | waits: waits}
   end
 
   defp send_close(state, session) do
@@ -1985,15 +2040,14 @@ defmodule Opus.Programs.Box do
 
     cond do
       state.boot == nil or plane_generation(state) == :not_owner ->
-        record = answer_waiters(record, {:error, :unanswered})
-        %{state | closing: Map.put(state.closing, session, record)}
+        unanswered(state, session)
 
       record.inflight != nil ->
         state
 
       true ->
         box = self()
-        grant = %{record.grant | boot: state.boot}
+        grant = grant(state, record.owner, record.version)
         window = close_window_ms()
 
         {_pid, inflight} =
@@ -2012,13 +2066,14 @@ defmodule Opus.Programs.Box do
 
       record ->
         if record.inflight, do: Process.demonitor(record.inflight, [:flush])
-        closed? = result == :ok
-        record = answer_waiters(record, if(closed?, do: :ok, else: {:error, :unanswered}))
 
-        if closed? do
-          %{state | closing: Map.delete(state.closing, session)}
+        if result == :ok do
+          [{^session, place}] = :ets.lookup(@places, session)
+          put_place(session, %{place | closed_at: now_ms()})
+          confirmed(%{state | closing: Map.delete(state.closing, session)}, session)
         else
           state = %{state | closing: Map.put(state.closing, session, %{record | inflight: nil})}
+          state = unanswered(state, session)
 
           # Refused for a boot the service no longer runs: it is greeted,
           # and the close is sent again under the one it runs.
@@ -2028,6 +2083,100 @@ defmodule Opus.Programs.Box do
           end
         end
     end
+  end
+
+  # ============================================================================
+  # Places
+  # ============================================================================
+
+  defp place(open) do
+    %{
+      key: open.key,
+      holder: open.holder,
+      principal: Map.get(open.params, :principal),
+      version: Map.take(open.grant, [:generation, :epoch]),
+      closed_at: nil
+    }
+  end
+
+  defp put_place(id, place), do: :ets.insert(@places, {id, place})
+
+  # An open answered is on record as its session, and settles the key's
+  # opens that were never answered; one refused is forgotten only when the
+  # refusal can follow no start.
+  defp open_answered(state, ref, open, {:ok, %{session: session}}) do
+    :ets.delete(@places, ref)
+    :ets.insert_new(@places, {session, place(open)})
+
+    for {id, %{key: key}} <- :ets.tab2list(@places),
+        key == open.key and is_reference(id) and not Map.has_key?(state.opens, id),
+        do: :ets.delete(@places, id)
+
+    :ok
+  end
+
+  defp open_answered(_state, ref, _open, {:error, reason}) do
+    if started_nothing?(reason), do: :ets.delete(@places, ref)
+    :ok
+  end
+
+  defp started_nothing?({:refused, code, _boot}), do: code not in @maybe_started
+  defp started_nothing?({:invalid, _error}), do: true
+  defp started_nothing?(_unanswered), do: false
+
+  # What the box before this one held or owed, owed by this one: sent once
+  # the service is greeted.
+  defp inherited(state) do
+    owed =
+      for {session, %{closed_at: nil} = place} <- :ets.tab2list(@places),
+          is_binary(session),
+          into: %{},
+          do: {session, %{owner: owner_of(place.key), version: place.version, inflight: nil}}
+
+    %{state | closing: owed}
+  end
+
+  defp forget_confirmed do
+    before = now_ms() - close_timeout_ms()
+
+    for {id, %{closed_at: at, holder: holder}} <- :ets.tab2list(@places),
+        at != nil and at < before and not Process.alive?(holder),
+        do: :ets.delete(@places, id)
+
+    :ok
+  end
+
+  # The opens out that `theirs?` takes by key and holder, withdrawn by a
+  # close: one parked never starts, and one sent is closed as it answers,
+  # with no caller to give it to.
+  defp withdraw_opens(state, theirs?) do
+    opens =
+      Map.new(state.opens, fn {ref, open} ->
+        if open.from != nil and theirs?.(open.key, open.holder) do
+          Process.cancel_timer(open.timer)
+          GenServer.reply(open.from, {:error, :not_held})
+          {ref, %{open | from: nil, timer: nil}}
+        else
+          {ref, open}
+        end
+      end)
+
+    owners =
+      Map.new(state.owners, fn {{athanor, server} = key, entry} ->
+        {withdrawn, parked} =
+          Enum.split_with(entry.parked, fn {_pref, holder, params, _deadline, _from, _timer} ->
+            theirs?.({athanor, server, params.home_id, params.key}, holder)
+          end)
+
+        for {_pref, _holder, _params, _deadline, from, timer} <- withdrawn do
+          Process.cancel_timer(timer)
+          GenServer.reply(from, {:error, :not_held})
+        end
+
+        {key, %{entry | parked: parked}}
+      end)
+
+    %{state | opens: opens, owners: owners}
   end
 
   # The owners a close is out for: their release waits for its answer.

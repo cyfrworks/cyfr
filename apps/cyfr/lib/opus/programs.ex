@@ -122,7 +122,12 @@ defmodule Opus.Programs do
   alone, and its holders, refused by the service once its lease lapses,
   hold their owners again.
   """
-  def start_link(opts \\ []), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(opts \\ []) do
+    # Here, in the process that supervises this tree: what the boxes hold
+    # on the service outlives them (`Opus.Programs.Box`, "Places").
+    Box.init_places()
+    Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
+  end
 
   @impl true
   def init(opts) do
@@ -303,7 +308,7 @@ defmodule Opus.Programs do
   # ============================================================================
 
   @typedoc "Why a terminal session ended (`Opus.Programs.Terminal`)."
-  @type ended :: :exited | :closed | :idle | :row_changed | :standing
+  @type ended :: :exited | :closed | :unanswered | :idle | :row_changed | :standing
 
   @typedoc """
   Who calls: a person at a screen, as a `Sanctum.Context` the gate reads as
@@ -483,6 +488,7 @@ defmodule Opus.Programs do
 
       spec = [
         name: terminal_name(id, principal),
+        principal: principal,
         id: id,
         athanor_id: athanor_id,
         user_id: user_id,
@@ -650,10 +656,11 @@ defmodule Opus.Programs do
   caller waits for it: `{:ok, :closed}` once the service confirmed it,
   `{:ok, :already_gone}` for a session that is not running (or not the
   caller's), and `{:error, :unanswered}` when the service did not
-  confirm it in time, the box still owing the close. One whose process
-  ended while it was asked waits on the close that process left, and is
+  confirm it in time, the box still owing the close. A session whose
+  process has ended waits on the close that process left, and is
   `:already_gone` only once that is confirmed. The session ends
-  `:closed` either way. A person closes their own sessions, those their
+  `:closed` of a close confirmed and `:unanswered` of one that was not,
+  said so to every process attached. A person closes their own sessions, those their
   turns started and their browser's; a turn or the browser closes only
   its own.
   """
@@ -663,21 +670,34 @@ defmodule Opus.Programs do
     with {:ok, principal} <- who(caller) do
       case terminal_pid(session_id, principal, :closing) do
         nil ->
-          {:ok, :already_gone}
+          close_gone(session_id, principal)
 
         pid ->
-          close_terminal(pid, principal)
+          close_terminal(pid, principal, session_id)
       end
     end
   catch
     :exit, _ -> {:error, :unanswered}
   end
 
-  defp close_terminal(pid, principal) do
+  defp close_terminal(pid, principal, session_id) do
     GenServer.call(pid, {:close, principal}, Box.close_timeout_ms() + @answer_margin_ms)
   catch
     :exit, {:timeout, _} -> {:error, :unanswered}
-    :exit, _ -> with :ok <- left_close(pid), do: {:ok, :already_gone}
+    :exit, _ -> close_gone(session_id, principal)
+  end
+
+  # A session with no process is gone once the close of what its process
+  # left is confirmed. Who may wait on that is who could have closed it,
+  # read from the place's record as from the registry: to anyone else, as
+  # for an id nothing was given under, it is gone.
+  defp close_gone(session_id, principal) do
+    theirs = fn {_holder, whose} -> reaches?(principal, whose, :closing) end
+
+    case Enum.find(Box.left(session_id), theirs) do
+      {holder, _whose} -> with :ok <- left_close(holder), do: {:ok, :already_gone}
+      nil -> {:ok, :already_gone}
+    end
   end
 
   @doc """
@@ -1011,11 +1031,11 @@ defmodule Opus.Programs do
   @doc """
   The calling holder's key's session ends: the box closes it, and owes the
   close until the backend confirms it. Answers `:ok` once the backend has
-  confirmed the close, and so the place is back (or the box knows that
-  nothing of the key runs), and `{:error, :unanswered}` when it did not,
-  the close window passed or the box could send nothing, the close still
-  owed; either way only then, so the holder's release of the owner after
-  it never outruns it.
+  confirmed every place of the key, and so they are back, and
+  `{:error, :unanswered}` when it did not, the close window passed, the
+  box could send nothing or has no confirmation to answer from
+  (`Opus.Programs.Box`, "Places"); either way only then, so the holder's
+  release of the owner after it never outruns it.
   """
   @spec box_close(map(), String.t() | nil, String.t()) :: :ok | {:error, :unanswered}
   def box_close(owner, home_id, key) do
@@ -1030,9 +1050,10 @@ defmodule Opus.Programs do
   end
 
   @doc """
-  The holder `holder` has died, and what it left is closed: `:ok` once the
-  close it left is confirmed, or it left none, and `{:error, :unanswered}`
-  while the box still owes it.
+  The holder `holder` has died, and what it left is closed: `:ok` once
+  every place it left is confirmed, by this box or one in its place, and
+  `{:error, :unanswered}` otherwise, with no confirmation on record
+  included.
   """
   @spec left_close(pid()) :: :ok | {:error, :unanswered}
   def left_close(holder) when is_pid(holder) do

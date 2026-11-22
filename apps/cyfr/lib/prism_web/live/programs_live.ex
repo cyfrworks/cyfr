@@ -336,9 +336,10 @@ defmodule PrismWeb.ProgramsLive do
   def handle_event(
         event,
         %{"session" => session},
-        %{assigns: %{terminal: %{session: session, closing: true}}} = socket
+        %{assigns: %{terminal: %{session: session, closing: task}}} = socket
       )
-      when event in ~w(terminal_input terminal_written terminal_resize terminal_keep terminal_close),
+      when is_reference(task) and
+             event in ~w(terminal_input terminal_written terminal_resize terminal_keep terminal_close),
       do: {:reply, %{}, socket}
 
   # Each piece the hook sends is answered before it sends the next, so
@@ -395,12 +396,13 @@ defmodule PrismWeb.ProgramsLive do
     tag = CyfrWeb.ContextGuard.capture(ctx)
     page = self()
 
-    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-      result = run_to_end(fn -> Opus.Programs.close(ctx, session) end)
-      send(page, {:closed, tag, session, result})
-    end)
+    {:ok, task} =
+      Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        result = run_to_end(fn -> Opus.Programs.close(ctx, session) end)
+        send(page, {:closed, tag, session, result})
+      end)
 
-    {:noreply, closing(socket, session, true)}
+    {:noreply, closing(socket, session, task)}
   end
 
   def handle_event("reset_home", %{"name" => name}, socket) do
@@ -530,6 +532,19 @@ defmodule PrismWeb.ProgramsLive do
 
   def handle_info({:closed, tag, session, result}, socket),
     do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, closed(&1, session, result)})
+
+  # A Close's task lost before it answered gives the terminal back. The
+  # session says its ending itself, if it reached one.
+  def handle_info(
+        {:DOWN, task, :process, _pid, _reason},
+        %{assigns: %{terminal: %{closing: task} = terminal}} = socket
+      ) do
+    socket = assign(socket, :terminal, %{terminal | closing: nil})
+
+    if terminal.ended,
+      do: {:noreply, socket},
+      else: {:noreply, put_flash(socket, :error, "Failed: #{error_message(:unavailable)}")}
+  end
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
@@ -1037,7 +1052,7 @@ defmodule PrismWeb.ProgramsLive do
       kept: false,
       ended: nil,
       attached: false,
-      closing: false,
+      closing: nil,
       delivery: nil,
       back: back
     })
@@ -1058,35 +1073,38 @@ defmodule PrismWeb.ProgramsLive do
 
   # What a Close answered, once it did.
   defp closed(socket, session, {:ok, _closed_or_gone}),
-    do: socket |> closing(session, false) |> ended(session, :closed)
+    do: socket |> answered(session) |> ended(session, :closed)
 
   defp closed(socket, session, {:error, :unanswered}),
-    do: socket |> closing(session, false) |> ended(session, :unanswered)
+    do: socket |> answered(session) |> ended(session, :unanswered)
 
   defp closed(socket, session, {:error, reason}) do
     socket
-    |> closing(session, false)
+    |> answered(session)
     |> put_flash(:error, "Failed: #{error_message(reason)}")
   end
 
-  defp closing(
-         %{assigns: %{terminal: %{session: session} = terminal}} = socket,
-         session,
-         closing?
-       ),
-       do: assign(socket, :terminal, %{terminal | closing: closing?})
+  # The shown session's Close is out while its task is watched.
+  defp closing(%{assigns: %{terminal: %{session: session} = terminal}} = socket, session, task),
+    do: assign(socket, :terminal, %{terminal | closing: Process.monitor(task)})
 
-  defp closing(socket, _session, _closing?), do: socket
+  defp closing(socket, _session, _task), do: socket
+
+  defp answered(
+         %{assigns: %{terminal: %{session: session, closing: task} = terminal}} = socket,
+         session
+       )
+       when is_reference(task) do
+    Process.demonitor(task, [:flush])
+    assign(socket, :terminal, %{terminal | closing: nil})
+  end
+
+  defp answered(socket, _session), do: socket
 
   # The shown session ended: its screen stays as it was, read-only, with
   # the ending said beside it, until the person closes the frame. The
   # first ending is the one said; a later answer for the gone session
   # (an acknowledgement the browser sent after) changes nothing.
-  # A session says `:closed` as it ends, whatever its close was answered:
-  # while one is out, the ending said is that answer's (`closed/3`).
-  defp ended(%{assigns: %{terminal: %{session: session, closing: true}}} = socket, session, _),
-    do: socket
-
   defp ended(
          %{assigns: %{terminal: %{session: session, ended: nil} = terminal}} = socket,
          session,
