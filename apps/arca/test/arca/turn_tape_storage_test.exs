@@ -153,31 +153,51 @@ defmodule Arca.TurnTapeStorageTest do
         fence: turn.fence
       })
 
+    asks =
+      Enum.map(calls, fn {id, tool, action} ->
+        {:ask,
+         %{
+           kind: "tool",
+           tool: tool,
+           action: action,
+           recovery: "replay_safe",
+           child_execution_id: "exec_child_" <> id,
+           idempotency_key: "call:#{turn.id}:1:#{id}",
+           call: %{
+             kind: "tool_call",
+             content: "#{tool}.#{action}",
+             payload: %{
+               "tool_call_id" => id,
+               "name" => "#{tool}.#{action}",
+               "tool" => tool,
+               "action" => action,
+               "arguments" => %{"path" => "a.txt"},
+               "provider_data" => %{"thought_signature" => "sig-" <> id},
+               "kind" => "read",
+               "step_id" => step.id
+             }
+           }
+         }}
+      end)
+
     {:ok, recorded} =
-      TurnStorage.record_response(actor, turn.id, step.id, %{
-        fence: turn.fence,
-        text: "On it.",
-        usage: %{"input_tokens" => 10, "output_tokens" => 3},
-        stop_reason: "tool_call",
-        tool_calls:
-          Enum.map(calls, fn {id, tool, action} ->
-            %{
-              tool_call_id: id,
-              name: "#{tool}.#{action}",
-              tool: tool,
-              action: action,
-              arguments: %{"path" => "a.txt"},
-              provider_data: %{"thought_signature" => "sig-" <> id},
-              kind: "read",
-              recovery: "replay_safe",
-              idempotency_key: "call:#{turn.id}:1:#{id}",
-              child_execution_id: "exec_child_" <> id
-            }
-          end)
+      TurnStorage.commit_events(actor, scope(turn), %{
+        events:
+          [{:text, %{text: "On it."}}] ++
+            asks ++
+            [{:usage, usage(%{"input_tokens" => 10, "output_tokens" => 3})}, {:stop, "tool_call"}],
+        position: {:step, step.id}
       })
 
     {step, recorded}
   end
+
+  defp scope(turn),
+    do: %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}}
+
+  # What a model ran and its counts, as a usage event tells them.
+  defp usage(counts),
+    do: %{"models" => [%{"model" => "m", "counts" => counts}], "accounting" => "complete"}
 
   # The turn paused around a launch it handed to a person.
   defp launch_paused!(actor, turn) do
@@ -442,7 +462,7 @@ defmodule Arca.TurnTapeStorageTest do
       %{turn: turn} = accept_turn!(actor, thread, "@aqua read a.txt")
       {turn, root} = start!(actor, turn)
 
-      {model_step, %{text: text, calls: [%{message: call_row, step: call_step}]}} =
+      {model_step, %{said: [text], asks: [%{message: call_row, step: call_step}]}} =
         respond!(actor, turn, [{"call_1", "files", "read"}])
 
       assert text.kind == "text" and text.turn_id == turn.id
@@ -458,7 +478,14 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:ok, %{dispatch_state: "closed", outcome: "ok", usage: usage}} =
                TurnStorage.step(actor, model_step.id)
 
-      assert usage =~ "input_tokens"
+      # A model step's usage is counted as a program's start step's is: one
+      # result, by the model it ran.
+      assert Jason.decode!(usage) == %{
+               "models" => %{"m" => %{"input_tokens" => 10, "output_tokens" => 3}},
+               "results" => 1,
+               "partial" => 0,
+               "unknown" => 0
+             }
 
       assert {:ok, %{dispatch_state: "dispatched", started_at: %DateTime{}}} =
                TurnStorage.dispatch_step(actor, call_step.id, %{
@@ -503,10 +530,29 @@ defmodule Arca.TurnTapeStorageTest do
           fence: turn.fence
         })
 
-      assert {:ok, %{calls: [%{step: call}]}} =
-               TurnStorage.record_response(actor, turn.id, flush.id, %{
-                 fence: turn.fence,
-                 tool_calls: [%{tool_call_id: "n1", name: "notes", tool: "notes", action: "keep"}]
+      assert {:ok, %{asks: [%{step: call}]}} =
+               TurnStorage.commit_events(actor, scope(turn), %{
+                 events: [
+                   {:ask,
+                    %{
+                      kind: "tool",
+                      tool: "notes",
+                      action: "keep",
+                      idempotency_key: "call:#{turn.id}:#{flush.id}:n1",
+                      call: %{
+                        kind: "tool_call",
+                        content: "notes",
+                        payload: %{
+                          "tool_call_id" => "n1",
+                          "name" => "notes",
+                          "tool" => "notes",
+                          "action" => "keep",
+                          "step_id" => flush.id
+                        }
+                      }
+                    }}
+                 ],
+                 position: {:step, flush.id}
                })
 
       assert call.purpose == "flush"
@@ -531,7 +577,7 @@ defmodule Arca.TurnTapeStorageTest do
     } do
       %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
       {turn, _root} = start!(actor, turn)
-      {_model, %{calls: [%{step: step}]}} = respond!(actor, turn, [{"c", "files", "read"}])
+      {_model, %{asks: [%{step: step}]}} = respond!(actor, turn, [{"c", "files", "read"}])
 
       bind = fn gen, exec ->
         {:ok, n} =
@@ -576,7 +622,7 @@ defmodule Arca.TurnTapeStorageTest do
       %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
       {turn, _root} = start!(actor, turn)
 
-      {_model, %{calls: [%{step: s1}, %{step: s2}]}} =
+      {_model, %{asks: [%{step: s1}, %{step: s2}]}} =
         respond!(actor, turn, [{"a", "files", "read"}, {"b", "files", "write"}])
 
       {:ok, _} = TurnStorage.dispatch_step(actor, s1.id, %{fence: turn.fence})
@@ -774,7 +820,7 @@ defmodule Arca.TurnTapeStorageTest do
       %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
       {turn, _root} = start!(actor, turn)
 
-      {_m, %{calls: [%{step: s1}, %{step: s2}]}} =
+      {_m, %{asks: [%{step: s1}, %{step: s2}]}} =
         respond!(actor, turn, [{"a", "files", "read"}, {"b", "files", "read"}])
 
       {:ok, _} = TurnStorage.dispatch_step(actor, s1.id, %{fence: turn.fence})
@@ -807,7 +853,7 @@ defmodule Arca.TurnTapeStorageTest do
       %{message: message, turn: turn} = accept_turn!(actor, thread, "@aqua read")
       {turn, _root} = start!(actor, turn)
 
-      {_m, %{text: text, calls: [%{message: call, step: step}]}} =
+      {_m, %{said: [text], asks: [%{message: call, step: step}]}} =
         respond!(actor, turn, [{"c", "files", "read"}])
 
       {:ok, _} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
@@ -870,7 +916,9 @@ defmodule Arca.TurnTapeStorageTest do
 
       %{message: c_message} = accept_turn!(actor, thread, "@aqua third", author: "usr_carol")
 
-      {_m, %{text: a_text, calls: [%{step: step}]}} = respond!(actor, a, [{"c", "files", "read"}])
+      {_m, %{said: [a_text], asks: [%{step: step}]}} =
+        respond!(actor, a, [{"c", "files", "read"}])
+
       {:ok, _} = TurnStorage.dispatch_step(actor, step.id, %{fence: a.fence})
 
       {:ok, %{result: a_result}} =
@@ -906,7 +954,7 @@ defmodule Arca.TurnTapeStorageTest do
           steer_turn_id: queued.id
         })
 
-      {_model, %{text: answer, calls: [%{step: call}]}} =
+      {_model, %{said: [answer], asks: [%{step: call}]}} =
         respond!(actor, first, [{"c", "files", "read"}])
 
       {:ok, _} = TurnStorage.dispatch_step(actor, call.id, %{fence: first.fence})
@@ -969,29 +1017,45 @@ defmodule Arca.TurnTapeStorageTest do
           fence: turn.fence
         })
 
+      asks =
+        for id <- calls do
+          {:ask,
+           %{
+             kind: "tool",
+             tool: "files",
+             action: "read",
+             recovery: "replay_safe",
+             child_execution_id: "exec_child_#{turn.id}_#{id}",
+             idempotency_key: "call:#{turn.id}:#{id}",
+             call: %{
+               kind: "tool_call",
+               content: "files.read",
+               payload: %{
+                 "tool_call_id" => id,
+                 "name" => "files.read",
+                 "tool" => "files",
+                 "action" => "read",
+                 "arguments" => %{"path" => "a.txt"},
+                 "kind" => "read",
+                 "step_id" => step.id
+               }
+             }
+           }}
+        end
+
       {:ok, recorded} =
-        TurnStorage.record_response(actor, turn.id, step.id, %{
-          fence: turn.fence,
-          text: text,
-          usage: %{"input_tokens" => 10, "output_tokens" => 3},
-          stop_reason: if(calls == [], do: "end_turn", else: "tool_call"),
-          tool_calls:
-            for id <- calls do
-              %{
-                tool_call_id: id,
-                name: "files.read",
-                tool: "files",
-                action: "read",
-                arguments: %{"path" => "a.txt"},
-                kind: "read",
-                recovery: "replay_safe",
-                idempotency_key: "call:#{turn.id}:#{id}",
-                child_execution_id: "exec_child_#{turn.id}_#{id}"
-              }
-            end
+        TurnStorage.commit_events(actor, scope(turn), %{
+          events:
+            [{:text, %{text: text}}] ++
+              asks ++
+              [
+                {:usage, usage(%{"input_tokens" => 10, "output_tokens" => 3})},
+                {:stop, if(calls == [], do: "end_turn", else: "tool_call")}
+              ],
+          position: {:step, step.id}
         })
 
-      for %{step: call} <- recorded.calls,
+      for %{step: call} <- recorded.asks,
           do: {:ok, _} = TurnStorage.dispatch_step(actor, call.id, %{fence: turn.fence})
 
       {step, recorded}
@@ -1030,7 +1094,7 @@ defmodule Arca.TurnTapeStorageTest do
          %{actor: actor, thread: thread} do
       %{message: ask, turn: turn} = accept_turn!(actor, thread, "@aqua read it")
       {turn, _root} = start!(actor, turn)
-      {first, %{text: reply, calls: [read]}} = round!(actor, turn, "Reading.", ["c1"])
+      {first, %{said: [reply], asks: [read]}} = round!(actor, turn, "Reading.", ["c1"])
       assert carried_by(ask) == first.id
 
       moon = post!(actor, thread, turn, "and the moon too")
@@ -1068,7 +1132,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert carried_by(moon) == nil
       stars = post!(actor, thread, turn, "and the stars")
-      {second, %{text: both}} = model!(actor, turn, "Both.", [])
+      {second, %{said: [both]}} = model!(actor, turn, "Both.", [])
       assert carried_by(moon) == second.id
       assert carried_by(stars) == nil
 
@@ -1077,7 +1141,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       # The stars were written while that answer was: they read after it.
       assert stars.seq < both.seq
-      {third, %{text: last}} = round!(actor, turn, "Stars too.")
+      {third, %{said: [last]}} = round!(actor, turn, "Stars too.")
       assert carried_by(stars) == third.id
       assert read_ids(actor, turn) == held ++ [stars.id, last.id]
 
@@ -1099,7 +1163,7 @@ defmodule Arca.TurnTapeStorageTest do
          %{actor: actor, thread: thread} do
       %{message: ask, turn: turn} = accept_turn!(actor, thread, "@aqua build it")
       {turn, _root} = start!(actor, turn)
-      {_first, %{text: reply, calls: [read]}} = round!(actor, turn, "Opening it.", ["c1"])
+      {_first, %{said: [reply], asks: [read]}} = round!(actor, turn, "Opening it.", ["c1"])
 
       {:ok, %{workspace: workspace}} =
         TurnStorage.open_workspace(actor, %{
@@ -1143,11 +1207,11 @@ defmodule Arca.TurnTapeStorageTest do
                  fence: turn.fence
                })
 
-      {second, %{text: noted}} = round!(actor, turn, "The report is in.")
+      {second, %{said: [noted]}} = round!(actor, turn, "The report is in.")
       assert carried_by(report) == second.id
       refute TurnStorage.steer_pending?(actor, turn.id)
       assert {:ok, []} = TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})
-      {_third, %{text: last}} = round!(actor, turn, "Nothing more.")
+      {_third, %{said: [last]}} = round!(actor, turn, "Nothing more.")
       assert carried_by(report) == second.id
 
       assert read_ids(actor, turn) -- [workspace_pointer(actor, thread)] ==
@@ -1176,7 +1240,7 @@ defmodule Arca.TurnTapeStorageTest do
          %{actor: actor, thread: thread} do
       %{message: ask, turn: turn} = accept_turn!(actor, thread, "@aqua read it")
       {turn, _root} = start!(actor, turn)
-      {_first, %{text: reply, calls: [read]}} = round!(actor, turn, "Reading.", ["c1"])
+      {_first, %{said: [reply], asks: [read]}} = round!(actor, turn, "Reading.", ["c1"])
       never = post!(actor, thread, turn, "never mind")
       result = result!(actor, turn, read)
 
@@ -1199,7 +1263,7 @@ defmodule Arca.TurnTapeStorageTest do
   describe "the uncertain stop" do
     # `n` of the steps proposed for `ids`, in order, flipped to dispatched.
     defp dispatched!(actor, turn, ids, n) do
-      {_model, %{calls: calls}} = respond!(actor, turn, Enum.map(ids, &{&1, "http", "get"}))
+      {_model, %{asks: calls}} = respond!(actor, turn, Enum.map(ids, &{&1, "http", "get"}))
 
       calls
       |> Enum.with_index()

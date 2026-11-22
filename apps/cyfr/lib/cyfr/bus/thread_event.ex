@@ -26,9 +26,11 @@ defmodule Cyfr.Bus.ThreadEvent do
       `message_id:`, the message of the turn that asked, which ended on
       it, so a retry sends that message again;
     * `:intents` — `%{intents:, user_id:}`;
-    * `:usage` — the turn's token totals, `%{input:, output:}`; a program
-      brain's turn adds the `models:` it ran and its `accounting:`
-      (`:complete`, `:partial` or `:unavailable`);
+    * `:usage` — what the thread's latest turn used, as its steps count
+      it (`Aqua.Tape.usage/2`): `%{input:, output:, models:, accounting:}`,
+      the models it ran and whether all of it was counted (`:complete`),
+      some (`:partial`) or none (`:unavailable`); a thread with no turn
+      yet tells `%{input: 0, output: 0}`;
     * `:tool_activity` — the running tool calls;
     * `:delta`, `:delta_abandoned` — a chat step's streamed text and
       its withdrawal (`Aqua.Loop.Stream`);

@@ -609,11 +609,18 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         Arca.TurnStorage.put_step(actor, turn.id, %{kind: "model", fence: turn.fence})
 
       {:ok, _} =
-        Arca.TurnStorage.record_response(actor, turn.id, model.id, %{
-          fence: turn.fence,
-          text: "done",
-          usage: usage
-        })
+        Arca.TurnStorage.commit_events(
+          actor,
+          %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+          %{
+            events: [
+              {:text, %{text: "done"}},
+              {:usage,
+               %{"models" => [%{"model" => "m", "counts" => usage}], "accounting" => "complete"}}
+            ],
+            position: {:step, model.id}
+          }
+        )
 
       ended!(turn)
     end

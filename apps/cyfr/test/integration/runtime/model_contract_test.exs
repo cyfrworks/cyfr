@@ -428,7 +428,7 @@ defmodule Locus.Runtime.ModelContractTest do
     refute Enum.any?(results, & &1["is_error"])
 
     # Usage is counted once a step: the thread's totals are the answers' sum.
-    assert for(step <- [first, second, third], do: Jason.decode!(step.usage)) ==
+    assert for(step <- [first, second, third], do: counted(step.usage)) ==
              [tokens(10, 5), tokens(20, 8), tokens(30, 2)]
 
     # Each chat step's execution keeps the usage its answer carried.
@@ -641,7 +641,7 @@ defmodule Locus.Runtime.ModelContractTest do
       assert [%{"stop_reason" => ^reason, "calls" => 0, "usage" => usage}] =
                turn_events(ctx, played, "model.completed", step_id)
 
-      assert usage == tokens(2, 3)
+      assert counted(usage) == tokens(2, 3)
       assert {:turn_finished, nil} in played.seen.thread
     end
   end
@@ -717,7 +717,7 @@ defmodule Locus.Runtime.ModelContractTest do
     assert %{status: "completed"} = played.turn
     assert [%{kind: "model", outcome: "ok", id: step_id} = step] = played.steps
     assert [%{kind: "text", content: "The answer given."}] = agent_rows(played)
-    assert Jason.decode!(step.usage) == tokens(1, 2)
+    assert counted(step.usage) == tokens(1, 2)
     assert [%{input: 1, output: 2}] = for({:usage, totals} <- played.seen.thread, do: totals)
 
     assert [%{"stop_reason" => "end_turn", "calls" => 0}] =
@@ -1128,6 +1128,17 @@ defmodule Locus.Runtime.ModelContractTest do
   # ---------------------------------------------------------------------------
 
   defp model_steps(played), do: Enum.filter(played.steps, &(&1.kind == "model"))
+
+  # A model step's usage is counted as a program's start step's is: one
+  # result, by the model it ran, all of it counted.
+  defp counted(usage) when is_binary(usage), do: counted(Jason.decode!(usage))
+
+  defp counted(usage) do
+    assert %{"models" => models, "results" => 1, "partial" => 0, "unknown" => 0} = usage
+
+    [{_model, counts}] = Map.to_list(models)
+    counts
+  end
 
   # The usage an execution's row keeps in its output's envelope.
   defp execution_usage(execution_id) do

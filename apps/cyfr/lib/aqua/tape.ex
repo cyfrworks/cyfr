@@ -453,27 +453,6 @@ defmodule Aqua.Tape do
   end
 
   @doc """
-  Persist a model response before any of its calls runs: the reply and
-  the tool calls as rows, every call as a proposed step
-  (`TurnStorage.record_response/4`). The rows are broadcast after commit.
-  """
-  @spec record_response(Context.t(), turn(), step(), map()) ::
-          {:ok, %{text: row() | nil, calls: [map()]}} | {:error, term()}
-  def record_response(%Context{} = ctx, turn, model_step, response) when is_map(response) do
-    with {:ok, %{text: text, calls: calls} = recorded} <-
-           TurnStorage.record_response(
-             Sanctum.Context.actor(ctx),
-             turn.id,
-             model_step.id,
-             Map.put_new(response, :fence, turn.fence)
-           ) do
-      if text, do: broadcast(ctx, turn.thread_id, :message, text)
-      Enum.each(calls, &broadcast(ctx, turn.thread_id, :message, &1.message))
-      {:ok, recorded}
-    end
-  end
-
-  @doc """
   Join `threads` into the turn's read threads
   (`TurnStorage.join_threads/4`), under the turn's row lock and its fence:
   what a child's run read joins its turn before the turn uses the child's
@@ -628,15 +607,17 @@ defmodule Aqua.Tape do
       })
 
   @doc """
-  Commit what a batch of a program brain's lines did with its position
-  (`Arca.TurnStorage.commit_brain/3`); the posts it wrote and the calls
-  it recorded are broadcast after the commit.
+  Commit what a harness said with its position (`Arca.TurnStorage.commit_events/3`):
+  `scope` is `%{thread: id, agent: agent, turn: %{id: id, fence: n} | nil}`.
+  The posts it wrote and the calls it recorded are broadcast after the
+  commit, then the thread's place in its person's list.
   """
-  @spec commit_brain(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def commit_brain(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+  @spec commit_events(Context.t(), map(), map()) :: {:ok, map()} | {:error, term()}
+  def commit_events(%Context{} = ctx, %{thread: thread_id} = scope, commit) when is_map(commit) do
     with {:ok, committed} <-
-           TurnStorage.commit_brain(Sanctum.Context.actor(ctx), thread_id, attrs) do
+           TurnStorage.commit_events(Sanctum.Context.actor(ctx), scope, commit) do
       Enum.each(committed.said, &broadcast(ctx, thread_id, :message, &1))
+      Enum.each(committed.asks, &broadcast(ctx, thread_id, :message, &1.message))
       if committed.said != [], do: announce_lists(ctx, thread_id, nil)
       {:ok, committed}
     end
@@ -674,6 +655,11 @@ defmodule Aqua.Tape do
   @spec brain(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def brain(%Context{} = ctx, thread_id),
     do: TurnStorage.brain(Sanctum.Context.actor(ctx), thread_id)
+
+  @doc "What a program's native session was given (`Arca.TurnStorage.brain_given/2`)."
+  @spec brain_given(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def brain_given(%Context{} = ctx, thread_id),
+    do: TurnStorage.brain_given(Sanctum.Context.actor(ctx), thread_id)
 
   @doc "Whether a program brain's silence ran out (`Arca.TurnStorage.brain_silence/2`)."
   @spec brain_silence(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
@@ -1097,10 +1083,11 @@ defmodule Aqua.Tape do
 
   @doc """
   What the thread's latest turn (`TurnStorage.latest/2`) has used, as the
-  thread's menu shows it and `:usage` tells it: for a turn on a program,
-  the models and tokens its `program.start` step stores, unknown and never
-  zero while it stores none; for any other turn, the tokens its model
-  steps were told, added up. A thread with no turn yet has used none, and
+  thread's menu shows it and `:usage` tells it: the usage its steps count
+  (`Arca.TurnStorage.commit_events/3`), a model step's own or a program's
+  `program.start` step's, added up by model, and whether all of it was
+  counted (`:complete`), only some (`:partial`), or none (`:unavailable`,
+  unknown and never zero). A thread with no turn yet has used none, and
   one that cannot be read now is unknown.
   """
   @spec usage(Context.t(), String.t()) :: map()
@@ -1109,41 +1096,40 @@ defmodule Aqua.Tape do
 
     with {:ok, %{} = turn} <- TurnStorage.latest(actor, thread_id),
          {:ok, steps} <- TurnStorage.steps(actor, turn.id) do
-      key = brain_start_key(turn.id)
-
-      case Enum.find(steps, &(&1.idempotency_key == key)) do
-        nil when is_nil(turn.program) -> model_usage(steps)
-        start -> program_usage(stored_usage(start && start.usage) || %{})
-      end
+      steps
+      |> Enum.map(&stored_usage(&1.usage))
+      |> Enum.filter(&is_map/1)
+      |> told()
     else
       {:ok, nil} -> %{input: 0, output: 0}
       {:error, _unread} -> %{input: 0, output: 0, accounting: :unavailable}
     end
   end
 
-  defp model_usage(steps) do
-    told = for %{kind: "model", usage: usage} <- steps, told = stored_usage(usage), do: told
-    sum = fn name -> told |> Enum.map(&(&1[name] || 0)) |> Enum.sum() end
-    %{input: sum.("input_tokens"), output: sum.("output_tokens")}
-  end
+  # The counted steps added up: each model's counts, and how many of the
+  # results were counted only in part or not at all.
+  defp told(counted) do
+    models =
+      Enum.reduce(counted, %{}, fn usage, models ->
+        Map.merge(models, usage["models"] || %{}, fn _model, a, b ->
+          Map.merge(a, b, fn _name, x, y -> x + y end)
+        end)
+      end)
 
-  # A program's counts, by model, and whether they are all of its results'
-  # (`Arca.TurnStorage`'s "usage"): none counted is unknown.
-  defp program_usage(usage) do
-    models = usage["models"] || %{}
     sum = fn name -> models |> Map.values() |> Enum.map(&(&1[name] || 0)) |> Enum.sum() end
+    missed = fn name -> counted |> Enum.map(&(&1[name] || 0)) |> Enum.sum() end
 
     %{
       input: sum.("input_tokens"),
       output: sum.("output_tokens"),
       models: models |> Map.keys() |> Enum.sort(),
-      accounting: accounting(usage, models)
+      accounting: accounting(missed.("partial"), missed.("unknown"), models)
     }
   end
 
-  defp accounting(_usage, models) when map_size(models) == 0, do: :unavailable
-  defp accounting(%{"partial" => 0, "unknown" => 0}, _models), do: :complete
-  defp accounting(_usage, _models), do: :partial
+  defp accounting(_partial, _unknown, models) when map_size(models) == 0, do: :unavailable
+  defp accounting(0, 0, _models), do: :complete
+  defp accounting(_partial, _unknown, _models), do: :partial
 
   defp stored_usage(json) when is_binary(json), do: Jason.decode!(json)
   defp stored_usage(usage), do: usage

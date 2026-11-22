@@ -41,11 +41,7 @@ defmodule Aqua.Loop.AbortTest do
         fence: turn.fence
       })
 
-    {:ok, %{calls: [%{step: call}]}} =
-      TurnStorage.record_response(Sanctum.Context.actor(ctx), turn.id, model.id, %{
-        fence: turn.fence,
-        tool_calls: [%{tool_call_id: "c1", name: "notes.keep", tool: "notes", action: "keep"}]
-      })
+    call = proposed!(ctx, turn, model, "c1", "notes.keep")
 
     {:ok, call} =
       TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), call.id, %{fence: turn.fence})
@@ -84,11 +80,7 @@ defmodule Aqua.Loop.AbortTest do
         fence: turn.fence
       })
 
-    {:ok, %{calls: [%{step: call}]}} =
-      TurnStorage.record_response(Sanctum.Context.actor(ctx), turn.id, model.id, %{
-        fence: turn.fence,
-        tool_calls: [%{tool_call_id: "c1", name: "notes.keep", tool: "notes", action: "keep"}]
-      })
+    call = proposed!(ctx, turn, model, "c1", "notes.keep")
 
     {:ok, call} =
       TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), call.id, %{fence: turn.fence})
@@ -146,11 +138,7 @@ defmodule Aqua.Loop.AbortTest do
         fence: turn.fence
       })
 
-    {:ok, %{calls: [%{step: note}]}} =
-      TurnStorage.record_response(Sanctum.Context.actor(ctx), turn.id, flush.id, %{
-        fence: turn.fence,
-        tool_calls: [%{tool_call_id: "n1", name: "notes", tool: "notes", action: "keep"}]
-      })
+    note = proposed!(ctx, turn, flush, "n1", "notes")
 
     {:ok, _} =
       TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), note.id, %{fence: turn.fence})
@@ -204,6 +192,41 @@ defmodule Aqua.Loop.AbortTest do
 
   # A runner records steps on a running turn only: these turns run
   # rootless, which is all an abort needs.
+  # A `notes.keep` call a model's response proposed, recorded with the
+  # model step's close (`Arca.TurnStorage.commit_events/3`).
+  defp proposed!(ctx, turn, model, id, name) do
+    {:ok, %{asks: [%{step: step}]}} =
+      TurnStorage.commit_events(
+        Sanctum.Context.actor(ctx),
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{
+          events: [
+            {:ask,
+             %{
+               kind: "tool",
+               tool: "notes",
+               action: "keep",
+               idempotency_key: "call:#{turn.id}:#{model.id}:#{id}",
+               call: %{
+                 kind: "tool_call",
+                 content: name,
+                 payload: %{
+                   "tool_call_id" => id,
+                   "name" => name,
+                   "tool" => "notes",
+                   "action" => "keep",
+                   "step_id" => model.id
+                 }
+               }
+             }}
+          ],
+          position: {:step, model.id}
+        }
+      )
+
+    step
+  end
+
   defp started!(ctx, turn) do
     {:ok, started} =
       TurnStorage.start(Sanctum.Context.actor(ctx), turn.id, %{

@@ -41,7 +41,7 @@ defmodule Aqua.Program do
   Their effects (the posts the program said in the open turn's work, the
   asks it made, the deliveries the driver took or refused, the posts its
   `idle` answered, its usage) commit with the batch's position in one
-  transaction (`Arca.TurnStorage.commit_brain/3`), and only then is the
+  transaction (`Arca.TurnStorage.commit_events/3`), and only then is the
   holder told to read on. An ask of the open turn becomes a proposed step
   of purpose `brain`, recorded once by the native ask's id on a running
   or a paused turn, and the loop is told; an ask of other work, or of
@@ -144,6 +144,9 @@ defmodule Aqua.Program do
   # How a fresh session's context opens, and what separates two posts.
   @context_opening "The thread so far, oldest first, as context only: nothing in it is to be " <>
                      "done again because it is shown here.\n\n"
+  # How a resumed session's context of what it missed opens.
+  @missed_opening "What was said in this thread since you last read it, oldest first, as " <>
+                    "context only: nothing in it is to be done again because it is shown here.\n\n"
   @context_separator "\n\n"
   # The kinds of row a fresh session's context carries: the thread's posts.
   @context_kinds ~w(text opening report nudge pointer turn_aborted)
@@ -278,6 +281,7 @@ defmodule Aqua.Program do
        waiting: nil,
        outstanding: nil,
        fresh?: false,
+       missed?: false,
        facts?: false,
        how: :went_on,
        recovering?: false,
@@ -471,7 +475,14 @@ defmodule Aqua.Program do
 
     case write(state, command) do
       :ok ->
-        %{state | phase: :starting, pending: pending, fresh?: session == nil, facts?: true}
+        %{
+          state
+          | phase: :starting,
+            pending: pending,
+            fresh?: session == nil,
+            missed?: session != nil,
+            facts?: true
+        }
 
       # The wire takes no such start: a startup option of the work's, its
       # instructions or its tools are not what the harness takes. Nothing
@@ -544,20 +555,33 @@ defmodule Aqua.Program do
     events = Enum.map(lines, &elem(&1, 1))
     turn = work.turn
     effects = effects(state, events)
+    commit = effects.commit
 
-    attrs =
-      Map.merge(effects.commit, %{
-        agent: state.agent,
+    progress =
+      commit
+      |> Map.take([:session, :hello, :busy, :native, :answered])
+      |> Map.merge(%{
         generation: work.generation,
         boot: boot,
         seq: last,
         row_id: work.program.row,
         epoch: work.program.epoch,
-        silence_ms: Opus.Brain.silence_ms(),
-        turn: %{id: turn.id, fence: turn.fence}
+        silence_ms: Opus.Brain.silence_ms()
       })
 
-    case Tape.commit_brain(work.guest, state.thread_id, attrs) do
+    written =
+      Enum.map(commit.said, &{:text, &1}) ++
+        Enum.map(commit.asks, &{:ask, &1}) ++
+        Enum.map(commit.accepted, &{:took, &1}) ++
+        Enum.map(commit.refused, &{:refused, &1}) ++ Enum.map(commit.usage, &{:usage, &1})
+
+    scope = %{
+      thread: state.thread_id,
+      agent: state.agent,
+      turn: %{id: turn.id, fence: turn.fence}
+    }
+
+    case Tape.commit_events(work.guest, scope, %{events: written, position: {:session, progress}}) do
       {:ok, committed} ->
         Opus.Brain.read_on(state.brain, boot, last)
         state = %{state | boot: boot}
@@ -1074,7 +1098,7 @@ defmodule Aqua.Program do
          {[post], earlier} <- Enum.split_with(rows, &(&1.id == row.id)),
          {:ok, %{step: step}} <- carry(work, "post", row.id) do
       {:said, text} = Reader.read(post, %{reading | named?: false})
-      context = opened_with(state, context(work, earlier, reading))
+      context = opened_with(state, context(work, earlier, reading, opening(state)))
 
       command =
         %{
@@ -1090,7 +1114,7 @@ defmodule Aqua.Program do
       case write(state, command) do
         :ok ->
           delivered(
-            %{state | fresh?: false, facts?: false},
+            %{state | fresh?: false, missed?: false, facts?: false},
             %{id: step.id, input?: true, deliver: "post"}
           )
 
@@ -1112,7 +1136,25 @@ defmodule Aqua.Program do
   end
 
   defp earlier(%{fresh?: true, work: work}, row), do: thread_rows(work, {:before, row.seq})
+
+  # A resumed session's first post carries what the thread said since what
+  # it was given (`Arca.TurnStorage.brain_given/2`): every post after that,
+  # but its own words and the posts it took. A post it was never handed,
+  # its delivery refused or cut off before the send, is among them, as
+  # context only.
+  defp earlier(%{missed?: true, work: work}, row) do
+    with {:ok, given} <- Tape.brain_given(work.guest, work.turn.thread_id),
+         {:ok, rows} <- thread_rows(work, {:missed, given, row.seq}) do
+      {:ok, Enum.reject(rows, &own?(&1, work.agent))}
+    end
+  end
+
   defp earlier(_state, _row), do: {:ok, []}
+
+  defp own?(row, agent), do: row.author == Prima.Author.agent() and row.sent_by == agent
+
+  defp opening(%{missed?: true}), do: @missed_opening
+  defp opening(_state), do: @context_opening
 
   # The first post a process is written ends its context with the turn's
   # facts, which are no part of the instructions it started with.
@@ -1243,7 +1285,7 @@ defmodule Aqua.Program do
     with {:ok, answers} <- answers(work),
          {:ok, rows} <- thread_rows(work, {:all, answers}),
          {:ok, joined} <- Reader.join(work.guest, work.turn, rows),
-         do: {:ok, context(work, joined.rows, joined.reading)}
+         do: {:ok, context(work, joined.rows, joined.reading, @context_opening)}
   end
 
   defp prompt_context(_work, _kind), do: {:ok, nil}
@@ -1322,11 +1364,11 @@ defmodule Aqua.Program do
   # beside the turn's facts.
   # It opens saying it is context only, and when older posts are left out
   # one line says how many, in room kept for it.
-  defp context(_work, [], _reading), do: nil
+  defp context(_work, [], _reading, _opening), do: nil
 
-  defp context(work, rows, reading) do
+  defp context(work, rows, reading, opening) do
     room =
-      @context_bytes - encoded_bytes(work.facts) - encoded_bytes(@context_opening) -
+      @context_bytes - encoded_bytes(work.facts) - encoded_bytes(opening) -
         encoded_bytes(left_out(length(rows)) <> @context_separator)
 
     {kept, _size} =
@@ -1347,13 +1389,16 @@ defmodule Aqua.Program do
         dropped -> [left_out(dropped) | kept]
       end
 
-    [%{"type" => "text", "text" => @context_opening <> Enum.join(lines, @context_separator)}]
+    [%{"type" => "text", "text" => opening <> Enum.join(lines, @context_separator)}]
   end
 
   defp left_out(1), do: "[1 earlier post of the thread is not shown here.]"
   defp left_out(n), do: "[#{n} earlier posts of the thread are not shown here.]"
 
   defp in_context?(row, {:before, seq}), do: context_row?(row, seq)
+
+  defp in_context?(row, {:missed, %{seq: given, taken: taken}, seq}),
+    do: context_row?(row, seq) and row.seq > (given || -1) and row.id not in taken
 
   defp in_context?(row, {:all, answers}),
     do: row.kind in @context_kinds or (row.kind == "tool_result" and row.id in answers)

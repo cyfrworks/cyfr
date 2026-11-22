@@ -136,19 +136,37 @@ defmodule Opus.BrainTest do
     args =
       Keyword.get(opts, :args, %{"action" => "start", "program" => row.id, "epoch" => row.epoch})
 
-    {:ok, %{calls: [%{step: step}]}} =
-      TurnStorage.record_response(actor, turn.id, model.id, %{
-        fence: turn.fence,
-        tool_calls: [
-          %{
-            tool_call_id: "call_#{System.unique_integer([:positive])}",
-            name: "program",
-            tool: "program",
-            action: "start",
-            arguments: args
-          }
-        ]
-      })
+    call_id = "call_#{System.unique_integer([:positive])}"
+
+    {:ok, %{asks: [%{step: step}]}} =
+      TurnStorage.commit_events(
+        actor,
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{
+          events: [
+            {:ask,
+             %{
+               kind: "tool",
+               tool: "program",
+               action: "start",
+               idempotency_key: "call:#{turn.id}:#{model.id}:#{call_id}",
+               call: %{
+                 kind: "tool_call",
+                 content: "program",
+                 payload: %{
+                   "tool_call_id" => call_id,
+                   "name" => "program",
+                   "tool" => "program",
+                   "action" => "start",
+                   "arguments" => args,
+                   "step_id" => model.id
+                 }
+               }
+             }}
+          ],
+          position: {:step, model.id}
+        }
+      )
 
     {:ok, step} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
     step
@@ -2533,19 +2551,23 @@ defmodule Opus.BrainTest do
     end
 
     # The session kept as the attendant keeps a driver's `started`, with
-    # the row it is stored with (`TurnStorage.commit_brain/3`).
+    # the row it is stored with (`TurnStorage.commit_events/3`).
     defp keep_session!(actor, thread, row, agent, session) do
       {:ok, %{seen: false}} =
-        TurnStorage.commit_brain(actor, thread.id, %{
-          agent: agent,
-          generation: 0,
-          boot: "boot-one",
-          hello: true,
-          seq: 1,
-          row_id: row.id,
-          epoch: row.epoch,
-          silence_ms: Opus.Brain.silence_ms(),
-          session: session
+        TurnStorage.commit_events(actor, %{thread: thread.id, agent: agent, turn: nil}, %{
+          events: [],
+          position:
+            {:session,
+             %{
+               generation: 0,
+               boot: "boot-one",
+               hello: true,
+               seq: 1,
+               row_id: row.id,
+               epoch: row.epoch,
+               silence_ms: Opus.Brain.silence_ms(),
+               session: session
+             }}
         })
     end
 

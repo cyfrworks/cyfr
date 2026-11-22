@@ -64,21 +64,39 @@ defmodule Aqua.Runner.RecoveryTableTest do
   defp paused_on_launch!(ctx, turn, dispatch?) do
     {:ok, model} = Tape.record_model_intent(ctx, turn, %{})
 
-    {:ok, %{calls: [%{step: proposed}]}} =
-      Tape.record_response(ctx, turn, model, %{
-        text: nil,
-        tool_calls: [
-          %{
-            tool_call_id: "l1",
-            name: "execution.run",
-            tool: "execution",
-            action: "run",
-            arguments: %{"reference" => "formula:local.nowhere:1.0.0", "input" => %{}},
-            kind: "execute",
-            step_kind: "launch"
-          }
-        ]
-      })
+    {:ok, %{asks: [%{step: proposed}]}} =
+      Tape.commit_events(
+        ctx,
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{
+          events: [
+            {:ask,
+             %{
+               kind: "launch",
+               tool: "execution",
+               action: "run",
+               idempotency_key: "call:#{turn.id}:#{model.id}:l1",
+               call: %{
+                 kind: "tool_call",
+                 content: "execution.run",
+                 payload: %{
+                   "tool_call_id" => "l1",
+                   "name" => "execution.run",
+                   "tool" => "execution",
+                   "action" => "run",
+                   "arguments" => %{
+                     "reference" => "formula:local.nowhere:1.0.0",
+                     "input" => %{}
+                   },
+                   "kind" => "execute",
+                   "step_id" => model.id
+                 }
+               }
+             }}
+          ],
+          position: {:step, model.id}
+        }
+      )
 
     launch =
       if dispatch? do

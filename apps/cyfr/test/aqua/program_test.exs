@@ -68,6 +68,8 @@ defmodule Aqua.ProgramTest do
   @post_gone "Aqua could not be given this message: a thread it came from has since been deleted."
   @model "catalyst:local.claude"
   @model_id "scripted-small"
+  @missed "What was said in this thread since you last read it, oldest first, as context " <>
+            "only: nothing in it is to be done again because it is shown here.\n\n"
   @opening "The thread so far, oldest first, as context only: nothing in it is to be done " <>
              "again because it is shown here.\n\n"
 
@@ -309,16 +311,20 @@ defmodule Aqua.ProgramTest do
       worker = "6f1e2d3c-0000-4968-8776-00000000000a"
 
       {:ok, %{seen: false}} =
-        TurnStorage.commit_brain(actor, child.id, %{
-          agent: "claude-code",
-          generation: 0,
-          boot: "boot-member",
-          hello: true,
-          seq: 1,
-          row_id: row.id,
-          epoch: row.epoch,
-          silence_ms: 1_800_000,
-          session: worker
+        TurnStorage.commit_events(actor, %{thread: child.id, agent: "claude-code", turn: nil}, %{
+          events: [],
+          position:
+            {:session,
+             %{
+               generation: 0,
+               boot: "boot-member",
+               hello: true,
+               seq: 1,
+               row_id: row.id,
+               epoch: row.epoch,
+               silence_ms: 1_800_000,
+               session: worker
+             }}
         })
 
       {:ok, kept} = Arca.ThreadStorage.get(actor, child.id)
@@ -3020,7 +3026,17 @@ defmodule Aqua.ProgramTest do
       say(fake, row, %{"t" => "accepted", "id" => work["id"]})
       post = sent()
       [third] = inputs(ctx, last)
-      assert post == with_facts(posted(third, last, "third"))
+      # The resumed session never took "second": it is handed it as context.
+      untaken =
+        "[#{Sanctum.Tenancy.Users.display_name(ctx.user_id)} posted this and it was not " <>
+          "taken: its turn ended before any model read it. Act on it only if they ask " <>
+          "again]\nsecond"
+
+      assert post ==
+               posted(third, last, "third")
+               |> Map.put("context", [%{"type" => "text", "text" => @missed <> untaken}])
+               |> with_facts()
+
       say(fake, row, accepted(third))
       say(fake, row, idle(last, [third.id]))
       assert :completed = Task.await(loop, 30_000)
@@ -3346,8 +3362,8 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
-    test "after Stop during a CYFR tool, the next turn hands the program its post and no " <>
-           "prompt about the stopped call",
+    test "after Stop during a CYFR tool, the next turn hands the program its post, with the " <>
+           "stopped turn's end as context, and no prompt about the stopped call",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "run it")
       tasks = start_supervised!(Task.Supervisor)
@@ -3393,7 +3409,14 @@ defmodule Aqua.ProgramTest do
 
       handed = sent()
       [post] = inputs(ctx, next)
-      assert handed == with_facts(posted(post, next, "next one"))
+
+      assert handed ==
+               posted(post, next, "next one")
+               |> Map.put("context", [
+                 %{"type" => "text", "text" => @missed <> aborted("stopped")}
+               ])
+               |> with_facts()
+
       say(fake, row, accepted(post))
       say(fake, row, idle(next, [post.id]))
       assert :completed = Task.await(loop, 30_000)
@@ -3655,7 +3678,7 @@ defmodule Aqua.ProgramTest do
     # Codex's driver refuses a post while Codex is signed out, in its own
     # sentence, before anything of it reaches the harness (`cyfr-codex`).
     test "a post the driver refuses ends the turn in the driver's words and closes the " <>
-           "session, which the next turn resumes writing only its own post",
+           "session, which the next turn resumes handing it that refused post as context",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "first")
       loop = run(ctx, turn)
@@ -3706,7 +3729,19 @@ defmodule Aqua.ProgramTest do
       say(fake, row, %{"t" => "accepted", "id" => work["id"]})
       post = sent()
       [second] = inputs(ctx, next)
-      assert post == with_facts(posted(second, next, "second"))
+
+      # The program never took "first", so it is not counted as given: the
+      # resumed session's first post carries it, read as not taken.
+      untaken =
+        "[#{Sanctum.Tenancy.Users.display_name(ctx.user_id)} posted this and it was not " <>
+          "taken: its turn ended before any model read it. Act on it only if they ask " <>
+          "again]\nfirst"
+
+      assert post ==
+               posted(second, next, "second")
+               |> Map.put("context", [%{"type" => "text", "text" => @missed <> untaken}])
+               |> with_facts()
+
       say(fake, row, accepted(second))
       say(fake, row, idle(next, [second.id]))
       assert :completed = Task.await(loop, 30_000)
@@ -3719,6 +3754,74 @@ defmodule Aqua.ProgramTest do
                input_fields("post", next.message_id, "ok")
              ]
 
+      refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "a post cut off between its carry and its send is never sent again, and the next " <>
+           "turn's resumed process is handed it as context, before the turn's facts",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      Prima.Test.Wait.wait_until(
+        fn -> Enum.map(inputs(ctx, turn), & &1.dispatch_state) == ["closed"] end,
+        10_000,
+        "the post's acceptance to commit"
+      )
+
+      # A post the attendant recorded as carried and then died before it
+      # wrote: its row arrives with no event, so only the carry knows it.
+      {:ok, %{message: cut}} =
+        TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "and this"},
+          steer_turn_id: turn.id
+        })
+
+      {:ok, held} = Tape.turn(ctx, turn.id)
+
+      {:ok, %{step: carried}} =
+        Tape.carry(ctx, held, %{
+          deliver: "post",
+          row_id: cut.id,
+          generation: 0,
+          silence_ms: Opus.Brain.silence_ms()
+        })
+
+      attendant = attendant!(ctx, turn)
+      _ = :sys.get_state(attendant)
+      Process.exit(attendant, :kill)
+      line = "#{@title} stopped before it finished."
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert carried_by(ctx, cut.id) == carried.id
+
+      next = accept!(ctx, thread, row, "second")
+      loop = run(ctx, next)
+      opened!(fake, row, "boot-two")
+      assert %{"t" => "start", "session" => @session} = sent()
+      say(fake, row, %{"t" => "started", "session" => @session, "fresh" => false, "held" => []})
+      work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      post = sent()
+      [second] = inputs(ctx, next)
+
+      assert post ==
+               posted(second, next, "second")
+               |> Map.put("context", [
+                 %{
+                   "type" => "text",
+                   "text" =>
+                     @missed <> Sanctum.Tenancy.Users.display_name(ctx.user_id) <> ": and this"
+                 }
+               ])
+               |> with_facts()
+
+      say(fake, row, accepted(second))
+      say(fake, row, idle(next, [second.id]))
+      assert :completed = Task.await(loop, 30_000)
       refute_received {:session, "send", _wire, _fields}
     end
 
@@ -4317,7 +4420,18 @@ defmodule Aqua.ProgramTest do
       assert continued == with_facts(posted(noticed, turn, post_notice()))
       said = accept_next!(fake, row)
       [_post, _noticed, steered] = inputs(ctx, turn)
-      assert said == posted(steered, turn, "go on")
+      # The pause's row came after what the session was given.
+      assert said ==
+               posted(steered, turn, "go on")
+               |> Map.put("context", [
+                 %{
+                   "type" => "text",
+                   "text" =>
+                     @missed <>
+                       aborted("a call's outcome is unknown; tools may have partially executed")
+                 }
+               ])
+
       assert steered.message_id == steer.id
       say(fake, row, idle(turn, [noticed.id, steered.id]))
       assert :completed = Task.await(resuming, 30_000)
@@ -5165,16 +5279,20 @@ defmodule Aqua.ProgramTest do
       )
 
     {:ok, %{seen: false}} =
-      TurnStorage.commit_brain(actor, other.id, %{
-        agent: "aqua",
-        generation: 0,
-        boot: "boot-elsewhere",
-        hello: true,
-        seq: 1,
-        row_id: row.id,
-        epoch: row.epoch,
-        silence_ms: 1_800_000,
-        session: "6f1e2d3c-0000-4968-8776-000000000009"
+      TurnStorage.commit_events(actor, %{thread: other.id, agent: "aqua", turn: nil}, %{
+        events: [],
+        position:
+          {:session,
+           %{
+             generation: 0,
+             boot: "boot-elsewhere",
+             hello: true,
+             seq: 1,
+             row_id: row.id,
+             epoch: row.epoch,
+             silence_ms: 1_800_000,
+             session: "6f1e2d3c-0000-4968-8776-000000000009"
+           }}
       })
 
     {:ok, kept} = Arca.ThreadStorage.get(actor, other.id)
@@ -5496,6 +5614,12 @@ defmodule Aqua.ProgramTest do
   defp timeless(command), do: command
 
   # The turn's facts as the context block a process's first post carries last.
+  # A stopped or paused turn's row as a context reads it.
+  defp aborted(reason),
+    do:
+      "[The server restarted while the assistant was working; tools may have partially " <>
+        "executed. #{reason}]"
+
   defp facts, do: %{"type" => "text", "text" => "## Now\n\nCurrent date: <now>"}
 
   defp with_facts(post), do: Map.update(post, "context", [facts()], &(&1 ++ [facts()]))
