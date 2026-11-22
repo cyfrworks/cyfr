@@ -166,7 +166,17 @@ func TestAReadingThatNeverCameBackBlamesNoDocker(t *testing.T) {
 			}
 			defer end()
 			f := &localFolder{dir: dir, opened: read.localBound}
-			_, err := f.look(ended, workLook, dir)
+			looked := make(chan error, 1)
+			go func() {
+				_, err := f.look(ended, workLook, dir)
+				looked <- err
+			}()
+			var err error
+			select {
+			case err = <-looked:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the reading was waited for past its caller")
+			}
 			want := "The CYFR in " + dir + " could not be read here (" + c.why + "), so nothing was sent to it. Try again."
 			if err == nil || err.Error() != want {
 				t.Fatalf("said %v, want %q", err, want)
