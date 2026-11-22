@@ -27,7 +27,9 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
 
   Each runner has a relay stream too: `read_relay/1` answers what the
   service wrote on it and `write_relay/2` makes the runner write on it;
-  `relay_closed?/1` says whether the service ended it.
+  `relay_closed?/1` says whether the service ended it. `end_relay/1` ends
+  the runner's end of it alone, and `refuse_write/2` refuses the service's
+  writes to a runner's channel, writing nothing.
 
   `relayed!/2` routes an attempt's client as a runner's is routed, for a
   test that runs runner code in this VM: through a runner's end of a relay
@@ -251,6 +253,15 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   @spec exit(map(), integer()) :: :ok
   def exit(%{runner: runner}, status), do: GenServer.call(runner, {:exit, status})
 
+  @doc "Answer every write to runner `spawn`'s channel `{:error, reason}` from now on, writing nothing."
+  @spec refuse_write(map(), term()) :: :ok
+  def refuse_write(%{runner: runner}, reason),
+    do: GenServer.call(runner, {:refuse_write, reason})
+
+  @doc "End runner `spawn`'s end of its relay stream alone."
+  @spec end_relay(map()) :: :ok
+  def end_relay(%{runner: runner}), do: GenServer.call(runner, :relay_end)
+
   @doc "End the keeper as a lost channel does."
   @spec kill!(atom()) :: :ok
   def kill!(keeper), do: GenServer.call(keeper, :channel_lost)
@@ -306,11 +317,30 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     @impl true
     def init(state),
       do:
-        {:ok, Map.merge(state, %{inbox: "", relay_inbox: "", relay_closed: false, ended: false})}
+        {:ok,
+         Map.merge(state, %{
+           inbox: "",
+           relay_inbox: "",
+           relay_closed: false,
+           ended: false,
+           write_refusal: nil
+         })}
 
     @impl true
+    def handle_call({:write_in, _data}, _from, %{write_refusal: reason} = state)
+        when reason != nil,
+        do: {:reply, {:error, reason}, state}
+
     def handle_call({:write_in, data}, _from, state),
       do: {:reply, :ok, %{state | inbox: state.inbox <> data}}
+
+    def handle_call({:refuse_write, reason}, _from, state),
+      do: {:reply, :ok, %{state | write_refusal: reason}}
+
+    def handle_call(:relay_end, _from, state) do
+      notify(state, :relay_closed)
+      {:reply, :ok, state}
+    end
 
     def handle_call(:read, _from, state), do: {:reply, state.inbox, state}
 

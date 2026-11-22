@@ -150,8 +150,13 @@ defmodule Opus.Host do
   reporting boot, claimed by the named runner, that still owns its running
   execution is lapsed (`Opus.Lapse`), and the attempt process
   open for each is stopped without closing its run
-  (`Opus.Attempt.stop_unclosed/2`). A report from another boot
-  of the same service lapses nothing.
+  (`Opus.Attempt.stop_unclosed/2`). A report names the attempt the service
+  assigned whatever else it names, so one naming a single attempt is the
+  service's own word that the runner was given that run: if no attach of
+  it was answered, nothing of it ran and it is closed failed at once. An
+  attempt named beside others can be the runner's word and is never
+  closed so. A report from another boot of the same service lapses
+  nothing.
   It answers `{"v": 1, "ok": true}`, `{"v": 1, "error": "lost"}` for a
   report that does not verify, is not a report at this version or names
   another member, and `{"v": 1, "error": "unavailable"}` when this boot
@@ -490,7 +495,13 @@ defmodule Opus.Host do
   @impl HostAPI
   def runner_exited(report, runner, attempts) do
     with :ok <- Lapse.dispatched(report.service, report.boot, runner, attempts) do
-      holder = %{service_id: report.service, boot_id: report.boot, runner: runner}
+      holder = %{
+        service_id: report.service,
+        boot_id: report.boot,
+        runner: runner,
+        assigned?: match?([_], attempts)
+      }
+
       Enum.each(attempts, &Attempt.stop_unclosed(&1, holder))
     end
   end
