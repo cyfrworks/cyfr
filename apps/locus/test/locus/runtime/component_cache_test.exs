@@ -7,7 +7,8 @@ defmodule Locus.Runtime.ComponentCacheTest do
   pattern finds only live entries, and an invalidated one is gone. A
   compiled component is keyed by its digest and run only if its bytes
   hash to it: bytes that do not are refused before compilation, and
-  bytes that do not compile are cached under nothing. (A hit that skips
+  bytes that do not compile are cached under nothing. An entry compiled by
+  an earlier engine is never served: its component belongs to that engine. (A hit that skips
   the fetch is exercised by the integration suite, which runs real
   components.)
   """
@@ -17,6 +18,9 @@ defmodule Locus.Runtime.ComponentCacheTest do
   alias Locus.Runtime.{Cache, ComponentCache}
 
   @wasm File.read!(Path.join(__DIR__, "../../support/runtime/test_wasm/math.wasm"))
+  @admitted File.read!(
+              Path.join(__DIR__, "../../support/runtime/test_wasm/hostile/sync_lift.wasm")
+            )
 
   defp store do
     limits = %Wasmex.StoreLimits{
@@ -82,6 +86,30 @@ defmodule Locus.Runtime.ComponentCacheTest do
 
       assert {:error, {:artifact, _}} =
                ComponentCache.get_or_compile(digest, fn -> {:ok, :not_bytes} end, store())
+    end
+
+    test "an entry compiled by an earlier engine is not served: the bytes are fetched and compiled again" do
+      # An admitted component made unique to this test by a custom section,
+      # so no other test's run caches it under the same digest.
+      tag = "run-#{System.unique_integer([:positive])}"
+      section = <<byte_size("cache-test")>> <> "cache-test" <> tag
+      bytes = @admitted <> <<0, byte_size(section)>> <> section
+      digest = Prima.Digest.sha256(bytes)
+      generation = Locus.Runtime.SharedEngine.generation()
+      test = self()
+
+      :ok = Cache.put({:compiled_component, digest}, {generation - 1, :earlier_engine}, 60_000)
+
+      fetch = fn ->
+        send(test, :fetched)
+        {:ok, bytes}
+      end
+
+      assert {:ok, %Wasmex.Components.Component{} = component} =
+               ComponentCache.get_or_compile(digest, fetch, store())
+
+      assert_received :fetched
+      assert Cache.get({:compiled_component, digest}) == {:ok, {generation, component}}
     end
 
     test "a fetch that refuses is answered as it is" do

@@ -18,22 +18,19 @@ defmodule Prima.ComponentFeatures do
   ## Admission policy
 
   The engine (Wasmtime 51.0.0, which wasmex 0.18.1 runs) turns on `gc`,
-  `gc-types`, `exceptions` and `cm-async` by default; the other five
-  are a variant of one of those or build on it, and the engine leaves
-  them off, so
-  refusing them here keeps the validator's answer and the engine's the
-  same. The advisories these refusals once answered (GHSA-32h6-97mm-8q3c,
-  GHSA-cfhf-m2cr-62wj, GHSA-hw8m-q44c-ggrf) are fixed in that Wasmtime;
-  what holds each refusal now is its own merit:
+  `gc-types`, `exceptions` and `cm-async` by default; the other five are
+  a variant of one of those or build on it, and the engine leaves them
+  off, so refusing them here keeps the validator's answer and the
+  engine's the same. The advisories these refusals once answered
+  (GHSA-32h6-97mm-8q3c, GHSA-cfhf-m2cr-62wj, GHSA-hw8m-q44c-ggrf) are
+  fixed in that Wasmtime; what holds each refusal now is its own merit:
 
     * GC (`gc`, `gc-types`) and exception handling (`exceptions`,
-      `legacy-exceptions`): a GC reference type, a GC object or an
-      exception object lives in the store's GC heap, a second memory.
-      Wasmtime counts it against no memory count, and its growth is
-      bounded only as one memory is, by the store's per-memory size, so a
-      run holding both could reach twice the node's consented
-      `max_memory_bytes`, which `Locus.Runtime.Engine.store_limits/1`
-      bounds the run's memory to in total.
+      `legacy-exceptions`): Wasmtime allocates their objects in a GC
+      heap apart from linear memory, and the store's limiter bounds that
+      heap's growth by its per-memory size on its own, so a run could
+      hold a second allowance beside the linear memory that
+      `Locus.Runtime.Engine.store_limits/1` bounds.
     * The component-model async features (`cm-async` and the four that
       build on it, `cm-async-stackful`, `cm-more-async-builtins`,
       `cm-error-context`, `cm-threading`): no CYFR interface is async (a
@@ -43,6 +40,15 @@ defmodule Prima.ComponentFeatures do
       one: Wasmtime published nine advisories against its callbacks,
       streams, futures and event loop between 2026-10-02 and 2026-11-16,
       most of them a host panic.
+
+  Wide arithmetic (`wide-arithmetic`: `i64.add128`, `i64.sub128`,
+  `i64.mul_wide_s`, `i64.mul_wide_u`) is admitted. The engine turns it on
+  by default since Wasmtime 49, so the engine of wasmex 0.15.1 (47.0.3)
+  refused it at compile and the one of 0.18.1 compiles it. It is integer
+  arithmetic on values the guest already holds and grants no host
+  capability. `Locus.Runtime.ComponentFeaturesTest` runs a guest that
+  uses it. A default a later engine turns on is decided the same way:
+  admitted here by name, with a guest that uses it, or refused.
 
   ## The validator
 

@@ -9,7 +9,7 @@ hands it, what a request naming a connection may carry or what reaches a
 guest of the credential CYFR attaches for it, that trap, or that use a feature the runtime refuses
 (`Prima.ComponentFeatures`). Each `.wat` says what it does; the tests that
 run them are `Locus.Runtime.StoreLimitsTest`, `Locus.Runtime.TrapTest`,
-`Locus.Runtime.ComponentFeaturesTest` and `Locus.Runtime.VaultDenialTest`
+`Locus.Runtime.ComponentFeaturesTest`, `Locus.Runtime.WasiCapabilitiesTest` and `Locus.Runtime.VaultDenialTest`
 in this suite,
 `Locus.Runtime.MemoryBoundTest`, `Locus.Runtime.SecretAuditTest`,
 `Locus.Runtime.AttachedFetchTest`, `Locus.Runtime.FormulaHandlerTest`,
@@ -32,6 +32,8 @@ CYFR's, and the worker image's `tests/locus-runtime-image/runners.py` and
 | `gc_alloc` | reagent | allocates a GC struct; refused for the GC feature |
 | `exception_throw` | reagent | throws a tag and catches it with `try_table`; refused for the exception-handling feature |
 | `externref_table` | reagent | declares a table of `externref`; refused for GC's reference types |
+| `wide_arithmetic` | reagent | adds two 128-bit integers with `i64.add128` and answers `{"carried":true}`; admitted |
+| `socket_probe` | reagent, catalyst, formula | opens a TCP and a UDP socket through WASI and answers what the host said to each |
 
 ## Rebuilding
 
@@ -78,4 +80,8 @@ exception_throw.wat        sha256:557fad0ae8479152bfddd68c3f6ecd1d728cac41cbc120
 exception_throw.wasm       sha256:f558999c8ca27b298dae43ed58d7f7d53062a160edf399dc6168bd1ec655aaba
 externref_table.wat        sha256:f730a802a33e7ce0bb6b0aa070662d9b4818138b6fec3328ec4c99193aa83bc6
 externref_table.wasm       sha256:63c8f0725b2704e0ca504d9f6a69414999bb8c722b98d30a3df47d5709e09b62
+wide_arithmetic.wat        sha256:24d8a77f677b3b1bfb332edcb5cced1e056bdadee724b747502f58058fea7db2
+wide_arithmetic.wasm       sha256:0d77f0ef7217f2449c83a0d08d7bb0ad2f1de42fecc334b657f1ba927e6a677b
+socket_probe.wat           sha256:e113d384df5ea66d0c6ff53282665d641f33644f375187794ca8ede37368bcfb
+socket_probe.wasm          sha256:d3e535bfe8f5a0b94c1f3414729139a734e76dd4c45de6da0d828f0db80dc31d
 ```
