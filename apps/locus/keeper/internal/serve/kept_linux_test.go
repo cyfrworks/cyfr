@@ -285,7 +285,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 	spawnID := spawned["spawn_id"].(string)
 	rc := k.accept(t)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "24 80") })
-	resize, rerr := protocol.ParseRequest([]byte(`{"v":1,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+	resize, rerr := protocol.ParseRequest([]byte(`{"v":2,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 	if rerr != nil {
 		t.Fatal(rerr.Detail)
 	}

@@ -7,7 +7,8 @@ defmodule Locus.ListenerTest do
   request runs, as one table: the runtime's worker listener
   (`Locus.Runtime.WorkerListener`, cases R), the builds service
   (`Locus.BuilderService`, cases B and BH) and the backends service's
-  control and session routes (`Locus.Backends.Service`, cases C, S and SH).
+  control, session and close routes (`Locus.Backends.Service`, cases C,
+  S, SH and CL).
   Each case is driven against the real plug on a loopback port and asserts
   the answer's status, its exact body and its connection handling: "close"
   is a `connection: close` header and a socket the listener closed, "open"
@@ -922,9 +923,10 @@ defmodule Locus.ListenerTest do
 
   defp control_route, do: LB.route(:control)
   defp session_route, do: LB.route(:session)
+  defp close_route, do: LB.route(:close)
   defp backends_health_route, do: LB.route(:health)
 
-  defp lb(code), do: ~s({"error":"#{code}","version":3})
+  defp lb(code), do: ~s({"error":"#{code}","version":4})
 
   defp seq, do: System.unique_integer([:positive, :monotonic]) + 1_000
 
@@ -999,6 +1001,7 @@ defmodule Locus.ListenerTest do
         home_id: nil,
         key: "k#{System.unique_integer([:positive])}",
         mode: :run,
+        lifetime: LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16)),
         argv: []
       })
 
@@ -1400,6 +1403,41 @@ defmodule Locus.ListenerTest do
       assert_backends_health_answered(client)
     end
 
+    test "CL: a close is refused before its body as a session message is, its owner apart", ctx do
+      {:ok, body} =
+        LB.encode_close(%{
+          owner: %{athanor: @athanor, server: @server},
+          e: @e,
+          program: "fetch",
+          home_id: nil,
+          key: "never-opened",
+          mode: :run,
+          lifetime: LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+        })
+
+      signed = fn opts -> [{"x-cyfr-auth", invoke_header(ctx, body, opts)}] end
+
+      for {headers, status, code} <- [
+            {[], 401, :unauthorized},
+            {signed.(key: :binary.copy(<<7>>, 32)), 401, :unauthorized},
+            {signed.(boot: "bb_" <> String.duplicate("0", 32)), 409, :stale_boot},
+            {[{"content-length", "#{LB.max_control_bytes() + 1}"} | signed.([])], 413, :too_large}
+          ] do
+        sent = if code == :too_large, do: "", else: body
+
+        client =
+          ctx.port |> connect() |> send_request("POST", close_route(), headers, sent, :none)
+
+        assert_refused(client, status, lb(code), :close, @unread_ms)
+      end
+
+      # No owner runs at that version, and the close asks for none.
+      Agent.update(ctx.clock, &(&1 + @lease_ms))
+      client = ctx.port |> connect() |> send_request("POST", close_route(), signed.([]), body)
+      {answer, _client} = answer(client)
+      assert answer.status == 200, answer.body
+    end
+
     test "SH: health past its bound, at another version or none, or with a field it lacks",
          ctx do
       over = String.duplicate(" ", 4_097)
@@ -1412,7 +1450,7 @@ defmodule Locus.ListenerTest do
       for {body, status, code} <- [
             {~s({"version":2}), 409, :version},
             {~s({}), 409, :version},
-            {~s({"version":3,"x":1}), 400, :bad_request}
+            {~s({"version":4,"x":1}), 400, :bad_request}
           ] do
         client = ctx.port |> connect() |> send_request("POST", backends_health_route(), [], body)
         {_answer, client} = assert_refused(client, status, lb(code), :open)

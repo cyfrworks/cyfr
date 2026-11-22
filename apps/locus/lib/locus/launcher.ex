@@ -53,8 +53,11 @@ defmodule Locus.Launcher do
   `c:resize/3` sets its terminal's size;
   `c:release/3` ends it, a term signal first and the kill of everything it
   started once `grace_ms` pass, and answers at once, the `:released` event
-  following once nothing of it is left. `c:pool_stats/2` answers the
-  pool's size, its free uids and its quarantined ones.
+  following once nothing of it is left. `c:measure/2` answers what
+  it uses that cannot be given back, or an error where that is not known:
+  no reading is ever a zero.
+  `c:pool_stats/2` answers the pool's size, its free uids and its
+  quarantined ones.
 
   A spec with `control: true` asks for a process whose control channel is
   carried beside its stdio, as a runner of the runtime has one, and
@@ -108,14 +111,15 @@ defmodule Locus.Launcher do
   @typedoc """
   What an owner hears of its process: its stdio attached, bytes of its
   stdout and stderr as they arrive, its leader's end (a status or the name
-  of the signal that ended it), and its release, the last event; its
-  stdout, its stderr and its leader's end arrive in no defined order.
+  of the signal that ended it, and what memory limit killed it:
+  `t:Prima.KeeperProtocol.memory_end/0`), and its release, the last event;
+  its stdout, its stderr and its leader's end arrive in no defined order.
   """
   @type event ::
           :attached
           | {:stdout, binary()}
           | {:stderr, binary()}
-          | {:exited, integer() | nil, String.t() | nil}
+          | {:exited, integer() | nil, String.t() | nil, Prima.KeeperProtocol.memory_end()}
           | :released
 
   @typedoc """
@@ -124,7 +128,7 @@ defmodule Locus.Launcher do
   launcher's refusal, no process of it having run; its relay attached;
   bytes of its control channel, of its relay and of its stdout and
   stderr as they arrive; the control channel's and the relay's end, each
-  once; its leader's end and whether it was ended at its memory bound; a
+  once; its leader's end and what memory limit killed it; a
   relay that broke the frame codec or a channel lost; and its release,
   the last. The bytes of its control channel, its relay, its stdout and
   its stderr and its leader's end arrive in no defined order.
@@ -139,7 +143,8 @@ defmodule Locus.Launcher do
           | :relay_closed
           | {:stdout, binary()}
           | {:stderr, binary()}
-          | {:exited, {:status, integer()} | {:signal, String.t()}, boolean()}
+          | {:exited, {:status, integer()} | {:signal, String.t()},
+             Prima.KeeperProtocol.memory_end()}
           | {:error, :relay_protocol | :channel_lost}
           | :released
 
@@ -176,6 +181,10 @@ defmodule Locus.Launcher do
 
   @doc "End the process: a term signal, `grace_ms`, then the kill; `:released` follows."
   @callback release(GenServer.server() | keyword(), handle(), non_neg_integer()) :: :ok
+
+  @doc "What the process uses that cannot be given back; an error where that is not known, never a zero."
+  @callback measure(GenServer.server() | keyword(), handle()) ::
+              {:ok, Prima.KeeperProtocol.reading()} | {:error, error()}
 
   @doc "The uids of `pool`."
   @callback pool_stats(GenServer.server() | keyword(), String.t()) ::

@@ -44,7 +44,7 @@ defmodule Locus.Runtime.Keeper.Channel do
   every guest's linear memory, the pages of its home and the kernel
   memory charged to it, together. A runner that cannot stay under it
   loses every process at once; the leader's `exited` then says
-  `memory_exceeded`, read by `cyfr-locus` from the group's own counters,
+  `memory: "cap"`, read by `cyfr-locus` from the group's own counters,
   and the runner's end at its bound is logged before its owner hears the
   exit and the retirement that follow, as for any other runner's end: the
   pool taints it, the service reports it with the subtree it held, and
@@ -210,7 +210,7 @@ defmodule Locus.Runtime.Keeper.Channel do
 
   # cyfr-locus read it from the group's own counters: the kernel killed
   # the runner at its bound, not for the container's limit.
-  defp observe(channel, {:exited, exit, true}) do
+  defp observe(channel, {:exited, exit, :cap}) do
     Logger.warning(
       "[Locus.Runtime.Keeper.Channel] runner #{channel.runner} was ended at its memory bound of " <>
         "#{channel.memory_bytes} bytes (spawn #{channel.spawn_id}, #{format_exit(exit)})"

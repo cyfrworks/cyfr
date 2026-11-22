@@ -38,16 +38,13 @@ defmodule Aqua.Loop do
   ## The turn's read threads
 
   Every way a turn reads a thread's posts joins that thread to the turn's
-  read threads (`turns.read_threads`) in the transaction that writes the
-  step it belongs to, so deleting a thread finds every turn that read it.
-  A model step opens with the read threads of every earlier turn whose
-  rows the request sends, compaction summaries among them, and each other
-  thread whose posts its rows bring in (a workspace thread's pointer or
-  report, the daily thread an opening refers to), with the read threads a
-  report kept of the turn that reported, those of the turns that wrote
-  the posts an opening refers to, and those every copied file carries
-  from the post it came from; a call's result closes with the threads it
-  carries (`Aqua.Loop.Policy.threads_of/3`). The room excerpt is the
+  read threads (`turns.read_threads`) before they are read, so deleting a
+  thread finds every turn that read it. A request's rows, and what a
+  program is given, go through the one rule before they are worded
+  (`Aqua.Reader.join/5`, `Arca.TurnStorage.join_read/3`), which reads
+  them again as they stand, says which the turn is handed, and records
+  the threads those depend on. A call's result closes with the threads
+  it carries (`Aqua.Loop.Policy.threads_of/3`). The room excerpt is the
   athanor's own members' words and joins nothing.
 
   A model, hand or launched child's read threads join its turn when its
@@ -69,7 +66,7 @@ defmodule Aqua.Loop do
   alias Aqua.Loop.Binding
   alias Aqua.Loop.Binding.Call
   alias Aqua.Loop.{Planner, Policy, Request, Turn}
-  alias Aqua.Tape
+  alias Aqua.{Reader, Tape}
   alias Sanctum.Context
 
   # A root turn's holder on this boot registers here (`holder/1`).
@@ -943,14 +940,13 @@ defmodule Aqua.Loop do
 
   defp model_round(%State{} = state) do
     with {:ok, _drained} <- Tape.drain_steer(guest(state), state.turn),
-         {:ok, rows} <- Tape.projection(guest(state), state.turn),
-         removed = removed_files(state.spec.ctx, rows),
+         {:ok, rows, reading} <- projected(state),
+         reading = %{reading | removed: removed_files(state.spec.ctx, rows)},
          files = later_files(state, rows),
-         {:ok, planned, rows} <- compact(state, rows, removed, files),
-         cited = cited(planned, rows),
-         {:ok, step, planned} <- open_model_step(planned, "chat", rows, cited) do
+         {:ok, planned, rows, reading} <- compact(state, rows, reading, files),
+         {:ok, step, planned} <- open_model_step(planned, "chat") do
       excerpt = if planned.excerpt_sent?, do: nil, else: planned.spec.excerpt
-      request = request(planned, rows, excerpt, cited, removed, files)
+      request = request(planned, rows, reading, excerpt, files)
       planned = %{planned | sent_upto: highest_seq(rows)}
 
       if excerpt do
@@ -973,24 +969,21 @@ defmodule Aqua.Loop do
   # renders text, and an image or a document exists only as these typed
   # blocks, so a round without them would not show the model what it was
   # asked about.
-  defp request(%State{spec: spec} = state, rows, excerpt, cited, removed, files) do
+  defp request(%State{spec: spec} = state, rows, reading, excerpt, files) do
+    # The opening post's files were read as the turn was built: they go only
+    # while that post is still the turn's to read.
+    attachments =
+      if Enum.any?(rows, &(&1.id == state.turn.message_id)), do: spec.attachments, else: []
+
     rows = Planner.prune(rows)
     authors = rows |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.reject(&agent_or_system?/1)
-    multi? = length(authors) > 1
-
-    names =
-      if multi?, do: Map.new(authors, &{&1, Sanctum.Tenancy.Users.display_name(&1)}), else: %{}
 
     messages =
-      Request.messages(rows, removed,
-        me: spec.agent["name"],
-        names: names,
-        multi_author?: multi?,
+      Request.messages(rows, %{reading | named?: length(authors) > 1},
         excerpt: excerpt,
-        attachments: spec.attachments,
+        attachments: attachments,
         task_message_id: state.turn.message_id,
-        files: files,
-        refs: Map.new(cited, &{&1.id, &1})
+        files: files
       )
 
     Request.build(
@@ -1007,19 +1000,28 @@ defmodule Aqua.Loop do
   defp agent_or_system?(author),
     do: author in Prima.Author.reserved()
 
-  # By row id, the refs of each row's files the person deleted from Files
-  # (`Aqua.Attachments.as_kept/2`): read once a round, before the size
-  # estimate, which the dispatch shares, and only for the rows the request
-  # carries to the model (`Request.carried/1`), one listing per row that
-  # holds files. A compaction this round makes keeps a subset of them.
-  defp removed_files(ctx, rows) do
-    for row <- rows |> Planner.prune() |> Request.carried(),
-        Aqua.Attachments.refs_of(row) != [],
-        removed = Enum.filter(Aqua.Attachments.as_kept(ctx, row), &(&1["removed"] == true)),
-        removed != [],
-        into: %{},
-        do: {row.id, removed}
+  # The rows the turn reads now and their reading, joined before any is
+  # read (`Aqua.Reader.join/5`).
+  defp projected(%State{} = state) do
+    guest = guest(state)
+
+    with {:ok, rows} <- Tape.projection(guest, state.turn),
+         {:ok, joined} <- Reader.join(guest, state.turn, rows),
+         do: {:ok, joined.rows, joined.reading}
   end
+
+  # The rows again after the round wrote some, with the files deleted as
+  # the round first read them: a compaction keeps a subset of those rows.
+  defp reprojected(%State{} = state, %{removed: removed}) do
+    with {:ok, rows, reading} <- projected(state),
+         do: {:ok, rows, %{reading | removed: removed}}
+  end
+
+  # The files the person deleted (`Aqua.Reader.removed/2`): read once a
+  # round, before the size estimate, which the dispatch shares, and only
+  # for the rows the request carries to the model (`Request.carried/1`).
+  defp removed_files(ctx, rows),
+    do: Reader.removed(ctx, rows |> Planner.prune() |> Request.carried())
 
   # By row id, the files of each post written into the turn after the one
   # that opened it (a drained steer, `Tape.post?/2`), as blocks the brain
@@ -1042,15 +1044,12 @@ defmodule Aqua.Loop do
   # counts against the turn's cap, before it opens; the count is the
   # turn's, rebuilt from its rows on a continuation.
   #
-  # The step opens with the threads its rows carry, and with the read
-  # threads of the earlier turns whose rows it sends, joined in the step's
-  # own transaction.
-  defp open_model_step(state, purpose, rows \\ [], cited \\ [])
-
-  defp open_model_step(%State{steps: steps}, _purpose, _rows, _cited) when steps >= @max_steps,
+  # What its request carries joined the turn before it was read
+  # (`projected/1`).
+  defp open_model_step(%State{steps: steps}, _purpose) when steps >= @max_steps,
     do: {:error, :step_cap}
 
-  defp open_model_step(%State{} = state, purpose, rows, cited) do
+  defp open_model_step(%State{} = state, purpose) do
     with {:ok, step} <-
            Tape.record_model_intent(guest(state), state.turn, %{
              idempotency_key:
@@ -1059,9 +1058,7 @@ defmodule Aqua.Loop do
              tool: state.spec.catalyst,
              action: "chat",
              purpose: purpose,
-             dispatch_state: "dispatched",
-             threads: Tape.carried_threads(rows),
-             threads_from: earlier_turns(state, rows ++ cited)
+             dispatch_state: "dispatched"
            }) do
       {:ok, step, %{state | steps: state.steps + 1}}
     end
@@ -1071,36 +1068,6 @@ defmodule Aqua.Loop do
   # carries it and the model has the tool.
   defp offers_search?(spec),
     do: Request.offers_search?(spec.offered, spec.authority, spec.capabilities)
-
-  # The daily thread's posts the openings among `rows` refer to, read as
-  # they stand now and never copied: a post of another thread, or one
-  # deleted since, reads as nothing.
-  defp cited(%State{} = state, rows) do
-    rows
-    |> Enum.filter(&(&1.kind == "opening"))
-    |> Enum.flat_map(fn row ->
-      case Tape.payload(row) do
-        %{"from" => %{"thread" => daily}, "refs" => [_ | _] = ids} when is_binary(daily) ->
-          Enum.flat_map(Enum.uniq(ids), fn id ->
-            case is_binary(id) && Tape.message(guest(state), id) do
-              {:ok, %{thread_id: ^daily} = cited} -> [cited]
-              _gone -> []
-            end
-          end)
-
-        _no_refs ->
-          []
-      end
-    end)
-    |> Enum.uniq_by(& &1.id)
-  end
-
-  # The earlier turns whose rows a request sends: every row's turn but
-  # this one's, and the turn a crew row came from — a delivered request's
-  # asking turn, a reply's member turn — whose words it carries. An
-  # unattached row of a person's names none.
-  defp earlier_turns(%State{turn: turn}, rows),
-    do: rows |> Tape.writing_turns() |> Enum.reject(&(&1 == turn.id))
 
   # A brain whose grant holds no key to use is said as the brain's own
   # state, a line pointing at the Aqua page (`Aqua.Crew.unready/1`'s
@@ -2368,21 +2335,28 @@ defmodule Aqua.Loop do
   defp open_program(%State{} = state), do: {:ok, state}
 
   # What the program is given before its first answer joins the turn's
-  # read threads before its start is decided, as a model step's request
-  # joins what it reads, so a thread's deletion finds the turn: the threads
-  # the turn's posts carry, and for a thread with no native session those
-  # of the thread so far a fresh session's first post carries
-  # (`Aqua.Program.context_rows/2`), with the read threads of the turns
-  # whose words those rows are.
-  defp join_startup(%State{} = state) do
+  # read threads before its start is decided, as a request's rows join
+  # before they are read (`Aqua.Reader.join/5`), so a thread's deletion
+  # finds the turn: the turn's posts, and for a thread with no native
+  # session the thread so far a fresh session's first post carries
+  # (`Aqua.Program.context_rows/2`). The post that opened the turn is one
+  # of those posts until it is handed over. One that is not handed over was
+  # deleted with its workspace thread, and a program started without it
+  # would wait on it for good: the turn ends saying so.
+  defp join_startup(%State{turn: turn} = state) do
     guest = guest(state)
 
-    with {:ok, posts} <- Tape.brain_posts(guest, state.turn),
-         {:ok, context} <- startup_context(state, posts) do
-      rows = posts ++ context
-      read = Enum.flat_map(earlier_turns(state, rows), &Tape.turn_threads(guest, &1))
-      Tape.join_threads(guest, state.turn, Tape.carried_threads(rows) ++ read)
+    with {:ok, posts} <- Tape.brain_posts(guest, turn),
+         {:ok, context} <- startup_context(state, posts),
+         {:ok, %{rows: handed}} <- Reader.join(guest, turn, posts ++ context) do
+      if Enum.any?(handed, &(&1.id == turn.message_id)), do: :ok, else: post_gone(state)
     end
+  end
+
+  defp post_gone(%State{} = state) do
+    sentence = Aqua.Program.post_gone(program_title(state))
+    _ = system_row(state, sentence)
+    {:error, sentence}
   end
 
   defp startup_context(%State{spec: spec} = state, [first | _]) do
@@ -2714,13 +2688,13 @@ defmodule Aqua.Loop do
   # Compaction
   # ---------------------------------------------------------------------------
 
-  defp compact(%State{spec: spec} = state, rows, removed, files, flush? \\ true) do
+  defp compact(%State{spec: spec} = state, rows, reading, files, flush? \\ true) do
     # Size the request the way the executor will: it encodes the input and
     # refuses it past the consented cap of the node being entered, which for
     # a model call is the catalyst, not the agent. Without this the turn
     # fails at admission on a request compaction could have made fit.
     excerpt = if state.excerpt_sent?, do: nil, else: spec.excerpt
-    probe = request(state, rows, excerpt, cited(state, rows), removed, files)
+    probe = request(state, rows, reading, excerpt, files)
 
     case Planner.plan(rows,
            capabilities: spec.capabilities,
@@ -2731,32 +2705,32 @@ defmodule Aqua.Loop do
            max_request_size: spec.request_cap
          ) do
       :fit ->
-        {:ok, state, rows}
+        {:ok, state, rows, reading}
 
       {:compact, %{summarized_through_seq: 0}} ->
         # Nothing older than the boundary: a summary of no rows costs a model
         # call and writes a row that stands for nothing. The estimate counts
         # only transcript rows, so on a small window the system prompt and
         # tool definitions alone can ask for this every round.
-        {:ok, state, rows}
+        {:ok, state, rows, reading}
 
       {:compact, boundary} when flush? ->
         # The flush's rows are newer than any boundary, so the plan is made
         # again over the rows as they now stand.
         case flush(state, rows, probe) do
           {:flushed, state} ->
-            with {:ok, rows} <- Tape.projection(guest(state), state.turn),
-                 do: compact(state, rows, removed, files, false)
+            with {:ok, rows, reading} <- reprojected(state, reading),
+                 do: compact(state, rows, reading, files, false)
 
           {:skipped, state} ->
-            summarize(state, rows, boundary, removed)
+            summarize(state, rows, boundary, reading)
 
           {:error, :superseded} = superseded ->
             superseded
         end
 
       {:compact, boundary} ->
-        summarize(state, rows, boundary, removed)
+        summarize(state, rows, boundary, reading)
     end
   end
 
@@ -2773,7 +2747,7 @@ defmodule Aqua.Loop do
          true <- flush_runs?(state, offered),
          request = flush_request(probe, Map.put(offered, @flush_key, "offered")),
          size when is_integer(size) and (is_nil(cap) or size <= cap) <- encoded_size(request),
-         {:ok, step, opened} <- open_model_step(state, "flush", rows) do
+         {:ok, step, opened} <- open_model_step(state, "flush") do
       keep_notes(%{opened | sent_upto: highest_seq(rows)}, step, request)
     else
       {:error, :superseded} = superseded -> superseded
@@ -2905,14 +2879,14 @@ defmodule Aqua.Loop do
   defp keep_note(%State{} = state, step, {:error, message}),
     do: close(state, step, nil, {:error, message})
 
-  # `removed` is the round's read (`removed_files/2`): the rows a summary
-  # stands for are among those the round's request carried, so a
-  # compaction lists nothing of its own.
-  defp summarize(%State{spec: spec} = state, rows, boundary, removed) do
+  # `reading` is the round's, its deleted files among it: the rows a
+  # summary stands for are among those the round's request carried, so a
+  # compaction lists nothing of its own. A summary names no reader.
+  defp summarize(%State{spec: spec} = state, rows, boundary, reading) do
     previous = rows |> Enum.filter(&(&1.kind == "compaction")) |> List.last()
 
     # Only what the previous summary does not already stand for, and
-    # never a compaction row: `Request.messages/2` renders the latest one
+    # never a compaction row: `Request.messages/3` renders the latest one
     # as a summary block, so leaving it in sends the previous summary
     # twice — once rendered, once as `previous_summary` below.
     since = if previous, do: Tape.payload(previous)["first_kept_seq"] || 0, else: 0
@@ -2924,19 +2898,19 @@ defmodule Aqua.Loop do
       end)
 
     request =
-      Planner.summary_request(Request.messages(older, removed),
+      Planner.summary_request(Request.messages(older, %{reading | me: nil, named?: false}),
         model: spec.model,
         previous_summary: previous && previous.content
       )
 
-    case open_model_step(state, "compaction", rows) do
+    case open_model_step(state, "compaction") do
       {:error, :step_cap} -> {:error, :step_cap}
-      {:error, reason} -> skip_compaction(state, rows, reason)
-      {:ok, step, state} -> commit_summary(state, rows, boundary, request, step)
+      {:error, reason} -> skip_compaction(state, rows, reading, reason)
+      {:ok, step, state} -> commit_summary(state, rows, reading, boundary, request, step)
     end
   end
 
-  defp commit_summary(%State{} = state, rows, boundary, request, step) do
+  defp commit_summary(%State{} = state, rows, reading, boundary, request, step) do
     with {:ok, data} <- model_call(state, step, request, nil),
          summary =
            data["content"]
@@ -2958,8 +2932,8 @@ defmodule Aqua.Loop do
              summarized_through_seq: boundary.summarized_through_seq,
              step_id: step.id
            }),
-         {:ok, projected} <- Tape.projection(guest(state), state.turn) do
-      {:ok, %{state | observed: nil}, projected}
+         {:ok, projected, reread} <- reprojected(state, reading) do
+      {:ok, %{state | observed: nil}, projected, reread}
     else
       {:error, :superseded} ->
         {:error, :superseded}
@@ -2968,7 +2942,7 @@ defmodule Aqua.Loop do
         # The summary request answered nothing the turn can commit; a step
         # already closed by its response stays as it closed.
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: failure(other)})
-        skip_compaction(state, rows, other)
+        skip_compaction(state, rows, reading, other)
     end
   end
 
@@ -3006,9 +2980,9 @@ defmodule Aqua.Loop do
 
   # A compaction that did not land leaves the rows as they were; the
   # model step it opened stays counted.
-  defp skip_compaction(%State{} = state, rows, reason) do
+  defp skip_compaction(%State{} = state, rows, reading, reason) do
     Logger.warning("[Aqua.Loop] compaction skipped for turn #{state.turn.id}: #{inspect(reason)}")
-    {:ok, state, rows}
+    {:ok, state, rows, reading}
   end
 
   # ---------------------------------------------------------------------------

@@ -8,13 +8,13 @@ defmodule Locus.Backends.Reservations do
   Data only: the owner table holds it and acts on what it answers.
 
   A reservation is a session's heir tag (`t:tag/0`: its ledger, its session,
-  its athanor, its row, its session key, its memory bound and its kept
-  home) and its state:
+  its athanor, its row, the generation and epoch that opened it, its session
+  key, its lifetime, its memory bound and its kept home) and its state:
 
   | State | Holds | Event | Next | Authority |
   |---|---|---|---|---|
   | `reserved` | an open admitted, its home being made or its pool read | `:started` | `asked` | the table: it started the session's process |
-  | | | `:abandoned` | released | the table: it started no session process, so nothing was asked |
+  | | | `:abandoned` | released | the table: its preparation answered and it started no session process, so nothing was asked |
   | `asked` | a session process that may have asked its launcher | `:spawned` | `running` | the launcher, answering the spawn |
   | `asked`, `running`, `ending` | | `:confirmed` | released | the launcher, through the session (`:vacated`: refused, or released) |
   | `asked`, `running` | a process the launcher may run | `:unfollowed` | `ending` | the table: its session process died, its spawn's answer was lost, or its owner retired |
@@ -37,7 +37,9 @@ defmodule Locus.Backends.Reservations do
   holds a scratch session's uid of the pool, which only its process takes.
   Every state but `reserved` stands for a process the launcher may still
   run under its tag's row and key (`process?/4`). A tag that names no row
-  or key names a process of no key.
+  or key names a process of no key. A close names a lifetime
+  (`t:lifetime/0`), which an adoption carries in the tag, so it needs no
+  owner and finds nothing of another lifetime (`of_lifetime/2`).
   """
 
   @typedoc "A session's heir tag, which a table that adopts it holds by."
@@ -46,9 +48,22 @@ defmodule Locus.Backends.Reservations do
           session: key(),
           athanor: String.t(),
           server: String.t(),
+          g: pos_integer(),
+          e: pos_integer(),
           key: term(),
+          lifetime: String.t(),
           memory_bytes: pos_integer(),
           home_id: String.t() | nil
+        }
+
+  @typedoc "One lifetime: one process of one key, as the version that opened it names it."
+  @type lifetime :: %{
+          athanor: String.t(),
+          server: String.t(),
+          g: pos_integer(),
+          e: pos_integer(),
+          key: term(),
+          lifetime: String.t()
         }
 
   @typedoc "A session, by its owner and its id."
@@ -142,6 +157,14 @@ defmodule Locus.Backends.Reservations do
       _other ->
         false
     end)
+  end
+
+  @doc "Every reservation of the lifetime `named`, and of no other."
+  @spec of_lifetime(t(), lifetime()) :: [key()]
+  def of_lifetime(reservations, named) do
+    for {key, %{tag: tag}} <- reservations,
+        Map.take(tag, [:athanor, :server, :g, :e, :key, :lifetime]) == named,
+        do: key
   end
 
   @doc "The bytes the reservations of the athanors `athanor?` takes hold."

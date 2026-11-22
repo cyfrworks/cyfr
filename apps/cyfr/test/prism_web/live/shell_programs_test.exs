@@ -155,8 +155,15 @@ defmodule PrismWeb.ShellProgramsTest do
                args: []
              })
 
-    assert_receive {:session, "open", %{"key" => ^session}, _fields}, 2_000
+    key = key_of(session)
+    assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
     session
+  end
+
+  # The key the terminal `session` opened under: its one lifetime's.
+  defp key_of(session) do
+    [{pid, _person}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
+    :sys.get_state(pid).lifetime.key
   end
 
   defp chip(session), do: ~s(#{@shelf} [data-canvas-shelf-program="#{session}"])
@@ -182,7 +189,8 @@ defmodule PrismWeb.ShellProgramsTest do
     render_async(page, @answered_ms)
     path = assert_patch(page, @answered_ms)
     assert %{"terminal" => session} = URI.decode_query(URI.parse(path).query || "")
-    assert_receive {:session, "open", %{"key" => ^session}, _fields}, 2_000
+    key = key_of(session)
+    assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
 
     GenServer.stop(page.pid, :normal)
 
@@ -201,8 +209,8 @@ defmodule PrismWeb.ShellProgramsTest do
     desktop |> element(chip(session) <> " button.canvas-shelf-program-close") |> render_click()
     assert_receive {:session, "close", _message, _fields}, 2_000
 
+    assert eventually(fn -> not has_element?(desktop, chip(session)) end)
     assert {:ok, []} = Opus.Programs.running(person(user, athanor))
-    refute has_element?(desktop, chip(session))
     assert flash(desktop, "error") == nil
   end
 
@@ -280,7 +288,7 @@ defmodule PrismWeb.ShellProgramsTest do
     {desktop, _html} = mount_desktop(conn)
     desktop |> element(chip(session) <> " button.canvas-shelf-program-close") |> render_click()
     assert_receive {:session, "close", _message, _fields}, 2_000
-    assert {:ok, []} = Opus.Programs.running(me)
+    assert eventually(fn -> Opus.Programs.running(me) == {:ok, []} end)
   end
 
   test "Close's answers read in the terminal's own words, and the shelf lists what is running after",
@@ -289,7 +297,7 @@ defmodule PrismWeb.ShellProgramsTest do
 
     # Already gone: the chip of a session that ended meanwhile.
     render_click(desktop, "close_program", %{"session" => "trm_never"})
-    assert flash(desktop, "info") == "This program is not running any more."
+    assert eventually(fn -> flash(desktop, "info") == "This program is not running any more." end)
 
     # Unanswered: the service does not confirm, and CYFR ends it.
     session = start!(user, athanor, row)
@@ -297,8 +305,9 @@ defmodule PrismWeb.ShellProgramsTest do
     Scripted.refuse_once(fake, "close", "internal")
     desktop |> element(chip(session) <> " button.canvas-shelf-program-close") |> render_click()
 
-    assert flash(desktop, "error") ==
-             "The close was not confirmed yet; CYFR ends the program."
+    assert eventually(fn ->
+             flash(desktop, "error") == "The close was not confirmed yet; CYFR ends the program."
+           end)
 
     assert eventually(fn -> not has_element?(desktop, chip(session)) end)
     assert {:ok, []} = Opus.Programs.running(person(user, athanor))

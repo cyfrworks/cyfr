@@ -127,9 +127,9 @@ def scripted_controller(image):
                report)
 
         # A recv is idempotent: the same `after` answers the same lines.
-        status, opened = c.open(OWNER, "probe", key="mcp")
+        status, opened = c.open(OWNER, "probe", key="mcp", lifetime=c.lifetime(client.session))
         expect(status == 200 and opened["resumed"] is True and opened["session"] == client.session,
-               "an open of a running session's key attaches to it", opened)
+               "an open of a running session's lifetime answers it", opened)
         line = json.dumps({"jsonrpc": "2.0", "id": 900, "method": "tools/list"}, separators=(",", ":"))
         expect(c.send(OWNER, client.session, [line]) == (200, {"version": VERSION, "status": "running"}),
                "a line is sent to the running session")

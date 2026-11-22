@@ -308,6 +308,10 @@ defmodule Locus.DirectLauncher do
   @impl Locus.Launcher
   def pool_stats(_opts, pool) when is_binary(pool), do: {:ok, %{size: 1, free: 1, quarantined: 0}}
 
+  # A process here has no group of its own, so what it uses is not known.
+  @impl Locus.Launcher
+  def measure(_opts, _handle), do: {:error, {:refused, "unmeasured"}}
+
   # ————— heirs, fences and adoption —————
 
   # The node's one record of every process started for an heir, and of
@@ -1142,9 +1146,9 @@ defmodule Locus.DirectLauncher.Child do
   # A runner's owner hears the exit as cyfr-locus reports it, with no
   # memory bound to have reached; a long-lived process's as
   # `Locus.Launcher` spells it.
-  defp exit_event(:control, exit), do: {:exited, exit, false}
-  defp exit_event(:stdio, {:status, code}), do: {:exited, code, nil}
-  defp exit_event(:stdio, {:signal, signal}), do: {:exited, nil, signal}
+  defp exit_event(:control, exit), do: {:exited, exit, nil}
+  defp exit_event(:stdio, {:status, code}), do: {:exited, code, nil, nil}
+  defp exit_event(:stdio, {:signal, signal}), do: {:exited, nil, signal, nil}
 
   defp trim_sig("SIG" <> name), do: name
 end

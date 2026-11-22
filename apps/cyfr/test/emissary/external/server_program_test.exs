@@ -72,6 +72,49 @@ defmodule Emissary.External.ServerProgramTest do
     pid
   end
 
+  # The server's process asked again for, as the server asks for it.
+  defp ask_again(pid) do
+    %{lifetime: lifetime} = :sys.get_state(pid)
+    Opus.Programs.box_open(lifetime, pid, %{}, System.system_time(:millisecond) + 10_000)
+  end
+
+  defp close_process(pid) do
+    %{lifetime: lifetime} = :sys.get_state(pid)
+    Opus.Programs.box_close(lifetime)
+  end
+
+  test "a second ask for a running lifetime answers the same process, and one for a closed lifetime is refused",
+       %{ctx: ctx, fake: fake, row: row} do
+    assert {:ok, _tools} = Servers.ensure_started(row, ctx)
+    pid = server_pid(ctx, row)
+    assert [{session, %{running: true}}] = Map.to_list(Scripted.sessions(fake, row.id))
+
+    assert {:ok, %{session: ^session, resumed: true}} = ask_again(pid)
+
+    assert close_process(pid) == :ok
+    assert {:error, {:refused, :lifetime_over, _boot}} = ask_again(pid)
+    assert [{^session, %{running: false}}] = Map.to_list(Scripted.sessions(fake, row.id))
+
+    # The next call starts the program afresh, as another lifetime.
+    assert {:ok, %{"content" => [%{"text" => "found"}]}} =
+             Emissary.External.Server.call_tool(pid, "search", %{})
+
+    assert [_next] = for({id, %{running: true}} <- Scripted.sessions(fake, row.id), do: id)
+  end
+
+  test "a tool server opens through the box, which sends nothing without its slot",
+       %{ctx: ctx, fake: fake, row: row} do
+    assert {:ok, _tools} = Servers.ensure_started(row, ctx)
+    pid = server_pid(ctx, row)
+    assert_receive {:session, "open", _wire, _fields}, 2_000
+    Scripted.end_sessions(fake, row.id)
+    Arca.ControlPlane.record(:lost)
+
+    assert {:error, _sentence} = Emissary.External.Server.call_tool(pid, "search", %{})
+    refute_received {:session, "open", _wire, _fields}
+    Arca.ControlPlane.record(:unclaimed)
+  end
+
   test "a listing paged one tool a page is followed to its last page", %{ctx: ctx, row: row} do
     assert {:ok, tools} = Servers.ensure_started(row, ctx)
     assert Enum.map(tools, & &1["name"]) == @tools

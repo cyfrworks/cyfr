@@ -38,6 +38,7 @@ defmodule Prima.KeeperProtocolTest do
     "resize" => :resize,
     "release" => :release,
     "pool" => :pool,
+    "measure" => :measure,
     "home_make" => :home_make,
     "home_measure" => :home_measure,
     "home_retire" => :home_retire
@@ -105,6 +106,8 @@ defmodule Prima.KeeperProtocolTest do
     "pty of zero rows" => "pty",
     "pty of cols above the maximum" => "pty",
     "pty of fractional rows" => "pty",
+    "measure without a spawn id" => "spawn_id",
+    "measure without an id" => "id",
     "resize without rows" => "rows",
     "resize carrying an id" => "id",
     "resize of zero rows" => "rows",
@@ -463,7 +466,7 @@ defmodule Prima.KeeperProtocolTest do
       end
 
       assert @vectors["replies"] |> Enum.map(& &1["type"]) |> Enum.uniq() |> Enum.sort() ==
-               ~w(error exited pool released spawned)
+               ~w(error exited measured pool released spawned)
     end
 
     test "every home reply decodes to its typed shape, and the over-cap refusal as an error" do
@@ -487,10 +490,13 @@ defmodule Prima.KeeperProtocolTest do
   defp expected_reply(%{"type" => "error"} = r), do: {:error, r["id"], r["spawn_id"], r["code"]}
 
   defp expected_reply(%{"type" => "exited", "signal" => nil} = r),
-    do: {:exited, r["spawn_id"], {:status, r["code"]}, r["memory_exceeded"]}
+    do: {:exited, r["spawn_id"], {:status, r["code"]}, memory(r["memory"])}
 
   defp expected_reply(%{"type" => "exited"} = r),
-    do: {:exited, r["spawn_id"], {:signal, r["signal"]}, r["memory_exceeded"]}
+    do: {:exited, r["spawn_id"], {:signal, r["signal"]}, memory(r["memory"])}
+
+  defp expected_reply(%{"type" => "measured"} = r),
+    do: {:measured, r["id"], %{bytes: r["bytes"], lesser: r["lesser"]}}
 
   defp expected_reply(%{"type" => "released"} = r), do: {:released, r["spawn_id"]}
 
@@ -500,6 +506,11 @@ defmodule Prima.KeeperProtocolTest do
   defp expected_reply(%{"type" => "home_made"} = r), do: {:home_made, r["id"]}
   defp expected_reply(%{"type" => "home_measured"} = r), do: {:home_measured, r["id"], r["bytes"]}
   defp expected_reply(%{"type" => "home_retired"} = r), do: {:home_retired, r["id"]}
+
+  defp memory(nil), do: nil
+  defp memory("cap"), do: :cap
+  defp memory("machine"), do: :machine
+  defp memory("either"), do: :either
 
   describe "frames" do
     test "a header over the bound or on an unknown stream is refused as soon as it is in" do
@@ -667,7 +678,7 @@ defmodule Prima.KeeperProtocolTest do
       resize = %{type: :resize, spawn_id: @spawn_id, rows: 50, cols: 132}
 
       assert line(resize) ==
-               ~s({"cols":132,"rows":50,"spawn_id":"#{@spawn_id}","type":"resize","v":1}\n)
+               ~s({"cols":132,"rows":50,"spawn_id":"#{@spawn_id}","type":"resize","v":2}\n)
 
       for {member, value} <- [
             home_max_bytes: bounds.max_home_bytes + 1,
@@ -691,7 +702,7 @@ defmodule Prima.KeeperProtocolTest do
       home = %{type: :home_retire, id: "h", path: path, uid: 1}
 
       assert line(home) ==
-               ~s({"id":"h","path":"#{path}","type":"home_retire","uid":1,"v":1}\n)
+               ~s({"id":"h","path":"#{path}","type":"home_retire","uid":1,"v":2}\n)
 
       assert line(%{home | uid: bounds.max_uid})
       assert refused(%{home | uid: bounds.max_uid + 1}) =~ ~r/\Auid /
@@ -717,13 +728,13 @@ defmodule Prima.KeeperProtocolTest do
       assert line(spawn_request(%{env: env, control: true, memory_bytes: 16_777_216})) ==
                ~s({"argv":["true"],"attach":{"path":"/run/a.sock","token":"#{@token}"},) <>
                  ~s("control":true,"cpu_quota":100000,"env":{"ALPHA":"a","ZED":"z"},"id":"1",) <>
-                 ~s("memory_bytes":16777216,"pool":"build","type":"spawn","v":1}\n)
+                 ~s("memory_bytes":16777216,"pool":"build","type":"spawn","v":2}\n)
 
       assert line(spawn_request(%{pool: "runner", control: true, isolation: "netns"})) ==
                ~s({"argv":["true"],"attach":{"path":"/run/a.sock","token":"#{@token}"},) <>
                  ~s("control":true,"cpu_quota":100000,"id":"1","isolation":"netns",) <>
                  ~s("memory_bytes":16777216,) <>
-                 ~s("pool":"runner","type":"spawn","v":1}\n)
+                 ~s("pool":"runner","type":"spawn","v":2}\n)
 
       assert KeeperProtocol.isolations() == ["netns"]
 
@@ -736,16 +747,16 @@ defmodule Prima.KeeperProtocolTest do
              )
 
       assert line(%{type: :pool, id: "pool-1", pool: "runner"}) ==
-               ~s({"id":"pool-1","pool":"runner","type":"pool","v":1}\n)
+               ~s({"id":"pool-1","pool":"runner","type":"pool","v":2}\n)
     end
   end
 
   describe "replies" do
     test "of another version, type or member, or not one object, are refused" do
-      base = %{"v" => 1, "type" => "released", "spawn_id" => @spawn_id}
+      base = %{"v" => 2, "type" => "released", "spawn_id" => @spawn_id}
       decode = &KeeperProtocol.decode_reply(Jason.encode!(&1))
 
-      assert decode.(%{base | "v" => 2}) == {:error, :bad_version}
+      assert decode.(%{base | "v" => 1}) == {:error, :bad_version}
       assert decode.(Map.delete(base, "v")) == {:error, :bad_version}
       assert decode.(%{base | "type" => "spawn"}) == {:error, :unknown_type}
       assert decode.(Map.put(base, "extra", 1)) == {:error, {:unknown_field, "extra"}}
@@ -761,7 +772,7 @@ defmodule Prima.KeeperProtocolTest do
     end
 
     test "a home_measured's bytes is a whole number JSON carries exactly" do
-      measured = %{"v" => 1, "type" => "home_measured", "id" => "h"}
+      measured = %{"v" => 2, "type" => "home_measured", "id" => "h"}
       decode = &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(measured, &1)))
       most = 9_007_199_254_740_991
 
@@ -772,12 +783,12 @@ defmodule Prima.KeeperProtocolTest do
       assert decode.(%{"bytes" => "1"}) == {:error, {:wrong_type, "bytes"}}
       assert decode.(%{}) == {:error, {:missing_field, "bytes"}}
 
-      assert KeeperProtocol.decode_reply(~s({"v":1,"type":"home_made","id":"h","bytes":1})) ==
+      assert KeeperProtocol.decode_reply(~s({"v":2,"type":"home_made","id":"h","bytes":1})) ==
                {:error, {:unknown_field, "bytes"}}
     end
 
     test "a spawned without its uid or pid is refused" do
-      spawned = %{"v" => 1, "type" => "spawned", "id" => "7", "spawn_id" => @spawn_id}
+      spawned = %{"v" => 2, "type" => "spawned", "id" => "7", "spawn_id" => @spawn_id}
       decode = &KeeperProtocol.decode_reply(Jason.encode!(&1))
 
       assert decode.(Map.put(spawned, "pid", 1)) == {:error, {:missing_field, "uid"}}
@@ -787,14 +798,14 @@ defmodule Prima.KeeperProtocolTest do
                {:error, {:invalid_field, "uid"}}
     end
 
-    test "an exited with both a code and a signal, neither, or no boolean report is refused" do
+    test "an exited with both a code and a signal, neither, or no memory reason is refused" do
       exited = %{
-        "v" => 1,
+        "v" => 2,
         "type" => "exited",
         "spawn_id" => @spawn_id,
         "code" => nil,
         "signal" => nil,
-        "memory_exceeded" => false
+        "memory" => nil
       }
 
       decode = &KeeperProtocol.decode_reply(Jason.encode!(&1))
@@ -803,21 +814,46 @@ defmodule Prima.KeeperProtocolTest do
       assert decode.(%{exited | "code" => 1, "signal" => "SIGKILL"}) == {:error, :ambiguous_exit}
       assert decode.(Map.delete(exited, "code")) == {:error, {:missing_field, "code"}}
 
-      assert decode.(%{exited | "code" => 0, "memory_exceeded" => nil}) ==
-               {:error, {:wrong_type, "memory_exceeded"}}
+      for not_text <- [true, false, 1] do
+        assert decode.(%{exited | "code" => 0, "memory" => not_text}) ==
+                 {:error, {:wrong_type, "memory"}}
+      end
 
-      assert decode.(%{exited | "code" => 0, "memory_exceeded" => "true"}) ==
-               {:error, {:wrong_type, "memory_exceeded"}}
+      for unknown <- ["", "true", "Cap"] do
+        assert decode.(%{exited | "code" => 0, "memory" => unknown}) ==
+                 {:error, {:invalid_field, "memory"}}
+      end
 
-      assert decode.(Map.delete(%{exited | "code" => 0}, "memory_exceeded")) ==
-               {:error, {:missing_field, "memory_exceeded"}}
+      assert decode.(Map.delete(%{exited | "code" => 0}, "memory")) ==
+               {:error, {:missing_field, "memory"}}
 
-      assert decode.(%{exited | "code" => 0}) == {:ok, {:exited, @spawn_id, {:status, 0}, false}}
+      assert decode.(%{exited | "code" => 0}) == {:ok, {:exited, @spawn_id, {:status, 0}, nil}}
+    end
+
+    test "a measured's bytes is a whole number, and a reading not made is never one" do
+      measured = %{"v" => 2, "type" => "measured", "id" => "25", "lesser" => false}
+      decode = &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(measured, &1)))
+
+      assert decode.(%{"bytes" => 1}) == {:ok, {:measured, "25", %{bytes: 1, lesser: false}}}
+
+      assert decode.(%{"bytes" => 1, "lesser" => true}) ==
+               {:ok, {:measured, "25", %{bytes: 1, lesser: true}}}
+
+      assert decode.(%{"bytes" => 1, "lesser" => "true"}) == {:error, {:wrong_type, "lesser"}}
+      assert decode.(%{"bytes" => 1, "lesser" => nil}) == {:error, {:wrong_type, "lesser"}}
+
+      assert KeeperProtocol.decode_reply(~s({"v":2,"type":"measured","id":"25","bytes":1})) ==
+               {:error, {:missing_field, "lesser"}}
+
+      assert decode.(%{"bytes" => 0}) == {:error, {:invalid_field, "bytes"}}
+      assert decode.(%{"bytes" => -1}) == {:error, {:invalid_field, "bytes"}}
+      assert decode.(%{"bytes" => nil}) == {:error, {:wrong_type, "bytes"}}
+      assert decode.(%{}) == {:error, {:missing_field, "bytes"}}
     end
 
     test "an error names its request by id, spawn id, both or neither" do
       decode =
-        &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(%{"v" => 1, "type" => "error"}, &1)))
+        &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(%{"v" => 2, "type" => "error"}, &1)))
 
       assert decode.(%{"code" => "bad_request"}) == {:ok, {:error, nil, nil, "bad_request"}}
 

@@ -7,7 +7,7 @@ cyfr-locus bounds a spawn that asks for `memory_bytes` with a cgroup of its
 own (apps/locus/keeper/internal/cgroup): the kernel never lets the spawn's whole
 process tree, the tmpfs pages of its home and the kernel memory charged to
 it pass the bound, kills every process of the spawn when they cannot stay
-under it, and cyfr-locus reports that end as `memory_exceeded`. It can do
+under it, and cyfr-locus reports that end as `memory` `cap`. It can do
 so only where the service mounts the container's cgroup writable
 (`security_opt: writable-cgroups=true`); anywhere else it refuses a spawn
 that asks for a bound.
@@ -20,7 +20,7 @@ own uids, with a client that speaks the keeper's protocol
   the maximum, is refused as a bad request and nothing is spawned, and a
   command runs under the least bound the protocol allows;
 - beside a sibling spawn that holds 64 MiB under its bound and completes,
-  three hostile spawns end at theirs, reported `memory_exceeded` with
+  three hostile spawns end at theirs, reported `memory` `cap` with
   SIGKILL: one process allocating without end, with a daemon in a session
   of its own that ignores SIGTERM; 48 processes of 16 MiB, none of them
   large; and one filling its home, which no process holds;
@@ -90,7 +90,7 @@ while :; do
     END { for (u in n) printf "%%s:%%d:%%d,", u, rss[u], n[u] }'
   groups=""
   for d in /sys/fs/cgroup/keeper-*; do
-    peak="$(cat "$d/memory.peak" 2>/dev/null)" && groups="$groups${d##*keeper-}:$peak,"
+    peak="$(cat "$d/bound/memory.peak" 2>/dev/null)" && groups="$groups${d##*keeper-}:$peak,"
   done
   printf '|%%s|%%s|%%s\n' "$(cat /sys/fs/cgroup/memory.current)" "$(awk '$1 == "shmem" {print $2}' /sys/fs/cgroup/memory.stat)" "$groups"
   sleep 0.1
@@ -221,7 +221,7 @@ server.listen(attach, () => {
     }
   });
   for (const s of spawns) {
-    const request = { v: 1, type: "spawn", id: s.id, pool: scenario.pool, argv: s.argv, env: {}, cpu_quota: 100000, attach: { path: attach, token: s.token } };
+    const request = { v: 2, type: "spawn", id: s.id, pool: scenario.pool, argv: s.argv, env: {}, cpu_quota: 100000, attach: { path: attach, token: s.token } };
     if ("memory_bytes" in s) request.memory_bytes = s.memory_bytes;
     channel.write(JSON.stringify(request) + "\n");
   }
@@ -425,7 +425,7 @@ def test_keeper(stack, limit, canary):
         uid = spawn.get("uid")
         exited, error = reply(name, "exited"), reply(name, "error")
         resident, processes, _ = sampler.tree_peak(uid)
-        end = (f"exited {({k: exited[k] for k in ('code', 'signal', 'memory_exceeded')})} {exited['at_ms'] / 1000:.1f} s in"
+        end = (f"exited {({k: exited[k] for k in ('code', 'signal', 'memory')})} {exited['at_ms'] / 1000:.1f} s in"
                if exited else f"refused as {error['code']}" if error else "no answer")
         peak = sampler.group_peaks.get(uid)
         measured = f"; uid {uid}, group peak {mib(peak) if peak else 'unseen'}, {mib(resident)} resident over {processes} processes" if uid else ""
@@ -453,19 +453,19 @@ def test_keeper(stack, limit, canary):
                  "the service needs `security_opt: writable-cgroups=true` (Docker Engine 28 or later)\n" + result.stderr[-1500:])
 
     least = reply("the least bound", "exited")
-    expect(least and least["code"] == 0 and least["memory_exceeded"] is False and "ran" in spawns["the least bound"]["stdout"],
+    expect(least and least["code"] == 0 and least["memory"] is None and "ran" in spawns["the least bound"]["stdout"],
            f"a command runs under the least bound the protocol allows, {mib(MIN_BOUND)}", spawns["the least bound"])
     sibling = reply("sibling", "exited")
-    expect(sibling and sibling["code"] == 0 and sibling["memory_exceeded"] is False and "held 1" in spawns["sibling"]["stdout"],
+    expect(sibling and sibling["code"] == 0 and sibling["memory"] is None and "held 1" in spawns["sibling"]["stdout"],
            "a sibling spawn holding 64 MiB under its bound completes", spawns["sibling"])
     for name in ("process", "tree", "home"):
         exited = reply(name, "exited")
-        expect(exited and exited["signal"] == "SIGKILL" and exited["code"] is None and exited["memory_exceeded"] is True,
+        expect(exited and exited["signal"] == "SIGKILL" and exited["code"] is None and exited["memory"] == "cap",
                f"the hostile {name} is ended at its bound and reported so", spawns[name])
         expect(reply(name, "released"), f"the hostile {name}'s uid is reported retired", spawns[name])
     # A hostile group lives for less than a second, so the sampler may miss
     # its last pages; that it reached its bound is the kernel's own count,
-    # which `memory_exceeded` reports. What was sampled never passed it.
+    # which `memory` `cap` reports. What was sampled never passed it.
     asked = {spawn["name"]: spawn.get("memory_bytes") for spawn in scenario()}
     seen = {name: sampler.group_peaks.get(spawns[name]["uid"]) for name in bounded}
     expect(seen["sibling"] and all(peak is None or peak <= asked[name] for name, peak in seen.items()),
