@@ -146,7 +146,8 @@ export const ACTS = {
   another: {window: "content", by: (_, url) => atChooser(url),
     to: (s, e) => s.accountRoad && s.name === "open" && e.url === ANOTHER,
     then: (s) => ({...leave(s), allow: false})},
-  // Try again, on the chooser of a CYFR whose page did not load.
+  // Try again, on the chooser of a CYFR whose page did not load, which
+  // comes here only once cyfr answered at the press (bootstrap.go onward).
   again: {window: "content", by: (_, url) => atChooser(url),
     to: (s, e) => s.accountRoad && s.name === "open" && e.url === AGAIN,
     then: (s) => ({state: {...s, notices: []}, allow: false, do: [{root: {home: s.home}}]})},

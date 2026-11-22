@@ -136,10 +136,12 @@ test("a chooser told that the CYFR did not answer names it and offers it again",
   assert.deepEqual(keys.went.byItself, [])
   assert.equal(keys.$("notice").textContent, UNANSWERED)
   assert.deepEqual([keys.$("road").hidden, keys.$("again").hidden, keys.$("passkey").hidden], [false, false, false])
-  keys.$("again").fire("click")
+  assert.deepEqual(keys.went.asked, [], "it connects nothing by itself")
+  keys.$("again").onclick()
+  assert.deepEqual(keys.went.pressed, [], "not before the CYFR answered")
   await settled()
+  assert.deepEqual(keys.went.asked, [["/bootstrap/connect", {address: HOME}]], "the press asks, as the passkey's way on does")
   assert.deepEqual(keys.went.pressed, ["/bootstrap/again"], "main's to open")
-  assert.deepEqual(keys.went.asked, [], "and cyfr is asked nothing")
 
   const words = await chooser("unanswered", OPEN)
   assert.deepEqual(words.went.byItself, [], "it stays to say so")
@@ -147,6 +149,19 @@ test("a chooser told that the CYFR did not answer names it and offers it again",
   assert.deepEqual([words.$("road").hidden, words.$("again").hidden, words.$("words").hidden], [false, true, false])
   words.$("words").onclick()
   assert.deepEqual(words.went.pressed, ["/"], "the device's pages, which offer it")
+})
+
+test("Try again loads nothing until a Connect at that CYFR answered with a way on", async () => {
+  const local = {home: "http://localhost:4000", next: "/"}
+  for (const said of [{home: local.home, error: "The CYFR in /srv/cyfr does not answer."}, {error: "CYFR locked. Connect again."}]) {
+    const {$, went} = await chooser("", local, said, ROAD + "&notice=unanswered")
+    $("again").onclick()
+    await settled()
+    assert.deepEqual([went.byItself, went.pressed], [[], []], said.error)
+    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: local.home}]])
+    assert.equal($("notice").textContent, said.error)
+    assert.deepEqual([$("road").hidden, $("again").hidden, $("words").hidden], [false, false, false], "every way on stays")
+  }
 })
 
 test("Try again shows only where main says the CYFR did not answer, and after a reload there", async () => {
