@@ -1430,14 +1430,19 @@ defmodule Opus.BrainTest do
     # where `Brain.models/2` gives a minute: the caller, which tells the
     # test what it was answered, and when that deadline is.
     defp due_in!(ctx, row, ms) do
-      id = "mdl_#{System.unique_integer([:positive])}"
-      {:ok, holder} = DynamicSupervisor.start_child(Brain.Holders, {Brain, {ctx.athanor_id, id}})
-      owner = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch}
       until = System.monotonic_time(:millisecond) + ms
-      command = {:once, owner, %{"t" => "models", "id" => id}, until}
+      {holder, command} = one_command!(ctx, row, until)
       test = self()
       spawn(fn -> send(test, {:asked, GenServer.call(holder, command, 30_000)}) end)
       until
+    end
+
+    # A holder of its own and the discovery `until` is the deadline of.
+    defp one_command!(ctx, row, until) do
+      id = "mdl_#{System.unique_integer([:positive])}"
+      {:ok, holder} = DynamicSupervisor.start_child(Brain.Holders, {Brain, {ctx.athanor_id, id}})
+      owner = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch}
+      {holder, {:once, owner, %{"t" => "models", "id" => id}, until}}
     end
 
     # What is left until `until`, and a second for what follows it.
@@ -1946,14 +1951,25 @@ defmodule Opus.BrainTest do
 
     test "a discovery ends on its row's end, its caller answered only once its close is",
          %{fake: fake, ctx: ctx, row: row} do
-      {_asker, holder, _id} = discovering!(fake, ctx, row)
+      until = System.monotonic_time(:millisecond) + 60_000
+      {holder, command} = one_command!(ctx, row, until)
+      asked = :gen_server.send_request(holder, command)
+      once_driver!(fake, row)
+      written_and_reading!()
       Scripted.hold(fake, "close")
       :ok = Opus.Programs.end_mounts(ctx.athanor_id, row.id)
       assert_receive {:held, "close", closer}, 1_000
-      refute_received {:asked, _answer}
+
+      # The test is the caller, and what one process sends another arrives in
+      # order: whatever the holder answered before the close is here by the
+      # time it has said it is alive.
+      assert Process.alive?(holder)
+      assert :gen_server.wait_response(asked, 0) == :timeout
+      ended = Process.monitor(holder)
       send(closer, :go)
-      ends_giving_back!(holder, :normal, fake, ctx, row)
-      assert_receive {:asked, {:error, :lost}}, 1_000
+      assert_receive {:DOWN, ^ended, :process, ^holder, :normal}, 1_000
+      given_back!(fake, ctx, row)
+      assert :gen_server.wait_response(asked, 1_000) == {:reply, {:error, :lost}}
     end
 
     test "a discovery ends when the box tells it to stand down for its row's change",
@@ -1967,10 +1983,27 @@ defmodule Opus.BrainTest do
 
       changed = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch + 1}
       ended = Process.monitor(holder)
-      assert {:ok, _grant} = Opus.Programs.hold(changed)
+      reading = Process.monitor(:sys.get_state(holder).reader)
+
+      # The replaced session's close and the successor's sync each end it at
+      # the service, which the reader would hear: with both held there, only
+      # the box's telling stops the reading.
+      Scripted.hold(fake, "close")
+      Scripted.hold(fake, "sync")
+
+      successor =
+        Task.async(fn ->
+          with {:ok, _grant} <- Opus.Programs.hold(changed), do: Opus.Programs.release(changed)
+        end)
+
+      assert_receive {:held, "close", closer}, 1_000
+      assert_receive {:held, "sync", syncing}, 1_000
+      assert_receive {:DOWN, ^reading, :process, _reader, :killed}, 1_000
+      send(closer, :go)
+      send(syncing, :go)
       assert_receive {:DOWN, ^ended, :process, ^holder, :normal}, 1_000
       assert_receive {:asked, {:error, :lost}}, 1_000
-      :ok = Opus.Programs.release(changed)
+      assert Task.await(successor) == :ok
       given_back!(fake, ctx, row)
     end
 
