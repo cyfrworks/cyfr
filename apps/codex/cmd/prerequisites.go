@@ -396,6 +396,11 @@ func withDockerGroup(ctx context.Context, subcommand string, args []string, out,
 	return continueWithGroup(subcommand, args, account.Username, out, errOut)
 }
 
+// loginAgain is said where only a new login gives this account the docker
+// group: there is no sg, which is also newgrp, both of them an optional
+// package's on Ubuntu 26.04.
+const loginAgain = "Docker does not answer this account until you log out and in again"
+
 // sgProgram runs a command with a group the account's processes do not
 // carry yet, without a password when /etc/group lists the account in it;
 // tests stand in for it.
@@ -412,10 +417,13 @@ func staleGroup(account string) bool {
 // environment and directory. It answers false, having run nothing, when
 // /etc/group does not list the account in the group, and when this process
 // already has it: sg would give it nothing, and its child would land here
-// again.
+// again. With no sg it runs nothing and says to log in again (loginAgain).
 func continueWithGroup(subcommand string, args []string, account string, out, errOut io.Writer) (bool, error) {
 	if !staleGroup(account) {
 		return false, nil
+	}
+	if _, err := os.Stat(sgProgram); err != nil {
+		return true, fmt.Errorf("%s. Then run `cyfr %s` again", loginAgain, subcommand)
 	}
 	self, err := os.Executable()
 	if err != nil {

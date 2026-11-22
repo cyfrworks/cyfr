@@ -481,6 +481,30 @@ func TestInitInstallFails(t *testing.T) {
 	}
 }
 
+// Where there is no sg, which is also newgrp, as on Ubuntu 26.04 without
+// util-linux-extra, init advises neither: it says what gives the account
+// the group, a new login.
+func TestInitSaysLogInAgainWhereThereIsNoNewgrp(t *testing.T) {
+	for name, set := range map[string]func(*standIn){
+		"installed before":    func(s *standIn) { s.installed, s.running, s.member = dockerPackages, true, []string{dockerGroup} },
+		"installed by init":   func(*standIn) {},
+		"added to its groups": func(s *standIn) { s.installed, s.running = dockerPackages, true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := standInMachine(t)
+			set(s)
+			sgProgram = filepath.Join(t.TempDir(), "sg")
+			t.Chdir(t.TempDir())
+			continued, _, err := prepare(t)
+			const want = "Docker does not answer this account until you log out and in again. Then run `cyfr init` again"
+			if !continued || err == nil || err.Error() != want {
+				t.Fatalf("continued %t, init said %v, want %q", continued, err, want)
+			}
+			nothingWritten(t)
+		})
+	}
+}
+
 // A continued init's status is init's.
 func TestInitAnswersTheContinuationsStatus(t *testing.T) {
 	s := standInMachine(t)

@@ -133,7 +133,7 @@ func dockerReady(ctx context.Context) (bool, string) {
 	case ctx.Err() != nil:
 		return false, "Docker was not waited for"
 	case !answers && olderThanGroup():
-		return false, "Docker does not answer this account until you log out and in again"
+		return false, loginAgain
 	case !answers:
 		return false, "Docker does not answer this account"
 	}
