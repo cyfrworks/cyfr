@@ -202,6 +202,7 @@ test("every other outcome withdraws a sign-in's return, and no later landing at 
     "superseded by the same address": [...landing, ownStart],
     "a document committed": [...landing, {type: "committed"}],
     "the load failed": [...landing, {type: "load-failed"}],
+    "main's load call ended before it landed": [...landing, {type: "load-ended", url: ANSWER}],
     "another fragment landed": [...landing, {type: "landed", url: HOME + "/login#b"}],
     "a lock": [...landing, {type: "lock", why: "lock-screen"}],
     "cyfr's own lock": [...landing, locked(HOME)],
@@ -211,6 +212,21 @@ test("every other outcome withdraws a sign-in's return, and no later landing at 
   for (const [name, events] of Object.entries(outcomes)) {
     assert.equal(run([...returned, ...events], true).s.returning, null, name)
     assert.equal(reloads([...events, ...later]), 0, name)
+  }
+})
+
+test("an earlier load call's end leaves the return on its way", () => {
+  assert.equal(reloads([ownStart, {type: "delivered"}, {type: "load-ended", url: HOME + "/login#before"}, {type: "landed", url: ANSWER}]), 1)
+})
+
+test("before ready and while locking, a top-frame load in the account window is refused and ends any ceremony; a frame's ends nothing", () => {
+  const states = {starting: initial(true), locking: run([...open, {type: "lock", why: "lock-screen"}], true).s}
+  for (const [name, s] of Object.entries(states)) {
+    for (const url of [ACCOUNT + "/account/sign", ANSWER, HOME + "/"]) {
+      const at = {type: "account-navigate", url, kind: "sign-in"}
+      assert.deepEqual(step(s, {...at, target: "top"}), {state: s, allow: false, do: [{unhop: true}]}, `${name}: ${url}`)
+      assert.deepEqual(step(s, {...at, target: "frame"}), {state: s, allow: false, do: []}, `${name}, a frame: ${url}`)
+    }
   }
 })
 

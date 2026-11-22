@@ -158,7 +158,11 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.hop) startHop(effect.hop.url, effect.hop.kind)
     if (effect.unhop) endHop()
     if (effect.deliver && content) {
-      content.loadURL(effect.deliver.url)
+      const {url} = effect.deliver
+      // The engine settles the call after its landing when it succeeds;
+      // it may reject before one, with no did-fail-load.
+      const ended = () => on({type: "load-ended", url})
+      content.loadURL(url).then(ended, ended)
       // That load's navigation has started by now, and been heard.
       on({type: "delivered"})
     }

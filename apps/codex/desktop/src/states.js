@@ -34,7 +34,8 @@
 // Every other outcome withdraws it, and nothing reloads: another
 // navigation starting (main's started as a whole document, or one that
 // supersedes it, whatever its address), a document committing, a load
-// failing, none started within the call, another CYFR, a lock, an end.
+// failing, none started within the call, main's load call ending before
+// it landed (resolved or rejected), another CYFR, a lock, an end.
 //
 // The effects (app.js carries each out at once, in order):
 //   close                    destroy every content, confirmation and
@@ -54,7 +55,8 @@
 //   token                    read the forgery token of the page shown
 //   hop {url, kind}, unhop
 //   deliver {url}            load a sign-in's answer into the content
-//                            window; answers delivered once that call is over
+//                            window; answers delivered as that call
+//                            returns, and load-ended as its promise settles
 //   reload                   load the content window's page again
 //   confirmation {url}       open a confirmation's answer in a window of
 //                            the content's session
@@ -169,6 +171,8 @@ export function step(s, e) {
     case "committed":
     case "load-failed":
       return withdrawn(s)
+    case "load-ended":
+      return e.url === s.returning?.url ? withdrawn(s) : same(s)
 
     // A load in a window of the content's own (the content window or a
     // confirmation window): a hop or the company page acts, from the
@@ -200,8 +204,9 @@ export function step(s, e) {
     }
     // A load in the account window: its top frame shows the ceremony or
     // returns, as the kind of ceremony the content window now showing began
-    // (`kind`, none otherwise); anything else ends the ceremony, and a frame
-    // loads nothing.
+    // (`kind`, none otherwise); anything else ends the ceremony, and so
+    // does every top-frame load before ready and while locking, when no
+    // ceremony may go on. A frame loads nothing and ends nothing, ever.
     case "account-navigate": {
       if (e.target !== "top") return {state: s, allow: false, do: []}
       const where = ["starting", "locking"].includes(s.name) ? "block" : accountLoad(e.url, kept(s))
