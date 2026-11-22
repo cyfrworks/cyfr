@@ -18,11 +18,14 @@ button.quiet{background:#33444a}.notice{background:#3b2a12;padding:.6rem;border-
 
 var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-{{if .Waiting}}<meta http-equiv="refresh" content="2">{{end}}
+{{if or .Waiting .Unwatched}}<meta http-equiv="refresh" content="2">{{end}}
 <title>CYFR</title><style>` + style + `</style>
 <main{{if .Proof}} data-proof="{{.Proof}}"{{end}}{{if .To}} data-to="{{.To}}"{{end}}>
 {{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
-{{if .Waiting}}
+{{if .Unwatched}}
+<h1>CYFR cannot be unlocked now</h1>
+<p id="unwatched" role="alert">{{.Unwatched}}</p>
+{{else if .Waiting}}
 <h1>CYFR is starting</h1>
 <p>This device opens CYFR once it answers. If it does not, run <code>cyfr up</code> in CYFR's directory; Ctrl+Alt+F2 opens a terminal.</p>
 {{else if eq .Answer "answered"}}

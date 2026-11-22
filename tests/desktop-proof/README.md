@@ -1,10 +1,22 @@
 # The CYFR app's proofs
 
-Two kinds, by what they need.
+Three kinds, by what they need.
 
 **`native/smoke.sh`**, home-free: the installed production app on Linux,
 macOS and Windows, with no CYFR and no signing credentials (Codex CI's
 `desktop-native` job; its header lists the checks).
+
+**`screen/idle.sh`, the device screen's idle lock**, with no CYFR (Codex
+CI's `screen-idle` job, amd64): this tree's watches under Ubuntu 26.04's
+labwc beside a real Chrome with the screen's flags, with nothing playing,
+with a page playing a video a tap started and with a sandboxed frame
+playing one; and the suspend watch over the real swayidle and a stand-in logind.
+Each video row holds that the watch locks while the control, swayidle's
+ordinary timeout, is held off, and that this same control fires once the
+playback ends: a page that held no idle inhibitor, or a control that could
+not fire, fails rather than show nothing. The frame
+stands for an app's, with Prism's sandbox for no grant; no CYFR serves
+it. Its header names the rest.
 
 **`*/run.sh`, against a real CYFR**: every tracked `tests/desktop-proof/*/run.sh`,
 in sorted order, run by `home.sh` (the Test workflow's `desktop-home` job, on
