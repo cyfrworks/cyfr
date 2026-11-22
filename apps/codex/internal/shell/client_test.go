@@ -22,14 +22,20 @@ import (
 // recovery code as the page does once the page's proof is checked
 // (enrollByPage, asPage), with a key held since a setup allowed to open.
 func enrollNow(s *Shell, ctx context.Context, name string, wait time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	s.enroll(ctx, name, wait, true)
 }
 
 func savedNow(s *Shell, ctx context.Context, accepted string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	s.saved(ctx, accepted)
 }
 

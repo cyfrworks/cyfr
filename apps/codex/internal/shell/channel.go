@@ -93,6 +93,9 @@ type Channel struct {
 	report  func() []string
 	renewed func(json.RawMessage)
 
+	// writing is the one intent being written, which the next waits out.
+	writing chan struct{}
+
 	mu      sync.Mutex
 	next    int
 	waiting map[string]chan answer
@@ -206,7 +209,7 @@ func (d Dialer) open(ctx context.Context, device Device, key Signer, report func
 	}
 	conn.SetReadLimit(1 << 20)
 	c := &Channel{conn: conn, device: device, key: key, report: report, renewed: renewed,
-		waiting: map[string]chan answer{}, done: make(chan struct{})}
+		waiting: map[string]chan answer{}, writing: make(chan struct{}, 1), done: make(chan struct{})}
 	if err := first(c, dialCtx); err != nil {
 		conn.CloseNow()
 		return nil, err
@@ -527,6 +530,12 @@ func (c *Channel) Err() error {
 
 // Call sends one intent and waits for its answer: the result, an
 // *IntentError for a refusal, or why the channel ended.
+//
+// ctx ends the wait and never a write begun: the websocket closes a
+// connection whose write is cancelled, and a lock cancels what is in
+// flight just before it sends that connection its proofs. A write begun
+// ends with the channel at the latest, and the next intent is written
+// after it.
 func (c *Channel) Call(ctx context.Context, operation string, args map[string]any) (json.RawMessage, error) {
 	c.mu.Lock()
 	if c.ended != nil {
@@ -542,8 +551,36 @@ func (c *Channel) Call(ctx context.Context, operation string, args map[string]an
 	if args == nil {
 		args = map[string]any{}
 	}
-	if err := c.send(ctx, map[string]any{"type": "intent", "id": id, "operation": operation, "args": args}); err != nil {
+	forget := func() {
+		c.mu.Lock()
+		delete(c.waiting, id)
+		c.mu.Unlock()
+	}
+	select {
+	case c.writing <- struct{}{}:
+	case <-ctx.Done():
+		forget()
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		<-c.writing
+		forget()
 		return nil, err
+	}
+	sent := make(chan error, 1)
+	go func() {
+		defer func() { <-c.writing }()
+		sent <- c.send(context.Background(), map[string]any{"type": "intent", "id": id, "operation": operation, "args": args})
+	}()
+	select {
+	case err := <-sent:
+		if err != nil {
+			forget()
+			return nil, err
+		}
+	case <-ctx.Done():
+		forget()
+		return nil, ctx.Err()
 	}
 	select {
 	case a, ok := <-w:
@@ -555,9 +592,7 @@ func (c *Channel) Call(ctx context.Context, operation string, args map[string]an
 		}
 		return a.Result, nil
 	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.waiting, id)
-		c.mu.Unlock()
+		forget()
 		return nil, ctx.Err()
 	}
 }

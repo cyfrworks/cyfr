@@ -6,6 +6,7 @@ package shell
 import (
 	"context"
 	"html"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -158,7 +159,7 @@ func neverConnected(t *testing.T, home *fakeHome, edit ...func(*Config)) (*box, 
 	b.shell.mu.Unlock()
 	home.approve(t, identifier, dev, pub)
 	b.post("/enroll", url.Values{"name": {"mira"}})
-	if v := b.shell.pageView(nil); v.Page != PageLocked {
+	if v, ok := b.shell.pageView(t.Context(), nil); !ok || v.Page != PageLocked {
 		t.Fatalf("the approved box shows %s: %s", v.Page, v.Notice)
 	}
 	return b, p
@@ -276,7 +277,6 @@ func TestRender_TheTermsAreReadBesideThePage(t *testing.T) {
 		t.Fatalf("a form before its terms were read:\n%s", page)
 	}
 	g.reached(t)
-	returns(t, "a lock beside the terms' reading", func() { b.shell.Lock("") })
 	g.open()
 	becomesTrue(t, "the setup form", func() bool {
 		page = b.aloud()
@@ -288,6 +288,21 @@ func TestRender_TheTermsAreReadBesideThePage(t *testing.T) {
 	if drawn := body(b.post("/passphrase", nil)); !strings.Contains(drawn, "I accept the terms at https://cyfr.example/terms") {
 		t.Fatalf("the form names no terms:\n%s", drawn)
 	}
+}
+
+// The terms' reading holds nothing of the shell as it waits, so a lock
+// waits for none of it, even one deaf to the lock.
+func TestRender_ALockWaitsForNoTermsReading(t *testing.T) {
+	home := newFakeHome(t)
+	g := newGate(t)
+	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), gated(g, func(r *http.Request) bool { return !theDial(r) }))
+	b.srv.Reachable = func() bool { return true }
+	makeDeaf(b.shell)
+	g.shut()
+	b.aloud()
+	g.reached(t)
+	returns(t, "the lock", func() { b.shell.Lock("") })
+	g.open()
 }
 
 // No page waits for an action in flight, which holds the shell through
@@ -397,21 +412,19 @@ func TestLock_AnUnlockBegunBeforeItNeverOpensAfterIt(t *testing.T) {
 		home := newFakeHome(t)
 		g := newGate(t)
 		b, p := atLastStep(t, home, g)
+		makeDeaf(b.shell)
 		g.shut()
 		proof := make(chan string, 1)
 		go func() { proof <- b.shell.unlock(context.Background(), []byte(p)) }()
 		g.reached(t)
 		// The lock comes too late to cancel the write: it finds nothing
 		// left to cancel, and waits for the shell.
-		b.shell.workMu.Lock()
-		clear(b.shell.working)
-		b.shell.workMu.Unlock()
 		locked := make(chan struct{})
 		go func() {
 			defer close(locked)
 			b.shell.Lock(suspendedHere)
 		}()
-		becomesTrue(t, "the lock waits", b.shell.lockWaits)
+		becomesTrue(t, "the lock waits", func() bool { return lockComing(b.shell) })
 		g.open()
 		<-proof
 		<-locked
@@ -433,7 +446,7 @@ func TestLock_AnUnlockBegunBeforeItNeverOpensAfterIt(t *testing.T) {
 			defer close(locked)
 			b.shell.Lock(suspendedHere)
 		}()
-		becomesTrue(t, "the lock waits", b.shell.lockWaits)
+		becomesTrue(t, "the lock waits", func() bool { return lockComing(b.shell) })
 		g.open()
 		<-locked
 		if w := <-answered; w.Code != http.StatusSeeOther || proofIn(w) != "" {
@@ -447,10 +460,10 @@ func TestLock_AnUnlockBegunBeforeItNeverOpensAfterIt(t *testing.T) {
 	t.Run("before it took the shell", func(t *testing.T) {
 		home := newFakeHome(t)
 		b, p := neverConnected(t, home)
-		ctx, done := b.shell.acting(t.Context())
+		ctx, done := b.shell.act(t.Context())
 		defer done()
 		b.shell.Lock("")
-		if proof := b.shell.unlock(ctx, []byte(p)); proof != "" || b.shell.Unlocked() || len(home.hellosSeen()) != 0 || b.shell.pageView(nil).Notice != "" {
+		if proof := b.shell.unlock(ctx, []byte(p)); proof != "" || b.shell.Unlocked() || len(home.hellosSeen()) != 0 || b.shell.shownView().Notice != "" {
 			t.Fatal("an unlock begun before the lock ran after it")
 		}
 	})
@@ -458,7 +471,7 @@ func TestLock_AnUnlockBegunBeforeItNeverOpensAfterIt(t *testing.T) {
 		home := newFakeHome(t)
 		b := newBox(t, home, t.TempDir())
 		setUpAndOpen(t, home, b)
-		ctx, done := b.shell.acting(t.Context())
+		ctx, done := b.shell.act(t.Context())
 		defer done()
 		b.shell.Lock(suspendedHere)
 		b.shell.Begin(ctx)
@@ -469,7 +482,7 @@ func TestLock_AnUnlockBegunBeforeItNeverOpensAfterIt(t *testing.T) {
 	t.Run("begun as a lock waited", func(t *testing.T) {
 		home := newFakeHome(t)
 		b, p := neverConnected(t, home)
-		locked := b.shell.cut()
+		locked, _ := b.shell.end(nil)
 		defer locked()
 		w := b.post("/unlock", url.Values{"secret": {p}})
 		if w.Code != http.StatusSeeOther || proofIn(w) != "" || b.shell.Unlocked() || len(home.hellosSeen()) != 0 {
@@ -484,16 +497,16 @@ func TestLock_AnUnlockBegunBeforeItNeverOpensAfterIt(t *testing.T) {
 		answered := make(chan *httptest.ResponseRecorder, 1)
 		go func() { answered <- b.post("/open", nil) }()
 		becomesTrue(t, "the action waits", func() bool {
-			b.shell.workMu.Lock()
-			defer b.shell.workMu.Unlock()
-			return len(b.shell.working) > 0
+			b.shell.genMu.Lock()
+			defer b.shell.genMu.Unlock()
+			return b.shell.gen.active > 0
 		})
 		locked := make(chan struct{})
 		go func() {
 			defer close(locked)
 			b.shell.Lock(suspendedHere)
 		}()
-		becomesTrue(t, "the lock waits", b.shell.lockWaits)
+		becomesTrue(t, "the lock waits", func() bool { return lockComing(b.shell) })
 		b.shell.mu.Unlock()
 		<-locked
 		if w := <-answered; w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
@@ -602,11 +615,15 @@ func TestLock_AChannelItsCutEndedIsNoFailure(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
 	setUpAndOpen(t, home, b)
-	locked := b.shell.cut()
+	b.shell.mu.Lock()
+	ch := b.shell.ch
+	b.shell.mu.Unlock()
+	locked, _ := b.shell.end(nil)
 	defer locked()
 	home.closeChannels(1011)
-	becomesTrue(t, "it locked", func() bool { return !b.shell.Unlocked() })
-	if page := b.page(); strings.Contains(page, `class="notice"`) {
+	<-ch.Done()
+	b.shell.Lock(suspendedHere)
+	if page := b.page(); b.shell.Unlocked() || !strings.Contains(page, suspendedHere) || strings.Contains(page, "could not be reached") {
 		t.Fatalf("a lock's cut is told as a failure:\n%s", page)
 	}
 }
@@ -674,4 +691,126 @@ func TestLock_AConfirmationItCutShortSaysNeitherDoneNorFailed(t *testing.T) {
 	if page := b.page(); !strings.Contains(page, suspendedHere) {
 		t.Fatalf("after the lock the page is\n%s", page)
 	}
+}
+
+// A write a cancellation meets finishes, and the channel is there for the
+// lock's proofs after it, written after it.
+func TestLock_ACancelledIntentLeavesTheChannelToTheLock(t *testing.T) {
+	home := newFakeHome(t)
+	g := newGate(t)
+	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), func(c *Config) {
+		client := *c.Client
+		base := client.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		client.Transport = slowWrites{base: base, gate: g}
+		c.Client = &client
+	})
+	setUpAndOpen(t, home, b)
+	b.shell.mu.Lock()
+	ch := b.shell.ch
+	b.shell.mu.Unlock()
+	g.shut()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	called := make(chan struct{})
+	go func() {
+		defer close(called)
+		_, _ = ch.Call(ctx, "confirmation.pending", map[string]any{"request": "cnr_1"})
+	}()
+	g.reached(t)
+	cancel()
+	returns(t, "the cancelled intent", func() { <-called })
+	if len(ch.writing) != 1 {
+		t.Fatal("a write still under way gave its turn up, so the next intent could overtake it")
+	}
+	locked := make(chan struct{})
+	go func() {
+		defer close(locked)
+		b.shell.Lock(suspendedHere)
+	}()
+	becomesTrue(t, "the lock began", func() bool { return lockComing(b.shell) })
+	g.open()
+	<-locked
+	ops := home.opsSeen()
+	home.mu.Lock()
+	defer home.mu.Unlock()
+	if !slices.Equal(home.locked, []string{"ses_1"}) || len(ops) < 2 || !slices.Equal(ops[len(ops)-2:], []string{"confirmation.pending", "session.lock"}) {
+		t.Fatalf("the lock after it retired %v, the CYFR having read %v", home.locked, ops)
+	}
+}
+
+// slowWrites holds the device channel's writes at gate, until it opens or
+// the connection closes.
+type slowWrites struct {
+	base http.RoundTripper
+	gate *gate
+}
+
+func (s slowWrites) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := s.base.RoundTrip(r)
+	if err != nil || !theDial(r) {
+		return resp, err
+	}
+	conn, ok := resp.Body.(io.ReadWriteCloser)
+	if !ok {
+		return resp, nil
+	}
+	closed, closing := context.WithCancel(context.Background())
+	resp.Body = &slowConn{ReadWriteCloser: conn, gate: s.gate, closed: closed, closing: closing}
+	return resp, nil
+}
+
+type slowConn struct {
+	io.ReadWriteCloser
+	gate    *gate
+	closed  context.Context
+	closing context.CancelFunc
+}
+
+func (c *slowConn) Write(p []byte) (int, error) {
+	if err := c.gate.pass(c.closed); err != nil {
+		return 0, err
+	}
+	return c.ReadWriteCloser.Write(p)
+}
+
+func (c *slowConn) Close() error {
+	c.closing()
+	return c.ReadWriteCloser.Close()
+}
+
+// An action its client cancelled before a lock changes nothing after it:
+// the cancellation's cause hides no lock.
+func TestLock_AnActionCancelledFirstLeavesTheLocksSentence(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	setUpAndOpen(t, home, b)
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx, done := b.shell.act(parent)
+	defer done()
+	cancel()
+	b.shell.Lock(suspendedHere)
+	b.shell.Begin(ctx)
+	if got := b.shell.shownView().Notice; got != suspendedHere {
+		t.Fatalf("an action from before the lock overwrote its sentence: %q", got)
+	}
+}
+
+// An action whose time ran out waits for the shell no longer.
+func TestLock_AnExpiredActionStopsWaitingForTheShell(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	b.shell.mu.Lock()
+	defer b.shell.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	began := make(chan struct{})
+	go func() {
+		defer close(began)
+		b.shell.Begin(ctx)
+	}()
+	returns(t, "the expired action", func() { <-began })
 }
