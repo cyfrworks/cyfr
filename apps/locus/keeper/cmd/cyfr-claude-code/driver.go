@@ -209,23 +209,24 @@ func (d *driver) answer(id, ask, content string, isError bool) error {
 }
 
 // models answers the harness's model listing: from the answer its running
-// session's `initialize` gave, or from a harness of its own, started and
-// closed for it, when none runs. That one-off listing is refused in
-// `signedOutSentence` while the harness has no sign-in (`signedOut`), so a
-// person setting the brain up reads that it is still to sign in.
+// session's `initialize` gave, which reads no account and so says none, or
+// from a harness of its own, started and closed for it, when none runs.
+// That one-off listing says the account it read (`account`) and is refused
+// in `signedOutSentence` while the harness has no sign-in, so a person
+// setting the brain up reads that it is still to sign in.
 func (d *driver) models(id string) error {
 	listing := d.listing
+	var account string
 	if d.h != nil && !d.running() {
 		return d.c.Refuse(id, "The harness is starting: its models are listed once it has started.")
 	}
 	if d.h == nil {
-		var out bool
 		var err error
-		if listing, out, err = d.listOnce(); err != nil {
+		if listing, account, err = d.listOnce(); err != nil {
 			return d.c.Refuse(id, "Claude Code did not list its models: "+err.Error()+".")
 		}
-		if out {
-			return d.c.Refuse(id, signedOutSentence)
+		if account == brainwire.SignedOut {
+			return d.c.RefuseSignedOut(id, signedOutSentence)
 		}
 	}
 	var entries []struct {
@@ -234,22 +235,12 @@ func (d *driver) models(id string) error {
 		Efforts     []string `json:"supportedEffortLevels"`
 	}
 	_ = json.Unmarshal(listing, &entries)
-	models := []map[string]string{}
-	efforts := []string{}
-	seen := map[string]bool{}
+	models := []brainwire.Model{}
 	for _, entry := range entries {
-		if !brainwire.IsID(entry.Value) || len(models) >= brainwire.MaxList {
-			continue
-		}
-		models = append(models, map[string]string{"id": entry.Value, "name": entry.DisplayName})
-		for _, level := range entry.Efforts {
-			if !seen[level] && len(efforts) < brainwire.MaxList {
-				seen[level] = true
-				efforts = append(efforts, level)
-			}
-		}
+		models = brainwire.AppendModel(models, entry.Value, entry.DisplayName, entry.Efforts)
 	}
-	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", models).Set("efforts", efforts).Set("access", accessChoices))
+	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", models).Set("access", accessChoices).
+		SetOptional("account", account))
 }
 
 // unlistedAccess ends the driver on a start naming an access it does not
@@ -260,41 +251,72 @@ const unlistedAccess = "The crew member's access is not one CYFR runs Claude Cod
 // sign-in and no key it can run with, as its `initialize` answer says.
 const signedOutSentence = "Claude Code has no sign-in or key it can use; sign it in on the program's terminal, or set a key in its settings."
 
-// signedOut reads an `initialize` answer's `account`: only the one shape
-// Claude Code 2.1.323 answers with no sign-in and no key, measured on an
-// empty folder (`tokenSource` "none", no `apiKeySource`, `apiProvider`
-// "firstParty"), is signed out. Any other answer, a field absent or
-// unknown among them, lists as before, so a sign-in in a shape not yet
-// seen never reads signed out. Nothing of the account is kept.
-func signedOut(response json.RawMessage) bool {
-	var r struct {
-		Account *struct {
-			TokenSource  *string `json:"tokenSource"`
-			APIKeySource *string `json:"apiKeySource"`
-			APIProvider  *string `json:"apiProvider"`
-		} `json:"account"`
+// providers are the providers Claude Code names as its `apiProvider`:
+// firstParty, Anthropic's own, and the others it runs on.
+var providers = map[string]bool{
+	"firstParty": true, "bedrock": true, "vertex": true, "foundry": true, "anthropicAws": true,
+	"anthropicGoogleCloud": true, "mantle": true, "gateway": true,
+}
+
+// account is what an `initialize` answer's `account` says. The answer has
+// one shape: an object whose `apiProvider` is one of providers and whose
+// `subscriptionType`, `tokenSource` and `apiKeySource` are each absent or
+// a string that is not empty, the members spelled exactly so. Anything
+// else is not known, and says nothing, so a sign-in in a shape not yet
+// seen never reads signed out.
+//
+// In that shape signed out is only what Claude Code 2.1.323 answered with
+// no sign-in and no key on an empty folder (`tokenSource` "none",
+// "firstParty", the other two absent). Signed in is only what it names: a
+// plan (all a plan's sign-in names), a token source, a key source, a dead
+// key's among them, or another provider. Nothing of the account is kept
+// but that word.
+func account(response json.RawMessage) string {
+	var answer, members map[string]json.RawMessage
+	if json.Unmarshal(response, &answer) != nil || json.Unmarshal(answer["account"], &members) != nil {
+		return ""
 	}
-	if json.Unmarshal(response, &r) != nil || r.Account == nil {
-		return false
+	read := map[string]string{}
+	for _, name := range []string{"apiProvider", "subscriptionType", "tokenSource", "apiKeySource"} {
+		if raw, present := members[name]; present {
+			var value *string
+			if json.Unmarshal(raw, &value) != nil || value == nil || *value == "" {
+				return ""
+			}
+			read[name] = *value
+		}
 	}
-	a := r.Account
-	return a.TokenSource != nil && *a.TokenSource == "none" && a.APIKeySource == nil &&
-		a.APIProvider != nil && *a.APIProvider == "firstParty"
+	provider := read["apiProvider"]
+	if !providers[provider] {
+		return ""
+	}
+	if provider != "firstParty" {
+		return brainwire.SignedIn
+	}
+	for _, name := range []string{"subscriptionType", "tokenSource", "apiKeySource"} {
+		if value, present := read[name]; present && value != "none" {
+			return brainwire.SignedIn
+		}
+	}
+	if len(read) == 2 && read["tokenSource"] == "none" {
+		return brainwire.SignedOut
+	}
+	return ""
 }
 
 // listOnce starts a harness only to ask its `initialize` answer, and
-// closes it: the models it lists, and whether it has no sign-in
-// (`signedOut`). Its errors are the driver's own sentences, never the
+// closes it: the models it lists, and what it says of its account
+// (`account`). Its errors are the driver's own sentences, never the
 // harness's or the system's words, since a refusal carries them to the
 // wire.
-func (d *driver) listOnce() (json.RawMessage, bool, error) {
+func (d *driver) listOnce() (json.RawMessage, string, error) {
 	h, err := d.c.Spawn(append(append([]string{}, d.harnessCommand...), baseArgv...))
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
 	defer h.Stop()
 	if err := h.Write(initializeLine("")); err != nil {
-		return nil, false, errors.New("it ended before it was asked")
+		return nil, "", errors.New("it ended before it was asked")
 	}
 	deadline := time.After(listingWait)
 	for {
@@ -309,17 +331,17 @@ func (d *driver) listOnce() (json.RawMessage, bool, error) {
 				continue
 			}
 			if answer.Subtype != "success" {
-				return nil, false, errors.New("it refused to start")
+				return nil, "", errors.New("it refused to start")
 			}
 			var response struct {
 				Models json.RawMessage `json:"models"`
 			}
 			_ = json.Unmarshal(answer.Response, &response)
-			return response.Models, signedOut(answer.Response), nil
+			return response.Models, account(answer.Response), nil
 		case <-h.Done:
-			return nil, false, errors.New("it ended before it answered")
+			return nil, "", errors.New("it ended before it answered")
 		case <-deadline:
-			return nil, false, errors.New("it did not answer in time")
+			return nil, "", errors.New("it did not answer in time")
 		}
 	}
 }
@@ -397,7 +419,8 @@ func (d *driver) controlResponse(l harnessLine) error {
 		if s.resume && len(s.pending) > 0 {
 			held = heldPosts(d.home, s.session, s.pending)
 		}
-		return d.c.Emit(brainwire.NewEvent("started").Set("session", s.session).Set("fresh", !s.resume).Set("held", held))
+		return d.c.Emit(brainwire.NewEvent("started").Set("session", s.session).Set("fresh", !s.resume).Set("held", held).
+			SetOptional("account", account(answer.Response)))
 	}
 	if id, ok := d.awaiting[answer.RequestID]; ok {
 		delete(d.awaiting, answer.RequestID)

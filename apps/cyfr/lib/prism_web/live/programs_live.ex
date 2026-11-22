@@ -45,8 +45,8 @@ defmodule PrismWeb.ProgramsLive do
   to show again or close, kept current from the person's own
   `Cyfr.Bus.programs/2` topic. No address starts, closes or changes
   anything: `?terminal=` only attaches to one of the person's own running
-  sessions, and `&from=aqua` adds the way back to Aqua's card, whose Set
-  up started it.
+  sessions, and `&from=aqua` adds the way back to the Aqua page, which
+  sent the person here to install it.
 
   Adding a program, every edit that changes its definition and removing
   one are each confirmed by the person (`program_definition`): the system
@@ -86,6 +86,9 @@ defmodule PrismWeb.ProgramsLive do
 
   @behaviour PrismWeb.SystemLayer.Hook
   on_mount PrismWeb.SystemLayer.Hook
+
+  @behaviour PrismWeb.TerminalComponent
+  on_mount PrismWeb.TerminalComponent
 
   alias PrismWeb.{SystemLayer, TerminalComponent}
 
@@ -140,8 +143,6 @@ defmodule PrismWeb.ProgramsLive do
       # The row whose definition an open form replaces: %{name, epoch,
       # config}, its config as `mcp_servers.get` answered it.
       |> assign(:editing, nil)
-      # The terminal shown: %{session, name, kept, ended, back}; nil when none.
-      |> assign(:terminal, nil)
       # The person's running sessions (`Opus.Programs.running/1`).
       |> assign(:running, [])
       # Whether a terminal this page opens adds the way back to Aqua.
@@ -316,95 +317,6 @@ defmodule PrismWeb.ProgramsLive do
   def handle_event("show_terminal", %{"session" => session}, socket),
     do: {:noreply, push_patch(socket, to: terminal_path(socket, session))}
 
-  # The frame's hook stands: the page attaches to the session, sets the
-  # frame's size and answers what was printed before.
-  def handle_event("terminal_ready", %{"session" => session} = params, socket) do
-    with %{session: ^session, ended: nil} <- socket.assigns.terminal,
-         {:ok, %{tail: %{bytes: tail}, kept: kept}} <-
-           Opus.Programs.attach(socket.assigns.context, session) do
-      _ = resize(socket, session, params)
-      terminal = %{socket.assigns.terminal | kept: kept, attached: true}
-      {:reply, %{data: Base.encode64(tail)}, assign(socket, :terminal, terminal)}
-    else
-      {:error, reason} -> {:reply, %{}, ended(socket, session, reason)}
-      _other -> {:reply, %{}, socket}
-    end
-  end
-
-  # A session being closed answers nothing until its close has, so the
-  # page asks it nothing meanwhile.
-  def handle_event(
-        event,
-        %{"session" => session},
-        %{assigns: %{terminal: %{session: session, closing: task}}} = socket
-      )
-      when is_reference(task) and
-             event in ~w(terminal_input terminal_written terminal_resize terminal_keep terminal_close),
-      do: {:reply, %{}, socket}
-
-  # Each piece the hook sends is answered before it sends the next, so
-  # what a person pastes waits in the browser, not here.
-  def handle_event("terminal_input", %{"session" => session, "terminal_input" => data}, socket)
-      when is_binary(data) do
-    case Opus.Programs.input(socket.assigns.context, session, data) do
-      :ok ->
-        {:reply, %{}, socket}
-
-      {:error, reason} when reason in [:unavailable, :too_large] ->
-        {:reply, %{}, put_flash(socket, :error, "The program did not take that; type it again.")}
-
-      {:error, reason} ->
-        {:reply, %{}, ended(socket, session, reason)}
-    end
-  end
-
-  # The browser drew the delivery it names: the page forwards only the
-  # token of the delivery it pushed last, and the session hands more when
-  # that is the one it waits on.
-  def handle_event("terminal_written", %{"session" => session, "delivery" => delivery}, socket)
-      when is_binary(delivery) do
-    with %{session: ^session, delivery: ^delivery} <- socket.assigns.terminal,
-         {:error, reason} <- Opus.Programs.taken(socket.assigns.context, session, delivery) do
-      {:noreply, ended(socket, session, reason)}
-    else
-      _taken_or_not_the_last -> {:noreply, socket}
-    end
-  end
-
-  def handle_event("terminal_resize", %{"session" => session} = params, socket) do
-    _ = resize(socket, session, params)
-    {:noreply, socket}
-  end
-
-  def handle_event("terminal_keep", %{"session" => session} = params, socket) do
-    kept = params["kept"] == "true"
-
-    case Opus.Programs.keep(socket.assigns.context, session, kept) do
-      :ok -> {:noreply, kept(socket, session, kept)}
-      {:error, reason} -> {:noreply, ended(socket, session, reason)}
-    end
-  end
-
-  # The person closes the frame of a program that ended; its screen goes.
-  def handle_event("terminal_dismiss", _params, socket),
-    do:
-      {:noreply,
-       push_patch(socket, to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/programs"))}
-
-  def handle_event("terminal_close", %{"session" => session}, socket) do
-    ctx = socket.assigns.context
-    tag = CyfrWeb.ContextGuard.capture(ctx)
-    page = self()
-
-    {:ok, task} =
-      Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-        result = run_to_end(fn -> Opus.Programs.close(ctx, session) end)
-        send(page, {:closed, tag, session, result})
-      end)
-
-    {:noreply, closing(socket, session, task)}
-  end
-
   def handle_event("reset_home", %{"name" => name}, socket) do
     {:noreply,
      call(socket, "Emptying the folder…", :reset_home, "mcp_servers/reset_home", %{
@@ -467,7 +379,7 @@ defmodule PrismWeb.ProgramsLive do
           show_terminal(socket, session)
 
         _none ->
-          detach(socket)
+          TerminalComponent.detach(socket)
       end
 
     {:noreply, socket |> load_running()}
@@ -490,32 +402,7 @@ defmodule PrismWeb.ProgramsLive do
   def handle_info({:add_browser, chrome}, socket),
     do: {:noreply, prefill_browser(socket, chrome)}
 
-  # What the shown session's program wrote goes straight to the frame's
-  # hook, and is kept nowhere here: the next output, or the tail that
-  # replaces what the frame shows when more came than it was kept.
-  def handle_info({Opus.Programs, session, {kind, delivery, %{bytes: bytes}}}, socket)
-      when kind in [:bytes, :tail] do
-    case socket.assigns.terminal do
-      %{session: ^session} = terminal ->
-        event = if kind == :tail, do: "terminal_tail", else: "terminal_output"
-        data = %{session: session, delivery: delivery, data: Base.encode64(bytes)}
-
-        {:noreply,
-         socket |> assign(:terminal, %{terminal | delivery: delivery}) |> push_event(event, data)}
-
-      _other ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_info({Opus.Programs, session, {:ended, reason}}, socket),
-    do: {:noreply, ended(socket, session, reason)}
-
-  # The person's running sessions moved, here or on another surface; the
-  # one shown ended, though its end never reached this page (it died).
-  def handle_info(%Cyfr.Bus.Program{kind: :ended, session: session, reason: reason}, socket),
-    do: {:noreply, ended(socket, session, reason)}
-
+  # The person's running sessions moved, here or on another surface.
   def handle_info(%Cyfr.Bus.Program{}, socket), do: {:noreply, load_running(socket)}
 
   # A row expanded here and disabled elsewhere has its details read again:
@@ -528,22 +415,6 @@ defmodule PrismWeb.ProgramsLive do
       %{enabled: false} -> {:noreply, expand_server(socket, name)}
       _other -> {:noreply, socket}
     end
-  end
-
-  def handle_info({:closed, tag, session, result}, socket),
-    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, closed(&1, session, result)})
-
-  # A Close's task lost before it answered gives the terminal back. The
-  # session says its ending itself, if it reached one.
-  def handle_info(
-        {:DOWN, task, :process, _pid, _reason},
-        %{assigns: %{terminal: %{closing: task} = terminal}} = socket
-      ) do
-    socket = assign(socket, :terminal, %{terminal | closing: nil})
-
-    if terminal.ended,
-      do: {:noreply, socket},
-      else: {:noreply, put_flash(socket, :error, "Failed: #{error_message(:unavailable)}")}
   end
 
   def handle_info(msg, socket) do
@@ -1034,8 +905,6 @@ defmodule PrismWeb.ProgramsLive do
   defp show_terminal(%{assigns: %{terminal: %{session: session}}} = socket, session), do: socket
 
   defp show_terminal(socket, session) do
-    socket = detach(socket)
-
     back =
       if socket.assigns.from_aqua,
         do: PrismWeb.Focus.path(socket.assigns.athanor_route, "/aqua?setup=1")
@@ -1046,90 +915,16 @@ defmodule PrismWeb.ProgramsLive do
         _other -> nil
       end)
 
-    assign(socket, :terminal, %{
-      session: session,
-      name: name,
-      kept: false,
-      ended: nil,
-      attached: false,
-      closing: nil,
-      delivery: nil,
-      back: back
-    })
+    TerminalComponent.show(socket, %{session: session, name: name, back: back})
   end
 
-  defp detach(%{assigns: %{terminal: %{session: session}}} = socket) do
-    if connected?(socket), do: Opus.Programs.detach(socket.assigns.context, session)
-    assign(socket, :terminal, nil)
-  end
+  # An ending, the shown session's or another's, moves what runs.
+  @impl PrismWeb.TerminalComponent
+  def terminal_ended(socket, _ended), do: load_running(socket)
 
-  defp detach(socket), do: socket
-
-  defp resize(socket, session, %{"rows" => rows, "cols" => cols})
-       when is_integer(rows) and is_integer(cols),
-       do: Opus.Programs.resize(socket.assigns.context, session, rows, cols)
-
-  defp resize(_socket, _session, _params), do: {:error, :invalid_size}
-
-  # What a Close answered, once it did.
-  defp closed(socket, session, {:ok, _closed_or_gone}),
-    do: socket |> answered(session) |> ended(session, :closed)
-
-  defp closed(socket, session, {:error, :unanswered}),
-    do: socket |> answered(session) |> ended(session, :unanswered)
-
-  defp closed(socket, session, {:error, reason}) do
-    socket
-    |> answered(session)
-    |> put_flash(:error, "Failed: #{error_message(reason)}")
-  end
-
-  # The shown session's Close is out while its task is watched.
-  defp closing(%{assigns: %{terminal: %{session: session} = terminal}} = socket, session, task),
-    do: assign(socket, :terminal, %{terminal | closing: Process.monitor(task)})
-
-  defp closing(socket, _session, _task), do: socket
-
-  defp answered(
-         %{assigns: %{terminal: %{session: session, closing: task} = terminal}} = socket,
-         session
-       )
-       when is_reference(task) do
-    Process.demonitor(task, [:flush])
-    assign(socket, :terminal, %{terminal | closing: nil})
-  end
-
-  defp answered(socket, _session), do: socket
-
-  # The shown session ended: its screen stays as it was, read-only, with
-  # the ending said beside it, until the person closes the frame. The
-  # first ending is the one said; a later answer for the gone session
-  # (an acknowledgement the browser sent after) changes nothing.
-  defp ended(
-         %{assigns: %{terminal: %{session: session, ended: nil} = terminal}} = socket,
-         session,
-         reason
-       ) do
-    if connected?(socket), do: Opus.Programs.detach(socket.assigns.context, session)
-
-    socket
-    |> assign(:terminal, %{terminal | ended: ended_reason(reason)})
-    |> push_event("terminal_ended", %{session: session})
-    |> load_running()
-  end
-
-  defp ended(socket, _session, _reason), do: load_running(socket)
-
-  defp ended_reason(reason)
-       when reason in [:exited, :closed, :idle, :row_changed, :standing, :unanswered],
-       do: reason
-
-  defp ended_reason(_gone), do: :not_found
-
-  defp kept(%{assigns: %{terminal: %{session: session} = terminal}} = socket, session, kept),
-    do: assign(socket, :terminal, %{terminal | kept: kept})
-
-  defp kept(socket, _session, _kept), do: socket
+  @impl PrismWeb.TerminalComponent
+  def terminal_dismissed(socket),
+    do: push_patch(socket, to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/programs"))
 
   defp load_running(socket) do
     if connected?(socket), do: assign(socket, :running, running(socket)), else: socket

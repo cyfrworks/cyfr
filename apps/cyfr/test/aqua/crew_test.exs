@@ -409,7 +409,7 @@ defmodule Aqua.CrewTest do
 
     for {member, reason, words} <- [
           {"coder", :no_grant, "coder's brain needs only your grant"},
-          {"openai-codex", :program_unfit, "program is not one a brain can run in"},
+          {"openai-codex", :program_unfit, "program is not one a crew member can run on"},
           {"claude-code", :program_missing, "install it from its card on the Aqua page"}
         ] do
       assert {:error, {:crew_unready, ^member, ^reason} = refusal} =

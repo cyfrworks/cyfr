@@ -200,11 +200,13 @@ func fakeClaude() int {
 			line, _ := json.Marshal(map[string]any{"argv": args, "answers": got})
 			reply(uuids, string(line))
 		case strings.Contains(words, "other"):
-			write(map[string]any{"type": "control_request", "request_id": "hook-1", "request": map[string]any{"subtype": "hook_callback"}})
+			// Registered before it is written, as ask does: an answer read
+			// before its channel stands is dropped, and the turn never ends.
 			answersMu.Lock()
 			ch := make(chan map[string]any, 1)
 			answers["hook-1"] = ch
 			answersMu.Unlock()
+			write(map[string]any{"type": "control_request", "request_id": "hook-1", "request": map[string]any{"subtype": "hook_callback"}})
 			got := <-ch
 			reply(uuids, fmt.Sprintf("the driver answered %v", got["subtype"]))
 		case strings.Contains(words, "together"):
