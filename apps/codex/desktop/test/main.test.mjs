@@ -32,6 +32,8 @@ function reset() {
   world.cleared = []
   world.answer = () => ({status: 503, headers: new Headers()})
   world.page = () => Promise.resolve("forgery-token")
+  world.wholeDocument = false
+  world.refuseLoad = false
   world.app.removeAllListeners()
   world.powerMonitor.removeAllListeners()
   world.quit = false
@@ -46,6 +48,14 @@ class Contents extends EventEmitter {
   }
   getURL() { return this.url }
   executeJavaScript() { return world.page(this) }
+  reload() {
+    this.reloaded = [...(this.reloaded ?? []), this.url]
+    this.emit("did-start-navigation", {url: this.url, isMainFrame: true, isSameDocument: false})
+    queueMicrotask(() => {
+      this.emit("did-navigate", {}, this.url)
+      this.emit("did-finish-load")
+    })
+  }
   setWindowOpenHandler(h) { this.opens = h }
 }
 
@@ -57,12 +67,33 @@ class BrowserWindow extends EventEmitter {
     this.destroyed = false
     world.windows.push(this)
   }
+  // As Electron 45 makes a load: its navigation starts within the call. A
+  // load of the page shown with a fragment, the same one included, changes
+  // the fragment alone, and still lands after another navigation that
+  // started since; unless the engine makes it a document (wholeDocument).
+  // Its promise resolves once that has landed or committed, or, with
+  // another load of the page still pending (refuseLoad), rejects first,
+  // sends no did-fail-load, and lands afterwards all the same.
   loadURL(url) {
+    const inPage = !world.wholeDocument && !!this.webContents.url && url.includes("#") &&
+      this.webContents.url.split("#")[0] === url.split("#")[0]
+    this.webContents.emit("did-start-navigation", {url, isMainFrame: true, isSameDocument: inPage})
     this.webContents.url = url
-    queueMicrotask(() => {
+    const land = () => {
+      if (inPage) return this.webContents.emit("did-navigate-in-page", {}, url, true)
       this.webContents.emit("did-navigate", {}, url)
       this.webContents.emit("did-finish-load")
-    })
+    }
+    if (world.refuseLoad) {
+      setImmediate(land)
+      const refused = Promise.reject(new Error("ERR_FAILED"))
+      refused.catch(() => {}) // as Electron silences one nobody reads
+      return refused
+    }
+    return new Promise((resolve) => queueMicrotask(() => {
+      land()
+      resolve()
+    }))
   }
   destroy() {
     if (this.destroyed) return
@@ -385,4 +416,107 @@ test("a lock's notice is its own sign-out's: one unconfirmed before does not mak
   await settled()
   assert.equal(world.fetched.length, 2, "each lock sent its sign-out")
   assert.doesNotMatch(content().webContents.url, /unconfirmed/)
+})
+
+const ANSWER = HOME + "/login#answer"
+
+// The content window at the CYFR's sign-in page, hopped to the account
+// window, which then sends the answer back (`answer`).
+async function hopped() {
+  await started(true)
+  child.say({type: "home", home: HOME, account: ACCOUNT})
+  child.say({type: "opened", home: HOME})
+  await settled()
+  const page = content()
+  navigate(page, HOME + "/login")
+  page.loadURL(HOME + "/login")
+  await settled()
+  const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
+  assert.ok(navigate(page, hop).prevented, "the hop leaves the content window at the sign-in page")
+  const account = live().find((w) => w.webContents.url === hop)
+  const answer = () => {
+    const back = {url: ANSWER, isMainFrame: true, prevented: false, preventDefault() { this.prevented = true }}
+    account.webContents.emit("will-navigate", back)
+    assert.ok(back.prevented, "the account window does not load the return")
+  }
+  return {page, answer}
+}
+
+// The page's own change of its fragment to `url`, as the engine reports it.
+function fragmentTo(page, url) {
+  page.webContents.emit("did-start-navigation", {url, isMainFrame: true, isSameDocument: true})
+  page.webContents.url = url
+  page.webContents.emit("did-navigate-in-page", {}, url, true)
+}
+
+test("a sign-in's answer returns as a document of its own, though the content window still shows the CYFR's sign-in page", async () => {
+  const {page, answer} = await hopped()
+  answer()
+  await settled()
+  await settled()
+  assert.equal(page.webContents.url, ANSWER)
+  assert.deepEqual(page.webContents.reloaded, [ANSWER], "the page loaded again with the answer, as Prism reads it on loading")
+  fragmentTo(page, ANSWER)
+  await settled()
+  assert.deepEqual(page.webContents.reloaded, [ANSWER], "one reload a return")
+})
+
+test("a sign-in's answer that committed as a whole document reloads nothing, then or at a later fragment of that same address", async () => {
+  const {page, answer} = await hopped()
+  world.wholeDocument = true // the engine's choice, whatever the two addresses
+  answer()
+  await settled()
+  assert.equal(page.webContents.reloaded, undefined)
+  fragmentTo(page, ANSWER)
+  await settled()
+  assert.equal(page.webContents.reloaded, undefined, "a later fragment change to that address is the page's own")
+})
+
+test("a superseded sign-in's answer reloads nothing, as it lands or at a later fragment of that same address", async () => {
+  const {page, answer} = await hopped()
+  answer()
+  // Another navigation starts before the answer lands, which it still does.
+  page.webContents.emit("did-start-navigation", {url: HOME + "/elsewhere", isMainFrame: true, isSameDocument: false})
+  await settled()
+  assert.equal(page.webContents.reloaded, undefined, "the answer landing after it was superseded")
+  fragmentTo(page, ANSWER)
+  await settled()
+  assert.equal(page.webContents.reloaded, undefined, "a later fragment change to that address is the page's own")
+})
+
+test("a sign-in's answer whose load call rejects reloads nothing as it lands, or at a later fragment of that same address", async () => {
+  const {page, answer} = await hopped()
+  let landed = false
+  page.webContents.on("did-navigate-in-page", () => { landed = true })
+  world.refuseLoad = true
+  answer()
+  await settled()
+  await settled()
+  assert.ok(landed, "the fragment landed after the call rejected")
+  assert.equal(page.webContents.reloaded, undefined, "the rejection withdrew the return")
+  fragmentTo(page, ANSWER)
+  await settled()
+  assert.equal(page.webContents.reloaded, undefined, "a later fragment change to that address is the page's own")
+})
+
+test("a lock over a chooser that is keeping a notice leaves the notice there, until a way on is taken from it", async () => {
+  await signedIn()
+  const lockNow = async (signal) => {
+    world.powerMonitor.emit(signal)
+    await settled()
+    child.say({type: "locked", home: HOME, account: ACCOUNT})
+    await settled()
+    await settled()
+  }
+  await lockNow("lock-screen") // the CYFR answers 503: unconfirmed
+  assert.match(content().webContents.url, /notice=unconfirmed$/)
+  await lockNow("suspend")
+  assert.match(content().webContents.url, /notice=unconfirmed$/, "kept through the lock over it")
+  const chooser = content()
+  assert.ok(!navigate(chooser, "http://127.0.0.1:7340/").prevented)
+  chooser.loadURL("http://127.0.0.1:7340/")
+  await settled()
+  await lockNow("lock-screen")
+  assert.doesNotMatch(content().webContents.url, /notice=/, "told once the person went on")
 })

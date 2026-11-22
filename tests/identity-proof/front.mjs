@@ -14,7 +14,7 @@
 // A control listener beside it (plain HTTP, the same address) lets the
 // proof break the directory on purpose, and reports what reached it:
 //
-//   POST /fault {"mode": …}   none | down | hold | directory
+//   POST /fault {"mode": …}   none | down | hold | directory | redirect
 //     down                       every connection is closed before it is
 //                                answered: the directory is unreachable
 //     hold                       every request but an upgrade waits,
@@ -24,6 +24,8 @@
 //     directory {"directory": U} the sign-in page (GET /login) names U as
 //                                its account directory: the CYFR as it
 //                                would be configured with another
+//     redirect {"from": P, "to": U}  a request for the path P is answered
+//                                with a redirect to U
 //   GET /seen                 every request: method, path, user agent,
 //                             when it came, status, the
 //                             cyfr-session-retired header answered,
@@ -48,6 +50,7 @@ if (!listen || !controlPort || !name || !cert || !key || !upstreamPort || !token
 const [host, port] = listen.split(":");
 let mode = "none";
 let directory = "";
+let redirect = null;
 const seen = [];
 // The requests hold keeps waiting, each released when the mode changes.
 let held = [];
@@ -77,6 +80,13 @@ const front = createTls({ cert: readFileSync(cert), key: readFileSync(key) }, (r
 
 function pass(req, res, account) {
   if (account.aborted) return;
+  if (mode === "redirect" && account.path === redirect.from) {
+    account.fault = "redirect";
+    account.status = 302;
+    res.writeHead(302, { location: redirect.to, "content-length": 0 });
+    res.end();
+    return;
+  }
   // The sign-in page named another directory: read whole, unencoded, so
   // its one attribute can be rewritten.
   const rewrite = mode === "directory" && req.method === "GET" && account.path === "/login";
@@ -166,14 +176,18 @@ const control = createHttp((req, res) => {
       try {
         const asked = JSON.parse(body);
         const next = asked.mode;
-        if (!["none", "down", "hold", "directory"].includes(next)) return reply(422, { error: "unknown mode" });
+        if (!["none", "down", "hold", "directory", "redirect"].includes(next)) return reply(422, { error: "unknown mode" });
+        if (next === "redirect" && !(/^\/[^\s?#]*$/.test(asked.from ?? "") && /^https:\/\/[^\s"<>]+$/.test(asked.to ?? ""))) {
+          return reply(422, { error: "no redirect" });
+        }
         if (next === "directory" && !/^https:\/\/[^"<>\s]+$/.test(asked.directory ?? "")) return reply(422, { error: "no directory" });
         mode = next;
         directory = next === "directory" ? asked.directory : "";
+        redirect = next === "redirect" ? { from: asked.from, to: asked.to } : null;
         const release = held;
         held = [];
         for (const go of release) go();
-        return reply(200, { mode, directory });
+        return reply(200, { mode, directory, redirect });
       } catch {
         return reply(400, { error: "unreadable" });
       }

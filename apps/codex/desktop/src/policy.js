@@ -132,14 +132,17 @@ export function grants(permission) {
 const PASSKEYS_DENIED = "publickey-credentials-get=(), publickey-credentials-create=()"
 
 /**
- * A document's response headers as a session of `kind` ("content" or
- * "account") keeps them. Content documents, frames among them, deny both
- * passkey calls, with any feature they named first kept, and run no
- * worker; the account window's document frames nothing. Each adds to the
- * document's own policies, which keep restricting it.
+ * A response's headers as a session of `kind` ("content" or "account")
+ * keeps them, for the documents made of them. Content documents, frames
+ * among them, deny both passkey calls, with any feature they named first
+ * kept, and run no worker, so only a document's own response makes one.
+ * The account window's documents frame nothing, and each response of that
+ * session says so: the account pages' service worker makes a document of
+ * what it fetched or kept, which the engine calls no document. Each adds
+ * to the document's own policies, which keep restricting it.
  */
 export function documentHeaders(kind, resourceType, headers) {
-  if (resourceType !== "mainFrame" && resourceType !== "subFrame") return headers
+  if (kind === "content" && resourceType !== "mainFrame" && resourceType !== "subFrame") return headers
   const out = {}
   const policies = []
   const csp = []
@@ -156,7 +159,7 @@ export function documentHeaders(kind, resourceType, headers) {
     out["Content-Security-Policy"] = [...csp, "worker-src 'none'"]
   } else {
     if (policies.length) out["Permissions-Policy"] = policies
-    out["Content-Security-Policy"] = resourceType === "mainFrame" ? [...csp, "frame-src 'none'"] : csp
+    out["Content-Security-Policy"] = [...csp, "frame-src 'none'"]
   }
   return out
 }

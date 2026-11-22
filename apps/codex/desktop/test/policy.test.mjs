@@ -160,10 +160,14 @@ test("content documents deny both passkey calls and workers, keeping their own p
   assert.equal(documentHeaders("content", "script", script), script)
 })
 
-test("the account window's document frames nothing, keeping its own policies", () => {
-  const got = documentHeaders("account", "mainFrame", {"Content-Security-Policy": ["script-src 'self'"]})
-  assert.deepEqual(got["Content-Security-Policy"], ["script-src 'self'", "frame-src 'none'"])
-  assert.ok(!("Permissions-Policy" in got))
+test("the account window's document frames nothing, keeping its own policies, whichever response it is made of", () => {
+  // The account pages' service worker fetches a page as an xhr and answers
+  // the next visit's document with that response, or with its kept copy.
+  for (const resourceType of ["mainFrame", "subFrame", "xhr", "other"]) {
+    const got = documentHeaders("account", resourceType, {"Content-Security-Policy": ["script-src 'self'"]})
+    assert.deepEqual(got["Content-Security-Policy"], ["script-src 'self'", "frame-src 'none'"], resourceType)
+    assert.ok(!("Permissions-Policy" in got), resourceType)
+  }
 })
 
 test("a sign-out is retired only by the selected CYFR's own signed-out redirect that says so", () => {

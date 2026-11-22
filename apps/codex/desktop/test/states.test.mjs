@@ -172,7 +172,92 @@ test("a hop is the content window's top frame asking; a frame asking, or a confi
 
 test("the account window's top frame returns; its frames load nothing and end nothing", () => {
   const s = run(open, true).s
-  assert.deepEqual(step(s, {type: "account-navigate", url: HOME + "/login#a", target: "top"}).do, [{return: {url: HOME + "/login#a"}}, {hold: true}])
+  const back = (kind) => step(s, {type: "account-navigate", url: HOME + "/login#a", target: "top", kind})
+  assert.deepEqual(back("sign-in").do, [{unhop: true}, {hold: true}, {deliver: {url: HOME + "/login#a"}}])
+  assert.deepEqual(back("confirmation").do, [{unhop: true}, {hold: true}, {confirmation: {url: HOME + "/login#a"}}])
+  assert.equal(back("confirmation").state.returning, null, "a confirmation's answer reloads nothing")
+  assert.deepEqual(back(null), {state: s, allow: false, do: [{unhop: true}]}, "no ceremony of the content window showing: nothing is delivered or held")
   assert.deepEqual(step(s, {type: "account-navigate", url: HOME + "/login#a", target: "frame"}), {state: s, allow: false, do: []})
   assert.deepEqual(step(s, {type: "account-navigate", url: HOME + "/", target: "top"}).do, [{unhop: true}])
+})
+
+const ANSWER = HOME + "/login#a"
+const returned = [...open, {type: "account-navigate", url: ANSWER, target: "top", kind: "sign-in"}]
+const ownStart = {type: "started", url: ANSWER, sameDocument: true}
+const reloads = (events) => run([...returned, ...events], true).kinds.filter((k) => k === "reload").length
+
+test("a sign-in's return reloads once, when the navigation main made for it lands as a change of fragment", () => {
+  const landed = {type: "landed", url: ANSWER}
+  assert.equal(reloads([ownStart, {type: "delivered"}, landed]), 1)
+  assert.equal(reloads([ownStart, {type: "delivered"}, landed, ownStart, landed]), 1, "once")
+})
+
+test("every other outcome withdraws a sign-in's return, and no later landing at its address reloads", () => {
+  const later = [ownStart, {type: "landed", url: ANSWER}]
+  const landing = [ownStart, {type: "delivered"}]
+  const outcomes = {
+    "no navigation started within main's call": [{type: "delivered"}],
+    "main's load started as a whole document": [{...ownStart, sameDocument: false}, {type: "delivered"}],
+    "superseded by another address": [...landing, {type: "started", url: HOME + "/elsewhere", sameDocument: false}],
+    "superseded by the same address": [...landing, ownStart],
+    "a document committed": [...landing, {type: "committed"}],
+    "the load failed": [...landing, {type: "load-failed"}],
+    "main's load call ended before it landed": [...landing, {type: "load-ended", url: ANSWER}],
+    "another fragment landed": [...landing, {type: "landed", url: HOME + "/login#b"}],
+    "a lock": [...landing, {type: "lock", why: "lock-screen"}],
+    "cyfr's own lock": [...landing, locked(HOME)],
+    "the window gone": [...landing, {type: "quit"}],
+    "cyfr gone": [...landing, {type: "gone", why: "it exited"}]
+  }
+  for (const [name, events] of Object.entries(outcomes)) {
+    assert.equal(run([...returned, ...events], true).s.returning, null, name)
+    assert.equal(reloads([...events, ...later]), 0, name)
+  }
+})
+
+test("an earlier load call's end leaves the return on its way", () => {
+  assert.equal(reloads([ownStart, {type: "delivered"}, {type: "load-ended", url: HOME + "/login#before"}, {type: "landed", url: ANSWER}]), 1)
+})
+
+test("before ready and while locking, a top-frame load in the account window is refused and ends any ceremony; a frame's ends nothing", () => {
+  const states = {starting: initial(true), locking: run([...open, {type: "lock", why: "lock-screen"}], true).s}
+  for (const [name, s] of Object.entries(states)) {
+    for (const url of [ACCOUNT + "/account/sign", ANSWER, HOME + "/"]) {
+      const at = {type: "account-navigate", url, kind: "sign-in"}
+      assert.deepEqual(step(s, {...at, target: "top"}), {state: s, allow: false, do: [{unhop: true}]}, `${name}: ${url}`)
+      assert.deepEqual(step(s, {...at, target: "frame"}), {state: s, allow: false, do: []}, `${name}, a frame: ${url}`)
+    }
+  }
+})
+
+const CHOOSER = "http://127.0.0.1:7340/bootstrap/#notice=unconfirmed"
+const unconfirmedLock = [...open, given, {type: "lock", why: "lock-screen"}, {type: "signed-out", confirmed: false}, locked(HOME)]
+const lockAgain = [{type: "lock", why: "suspend"}, {type: "signed-out", confirmed: true}, locked(HOME)]
+const shownNotices = (events) => run(events).effects.filter((x) => x.chooser).at(-1).chooser
+
+test("a lock over a chooser that is keeping a notice leaves the notice there", () => {
+  assert.deepEqual(shownNotices([...unconfirmedLock, ...lockAgain]), ["unconfirmed"], "a second lock")
+  assert.deepEqual(shownNotices([...unconfirmedLock, ...lockAgain, ...lockAgain]), ["unconfirmed"], "a third")
+  assert.deepEqual(shownNotices([...unconfirmedLock, locked(HOME), {type: "signed-out", confirmed: true}]), ["unconfirmed"], "cyfr's own lock")
+  assert.deepEqual(shownNotices([...unconfirmedLock, {type: "lock", why: "suspend"}, {type: "signed-out", confirmed: false}, locked(HOME)]),
+    ["unconfirmed"], "unconfirmed again is said once")
+  assert.deepEqual(shownNotices([...unconfirmedLock, {type: "lock", why: "x", notice: "company"}, {type: "signed-out", confirmed: true}, locked(HOME)]),
+    ["unconfirmed", "company"], "another notice joins it")
+})
+
+test("only a way on taken from the chooser clears what it was keeping", () => {
+  const from = (over) => ({type: "navigate", window: "content", url: "http://127.0.0.1:7340/", target: "top", asker: "top", showing: CHOOSER, ...over})
+  for (const [name, way] of [["Use this computer's key", from({})], ["Sign in with your passkey", from({url: HOME + "/login"})]]) {
+    assert.deepEqual(shownNotices([...unconfirmedLock, way, ...lockAgain]), [], name)
+  }
+  for (const [name, event] of [["a frame's load", from({target: "frame"})], ["a load refused", from({url: "https://evil.example/"})],
+    ["a confirmation window's", from({window: "child"})], ["the chooser itself again", from({url: CHOOSER})],
+    ["its page finishing", {type: "page", url: CHOOSER}], ["a second launch", {type: "second-instance"}]]) {
+    assert.deepEqual(shownNotices([...unconfirmedLock, event, ...lockAgain]), ["unconfirmed"], name)
+  }
+})
+
+test("a second launch shows the content window, and nothing once ended", () => {
+  assert.deepEqual(step(run(open).s, {type: "second-instance"}).do, [{show: true}])
+  assert.deepEqual(step(run([...open, {type: "quit"}]).s, {type: "second-instance"}).do, [])
 })
