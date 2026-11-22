@@ -9,11 +9,10 @@ defmodule Opus.Programs.Terminal do
   a page or a browser credential (`Opus.Programs.start/3`).
 
   The process holds the row's owner (`Opus.Programs.hold/2`) and asks the
-  box for the session under a key that is its own id, so every start is
-  a session of its own; the box records that open before the backend is
-  asked and settles whatever the backend answers under the key
-  (`Opus.Programs.Box`). An open the box answers past its deadline
-  refuses the start, the process ends, and the box closes the late
+  box for the one lifetime its id is the handle of (`Opus.Programs.Box`,
+  "A terminal's id"), so every start is a session of its own. An open the
+  box answers past its deadline refuses the start, the process ends, and
+  the box closes that lifetime, with it any late
   session. A reader of its own reads the session's output for the
   process's life, one `output` at a time naming the last chunk it was
   answered, so a lost answer is replayed.
@@ -46,7 +45,11 @@ defmodule Opus.Programs.Terminal do
       (its answer says so, the service was started again, or it could
       not be read for a minute);
     * `:closed`: `close/2` was accepted, carried out by this process
-      whether or not the caller still waits;
+      whether or not the caller still waits, and the box said the place
+      is back;
+    * `:unanswered`: as `:closed`, but the box did not confirm it and
+      still owes the close. Every attached process and the topic hear the
+      one or the other, and only once the box has answered;
     * `:idle`: a day passed with nothing attached and nothing printed,
       unless the session is kept (`keep/3`);
     * `:row_changed`: its row was changed, disabled or removed
@@ -57,7 +60,7 @@ defmodule Opus.Programs.Terminal do
       cannot answer ends nothing, and a sign-out of a browser leaves the
       person standing.
 
-  However it ends, killed included, the box closes its session; on the
+  However it ends, killed included, the box closes its lifetime; on the
   way out it asks so itself, which is the fast path.
 
   A session a turn started (`turn_id`, `by: :aqua`) has no attached
@@ -77,8 +80,8 @@ defmodule Opus.Programs.Terminal do
   does and is handed acknowledged deliveries and the tail, and nothing of
   a turn ends it. That holder, named at its start (`held_by`), keeps its
   idle stop, so the session lives as long as it from the moment it is
-  asked for: starting or started, it ends `:closed` once that process is
-  gone, however it ended. A person's session is held by no process and
+  asked for: starting or started, it is closed once that process is
+  gone, however it ended, and ends as a close does. A person's session is held by no process and
   only detaches. Every change of
   what `Opus.Programs.running/1` reports is announced on the person's
   own `Cyfr.Bus.programs/2` topic (`Cyfr.Bus.Program`). Nothing that
@@ -147,6 +150,7 @@ defmodule Opus.Programs.Terminal do
     {:ok,
      %{
        id: Keyword.fetch!(args, :id),
+       lifetime: Keyword.fetch!(args, :lifetime),
        athanor_id: Keyword.fetch!(args, :athanor_id),
        user_id: Keyword.fetch!(args, :user_id),
        turn_id: Keyword.get(args, :turn_id),
@@ -183,13 +187,9 @@ defmodule Opus.Programs.Terminal do
     case with(:ok <- turn_running(state), do: hold(state, deadline)) do
       {:ok, state} ->
         holder = self()
-        owner = state.owner
+        lifetime = state.lifetime
 
         params = %{
-          program: Opus.Programs.Definition.program_name(),
-          home_id: state.home_id,
-          key: state.id,
-          mode: :terminal,
           argv: state.argv,
           rows: state.rows,
           cols: state.cols,
@@ -198,7 +198,7 @@ defmodule Opus.Programs.Terminal do
         }
 
         spawn_link(fn ->
-          send(holder, {:opened, Opus.Programs.box_open(owner, holder, params, deadline)})
+          send(holder, {:opened, Opus.Programs.box_open(lifetime, holder, params, deadline)})
         end)
 
         {:noreply, %{state | opening: from, deadline: deadline}}
@@ -316,30 +316,43 @@ defmodule Opus.Programs.Terminal do
   # A close names the session it was accepted for, by its id: it is
   # carried out here, so the caller leaving changes nothing, and answers
   # what the box answered. Nothing attaches to a session being closed.
-  def handle_call({:close, _principal}, _from, %{ended: ended} = state) when ended != nil,
-    do: {:stop, :normal, {:ok, :already_gone}, unlisted(state)}
+  # One whose program exited is gone only once its place is back; until
+  # then it stays, and counts, to be asked again.
+  def handle_call({:close, _principal}, _from, %{ended: ended} = state) when ended != nil do
+    if close_session(state) == :ok,
+      do: {:stop, :normal, {:ok, :already_gone}, unlisted(state)},
+      else: {:reply, {:error, :unanswered}, state}
+  end
 
   def handle_call({:close, principal}, _from, state) do
     if listed?(state, principal) do
-      state = stop_reader(state)
       if state.opening, do: GenServer.reply(state.opening, {:error, :closed})
+      {answer, state} = carry_out_close(state)
 
       # Only a close the backend confirmed frees the slot: one it left
       # unanswered may still run there, and counts until this process ends.
-      {answer, state} =
-        case close_session(state) do
-          :ok -> {{:ok, :closed}, unlisted(state)}
-          {:error, _unanswered} -> {{:error, :unanswered}, state}
-        end
-
-      state = ended(state, :closed)
-      {:stop, :normal, answer, answer_waiters(%{state | session: nil, opening: nil})}
+      state = if answer == {:ok, :closed}, do: unlisted(state), else: state
+      {:stop, :normal, answer, answer_waiters(state)}
     else
       {:reply, {:ok, :already_gone}, state}
     end
   end
 
   def handle_call(_request, _from, state), do: {:reply, {:error, :not_found}, state}
+
+  # A close, however it was asked: the ending said is what the box
+  # answered, to every attached process alike, and never before it did.
+  defp carry_out_close(state) do
+    state = stop_reader(state)
+
+    {answer, reason} =
+      case close_session(state) do
+        :ok -> {{:ok, :closed}, :closed}
+        {:error, _unanswered} -> {{:error, :unanswered}, :unanswered}
+      end
+
+    {answer, %{ended(state, reason) | session: nil, opening: nil}}
+  end
 
   # A close that answered for a program that runs no more has freed its
   # slot: the session leaves the registry before the answer, since this
@@ -356,7 +369,8 @@ defmodule Opus.Programs.Terminal do
   @impl true
   def handle_cast(:refused, state) do
     if state.opening, do: GenServer.reply(state.opening, {:error, :deadline})
-    {:stop, :normal, ended(%{state | opening: nil}, :closed)}
+    {_answer, state} = carry_out_close(state)
+    {:stop, :normal, state}
   end
 
   def handle_cast({:row_ended, athanor_id, row_id}, state) do
@@ -414,7 +428,8 @@ defmodule Opus.Programs.Terminal do
   # is refused.
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{held_by: {_pid_held, ref}} = state) do
     if state.opening, do: GenServer.reply(state.opening, {:error, :closed})
-    finish(%{state | opening: nil}, :closed)
+    {_answer, state} = carry_out_close(state)
+    {:stop, :normal, answer_waiters(state)}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -654,7 +669,7 @@ defmodule Opus.Programs.Terminal do
     end
   end
 
-  defp close_session(state), do: Opus.Programs.box_close(state.owner, state.home_id, state.id)
+  defp close_session(state), do: Opus.Programs.box_close(state.lifetime)
 
   defp stop_reader(%{reader: nil} = state), do: state
 

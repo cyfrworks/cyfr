@@ -303,7 +303,7 @@ defmodule Opus.Programs do
   # ============================================================================
 
   @typedoc "Why a terminal session ended (`Opus.Programs.Terminal`)."
-  @type ended :: :exited | :closed | :idle | :row_changed | :standing
+  @type ended :: :exited | :closed | :unanswered | :idle | :row_changed | :standing
 
   @typedoc """
   Who calls: a person at a screen, as a `Sanctum.Context` the gate reads as
@@ -477,20 +477,20 @@ defmodule Opus.Programs do
          :ok <- room(principal),
          {:ok, row} <- program_row(caller_actor(caller), row_id),
          :ok <- browser_row(principal, row),
-         :ok <- at_epoch(row, Map.get(opts, :epoch)) do
-      id = "trm_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+         :ok <- at_epoch(row, Map.get(opts, :epoch)),
+         owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
+         home_id = if(row.home == "kept", do: row.id),
+         deadline = Map.get(opts, :deadline, System.system_time(:millisecond) + @start_ms) do
       {athanor_id, user_id, turn_id} = parts(principal)
 
       spec = [
-        name: terminal_name(id, principal),
-        id: id,
         athanor_id: athanor_id,
         user_id: user_id,
         turn_id: turn_id,
         row_id: row.id,
         row_name: row.name,
-        home_id: if(row.home == "kept", do: row.id),
-        owner: %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
+        home_id: home_id,
+        owner: owner,
         argv: args,
         by: by(principal),
         held_by: held_by,
@@ -498,18 +498,56 @@ defmodule Opus.Programs do
         cols: cols
       ]
 
-      deadline = Map.get(opts, :deadline, System.system_time(:millisecond) + @start_ms)
-      wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
-
-      case DynamicSupervisor.start_child(@relays, {Terminal, spec}) do
-        {:ok, pid} -> open(pid, deadline, wait)
-        # A browser's row whose session already runs (`Terminal`).
-        :ignore -> {:error, :already_running}
-        {:error, reason} -> {:error, reason}
-      end
+      started(principal, spec, deadline, _again? = true)
     end
   catch
     :exit, _ -> {:error, :backends_unavailable}
+  end
+
+  # One try of a start is one id and one lifetime. One of a boot the
+  # service no longer runs is refused before anything of it runs, and is
+  # made again once, when the try before it has gone.
+  defp started(principal, spec, deadline, again?) do
+    with {:ok, {id, lifetime}} <- new_terminal(principal, spec[:owner], spec[:home_id]) do
+      named = [name: terminal_name(id, principal), id: id, lifetime: lifetime] ++ spec
+      wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
+
+      case DynamicSupervisor.start_child(@relays, {Terminal, named}) do
+        {:ok, pid} ->
+          ended = Process.monitor(pid)
+
+          case open(pid, deadline, wait) do
+            {:error, {:refused, :stale_boot, _boot}} when again? ->
+              receive do
+                {:DOWN, ^ended, :process, ^pid, _reason} ->
+                  started(principal, spec, deadline, false)
+              after
+                wait -> {:error, :deadline}
+              end
+
+            answer ->
+              Process.demonitor(ended, [:flush])
+              answer
+          end
+
+        # A browser's row whose session already runs (`Terminal`).
+        :ignore ->
+          {:error, :already_running}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  # The terminal's id, made by the box, whose root proves it: the handle
+  # of the one lifetime this try is, fixed before anything is asked.
+  defp new_terminal(principal, owner, home_id) do
+    call(
+      box_of(owner.athanor_id),
+      {:terminal_id, principal, owner, home_id},
+      Box.control_timeout_ms()
+    )
   end
 
   # A start refused for its deadline is ended by its session's owner,
@@ -650,8 +688,14 @@ defmodule Opus.Programs do
   caller waits for it: `{:ok, :closed}` once the service confirmed it,
   `{:ok, :already_gone}` for a session that is not running (or not the
   caller's), and `{:error, :unanswered}` when the service did not
-  confirm it in time, the box still owing the close. The session ends
-  `:closed` either way. A person closes their own sessions, those their
+  confirm it in time, the box still owing the close. A session with no
+  process here, after a restart of CYFR too, is closed by the lifetime its
+  id names (`Opus.Programs.Box`, "A terminal's id") and is `:already_gone`
+  only once the service confirmed that; an id that names no lifetime the
+  caller may close is `:already_gone` with the service not asked. The
+  session ends
+  `:closed` of a close confirmed and `:unanswered` of one that was not,
+  said so to every process attached. A person closes their own sessions, those their
   turns started and their browser's; a turn or the browser closes only
   its own.
   """
@@ -661,15 +705,42 @@ defmodule Opus.Programs do
     with {:ok, principal} <- who(caller) do
       case terminal_pid(session_id, principal, :closing) do
         nil ->
-          {:ok, :already_gone}
+          close_gone(session_id, principal)
 
         pid ->
-          GenServer.call(pid, {:close, principal}, Box.close_timeout_ms() + @answer_margin_ms)
+          close_terminal(pid, principal, session_id)
       end
     end
   catch
+    :exit, _ -> {:error, :unanswered}
+  end
+
+  defp close_terminal(pid, principal, session_id) do
+    GenServer.call(pid, {:close, principal}, Box.close_timeout_ms() + @answer_margin_ms)
+  catch
     :exit, {:timeout, _} -> {:error, :unanswered}
-    :exit, _ -> {:ok, :already_gone}
+    :exit, _ -> close_gone(session_id, principal)
+  end
+
+  # A session with no process is gone once its lifetime's place is back.
+  # Who may ask that is who could have closed it, read from its id; to
+  # anyone else, as for an id CYFR made no lifetime of, it is gone.
+  defp close_gone(session_id, principal) do
+    case call(@local, {:terminal_named, session_id, principal}, Box.control_timeout_ms()) do
+      {:ok, whose, lifetime} ->
+        if reaches?(principal, whose, :closing) do
+          with :ok <- box_close(lifetime), do: {:ok, :already_gone}
+        else
+          {:ok, :already_gone}
+        end
+
+      :none ->
+        {:ok, :already_gone}
+
+      # No box could read the id, so nothing says what it names is gone.
+      {:error, _unread} ->
+        {:error, :unanswered}
+    end
   end
 
   @doc """
@@ -981,40 +1052,47 @@ defmodule Opus.Programs do
   # ============================================================================
 
   @doc """
-  The box's open of a session for the holder `holder` of `owner` (a brain
-  session, `Opus.Brain`, or a terminal, `Opus.Programs.Terminal`), with
-  `params` (`program`, `home_id`, `key`, `argv`, its `mode`, `:run` unless
-  it names one, and a terminal's `rows` and `cols`): recorded in the box before the backend is asked, so whatever
-  the backend answers under the key is the box's, and answered by
-  `deadline` (Unix milliseconds). Answers the session the box gave the
-  key, `{:error, :deadline}` past it, or the refusal.
+  A new lifetime of `named` (its `program`, `key`, `mode`, `:run` unless it
+  names one, and `home_id`) under `grant` and of its service boot: one
+  process, which `box_open/4` opens and `box_close/1` ends.
   """
-  @spec box_open(map(), pid(), map(), integer()) ::
-          {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
-  def box_open(owner, holder, params, deadline) do
-    wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
+  @spec lifetime(grant(), map()) :: Box.lifetime()
+  defdelegate lifetime(grant, named), to: Box
 
-    case call(box_of(owner.athanor_id), {:session_open, owner, holder, params, deadline}, wait) do
+  @doc """
+  The box's open of `lifetime` for the holder `holder`, the only open
+  there is (a tool server's, a brain's and a terminal's), with `params`
+  (`argv`, and a terminal's `rows` and `cols`), answered by `deadline`
+  (Unix milliseconds). Answers the lifetime's session, `{:error,
+  :deadline}` past it, `{:error, :control_plane_lost}` for a member
+  without its slot, or the refusal: `lifetime_over` for one closed or
+  ended, and `stale_boot` for one of another boot of the service, whose
+  caller holds again and mints another. An open that is never given has
+  its lifetime closed (`Opus.Programs.Box`, "Sessions").
+  """
+  @spec box_open(Box.lifetime(), pid(), map(), integer()) ::
+          {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
+  def box_open(lifetime, holder, params, deadline) do
+    wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
+    message = {:session_open, lifetime, holder, params, deadline}
+
+    case call(box_of(lifetime.athanor), message, wait) do
       {:error, :backends_unavailable} -> {:error, :deadline}
       answer -> answer
     end
   end
 
   @doc """
-  The calling holder's key's session ends: the box closes it, and owes the
-  close until the backend confirms it. Answers `:ok` once the backend has
-  confirmed the close (or nothing of the session runs), and
-  `{:error, :unanswered}` when it did not or the close window passed, the
-  close still owed; either way only then, so the holder's release of the
-  owner after it never outruns it.
+  End `lifetime`, and no other: the box owes the close until the service
+  confirms it. Answers `:ok` once the service has confirmed that nothing
+  of the lifetime is held, and so its place is back, whether or not this
+  box knew of it, and `{:error, :unanswered}` when it did not, the close
+  window passed or the box could send nothing; either way only then, so
+  the holder's release of the owner after it never outruns it.
   """
-  @spec box_close(map(), String.t() | nil, String.t()) :: :ok | {:error, :unanswered}
-  def box_close(owner, home_id, key) do
-    case call(
-           box_of(owner.athanor_id),
-           {:session_close, owner, home_id, key},
-           Box.close_timeout_ms()
-         ) do
+  @spec box_close(Box.lifetime()) :: :ok | {:error, :unanswered}
+  def box_close(lifetime) do
+    case call(box_of(lifetime.athanor), {:session_close, lifetime}, Box.close_timeout_ms()) do
       :ok -> :ok
       {:error, _unanswered} -> {:error, :unanswered}
     end

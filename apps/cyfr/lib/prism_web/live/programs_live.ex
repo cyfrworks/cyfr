@@ -78,7 +78,8 @@ defmodule PrismWeb.ProgramsLive do
   minute, and the browser gives up on an event it waits on for 30
   seconds. The page says what it is doing until the answer comes, takes
   no other of these meanwhile, and the call runs to its end if the person
-  leaves (`PrismWeb.Ops.run_to_end/1`).
+  leaves (`PrismWeb.Ops.run_to_end/1`). A program's Close waits off the
+  page's process too, until its place is back or the close is unanswered.
   """
 
   use PrismWeb, :live_view
@@ -330,6 +331,17 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
+  # A session being closed answers nothing until its close has, so the
+  # page asks it nothing meanwhile.
+  def handle_event(
+        event,
+        %{"session" => session},
+        %{assigns: %{terminal: %{session: session, closing: task}}} = socket
+      )
+      when is_reference(task) and
+             event in ~w(terminal_input terminal_written terminal_resize terminal_keep terminal_close),
+      do: {:reply, %{}, socket}
+
   # Each piece the hook sends is answered before it sends the next, so
   # what a person pastes waits in the browser, not here.
   def handle_event("terminal_input", %{"session" => session, "terminal_input" => data}, socket)
@@ -380,16 +392,17 @@ defmodule PrismWeb.ProgramsLive do
        push_patch(socket, to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/programs"))}
 
   def handle_event("terminal_close", %{"session" => session}, socket) do
-    case Opus.Programs.close(socket.assigns.context, session) do
-      {:ok, _closed_or_gone} ->
-        {:noreply, ended(socket, session, :closed)}
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+    page = self()
 
-      {:error, :unanswered} ->
-        {:noreply, ended(socket, session, :unanswered)}
+    {:ok, task} =
+      Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        result = run_to_end(fn -> Opus.Programs.close(ctx, session) end)
+        send(page, {:closed, tag, session, result})
+      end)
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
-    end
+    {:noreply, closing(socket, session, task)}
   end
 
   def handle_event("reset_home", %{"name" => name}, socket) do
@@ -515,6 +528,22 @@ defmodule PrismWeb.ProgramsLive do
       %{enabled: false} -> {:noreply, expand_server(socket, name)}
       _other -> {:noreply, socket}
     end
+  end
+
+  def handle_info({:closed, tag, session, result}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, closed(&1, session, result)})
+
+  # A Close's task lost before it answered gives the terminal back. The
+  # session says its ending itself, if it reached one.
+  def handle_info(
+        {:DOWN, task, :process, _pid, _reason},
+        %{assigns: %{terminal: %{closing: task} = terminal}} = socket
+      ) do
+    socket = assign(socket, :terminal, %{terminal | closing: nil})
+
+    if terminal.ended,
+      do: {:noreply, socket},
+      else: {:noreply, put_flash(socket, :error, "Failed: #{error_message(:unavailable)}")}
   end
 
   def handle_info(msg, socket) do
@@ -1023,6 +1052,7 @@ defmodule PrismWeb.ProgramsLive do
       kept: false,
       ended: nil,
       attached: false,
+      closing: nil,
       delivery: nil,
       back: back
     })
@@ -1040,6 +1070,36 @@ defmodule PrismWeb.ProgramsLive do
        do: Opus.Programs.resize(socket.assigns.context, session, rows, cols)
 
   defp resize(_socket, _session, _params), do: {:error, :invalid_size}
+
+  # What a Close answered, once it did.
+  defp closed(socket, session, {:ok, _closed_or_gone}),
+    do: socket |> answered(session) |> ended(session, :closed)
+
+  defp closed(socket, session, {:error, :unanswered}),
+    do: socket |> answered(session) |> ended(session, :unanswered)
+
+  defp closed(socket, session, {:error, reason}) do
+    socket
+    |> answered(session)
+    |> put_flash(:error, "Failed: #{error_message(reason)}")
+  end
+
+  # The shown session's Close is out while its task is watched.
+  defp closing(%{assigns: %{terminal: %{session: session} = terminal}} = socket, session, task),
+    do: assign(socket, :terminal, %{terminal | closing: Process.monitor(task)})
+
+  defp closing(socket, _session, _task), do: socket
+
+  defp answered(
+         %{assigns: %{terminal: %{session: session, closing: task} = terminal}} = socket,
+         session
+       )
+       when is_reference(task) do
+    Process.demonitor(task, [:flush])
+    assign(socket, :terminal, %{terminal | closing: nil})
+  end
+
+  defp answered(socket, _session), do: socket
 
   # The shown session ended: its screen stays as it was, read-only, with
   # the ending said beside it, until the person closes the frame. The

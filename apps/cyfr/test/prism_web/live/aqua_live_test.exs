@@ -434,7 +434,14 @@ defmodule PrismWeb.AquaLiveTest do
       lists!(fake, row, fn -> has_element?(view, set_up) end, signed_out)
       view |> element(set_up) |> render_click()
       first = set_up_terminal!(view)
-      assert opened(home) == [first]
+
+      # A terminal opens under its lifetime's key, which its id is a handle of.
+      key_of = fn id ->
+        [{pid, _person}] = Registry.lookup(Opus.Programs.Registry, {:terminal, id})
+        :sys.get_state(pid).lifetime.key
+      end
+
+      assert opened(home) == [key_of.(first)]
 
       # Set up again shows the same terminal and opens none.
       {view, _html} = mount_athanor(conn, "/aqua")
@@ -456,7 +463,7 @@ defmodule PrismWeb.AquaLiveTest do
       view |> element(set_up) |> render_click()
       second = set_up_terminal!(view)
       refute second == first
-      assert second in opened(home)
+      assert key_of.(second) in opened(home)
     end
 
     # A crew member whose brain needs nothing of the person, never granted,

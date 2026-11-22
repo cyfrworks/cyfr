@@ -249,7 +249,9 @@ class Service:
     def post(self, url, headers, body, timeout=60):
         message = json.loads(body)
         self.received.append(message)
-        kind = message["type"]
+        kind = message.get("type", "close")
+        if kind == "close":
+            return 200, {"version": VERSION, "status": "closed"}, "bb"
         if kind == "open":
             self.opened += 1
             session = "ss_" + f"{self.opened:032x}"
@@ -298,11 +300,25 @@ class Sessions(unittest.TestCase):
         self.assertEqual((body["owner"], body["e"], body["version"]),
                          ({"athanor": "ath_unit", "server": "mcp_unit"}, 3, harness.VERSION))
         self.assertNotIn("home_id", body)
+        self.assertRegex(body["lifetime"], r"\Alt_[0-9a-f]{32}_[0-9a-f]{32}\Z")
+        self.assertEqual(body["lifetime"], harness.new_lifetime("bb", body["lifetime"][-32:]))
         self.assertTrue(request.url.endswith(harness.ROUTES["session"]))
         signing = harness.owner_key(bytes(32), "ath_unit", "mcp_unit", 1, 3)
         fields = {"athanor": "ath_unit", "server": "mcp_unit", "generation": 1, "epoch": 3, "boot": "bb", "ts": 1,
                   "nonce": "n_1"}
         self.assertEqual(request.headers[harness.AUTH_HEADER], harness.invoke_header(signing, fields, request.body))
+
+    def test_each_open_is_a_lifetime_of_its_own_and_a_close_names_the_one_that_opened_its_session(self):
+        _status, first = self.c.open(OWNER, "probe")
+        opened = self.service.received[-1]
+        self.c.open(OWNER, "probe")
+        self.assertNotEqual(self.service.received[-1]["lifetime"], opened["lifetime"])
+        self.c.open(OWNER, "probe", lifetime=self.c.lifetime(first["session"]))
+        self.assertEqual(self.service.received[-1]["lifetime"], opened["lifetime"])
+        self.c.close(OWNER, first["session"])
+        closed = self.service.received[-1]
+        self.assertEqual(sorted(closed), ["e", "key", "lifetime", "mode", "owner", "program", "version"])
+        self.assertEqual(closed["lifetime"], opened["lifetime"])
 
     def test_a_program_names_only_the_members_it_has(self):
         self.assertEqual(harness.program_wire(harness.probe()),

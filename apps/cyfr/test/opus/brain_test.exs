@@ -27,6 +27,7 @@ defmodule Opus.BrainTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Prima.Test.Wait, only: [wait_until: 2]
 
   alias Arca.TurnStorage
   alias Cyfr.Test.ScriptedBackends, as: Scripted
@@ -334,6 +335,18 @@ defmodule Opus.BrainTest do
       assert {"boot-one", [{1, %{"t" => "hello", "boot" => "boot-one"}}]} = batch(brain)
     end
 
+    test "a holder handed a grant of a boot the service has left opens under the one it runs",
+         %{fake: fake, row: row, binding: binding} do
+      owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch}
+      # A live owner answers the brain's hold at once, with the boot it was synced under.
+      assert {:ok, %{boot: "bb_first"}} = Opus.Programs.hold(owner)
+      Scripted.restart(fake, "bb_second")
+
+      assert {:ok, _brain} = Brain.open(binding)
+      assert_receive {:session, "open", _open, %{boot: "bb_second"}}, 5_000
+      assert [_one] = running_sessions(fake, row)
+    end
+
     test "a driver whose hello names another version is ended before anything is written to it",
          %{fake: fake, row: row, binding: binding} do
       {:ok, {pid, ref} = brain} = Brain.open(binding)
@@ -515,6 +528,27 @@ defmodule Opus.BrainTest do
       harness_started!(fake, row, brain)
       work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
       worked!(fake, row, brain, binding, work, @named)
+    end
+
+    test "a dead holder that had restarted its driver answers a close unanswered, never closed",
+         %{fake: fake, row: row, binding: binding} do
+      {pid, _ref} = brain = started!(fake, row, binding, @named)
+      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
+
+      assert {:ok, :restarted} =
+               Brain.write(brain, binding, work, config: %{@named | "access" => "another"})
+
+      assert [{_second, %{running: true}}] = running_sessions(fake, row)
+
+      # Its second process still runs: the box's close of it is on its way.
+      Scripted.hold(fake, "close", 30_000)
+      monitor = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 5_000
+      assert_receive {:held, "close", service}, 5_000
+
+      assert Brain.close(brain) == {:error, :unanswered}
+      send(service, :go)
     end
 
     test "a later turn of the same access works on the running process; one whose access " <>
@@ -941,6 +975,72 @@ defmodule Opus.BrainTest do
       :ok = Brain.close(brain)
       assert_receive {Brain, ^ref, {:ended, :closed}}, 5_000
       assert running_sessions(fake, row) == []
+    end
+
+    test "a close says unanswered while the box still owes it, to its attendant too", %{
+      fake: fake,
+      brain: {_pid, ref} = brain
+    } do
+      Scripted.refuse_once(fake, "close", "unavailable")
+      assert Brain.close(brain) == {:error, :unanswered}
+      assert_receive {Brain, ^ref, {:ended, reason}}, 2_000
+      assert reason == :unanswered
+    end
+
+    test "its attendant is told closed only once the close is confirmed", %{
+      fake: fake,
+      brain: {_pid, ref} = brain
+    } do
+      Scripted.hold(fake, "close")
+      closing = Task.async(fn -> Brain.close(brain) end)
+      assert_receive {:held, "close", service}, 5_000
+      refute_receive {Brain, ^ref, {:ended, _reason}}, 200
+      send(service, :go)
+      assert Task.await(closing) == :ok
+      assert_receive {Brain, ^ref, {:ended, :closed}}, 2_000
+    end
+
+    test "a close of a dead holder waits on a replacement box for what the holder left", %{
+      fake: fake,
+      brain: {pid, _ref} = brain
+    } do
+      box = GenServer.whereis(Opus.Programs.via("local"))
+      Scripted.hold(fake, "close", 50_000)
+      monitor = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 5_000
+      assert_receive {:held, "close", first}, 5_000
+      on_exit(fn -> send(first, :go) end)
+
+      Scripted.hold(fake, "close", 40_000)
+      down = Process.monitor(box)
+      Process.exit(box, :kill)
+      assert_receive {:DOWN, ^down, :process, ^box, _reason}, 5_000
+      wait_until(fn -> GenServer.whereis(Opus.Programs.via("local")) not in [nil, box] end, 5_000)
+      replacement = GenServer.whereis(Opus.Programs.via("local"))
+      wait_until(fn -> :sys.get_state(replacement).boot != nil end, 5_000)
+
+      closing = Task.async(fn -> Brain.close(brain) end)
+      assert Task.yield(closing, 500) == nil, "a close was answered from an empty record"
+      assert_receive {:held, "close", second}, 5_000
+      send(second, :go)
+      assert Task.await(closing) == :ok
+    end
+
+    test "a close of a holder that ended first waits on the close it left", %{
+      fake: fake,
+      brain: {pid, _ref} = brain
+    } do
+      Scripted.hold(fake, "close")
+      monitor = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 5_000
+      assert_receive {:held, "close", service}, 5_000
+
+      closing = Task.async(fn -> Brain.close(brain) end)
+      assert Task.yield(closing, 200) == nil
+      send(service, :go)
+      assert Task.await(closing) == :ok
     end
 
     test "the attendant's exit ends it, its session closed", %{

@@ -15,32 +15,22 @@ defmodule Aqua.Loop.Request do
   entry or a value; an external server's tool rides under its wire
   name; the `ui` event and `request_setup` are always offered.
 
-  The messages are the projection shaped for the contract, read by the
-  agent the turn runs (`:me`): what that agent said (`sent_by`) and the
+  The messages are the projection shaped for the contract, each row in
+  the words `Aqua.Reader` reads it in: what the reading agent said and the
   tool calls of one step are one `assistant` message with the stored
-  typed blocks; anything anyone else said is a `user` message — a
-  person's (named when several people write), another agent's under its
-  name, a crew member's reply under the request it answers. A request the
+  typed blocks; what is said to it is a `user` message. A request the
   reading agent made itself is its tool call's to show, and is read as a
   row only once a compaction summarized that call away while the
   request still waits (`Aqua.Loop.Planner.pinned?/1`). Tool results ride
   a `tool` message with the call's name, a compaction stands in for the
-  rows before its boundary, an aborted mark tells the model what
-  happened, and a call that never got its result carries a synthetic one
-  saying so. The room excerpt is a transient block on this request's
-  last `user` message; the turn's attachments are typed blocks on its
-  initiating message, and a later post's files are typed blocks on that
-  post's own message, where it stands. A workspace thread's rows read as their writer
-  words them: an opening as the ask, attributed to the person who asked,
-  then each daily-thread post it refers to as it reads now (`:refs`), then
-  the files it carries; a pointer as one line naming its workspace thread
-  and title; a report as one block naming its workspace thread, outcome
-  and summary. A post the reading agent made with `thread.post` is its
-  call's to show. Notes in the server's voice and errors are not the
-  model's to read.
+  rows before its boundary, and a call that never got its result carries
+  a synthetic one saying so. The room excerpt is a transient block on
+  this request's last `user` message; the turn's attachments are typed
+  blocks on its initiating message, and a later post's files are typed
+  blocks on that post's own message, where it stands.
   """
 
-  alias Aqua.Tape
+  alias Aqua.{Reader, Tape}
 
   @default_max_tokens 16_384
   # The apps the `connection` argument lists, at most.
@@ -365,31 +355,26 @@ defmodule Aqua.Loop.Request do
   end
 
   @doc """
-  The projection shaped for the contract. `removed`, by row id, the refs
-  of a row's files the person deleted, is every caller's to give, so none
-  can leave a deleted file unnamed: every row the request carries that
-  holds one is named in one block beside the initiating message's own,
-  and an opening never names one as carried. `opts`: `:me` (the agent the
-  turn runs, whose rows are its own speech), `:names` (a map of
-  user id to display name, used when `:multi_author?` is true),
-  `:excerpt` (the room excerpt, a transient block), `:attachments` (typed
-  blocks for the initiating message), `:task_message_id` (which message
-  those blocks belong to; without it they land on the first user message,
-  which is only the right one in a transcript of one), `:files` (typed
-  blocks by row id, for the later posts written into the turn: each set on
-  its own post's message, after its text, and nowhere when that post is
-  not carried), `:refs` (the daily-thread posts an opening refers to, by
-  id, as they read now).
+  The projection shaped for the contract, each row as `reading` reads it
+  (`t:Aqua.Reader.reading/0`). Every row the request carries that holds a
+  file the person deleted (the reading's `removed`) is named in one block
+  beside the initiating message's own. `opts`: `:excerpt` (the room
+  excerpt, a transient block), `:attachments` (typed blocks for the
+  initiating message), `:task_message_id` (which message those blocks
+  belong to; without it they land on the first user message, which is
+  only the right one in a transcript of one), `:files` (typed blocks by
+  row id, for the later posts written into the turn: each set on its own
+  post's message, after its text, and nowhere when that post is not
+  carried).
   """
-  @spec messages([Aqua.Tape.row()], %{String.t() => [map()]}, keyword()) :: [map()]
-  def messages(rows, removed, opts \\ []) when is_list(rows) and is_map(removed) do
-    opts = Keyword.put(opts, :removed, removed)
+  @spec messages([Aqua.Tape.row()], Reader.reading(), keyword()) :: [map()]
+  def messages(rows, reading, opts \\ []) when is_list(rows) and is_map(reading) do
     items = apply_compaction(rows)
-    blocks = List.wrap(Keyword.get(opts, :attachments)) ++ removed_note(items, removed)
+    blocks = List.wrap(Keyword.get(opts, :attachments)) ++ removed_note(items, reading.removed)
     files = Keyword.get(opts, :files, %{})
 
     items
-    |> Enum.reduce([], fn row, acc -> row |> shape(acc, opts) |> with_files(row, files) end)
+    |> Enum.reduce([], fn row, acc -> row |> shape(acc, reading) |> with_files(row, files) end)
     |> Enum.reverse()
     |> Enum.map(&finish_message/1)
     |> answer_dangling_calls()
@@ -498,7 +483,7 @@ defmodule Aqua.Loop.Request do
           blocks: [
             %{
               "type" => "text",
-              "text" => "[Summary of the thread so far]\n" <> (compaction.content || "")
+              "text" => Reader.summary(compaction.content)
             }
           ],
           step: nil
@@ -516,54 +501,14 @@ defmodule Aqua.Loop.Request do
         []
 
       refs ->
-        names = Enum.map_join(refs, ", ", & &1["filename"])
-
-        [
-          %{
-            "type" => "text",
-            "text" =>
-              "[The person deleted these files of posts in this thread; they can no longer " <>
-                "be read: #{names}]"
-          }
-        ]
+        [%{"type" => "text", "text" => Reader.removed_note(refs)}]
     end
   end
 
-  defp shape({:shaped, message}, acc, _opts), do: [message | acc]
+  defp shape({:shaped, message}, acc, _reading), do: [message | acc]
+  defp shape({:pinned, row}, acc, _reading), do: said(Reader.waiting(row), row, acc)
 
-  defp shape({:pinned, row}, acc, _opts) do
-    said(
-      "[Request #{row.id} to #{row.addressee}, still waiting on its reply]\n#{row.content}",
-      row,
-      acc
-    )
-  end
-
-  defp shape(%{kind: "opening"} = row, acc, opts), do: said(opening_text(row, opts), row, acc)
-  defp shape(%{kind: "pointer"} = row, acc, _opts), do: said(pointer_text(row), row, acc)
-  defp shape(%{kind: "report"} = row, acc, _opts), do: said(report_text(row), row, acc)
-  defp shape(%{kind: "nudge"} = row, acc, _opts), do: said(server_text(row), row, acc)
-
-  defp shape(%{kind: "text"} = row, acc, opts) do
-    me = Keyword.get(opts, :me)
-
-    cond do
-      # The reader's own post is its call's to show (`thread.post`).
-      posted?(row) and own?(row, me) -> acc
-      is_binary(Map.get(row, :reply_to)) -> said(reply_text(row), row, acc)
-      request?(row) and own?(row, me) -> acc
-      request?(row) -> said(request_text(row, opts), row, acc)
-      # Before the reader's own speech: a line in the server's voice, a
-      # schedule's or the server's own post, which a request that names no
-      # reader reads as its own.
-      server?(row) -> said(server_text(row), row, acc)
-      own?(row, me) -> spoken(row, acc)
-      agent?(row) -> said("[#{row.sent_by}]\n#{row.content}", row, acc)
-      true -> said(person_text(row, opts), row, acc)
-    end
-  end
-
-  defp shape(%{kind: "tool_call"} = row, acc, _opts) do
+  defp shape(%{kind: "tool_call"} = row, acc, _reading) do
     payload = Tape.payload(row)
     step = payload["step_id"]
 
@@ -586,7 +531,7 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp shape(%{kind: "tool_result"} = row, acc, _opts) do
+  defp shape(%{kind: "tool_result"} = row, acc, _reading) do
     payload = Tape.payload(row)
 
     block = %{
@@ -606,16 +551,13 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp shape(%{kind: "turn_aborted"} = row, acc, _opts) do
-    text =
-      "[The server restarted while the assistant was working; tools may have partially executed. " <>
-        (row.content || "") <> "]"
-
-    [%{role: "user", blocks: [%{"type" => "text", "text" => text}], step: nil} | acc]
+  defp shape(row, acc, reading) do
+    case Reader.read(row, reading) do
+      {:own, text} -> spoken(text, row, acc)
+      {:said, text} -> said(text, row, acc)
+      :none -> acc
+    end
   end
-
-  # Notes in the server's voice and errors are not the model's.
-  defp shape(%{}, acc, _opts), do: acc
 
   # A later post's files on the message its row was shaped as, before any
   # merge joins that message to its neighbour's.
@@ -625,9 +567,9 @@ defmodule Aqua.Loop.Request do
 
   defp with_files(acc, _row, _files), do: acc
 
-  defp spoken(row, acc) do
+  defp spoken(text, row, acc) do
     step = step_of(row)
-    block = %{"type" => "text", "text" => row.content || ""}
+    block = %{"type" => "text", "text" => text}
 
     case acc do
       [%{role: "assistant", step: ^step} = current | rest] when not is_nil(step) ->
@@ -648,106 +590,6 @@ defmodule Aqua.Loop.Request do
       }
       | acc
     ]
-  end
-
-  # The reading agent's own speech: a row it sent. A row written before
-  # rows named their sender is read by its author.
-  defp own?(%{sent_by: sent_by}, me) when is_binary(sent_by) and is_binary(me), do: sent_by == me
-  defp own?(row, _me), do: row.author in Prima.Author.reserved()
-
-  defp agent?(%{sent_by: sent_by}), do: is_binary(sent_by) and sent_by != "person"
-  defp agent?(_row), do: false
-
-  # A line in the server's voice: written by the server, never by the
-  # person or an agent.
-  defp server?(%{author: author}), do: author == Prima.Author.system()
-  defp server?(_row), do: false
-
-  # A schedule's line, which its fire wrote for the person, names the
-  # schedule (`Aqua.ScheduleTurns`); any other line of the server's is its
-  # own (`Aqua.Nudge`).
-  defp server_text(row) do
-    case Tape.payload(row)["schedule"] do
-      %{"id" => id, "name" => name} when is_binary(id) and is_binary(name) ->
-        "[The schedule \"#{name}\" (#{id}) fired with its line]\n#{row.content}"
-
-      _own ->
-        "[A line from the server, not the person]\n" <> (row.content || "")
-    end
-  end
-
-  defp request?(row),
-    do: is_binary(Map.get(row, :addressee)) and Map.get(row, :status) in ["pending", "answered"]
-
-  defp posted?(row), do: Tape.payload(row)["post"] == true
-
-  # A workspace thread's opening: the ask, attributed to the person
-  # who asked, then each daily-thread post it refers to as that post reads
-  # now (`:refs`, read by the loop and never copied), then the files it
-  # carries, which ride as blocks on the turn it opened.
-  defp opening_text(row, opts) do
-    payload = Tape.payload(row)
-    title = payload["title"] || ""
-    asker = display(payload["asked_by"] || row.author, opts)
-
-    refs =
-      for id <- List.wrap(payload["refs"]),
-          %{} = cited <- [Map.get(Keyword.get(opts, :refs, %{}), id)] do
-        "\n\n[Post #{cited.id} of the daily thread, by #{sender(cited, opts)}]\n#{cited.content}"
-      end
-
-    gone =
-      for ref <- Map.get(Keyword.fetch!(opts, :removed), row.id, []), do: ref["stored_name"]
-
-    files =
-      case Enum.reject(Aqua.Attachments.refs_of(row), &(&1["stored_name"] in gone)) do
-        [] -> ""
-        refs -> "\n\n[Files carried in: #{Enum.map_join(refs, ", ", & &1["filename"])}]"
-      end
-
-    "[#{asker} asked, in this workspace thread \"#{title}\" (#{row.thread_id})]\n" <>
-      (row.content || "") <> Enum.join(refs) <> files
-  end
-
-  # A pointer: one line naming the workspace thread and its title.
-  defp pointer_text(row) do
-    payload = Tape.payload(row)
-
-    "[The workspace thread \"#{payload["title"] || ""}\" (#{row.workspace_id}) was opened or asked again from here]"
-  end
-
-  # A report: one block naming the workspace thread, its outcome and
-  # its summary.
-  defp report_text(row) do
-    payload = Tape.payload(row)
-
-    "[Report from the workspace thread \"#{payload["title"] || ""}\" (#{row.workspace_id}): " <>
-      "#{reported(payload)}]\n" <> (row.content || "")
-  end
-
-  # The outcome as the reading model is told it: Aqua's `done` or
-  # `needs_you`, or the server's `error`.
-  defp reported(%{"outcome" => "needs_you"}), do: "needs the person"
-  defp reported(%{"outcome" => "error"}), do: "error, Aqua could not run it"
-  defp reported(_payload), do: "done"
-
-  defp sender(%{sent_by: "person"} = row, opts), do: display(row.author, opts)
-  defp sender(%{sent_by: sent_by}, _opts) when is_binary(sent_by), do: sent_by
-  defp sender(row, opts), do: display(row.author, opts)
-
-  defp request_text(row, opts) do
-    asker = if row.sent_by == "person", do: display(row.author, opts), else: row.sent_by
-
-    "[#{asker} asked #{row.addressee} (request #{row.id}, #{row.status})]\n#{row.content}"
-  end
-
-  defp reply_text(row),
-    do: "[#{row.sent_by} replied to request #{row.reply_to}: #{row.outcome}]\n#{row.content}"
-
-  defp person_text(row, opts) do
-    if Keyword.get(opts, :multi_author?, false),
-      do: "#{display(row.author, opts)}: #{row.content}",
-      else: row.content || ""
   end
 
   defp finish_message(%{role: role, blocks: blocks} = message) do
@@ -882,9 +724,5 @@ defmodule Aqua.Loop.Request do
       %{"step_id" => step} when is_binary(step) -> step
       _ -> nil
     end
-  end
-
-  defp display(author, opts) do
-    Map.get(Keyword.get(opts, :names, %{}), author, author)
   end
 end

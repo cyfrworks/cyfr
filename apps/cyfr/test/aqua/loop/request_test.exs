@@ -29,6 +29,25 @@ defmodule Aqua.Loop.RequestTest do
   @agent Message.agent_author()
   @system Message.system_author()
 
+  # How the rows are read (`t:Aqua.Reader.reading/0`): `fields` over a
+  # reading that names no reader and shows each person by their id.
+  defp reading(fields \\ []) do
+    Map.merge(
+      %{
+        me: nil,
+        open: [],
+        refused: [],
+        named?: false,
+        refs: %{},
+        removed: %{},
+        display: & &1
+      },
+      Map.new(fields)
+    )
+  end
+
+  defp named_as(names), do: &Map.get(names, &1, &1)
+
   test "tools come from the offered set: a tool per offered action, its enum those, and no approval said" do
     tools = ~w(files.read files.write notes.read notes.keep browser.open native_search)
 
@@ -191,7 +210,8 @@ defmodule Aqua.Loop.RequestTest do
       row(8, "text", "usr_b", "thanks")
     ]
 
-    messages = Request.messages(rows, %{}, multi_author?: true, names: %{"usr_a" => "Ann"})
+    messages =
+      Request.messages(rows, reading(named?: true, display: named_as(%{"usr_a" => "Ann"})))
 
     assert [
              %{
@@ -274,8 +294,8 @@ defmodule Aqua.Loop.RequestTest do
     without = rows -- [page_call, page_result]
 
     # The ordinary request, from the projection as the loop prunes it.
-    ordinary = Request.messages(Planner.prune(rows), %{})
-    assert ordinary == Request.messages(Planner.prune(without), %{})
+    ordinary = Request.messages(Planner.prune(rows), reading())
+    assert ordinary == Request.messages(Planner.prune(without), reading())
 
     assert [
              %{"role" => "user"},
@@ -290,10 +310,11 @@ defmodule Aqua.Loop.RequestTest do
     %{first_kept_seq: kept} = Planner.boundary(rows, 1)
     assert kept > page_result.seq
     older = Enum.filter(rows, &(&1.seq < kept))
-    summary = Planner.summary_request(Request.messages(older, %{}), model: "m")
+    summary = Planner.summary_request(Request.messages(older, reading()), model: "m")
 
     assert summary ==
-             Planner.summary_request(Request.messages(older -- [page_call, page_result], %{}),
+             Planner.summary_request(
+               Request.messages(older -- [page_call, page_result], reading()),
                model: "m"
              )
 
@@ -332,10 +353,9 @@ defmodule Aqua.Loop.RequestTest do
 
       unnamed = struct(row(3, "text", @system, "a plain line"), sent_by: "person")
 
-      assert Request.messages([fire_row(1), theirs, unnamed], %{},
-               me: "aqua",
-               multi_author?: true,
-               names: %{"usr_a" => "Ann"}
+      assert Request.messages(
+               [fire_row(1), theirs, unnamed],
+               reading(me: "aqua", named?: true, display: named_as(%{"usr_a" => "Ann"}))
              ) == [
                %{
                  "role" => "user",
@@ -355,7 +375,7 @@ defmodule Aqua.Loop.RequestTest do
     # (`Aqua.Loop`'s compaction): the fire's line is still the schedule's,
     # never the agent's own words.
     test "reads as the schedule's line in a request that names no reader" do
-      assert Request.messages([fire_row(1)], %{}) == [
+      assert Request.messages([fire_row(1)], reading()) == [
                %{"role" => "user", "content" => [%{"type" => "text", "text" => @line}]}
              ]
     end
@@ -384,7 +404,7 @@ defmodule Aqua.Loop.RequestTest do
       row(5, "turn_aborted", @system, "restart")
     ]
 
-    messages = Request.messages(rows, %{})
+    messages = Request.messages(rows, reading())
 
     assert [
              _,
@@ -433,7 +453,7 @@ defmodule Aqua.Loop.RequestTest do
                  row(3, "text", "usr_a", "never mind"),
                  result.(4, "skipped")
                ],
-               %{}
+               reading()
              )
 
     # The first call has no result; the next round's call reuses its id and
@@ -454,7 +474,7 @@ defmodule Aqua.Loop.RequestTest do
                  call.(4, "s2"),
                  result.(5, "ok")
                ],
-               %{}
+               reading()
              )
 
     assert synthetic["tool_call_id"] == "call_1" and synthetic["content"] =~ "outcome is unknown"
@@ -484,7 +504,7 @@ defmodule Aqua.Loop.RequestTest do
                %{"role" => "user", "content" => [%{"text" => "what next?"}]},
                %{"role" => "assistant", "content" => [%{"text" => "Asking the planner."}]},
                %{"role" => "user", "content" => said}
-             ] = Request.messages(rows, %{}, me: "aqua")
+             ] = Request.messages(rows, reading(me: "aqua"))
 
       texts = Enum.map(said, & &1["text"])
 
@@ -495,8 +515,9 @@ defmodule Aqua.Loop.RequestTest do
 
       # In the member's thread the soul's task is said to the member.
       assert [%{"role" => "user", "content" => [%{"text" => "[aqua]\nplan it"}]}] =
-               Request.messages([crew(1, "aqua", "plan it", addressee: "planner")], %{},
-                 me: "planner"
+               Request.messages(
+                 [crew(1, "aqua", "plan it", addressee: "planner")],
+                 reading(me: "planner")
                )
     end
 
@@ -541,7 +562,7 @@ defmodule Aqua.Loop.RequestTest do
         crew(12, "aqua", "And add the dentist.", addressee: "claude-code", status: "pending")
       ]
 
-      messages = Request.messages(rows, %{}, me: "claude-code")
+      messages = Request.messages(rows, reading(me: "claude-code"))
 
       assert messages == [
                %{
@@ -652,7 +673,7 @@ defmodule Aqua.Loop.RequestTest do
         crew(4, "person", "and now?", addressee: "aqua")
       ]
 
-      [%{"role" => "user", "content" => blocks}] = Request.messages(rows, %{}, me: "aqua")
+      [%{"role" => "user", "content" => blocks}] = Request.messages(rows, reading(me: "aqua"))
       texts = Enum.map(blocks, & &1["text"])
 
       assert [
@@ -683,11 +704,11 @@ defmodule Aqua.Loop.RequestTest do
                  %{"text" => "## Read from a shared thread\n\nBob: hi"}
                ]
              }
-           ] = Request.messages(rows, %{}, excerpt: "Bob: hi")
+           ] = Request.messages(rows, reading(), excerpt: "Bob: hi")
 
     # Attachments ride on the initiating message, first user message.
     [%{"content" => content}] =
-      Request.messages([row(1, "text", "usr_a", "see")], %{},
+      Request.messages([row(1, "text", "usr_a", "see")], reading(),
         attachments: [%{"type" => "image", "media_type" => "image/png", "data" => "…"}]
       )
 
@@ -706,10 +727,10 @@ defmodule Aqua.Loop.RequestTest do
     # Without the id there is nothing to aim at and the oldest message takes
     # it, which is the whole defect in a thread with history.
     assert [%{"content" => [_, ^image]}, _, %{"content" => [_]}] =
-             Request.messages(rows, %{}, attachments: [image])
+             Request.messages(rows, reading(), attachments: [image])
 
     assert [%{"content" => [_]}, _, %{"content" => [_, ^image]}] =
-             Request.messages(rows, %{}, attachments: [image], task_message_id: "msg_3")
+             Request.messages(rows, reading(), attachments: [image], task_message_id: "msg_3")
   end
 
   test "a later post's files ride its own message where it stands, before any merge" do
@@ -727,7 +748,7 @@ defmodule Aqua.Loop.RequestTest do
       row(6, "text", "usr_a", "and this, uncarried")
     ]
 
-    assert Request.messages(rows, %{},
+    assert Request.messages(rows, reading(),
              attachments: [first],
              task_message_id: "msg_1",
              files: %{"msg_3" => [later], "msg_4" => [alone], "msg_9" => [later]}
@@ -924,10 +945,9 @@ defmodule Aqua.Loop.RequestTest do
       }
 
       [%{"role" => "user", "content" => [%{"text" => text}]}] =
-        Request.messages([opening], %{},
-          me: "aqua",
-          names: %{"usr_1" => "Ada"},
-          refs: %{"msg_ref" => cited}
+        Request.messages(
+          [opening],
+          reading(me: "aqua", display: named_as(%{"usr_1" => "Ada"}), refs: %{"msg_ref" => cited})
         )
 
       assert text =~ ~s|[Ada asked, in this workspace thread "Moon report" (thr_work)]|
@@ -967,9 +987,13 @@ defmodule Aqua.Loop.RequestTest do
       }
 
       [%{"content" => blocks}] =
-        Request.messages([opening, older, kept], %{"msg_1" => [moon], "msg_2" => [moon, notes]},
-          me: "aqua",
-          names: %{"usr_1" => "Ada"}
+        Request.messages(
+          [opening, older, kept],
+          reading(
+            me: "aqua",
+            display: named_as(%{"usr_1" => "Ada"}),
+            removed: %{"msg_1" => [moon], "msg_2" => [moon, notes]}
+          )
         )
 
       texts = Enum.map(blocks, & &1["text"])
@@ -1000,7 +1024,7 @@ defmodule Aqua.Loop.RequestTest do
 
       text =
         [request, compaction, ask]
-        |> Request.messages(%{"msg_1" => [ref]}, me: "aqua")
+        |> Request.messages(reading(me: "aqua", removed: %{"msg_1" => [ref]}))
         |> Jason.encode!()
 
       assert text =~ "still waiting on its reply"
@@ -1019,7 +1043,7 @@ defmodule Aqua.Loop.RequestTest do
 
       text =
         [post, ask]
-        |> Request.messages(%{"msg_1" => [ref]}, me: "aqua")
+        |> Request.messages(reading(me: "aqua", removed: %{"msg_1" => [ref]}))
         |> Jason.encode!()
 
       refute text =~ "Here it is"
@@ -1066,7 +1090,7 @@ defmodule Aqua.Loop.RequestTest do
 
       # Each is another thread's word to the reader, never its own speech.
       [%{"role" => "user", "content" => [%{"text" => pointed}, %{"text" => reported}]}] =
-        Request.messages([pointer, report], %{}, me: "aqua")
+        Request.messages([pointer, report], reading(me: "aqua"))
 
       assert pointed ==
                ~s|[The workspace thread "Moon report" (thr_work) was opened or asked again from here]|
@@ -1091,7 +1115,7 @@ defmodule Aqua.Loop.RequestTest do
         report.(3, %{"outcome" => "error"})
       ]
 
-      [%{"role" => "user", "content" => content}] = Request.messages(rows, %{}, me: "aqua")
+      [%{"role" => "user", "content" => content}] = Request.messages(rows, reading(me: "aqua"))
 
       assert Enum.map(content, & &1["text"]) == [
                ~s|[Report from the workspace thread "Moon report" (thr_work): done]\nSummary 1.|,
@@ -1105,7 +1129,7 @@ defmodule Aqua.Loop.RequestTest do
       theirs = %{row(2, "text", @agent, "their chart", %{"post" => true}) | sent_by: "planner"}
 
       assert [%{"role" => "user", "content" => [%{"text" => "[planner]\ntheir chart"}]}] =
-               Request.messages([mine, theirs], %{}, me: "aqua")
+               Request.messages([mine, theirs], reading(me: "aqua"))
     end
   end
 end

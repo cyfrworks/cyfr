@@ -175,16 +175,17 @@ defmodule Opus.Brain.CleanupTest do
     test = self()
 
     holding = fn ->
-      {:ok, _grant} = Opus.Programs.hold(owner)
+      {:ok, grant} = Opus.Programs.hold(owner)
+      deadline = System.system_time(:millisecond) + 10_000
 
       opened =
         if params,
           do:
             Opus.Programs.box_open(
-              owner,
+              Opus.Programs.lifetime(grant, params),
               self(),
-              params,
-              System.system_time(:millisecond) + 10_000
+              Map.take(params, [:argv]),
+              deadline
             )
 
       send(test, {:holding, self(), opened})
@@ -196,7 +197,7 @@ defmodule Opus.Brain.CleanupTest do
     {pid, opened}
   end
 
-  test "a forget whose open meets a dead holder's session still being closed writes nothing to it and stays owed",
+  test "a forget whose open meets a dead holder's session still being closed waits, owed, writing nothing to it, and forgets in a process of its own",
        %{fake: fake, actor: actor, thread: thread, row: row} do
     record = owed!(actor, thread.id, row)
     owner = %{athanor_id: actor.athanor_id, server_id: row.id, epoch: row.epoch}
@@ -220,24 +221,24 @@ defmodule Opus.Brain.CleanupTest do
 
     # Killed, it never closes: the box's own close of its session is held
     # on its way, so the session still runs at the service.
-    Scripted.hold(fake, "close", 10_000)
+    Scripted.hold(fake, "close", 30_000)
     Process.exit(dying, :kill)
     assert_receive {:held, "close", closer}, 5_000
 
     task = draining(actor)
-    assert_receive {:session, "open", %{"key" => ^key}, _fields}, 5_000
-    assert Task.await(task, 10_000) == {:ok, %{"owed" => 1}}
+    assert_receive {:session, "open", %{"key" => ^key}, _fields} = forgetting, 5_000
+    assert Task.yield(task, 500) == nil, "the forget did not wait for the dead holder's release"
     refute_received {:session, "recv", _message, _fields}
     refute_received {:session, "send", _message, _fields}
     assert pending(actor) == [record]
     assert outcome(actor, record) == :none
     assert %{running: true} = Scripted.sessions(fake, row.id)[session]
 
-    # The close lands; the next drain opens a driver of its own and forgets.
+    # The close lands; the forget's open then starts a driver of its own.
     send(closer, :go)
     wait_until(fn -> not Scripted.sessions(fake, row.id)[session].running end, 5_000)
-
-    task = draining(actor)
+    # The open that waited is the one the driver answers.
+    send(self(), forgetting)
     %{"t" => "forget", "id" => id, "session" => @session} = driver!(fake, row)
     say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
     assert Task.await(task, 10_000) == {:ok, %{"applied" => 1}}

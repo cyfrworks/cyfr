@@ -41,8 +41,8 @@ import (
 
 // TestMain lets the test binary stand in for cyfr-locus's helpers, which
 // the keeper under test starts as `<self> stage`, `<self> relay`,
-// `<self> retire` and `<self> home`, dispatched as main.go dispatches them. `<self> hold` is
-// the memory tests' command.
+// `<self> retire` and `<self> home`, dispatched as main.go dispatches them. `<self> hold` and
+// `<self> mapped` are the memory tests' commands.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -56,6 +56,8 @@ func TestMain(m *testing.M) {
 			os.Exit(home.HelperMain())
 		case "hold":
 			os.Exit(hold(os.Args[2:]))
+		case "mapped":
+			os.Exit(mapped(os.Args[2:]))
 		case "dial":
 			os.Exit(dial(os.Args[2:]))
 		}
@@ -94,6 +96,33 @@ func hold(args []string) int {
 	fmt.Println("held")
 	time.Sleep(time.Duration(seconds) * time.Second)
 	return int(held[0][0]) - 1
+}
+
+// mapped maps the file it is given, as a program maps its own code, touches
+// every page, and keeps it for the seconds it is told to.
+func mapped(args []string) int {
+	file, err := os.Open(args[0])
+	if err != nil {
+		return 1
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return 1
+	}
+	pages, err := unix.Mmap(int(file.Fd()), 0, int(info.Size()), unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		return 1
+	}
+	seconds, _ := strconv.Atoi(args[1])
+	var sum byte
+	for end := time.Now().Add(time.Duration(seconds) * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		for i := 0; i < len(pages); i += 4096 {
+			sum += pages[i]
+		}
+	}
+	runtime.KeepAlive(sum)
+	return 0
 }
 
 const (
@@ -620,7 +649,7 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := theirs.Write([]byte(`{"v":1,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
+	if _, err := theirs.Write([]byte(`{"v":2,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	lr := protocol.NewLineReader(theirs)
@@ -677,7 +706,7 @@ func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
 		channel: ours,
 	}
 	resize := func(spawnID string) *protocol.Request {
-		req, rerr := protocol.ParseRequest([]byte(`{"v":1,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+		req, rerr := protocol.ParseRequest([]byte(`{"v":2,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 		if rerr != nil {
 			t.Fatal(rerr.Detail)
 		}
@@ -869,7 +898,7 @@ func TestAnIsolatedSpawnRunsInItsBoundedGroup(t *testing.T) {
 	_, uid, rc := k.spawnBounded(t, "1", `cat /proc/self/cgroup; readlink /proc/self/ns/net; echo done`, map[string]string{}, false, 64<<20)
 	rc.readUntil(t, func() bool { return false })
 	stdout := string(rc.got[frame.StreamStdout])
-	if !strings.Contains(stdout, "0::/"+cgroup.Name(uid)+"\n") || !strings.Contains(stdout, "done\n") || strings.Contains(stdout, keeperNet) {
+	if !strings.Contains(stdout, "0::/"+cgroup.Name(uid)+"/bound\n") || !strings.Contains(stdout, "done\n") || strings.Contains(stdout, keeperNet) {
 		t.Fatalf("the isolated bounded spawn of uid %d: %q", uid, stdout)
 	}
 	k.reply(t)

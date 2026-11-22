@@ -270,6 +270,12 @@ defmodule Aqua.Providers.ThreadTest do
                call(ctx, %{"action" => "events", "thread" => thread.id})
 
       assert Enum.map(msgs, & &1.content) == ["one", "two"]
+
+      assert Enum.map(msgs, &Map.take(&1, [:sent_by, :reply_to, :outcome, :workspace])) == [
+               %{sent_by: "person", reply_to: nil, outcome: nil, workspace: nil},
+               %{sent_by: "aqua", reply_to: nil, outcome: nil, workspace: nil}
+             ]
+
       assert cursor == List.last(msgs).seq
 
       # A reconnect replays from where it left off.
@@ -1165,7 +1171,8 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, %{messages: page, cursor: cursor}} =
                in_turn(ctx, turn, %{"action" => "events", "thread" => work.id, "limit" => 500})
 
-      assert length(page) == 50 and hd(page).content == "step 1"
+      name = Sanctum.Tenancy.Users.display_name(ctx.user_id)
+      assert length(page) == 50 and hd(page).content == "#{name}: step 1"
 
       assert {:ok, %{messages: rest}} =
                in_turn(ctx, turn, %{
@@ -1174,11 +1181,211 @@ defmodule Aqua.Providers.ThreadTest do
                  "after_seq" => cursor
                })
 
-      assert Enum.map(rest, & &1.content) == for(n <- 51..60, do: "step #{n}")
+      assert Enum.map(rest, & &1.content) == for(n <- 51..60, do: "#{name}: step #{n}")
 
       # The person's own read keeps its bound of 500 rows.
       assert {:ok, %{messages: all}} = call(ctx, %{"action" => "events", "thread" => work.id})
       assert length(all) == 60
+    end
+
+    test "in a turn a read is worded and named, with the thread's open turns: a post of a " <>
+           "turn that ended untaken says so, and the person's replay stays raw",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Plans")
+      ended = running!(ctx, work)
+      {:ok, _} = Aqua.Tape.finish(ctx, ended, "cancelled")
+      {:ok, refused} = Aqua.Tape.message(ctx, ended.message_id)
+      open = running!(ctx, work)
+      {:ok, waiting} = Aqua.Tape.message(ctx, open.message_id)
+
+      reply =
+        say!(ctx, work, "It could not run.", %{
+          author: "aqua",
+          sent_by: "builder",
+          reply_to: refused.id,
+          outcome: "failed"
+        })
+
+      name = Sanctum.Tenancy.Users.display_name(ctx.user_id)
+      args = %{"action" => "events", "thread" => work.id}
+
+      assert {:ok, %{messages: read}} = in_turn(ctx, running!(ctx, daily), args)
+
+      assert Enum.map(read, & &1.content) == [
+               "[#{name} posted this and it was not taken: its turn ended before any model " <>
+                 "read it. Act on it only if they ask again]\n#{refused.content}",
+               "#{name}: #{waiting.content}",
+               "[builder replied to request #{refused.id}: failed]\nIt could not run."
+             ]
+
+      assert %{sent_by: "builder", reply_to: to, outcome: "failed"} = List.last(read)
+      assert to == refused.id
+
+      assert {:ok, %{messages: raw}} = call(ctx, args)
+      assert Enum.map(raw, & &1.content) == [refused.content, waiting.content, reply.content]
+    end
+
+    test "a reread past the last post records the thread it asked to read",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Short")
+      last = say!(ctx, work, "the only post")
+      turn = running!(ctx, daily)
+
+      assert {:ok, %{messages: [], read_threads: joined}} =
+               in_turn(ctx, turn, %{
+                 "action" => "events",
+                 "thread" => work.id,
+                 "after_seq" => last.seq
+               })
+
+      assert joined == [work.id]
+      assert read_threads(ctx, turn) == [work.id]
+    end
+
+    test "a withheld report records none of what it carries, and an empty page never " <>
+           "carries its sequence",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Surviving")
+      gone = workspace!(ctx, "Source")
+      searcher = running!(ctx, daily)
+      rereader = running!(ctx, workspace!(ctx, "Elsewhere"))
+      {:ok, opened} = Aqua.Tape.message(ctx, searcher.message_id)
+
+      _report =
+        say!(ctx, daily, "fares rise on Monday", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: work.id,
+          payload: %{"read_threads" => [gone.id]}
+        })
+
+      assert {:ok, _} = Aqua.Tape.delete_thread(ctx, gone.id)
+
+      assert {:ok, %{results: [], read_threads: []}} =
+               in_turn(ctx, searcher, %{"action" => "search", "q" => "fares rise"})
+
+      assert read_threads(ctx, searcher) == []
+
+      assert {:ok, %{messages: [], cursor: cursor, read_threads: joined}} =
+               in_turn(ctx, rereader, %{
+                 "action" => "events",
+                 "thread" => daily.id,
+                 "after_seq" => opened.seq
+               })
+
+      assert cursor == nil
+      assert joined == [daily.id]
+      assert read_threads(ctx, rereader) == [daily.id]
+    end
+
+    test "a reread's cursor is the last post it answered: it reads past what it withholds, " <>
+           "and records nothing past its page",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Paged")
+      gone = workspace!(ctx, "Source")
+      beyond = workspace!(ctx, "Beyond the page")
+
+      withheld = fn n ->
+        say!(ctx, work, "withheld #{n}", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: work.id,
+          payload: %{"read_threads" => [gone.id]}
+        })
+      end
+
+      first = say!(ctx, work, "first")
+      for n <- 1..60, do: withheld.(n)
+      second = say!(ctx, work, "second")
+      withheld.(61)
+
+      third =
+        say!(ctx, work, "third", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "pointer",
+          workspace_id: beyond.id
+        })
+
+      withheld.(62)
+      assert {:ok, _} = Aqua.Tape.delete_thread(ctx, gone.id)
+      reader = running!(ctx, daily)
+      args = %{"action" => "events", "thread" => work.id, "limit" => 2}
+
+      assert {:ok, %{messages: page, cursor: cursor, read_threads: joined}} =
+               in_turn(ctx, reader, args)
+
+      assert Enum.map(page, & &1.id) == [first.id, second.id]
+      assert cursor == second.seq
+      assert joined == [work.id]
+      assert read_threads(ctx, reader) == [work.id]
+
+      assert {:ok, %{messages: [last], cursor: cursor}} =
+               in_turn(ctx, reader, Map.put(args, "after_seq", cursor))
+
+      assert last.id == third.id and cursor == third.seq
+
+      assert {:ok, %{messages: [], cursor: nil}} =
+               in_turn(ctx, reader, Map.put(args, "after_seq", cursor))
+    end
+
+    test "a search goes on past the matches it withholds and never answers one as where to go on",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Matched")
+      gone = workspace!(ctx, "Source")
+      visible = for n <- 1..2, do: say!(ctx, daily, "needle visible #{n}")
+
+      for n <- 1..21 do
+        say!(ctx, work, "needle withheld #{n}", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: work.id,
+          payload: %{"read_threads" => [gone.id]}
+        })
+      end
+
+      assert {:ok, _} = Aqua.Tape.delete_thread(ctx, gone.id)
+      reader = running!(ctx, workspace!(ctx, "Searching"))
+      args = %{"action" => "search", "q" => "needle", "limit" => 1}
+
+      assert {:ok, %{results: [newer], count: 1, next: next}} = in_turn(ctx, reader, args)
+      assert newer.message == List.last(visible).id
+      assert next == newer.message
+
+      assert {:ok, %{results: [older], next: next}} =
+               in_turn(ctx, reader, Map.put(args, "before", next))
+
+      assert older.message == hd(visible).id
+
+      assert {:ok, %{results: [], next: nil}} =
+               in_turn(ctx, reader, Map.put(args, "before", next))
+
+      assert {:ok, %{results: [], next: nil}} =
+               in_turn(ctx, reader, %{"action" => "search", "q" => "needle withheld"})
+    end
+
+    test "a reread words the reader's own speech, request and post by who said each",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Own words")
+      own = %{author: "aqua", sent_by: "aqua"}
+      say!(ctx, work, "I will check.", own)
+
+      asked =
+        say!(ctx, work, "build it", Map.merge(own, %{addressee: "builder", status: "pending"}))
+
+      say!(ctx, work, "the chart", Map.put(own, :payload, %{"post" => true}))
+
+      assert {:ok, %{messages: read}} =
+               in_turn(ctx, running!(ctx, daily), %{"action" => "events", "thread" => work.id})
+
+      assert Enum.map(read, & &1.content) == [
+               "[aqua]\nI will check.",
+               "[aqua asked builder (request #{asked.id}, pending)]\nbuild it",
+               "[aqua]\nthe chart"
+             ]
     end
 
     test "a turn's search and read join every thread they carry and their posts carry into " <>
@@ -1223,7 +1430,7 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, %{messages: read, read_threads: joined}} =
                in_turn(ctx, other, %{"action" => "events", "thread" => work.id})
 
-      assert "fares rise on Monday" in Enum.map(read, & &1.content)
+      assert "[aqua]\nfares rise on Monday" in Enum.map(read, & &1.content)
       assert joined == Enum.sort([news.id, work.id])
       assert read_threads(ctx, other) == joined
     end

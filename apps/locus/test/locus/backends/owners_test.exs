@@ -123,7 +123,19 @@ defmodule Locus.Backends.OwnersTest do
       end
     end
 
-    def home_ensure(agent, id), do: Locus.DirectLauncher.home_ensure(root(agent), id)
+    # A making the test holds waits here, before anything of the home is made.
+    def home_ensure(agent, id) do
+      if test = Agent.get_and_update(agent, &Map.pop(&1, :before_ensure)) do
+        send(test, {:home_about_to_be_created, self()})
+
+        receive do
+          :continue_ensure -> :ok
+        end
+      end
+
+      Locus.DirectLauncher.home_ensure(root(agent), id)
+    end
+
     # A measure the test makes fail stands for one the keeper could not
     # take over the whole home.
     def home_measure(agent, id) do
@@ -296,6 +308,10 @@ defmodule Locus.Backends.OwnersTest do
   defp invoke(server, {g, e}, athanor \\ @athanor),
     do: %{athanor: athanor, server: server, generation: g, epoch: e}
 
+  # A lifetime of its own for each open, unless the test asks again for one.
+  defp lifetime,
+    do: Prima.LocusBackends.new_lifetime("bb_owners", :crypto.strong_rand_bytes(16))
+
   defp open(owners, server, version, program, opts \\ []) do
     athanor = Keyword.get(opts, :athanor, @athanor)
 
@@ -307,6 +323,7 @@ defmodule Locus.Backends.OwnersTest do
       home_id: Keyword.get(opts, :home_id),
       key: Keyword.get(opts, :key, "k"),
       mode: Keyword.get(opts, :mode, :run),
+      lifetime: Keyword.get_lazy(opts, :lifetime, &lifetime/0),
       argv: Keyword.get(opts, :argv, []),
       rows: Keyword.get(opts, :rows),
       cols: Keyword.get(opts, :cols)
@@ -603,17 +620,18 @@ defmodule Locus.Backends.OwnersTest do
       end
     end
 
-    test "an open attaches by its key while the process runs, and starts it again once it ended",
+    test "an open answers its own lifetime's process while it runs, and another lifetime starts it again once it ended",
          ctx do
       owners = start_owners(ctx)
       assert {:ok, _} = sync(owners, "a", {1, 1}, [program("cat", "exec cat")])
+      one = [lifetime: lifetime()]
 
       assert {:ok, %{status: :running, session: first, resumed: false} = opened} =
-               open(owners, "a", {1, 1}, "cat")
+               open(owners, "a", {1, 1}, "cat", one)
 
       assert opened == %{status: :running, session: first, resumed: false}
 
-      assert {:ok, %{session: ^first, resumed: true}} = open(owners, "a", {1, 1}, "cat")
+      assert {:ok, %{session: ^first, resumed: true}} = open(owners, "a", {1, 1}, "cat", one)
       assert {:ok, %{session: other, resumed: false}} = open(owners, "a", {1, 1}, "cat", key: "b")
       assert other != first
 
@@ -621,6 +639,7 @@ defmodule Locus.Backends.OwnersTest do
       :ok = Backend.close(pid)
       assert %{running: false} = Backend.recv(pid, 0, 0)
 
+      assert {:error, :lifetime_over} = open(owners, "a", {1, 1}, "cat", one)
       assert {:ok, %{session: again, resumed: false}} = open(owners, "a", {1, 1}, "cat")
       assert again != first
 
@@ -662,7 +681,7 @@ defmodule Locus.Backends.OwnersTest do
       # in a kept home or a scratch one.
       for {name, opts} <- [{"kept", [home_id: @home]}, {"scratch", []}] do
         assert {:ok, %{session: run}} = open(owners, "a", v, name, opts)
-        terminal = [mode: :terminal, rows: 24, cols: 80] ++ opts
+        terminal = [lifetime: lifetime(), mode: :terminal, rows: 24, cols: 80] ++ opts
         assert {:ok, %{session: id} = opened} = open(owners, "a", v, name, terminal)
         assert opened == %{status: :running, session: id, resumed: false}
         assert id != run
@@ -992,27 +1011,40 @@ defmodule Locus.Backends.OwnersTest do
     test "a resumed session is held once, and resumes with the budget full", ctx do
       owners = start_owners(ctx, memory_budget: 256 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
-      assert {:ok, %{session: id, resumed: false}} = open(owners, "a", {1, 1}, "b1")
-      assert {:ok, %{session: ^id, resumed: true}} = open(owners, "a", {1, 1}, "b1")
+      one = [lifetime: lifetime()]
+      assert {:ok, %{session: id, resumed: false}} = open(owners, "a", {1, 1}, "b1", one)
+      assert {:ok, %{session: ^id, resumed: true}} = open(owners, "a", {1, 1}, "b1", one)
       assert held_bytes(owners) == 256 * @mib
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "two")
     end
 
-    test "two opens of one key prepared at once start one session and hold its bound once", ctx do
+    test "two opens of one lifetime prepared at once start one session and hold its bound once",
+         ctx do
       owners = start_owners(ctx, memory_budget: 512 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       set_pool(ctx, :hang)
-      first = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
-      second = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
-      wait_until(fn -> map_size(:sys.get_state(owners).pending) == 2 end, 5_000)
-      assert held_bytes(owners) == 512 * @mib
+      one = [lifetime: lifetime()]
+      first = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
+      second = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
+
+      wait_until(
+        fn ->
+          Enum.any?(:sys.get_state(owners).pending, fn
+            {_ref, %{continuation: {:open, froms, _ask}}} -> length(froms) == 2
+            _other -> false
+          end)
+        end,
+        5_000
+      )
+
+      assert held_bytes(owners) == 256 * @mib
       Task.await_many([first, second])
       set_pool(ctx, pool(4))
 
       # Both refused by the hung pool; with an answering pool, one starts
       # the session and the other attaches to it.
-      first = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
-      second = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      first = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
+      second = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
       assert [{:ok, %{session: id}}, {:ok, %{session: id}}] = Task.await_many([first, second])
       assert held_bytes(owners) == 256 * @mib
     end
@@ -1124,6 +1156,44 @@ defmodule Locus.Backends.OwnersTest do
       assert Reservations.endings(:sys.get_state(owners).reservations) == %{}
     end
 
+    test "a second ask of a lifetime waits for the launch, and hears its refusal", ctx do
+      launcher = {self(), ctx.clock, Agent.get(ctx.clock, & &1)}
+
+      owners =
+        start_owners(ctx, session_opts: [launcher: BeforeSpawn, launcher_server: launcher])
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      one = [lifetime: lifetime()]
+      first = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
+      assert_receive {:before_spawn, backend}, 2_000
+      second = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
+
+      assert Task.yield(second, 250) == nil, "a second ask was told running before the launch"
+
+      send(backend, :go)
+      assert {:error, refusal} = Task.await(first, 5_000)
+      assert {:error, ^refusal} = Task.await(second, 5_000)
+    end
+
+    test "a second ask of a lifetime being prepared shares the first's preparation and its refusal",
+         ctx do
+      owners = start_owners(ctx, memory_budget: 256 * @mib)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      set_pool(ctx, {:held, self(), pool(0)})
+      one = [lifetime: lifetime()]
+      first = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
+      assert_receive {:pool_read, reading}, 2_000
+      second = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
+
+      # The box has room for one bound: the second asks for none of its own.
+      assert Task.yield(second, 250) == nil
+      refute_received {:pool_read, _another}
+
+      send(reading, :answer)
+      assert {:error, :capacity} = Task.await(first, 5_000)
+      assert {:error, :capacity} = Task.await(second, 5_000)
+    end
+
     test "a session that dies before its launcher has its request is cleared by the launcher's fence",
          ctx do
       owners =
@@ -1207,6 +1277,25 @@ defmodule Locus.Backends.OwnersTest do
       wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
     end
 
+    test "a lifetime closed in the table's last boot is refused by the next, though no fence outlived it",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      lifetime = lifetime()
+      assert {:ok, _} = open(owners, "a", {1, 1}, "b1", lifetime: lifetime)
+      named = %{program: "b1", home_id: nil, key: "k", mode: :run, lifetime: lifetime}
+      assert :ok = Owners.close(owners, invoke("a", {1, 1}), named)
+
+      stop_supervised!(Owners)
+      owners = start_owners(ctx, boot: "bb_next")
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+
+      assert open(owners, "a", {1, 1}, "b1", lifetime: lifetime) == {:error, :lifetime_over},
+             "the last boot's closed lifetime started again"
+
+      assert sessions_of(owners, "a") == []
+    end
+
     test "a table restarted by its supervisor adopts the processes its predecessor followed",
          ctx do
       owner_name = :owners_restart_owners
@@ -1283,8 +1372,23 @@ defmodule Locus.Backends.OwnersTest do
         )
 
       assert :sys.get_state(owners).adopted == false
+
+      # Nothing is known to be released before the launcher has answered.
+      assert {:error, :unavailable} =
+               Owners.close(owners, invoke("a", {1, 1}), %{
+                 program: "b1",
+                 home_id: nil,
+                 key: "k",
+                 mode: :run,
+                 lifetime: lifetime()
+               })
+
       :ok = Owners.sweep(owners)
       assert_receive {:adoption_snapshot, worker, ^owners, tag}, 2_000
+
+      # An adoption pending is shown as its kind, in a status that reads.
+      status = inspect(:sys.get_status(owners), limit: :infinity, printable_limit: :infinity)
+      assert status =~ "adopting: true"
       send(owners, {AdoptionRace, {:heir, tag}, :released})
       assert {:ok, %{memory: %{held_bytes: 0}}} = control(owners, 1, %{type: :status, owners: []})
       send(worker, :go)
@@ -1446,6 +1550,32 @@ defmodule Locus.Backends.OwnersTest do
     end
   end
 
+  # An open of each key held before it makes its home, with its worker.
+  defp preparing(ctx, owners, keys) do
+    test = self()
+
+    for key <- keys do
+      Agent.update(ctx.stub, &Map.put(&1, :before_ensure, test))
+      opening = Task.async(fn -> open(owners, "a", {1, 1}, "kept", home_id: @home, key: key) end)
+      assert_receive {:home_about_to_be_created, worker}, 2_000
+      {opening, worker}
+    end
+  end
+
+  # What `ask` is answered while what it would wait for is still held.
+  defp at_once(ask) do
+    case Task.yield(Task.async(ask), 2_000) do
+      {:ok, answer} -> answer
+      nil -> :waits
+    end
+  end
+
+  defp running_in(owners, server) do
+    for {_id, %{server: ^server, state: :running} = owner} <- held(owners),
+        {id, %{running: true}} <- owner.sessions,
+        do: id
+  end
+
   describe "kept homes" do
     test "the sessions of one entry share its home, and take no uid of the pool", ctx do
       owners = start_owners(ctx)
@@ -1528,6 +1658,36 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{homes: []}} = control(owners, 1, %{type: :homes})
     end
 
+    test "a close waits for its lifetime's preparation, so nothing makes a home again once it is retired",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
+      test = self()
+      Agent.update(ctx.stub, &Map.put(&1, :before_ensure, test))
+      lifetime = lifetime()
+      named = %{program: "kept", home_id: @home, key: "k", mode: :run, lifetime: lifetime}
+
+      opening =
+        Task.async(fn ->
+          open(owners, "a", {1, 1}, "kept", home_id: @home, lifetime: lifetime)
+        end)
+
+      assert_receive {:home_about_to_be_created, worker}, 2_000
+      closing = Task.async(fn -> Owners.close(owners, invoke("a", {1, 1}), named) end)
+
+      assert Task.yield(closing, 300) == nil,
+             "closed was answered while the preparation could still make the home"
+
+      send(worker, :continue_ensure)
+      assert {:error, :lifetime_over} = Task.await(opening, 5_000)
+      assert :ok = Task.await(closing, 5_000)
+
+      retire = %{type: :home, op: :retire, athanor: @athanor, home_id: @home}
+      assert {:ok, %{state: :absent}} = control(owners, 1, retire)
+      refute File.exists?(Path.join(ctx.root, @home))
+      assert sessions_of(owners, "a") == []
+    end
+
     test "a home already past its bound refuses the open before anything starts", ctx do
       owners = start_owners(ctx)
       home = Path.join(ctx.root, @home)
@@ -1551,6 +1711,79 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{home_id: @home, state: :absent}} = control(owners, 1, retire)
       assert %{running: false} = Backend.recv(pid, 0, 0)
       refute File.exists?(Path.join(ctx.root, @home))
+    end
+
+    for {op, state, there?} <- [{:retire, :absent, false}, {:reset, :empty, true}] do
+      @tag op: op, answered: state, there?: there?
+      test "a home's #{op} is unavailable at once while any open prepares in it, and succeeds when asked again",
+           ctx do
+        owners = start_owners(ctx)
+        assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
+        [{first, making}, {second, lost}] = preparing(ctx, owners, ["one", "two"])
+        message = %{type: :home, op: ctx.op, athanor: @athanor, home_id: @home}
+        change = fn -> control(owners, 1, message) end
+        other = %{message | home_id: "vlt_01a09fee-2c3d-7e4f-8a5b-000000000002"}
+
+        beside_both = at_once(change)
+        another_home = at_once(fn -> control(owners, 1, other) end)
+        send(making, :continue_ensure)
+        Task.await(first, 5_000)
+        beside_one = at_once(change)
+        Process.exit(lost, :kill)
+        Task.await(second, 5_000)
+        again = change.()
+
+        # The session the settled preparation started ends with the change.
+        wait_until(fn -> running_in(owners, "a") == [] end, 5_000)
+
+        assert %{
+                 beside_both: beside_both,
+                 another_home: match?({:ok, _}, another_home),
+                 beside_one: beside_one,
+                 again: again,
+                 folder: File.exists?(Path.join(ctx.root, @home))
+               } == %{
+                 beside_both: {:error, :unavailable},
+                 another_home: true,
+                 beside_one: {:error, :unavailable},
+                 again: {:ok, %{home_id: @home, state: ctx.answered}},
+                 folder: ctx.there?
+               }
+      end
+    end
+
+    test "another owner's renewal is served, and its session runs, while a home's retire meets a held preparation",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
+      assert {:ok, _} = sync(owners, "b", {1, 1}, idle_programs(1))
+      assert {:ok, %{session: id}} = open(owners, "b", {1, 1}, "b1")
+      [{opening, making}] = preparing(ctx, owners, ["one"])
+
+      retire = %{type: :home, op: :retire, athanor: @athanor, home_id: @home}
+      retired = at_once(fn -> control(owners, 1, retire) end)
+
+      # Inside its lease, then past the one it had.
+      advance(ctx, 20_000)
+      renew = %{type: :renew, lease_ms: 30_000, owners: [%{athanor: @athanor, server: "b", e: 1}]}
+      renewed = at_once(fn -> control(owners, 1, renew) end)
+      advance(ctx, 11_000)
+      :ok = Owners.sweep(owners)
+      runs = running_in(owners, "b")
+
+      send(making, :continue_ensure)
+      Task.await(opening, 5_000)
+
+      assert %{retired: retired, renewed: renewed, runs: runs} == %{
+               retired: {:error, :unavailable},
+               renewed:
+                 {:ok,
+                  %{
+                    renewed: [%{athanor: @athanor, server: "b", e: 1, state: :running}],
+                    unknown: []
+                  }},
+               runs: [id]
+             }
     end
 
     test "a home the launcher cannot keep is unavailable", ctx do
@@ -1793,14 +2026,53 @@ defmodule Locus.Backends.OwnersTest do
       assert %{programs: [%{sessions: 1}]} = status(owners, "a")
     end
 
-    test "two opens held for one key and woken by the same release start one process", ctx do
+    test "a close refuses its lifetime's open still being prepared, waits for that work and starts nothing",
+         ctx do
+      owners = start_owners(ctx, memory_budget: 256 * @mib)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      set_pool(ctx, {:held, self(), pool(4)})
+      lifetime = lifetime()
+      opening = Task.async(fn -> open(owners, "a", {1, 1}, "b1", lifetime: lifetime) end)
+      assert_receive {:pool_read, reading}, 2_000
+
+      named = %{program: "b1", home_id: nil, key: "k", mode: :run, lifetime: lifetime}
+      closing = Task.async(fn -> Owners.close(owners, invoke("a", {1, 1}), named) end)
+      assert Task.yield(closing, 250) == nil
+      assert held_bytes(owners) == 256 * @mib
+
+      send(reading, :answer)
+      assert {:error, :lifetime_over} = Task.await(opening, 10_000)
+      assert :ok = Task.await(closing, 5_000)
+      assert held_bytes(owners) == 0
+      assert sessions_of(owners, "a") == []
+    end
+
+    test "a close refuses its lifetime's open held for the key, and ends nothing of the process it waits for",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
+      lifetime = lifetime()
+      waiting = Task.async(fn -> open(owners, "a", {1, 1}, "b1", lifetime: lifetime) end)
+      wait_until(fn -> holding(owners) == 1 end, 5_000)
+
+      named = %{program: "b1", home_id: nil, key: "k", mode: :run, lifetime: lifetime}
+      assert :ok = Owners.close(owners, invoke("a", {1, 1}), named)
+      assert {:error, :lifetime_over} = Task.await(waiting, 5_000)
+      assert %{programs: [%{sessions: 1}]} = status(owners, "a")
+      assert sessions_of(owners, "a") == [id]
+    end
+
+    test "two opens of one lifetime held for a key and woken by the same release start one process",
+         ctx do
       owners = start_owners(ctx)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
       {backend, handle} = hold_release(owners, "a", {1, 1}, id)
       :ok = Backend.close(backend)
 
-      tasks = for _ <- 1..2, do: Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      one = [lifetime: lifetime()]
+      tasks = for _ <- 1..2, do: Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
       wait_until(fn -> holding(owners) == 2 end, 5_000)
 
       :sys.resume(handle.server)
@@ -1872,14 +2144,15 @@ defmodule Locus.Backends.OwnersTest do
       owners = start_owners(ctx)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       assert {:ok, %{session: k}} = open(owners, "a", {1, 1}, "b1", key: "k")
-      assert {:ok, %{session: j}} = open(owners, "a", {1, 1}, "b1", key: "j")
+      same = [key: "j", lifetime: lifetime()]
+      assert {:ok, %{session: j}} = open(owners, "a", {1, 1}, "b1", same)
       {backend, handle} = hold_release(owners, "a", {1, 1}, k)
       :ok = Backend.close(backend)
 
       task = Task.async(fn -> open(owners, "a", {1, 1}, "b1", key: "k") end)
       wait_until(fn -> holding(owners) == 1 end, 5_000)
 
-      assert {:ok, %{session: ^j, resumed: true}} = open(owners, "a", {1, 1}, "b1", key: "j")
+      assert {:ok, %{session: ^j, resumed: true}} = open(owners, "a", {1, 1}, "b1", same)
       assert {:ok, %{resumed: false}} = open(owners, "a", {1, 1}, "b1", key: "m")
       assert Task.yield(task, 0) == nil
       assert File.exists?("/proc/#{handle.pid}")
