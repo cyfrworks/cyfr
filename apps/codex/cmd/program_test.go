@@ -435,7 +435,7 @@ func TestUpdateLeavesThePackagesProgramToThePackage(t *testing.T) {
 			target = o.version
 		}
 		_, err := s.run(o)
-		want := "This cyfr belongs to the CYFR app's package, so nothing was changed: install the package of release " + target + " from " + releasesPage + "/tag/" + target
+		want := "This cyfr belongs to the CYFR app's package, so nothing was changed: install the package of release " + target + " from " + releasesPage + "/tag/" + target + ", then run 'cyfr update' again to update CYFR here"
 		if err == nil || err.Error() != want {
 			t.Errorf("cyfr update answered %v, want %q", err, want)
 		}
@@ -448,6 +448,41 @@ func TestUpdateLeavesThePackagesProgramToThePackage(t *testing.T) {
 		if got := read(t, code); got != "the app" {
 			t.Errorf("the package's app holds %q", got)
 		}
+	}
+}
+
+// The two steps the package's refusal names: with the newer package
+// installed, cyfr update run again finds the program current and goes on
+// to the stack in the directory.
+func TestUpdateAgainFromTheNewerPackageGoesOnToTheStack(t *testing.T) {
+	s := newProgramScenario(t, "1.0.0", "1.1.0")
+	code := filepath.Join(filepath.Dir(s.self), "app.asar")
+	if err := os.WriteFile(code, []byte("the app"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	savedManifest := fetchManifest
+	t.Cleanup(func() { fetchManifest = savedManifest })
+	reached := errors.New("the stack's update began")
+	var asked []string
+	fetchManifest = func(_ context.Context, v string) (*release.Manifest, error) {
+		asked = append(asked, v)
+		return nil, reached
+	}
+	if err := os.WriteFile("docker-compose.yml", []byte("services: {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "then run 'cyfr update' again") || len(asked) != 0 {
+		t.Fatalf("the first cyfr update answered %v and asked the stack's releases %v", err, asked)
+	}
+	// The newer package installed.
+	version.Version = "1.1.0"
+	out, err := s.run(updateOptions{})
+	if err == nil || !strings.Contains(err.Error(), reached.Error()) || !slices.Equal(asked, []string{"1.1.0"}) ||
+		!strings.Contains(out, "cyfr 1.1.0 is the newest release.") {
+		t.Fatalf("cyfr update again answered %v, asking %v:\n%s", err, asked, out)
+	}
+	if len(s.fetched) != 0 || len(s.handed) != 0 || read(t, s.self) != "old cyfr" {
+		t.Errorf("the package's cyfr was fetched %v, handed over %v or changed", s.fetched, s.handed)
 	}
 }
 
