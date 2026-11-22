@@ -140,15 +140,17 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # the layer refreshes once a day and is shared within it; a local build may
 # leave it.
 #
-# Aqua's browser is Debian's Chromium (cyfr-browser, below), upgraded with
-# the rest at each build, with a font for the pages it renders. Chromium
-# links libgbm, which a headless Chromium does not use: it allocates no
+# Aqua's browser is Debian's Chromium (cyfr-browser, below), its headless
+# shell, upgraded with the rest at each build, with a font for the pages
+# it renders. The shell is the browser engine alone: no sign-in, sync,
+# component updater or session restore, so it reaches nothing by itself.
+# It links libgbm, which a headless browser does not use: it allocates no
 # GPU buffer. So Mesa's gallium driver, which libgbm1 depends on, is
 # purged past the dependency check with what it alone pulled in (LLVM, Z3
 # and theirs, about 190 MiB), so none of it is present or listed: starting
-# from mesa-libgallium, a package Chromium brought joins the purge when
-# only the purge's own packages depend on it. libgbm1 and libglx-mesa0
-# keep their one unmet dependency, mesa-libgallium, and every other
+# from mesa-libgallium, a package the shell brought joins the purge when
+# only the purge's own packages depend on it. What depends on
+# mesa-libgallium keeps that one unmet dependency, and every other
 # dependency stays met. No later layer and nothing at run time calls apt,
 # and one that did would have to install mesa-libgallium first.
 ARG APT_REFRESH=0
@@ -163,14 +165,14 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     iptables \
     procps \
     && apt-get install -y --no-install-recommends fonts-liberation \
-    && dpkg-query -W -f '${Package}\n' | sort > /tmp/before-chromium \
-    && apt-get install -y --no-install-recommends chromium \
-    && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/before-chromium - > /tmp/chromium-brought \
+    && dpkg-query -W -f '${Package}\n' | sort > /tmp/before-browser \
+    && apt-get install -y --no-install-recommends chromium-headless-shell \
+    && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/before-browser - > /tmp/browser-brought \
     && depends() { dpkg-query -W -f '${Depends},${Pre-Depends}\n' "$@" | tr ',' '\n' \
          | sed 's/ *(.*//; s/ *|.*//; s/^ *//; s/:any$//' | grep . | sort -u; } \
     && echo mesa-libgallium > /tmp/purged \
     && while :; do \
-         { cat /tmp/purged; depends $(cat /tmp/purged) | grep -xF -f /tmp/chromium-brought; } | sort -u > /tmp/candidates; \
+         { cat /tmp/purged; depends $(cat /tmp/purged) | grep -xF -f /tmp/browser-brought; } | sort -u > /tmp/candidates; \
          dpkg-query -W -f '${Package}\n' | grep -vxF -f /tmp/candidates > /tmp/outside; \
          depends $(cat /tmp/outside) | grep -vx mesa-libgallium > /tmp/wanted; \
          { echo mesa-libgallium; grep -vxF -f /tmp/wanted /tmp/candidates; } | sort -u > /tmp/next; \
@@ -179,9 +181,9 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
        done \
     && grep -q '^libllvm' /tmp/purged \
     && dpkg --purge --force-depends $(cat /tmp/purged) \
-    && rm /tmp/before-chromium /tmp/chromium-brought /tmp/purged /tmp/candidates /tmp/outside /tmp/wanted /tmp/next \
+    && rm /tmp/before-browser /tmp/browser-brought /tmp/purged /tmp/candidates /tmp/outside /tmp/wanted /tmp/next \
     && ldconfig \
-    && ! ldd /usr/lib/chromium/chromium /usr/lib/*/libgbm.so.1 | grep -q 'not found' \
+    && ! ldd /usr/lib/chromium/chromium-headless-shell /usr/lib/*/libgbm.so.1 | grep -q 'not found' \
     && ! apt-get check 2>&1 | grep 'Depends:' | grep -qv 'Depends: mesa-libgallium ' \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
@@ -320,7 +322,7 @@ COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 COPY --from=keeper /out/cyfr-stub /opt/cyfr/bin/cyfr-stub
 # Aqua's browser: the command of a person's browser row, which the backends
 # service runs on a terminal in the row's kept home. It starts the image's
-# Chromium headless with its profile there and drives it over Chromium's
+# Chromium headless shell with its profile there and drives it over its
 # debugging pipe, which stays inside the box: no debugging port is opened.
 COPY --from=keeper /out/cyfr-browser /opt/cyfr/bin/cyfr-browser
 # Claude Code's driver, as a brain of CYFR's: the start of a brain row's

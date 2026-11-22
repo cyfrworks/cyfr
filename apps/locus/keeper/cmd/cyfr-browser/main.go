@@ -3,8 +3,8 @@
 
 //go:build linux
 
-// Command cyfr-browser drives Aqua's browser: a headless Chromium with its
-// profile in a kept home. It is the command of a `driven` program row,
+// Command cyfr-browser drives Aqua's browser: Chromium's headless shell
+// with its profile in a kept home. It is the command of a `driven` program row,
 // which the backends service runs on a pseudo-terminal under the home's
 // uid; its one host, Opus.Browser, speaks framed messages to it over that
 // terminal's bytes, and it speaks the Chrome DevTools Protocol to Chrome
@@ -13,9 +13,9 @@
 //
 //	cyfr-browser [--chrome PATH] [--net-log PATH] [--chunk BYTES] [--keep-ms MS]
 //
-// It starts the image's Chromium, Debian's, by its absolute path
-// (Dockerfile.locus), and fetches nothing; --chrome starts the Chrome at
-// PATH instead. --net-log has Chrome log its network to PATH, which only
+// It starts the image's Chromium headless shell, Debian's, by its
+// absolute path (Dockerfile.locus), and fetches nothing; --chrome starts
+// the Chrome at PATH instead. --net-log has Chrome log its network to PATH, which only
 // tests pass.
 //
 // The framing and its messages are defined in
@@ -61,9 +61,10 @@ import (
 const (
 	defaultChunk  = 49152
 	defaultKeepMS = 120000
-	// chromium is the image's Chromium, its binary itself rather than
-	// Debian's launcher, which adds flags of its own.
-	chromium = "/usr/lib/chromium/chromium"
+	// chromium is the image's Chromium headless shell: the browser engine
+	// with no sign-in, sync, component updater or session restore of its
+	// own, which the full browser has and reaches Google for at start.
+	chromium = "/usr/lib/chromium/chromium-headless-shell"
 	// startWait bounds Chrome's first answer.
 	startWait = 30 * time.Second
 	// closeWait bounds Chrome's own shutdown before it is killed.
@@ -207,7 +208,7 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 	// options (no new privileges, and a seccomp profile that denies making
 	// a namespace), so Chrome runs without it, held by the home's uid, the
 	// egress guard, the read-only root and its memory bound.
-	args := append([]string{"--headless", "--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
+	args := append([]string{"--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
 		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900"}, quiet...)
 	cmd := exec.Command(path, append(args, logging...)...)
 	// Chrome runs in its home with its temporary folder named relative to

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""Aqua's browser in the backends image: cyfr-browser driving the image's Chromium in its kept home, framed over its terminal.
+"""Aqua's browser in the backends image: cyfr-browser driving the image's Chromium headless shell in its kept home, framed over its terminal.
 
 Run as docker-compose.yml's locus-backends service, driven only by requests
 signed as CYFR signs them (harness.py). The browser is a kept program whose
@@ -70,7 +70,7 @@ container starts:
 - Chrome reaches nothing by itself: its own network log over a start with
   nothing asked shows no URL requested, no host resolved and no connection.
 - The pinned programs are in the image, and a kept program fetches
-  neither: the image holds Debian's Chromium and Codex at
+  neither: the image holds Debian's Chromium headless shell and Codex at
   /opt/cyfr/programs/codex, each built for this machine, and nothing of
   Codex's codex-resources folder (no bubblewrap, no voice host, no shared
   library). Under rows whose hosts admit no public host (the stack's own
@@ -154,8 +154,8 @@ BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, CODEX_HOME = (
 HOME_MAX_BYTES = 2 << 30
 BROWSER = {"name": "browser", "command": "cyfr-browser", "env": {}, "home": "kept", "memory_bytes": 1536 << 20,
            "home_max_bytes": HOME_MAX_BYTES}
-# The image's Chromium, which the driver starts by its path, and Codex's folder.
-CHROMIUM = "/usr/lib/chromium/chromium"
+# The image's Chromium headless shell, which the driver starts by its path, and Codex's folder.
+CHROMIUM = "/usr/lib/chromium/chromium-headless-shell"
 CODEX = "/opt/cyfr/programs/codex"
 # Codex's row as Opus.Programs.Definition ships it: its driver and the image's Codex by its path, in a kept
 # folder at the service's default memory bound.
@@ -1041,7 +1041,7 @@ def pinned(stack, c):
     """The pinned programs are in the image, and a kept program held to no public host runs both, fetching nothing."""
     machine = imagesuite.read_output(stack.exec("uname -m"), "the box's machine").strip()
     expect(elf_machine(stack, CHROMIUM) == ELF_MACHINE.get(machine),
-           f"the image holds Debian's Chromium, built for this box's {machine}", CHROMIUM)
+           f"the image holds Debian's Chromium headless shell, built for this box's {machine}", CHROMIUM)
     entry = imagesuite.read_output(stack.exec(
         f"ls {CODEX}/node_modules/@openai/codex-linux-*/vendor/*/bin/codex"), "Codex's platform binary").split()
     expect(len(entry) == 1 and elf_machine(stack, entry[0]) == ELF_MACHINE.get(machine),
@@ -1475,40 +1475,29 @@ def main():
         eventually(lambda: not stack.under_uid(uid), "the short keep's processes to end with its session")
 
         # ————— a profile with open pages starts empty —————
-        # A Chrome that ends abruptly with a page open, as a crash or its memory bound leaves a profile, in a profile
-        # set to continue where it left off: a later start loads nothing on its own account, so no session it
-        # writes holds that page.
+        # A Chrome that ends abruptly with a page open, as a crash or its memory bound leaves a profile: a later
+        # start, logging Chrome's network, asks nothing of that page, so no session of the profile is restored.
         if os.environ.get("CYFR_TEST_OFFLINE") == "1":
-            print("skip: a profile's last session needs a public page to hold (CYFR_TEST_OFFLINE=1)", flush=True)
+            print("skip: a profile's last page needs a public page to hold (CYFR_TEST_OFFLINE=1)", flush=True)
         else:
             token = f"cyfr-restore-{os.urandom(6).hex()}"
-            profile_dir = f"{KEPT_ROOT}/{BROWSER_HOME}/chrome/Default"
-            sessions = lambda: set(as_home(stack, BROWSER_HOME, f"ls {profile_dir}/Sessions 2>/dev/null; true",
-                                           "the profile's sessions").split())
-            holding = lambda names: [n for n in names if as_home(
-                stack, BROWSER_HOME, f"grep -a -c {token} {profile_dir}/Sessions/{n} || true", "a session's pages").strip() != "0"]
-            as_home(stack, BROWSER_HOME,
-                    f"cd {profile_dir} && if grep -q '\"session\":{{' Preferences; "
-                    f"then sed -i 's/\"session\":{{/\"session\":{{\"restore_on_startup\":1,/' Preferences; "
-                    f"else sed -i 's/^{{/{{\"session\":{{\"restore_on_startup\":1}},/' Preferences; fi",
-                    "the profile set to continue where it left off")
             r = Host(stack, c, BROWSER_HOME)
             expect("error" not in r.hello(), "a session that will end with a page open starts")
             ok(r.ask(1, "thr_restore", "open", {"url": f"https://example.com/?{token}"}), "a page is open")
-            eventually(lambda: holding(sessions()), "the profile's session to hold the open page", 30)
             main_pids = [p["pid"] for p in chrome_processes(stack, uid) if "--type=" not in p["cmd"]]
             as_home(stack, BROWSER_HOME, f"kill -9 {' '.join(map(str, main_pids))}", "Chrome ended abruptly")
             eventually(lambda: (r.read(1_000), not r.running)[1], "the driver to end with its Chrome")
             eventually(lambda: not stack.under_uid(uid), "that session's processes to end")
-            before = sessions()
-            expect(holding(before), "the profile's last session holds the open page", sorted(before))
-            again = Host(stack, c, BROWSER_HOME)
+            restore_log = f"{KEPT_ROOT}/{BROWSER_HOME}/restore-netlog.json"
+            again = Host(stack, c, BROWSER_HOME, ["--net-log", restore_log])
             expect("error" not in again.hello(), "the profile with an open page starts")
-            time.sleep(5)
-            written = sessions() - before
-            expect(not holding(written), "a later start reopens none of the last session's pages", sorted(written))
+            time.sleep(5)  # sleep-ok: a restored page would load within these seconds of the start
             again.close()
             eventually(lambda: not stack.under_uid(uid), "the later session's processes to end")
+            asked = [entry for entry in net_log_leaving(as_home(stack, BROWSER_HOME, f"cat {restore_log}",
+                                                                "the later start's network log")) if token in entry[1]]
+            expect(asked == [], "a later start reopens none of the last session's pages", asked)
+            as_home(stack, BROWSER_HOME, f"rm {restore_log}", "the network log removed")
 
         # ————— it reaches nothing by itself —————
         # Chrome's own network log over a start with nothing asked of it: no request leaves.
