@@ -135,6 +135,71 @@ defmodule Cyfr.DocsDriftTest do
              "parts #{inspect(@part_names)}"
   end
 
+  @architecture_words 5_000
+  @part_words 120
+  @to_its_owner "ARCHITECTURE.md says who owns a thing, who may reach or trust whom, which " <>
+                  "channel joins two parts and what two parts must both keep. A sentence " <>
+                  "about one part's behaviour belongs in its owner's documentation: move " <>
+                  "it there, and leave the ceiling as it is."
+
+  defp words(text), do: text |> String.split(~r/\s+/u, trim: true) |> length()
+
+  defp part_words(doc) do
+    for [section, part] <-
+          Regex.scan(~r/^### (\w+)(?: \([^)]*\))?: [^\n]*\n.*?(?=^[#]{2,3} |\z)/ms, doc),
+        do: {part, words(section)}
+  end
+
+  test "ARCHITECTURE.md holds at most #{@architecture_words} words" do
+    total = words(SourceTree.read(@architecture))
+
+    assert total <= @architecture_words,
+           "ARCHITECTURE.md holds #{total} words, over its #{@architecture_words}. " <>
+             @to_its_owner
+  end
+
+  test "each part's section of ARCHITECTURE.md holds at most #{@part_words} words" do
+    doc = SourceTree.read(@architecture)
+    parts = part_words(doc)
+
+    # Guards against the scan quietly matching nothing.
+    assert length(parts) == length(@part_names)
+
+    over = Enum.filter(parts, fn {_part, count} -> count > @part_words end)
+
+    assert over == [],
+           "these part sections of ARCHITECTURE.md hold more than #{@part_words} words: " <>
+             "#{inspect(over)}. " <> @to_its_owner
+  end
+
+  test "a part's section runs through a nested heading and a fenced line to the next part" do
+    sample = """
+    ## 3. Modules
+
+    ### One (Alias): first
+
+    one two
+
+    #### Nested
+
+    three
+
+    ```
+    # four
+    ```
+
+    ### Two: second
+
+    five
+
+    ## 4. Next
+
+    six
+    """
+
+    assert part_words(sample) == [{"One", 13}, {"Two", 4}]
+  end
+
   test "ARCHITECTURE.md's four ports are the port roster" do
     [section] =
       Regex.run(~r/^### 4\.2 The four ports\n(.*?)(?=^### )/ms, SourceTree.read(@architecture),

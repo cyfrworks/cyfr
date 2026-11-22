@@ -6,8 +6,8 @@ defmodule Emissary.Router do
   Emissary's routes, with the pipelines they pass through: MCP, the
   vault's OAuth grant callback, tincture serving, a canvas's page and
   the tincture data routes (a canvas's among them), health, the
-  execution-events stream, inbound webhooks, the identity directory and
-  the restore ingress.
+  execution-events stream, inbound webhooks, and the identity directory
+  with the handle registry and the account pages served beside it.
 
   The composition router invokes `routes/0` where the adapter's routes
   stand, so its `__routes__/0` stays the total table. The quoted calls

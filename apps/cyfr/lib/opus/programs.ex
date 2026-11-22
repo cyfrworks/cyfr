@@ -32,10 +32,11 @@ defmodule Opus.Programs do
   ## Kept homes
 
   A program row with a kept home has one folder, its own: the home's id is
-  the row's id, made with the row and retired with it. `home/3` resets a
-  row's kept home (every session in it ends and it is made again empty
-  under the same uid) or retires it (its sessions end, the home is removed
-  and its uid freed). The box that holds a home drew its uid; CYFR never
+  the row's id, made at its first session and retired with the row. A
+  program's own sign-in, which it writes there, is the folder's and no
+  vault entry. `home/3` resets a row's kept home (every session in it ends
+  and it is made again empty under the same uid) or retires it (its
+  sessions end, the home is removed and its uid freed). The box that holds a home drew its uid; CYFR never
   learns it. A retire is retried until the box acknowledges it. Either way
   the brain sessions threads kept for the home are forgotten, so a member
   whose brain ran there starts a new one.

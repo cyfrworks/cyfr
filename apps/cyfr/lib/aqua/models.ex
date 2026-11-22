@@ -14,7 +14,7 @@ defmodule Aqua.Models do
       installed catalyst that speaks the contract and has what it needs
       connected asked for its models;
     * `model_status/2` — whether each agent's brain is ready: installed,
-      and bound to the key the crew's grant runs it with, or, for a brain
+      and bound to the key its own grant runs it with, or, for a brain
       that is a program, the program row of its name standing
       (`t:status/0`);
     * `providers/1` — every brain the athanor can connect, with what it
@@ -35,7 +35,7 @@ defmodule Aqua.Models do
   carry the ref the agent names, whether or not the listing resolved it:
 
     * `:ready` — its own grant holds what its own plan requires, which
-      every crew member's turn on it runs under;
+      every crew member's model call on it runs under;
     * `:needs_key` — a key to connect;
     * `:needs_grant` — the person's grant of the brain is all it asks, as
       Aqua's setup reads it (`t:provider/0`): a brain that needs nothing
@@ -86,8 +86,8 @@ defmodule Aqua.Models do
   @listing_concurrency 5
   @listing_timeout_ms 30_000
   @capabilities_ttl_ms :timer.hours(24)
-  # The crew's one grant, which runs every member's brain
-  # (`Compendium.AgentSource`).
+  # The crew's one grant, which every member's turn runs under and which
+  # names no brain (`Compendium.AgentSource`).
   @grant Prima.AgentRef.soul_ref()
 
   @doc """
@@ -688,7 +688,7 @@ defmodule Aqua.Models do
   defp suited({:error, _unanswered}), do: {:error, :unavailable}
 
   # A brain is ready when its own profile binds what it needs: the grant
-  # every member's turn on it runs under.
+  # every member's model call on it runs under.
   defp catalyst_status(_ctx, {:error, _unread}, ref), do: {:model_unavailable, ref}
 
   defp catalyst_status(ctx, {:ok, listing}, ref) do

@@ -65,9 +65,9 @@ defmodule Sanctum.Pairing do
   | `:platform_admin_marking` | a fresh confirmation, the platform administrator's |
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
-  are sensitive, and no operation makes either (each is *Not built yet*
-  in ARCHITECTURE.md). `credential_sharing` is offering a key to more
-  people than before: a new share (`share.create`) and a share's audience
+  are sensitive, and no operation makes either. `credential_sharing` is
+  offering a key to more people than before: a new share
+  (`share.create`) and a share's audience
   widened to everyone or to another group (`share.set_audience`), decided
   by `Sanctum.Shares`. Whether a change widens is decided from the stored
   row, and the confirmation is asked only then. `program_definition` is a

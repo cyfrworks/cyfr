@@ -5,10 +5,11 @@
 // key, make the account or add the key to one, unlock it with the person's
 // PIN (or passphrase) and lock it again, confirm a sensitive change
 // freshly and add a passkey a browser asks for to the account, served on
-// literal loopback to a box's screen. Through the device channel the
-// device proves the person to a CYFR.
+// literal loopback to a box's screen or the CYFR app. Through the device
+// channel the device proves the person to a CYFR.
 //
-// The PIN opens the device's key (internal/holder) and goes nowhere else:
+// The PIN opens the device's key (internal/holder) in this package alone
+// and goes nowhere else:
 // a CYFR receives only signatures, never a PIN, a passphrase or anything
 // derived from one. One key serves every CYFR; each CYFR admits it once,
 // by its hello, and from then the device connects under the certificate

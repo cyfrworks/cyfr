@@ -9,7 +9,8 @@ defmodule PrismWeb.TerminalComponent do
   it the `Terminal` hook (`assets/js/terminal/frame.js`) draws what the
   program writes with the vendored xterm.js, the terminal type the program
   is told it runs on (`Prima.LocusBackends.terminal_type/0`). Nothing the program writes
-  reaches the chrome. What the frame sends the program is what the person
+  reaches the chrome, and the frame asks the person for no secret. What
+  the frame sends the program is what the person
   types and the terminal's own answers to the program's standard queries,
   never text the program chose. When the program ends, the screen the
   page drew stays, read-only, beside the ending, until the person closes

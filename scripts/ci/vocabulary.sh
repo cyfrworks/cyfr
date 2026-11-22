@@ -218,12 +218,14 @@ assert_spelling scripts/scaffold-tarball.sh '-C seed aqua'
 # the access vector's words and refusal templates, which `cyfr`
 # prints) name the installation CYFR and the assistant Aqua, and
 # carry none of the concept words home, hub, cell, door or glass
-# where a person reads them: a cluster, a sign-in method and a
-# device say so. "node" and "member" are not gated: each is also
+# where a person reads them: an always-on CYFR, a cluster and its
+# servers, a sign-in method and a device or browser say so. "node"
+# and "member" are not gated: each is also
 # ordinary English and technical vocabulary (Node.js, a tree's or a
 # graph's nodes, Tailscale's and Erlang's nodes, a person who is a
-# member), so their installation and cluster senses are the
-# reviewer's to check. In Markdown and in the vector a `code span`
+# member), so their installation and cluster senses (a CYFR, a
+# machine or a server) are the reviewer's to check. In Markdown
+# and in the vector a `code span`
 # (delimited by a run of backticks, closed by a run of the same
 # length) is not prose: an identifier, event name, wire field or
 # command is spelled as the code spells it (`door.*`, a program's

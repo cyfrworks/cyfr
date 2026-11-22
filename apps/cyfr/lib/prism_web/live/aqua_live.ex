@@ -4,10 +4,11 @@
 defmodule PrismWeb.AquaLive do
   @moduledoc """
   The athanor's Aqua, at `/a/<athanor>/aqua`: the soul and the crew it
-  hands jobs to — each with a prompt and a brain, the soul with the
-  capability allowlist the crew runs under too, a crew member with what
-  it is good at and what to avoid — the athanor's own
-  (`Compendium.AquaTemplate` seeds them), edited by its
+  hands jobs to — the soul with its prompt, the capability allowlist the
+  crew runs under too and the crew member whose brain it runs on, a crew
+  member with a brain, what it is good at and what to avoid, and no
+  prompt — the athanor's own
+  (`Compendium.AquaTemplate` seeds the soul), edited by its
   person through the `aqua` tool — beside the page the soul reads first
   (`about-you`, pinned through the `notes` tool), the notes kept here, and the scrolls it can
   read on demand. Every write from this page goes through the tool Aqua

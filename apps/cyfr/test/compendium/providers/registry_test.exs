@@ -180,9 +180,9 @@ defmodule Compendium.Providers.RegistryTest do
     end
   end
 
-  # A push token outlives the session that asks for it (`ARCHITECTURE.md`
-  # §9.3): issuing one waits on a fresh confirmation, whose preview names
-  # what is issued and holds no secret. The registry is an HTTP stub,
+  # A push token is a credential issued (`Sanctum.Pairing`'s
+  # `credential_issuance`): issuing one waits on a fresh confirmation, whose
+  # preview names what is issued and holds no secret. The registry is an HTTP stub,
   # which fails the test on any request it expects none of.
   describe "issuing another push token" do
     setup do

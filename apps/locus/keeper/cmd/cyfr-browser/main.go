@@ -233,6 +233,10 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 		commandsOut.Close()
 		return nil, err
 	}
+	// Chrome's own sandbox cannot start under the backends service's
+	// options (no new privileges, and a seccomp profile that denies making
+	// a namespace), so Chrome runs without it, held by the home's uid, the
+	// egress guard, the read-only root and its memory bound.
 	args := append([]string{"--headless", "--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
 		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900"}, quiet...)
 	cmd := exec.Command(path, append(args, logging...)...)

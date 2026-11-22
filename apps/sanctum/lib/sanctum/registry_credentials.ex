@@ -33,7 +33,7 @@ defmodule Sanctum.RegistryCredentials do
 
   A push token outlives the session that asks for it, so issuing one at
   the registry for a namespace the caller holds is a sensitive change
-  (`credential_issuance`, `ARCHITECTURE.md` §9.3), decided by
+  (`credential_issuance` in `Sanctum.Pairing`'s table), decided by
   `confirm_issuance/4` before the registry is asked. A token the registry
   refused is removed with `delete_push_token/4`.
   """

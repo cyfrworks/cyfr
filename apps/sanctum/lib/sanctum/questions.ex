@@ -37,10 +37,10 @@ defmodule Sanctum.Questions do
   An ask that passes is admitted: decided by the first of a permission
   that covers it (the row is written answered, naming it), a root whose
   origin is not `interactive` (`none(unattended)`), or else the question
-  opens and is announced. The row is inserted with its decision in a
-  transaction that checks the attempt is current and the run open
-  (`Arca.Questions.admit/2`); a run that ended leaves no row. A refusal at
-  1, 2 or 4 leaves none, and a store that cannot answer is
+  opens, its deadline the run's, and is announced. The row is inserted
+  with its decision in a transaction that checks the attempt is current
+  and the run open (`Arca.Questions.admit/2`); a run that ended leaves no
+  row. A refusal at 1, 2 or 4 leaves none, and a store that cannot answer is
   `none(unavailable)`, with nothing recorded.
 
   ## Permissions
@@ -53,6 +53,10 @@ defmodule Sanctum.Questions do
   caller; an unknown caller is covered only by an answer for any. A
   person removes one (`forget/2`); a catalyst's go in the transaction
   that removes its last installed release (`Arca.ComponentStorage`).
+  A permission answers its component's asks and nothing else: it adds no
+  reach to the grant the run stands on and satisfies no fresh
+  confirmation, and an allow answers the ask without the person, so it
+  removes the one check before that action.
 
   ## The answer door
 

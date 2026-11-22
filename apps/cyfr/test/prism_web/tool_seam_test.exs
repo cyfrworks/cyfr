@@ -139,9 +139,8 @@ defmodule PrismWeb.ToolSeamTest do
   # other change the console makes goes through a tool, because an agent can
   # make it too and one gate should answer for both.
   @console_owned [
-    # Someone's own UI preferences, which carry no authority: the one
-    # write ARCHITECTURE.md §3 (Prism) lets the console make beside the
-    # gate. There is no `user.put_prefs` tool and there should not be one.
+    # Someone's own UI preferences, which carry no authority. There is no
+    # `user.put_prefs` tool and there should not be one.
     {"apps/cyfr/lib/prism_web/live/settings_live.ex", "Sanctum.Tenancy.Users.put_prefs"},
     # The same kind of preference: that the pane has shown this person the
     # line about what Aqua reads in shared threads, which decides only

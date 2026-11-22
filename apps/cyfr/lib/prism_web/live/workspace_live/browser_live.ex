@@ -8,7 +8,10 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
   type in it while Aqua goes on with its work (C12). A view of its own,
   nested as the thread pane is, so the window's images come to a process
   of its own and the guard (`CyfrWeb.ContextGuard`) runs before each of
-  them as before every event.
+  them as before every event. It is CYFR's own view, not a frame: no
+  frame credential is minted for it, and the window reaches the page only
+  as images drawn on a canvas, so the page in Aqua's browser reads nothing
+  of the thread beside it.
 
   While the person's browser holds a window for this thread it offers to
   show it; nothing streams before they ask. Asking is `browser.watch`

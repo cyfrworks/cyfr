@@ -24,10 +24,9 @@
 // `performance.now()` in the shell's document, read through an init script
 // (INSTRUMENT) that records the click and wraps the shell's port handlers.
 // It changes no message and records nothing of a boot, bearer, argument or
-// stream payload. Each number's p95 is held to its budget (BUDGET_MS, the
-// values of the canvas budgets ARCHITECTURE.md §6.9 names) for the host
-// class the run names, at both viewports, and a record over either fails
-// the run.
+// stream payload. Each number's p95 is held to its budget (BUDGET_MS, which
+// states the two canvas budgets) for the host class the run names, at both
+// viewports, and a record over either fails the run.
 //
 // The containment of a canvas's code against the host page, siblings and
 // served versions is the hostile-frame proof's and a separate deliverable's

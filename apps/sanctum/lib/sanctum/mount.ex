@@ -6,10 +6,11 @@ defmodule Sanctum.Mount do
   row's removal.
 
   A program row with a kept home (`mcp_servers`, `home: "kept"`) has one
-  folder, its own: the home's id is the row's id, made with the row and
-  retired with it. The box that holds the home (the backends service)
-  keeps what the program keeps there, under a uid of the home's own that
-  it draws when it first makes the home, and no CYFR process can read it.
+  folder, its own: the home's id is the row's id, made at its first
+  session and retired with the row. The box that holds the home (the
+  backends service) keeps what the program keeps there, under a uid of
+  the home's own that it draws when it first makes the home, and no CYFR
+  process can read it.
 
   `granted_to/2` names the grants of a row's tools, which a change or
   removal of the row asks again; `orphaned_homes/1` names the homes a box

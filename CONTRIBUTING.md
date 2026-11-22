@@ -169,9 +169,12 @@ same worktree refuses, naming the run that holds it.
 ## Before opening a PR
 
 - Consult [`ARCHITECTURE.md`](ARCHITECTURE.md) when deciding ownership,
-  changing a layer edge, a port or an invariant, or resolving an unclear
-  architectural contract. A change to a principle, a layer edge, a port or an
-  invariant changes that document in the same pull request.
+  changing a layer edge, a port, a channel or an invariant two or more parts
+  keep, or resolving an unclear architectural contract. A change to a
+  principle, a layer edge, a port, a channel or an invariant two or more parts
+  keep changes that document in the same pull request; a change to one part's
+  behaviour changes that part's documentation and leaves `ARCHITECTURE.md`
+  alone.
 - Keep changes focused and match the surrounding code style.
 - Every component is validated by the pinned `wasm-tools`, which the dev
   and test configurations name at `_tools/wasm-tools`, and the application

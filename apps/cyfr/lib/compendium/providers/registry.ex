@@ -28,8 +28,13 @@ defmodule Compendium.Providers.Registry do
   verification the founding member's token. A browser's answer returns to
   the sign-in page, which completes it the same way
   (`Compendium.complete_registry/2`). This CYFR holds no key of anyone's
-  and signs nothing. Namespace administration (tokens, members) stays
-  under the namespace's stored push token.
+  and signs nothing. That signature, by a key of the account over this
+  exact operation and body, is the operation's fresh confirmation, so the
+  push tokens a mint stores ask for no other; a token issued under a
+  stored push token, which no key signs, asks one
+  (`Sanctum.RegistryCredentials.confirm_issuance/4`). Namespace
+  administration (tokens, members) stays under the namespace's stored
+  push token.
   """
 
   alias Sanctum.Context

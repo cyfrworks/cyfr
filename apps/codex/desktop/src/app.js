@@ -490,6 +490,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     guard(account, "account")
     account.on("select-webauthn-account", chooseAccount)
     if (touchIdGroup && process.platform === "darwin") app.configureWebAuthn({touchID: {keychainAccessGroup: touchIdGroup}})
+    // The app locks on the system's lock or sleep, as on any window's page
+    // lost and on cyfr's locked; the desktop's idle alone does not.
     for (const signal of ["lock-screen", "suspend"]) powerMonitor.on(signal, () => on({type: "lock", why: signal}))
     startCyfr()
   })

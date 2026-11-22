@@ -57,6 +57,11 @@ defmodule Compendium.AquaAgent do
   (`member_name?/1`), or a member that is gone, disabled or refused,
   still resolves, with no brain and its holder's state, which a turn
   refuses with its sentence and Aqua's card says (`Prima.Refusal`).
+  The member that holds the seat is still a crew member under its own
+  name, in threads of its own, and gains no power to hand out work
+  (`Aqua.Runner.Admission.request/4`); on a program row, the soul's
+  threads and the member's each keep their own session in that row's
+  one folder.
 
   A crew member is offered the soul's tools (`under_soul/2`) on every
   job, so a `tools` list in a crew file refuses the file, and so does anything below a crew file's frontmatter
@@ -192,10 +197,11 @@ defmodule Compendium.AquaAgent do
   roster, the index's capability digest and a turn's pinned revision
   alike — so a crew member's capability always names the tools it is
   offered, and the soul's the brain it runs on. A turn pins the soul's
-  bytes, so the member they name is the one it runs on, in recovery too;
-  that member's file is read as it stands, as the soul's tools are for a
-  crew member, and a brain or options moved since the turn started moves
-  the digest the turn checks.
+  bytes, so the member they name is the one it runs on, in recovery too,
+  and a member chosen later runs the next turn; that member's file is
+  read as it stands, as the soul's tools are for a crew member, and a
+  brain or options moved since the turn started moves the digest the
+  turn checks.
   """
   @spec resolve(Context.t(), String.t(), binary()) :: {:ok, t()} | {:error, term()}
   def resolve(%Context{} = ctx, name, binary) when is_binary(name) and is_binary(binary) do
