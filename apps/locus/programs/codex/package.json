@@ -1,0 +1,9 @@
+{
+  "name": "cyfr-programs-codex",
+  "private": true,
+  "description": "OpenAI Codex at the version CYFR's driver cyfr-codex speaks to, installed into the Locus image (Dockerfile.locus).",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@openai/codex": "0.169.0"
+  }
+}

@@ -162,17 +162,16 @@ defmodule Opus.Programs.Definition do
   @spec browser_command() :: String.t()
   def browser_command, do: @browser_command
 
-  # A Chrome, a second being fetched beside it, and the profile.
+  # The profile; the Chromium it runs is the image's.
   @browser_home_bytes 2 * 1024 * 1024 * 1024
 
   @doc """
   Aqua's browser as the config of the row a person adds once
   (`mcp_servers.create`, confirmed as any program's definition is), which
   the Programs page's form is filled from: the browser driver's command,
-  which fetches Chrome into the row's kept folder and starts it over its
-  debugging pipe inside the box, with no environment, driven, in that
-  folder, which holds Chrome and the profile, bounded at `memory_bytes`
-  and its folder at 2 GiB.
+  which starts the image's Chromium over its debugging pipe inside the
+  box, with no environment, driven, in the row's kept folder, which holds
+  its profile, bounded at `memory_bytes` and its folder at 2 GiB.
   """
   @spec browser(pos_integer()) :: map()
   def browser(memory_bytes) when is_integer(memory_bytes) do
@@ -209,7 +208,8 @@ defmodule Opus.Programs.Definition do
   # The program brains CYFR ships a driver for: the row's name, the title a
   # person reads, and the command its install form is prefilled with, the
   # driver first and the harness at the version its driver was probed
-  # against. `Arca.McpServerStorage.driver/1` is the one list of driver
+  # against: Codex as the Locus image carries it, by its path, and Claude
+  # Code, which the image does not carry, fetched at that version. `Arca.McpServerStorage.driver/1` is the one list of driver
   # words; a test holds each command to it.
   @brains [
     %{
@@ -220,7 +220,7 @@ defmodule Opus.Programs.Definition do
     %{
       name: "openai-codex",
       title: "OpenAI Codex",
-      command: "cyfr-codex npx -y @openai/codex@0.169.0"
+      command: "cyfr-codex /opt/cyfr/programs/codex/bin/codex"
     }
   ]
 
