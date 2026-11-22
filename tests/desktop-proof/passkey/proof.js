@@ -430,7 +430,48 @@ async function keptPhase() {
     js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism after Try again", 30_000).catch(() => false)
   row("try_again", back && (await sessionCookie(w)) === cookie,
     "Try again opens Prism at the CYFR's root, signed in as before", {back})
+  await choosersWord(w)
   return "quit"
+}
+
+// What the chooser says on main's behalf is main's alone to decide.
+// chooser_refused: Prism's page in `w` cannot send the window to the
+// chooser with a notice, by a navigation or by a redirect of the CYFR's.
+// chooser_history: the history, which nothing can refuse, brings back the
+// entry main's load made for the failure, and it says nothing of it.
+async function choosersWord(w) {
+  const host = new URL(HOME).hostname
+  const to = `${LOOPBACK}/bootstrap/#road=passkey&notice=unanswered`
+  const from = history.length
+  const before = decisions.length
+  await js(w.webContents, `location.assign(${literal(to)}); 1`)
+  const navigated = await decided(w.webContents, to, false, "main's decision on the page's load of the chooser").catch(() => null)
+  const hop = "/proof-chooser"
+  await fault(host, "redirect", {from: hop, to})
+  let redirected
+  try {
+    await js(w.webContents, `location.assign(${literal(hop)}); 1`)
+    redirected = await waitFor(() => decisions.slice(before).find((d) => d.window === w.webContents.id && d.name === "will-redirect" && d.main),
+      "main's decision on the redirect to the chooser", 30_000).catch(() => null)
+  } finally {
+    await fault(host, "none")
+  }
+  await waitFor(() => !w.webContents.isLoading(), "the window at rest")
+  row("chooser_refused", navigated === true && redirected?.prevented === true && atHome(w.webContents.getURL()),
+    "Prism's page cannot send the window to the chooser with a notice, by a navigation or by a redirect: main refuses both and the page stays",
+    {navigated, redirected: redirected?.prevented ?? null, url: bare(w.webContents.getURL()), asked: history.slice(from).map(bare)})
+
+  await js(w.webContents, "window.history.back(); 1")
+  const shows = await waitFor(async () => {
+    if (!atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
+    const at = await js(w.webContents, `(() => ({type: performance.getEntriesByType("navigation")[0].type,
+      ways: document.querySelector("#words").getClientRects().length > 0,
+      words: document.querySelector("#notice").textContent,
+      again: document.querySelector("#again").getClientRects().length > 0}))()`)
+    return at.ways ? at : null
+  }, "the chooser by the history", 30_000).catch((e) => ({why: e.message}))
+  row("chooser_history", shows.type === "back_forward" && shows.ways && shows.words === "" && shows.again === false,
+    "the history brings back the chooser's entry of a failure with no notice and no Try again", shows)
 }
 
 async function closedPhase() {

@@ -23,7 +23,8 @@ const top = (url, state, showing = home + "/login", asker = "top") => contentNav
 const frame = (url, state, asker = "frame-inside") => contentNavigation({url, target: "frame", asker, showing: home + "/"}, state)
 
 test("a content window loads the device's pages, then the selected CYFR, and nothing else", () => {
-  assert.equal(top(LOOPBACK + "/bootstrap/", before, ""), "allow")
+  assert.equal(top(LOOPBACK + "/bootstrap/", before, ""), "block", "the chooser is main's alone to load")
+  assert.equal(top(LOOPBACK + "/", before, ""), "allow", "the device's pages")
   assert.equal(top(home + "/", before), "block", "the CYFR before main keeps to it")
   assert.equal(top(home + "/threads?x=1", ready), "allow")
   assert.equal(top(home + "/company-login", ready), "company")

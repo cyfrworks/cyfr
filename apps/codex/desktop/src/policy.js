@@ -40,6 +40,8 @@ export function parse(address) {
  * sends itself to the account service's sign-in route, which opens in
  * the account window, also where the CYFR serves that route itself) or
  * "company" (the CYFR's company sign-in, which the app does not offer).
+ * The chooser is main's alone to show (chooserPath): no navigation, no
+ * redirect and no frame loads it, in any window.
  * What a frame may ask, once: it may navigate itself or a frame inside it
  * to an address a frame may load, and never the top frame or a frame not
  * inside it; it never hops or returns. A frame loads no ceremony route. The recovery route is reached from the sign-in inside
@@ -51,6 +53,7 @@ export function contentNavigation({url, target, asker, showing}, state) {
   if (!u) return "block"
   if (target !== "top") return asker === "frame-outside" ? "block" : frameLoad(u, state)
   if (asker === "frame-inside" || asker === "frame-outside") return "block"
+  if (chooserPath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home) return "block"
   if (ceremony(u, state)) {
@@ -66,9 +69,22 @@ export function contentNavigation({url, target, asker, showing}, state) {
 // origin.
 function frameLoad(u, state) {
   if (["about:", "blob:", "data:"].includes(u.protocol)) return "allow"
+  if (chooserPath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home || ceremony(u, state)) return "block"
   return u.origin === state.home && u.pathname !== "/company-login" ? "allow" : "block"
+}
+
+// Whether u is one of the chooser's addresses as cyfr reads them, which
+// is unescaped: main alone loads the chooser (its loads ask no policy), so
+// what it says on main's behalf comes with main's load and no other.
+function chooserPath(u) {
+  if (u.origin !== LOOPBACK) return false
+  try {
+    return decodeURIComponent(u.pathname).startsWith("/bootstrap")
+  } catch {
+    return true // not readable here, and cyfr may read it as the chooser's
+  }
 }
 
 // Whether u is one of the account service's ceremony routes.

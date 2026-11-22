@@ -52,6 +52,11 @@
 // lock's own load can fail just before the lock is heard, and the lock's
 // chooser has nothing of it to tell.
 //
+// What the chooser tells is main's alone to decide: a notice comes with a
+// load of the chooser main makes for what it observed (chooser, back) or
+// as cyfr's answer to main's home-failed, and no page can make such a
+// load (policy.js chooserPath, bootstrap.go's script).
+//
 // What main takes for the person pressing something is in ACTS, and
 // nowhere else.
 //
@@ -127,7 +132,6 @@ const atChooser = (url) => {
 const ANOTHER = LOOPBACK + "/bootstrap/another"
 // Its Try again, the same way: the CYFR open, at its root.
 const AGAIN = LOOPBACK + "/bootstrap/again"
-const MAINS = [ANOTHER, AGAIN]
 // The engine's code for a load given up: replaced, stopped or refused.
 const ABORTED = -3
 
@@ -148,7 +152,7 @@ export const ACTS = {
     then: (s) => ({state: {...s, notices: []}, allow: false, do: [{root: {home: s.home}}]})},
   // A way on from the chooser: the passkey's, or this computer's key's.
   onward: {window: "content", by: (_, url) => atChooser(url),
-    to: (s, e) => !MAINS.includes(e.url) && !atChooser(e.url) && contentNavigation(e, kept(s)) === "allow",
+    to: (s, e) => contentNavigation(e, kept(s)) === "allow",
     then: (s) => ({state: {...s, notices: []}, allow: true, do: []})},
   // Sign in with your account, on a page of the CYFR: the account hop.
   hop: {window: "content", by: (s, url) => s.name === "open" && parse(url)?.origin === s.home,
@@ -304,7 +308,6 @@ export function step(s, e) {
       if (act) return act.then(s, e)
       const where = contentNavigation(e, kept(s))
       if (where === "allow") {
-        if (e.target === "top" && MAINS.includes(e.url)) return {state: s, allow: false, do: []}
         if (sentToSignIn(s, e)) return {...lock(s, "the CYFR asks for a sign-in", ""), allow: false}
         return {state: s, allow: true, do: []}
       }
