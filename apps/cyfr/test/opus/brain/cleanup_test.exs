@@ -278,6 +278,22 @@ defmodule Opus.Brain.CleanupTest do
     Process.exit(consumer, :kill)
     assert_receive {:DOWN, ^ended, :process, ^holder, :normal}, 1_000
     assert Enum.all?(Scripted.sessions(fake, row.id), fn {_id, s} -> not s.running end)
+
+    key = {actor.athanor_id, row.id}
+    controller = Opus.Programs.via("local")
+
+    wait_until(
+      fn ->
+        state = :sys.get_state(controller)
+        not is_map_key(state.owners, key) and not is_map_key(state.claims, key)
+      end,
+      2_000
+    )
+
+    assert {:ok, claim} =
+             Arca.JobClaims.read("mcp_backend", actor.athanor_id <> ":" <> row.id)
+
+    refute Arca.JobClaims.live?(claim)
     assert pending(actor) == [record]
     assert outcome(actor, record) == :none
 

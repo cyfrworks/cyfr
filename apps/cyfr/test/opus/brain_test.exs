@@ -1820,6 +1820,23 @@ defmodule Opus.BrainTest do
       ends_giving_back!(holder, :normal, fake, ctx, row)
     end
 
+    test "a cleanup whose caller dies while its session opens writes nothing, all given back",
+         %{fake: fake, ctx: ctx, row: row, thread: thread} do
+      record = owed!(ctx, thread.id, row)
+      Scripted.hold(fake, "opened")
+      asker = spawn(fn -> Brain.forget(record) end)
+      assert_receive {:held, "opened", service}, 5_000
+      holder = Brain.whereis(ctx.athanor_id, thread.id)
+
+      # The driver's hello stands before the open answers: what is read
+      # first, the hello or the caller's death, decides the write.
+      say(fake, row, hello())
+      Process.exit(asker, :kill)
+      send(service, :go)
+      ends_giving_back!(holder, :normal, fake, ctx, row)
+      refute_sent()
+    end
+
     test "a discovery waiting on its driver ends on shutdown at once, all given back",
          %{fake: fake, ctx: ctx, row: row} do
       {_asker, holder, _id} = discovering!(fake, ctx, row)
