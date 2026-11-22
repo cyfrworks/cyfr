@@ -1067,17 +1067,17 @@ func TestForgetRemovesThatThreadAndNothingElse(t *testing.T) {
 		matches, _ := filepath.Glob(filepath.Join(codex, pattern))
 		return len(matches) > 0
 	}
-	if !exists("sessions/*/*/*/rollout-*-"+gone+".jsonl") || !exists("shell_snapshots/"+gone+".*") || !exists("auth.json") {
-		t.Fatal("the thread's rollout, its snapshot and the sign-in are in the folder (a positive control)")
+	if !exists("sessions/*/*/*/rollout-*-"+gone+".jsonl") || !exists("shell_snapshots/"+gone+".*") || !exists("cyfr-instructions/"+gone) || !exists("auth.json") {
+		t.Fatal("the thread's rollout, its snapshot, the record of its instructions and the sign-in are in the folder (a positive control)")
 	}
 	s.send(map[string]any{"t": "forget", "id": "obx_1", "session": gone})
 	if e := s.expect("forgot"); e["id"] != "obx_1" || e["session"] != gone {
 		t.Fatalf("a forget is answered by its id and the thread: %v", e)
 	}
-	if exists("sessions/*/*/*/rollout-*-"+gone+".jsonl") || exists("shell_snapshots/"+gone+".*") {
-		t.Fatal("the forgotten thread's rollout and the snapshot Codex leaves are gone")
+	if exists("sessions/*/*/*/rollout-*-"+gone+".jsonl") || exists("shell_snapshots/"+gone+".*") || exists("cyfr-instructions/"+gone) {
+		t.Fatal("the forgotten thread's rollout, the snapshot Codex leaves and the record of its instructions are gone")
 	}
-	if !exists("sessions/*/*/*/rollout-*-"+kept+".jsonl") || !exists("shell_snapshots/"+kept+".*") || !exists("auth.json") {
+	if !exists("sessions/*/*/*/rollout-*-"+kept+".jsonl") || !exists("shell_snapshots/"+kept+".*") || !exists("cyfr-instructions/"+kept) || !exists("auth.json") {
 		t.Fatal("another thread and the sign-in stay")
 	}
 	s.send(map[string]any{"t": "forget", "id": "obx_2", "session": gone})
@@ -1428,5 +1428,117 @@ func TestAnUnreadableTotalLeavesTheResumedThreadsFirstUsableOnePartial(t *testin
 				t.Fatalf("the totals after the first usable one are complete: %s", got)
 			}
 		})
+	}
+}
+
+// resumedWith resumes `session` in a new process of the driver with the
+// instructions `system`.
+func resumedWith(t *testing.T, home, session, system string) *wireSession {
+	t.Helper()
+	s := startDriverIn(t, home)
+	s.expect("hello")
+	s.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": map[string]any{}, "system": system})
+	s.expect("started")
+	s.expect("usage")
+	work(s, "stp_work", "trn_next")
+	return s
+}
+
+// injectedInto is what every process so far injected into the thread, as
+// Codex read it back in the turn of the post `id`.
+func injectedInto(s *wireSession, id string) []any {
+	s.t.Helper()
+	postText(s, id, "trn_next", "history")
+	var injected []any
+	if err := json.Unmarshal([]byte(saidOf(s.until("idle"))), &injected); err != nil {
+		s.t.Fatal(err)
+	}
+	return injected
+}
+
+func instructionsItem(system string) any {
+	return map[string]any{"type": "message", "role": "developer", "content": []any{map[string]any{"type": "input_text",
+		"text": "Your current instructions, in place of any given earlier in this thread:\n" + system}}}
+}
+
+// A resume's developer instructions do not reach the thread's history, so
+// instructions that changed since the thread was last handed some are
+// injected before the resumed thread's first post, once; unchanged ones
+// never are.
+func TestAResumeInjectsItsInstructionsOnlyWhenTheyChanged(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_next")
+	if got := injectedInto(s, "stp_first"); len(got) != 0 {
+		t.Fatalf("a new thread has its instructions from its start, injected with none: %v", got)
+	}
+	s.end()
+
+	want := []any{}
+	for i, next := range []struct {
+		system  string
+		changed bool
+	}{
+		{"be brief", false},
+		{"be thorough", true},
+		{"be thorough", false},
+		{"be brief", true},
+		{"be brief", false},
+	} {
+		if next.changed {
+			want = append(want, instructionsItem(next.system))
+		}
+		again := resumedWith(t, s.home, session, next.system)
+		for n := 0; n < 2; n++ {
+			if got := injectedInto(again, fmt.Sprintf("stp_post_%d_%d", i, n)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("resume %d, post %d: the thread holds exactly %v, not %v", i, n, want, got)
+			}
+		}
+		again.end()
+	}
+}
+
+// A thread with no record of what it was handed, one made before the
+// record or one whose record was lost, is handed its instructions once.
+func TestAThreadWithNoRecordIsHandedItsInstructionsOnce(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_next")
+	injectedInto(s, "stp_first")
+	s.end()
+	if err := os.RemoveAll(filepath.Join(s.home, ".codex", "cyfr-instructions")); err != nil {
+		t.Fatal(err)
+	}
+	want := []any{instructionsItem("be brief")}
+	for i := 0; i < 2; i++ {
+		again := resumedWith(t, s.home, session, "be brief")
+		if got := injectedInto(again, fmt.Sprintf("stp_post_%d", i)); !reflect.DeepEqual(got, want) {
+			t.Fatalf("resume %d: handed once, %v, not %v", i, want, got)
+		}
+		again.end()
+	}
+}
+
+// An injection Codex refuses writes no post, and is made again at the next
+// resume: nothing is recorded as handed that was not.
+func TestARefusedInjectionWritesNoPostAndIsMadeAgain(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_next")
+	injectedInto(s, "stp_first")
+	s.end()
+
+	t.Setenv("FAKE_INJECT_FAIL", "1")
+	refused := resumedWith(t, s.home, session, "be thorough")
+	refused.send(map[string]any{"t": "post", "id": "stp_unwritten", "work": "trn_next", "content": []any{map[string]any{"type": "text", "text": "history"}}})
+	if e := refused.expect("refused"); e["id"] != "stp_unwritten" || e["reason"] != "OpenAI Codex did not take its changed instructions, so the post was not written; send it again." {
+		t.Fatalf("the post is refused in the driver's words: %v", e)
+	}
+	refused.end()
+
+	t.Setenv("FAKE_INJECT_FAIL", "")
+	again := resumedWith(t, s.home, session, "be thorough")
+	if got, want := injectedInto(again, "stp_written"), []any{instructionsItem("be thorough")}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("the next resume hands them over: %v, not %v", got, want)
 	}
 }

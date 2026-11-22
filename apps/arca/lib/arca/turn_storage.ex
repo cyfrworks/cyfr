@@ -2249,7 +2249,6 @@ defmodule Arca.TurnStorage do
       ended_work!(athanor_id, turn, status, attrs)
     end
 
-    :ok = unattended!(athanor_id, turn)
     Arca.ThreadStorage.release_all!(Prima.Actor.in_athanor(athanor_id), turn.thread_id, turn.id)
 
     turn = turn!(athanor_id, turn.id)
@@ -3061,7 +3060,8 @@ defmodule Arca.TurnStorage do
 
   @doc """
   Forget the brain's session of the turn's thread, which its program
-  reported gone or the turn's program row no longer runs (`Aqua.Program`):
+  reported gone (`Aqua.Program`) or the turn's program row is no longer
+  the one it is stored with (`Aqua.Loop`):
   `brain_session` is cleared and `brain_generation` raised in one
   statement, as `Arca.ThreadStorage.forget_sessions/2` forgets a home's,
   and only while the thread is at `:generation`, the one the turn read.
@@ -4743,7 +4743,8 @@ defmodule Arca.TurnStorage do
     * `:busy`, whether the program owes output after the batch (`true`
       once a delivery was taken, `false` after an `idle`), and `:native`,
       whether a line of the program's own came, which restarts the
-      silence clock's interval (`:silence_ms`).
+      silence clock's interval (`:silence_ms`), as a `:hello` does: a
+      process's interval is whole, whatever the last one spent.
 
   Answers `%{seen: boolean, asks: [step], said: [row], progress: map}`.
   """
@@ -4835,7 +4836,7 @@ defmodule Arca.TurnStorage do
           busy -> Map.put(p, "busy", busy)
         end
       end)
-      |> clocked(athanor_id, turn, Map.fetch!(attrs, :silence_ms), Map.get(attrs, :native, false))
+      |> clocked(athanor_id, turn, Map.fetch!(attrs, :silence_ms), whole_interval?(attrs))
       |> Map.merge(%{
         "driver" => %{"row" => attrs.row_id, "epoch" => attrs.epoch},
         "boot" => attrs.boot,
@@ -5059,62 +5060,42 @@ defmodule Arca.TurnStorage do
   defp usage_step(_athanor_id, _thread, _turn, _agent, _work), do: nil
 
   # The silence clock (`brain_progress`'s `clock`): it runs only while the
-  # program owes output, banks what ran when it pauses, and a line of the
-  # program's own restarts its interval. Read by the database's clock.
-  # `idle` marks a clock set with no turn open, which a turn of the thread
-  # opened since holds still (`brain_silence/2`) until that turn's own
-  # obligations set it.
+  # program owes an open turn output, banks what ran when it pauses, and
+  # restarts whole at a line of the program's own and at a process's hello
+  # (`whole_interval?/1`). Read by the database's clock.
   # arca:db-raise-ok inside the caller's transaction
-  defp clocked(progress, athanor_id, turn, silence_ms, native?) do
+  defp clocked(progress, athanor_id, turn, silence_ms, whole?) do
     now = Arca.ServerMetaStorage.now!()
     clock = progress["clock"] || %{"since" => nil, "left_ms" => silence_ms}
 
     left =
       cond do
-        native? -> silence_ms
-        # Work that takes an idle session starts its interval anew.
-        clock["idle"] == true and not is_nil(turn) -> silence_ms
+        whole? -> silence_ms
         is_binary(clock["since"]) -> max(clock["left_ms"] - elapsed_ms(clock["since"], now), 0)
         true -> clock["left_ms"]
       end
 
     since = if owes?(athanor_id, turn, progress), do: DateTime.to_iso8601(now)
-    Map.put(progress, "clock", %{"since" => since, "left_ms" => left, "idle" => is_nil(turn)})
+    Map.put(progress, "clock", %{"since" => since, "left_ms" => left})
   end
+
+  defp whole_interval?(attrs),
+    do: Map.get(attrs, :native, false) or Map.get(attrs, :hello, false)
 
   defp elapsed_ms(since, now) do
     {:ok, at, _offset} = DateTime.from_iso8601(since)
     max(DateTime.diff(now, at, :millisecond), 0)
   end
 
-  # A program turn's end leaves its session with no turn open, which owes
-  # output (`owes?/3`): the clock runs from now with what is left of its
-  # interval, so a session kept idle is closed when it runs out. A thread
-  # whose clock never started has no session to close.
-  # arca:db-raise-ok inside the caller's transaction
-  defp unattended!(_athanor_id, %Turn{program: nil}), do: :ok
-
-  defp unattended!(athanor_id, %Turn{} = turn) do
-    thread = locked_thread!(athanor_id, turn.thread_id)
-
-    case progress(thread) do
-      %{"clock" => %{"left_ms" => left}} = progress ->
-        put_progress!(athanor_id, thread.id, clocked(progress, athanor_id, nil, left, false))
-
-      _no_clock ->
-        :ok
-    end
-  end
-
-  # Whether the program owes output: with no turn open, always, so a
-  # session idle that long is closed; with one, when a delivery was taken
+  # Whether the program owes output: never with no turn open, since a
+  # program lives for one turn; with one, when a delivery was taken
   # since its last `idle`, or a post or notice of the turn it took is
   # still owed an answer, and neither CYFR nor the person owes it
   # anything: no ask undecided or running, no closed result whose answer
   # is not yet taken, no post waiting or not yet taken, no recovery
   # prompt not yet recorded.
   # arca:db-raise-ok inside the caller's transaction
-  defp owes?(_athanor_id, nil, _progress), do: true
+  defp owes?(_athanor_id, nil, _progress), do: false
 
   defp owes?(athanor_id, %Turn{} = turn, progress) do
     (progress["busy"] == true or answer_owed?(athanor_id, turn, progress)) and
@@ -5165,23 +5146,17 @@ defmodule Arca.TurnStorage do
   Whether a program brain's silence ran out, by the database's clock:
   `expired?`, and `due_ms`, the milliseconds left of its interval while
   the clock runs (nil while it is paused), read from the thread's
-  `brain_progress`. A clock that runs with no turn open stands still while
-  a turn of the thread is open, accepted and not yet at work included: the
-  session waits for that turn, whose obligations set the clock next.
+  `brain_progress`. It is the open turn's clock: only that turn's
+  attendant reads it, after its process's hello began the interval.
   """
   @spec brain_silence(Prima.Actor.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def brain_silence(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
       when is_binary(athanor_id) and athanor_id != "" do
     with {:ok, %{progress: progress, now: now}} <- brain(actor, thread_id) do
       case progress["clock"] do
-        %{"since" => since, "left_ms" => left} = clock when is_binary(since) ->
-          with {:ok, false} <- awaited(athanor_id, thread_id, clock) do
-            due = left - elapsed_ms(since, now)
-            {:ok, %{expired?: due <= 0, due_ms: max(due, 0)}}
-          else
-            {:ok, true} -> {:ok, %{expired?: false, due_ms: nil}}
-            error -> error
-          end
+        %{"since" => since, "left_ms" => left} when is_binary(since) ->
+          due = left - elapsed_ms(since, now)
+          {:ok, %{expired?: due <= 0, due_ms: max(due, 0)}}
 
         _paused ->
           {:ok, %{expired?: false, due_ms: nil}}
@@ -5190,22 +5165,6 @@ defmodule Arca.TurnStorage do
   end
 
   def brain_silence(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
-
-  # Whether an idle session's clock waits on a turn of its thread that is
-  # open.
-  defp awaited(athanor_id, thread_id, %{"idle" => true}) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.brain_silence", fn ->
-      {:ok,
-       Arca.Repo.exists?(
-         from(t in Turn,
-           where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
-           where: t.status in ^@open
-         )
-       )}
-    end)
-  end
-
-  defp awaited(_athanor_id, _thread_id, _clock), do: {:ok, false}
 
   # The thread's `brain_progress` map.
   defp progress(%Thread{brain_progress: nil}), do: %{}

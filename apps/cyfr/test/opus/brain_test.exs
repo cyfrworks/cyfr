@@ -17,9 +17,8 @@ defmodule Opus.BrainTest do
   not running; a paused turn's
   proof writes a post or an answer of its own work and nothing else; a
   stale open ends no successor. A start writes the caller's configuration
-  unchanged, the member's access among it, and a work whose configuration
-  differs from the running harness's, a later turn's changed access among
-  them, starts the program again with it. A line that does not read, one past the bound, one lost
+  unchanged, the member's access among it, and a work is written to the
+  process that started. A line that does not read, one past the bound, one lost
   unread, a read the box refuses, the row's change, the driver's end, a
   lost answer to a write and a take-over each end the session, its box
   session closed.
@@ -465,49 +464,6 @@ defmodule Opus.BrainTest do
       assert Brain.write(brain, binding, %{answer | "id" => "stp_twice"}) ==
                {:error, :not_this_work}
     end
-
-    test "a work whose configuration differs closes the driver's process and opens a new one",
-         %{fake: fake, row: row, binding: binding} do
-      brain =
-        started!(fake, row, binding, %{"model" => "opus", "harness_tools" => ["Read", "Grep"]})
-
-      [{first, _}] = running_sessions(fake, row)
-      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
-
-      assert :ok =
-               Brain.write(brain, binding, work,
-                 config: %{"model" => "opus", "harness_tools" => ["Read", "Grep"]}
-               )
-
-      assert %{"t" => "work"} = sent()
-      say(fake, row, %{"t" => "accepted", "id" => "stp_work"})
-      {_boot, [{seq, _}]} = batch(brain)
-      :ok = Brain.read_on(brain, "boot-one", seq)
-
-      # A narrower set of the harness's own tools: nothing of the work is
-      # written, the process is started again.
-      assert {:ok, :restarted} =
-               Brain.write(brain, binding, %{work | "id" => "stp_next"},
-                 config: %{"model" => "opus", "harness_tools" => ["Read"]}
-               )
-
-      refute_sent()
-      assert [{second, _}] = running_sessions(fake, row)
-      assert second != first
-      say(fake, row, hello("boot-two"))
-      assert {"boot-two", [{1, %{"t" => "hello"}}]} = batch(brain)
-      :ok = Brain.read_on(brain, "boot-two", 1)
-
-      resume = %{
-        "t" => "start",
-        "gen" => 0,
-        "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
-        "config" => %{"model" => "opus", "harness_tools" => ["Read"]}
-      }
-
-      assert :ok = Brain.write(brain, binding, resume)
-      assert %{"t" => "start", "session" => _} = sent()
-    end
   end
 
   describe "what is known of the account" do
@@ -580,15 +536,6 @@ defmodule Opus.BrainTest do
       "harness_tools" => ["Read", "Grep"]
     }
 
-    # A work written as it came, on the process that was running.
-    defp worked!(fake, row, brain, binding, work, config, boot \\ "boot-one") do
-      [{running, _}] = running_sessions(fake, row)
-      assert :ok = Brain.write(brain, binding, work, config: config)
-      assert sent() == work
-      accepted!(fake, row, brain, work["id"], boot)
-      assert [{^running, %{running: true}}] = running_sessions(fake, row)
-    end
-
     test "a start writes the caller's configuration unchanged, its access among it",
          %{fake: fake, row: row, binding: binding} do
       brain = opened!(fake, row, binding)
@@ -597,71 +544,11 @@ defmodule Opus.BrainTest do
       assert sent() == start
       harness_started!(fake, row, brain)
       work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
-      worked!(fake, row, brain, binding, work, @named)
-    end
-
-    test "a dead holder that had restarted its driver answers a close unanswered, never closed",
-         %{fake: fake, row: row, binding: binding} do
-      {pid, _ref} = brain = started!(fake, row, binding, @named)
-      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
-
-      assert {:ok, :restarted} =
-               Brain.write(brain, binding, work, config: %{@named | "access" => "another"})
-
-      assert [{_second, %{running: true}}] = running_sessions(fake, row)
-
-      # Its second process still runs: the box's close of it is on its way.
-      Scripted.hold(fake, "close", 30_000)
-      monitor = Process.monitor(pid)
-      Process.exit(pid, :kill)
-      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 5_000
-      assert_receive {:held, "close", service}, 5_000
-
-      assert Brain.close(brain) == {:error, :unanswered}
-      send(service, :go)
-    end
-
-    test "a later turn of the same access works on the running process; one whose access " <>
-           "changed starts the program again, resuming, with its own",
-         %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
-      brain = started!(fake, row, binding, @named)
-      [{first, _}] = running_sessions(fake, row)
-
-      same = admitted!(ctx, binding, next_turn!(ctx, thread.id, turn, "aqua"), row)
-      work = %{"t" => "work", "id" => "stp_same", "work" => same.turn_id, "tools" => []}
-      worked!(fake, row, brain, same, work, @named)
-
-      other =
-        admitted!(ctx, binding, next_turn!(ctx, thread.id, %{id: same.turn_id}, "aqua"), row)
-
-      changed = %{@named | "access" => "another"}
-      flush_opens_and_closes()
-      switched = %{work | "id" => "stp_switched", "work" => other.turn_id}
-      assert {:ok, :restarted} = Brain.write(brain, other, switched, config: changed)
-      refute_sent()
-
-      assert [{"close", %{"session" => ^first}}, {"open", %{"home_id" => home}}] =
-               opens_and_closes(2)
-
-      assert home == row.id
-      assert [{second, %{running: true}}] = running_sessions(fake, row)
-      assert second != first
-
-      say(fake, row, hello("boot-two"))
-      assert {"boot-two", [{1, %{"t" => "hello"}}]} = batch(brain)
-      :ok = Brain.read_on(brain, "boot-two", 1)
-
-      resume = %{
-        "t" => "start",
-        "gen" => 0,
-        "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
-        "config" => changed
-      }
-
-      assert :ok = Brain.write(brain, other, resume)
-      assert sent() == resume
-      harness_started!(fake, row, brain, "boot-two")
-      worked!(fake, row, brain, other, switched, changed, "boot-two")
+      [{running, _}] = running_sessions(fake, row)
+      assert :ok = Brain.write(brain, binding, work)
+      assert sent() == work
+      accepted!(fake, row, brain, work["id"], "boot-one")
+      assert [{^running, %{running: true}}] = running_sessions(fake, row)
     end
   end
 

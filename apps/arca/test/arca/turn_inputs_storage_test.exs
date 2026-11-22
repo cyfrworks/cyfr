@@ -686,49 +686,47 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:ok, %{expired?: true, due_ms: 0}} = TurnStorage.brain_silence(actor, daily.id)
   end
 
-  test "a program turn's end starts the clock of the session it leaves with no turn open, " <>
-         "with what was left of its interval",
+  test "there is no clock without a turn: a batch with none stops one that ran, and a turn " <>
+         "that ends answered leaves none running",
        %{actor: actor, daily: daily, turn: turn} do
     {:ok, %{step: post}} = carry(actor, turn, "post", opening(actor, turn))
     {:ok, _} = commit(actor, daily, turn, %{accepted: [post.id], busy: true})
-    {:ok, _} = commit(actor, daily, turn, %{answered: [post.id], busy: false, native: true})
+    assert {:ok, %{due_ms: due}} = TurnStorage.brain_silence(actor, daily.id)
+    assert is_integer(due)
+
+    assert {:ok, %{status: "failed"}} = finish(actor, turn, "failed")
+    {:ok, _} = commit(actor, daily, nil, %{native: true})
     assert {:ok, %{due_ms: nil, expired?: false}} = TurnStorage.brain_silence(actor, daily.id)
-
-    assert {:ok, %{status: "completed"}} = finish(actor, turn, "completed")
-    assert {:ok, %{due_ms: due, expired?: false}} = TurnStorage.brain_silence(actor, daily.id)
-    assert is_integer(due) and due > @silence - 5_000
-
-    backdate!(daily, @silence + 1)
-    assert {:ok, %{expired?: true, due_ms: 0}} = TurnStorage.brain_silence(actor, daily.id)
-
-    # A turn of the thread opened since, accepted and not yet at work,
-    # holds the idle clock still; once it ends unattended the clock runs
-    # out again.
-    next = running!(actor, daily)
-    assert {:ok, %{expired?: false, due_ms: nil}} = TurnStorage.brain_silence(actor, daily.id)
-    {:ok, _} = finish(actor, next, "cancelled")
-    backdate!(daily, @silence + 1)
-    assert {:ok, %{expired?: true, due_ms: 0}} = TurnStorage.brain_silence(actor, daily.id)
-  end
-
-  test "the time a session sat idle, its deadline passed included, is not taken from the " <>
-         "next turn's interval once that turn's program owes output",
-       %{actor: actor, daily: daily, turn: turn} do
-    {:ok, %{step: first}} = carry(actor, turn, "post", opening(actor, turn))
-    {:ok, _} = commit(actor, daily, turn, %{accepted: [first.id], busy: true})
-    {:ok, _} = commit(actor, daily, turn, %{answered: [first.id], busy: false, native: true})
-    {:ok, _} = finish(actor, turn, "completed")
-    backdate!(daily, @silence + 1)
 
     next = running!(actor, daily)
     _start = start!(actor, next)
+    {:ok, _} = commit(actor, daily, next, %{hello: true, boot: "boot-2"})
+    {:ok, %{step: answered}} = carry(actor, next, "post", opening(actor, next))
+    {:ok, _} = commit(actor, daily, next, %{boot: "boot-2", accepted: [answered.id], busy: true})
+
+    {:ok, _} =
+      commit(actor, daily, next, %{boot: "boot-2", answered: [answered.id], busy: false})
+
+    assert {:ok, %{status: "completed"}} = finish(actor, next, "completed")
+    assert {:ok, %{due_ms: nil, expired?: false}} = TurnStorage.brain_silence(actor, daily.id)
+  end
+
+  test "a process's hello starts a whole interval: what the last turn's program spent is not " <>
+         "taken from the next turn's",
+       %{actor: actor, daily: daily, turn: turn} do
+    {:ok, %{step: first}} = carry(actor, turn, "post", opening(actor, turn))
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [first.id], busy: true})
+    backdate!(daily, @silence + 1)
+    {:ok, _} = commit(actor, daily, turn, %{answered: [first.id], busy: false})
+    {:ok, _} = finish(actor, turn, "completed")
+
+    next = running!(actor, daily)
+    _start = start!(actor, next)
+    {:ok, _} = commit(actor, daily, next, %{hello: true, boot: "boot-2"})
     assert {:ok, %{expired?: false, due_ms: nil}} = TurnStorage.brain_silence(actor, daily.id)
 
-    # The driver's taking the work is its acknowledgement, not the
-    # program's own line.
-    {:ok, _} = commit(actor, daily, next, %{})
     {:ok, %{step: post}} = carry(actor, next, "post", opening(actor, next))
-    {:ok, _} = commit(actor, daily, next, %{accepted: [post.id], busy: true})
+    {:ok, _} = commit(actor, daily, next, %{boot: "boot-2", accepted: [post.id], busy: true})
 
     assert {:ok, %{expired?: false, due_ms: due}} = TurnStorage.brain_silence(actor, daily.id)
     assert is_integer(due) and due > @silence - 5_000

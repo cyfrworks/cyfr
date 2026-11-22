@@ -37,6 +37,7 @@ import (
 //	       whose singular `user_message_uuid` names the first alone
 //	subagent  streams and says words of a subagent's, runs its tool, then replies
 //	around replies in one message of text, a call of CYFR's, and text
+//	handed replies with the initialize request it was started with, as JSON
 //	noise  writes a line that is no JSON, one of no type the driver
 //	       reads and an event that does not read, then replies
 //
@@ -136,6 +137,8 @@ func fakeClaude() int {
 		write(result)
 	}
 	reply = func(uuids []string, text string) { replyWith(uuids, text, modelUsage) }
+	// What initialize asked, for `handed`.
+	var initialized []byte
 	// The posts each turn is begun from; a turn that waits for the next
 	// post takes it here.
 	work := make(chan [2]string, 16)
@@ -232,6 +235,8 @@ func fakeClaude() int {
 				map[string]any{"type": "text", "text": "after it"}}}})
 			write(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "uuid": "result-around",
 				"user_message_uuids": uuids, "model_usage_since_last_result": modelUsage})
+		case strings.Contains(words, "handed"):
+			reply(uuids, string(initialized))
 		case strings.Contains(words, "noise"):
 			mu.Lock()
 			out.WriteString("not a line of JSON\n")
@@ -263,6 +268,7 @@ func fakeClaude() int {
 				id := message["request_id"]
 				switch request["subtype"] {
 				case "initialize":
+					initialized, _ = json.Marshal(request)
 					answer := map[string]any{
 						"models": []any{
 							map[string]any{"value": "default", "displayName": "Default", "supportedEffortLevels": []string{"low", "high"}},
