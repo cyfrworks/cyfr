@@ -54,6 +54,21 @@ const addedKeys = (second) => js(second, `(async () => {
   }
 })()`)
 
+// A frame of `frameURL` made in the account window `a`'s page, and what
+// the engine reported refused it: whether main's own policy (frame-src
+// 'none') did, beside and apart from the account service's.
+async function frameRefusal(a, frameURL) {
+  await js(a.webContents, `(() => { window.proofRefused = []
+    addEventListener("securitypolicyviolation", (e) => proofRefused.push({policy: e.originalPolicy, directive: e.effectiveDirective,
+      blocked: e.blockedURI, disposition: e.disposition}))
+    const f = document.createElement("iframe"); f.src = ${literal(frameURL)}; document.body.appendChild(f); return 1 })()`)
+  const refusals = () => js(a.webContents, "window.proofRefused")
+  const byMain = (r) => r.policy === "frame-src 'none'" && r.directive === "frame-src" && r.disposition === "enforce" && r.blocked === frameURL
+  const refusedByMain = await waitFor(async () => (await refusals()).some(byMain), "main's refusal of the frame's load", 20_000)
+    .catch(() => false)
+  return {refusedByMain, refusals: await refusals()}
+}
+
 async function passkeyPhase() {
   // The account @desk-a made and the CYFR set up on the second client;
   // this computer's device enrolled on the six-word road; and a second
@@ -230,6 +245,32 @@ async function passkeyPhase() {
     cancelled === "The passkey was not used. Try again when you are ready." && who,
   "the app offers both accounts' passkeys; Cancel signs no one in, and choosing @desk-a signs in as @desk-a", {offered: offeredBoth, cancelled})
 
+  // account_offline: with the account service unreachable (its front takes
+  // every connection down), the account pages' worker opens the sign-in
+  // from the copy it stored in this run, and that copy carries main's
+  // policy: the engine reports it refusing a frame there.
+  out = await lockedOut(w, "the computer's lock", async () => powerMonitor.emit("lock-screen"))
+  const service = new URL(DIRECTORY).hostname
+  const toService = await toSignIn()
+  await fault(service, "down")
+  const downFrom = (await seen(service)).length
+  await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
+  a = await waitFor(() => {
+    const w = accountWindow()
+    return w && !w.webContents.isLoading() && w.webContents.getURL().startsWith(DIRECTORY + "/account/sign") ? w : null
+  }, "the account window with the account service unreachable")
+  const byWorker = await js(a.webContents, `!!navigator.serviceWorker.controller && !!document.querySelector("#use-passkey")`)
+  const kept = await frameRefusal(a, DIRECTORY + "/account/devices")
+  const asked = (await seen(service)).slice(downFrom).filter((r) => r.path === "/account/sign")
+  const unanswered = asked.length > 0 && asked.every((r) => r.fault === "down" && r.status === null)
+  await fault(service, "none")
+  a.close()
+  await waitFor(() => !accountWindow(), "the account window closed")
+  row("account_offline", byWorker && unanswered && kept.refusedByMain,
+    "with the account service unreachable the account window opens the copy its worker stored, and that copy still carries main's refusal of a frame",
+    {byWorker, asked: asked.map((r) => ({status: r.status, fault: r.fault})), ...kept})
+  w = content()
+
   // account_window: the account window holds the account service's sign-in
   // and recovery pages alone. A frame there is refused by main: the engine
   // reports, for that frame's address, the policy main adds to the page
@@ -237,21 +278,12 @@ async function passkeyPhase() {
   // policy, and nothing of the frame reaches the service. The CYFR's own
   // pages are refused at once, by navigation or by a redirect, and either
   // ends the ceremony.
-  out = await lockedOut(w, "the computer's lock", async () => powerMonitor.emit("lock-screen"))
   a = await startSignIn(await toSignIn())
   const xFrom = (await seen(new URL(HOME).hostname)).length
   const frameURL = DIRECTORY + "/account/devices"
   const dirHost = new URL(DIRECTORY).hostname
   const dirFrom = (await seen(dirHost)).length
-  await js(a.webContents, `(() => { window.proofRefused = []
-    addEventListener("securitypolicyviolation", (e) => proofRefused.push({policy: e.originalPolicy, directive: e.effectiveDirective,
-      blocked: e.blockedURI, disposition: e.disposition}))
-    const f = document.createElement("iframe"); f.src = ${literal(frameURL)}; document.body.appendChild(f); return 1 })()`)
-  const refusals = () => js(a.webContents, "window.proofRefused")
-  const byMain = (r) => r.policy === "frame-src 'none'" && r.directive === "frame-src" && r.disposition === "enforce" && r.blocked === frameURL
-  const frameRefused = await waitFor(async () => (await refusals()).some(byMain), "main's refusal of the frame's load", 20_000)
-    .catch(() => false)
-  const frame = {refusedByMain: frameRefused, refusals: await refusals(),
+  const frame = {...await frameRefusal(a, frameURL),
     reached: (await seen(dirHost)).slice(dirFrom).filter((r) => r.path === "/account/devices").length}
   const stillOpen = !!accountWindow()
   let account = {id: a.webContents.id}
