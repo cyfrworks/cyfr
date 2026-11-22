@@ -171,6 +171,10 @@ if [ "$SHAPE" = company ]; then
 fi
 identity_env "$X" CYFR_REGISTRY_URL "$DIRECTORY_HOST"
 identity_env "$X" CYFR_SETUP_TOKEN "$SETUP_TOKEN"
+# The CYFR's worker service, at a port of the run's own where nothing
+# listens unless a proof answers its status (media/).
+cell_pick_port WORKER_PORT
+identity_env "$X" CYFR_LOCUS_RUNTIME_WORKERS "wrk_proof=http://127.0.0.1:$WORKER_PORT"
 if [ "$SHAPE" = company ]; then
   identity_env "$X" CYFR_COMPANY_LOGIN join
   identity_env "$X" CYFR_OIDC_ISSUER https://idp.test
@@ -188,14 +192,14 @@ identity_front_start "$X"
 if [ "$SHAPE" = company ]; then identity_front_start "$IDP"; fi
 
 # What the script and its proof get: the CYFR's address, its account
-# directory, the run's authority, the setup token, and each front's
-# control address. The app gets the address alone.
+# directory, the run's authority, the setup token, the worker service's
+# port and each front's control address. The app gets the address alone.
 cp "$BROWSER_AUTHORITY/authority.pem" "$FIXTURE/authority.pem"
 fronts=()
 for host in "${!IDENTITY_FRONTS[@]}"; do fronts+=("$host" "$(identity_front_control "$host")"); done
 python3 -I -c 'import json, sys; a = sys.argv; json.dump({"home": "https://x.test", "directory": "https://" + a[1], "setup_token": a[2],
-  "fronts": dict(zip(a[4::2], a[5::2]))}, open(a[3], "w"))' \
-  "$DIRECTORY_HOST" "$SETUP_TOKEN" "$FIXTURE/inputs.json" "${fronts[@]}"
+  "worker_port": int(a[4]), "fronts": dict(zip(a[5::2], a[6::2]))}, open(a[3], "w"))' \
+  "$DIRECTORY_HOST" "$SETUP_TOKEN" "$FIXTURE/inputs.json" "$WORKER_PORT" "${fronts[@]}"
 if [ -f "$(dirname "$SCRIPT")/proof.js" ]; then
   node "$HERE/pack.mjs" "$(dirname "$SCRIPT")/proof.js" "$FIXTURE/proof.asar"
 fi

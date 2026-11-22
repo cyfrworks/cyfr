@@ -698,6 +698,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version routes retries timeouts_ms requests status)},
       {"apps/prima/test/prima/worker_protocol_test.exs", ~w(retries timeouts_ms status)},
       {"apps/prima/test/prima/worker_wire_test.exs", ~w(version routes requests)},
+      {"tests/desktop-proof/media/proof.js", ~w(version routes status)},
       {"tests/locus-runtime-image/runners.py", ~w(status)},
       {"tests/locus-runtime-image/worker_auth.py",
        ~w(version routes retries timeouts_ms requests status)}
