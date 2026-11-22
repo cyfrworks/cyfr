@@ -475,7 +475,7 @@ With `--no-interactive` it asks nothing and the screen keeps its login prompt. T
 
 **Upgrading.** `cyfr update` is the one command for it: it brings the `cyfr` program to the newest release, then the CYFR in the current directory to the program's release, and two releases never run side by side on one database.
 
-- **The program.** When the newest release is newer than this `cyfr`, `cyfr update` installs it: the newest published release that is not a pre-release and, while none is published, the newest pre-release, the rule the install script and the server's update notice follow too. It installs it through `brew` for a Homebrew cask install; any other install downloads the release's archive for this platform, verifies it against the release's `checksums.txt` signed by the release workflow for that tag, and only then replaces its own file. It then goes on as the new program, so the one command finishes the job. Once a release that is not a pre-release is published, pre-releases (`0.6.0-alpha.1`, `1.0.0-rc.2`) are no longer chosen this way: `cyfr update --version <version>` installs exactly the release it names, a pre-release or an older release included, and the install script does the same with `CYFR_VERSION=<version>`. A Homebrew install takes only its tap's release, the newest that is not a pre-release. In a directory that holds no CYFR, `cyfr update` stops after the program.
+- **The program.** When the newest release is newer than this `cyfr`, `cyfr update` installs it: the newest published release that is not a pre-release and, while none is published, the newest pre-release, the rule the install script and the server's update notice follow too. It installs it through `brew` for a Homebrew cask install. The `cyfr` inside the CYFR app's package refuses and says to install the newer package, changing nothing. Any other install downloads the release's archive for this platform, verifies it against the release's `checksums.txt` signed by the release workflow for that tag, and only then replaces its own file. It then goes on as the new program, so the one command finishes the job. Once a release that is not a pre-release is published, pre-releases (`0.6.0-alpha.1`, `1.0.0-rc.2`) are no longer chosen this way: `cyfr update --version <version>` installs exactly the release it names, a pre-release or an older release included, and the install script does the same with `CYFR_VERSION=<version>`. A Homebrew install takes only its tap's release, the newest that is not a pre-release. In a directory that holds no CYFR, `cyfr update` stops after the program.
 - **CYFR.** In CYFR's directory it then fetches the release's `release.json` and its signature and verifies them: signed keyless by the release workflow of that version's tag, naming that version. Without network access to the release, or with a manifest that does not verify, it refuses and changes nothing, as it refuses a `docker-compose.yml` that lacks a service of the bundled stack (`cyfr init --force` regenerates the file and keeps `.env`). It then shows the release CYFR is on, each image line that changes and where the release notes are, and asks before changing anything (`--yes` makes the change without asking; with no terminal and no `--yes` it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR already on the program's release is left alone, with no stop and no snapshot. A CYFR on a newer release than the program, by its compose file's tags or by the release its running cyfr reports, is refused before anything stops, since older code never starts over a database a newer release migrated: restore a snapshot of the older release instead. A CYFR whose database was built from another schema than the release's, which its manifest names by fingerprint, is refused before it asks and before it takes the stack's lock, so the refusal changes nothing: the fingerprint is read through the running cyfr, or offline from its image while cyfr is stopped, in a one-off container that mounts nothing and never pulls, and the refusal says how to start over, since there is no upgrade path between schemas. An answer that does not read refuses as well. Once confirmed, in order, it:
 
 1. pulls every image the manifest names by its digest while the stack still runs; a failed pull changes nothing. It names the storage root it will snapshot as compose resolves it. On PostgreSQL it first reads the server's major through a client image the CLI pins by digest, one for each of PostgreSQL 14 to 18, and pulls the pin of that major for the dump; a server of another major refuses the update before anything changes;
@@ -1289,14 +1289,16 @@ PATH it refuses. Two knobs adjust the policy:
 - `CYFR_INSECURE_SKIP_VERIFY=1` — skip verification entirely (not
   recommended; for airgapped/bootstrap edge cases).
 
-All release binaries are signed and attested. You can also verify manually at
-three levels:
+A release signs and attests its `checksums.txt`, which holds the SHA-256 of
+each download, the CYFR app's Linux package among them. To verify manually,
+verify `checksums.txt`, by its attestation or its signature, and then the
+download against it:
 
 ```bash
-# GitHub Attestation (easiest — just needs gh CLI)
-gh attestation verify cyfr_*.tar.gz --owner cyfrworks
+# GitHub Attestation of the checksums (just needs gh CLI)
+gh attestation verify checksums.txt --owner cyfrworks
 
-# Checksum verification (no tools needed)
+# Each download beside checksums.txt, against it
 sha256sum --check --ignore-missing checksums.txt
 
 # Full Sigstore verification (maximum rigor): the release workflow at the
