@@ -55,19 +55,19 @@ apps/locus/test/support/runtime/test_wasm/hostile/build.sh --check   # compare o
 
 ```text
 extra_memory.wat           sha256:4f77c1473bee65d056d60911c661e41eca27ba08644869da6bb0b55f3e5cf62e
-extra_memory.wasm          sha256:219eb7033c8f9a328e05b441441eef8f9aa75fdd09714ff2320530b6486eafdb
+extra_memory.wasm          sha256:7a05d3fda1ed26681605591e2a6e86bc9010f1364842cf7c6fc3d185fc3ab4d7
 wide_table.wat             sha256:4f824339d5fdd1f86bd8cecc419518ba38b43982331b2231606fe3760c051937
-wide_table.wasm            sha256:c859d1b0b879e6cc3e6e9c0a0a7a45f0c9f0a2adae1b1becaac8d6bb8466e17c
+wide_table.wasm            sha256:2b594ca2dcb47a3ed1854ca7c6ad4c37ec5d72b66dd78dffc8453c7d2c465972
 grower.wat                 sha256:4653562e719e9cf0afeeeb492eb5258d0f398b175877ca30b0ba0abf762f577c
-grower.wasm                sha256:7e7b1f9a6a4046af9c317f34230e8ddc49dba8fe2e37cd3920ba856f5745fead
+grower.wasm                sha256:5d01278ec5d17784df8ecdde6f95689f3db6bf804b0781e888c57e35e6e83666
 vault_probe.wat            sha256:4b110e1e10e335a559a97e1ad7067dd94f868c204603e53fbcb2158ac2e63f31
-vault_probe.wasm           sha256:2bdd667749cf8cf6379d58e09c8a64694825bf8eac7758be365406950b0f6b8e
+vault_probe.wasm           sha256:72a15e0ab85a585bc79772e6b3a73f86d5d7724c5cfb08260e146bc4e7b67278
 attached_header_probe.wat  sha256:15557a58c237f2afc8cedf7aea4ac107575a25b06a1cb37d145074168468b468
-attached_header_probe.wasm sha256:e437e51b231f7619fdb6fe7a9c3ffc2d63631f69c97b76b5a4f231a415c2c341
+attached_header_probe.wasm sha256:e6269ad0a060d8275bbae609fbbbc002ab884ff99a955bacdb7646d422322a38
 credential_canary.wat      sha256:1a6454ba0eb640603d8e19e53798ab1b40f651857c2bd79c78ae983ed2d2022d
-credential_canary.wasm     sha256:a060410f737ba9418beab64d568ecd17e95424909e99cca86e021a64e1baa0e1
+credential_canary.wasm     sha256:de98bb4ac754308e506ef44ef50e3c9c65ac48528f300e0c434ce69300af3815
 trapper.wat                sha256:bd87bb0835163c620f3b0b67ec482798faace66aec66781581285421392c94f9
-trapper.wasm               sha256:6c0709e585eb71f180c8f0386324aec45d4cd19db13ddc41e76ebdc7c1e1eb8c
+trapper.wasm               sha256:585bdd27e68350494160b2a2f050e1159b926b4564921083b6484a57129584fd
 async_lift.wat             sha256:c990b80ab5dc7f5ae6051c16e3722f8e402b38b123f385f63785302a8f470e8f
 async_lift.wasm            sha256:e1429137b0c6056577d31a5bff20be298e28a0690ef1259e393d34e345273c39
 sync_lift.wat              sha256:83a4419d4e24ab767b75cfe637a0e8a765533ffcd142b500c535074a58ca7df9

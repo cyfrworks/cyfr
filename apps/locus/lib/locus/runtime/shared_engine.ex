@@ -23,10 +23,11 @@ defmodule Locus.Runtime.SharedEngine do
   ## CPU-Time Limitation
 
   Wasmex runs each store's calls as tasks on its own pool of native
-  threads, and its engine turns on epoch interruption only so that a call
-  yields its thread every tick: it interrupts a core module's call at the
-  call's timeout and never a component's, whose call outlives its caller
-  and finishes in the background. So the wall-clock timeout kill in
+  threads, and its engine turns on epoch interruption so that a call
+  yields its thread every tick and a call given a deadline is interrupted
+  at it. `Locus.Runtime.Engine` gives a component's call none
+  (`:infinity`): the call outlives a caller that is killed and finishes in
+  the background. So the wall-clock timeout kill in
   `Locus.Runtime.Runner` cannot preempt a component that never returns
   (e.g. a tight compute loop). Killing the waiting BEAM process frees the
   execution slot, but the call keeps one CPU core busy until the runner's

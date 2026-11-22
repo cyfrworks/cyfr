@@ -9,34 +9,40 @@ defmodule Prima.ComponentFeatures do
   the registry's publish and registration and both builders call) and
   again before it is compiled (`Locus.Runtime.ComponentCache` and the
   engine's uncached compile), by the pinned `wasm-tools`
-  (`scripts/wasm-tools.sh`), whose wasmparser decodes the async canonical
-  options and builtins as the engine's does. The check before a compile
-  is what holds a component stored before the admission checks existed:
-  no stored row runs a refused feature.
+  (`scripts/wasm-tools.sh`), whose wasmparser is the engine's own release
+  (0.263, which Wasmtime 51.0.0 and wasm-tools 1.263.0 both use), so it
+  decodes the async canonical options and builtins as the engine does.
+  The check before a compile is what holds a component stored before the
+  admission checks existed: no stored row runs a refused feature.
 
-  ## A security constraint, and its condition
+  ## Admission policy
 
-  The refused features are those the engine's Wasmtime (47.0.3, which
-  wasmex 0.15.1 runs) cannot run safely, not admission policy of their
-  own:
+  The engine (Wasmtime 51.0.0, which wasmex 0.18.1 runs) turns on `gc`,
+  `gc-types`, `exceptions` and `cm-async` by default; the other five
+  are a variant of one of those or build on it, and the engine leaves
+  them off, so
+  refusing them here keeps the validator's answer and the engine's the
+  same. The advisories these refusals once answered (GHSA-32h6-97mm-8q3c,
+  GHSA-cfhf-m2cr-62wj, GHSA-hw8m-q44c-ggrf) are fixed in that Wasmtime;
+  what holds each refusal now is its own merit:
 
-    * the component-model async features (`cm-async` and the four that
-      build on it): GHSA-32h6-97mm-8q3c, an async-lifted export's callback
-      whose result count Wasmtime never validates, lets a component write
-      to the host's native stack, in Wasmtime 39.0.0 through 48.0.3 and
-      49.0.0 through 49.0.1;
-    * exception handling (`exceptions`, `legacy-exceptions`) and GC
-      (`gc`): GHSA-cfhf-m2cr-62wj and GHSA-hw8m-q44c-ggrf corrupt the GC
-      heap through mis-typed tags and unrooted references live across a
-      `try_call`, in Wasmtime 47.0.0 through 48.0.3 and 49.0.0 through
-      49.0.1;
-    * GC's reference types (`gc-types`): a core module declaring a table
-      of `externref` gets a GC heap at instantiation, a memory the store's
-      count of one linear memory does not bound.
-
-  The advisories are fixed in Wasmtime 48.0.4 and 49.0.2. When the wasmex
-  this tree pins runs one of those or later, this refusal is re-evaluated
-  then: removed, or kept as admission policy on its own merits.
+    * GC (`gc`, `gc-types`) and exception handling (`exceptions`,
+      `legacy-exceptions`): a GC reference type, a GC object or an
+      exception object lives in the store's GC heap, a second memory.
+      Wasmtime counts it against no memory count, and its growth is
+      bounded only as one memory is, by the store's per-memory size, so a
+      run holding both could reach twice the node's consented
+      `max_memory_bytes`, which `Locus.Runtime.Engine.store_limits/1`
+      bounds the run's memory to in total.
+    * The component-model async features (`cm-async` and the four that
+      build on it, `cm-async-stackful`, `cm-more-async-builtins`,
+      `cm-error-context`, `cm-threading`): no CYFR interface is async (a
+      run is one synchronous call of its `run` or `compute`, and every
+      host import answers synchronously), so they would give untrusted
+      code a surface no component needs, and the engine's most revised
+      one: Wasmtime published nine advisories against its callbacks,
+      streams, futures and event loop between 2026-10-02 and 2026-11-16,
+      most of them a host panic.
 
   ## The validator
 
