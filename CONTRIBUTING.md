@@ -378,8 +378,9 @@ same worktree refuses, naming the run that holds it.
   the tree, and a tag whose own run fails them publishes nothing. The
   tag's GoReleaser run checks every command line binary it builds before
   archiving any (`scripts/ci/release-binary-check.sh`,
-  each build's post hook): one built with a build tag or holding the
-  update proof's code fails the release.
+  each build's post hook): one built with a build tag, or holding the
+  update proof's code or the tests' cheap key derivation, fails the
+  release.
 - `scripts/heavy-check.sh` queues the checks of everyone sharing a host.
   It cuts the machine's cores into four quarters of whole cores, and a
   check takes one: named test paths in one partition, a compile,

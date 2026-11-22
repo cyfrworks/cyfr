@@ -19,8 +19,9 @@ builds:
       - -X github.com/cyfr/codex/internal/version.Commit={{.Commit}}
       - -X github.com/cyfr/codex/internal/version.Date={{.Date}}
     # Every binary the release publishes, each target's as it is built:
-    # built with no build tag and holding none of the release proof, or the
-    # release fails before any archive or upload (the script's header).
+    # built with no build tag and holding none of the release proof or of
+    # the tests' cheap key derivation, or the release fails before any
+    # archive or upload (the script's header).
     # The path is from the workdir, apps/codex.
     hooks:
       post:
