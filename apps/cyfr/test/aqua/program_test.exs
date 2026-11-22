@@ -618,10 +618,12 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(input))
       committed!(ctx, thread, 4)
 
+      # The turn waits and the attendant is held with whatever it was reading
+      # behind it, so the report is first read once the hook stands.
+      attendant = waited_on!(ctx, thread, loop)
+      hold!(attendant)
       workspace = workspace!(ctx, thread)
 
-      # Written below the thread's events, and only then told: the one read
-      # of the waiting posts this event causes is the one the deletion follows.
       {:ok, %{message: joined}} =
         TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
           message: %{
@@ -634,9 +636,6 @@ defmodule Aqua.ProgramTest do
           steer_turn_id: turn.id
         })
 
-      [{attendant, _}] =
-        Registry.lookup(Aqua.Program.Registry, {ctx.athanor_id, thread.id, "aqua"})
-
       handler = "post-gone-#{System.unique_integer([:positive])}"
 
       :ok =
@@ -647,6 +646,7 @@ defmodule Aqua.ProgramTest do
 
       on_exit(fn -> :telemetry.detach(handler) end)
       :ok = Tape.announce(ctx, thread.id, :message, joined)
+      :ok = :sys.resume(attendant)
 
       assert {:failed, @post_gone} = Task.await(loop, 15_000)
       assert system_lines(ctx, thread, turn) == [@post_gone]
@@ -666,6 +666,16 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(input))
       committed!(ctx, thread, 4)
 
+      # The turn is held where it waits, which holds no connection, and its
+      # suspension ends with this test's process. The attendant takes the
+      # idle, tells it and reads that nothing waits, and only then is held.
+      attendant = waited_on!(ctx, thread, loop)
+      true = :erlang.suspend_process(loop.pid)
+      say(fake, row, idle(turn, [input.id]))
+      committed!(ctx, thread, 5)
+      hold!(attendant)
+
+      # So neither has seen the report when it is written.
       workspace = workspace!(ctx, thread)
 
       {:ok, %{message: joined}} =
@@ -680,28 +690,22 @@ defmodule Aqua.ProgramTest do
           steer_turn_id: turn.id
         })
 
-      [{attendant, _}] =
-        Registry.lookup(Aqua.Program.Registry, {ctx.athanor_id, thread.id, "aqua"})
+      # The turn takes the idle, finds the report pending and so does not
+      # end: it says that it waits again (`Aqua.Program.watch/2`), and the
+      # attendant, held, has read none of it when the report is deleted.
+      assert :erlang.trace(attendant, true, [:receive]) == 1
+      true = :erlang.resume_process(loop.pid)
+      %{id: turn_id} = turn
+      %{pid: waiting} = loop
 
-      handler = "queued-gone-#{System.unique_integer([:positive])}"
+      assert_receive {:trace, ^attendant, :receive,
+                      {:"$gen_cast", {:watch, %{turn: %{id: ^turn_id}}, ^waiting}}},
+                     10_000
 
-      :ok =
-        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold_before_posts/4, %{
-          attendant: attendant,
-          loop: loop.pid,
-          test: self()
-        })
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-      say(fake, row, idle(turn, [input.id]))
-
-      # The loop found the report pending, and the attendant has not read it.
-      assert_receive :loop_found_pending, 10_000
-      assert_receive {:held_before_posts, held}, 10_000
-      on_exit(fn -> send(held, :read_posts) end)
+      assert :erlang.trace(attendant, false, [:receive]) == 1
       assert {:ok, _} = Tape.delete_thread(ctx, workspace.id)
       assert {:error, :not_found} = Tape.message(ctx, joined.id)
-      send(held, :read_posts)
+      :ok = :sys.resume(attendant)
 
       assert :completed = Task.await(loop, 15_000)
       assert system_lines(ctx, thread, turn) == []
@@ -4068,32 +4072,36 @@ defmodule Aqua.ProgramTest do
     :ok
   end
 
-  # The attendant is held after it read the results owed and before it
-  # reads the posts that wait; the loop's refused end says it found one.
-  @doc false
-  def hold_before_posts(_event, _measured, meta, config) do
-    query = meta[:query] || ""
+  # The thread's attendant, once the turn waits on it: the loop watches it
+  # while it waits and at no other time (`Aqua.Program.watch/2`).
+  defp waited_on!(ctx, thread, loop) do
+    [{attendant, _}] =
+      Registry.lookup(Aqua.Program.Registry, {ctx.athanor_id, thread.id, "aqua"})
 
-    cond do
-      self() == config.loop and query =~ ~r/^rollback/i ->
-        send(config.test, :loop_found_pending)
+    Prima.Test.Wait.wait_until(
+      fn ->
+        {:monitored_by, watching} = Process.info(attendant, :monitored_by)
+        loop.pid in watching
+      end,
+      10_000,
+      "the turn to wait on its attendant"
+    )
 
-      self() == config.attendant and is_nil(Process.get(:held_before_posts)) and
-        meta[:source] == "turn_steps" and query =~ "LEFT OUTER JOIN" ->
-        Process.put(:held_before_posts, true)
-        send(config.test, {:held_before_posts, self()})
+    attendant
+  end
 
-        receive do
-          :read_posts -> :ok
-        after
-          30_000 -> :ok
-        end
+  # The attendant ends what it was doing and takes up nothing more until
+  # resumed. The restore runs before the sandbox's stop, which asks it.
+  defp hold!(attendant) do
+    on_exit(fn ->
+      try do
+        :sys.resume(attendant)
+      catch
+        :exit, _ended -> :ok
+      end
+    end)
 
-      true ->
-        :ok
-    end
-
-    :ok
+    :ok = :sys.suspend(attendant, 10_000)
   end
 
   defp row!(ctx, thread, text, fields \\ %{}) do
