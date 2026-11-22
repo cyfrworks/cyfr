@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -41,7 +40,8 @@ var desktopServeCmd = &cobra.Command{
 // runDesktopServe binds the shell's listener for this process alone, says
 // ready to main with the chooser's address, then serves until main sends
 // shutdown, its pipe ends, or it sends a line that is not its message.
-// Every end locks first.
+// Every end locks the device first, saying nothing to main
+// (desktop.Service.End): an end signs nobody out.
 func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 	_ = holder.HardenProcess()
 	dir, err := shell.DeviceDir()
@@ -55,7 +55,6 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 	to := desktop.NewWriter(out)
 	host, _ := os.Hostname()
 	svc := &desktop.Service{
-		AccountRoad: runtime.GOOS == "darwin" || runtime.GOOS == "windows",
 		Token:       desktop.NewToken(),
 		Clients:     shell.ClientFile(filepath.Join(dir, "client.json")),
 		Record:      filepath.Join(dir, "holder.json"),
@@ -71,13 +70,6 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 		defer cancel()
 		_ = hs.Shutdown(sctx)
 	}()
-	// What cannot be watched is known before the chooser first asks.
-	watching, stopWatching := context.WithCancel(ctx)
-	defer stopWatching()
-	watchSessionLock(watching, svc.Lock, func(sentence string) {
-		svc.Warn(sentence)
-		fmt.Fprintln(os.Stderr, "cyfr: "+sentence)
-	})
 	if err := to.Send(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
 		return err
 	}
@@ -87,13 +79,13 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 	case err := <-ran:
 		return err
 	case err := <-served:
-		svc.Lock("")
+		svc.End()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
 	case <-ctx.Done():
-		svc.Lock("")
+		svc.End()
 		return nil
 	}
 }

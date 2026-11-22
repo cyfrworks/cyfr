@@ -13,11 +13,11 @@ defmodule Prima.KeeperProtocol do
   ## Lines
 
   A request or a reply is one JSON object on one line, ending in `\\n`,
-  carrying `"v": 1` and a `type`, at most `max_line_bytes/0` bytes before
-  its newline. A client sends `spawn`, `signal`, `resize`, `release`, `pool`,
-  `home_make`, `home_measure` and `home_retire`; the keeper answers
-  `spawned`, `error`, `exited`, `released`, `pool`, `home_made`,
-  `home_measured` and `home_retired`.
+  carrying `"v": 2` and a `type`, at most `max_line_bytes/0` bytes before
+  its newline. A client sends `spawn`, `signal`, `resize`, `release`,
+  `measure`, `pool`, `home_make`, `home_measure` and `home_retire`; the
+  keeper answers `spawned`, `error`, `exited`, `released`, `measured`,
+  `pool`, `home_made`, `home_measured` and `home_retired`.
 
   `encode/1` writes a request's members in name order, `v` and `type`
   among them, and refuses by raising `ArgumentError` what the keeper
@@ -39,14 +39,38 @@ defmodule Prima.KeeperProtocol do
   bounds where it runs, whichever of them it lacks the means for; it
   refuses every spawn so, and none runs unbounded.
 
+  An `exited` comes at most once and before its spawn's `released`, never
+  after. Where retirement's bounded wait for the leader's reaping ran out,
+  a spawn killed for memory has one with `SIGKILL` and the cause, and any
+  other has none.
+
+  An `exited`'s `memory` says what the kernel killed processes of the
+  spawn for, as its group's own counters say: `"cap"` for its own bound;
+  `"machine"` for a limit above it, the container's or the machine's,
+  whatever its own bound counted before; `"either"` for a kill the
+  counters cannot lay to one of the two, which is never called `"cap"`;
+  and null for no kill or for counters that could not be read. A `measure`
+  carries exactly `id` and `spawn_id` and is answered under that `id`
+  alone, as a home request is, so a reply settles only the request it
+  answers: `measured`, or an `error` `unmeasured` where the keeper holds no
+  such spawn or cannot read its group. A `measured`'s `bytes` are what the
+  spawn's group uses that cannot be given back, `anon + shmem + kernel -
+  slab_reclaimable` from one read of its `memory.stat`: file cache is none
+  of it and a tmpfs's pages are. Its `lesser` is true where that kernel's
+  `memory.stat` has no `kernel` line (before 5.18), and `bytes` then the
+  lesser sum, of the parts of it that it names. A reading not made is
+  unknown, and zero is no reading: a `measured` of no `bytes` is refused,
+  where a `home_measured` of none is an empty home.
+
   `decode_reply/1` answers the reply or the first refusal, in this order:
   `:oversize_line`; `:malformed` (not one JSON object); `:bad_version`;
   `:unknown_type`; `{:unknown_field, name}` (the first by name); then per
   member, in the order the type lists them, `{:missing_field, name}`,
   `{:wrong_type, name}` or `{:invalid_field, name}`; and last, for an
   `exited`, `:ambiguous_exit` when it carries both a `code` and a
-  `signal`, or neither. A `home_measured` reply's `bytes` is a whole
-  number up to 2^53 - 1, the largest every JSON reader carries exactly.
+  `signal`, or neither. The `bytes` of a `measured` is a whole number from
+  1 and that of a `home_measured` from 0, each up to 2^53 - 1, the largest
+  every JSON reader carries exactly.
 
   ## Homes
 
@@ -121,7 +145,7 @@ defmodule Prima.KeeperProtocol do
   its control channel.
   """
 
-  @version 1
+  @version 2
   # The keeper spells these as frame.MaxPayload and protocol.MaxLineBytes;
   # the vectors' `bounds` pin both sides to the same numbers.
   @max_frame_bytes 65_536
@@ -168,8 +192,9 @@ defmodule Prima.KeeperProtocol do
 
   # The integers a reply carries: uids, pids and pool counts.
   @max_count 4_294_967_295
-  # A measured home's bytes: the largest integer JSON carries exactly.
+  # A measured spawn's or home's bytes: the largest integer JSON carries exactly.
   @max_measured_bytes 9_007_199_254_740_991
+  @memory_ends %{"cap" => :cap, "machine" => :machine, "either" => :either}
 
   @id ~r/\A[A-Za-z0-9._:-]{1,64}\z/
   @pool ~r/\A[a-z][a-z0-9-]{0,31}\z/
@@ -205,6 +230,7 @@ defmodule Prima.KeeperProtocol do
     resize: {"resize", [spawn_id: :required, rows: :required, cols: :required]},
     release: {"release", [spawn_id: :required, grace_ms: :required]},
     pool: {"pool", [id: :required, pool: :required]},
+    measure: {"measure", [id: :required, spawn_id: :required]},
     home_make: {"home_make", [id: :required, path: :required, uid: :required]},
     home_measure: {"home_measure", [id: :required, path: :required, uid: :required]},
     home_retire: {"home_retire", [id: :required, path: :required, uid: :required]}
@@ -221,9 +247,10 @@ defmodule Prima.KeeperProtocol do
          spawn_id: :spawn_id,
          code: {:nullable, :integer},
          signal: {:nullable, :signal},
-         memory_exceeded: :boolean
+         memory: {:nullable, :memory_end}
        ]},
     "released" => {:released, [spawn_id: :spawn_id]},
+    "measured" => {:measured, [id: :id, bytes: :used_bytes, lesser: :boolean]},
     "pool" => {:pool, [id: :id, pool: :pool, size: :count, free: :count, quarantined: :count]},
     "home_made" => {:home_made, [id: :id]},
     "home_measured" => {:home_measured, [id: :id, bytes: :measured_bytes]},
@@ -275,6 +302,7 @@ defmodule Prima.KeeperProtocol do
           | %{type: :resize, spawn_id: String.t(), rows: pos_integer(), cols: pos_integer()}
           | %{type: :release, spawn_id: String.t(), grace_ms: non_neg_integer()}
           | %{type: :pool, id: String.t(), pool: String.t()}
+          | %{type: :measure, id: String.t(), spawn_id: String.t()}
           | %{
               type: :home_make | :home_measure | :home_retire,
               id: String.t(),
@@ -286,15 +314,29 @@ defmodule Prima.KeeperProtocol do
   @type exit_status :: {:status, integer()} | {:signal, String.t()}
 
   @typedoc """
+  What the kernel killed processes of a spawn for: its own memory bound
+  (`:cap`), a limit above it (`:machine`), one of the two where which is
+  not known (`:either`), or none that is known.
+  """
+  @type memory_end :: :cap | :machine | :either | nil
+
+  @typedoc """
+  What a spawn uses that cannot be given back, and whether that is the
+  lesser sum of a kernel that counts no `kernel` memory.
+  """
+  @type reading :: %{bytes: pos_integer(), lesser: boolean()}
+
+  @typedoc """
   A reply. An `error` names the request it refuses by `id` (a spawn, a
-  pool or a home request) or `spawn_id` (a signal or a release); a
+  pool, a home request or a measure) or `spawn_id` (a signal or a release); a
   request the keeper could not read is named by neither.
   """
   @type reply ::
           {:spawned, id :: String.t(), spawn_id :: String.t(), uid :: non_neg_integer(),
            pid :: non_neg_integer()}
           | {:error, id :: String.t() | nil, spawn_id :: String.t() | nil, code :: String.t()}
-          | {:exited, spawn_id :: String.t(), exit_status(), memory_exceeded :: boolean()}
+          | {:exited, spawn_id :: String.t(), exit_status(), memory_end()}
+          | {:measured, id :: String.t(), reading()}
           | {:released, spawn_id :: String.t()}
           | {:pool, id :: String.t(), pool :: String.t(), size :: non_neg_integer(),
              free :: non_neg_integer(), quarantined :: non_neg_integer()}
@@ -856,7 +898,16 @@ defmodule Prima.KeeperProtocol do
   defp read(:measured_bytes, name, value) when is_integer(value),
     do: {:error, {:invalid_field, name}}
 
+  # A spawn that is held uses memory, so none is no reading.
+  defp read(:used_bytes, name, 0), do: {:error, {:invalid_field, name}}
+  defp read(:used_bytes, name, value), do: read(:measured_bytes, name, value)
+
   defp read(:boolean, _name, value) when is_boolean(value), do: {:ok, value}
+
+  defp read(:memory_end, _name, value) when is_map_key(@memory_ends, value),
+    do: {:ok, Map.fetch!(@memory_ends, value)}
+
+  defp read(:memory_end, name, value) when is_binary(value), do: {:error, {:invalid_field, name}}
   defp read(_kind, name, _value), do: {:error, {:wrong_type, name}}
 
   defp reading(regex, name, value) do
@@ -869,17 +920,20 @@ defmodule Prima.KeeperProtocol do
   defp reply(:error, %{id: id, spawn_id: spawn_id, code: code}),
     do: {:ok, {:error, id, spawn_id, code}}
 
-  defp reply(:exited, %{spawn_id: spawn_id, code: code, signal: nil, memory_exceeded: exceeded})
+  defp reply(:exited, %{spawn_id: spawn_id, code: code, signal: nil, memory: memory})
        when code != nil,
-       do: {:ok, {:exited, spawn_id, {:status, code}, exceeded}}
+       do: {:ok, {:exited, spawn_id, {:status, code}, memory}}
 
-  defp reply(:exited, %{spawn_id: spawn_id, code: nil, signal: signal, memory_exceeded: exceeded})
+  defp reply(:exited, %{spawn_id: spawn_id, code: nil, signal: signal, memory: memory})
        when signal != nil,
-       do: {:ok, {:exited, spawn_id, {:signal, signal}, exceeded}}
+       do: {:ok, {:exited, spawn_id, {:signal, signal}, memory}}
 
   defp reply(:exited, _read), do: {:error, :ambiguous_exit}
 
   defp reply(:released, %{spawn_id: spawn_id}), do: {:ok, {:released, spawn_id}}
+
+  defp reply(:measured, %{id: id, bytes: bytes, lesser: lesser}),
+    do: {:ok, {:measured, id, %{bytes: bytes, lesser: lesser}}}
 
   defp reply(:pool, %{id: id, pool: pool, size: size, free: free, quarantined: quarantined}),
     do: {:ok, {:pool, id, pool, size, free, quarantined}}

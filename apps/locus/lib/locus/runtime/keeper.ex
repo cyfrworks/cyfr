@@ -167,7 +167,7 @@ defmodule Locus.Runtime.Keeper do
   def event({:refused, code}), do: {:refused, code}
   def event({:stdout, bytes}), do: {:log, bytes}
   def event({:stderr, bytes}), do: {:log, bytes}
-  def event({:exited, exit, _memory_exceeded}), do: {:exited, exit}
+  def event({:exited, exit, _memory}), do: {:exited, exit}
   def event(:attached), do: :attached
   def event({:control, bytes}), do: {:control, bytes}
   def event(:control_closed), do: :control_closed

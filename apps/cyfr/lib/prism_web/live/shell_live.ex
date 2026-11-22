@@ -106,7 +106,8 @@ defmodule PrismWeb.ShellLive do
   whose tab was closed still stands there until it ends. A read that
   fails keeps what is shown and is tried again shortly. `PrismWeb.CanvasLive` draws them; a chip opens the program's
   terminal on the Programs page (`?terminal=<session>`), and its Close
-  asks `close/2`, after which the list is what `running/1` answers. The
+  asks `close/2` off the shell's process, after whose answer the list is
+  what `running/1` answers. The
   shelf shows only while a canvas is shown; without one, the Programs
   page lists them.
 
@@ -779,22 +780,16 @@ defmodule PrismWeb.ShellLive do
   # Close on a running program's shelf chip. What the shelf lists next is
   # what `Opus.Programs.running/1` answers, whatever close said.
   def handle_event("close_program", %{"session" => session}, socket) when is_binary(session) do
-    socket =
-      case Opus.Programs.close(socket.assigns.context, session) do
-        {:ok, :closed} ->
-          socket
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+    lv = self()
 
-        {:ok, :already_gone} ->
-          put_flash(socket, :info, TerminalComponent.ended_text(:not_found))
+    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      result = run_to_end(fn -> Opus.Programs.close(ctx, session) end)
+      send(lv, {:deliver, tag, {:program_closed, result}})
+    end)
 
-        {:error, :unanswered} ->
-          put_flash(socket, :error, TerminalComponent.ended_text(:unanswered))
-
-        {:error, reason} ->
-          put_flash(socket, :error, "Failed: #{error_message(reason)}")
-      end
-
-    {:noreply, load_programs(socket)}
+    {:noreply, socket}
   end
 
   # The person's devices: the system layer's pairing prompt, one at a time.
@@ -3398,6 +3393,25 @@ defmodule PrismWeb.ShellLive do
 
   def handle_info({:deliver, tag, message}, socket),
     do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))
+
+  def handle_info({:program_closed, result}, socket) do
+    socket =
+      case result do
+        {:ok, :closed} ->
+          socket
+
+        {:ok, :already_gone} ->
+          put_flash(socket, :info, TerminalComponent.ended_text(:not_found))
+
+        {:error, :unanswered} ->
+          put_flash(socket, :error, TerminalComponent.ended_text(:unanswered))
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Failed: #{error_message(reason)}")
+      end
+
+    {:noreply, load_programs(socket)}
+  end
 
   def handle_info({:request_expired, id}, socket), do: {:noreply, request_expired(socket, id)}
 

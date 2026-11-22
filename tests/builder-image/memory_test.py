@@ -258,9 +258,9 @@ class ClientOutput(unittest.TestCase):
                             relay.sendall(packet + frame(1, b"") + frame(2, b""))
                         spawn_id = "a" * 32
                         for reply in (
-                            {"v": 1, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
-                            {"v": 1, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory_exceeded": False},
-                            {"v": 1, "type": "released", "spawn_id": spawn_id},
+                            {"v": 2, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
+                            {"v": 2, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
+                            {"v": 2, "type": "released", "spawn_id": spawn_id},
                         ):
                             parent.sendall(json.dumps(reply).encode() + b"\n")
                         os.kill(process.pid, signal.SIGCONT)

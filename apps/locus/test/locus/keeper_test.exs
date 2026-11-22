@@ -157,15 +157,19 @@ defmodule Locus.KeeperTest do
       fake: fake
     } do
       :ok =
-        FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: true}})
+        FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: "cap"}})
 
       assert {{:error, {:memory, 33_554_432}}, ["the command's last words"]} =
                run(name, "true", memory_bytes: 33_554_432)
 
-      # The same end without the kernel's report is a signal like any other.
-      :ok =
-        FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: false}})
+      # A kill for memory that is not at the bound names its cause and no bytes.
+      for {spelled, cause} <- [{"machine", :machine}, {"either", :either}] do
+        :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: spelled}})
+        assert {{:error, {:memory, ^cause}}, _} = run(name, "true", memory_bytes: 33_554_432)
+      end
 
+      # The same end without the kernel's report is a signal like any other.
+      :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: nil}})
       assert {{:ok, %{exit: {:signal, "SIGKILL"}}}, _} = run(name, "true")
     end
 
@@ -437,7 +441,7 @@ defmodule Locus.KeeperTest do
 
       :ok =
         :socket.send(c.peer, [
-          Jason.encode!(%{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}),
+          Jason.encode!(%{v: 2, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}),
           ?\n
         ])
 
@@ -615,7 +619,7 @@ defmodule Locus.KeeperTest do
       %{"id" => id, "attach" => %{"token" => token}} = request(c.peer)
       spawn_id = String.duplicate("cd", 16)
 
-      spawned = %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}
+      spawned = %{v: 2, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}
       :ok = :socket.send(c.peer, [Jason.encode!(spawned), ?\n])
       assert_receive {Keeper, ^ref, {:spawned, ^spawn_id, 1, 1}}, 5_000
 
@@ -758,7 +762,7 @@ defmodule Locus.KeeperTest do
     # waits for the relay to deliver everything (Locus.Keeper).
     defp ending(events) do
       assert List.last(events) == :released
-      assert [exited] = Enum.filter(events, &match?({:exited, _, _}, &1))
+      assert [exited] = Enum.filter(events, &match?({:exited, _, _, _}, &1))
       [exited, :released]
     end
 
@@ -805,7 +809,7 @@ defmodule Locus.KeeperTest do
       assert hd(events) == :attached
       assert {:stdout, "out\n"} in streams(events)
       assert {:stderr, "hello\n"} in streams(events)
-      assert ending(events) == [{:exited, 4, nil}, :released]
+      assert ending(events) == [{:exited, 4, nil, nil}, :released]
 
       [spawn] = recorded(fake, "spawn")
       assert spawn["pool"] == "backends"
@@ -841,7 +845,7 @@ defmodule Locus.KeeperTest do
 
       events = events_until_released(handle)
       assert {:stdout, ^data} = Enum.find(events, &match?({:stdout, _}, &1))
-      assert {:exited, 0, nil} in events
+      assert {:exited, 0, nil, nil} in events
     end
 
     test "signal signals the spawn and is the vectors' request", %{name: name, fake: fake} do
@@ -851,7 +855,7 @@ defmodule Locus.KeeperTest do
       assert {:error, :unencodable} = Keeper.signal(handle, "SIGSTOP")
       assert :ok = Keeper.signal(handle, "SIGTERM")
 
-      assert ending(events_until_released(handle)) == [{:exited, nil, "SIGTERM"}, :released]
+      assert ending(events_until_released(handle)) == [{:exited, nil, "SIGTERM", nil}, :released]
 
       [signal] = recorded(fake, "signal")
       vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "signal"))
@@ -872,7 +876,7 @@ defmodule Locus.KeeperTest do
       assert resize == %{vector | "spawn_id" => handle.spawn_id}
 
       :ok = Keeper.release(name, handle, 0)
-      assert ending(events_until_released(handle)) == [{:exited, nil, "SIGKILL"}, :released]
+      assert ending(events_until_released(handle)) == [{:exited, nil, "SIGKILL", nil}, :released]
 
       assert {:error, :unknown_spawn} = Keeper.resize(handle, 24, 80)
       assert {:error, :unknown_spawn} = Keeper.resize(%{handle | ref: make_ref()}, 24, 80)
@@ -890,7 +894,7 @@ defmodule Locus.KeeperTest do
       assert :ok = Keeper.release(name, handle, 2_000)
       events = events_until_released(handle)
       assert {:stdout, "term\n"} in streams(events)
-      assert ending(events) == [{:exited, 0, nil}, :released]
+      assert ending(events) == [{:exited, 0, nil, nil}, :released]
 
       [release] = recorded(fake, "release")
       vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "release"))
@@ -908,7 +912,7 @@ defmodule Locus.KeeperTest do
       assert :ok = Keeper.release(name, handle, 1_500)
       events = events_until_released(handle)
       assert {:stdout, "term\n"} in streams(events)
-      assert ending(events) == [{:exited, nil, "SIGKILL"}, :released]
+      assert ending(events) == [{:exited, nil, "SIGKILL", nil}, :released]
     end
 
     test "release with no grace kills the spawn", %{name: name, fake: fake} do
@@ -917,9 +921,47 @@ defmodule Locus.KeeperTest do
 
       :ok = Keeper.release(name, handle, 0)
 
-      assert ending(events_until_released(handle)) == [{:exited, nil, "SIGKILL"}, :released]
+      assert ending(events_until_released(handle)) == [{:exited, nil, "SIGKILL", nil}, :released]
 
       assert [%{"grace_ms" => 0}] = recorded(fake, "release")
+    end
+
+    test "a kill at the spawn's cap, one for the container's limit and one for neither reach its owner apart",
+         %{name: name, fake: fake} do
+      for {spelled, memory} <- [
+            {"cap", :cap},
+            {"machine", :machine},
+            {"either", :either},
+            {nil, nil}
+          ] do
+        :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: spelled}})
+        assert {:ok, handle} = spawn_live(name, "unused")
+
+        assert ending(events_until_released(handle)) ==
+                 [{:exited, nil, "SIGKILL", memory}, :released]
+      end
+    end
+
+    test "measure answers what a spawn uses with the vectors' request, and a reading not made as none",
+         %{name: name, fake: fake} do
+      assert {:ok, handle} = spawn_live(name, "exec cat")
+      assert {:error, {:refused, "unmeasured"}} = Keeper.measure(name, handle)
+
+      reading = %{bytes: 268_435_456, lesser: true}
+      :ok = FakeKeeper.mode(fake, {:measured, reading})
+      assert {:ok, ^reading} = Keeper.measure(name, handle)
+
+      vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "measure"))
+      sent = %{vector | "spawn_id" => handle.spawn_id}
+      assert [first, second] = requests(fake, "measure")
+      assert first["id"] != second["id"]
+      assert [%{first | "id" => sent["id"]}, %{second | "id" => sent["id"]}] == [sent, sent]
+
+      :ok = FakeKeeper.mode(fake, :normal)
+      Keeper.release(name, handle, 0)
+      assert List.last(events_until_released(handle)) == :released
+      assert {:error, :unknown_spawn} = Keeper.measure(name, handle)
+      assert {:error, :unknown_spawn} = Keeper.measure(name, %{handle | ref: make_ref()})
     end
 
     test "pool_stats reads a pool with the vectors' request, and a refusal is the keeper's code",
@@ -1016,7 +1058,7 @@ defmodule Locus.KeeperTest do
 
       assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
 
-      assert [%{"type" => "home_make", "path" => path, "uid" => ^uid, "v" => 1}] =
+      assert [%{"type" => "home_make", "path" => path, "uid" => ^uid, "v" => 2}] =
                home_requests(fake)
 
       assert path == Path.join(root, "vlt_a")
@@ -1208,6 +1250,71 @@ defmodule Locus.KeeperTest do
         assert {:error, {:refused, ^code}} =
                  Keeper.spawn(name, Map.put(spec, :hosts, ["api.example.com"]))
       end
+    end
+
+    for op <- [:home_retire, :home_reset] do
+      @tag op: op
+      test "#{op} is never ok beside a make held past its caller's timeout, and is once it landed",
+           %{root: root, uid: uid, op: op} do
+        %{name: name, fake: fake} = kept_client(root, uid, uid)
+        FakeKeeper.mode(fake, {:home_make_held, self()})
+        assert {:timeout, _call} = catch_exit(GenServer.call(name, {:home_ensure, "vlt_a"}, 200))
+        assert_receive {:home_make_held, make}, 2_000
+
+        beside = apply(Keeper, op, [name, "vlt_a"])
+        another_home = apply(Keeper, op, [name, "vlt_b"])
+        :ok = FakeKeeper.release_make(fake, make)
+        Prima.Test.Wait.wait_until(fn -> :sys.get_state(name).homes == %{} end, 5_000)
+        landed = File.exists?(Path.join(root, "vlt_a"))
+        again = apply(Keeper, op, [name, "vlt_a"])
+
+        assert %{
+                 beside: beside,
+                 another_home: another_home,
+                 landed: landed,
+                 again: again,
+                 folder: File.exists?(Path.join(root, "vlt_a"))
+               } == %{
+                 beside: {:error, {:refused, "unavailable"}},
+                 another_home: :ok,
+                 landed: true,
+                 again: :ok,
+                 folder: op == :home_reset
+               }
+      end
+    end
+
+    test "home_retire is never ok beside a reset, which makes the home again, at either of its steps",
+         %{root: root, uid: uid} do
+      %{name: name, fake: fake} = kept_client(root, uid, uid)
+      assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
+      FakeKeeper.mode(fake, {:home_make_held, self()})
+
+      # Its retirement out, unanswered; then its make.
+      :sys.suspend(fake)
+      resetting = Task.async(fn -> Keeper.home_reset(name, "vlt_a") end)
+      Prima.Test.Wait.wait_until(fn -> :sys.get_state(name).homes != %{} end, 5_000)
+      retiring = Task.async(fn -> Keeper.home_retire(name, "vlt_a") end)
+      beside_retirement = Task.yield(retiring, 1_000) || :waits
+      :sys.resume(fake)
+      assert_receive {:home_make_held, make}, 2_000
+      beside_make = Keeper.home_retire(name, "vlt_a")
+      :ok = FakeKeeper.release_make(fake, make)
+      assert :ok = Task.await(resetting, 5_000)
+      made_again = File.exists?(Path.join(root, "vlt_a"))
+
+      assert %{
+               beside_retirement: beside_retirement,
+               beside_make: beside_make,
+               made_again: made_again
+             } == %{
+               beside_retirement: {:ok, {:error, {:refused, "unavailable"}}},
+               beside_make: {:error, {:refused, "unavailable"}},
+               made_again: true
+             }
+
+      assert :ok = Keeper.home_retire(name, "vlt_a")
+      refute File.exists?(Path.join(root, "vlt_a"))
     end
 
     test "a refused home request is the keeper's code", %{root: root, uid: uid} do

@@ -4,9 +4,10 @@
 // What the app's windows may load, open and be granted: decisions on
 // addresses and headers alone, so each is tested without a window.
 //
-// Two kinds of session hold pages. A content session, memory-only and new
-// at each unlock, holds the device's pages on loopback and, once main is
-// ready for it, the CYFR selected. The account session, kept across
+// Two kinds of session hold pages. A content session holds the device's
+// pages on loopback and, once cyfr opened it, the CYFR selected:
+// one kept across launches on the passkey road, as a browser's is, and
+// otherwise memory-only and new at each lock. The account session, kept across
 // launches, holds the selected CYFR's account service's sign-in page and
 // its recovery continuation alone, opened when a page of that CYFR hops
 // there with a sign-in or confirmation it issued; the answer comes back
@@ -162,23 +163,6 @@ export function documentHeaders(kind, resourceType, headers) {
     out["Content-Security-Policy"] = [...csp, "frame-src 'none'"]
   }
   return out
-}
-
-/**
- * Whether a sign-out's direct answer says the selected CYFR at `home`
- * retired the session it was sent under: a redirect whose location,
- * resolved against `home`, is exactly its signed-out address, with
- * cyfr-session-retired: 1.
- */
-export function retired(status, headers, home) {
-  let to = ""
-  try {
-    to = new URL(headers.get("location") ?? "", home + "/auth/logout").href
-  } catch {
-    return false
-  }
-  return (status === 302 || status === 303) && headers.get("cyfr-session-retired") === "1" &&
-    to === home + "/login?error=signed_out"
 }
 
 /**

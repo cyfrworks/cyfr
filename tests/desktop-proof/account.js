@@ -12,8 +12,8 @@ import {generateKeyPairSync, randomBytes} from "node:crypto"
 
 import {BrowserWindow, dialog, session} from "electron"
 
-import {DIRECTORY, HOME, LOOPBACK, NAME, arm, atDevice, atHome, content, contentAt, harvest, js, literal, load,
-  log, openCYFR, section, secondClient, submit, waitFor} from "./lib.js"
+import {DIRECTORY, HOME, LOOPBACK, NAME, arm, atBootstrap, atDevice, atHome, content, contentAt, harvest, js, literal,
+  load, lockedOut, log, openCYFR, section, secondClient, submit, waitFor} from "./lib.js"
 
 export const ACCOUNT_PARTITION = "persist:cyfr-account"
 
@@ -108,14 +108,47 @@ export function passkeyFor(rpId) {
 
 // ---- the account road from the CYFR's sign-in page ----
 
-/** The content window sent to the CYFR's sign-in page, as Prism's own link sends it. */
+/**
+ * The content window at the CYFR's sign-in page: by the chooser's Sign in
+ * with your passkey where the chooser shows, and otherwise by an address
+ * the content window is given.
+ */
 export async function toSignIn() {
   const w = content()
-  await js(w.webContents, `location.assign(${literal(HOME + "/login")}); 1`)
+  await js(w.webContents, atBootstrap(w.webContents.getURL())
+    ? `document.querySelector("#passkey").click(); 1`
+    : `location.assign(${literal(HOME + "/login")}); 1`)
   const at = await contentAt((u) => u.startsWith(HOME + "/login"), "the CYFR's sign-in page")
   await waitFor(() => js(at.webContents, `!!document.querySelector(".phx-connected") && !!document.querySelector('[data-test="sign-in"]')`),
     "Sign in with your account")
   return at
+}
+
+/** The chooser with both ways on and the way to another CYFR, in sight. */
+export async function bothWays() {
+  return waitFor(async () => {
+    const w = content()
+    if (!w || w.webContents.isLoading() || !atBootstrap(w.webContents.getURL())) return null
+    return await js(w.webContents, `["#passkey", "#words", "#another"].every((id) => document.querySelector(id).getClientRects().length > 0)`) ? w : null
+  }, "the chooser with both ways on")
+}
+
+/** Sign out pressed in Prism's top bar: the lock it led to (lockedOut), at the chooser's ways on. */
+export function signOutOfPrism(w) {
+  return lockedOut(w, "Prism's Sign out", async () => {
+    const link = `[phx-click-away="close_popover"] a[href="/auth/logout"][data-method="post"]`
+    if (!await js(w.webContents, `!!document.querySelector(${literal(link)})`)) {
+      await js(w.webContents, `document.querySelector('button[phx-click="toggle_popover"][phx-value-name="user"]').click(); 1`)
+    }
+    await waitFor(() => js(w.webContents, `!!document.querySelector(${literal(link)})`), "Sign out")
+    await js(w.webContents, `document.querySelector(${literal(link)}).click(); 1`)
+  }, {onward: false})
+}
+
+/** Lock pressed in Prism's top bar: the lock it led to, at the chooser's ways on. */
+export function lockDevice(w) {
+  return lockedOut(w, "the device's Lock", () => js(w.webContents, `document.querySelector('[data-test="device-lock"]').click(); 1`),
+    {onward: false})
 }
 
 /** Sign in with your account, pressed: the hop to the account window. */
@@ -169,7 +202,11 @@ export async function accountAndSetup(inputs) {
   return {second, recovery}
 }
 
-/** The app's Connect to the CYFR, its account service approved: the device's pages. */
+/**
+ * The app's Connect to the CYFR, its account service approved: the CYFR
+ * opened, which sends who is not signed in to the chooser's ways on, and
+ * from there the device's pages.
+ */
 export async function connectApproved() {
   const w = await contentAt((u) => u.startsWith(LOOPBACK + "/bootstrap/"), "the chooser")
   await waitFor(() => js(w.webContents, `!document.querySelector("#choose").hidden`), "the chooser's form")
@@ -177,6 +214,7 @@ export async function connectApproved() {
     document.querySelector("#connect").requestSubmit(); 1`)
   await waitFor(() => js(w.webContents, `!document.querySelector("#confirm").hidden`), "the account service asked about")
   await js(w.webContents, `document.querySelector("#approve").click(); 1`)
+  await js((await bothWays()).webContents, `document.querySelector("#words").click(); 1`)
   return contentAt(atDevice, "the device's pages")
 }
 

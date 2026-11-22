@@ -568,7 +568,7 @@ defmodule Locus.BuilderServiceTest do
     test "a build ended at its memory bound answers memory with the configured limit", %{
       port: port
     } do
-      fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: true}})
+      fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "cap"}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
       assert {:refusal, {:memory, 268_435_456}, diagnostics} = List.last(lines)
@@ -580,10 +580,36 @@ defmodule Locus.BuilderServiceTest do
     end
 
     test "a build killed for any other reason is failed with its signal", %{port: port} do
-      _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: false}})
+      _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: nil}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
       assert {:refusal, {:failed, {:signal, "SIGKILL"}}, _diagnostics} = List.last(lines)
+    end
+
+    test "a build ended at a limit above its own is a memory end that says CYFR ran out for builds",
+         %{port: port} do
+      _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "machine"}})
+
+      assert {200, lines} = Wire.build(port, Wire.request("true"))
+      assert {:refusal, refusal, _diagnostics} = List.last(lines)
+      assert refusal == {:memory, :machine}
+
+      said = Prima.BuilderProtocol.describe_refusal(refusal)
+      assert said == "CYFR ran out of memory for builds and the build was ended"
+      refute said =~ ~r/bound|SIGKILL|[0-9]/
+    end
+
+    test "a build ended for memory at a limit the kernel cannot name is a memory end that names none",
+         %{port: port} do
+      _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "either"}})
+
+      assert {200, lines} = Wire.build(port, Wire.request("true"))
+      assert {:refusal, refusal, _diagnostics} = List.last(lines)
+      assert refusal == {:memory, :either}
+
+      said = Prima.BuilderProtocol.describe_refusal(refusal)
+      assert said == "the build ran out of memory and was ended"
+      refute said =~ ~r/bound|limit|SIGKILL|[0-9]/
     end
 
     test "a keeper that cannot bound a build runs none: unavailable, naming the option", %{

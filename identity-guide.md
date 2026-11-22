@@ -91,6 +91,8 @@ In the CYFR app on macOS and Windows, **Sign in with your passkey** opens that C
 
 A browser that holds no passkey of yours, as one does when you made your account on a CYFR box, has two ways on once it is refused: **Add a passkey with your recovery code**, or **No passkey in this browser?**, which asks your name, makes a passkey for that account in this browser and returns it to the CYFR, which shows its code. On your box's screen, or in the CYFR app unlocked with the computer's key, **Your devices** shows "A browser asks to add a passkey" with that code: check it is the same, press **Approve**, and type that device's PIN or passphrase; its key adds the passkey to your account. Then sign in again in the browser with the new passkey. A passkey nobody approves adds nothing and is forgotten after five minutes.
 
+A sign-in with a passkey lasts until you sign out, until it goes unused for the CYFR's `session_ttl_hours` (30 days unless its administrator changed it), or until about 30 days after you signed in, however much you use it, whichever comes first. It lasts as long in the CYFR app, through quitting it and opening it again.
+
 Each CYFR decides who it admits:
 
 - **Its setup** admits its first person, who administers it, through the setup link or the box's own screen, and then opens nothing.

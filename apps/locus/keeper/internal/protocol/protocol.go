@@ -3,33 +3,38 @@
 
 // Package protocol defines the messages between `cyfr-locus serve` and its
 // client over the inherited socket (fd 3): one JSON object per line, each
-// carrying `"v": 1` and a `type`.
+// carrying `"v": 2` and a `type`.
 //
 // Client to keeper:
 //
-//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
-//	{"v":1,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
-//	{"v":1,"type":"resize","spawn_id":…,"rows":…,"cols":…}
-//	{"v":1,"type":"release","spawn_id":…,"grace_ms":…}
-//	{"v":1,"type":"pool","id":…,"pool":…}
-//	{"v":1,"type":"home_make","id":…,"path":…,"uid":…}
-//	{"v":1,"type":"home_measure","id":…,"path":…,"uid":…}
-//	{"v":1,"type":"home_retire","id":…,"path":…,"uid":…}
+//	{"v":2,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
+//	{"v":2,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
+//	{"v":2,"type":"resize","spawn_id":…,"rows":…,"cols":…}
+//	{"v":2,"type":"release","spawn_id":…,"grace_ms":…}
+//	{"v":2,"type":"measure","id":…,"spawn_id":…}
+//	{"v":2,"type":"pool","id":…,"pool":…}
+//	{"v":2,"type":"home_make","id":…,"path":…,"uid":…}
+//	{"v":2,"type":"home_measure","id":…,"path":…,"uid":…}
+//	{"v":2,"type":"home_retire","id":…,"path":…,"uid":…}
 //
 // Keeper to client:
 //
-//	{"v":1,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
-//	{"v":1,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request)
-//	{"v":1,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory_exceeded":…}
-//	{"v":1,"type":"released","spawn_id":…}
-//	{"v":1,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
-//	{"v":1,"type":"home_made","id":…}
-//	{"v":1,"type":"home_measured","id":…,"bytes":…}
-//	{"v":1,"type":"home_retired","id":…}
+//	{"v":2,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
+//	{"v":2,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request)
+//	{"v":2,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
+//	{"v":2,"type":"measured","id":…,"bytes":…,"lesser":…}
+//	{"v":2,"type":"released","spawn_id":…}
+//	{"v":2,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
+//	{"v":2,"type":"home_made","id":…}
+//	{"v":2,"type":"home_measured","id":…,"bytes":…}
+//	{"v":2,"type":"home_retired","id":…}
 //
-// `exited` is sent once, when a spawn's leader process is reaped. `released`
-// is sent once, when the spawn's uid has been retired, whether retirement
-// followed a `release` or the leader's exit.
+// `exited` is sent at most once and always before `released`: when a spawn's
+// leader process is reaped or, where retirement's bounded wait for that ran
+// out and the counters hold a kill for memory, then, with SIGKILL. A leader
+// retirement stopped waiting for with no such kill has none. `released` is
+// sent once, when the spawn's uid has been retired, whether retirement
+// followed a `release` or the leader's exit, and no exit follows it.
 //
 // A spawn's `env` is the whole environment block its command receives
 // beside the variables the stage sets itself (PATH, HOME, USER, LOGNAME and
@@ -44,12 +49,26 @@
 // to that many bytes with no swap, so its processes, the pages of what it writes to
 // a tmpfs home and the kernel memory charged to it never exceed the bound
 // together. When they cannot stay under it the kernel kills every process
-// of the spawn, and the leader's `exited` carries `"memory_exceeded": true`,
-// read from the cgroup's own counters and never inferred from the signal;
-// every other `exited` carries false. A keeper that cannot give a spawn
-// such a cgroup refuses the request as CodeMemoryUnavailable: the bound is
-// enforced or the command does not run. Missing, null and zero
+// of the spawn, and the leader's `exited` carries `"memory": "cap"`. A kill
+// for a limit above the spawn's, the container's or the machine's, carries
+// `"memory": "machine"`, whatever the spawn's own bound counted before it.
+// A kill the counters cannot lay to one of the two carries
+// `"memory": "either"` and never "cap". All are read from the cgroup's own
+// counters and never inferred from the signal; an `exited` of no kill, or of
+// counters that could not be read, carries null. A keeper that cannot give
+// a spawn such a cgroup refuses the request as CodeMemoryUnavailable: the
+// bound is enforced or the command does not run. Missing, null and zero
 // `memory_bytes` are refused as CodeBadRequest.
+//
+// A `measure` has an id of its own and names a spawn, and is answered under
+// that id alone, as a home request is: `measured` with the `bytes` of the
+// spawn's cgroup that cannot be given back, anon + shmem + kernel -
+// slab_reclaimable from one read of its memory.stat, so the tmpfs pages it
+// wrote count and the file cache it was charged does not. Where the kernel's
+// memory.stat has no `kernel` line (before 5.18) `lesser` is true and
+// `bytes` the lesser sum, of the parts of it that it names. A spawn the
+// keeper does not hold and a group it cannot read are refused as
+// CodeUnmeasured: no reading is ever answered as zero.
 //
 // A spawn's required `cpu_quota`, from MinCPUQuota to MaxCPUQuota, is the
 // microseconds of CPU time its group may use in every CPUPeriod (100000
@@ -144,7 +163,19 @@ import (
 )
 
 // Version is the protocol version every message carries as `v`.
-const Version = 1
+const Version = 2
+
+// An `exited`'s `memory` values beside null.
+const (
+	// MemoryCap says that the spawn reached its own memory bound.
+	MemoryCap = "cap"
+	// MemoryMachine says that a limit above the spawn's, the container's or
+	// the machine's, ended it.
+	MemoryMachine = "machine"
+	// MemoryEither says that one of the two ended it and that the counters
+	// do not say which.
+	MemoryEither = "either"
+)
 
 // IsolationNetns is the one value a spawn's `isolation` takes: a user and
 // network namespace of the spawn's own.
@@ -171,6 +202,7 @@ const (
 	TypeResize       = "resize"
 	TypeRelease      = "release"
 	TypePool         = "pool"
+	TypeMeasure      = "measure"
 	TypeHomeMake     = "home_make"
 	TypeHomeMeasure  = "home_measure"
 	TypeHomeRetire   = "home_retire"
@@ -178,6 +210,7 @@ const (
 	TypeError        = "error"
 	TypeExited       = "exited"
 	TypeReleased     = "released"
+	TypeMeasured     = "measured"
 	TypeHomeMade     = "home_made"
 	TypeHomeMeasured = "home_measured"
 	TypeHomeRetired  = "home_retired"
@@ -195,6 +228,9 @@ const (
 	// CodeMemoryUnavailable refuses a spawn whose memory and CPU bounds the
 	// keeper cannot enforce where it runs.
 	CodeMemoryUnavailable = "memory_unavailable"
+	// CodeUnmeasured refuses a measure of a spawn the keeper does not hold
+	// or whose cgroup it cannot read: what it uses is unknown.
+	CodeUnmeasured = "unmeasured"
 	// CodeHomeOverCap refuses a kept spawn whose home already holds its
 	// home_max_bytes.
 	CodeHomeOverCap = "home_over_cap"
@@ -552,6 +588,16 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 		if req.GraceMs == nil || *req.GraceMs < 0 || *req.GraceMs > MaxGraceMs {
 			return nil, refuse(fmt.Sprintf("grace_ms must be within 0..%d", MaxGraceMs))
 		}
+	case TypeMeasure:
+		if !req.only("id", "spawn_id") {
+			return nil, refuse("measure carries only id and spawn_id")
+		}
+		if !idPattern.MatchString(req.ID) {
+			return nil, refuse("id must match " + idPattern.String())
+		}
+		if !spawnIDPattern.MatchString(req.SpawnID) {
+			return nil, refuse("spawn_id must be 32 lowercase hex digits")
+		}
 	case TypePool:
 		if !req.only("id", "pool") {
 			return nil, refuse("pool carries only id and pool")
@@ -809,8 +855,8 @@ func NewSpawned(id, spawnID string, uid, pid int) Spawned {
 	return Spawned{V: Version, Type: TypeSpawned, ID: id, SpawnID: spawnID, UID: uid, PID: pid}
 }
 
-// ErrorReply refuses the request named by ID (spawn, pool, home) or SpawnID
-// (signal, resize, release).
+// ErrorReply refuses the request named by ID (spawn, pool, home, measure) or
+// SpawnID (signal, resize, release).
 type ErrorReply struct {
 	V       int    `json:"v"`
 	Type    string `json:"type"`
@@ -825,19 +871,36 @@ func NewError(id, spawnID, code string) ErrorReply {
 }
 
 // Exited reports a leader's end: its exit code, or the signal that ended it,
-// and whether the kernel killed processes of the spawn at its memory bound.
+// and what memory limit the kernel killed processes of the spawn for.
 type Exited struct {
-	V              int     `json:"v"`
-	Type           string  `json:"type"`
-	SpawnID        string  `json:"spawn_id"`
-	Code           *int    `json:"code"`
-	Signal         *string `json:"signal"`
-	MemoryExceeded bool    `json:"memory_exceeded"`
+	V       int     `json:"v"`
+	Type    string  `json:"type"`
+	SpawnID string  `json:"spawn_id"`
+	Code    *int    `json:"code"`
+	Signal  *string `json:"signal"`
+	// Memory is MemoryCap, MemoryMachine, MemoryEither or nil.
+	Memory *string `json:"memory"`
 }
 
 // NewExited builds an `exited` reply; exactly one of code and signal is set.
-func NewExited(spawnID string, code *int, signal *string, memoryExceeded bool) Exited {
-	return Exited{V: Version, Type: TypeExited, SpawnID: spawnID, Code: code, Signal: signal, MemoryExceeded: memoryExceeded}
+func NewExited(spawnID string, code *int, signal, memory *string) Exited {
+	return Exited{V: Version, Type: TypeExited, SpawnID: spawnID, Code: code, Signal: signal, Memory: memory}
+}
+
+// Measured answers the `measure` named by ID with the bytes of its spawn's
+// cgroup that cannot be given back, and whether they are the lesser sum of a
+// kernel with no `kernel` count.
+type Measured struct {
+	V      int    `json:"v"`
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Bytes  uint64 `json:"bytes"`
+	Lesser bool   `json:"lesser"`
+}
+
+// NewMeasured builds a `measured` reply.
+func NewMeasured(id string, bytes uint64, lesser bool) Measured {
+	return Measured{V: Version, Type: TypeMeasured, ID: id, Bytes: bytes, Lesser: lesser}
 }
 
 // Released reports that a spawn's uid has been retired.

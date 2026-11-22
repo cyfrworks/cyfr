@@ -177,7 +177,7 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
 
 
 def spawn_line(spawn_id, argv, isolated=True, env=None, control=False, attach=f"{RUN_DIR}/attach.sock"):
-    request = {"v": 1, "type": "spawn", "id": spawn_id, "pool": ROLE["pool"], "argv": argv, "env": env or {},
+    request = {"v": 2, "type": "spawn", "id": spawn_id, "pool": ROLE["pool"], "argv": argv, "env": env or {},
                "memory_bytes": MEMORY_BYTES, "cpu_quota": CPU_QUOTA, "attach": {"path": attach, "token": TOKEN}}
     if control:
         request["control"] = True
@@ -199,7 +199,7 @@ def test_refusals(image):
     client = (f"printf '%s\\n' '{spawn_line('1', ['/bin/true'], isolated=False)}' >&3; "
               "read -r line <&3; echo \"reply:$line\"")
     answered = keeper_run(image, client)
-    expect(replies(answered.stdout) == [{"v": 1, "type": "error", "id": "1", "code": "bad_request"}],
+    expect(replies(answered.stdout) == [{"v": 2, "type": "error", "id": "1", "code": "bad_request"}],
            "under the profile, a spawn of the isolated pool without isolation is refused as bad_request",
            answered.stdout + answered.stderr)
 
@@ -437,7 +437,7 @@ def test_spawn(stack):
 def test_cgroup(stack):
     for runner in stack.runner_processes():
         facts = runner_facts(stack, runner)
-        expect(facts.get("cgroup") == f"0::/keeper-{runner['uid']}",
+        expect(facts.get("cgroup") == f"0::/keeper-{runner['uid']}/bound",
                f"cgroup: runner uid {runner['uid']} runs in its own group, placed from the parent side before it ran", facts)
 
 

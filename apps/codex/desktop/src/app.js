@@ -8,23 +8,29 @@
 // cyfr, from a window or from the system, goes through its `step`, and
 // this file carries out the effects it answers, in order, and nothing
 // else. cyfr serves the chooser and the device's pages on loopback; main
-// shows them in a content window whose session is memory-only and new at
-// every unlock. On macOS and Windows a person may sign in with the
-// account's passkey instead: the CYFR's own sign-in page hops to its
+// shows them in a content window. On the six-word road alone its session
+// is memory-only and new at every lock. On macOS and Windows a person may
+// sign in with the account's passkey instead, and is then kept signed in
+// as a browser keeps them: the content session is one, kept on disk, and
+// one CYFR's alone (owner.js). The CYFR's own sign-in page hops to its
 // account service, which opens in the one account window, and the answer
 // returns only to the content session that hopped.
 
 import {spawn} from "node:child_process"
+import path from "node:path"
 
-import {BrowserWindow, app, dialog, net, powerMonitor, session} from "electron"
+import {BrowserWindow, app, dialog, session} from "electron"
 
+import {keptStorage} from "./owner.js"
 import {lines, readFromCyfr, toCyfr} from "./process.js"
-import {accountLoad, documentHeaders, grants, readHop, relyingParty, retired, unlistedSwitch} from "./policy.js"
+import {accountLoad, documentHeaders, grants, readHop, relyingParty, unlistedSwitch} from "./policy.js"
 import {initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
-const UNCONFIRMED = "The CYFR did not confirm that it signed this computer out. That sign-in ends when it expires, or when you sign it out under Settings, Keys on your account."
+// How long the app's end waits for a clear, a take or a flush under way.
+const END_WAITS_MS = 5000
 const ACCOUNT_PARTITION = "persist:cyfr-account"
+const CONTENT_PARTITION = "persist:cyfr-content"
 
 const SECURE = {
   sandbox: true,
@@ -38,6 +44,14 @@ const SECURE = {
   spellcheck: false,
   safeDialogs: true,
   devTools: false
+}
+
+// Who began a navigation of `contents` (`asker`) and, where that was its
+// top frame, the address of the document committed there (`by`): never one
+// still loading, and never where a redirect goes.
+function begun(event, contents) {
+  const asker = askerOf(event, contents)
+  return {asker, by: asker === "top" ? contents.mainFrame.url : ""}
 }
 
 // Who asked for a navigation of `contents`, as the engine reports its
@@ -84,15 +98,12 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   const children = new Set() // its confirmation windows
   let accountWindow = null
   let hop = null // {kind, request, from, timer}
-  // The forgery token of the last page of the CYFR main keeps to, held
-  // apart from the content window so that closing it at once loses
-  // nothing; step says when the session is held (states.js `held`).
-  let holder = null
   let contentSession = null
   let generation = 0
-  // The sign-out a lock, cyfr's loss or quitting started: whether the
-  // CYFR confirmed it.
-  let retiring = Promise.resolve(true)
+  let storage = null // the passkey road's kept storage (owner.js)
+  // What is being forgotten or taken, one after the other, which quitting
+  // waits for, so long (ending).
+  let forgetting = Promise.resolve()
 
   // ---- the one place: every event goes through step ----
 
@@ -107,27 +118,29 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.say) say(effect.say)
     if (effect.close) closeContent()
     if (effect.send) send(effect.send.type, effect.send.fields)
-    if (effect.retire) {
-      const out = {held: effect.retire.held ? holder ?? {token: ""} : null, ses: contentSession}
-      holder = null
-      // A sign-out still running from before is waited for too. Once a
-      // lock has told the person its answer, the next answers for itself.
-      const before = retiring
-      const now = retire(out).then(async (confirmed) => (await before) && confirmed)
-      retiring = now
-      if (state.name === "locking") {
-        now.then((confirmed) => {
-          if (retiring === now) retiring = Promise.resolve(true)
-          on({type: "signed-out", confirmed})
-        })
-      }
+    if (effect.forget) {
+      // A session in memory is never used again, cleared or not.
+      const ses = contentSession
+      const done = forgetting.then(() => storage ? storage.clear() : discard(ses))
+      forgetting = done
+      done.then((cleared) => on({type: "forgot", cleared}))
     }
-    if (effect.chooser) openContent(state.readyURL + (effect.chooser.length ? `&notice=${effect.chooser.join(",")}` : ""))
+    if (effect.take) {
+      const answer = (taken) => on({type: "taken", taken})
+      forgetting = forgetting.then(async () => {
+        if (storage) await storage.take(() => state.home, answer)
+        else answer(true)
+      })
+    }
+    if (effect.root && content && !storage.loadRoot(content, effect.root.home)) {
+      on({type: "gone", why: "the sign-in it keeps is another CYFR's"})
+    }
+    if (effect.chooser) openContent(chooserAddress(effect.chooser))
     if (effect.relaunch) {
       say("starting again with the CYFR's route")
       const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a))
       if (effect.relaunch.proxy) args.push(`--proxy-server=${effect.relaunch.proxy}`, `--host-resolver-rules=${effect.relaunch.resolver}`)
-      retiring.then(() => {
+      ending(() => {
         if (child && child.exitCode === null) child.kill()
         app.relaunch({args})
         app.exit(0)
@@ -136,11 +149,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.end) {
       say(`cyfr ended: ${effect.end}`)
       if (child && child.exitCode === null) child.kill()
-      retiring.then((confirmed) => message(`CYFR stopped: ${effect.end}. Quit the app and open it again.` +
-        (confirmed ? "" : ` ${UNCONFIRMED}`)))
+      message(`CYFR stopped: ${effect.end}. Quit the app and open it again.`)
     }
     if (effect.quit) {
-      retiring.then(() => {
+      ending(() => {
         if (child && child.exitCode === null) {
           send("shutdown")
           child.stdin.end()
@@ -148,12 +160,6 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         quitting = true
         app.quit()
       })
-    }
-    if (effect.hold) holder = holder ?? {token: ""}
-    if (effect.token && content && holder) {
-      const keep = holder
-      content.webContents.executeJavaScript("document.querySelector('meta[name=\"csrf-token\"]')?.content ?? ''", false)
-        .then((token) => { if (typeof token === "string" && token) keep.token = token }, () => {})
     }
     if (effect.hop) startHop(effect.hop.url, effect.hop.kind)
     if (effect.unhop) endHop()
@@ -173,6 +179,30 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       content.focus()
     }
   }
+
+  // The app's one way out, `end`. It waits END_WAITS_MS at the most for
+  // what is being forgotten or taken, and never runs in the turn that asked
+  // for it: where the system began the quit (SIGTERM, Cmd+Q, a logout) the
+  // engine runs the microtasks before its before-quit returns, and a quit
+  // made there re-enters the one under way, which then never ends. A clear
+  // the bound cuts off records no owner (owner.js records only after it),
+  // so the next start clears again before another CYFR is kept to.
+  function ending(end) {
+    let timer
+    const bound = new Promise((resolve) => { timer = setTimeout(resolve, END_WAITS_MS) })
+    const go = () => {
+      clearTimeout(timer)
+      setImmediate(end)
+    }
+    Promise.race([forgetting, bound]).then(go, go)
+  }
+
+  // The chooser's address: cyfr's own, with the road this app offers,
+  // which is main's alone to say, and what main has to tell.
+  const chooserAddress = (notices) =>
+    state.readyURL + (accountRoad ? "&road=passkey" : "") + (notices.length ? `&notice=${notices.join(",")}` : "")
+
+  const discard = (ses) => Promise.resolve(ses?.clearStorageData()).then(() => true, () => true)
 
   // ---- the window owner: every window the app has is made here ----
 
@@ -202,30 +232,34 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // opened it for (`first`), which that handler decided: the engine names
   // some frame of the opener as its initiator, not reliably the top one.
   function confine(contents, which, lost, first = null) {
-    const ask = (event) => {
+    const ask = (event, redirect = false) => {
       const opening = first !== null && event.isMainFrame && event.url === first
       if (event.isMainFrame) first = null
+      const {asker, by} = begun(event, contents)
       const decided = on({type: "navigate", window: which, url: event.url, target: event.isMainFrame ? "top" : "frame",
-        asker: opening ? "top" : askerOf(event, contents), showing: contents.getURL()})
+        asker: opening ? "top" : asker, by, showing: contents.getURL(), redirect})
       if (!decided.allow) event.preventDefault()
     }
-    contents.on("will-navigate", ask)
-    contents.on("will-redirect", ask)
+    contents.on("will-navigate", (event) => ask(event))
+    contents.on("will-redirect", (event) => ask(event, true))
     contents.on("will-frame-navigate", (event) => {
       if (!event.isMainFrame) ask(event)
     })
     contents.setWindowOpenHandler(() => ({action: "deny"}))
-    contents.on("render-process-gone", () => on({type: "lock", why: lost}))
+    // The engine takes no load from inside its report of the loss.
+    contents.on("render-process-gone", () => setImmediate(lost))
   }
 
   function openContent(address) {
-    generation++
-    contentSession = session.fromPartition(`cyfr-${process.pid}-${generation}`)
+    if (!accountRoad) generation++
+    contentSession = session.fromPartition(accountRoad ? CONTENT_PARTITION : `cyfr-${process.pid}-${generation}`)
     guard(contentSession, "content")
     const w = window(contentSession)
     content = w
     const contents = w.webContents
-    confine(contents, "content", "the page stopped")
+    confine(contents, "content", () => {
+      if (content === w) on({type: "lost"})
+    })
     // The window handler opens only the device's two loopback confirmation
     // routes and the confirmation hop (step's open-window). Electron does
     // not say which frame asked; Prism's own frame rules refuse every frame
@@ -244,12 +278,11 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       opening = null
       children.add(opened)
       opened.on("closed", () => children.delete(opened))
-      confine(opened.webContents, "child", "a window's page stopped", first)
+      confine(opened.webContents, "child", () => opened.destroy(), first)
     })
     const heard = (event) => {
       if (content === w) on(event)
     }
-    contents.on("did-finish-load", () => heard({type: "page", url: contents.getURL()}))
     contents.on("did-start-navigation", (details) => {
       if (details.isMainFrame) heard({type: "started", url: details.url, sameDocument: details.isSameDocument})
     })
@@ -274,18 +307,21 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const w = window(ses, {width: 560, height: 760, parent: content ?? undefined})
     accountWindow = w
     const contents = w.webContents
-    const ask = (event) => {
-      const decided = on({type: "account-navigate", url: event.url, target: event.isMainFrame ? "top" : "frame",
+    const ask = (event, redirect = false) => {
+      const decided = on({type: "account-navigate", window: "account", url: event.url, target: event.isMainFrame ? "top" : "frame",
+        ...begun(event, contents), redirect,
         kind: hop && content && hop.from === content ? hop.kind : null})
       if (!decided.allow) event.preventDefault()
     }
-    contents.on("will-navigate", ask)
-    contents.on("will-redirect", ask)
+    contents.on("will-navigate", (event) => ask(event))
+    contents.on("will-redirect", (event) => ask(event, true))
     contents.on("will-frame-navigate", (event) => {
       if (!event.isMainFrame) ask(event)
     })
     contents.setWindowOpenHandler(() => ({action: "deny"}))
-    contents.on("render-process-gone", () => on({type: "lock", why: "the sign-in page stopped"}))
+    contents.on("render-process-gone", () => setImmediate(() => {
+      if (accountWindow === w) endHop()
+    }))
     w.on("closed", () => {
       if (accountWindow === w) {
         accountWindow = null
@@ -303,10 +339,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     w.webContents.on("will-navigate", block)
     w.webContents.on("will-redirect", block)
     w.webContents.setWindowOpenHandler(() => ({action: "deny"}))
-    w.on("closed", () => {
-      quitting = true
-      app.quit()
-    })
+    w.on("closed", () => on({type: "quit"}))
     const page = "<!doctype html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content=\"default-src 'none'; style-src 'unsafe-inline'\">" +
       "<title>CYFR</title><style>body{background:#0b1418;color:#e8f1f2;font:1.1rem system-ui,sans-serif;margin:2rem}</style>" +
       `<h1>CYFR</h1><p>${text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p>`
@@ -339,7 +372,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     children.add(w)
     w.on("closed", () => children.delete(w))
-    confine(w.webContents, "child", "a window's page stopped")
+    confine(w.webContents, "child", () => w.destroy())
     w.loadURL(url)
   }
 
@@ -375,52 +408,6 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     }).then(({response}) => {
       answer(hop && top(frame) && response < names.length ? details.accounts[response].credentialId : null)
     }, () => answer(null))
-  }
-
-  // ---- the sign-out ----
-
-  // Sign out the session `out.held` held at the CYFR main keeps to, then
-  // clear the content session's storage, always: whether the CYFR
-  // confirmed it. No session held is nothing to confirm; a missing
-  // forgery token, a failed request or any answer but the signed-out
-  // acknowledgement is unconfirmed (policy.js retired).
-  async function retire({held: out, ses}) {
-    const home = kept(state).home || state.home
-    try {
-      if (!out) return true
-      if (!out.token || !home) return false
-      const answer = await direct(ses, home + "/auth/logout", "_csrf_token=" + encodeURIComponent(out.token))
-      return !!answer && retired(answer.status, answer.headers, home)
-    } catch {
-      return false
-    } finally {
-      await ses?.clearStorageData().catch(() => {})
-    }
-  }
-
-  // The direct answer to a form POST of `body` to `url` in session `ses`,
-  // with its cookies, a redirect answered rather than followed: {status,
-  // headers}, or null when none came within 10 s. net.request, since
-  // session.fetch rejects a manual redirect rather than answer it.
-  function direct(ses, url, body) {
-    return new Promise((resolve) => {
-      const request = net.request({method: "POST", url, session: ses, useSessionCookies: true, redirect: "manual"})
-      const timer = setTimeout(() => done(null), 10_000)
-      function done(answer) {
-        clearTimeout(timer)
-        resolve(answer)
-        request.abort()
-      }
-      const headers = (raw) => new Headers(Object.entries(raw ?? {}).flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((x) => [k, x])))
-      request.on("redirect", (status, _method, _location, raw) => done({status, headers: headers(raw)}))
-      request.on("response", (response) => {
-        done({status: response.statusCode, headers: headers(response.headers)})
-        response.resume?.()
-      })
-      request.on("error", () => done(null))
-      request.setHeader("content-type", "application/x-www-form-urlencoded")
-      request.end(body)
-    })
   }
 
   // ---- cyfr ----
@@ -490,9 +477,14 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     guard(account, "account")
     account.on("select-webauthn-account", chooseAccount)
     if (touchIdGroup && process.platform === "darwin") app.configureWebAuthn({touchID: {keychainAccessGroup: touchIdGroup}})
-    // The app locks on the system's lock or sleep, as on any window's page
-    // lost and on cyfr's locked; the desktop's idle alone does not.
-    for (const signal of ["lock-screen", "suspend"]) powerMonitor.on(signal, () => on({type: "lock", why: signal}))
+    if (accountRoad) {
+      // The engine writes cookies within half a minute, which an app that is
+      // killed does not have.
+      const ses = session.fromPartition(CONTENT_PARTITION)
+      storage = keptStorage(ses, path.join(app.getPath("userData"), "content-owner"))
+      const {cookies} = ses
+      cookies.on("changed", () => cookies.flushStore().catch(() => {}))
+    }
     startCyfr()
   })
 

@@ -35,7 +35,7 @@ func TestTheDeviceRoadMakesItsKeyOnTheChipWhereThereIsOne(t *testing.T) {
 	a.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
 	done := a.connect(t, "/bootstrap/approve", map[string]string{"home": "https://cyfr.example.com", "directory": accounts.URL()})
 	a.next(t)
-	a.HomeReady("https://cyfr.example.com")
+	a.ready("https://cyfr.example.com")
 	answered(t, done)
 
 	if page := a.get("/").Body.String(); !strings.Contains(page, "Choose a six-digit PIN") || strings.Contains(page, "Show the passphrase") {

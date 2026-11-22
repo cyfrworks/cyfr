@@ -47,12 +47,18 @@ func keeperFiles(t *testing.T, root string, files ...string) {
 }
 
 func TestOwnReadsTheV2PathAndRefusesAnyOtherHierarchy(t *testing.T) {
-	for self, want := range map[string]string{"0::/\n": "/", "0::/keeper-30001\n": "/keeper-30001", "0::/keeper": "/keeper"} {
+	for self, want := range map[string]string{
+		"0::/\n":                   "/",
+		"0::/keeper-30001/bound\n": "/keeper-30001",
+		"0::/keeper":               "/keeper",
+		"0::/keeper-s-0123456789abcdef0123456789abcdef/bound": "/keeper-s-0123456789abcdef0123456789abcdef",
+		"0::/keeper-30001/bound/inner":                        "/keeper-30001/bound/inner",
+	} {
 		if got, err := Own([]byte(self)); err != nil || got != want {
 			t.Errorf("Own(%q) = %q, %v; want %q", self, got, err, want)
 		}
 	}
-	for _, self := range []string{"", "\n", "12:memory:/docker/abc\n0::/docker/abc\n", "1:name=systemd:/\n", "0::relative\n"} {
+	for _, self := range []string{"", "\n", "12:memory:/docker/abc\n0::/docker/abc\n", "1:name=systemd:/\n", "0::relative\n", "0::/keeper-30001\n"} {
 		if got, err := Own([]byte(self)); err == nil {
 			t.Errorf("Own(%q) = %q, want a refusal", self, got)
 		}
@@ -285,14 +291,22 @@ func TestCreateSetsTheBoundsNoSwapAndTheGroupKill(t *testing.T) {
 		"memory.max": "1073741824", "memory.swap.max": "0",
 		"memory.oom.group": "1", "cpu.max": "200000 100000",
 	} {
-		if got, err := os.ReadFile(filepath.Join(m.root, "keeper-30001", file)); err != nil || string(got) != want {
+		if got, err := os.ReadFile(filepath.Join(m.root, "keeper-30001", boundLeaf, file)); err != nil || string(got) != want {
 			t.Errorf("%s holds %q (%v), want %q", file, got, err, want)
 		}
+	}
+	for file, want := range map[string]string{"memory.oom.group": "1", "cgroup.subtree_control": "+memory +cpu"} {
+		if got, err := os.ReadFile(filepath.Join(m.root, "keeper-30001", file)); err != nil || string(got) != want {
+			t.Errorf("the mark's %s holds %q (%v), want %q", file, got, err, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(m.root, "keeper-30001", "memory.max")); err == nil {
+		t.Error("the mark was given a bound, which would stand where the spawn's does")
 	}
 	if err := g.Add(4321); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(m.root, "keeper-30001", "cgroup.procs")); string(got) != "4321" {
+	if got, _ := os.ReadFile(filepath.Join(m.root, "keeper-30001", boundLeaf, "cgroup.procs")); string(got) != "4321" {
 		t.Fatalf("cgroup.procs holds %q", got)
 	}
 	for _, name := range []string{"", "keeper", "keeper-", "keeper-0", "keeper-30001/..", "../keeper-30001", "keeper-30001x"} {
@@ -315,7 +329,11 @@ func TestCreateNeverReusesAnEarlierSpawnsGroup(t *testing.T) {
 	if again, err := m.Create(Name(30002), 1<<30, 100_000); err == nil || !strings.Contains(err.Error(), "earlier spawn") {
 		t.Fatalf("Create over a group in use = %v, %v", again, err)
 	}
+	files := []string{"memory.oom.group", "cgroup.subtree_control"}
 	for _, file := range boundFiles {
+		files = append(files, filepath.Join(boundLeaf, file))
+	}
+	for _, file := range files {
 		if err := os.Remove(filepath.Join(m.root, "keeper-30002", file)); err != nil {
 			t.Fatal(err)
 		}
@@ -328,40 +346,115 @@ func TestCreateNeverReusesAnEarlierSpawnsGroup(t *testing.T) {
 	}
 }
 
-func TestKillsTellsTheSpawnsBoundFromTheContainers(t *testing.T) {
+func TestKilledForTellsTheSpawnsBoundFromALimitAbove(t *testing.T) {
 	m := &Manager{root: t.TempDir()}
 	g, err := m.Create(Name(30003), 1<<30, 100_000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := filepath.Join(m.root, "keeper-30003", "memory.events")
-	for content, want := range map[string]Kills{
-		"low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n":  {},
-		"low 0\nhigh 0\nmax 19\noom 1\noom_kill 7\noom_group_kill 1\n": {AtBound: true},
-		"low 0\nhigh 0\nmax 0\noom 0\noom_kill 3\noom_group_kill 1\n":  {Outside: true},
-		"low 0\nhigh 0\nmax 40\noom 2\noom_kill 0\noom_group_kill 0\n": {},
-		"oom 1\noom_kill 1\n": {AtBound: true},
-		"low 0\nhigh 0\nmax 536\noom 26\noom_kill 2\noom_group_kill 1\n": {AtBound: true},
+	bound := filepath.Join(m.root, "keeper-30003", boundLeaf, "memory.events.local")
+	mark := filepath.Join(m.root, "keeper-30003", "memory.events.local")
+	const quiet = "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
+	const marked = "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 1\n"
+	const uncounted = "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n"
+	for _, c := range []struct {
+		name, bound, mark string
+		want              Cause
+		waits             int
+	}{
+		{name: "no kill", bound: quiet, mark: quiet, want: NotKilled},
+		{name: "out of memory at the bound, nothing killed", bound: "max 40\noom 2\noom_kill 0\noom_group_kill 0\n", mark: quiet, want: NotKilled},
+		{name: "at the bound", bound: "max 19\noom 1\noom_kill 7\noom_group_kill 1\n", mark: quiet, want: AtBound},
+		{name: "at the bound, many times over", bound: "max 536\noom 26\noom_kill 2\noom_group_kill 1\n", mark: quiet, want: AtBound},
+		{name: "from above", bound: "oom 0\noom_kill 3\noom_group_kill 0\n", mark: marked, want: Above},
+		{name: "from above, after the bound failed with nothing to kill", bound: "oom 1\noom_kill 1\noom_group_kill 0\n", mark: marked, want: Above},
+		{name: "from above, counted by neither level", bound: "oom 0\noom_kill 1\noom_group_kill 0\n", mark: quiet, want: Above},
+		{name: "at both", bound: "oom 1\noom_kill 3\noom_group_kill 1\n", mark: marked, want: Either},
+		{name: "out of memory at the bound, and no group kill ever counted", bound: "oom 1\noom_kill 1\noom_group_kill 0\n", mark: quiet, want: Either, waits: settleAttempts},
+		{name: "a kernel with no group kill count, out of memory at the bound", bound: "oom 1\noom_kill 1\n", mark: uncounted, want: Either},
+		{name: "a kernel with no group kill count, never out of memory at the bound", bound: "oom 0\noom_kill 1\n", mark: uncounted, want: Above},
 	} {
-		if err := os.WriteFile(events, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
+		for file, content := range map[string]string{bound: c.bound, mark: c.mark} {
+			if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if got, err := g.Kills(); err != nil || got != want {
-			t.Errorf("events %q: %+v, %v; want %+v", content, got, err, want)
+		waits := pausing(t, nil)
+		if got, err := g.KilledFor(); err != nil || got != c.want || len(*waits) != c.waits {
+			t.Errorf("%s: %v, %v after %d waits; want %v after %d", c.name, got, err, len(*waits), c.want, c.waits)
 		}
 	}
+
+	// The group kill's count follows the first victim's signal.
+	for file, content := range map[string]string{bound: "oom 1\noom_kill 1\noom_group_kill 0\n", mark: quiet} {
+		if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pausing(t, func() { _ = os.WriteFile(bound, []byte("oom 1\noom_kill 2\noom_group_kill 1\n"), 0o644) })
+	if got, err := g.KilledFor(); err != nil || got != AtBound {
+		t.Errorf("a count that settled read as %v, %v", got, err)
+	}
+
 	for _, content := range []string{"", "oom 1\n", "oom_kill 1\n", "oom one\noom_kill 1\n", "oom 1 2\noom_kill 1\n"} {
-		if err := os.WriteFile(events, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(bound, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := g.Kills(); err == nil {
-			t.Errorf("events %q read as %+v", content, got)
+		if got, err := g.KilledFor(); err == nil {
+			t.Errorf("events %q read as %v", content, got)
 		}
 	}
-	if err := os.Remove(events); err != nil {
+	if err := os.Remove(bound); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := g.Kills(); err == nil {
-		t.Errorf("missing events read as %+v", got)
+	if got, err := g.KilledFor(); err == nil {
+		t.Errorf("missing events read as %v", got)
+	}
+}
+
+// A group's use is the memory that cannot be given back, summed from one
+// memory.stat of either shape: with a `kernel` line the whole, without one
+// the lesser, of the parts that kernel names. File cache is none of it,
+// whatever memory.current says, and no reading is zero.
+func TestUsedIsTheMemoryThatCannotBeGivenBack(t *testing.T) {
+	const whole = "anon 8192\nfile 2097152\nkernel 40960\nkernel_stack 16384\npagetables 4096\nsec_pagetables 0\n" +
+		"percpu 512\nsock 4096\nvmalloc 1024\nshmem 12288\ninactive_file 0\nactive_file 2084864\n" +
+		"slab_reclaimable 8192\nslab_unreclaimable 4096\n"
+	const v517 = "anon 8192\nfile 2097152\nkernel_stack 16384\npagetables 4096\npercpu 512\nsock 4096\nvmalloc 1024\n" +
+		"shmem 12288\ninactive_file 0\nactive_file 2084864\nslab_reclaimable 8192\nslab_unreclaimable 4096\nslab 12288\n"
+	const v54 = "anon 8192\nfile 2097152\nkernel_stack 16384\nslab 12288\nsock 4096\nshmem 12288\ninactive_file 0\n" +
+		"slab_reclaimable 8192\nslab_unreclaimable 4096\n"
+	for _, c := range []struct {
+		name    string
+		stat    string
+		current string
+		want    uint64
+		lesser  bool
+		fails   bool
+	}{
+		{name: "with a kernel line", stat: whole, current: "2142208", want: 8192 + 12288 + 40960 - 8192},
+		{name: "with a kernel line, and memory.current never read", stat: whole, want: 8192 + 12288 + 40960 - 8192},
+		{name: "before 5.18", stat: v517, current: "2142208", want: 8192 + 12288 + 16384 + 4096 + 512 + 1024 + 4096, lesser: true},
+		{name: "5.4, which names fewer parts", stat: v54, current: "2142208", want: 8192 + 12288 + 16384 + 4096, lesser: true},
+		{name: "all cache", stat: "anon 0\nfile 4096\nkernel 4096\nshmem 0\ninactive_file 0\nslab_reclaimable 4096\n", current: "8192", fails: true},
+		{name: "nothing counted", stat: "anon 0\nkernel 0\nshmem 0\ninactive_file 0\nslab_reclaimable 0\n", current: "8192", fails: true},
+		{name: "more given back than held", stat: "anon 0\nkernel 0\nshmem 0\ninactive_file 0\nslab_reclaimable 4096\n", current: "8192", fails: true},
+		{name: "no anon", stat: "kernel 4096\nshmem 0\ninactive_file 0\nslab_reclaimable 0\n", current: "8192", fails: true},
+		{name: "no shmem", stat: "anon 4096\nkernel 4096\ninactive_file 0\nslab_reclaimable 0\n", current: "8192", fails: true},
+		{name: "a kernel line and no slab_reclaimable", stat: "anon 4096\nkernel 4096\nshmem 0\ninactive_file 0\n", current: "8192", fails: true},
+		{name: "a count that does not read", stat: "anon max\nkernel 4096\nshmem 0\ninactive_file 0\nslab_reclaimable 0\n", current: "8192", fails: true},
+		{name: "no memory.stat", current: "8192", fails: true},
+	} {
+		files := map[string]string{}
+		if c.stat != "" {
+			files["memory.stat"] = c.stat
+		}
+		if c.current != "" {
+			files["memory.current"] = c.current + "\n"
+		}
+		used, err := (&Group{path: namespaceRoot(t, files)}).Used()
+		if (err != nil) != c.fails || used != (Use{Bytes: c.want, Lesser: c.lesser}) {
+			t.Errorf("%s: Used = %v, %v; want %d, lesser %t, failing %t", c.name, used, err, c.want, c.lesser, c.fails)
+		}
 	}
 }

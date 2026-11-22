@@ -362,8 +362,11 @@ type spawn struct {
 	// the retirement that removes the spawn from spawns closes it.
 	pty *os.File
 
-	// exitReported closes once `exited` has been sent for the leader.
-	exitReported chan struct{}
+	// exitOnce settles the leader's one `exited`, sent or never to be:
+	// whichever of its watcher and the retirement comes first reads the
+	// cause and settles it, and the other waits for that. It is settled
+	// before `released`, so no exit follows one.
+	exitOnce sync.Once
 	// retired closes when retirement has finished.
 	retired    chan struct{}
 	retireOnce sync.Once
@@ -621,6 +624,8 @@ func (s *server) handle(req *protocol.Request) {
 		s.handleRelease(req)
 	case protocol.TypePool:
 		s.handlePool(req)
+	case protocol.TypeMeasure:
+		s.handleMeasure(req)
 	case protocol.TypeHomeMake, protocol.TypeHomeMeasure, protocol.TypeHomeRetire:
 		s.handleHome(req)
 	}
@@ -639,6 +644,28 @@ func (s *server) handlePool(req *protocol.Request) {
 		return
 	}
 	s.send(protocol.NewPoolReply(req.ID, req.Pool, st.Size, st.Free, st.Quarantined))
+}
+
+// handleMeasure answers what a spawn's group uses. The reading is taken
+// under mu: a pooled spawn's group is named by its uid, which no other spawn
+// is given until mu has seen this one gone.
+func (s *server) handleMeasure(req *protocol.Request) {
+	var used cgroup.Use
+	var err error
+	s.mu.Lock()
+	sp := s.spawns[req.SpawnID]
+	if sp != nil {
+		used, err = sp.group.Used()
+	}
+	s.mu.Unlock()
+	if err != nil {
+		s.log.Error("measure %s: spawn %s: reading its memory use: %v", req.ID, req.SpawnID, err)
+	}
+	if sp == nil || err != nil {
+		s.send(protocol.NewError(req.ID, "", protocol.CodeUnmeasured))
+		return
+	}
+	s.send(protocol.NewMeasured(req.ID, used.Bytes, used.Lesser))
 }
 
 func (s *server) handleSignal(req *protocol.Request) {
@@ -782,7 +809,7 @@ func (s *server) handleSpawn(req *protocol.Request) {
 		return
 	}
 
-	sp := &spawn{pool: p, account: s.accounts[uid], exitReported: make(chan struct{}), retired: make(chan struct{})}
+	sp := &spawn{pool: p, account: s.accounts[uid], retired: make(chan struct{})}
 	if sp.id, err = randomHex(16); err == nil {
 		var name string
 		if name, err = home.NewName(uid); err == nil {
@@ -1049,41 +1076,84 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 // watchLeader reports the leader's exit and retires the spawn.
 func (s *server) watchLeader(sp *spawn) {
 	<-sp.leader.done
-	var code *int
-	var sig *string
-	if ws := sp.leader.status; ws.Signaled() {
-		name := unix.SignalName(ws.Signal())
-		if name == "" {
-			name = ws.Signal().String()
-		}
-		sig = &name
-	} else {
-		c := ws.ExitStatus()
-		code = &c
-	}
-	s.send(protocol.NewExited(sp.id, code, sig, s.memoryExceeded(sp)))
-	close(sp.exitReported)
+	s.reportExit(sp)
 	s.retire(sp, leaderExitGrace, true)
 }
 
-// memoryExceeded reports whether the kernel killed processes of the spawn at
-// the spawn's own memory bound, as the group's counters say; the kernel
-// counts a kill before it delivers it, so a leader reaped after one finds it
-// counted. A kill for the container's limit is not the spawn's bound.
-func (s *server) memoryExceeded(sp *spawn) bool {
-	if sp.group == nil {
-		return false
+// reportExit settles the spawn's one `exited`, with what the counters say
+// killed it. A leader not reaped by then has SIGKILL's where they count a
+// kill for memory, which takes every process of the group, and none now or
+// later where they count none.
+func (s *server) reportExit(sp *spawn) {
+	sp.exitOnce.Do(func() {
+		reaped := sp.leader.reaped()
+		memory := s.memoryEnd(sp)
+		if !reaped && memory == nil {
+			return
+		}
+		var code *int
+		var sig *string
+		switch {
+		case !reaped:
+			name := unix.SignalName(unix.SIGKILL)
+			sig = &name
+		case sp.leader.status.Signaled():
+			signal := sp.leader.status.Signal()
+			name := unix.SignalName(signal)
+			if name == "" {
+				name = signal.String()
+			}
+			sig = &name
+		default:
+			c := sp.leader.status.ExitStatus()
+			code = &c
+		}
+		s.send(protocol.NewExited(sp.id, code, sig, memory))
+	})
+}
+
+// reportExitBeforeRemoval is a retirement's step before it removes the group
+// and reports the release: the exit is settled while the counters stand,
+// however late the watcher runs. The reaping is waited for clearTimeout at
+// most, since a leader stuck in the kernel may never be reaped, and the
+// counters alone decide the cause, whether it was or not.
+func (s *server) reportExitBeforeRemoval(sp *spawn) {
+	select {
+	case <-sp.leader.done:
+	case <-time.After(clearTimeout):
 	}
-	kills, err := sp.group.Kills()
+	s.reportExit(sp)
+}
+
+// memoryEnd says what the kernel killed processes of the spawn for, as its
+// group's counters say (cgroup.KilledFor): its own bound (MemoryCap), a
+// limit above it (MemoryMachine), or one of the two that they cannot tell
+// apart (MemoryEither), which is never reported as the cap; nil for no kill,
+// or for counters that do not read. The kernel counts a kill before it
+// delivers it, so a leader reaped after one finds it counted.
+func (s *server) memoryEnd(sp *spawn) *string {
+	if sp.group == nil {
+		return nil
+	}
+	var memory string
+	cause, err := sp.group.KilledFor()
 	switch {
 	case err != nil:
 		s.log.Error("spawn %s: reading its memory counters: %v", sp.id, err)
-	case kills.AtBound:
+		return nil
+	case cause == cgroup.AtBound:
+		memory = protocol.MemoryCap
 		s.log.Warn("spawn %s: uid %d reached its memory bound and the kernel killed its processes", sp.id, sp.account.UID)
-	case kills.Outside:
-		s.log.Warn("spawn %s: processes of uid %d were killed for the container's memory limit, under the spawn's own bound", sp.id, sp.account.UID)
+	case cause == cgroup.Above:
+		memory = protocol.MemoryMachine
+		s.log.Warn("spawn %s: processes of uid %d were killed for a memory limit above the spawn's own, the container's or the machine's", sp.id, sp.account.UID)
+	case cause == cgroup.Either:
+		memory = protocol.MemoryEither
+		s.log.Warn("spawn %s: processes of uid %d were killed for memory, and the counters do not say whether at the spawn's own bound or above it", sp.id, sp.account.UID)
+	default:
+		return nil
 	}
-	return kills.AtBound
+	return &memory
 }
 
 // retire ends a spawn once: every process of its uid is terminated, what
@@ -1110,6 +1180,9 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				case <-time.After(time.Second):
 					s.signalChild(sp.relay, unix.SIGKILL)
 				}
+			}
+			if notify {
+				s.reportExitBeforeRemoval(sp)
 			}
 			// A group is removable once it holds no process, which a clean
 			// scrub has established; the next spawn under the uid removes
@@ -1142,20 +1215,10 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				s.log.Warn("spawn %s: uid %d quarantined: a process or something it left outlived retirement", sp.id, uid)
 			}
 			if notify {
-				s.reportReleased(sp)
+				s.send(protocol.NewReleased(sp.id))
 			}
 		}()
 	})
-}
-
-// reportReleased sends `released`, which follows `exited`; a leader that
-// survived retirement is not waited for.
-func (s *server) reportReleased(sp *spawn) {
-	select {
-	case <-sp.exitReported:
-	case <-time.After(clearTimeout):
-	}
-	s.send(protocol.NewReleased(sp.id))
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends

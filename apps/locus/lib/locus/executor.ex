@@ -48,7 +48,10 @@ defmodule Locus.Executor do
   - `:cancelled` — `cancel/1` ended the run
   - `:capacity` — no pooled uid is free
   - `{:memory, limit_bytes}` — the command reached its memory bound and the
-    kernel ended it there (the build wire's `memory` refusal)
+    kernel ended it there
+  - `{:memory, :machine}` — the kernel ended it for memory at a limit above
+    its bound; `{:memory, :either}` — at one of the two, and it does not
+    say which (all three the build wire's `memory` refusal)
   - `{:unavailable, sentence}` — the bound cannot be enforced here, so the
     command was not run (the build wire's `unavailable` refusal)
   - `{:output_too_large, max}` — stdout passed its bound
@@ -58,7 +61,7 @@ defmodule Locus.Executor do
           :timeout
           | :cancelled
           | :capacity
-          | {:memory, pos_integer()}
+          | {:memory, pos_integer() | :machine | :either}
           | {:unavailable, String.t()}
           | {:output_too_large, pos_integer()}
           | {:spawn_failed, term()}

@@ -6,7 +6,7 @@ defmodule Locus.Backends.Service do
 
   @moduledoc """
   The backends service: the listener side of `Prima.LocusBackends`, and
-  the only thing that reaches `Locus.Backends.Owners` from outside. Three
+  the only thing that reaches `Locus.Backends.Owners` from outside. Four
   `POST` routes; whatever is not one of them is refused `bad_request`, and
   every refusal is `Prima.LocusBackends.encode_refusal/1` at its code's
   status. Every answer carries `x-cyfr-boot`, the service's lifetime
@@ -15,7 +15,7 @@ defmodule Locus.Backends.Service do
   ## Health
 
   `POST /locus/v1/backends/health` answers without authentication: a
-  `{"version": 3}` body (`Prima.LocusBackends.read_health/1`), read within
+  `{"version": 4}` body (`Prima.LocusBackends.read_health/1`), read within
   #{@max_health_bytes} bytes, is answered with the protocol version and the
   release; a body at another version is refused `version`.
 
@@ -65,6 +65,22 @@ defmodule Locus.Backends.Service do
      `Prima.LocusBackends.mode_types/1`), so a `recv` or an `output` that
      waits holds its session and nothing else.
 
+  ## A close, in order
+
+  It asks nothing of the owner's standing: the proof is the header, and
+  what it may end is the one lifetime of that version it names.
+
+  1. **The header**, as a session message's: `unauthorized`.
+  2. **The lifetime**: `stale_boot`.
+  3. **The nonce**, before the body: `replay`, `nonce_cache_full`.
+  4. **The body**, read within `max_control_bytes/0` (`too_large`), must be
+     the one the header hashed (`unauthorized`).
+  5. **The nonce again**, and the nonce recorded.
+  6. **The close**, read strictly (`read_close/1`), naming the owner and
+     epoch its header names (`bad_request`).
+  7. **The place back** (`Locus.Backends.Owners.close/3`): answered
+     `closed` once nothing of the lifetime is held, else `unavailable`.
+
   Every refusal made before the body is read closes the connection, so
   the body is never read. What a session answers is masked with its
   owner's secret values before it leaves. Nothing a request carries is
@@ -98,11 +114,15 @@ defmodule Locus.Backends.Service do
     :ok
   end
 
-  @doc "Forget every nonce whose window has passed by `now`, in Unix milliseconds."
+  @doc """
+  Forget every nonce whose window has passed by `now`, in Unix
+  milliseconds: its last millisecond is not passed, as a header is still
+  accepted in it (`Prima.LocusBackends.verify_header/4`).
+  """
   @spec forget_expired_nonces(integer()) :: :ok
   def forget_expired_nonces(now \\ System.system_time(:millisecond)) do
     if :ets.whereis(@nonces) != :undefined,
-      do: :ets.select_delete(@nonces, [{{:_, :"$1"}, [{:"=<", :"$1", now}], [true]}])
+      do: :ets.select_delete(@nonces, [{{:_, :"$1"}, [{:<, :"$1", now}], [true]}])
 
     :ok
   end
@@ -117,6 +137,7 @@ defmodule Locus.Backends.Service do
       {"POST", {:ok, :health}} -> health(conn)
       {"POST", {:ok, :control}} -> control(conn, Listener.now(conn))
       {"POST", {:ok, :session}} -> session(conn, Listener.now(conn))
+      {"POST", {:ok, :close}} -> close(conn, Listener.now(conn))
       _ -> refuse(closing(conn), :bad_request)
     end
   end
@@ -298,7 +319,8 @@ defmodule Locus.Backends.Service do
     end
   end
 
-  # A session message names the owner and epoch its signature names.
+  # A session message and a close name the owner and epoch their signature
+  # names.
   defp named(conn, %{owner: owner, e: e}, invoke) do
     if owner == %{athanor: invoke.athanor, server: invoke.server} and e == invoke.epoch,
       do: :ok,
@@ -321,16 +343,13 @@ defmodule Locus.Backends.Service do
     end
   end
 
-  defp of_mode(%{type: :close}, _mode), do: :ok
-
   defp of_mode(%{type: type}, mode),
     do: if(type in LocusBackends.mode_types(mode), do: :ok, else: {:error, :bad_request})
 
-  # A session whose process record is gone has ended and holds nothing.
+  # A session whose process record is gone has ended.
   defp reach(_conn, nil, %{type: type}) when type in [:send, :input, :resize],
     do: {:ok, %{status: :ended}}
 
-  defp reach(_conn, nil, %{type: :close}), do: {:ok, %{status: :closed}}
   defp reach(_conn, nil, %{type: :recv}), do: {:ok, %{lines: [], dropped: 0, running: false}}
   defp reach(_conn, nil, %{type: :output}), do: {:ok, %{chunks: [], dropped: 0, running: false}}
 
@@ -347,19 +366,43 @@ defmodule Locus.Backends.Service do
 
       type when type in [:recv, :output] ->
         {:ok, Backend.recv(pid, message.after, message.max_wait_ms)}
-
-      :close ->
-        with :ok <- Backend.close(pid), do: {:ok, %{status: :closed}}
     end
   catch
     :exit, _reason -> reach(conn, nil, message)
   end
 
+  # ————— closes —————
+
+  defp close(conn, now) do
+    with {:ok, key} <- known(conn, key(conn)),
+         {:ok, invoke, body_hash} <- verified(conn, :invoke, key, now),
+         :ok <- lifetime(conn, invoke.boot == conn.assigns.boot),
+         :ok <- nonce(closing(conn), invoke, now, false),
+         {:ok, body, conn} <- body(conn, LocusBackends.max_control_bytes()),
+         :ok <- hashed(conn, :invoke, body_hash, body),
+         :ok <- nonce(conn, invoke, now, true),
+         {:ok, message} <- readable(conn, LocusBackends.read_close(body)),
+         :ok <- named(conn, message, invoke),
+         :ok <- released(conn, invoke, message) do
+      {:ok, text} = LocusBackends.encode_close_answer(%{status: :closed})
+      answer(conn, 200, text)
+    else
+      {:refused, conn, refusal} -> refuse(conn, refusal)
+    end
+  end
+
+  defp released(conn, invoke, message) do
+    case Owners.close(owners(conn), invoke, message) do
+      :ok -> :ok
+      {:error, code} -> {:refused, conn, code}
+    end
+  end
+
   # ————— nonces —————
 
-  # A nonce is held for as long as its header could verify: until its `ts`
-  # and the window. `record?` records it, only once the body was the one
-  # its header signed.
+  # A nonce is held for as long as its header could verify: through its
+  # `ts` and the window, that millisecond included. `record?` records it,
+  # only once the body was the one its header signed.
   defp nonce(conn, invoke, now, record?) do
     row = {invoke.athanor, invoke.server, invoke.generation, invoke.epoch, invoke.nonce}
 
@@ -374,25 +417,25 @@ defmodule Locus.Backends.Service do
 
   defp unseen(row, now) do
     case :ets.lookup(@nonces, row) do
-      [{^row, expires}] when expires > now -> {:error, :replay}
+      [{^row, expires}] when expires >= now -> {:error, :replay}
       _ -> :ok
     end
   end
 
   defp room(invoke, now) do
     owner = {invoke.athanor, invoke.server, invoke.generation, invoke.epoch, :_}
-    live = [{{owner, :"$1"}, [{:>, :"$1", now}], [true]}]
+    live = [{{owner, :"$1"}, [{:>=, :"$1", now}], [true]}]
 
     if :ets.select_count(@nonces, live) < LocusBackends.max_nonces() do
       :ok
     else
-      :ets.select_delete(@nonces, [{{owner, :"$1"}, [{:"=<", :"$1", now}], [true]}])
+      :ets.select_delete(@nonces, [{{owner, :"$1"}, [{:<, :"$1", now}], [true]}])
       {:error, :nonce_cache_full}
     end
   end
 
   defp record(row, ts, now) do
-    :ets.select_delete(@nonces, [{{row, :"$1"}, [{:"=<", :"$1", now}], [true]}])
+    :ets.select_delete(@nonces, [{{row, :"$1"}, [{:<, :"$1", now}], [true]}])
 
     if :ets.insert_new(@nonces, {row, ts + LocusBackends.nonce_window_ms()}),
       do: :ok,

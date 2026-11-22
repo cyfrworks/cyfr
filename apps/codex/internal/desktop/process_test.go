@@ -55,7 +55,8 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 	for _, c := range readProcessVectors(t).GoToMain {
 		t.Run(c.Name, func(t *testing.T) {
 			o := c.Message
-			m := Message{Type: str(o, "type"), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
+			attempt, _ := o["attempt"].(float64)
+			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
 				Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), ID: str(o, "id"), Suggested: str(o, "suggested")}
 			var out bytes.Buffer
 			if err := NewWriter(&out).Send(m); err != nil {
@@ -86,7 +87,8 @@ func TestCyfrReadsEachMessageFromMain(t *testing.T) {
 			}
 			var o map[string]any
 			_ = json.Unmarshal(c.Message, &o)
-			if m.Type != o["type"] || m.Home != str(o, "home") || m.ID != str(o, "id") {
+			attempt, _ := o["attempt"].(float64)
+			if m.Type != o["type"] || m.Home != str(o, "home") || m.ID != str(o, "id") || m.Attempt != uint64(attempt) {
 				t.Fatalf("read %+v from %s", m, c.Message)
 			}
 			path, has := o["path"]
@@ -130,7 +132,10 @@ func TestCyfrSendsNothingMainSends(t *testing.T) {
 			t.Errorf("sent %s", typ)
 		}
 	}
-	if err := NewWriter(&bytes.Buffer{}).Send(Message{Type: TypeHome, Home: "https://x"}); err == nil {
+	if err := NewWriter(&bytes.Buffer{}).Send(Message{Type: TypeHome, Home: "https://x", Account: "https://y"}); err == nil {
+		t.Error("sent home without its attempt")
+	}
+	if err := NewWriter(&bytes.Buffer{}).Send(Message{Type: TypeHome, Home: "https://x", Attempt: 1}); err == nil {
 		t.Error("sent home without its account service")
 	}
 }

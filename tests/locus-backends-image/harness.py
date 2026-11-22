@@ -23,9 +23,11 @@ A Controller is the control plane's side of the backends wire
 tests/fixtures/locus_backends.json: control messages signed under the
 control key with a rising sequence, program environments sealed to the
 owner and the service lifetime `hello` learned, and session messages
-(open, send, recv and close of a `run` session; input, output and resize of
-a `terminal` one, its bytes in padded base64) signed as invokes under each
-owner's key. Every request can be given its own timestamp, nonce, sequence,
+(open, send and recv of a `run` session; input, output and resize of
+a `terminal` one, its bytes in padded base64) and closes, on their own
+route, signed as invokes under each owner's key. An open names a lifetime
+of its own unless it is given one to ask again for, and a close the one
+that opened its session. Every request can be given its own timestamp, nonce, sequence,
 boot or key, and every signed session message is kept so it can be sent
 again unchanged. The wire carries lines and bytes, never MCP: an
 `McpClient` speaks MCP's JSON-RPC over a run session's lines to the probe
@@ -159,6 +161,11 @@ def now_ms():
 def wire_json(value):
     """A body as every end writes it: keys sorted, no whitespace."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def new_lifetime(boot, random_hex=None):
+    """A lifetime's text, of the service's `boot`."""
+    return f"lt_{hashlib.sha256(boot.encode()).hexdigest()[:32]}_{random_hex or secrets.token_hex(16)}"
 
 
 def b64url(data):
@@ -391,8 +398,8 @@ def check_vectors():
     compare("owner_key", owner_key(key, owner["athanor"], owner["server"], owner["generation"],
                                    owner["epoch"]).hex(), WIRE["owner_key_hex"])
 
-    compare("version", VERSION, 3)
-    compare("routes", sorted(ROUTES), ["control", "health", "session"])
+    compare("version", VERSION, 4)
+    compare("routes", sorted(ROUTES), ["close", "control", "health", "session"])
     for kind in ["hello", "reconcile", "sync", "renew", "release", "status", "home"]:
         vector = WIRE[kind]
         body = vector["body"].encode()
@@ -418,6 +425,10 @@ def check_vectors():
         compare(f"{kind}.canonical", canonical("invoke", [fields[n] for n in SESSION_FIELDS], body), vector["canonical"])
         compare(f"{kind}.header", invoke_header(signing, fields, body), vector["header"])
 
+    minted = WIRE["lifetime"]
+    compare("lifetime", new_lifetime(minted["boot"], minted["random_hex"]), minted["text"])
+    compare("close.members", sorted(json.loads(WIRE["close"]["body"])),
+            ["e", "key", "lifetime", "mode", "owner", "program", "version"])
     terminal = json.loads(WIRE["open_terminal"]["body"])
     compare("open_terminal.size", [terminal["mode"], 1 <= terminal["rows"] <= BOUNDS["max_pty_size"],
                                    1 <= terminal["cols"] <= BOUNDS["max_pty_size"]], ["terminal", True, True])
@@ -507,6 +518,8 @@ class Controller:
         self.seq = 0
         self.boot = None
         self._clients = {}
+        # What a close names of each session opened here.
+        self._opened = {}
 
     def control(self, message, generation=None, seq=None, boot=None, ts=None, key=None, version=VERSION):
         """Posts a control message at the protocol version: (status, answer, boot)."""
@@ -594,13 +607,16 @@ class Controller:
     # ————— sessions —————
 
     def sign_session(self, owner, message, generation=None, boot=None, ts=None, nonce=None, key=None,
-                     version=VERSION, header_owner=None):
+                     version=VERSION, header_owner=None, route="session"):
         """Signs one session message for `owner` as an owner's process does, without sending it.
 
         `header_owner` signs the header for another owner version than the
         body names, so a body that names another owner than its signature
-        can be sent.
+        can be sent. A close is signed alike and posted on its own `route`.
+        An open that names no lifetime is given one of its own.
         """
+        if message.get("type") == "open" and "lifetime" not in message:
+            message = {**message, "lifetime": new_lifetime(boot or self.boot)}
         body = wire_json({**message, "owner": {"athanor": owner["athanor"], "server": owner["server"]},
                           "e": owner["e"], "version": version})
         signer = header_owner or owner
@@ -615,24 +631,34 @@ class Controller:
         }
         signing = key or owner_key(self.key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
         headers = {"content-type": "application/json", AUTH_HEADER: invoke_header(signing, fields, body)}
-        return Request(self.base + ROUTES["session"], headers, body)
+        return Request(self.base + ROUTES[route], headers, body)
 
     def session(self, owner, message, timeout=60, **options):
         """Signs and posts one session message: (status, answer, boot, request)."""
         request = self.sign_session(owner, message, **options)
-        return (*post(request.url, request.headers, request.body, timeout), request)
+        status, answer, boot = post(request.url, request.headers, request.body, timeout)
+        if message.get("type") == "open" and status == 200:
+            opened = json.loads(request.body)
+            self._opened[answer["session"]] = {
+                name: opened[name] for name in ["program", "home_id", "key", "mode", "lifetime"] if name in opened}
+        return status, answer, boot, request
 
     def resend(self, request, base=None):
         url = base + ROUTES["session"] if base else request.url
         return (*post(url, request.headers, request.body), request)
 
-    def open(self, owner, program, key="k", mode="run", argv=None, home_id=None, rows=None, cols=None, **options):
-        """Opens (or attaches to) the session of `key` and `mode`: (status, answer).
+    def lifetime(self, session):
+        """The lifetime that opened `session`, to ask again for."""
+        return self._opened[session]["lifetime"]
+
+    def open(self, owner, program, key="k", mode="run", argv=None, home_id=None, rows=None, cols=None, lifetime=None,
+             **options):
+        """Opens the session of a lifetime of `key` and `mode`, a new one unless given: (status, answer).
 
         A `terminal` open names its terminal's `rows` and `cols`; a run open names neither.
         """
         message = {"type": "open", "program": program, "key": key, "mode": mode, "argv": list(argv or [])}
-        for name, value in [("home_id", home_id), ("rows", rows), ("cols", cols)]:
+        for name, value in [("home_id", home_id), ("rows", rows), ("cols", cols), ("lifetime", lifetime)]:
             if value is not None:
                 message[name] = value
         status, answer, _boot, _request = self.session(owner, message, **options)
@@ -668,7 +694,9 @@ class Controller:
         return status, answer
 
     def close(self, owner, session, **options):
-        status, answer, _boot, _request = self.session(owner, {"type": "close", "session": session}, **options)
+        """Closes the lifetime that opened `session`, by its owner version, waiting for its place: (status, answer)."""
+        status, answer, _boot, _request = self.session(
+            owner, self._opened[session], route="close", timeout=BOUNDS["close_wait_ms"] / 1000 + 30, **options)
         return status, answer
 
     def lines_until(self, owner, session, found, after=0, timeout_s=20):

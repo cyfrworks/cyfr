@@ -199,7 +199,7 @@ defmodule Locus.DirectLauncherTest do
       assert hd(events) == :attached
       assert stream(events, :stdout) == "out\n"
       assert "hello\n" <> home = stream(events, :stderr)
-      assert Enum.take(events, -2) == [{:exited, 4, nil}, :released]
+      assert Enum.take(events, -2) == [{:exited, 4, nil, nil}, :released]
       refute File.exists?(home)
 
       assert {:ok, %{size: 1, free: 1, quarantined: 0}} =
@@ -213,7 +213,7 @@ defmodule Locus.DirectLauncherTest do
 
       events = events_until_released(handle)
       assert stream(events, :stdout) == data
-      assert {:exited, 0, nil} in events
+      assert {:exited, 0, nil, nil} in events
       assert {:error, :unknown_spawn} = DirectLauncher.send(handle, "late")
     end
 
@@ -225,7 +225,7 @@ defmodule Locus.DirectLauncherTest do
       assert :ok = DirectLauncher.signal(handle, "SIGTERM")
 
       assert Enum.take(events_until_released(handle), -2) == [
-               {:exited, nil, "SIGTERM"},
+               {:exited, nil, "SIGTERM", nil},
                :released
              ]
     end
@@ -238,7 +238,7 @@ defmodule Locus.DirectLauncherTest do
       :ok = DirectLauncher.release([], handle, 2_000)
       events = events_until_released(handle)
       assert stream(events, :stdout) =~ "term\n"
-      assert {:exited, 0, nil} in events
+      assert {:exited, 0, nil, nil} in events
 
       assert {:ok, stubborn} =
                spawn_live(~s(trap '' TERM; echo ready; while :; do sleep 0.1; done))
@@ -248,7 +248,7 @@ defmodule Locus.DirectLauncherTest do
       :ok = DirectLauncher.release([], stubborn, 300)
 
       assert Enum.take(events_until_released(stubborn), -2) == [
-               {:exited, nil, "SIGKILL"},
+               {:exited, nil, "SIGKILL", nil},
                :released
              ]
 
