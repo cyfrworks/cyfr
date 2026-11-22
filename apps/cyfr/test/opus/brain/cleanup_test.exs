@@ -272,6 +272,8 @@ defmodule Opus.Brain.CleanupTest do
     record = owed!(actor, thread.id, row)
     consumer = spawn(fn -> Cleanup.drain(actor.athanor_id) end)
     assert %{"t" => "forget", "id" => id, "session" => @session} = driver!(fake, row)
+    # The write answered: the holder reads past the hello.
+    assert_receive {:session, "recv", %{"after" => 1}, _fields}, 5_000
     holder = Opus.Brain.whereis(actor.athanor_id, thread.id)
     ended = Process.monitor(holder)
 

@@ -1290,6 +1290,11 @@ defmodule Opus.BrainTest do
     defp first_read!,
       do: assert_receive({:session, "recv", %{"after" => 0}, _fields}, 5_000)
 
+    # The write answered: the holder reads past the hello. Until then what
+    # the service is told can still be the write's to answer.
+    defp written_and_reading!,
+      do: assert_receive({:session, "recv", %{"after" => 1}, _fields}, 5_000)
+
     # `opener` waits on the take-over it asked of `holder`, and `holder`
     # has handled the asking: the opener watches it twice then, for its
     # end and for the call, and the holder answers what came after.
@@ -1313,6 +1318,7 @@ defmodule Opus.BrainTest do
       test = self()
       asker = spawn(fn -> send(test, {:asked, Brain.models(ctx, row.id)}) end)
       %{"t" => "models", "id" => id} = once_driver!(fake, row)
+      written_and_reading!()
       holder = Brain.whereis(ctx.athanor_id, id)
       assert is_pid(holder)
       {asker, holder, id}
@@ -1969,6 +1975,25 @@ defmodule Opus.BrainTest do
         assert Task.await(task, 5_000) == {:error, :unreadable}
         refute_sent()
       end
+    end
+
+    test "a holder of one command shows neither its command nor its grant's key in its status",
+         %{fake: fake, ctx: ctx, row: row, thread: thread} do
+      record = owed!(ctx, thread.id, row)
+      task = Task.async(fn -> Brain.forget(record) end)
+      assert %{"t" => "forget", "id" => id, "session" => @session} = once_driver!(fake, row)
+      written_and_reading!()
+      holder = Brain.whereis(ctx.athanor_id, thread.id)
+
+      status =
+        inspect(:sys.get_status(holder, 1_000), limit: :infinity, printable_limit: :infinity)
+
+      refute status =~ @session
+      refute status =~ id
+      refute status =~ inspect(:sys.get_state(holder).grant.owner_key)
+
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(task, 5_000) == :forgot
     end
 
     test "discovery runs for no turn, no other athanor and no row but a brain's",
