@@ -311,6 +311,19 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     endHop()
     if (!h || h.from !== content || !content) return
     if (h.kind === "sign-in") {
+      // The hop left the content window at the CYFR's sign-in page, so
+      // the return differs from it by its fragment alone: a same-document
+      // navigation, which Prism's page, reading the answer as it loads,
+      // never sees. Once that fragment is in place the page loads again.
+      const wc = content.webContents
+      if (wc.getURL().split("#")[0] === url.split("#")[0]) {
+        const landed = (_event, at, isMainFrame) => {
+          if (!isMainFrame || at !== url) return
+          wc.off("did-navigate-in-page", landed)
+          if (content && content.webContents === wc) wc.reload()
+        }
+        wc.on("did-navigate-in-page", landed)
+      }
       content.loadURL(url)
       return
     }

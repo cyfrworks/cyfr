@@ -46,6 +46,13 @@ class Contents extends EventEmitter {
   }
   getURL() { return this.url }
   executeJavaScript() { return world.page(this) }
+  reload() {
+    this.reloaded = [...(this.reloaded ?? []), this.url]
+    queueMicrotask(() => {
+      this.emit("did-navigate", {}, this.url)
+      this.emit("did-finish-load")
+    })
+  }
   setWindowOpenHandler(h) { this.opens = h }
 }
 
@@ -57,9 +64,13 @@ class BrowserWindow extends EventEmitter {
     this.destroyed = false
     world.windows.push(this)
   }
+  // A load that differs from the page shown by its fragment alone is a
+  // same-document navigation, as the engine makes it: no new document.
   loadURL(url) {
+    const inPage = !!this.webContents.url && this.webContents.url.split("#")[0] === url.split("#")[0] && url.includes("#")
     this.webContents.url = url
     queueMicrotask(() => {
+      if (inPage) return this.webContents.emit("did-navigate-in-page", {}, url, true)
       this.webContents.emit("did-navigate", {}, url)
       this.webContents.emit("did-finish-load")
     })
@@ -385,4 +396,26 @@ test("a lock's notice is its own sign-out's: one unconfirmed before does not mak
   await settled()
   assert.equal(world.fetched.length, 2, "each lock sent its sign-out")
   assert.doesNotMatch(content().webContents.url, /unconfirmed/)
+})
+
+test("a sign-in's answer returns as a document of its own, though the content window still shows the CYFR's sign-in page", async () => {
+  await started(true)
+  child.say({type: "home", home: HOME, account: ACCOUNT})
+  child.say({type: "opened", home: HOME})
+  await settled()
+  const page = content()
+  navigate(page, HOME + "/login")
+  page.loadURL(HOME + "/login")
+  await settled()
+  const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
+  assert.ok(navigate(page, hop).prevented, "the hop leaves the content window at the sign-in page")
+  const account = live().find((w) => w.webContents.url === hop)
+  const back = {url: HOME + "/login#answer", isMainFrame: true, prevented: false, preventDefault() { this.prevented = true }}
+  account.webContents.emit("will-navigate", back)
+  assert.ok(back.prevented, "the account window does not load the return")
+  await settled()
+  await settled()
+  assert.equal(page.webContents.url, HOME + "/login#answer")
+  assert.deepEqual(page.webContents.reloaded, [HOME + "/login#answer"], "the page loaded again with the answer, as Prism reads it on loading")
 })
