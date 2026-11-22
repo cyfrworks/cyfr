@@ -16,15 +16,16 @@
 #   startup    the app says ready, the chooser answers 200 on
 #              127.0.0.1:7340 and the app's window is on the screen, which
 #              it is only once its page has drawn
-#   profile    (Linux, macOS) the app's profile is under the run's HOME,
-#              never the account's own
+#   profile    (Linux, macOS) the app makes its profile under the run's
+#              HOME
 #   sandbox    (Linux) every live renderer of the app runs under seccomp
 #              mode 2, in a user namespace other than the app's
 #   second     a second launch for the same account exits 0, saying the
 #              first is shown instead, and the first still serves
-#   renderer   with the content's renderer killed, the app shows the page
-#              again in a renderer of its own, the chooser still answering
-#              and the window on the screen, and locks nothing
+#   renderer   with the content's renderer killed, a new renderer runs
+#              under the app, the chooser still answers, the window is on
+#              the screen and the app locks nothing. That the page is shown
+#              again in it is the real-CYFR proofs' renderer_killed
 #   terminate  the app terminated (SIGTERM; on Windows the forced end Task
 #              Manager's End task gives) ends, its cyfr with it, and 7340
 #              stops answering
@@ -328,7 +329,7 @@ if ready first "$FIRST"; then
   esac
   if [ -n "$PROFILE" ]; then
     if within 30 test -d "$PROFILE"; then
-      pass profile "the app's profile is under the run's HOME"
+      pass profile "the app made its profile under the run's HOME"
     else
       fail profile "the app kept no profile at $PROFILE within 30 s"
     fi
@@ -379,15 +380,15 @@ if ready first "$FIRST"; then
   else
     for r in $old; do oskill "$r"; done
     if ! within 30 fresh; then
-      fail renderer "no new renderer showed the page again within 30 s of its renderer's end$(said first 'CYFR: cyfr ended: ' && echo ": its cyfr ended meanwhile")"
+      fail renderer "no new renderer ran within 30 s of its renderer's end$(said first 'CYFR: cyfr ended: ' && echo ": its cyfr ended meanwhile")"
     elif ! unsaid first 'CYFR: locked:'; then
       fail renderer "the app locked as its renderer ended, or its output could not be read: $(grep -F 'CYFR: locked:' "$RUN/first.log" | head -1)"
     elif ! within 20 answers; then
-      fail renderer "the page was shown again, and $CHOOSER did not answer 200"
+      fail renderer "a new renderer runs, and $CHOOSER did not answer 200"
     elif ! within 20 has_window "$FIRST_OS"; then
       fail renderer "a new renderer runs, and no window of the app was on the screen within 20 s"
     else
-      pass renderer "a new renderer shows the page again in the window on the screen, the app locked nothing and the chooser answers"
+      pass renderer "a new renderer runs, the app's window is on the screen, the app locked nothing and the chooser answers"
     fi
   fi
 

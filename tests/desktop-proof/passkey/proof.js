@@ -425,11 +425,17 @@ async function keptPhase() {
   const {cookie, ...detail} = unanswered
   row("unanswered", toldUnanswered(unanswered, true),
     "a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR and offering it again, signed in as before", detail)
+  const pressedAt = history.length
+  const frontAt = await frontLength()
   await js(w.webContents, `document.querySelector("#again").click(); 1`)
   const back = await waitFor(async () => !w.isDestroyed() && atHome(w.webContents.getURL()) && !w.webContents.isLoading() &&
     js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism after Try again", 30_000).catch(() => false)
-  row("try_again", back && (await sessionCookie(w)) === cookie,
-    "Try again opens Prism at the CYFR's root, signed in as before", {back})
+  // What the retry asked for: the engine's first load of the CYFR after
+  // the press, and that request at the front.
+  const asked = history.slice(pressedAt).find((url) => !url.startsWith(LOOPBACK + "/")) ?? null
+  const answered = (await reachedSince(new URL(HOME).hostname, frontAt)).find((r) => r.method === "GET" && r.path === "/")?.status ?? null
+  row("try_again", asked === HOME + "/" && answered !== null && back === true && cookie !== null && (await sessionCookie(w)) === cookie,
+    "Try again asks for the CYFR's root, and Prism opens signed in as before", {asked: asked && bare(asked), answered, back})
   await choosersWord(w)
   return "quit"
 }

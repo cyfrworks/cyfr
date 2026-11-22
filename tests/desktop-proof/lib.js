@@ -51,8 +51,9 @@ app.commandLine.appendSwitch("use-fake-device-for-media-stream")
 
 export const said = []
 // For each lock main said, whether it had closed every window of the
-// content's before it awaited anything.
+// content's before it awaited anything; and how long history was then.
 export const closedAtLock = []
+export const historyAtLock = []
 export const record = {rows: [], stopped: null}
 // Every line the proof writes goes through here, and its record through
 // scrubbed (finish), so that a credential is gone before a byte is written.
@@ -343,7 +344,8 @@ async function atRest(why) {
   return rest
 }
 
-// The chooser a lock since `shownBefore` (history's length before it)
+// The chooser a lock since `shownBefore` (history's length as main said
+// it, or before where nothing else could load the chooser meanwhile)
 // brought back, and what it told (atRest); then each of `over` done to a
 // chooser that stayed, with what it told after each (kept); then, with
 // `onward`, Use this computer's key pressed where one still stays. Answers
@@ -405,16 +407,19 @@ export const lockDetail = (out) => ({before: out.before, after: out.after, held:
 // The sentence for a page of the CYFR that did not load.
 export const UNANSWERED = `The CYFR at ${HOME} did not answer.`
 
-// `w`'s page of the CYFR loaded again while the CYFR's front takes
-// nothing: what the person then has in that window.
+// A page of the CYFR asked for in `w` while its front takes nothing: what
+// failed, as main said it and as the front saw it, and what the person
+// then has in that window.
 export async function unansweredLoad(w) {
   const host = new URL(HOME).hostname
+  const page = "/threads"
   const cookie = await sessionCookie(w)
   const from = await frontLength()
   const saidBefore = said.length
+  let out
   await fault(host, "down")
   try {
-    await js(w.webContents, "location.reload(); 1")
+    await js(w.webContents, `location.assign(${literal(page)}); 1`)
     const shows = await waitFor(async () => {
       if (w.isDestroyed() || !atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
       const at = await js(w.webContents, `(() => { const inSight = (id) => {
@@ -423,15 +428,18 @@ export async function unansweredLoad(w) {
           again: inSight("#again"), onward: inSight("#words")} })()`)
       return at.words && at.onward ? at : null
     }, "the chooser after a load that failed", 30_000).catch((e) => ({why: e.message}))
-    return {...shows, visible: !w.isDestroyed() && w.isVisible(), window: content() === w,
-      same: (await sessionCookie(w)) === cookie, cookie,
+    out = {...shows, visible: !w.isDestroyed() && w.isVisible(), window: content() === w,
+      same: cookie !== null && (await sessionCookie(w)) === cookie, cookie,
+      failed: said.slice(saidBefore).some((l) => l.startsWith("unanswered:")) &&
+        (await reachedSince(host, from)).some((r) => r.path === page && r.fault === "down"),
       locks: said.slice(saidBefore).filter((l) => l.startsWith("locked:")), signOuts: await signOutsSince(from)}
   } finally {
     await fault(host, "none")
   }
+  return {...out, opens: !!cookie && (await opens(cookie)).opens}
 }
-export const toldUnanswered = (out, again) => out.words === UNANSWERED && out.onward && out.again === again && out.visible &&
-  out.window && out.same && out.locks.length === 0 && out.signOuts.length === 0
+export const toldUnanswered = (out, again) => out.failed && out.words === UNANSWERED && out.onward && out.again === again &&
+  out.visible && out.window && out.same && out.opens && out.locks.length === 0 && out.signOuts.length === 0
 
 // The sentence a clear that failed leaves on the chooser.
 export const UNCLEARED = "The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."
@@ -673,6 +681,7 @@ export function run(name, phases, options = {}) {
     said.push(line)
     // Main closes in the same turn it says the lock in.
     if (line.startsWith("locked: ")) {
+      historyAtLock.push(history.length)
       queueMicrotask(() => closedAtLock.push(appWindows().every((w) => !/^https?:/.test(w.webContents.getURL()))))
     }
     log(`app: ${line}`)
