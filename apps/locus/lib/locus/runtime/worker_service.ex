@@ -42,7 +42,8 @@ defmodule Locus.Runtime.WorkerService do
   assigned, or that completes unclean after a `cancel_child` for a child
   it held, is reported at once to the member that assigned its subtree —
   every attempt one runner holds was issued by one member, and no other
-  lapses them — naming that member and the runner, and signed with the
+  lapses them — naming that member and the runner the service assigned,
+  never the one an `exit` names, and signed with the
   service's dispatch key (`Locus.Runtime.HostClient.runner_exited/5`). The report
   names every attempt the service assigned that runner: the subtree's
   root, then every child the runner said it started, then what its `exit`
@@ -56,7 +57,9 @@ defmodule Locus.Runtime.WorkerService do
   the service, however the service ends, since a report carries this
   boot and a restarted service holds none of its predecessor's attempts.
   The attempts an ended report would have named lapse on their leases,
-  and the service logs each runner whose report it ended. A
+  and the service logs each runner whose report it ended. A `start` none
+  of which reached the runner it was given ran nothing, and is sent once
+  more, to another runner (`Locus.Runtime.RunnerProcess.assign/5`). A
   `start` no runner can be found for answers `{:error, :unavailable}`,
   and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
   with the keeper's account of why; the listener refuses either `503`,
@@ -276,13 +279,13 @@ defmodule Locus.Runtime.WorkerService do
     end
   end
 
-  def handle_info({RunnerPool, pid, {:exit, runner, open}}, state) do
+  def handle_info({RunnerPool, pid, {:exit, _named, open}}, state) do
     case Map.get(state.assigned, pid) do
       nil ->
         {:noreply, state}
 
       assignment ->
-        state = report(state, runner, assignment, open)
+        state = report(state, assignment.runner, assignment, open)
         {:noreply, forget(state, pid)}
     end
   end
@@ -340,7 +343,7 @@ defmodule Locus.Runtime.WorkerService do
   # Starting
   # ---------------------------------------------------------------------------
 
-  defp start_pooled(state, token, assignment, input, keys, caller) do
+  defp start_pooled(state, token, assignment, input, keys, caller, resend? \\ true) do
     execution_id = assignment.execution_id
 
     if Map.has_key?(state.executions, execution_id) do
@@ -379,6 +382,15 @@ defmodule Locus.Runtime.WorkerService do
             {:error, :malformed} ->
               :ok = RunnerPool.taint(RunnerPool, pid, 0)
               {:reply, {:error, :malformed}, state}
+
+            {:error, {:unsent, reason}} when resend? ->
+              Logger.warning(
+                "[Locus.Runtime.WorkerService] the assign of #{execution_id} reached nothing of " <>
+                  "runner #{runner} (#{inspect(reason)}) and is sent to another"
+              )
+
+              :ok = RunnerPool.taint(RunnerPool, pid, 0)
+              start_pooled(state, token, assignment, input, keys, caller, false)
 
             {:error, reason} ->
               Logger.error(
