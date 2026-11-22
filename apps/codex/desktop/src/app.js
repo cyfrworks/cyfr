@@ -19,7 +19,7 @@ import {spawn} from "node:child_process"
 import {BrowserWindow, app, dialog, net, powerMonitor, session} from "electron"
 
 import {lines, readFromCyfr, toCyfr} from "./process.js"
-import {accountLoad, documentHeaders, grants, readHop, relyingParty, retired, unlistedSwitch} from "./policy.js"
+import {LOCALHOST_IS_IPV4, accountLoad, documentHeaders, grants, readHop, relyingParty, retired, unlistedSwitch} from "./policy.js"
 import {initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
@@ -75,10 +75,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     return
   }
 
-  let state = initial(accountRoad, {
+  const route = {
     proxy: app.commandLine.getSwitchValue("proxy-server"),
     resolver: app.commandLine.getSwitchValue("host-resolver-rules")
-  })
+  }
+  // Not a route of a CYFR's, so not part of the one main was started on.
+  if (!route.resolver) app.commandLine.appendSwitch("host-resolver-rules", LOCALHOST_IS_IPV4)
+  let state = initial(accountRoad, route)
   let child = null
   let content = null // the one content window
   const children = new Set() // its confirmation windows

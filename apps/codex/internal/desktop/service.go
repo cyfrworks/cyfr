@@ -23,8 +23,10 @@ import (
 	"github.com/cyfr/codex/internal/shell"
 )
 
-// Local is the CYFR set up in a folder on this computer, read from that
-// folder alone.
+// Local is the CYFR set up in a folder on this computer as one reading of
+// that folder names it, from the folder alone: what opens it uses that
+// one reading, and Shell's client and Answers are bound to the CYFR it
+// names (cmd readLocal).
 type Local struct {
 	// Shell is what that CYFR's own settings decide of the device's shell
 	// there: its address, the client that reaches it, the account service
@@ -32,8 +34,10 @@ type Local struct {
 	Shell shell.Config
 	// Proxy and Resolver are the route to it, empty on this computer's own.
 	Proxy, Resolver string
-	// Answers is whether it answers now. Asking starts nothing.
-	Answers func() bool
+	// Answers is nil when that CYFR itself answers now, and otherwise why
+	// it is not opened, in a sentence for the person. Asking starts
+	// nothing.
+	Answers func(context.Context) error
 }
 
 // Service is what the CYFR app's cyfr serves on the shell's listener: the
@@ -95,6 +99,9 @@ type Service struct {
 	selecting string
 	sh        *shell.Shell
 	pages     *shell.Server
+	// here is the CYFR the device's pages serve when it is one on this
+	// computer.
+	here *Local
 	// committed is the CYFR the device's pages serve, as home named it:
 	// every locked names it again.
 	committed Message
@@ -274,13 +281,13 @@ func (s *Service) opened(home string) answer {
 	return a
 }
 
-func (s *Service) state(context.Context, uint64, request) answer {
+func (s *Service) state(ctx context.Context, _ uint64, _ request) answer {
 	c, err := s.Clients.Load()
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
 	s.mu.Lock()
-	open, home, warning := s.pages != nil, s.committed.Home, s.warning
+	open, home, here, warning := s.pages != nil, s.committed.Home, s.here, s.warning
 	s.mu.Unlock()
 	a := answer{Home: c.Home}
 	switch {
@@ -288,6 +295,12 @@ func (s *Service) state(context.Context, uint64, request) answer {
 		// The CYFR open, which the record selects only once it admitted
 		// this device.
 		a = s.opened(home)
+		// The passkey's way on is the CYFR's own page, loaded with no
+		// connection of the shell's: it is offered again only while that
+		// CYFR still answers. The device's pages ask as they connect.
+		if here != nil && a.Passkey != "" && here.Answers(ctx) != nil {
+			a.Passkey = ""
+		}
 	case c.Project != "" && s.Local != nil:
 		if l, err := s.Local(c.Project); err != nil {
 			a.Error = fmt.Sprintf("The app cannot read the CYFR in %s (%v).", c.Project, err)
@@ -299,15 +312,20 @@ func (s *Service) state(context.Context, uint64, request) answer {
 	return a
 }
 
-// homeOf reads a typed address as a CYFR's https origin: a bare name is
-// taken as https://name.
+// homeOf reads a typed address as a CYFR's origin in its one spelling
+// (account.CanonicalHome, as a folder's is read) and whether that is an
+// https one, as a CYFR elsewhere must be: a bare name is taken as
+// https://name.
 func homeOf(address string) (string, bool) {
 	a := strings.TrimRight(strings.TrimSpace(address), "/")
 	if !strings.Contains(a, "://") {
 		a = "https://" + a
 	}
-	a = strings.ToLower(a)
-	return a, strings.HasPrefix(a, "https://") && account.IsHome(a)
+	home, ok := account.CanonicalHome(a)
+	if !ok {
+		return "", false
+	}
+	return home, strings.HasPrefix(home, "https://")
 }
 
 func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer {
@@ -317,10 +335,16 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	}
 	defer s.finish()
 	home, ok := homeOf(req.Address)
-	if project, l, remembered := s.remembered(); remembered && l.Shell.Address == home {
+	project, l, remembered := s.remembered()
+	if remembered && l.Shell.Address == home {
 		return s.openLocal(run, epoch, project, l)
 	}
 	if !ok {
+		if remembered && home != "" {
+			// The folder's address changed since the chooser showed it, or
+			// another of this computer's was typed.
+			return answer{Error: fmt.Sprintf("The CYFR in %s is at %s. Connect to that address.", project, l.Shell.Address)}
+		}
 		return answer{Error: "Type the CYFR's address, such as https://cyfr.example.com."}
 	}
 	discover := s.Discover
@@ -402,15 +426,24 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 		return answer{Error: fmt.Sprintf("The CYFR in %s names %s as its account service. The app takes an https address, "+
 			"or a plain http one only at a CYFR's own address on this computer.", project, l.Shell.Directory)}
 	}
-	if !l.Answers() {
-		return answer{Error: fmt.Sprintf("The CYFR in %s does not answer at %s. If it is not running, run cyfr up in that folder, then connect again.", project, home)}
+	if err := l.Answers(run); err != nil {
+		if !s.live(epoch) {
+			return answer{Error: lockedSentence}
+		}
+		return answer{Error: err.Error()}
 	}
 	sel, err := s.Clients.SelectLocal(project)
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
-	return s.selectHome(run, epoch, sel, l.Shell,
+	a := s.selectHome(run, epoch, sel, l.Shell,
 		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pages != nil {
+		s.here = &l
+	}
+	return a
 }
 
 // selectRemote selects the CYFR elsewhere at home, with the account

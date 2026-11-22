@@ -5,6 +5,7 @@ package shell
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -61,12 +62,16 @@ func newBoxAt(t *testing.T, home *fakeHome, dir, directory string, edit ...func(
 	cfg := Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
 		Directory: directory,
-		Tokens:    func() string { return home.setupToken },
-		SetupOpen: home.setupOpen,
-		Restart:   func() { b.restarts.Add(1) },
-		Detect:    func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
-		Now:       func() time.Time { return time.Unix(0, b.now.Load()) },
-		Chip:      func() bool { return false },
+		SetupToken: func(ctx context.Context) string {
+			if home.setupOpen(ctx) {
+				return home.setupToken
+			}
+			return ""
+		},
+		Restart: func() { b.restarts.Add(1) },
+		Detect:  func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
+		Now:     func() time.Time { return time.Unix(0, b.now.Load()) },
+		Chip:    func() bool { return false },
 	}
 	for _, e := range edit {
 		e(&cfg)

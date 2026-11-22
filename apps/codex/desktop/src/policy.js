@@ -192,6 +192,14 @@ export function retired(status, headers, home) {
 export const SWITCHES = ["proxy-server", "host-resolver-rules"]
 
 /**
+ * The engine's resolver rule unless main was started on a route:
+ * localhost is 127.0.0.1 alone, where Docker publishes a local CYFR, and
+ * never ::1, where any other program may listen on the same port and be
+ * given that CYFR's pages, tickets and cookies (cmd/local.go).
+ */
+export const LOCALHOST_IS_IPV4 = "MAP localhost 127.0.0.1"
+
+/**
  * The first switch of `args` (the command line after the executable) the
  * app does not take, as the engine reads switches on `platform`: "-" or
  * "--" before a name, "/" too on Windows, up to an "=" and its value,

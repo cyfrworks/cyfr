@@ -366,3 +366,29 @@ func checkEnv(data []byte) error {
 	_, err = headOf(d.values())
 	return err
 }
+
+// ReadProjectAlone is one reading of dir's .env from that file alone: its
+// values and the head they name. Unlike ReadEnvValues and Engine.Head,
+// which read as compose does under this process's environment, no value
+// is taken or interpolated from the environment, so whoever started this
+// process sets nothing of what is read.
+func ReadProjectAlone(dir string) (map[string]string, Head, error) {
+	data, err := os.ReadFile(filepath.Join(dir, ".env"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, Head{}, redactorFor(nil, nil).err(err)
+	}
+	refused := redactorFor(data, nil)
+	d, err := readDotenv(data, func(string) (string, bool) { return "", false })
+	if err != nil {
+		return nil, Head{}, refused.err(err)
+	}
+	if key := d.composeKey(); key != "" {
+		return nil, Head{}, Refuse("compose_env_refused", map[string]string{"key": key})
+	}
+	values := d.values()
+	head, err := headOf(values)
+	if err != nil {
+		return nil, Head{}, refused.err(err)
+	}
+	return values, head, nil
+}

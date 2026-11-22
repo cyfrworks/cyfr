@@ -157,3 +157,31 @@ func TestAccountServiceVectors(t *testing.T) {
 		t.Fatalf("a local CYFR's own directory under a path: %+v, %v", got, ok)
 	}
 }
+
+// An address from a setting or a person is read into the one spelling the
+// CYFR gives its own (Prima.Identity.Encoding.canonical_home), and a port
+// has one spelling.
+func TestCanonicalHome(t *testing.T) {
+	for in, want := range map[string]string{
+		"http://localhost:80":           "http://localhost",
+		"http://localhost:80/":          "http://localhost",
+		"HTTP://LocalHost:4000":         "http://localhost:4000",
+		"https://CYFR.example.com:443":  "https://cyfr.example.com",
+		"https://cyfr.example.com:8443": "https://cyfr.example.com:8443",
+		"http://localhost:65535":        "http://localhost:65535",
+		"http://localhost:04000":        "",
+		"http://localhost:65536":        "",
+		"http://localhost:":             "",
+		"http://localhost:4000/x":       "",
+		"http://localhost:4000#x":       "",
+		"http://localhost:4000?x":       "",
+		"http://user@localhost:4000":    "",
+		"http://\u212ayfr.example.com":  "",
+		"ftp://localhost":               "",
+	} {
+		got, ok := CanonicalHome(in)
+		if got != want || ok != (want != "") || ok && !IsHome(got) {
+			t.Errorf("%q: %q, %v; want %q", in, got, ok, want)
+		}
+	}
+}

@@ -353,6 +353,8 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 
 	if local.Proxy != "" {
 		chromeArgs = append(chromeArgs, "--proxy-server="+local.Proxy, "--host-resolver-rules="+local.Resolver)
+	} else {
+		chromeArgs = append(chromeArgs, "--host-resolver-rules="+localhostIsIPv4)
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
@@ -380,7 +382,20 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 		ln.Close()
 		return err
 	}
-	srv := &shell.Server{Shell: sh, Reachable: local.Answers}
+	// A folder naming another CYFR than the one this shell opened ends it:
+	// the launcher starts it again on the reading made then.
+	moved := make(chan error, 1)
+	srv := &shell.Server{Shell: sh, Reachable: func() bool {
+		err := local.Answers(ctx)
+		var unbound *shell.Unbound
+		if errors.As(err, &unbound) && unbound.Moved {
+			select {
+			case moved <- err:
+			default:
+			}
+		}
+		return err == nil
+	}}
 	served := make(chan error, 1)
 	go func() { served <- srv.ServeOn(ctx, ln) }()
 
@@ -445,6 +460,8 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 		ended = fmt.Errorf("The screen's idle lock (swayidle) stopped (%v): the screen locked and starts again", err)
 	case err := <-browser:
 		ended = fmt.Errorf("Chrome did not start (%v)", err)
+	case err := <-moved:
+		ended = fmt.Errorf("The screen starts again on this folder's settings (%v)", err)
 	}
 	sh.Lock("")
 	stopBrowsing()

@@ -70,9 +70,9 @@ func device(t *testing.T, home *fakeHome, dir string, clients *memoryClients, se
 	sh, err := New(Config{
 		Address: home.address(), Client: home.srv.Client(), Record: filepath.Join(dir, "key.json"), DataDir: dir,
 		Clients: clients, Directory: home.accounts.URL(),
-		Detect: func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} },
-		Chip:   func() bool { return false },
-		Tokens: func() string { return setup },
+		Detect:     func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} },
+		Chip:       func() bool { return false },
+		SetupToken: func(context.Context) string { return setup },
 	})
 	if err != nil {
 		t.Fatal(err)

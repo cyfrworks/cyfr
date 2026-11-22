@@ -26,6 +26,7 @@ const READY = "http://127.0.0.1:7340/bootstrap/#token=dG9rZW4"
 const world = {}
 
 function reset() {
+  world.switches = []
   world.windows = []
   world.sessions = new Map()
   world.fetched = []
@@ -129,7 +130,7 @@ function fromPartition(partition) {
 }
 
 world.app = Object.assign(new EventEmitter(), {
-  commandLine: {getSwitchValue: () => "", hasSwitch: () => false},
+  commandLine: {getSwitchValue: () => "", hasSwitch: () => false, appendSwitch: (...a) => world.switches.push(a)},
   enableSandbox() {}, requestSingleInstanceLock: () => true, relaunch() {}, configureWebAuthn() {},
   whenReady: () => Promise.resolve(),
   exit(code) { world.exited = code },
@@ -519,4 +520,27 @@ test("a lock over a chooser that is keeping a notice leaves the notice there, un
   await settled()
   await lockNow("lock-screen")
   assert.doesNotMatch(content().webContents.url, /notice=/, "told once the person went on")
+})
+
+test("with no route localhost is 127.0.0.1 alone, and that is no route a CYFR is restarted for", async () => {
+  await started(false)
+  assert.deepEqual(world.switches, [["host-resolver-rules", "MAP localhost 127.0.0.1"]])
+  world.relaunched = null
+  world.app.relaunch = (options) => { world.relaunched = options }
+  child.say({type: "home", home: "http://localhost:4000", account: "https://cyfr.run"})
+  await settled()
+  await settled()
+  assert.equal(world.relaunched, null)
+  assert.ok(child.heard.some((m) => m.type === "home-ready" && m.home === "http://localhost:4000"))
+})
+
+test("started on a route main keeps that route's rules alone", async () => {
+  const bare = world.app.commandLine.getSwitchValue
+  world.app.commandLine.getSwitchValue = (name) => (name === "host-resolver-rules" ? "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1" : "")
+  try {
+    await started(false)
+    assert.deepEqual(world.switches, [])
+  } finally {
+    world.app.commandLine.getSwitchValue = bare
+  }
 })

@@ -68,19 +68,16 @@ type Config struct {
 	// DataDir is the CYFR's actual data directory, whose volume the
 	// detection reads.
 	DataDir string
-	// Tokens reads the setup token a first hello brings, when there is
-	// one, so it never travels in an argument.
-	Tokens func() (setup string)
-	// SetupOpen is set for a device whose .env holds the setup token
+	// SetupToken answers the setup token a first hello brings, or "", so
+	// it never travels in an argument. A device whose .env holds the token
 	// whether or not anyone is set up (a box's screen, the CYFR app at a
-	// CYFR on its own computer), and says whether no one is set up on this
-	// CYFR yet. Such a device's first hello
-	// brings the token only then, whether it made its account here or was
-	// added to one, since the installation's first person binds it
-	// whoever they are; on a CYFR someone is set up on it brings none, and
-	// the CYFR's door decides. Unset, a first hello brings whatever token
-	// Tokens reads.
-	SetupOpen func(context.Context) bool
+	// CYFR on its own computer) answers it from one reading, only while
+	// that reading says no one is set up and names this shell's Address.
+	// Its first hello then brings it whether the device made its account
+	// here or was added to one, since the installation's first person
+	// binds it whoever they are; otherwise it brings none, and the CYFR's
+	// door decides. Unset, a first hello brings none.
+	SetupToken func(context.Context) string
 	// Restart starts the browser again on the lock page, after a lock.
 	Restart func()
 	// DisplayName is the name the CYFR lists this device by.
@@ -473,8 +470,8 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Restart == nil {
 		cfg.Restart = func() {}
 	}
-	if cfg.Tokens == nil {
-		cfg.Tokens = func() string { return "" }
+	if cfg.SetupToken == nil {
+		cfg.SetupToken = func(context.Context) string { return "" }
 	}
 	if cfg.Directory == "" {
 		cfg.Directory = account.DefaultDirectory
@@ -842,12 +839,26 @@ func (s *Shell) sentence(err error) string { return sentence(err) }
 const CompanySignIn = "This CYFR requires company sign-in. Open its address in a browser to continue. " +
 	"The CYFR app does not support company sign-in yet."
 
+// Unbound is a Config.Client's refusal to connect where what it is bound
+// to no longer holds: nothing was sent, and the person reads Sentence.
+// Moved is the CYFR now named at another address or account service than
+// this shell's, which a shell made afresh would follow.
+type Unbound struct {
+	Sentence string
+	Moved    bool
+}
+
+func (u *Unbound) Error() string { return u.Sentence }
+
 // sentence is what the person reads for a failure of this screen.
 func sentence(err error) string {
 	var intent *IntentError
 	var dir *account.DirectoryRefusal
 	var refused *RefusedError
+	var unbound *Unbound
 	switch {
+	case errors.As(err, &unbound):
+		return unbound.Sentence
 	case errors.As(err, &refused):
 		return refused.Message
 	case errors.Is(err, holder.ErrWrongSecret), errors.Is(err, holder.ErrSecretShape):
@@ -1534,13 +1545,13 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 }
 
 // admission is the capability a first hello brings: none once this CYFR
-// admitted this device (the door decides), else the setup token (for a
-// device with SetupOpen, only while no one is set up).
+// admitted this device (the door decides), else the setup token, where
+// SetupToken answers one.
 func (s *Shell) admission(ctx context.Context) map[string]any {
 	if s.here.ClientID != "" {
 		return nil
 	}
-	if t := s.cfg.Tokens(); t != "" && (s.cfg.SetupOpen == nil || s.cfg.SetupOpen(ctx)) {
+	if t := s.cfg.SetupToken(ctx); t != "" {
 		return map[string]any{"setup": t}
 	}
 	return nil

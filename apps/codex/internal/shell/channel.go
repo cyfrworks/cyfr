@@ -202,7 +202,7 @@ func (d Dialer) open(ctx context.Context, device Device, key Signer, report func
 	defer cancel()
 	conn, _, err := websocket.Dial(dialCtx, d.url(), &websocket.DialOptions{HTTPClient: d.Client})
 	if err != nil {
-		return nil, fmt.Errorf("%w (%v)", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w (%w)", ErrUnavailable, err)
 	}
 	conn.SetReadLimit(1 << 20)
 	c := &Channel{conn: conn, device: device, key: key, report: report, renewed: renewed,

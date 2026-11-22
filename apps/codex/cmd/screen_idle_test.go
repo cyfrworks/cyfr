@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,5 +129,65 @@ func TestScreenShell_AKilledShellLeavesNoChildBehind(t *testing.T) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+	}
+}
+
+// A folder that names another CYFR than the one the screen opened ends
+// the screen's shell, which its launcher starts again on that reading,
+// and Chrome is given localhost as 127.0.0.1 alone.
+func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
+	screenProject(t)
+	if err := os.MkdirAll(screenDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	chromed := filepath.Join(bin, "chrome.args")
+	for name, script := range map[string]string{
+		"pkill":                "exit 0",
+		"wvkbd-mobintl":        "exec /bin/sleep 30",
+		"swayidle":             "exec /bin/sleep 30",
+		"google-chrome-stable": `echo "$@" >` + chromed + `; exec /bin/sleep 30`,
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	listen, address := ownListener()
+	ended := make(chan error, 1)
+	go func() { ended <- runScreenShell(ctx, listen) }()
+	for {
+		if raw, err := os.ReadFile(chromed); err == nil && strings.HasSuffix(string(raw), "\n") {
+			if !strings.Contains(string(raw), "--host-resolver-rules=MAP localhost 127.0.0.1") {
+				t.Errorf("Chrome was started with %s", raw)
+			}
+			break
+		}
+		select {
+		case err := <-ended:
+			t.Fatalf("the screen ended first: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\nCYFR_PORT=4322\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://"+address()+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "127.0.0.1:7340"
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		resp.Body.Close()
+	}
+	select {
+	case err := <-ended:
+		if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "starts again") {
+			t.Fatalf("the screen ended with %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the screen kept the CYFR it read before")
 	}
 }
