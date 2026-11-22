@@ -12,7 +12,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -82,16 +81,21 @@ func TestACheapKeyIsRefusedUnderTheFixedDerivation(t *testing.T) {
 }
 
 // Nothing of a program reaches the cheap derivation: every Go source of the
-// module is read, for every system and build tag, and each name is in
-// exactly these files. The test files in the list are the search's positive
+// module is read, for every system and build tag, and each name is referred
+// to exactly so many times in exactly these files, so one reference more
+// fails here, in a file listed as in any other. A comment refers to nothing,
+// a directive does. The test files in the list are the search's positive
 // control.
 func TestNoProgramReachesTheCheapDerivation(t *testing.T) {
-	want := map[string][]string{
-		"CheapDerivationForTests": {"internal/holder/cheap.go", "internal/holder/cheap_test.go", "internal/shell/shell_test.go"},
-		"testCost":                {"internal/holder/cheap.go", "internal/holder/cheap_test.go", "internal/holder/software.go"},
+	want := map[string]map[string]int{
+		"CheapDerivationForTests": {"internal/holder/cheap.go": 2, "internal/holder/cheap_test.go": 2, "internal/shell/shell_test.go": 2},
+		"testCost":                {"internal/holder/cheap.go": 3, "internal/holder/cheap_test.go": 3, "internal/holder/software.go": 1},
 	}
 	root := filepath.Join("..", "..")
-	got := map[string][]string{}
+	got := map[string]map[string]int{}
+	for name := range want {
+		got[name] = map[string]int{}
+	}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -110,10 +114,16 @@ func TestNoProgramReachesTheCheapDerivation(t *testing.T) {
 			return err
 		}
 		for name := range want {
-			if !bytes.Contains(src, []byte(name)) {
+			n := 0
+			for line := range strings.Lines(string(src)) {
+				if code := strings.TrimSpace(line); !strings.HasPrefix(code, "//") || strings.HasPrefix(code, "//go:") {
+					n += strings.Count(code, name)
+				}
+			}
+			if n == 0 {
 				continue
 			}
-			got[name] = append(got[name], filepath.ToSlash(rel))
+			got[name][filepath.ToSlash(rel)] = n
 			if name == "testCost" && filepath.Base(path) == "software.go" &&
 				bytes.Count(src, []byte(name)) != bytes.Count(src, []byte(name+".Load()")) {
 				t.Errorf("%s does more with %s than read it", rel, name)
@@ -124,10 +134,7 @@ func TestNoProgramReachesTheCheapDerivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name := range got {
-		slices.Sort(got[name])
-	}
-	if !maps.EqualFunc(got, want, slices.Equal) {
-		t.Fatalf("the cheap derivation is named in %v, not in %v alone", got, want)
+	if !maps.EqualFunc(got, want, maps.Equal) {
+		t.Fatalf("the cheap derivation is referred to %v, not %v alone", got, want)
 	}
 }
