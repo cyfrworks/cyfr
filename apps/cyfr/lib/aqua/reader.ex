@@ -139,9 +139,12 @@ defmodule Aqua.Reader do
   def waiting(row),
     do: "[Request #{row.id} to #{row.addressee}, still waiting on its reply]\n#{row.content}"
 
-  @doc "A compaction's summary, standing in for the rows before its boundary."
-  @spec summary(Tape.row()) :: String.t()
-  def summary(row), do: "[Summary of the thread so far]\n" <> (row.content || "")
+  @doc """
+  A compaction's summary, standing in for the rows before its boundary:
+  in a request, and before the rows the next summary folds.
+  """
+  @spec summary(String.t() | nil) :: String.t()
+  def summary(text), do: "[Summary of the thread so far]\n" <> (text || "")
 
   @doc "A workspace thread's first ask, as the prompt quotes it."
   @spec asked(String.t()) :: String.t()

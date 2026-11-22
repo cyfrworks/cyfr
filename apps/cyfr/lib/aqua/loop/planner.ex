@@ -258,7 +258,7 @@ defmodule Aqua.Loop.Planner do
           [
             %{
               "role" => "user",
-              "content" => [%{"type" => "text", "text" => "[Summary so far]\n" <> summary}]
+              "content" => [%{"type" => "text", "text" => Aqua.Reader.summary(summary)}]
             }
           ]
 
