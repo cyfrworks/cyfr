@@ -6,7 +6,8 @@ defmodule Opus.Brain.CleanupTest do
   The `brain_cleanup` consumer (`Opus.Brain.Cleanup`) against the scripted
   backends service, the test playing the row's driver: a removal the
   driver confirms is receipted `applied`; one the driver refuses, one
-  whose answer is lost and one while the box is away stay owed and are
+  whose answer is lost, one whose caller died after its forget was written
+  and one while the box is away stay owed and are
   tried again at the next drain; a successor's session and a row gone are
   `superseded`, a row that runs no driver stays owed until it names one,
   and none of the three opens anything. Every receipt is read whole from
@@ -264,6 +265,30 @@ defmodule Opus.Brain.CleanupTest do
     say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
     assert Task.await(task, 30_000) == {:ok, %{"applied" => 1}}
     assert outcome(actor, record) == {:ok, "applied"}
+  end
+
+  test "a caller that dies after its forget was written leaves the removal owed, and the retry ends clean",
+       %{fake: fake, actor: actor, thread: thread, row: row} do
+    record = owed!(actor, thread.id, row)
+    consumer = spawn(fn -> Cleanup.drain(actor.athanor_id) end)
+    assert %{"t" => "forget", "id" => id, "session" => @session} = driver!(fake, row)
+    holder = Opus.Brain.whereis(actor.athanor_id, thread.id)
+    ended = Process.monitor(holder)
+
+    Process.exit(consumer, :kill)
+    assert_receive {:DOWN, ^ended, :process, ^holder, :normal}, 1_000
+    assert Enum.all?(Scripted.sessions(fake, row.id), fn {_id, s} -> not s.running end)
+    assert pending(actor) == [record]
+    assert outcome(actor, record) == :none
+
+    # The same member's next drain: the same forget, on a driver of its own.
+    task = draining(actor)
+    assert %{"t" => "forget", "id" => ^id, "session" => @session} = driver!(fake, row)
+    say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+    assert Task.await(task, 10_000) == {:ok, %{"applied" => 1}}
+    assert pending(actor) == []
+    assert outcome(actor, record) == {:ok, "applied"}
+    assert Enum.all?(Scripted.sessions(fake, row.id), fn {_id, s} -> not s.running end)
   end
 
   test "a successor's session and a row gone are superseded, a row with no driver owed, none opened",
