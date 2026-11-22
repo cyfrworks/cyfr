@@ -25,6 +25,8 @@ import (
 // Service is one directory and its registry at one origin.
 type Service struct {
 	srv *httptest.Server
+	// origin is where the service names itself.
+	origin string
 
 	mu       sync.Mutex
 	logs     map[string][]any
@@ -50,15 +52,26 @@ const Reserved = "admin"
 func New(t *testing.T) *Service {
 	s := &Service{logs: map[string][]any{}, handles: map[string]string{}, accepted: map[string]string{}}
 	s.srv = httptest.NewServer(http.HandlerFunc(s.serve))
+	s.origin = s.srv.URL
 	t.Cleanup(s.srv.Close)
 	return s
 }
 
 // URL is the service's origin: its directory and its registry.
-func (s *Service) URL() string { return s.srv.URL }
+func (s *Service) URL() string { return s.origin }
+
+// ServedAt has the service name itself at origin, as one a CYFR serves at
+// its own address does: a test's front there passes requests on to the
+// address URL answered before.
+func (s *Service) ServedAt(origin string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.origin = origin
+}
 
 func (s *Service) host() string {
-	return strings.Split(strings.TrimPrefix(s.srv.URL, "http://"), ":")[0]
+	_, at, _ := strings.Cut(s.origin, "://")
+	return strings.Split(at, ":")[0]
 }
 
 // Log is identifier's log as kept.
@@ -135,7 +148,7 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 		if s.Policy != nil {
 			policy = map[string]any{"version": s.Policy.Version, "url": s.Policy.URL}
 		}
-		reply(w, http.StatusOK, map[string]any{"directory": s.srv.URL, "registry": s.srv.URL, "policy": policy})
+		reply(w, http.StatusOK, map[string]any{"directory": s.origin, "registry": s.origin, "policy": policy})
 	case r.Method == http.MethodPost && path == "/directory/v1/register":
 		s.write(w, body, "")
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/append"):
@@ -150,7 +163,7 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reply(w, http.StatusOK, map[string]any{"protocol": "cyfr-handle/v1", "registry": s.host(), "handle": name,
-			"identifier": id, "directory": s.srv.URL})
+			"identifier": id, "directory": s.origin})
 	case r.Method == http.MethodPost && (path == "/v1/namespaces/personal/claim" || path == "/v1/legal/accept"):
 		s.registry(w, path, body)
 	default:

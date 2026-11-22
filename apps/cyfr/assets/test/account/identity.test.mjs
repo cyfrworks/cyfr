@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import {describe, test} from "node:test"
 
-import {b64, fromHex, unb64} from "../../account/encoding.js"
+import {b64, fromHex, isDirectoryUrl, isHome, unb64} from "../../account/encoding.js"
 import {
   ed25519Key,
   hash,
@@ -118,5 +118,17 @@ describe("identity.json", () => {
   test("a hex identifier and its digest bytes are one value", () => {
     const {identifier: alice} = vectors.identifiers.alice
     assert.deepEqual(userId(alice), fromHex(alice.slice(4)))
+  })
+})
+
+describe("addresses.json", () => {
+  const addresses = JSON.parse(readFileSync(new URL("../../../../../tests/fixtures/addresses.json", import.meta.url), "utf8")).addresses
+
+  test("an address has the one grammar every side reads", () => {
+    assert.ok(addresses.length > 0)
+    for (const {value, home, directory} of addresses) {
+      assert.equal(isHome(value), home, value)
+      assert.equal(isDirectoryUrl(value), directory, value)
+    }
   })
 })

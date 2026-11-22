@@ -1100,6 +1100,11 @@ func readSetUp(ctx context.Context, e stackEngine, head access.Head) setUp {
 	case err != nil || res.ExitCode != 0:
 		return setUpUnknown
 	}
+	return setUpIn(res)
+}
+
+// setUpIn is what a cyfr log since its start, res, says of setup.
+func setUpIn(res access.Result) setUp {
 	log := string(res.Stdout) + "\n" + string(res.Stderr)
 	if notSet := strings.LastIndex(log, notSetUpMarker); notSet >= 0 && !strings.Contains(log[notSet:], setUpMarker) {
 		return setUpNone

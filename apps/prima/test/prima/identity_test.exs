@@ -18,6 +18,7 @@ defmodule Prima.IdentityTest do
   alias Prima.Identity.{Encoding, Entry, Key, State, WebAuthn}
 
   @vectors Path.expand("../../../../tests/fixtures/identity.json", __DIR__)
+  @addresses Path.expand("../../../../tests/fixtures/addresses.json", __DIR__)
 
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 
@@ -425,6 +426,19 @@ defmodule Prima.IdentityTest do
       refute Encoding.directory_url?("https://directory.example?x=1")
       refute Encoding.directory_url?("https://DIRECTORY.example")
       refute Encoding.directory_url?("https://directory.example:443/x")
+    end
+
+    test "an address has the one grammar every side reads (addresses.json)" do
+      %{"addresses" => addresses} = @addresses |> File.read!() |> Jason.decode!()
+      assert addresses != []
+
+      for %{"value" => value, "home" => home, "directory" => directory} = row <- addresses do
+        assert {value, Encoding.home?(value)} == {value, home}
+        assert {value, Encoding.directory_url?(value)} == {value, directory}
+
+        spelled = if row["spelled"], do: {:ok, row["spelled"]}, else: :error
+        assert {value, Encoding.canonical_home(value)} == {value, spelled}
+      end
     end
 
     test "a map is held to exactly its fields, unknown before missing" do

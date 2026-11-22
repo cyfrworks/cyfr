@@ -109,9 +109,23 @@ test("on the passkey road the chooser stays with both ways on and the way to ano
     assert.deepEqual(went.byItself, [], notice)
     assert.deepEqual([$("road").hidden, $("passkey").hidden, $("either").hidden, $("another").hidden], [false, false, false, false], notice)
     assert.equal($("notice").textContent, notice ? COMPANY : "")
-    $("passkey").onclick()
-    assert.deepEqual(went.pressed, [PASSKEY])
     assert.deepEqual(went.asked, [], "it connects nothing by itself")
+    $("passkey").onclick()
+    assert.deepEqual(went.pressed, [], "not before the CYFR answered")
+    await settled()
+    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME}]], "the press asks")
+    assert.deepEqual(went.pressed, [PASSKEY])
+  }
+})
+
+test("the passkey's way on goes nowhere when its press is not answered with a way on", async () => {
+  for (const said of [{home: HOME, error: "It did not answer."}, {error: "CYFR locked. Connect again."}]) {
+    const {$, went} = await chooser("", OPEN, said, ROAD)
+    $("passkey").onclick()
+    await settled()
+    assert.deepEqual([went.byItself, went.pressed], [[], []])
+    assert.equal($("notice").textContent, said.error)
+    assert.deepEqual([$("road").hidden, $("passkey").hidden, $("words").hidden], [false, false, false], "both ways on stay")
   }
 })
 

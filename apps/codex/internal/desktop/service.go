@@ -23,6 +23,24 @@ import (
 	"github.com/cyfr/codex/internal/shell"
 )
 
+// Local is the CYFR set up in a folder on this computer as one reading of
+// that folder names it, from the folder alone: what opens it uses that
+// one reading, and Shell's client and Answers are bound to the CYFR it
+// names (cmd readLocal).
+type Local struct {
+	// Shell is what that CYFR's own settings decide of the device's shell
+	// there: its address, the client that reaches it, the account service
+	// it names, its data directory and its setup capability.
+	Shell shell.Config
+	// Proxy and Resolver are the engine's route to its pages, empty on
+	// this computer's own.
+	Proxy, Resolver string
+	// Answers is nil when that CYFR itself answers now, and otherwise why
+	// it is not opened, in a sentence for the person. Asking starts
+	// nothing.
+	Answers func(context.Context) error
+}
+
 // Service is what the CYFR app's cyfr serves on the shell's listener: the
 // chooser (/bootstrap/) until a CYFR is selected, then the device's pages
 // at that CYFR. It selects one CYFR a run.
@@ -30,7 +48,11 @@ import (
 // The chooser's requests are JSON POSTs from the chooser's own page: the
 // exact Host and Origin, application/json, and the run token main put in
 // the chooser's first address, which no other page and no other program
-// was given. A CYFR's address is read as an https origin; its sign-in
+// was given. The address of the CYFR in the folder the client record
+// remembers opens that CYFR (openLocal): the folder's own settings name
+// its directory, so nothing is discovered or asked (account.ServiceOf),
+// and one that does not answer is named, never started. Any other CYFR's
+// address is read as an https origin; its sign-in
 // page names its directory (account.Discover). cyfr.run, or the
 // directory approved for this CYFR before, goes on at once; any other is
 // shown whole beside the CYFR's address and goes on only once the person
@@ -38,6 +60,9 @@ import (
 // home, numbered, and waits for that number's home-ready or home-failed;
 // only then are the device's pages, and the ticket they hand over, served,
 // and only after a home-ready. An answer to any other number is none.
+//
+// With a CYFR open, a Connect at that CYFR's own address is the press of
+// the chooser's passkey way on (again), and one at any other is refused.
 //
 // The road the app offers is main's alone to know (it says it in the
 // chooser's address, and decides every navigation): cyfr answers every
@@ -59,6 +84,9 @@ type Service struct {
 	// Discover reads a CYFR's directory; account.Discover unless a test
 	// replaces it.
 	Discover func(ctx context.Context, client *http.Client, home string) (account.Discovered, error)
+	// Local reads the CYFR set up in a folder on this computer, asking
+	// Docker nothing; nil reads none.
+	Local func(project string) (Local, error)
 	// Shell adapts a selected CYFR's shell configuration; nil leaves it.
 	Shell func(*shell.Config)
 
@@ -82,11 +110,15 @@ type Service struct {
 	selecting string
 	sh        *shell.Shell
 	pages     *shell.Server
+	// here is the CYFR the device's pages serve when it is one on this
+	// computer.
+	here *Local
 	// committed is the CYFR the device's pages serve, as home named it:
 	// every locked names it again.
 	committed Message
-	// began is whether a Connect began in this run: the remembered CYFR
-	// is connected by itself once, as the app starts, and never again.
+	// began is whether a Connect began in this run: the CYFR elsewhere
+	// remembered is connected by itself once, as the app starts, and
+	// never again.
 	began bool
 	// ended is whether cyfr is ending, which main hears as its end and
 	// never as a lock.
@@ -193,9 +225,10 @@ const (
 	busySentence    = "This app is connecting already. Wait for it to finish."
 )
 
-// begin takes the one Connect a time for a request of epoch, or answers
-// why not; run ends at the next lock, and finish must follow.
-func (s *Service) begin(ctx context.Context, epoch uint64) (context.Context, *answer) {
+// begin takes the one Connect a time for a request of epoch at home, or
+// answers why not: with a CYFR open, only that CYFR's own home is taken.
+// run ends at the next lock, and finish must follow.
+func (s *Service) begin(ctx context.Context, epoch uint64, home string) (context.Context, *answer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
@@ -203,7 +236,7 @@ func (s *Service) begin(ctx context.Context, epoch uint64) (context.Context, *an
 		return nil, &answer{Error: lockedSentence}
 	case s.connecting:
 		return nil, &answer{Error: busySentence}
-	case s.pages != nil:
+	case s.pages != nil && home != s.committed.Home:
 		return nil, &answer{Error: "This app is connected to a CYFR already. Quit it and open it again to connect to another."}
 	}
 	run, stop := context.WithCancel(ctx)
@@ -236,9 +269,10 @@ type request struct {
 // directory for a CYFR, or go to the device's pages.
 //
 // Once a CYFR is open, Next is the device's pages. Resume, before any
-// Connect of this run, is the remembered CYFR, which a chooser on the
-// passkey road connects by itself. Notice names a sentence of the
-// chooser's own, the one main's notices name.
+// Connect of this run, is the remembered CYFR elsewhere, which a chooser
+// on the passkey road connects by itself; a folder's is never Resume.
+// Notice names a sentence of the chooser's own, the one main's notices
+// name.
 type answer struct {
 	Home    string `json:"home,omitempty"`
 	Confirm string `json:"confirm,omitempty"`
@@ -262,34 +296,62 @@ func (s *Service) state(context.Context, uint64, request) answer {
 	open, began, home := s.pages != nil, s.began, s.committed.Home
 	s.mu.Unlock()
 	if open {
+		// The CYFR open, which the record may not name: it keeps another's
+		// client, or a folder, until this CYFR admitted the device.
 		return s.opened(home)
 	}
 	a := answer{Home: c.Home}
 	if !began {
 		a.Resume = c.Home
 	}
+	if c.Project != "" && s.Local != nil {
+		// A folder's CYFR fills the field and is never Resume: one press
+		// opens it.
+		if l, err := s.Local(c.Project); err != nil {
+			a.Error = fmt.Sprintf("The app cannot read the CYFR in %s (%v).", c.Project, err)
+		} else {
+			a.Home = l.Shell.Address
+		}
+	}
 	return a
 }
 
-// homeOf reads a typed address as a CYFR's https origin: a bare name is
-// taken as https://name.
+// homeOf reads a typed address as a CYFR's origin in its one spelling
+// (account.CanonicalHome, as a folder's is read) and whether that is an
+// https one, as a CYFR elsewhere must be: a bare name is taken as
+// https://name.
 func homeOf(address string) (string, bool) {
 	a := strings.TrimRight(strings.TrimSpace(address), "/")
 	if !strings.Contains(a, "://") {
 		a = "https://" + a
 	}
-	a = strings.ToLower(a)
-	return a, strings.HasPrefix(a, "https://") && account.IsHome(a)
+	home, ok := account.CanonicalHome(a)
+	if !ok {
+		return "", false
+	}
+	return home, strings.HasPrefix(home, "https://")
 }
 
 func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer {
-	run, refused := s.begin(ctx, epoch)
+	home, ok := homeOf(req.Address)
+	run, refused := s.begin(ctx, epoch, home)
 	if refused != nil {
 		return *refused
 	}
 	defer s.finish()
-	home, ok := homeOf(req.Address)
+	if a, open := s.again(run, epoch); open {
+		return a
+	}
+	project, l, remembered := s.remembered()
+	if remembered && l.Shell.Address == home {
+		return s.openLocal(run, epoch, project, l)
+	}
 	if !ok {
+		if remembered && home != "" {
+			// The folder's address changed since the chooser showed it, or
+			// another of this computer's was typed.
+			return answer{Error: fmt.Sprintf("The CYFR in %s is at %s. Connect to that address.", project, l.Shell.Address)}
+		}
 		return answer{Error: "Type the CYFR's address, such as https://cyfr.example.com."}
 	}
 	discover := s.Discover
@@ -315,9 +377,9 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	}
 	switch {
 	case found.Directory == account.DefaultDirectory:
-		return s.selectHome(run, epoch, home, found, true)
+		return s.selectRemote(run, epoch, home, found, true)
 	case c.Home == home && c.Directory == found.Directory:
-		return s.selectHome(run, epoch, home, found, false)
+		return s.selectRemote(run, epoch, home, found, false)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -329,7 +391,7 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 }
 
 func (s *Service) approve(ctx context.Context, epoch uint64, req request) answer {
-	run, refused := s.begin(ctx, epoch)
+	run, refused := s.begin(ctx, epoch, "")
 	if refused != nil {
 		return *refused
 	}
@@ -341,7 +403,32 @@ func (s *Service) approve(ctx context.Context, epoch uint64, req request) answer
 	if p == nil || p.epoch != epoch || p.home != req.Home || p.found.Directory != req.Directory {
 		return answer{Error: "That is not the account service this app asked about. Connect again."}
 	}
-	return s.selectHome(run, epoch, p.home, p.found, true)
+	return s.selectRemote(run, epoch, p.home, p.found, true)
+}
+
+// again answers a Connect at the CYFR open, which the chooser's passkey
+// way on presses before it loads that CYFR's own page, a load that takes
+// the kept sign-in along on no connection of the shell's. A folder's CYFR
+// is asked at the press, so that whatever took a stopped one's port is
+// given none.
+func (s *Service) again(run context.Context, epoch uint64) (answer, bool) {
+	s.mu.Lock()
+	here, home, open := s.here, s.committed.Home, s.pages != nil
+	s.mu.Unlock()
+	if !open {
+		return answer{}, false
+	}
+	var err error
+	if here != nil {
+		err = here.Answers(run)
+	}
+	switch {
+	case !s.live(epoch):
+		return answer{Error: lockedSentence}, true
+	case err != nil:
+		return answer{Home: home, Error: err.Error()}, true
+	}
+	return s.opened(home), true
 }
 
 // live is whether no lock came since epoch.
@@ -351,19 +438,65 @@ func (s *Service) live(epoch uint64) bool {
 	return s.epoch == epoch
 }
 
-// selectHome makes the device's shell at home, with its directory, over
-// the selection (shell.Selection), and sends main home; once main answers
-// home-ready for it, the selection is remembered and the device's pages are
-// served. Each step that publishes does so under s.mu while the epoch it
-// arrived in still runs, so a lock ends it unopened.
-func (s *Service) selectHome(run context.Context, epoch uint64, home string, found account.Discovered, approved bool) answer {
+// remembered is the folder the client record selects and the CYFR there,
+// when there is one the app can read.
+func (s *Service) remembered() (string, Local, bool) {
+	c, err := s.Clients.Load()
+	if err != nil || c.Project == "" || s.Local == nil {
+		return "", Local{}, false
+	}
+	l, err := s.Local(c.Project)
+	return c.Project, l, err == nil
+}
+
+// openLocal selects the CYFR l, set up in project on this computer, with
+// the account service its own settings name.
+func (s *Service) openLocal(run context.Context, epoch uint64, project string, l Local) answer {
+	home := l.Shell.Address
+	found, ok := account.ServiceOf(home, l.Shell.Directory)
+	if !ok {
+		return answer{Error: fmt.Sprintf("The CYFR in %s names %s as its account service. The app takes an https address, "+
+			"or a plain http one only at a CYFR's own address on this computer.", project, l.Shell.Directory)}
+	}
+	if err := l.Answers(run); err != nil {
+		if !s.live(epoch) {
+			return answer{Error: lockedSentence}
+		}
+		return answer{Error: err.Error()}
+	}
+	sel, err := s.Clients.SelectLocal(project)
+	if err != nil {
+		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
+	}
+	a := s.selectHome(run, epoch, sel, l.Shell,
+		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pages != nil {
+		s.here = &l
+	}
+	return a
+}
+
+// selectRemote selects the CYFR elsewhere at home, with the account
+// service found for it, approved in this selection or not.
+func (s *Service) selectRemote(run context.Context, epoch uint64, home string, found account.Discovered, approved bool) answer {
 	sel, err := s.Clients.Select(home, found.Directory, approved)
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
-	cfg := shell.Config{Address: home, Client: s.Client, DisplayName: s.DisplayName,
-		Record: s.Record, Clients: sel, Directory: found.Directory,
-		Detect: remoteDisks, Restart: s.sayLocked}
+	return s.selectHome(run, epoch, sel, shell.Config{Address: home, Client: s.Client, Directory: found.Directory, Detect: remoteDisks},
+		Message{Type: TypeHome, Home: home, Account: found.Origin})
+}
+
+// selectHome makes the device's shell at the CYFR cfg reaches, over the
+// selection (shell.Selection), and sends main proposal, its home; once
+// main answers home-ready for it, the selection is remembered and the
+// device's pages are served. Each step that publishes does so under s.mu while the epoch it
+// arrived in still runs, so a lock ends it unopened.
+func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selection, cfg shell.Config, proposal Message) answer {
+	home := proposal.Home
+	cfg.DisplayName, cfg.Record, cfg.Clients, cfg.Restart = s.DisplayName, s.Record, sel, s.sayLocked
 	if s.Shell != nil {
 		s.Shell(&cfg)
 	}
@@ -372,7 +505,6 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 		return answer{Error: err.Error()}
 	}
 	ready := make(chan bool, 1)
-	proposal := Message{Type: TypeHome, Home: home, Account: found.Origin}
 	s.mu.Lock()
 	if s.epoch != epoch {
 		s.mu.Unlock()
@@ -466,7 +598,7 @@ func (s *Service) lock(why string, leave bool) {
 	s.mu.Lock()
 	sh := s.sh
 	if leave {
-		s.sh, s.pages, s.committed = nil, nil, Message{}
+		s.sh, s.pages, s.here, s.committed = nil, nil, nil, Message{}
 	}
 	s.epoch++
 	if s.stop != nil {
@@ -477,13 +609,9 @@ func (s *Service) lock(why string, leave bool) {
 		s.ready, s.selecting, s.current = nil, "", 0
 	}
 	s.mu.Unlock()
-	if sh != nil {
-		wasOpen := sh.Unlocked()
-		sh.Lock(why)
-		if wasOpen {
-			// The shell said locked as it restarted the pages.
-			return
-		}
+	if sh != nil && sh.Lock(why) {
+		// The shell said locked as it restarted the pages.
+		return
 	}
 	s.sayLocked()
 }

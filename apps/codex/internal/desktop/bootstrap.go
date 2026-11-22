@@ -22,10 +22,12 @@ import (
 // (main refuses a page that move, and is not asked for the engine's own)
 // shows the road and no notice.
 // On the passkey road the script
-// connects the CYFR remembered by itself as the app starts, leaves a CYFR
-// just connected to main, which opens it at its root, and asks main by
-// addresses main alone answers to connect to another and, where main says
-// the CYFR's page did not load, to open that CYFR again.
+// connects the CYFR elsewhere remembered by itself as the app starts,
+// leaves a CYFR just connected to main, which opens it at its root, goes
+// on to the open CYFR's sign-in page only once a Connect at it, posted at
+// the press, answers with next, and asks main by addresses main alone
+// answers to connect to another and, where main says the CYFR's page did
+// not load, to open that CYFR again.
 // With a CYFR open it goes on to the device's pages by itself only when
 // it has nothing to tell (a notice main put in the address, or one
 // cyfr's answer names): with a notice it stays, as it does on the
@@ -44,9 +46,10 @@ function say(t){$("notice").textContent=t||""}
 function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
 function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.next&&(passkey||told));$("confirm").hidden=!asked;$("choose").hidden=!!asked||stay;$("road").hidden=!stay;
 if(asked){$("home").textContent=a.home;$("service").textContent=a.confirm}
-if(stay){$("open").textContent=a.home;$("passkey").hidden=$("either").hidden=$("another").hidden=!passkey;$("again").hidden=!passkey||!main.told.includes("unanswered");$("passkey").onclick=()=>location.assign(a.home+"/login");$("words").onclick=()=>location.assign(a.next)}
+if(stay){$("open").textContent=a.home;$("passkey").hidden=$("either").hidden=$("another").hidden=!passkey;$("again").hidden=!passkey||!main.told.includes("unanswered");$("passkey").onclick=()=>onward(a.home);$("words").onclick=()=>location.assign(a.next)}
 else if(a.next)location.replace(a.next)}
 function connected(a){if(!(passkey&&a.next))show(a,notices[a.notice])}
+function onward(home){say("Connecting\u2026");post("/bootstrap/connect",{address:home}).then(a=>a.next?location.assign(home+"/login"):say(a.error))}
 function connect(address){say("Connecting\u2026");post("/bootstrap/connect",{address}).then(connected)}
 post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;const told=main.told.map(n=>notices[n]).filter(Boolean).join(" ").replace("{CYFR}",a.home||"");show(a,told);if(passkey&&a.resume&&!told)connect(a.resume)});
 $("connect").addEventListener("submit",e=>{e.preventDefault();connect($("address").value)});

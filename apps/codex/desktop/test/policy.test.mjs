@@ -11,6 +11,7 @@ import {
   relyingParty, unlistedSwitch
 } from "../src/policy.js"
 
+const processes = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
 const signIn = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_in.json", import.meta.url)))
 const home = signIn["home"]
 const account = "https://accounts.example.com"
@@ -218,4 +219,33 @@ test("what the app prints keeps what is no address's fragment, query or credenti
   }
   assert.equal(printed("Failed to load URL: https://x.test:8443/threads#t with error: ERR_FAILED"),
     "Failed to load URL: https://x.test:8443 with error: ERR_FAILED")
+})
+
+test("main takes a home's account service by the rule cyfr holds", () => {
+  assert.ok(processes.account_services.length > 0)
+  for (const s of processes.account_services) assert.equal(homeMessage({home: s.home, account: s.account}), s.accepted, s.name)
+})
+
+test("a local CYFR serving its own accounts hops to its sign-in route alone, and nothing else of this computer loads", () => {
+  const origin = "http://localhost:4000"
+  const local = {home: origin, account: origin, accountRoad: true}
+  assert.equal(top(origin + "/threads", local, LOOPBACK + "/"), "allow")
+  assert.equal(top(origin + "/account/sign#x", local, origin + "/login"), "hop")
+  assert.equal(top(origin + "/account/new#x", {...local, account: "https://cyfr.run"}, origin + "/login"), "allow", "the CYFR's own page")
+  assert.equal(accountLoad(origin + "/account/sign", local), "allow")
+  assert.equal(accountLoad(origin + "/login#answer=x", local), "return")
+  assert.equal(accountLoad(origin + "/threads", local), "block")
+  for (const elsewhere of ["http://localhost:4100/", "http://127.0.0.1:4000/", "http://localhost:4100/account/sign"]) {
+    assert.equal(top(elsewhere, local, origin + "/login"), "block", elsewhere)
+    assert.equal(accountLoad(elsewhere, local), "block", elsewhere)
+  }
+})
+
+test("main reads a CYFR's address and its account service's by the one grammar every side reads", () => {
+  const addresses = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/addresses.json", import.meta.url))).addresses
+  assert.ok(addresses.length > 0)
+  for (const a of addresses) {
+    assert.equal(homeMessage({home: a.value, account: "https://cyfr.run"}), a.home, a.value)
+    if (a.value.startsWith("https://")) assert.equal(homeMessage({home: "https://cyfr.example.com", account: a.value}), a.home, a.value)
+  }
 })

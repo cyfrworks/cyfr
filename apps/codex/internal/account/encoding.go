@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -40,6 +41,7 @@ var (
 	digestShape     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	identifierShape = regexp.MustCompile(`^per_[0-9a-f]{64}$`)
 	aaguidShape     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	portShape       = regexp.MustCompile(`^(0|[1-9][0-9]{0,4})$`)
 	pathShape       = regexp.MustCompile(`^(/[A-Za-z0-9._~!$&'()*+,;=:@%-]+)*$`)
 )
 
@@ -63,10 +65,52 @@ func origin(u *url.URL) (string, bool) {
 		return "", false
 	}
 	o := u.Scheme + "://" + u.Hostname()
-	if p := u.Port(); p != "" && !(u.Scheme == "http" && p == "80") && !(u.Scheme == "https" && p == "443") {
-		o += ":" + p
+	if p := u.Port(); p != "" {
+		// A port has one spelling too, as the app's main reads it
+		// (assets/account/encoding.js splitOrigin).
+		if n, err := strconv.Atoi(p); err != nil || !portShape.MatchString(p) || n > maxPort {
+			return "", false
+		}
+		if !(u.Scheme == "http" && p == "80") && !(u.Scheme == "https" && p == "443") {
+			o += ":" + p
+		}
 	}
 	return o, true
+}
+
+const (
+	maxPort = 65535
+	// maxPortDigits is as many digits as Prima's URI reader takes in a
+	// port, leading zeros among them.
+	maxPortDigits = 5
+)
+
+// CanonicalHome is the one spelling of a home written another way, as
+// Prima.Identity.Encoding.canonical_home gives a CYFR its own
+// (tests/fixtures/addresses.json, spelled): scheme and host lowercased in
+// ASCII, the port read as at most five digits (a leading zero among them,
+// an empty one the scheme's own), the scheme's default port and a
+// trailing / dropped.
+// It is for an address this side read from a setting or a person typed. A
+// home on the wire is already in its spelling (IsHome).
+func CanonicalHome(v string) (string, bool) {
+	if len(v) > 300 || strings.ContainsAny(v, "?#") || strings.ContainsFunc(v, func(r rune) bool { return r > 0x7f }) {
+		return "", false
+	}
+	u, err := url.Parse(strings.ToLower(v))
+	if err != nil || (u.Path != "" && u.Path != "/") || u.RawPath != "" || !isHost(u.Hostname()) {
+		return "", false
+	}
+	host := u.Hostname()
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || len(p) > maxPortDigits || n > maxPort {
+			return "", false
+		}
+		host += ":" + strconv.Itoa(n)
+	}
+	u.Host = host
+	return origin(u)
 }
 
 // IsHome is whether v names a home (a CYFR's origin) in its one spelling.
