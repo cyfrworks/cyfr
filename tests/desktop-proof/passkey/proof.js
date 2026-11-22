@@ -429,18 +429,31 @@ async function keptPhase() {
       cookie = kept
       return [toldUnanswered({cookie, ...detail}, true), detail]
     })
-  await judged("try_again", "Try again asks for the CYFR's root, and Prism opens signed in as before", async () => {
+  await judged("try_again", "Try again asks cyfr, then for the CYFR's root, and Prism opens signed in as before", async () => {
     const pressedAt = history.length
     const frontAt = await frontLength()
-    await js(w.webContents, `document.querySelector("#again").click(); 1`)
-    const back = await waitFor(async () => !w.isDestroyed() && atHome(w.webContents.getURL()) && !w.webContents.isLoading() &&
-      js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism after Try again", 30_000).catch(() => false)
+    // When the chooser asked cyfr, by the engine's loads made by then.
+    let connectAt = null
+    const ses = w.webContents.session
+    ses.webRequest.onBeforeRequest({urls: [LOOPBACK + "/bootstrap/connect"]}, (_details, callback) => {
+      connectAt ??= history.length
+      callback({})
+    })
+    let back
+    try {
+      await js(w.webContents, `document.querySelector("#again").click(); 1`)
+      back = await waitFor(async () => !w.isDestroyed() && atHome(w.webContents.getURL()) && !w.webContents.isLoading() &&
+        js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism after Try again", 30_000).catch(() => false)
+    } finally {
+      ses.webRequest.onBeforeRequest(null)
+    }
     // What the retry asked for: the engine's first load of the CYFR after
     // the press, and that request at the front.
     const asked = history.slice(pressedAt).find((url) => !url.startsWith(LOOPBACK + "/")) ?? null
+    const askedFirst = connectAt !== null && !history.slice(pressedAt, connectAt).some((url) => !url.startsWith(LOOPBACK + "/"))
     const answered = (await reachedSince(new URL(HOME).hostname, frontAt)).find((r) => r.method === "GET" && r.path === "/")?.status ?? null
-    return [asked === HOME + "/" && answered !== null && back === true && cookie !== null && (await sessionCookie(w)) === cookie,
-      {asked: asked && bare(asked), answered, back}]
+    return [askedFirst && asked === HOME + "/" && answered !== null && back === true && cookie !== null && (await sessionCookie(w)) === cookie,
+      {askedFirst, asked: asked && bare(asked), answered, back}]
   })
   await choosersWord(w)
   return "quit"
