@@ -413,6 +413,44 @@ func fakeBrew(t *testing.T, installed, upgradeTo string) string {
 // installed; brew left on another release hands nothing over. A --version
 // other than the tap's release, the newest one, is refused before brew
 // runs, naming the install script.
+func TestUpdateLeavesThePackagesProgramToThePackage(t *testing.T) {
+	for _, o := range []updateOptions{{}, {version: "1.2.0"}} {
+		s := newProgramScenario(t, "1.0.0", "1.1.0")
+		// The package's layout, reached by the link it puts on PATH.
+		inside := s.self
+		code := filepath.Join(filepath.Dir(inside), "app.asar")
+		link := filepath.Join(t.TempDir(), "cyfr")
+		if err := os.WriteFile(code, []byte("the app"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(inside, link); err != nil {
+			if runtime.GOOS == "windows" {
+				t.Skip("Windows makes a link only with a privilege")
+			}
+			t.Fatal(err)
+		}
+		selfExecutable = func() (string, error) { return link, nil }
+		target := "1.1.0"
+		if o.version != "" {
+			target = o.version
+		}
+		_, err := s.run(o)
+		want := "This cyfr belongs to the CYFR app's package, so nothing was changed: install the package of release " + target + " from " + releasesPage + "/tag/" + target
+		if err == nil || err.Error() != want {
+			t.Errorf("cyfr update answered %v, want %q", err, want)
+		}
+		if len(s.fetched) != 0 || len(s.handed) != 0 {
+			t.Errorf("cyfr update fetched %v and handed over %v", s.fetched, s.handed)
+		}
+		if got := read(t, inside); got != "old cyfr" {
+			t.Errorf("the package's cyfr holds %q", got)
+		}
+		if got := read(t, code); got != "the app" {
+			t.Errorf("the package's app holds %q", got)
+		}
+	}
+}
+
 func TestUpdateThroughHomebrew(t *testing.T) {
 	brewLog := func(dir string) string { return strings.TrimSpace(read(t, filepath.Join(dir, "log"))) }
 	restore := caskInstalled

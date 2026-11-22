@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -167,7 +168,9 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 
 // replaceSelf downloads and verifies release target's binary for this
 // platform and installs it over this program's file, answering the file's
-// path with its links resolved.
+// path with its links resolved. The cyfr inside the CYFR app's package,
+// which has the app's code beside it (app.asar), is refused before any
+// download: replaced alone, the app and its cyfr would be two releases.
 func replaceSelf(ctx context.Context, out io.Writer, target string) (string, error) {
 	self, err := selfExecutable()
 	if err == nil {
@@ -175,6 +178,12 @@ func replaceSelf(ctx context.Context, out io.Writer, target string) (string, err
 	}
 	if err != nil {
 		return "", fmt.Errorf("cyfr update could not find its own program file (%v); nothing was changed", err)
+	}
+	switch _, err := os.Lstat(filepath.Join(filepath.Dir(self), "app.asar")); {
+	case err == nil:
+		return "", fmt.Errorf("This cyfr belongs to the CYFR app's package, so nothing was changed: install the package of release %s from %s/tag/%s", target, releasesPage, target)
+	case !errors.Is(err, fs.ErrNotExist):
+		return "", fmt.Errorf("cyfr update could not tell whether this cyfr belongs to the CYFR app's package (%v); nothing was changed", err)
 	}
 	fmt.Fprintf(out, "Downloading and verifying release %s for %s/%s...\n", target, runtime.GOOS, runtime.GOARCH)
 	fetch, cancel := context.WithTimeout(ctx, fetchBinaryTimeout)
