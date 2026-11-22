@@ -1878,7 +1878,8 @@ defmodule Opus.Programs.Box do
   # The one place an open is sent from: only while this member holds its
   # slot at the lifetime's generation and the service runs the lifetime's
   # boot, and in a process of its own, monitored here, whose wait reaches
-  # just past the deadline.
+  # just past the deadline, or to the connect timeout where that is later:
+  # the box's own timer ends the open at the deadline either way.
   defp start_open(state, %{lifetime: lifetime} = open) do
     cond do
       not holds_slot?(state, lifetime) ->
@@ -1895,8 +1896,10 @@ defmodule Opus.Programs.Box do
         left = max(open.deadline - now_ms(), 0)
         grant = grant(state, owner_of(lifetime), lifetime)
 
-        params =
-          Map.merge(open.params, %{lifetime: lifetime, timeout_ms: left + @open_transport_ms})
+        # A request's timeout below the connect timeout becomes that timeout
+        # (`Prima.Network.pin/3`), and each distinct one a connection pool.
+        wait = max(left + @open_transport_ms, Prima.Network.connect_timeout_ms())
+        params = Map.merge(open.params, %{lifetime: lifetime, timeout_ms: wait})
 
         timer = Process.send_after(self(), {:open_deadline, ref}, left)
 

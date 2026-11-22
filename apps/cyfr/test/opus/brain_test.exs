@@ -1445,6 +1445,17 @@ defmodule Opus.BrainTest do
       {holder, {:once, owner, %{"t" => "models", "id" => id}, until}}
     end
 
+    # A discovery listed whole, its deadline `ms` away.
+    defp listed_within!(fake, ctx, row, ms) do
+      _until = due_in!(ctx, row, ms)
+      %{"t" => "models", "id" => id} = once_driver!(fake, row)
+      written_and_reading!()
+      answered!(fake, row, id)
+      assert_receive {:asked, {:ok, _listed}}, 2_000
+      given_back!(fake, ctx, row)
+      flush_reads()
+    end
+
     # What is left until `until`, and a second for what follows it.
     defp by(until), do: max(until - System.monotonic_time(:millisecond), 0) + 1_000
 
@@ -2281,6 +2292,19 @@ defmodule Opus.BrainTest do
 
       send(syncing, :go)
       given_back!(fake, ctx, row)
+    end
+
+    test "opens with little time left share the connection pool of those with plenty",
+         %{fake: fake, ctx: ctx, row: row} do
+      pools = fn -> DynamicSupervisor.count_children(Req.FinchSupervisor).active end
+      listed_within!(fake, ctx, row, 20_000)
+      warm = pools.()
+
+      # No run of the others gives these, so a pool of each would be new.
+      for ms <- [1_700, 2_100, 2_600, 3_300] do
+        listed_within!(fake, ctx, row, ms)
+        assert pools.() == warm, "an open with #{ms} ms left made a connection pool"
+      end
     end
 
     test "nothing is asked of the box for a command whose deadline has passed",
