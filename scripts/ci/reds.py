@@ -19,7 +19,8 @@ push run on main, and leaves every other run alone:
   success on attempt 2  when attempt 1 had failed jobs, a flake: a comment
                         on FLAKES naming the run, the commit, those jobs and
                         the failing tests their logs name (ExUnit's numbered
-                        failure lines, the harnesses' FAIL lines);
+                        failure lines, the harnesses' FAIL lines: FAIL: text,
+                        and the desktop proofs' FAIL row: text);
   failure on attempt 2  no further rerun; on main, a comment on RED_TWICE
                         naming the run and its failed jobs (a second red on
                         main opens a regression job); on a pull request
@@ -61,7 +62,7 @@ FAILED_JOB = {"failure", "timed_out"}
 # The failing tests a job's log names, after the runner's timestamp.
 STAMP = re.compile(r"^\d{4}-\d\d-\d\dT[0-9:.]+Z ?")
 TEST_LINE = re.compile(r"^\s*(\d+\) (?:(?:test|doctest|property) .*\(\S+\)|\S+: failure on setup_all callback.*))\s*$"
-                       r"|^\s*(FAIL: .+?)\s*$")
+                       r"|^\s*(FAIL(?::| [a-z][^:]*:) .+?)\s*$")
 # What block() removes from text a run carries.
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # What one comment names of one job's log, and of one line.

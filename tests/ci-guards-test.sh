@@ -1988,8 +1988,8 @@ chmod +x "$scratch/reds-bin/gh"
 
 # reds_state [ISSUE...]: a fresh stand-in state, each ISSUE 'NUMBER
 # open|closed|pr TITLE'. Run 7's attempt 1 failed two jobs and passed one:
-# job 71's log names ExUnit failures, one twice, and a harness FAIL line
-# under the runner's timestamps, with a mention and a link, after a step
+# job 71's log names ExUnit failures, one twice, and harness and desktop
+# proof FAIL lines under the runner's timestamps, with a mention and a link, after a step
 # command the runner coloured, as in every job's log; job 72's log
 # names none; job 73 passed. Its attempt 2 failed job 75 again; job 74's
 # log cannot be read. Run 8's attempt 1 failed no job.
@@ -2012,6 +2012,10 @@ log71 = "\n".join([
     "2026-11-18T10:00:02.0000000Z   2) test @someone [x](https://example.invalid) (Aqua.RunnerTest)",
     "2026-11-18T10:00:03.0000000Z   1) test a session ends on sign-out (CyfrWeb.SessionTest)",
     "2026-11-18T10:00:04.0000000Z FAIL: main-run: a run in progress waits",
+    "2026-11-18T10:00:04.1000000Z PASS first_open: a CYFR just connected opens at its root",
+    "2026-11-18T10:00:04.2000000Z FAIL device_lock: the device's Lock ends its session {\"held\":false}",
+    "2026-11-18T10:00:04.3000000Z FAIL refused --no-sandbox: exit 0",
+    "2026-11-18T10:00:04.4000000Z FAILED to read nothing: not a row",
     "2026-11-18T10:00:05.0000000Z 3 tests, 2 failures",
 ])
 json.dump({"issues": issues, "reruns": [], "logs": {"71": log71, "72": "all quiet\n", "73": "ok\n"},
@@ -2079,6 +2083,8 @@ block = ["    Elixir Tests (postgres, shard 2)",
          "        1) test a session ends on sign-out (CyfrWeb.SessionTest)",
          "        2) test @someone [x](https://example.invalid) (Aqua.RunnerTest)",
          "        FAIL: main-run: a run in progress waits",
+         "        FAIL device_lock: the device's Lock ends its session {\"held\":false}",
+         "        FAIL refused --no-sandbox: exit 0",
          "    @someone's job",
          "        (its log names no failing test)"]
 lines = body.split("\n")
