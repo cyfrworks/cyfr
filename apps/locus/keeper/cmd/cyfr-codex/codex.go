@@ -363,6 +363,10 @@ const unknownAccountSentence = "OpenAI Codex's account answer is not one CYFR kn
 // instructions that go before it.
 const instructionsSentence = "OpenAI Codex did not take its changed instructions, so the post was not written; send it again."
 
+// unrecordedSentence refuses a post whose changed instructions the folder
+// cannot record: the stale record would hide the change after them.
+const unrecordedSentence = "OpenAI Codex's changed instructions could not be recorded in its folder, so the post was not written; check that the program's folder can be written."
+
 // unreadAccountSentence refuses a post while Codex's account read failed:
 // no sign-out.
 const unreadAccountSentence = "OpenAI Codex's account could not be read, so the post was not written; send it again."

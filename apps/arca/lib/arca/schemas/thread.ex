@@ -76,7 +76,8 @@ defmodule Arca.Schemas.Thread do
   anew, until the driver answers for the prompt's write or a reconcile
   finds its step recorded; `busy`,
   whether the program owes output since a delivery was taken; and
-  `clock`, the open turn's silence clock: `since` when it last ran from,
+  `clock`, the open turn's silence clock, which runs over that output and
+  over a delivery not acknowledged: `since` when it last ran from,
   nil while it is paused, and `left_ms`, what is left of its interval,
   which each driver process's hello starts whole.
   """

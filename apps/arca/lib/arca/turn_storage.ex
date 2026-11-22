@@ -2104,15 +2104,17 @@ defmodule Arca.TurnStorage do
   def append_turn_row(%Prima.Actor{athanor_id: athanor_id} = actor, turn_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.append_turn_row", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        turn = open!(own!(athanor_id, turn_id, attrs))
-        thread = thread!(athanor_id, turn.thread_id)
+      with_seq_retry(fn ->
+        Arca.Repo.locking_transaction(fn ->
+          turn = open!(own!(athanor_id, turn_id, attrs))
+          thread = thread!(athanor_id, turn.thread_id)
 
-        Arca.ThreadStorage.insert_message!(
-          actor,
-          thread,
-          attrs |> Map.drop([:fence]) |> Map.merge(%{turn_id: turn.id, sent_by: turn.agent})
-        )
+          Arca.ThreadStorage.insert_message!(
+            actor,
+            thread,
+            attrs |> Map.drop([:fence]) |> Map.merge(%{turn_id: turn.id, sent_by: turn.agent})
+          )
+        end)
       end)
     end)
     |> Arca.Data.project()
@@ -4211,8 +4213,8 @@ defmodule Arca.TurnStorage do
 
   What the delivery brings in joined the turn's read threads before it
   was read (`join_read/3`). A post or a notice joins the posts owed an
-  answer, and the silence clock pauses on the delivery not yet taken
-  (`brain_progress`). A notice leaves the recovery obligation it answers
+  answer, and the silence clock runs over the delivery's acknowledgement,
+  which the program owes (`brain_progress`). A notice leaves the recovery obligation it answers
   (`reconcile_brain/3`) where it stands until the driver answers for its
   write (`commit_brain/3`) or a reconcile settles it; until then its step
   alone keeps another notice of its row from being offered
@@ -5059,8 +5061,9 @@ defmodule Arca.TurnStorage do
 
   defp usage_step(_athanor_id, _thread, _turn, _agent, _work), do: nil
 
-  # The silence clock (`brain_progress`'s `clock`): it runs only while the
-  # program owes an open turn output, banks what ran when it pauses, and
+  # The silence clock (`brain_progress`'s `clock`): it runs whenever the
+  # program owes an open turn something (`owes?/3`), banks what ran when it
+  # pauses, and
   # restarts whole at a line of the program's own and at a process's hello
   # (`whole_interval?/1`). Read by the database's clock.
   # arca:db-raise-ok inside the caller's transaction
@@ -5087,20 +5090,32 @@ defmodule Arca.TurnStorage do
     max(DateTime.diff(now, at, :millisecond), 0)
   end
 
-  # Whether the program owes output: never with no turn open, since a
-  # program lives for one turn; with one, when a delivery was taken
+  # Whether the program owes something: never with no turn open, since a
+  # program lives for one turn; with one, whenever a delivery sent to it
+  # is not acknowledged, whatever waits behind it, since nothing more is
+  # written until it answers. Else when a delivery was taken
   # since its last `idle`, or a post or notice of the turn it took is
   # still owed an answer, and neither CYFR nor the person owes it
   # anything: no ask undecided or running, no closed result whose answer
-  # is not yet taken, no post waiting or not yet taken, no recovery
+  # is not yet sent, no post waiting to be, no recovery
   # prompt not yet recorded.
   # arca:db-raise-ok inside the caller's transaction
   defp owes?(_athanor_id, nil, _progress), do: false
 
   defp owes?(athanor_id, %Turn{} = turn, progress) do
-    (progress["busy"] == true or answer_owed?(athanor_id, turn, progress)) and
-      owed_notices(athanor_id, turn, progress) == [] and
-      not owed_to_program?(athanor_id, turn)
+    unacknowledged?(athanor_id, turn) or
+      ((progress["busy"] == true or answer_owed?(athanor_id, turn, progress)) and
+         owed_notices(athanor_id, turn, progress) == [] and
+         not owed_to_program?(athanor_id, turn))
+  end
+
+  defp unacknowledged?(athanor_id, %Turn{} = turn) do
+    Arca.Repo.exists?(
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+        where: s.kind == "input" and s.dispatch_state == "dispatched"
+      )
+    )
   end
 
   defp answer_owed?(athanor_id, %Turn{} = turn, %{"owed" => [_ | _] = owed}) do

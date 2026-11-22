@@ -306,12 +306,21 @@ defmodule Opus.Brain do
   `:unreadable`, `:running` (a `start` while a harness runs),
   `:not_started`, `:not_this_work`, `:not_this_generation` (a `start`
   naming another generation than the binding's), `{:not_admitted,
-  reason}`; or `{:error, :uncertain}`, a write that may have reached the
-  driver, after which the session ends.
+  reason}`, `:ended` (the service held no such session), `:not_written`
+  (the service refused it) or `:unavailable` (the holder ended before it
+  took the write); or `{:error, :uncertain}`, a write that may have
+  reached the driver, its answer lost among them: the holder's reply that
+  did not come, the holder's death while it wrote and a service that
+  answers the session ended, which can follow the writing.
   """
   @spec write(brain(), binding(), Wire.message()) :: :ok | {:error, term()}
   def write({pid, ref}, binding, %{} = command) when is_map(ref) do
-    call(pid, {:write, ref, binding, command}, @write_ms + @answer_margin_ms)
+    GenServer.call(pid, {:write, ref, binding, command}, @write_ms + @answer_margin_ms)
+  catch
+    # Only a holder that had ended before it took the write surely wrote
+    # nothing: one that takes a write answers it before it stops.
+    :exit, {gone, _call} when gone in [:noproc, :normal] -> {:error, :unavailable}
+    :exit, _timeout_or_death -> {:error, :uncertain}
   end
 
   @doc """
@@ -1385,8 +1394,9 @@ defmodule Opus.Brain do
       {:ok, :running} ->
         {:reply, :ok, written(state, command)}
 
+      # The service answers ended too for a write that failed part way.
       {:ok, :ended} ->
-        {:stop, :normal, {:error, :ended}, ended(state, :exited)}
+        {:stop, :normal, {:error, :uncertain}, ended(state, :interrupted)}
 
       {:error, {:refused, code, _boot}} when code in @gone ->
         {:stop, :normal, {:error, :ended}, ended(state, :exited)}

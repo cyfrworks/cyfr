@@ -27,15 +27,23 @@ defmodule Aqua.Loop do
   turn's row, its posts and its usage name.
 
   Every write goes through `Aqua.Tape` under the actor's guest-planed
-  context; the loop process never runs a child on itself.
+  context; the loop process never runs a child on itself. A loop writes
+  only under the fence it acquired: it never reads the fence again from
+  the turn's row, and each row it writes, a failure's sentence among them,
+  presents that fence in the transaction that writes it, so a loop whose
+  turn was taken writes nothing and is cancelled.
 
   ## A turn on a program
 
   A program lives for one turn: while a loop holds the turn, a launch's
   wait and a steer at the finish included. Whatever way the loop returns,
   an end or a pause, the turn's session is closed and the close waited on
-  first (`Aqua.Program.close/2`), so the next turn finds the place back.
-  Aqua knows nothing else of a process. A turn whose member's program is
+  first (`Aqua.Program.close/2`), and the loop conveys Opus's answer: a
+  plain result says that the place is back, `{:unanswered, unclosed,
+  result}` that it is not, as `abort/4` and `abort_ended/4` do. Who needs
+  the place hands `unclosed` to the next loop (`:unclosed`), whose program
+  opens nothing until Opus says that each is back. Aqua knows nothing else
+  of a process. A turn whose member's program is
   another row than the one the thread's session is stored with forgets
   that session before its start and starts over from the thread's posts.
 
@@ -96,6 +104,9 @@ defmodule Aqua.Loop do
   # beside the retry's (`Aqua.Loop.Stream`).
   @recoverable ~w(rate_limited overloaded incomplete_stream)
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
+  # A write refused for one of these found the turn taken or over: whoever
+  # took it says what became of it.
+  @taken [:superseded, :not_open, :already_finished]
   # A refusal for want of a key bound to the brain is the brain's own
   # state, a key to enter (`Aqua.Loop.Turn.key_refusals/0`); a key the
   # provider refused (`authentication`) is the provider's to say, as a
@@ -151,7 +162,10 @@ defmodule Aqua.Loop do
       program: nil,
       # The turn's attendant and this loop's monitor of it, from its first
       # wait on it to its return (`attended/2`).
-      attendant: nil
+      attendant: nil,
+      # The places of the thread's earlier turns not known to be back
+      # (`Opus.Brain.brain/0`), which its program waits on before it opens.
+      unclosed: []
     ]
   end
 
@@ -161,6 +175,10 @@ defmodule Aqua.Loop do
           | {:failed, term()}
           | :cancelled
           | {:uncertain, term()}
+          | {:unwritten, result()}
+
+  @typedoc "An answer, saying that the places `unclosed` names are not back."
+  @type conveyed(answer) :: answer | {:unanswered, [Opus.Brain.brain()], answer}
 
   # ---------------------------------------------------------------------------
   # Entry points
@@ -169,19 +187,23 @@ defmodule Aqua.Loop do
   @doc """
   Run an accepted turn as its root: claim the root on this process,
   start the turn with its pins, and loop. `opts`: `:ctx` (the actor's
-  external-plane context), `:turn_id`. Ends the turn itself on every
-  outcome but a pause. A turn another process on this boot holds is
+  external-plane context), `:turn_id`, `:unclosed` (the thread's places
+  not known to be back). Ends the turn itself on every
+  outcome but a pause: `{:unwritten, result}` is an end that could not be
+  written, its turn left to recovery before anything of the thread goes
+  on. A turn another process on this boot holds is
   refused `{:error, :held}` before anything is read (`holder/1`).
   """
-  @spec run(keyword()) :: result() | {:error, term()}
+  @spec run(keyword()) :: conveyed(result() | {:error, term()})
   def run(opts) do
     ctx = Keyword.fetch!(opts, :ctx)
     turn_id = Keyword.fetch!(opts, :turn_id)
 
-    hold(ctx, turn_id, fn ->
+    hold(ctx, turn_id, Keyword.get(opts, :unclosed, []), fn unclosed ->
       with {:ok, turn} <- Tape.turn(ctx, turn_id) do
         case claim_and_start(ctx, turn) do
           {:ok, state} ->
+            state = %{state | unclosed: unclosed}
             Aqua.Loop.Stream.announce_fence(state.spec.guest, state.turn)
 
             case open_call(state) do
@@ -207,8 +229,8 @@ defmodule Aqua.Loop do
           {:error, reason} ->
             reason = unclaimed(ctx, turn, reason)
             say_unrun(ctx, turn, reason)
-            _ = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
-            {:failed, reason}
+            finish = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
+            unrun(turn, {:failed, reason}, finish)
         end
       end
     end)
@@ -240,8 +262,7 @@ defmodule Aqua.Loop do
   # points at the Aqua page.
   defp never_ran(ctx, claim, turn, reason) do
     say_unrun(ctx, turn, reason)
-    end_unrun(ctx, claim, turn, describe(reason))
-    {:failed, reason}
+    end_unrun(ctx, claim, turn, reason)
   end
 
   # A turn that never ran says why in the thread where the person can act
@@ -273,54 +294,59 @@ defmodule Aqua.Loop do
 
   defp say_unrun(_ctx, _turn, _reason), do: :ok
 
-  defp unrun_line(ctx, turn, line) do
-    Tape.append(ctx, turn.thread_id, %{
-      author: Prima.Author.system(),
-      sent_by: turn.agent,
-      kind: "system",
-      content: line,
-      turn_id: turn.id,
-      execution_id: turn.root_execution_id
-    })
-  end
+  defp unrun_line(ctx, turn, line), do: Tape.append_line(ctx, turn, line)
 
   defp refused_key_line(%{"message" => message}) when is_binary(message),
     do: "The model refused its key: #{message}"
 
   defp refused_key_line(_error), do: "The model refused its key."
 
-  defp end_unrun(ctx, claim, turn, error) do
+  defp end_unrun(ctx, claim, turn, reason) do
+    error = describe(reason)
     Opus.suspend_lease_watch(claim.keeper)
-    _ = Tape.finish(ctx, turn, "failed", %{error: error})
-    Opus.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
+    finish = Tape.finish(ctx, turn, "failed", %{error: error})
+    ended = unrun(turn, {:failed, reason}, finish)
+
+    # A root closed as failed takes no successor, and recovery adopts a
+    # turn whose end was not written by opening one.
+    failed = if match?({:unwritten, _result}, ended), do: nil, else: error
+    Opus.release_turn_root(ctx, claim.execution_id, claim: claim, failed: failed)
+    ended
   end
 
   defp setup_required(ctx, turn) do
-    _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
+    finish = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
 
     Tape.announce(ctx, turn.thread_id, :consent_required, %{
       ref: @grant,
       user_id: ctx.user_id
     })
 
-    {:failed, :setup_required}
+    unrun(turn, {:failed, :setup_required}, finish)
   end
+
+  # A turn that never ran answers why, whoever wrote its end: only an end
+  # that nobody could write is left to recovery.
+  defp unrun(_turn, result, {:error, reason}) when reason in @taken, do: result
+  defp unrun(turn, result, finish), do: finished(turn, "failed", result, finish)
 
   @doc """
   Continue a turn on this process: `:resume` a paused turn (the root is
   taken back first; a refusal leaves it paused), or `:adopt` a running
   turn whose successor attempt a takeover already opened. `opts`: `:ctx`,
-  `:turn_id`, `:mode`. Open steps are settled before the loop goes on. A
-  turn another process on this boot holds is refused `{:error, :held}`
+  `:turn_id`, `:mode`, `:unclosed` as `run/1` takes it. Open steps are
+  settled before the loop goes on. A
+  turn taken after it was read is cancelled, left to whoever took it, and
+  a turn another process on this boot holds is refused `{:error, :held}`
   before anything is read (`holder/1`).
   """
-  @spec run_nested(keyword()) :: result() | {:error, term()}
+  @spec run_nested(keyword()) :: conveyed(result() | {:error, term()})
   def run_nested(opts) do
     ctx = Keyword.fetch!(opts, :ctx)
     mode = Keyword.get(opts, :mode, :resume)
     turn_id = Keyword.fetch!(opts, :turn_id)
 
-    hold(ctx, turn_id, fn ->
+    hold(ctx, turn_id, Keyword.get(opts, :unclosed, []), fn unclosed ->
       with {:ok, turn} <- Tape.turn(ctx, turn_id),
            {:ok, claim, turn} <- reclaim(ctx, turn, mode),
            {:ok, spec} <- rebuilt(ctx, turn) do
@@ -333,7 +359,8 @@ defmodule Aqua.Loop do
           turn: turn,
           generation: spec.thread.brain_generation,
           since: now(),
-          active_ms: turn.active_ms
+          active_ms: turn.active_ms,
+          unclosed: unclosed
         }
 
         Aqua.Loop.Stream.announce_fence(spec.guest, turn)
@@ -342,6 +369,9 @@ defmodule Aqua.Loop do
           {:continue, state} -> conclude(state, loop(state))
           {:halt, result, state} -> conclude(state, {result, state})
         end
+      else
+        {:error, :superseded} -> :cancelled
+        refused -> refused
       end
     end)
   end
@@ -356,8 +386,10 @@ defmodule Aqua.Loop do
       {:ok, spec}
     else
       {:error, :consent_moved} = moved ->
-        _ = unrun_line(ctx, turn, describe(:consent_moved))
-        moved
+        case unrun_line(ctx, turn, describe(:consent_moved)) do
+          {:error, reason} when reason in @taken -> {:error, :superseded}
+          _written_or_unkept -> moved
+        end
 
       refused ->
         refused
@@ -381,28 +413,40 @@ defmodule Aqua.Loop do
   # The hold is let go before the result is returned, so the process that
   # awaits this loop can start the turn's next loop at once. A program
   # lives while a loop holds its turn: what a dead loop's attendant left is
-  # closed before this one starts, and what this one held before it returns.
-  defp hold(%Context{athanor_id: athanor_id}, turn_id, fun) do
+  # closed before this one starts, and what this one held before it returns,
+  # with the word of every place this thread still waits on.
+  defp hold(%Context{athanor_id: athanor_id}, turn_id, given, fun) do
     key = {:turn, turn_id}
 
     case Registry.register(@holders, key, nil) do
       {:ok, _} ->
         try do
-          :ok = Aqua.Program.close(athanor_id, turn_id)
-          fun.()
+          unclosed = Enum.uniq(given ++ still_out(Aqua.Program.close(athanor_id, turn_id), []))
+          result = fun.(unclosed)
+          conveyed(result, still_out(Aqua.Program.close(athanor_id, turn_id), unclosed))
         after
-          :ok = Aqua.Program.close(athanor_id, turn_id)
+          _ = Aqua.Program.close(athanor_id, turn_id)
           Registry.unregister(@holders, key)
         end
 
       {:error, {:already_registered, _holder}} ->
-        {:error, :held}
+        conveyed({:error, :held}, given)
     end
   end
 
+  # What is still out by a close's answer, of what was known to be.
+  defp still_out(:none, known), do: known
+  defp still_out(:ok, _known), do: []
+  defp still_out({:error, {:unanswered, unclosed}}, _known), do: unclosed
+
+  defp conveyed(answer, []), do: answer
+  defp conveyed(answer, unclosed), do: {:unanswered, unclosed, answer}
+
   @doc """
   Abort a turn from outside its process: the fence of the turn is raised;
-  a program's session is closed, so that it is written nothing more;
+  a program's session is closed, so that it is written nothing more, and
+  a close Opus did not answer is said with whatever this answers
+  (`t:conveyed/1`);
   then `stop` is called, with which the caller stops the turn's process if
   one still runs, and with it every worker under it
   (`Aqua.Loop.Worker`); then the dispatched steps of the turn are
@@ -419,18 +463,23 @@ defmodule Aqua.Loop do
   shutdown or storage transition is returned to the caller.
   """
   @spec abort(Context.t(), Tape.turn(), String.t(), (-> term())) ::
-          {:ok, Tape.turn()} | {:error, term()}
+          conveyed({:ok, Tape.turn()} | {:error, term()})
   def abort(%Context{} = ctx, turn, reason, stop \\ fn -> :ok end) when is_function(stop, 0) do
     guest = Context.enter_guest(ctx)
     holder = holder(turn.id)
 
     with :ok <- held(),
-         {:ok, superseded} <- Tape.supersede(guest, turn),
-         :ok <- Aqua.Program.close(ctx.athanor_id, turn.id),
-         :ok <- stop_aborted(stop, holder),
+         {:ok, superseded} <- Tape.supersede(guest, turn) do
+      unclosed = still_out(Aqua.Program.close(ctx.athanor_id, turn.id), [])
+      conveyed(aborted(ctx, superseded, reason, stop, holder), unclosed)
+    end
+  end
+
+  defp aborted(ctx, superseded, reason, stop, holder) do
+    with :ok <- stop_aborted(stop, holder),
          :ok <- held(),
          :ok <- settle_aborted(ctx, superseded, reason),
-         {:ok, _} <- Tape.append_aborted(guest, superseded, reason) do
+         {:ok, _} <- Tape.append_aborted(Context.enter_guest(ctx), superseded, reason) do
       {:ok, superseded}
     end
   end
@@ -444,11 +493,16 @@ defmodule Aqua.Loop do
   wrote the end; nothing here writes the turn. The first failure is
   answered after every step was tried.
   """
-  @spec abort_ended(Context.t(), String.t(), [map()], (-> term())) :: :ok | {:error, term()}
+  @spec abort_ended(Context.t(), String.t(), [map()], (-> term())) ::
+          conveyed(:ok | {:error, term()})
   def abort_ended(%Context{} = ctx, turn_id, steps, stop \\ fn -> :ok end)
       when is_binary(turn_id) and is_list(steps) and is_function(stop, 0) do
-    with :ok <- Aqua.Program.close(ctx.athanor_id, turn_id),
-         :ok <- stop_aborted(stop, holder(turn_id)) do
+    unclosed = still_out(Aqua.Program.close(ctx.athanor_id, turn_id), [])
+    conveyed(stop_remaining(ctx, turn_id, steps, stop), unclosed)
+  end
+
+  defp stop_remaining(ctx, turn_id, steps, stop) do
+    with :ok <- stop_aborted(stop, holder(turn_id)) do
       Enum.reduce(steps, :ok, fn step, result ->
         case cancel_dispatched(ctx, %{id: turn_id}, step) do
           :ok -> result
@@ -688,7 +742,7 @@ defmodule Aqua.Loop do
             conclude(state, loop(ended))
 
           finish ->
-            final = finished(ended, status, result, finish)
+            final = finished(ended.turn, status, result, finish)
             unwatch(ended)
             release(ended)
             final
@@ -715,22 +769,26 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp finished(ended, status, result, finish) do
+  defp finished(turn, status, result, finish) do
     case finish do
       {:ok, _} ->
         result
 
+      # A moved fence wins: the loop is cancelled.
+      {:error, reason} when reason in @taken ->
+        :cancelled
+
       other ->
         # Saying "completed" while the row still says "running" puts the
         # runtime and the rows in disagreement, and the runner would take
-        # the next message believing this one had landed. The row is left
-        # for recovery, which is what owns a turn nobody finished.
+        # the next message believing this one had landed. The turn is
+        # recovered before the queue advances (`Aqua.Runner`).
         Logger.error(
-          "[Aqua.Loop] turn #{ended.turn.id} could not be finished as #{status}: " <>
+          "[Aqua.Loop] turn #{turn.id} could not be finished as #{status}: " <>
             "#{inspect(other)}"
         )
 
-        {:uncertain, "the turn's terminal write did not land"}
+        {:unwritten, result}
     end
   end
 
@@ -819,22 +877,12 @@ defmodule Aqua.Loop do
   defp program_ended(%State{} = state, reason),
     do: program_failed(state, Prima.Refusal.message(reason))
 
-  # A moved fence wins: whoever took the turn says what became of it, and
-  # this loop is cancelled and says nothing.
+  # A moved fence wins: the sentence's own write presents the loop's, and
+  # one refused so leaves the turn to whoever took it, this loop cancelled.
   defp program_failed(%State{} = state, sentence) do
-    if taken?(state) do
-      {:halt, :cancelled, state}
-    else
-      _ = system_row(state, sentence)
-      {:halt, {:failed, sentence}, state}
-    end
-  end
-
-  defp taken?(%State{turn: %{id: id, fence: fence}} = state) do
-    case Tape.turn(guest(state), id) do
-      {:ok, turn} -> turn.fence != fence or Tape.terminal?(turn)
-      {:error, :not_found} -> true
-      {:error, _unread} -> false
+    case system_row(state, sentence) do
+      {:error, reason} when reason in @taken -> {:halt, :cancelled, state}
+      _written_or_unkept -> {:halt, {:failed, sentence}, state}
     end
   end
 
@@ -843,8 +891,8 @@ defmodule Aqua.Loop do
   # does, ends the turn's wait and is never replaced, as the program's job
   # is over with it. Meanwhile what it tells of the program's own work is
   # taken (`native/2`), as it is while a call runs.
-  defp attended(%State{attendant: {pid, _monitor}} = state, start) do
-    :ok = Aqua.Program.watch(pid, program_work(state, start.id))
+  defp attended(%State{attendant: {pid, _monitor}} = state, _start) do
+    :ok = Aqua.Program.watch(pid, state.turn)
     attending(state)
   end
 
@@ -892,9 +940,10 @@ defmodule Aqua.Loop do
     end
   end
 
-  # What the attendant needs of the turn: its contexts, the turn as its
-  # row stands, the admitting step, the row, the thread's session
-  # generation as stored now, and what the work runs with.
+  # What the attendant needs of the turn: its contexts, the turn as this
+  # loop holds it, whose fence is the one it acquired, the admitting step,
+  # the row, the thread's session generation as stored now, what the work
+  # runs with and the places it waits on.
   defp program_work(%State{spec: spec, program: program} = state, start_id) do
     generation =
       case Tape.brain(spec.guest, state.turn.thread_id) do
@@ -902,16 +951,10 @@ defmodule Aqua.Loop do
         {:error, _} -> state.generation
       end
 
-    turn =
-      case Tape.turn(spec.guest, state.turn.id) do
-        {:ok, turn} -> turn
-        {:error, _} -> state.turn
-      end
-
     %{
       ctx: spec.ctx,
       guest: spec.guest,
-      turn: turn,
+      turn: state.turn,
       start: start_id,
       program: program,
       agent: state.turn.agent,
@@ -920,7 +963,8 @@ defmodule Aqua.Loop do
       config: program_config(spec),
       system: spec.system,
       facts: spec.facts,
-      tools: spec.tools
+      tools: spec.tools,
+      unclosed: state.unclosed
     }
   end
 
@@ -2365,14 +2409,14 @@ defmodule Aqua.Loop do
          %{session: session, generation: generation, progress: %{"row" => stored}}
          when is_binary(session) and stored != row <- kept,
          {:ok, raised} <- Tape.forget_session(guest, state.turn, generation) do
-      _ =
-        system_row(
-          state,
-          "#{program_title(state)} runs on another program now, so it starts over from the " <>
-            "thread's posts."
-        )
+      line =
+        "#{program_title(state)} runs on another program now, so it starts over from the " <>
+          "thread's posts."
 
-      {:ok, %{state | generation: raised}}
+      case system_row(state, line) do
+        {:error, reason} when reason in @taken -> {:error, :superseded}
+        _written_or_unkept -> {:ok, %{state | generation: raised}}
+      end
     else
       {:error, :superseded} = superseded -> superseded
       {:error, _unread} -> unstarted(state, {:start_failed, :session})
@@ -2383,8 +2427,11 @@ defmodule Aqua.Loop do
   # A turn that ends before its program is started says why.
   defp unstarted(%State{} = state, kind) do
     sentence = Prima.Refusal.message(harness(state, kind))
-    _ = system_row(state, sentence)
-    {:error, sentence}
+
+    case system_row(state, sentence) do
+      {:error, reason} when reason in @taken -> {:error, :superseded}
+      _written_or_unkept -> {:error, sentence}
+    end
   end
 
   # What the program is given before its first answer joins the turn's
@@ -3186,16 +3233,8 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp system_row(%State{} = state, text) do
-    Tape.append(guest(state), state.turn.thread_id, %{
-      author: Prima.Author.system(),
-      sent_by: state.turn.agent,
-      kind: "system",
-      content: text,
-      turn_id: state.turn.id,
-      execution_id: state.turn.root_execution_id
-    })
-  end
+  defp system_row(%State{} = state, text),
+    do: Tape.append_line(guest(state), state.turn, text)
 
   defp announce(%State{} = state, kind, data),
     do: Tape.announce(guest(state), state.turn.thread_id, kind, data)

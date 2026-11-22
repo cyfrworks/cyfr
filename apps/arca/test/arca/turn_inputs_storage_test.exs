@@ -637,14 +637,20 @@ defmodule Arca.TurnInputsStorageTest do
 
   # ---- the silence clock -----------------------------------------------------
 
-  test "the clock runs only while the program owes output: it pauses for a post not yet " <>
-         "taken, an ask open and a result not yet answered, resumes with what was left, and a " <>
-         "line of the program's own restarts it",
+  test "the clock runs whenever the program owes something, an acknowledgement among it " <>
+         "with a post waiting behind, and pauses while CYFR owes it",
        %{actor: actor, daily: daily, turn: turn} do
-    {:ok, %{step: post}} = carry(actor, turn, "post", opening(actor, turn))
-    assert {:ok, %{due_ms: nil, expired?: false}} = TurnStorage.brain_silence(actor, daily.id)
+    opened = opening(actor, turn)
+    behind = steer!(actor, daily, turn, "waits behind it")
+    {:ok, %{step: post}} = carry(actor, turn, "post", opened)
 
-    {:ok, _} = commit(actor, daily, turn, %{accepted: [post.id], busy: true})
+    assert {:ok, %{due_ms: unacknowledged, expired?: false}} =
+             TurnStorage.brain_silence(actor, daily.id)
+
+    assert is_integer(unacknowledged)
+
+    {:ok, %{step: second}} = carry(actor, turn, "post", behind)
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [post.id, second.id], busy: true})
     assert {:ok, %{due_ms: due}} = TurnStorage.brain_silence(actor, daily.id)
     assert due > @silence - 5_000
 

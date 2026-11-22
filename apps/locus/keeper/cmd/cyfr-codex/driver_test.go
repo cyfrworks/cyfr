@@ -1542,3 +1542,72 @@ func TestARefusedInjectionWritesNoPostAndIsMadeAgain(t *testing.T) {
 		t.Fatalf("the next resume hands them over: %v, not %v", got, want)
 	}
 }
+
+// What a thread was last handed is recorded only if the record was written,
+// and a stale one never stands for what was handed after it: a record
+// Codex's driver cannot rewrite costs a repeated injection, never a skipped
+// change.
+func TestARecordThatCannotBeRewrittenSkipsNoChange(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a file of mode 400, so no record here is past writing")
+	}
+	const brief, thorough = "be brief", "be thorough"
+	for _, c := range []struct {
+		name         string
+		file, folder os.FileMode
+		lost         bool
+		refused      bool
+		want         []string
+	}{
+		{name: "a read-only record", file: 0o400, folder: 0o700, want: []string{thorough, brief}},
+		{name: "a read-only folder", file: 0o600, folder: 0o500, want: []string{thorough, brief}},
+		{name: "no record and nowhere to write one", folder: 0o500, lost: true, want: []string{thorough, brief, brief}},
+		{name: "a record that can neither go nor change", file: 0o400, folder: 0o500, refused: true, want: []string{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := startDriver(t)
+			session := startFresh(s, map[string]any{})
+			work(s, "stp_work", "trn_next")
+			injectedInto(s, "stp_first")
+			s.end()
+
+			folder := filepath.Join(s.home, ".codex", "cyfr-instructions")
+			record := filepath.Join(folder, session)
+			var err error
+			if c.lost {
+				err = os.Remove(record)
+			} else {
+				err = os.Chmod(record, c.file)
+			}
+			if err != nil || os.Chmod(folder, c.folder) != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(folder, 0o700) })
+
+			changed := resumedWith(t, s.home, session, thorough)
+			if c.refused {
+				changed.send(map[string]any{"t": "post", "id": "stp_b", "work": "trn_next", "content": []any{map[string]any{"type": "text", "text": "history"}}})
+				if e := changed.expect("refused"); e["id"] != "stp_b" || e["reason"] != "OpenAI Codex's changed instructions could not be recorded in its folder, so the post was not written; check that the program's folder can be written." {
+					t.Fatalf("nothing is injected that a stale record would hide: %v", e)
+				}
+			} else {
+				injectedInto(changed, "stp_b")
+			}
+			changed.end()
+
+			var got []any
+			for i := 0; i < 2; i++ {
+				again := resumedWith(t, s.home, session, brief)
+				got = injectedInto(again, fmt.Sprintf("stp_a_%d", i))
+				again.end()
+			}
+			want := []any{}
+			for _, system := range c.want {
+				want = append(want, instructionsItem(system))
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("the last instructions handed are the last the thread was given: %v, not %v", got, want)
+			}
+		})
+	}
+}

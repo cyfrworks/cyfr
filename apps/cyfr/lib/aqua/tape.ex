@@ -219,7 +219,18 @@ defmodule Aqua.Tape do
     })
   end
 
-  # A row the turn owns, written inside its fence. Both of these change what
+  @doc """
+  A line in the server's voice that `turn`'s loop writes in its thread,
+  its failure's sentence among them, under the fence `turn` holds: a loop
+  whose turn was taken writes none (`{:error, :superseded}`), and a turn
+  that is over takes none (`{:error, :not_open}`).
+  """
+  @spec append_line(Context.t(), turn(), String.t()) :: {:ok, row()} | {:error, term()}
+  def append_line(%Context{} = ctx, turn, text) when is_binary(text) do
+    turn_row(ctx, turn, %{author: Prima.Author.system(), kind: "system", content: text})
+  end
+
+  # A row the turn owns, written inside its fence. Each changes what
   # the next request reads, so a runner whose fence has moved must not be
   # able to add one — the generic `append/3` asks the thread and would
   # have let a superseded loop rewrite its successor's projection.

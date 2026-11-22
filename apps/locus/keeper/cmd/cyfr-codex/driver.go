@@ -234,6 +234,10 @@ func (d *driver) post(id, work string, members map[string]json.RawMessage) error
 // request; one Codex refuses is not written.
 func (d *driver) deliver(w *waiting) error {
 	if d.handing != "" {
+		if !clearHanded(d.home, d.session) {
+			d.waiting = nil
+			return d.c.Refuse(w.id, unrecordedSentence)
+		}
 		w.kind = "instructions"
 		w.request = d.nextID("instructions")
 		return d.h.Write(injectInstructions(w.request, d.session, d.handing))

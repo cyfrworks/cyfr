@@ -147,6 +147,76 @@ defmodule Aqua.LoopTest do
     tree
   end
 
+  test "a loop that lost its turn writes no failure sentence: the row presents the fence the " <>
+         "loop acquired",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+    script!([{:probe, self()}, {:error, "the model fell over"}])
+    task = run(ctx, turn)
+    assert_receive {:scripted_probe, worker, _child}, 10_000
+
+    {:ok, held} = Tape.turn(ctx, turn.id)
+    {:ok, _taken} = Tape.supersede(ctx, held)
+    send(worker, :continue)
+    ended = Task.await(task, 30_000)
+
+    lines =
+      for %{kind: "system"} = line <- Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+          do: line.content
+
+    assert lines == []
+    assert ended == :cancelled
+  end
+
+  test "a resume whose turn was taken after it read it is cancelled, so nobody ends the turn " <>
+         "under the fence that took it",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua fetch it")
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
+
+    ScriptedWorker.script([
+      calls([{"c1", "http", %{"action" => "get", "url" => "https://example.test/x"}}]),
+      {:crash, :before_response}
+    ])
+
+    assert {:paused, :uncertain} = Task.await(run(ctx, turn), 60_000)
+    {:ok, held} = Tape.turn(ctx, turn.id)
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "go on"},
+        steer_turn_id: turn.id
+      })
+
+    loop =
+      Task.async(fn ->
+        receive do: (:go -> :ok)
+        Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+      end)
+
+    # The turn is taken straight after the loop's read of it.
+    taken = {__MODULE__, :taken, turn.id}
+    test = self()
+
+    :ok =
+      :telemetry.attach(
+        taken,
+        [:arca, :repo, :query],
+        fn _event, _measured, %{source: source}, _config ->
+          if source == "turns" and self() == loop.pid and Process.put(taken, true) == nil,
+            do: send(test, {:taken, Tape.supersede(ctx, held)})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(taken) end)
+    send(loop.pid, :go)
+
+    assert Task.await(loop, 30_000) == :cancelled
+    assert_received {:taken, {:ok, %{fence: fence}}}
+    assert {:ok, %{status: "paused", fence: ^fence}} = Tape.turn(ctx, turn.id)
+  end
+
   test "a turn refused its root for ownership reads the retry sentence and can be sent again",
        %{ctx: ctx, thread: thread} do
     # This server has lost its slot: the root's admission is refused.

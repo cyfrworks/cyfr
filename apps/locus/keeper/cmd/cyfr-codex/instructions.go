@@ -19,8 +19,12 @@ import (
 // some are injected before the resumed thread's first post. An injected
 // copy stays in the history for every later request, so unchanged ones
 // never are: the driver keeps the SHA-256 of what it last handed, one file
-// for each thread, `<codex>/cyfr-instructions/<thread>`, written once
-// Codex took them and removed with the thread (forget.go). Every start
+// for each thread, `<codex>/cyfr-instructions/<thread>`, cleared before
+// others are injected, written once Codex took them and removed with the
+// thread (forget.go). So a record stands only for what was last handed:
+// one that could not be written is missing, and the next start hands the
+// instructions again. Where it cannot even be cleared nothing is injected,
+// since it would hide the change. Every start
 // still carries the instructions, which a compaction reads, so their
 // presence on the wire says nothing of a change. A record that is missing
 // or does not read costs one repeated injection.
@@ -43,8 +47,19 @@ func wasHanded(home, thread, system string) bool {
 	return err == nil && string(last) == digest(system)
 }
 
-// recordHanded keeps that the thread was handed `system`. One that cannot
-// be written is as a lost one.
+// clearHanded withdraws the thread's record, removed or else emptied in
+// place, and says whether none stands.
+func clearHanded(home, thread string) bool {
+	file := instructionsFile(home, thread)
+	if err := os.Remove(file); err == nil || brainwire.Absent(err) {
+		return true
+	}
+	err := os.Truncate(file, 0)
+	return err == nil || brainwire.Absent(err)
+}
+
+// recordHanded keeps that the thread was handed `system`, after the last
+// record was cleared. One that cannot be written is as a lost one.
 func recordHanded(home, thread, system string) {
 	file := instructionsFile(home, thread)
 	if os.MkdirAll(filepath.Dir(file), 0o700) == nil {
