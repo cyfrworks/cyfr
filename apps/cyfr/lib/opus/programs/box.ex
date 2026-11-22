@@ -140,8 +140,11 @@ defmodule Opus.Programs.Box do
   it gave, to close them when their holder dies, releases or loses the
   owner, and the closes it has still to make, and neither says that a
   place is back: a close is `:ok` only of the service's answer for that
-  lifetime (`Prima.LocusBackends`, "A close"), asked whether or not the
-  box knows of it. A close has no authority over another lifetime.
+  lifetime (`Prima.LocusBackends`, "A close"), asked of a lifetime the box
+  does not know too. Once the service has given that answer the box gives
+  it again at once, sending nothing, and refuses an open of that lifetime,
+  for as long as the lifetime's holder runs, or the asker of a close where
+  the box knew of none. A close has no authority over another lifetime.
 
   Every try of a close is signed as the generation and epoch in its
   lifetime's name, at the service's current boot, so it needs no owner.
@@ -276,13 +279,16 @@ defmodule Opus.Programs.Box do
       # What the box routes, none of it evidence of a release ("Sessions"):
       # each lifetime a holder was given, lifetime => %{holder, ended};
       # each open in flight, ref => its record; the monitor of each open's
-      # process, monitor => ref; and each close still to be made,
-      # lifetime => %{inflight, waiters}, inflight the monitor of the
-      # process sending it.
+      # process, monitor => ref; each close still to be made,
+      # lifetime => %{inflight, waiters, holder}, inflight the monitor of
+      # the process sending it; and each close confirmed, lifetime => the
+      # monitor of that holder, whose end drops it. That monitor is its
+      # own: an owner let go is watched no more while its holder still runs.
       sessions: %{},
       opens: %{},
       open_tasks: %{},
       closing: %{},
+      closed: %{},
       # Lease maintenance, sent first; then syncs and status reads.
       urgent: :queue.new(),
       queue: :queue.new()
@@ -448,7 +454,8 @@ defmodule Opus.Programs.Box do
           now_ms() >= deadline ->
             {:reply, {:error, :deadline}, state}
 
-          g != lifetime.generation or Map.has_key?(state.closing, lifetime) ->
+          g != lifetime.generation or Map.has_key?(state.closing, lifetime) or
+              Map.has_key?(state.closed, lifetime) ->
             {:reply, {:error, {:refused, :lifetime_over, nil}}, state}
 
           stale_ceiling?(state, key) ->
@@ -465,10 +472,14 @@ defmodule Opus.Programs.Box do
 
   # A close of one lifetime, known here or not: the box owes it from here
   # until the service confirms it, and the caller hears `:ok` of that
-  # confirmation alone.
-  def handle_call({:session_close, lifetime}, from, state) do
+  # confirmation alone, at once where it has come already.
+  def handle_call({:session_close, lifetime}, _from, state)
+      when is_map_key(state.closed, lifetime),
+      do: {:reply, :ok, state}
+
+  def handle_call({:session_close, lifetime}, {asker, _tag} = from, state) do
     state = over(state, fn named, _holder -> named == lifetime end)
-    closing = Map.put_new(state.closing, lifetime, %{inflight: nil, waiters: []})
+    closing = Map.put_new(state.closing, lifetime, %{inflight: nil, waiters: [], holder: asker})
     closing = Map.update!(closing, lifetime, &%{&1 | waiters: [from | &1.waiters]})
     {:noreply, send_close(%{state | closing: closing}, lifetime)}
   end
@@ -664,7 +675,8 @@ defmodule Opus.Programs.Box do
         {:noreply, state |> enqueue_release() |> dispatch()}
 
       nil ->
-        {:noreply, holder_down(state, ref, pid)}
+        closed = Map.reject(state.closed, &match?({_lifetime, ^ref}, &1))
+        {:noreply, holder_down(%{state | closed: closed}, ref, pid)}
     end
   end
 
@@ -1947,7 +1959,9 @@ defmodule Opus.Programs.Box do
   defp not_given(state, %{lifetime: lifetime} = open, reason) do
     refuse_open(open, reason)
 
-    if Map.has_key?(state.sessions, lifetime), do: state, else: owe_close(state, lifetime)
+    if Map.has_key?(state.sessions, lifetime),
+      do: state,
+      else: owe_close(state, lifetime, open.holder)
   end
 
   defp refuse_open(open, reason) do
@@ -1982,8 +1996,14 @@ defmodule Opus.Programs.Box do
       Map.split_with(state.sessions, fn {lifetime, held} -> over?.(lifetime, held.holder) end)
 
     state = %{state | owners: owners, opens: opens, sessions: sessions}
-    owed = for({_ref, open} <- sent, do: open.lifetime) ++ Map.keys(given)
-    owed |> Enum.uniq() |> Enum.reduce(state, &owe_close(&2, &1))
+
+    owed =
+      for({_ref, open} <- sent, do: {open.lifetime, open.holder}) ++
+        for({lifetime, held} <- given, do: {lifetime, held.holder})
+
+    owed
+    |> Map.new()
+    |> Enum.reduce(state, fn {lifetime, holder}, state -> owe_close(state, lifetime, holder) end)
   end
 
   # A holder that died leaves the box its lifetimes to close.
@@ -2012,8 +2032,8 @@ defmodule Opus.Programs.Box do
 
   # A close still to be made, sent now and again on every tick until the
   # service confirms it.
-  defp owe_close(state, lifetime) do
-    closing = Map.put_new(state.closing, lifetime, %{inflight: nil, waiters: []})
+  defp owe_close(state, lifetime, holder) do
+    closing = Map.put_new(state.closing, lifetime, %{inflight: nil, waiters: [], holder: holder})
     send_close(%{state | closing: closing}, lifetime)
   end
 
@@ -2057,7 +2077,8 @@ defmodule Opus.Programs.Box do
 
         if result == :ok do
           Enum.each(record.waiters, &GenServer.reply(&1, :ok))
-          %{state | closing: Map.delete(state.closing, lifetime)}
+          closed = Map.put(state.closed, lifetime, Process.monitor(record.holder))
+          %{state | closing: Map.delete(state.closing, lifetime), closed: closed}
         else
           closing = Map.put(state.closing, lifetime, %{record | inflight: nil})
           state = unanswered(%{state | closing: closing}, lifetime)

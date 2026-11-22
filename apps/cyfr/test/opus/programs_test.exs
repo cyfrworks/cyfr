@@ -3049,6 +3049,47 @@ defmodule Opus.ProgramsTest do
       refute_receive {:session, "open", _wire, _fields}, 100
     end
 
+    test "a confirmed close is answered at once and sent once, whoever asks again",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, _opened} = box_open(holder, "k")
+      lifetime = lifetime_of(holder, "k")
+      send(holder, {:close, "k"})
+      assert_receive {:closed, ^holder, "k", :ok}, 3_000
+      flush_sessions()
+
+      # A second send would wait here past every wait below.
+      Scripted.hold(fake, "close", 30_000)
+      send(holder, {:close, "k"})
+      assert_receive {:closed, ^holder, "k", :ok}, 1_000
+      assert Task.await(Task.async(fn -> Programs.box_close(lifetime) end), 1_000) == :ok
+
+      send(holder, {:ask_again, "k"})
+
+      assert_receive {:opened, ^holder, "k", {:error, {:refused, :lifetime_over, nil}}}, 1_000
+      refute_received {:session, _type, _wire, _fields}
+    end
+
+    test "a confirmed close is remembered no longer than its holder runs",
+         %{fake: fake, row: row} do
+      controller = start_controller(fake)
+      _kept = box_holder(row)
+      holder = box_holder(row)
+      assert {:ok, _opened} = box_open(holder, "k")
+      lifetime = lifetime_of(holder, "k")
+      send(holder, {:close, "k"})
+      assert_receive {:closed, ^holder, "k", :ok}, 3_000
+      assert Map.keys(:sys.get_state(controller).closed) == [lifetime]
+      flush_sessions()
+
+      Process.exit(holder, :kill)
+      eventually(fn -> :sys.get_state(controller).closed == %{} end, "the close to be forgotten")
+
+      assert Programs.box_close(lifetime) == :ok
+      assert_receive {:session, "close", _wire, _fields}, 2_000
+    end
+
     test "a close of a lifetime the box does not know is answered by the service alone",
          %{fake: fake, row: row} do
       start_controller(fake)

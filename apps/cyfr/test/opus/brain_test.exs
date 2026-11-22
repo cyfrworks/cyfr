@@ -1460,6 +1460,30 @@ defmodule Opus.BrainTest do
       end
     end
 
+    # `cause` brings Box to close `holder`'s lifetime while the holder hears
+    # nothing. The holder is let run once that close is confirmed, and a
+    # second one would be held past every wait of the test's.
+    defp confirmed_unheard!(fake, holder, cause) do
+      controller = GenServer.whereis(Opus.Programs.via("local"))
+      :erlang.suspend_process(holder)
+
+      try do
+        caused = cause.()
+        assert_receive {:session, "close", _first, _fields}, 3_000
+
+        wait_until(
+          fn -> :sys.get_state(controller).closing == %{} end,
+          2_000,
+          "the first close confirmed"
+        )
+
+        Scripted.hold(fake, "close", 30_000)
+        caused
+      after
+        :erlang.resume_process(holder)
+      end
+    end
+
     # The reads an earlier holder made, told already.
     defp flush_reads do
       receive do
@@ -2159,8 +2183,52 @@ defmodule Opus.BrainTest do
       refute_receive {:asked, _answer}, Opus.Programs.Box.release_timeout_ms() + 500
       send(closing, :go)
       assert_receive {:asked, {:error, :deadline}}, 1_000
+      assert_receive {:session, "close", %{"lifetime" => lifetime}, _fields}, 1_000
       given_back!(fake, ctx, row)
+      refute_received {:session, "close", %{"lifetime" => ^lifetime}, _fields}
       send(opening, :go)
+    end
+
+    test "a refused open's close, confirmed before its holder hears of either, is the only one",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.refuse_once(fake, "open", "capacity")
+      Scripted.hold(fake, "open", 15_000)
+      until = System.monotonic_time(:millisecond) + 60_000
+      {holder, command} = one_command!(ctx, row, until)
+      asked = :gen_server.send_request(holder, command)
+      assert_receive {:held, "open", opening}, 3_000
+
+      confirmed_unheard!(fake, holder, fn -> send(opening, :go) end)
+
+      assert {:reply, {:error, {:refused, :capacity, _boot}}} =
+               :gen_server.wait_response(asked, 1_000)
+
+      refute_received {:session, "close", _wire, _fields}
+      given_back!(fake, ctx, row)
+    end
+
+    test "a replaced row's close, confirmed before its holder hears of it, is the only one",
+         %{fake: fake, ctx: ctx, row: row} do
+      {_asker, holder, _id} = discovering!(fake, ctx, row)
+
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^row.id),
+          set: [epoch: row.epoch + 1]
+        )
+
+      changed = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch + 1}
+
+      successor =
+        confirmed_unheard!(fake, holder, fn ->
+          Task.async(fn ->
+            with {:ok, _grant} <- Opus.Programs.hold(changed), do: Opus.Programs.release(changed)
+          end)
+        end)
+
+      assert_receive {:asked, {:error, :lost}}, 1_000
+      refute_received {:session, "close", _wire, _fields}
+      assert Task.await(successor) == :ok
+      given_back!(fake, ctx, row)
     end
 
     test "a hold out at the deadline is cut at it, and nothing is opened",
