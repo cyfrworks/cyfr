@@ -29,8 +29,8 @@ defmodule Locus.Backends.Owners do
   | `release` | each owner at or below `(g, e)` retired |
   | `reconcile` | each owner not at exactly `g` and its kept `e` retired |
   | `status` | each named owner present, its programs as their sessions report them |
-  | `home` while an open prepares in it | `unavailable`, nothing changed |
-  | `home` | every session of the home among the athanor's owners ended, then the home reset or retired |
+  | `home` while an open prepares in it | `conflict`, nothing changed |
+  | `home` | every session of the home among the athanor's owners ended, then the home reset or retired; `conflict` if a launcher's request will still make it |
 
   A sync starts nothing: it is answered on admission with every program
   `idle`, or `failed` for none. A retired owner leaves routing at once and
@@ -741,11 +741,12 @@ defmodule Locus.Backends.Owners do
   end
 
   # A home still being prepared is neither reset nor retired, and the turn is
-  # not held for it: the controller sends a retire again until it is
-  # acknowledged, and a reset is asked again.
+  # not held for it: it is `conflict`, the home busy rather than the service
+  # down. The controller sends a retire again until it is acknowledged, and
+  # a reset is asked again.
   defp apply_control(state, from, _fields, %{type: :home} = message, _open_env) do
     if preparing_in?(state, message.home_id),
-      do: {:reply, {:error, :unavailable}, state},
+      do: {:reply, {:error, :conflict}, state},
       else: change_home(state, from, message)
   end
 
@@ -890,6 +891,11 @@ defmodule Locus.Backends.Owners do
         {:retire, :ok} ->
           {{:ok, %{home_id: message.home_id, state: :absent}},
            Map.delete(state.homes, message.home_id)}
+
+        # The launcher's request that will still make the home, as an open's
+        # preparation is: the home busy, not the service.
+        {_op, {:error, {:refused, "conflict"}}} ->
+          {{:error, :conflict}, Map.put(state.homes, message.home_id, %{home | busy: false})}
 
         {_op, _failed} ->
           {{:error, :unavailable}, Map.put(state.homes, message.home_id, %{home | busy: false})}

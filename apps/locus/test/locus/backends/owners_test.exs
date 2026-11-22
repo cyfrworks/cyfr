@@ -146,8 +146,16 @@ defmodule Locus.Backends.OwnersTest do
     end
 
     def home_list(agent), do: Locus.DirectLauncher.home_list(root(agent))
-    def home_reset(agent, id), do: Locus.DirectLauncher.home_reset(root(agent), id)
-    def home_retire(agent, id), do: Locus.DirectLauncher.home_retire(root(agent), id)
+    def home_reset(agent, id), do: home_change(agent, :home_reset, id)
+    def home_retire(agent, id), do: home_change(agent, :home_retire, id)
+
+    # A change the test answers stands for one the keeper refused.
+    defp home_change(agent, op, id) do
+      case Agent.get(agent, &Map.get(&1, :home_change)) do
+        nil -> apply(Locus.DirectLauncher, op, [root(agent), id])
+        answer -> answer
+      end
+    end
 
     defp root(agent), do: [kept_root: Agent.get(agent, & &1.kept_root)]
   end
@@ -1715,7 +1723,7 @@ defmodule Locus.Backends.OwnersTest do
 
     for {op, state, there?} <- [{:retire, :absent, false}, {:reset, :empty, true}] do
       @tag op: op, answered: state, there?: there?
-      test "a home's #{op} is unavailable at once while any open prepares in it, and succeeds when asked again",
+      test "a home's #{op} is conflict at once while any open prepares in it, and succeeds when asked again",
            ctx do
         owners = start_owners(ctx)
         assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
@@ -1743,9 +1751,9 @@ defmodule Locus.Backends.OwnersTest do
                  again: again,
                  folder: File.exists?(Path.join(ctx.root, @home))
                } == %{
-                 beside_both: {:error, :unavailable},
+                 beside_both: {:error, :conflict},
                  another_home: true,
-                 beside_one: {:error, :unavailable},
+                 beside_one: {:error, :conflict},
                  again: {:ok, %{home_id: @home, state: ctx.answered}},
                  folder: ctx.there?
                }
@@ -1775,7 +1783,7 @@ defmodule Locus.Backends.OwnersTest do
       Task.await(opening, 5_000)
 
       assert %{retired: retired, renewed: renewed, runs: runs} == %{
-               retired: {:error, :unavailable},
+               retired: {:error, :conflict},
                renewed:
                  {:ok,
                   %{
@@ -1784,6 +1792,26 @@ defmodule Locus.Backends.OwnersTest do
                   }},
                runs: [id]
              }
+    end
+
+    test "a home change the launcher refuses for a make in flight is conflict, any other " <>
+           "failure unavailable",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
+      reset = %{type: :home, op: :reset, athanor: @athanor, home_id: @home}
+
+      answers =
+        for refusal <- [
+              {:refused, "conflict"},
+              {:refused, "internal"},
+              {:launcher_unavailable, :timeout}
+            ] do
+          Agent.update(ctx.stub, &Map.put(&1, :home_change, {:error, refusal}))
+          control(owners, 1, reset)
+        end
+
+      assert answers == [{:error, :conflict}, {:error, :unavailable}, {:error, :unavailable}]
     end
 
     test "a home the launcher cannot keep is unavailable", ctx do
