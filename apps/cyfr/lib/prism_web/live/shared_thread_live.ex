@@ -594,6 +594,7 @@ defmodule PrismWeb.SharedThreadLive do
             class="flex items-center gap-1 rounded bg-gray-800 px-2 py-0.5 text-xs"
           >
             <span class="max-w-[12rem] truncate text-gray-300">{entry.client_name}</span>
+            <.upload_refusal upload={@uploads.files} entry={entry} />
             <button
               type="button"
               phx-click="cancel_upload"
@@ -604,6 +605,7 @@ defmodule PrismWeb.SharedThreadLive do
               ×
             </button>
           </div>
+          <.upload_refusal upload={@uploads.files} />
         </div>
         <div class="flex items-end gap-2">
           <label

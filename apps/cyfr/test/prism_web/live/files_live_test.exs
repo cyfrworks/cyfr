@@ -48,6 +48,15 @@ defmodule PrismWeb.FilesLiveTest do
     {:ok, conn: conn, ctx: ctx, route: Sanctum.Tenancy.Athanors.route_slug(athanor)}
   end
 
+  test "more files than an upload takes are said beside it", %{conn: conn} do
+    {view, _html} = mount_athanor(conn, "/files?p=data")
+    files = for n <- 0..10, do: %{name: "f#{n}.txt", content: "x", type: "text/plain"}
+
+    view |> file_input("#files-upload", :files, files) |> preflight_upload()
+
+    assert has_element?(view, ~s([data-test="upload-refusal"]), "too many files, remove some")
+  end
+
   test "the root lists the folders in their tiers and nothing of the server's", %{conn: conn} do
     {_view, html} = mount_athanor(conn, "/files")
 
