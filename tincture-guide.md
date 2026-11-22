@@ -563,7 +563,7 @@ The frame's document is sandboxed without `allow-same-origin`, so its origin is 
 | `form-action` | `'none'` | submits no form (the sandbox has no `allow-forms` either) |
 | `object-src`, `base-uri`, `frame-ancestors` | `'none'`, `'self'`, the shell | embeds no plugin, and is framed by the shell alone |
 
-It has no cookies and no `localStorage` or `sessionStorage` (the opaque origin has none), no access to `window.top`, `window.opener` or the shell's document, no popups and no top-level navigation. A frame may navigate itself; that navigation carries no `Referer` and nothing the frame was not given, and ends its handshake. Keep all JavaScript in files — an inline `<script>` of your own is blocked without an error.
+It gets no camera, microphone or screen capture: the endpoint serves every page and file of a tincture or canvas with `Permissions-Policy: camera=(), microphone=(), display-capture=()`, a public tincture opened at its own address included, and no capability opens them. It has no cookies and no `localStorage` or `sessionStorage` (the opaque origin has none), no access to `window.top`, `window.opener` or the shell's document, no popups and no top-level navigation. A frame may navigate itself; that navigation carries no `Referer` and nothing the frame was not given, and ends its handshake. Keep all JavaScript in files — an inline `<script>` of your own is blocked without an error.
 
 ---
 

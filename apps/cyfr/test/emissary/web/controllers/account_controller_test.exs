@@ -42,6 +42,12 @@ defmodule Emissary.Web.AccountControllerTest do
     assert get_resp_header(conn, "content-security-policy") == [
              "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' #{@directory}"
            ]
+
+    # The endpoint's refusal, which names no passkey call: both keep the
+    # browser's default, the page's own origin.
+    assert get_resp_header(conn, "permissions-policy") == [
+             "camera=(), microphone=(), display-capture=()"
+           ]
   end
 
   defp content_type(conn), do: conn |> get_resp_header("content-type") |> hd()

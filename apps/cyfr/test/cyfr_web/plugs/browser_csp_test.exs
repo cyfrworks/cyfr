@@ -5,7 +5,9 @@ defmodule CyfrWeb.Plugs.BrowserCSPTest do
   @moduledoc """
   The Prism pages' content security policy: same-origin connections on
   every page, `/pair` among them, which holds no key and fetches nothing
-  from another home, and framed by nothing.
+  from another home, and framed by nothing. And their permissions policy:
+  the camera and the microphone for the page's own origin alone, screen
+  capture for none.
   """
 
   use CyfrWeb.ConnCase, async: true
@@ -30,6 +32,15 @@ defmodule CyfrWeb.Plugs.BrowserCSPTest do
       policy = directives(get(build_conn(), path))
       assert "connect-src 'self'" in policy, path
       refute Enum.any?(policy, &(&1 =~ "https:")), path
+    end
+  end
+
+  test "every page keeps the camera and microphone to itself and refuses screen capture" do
+    for path <- ["/login", "/setup"] do
+      page = get(build_conn(), path)
+
+      assert {path, page.status, get_resp_header(page, "permissions-policy")} ==
+               {path, 200, ["camera=(self), microphone=(self), display-capture=()"]}
     end
   end
 end

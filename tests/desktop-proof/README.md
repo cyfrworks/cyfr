@@ -89,7 +89,7 @@ that fails. The proof has 28 rows over three launches of the app (`run.sh`): `co
 | `admission_refused` | "I approved it" before any approval is refused, and says so | the device's page |
 | `approved` | the second client shows the same code and adds the key with the passkey | the account pages |
 | `prism` | the device is admitted and Prism opens in the content window, signed in | the content window and its session cookie |
-| `passkeys` | both passkey calls, in Prism's page and in a frame of it, are refused by the app's permissions policy (Prism names none for its page) | each call's refusal, which names the denied feature, and the reported feature policy |
+| `passkeys` | both passkey calls, in Prism's page and in a frame of it, are refused by the app's permissions policy (Prism's own policy names neither call) | each call's refusal, which names the denied feature, and the reported feature policy |
 | `media` | the camera and the microphone are refused to Prism's page and to a frame it allows them to | each request's `NotAllowedError` |
 | `navigation` | main refuses the top frame sent elsewhere, a window elsewhere, a frame sent to the CYFR's company sign-in and a frame moving the top frame (asked from inside the frame, so the engine's initiator is the frame); Prism's page and the frame allow each | main's decision on each navigation's event and on the window request, read from its window handler; nothing at the front for the company sign-in |
 | `prism_frame_rules` | Prism's own frame rules hold in the app: a frame Prism serves (a canvas) is given no window and cannot move the top frame. This is Prism's sandbox refusing, not the app | the engine's answers in the frame |
