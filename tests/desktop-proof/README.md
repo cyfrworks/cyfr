@@ -20,7 +20,7 @@ For each script `home.sh` starts afresh, in the pairing proof's topology
 |---|---|
 | `separate` | `x.test`, reading accounts at the account directory `dir.test` (`CYFR_DIRECTORY_SERVE=writer`) and names there |
 | `self` | `x.test` serving its own account pages: the CYFR and its account service share one origin |
-| `company` | `x.test` serving its own account pages and requiring a company sign-in (`CYFR_COMPANY_LOGIN=join`) at the OIDC issuer `idp.test`, a front with nothing behind it, which only records what reaches it |
+| `company` | `x.test` serving its own account pages and requiring a company sign-in (`CYFR_COMPANY_LOGIN=join`) at the OIDC issuer `idp.test`, a front with nothing behind it, which only records what reaches it. Only the client is told that front's address, so every request there is the client's and counts |
 
 Each has a setup token of the run's own.
 
@@ -34,7 +34,7 @@ architecture, run as this user on the host's network with each cell's own
 settings (`tests/release-boot/release.sh` cells, whose `bin/cyfr` here runs
 the image's). The app is given the CYFR's address and the trust alone: the
 script and its proof get `FIXTURE_DIR/inputs.json` (the CYFR's and its
-account directory's addresses, the shape, the setup token, each front's
+account directory's addresses, the setup token, each front's
 control address) and `authority.pem`.
 
 A script whose folder holds a `proof.js` runs it as the app's entry, on what
@@ -115,8 +115,11 @@ computer locks. On GitHub's Linux runners the engine reported nothing for
 over a minute; on the machine this proof was written on it reported the
 page gone within a tenth of a second.
 
-What a proof records holds no credential: addresses without their
-fragments, headings and notices, never a page's text.
+What a proof records holds no credential: headings and notices, never a
+page's text, and addresses cut at their fragment or query and without the
+credential some carry in their path (a sign-in's ticket, a canvas's or a
+served file's asset credential). One scrub does it for everything written,
+the app's own output too, before it is written (`scrub.mjs`).
 
 ## The passkey road: `passkey/`, `passkey-self/`, `passkey-company/`
 
@@ -141,14 +144,14 @@ account window makes.
 | `passkeys_policy` | with a usable authenticator in the content window, both passkey calls in the CYFR's page and a frame are refused by the app's policy | each call's refusal naming the denied feature |
 | `no_passkey` | Sign in opens the app's account window at the account service; with no passkey it says so and offers to make one | the account window's origin and page |
 | `offer` | a passkey made in the account window returns to the CYFR's sign-in page, which shows its code | the code in the content window; the passkey the authenticator added |
-| `matched_code` | the device's Your devices shows the same code; its own window adds the passkey with the passphrase | the code in Prism and in the device's window; "Added" |
+| `matched_code` | the device's Your devices and its own window show the same code, and with the passphrase the passkey is added to the account | the code in both; the account's log at the directory, without that key before and with it after |
 | `passkey_sign_in` | the new passkey alone signs in: the account window's answer returns and Prism opens | Prism, a session, the account offered |
 | `devices` | Your devices lists the passkey and how it signs in | the listed passkey |
 | `confirm` | a key asked for in Prism is confirmed with the passkey in the account window | the confirmation's page; the key shown |
 | `sign_out_alone` | the lock signs the passkey's session out, acknowledged; with no device channel, the sign-out alone retires it | the cookie opening a page before; the acknowledgement at the front; the cookie refused after |
 | `resume` | after the lock the CYFR sends the content to its sign-in, and a fresh assertion opens Prism | the sign-in page; a new session; the old cookie refused |
 | `choose_cancel` | with two accounts' passkeys the app offers both; Cancel signs no one in; choosing @desk-a signs in as @desk-a | what the dialog offered; the page's refusal; Prism |
-| `account_window` | the account window loads no frame, refuses the CYFR's own page by navigation and by redirect, and either ends the ceremony | the frame; main's decisions; the window gone; nothing at the CYFR's front |
+| `account_window` | main refuses a frame's load in the account window, and the CYFR's own page by navigation and by redirect, and either of those ends the ceremony | the engine's report of the policy main adds refusing that frame's address, apart from the account service's own policy, and nothing of it at the service's front; main's decisions; the window gone; nothing at the CYFR's front |
 | `recovery` | the recovery code adds a passkey in the account window's recovery page, which returns to the sign-in and signs in | the passkey added; Prism |
 | `wrong_window` | an answer made for another browser's sign-in signs no one in when given to the content window. This is the CYFR's binding of an answer to the browser that asked, holding in the app | the CYFR's refusal; the page's cookie opens nothing |
 
@@ -158,11 +161,20 @@ the CYFR's own account page in the account window), `same_origin_sign_in`,
 both calls) and `home_paths` (the account window refuses the CYFR's own
 page at that same origin, and the ceremony ends).
 
-**`passkey-company/`** (shape `company`): `account_road` (the passkey signs
-in, the CYFR's company page closes it in the app, and the chooser sends the
-person to a browser) and `device_road` (the device's page says the same
-once the CYFR refuses the device), each with nothing of the app reaching
-the issuer.
+**`passkey-company/`** (shape `company`).
+
+| Row | What holds | What the row observes |
+|---|---|---|
+| `account_road` | the passkey signs in, the CYFR's company page closes it in the app, and the chooser sends the person to a browser | the sentence's words, visible on the chooser of the passkey road; no request starting a company sign-in and none at the issuer |
+| `device_road` | the device's page says the same once the CYFR refuses the device | the sentence on the device's page; the same two counts |
+
+That chooser is the one macOS and Windows have: the proof gives `cyfr`'s
+answer to it the passkey road's field and leaves the page as it is. On Linux
+the chooser goes on to the device's pages at once, so a notice's words do
+not stay on it. The company run also records, without asserting, what the
+sign-out was answered: whether main's forgery token was missing or stale.
+On a CYFR that requires a company sign-in the app's lock is unconfirmed,
+and the session left can reach only the company page.
 
 Not here: the computer's real lock and sleep, Touch ID and Windows Hello (a
 person at the machine), and macOS and Windows (`desktop-native`).

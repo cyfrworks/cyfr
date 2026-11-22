@@ -9,7 +9,9 @@
 # inputs are. The app is launched once for each PHASE, in order. Each
 # launch appends one PASS or FAIL line a row to FIXTURE_DIR/out/NAME.txt
 # and its RESULT line, and writes its record to NAME-PHASE.json; one FAIL,
-# or a launch that does not finish its record, fails the run.
+# or a launch that does not finish its record, fails the run. The app's own
+# output goes to FIXTURE_DIR/app-output alone, a pipe home.sh reads: it is
+# scrubbed there before any of it is written.
 #
 # Usage: bash tests/desktop-proof/launch.sh NAME APP_PATH HOME_ORIGIN FIXTURE_DIR PHASE...
 set -uo pipefail
@@ -35,7 +37,10 @@ grep -q "\"home\": \"$HOME_ORIGIN\"" "$FIXTURE/inputs.json" ||
 # The display and the bus are the ones xvfb-run and dbus-run-session give
 # the command they run.
 export APP FIXTURE
+[ -p "$FIXTURE/app-output" ] || { echo "FAIL output: no pipe takes the app's output"; exit 1; }
+exec 9>"$FIXTURE/app-output"
 for phase in "$@"; do
+  echo "=== $phase" >&9
   # The last launch's cyfr leaves 127.0.0.1:7340 as it ends.
   for _ in $(seq 100); do
     (exec 3<>/dev/tcp/127.0.0.1/7340) 2>/dev/null || break
@@ -45,12 +50,11 @@ for phase in "$@"; do
   timeout 900 dbus-run-session -- xvfb-run -a -s "-screen 0 1400x1000x24" bash -c \
     'exec env -i HOME="$HOME" PATH=/usr/bin:/bin LANG=C.UTF-8 DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" \
       DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" CYFR_DESKTOP_PROOF_FIXTURE="$FIXTURE" \
-      CYFR_DESKTOP_PROOF_PHASE="$PHASE" "$APP"' >"$OUT/app-$NAME-$phase.log" 2>&1
+      CYFR_DESKTOP_PROOF_PHASE="$PHASE" "$APP"' >&9 2>&1
   code=$?
   if ! grep -qx "RESULT $phase [a-z]*" "$OUT/$NAME.txt" 2>/dev/null; then
     cat "$OUT/$NAME.txt" 2>/dev/null
-    echo "FAIL proof: the $phase launch did not finish (the app exited $code); the app's last lines:"
-    tail -n 30 "$OUT/app-$NAME-$phase.log"
+    echo "FAIL proof: the $phase launch did not finish (the app exited $code); the app's last lines follow"
     exit 1
   fi
   if ! grep -qx "RESULT $phase passed" "$OUT/$NAME.txt"; then

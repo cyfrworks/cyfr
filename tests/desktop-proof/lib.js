@@ -16,8 +16,8 @@
 // launch.sh (CYFR_DESKTOP_PROOF_PHASE); each launch appends its rows to
 // FIXTURE/out/NAME.txt (a PASS or FAIL line a row, then RESULT PHASE
 // passed or failed) and writes NAME-PHASE.json. Nothing it records holds
-// a credential: no page text, only addresses without their fragments,
-// headings and notices.
+// a credential: no page text, only addresses, headings and notices, and
+// everything it writes is scrubbed first (write, scrub.mjs).
 
 import {appendFileSync, readFileSync, readdirSync, writeFileSync} from "node:fs"
 import path from "node:path"
@@ -25,6 +25,7 @@ import path from "node:path"
 import {BrowserWindow, app, net, powerMonitor, session} from "electron"
 
 import {startApp} from "../../apps/codex/desktop/src/app.js"
+import {scrub, scrubbed} from "./scrub.mjs"
 
 export const FIXTURE = process.env.CYFR_DESKTOP_PROOF_FIXTURE
 export const PHASE = process.env.CYFR_DESKTOP_PROOF_PHASE
@@ -45,17 +46,14 @@ app.commandLine.appendSwitch("use-fake-device-for-media-stream")
 
 export const said = []
 export const record = {rows: [], stopped: null}
-// What the proof writes carries no address's fragment, which may hold the
-// run token, an unlock ticket or an enrolment offer: every address in it
-// ends at its "#".
-export const scrub = (text) => String(text).replace(/((?:https?|data):[^\s"'#<>\\]*)#[^\s"'<>)\]\\]*/g, "$1#")
-// JSON of `value` with every string in it scrubbed.
-export const scrubbed = (value, space) => JSON.stringify(value, (_key, v) => typeof v === "string" ? scrub(v) : v, space)
-export const log = (line) => appendFileSync(path.join(OUT, `${proof}.log`), `${new Date().toISOString()} ${scrub(line)}\n`)
+// Every line the proof writes goes through here, and its record through
+// scrubbed (finish), so that a credential is gone before a byte is written.
+const write = (file, line) => appendFileSync(path.join(OUT, file), `${scrub(line)}\n`)
+export const log = (line) => write(`${proof}.log`, `${new Date().toISOString()} ${line}`)
 
 export function row(name, ok, what, detail = {}) {
   record.rows.push({name, ok: !!ok, what, detail})
-  appendFileSync(path.join(OUT, `${proof}.txt`), `${ok ? "PASS" : "FAIL"} ${name}: ${what}${ok ? "" : ` ${scrubbed(detail)}`}\n`)
+  write(`${proof}.txt`, `${ok ? "PASS" : "FAIL"} ${name}: ${what}${ok ? "" : ` ${scrubbed(detail)}`}`)
   log(`${ok ? "PASS" : "FAIL"} ${name} ${scrubbed(detail)}`)
   if (!ok) throw new Stop(name)
 }
@@ -373,9 +371,8 @@ export const history = []
 // Main's decision on each navigation: the proof's listeners are added as
 // a window is made, before main's, and read the event a tick later.
 export const decisions = []
-// An address as the record keeps it: without its fragment, which carries
-// the run token, an unlock ticket or an enrolment offer.
-export const bare = (url) => String(url).split("#")[0].slice(0, 120)
+// An address as a row's detail keeps it, scrubbed before it is cut short.
+export const bare = (url) => scrub(url).split("#")[0].slice(0, 120)
 app.on("browser-window-created", (_event, win) => {
   const wc = win.webContents
   const id = wc.id
@@ -431,7 +428,7 @@ export function childOfThis(word) {
 export let proof = "proof"
 
 export function finish(code) {
-  appendFileSync(path.join(OUT, `${proof}.txt`), `RESULT ${PHASE} ${code === 0 ? "passed" : "failed"}\n`)
+  write(`${proof}.txt`, `RESULT ${PHASE} ${code === 0 ? "passed" : "failed"}`)
   writeFileSync(path.join(OUT, `${proof}-${PHASE}.json`), scrubbed(record, 2))
   app.exit(code)
 }
@@ -465,8 +462,8 @@ export function run(name, phases, options = {}) {
   if (!phases[PHASE]) throw new Error(`no phase ${PHASE}`)
   app.whenReady().then(phases[PHASE]).then(() => finish(record.rows.every((r) => r.ok) ? 0 : 1), async (e) => {
     if (!(e instanceof Stop)) {
-      record.stopped = scrub(e.stack ?? String(e))
-      appendFileSync(path.join(OUT, `${proof}.txt`), `FAIL stopped: ${scrub(e.message)}\n`)
+      record.stopped = e.stack ?? String(e)
+      write(`${proof}.txt`, `FAIL stopped: ${e.message}`)
     }
     record.where = await where().catch((x) => String(x))
     record.processes = app.getAppMetrics().map((m) => ({pid: m.pid, type: m.type, name: m.name ?? null}))

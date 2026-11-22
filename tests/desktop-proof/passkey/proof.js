@@ -35,6 +35,25 @@ const bothCalls = (wc, where) => js(wc, `(async () => { const w = ${where}; cons
 // The account page's error in `a`, once shown.
 const askError = (a) => waitFor(() => js(a.webContents, `document.querySelector("#ask-error")?.textContent.trim() || null`), "the account page's error")
 
+// The codes of the keys @NAME's account's log adds, read from the
+// directory by the second client, whose page is the directory's own: a
+// key's code is the first 16 hex digits of its kid.
+const addedKeys = (second) => js(second, `(async () => {
+  const get = async (at) => {
+    const r = await fetch(at, {cache: "no-store"})
+    if (r.status !== 200) throw new Error("the directory answered " + r.status)
+    return r.json()
+  }
+  const {identifier} = await get(${literal(`${DIRECTORY}/v1/handles/${NAME}`)})
+  const codes = []
+  for (let after = null; ;) {
+    const page = await get(${literal(`${DIRECTORY}/directory/v1/`)} + identifier + (after === null ? "" : "?after=" + after))
+    for (const entry of page.entries) if (entry.kind === "add_key") codes.push(entry.key.kid.replace("sha256:", "").slice(0, 16))
+    if (page.next === null || page.next === undefined) return codes
+    after = page.next
+  }
+})()`)
+
 async function passkeyPhase() {
   // The account @desk-a made and the CYFR set up on the second client;
   // this computer's device enrolled on the six-word road; and a second
@@ -103,7 +122,10 @@ async function passkeyPhase() {
 
   // matched_code: on this computer's device, unlocked with its passphrase,
   // Prism's Your devices shows the same code; Approve opens the device's own
-  // window, which shows it again and adds the passkey with the passphrase.
+  // window, which shows it again and adds the passkey with the passphrase:
+  // the account's log, without that key before, then holds it. That window
+  // saying so, or closing, is no evidence of it.
+  const listedBefore = await addedKeys(second)
   w = await devicePrism(passphrase)
   await js(w.webContents, `document.querySelector('[data-test="shell-devices"]').click(); 1`)
   const listed = await waitFor(() => js(w.webContents, `document.querySelector('[data-test="pairing-waiting-code"]')?.textContent.trim() || null`),
@@ -114,10 +136,11 @@ async function passkeyPhase() {
   await waitFor(() => js(approve.webContents, `!!document.querySelector('form[action="/passkey/decide"]')`), "the approval page")
   const shownThere = await js(approve.webContents, `document.querySelector("p.code")?.textContent.trim() || null`)
   await submit(approve.webContents, "/passkey/decide", {secret: passphrase}, 'button[value="approve"]')
-  const added = await waitFor(async () => approve.isDestroyed() ||
-    (await js(approve.webContents, `document.body.innerText`).catch(() => "")).includes("Added to your account"), "the passkey added")
-  row("matched_code", listed === waiting && shownThere === waiting && added,
-    "the device's Prism shows the same code, and its own window adds the passkey with the passphrase", {listed, shownThere})
+  const added = await waitFor(async () => (await addedKeys(second)).includes(waiting), "the passkey in the account's log", 20_000)
+    .catch(() => false)
+  row("matched_code", listed === waiting && shownThere === waiting && !listedBefore.includes(waiting) && added,
+    "the device's Prism and its own window show the same code, and with the passphrase the passkey is added to the account's log",
+    {listed, shownThere, before: listedBefore.includes(waiting), added})
 
   // passkey_sign_in: locked, then signed in again with the new passkey
   // alone: the account window's assertion returns and Prism opens.
@@ -208,19 +231,28 @@ async function passkeyPhase() {
   "the app offers both accounts' passkeys; Cancel signs no one in, and choosing @desk-a signs in as @desk-a", {offered: offeredBoth, cancelled})
 
   // account_window: the account window holds the account service's sign-in
-  // and recovery pages alone: a frame there loads nothing, the CYFR's own
+  // and recovery pages alone. A frame there is refused by main: the engine
+  // reports, for that frame's address, the policy main adds to the page
+  // (frame-src 'none'), beside and apart from the account service's own
+  // policy, and nothing of the frame reaches the service. The CYFR's own
   // pages are refused at once, by navigation or by a redirect, and either
   // ends the ceremony.
   out = await lockedOut(w, "the computer's lock", async () => powerMonitor.emit("lock-screen"))
   a = await startSignIn(await toSignIn())
   const xFrom = (await seen(new URL(HOME).hostname)).length
-  await js(a.webContents, `new Promise((done) => { const f = document.createElement("iframe"); f.name = "proof-frame";
-    f.src = ${literal(DIRECTORY + "/account/sign")}; document.body.appendChild(f); setTimeout(done, 0) })`)
-  const framed = await waitFor(() => a.webContents.mainFrame.frames.find((f) => f.name === "proof-frame"), "the frame")
-  const frameLoaded = await waitFor(async () => {
-    const at = framed.url
-    return at === "" || at === "about:blank" || at.startsWith("chrome-error:") ? {at} : at.startsWith(DIRECTORY) ? {at: bare(at)} : null
-  }, "the frame's end")
+  const frameURL = DIRECTORY + "/account/devices"
+  const dirHost = new URL(DIRECTORY).hostname
+  const dirFrom = (await seen(dirHost)).length
+  await js(a.webContents, `(() => { window.proofRefused = []
+    addEventListener("securitypolicyviolation", (e) => proofRefused.push({policy: e.originalPolicy, directive: e.effectiveDirective,
+      blocked: e.blockedURI, disposition: e.disposition}))
+    const f = document.createElement("iframe"); f.src = ${literal(frameURL)}; document.body.appendChild(f); return 1 })()`)
+  const refusals = () => js(a.webContents, "window.proofRefused")
+  const byMain = (r) => r.policy === "frame-src 'none'" && r.directive === "frame-src" && r.disposition === "enforce" && r.blocked === frameURL
+  const frameRefused = await waitFor(async () => (await refusals()).some(byMain), "main's refusal of the frame's load", 20_000)
+    .catch(() => false)
+  const frame = {refusedByMain: frameRefused, refusals: await refusals(),
+    reached: (await seen(dirHost)).slice(dirFrom).filter((r) => r.path === "/account/devices").length}
   const stillOpen = !!accountWindow()
   let account = {id: a.webContents.id}
   await js(a.webContents, `location.href = ${literal(HOME + "/")}; 1`)
@@ -236,10 +268,10 @@ async function passkeyPhase() {
   const endedByRedirect = await waitFor(() => !accountWindow(), "the ceremony ended by the redirect")
   await fault(new URL(DIRECTORY).hostname, "none")
   const reachedX = (await reachedSince(new URL(HOME).hostname, xFrom)).filter((r) => r.path === "/").length
-  row("account_window", frameLoaded.at === "" || frameLoaded.at === "about:blank" || frameLoaded.at.startsWith("chrome-error:")
-    ? stillOpen && homeRefused && endedByHome && redirectRefused.prevented && endedByRedirect && reachedX === 0 : false,
-  "the account window loads no frame, refuses the CYFR's own page by navigation and by redirect, and either ends the ceremony",
-  {frame: frameLoaded.at, homeRefused, redirectRefused: redirectRefused.prevented, reachedX})
+  row("account_window", frame.refusedByMain && frame.reached === 0 && stillOpen && homeRefused && endedByHome &&
+    redirectRefused.prevented && endedByRedirect && reachedX === 0,
+  "main refuses a frame's load in the account window, and the CYFR's own page by navigation and by redirect, either ending the ceremony",
+  {frame, homeRefused, redirectRefused: redirectRefused.prevented, reachedX})
 
   // recovery: with no passkey on this computer, the recovery code adds one
   // in the account window's recovery page, which returns to the sign-in and

@@ -72,11 +72,22 @@ OUT="${PROOF_OUT:-$WORK/out}"
 FIXTURE="$WORK/fixture"
 CLIENT="${PROOF_RUN_PREFIX:-}cyfr-desktop-client-$$"
 CELLS="${PROOF_RUN_PREFIX:-}cyfr-desktop-cell-$$"
+APP_OUTPUT="$FIXTURE/app-output"
+APP_LOG="$FIXTURE/out/app-$NAME.log"
+SCRUB=""
 mkdir -p "$FIXTURE/out" "$OUT"
+mkfifo "$APP_OUTPUT"
 
 cleanup() {
   local code=$?
   docker rm -f "$CLIENT" >/dev/null 2>&1 || true
+  if [ -n "$SCRUB" ]; then
+    # No writer is left. A scrub still waiting for a first one is given an
+    # empty one, then read to its end.
+    if kill -0 "$SCRUB" 2>/dev/null; then timeout 5 bash -c ': >"$1"' _ "$APP_OUTPUT" 2>/dev/null || true; fi
+    wait "$SCRUB" || [ "$code" -ne 0 ] || code=1
+    [ "$code" -eq 0 ] || tail -n 30 "$APP_LOG" >&2 2>/dev/null || true
+  fi
   identity_front_stop
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   docker ps -aq --filter "name=^$CELLS-" | xargs -r docker rm -f >/dev/null 2>&1 || true
@@ -117,7 +128,9 @@ chmod +x "$REL/bin/cyfr"
 #             service share one origin
 #   company   x.test serving its own account pages and requiring a company
 #             sign-in (join) at the OIDC issuer idp.test, a front with
-#             nothing behind it that only records what reaches it
+#             nothing behind it that only records what reaches it, at an
+#             address the client alone is told: whatever reaches it is the
+#             client's, whatever headers it carries
 SHAPE=separate
 if [ -f "$(dirname "$SCRIPT")/home" ]; then SHAPE="$(tr -d '[:space:]' <"$(dirname "$SCRIPT")/home")"; fi
 case "$SHAPE" in separate | self | company) ;; *) fail "$(dirname "$SCRIPT")/home names no shape this driver makes: '$SHAPE'" ;; esac
@@ -142,9 +155,12 @@ case "$SHAPE" in
     DIRECTORY_HOST=x.test
     ;;
 esac
+identity_reaches_directory "$X" "$DIRECTORY_HOST"
 if [ "$SHAPE" = company ]; then
   # The issuer: a certificate of the run's authority and a front at an
   # address of the run's own, forwarding to a port nothing listens on.
+  # Declared once x.test is configured, so that its inetrc does not name
+  # it: the CYFR's own server cannot reach it.
   IDP="$WORK/idp"
   mkdir -p "$IDP"
   browser_certificate idp.test
@@ -153,7 +169,6 @@ if [ "$SHAPE" = company ]; then
   IDP_SECRET="$(openssl rand -hex 32)"
   LOG_SECRETS+=("$IDP_SECRET")
 fi
-identity_reaches_directory "$X" "$DIRECTORY_HOST"
 identity_env "$X" CYFR_REGISTRY_URL "$DIRECTORY_HOST"
 identity_env "$X" CYFR_SETUP_TOKEN "$SETUP_TOKEN"
 if [ "$SHAPE" = company ]; then
@@ -179,8 +194,8 @@ cp "$BROWSER_AUTHORITY/authority.pem" "$FIXTURE/authority.pem"
 fronts=()
 for host in "${!IDENTITY_FRONTS[@]}"; do fronts+=("$host" "$(identity_front_control "$host")"); done
 python3 -I -c 'import json, sys; a = sys.argv; json.dump({"home": "https://x.test", "directory": "https://" + a[1], "setup_token": a[2],
-  "shape": a[3], "fronts": dict(zip(a[5::2], a[6::2]))}, open(a[4], "w"))' \
-  "$DIRECTORY_HOST" "$SETUP_TOKEN" "$SHAPE" "$FIXTURE/inputs.json" "${fronts[@]}"
+  "fronts": dict(zip(a[4::2], a[5::2]))}, open(a[3], "w"))' \
+  "$DIRECTORY_HOST" "$SETUP_TOKEN" "$FIXTURE/inputs.json" "${fronts[@]}"
 if [ -f "$(dirname "$SCRIPT")/proof.js" ]; then
   node "$HERE/pack.mjs" "$(dirname "$SCRIPT")/proof.js" "$FIXTURE/proof.asar"
 fi
@@ -200,5 +215,7 @@ docker exec "$CLIENT" bash /proof/client.sh >"$WORK/client.log" 2>&1 || {
 }
 
 step "$NAME"
+node "$HERE/scrub-lines.mjs" <"$APP_OUTPUT" >"$APP_LOG" &
+SCRUB=$!
 docker exec -u proof -e HOME=/home/proof -w /home/proof "$CLIENT" \
   bash "/proof/$NAME/run.sh" /opt/cyfr/CYFR https://x.test /fixture
