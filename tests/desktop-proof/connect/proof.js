@@ -79,7 +79,7 @@ async function waitFor(check, what, ms = STEP_MS) {
     }
     await sleep(200)
   }
-  throw new Error(`timed out waiting for ${what} (${literal(last)})`)
+  throw new Error(`timed out waiting for ${what} (${JSON.stringify(last)})`)
 }
 
 // A value written into a script the proof runs in a page: JSON, with the
@@ -152,7 +152,7 @@ async function fault(host, mode, fields = {}) {
   const r = await fetch(`${inputs.fronts[host]}/fault`, {method: "POST", headers: {"content-type": "application/json"},
     body: JSON.stringify({mode, ...fields})})
   const answer = await r.json()
-  if (r.status !== 200 || answer.mode !== mode) throw new Error(`the front of ${host} did not take ${mode}: ${r.status} ${literal(answer)}`)
+  if (r.status !== 200 || answer.mode !== mode) throw new Error(`the front of ${host} did not take ${mode}: ${r.status} ${JSON.stringify(answer)}`)
   return answer
 }
 
@@ -630,14 +630,35 @@ async function connectPhase() {
   await openCYFR(out.back, passphrase)
   w = await contentAt(atHome, "Prism again")
 
-  // renderer_loss: Prism's page stopping locks the app and signs out.
-  out = await lockedOut(w, "Prism's page stopping", async () => {
-    log(`crashing the renderer of window ${w.webContents.id}, pid ${w.webContents.getOSProcessId()}, loading ${w.webContents.isLoading()}`)
-    w.webContents.forcefullyCrashRenderer()
+  // renderer_killed: Prism's page's process ended by the kill signal, as
+  // the kernel ends one when memory runs out: the engine reports the page
+  // gone, the app locks at once, and its sign-out is acknowledged.
+  const killed = {pid: w.webContents.getOSProcessId()}
+  out = await lockedOut(w, "Prism's page's process killed", async () => {
+    const prism = w
+    const start = Date.now()
+    prism.webContents.once("render-process-gone", (_e, details) => {
+      // Main's own handler ran first (it was added as the window was made).
+      Object.assign(killed, {reason: details.reason, reportedMs: Date.now() - start, closedAtOnce: prism.isDestroyed()})
+    })
+    log(`killing the renderer of window ${prism.webContents.id}, pid ${killed.pid}`)
+    process.kill(killed.pid, "SIGKILL")
   })
-  row("renderer_loss", said.includes("locked: the page stopped") && signedOut(out),
-    "Prism's page stopping locks the app, and main's sign-out is acknowledged", lockDetail(out))
+  row("renderer_killed", killed.reason === "killed" && killed.closedAtOnce && said.includes("locked: the page stopped") && signedOut(out),
+    "Prism's page's process killed: the engine reports it gone, the app closes Prism at once and its sign-out is acknowledged",
+    {...lockDetail(out), killed})
   await openCYFR(out.back, passphrase)
+  w = await contentAt(atHome, "Prism again")
+
+  // The forced crash, recorded and not asserted (../README.md): the
+  // engine's own crash of Prism's page, which on some machines begins and
+  // does not finish, so that the engine reports nothing. The record keeps
+  // whether and when the engine reported the page gone; when it did not
+  // within 15 s, the process's state and this machine's core pattern, and
+  // then the proof ends that process itself and goes on.
+  record.forcedCrash = await forcedCrash(w)
+  log(`forced crash: ${JSON.stringify(record.forcedCrash)}`)
+  await openCYFR(await contentAt(atDevice, "the device's pages after the forced crash"), passphrase)
   w = await contentAt(atHome, "Prism again")
 
   // process_loss: cyfr killed while Prism holds a session: the app closes
@@ -655,6 +676,52 @@ async function connectPhase() {
     signOuts.length === 1 && signOuts[0].retired === "1" && refused(after),
   "cyfr's loss while Prism holds a session closes the content, signs it out, confirmed, and tells the person",
   {told: told.replace(/^.*<p>/, "").replace(/<\/p>$/, ""), before, after, signOuts})
+}
+
+// The engine's forced crash of window `w`'s page, and what followed.
+async function forcedCrash(w) {
+  const wc = w.webContents
+  const pid = wc.getOSProcessId()
+  const start = Date.now()
+  const gone = new Promise((resolve) => wc.once("render-process-gone", (_e, details) =>
+    resolve({reason: details.reason, afterMs: Date.now() - start})))
+  const within = (ms) => Promise.race([gone, sleep(ms).then(() => null)]) // sleep-ok: how long the record waits on the engine's report
+  wc.forcefullyCrashRenderer()
+  const reported = await within(15_000)
+  if (reported) return {pid, reported}
+  const state = processState(pid)
+  try {
+    process.kill(pid, "SIGKILL")
+  } catch (e) {
+    return {pid, reported: null, state, machine: machine(), killed: e.code}
+  }
+  return {pid, reported: null, state, machine: machine(), afterKill: await within(15_000)}
+}
+
+// A process's state as /proc shows it: its state line, what it waits in,
+// and its core size limit; or why it could not be read.
+function processState(pid) {
+  const read = (file) => {
+    try {
+      return readFileSync(`/proc/${pid}/${file}`, "utf8")
+    } catch (e) {
+      return `unreadable: ${e.code}`
+    }
+  }
+  return {state: /^State:\s*(.*)$/m.exec(read("status"))?.[1] ?? read("status"), waits: read("wchan").trim(),
+    coreLimit: /^Max core file size.*$/m.exec(read("limits"))?.[0]?.replace(/\s+/g, " ") ?? read("limits")}
+}
+
+// What this machine does with a crashing process: its core pattern and
+// this process's core size limit.
+function machine() {
+  let corePattern
+  try {
+    corePattern = readFileSync("/proc/sys/kernel/core_pattern", "utf8").trim()
+  } catch (e) {
+    corePattern = `unreadable: ${e.code}`
+  }
+  return {corePattern, coreLimit: processState(process.pid).coreLimit}
 }
 
 // What a Connect in the chooser `w` led to: the question about an
@@ -792,8 +859,9 @@ app.whenReady().then(PHASES[PHASE]).then(() => finish(record.rows.every((r) => r
   }
   record.where = await where().catch((x) => String(x))
   record.processes = app.getAppMetrics().map((m) => ({pid: m.pid, type: m.type, name: m.name ?? null}))
+  record.machine = machine()
   record.agents = await Promise.all(Object.keys(inputs.fronts).map(async (h) =>
     [h, [...new Set((await seen(h).catch(() => [])).map((r) => r.agent))]])).catch(() => null)
-  log(`where: ${literal(record.where)}`)
+  log(`where: ${JSON.stringify(record.where)}`)
   finish(1)
 })

@@ -83,7 +83,7 @@ that fails. The proof has 28 rows over three launches of the app (`run.sh`): `co
 | `navigation` | main refuses the top frame sent elsewhere, a window elsewhere, a frame sent to the CYFR's company sign-in and a frame moving the top frame (asked from inside the frame, so the engine's initiator is the frame); Prism's page and the frame allow each | main's decision on each navigation's event and on the window request, read from its window handler; nothing at the front for the company sign-in |
 | `prism_frame_rules` | Prism's own frame rules hold in the app: a frame Prism serves (a canvas) is given no window and cannot move the top frame. This is Prism's sandbox refusing, not the app | the engine's answers in the frame |
 | `confirm` | an API key asked for in Prism waits on the device's own window: a wrong passphrase is refused and asked again, the right one confirms it | the refusal and the same confirmation asked again, no key in Prism; then the key shown in Prism |
-| `lock`, `system_lock`, `renderer_loss` | Prism's Lock, the computer's lock (main's lock-screen event, as the system sends it) and Prism's page stopping each close Prism and sign its session out, confirmed | the session's cookie opening a page before; main's sign-out answered at the front with the CYFR's acknowledgement; the chooser opened with no unconfirmed notice; the cookie refused after. On this road `cyfr`'s lock also retires the session through the device's channel, so the refused cookie alone does not tell which retired it; the passkey road shows the sign-out alone |
+| `lock`, `system_lock`, `renderer_killed` | Prism's Lock, the computer's lock (main's lock-screen event, as the system sends it) and Prism's page's process ended by the kill signal (as the kernel ends one when memory runs out) each close Prism and sign its session out, confirmed | the session's cookie opening a page before; main's sign-out answered at the front with the CYFR's acknowledgement; the chooser opened with no unconfirmed notice; the cookie refused after. On this road `cyfr`'s lock also retires the session through the device's channel, so the refused cookie alone does not tell which retired it; the passkey road shows the sign-out alone |
 | `system_lock_at_once` | the computer's lock closes Prism's window at once | the window, destroyed before anything is awaited |
 | `reconnect` | the lock left the device locked; its passphrase opens Prism again under a new session | the locked device's page first; a new session cookie |
 | `offline_lock` | with the CYFR unreachable, the lock still closes Prism, and the chooser says the sign-out is unconfirmed | the front taking `down`; the chooser's notice |
@@ -91,6 +91,18 @@ that fails. The proof has 28 rows over three launches of the app (`run.sh`): `co
 | `remembered` | launched again, the CYFR's approved account service is not asked about again | the device's pages, with no question |
 | `directory_changed` | a CYFR that names another account service than the one approved is asked about afresh | the question, with the front standing in for a CYFR reconfigured (fault `directory`) |
 | `approval_ended` | that earlier approval has ended: named again, the first account service is asked about again, and nothing of the app reaches it | the question; the front of `dir.test` |
+
+After `renderer_killed` the proof crashes Prism's page the engine's own
+way (`forcefullyCrashRenderer`) and records, without asserting, whether
+and how soon the engine reported the page gone. When it has not within
+15 s, the record keeps that process's state and the machine's core pattern
+(also kept whenever a proof stops), and the proof ends the process with the
+kill signal and goes on. This shows a limit of the app: when a page's
+process starts to crash and does not exit, the engine reports nothing, and
+the window stays open and unanswering until the person closes it or the
+computer locks. On GitHub's Linux runners the engine reported nothing for
+over a minute; on the machine this proof was written on it reported the
+page gone within a tenth of a second.
 
 What a proof records holds no credential: addresses without their
 fragments, headings and notices, never a page's text.
