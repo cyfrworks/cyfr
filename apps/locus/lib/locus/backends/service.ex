@@ -57,7 +57,8 @@ defmodule Locus.Backends.Service do
   6. **The owner and the nonce again**, and the nonce recorded: only a
      request whose body was the one signed records one.
   7. **The message**, read strictly (`read_session/1`), naming the owner
-     and epoch its header names (`bad_request`).
+     and epoch its header names, and an `open` a lifetime no further ahead
+     than the header's time allows (`bad_request`).
   8. **The session**: `open` through the owners (`Locus.Backends.Owners.open/3`);
      every other message to the session the owners name
      (`unknown_session` for one they do not hold) when it is of that
@@ -68,7 +69,7 @@ defmodule Locus.Backends.Service do
   ## A close, in order
 
   It asks nothing of the owner's standing: the proof is the header, and
-  what it may end is what that version opened.
+  what it may end is the one lifetime of that version it names.
 
   1. **The header**, as a session message's: `unauthorized`.
   2. **The lifetime**: `stale_boot`.
@@ -77,9 +78,10 @@ defmodule Locus.Backends.Service do
      the one the header hashed (`unauthorized`).
   5. **The nonce again**, and the nonce recorded.
   6. **The close**, read strictly (`read_close/1`), naming the owner and
-     epoch its header names (`bad_request`).
+     epoch its header names and a lifetime no further ahead than the
+     header's time allows (`bad_request`).
   7. **The place back** (`Locus.Backends.Owners.close/3`): answered
-     `closed` once nothing is held for the session, else `unavailable`.
+     `closed` once nothing of the lifetime is held, else `unavailable`.
 
   Every refusal made before the body is read closes the connection, so
   the body is never read. What a session answers is masked with its
@@ -324,9 +326,12 @@ defmodule Locus.Backends.Service do
   end
 
   defp served(conn, invoke, %{type: :open} = message) do
-    case Owners.open(owners(conn), invoke, message) do
-      {:ok, answer} -> {:ok, answer}
+    with :ok <- within(conn, message, invoke),
+         {:ok, answer} <- Owners.open(owners(conn), invoke, message) do
+      {:ok, answer}
+    else
       {:error, code} -> {:refused, conn, code}
+      {:refused, _conn, _code} = refused -> refused
     end
   end
 
@@ -379,7 +384,8 @@ defmodule Locus.Backends.Service do
          :ok <- nonce(conn, invoke, now, true),
          {:ok, message} <- readable(conn, LocusBackends.read_close(body)),
          :ok <- named(conn, message, invoke),
-         :ok <- released(conn, invoke, message.session) do
+         :ok <- within(conn, message, invoke),
+         :ok <- released(conn, invoke, message) do
       {:ok, text} = LocusBackends.encode_close_answer(%{status: :closed})
       answer(conn, 200, text)
     else
@@ -387,11 +393,19 @@ defmodule Locus.Backends.Service do
     end
   end
 
-  defp released(conn, invoke, session) do
-    case Owners.close(owners(conn), invoke, session) do
+  defp released(conn, invoke, message) do
+    case Owners.close(owners(conn), invoke, message) do
       :ok -> :ok
       {:error, code} -> {:refused, conn, code}
     end
+  end
+
+  # A lifetime's deadline is bounded by the time the signature proves, so
+  # no caller asks for a mark, or an admission, that lasts.
+  defp within(conn, %{lifetime: lifetime}, invoke) do
+    if LocusBackends.lifetime_within?(lifetime, invoke.ts),
+      do: :ok,
+      else: {:refused, conn, :bad_request}
   end
 
   # ————— nonces —————

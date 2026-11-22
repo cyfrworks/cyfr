@@ -42,9 +42,14 @@ defmodule Emissary.External.Server do
   A program is one command the backends service runs, and this process is
   its MCP client. Connecting asks the programs controller for the row's
   owner (`Opus.Programs.hold/1`), which answers a grant, then opens the
-  program's session under the key `"mcp"` (`Opus.Programs.Session`), in
-  the row's own home when it keeps one: the service attaches to a session
-  still running for that key or starts the command. A program started
+  program's session through the controller, the only way to open one
+  (`Opus.Programs.box_open/4`), under the key `"mcp"`, in the row's own
+  home when it keeps one, as one lifetime per process of the command
+  (`Opus.Programs.lifetime/3`): this process keeps it until that process
+  ends and asks again for it, which the service answers while it runs,
+  and opens another once the service says it is over. A server process
+  started again holds no lifetime, so it starts its program afresh. A
+  program started
   afresh (`resumed: false`) is initialized at the legacy protocol revision
   (`Prima.MCP.Protocol.legacy_version/0`) and told
   `notifications/initialized`; then it is asked `tools/list`, every page
@@ -304,6 +309,8 @@ defmodule Emissary.External.Server do
       # What each running call asked, so a refused one can be sent again:
       # %{task_pid => {tool_name, arguments, attempt}}.
       calls: %{},
+      # The lifetime of the program's process, kept until that ends.
+      lifetime: nil,
       # A program's session and its reader:
       # %{session: id, reader: pid | nil, after: seq}, nil while none is open.
       session: nil,
@@ -962,9 +969,9 @@ defmodule Emissary.External.Server do
   # A program's session
   # ============================================================================
 
-  # The program's session, opened when it has none: the service attaches to
-  # the one still running for this row's key, or starts the program afresh,
-  # which is initialized before anything else is sent to it.
+  # The program's session, asked for when it has none: of the process this
+  # server already has, while that runs, or of a new one, which is
+  # initialized before anything else is sent to it.
   defp ensure_session(%State{session: %{}} = state), do: {:ok, state}
 
   defp ensure_session(%State{grant: nil} = state) do
@@ -974,18 +981,48 @@ defmodule Emissary.External.Server do
     end
   end
 
+  defp ensure_session(%State{lifetime: nil} = state),
+    do: open_program(with_lifetime(state))
+
+  # Its process ended, or was closed: that place is asked back, and the
+  # program starts afresh as another lifetime.
   defp ensure_session(state) do
-    params = %{
+    case open_program(state) do
+      {:error, {:refused, :lifetime_over, _boot}, state} ->
+        _ = Opus.Programs.box_close(state.lifetime)
+        open_program(with_lifetime(state))
+
+      answer ->
+        answer
+    end
+  end
+
+  defp with_lifetime(state) do
+    named = %{
       program: Opus.Programs.Definition.program_name(),
       key: @session_key,
       home_id: state.home_id,
       mode: :run
     }
 
-    case Opus.Programs.Session.open(state.grant, params) do
+    %{state | lifetime: Opus.Programs.lifetime(state.grant, named, open_deadline())}
+  end
+
+  defp open_deadline, do: System.system_time(:millisecond) + @connect_call_timeout_ms
+
+  # A box that does not count this process a holder (one started in
+  # another's place) is asked to once.
+  defp open_program(state, held_again? \\ false) do
+    case Opus.Programs.box_open(state.lifetime, self(), %{}, open_deadline()) do
       {:ok, %{session: session, resumed: resumed}} ->
         state = %{state | session: %{session: session, reader: nil, after: 0}}
         if resumed, do: {:ok, state}, else: initialize_program(state)
+
+      {:error, :not_held} when not held_again? ->
+        case Opus.Programs.hold(owner(state)) do
+          {:ok, grant} -> open_program(%{state | grant: grant}, true)
+          {:error, reason} -> {:error, reason, state}
+        end
 
       {:error, {:refused, code, boot} = refused} ->
         if code == :stale_boot and is_binary(boot), do: Opus.Programs.boot_seen(boot)
@@ -1285,6 +1322,7 @@ defmodule Emissary.External.Server do
   defp backends_reason(:protocol_mismatch),
     do: "the backends service speaks another protocol version"
 
+  defp backends_reason(:deadline), do: "the backends service did not answer in time"
   defp backends_reason(:control_plane_lost), do: "this server does not own its control plane"
   defp backends_reason(:capacity), do: "the backends service has no free program slots"
 

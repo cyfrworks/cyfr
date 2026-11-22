@@ -636,11 +636,13 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
     session = open!(view, "claude", "login --device-auth")
+    [{terminal, _person}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
+    key = :sys.get_state(terminal).lifetime.key
 
     assert_receive {:session, "open",
                     %{
                       "mode" => "terminal",
-                      "key" => ^session,
+                      "key" => ^key,
                       "home_id" => ^home,
                       "argv" => ["login", "--device-auth"]
                     }, _fields},

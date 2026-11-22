@@ -518,6 +518,27 @@ defmodule Opus.BrainTest do
       worked!(fake, row, brain, binding, work, @named)
     end
 
+    test "a dead holder that had restarted its driver answers a close unanswered, never closed",
+         %{fake: fake, row: row, binding: binding} do
+      {pid, _ref} = brain = started!(fake, row, binding, @named)
+      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
+
+      assert {:ok, :restarted} =
+               Brain.write(brain, binding, work, config: %{@named | "access" => "another"})
+
+      assert [{_second, %{running: true}}] = running_sessions(fake, row)
+
+      # Its second process still runs: the box's close of it is on its way.
+      Scripted.hold(fake, "close", 30_000)
+      monitor = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 5_000
+      assert_receive {:held, "close", service}, 5_000
+
+      assert Brain.close(brain) == {:error, :unanswered}
+      send(service, :go)
+    end
+
     test "a later turn of the same access works on the running process; one whose access " <>
            "changed starts the program again, resuming, with its own",
          %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do

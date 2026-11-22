@@ -155,8 +155,15 @@ defmodule PrismWeb.ShellProgramsTest do
                args: []
              })
 
-    assert_receive {:session, "open", %{"key" => ^session}, _fields}, 2_000
+    key = key_of(session)
+    assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
     session
+  end
+
+  # The key the terminal `session` opened under: its one lifetime's.
+  defp key_of(session) do
+    [{pid, _person}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
+    :sys.get_state(pid).lifetime.key
   end
 
   defp chip(session), do: ~s(#{@shelf} [data-canvas-shelf-program="#{session}"])
@@ -182,7 +189,8 @@ defmodule PrismWeb.ShellProgramsTest do
     render_async(page, @answered_ms)
     path = assert_patch(page, @answered_ms)
     assert %{"terminal" => session} = URI.decode_query(URI.parse(path).query || "")
-    assert_receive {:session, "open", %{"key" => ^session}, _fields}, 2_000
+    key = key_of(session)
+    assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
 
     GenServer.stop(page.pid, :normal)
 

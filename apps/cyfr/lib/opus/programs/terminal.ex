@@ -9,11 +9,10 @@ defmodule Opus.Programs.Terminal do
   a page or a browser credential (`Opus.Programs.start/3`).
 
   The process holds the row's owner (`Opus.Programs.hold/2`) and asks the
-  box for the session under a key that is its own id, so every start is
-  a session of its own; the box records that open before the backend is
-  asked and settles whatever the backend answers under the key
-  (`Opus.Programs.Box`). An open the box answers past its deadline
-  refuses the start, the process ends, and the box closes the late
+  box for the one lifetime its id is the handle of (`Opus.Programs.Box`,
+  "A terminal's id"), so every start is a session of its own. An open the
+  box answers past its deadline refuses the start, the process ends, and
+  the box closes that lifetime, with it any late
   session. A reader of its own reads the session's output for the
   process's life, one `output` at a time naming the last chunk it was
   answered, so a lost answer is replayed.
@@ -61,7 +60,7 @@ defmodule Opus.Programs.Terminal do
       cannot answer ends nothing, and a sign-out of a browser leaves the
       person standing.
 
-  However it ends, killed included, the box closes its session; on the
+  However it ends, killed included, the box closes its lifetime; on the
   way out it asks so itself, which is the fast path.
 
   A session a turn started (`turn_id`, `by: :aqua`) has no attached
@@ -151,7 +150,7 @@ defmodule Opus.Programs.Terminal do
     {:ok,
      %{
        id: Keyword.fetch!(args, :id),
-       principal: Keyword.fetch!(args, :principal),
+       lifetime: Keyword.fetch!(args, :lifetime),
        athanor_id: Keyword.fetch!(args, :athanor_id),
        user_id: Keyword.fetch!(args, :user_id),
        turn_id: Keyword.get(args, :turn_id),
@@ -188,24 +187,18 @@ defmodule Opus.Programs.Terminal do
     case with(:ok <- turn_running(state), do: hold(state, deadline)) do
       {:ok, state} ->
         holder = self()
-        owner = state.owner
+        lifetime = state.lifetime
 
         params = %{
-          program: Opus.Programs.Definition.program_name(),
-          home_id: state.home_id,
-          key: state.id,
-          mode: :terminal,
           argv: state.argv,
           rows: state.rows,
           cols: state.cols,
-          # Whose the session is, for a close once this process is gone.
-          principal: state.principal,
           # What the box announces should this process die before it can.
           ended: Map.put(summary(state), :user_id, state.user_id)
         }
 
         spawn_link(fn ->
-          send(holder, {:opened, Opus.Programs.box_open(owner, holder, params, deadline)})
+          send(holder, {:opened, Opus.Programs.box_open(lifetime, holder, params, deadline)})
         end)
 
         {:noreply, %{state | opening: from, deadline: deadline}}
@@ -676,7 +669,7 @@ defmodule Opus.Programs.Terminal do
     end
   end
 
-  defp close_session(state), do: Opus.Programs.box_close(state.owner, state.home_id, state.id)
+  defp close_session(state), do: Opus.Programs.box_close(state.lifetime)
 
   defp stop_reader(%{reader: nil} = state), do: state
 

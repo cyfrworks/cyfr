@@ -181,17 +181,16 @@ defmodule Opus.Programs.TurnSessionTest do
                Map.merge(%{"program" => row.id, "epoch" => row.epoch, "wait_ms" => 0}, args)
              )
 
-    assert_receive {:session, "open", %{"key" => ^id} = open, _fields}, 2_000
+    key = key_of(id)
+    assert_receive {:session, "open", %{"key" => ^key} = open, _fields}, 2_000
     {id, Map.put(open, "session", backend_session(id)), answer}
   end
 
-  # The backend's id of the session the box opened under `key`.
-  defp backend_session(key) do
-    Enum.find_value(:sys.get_state(Programs.via("local")).sessions, fn
-      {{_a, _s, _h, ^key}, %{session: session}} -> session
-      _other -> nil
-    end)
-  end
+  # The key the terminal `id` opened under: its one lifetime's.
+  defp key_of(id), do: :sys.get_state(terminal(id)).lifetime.key
+
+  # The backend's id of the session the terminal `id` was given.
+  defp backend_session(id), do: :sys.get_state(terminal(id)).session
 
   defp terminal(id) do
     [{pid, _owner}] = Registry.lookup(Opus.Programs.Registry, {:terminal, id})
@@ -792,7 +791,8 @@ defmodule Opus.Programs.TurnSessionTest do
                  held_by: self()
                })
 
-      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+      key = key_of(id)
+      assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
 
       assert {:ok, %{programs: programs}} = call(ctx, lineage, "list", %{})
       refute Enum.any?(programs, &(&1.id == browser.id))

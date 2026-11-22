@@ -3,11 +3,12 @@
 
 defmodule Opus.Programs.Session do
   @moduledoc """
-  The session routes of `Prima.LocusBackends`, as a holder speaks them under
-  the grant `Opus.Programs.hold/1` answered: `open/2`, then `send/3` and
-  `recv/4` of a `run` session, or `input/3`, `output/4` and `resize/4` of
-  a `terminal` one; and the close route (`close/3`), which the box alone
-  speaks, under the grant that opened the session.
+  The session routes of `Prima.LocusBackends`: `open/2` and the close
+  route (`close/3`), which the box alone speaks, each for one lifetime
+  under the grant of the version in its name
+  (`Opus.Programs.Box`, "Sessions"); and what a holder speaks under the
+  grant `Opus.Programs.hold/1` answered, `send/3` and `recv/4` of a `run`
+  session, or `input/3`, `output/4` and `resize/4` of a `terminal` one.
 
   Each runs in the calling process, as one request of its own, apart from
   the box's serialized control channel: a `recv` that waits up to its
@@ -40,31 +41,27 @@ defmodule Opus.Programs.Session do
           | {:invalid, term()}
 
   @doc """
-  Open a session of `program` for `key`, in the kept home `home_id` when
-  it has one: it attaches to the key's running session of its mode, or
-  starts the program with `argv`, mode `:run` on pipes and mode
-  `:terminal` on a pseudo-terminal of `rows` by `cols`. `:timeout_ms`
-  bounds the wait for the answer (default #{@open_timeout_ms}).
+  Open the session of `params.lifetime`: the service answers the process running for
+  it, or starts its program with `argv`, mode `:run` on pipes and mode
+  `:terminal` on a pseudo-terminal of `rows` by `cols`, in the kept home
+  it names. `:timeout_ms` (default #{@open_timeout_ms}) bounds the wait
+  for the answer.
   """
   @spec open(grant(), %{
-          required(:program) => String.t(),
-          required(:key) => String.t(),
-          optional(:home_id) => String.t() | nil,
-          optional(:mode) => :run | :terminal,
+          required(:lifetime) => Opus.Programs.Box.lifetime(),
           optional(:argv) => Opus.Programs.Words.t(),
           optional(:rows) => pos_integer(),
           optional(:cols) => pos_integer(),
-          optional(:timeout_ms) => pos_integer()
+          optional(:timeout_ms) => pos_integer(),
+          optional(atom()) => term()
         }) ::
           {:ok, %{session: String.t(), resumed: boolean()}}
           | {:error, refusal()}
-  def open(grant, params) do
+  def open(grant, %{lifetime: lifetime} = params) do
     message =
-      Map.merge(base(:open, grant), %{
-        program: params.program,
-        home_id: Map.get(params, :home_id),
-        key: params.key,
-        mode: Map.get(params, :mode, :run),
+      base(:open, grant)
+      |> Map.merge(of_lifetime(lifetime))
+      |> Map.merge(%{
         argv: params |> Map.get(:argv, Opus.Programs.Words.new([])) |> Opus.Programs.Words.list(),
         rows: Map.get(params, :rows),
         cols: Map.get(params, :cols)
@@ -167,13 +164,13 @@ defmodule Opus.Programs.Session do
   end
 
   @doc """
-  End the session on the close route, proved by `grant`, the one that
-  opened it, at the service's current boot: `:ok` once the service says
+  End `lifetime` on the close route, proved by `grant`, of the version in
+  its name, at the service's current boot: `:ok` once the service says
   its place is back. The answer is awaited `timeout_ms`.
   """
-  @spec close(grant(), String.t(), pos_integer()) :: :ok | {:error, refusal()}
-  def close(grant, session, timeout_ms) do
-    message = Map.put(named(grant), :session, session)
+  @spec close(grant(), Opus.Programs.Box.lifetime(), pos_integer()) :: :ok | {:error, refusal()}
+  def close(grant, lifetime, timeout_ms) do
+    message = Map.merge(named(grant), of_lifetime(lifetime))
     max = LocusBackends.max_control_bytes()
 
     with {:ok, body} <- encoded(LocusBackends.encode_close(message)),
@@ -183,6 +180,12 @@ defmodule Opus.Programs.Session do
   end
 
   defp base(type, grant), do: Map.put(named(grant), :type, type)
+
+  defp of_lifetime(lifetime) do
+    lifetime
+    |> Map.take([:program, :home_id, :key, :mode])
+    |> Map.put(:lifetime, lifetime.id)
+  end
 
   defp named(grant),
     do: %{owner: %{athanor: grant.athanor, server: grant.server}, e: grant.epoch}

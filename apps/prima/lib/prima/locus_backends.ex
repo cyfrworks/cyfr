@@ -118,25 +118,27 @@ defmodule Prima.LocusBackends do
 
   ## Session messages (`encode_session/1`, `read_session/1`)
 
-  A session is one running process of one program, for one
-  `(program, home_id, key, mode)`, with a sequence-numbered buffer of what
+  A session is one running process of one program, the one process of a
+  lifetime ("A lifetime") of one `(program, home_id, key, mode)`, with a
+  sequence-numbered buffer of what
   its stdout writes: lines in mode `run`, chunks of bytes in mode
   `terminal`. Each message names its owner and epoch, which must be the
   ones its signature names:
 
   | Type | Members | Answer (`encode_session_answer/2`, `read_session_answer/2`) |
   |---|---|---|
-  | `open` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `argv[]`, `rows?`, `cols?` | `status`, `session`, `resumed` |
+  | `open` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `lifetime`, `argv[]`, `rows?`, `cols?` | `status`, `session`, `resumed` |
   | `send` | `owner`, `e`, `session`, `lines[]` | `status` |
   | `recv` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `lines[{seq, text}]`, `dropped`, `running`, `exit_code?` |
   | `input` | `owner`, `e`, `session`, `bytes` | `status` |
   | `output` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `chunks[{seq, bytes}]`, `dropped`, `running`, `exit_code?` |
   | `resize` | `owner`, `e`, `session`, `rows`, `cols` | `status` |
 
-  An `open` attaches to the session running for its key and mode
-  (`resumed: true`) or starts the program's `command` with `argv` appended
-  as its arguments (`resumed: false`): the administrator allowed the
-  program, and its arguments shape only what runs inside its box.
+  An `open` answers the session running for its lifetime (`resumed:
+  true`) or starts the program's `command` with `argv` appended as its
+  arguments (`resumed: false`): the administrator allowed the program, and
+  its arguments shape only what runs inside its box. An open of another
+  lifetime of a key waits until nothing of the key's process is left.
   `home_id` names the kept home the process runs in (`home_id_pattern/0`),
   present for a program whose home is kept and absent for any other. An
   open in mode `terminal` names the terminal's `rows` and `cols`, each 1
@@ -168,30 +170,51 @@ defmodule Prima.LocusBackends do
   whose process ended answers `running: false` on every later `recv` or
   `output`, with `exit_code` when its process exited of its own accord
   with a status (absent for one ended by a signal, by a close, by idle or
-  by its owners), and the next `open` with its key answers `resumed:
-  false`; an owner that speaks a protocol over a session starts it again
-  then. A `send`, `input` or `resize` to an ended session answers `status`
+  by its owners), and its lifetime is over: the key's next process is
+  another lifetime's, which an owner that speaks a protocol over a session
+  starts afresh. A `send`, `input` or `resize` to an ended session answers `status`
   `ended`, and one to a running session `running`. A session's idle period
   is the owner's `idle_ms`: a session that no message reached within it is
   ended.
 
+  ## A lifetime
+
+  A lifetime is one use of a key: one process, from its open to the
+  release of what it held (the service's own lifetime is its boot, and is
+  another thing). Its identity is the text `lifetime` carries
+  (`new_lifetime/1`, `lt_<until>_<32 hexadecimal digits>`) together with
+  the athanor, row, generation and epoch that sign for it and its
+  `(program, home_id, key, mode)`, fixed before its open is sent.
+
+  `until` is its admission deadline in Unix milliseconds, at most
+  `max_lifetime_ms/0` past the signed `ts` of the message that names it
+  (`bad_request` beyond, `lifetime_within?/2`). It is part of the
+  identity, so no retry renews it. The deadline bounds admission alone: an
+  open of a lifetime whose process still runs answers that process
+  whenever it is asked, and admits and renews nothing. An open of a
+  lifetime that was closed or ended, or is past `until` by the service's
+  clock, is refused `lifetime_over`, as it is first asked, as it is asked
+  again after a wait and as its process is about to start.
+
   ## A close (`encode_close/1`, `read_close/1`)
 
   A close is no session message: it has a route of its own, names exactly
-  `owner`, `e` and `session`, and is signed as an invoke, under the key of
-  the owner version that opened the session and with the service's current
-  lifetime. It asks nothing of that owner's standing, so a replaced,
-  released or lapsed owner closes exactly what it opened, and nothing of
-  another version's, row's or athanor's.
+  `owner`, `e`, `program`, `home_id?`, `key`, `mode` and `lifetime`, and
+  is signed as an invoke, under the key of the owner version that opened
+  the lifetime and with the service's current boot. It asks nothing of
+  that owner's standing, so a replaced, released or lapsed owner closes
+  exactly the lifetime it names, and nothing of another lifetime's,
+  version's, row's or athanor's.
 
-  It ends the session's process and answers `{"status": "closed"}`
-  (`encode_close_answer/1`, `read_close_answer/1`) once what the session
-  held is released, so `closed` means that its place is back. A close that
-  names nothing held that way is answered `closed` and changes nothing.
-  One whose place is not back within `close_wait_ms/0`, the stop grace and
-  the release bound together, or that arrives before the service knows
-  what it still holds, is refused `unavailable`: the place stays held and
-  the same close is sent again.
+  It ends that lifetime, whether its open has arrived or not: no open of
+  it is admitted afterwards, through the last moment one could have been,
+  those waiting and those being prepared are refused, and its process is
+  ended. It answers `{"status": "closed"}` (`encode_close_answer/1`,
+  `read_close_answer/1`) once nothing of the lifetime is held, so `closed`
+  means that its place is back and stays so. One whose place is not back
+  within `close_wait_ms/0`, the stop grace and the release bound together,
+  or that arrives before the service knows what it still holds, is refused
+  `unavailable`: the place stays held and the same close is sent again.
 
   ## Refusals
 
@@ -269,6 +292,7 @@ defmodule Prima.LocusBackends do
   @max_session_bytes 16_777_216
   @max_recv_wait_ms 30_000
   @close_wait_ms 17_000
+  @max_lifetime_ms 60_000
   @max_status_owners 64
   @max_status_answer_bytes @max_control_bytes
   @max_programs 16
@@ -298,6 +322,7 @@ defmodule Prima.LocusBackends do
     max_session_bytes: @max_session_bytes,
     max_recv_wait_ms: @max_recv_wait_ms,
     close_wait_ms: @close_wait_ms,
+    max_lifetime_ms: @max_lifetime_ms,
     max_status_owners: @max_status_owners,
     max_status_answer_bytes: @max_status_answer_bytes,
     max_programs: @max_programs,
@@ -328,6 +353,7 @@ defmodule Prima.LocusBackends do
     unknown_owner: 409,
     unknown_program: 409,
     unknown_session: 409,
+    lifetime_over: 409,
     program_failed: 409,
     home_over_cap: 409,
     hosts_unresolved: 409,
@@ -378,14 +404,15 @@ defmodule Prima.LocusBackends do
     homes: ~w(version homes)
   }
   @session_fields %{
-    open: ~w(version type owner e program key mode argv),
+    open: ~w(version type owner e program key mode lifetime argv),
     send: ~w(version type owner e session lines),
     recv: ~w(version type owner e session after max_wait_ms),
     input: ~w(version type owner e session bytes),
     output: ~w(version type owner e session after max_wait_ms),
     resize: ~w(version type owner e session rows cols)
   }
-  @close_fields ~w(version owner e session)
+  @close_fields ~w(version owner e program key mode lifetime)
+  @close_optional ~w(home_id)
   @session_answer_fields %{
     open: ~w(version status session resumed),
     send: ~w(version status),
@@ -404,6 +431,7 @@ defmodule Prima.LocusBackends do
   @program_name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @home_id ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @session_id ~r/\Ass_[0-9a-f]{32}\z/
+  @lifetime_text ~r/\Alt_([1-9][0-9]{0,15})_[0-9a-f]{32}\z/
   @key_text ~r/\A[A-Za-z0-9][A-Za-z0-9._:@-]*\z/
   @env_name ~r/\A[A-Z_][A-Z0-9_]{0,63}\z/
 
@@ -582,6 +610,7 @@ defmodule Prima.LocusBackends do
             home_id: String.t() | nil,
             key: String.t(),
             mode: mode(),
+            lifetime: lifetime(),
             argv: [String.t()],
             rows: pos_integer() | nil,
             cols: pos_integer() | nil
@@ -625,8 +654,19 @@ defmodule Prima.LocusBackends do
               cols: pos_integer()
             }
 
-  @typedoc "A close: the session, and the owner and epoch that opened it."
-  @type close_message :: %{owner: owner_ref(), e: pos_integer(), session: String.t()}
+  @typedoc "A lifetime's text (`new_lifetime/1`), the admission deadline in it."
+  @type lifetime :: String.t()
+
+  @typedoc "A close: the lifetime, its key, and the owner and epoch that opened it."
+  @type close_message :: %{
+          owner: owner_ref(),
+          e: pos_integer(),
+          program: String.t(),
+          home_id: String.t() | nil,
+          key: String.t(),
+          mode: mode(),
+          lifetime: lifetime()
+        }
 
   @typedoc "One buffered line, by its sequence number."
   @type line :: %{seq: pos_integer(), text: String.t()}
@@ -662,6 +702,7 @@ defmodule Prima.LocusBackends do
           | :unknown_owner
           | :unknown_program
           | :unknown_session
+          | :lifetime_over
           | :program_failed
           | :home_over_cap
           | :hosts_unresolved
@@ -827,6 +868,38 @@ defmodule Prima.LocusBackends do
   """
   @spec close_wait_ms() :: pos_integer()
   def close_wait_ms, do: @close_wait_ms
+
+  @doc "The furthest a lifetime's admission deadline lies past the time that signs for it."
+  @spec max_lifetime_ms() :: pos_integer()
+  def max_lifetime_ms, do: @max_lifetime_ms
+
+  @doc "A new lifetime, admitted through `until`, in Unix milliseconds."
+  @spec new_lifetime(pos_integer()) :: lifetime()
+  def new_lifetime(until) when is_integer(until) and until > 0,
+    do: "lt_#{until}_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+  @doc "The last moment `lifetime` may be admitted, in Unix milliseconds."
+  @spec lifetime_until(term()) :: {:ok, pos_integer()} | :error
+  def lifetime_until(lifetime) when is_binary(lifetime) do
+    with [_text, digits] <- Regex.run(@lifetime_text, lifetime),
+         until = String.to_integer(digits),
+         true <- MacEnvelope.valid_value?(:integer, until) do
+      {:ok, until}
+    else
+      _not_one -> :error
+    end
+  end
+
+  def lifetime_until(_lifetime), do: :error
+
+  @doc "Whether `lifetime`'s deadline lies within `max_lifetime_ms/0` of `ts`, the time that signed for it."
+  @spec lifetime_within?(lifetime(), integer()) :: boolean()
+  def lifetime_within?(lifetime, ts) when is_integer(ts) do
+    case lifetime_until(lifetime) do
+      {:ok, until} -> until <= ts + @max_lifetime_ms
+      :error -> false
+    end
+  end
 
   @doc "The session message types each mode takes beside `open`."
   @spec mode_types(mode()) :: [session_type()]
@@ -1663,22 +1736,10 @@ defmodule Prima.LocusBackends do
   end
 
   defp read_session_typed(:open, wire, message) do
-    with {:ok, program} <- program_name(wire["program"], "program"),
-         {:ok, home_id} <- optional(wire, "home_id", &home_id_value/1),
-         {:ok, key} <- key(wire["key"]),
-         {:ok, mode} <- roster(wire, "mode", @modes, ""),
+    with {:ok, named} <- named_lifetime(wire),
          {:ok, argv} <- argv(wire["argv"]),
-         {:ok, rows, cols} <- open_size(wire, mode) do
-      {:ok,
-       Map.merge(message, %{
-         program: program,
-         home_id: home_id,
-         key: key,
-         mode: mode,
-         argv: argv,
-         rows: rows,
-         cols: cols
-       })}
+         {:ok, rows, cols} <- open_size(wire, named.mode) do
+      {:ok, message |> Map.merge(named) |> Map.merge(%{argv: argv, rows: rows, cols: cols})}
     end
   end
 
@@ -1717,6 +1778,24 @@ defmodule Prima.LocusBackends do
          {:ok, rows} <- size(wire, "rows"),
          {:ok, cols} <- size(wire, "cols") do
       {:ok, Map.merge(message, %{session: session, rows: rows, cols: cols})}
+    end
+  end
+
+  # What an open and a close name alike: one lifetime of one key.
+  defp named_lifetime(wire) do
+    with {:ok, program} <- program_name(wire["program"], "program"),
+         {:ok, home_id} <- optional(wire, "home_id", &home_id_value/1),
+         {:ok, key} <- key(wire["key"]),
+         {:ok, mode} <- roster(wire, "mode", @modes, ""),
+         {:ok, lifetime} <- lifetime(wire["lifetime"]) do
+      {:ok, %{program: program, home_id: home_id, key: key, mode: mode, lifetime: lifetime}}
+    end
+  end
+
+  defp lifetime(text) do
+    case lifetime_until(text) do
+      {:ok, _until} -> {:ok, text}
+      :error -> {:error, {:invalid_field, "lifetime"}}
     end
   end
 
@@ -1975,11 +2054,11 @@ defmodule Prima.LocusBackends do
 
   defp read_close_wire(wire) do
     with :ok <- current_version(wire),
-         :ok <- exact(wire, @close_fields, ""),
+         :ok <- exact(wire, @close_fields, @close_optional, ""),
          {:ok, owner} <- owner(wire["owner"], "owner", []),
          {:ok, e} <- positive(wire, "e", ""),
-         {:ok, session} <- session_id(wire["session"]) do
-      {:ok, %{owner: owner, e: e, session: session}}
+         {:ok, named} <- named_lifetime(wire) do
+      {:ok, Map.merge(named, %{owner: owner, e: e})}
     end
   end
 

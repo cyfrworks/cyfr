@@ -246,7 +246,11 @@ defmodule Prima.LocusBackendsTest do
                LocusBackends.verify(:invoke, key(), v["header"], v["body"], fields.ts)
 
       assert {:ok, close} = LocusBackends.read_close(v["body"])
-      assert Map.keys(close) |> Enum.sort() == [:e, :owner, :session]
+
+      assert Map.keys(close) |> Enum.sort() ==
+               [:e, :home_id, :key, :lifetime, :mode, :owner, :program]
+
+      assert {close.program, close.home_id, close.key, close.mode} == {"fetch", nil, "mcp", :run}
       assert close.owner == %{athanor: owner().athanor, server: owner().server}
       assert close.e == owner().epoch
       assert {:ok, v["body"]} == LocusBackends.encode_close(close)
@@ -403,7 +407,7 @@ defmodule Prima.LocusBackendsTest do
                      env_name_form reserved_env_name scratch_disk_bound open_sign_in_mode
                      program_login_command open_run_with_size open_terminal_without_cols
                      input_not_base64 input_unpadded input_too_large resize_zero_rows
-                     open_bad_home_id recv_wait_too_long send_line_with_newline
+                     open_bad_home_id open_bad_lifetime open_without_lifetime recv_wait_too_long send_line_with_newline
                      home_without_id) do
         assert name in names, name
       end
@@ -582,6 +586,20 @@ defmodule Prima.LocusBackendsTest do
 
       assert {:error, {:invalid_field, "exit_code"}} =
                LocusBackends.encode_session_answer(:output, %{ended | running: true})
+    end
+
+    test "a lifetime carries its one deadline, held within its bound of the time that signs for it" do
+      ts = @vectors["open"]["fields"]["ts"]
+      max = @vectors["bounds"]["max_lifetime_ms"]
+      lifetime = LocusBackends.new_lifetime(ts + max)
+
+      assert LocusBackends.lifetime_until(lifetime) == {:ok, ts + max}
+      assert LocusBackends.lifetime_within?(lifetime, ts)
+      refute LocusBackends.lifetime_within?(lifetime, ts - 1)
+      refute LocusBackends.new_lifetime(ts + max) == lifetime
+
+      for text <- [nil, "lt_soon", "lt_0_" <> String.duplicate("a", 32), lifetime <> "\n"],
+          do: assert(LocusBackends.lifetime_until(text) == :error, inspect(text))
     end
 
     test "each mode takes its own messages beside open" do

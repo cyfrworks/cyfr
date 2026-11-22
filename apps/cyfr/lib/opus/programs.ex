@@ -122,12 +122,7 @@ defmodule Opus.Programs do
   alone, and its holders, refused by the service once its lease lapses,
   hold their owners again.
   """
-  def start_link(opts \\ []) do
-    # Here, in the process that supervises this tree: what the boxes hold
-    # on the service outlives them (`Opus.Programs.Box`, "Places").
-    Box.init_places()
-    Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
-  end
+  def start_link(opts \\ []), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
 
   @impl true
   def init(opts) do
@@ -482,21 +477,24 @@ defmodule Opus.Programs do
          :ok <- room(principal),
          {:ok, row} <- program_row(caller_actor(caller), row_id),
          :ok <- browser_row(principal, row),
-         :ok <- at_epoch(row, Map.get(opts, :epoch)) do
-      id = "trm_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+         :ok <- at_epoch(row, Map.get(opts, :epoch)),
+         owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
+         home_id = if(row.home == "kept", do: row.id),
+         deadline = Map.get(opts, :deadline, System.system_time(:millisecond) + @start_ms),
+         {:ok, {id, lifetime}} <- new_terminal(principal, owner, home_id, deadline) do
       {athanor_id, user_id, turn_id} = parts(principal)
 
       spec = [
         name: terminal_name(id, principal),
-        principal: principal,
         id: id,
+        lifetime: lifetime,
         athanor_id: athanor_id,
         user_id: user_id,
         turn_id: turn_id,
         row_id: row.id,
         row_name: row.name,
-        home_id: if(row.home == "kept", do: row.id),
-        owner: %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
+        home_id: home_id,
+        owner: owner,
         argv: args,
         by: by(principal),
         held_by: held_by,
@@ -504,7 +502,6 @@ defmodule Opus.Programs do
         cols: cols
       ]
 
-      deadline = Map.get(opts, :deadline, System.system_time(:millisecond) + @start_ms)
       wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
 
       case DynamicSupervisor.start_child(@relays, {Terminal, spec}) do
@@ -516,6 +513,16 @@ defmodule Opus.Programs do
     end
   catch
     :exit, _ -> {:error, :backends_unavailable}
+  end
+
+  # The terminal's id, made by the box, whose root proves it: the handle
+  # of the one lifetime this start is, fixed before anything is asked.
+  defp new_terminal(principal, owner, home_id, deadline) do
+    call(
+      box_of(owner.athanor_id),
+      {:terminal_id, principal, owner, home_id, deadline},
+      Box.control_timeout_ms()
+    )
   end
 
   # A start refused for its deadline is ended by its session's owner,
@@ -656,9 +663,12 @@ defmodule Opus.Programs do
   caller waits for it: `{:ok, :closed}` once the service confirmed it,
   `{:ok, :already_gone}` for a session that is not running (or not the
   caller's), and `{:error, :unanswered}` when the service did not
-  confirm it in time, the box still owing the close. A session whose
-  process has ended waits on the close that process left, and is
-  `:already_gone` only once that is confirmed. The session ends
+  confirm it in time, the box still owing the close. A session with no
+  process here, after a restart of CYFR too, is closed by the lifetime its
+  id names (`Opus.Programs.Box`, "A terminal's id") and is `:already_gone`
+  only once the service confirmed that; an id that names no lifetime the
+  caller may close is `:already_gone` with the service not asked. The
+  session ends
   `:closed` of a close confirmed and `:unanswered` of one that was not,
   said so to every process attached. A person closes their own sessions, those their
   turns started and their browser's; a turn or the browser closes only
@@ -687,16 +697,24 @@ defmodule Opus.Programs do
     :exit, _ -> close_gone(session_id, principal)
   end
 
-  # A session with no process is gone once the close of what its process
-  # left is confirmed. Who may wait on that is who could have closed it,
-  # read from the place's record as from the registry: to anyone else, as
-  # for an id nothing was given under, it is gone.
+  # A session with no process is gone once its lifetime's place is back.
+  # Who may ask that is who could have closed it, read from its id; to
+  # anyone else, as for an id CYFR made no lifetime of, it is gone.
   defp close_gone(session_id, principal) do
-    theirs = fn {_holder, whose} -> reaches?(principal, whose, :closing) end
+    case call(@local, {:terminal_named, session_id, principal}, Box.control_timeout_ms()) do
+      {:ok, whose, lifetime} ->
+        if reaches?(principal, whose, :closing) do
+          with :ok <- box_close(lifetime), do: {:ok, :already_gone}
+        else
+          {:ok, :already_gone}
+        end
 
-    case Enum.find(Box.left(session_id), theirs) do
-      {holder, _whose} -> with :ok <- left_close(holder), do: {:ok, :already_gone}
-      nil -> {:ok, :already_gone}
+      :none ->
+        {:ok, :already_gone}
+
+      # No box could read the id, so nothing says what it names is gone.
+      {:error, _unread} ->
+        {:error, :unanswered}
     end
   end
 
@@ -1009,55 +1027,46 @@ defmodule Opus.Programs do
   # ============================================================================
 
   @doc """
-  The box's open of a session for the holder `holder` of `owner` (a brain
-  session, `Opus.Brain`, or a terminal, `Opus.Programs.Terminal`), with
-  `params` (`program`, `home_id`, `key`, `argv`, its `mode`, `:run` unless
-  it names one, and a terminal's `rows` and `cols`): recorded in the box before the backend is asked, so whatever
-  the backend answers under the key is the box's, and answered by
-  `deadline` (Unix milliseconds). Answers the session the box gave the
-  key, `{:error, :deadline}` past it, or the refusal.
+  A new lifetime of `named` (its `program`, `key`, `mode`, `:run` unless it
+  names one, and `home_id`) under `grant`, admitted through `deadline`:
+  one process, which `box_open/4` opens and `box_close/1` ends.
   """
-  @spec box_open(map(), pid(), map(), integer()) ::
-          {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
-  def box_open(owner, holder, params, deadline) do
-    wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
+  @spec lifetime(grant(), map(), integer()) :: Box.lifetime()
+  defdelegate lifetime(grant, named, deadline), to: Box
 
-    case call(box_of(owner.athanor_id), {:session_open, owner, holder, params, deadline}, wait) do
+  @doc """
+  The box's open of `lifetime` for the holder `holder`, the only open
+  there is (a tool server's, a brain's and a terminal's), with `params`
+  (`argv`, and a terminal's `rows` and `cols`), answered by `deadline`
+  (Unix milliseconds). Answers the lifetime's session, `{:error,
+  :deadline}` past it, `{:error, :control_plane_lost}` for a member
+  without its slot, or the refusal, `lifetime_over` for one closed, ended
+  or past its admission. An open that is never given has its lifetime
+  closed (`Opus.Programs.Box`, "Sessions").
+  """
+  @spec box_open(Box.lifetime(), pid(), map(), integer()) ::
+          {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
+  def box_open(lifetime, holder, params, deadline) do
+    wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
+    message = {:session_open, lifetime, holder, params, deadline}
+
+    case call(box_of(lifetime.athanor), message, wait) do
       {:error, :backends_unavailable} -> {:error, :deadline}
       answer -> answer
     end
   end
 
   @doc """
-  The calling holder's key's session ends: the box closes it, and owes the
-  close until the backend confirms it. Answers `:ok` once the backend has
-  confirmed every place of the key, and so they are back, and
-  `{:error, :unanswered}` when it did not, the close window passed, the
-  box could send nothing or has no confirmation to answer from
-  (`Opus.Programs.Box`, "Places"); either way only then, so the holder's
-  release of the owner after it never outruns it.
+  End `lifetime`, and no other: the box owes the close until the service
+  confirms it. Answers `:ok` once the service has confirmed that nothing
+  of the lifetime is held, and so its place is back, whether or not this
+  box knew of it, and `{:error, :unanswered}` when it did not, the close
+  window passed or the box could send nothing; either way only then, so
+  the holder's release of the owner after it never outruns it.
   """
-  @spec box_close(map(), String.t() | nil, String.t()) :: :ok | {:error, :unanswered}
-  def box_close(owner, home_id, key) do
-    case call(
-           box_of(owner.athanor_id),
-           {:session_close, owner, home_id, key},
-           Box.close_timeout_ms()
-         ) do
-      :ok -> :ok
-      {:error, _unanswered} -> {:error, :unanswered}
-    end
-  end
-
-  @doc """
-  The holder `holder` has died, and what it left is closed: `:ok` once
-  every place it left is confirmed, by this box or one in its place, and
-  `{:error, :unanswered}` otherwise, with no confirmation on record
-  included.
-  """
-  @spec left_close(pid()) :: :ok | {:error, :unanswered}
-  def left_close(holder) when is_pid(holder) do
-    case call(@local, {:left_close, holder}, Box.close_timeout_ms()) do
+  @spec box_close(Box.lifetime()) :: :ok | {:error, :unanswered}
+  def box_close(lifetime) do
+    case call(box_of(lifetime.athanor), {:session_close, lifetime}, Box.close_timeout_ms()) do
       :ok -> :ok
       {:error, _unanswered} -> {:error, :unanswered}
     end

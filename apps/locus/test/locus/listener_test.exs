@@ -896,6 +896,7 @@ defmodule Locus.ListenerTest do
          boot: @boot,
          supervisor: supervisor,
          clock: fn -> Agent.get(clock, & &1) end,
+         now: fn -> Agent.get(now, & &1) end,
          stop_grace_ms: 100,
          launcher: Launcher,
          launcher_server: :none}
@@ -1001,6 +1002,7 @@ defmodule Locus.ListenerTest do
         home_id: nil,
         key: "k#{System.unique_integer([:positive])}",
         mode: :run,
+        lifetime: LB.new_lifetime(@instant + 30_000),
         argv: []
       })
 
@@ -1407,7 +1409,11 @@ defmodule Locus.ListenerTest do
         LB.encode_close(%{
           owner: %{athanor: @athanor, server: @server},
           e: @e,
-          session: "ss_" <> String.duplicate("0", 32)
+          program: "fetch",
+          home_id: nil,
+          key: "never-opened",
+          mode: :run,
+          lifetime: LB.new_lifetime(@instant + 30_000)
         })
 
       signed = fn opts -> [{"x-cyfr-auth", invoke_header(ctx, body, opts)}] end

@@ -8,8 +8,8 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
   session message that finds it is refused `lapsed` and every later one
   `unknown_owner`, since a scripted owner drains at once; a renewal
   answers it unknown and a release and a status name it no more, until a
-  sync admits it again. A close asks for no owner: it ends only what the
-  version that signed it opened. A client that went on using
+  sync admits it again. A close asks for no owner: it ends only the
+  lifetime it names, at the version that signed it. A client that went on using
   an owner whose lease it let run out is refused here as the service
   refuses it.
   """
@@ -76,17 +76,19 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
     root: root
   } do
     assert %{status: 200} = control(fake, root, 1, sync(root))
-    assert %{status: 200, body: %{"session" => id}} = open(fake, root, "late-close")
+    late = %{open_message() | key: "late-close"}
+    assert %{status: 200, body: %{"session" => _id}} = session(fake, root, late)
     lapse!(fake)
 
     assert %{status: 200, body: %{"owners" => []}} =
              control(fake, root, 2, %{type: :status, owners: [owner()]})
 
-    assert %{status: 200, body: %{"status" => "closed"}} = close(fake, root, id)
+    assert %{status: 200, body: %{"status" => "closed"}} = close(fake, root, late)
 
     assert %{status: 200} = control(fake, root, 3, sync(root))
-    assert %{status: 200, body: %{"session" => next}} = open(fake, root, "next")
-    assert %{status: 200} = close(fake, root, next, %{@owner | epoch: 2})
+    following = %{open_message() | key: "next"}
+    assert %{status: 200, body: %{"session" => next}} = session(fake, root, following)
+    assert %{status: 200} = close(fake, root, following, %{@owner | epoch: 2})
     assert %{^next => %{running: true}} = Scripted.sessions(fake, @owner.server)
   end
 
@@ -135,7 +137,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
           Scripted.end_sessions(fake, @owner.server, 0)
 
         :close ->
-          assert %{status: 200, body: %{"status" => "closed"}} = close(fake, root, id)
+          assert %{status: 200, body: %{"status" => "closed"}} = close(fake, root, open)
 
         :retire ->
           assert %{status: 200} =
@@ -188,8 +190,10 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
         if ending == :exit, do: assert(received["exit_code"] == 0)
       end
 
+      assert %{status: 409, body: %{"error" => "lifetime_over"}} = session(fake, root, open)
+
       assert %{status: 200, body: %{"session" => fresh, "resumed" => false}} =
-               session(fake, root, open)
+               session(fake, root, %{open | lifetime: open_message().lifetime})
 
       assert fresh != id
     end
@@ -225,13 +229,23 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
   end
 
   defp open_message,
-    do: %{type: :open, owner: owner(), e: 1, program: "cat", key: "key", mode: :run, argv: []}
+    do: %{
+      type: :open,
+      owner: owner(),
+      e: 1,
+      program: "cat",
+      key: "key",
+      mode: :run,
+      lifetime: Wire.new_lifetime(System.os_time(:millisecond) + 30_000),
+      argv: []
+    }
 
   defp open(fake, root, nonce),
     do: session(fake, root, %{open_message() | key: "key-#{nonce}"})
 
-  defp close(fake, root, id, opener \\ @owner) do
-    {:ok, body} = Wire.encode_close(%{owner: owner(), e: opener.epoch, session: id})
+  defp close(fake, root, opened, opener \\ @owner) do
+    named = Map.take(opened, [:program, :home_id, :key, :mode, :lifetime])
+    {:ok, body} = Wire.encode_close(Map.merge(named, %{owner: owner(), e: opener.epoch}))
     invoke(fake, root, :close, opener, body)
   end
 

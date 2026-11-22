@@ -156,8 +156,20 @@ defmodule Opus.Brain do
   service could not be read for a minute (`:unavailable`), and after a
   write whose answer did not come (`:interrupted`). Its attendant's exit
   ends it too. However it ends, killed included, the box closes its
-  session (`Opus.Programs.box_open/4`), and on its way out it asks so
-  itself.
+  process's lifetime (`Opus.Programs.box_open/4`), and on its way out it
+  asks so itself.
+
+  ## Its lifetimes
+
+  Each process of the driver is a lifetime of its own
+  (`Opus.Programs.lifetime/3`), minted before it is opened and kept in
+  memory alone: one admitted start opens several over a turn's recovery,
+  and a restart of CYFR leaves nobody who could close one, so what it left
+  is the box's reconcile's. The handle names the first, so a close of a
+  holder that has died asks for that lifetime's place. A restart
+  (`{:ok, :restarted}`) puts another process behind the same handle, which
+  from then on cannot name what its holder left: a close of it once the
+  holder has died is `{:error, :unanswered}`.
   """
 
   use GenServer, restart: :temporary
@@ -206,8 +218,11 @@ defmodule Opus.Brain do
           required(:admits?) => (-> boolean())
         }
 
-  @typedoc "A held session: its holder and the reference its messages carry."
-  @type brain :: {pid(), reference()}
+  @typedoc "What a held session's messages carry and its close names (moduledoc, \"Its lifetimes\")."
+  @type handle :: %{lifetime: Programs.Box.lifetime(), restarted: :atomics.atomics_ref()}
+
+  @typedoc "A held session: its holder and its handle."
+  @type brain :: {pid(), handle()}
 
   @doc """
   The most milliseconds of a program's own silence a job runs before it
@@ -279,7 +294,7 @@ defmodule Opus.Brain do
   """
   @spec write(brain(), binding(), Wire.message(), keyword()) ::
           :ok | {:ok, :restarted} | {:error, term()}
-  def write({pid, ref}, binding, %{} = command, opts \\ []) when is_reference(ref) do
+  def write({pid, ref}, binding, %{} = command, opts \\ []) when is_map(ref) do
     call(pid, {:write, ref, binding, command, opts}, @write_ms + @open_ms + @answer_margin_ms)
   end
 
@@ -295,17 +310,23 @@ defmodule Opus.Brain do
   @doc """
   End the session: its driver's process is closed, then the attendant is
   told `:closed` or `:unanswered` as this answers. `:ok` means that the
-  place is back; `{:error, :unanswered}` that Opus still owes the close,
-  which its box retries, or has no confirmation of it
-  (`Opus.Programs.Box`, "Places"). A holder that ended before it was asked
-  left its closes, and each is waited on.
+  place is back; `{:error, :unanswered}` that the service has not said
+  so, the box then owing the close. A holder that ended before it was
+  asked is answered for the lifetime its handle names, unless it had
+  restarted its driver (moduledoc, "Its lifetimes").
   """
   @spec close(brain()) :: :ok | {:error, :unanswered}
-  def close({pid, ref}) when is_reference(ref) do
+  def close({pid, ref}) when is_map(ref) do
     GenServer.call(pid, {:close, ref}, Programs.Box.close_timeout_ms() + @answer_margin_ms)
   catch
     :exit, {:timeout, _} -> {:error, :unanswered}
-    :exit, _ended -> Programs.left_close(pid)
+    :exit, _ended -> close_ended(ref)
+  end
+
+  defp close_ended(%{lifetime: lifetime, restarted: restarted}) do
+    if :atomics.get(restarted, 1) == 0,
+      do: Programs.box_close(lifetime),
+      else: {:error, :unanswered}
   end
 
   @doc "The held session of a thread, if one runs."
@@ -859,7 +880,8 @@ defmodule Opus.Brain do
        athanor_id: athanor_id,
        thread_id: thread_id,
        agent: nil,
-       ref: make_ref(),
+       ref: nil,
+       lifetime: nil,
        attendant: nil,
        owner: nil,
        grant: nil,
@@ -919,7 +941,7 @@ defmodule Opus.Brain do
   def handle_call({:close, ref}, _from, %{ref: ref} = state) do
     closed = disconnect(state)
     state = ended(state, if(closed == :ok, do: :closed, else: :unanswered))
-    {:stop, :normal, closed, %{state | reader: nil, grant: nil, session: nil}}
+    {:stop, :normal, closed, %{state | reader: nil, grant: nil, session: nil, lifetime: nil}}
   end
 
   def handle_call({:close, _ref}, _from, state), do: {:reply, {:error, :unanswered}, state}
@@ -977,9 +999,8 @@ defmodule Opus.Brain do
     # way out (`terminate/2`) gives back the owner a failed open held.
     case hold(state) do
       {:ok, held} ->
-        case fresh(held, 1) do
-          {:ok, session} ->
-            opened = %{held | session: session}
+        case fresh(held) do
+          {:ok, opened} ->
             {:stop, :normal, once(opened, command, deadline), opened}
 
           {:error, reason} ->
@@ -1082,13 +1103,14 @@ defmodule Opus.Brain do
   # The session
 
   # The owner is held for this process and a new process of the driver is
-  # opened under the thread's key. One that was still running
-  # (a close the box still owes) is closed and opened again, so every
-  # holder speaks to a driver that has heard nothing.
+  # opened under the thread's key, so every holder speaks to a driver that
+  # has heard nothing: another holder's still running is waited out by the
+  # service, never attached to.
   defp connect(state) do
     with {:ok, state} <- hold(state),
-         {:ok, session} <- fresh(state, 1) do
-      {:ok, read_from(%{state | session: session}, 0)}
+         {:ok, state} <- fresh(state) do
+      ref = %{lifetime: state.lifetime, restarted: :atomics.new(1, [])}
+      {:ok, read_from(%{state | ref: ref}, 0)}
     end
   end
 
@@ -1098,31 +1120,23 @@ defmodule Opus.Brain do
 
   defp hold(state), do: {:ok, state}
 
-  defp fresh(state, tries) do
+  # A new process: its lifetime, minted here before the open is parked or
+  # sent.
+  defp fresh(state) do
     deadline = System.system_time(:millisecond) + @open_ms
 
-    params = %{
+    named = %{
       program: Programs.Definition.program_name(),
       home_id: state.owner.server_id,
       key: key(state),
-      mode: :run,
-      argv: Programs.Words.new([])
+      mode: :run
     }
 
-    case Programs.box_open(state.owner, self(), params, deadline) do
-      {:ok, %{session: session, resumed: false}} ->
-        {:ok, session}
+    lifetime = Programs.lifetime(state.grant, named, deadline)
+    params = %{argv: Programs.Words.new([])}
 
-      {:ok, %{resumed: true}} when tries > 0 ->
-        _ = Programs.box_close(state.owner, state.owner.server_id, key(state))
-        fresh(state, tries - 1)
-
-      {:ok, %{resumed: true}} ->
-        {:error, :unavailable}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    with {:ok, %{session: session}} <- Programs.box_open(lifetime, self(), params, deadline),
+         do: {:ok, %{state | lifetime: lifetime, session: session}}
   end
 
   # The service's key of the thread's session.
@@ -1131,14 +1145,14 @@ defmodule Opus.Brain do
     "brain-" <> binary_part(digest, 0, 40)
   end
 
-  # What the close of its session answered; with none held, nothing was
-  # confirmed.
+  # What the close of its process's lifetime answered; with none held,
+  # nothing was confirmed.
   defp disconnect(state) do
     if state.reader, do: Process.exit(state.reader, :kill)
 
     closed =
-      if state.session,
-        do: Programs.box_close(state.owner, state.owner.server_id, key(state)),
+      if state.lifetime,
+        do: Programs.box_close(state.lifetime),
         else: {:error, :unanswered}
 
     if state.grant, do: Programs.release(state.owner)
@@ -1146,16 +1160,15 @@ defmodule Opus.Brain do
   end
 
   # A new process of the driver in the same holder: the last is closed,
-  # and what it held is forgotten.
+  # and what it held is forgotten. The handle is marked first, since it
+  # names the last one's lifetime alone.
   defp restart(state) do
     if state.reader, do: Process.exit(state.reader, :kill)
-    _ = Programs.box_close(state.owner, state.owner.server_id, key(state))
+    :atomics.put(state.ref.restarted, 1, 1)
+    _ = Programs.box_close(state.lifetime)
     state = reset(%{state | session: nil, reader: nil})
 
-    case fresh(state, 1) do
-      {:ok, session} -> {:ok, read_from(%{state | session: session}, 0)}
-      {:error, reason} -> {:error, reason}
-    end
+    with {:ok, state} <- fresh(state), do: {:ok, read_from(state, 0)}
   end
 
   defp reset(state) do

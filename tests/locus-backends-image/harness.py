@@ -25,7 +25,9 @@ control key with a rising sequence, program environments sealed to the
 owner and the service lifetime `hello` learned, and session messages
 (open, send and recv of a `run` session; input, output and resize of
 a `terminal` one, its bytes in padded base64) and closes, on their own
-route, signed as invokes under each owner's key. Every request can be given its own timestamp, nonce, sequence,
+route, signed as invokes under each owner's key. An open names a lifetime
+of its own unless it is given one to ask again for, and a close the one
+that opened its session. Every request can be given its own timestamp, nonce, sequence,
 boot or key, and every signed session message is kept so it can be sent
 again unchanged. The wire carries lines and bytes, never MCP: an
 `McpClient` speaks MCP's JSON-RPC over a run session's lines to the probe
@@ -159,6 +161,11 @@ def now_ms():
 def wire_json(value):
     """A body as every end writes it: keys sorted, no whitespace."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def new_lifetime():
+    """A lifetime's text, admitted through half the wire's bound from now."""
+    return f"lt_{now_ms() + BOUNDS['max_lifetime_ms'] // 2}_{secrets.token_hex(16)}"
 
 
 def b64url(data):
@@ -418,7 +425,8 @@ def check_vectors():
         compare(f"{kind}.canonical", canonical("invoke", [fields[n] for n in SESSION_FIELDS], body), vector["canonical"])
         compare(f"{kind}.header", invoke_header(signing, fields, body), vector["header"])
 
-    compare("close.members", sorted(json.loads(WIRE["close"]["body"])), ["e", "owner", "session", "version"])
+    compare("close.members", sorted(json.loads(WIRE["close"]["body"])),
+            ["e", "key", "lifetime", "mode", "owner", "program", "version"])
     terminal = json.loads(WIRE["open_terminal"]["body"])
     compare("open_terminal.size", [terminal["mode"], 1 <= terminal["rows"] <= BOUNDS["max_pty_size"],
                                    1 <= terminal["cols"] <= BOUNDS["max_pty_size"]], ["terminal", True, True])
@@ -508,6 +516,8 @@ class Controller:
         self.seq = 0
         self.boot = None
         self._clients = {}
+        # What a close names of each session opened here.
+        self._opened = {}
 
     def control(self, message, generation=None, seq=None, boot=None, ts=None, key=None, version=VERSION):
         """Posts a control message at the protocol version: (status, answer, boot)."""
@@ -601,7 +611,10 @@ class Controller:
         `header_owner` signs the header for another owner version than the
         body names, so a body that names another owner than its signature
         can be sent. A close is signed alike and posted on its own `route`.
+        An open that names no lifetime is given one of its own.
         """
+        if message.get("type") == "open" and "lifetime" not in message:
+            message = {**message, "lifetime": new_lifetime()}
         body = wire_json({**message, "owner": {"athanor": owner["athanor"], "server": owner["server"]},
                           "e": owner["e"], "version": version})
         signer = header_owner or owner
@@ -621,19 +634,29 @@ class Controller:
     def session(self, owner, message, timeout=60, **options):
         """Signs and posts one session message: (status, answer, boot, request)."""
         request = self.sign_session(owner, message, **options)
-        return (*post(request.url, request.headers, request.body, timeout), request)
+        status, answer, boot = post(request.url, request.headers, request.body, timeout)
+        if message.get("type") == "open" and status == 200:
+            opened = json.loads(request.body)
+            self._opened[answer["session"]] = {
+                name: opened[name] for name in ["program", "home_id", "key", "mode", "lifetime"] if name in opened}
+        return status, answer, boot, request
 
     def resend(self, request, base=None):
         url = base + ROUTES["session"] if base else request.url
         return (*post(url, request.headers, request.body), request)
 
-    def open(self, owner, program, key="k", mode="run", argv=None, home_id=None, rows=None, cols=None, **options):
-        """Opens (or attaches to) the session of `key` and `mode`: (status, answer).
+    def lifetime(self, session):
+        """The lifetime that opened `session`, to ask again for."""
+        return self._opened[session]["lifetime"]
+
+    def open(self, owner, program, key="k", mode="run", argv=None, home_id=None, rows=None, cols=None, lifetime=None,
+             **options):
+        """Opens the session of a lifetime of `key` and `mode`, a new one unless given: (status, answer).
 
         A `terminal` open names its terminal's `rows` and `cols`; a run open names neither.
         """
         message = {"type": "open", "program": program, "key": key, "mode": mode, "argv": list(argv or [])}
-        for name, value in [("home_id", home_id), ("rows", rows), ("cols", cols)]:
+        for name, value in [("home_id", home_id), ("rows", rows), ("cols", cols), ("lifetime", lifetime)]:
             if value is not None:
                 message[name] = value
         status, answer, _boot, _request = self.session(owner, message, **options)
@@ -669,9 +692,9 @@ class Controller:
         return status, answer
 
     def close(self, owner, session, **options):
-        """Closes a session by the owner version that opened it, waiting for its place: (status, answer)."""
+        """Closes the lifetime that opened `session`, by its owner version, waiting for its place: (status, answer)."""
         status, answer, _boot, _request = self.session(
-            owner, {"session": session}, route="close", timeout=BOUNDS["close_wait_ms"] / 1000 + 30, **options)
+            owner, self._opened[session], route="close", timeout=BOUNDS["close_wait_ms"] / 1000 + 30, **options)
         return status, answer
 
     def lines_until(self, owner, session, found, after=0, timeout_s=20):

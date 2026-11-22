@@ -102,17 +102,15 @@ defmodule Opus.Programs.TerminalTest do
                Map.merge(%{args: []}, Map.merge(@size, opts))
              )
 
-    assert_receive {:session, "open", %{"key" => ^id} = open, _fields}, 2_000
-    {id, open["session"] || backend_session(id)}
+    assert_receive {:session, "open", %{"mode" => "terminal"}, _fields}, 2_000
+    {id, backend_session(id)}
   end
 
-  # The backend's id of the session the box opened under `key`.
-  defp backend_session(key) do
-    Enum.find_value(:sys.get_state(Programs.via("local")).sessions, fn
-      {{_a, _s, _h, ^key}, %{session: session}} -> session
-      _other -> nil
-    end)
-  end
+  # The backend's id of the session the terminal `id` was given.
+  defp backend_session(id), do: :sys.get_state(terminal(id)).session
+
+  # The key the terminal `id` opened under: its one lifetime's.
+  defp key_of(id), do: :sys.get_state(terminal(id)).lifetime.key
 
   defp terminal(id) do
     [{pid, _person}] = Registry.lookup(Opus.Programs.Registry, {:terminal, id})
@@ -134,7 +132,37 @@ defmodule Opus.Programs.TerminalTest do
     end
   end
 
+  defp flush_closes do
+    receive do
+      {:session, "close", _wire, _fields} -> flush_closes()
+    after
+      0 -> :ok
+    end
+  end
+
+  # The id with one character of its proof changed.
+  defp forged(id) do
+    {named, <<first, rest::binary>>} = String.split_at(id, -43)
+    named <> <<if(first == ?A, do: ?B, else: ?A)>> <> rest
+  end
+
   defp gone?(id), do: Registry.lookup(Opus.Programs.Registry, {:terminal, id}) == []
+
+  # CYFR stops and starts again: the box and the session's process die,
+  # and nothing either held in memory is left.
+  defp opus_restarted!(controller, id) do
+    pid = terminal(id)
+    Process.exit(controller, :kill)
+    Process.exit(pid, :kill)
+
+    eventually(
+      fn ->
+        box = GenServer.whereis(Programs.via("local"))
+        box not in [nil, controller] and :sys.get_state(box).boot
+      end,
+      "a box in the killed one's place to greet the service"
+    )
+  end
 
   describe "a start" do
     test "runs the row's command with the starter's words on a terminal of their size, in the row's folder",
@@ -148,10 +176,13 @@ defmodule Opus.Programs.TerminalTest do
 
       home = row.id
 
+      key = key_of(id)
+
       assert_receive {:session, "open",
                       %{
                         "mode" => "terminal",
-                        "key" => ^id,
+                        "key" => ^key,
+                        "lifetime" => ^key,
                         "home_id" => ^home,
                         "argv" => ["auth", "login"],
                         "rows" => 30,
@@ -178,7 +209,8 @@ defmodule Opus.Programs.TerminalTest do
     test "a scratch program runs in no folder", %{ctx: ctx} do
       row = program_row(ctx, "scratchy", %{home: "scratch", home_max_bytes: nil})
       assert {:ok, id} = Programs.start(ctx, row.id, Map.merge(@size, %{args: []}))
-      assert_receive {:session, "open", %{"key" => ^id} = open, _fields}, 2_000
+      key = key_of(id)
+      assert_receive {:session, "open", %{"key" => ^key} = open, _fields}, 2_000
       refute Map.has_key?(open, "home_id")
     end
 
@@ -460,8 +492,10 @@ defmodule Opus.Programs.TerminalTest do
 
       send(answer, :go)
 
+      kept = key_of(again)
+
       [late_session] =
-        for {session, %{key: key}} <- Scripted.sessions(fake, row.id), key != again, do: session
+        for {session, %{key: key}} <- Scripted.sessions(fake, row.id), key != kept, do: session
 
       assert_receive {:session, "close", %{"session" => ^late_session}, _}, 3_000
       assert {:ok, [%{session: ^again}]} = Programs.running(ctx)
@@ -490,10 +524,8 @@ defmodule Opus.Programs.TerminalTest do
       session =
         eventually(
           fn ->
-            Enum.find_value(:sys.get_state(controller).sessions, fn
-              {{_a, _s, _h, "trm_" <> _}, %{session: session}} -> session
-              _other -> nil
-            end)
+            if :sys.get_state(controller).sessions != %{},
+              do: fake |> Scripted.sessions(row.id) |> Map.keys() |> List.first()
           end,
           "the box to give the session"
         )
@@ -512,14 +544,15 @@ defmodule Opus.Programs.TerminalTest do
     @tag timeout: 60_000
     test "a close the service does not answer in time is unanswered, and ends the session",
          %{ctx: ctx, row: row, fake: fake, controller: controller} do
-      {id, session} = start!(ctx, row)
+      {id, _session} = start!(ctx, row)
+      key = key_of(id)
       Scripted.hold(fake, "close", 50_000)
       closing = Task.async(fn -> Programs.close(ctx, id) end)
       assert_receive {:held, "close", backend}, 2_000
 
       assert {:error, :unanswered} = Task.await(closing, 40_000)
       eventually(fn -> gone?(id) end, "the session to end")
-      assert Map.has_key?(:sys.get_state(controller).closing, session)
+      assert [%{key: ^key}] = Map.keys(:sys.get_state(controller).closing)
       send(backend, :go)
     end
 
@@ -582,13 +615,44 @@ defmodule Opus.Programs.TerminalTest do
       browser = browser_row(ctx)
       holder = spawn(fn -> Process.sleep(:infinity) end)
       {:ok, id} = browser_start(ctx, browser.id, holder)
-      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+      key = key_of(id)
+      assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
 
       Scripted.refuse_once(fake, "close", "unavailable")
       Process.exit(holder, :kill)
 
       assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: reason}, 5_000
       assert reason == :unanswered
+    end
+
+    test "after a restart of Opus its owner's close ends a live terminal by its id, and nobody else's does",
+         %{ctx: ctx, row: row, fake: fake, controller: controller} do
+      {id, session} = start!(ctx, row)
+      {stranger, _user} = person!("terminal-stranger-after-restart")
+
+      # Until the new box's reconcile lands, the terminal runs on.
+      Scripted.hold(fake, "reconcile", 30_000)
+      opus_restarted!(controller, id)
+      assert_receive {:held, "reconcile", reconciling}, 3_000
+      on_exit(fn -> send(reconciling, :go) end)
+      flush_closes()
+
+      assert {:ok, :already_gone} = Programs.close(stranger, id)
+
+      # Another starter of the same person's, and an id changed by one byte.
+      assert {:ok, :already_gone} =
+               Programs.close(Programs.browser(ctx.athanor_id, ctx.user_id), id)
+
+      assert {:ok, :already_gone} = Programs.close(ctx, forged(id))
+      refute_received {:session, "close", _wire, _fields}
+      assert %{^session => %{running: true}} = Scripted.sessions(fake, row.id)
+
+      assert {:ok, :already_gone} = Programs.close(ctx, id)
+
+      assert %{^session => %{running: false}} = Scripted.sessions(fake, row.id),
+             "already gone was said of a terminal that still runs"
+
+      send(reconciling, :go)
     end
 
     test "a close answers closed, already gone, or that the service did not answer",
@@ -742,9 +806,11 @@ defmodule Opus.Programs.TerminalTest do
 
       home = row.id
 
+      key = key_of(id)
+
       assert_receive {:session, "open",
                       %{
-                        "key" => ^id,
+                        "key" => ^key,
                         "argv" => ["--version"],
                         "rows" => 40,
                         "cols" => 120,
@@ -1128,7 +1194,8 @@ defmodule Opus.Programs.TerminalTest do
       refute_received {:session, "open", _message, _fields}
 
       assert {:ok, id} = browser_start(ctx, browser.id)
-      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+      key = key_of(id)
+      assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
 
       assert [{_pid, {athanor, user, :browser}}] =
                Registry.lookup(Opus.Programs.Registry, {:terminal, id})
@@ -1154,9 +1221,14 @@ defmodule Opus.Programs.TerminalTest do
 
       # Each row's session runs in that row's own kept folder.
       assert {:ok, first} = browser_start(ctx, browser.id)
-      assert_receive {:session, "open", %{"key" => ^first, "home_id" => first_home}, _}, 2_000
+      first_key = key_of(first)
+      assert_receive {:session, "open", %{"key" => ^first_key, "home_id" => first_home}, _}, 2_000
       assert {:ok, second} = browser_start(ctx, apart.id)
-      assert_receive {:session, "open", %{"key" => ^second, "home_id" => second_home}, _}, 2_000
+      second_key = key_of(second)
+
+      assert_receive {:session, "open", %{"key" => ^second_key, "home_id" => second_home}, _},
+                     2_000
+
       assert {first_home, second_home} == {browser.id, apart.id}
 
       assert {:error, :already_running} = browser_start(ctx, browser.id)
@@ -1182,7 +1254,8 @@ defmodule Opus.Programs.TerminalTest do
 
       holder = spawn(fn -> Process.sleep(:infinity) end)
       {:ok, id} = browser_start(ctx, browser.id, holder)
-      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+      key = key_of(id)
+      assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
       Process.exit(holder, :kill)
 
       assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, by: :browser, reason: :closed},
@@ -1209,7 +1282,8 @@ defmodule Opus.Programs.TerminalTest do
          %{ctx: ctx} do
       browser = browser_row(ctx)
       {:ok, id} = browser_start(ctx, browser.id)
-      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+      key = key_of(id)
+      assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
 
       assert {:ok, [%{session: ^id, by: :browser, name: "aqua-browser"}]} = Programs.running(ctx)
       assert {:error, :not_found} = Programs.attach(ctx, id)

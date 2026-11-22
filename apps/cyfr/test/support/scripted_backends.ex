@@ -22,11 +22,16 @@ defmodule Cyfr.Test.ScriptedBackends do
   scripted session does at once: the session message that finds the
   lease run out is refused `lapsed`, every later one `unknown_owner`, a
   renewal answers it unknown and a release or a status names it no more,
-  until a sync admits it as a new owner. A close is verified alike but
-  asks for no owner: it ends only a session that the version its header
-  names opened, and is answered `closed`, since a scripted session's
-  place is back as soon as it ends; it is reported, held and refused as a
-  session message of type `close`. Every answer carries `x-cyfr-boot`, and every refusal
+  until a sync admits it as a new owner, and a sync at another version or
+  a reconcile that keeps none ends the sessions of the owner it replaces.
+  An open answers the session running for its lifetime, waits while
+  another lifetime's runs under its key, and is refused `lifetime_over`
+  for a lifetime closed, ended or past its deadline by the system's
+  clock. A close is verified alike but asks for no owner: it ends the one
+  lifetime it names, opened or not, and is answered `closed`, since a
+  scripted session's place is back as soon as it ends; it is reported,
+  held and refused as a session message of type `close`, with the
+  `session` its lifetime opened beside its members, where one was. Every answer carries `x-cyfr-boot`, and every refusal
   is `encode_refusal/1` at its code's status. Each accepted control message
   is reported to the test as `{:control, type, message, fields}`, the
   message as its JSON; each session message as `{:session, type, message,
@@ -54,7 +59,7 @@ defmodule Cyfr.Test.ScriptedBackends do
   (`end_sessions/2`, a reset or retire of its home, or an idle period set
   with `set(fake, :idle_ms, ms)`: no `send` and no `recv` arriving within
   it, a waiting recv counting at its arrival alone) answers `running:
-  false`, and the next `open` of its key starts it afresh (`resumed:
+  false`, and the next lifetime of its key starts it afresh (`resumed:
   false`). A session's key is Locus's: its program, home, key and mode.
 
   `set(fake, :reset_send, true)` resets the connection of the next `send`
@@ -93,7 +98,7 @@ defmodule Cyfr.Test.ScriptedBackends do
              leases: %{},
              programs: %{},
              sessions: %{},
-             keys: %{},
+             spent: MapSet.new(),
              tools: %{},
              hold: MapSet.new(),
              pool: 32,
@@ -199,7 +204,7 @@ defmodule Cyfr.Test.ScriptedBackends do
             owners: %{},
             leases: %{},
             sessions: %{},
-            keys: %{}
+            spent: MapSet.new()
         }
       )
 
@@ -331,9 +336,6 @@ defmodule Cyfr.Test.ScriptedBackends do
   """
   def supervise_controller(opts) do
     opts = Keyword.merge([box: Opus.Programs.local(), name: Opus.Programs.via("local")], opts)
-    # The places outlive a box, as a test's box restarted must find them,
-    # and no test's outlive the test.
-    :ets.delete_all_objects(Opus.Programs.Box.Places)
     controller = ExUnit.Callbacks.start_supervised!({Opus.Programs.Box, opts})
     ExUnit.Callbacks.start_supervised!({Teardown, &quiesce/0}, shutdown: 10_000)
     controller
@@ -472,7 +474,8 @@ defmodule Cyfr.Test.ScriptedBackends do
           do: {{a, s}, {fields.generation, e}}
 
     Agent.update(agent, fn st ->
-      %{st | owners: Map.filter(st.owners, fn owner -> owner in kept end)}
+      {owners, gone} = Map.split_with(st.owners, fn owner -> owner in kept end)
+      ended(%{st | owners: owners}, Map.keys(gone))
     end)
 
     control_answer(conn, Agent.get(agent, & &1), %{"released" => []})
@@ -490,8 +493,12 @@ defmodule Cyfr.Test.ScriptedBackends do
     send(st.test, {:sealed_env, server, Jason.decode!(plaintext)})
 
     Agent.update(agent, fn st ->
+      version = {fields.generation, e}
+      held = Map.get(st.owners, {athanor, server}, version)
+      st = if held == version, do: st, else: ended(st, [{athanor, server}])
+
       st
-      |> put_in([:owners, {athanor, server}], {fields.generation, e})
+      |> put_in([:owners, {athanor, server}], version)
       |> put_in([:leases, {athanor, server}], now() + message["lease_ms"])
       |> put_in([:programs, {athanor, server}], message["programs"])
     end)
@@ -617,6 +624,16 @@ defmodule Cyfr.Test.ScriptedBackends do
   defp handle(conn, agent, %{"type" => "homes"}, _fields) do
     st = Agent.get(agent, & &1)
     control_answer(conn, st, %{"homes" => st.homes |> MapSet.to_list() |> Enum.sort()})
+  end
+
+  # A retired owner's sessions end, as Locus drains them.
+  defp ended(st, owners) do
+    sessions =
+      Map.new(st.sessions, fn {id, s} ->
+        if s.owner in owners, do: {id, %{s | running: false}}, else: {id, s}
+      end)
+
+    %{st | sessions: sessions}
   end
 
   # An owner whose lease ran out is lapsed, as Locus lapses one
@@ -751,16 +768,18 @@ defmodule Cyfr.Test.ScriptedBackends do
         refuse(conn, st, :stale_boot)
 
       message.owner != %{athanor: fields.athanor, server: fields.server} or
-          message.e != fields.epoch ->
+        message.e != fields.epoch or
+          not LocusBackends.lifetime_within?(message.lifetime, fields.ts) ->
         refuse(conn, st, :bad_request)
 
       true ->
         held(agent, "close")
-        send(st.test, {:session, "close", wire, fields})
+        named = lifetime(fields, message)
+        send(st.test, {:session, "close", reported(agent, wire, named), fields})
 
         case pop_refusal(agent, "close") do
           nil ->
-            if closed(agent, fields, message.session), do: Process.exit(self(), :kill)
+            if closed(agent, named), do: Process.exit(self(), :kill)
             session_answer(conn, Agent.get(agent, & &1), %{"status" => "closed"})
 
           {code, status} ->
@@ -772,22 +791,35 @@ defmodule Cyfr.Test.ScriptedBackends do
     end
   end
 
-  # The close carried out; answers whether its answer is to be lost.
-  defp closed(agent, fields, id) do
-    owner = {fields.athanor, fields.server}
-    version = {fields.generation, fields.epoch}
+  # One lifetime, as Locus identifies one.
+  defp lifetime(fields, message) do
+    %{
+      owner: {fields.athanor, fields.server},
+      version: {fields.generation, fields.epoch},
+      key: {message.program, message.home_id, message.key, message.mode},
+      lifetime: message.lifetime
+    }
+  end
 
+  defp reported(agent, wire, named) do
+    Agent.get(agent, fn st ->
+      case Enum.find(st.sessions, fn {_id, s} -> s.named == named end) do
+        {id, _s} -> Map.put(wire, "session", id)
+        nil -> wire
+      end
+    end)
+  end
+
+  # The close carried out; answers whether its answer is to be lost.
+  defp closed(agent, named) do
     Agent.get_and_update(agent, fn st ->
       sessions =
-        case st.sessions[id] do
-          %{owner: ^owner, version: ^version} = s ->
-            Map.put(st.sessions, id, %{s | running: false})
+        Map.new(st.sessions, fn {id, s} ->
+          if s.named == named, do: {id, %{s | running: false}}, else: {id, s}
+        end)
 
-          _none_of_that_version ->
-            st.sessions
-        end
-
-      {st.lose_close, %{st | sessions: sessions, lose_close: false}}
+      spent = MapSet.put(st.spent, named)
+      {st.lose_close, %{st | sessions: sessions, spent: spent, lose_close: false}}
     end)
   end
 
@@ -823,53 +855,12 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp handle_session(conn, agent, fields, %{type: :open} = message) do
-    # A session's key is Locus's: its program, home, key and mode.
-    key =
-      {fields.athanor, fields.server, message.program, message.home_id, message.key, message.mode}
-
-    answer =
-      Agent.get_and_update(agent, fn st ->
-        case st.keys[key] && st.sessions[st.keys[key]] do
-          %{running: true} ->
-            id = st.keys[key]
-
-            {%{"status" => "running", "session" => id, "resumed" => true}, touch(st, id)}
-
-          _none_or_ended ->
-            id = "ss_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-
-            s = %{
-              owner: {fields.athanor, fields.server},
-              version: {fields.generation, fields.epoch},
-              program: message.program,
-              key: message.key,
-              home_id: message.home_id,
-              mode: message.mode,
-              size: message.rows && {message.rows, message.cols},
-              lines: [],
-              seq: 0,
-              running: true,
-              exit_code: nil,
-              active: System.monotonic_time(:millisecond)
-            }
-
-            st = %{st | sessions: Map.put(st.sessions, id, s), keys: Map.put(st.keys, key, id)}
-
-            st =
-              if message.home_id,
-                do: %{st | homes: MapSet.put(st.homes, message.home_id)},
-                else: st
-
-            if message.mode == :terminal and is_pid(Map.get(st, :terminal)),
-              do: send(st.terminal, {:terminal_opened, %{agent: agent}, id})
-
-            {%{"status" => "running", "session" => id, "resumed" => false}, st}
-        end
-      end)
-
-    # The session stands; its answer may be held (`hold(fake, "opened")`).
-    held(agent, "opened")
-    session_answer(conn, Agent.get(agent, & &1), answer)
+    if LocusBackends.lifetime_within?(message.lifetime, fields.ts) do
+      bound = now() + LocusBackends.close_wait_ms()
+      opening(conn, agent, lifetime(fields, message), message, bound)
+    else
+      refuse(conn, Agent.get(agent, & &1), :bad_request)
+    end
   end
 
   defp handle_session(conn, agent, fields, %{session: id} = message) do
@@ -884,6 +875,90 @@ defmodule Cyfr.Test.ScriptedBackends do
           do: handle_mode(conn, agent, fields, message),
           else: refuse(conn, st, :bad_request)
     end
+  end
+
+  # An open asked as Locus asks one, again while it is held behind its key.
+  defp opening(conn, agent, named, message, bound) do
+    case Agent.get_and_update(agent, &admitted(&1, named, message)) do
+      {:ok, answer} ->
+        # The session stands; its answer may be held (`hold(fake, "opened")`).
+        held(agent, "opened")
+        session_answer(conn, Agent.get(agent, & &1), answer)
+
+      :behind ->
+        if now() >= bound do
+          refuse(conn, Agent.get(agent, & &1), :unavailable)
+        else
+          # sleep-ok: the fake service's held open: it asks every 10 ms, until the wire's bound,
+          # whether its key's last process has ended
+          Process.sleep(10)
+          opening(conn, agent, named, message, bound)
+        end
+
+      {:error, code} ->
+        refuse(conn, Agent.get(agent, & &1), code)
+    end
+  end
+
+  defp admitted(st, named, message) do
+    {:ok, until} = LocusBackends.lifetime_until(named.lifetime)
+    running = for {id, %{running: true} = s} <- st.sessions, do: {id, s}
+    own = Enum.find(running, fn {_id, s} -> s.named == named end)
+
+    cond do
+      own ->
+        {id, _s} = own
+        {{:ok, opened(id, true)}, touch(st, id)}
+
+      Map.get(st.owners, named.owner) != named.version ->
+        {{:error, :lapsed}, st}
+
+      MapSet.member?(st.spent, named) or System.os_time(:millisecond) > until ->
+        {{:error, :lifetime_over}, st}
+
+      Enum.any?(running, fn {_id, %{named: other}} ->
+        other.owner == named.owner and other.key == named.key
+      end) ->
+        {:behind, st}
+
+      true ->
+        start_session(st, named, message)
+    end
+  end
+
+  defp opened(id, resumed?),
+    do: %{"status" => "running", "session" => id, "resumed" => resumed?}
+
+  defp start_session(st, named, message) do
+    id = "ss_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+    s = %{
+      owner: named.owner,
+      version: named.version,
+      named: named,
+      program: message.program,
+      key: message.key,
+      home_id: message.home_id,
+      mode: message.mode,
+      size: message.rows && {message.rows, message.cols},
+      lines: [],
+      seq: 0,
+      running: true,
+      exit_code: nil,
+      active: System.monotonic_time(:millisecond)
+    }
+
+    st = %{st | sessions: Map.put(st.sessions, id, s), spent: MapSet.put(st.spent, named)}
+
+    st =
+      if message.home_id,
+        do: %{st | homes: MapSet.put(st.homes, message.home_id)},
+        else: st
+
+    if message.mode == :terminal and is_pid(Map.get(st, :terminal)),
+      do: send(st.terminal, {:terminal_opened, %{agent: self()}, id})
+
+    {{:ok, opened(id, false)}, st}
   end
 
   defp handle_mode(conn, agent, fields, %{type: :send, session: id, lines: lines}) do

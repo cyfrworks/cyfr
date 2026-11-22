@@ -137,6 +137,7 @@ defmodule Locus.Backends.ServiceTest do
         boot: @boot,
         supervisor: supervisor,
         clock: fn -> Agent.get(clock, & &1) end,
+        now: fn -> Agent.get(now, & &1) end,
         stop_grace_ms: 100,
         session_opts: session_opts,
         # Room for every session a vector opens, but where it names
@@ -339,8 +340,9 @@ defmodule Locus.Backends.ServiceTest do
     post(ctx.port, route("session"), body, [{"x-cyfr-auth", header}])
   end
 
-  # A close of `session`, signed by the owner version that says it opened it.
-  defp close(ctx, session, opts \\ []) do
+  # A close of the lifetime `opened` names, signed by the owner version that
+  # says it opened it.
+  defp close(ctx, opened, opts \\ []) do
     owner = %{
       athanor: Keyword.get(opts, :athanor, @athanor),
       server: Keyword.get(opts, :server, @server),
@@ -349,11 +351,10 @@ defmodule Locus.Backends.ServiceTest do
     }
 
     {:ok, body} =
-      LB.encode_close(%{
-        owner: Map.take(owner, [:athanor, :server]),
-        e: owner.epoch,
-        session: session
-      })
+      opened
+      |> named()
+      |> Map.merge(%{owner: Map.take(owner, [:athanor, :server]), e: owner.epoch})
+      |> LB.encode_close()
 
     body = Keyword.get(opts, :body, body)
     {:ok, owner_key} = LB.owner_key(@key, owner)
@@ -395,12 +396,16 @@ defmodule Locus.Backends.ServiceTest do
     wait_until(fn -> map_size(:sys.get_state(ctx.owners).held) == 1 end, 5_000)
   end
 
+  # The open that was answered, which is what closes it, and its session.
   defp opened!(ctx, opts \\ []) do
-    answer = invoke(ctx, open_message(opts), Keyword.take(opts, [:epoch]))
+    open = open_message(opts)
+    answer = invoke(ctx, open, Keyword.take(opts, [:epoch]))
     assert answer.status == 200, answer.body
     assert {:ok, %{session: session}} = LB.read_session_answer(:open, answer.body)
-    session
+    Map.put(open, :session, session)
   end
+
+  defp named(opened), do: Map.take(opened, [:program, :home_id, :key, :mode, :lifetime])
 
   defp sync_at(ctx, e) do
     programs = [program("fetch", "exec cat")]
@@ -415,6 +420,7 @@ defmodule Locus.Backends.ServiceTest do
       home_id: nil,
       key: Keyword.get(opts, :key, "mcp"),
       mode: Keyword.get(opts, :mode, :run),
+      lifetime: Keyword.get_lazy(opts, :lifetime, fn -> LB.new_lifetime(@instant + 30_000) end),
       argv: Keyword.get(opts, :argv, [])
     }
     |> Map.merge(Map.new(Keyword.take(opts, [:rows, :cols])))
@@ -777,12 +783,14 @@ defmodule Locus.Backends.ServiceTest do
          ctx do
       fetch_sync(ctx)
 
-      run = invoke(ctx, open_message())
+      run_open = open_message()
+      run = invoke(ctx, run_open)
       assert {:ok, %{session: run}} = LB.read_session_answer(:open, run.body)
 
       # A terminal on a scratch program, under the same key: a session of
       # its own.
-      terminal = invoke(ctx, open_message(mode: :terminal, rows: 24, cols: 80))
+      terminal_open = open_message(mode: :terminal, rows: 24, cols: 80)
+      terminal = invoke(ctx, terminal_open)
       assert terminal.status == 200, terminal.body
       assert {:ok, %{session: terminal} = opened} = LB.read_session_answer(:open, terminal.body)
       assert opened == %{status: :running, session: terminal, resumed: false}
@@ -817,8 +825,11 @@ defmodule Locus.Backends.ServiceTest do
 
       # A close takes either mode's session. This launcher reports no
       # release, so each ends and neither's place is said to be back.
-      for {session, message, type} <- [{run, recv, :recv}, {terminal, output, :output}] do
-        assert_refused(close(ctx, session), "unavailable")
+      for {open, session, message, type} <- [
+            {run_open, run, recv, :recv},
+            {terminal_open, terminal, output, :output}
+          ] do
+        assert_refused(close(ctx, open), "unavailable")
         answer = invoke(ctx, Map.put(message, :session, session))
         assert {:ok, %{running: false}} = LB.read_session_answer(type, answer.body)
       end
@@ -837,13 +848,14 @@ defmodule Locus.Backends.ServiceTest do
     test "a session end to end: lines sent and received, masked, replayed, closed", ctx do
       fetch_sync(ctx, ~s(echo "token $API_TOKEN"; exec cat))
 
-      opened = invoke(ctx, open_message())
+      open = open_message()
+      opened = invoke(ctx, open)
       assert opened.status == 200, opened.body
 
       assert {:ok, %{session: session, resumed: false}} =
                LB.read_session_answer(:open, opened.body)
 
-      again = invoke(ctx, open_message())
+      again = invoke(ctx, open)
 
       assert {:ok, %{session: ^session, resumed: true}} =
                LB.read_session_answer(:open, again.body)
@@ -875,7 +887,7 @@ defmodule Locus.Backends.ServiceTest do
 
       assert {:ok, %{lines: []}} = LB.read_session_answer(:recv, past.body)
 
-      assert_closed(close(ctx, session))
+      assert_closed(close(ctx, open))
       assert :sys.get_state(ctx.owners).reservations == %{}
       assert %{running: false} = recv.(3)
 
@@ -983,19 +995,23 @@ defmodule Locus.Backends.ServiceTest do
       sync_at(ctx, @e + 1)
       successor = opened!(ctx, epoch: @e + 1)
 
-      for proof <- [
-            [],
-            [epoch: @e + 2],
-            [epoch: @e + 1, generation: @g - 1],
-            [epoch: @e + 1, server: "mcp_other"],
-            [epoch: @e + 1, athanor: "ath_other"]
+      for {named, proof} <- [
+            {successor, []},
+            {successor, [epoch: @e + 2]},
+            {successor, [epoch: @e + 1, generation: @g - 1]},
+            {successor, [epoch: @e + 1, server: "mcp_other"]},
+            {successor, [epoch: @e + 1, athanor: "ath_other"]},
+            # Its own version, naming another lifetime or another key.
+            {%{successor | lifetime: LB.new_lifetime(@instant + 30_000)}, [epoch: @e + 1]},
+            {%{successor | key: "another"}, [epoch: @e + 1]},
+            {%{successor | mode: :terminal}, [epoch: @e + 1]}
           ] do
-        assert_closed(close(ctx, successor, proof))
-        recv = %{type: :recv, session: successor, after: 0, max_wait_ms: 0}
+        assert_closed(close(ctx, named, proof))
+        recv = %{type: :recv, session: successor.session, after: 0, max_wait_ms: 0}
         answer = invoke(ctx, recv, epoch: @e + 1)
 
         assert {:ok, %{running: true}} = LB.read_session_answer(:recv, answer.body),
-               inspect(proof)
+               inspect({named, proof})
       end
     end
 
@@ -1009,17 +1025,106 @@ defmodule Locus.Backends.ServiceTest do
       assert old.headers["connection"] == "close"
 
       {:ok, other} =
-        LB.encode_close(%{
-          owner: %{athanor: @athanor, server: "mcp_other"},
-          e: @e,
-          session: session
-        })
+        session
+        |> named()
+        |> Map.merge(%{owner: %{athanor: @athanor, server: "mcp_other"}, e: @e})
+        |> LB.encode_close()
 
       assert_refused(close(ctx, session, body: other), "bad_request")
 
       nonce = "n_close_once"
       assert_closed(close(ctx, session, nonce: nonce))
       assert_refused(close(ctx, session, nonce: nonce), "replay")
+    end
+
+    @tag launcher: :direct
+    test "an open a worker signs after its close was answered is refused, and starts nothing",
+         ctx do
+      fetch_sync(ctx)
+      use = open_message(key: "worker")
+      assert_closed(close(ctx, use))
+
+      # Signed now: a header of its own, later than the close's.
+      at(ctx, @instant + 1_000)
+      late = invoke(ctx, use)
+
+      assert {late.status, json(late)["error"]} == {409, "lifetime_over"},
+             "an open signed after its close was admitted"
+
+      assert :sys.get_state(ctx.owners).reservations == %{}
+    end
+
+    @tag launcher: :direct
+    test "a second holder of a key in one epoch waits for the first's release, and the first's delayed close ends nothing of it",
+         ctx do
+      fetch_sync(ctx)
+      first = open_message(key: "thread")
+      opened = invoke(ctx, first)
+      assert {:ok, %{session: session}} = LB.read_session_answer(:open, opened.body)
+
+      second = open_message(key: "thread")
+      opening = Task.async(fn -> invoke(ctx, second) end)
+
+      assert Task.yield(opening, 300) == nil,
+             "the second holder was handed the first's process"
+
+      assert_closed(close(ctx, first))
+      answer = Task.await(opening, 10_000)
+      assert {:ok, %{session: next, resumed: false}} = LB.read_session_answer(:open, answer.body)
+      assert next != session
+
+      # The first's close again, delayed and signed after the second opened.
+      at(ctx, @instant + 1_000)
+      assert_closed(close(ctx, first))
+      recv = invoke(ctx, %{type: :recv, session: next, after: 0, max_wait_ms: 0})
+      assert {:ok, %{running: true}} = LB.read_session_answer(:recv, recv.body)
+    end
+
+    @tag launcher: :direct
+    test "a lost answer's retry past the deadline answers what still runs, and admits nothing once it ended",
+         ctx do
+      fetch_sync(ctx, "read -r line; exit 0")
+      use = open_message(key: "retried")
+
+      # The answer the caller never read.
+      lost = invoke(ctx, use)
+      assert {:ok, %{session: session}} = LB.read_session_answer(:open, lost.body)
+
+      # Past the deadline, signed again, so inside the header's window.
+      at(ctx, @instant + 90_000)
+      retry = invoke(ctx, use)
+
+      assert {:ok, %{session: ^session, resumed: true}} =
+               LB.read_session_answer(:open, retry.body)
+
+      assert map_size(:sys.get_state(ctx.owners).reservations) == 1
+
+      assert invoke(ctx, %{type: :send, session: session, lines: ["x"]}).status == 200
+      wait_until(fn -> :sys.get_state(ctx.owners).reservations == %{} end, 10_000)
+
+      retry = invoke(ctx, use)
+
+      assert {retry.status, json(retry)["error"]} == {409, "lifetime_over"},
+             "a retry past the deadline started a process"
+
+      assert :sys.get_state(ctx.owners).reservations == %{}
+    end
+
+    @tag launcher: :direct
+    test "a lifetime never admitted is refused past its deadline, admitted at its last moment, and never further ahead than its bound",
+         ctx do
+      fetch_sync(ctx)
+      until = @instant + 30_000
+
+      at(ctx, until + 1)
+      assert_refused(invoke(ctx, open_message(key: "late")), "lifetime_over")
+
+      at(ctx, until)
+      assert invoke(ctx, open_message(key: "last")).status == 200
+
+      far = LB.new_lifetime(until + LB.max_lifetime_ms() + 1)
+      assert_refused(invoke(ctx, open_message(key: "far", lifetime: far)), "bad_request")
+      assert_refused(close(ctx, open_message(key: "far", lifetime: far)), "bad_request")
     end
 
     test "a session message is refused before its body for its owner, and after it for its shape",
