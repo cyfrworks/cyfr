@@ -869,7 +869,7 @@ func TestAnIsolatedSpawnRunsInItsBoundedGroup(t *testing.T) {
 	_, uid, rc := k.spawnBounded(t, "1", `cat /proc/self/cgroup; readlink /proc/self/ns/net; echo done`, map[string]string{}, false, 64<<20)
 	rc.readUntil(t, func() bool { return false })
 	stdout := string(rc.got[frame.StreamStdout])
-	if !strings.Contains(stdout, "0::/"+cgroup.Name(uid)+"\n") || !strings.Contains(stdout, "done\n") || strings.Contains(stdout, keeperNet) {
+	if !strings.Contains(stdout, "0::/"+cgroup.Name(uid)+"/bound\n") || !strings.Contains(stdout, "done\n") || strings.Contains(stdout, keeperNet) {
 		t.Fatalf("the isolated bounded spawn of uid %d: %q", uid, stdout)
 	}
 	k.reply(t)

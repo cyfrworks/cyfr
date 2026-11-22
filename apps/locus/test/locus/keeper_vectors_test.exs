@@ -62,6 +62,7 @@ defmodule Locus.KeeperVectorsTest do
     {"exited", :signal},
     {"exited", :cap},
     {"exited", :machine},
+    {"exited", :either},
     {"error", "unmeasured"},
     {"measured", nil},
     {"released", nil},
@@ -105,6 +106,7 @@ defmodule Locus.KeeperVectorsTest do
         %{"type" => "error", "code" => code} -> {"error", code}
         %{"type" => "exited", "memory" => "cap"} -> {"exited", :cap}
         %{"type" => "exited", "memory" => "machine"} -> {"exited", :machine}
+        %{"type" => "exited", "memory" => "either"} -> {"exited", :either}
         %{"type" => "exited", "signal" => nil} -> {"exited", :status}
         %{"type" => "exited"} -> {"exited", :signal}
         %{"type" => type} -> {type, nil}
@@ -193,7 +195,7 @@ defmodule Locus.KeeperVectorsTest do
   } do
     assert Enum.all?(
              v["replies"],
-             &(&1["type"] != "exited" or &1["memory"] in [nil, "cap", "machine"])
+             &(&1["type"] != "exited" or &1["memory"] in [nil, "cap", "machine", "either"])
            )
 
     task = Task.async(fn -> run(name) end)
@@ -364,23 +366,8 @@ defmodule Locus.KeeperVectorsTest do
 
   test "a measure is the vectors' request, its reply the reading, and no reading is never a zero",
        %{v: v, peer: peer, name: name} do
-    keeper =
-      Task.async(fn ->
-        request = next_request(peer)
-        send_reply(peer, v |> reply("spawned") |> Map.put("id", request["id"]))
-      end)
-
-    assert {:ok, %{ref: ref} = handle} =
-             Keeper.spawn(name, %{
-               argv: ["/bin/true"],
-               env: %{},
-               pool: "backends",
-               memory_bytes: 268_435_456,
-               cpu_quota: 100_000
-             })
-
-    Task.await(keeper, 10_000)
-    asked = Enum.find(v["valid_requests"], &(&1["type"] == "measure"))
+    %{ref: ref} = handle = long_lived!(v, peer, name)
+    vector = Enum.find(v["valid_requests"], &(&1["type"] == "measure"))
     measured = reply(v, "measured")
 
     for {answer, read} <- [
@@ -390,8 +377,9 @@ defmodule Locus.KeeperVectorsTest do
           {reply(v, "released"), {:error, :unknown_spawn}}
         ] do
       task = Task.async(fn -> Keeper.measure(name, handle) end)
-      assert next_request(peer) == asked
-      send_reply(peer, answer)
+      asked = next_request(peer)
+      assert asked == %{vector | "id" => asked["id"]}
+      send_reply(peer, answering(asked, answer))
       assert Task.await(task, 5_000) == read
     end
 
@@ -399,6 +387,61 @@ defmodule Locus.KeeperVectorsTest do
     assert_receive {Keeper, ^ref, :released}, 5_000
     refute_received {Keeper, ^ref, :released}
   end
+
+  test "a reply settles only the measurement it answers, however late or out of order it comes",
+       %{v: v, peer: peer, name: name} do
+    handle = long_lived!(v, peer, name)
+    reading = reply(v, "measured")
+
+    # The first caller is gone before its reading is in, as one whose call
+    # timed out is.
+    gone = spawn(fn -> Keeper.measure(name, handle) end)
+    late = next_request(peer)
+    Process.exit(gone, :kill)
+
+    second = Task.async(fn -> Keeper.measure(name, handle) end)
+    asked = next_request(peer)
+    send_reply(peer, %{answering(late, reading) | "bytes" => 4_096})
+    send_reply(peer, %{answering(asked, reading) | "bytes" => 8_192})
+    assert Task.await(second, 5_000) == {:ok, 8_192}
+
+    # Two waiting at once, answered in the other order.
+    third = Task.async(fn -> Keeper.measure(name, handle) end)
+    third_asked = next_request(peer)
+    fourth = Task.async(fn -> Keeper.measure(name, handle) end)
+    fourth_asked = next_request(peer)
+    send_reply(peer, %{answering(fourth_asked, reading) | "bytes" => 16_384})
+    send_reply(peer, %{answering(third_asked, reading) | "bytes" => 12_288})
+
+    assert {Task.await(third, 5_000), Task.await(fourth, 5_000)} ==
+             {{:ok, 12_288}, {:ok, 16_384}}
+  end
+
+  # A long-lived spawn the vectors' `spawned` answered, its owner this test.
+  defp long_lived!(v, peer, name) do
+    keeper =
+      Task.async(fn ->
+        request = next_request(peer)
+        send_reply(peer, v |> reply("spawned") |> Map.put("id", request["id"]))
+      end)
+
+    assert {:ok, handle} =
+             Keeper.spawn(name, %{
+               argv: ["/bin/true"],
+               env: %{},
+               pool: "backends",
+               memory_bytes: 268_435_456,
+               cpu_quota: 100_000
+             })
+
+    Task.await(keeper, 10_000)
+    handle
+  end
+
+  # The vectors' reply as the keeper answers `request` with it: named as the
+  # request is named.
+  defp answering(request, reply),
+    do: Map.merge(reply, Map.take(request, Map.keys(reply) -- ~w(v type)))
 
   # ————— a spawn with a control channel —————
 
@@ -502,6 +545,14 @@ defmodule Locus.KeeperVectorsTest do
           assert_receive {Keeper, ^ref, {:spawned, ^spawn_id, ^uid, ^pid} = event}, 5_000
           assert Locus.Runtime.Keeper.event(event) == {:spawned, pid}
 
+        # A runner is not measured: its owner hears nothing of a reading.
+        %{"id" => "25"} ->
+          {%{ref: ref}, _request, spawned} = spawned_runner!(v, peer, name)
+          send_reply(peer, vector)
+          send_reply(peer, %{reply(v, "released") | "spawn_id" => spawned["spawn_id"]})
+          assert_receive {Keeper, ^ref, event}, 5_000
+          assert event == :released
+
         %{"type" => "error", "id" => _id, "code" => code} ->
           %{ref: ref} = spawn_runner!(name)
           send_reply(peer, %{vector | "id" => next_request(peer)["id"]})
@@ -515,7 +566,12 @@ defmodule Locus.KeeperVectorsTest do
           assert_receive {Keeper, ^ref, :released}, 5_000
 
         %{"type" => "exited", "spawn_id" => spawn_id, "memory" => spelled} ->
-          memory = Map.fetch!(%{nil => nil, "cap" => :cap, "machine" => :machine}, spelled)
+          memory =
+            Map.fetch!(
+              %{nil => nil, "cap" => :cap, "machine" => :machine, "either" => :either},
+              spelled
+            )
+
           {%{ref: ref}, _request, _spawned} = spawned_runner!(v, peer, name, spawn_id)
           send_reply(peer, vector)
 
@@ -531,14 +587,6 @@ defmodule Locus.KeeperVectorsTest do
           {%{ref: ref}, _request, _spawned} = spawned_runner!(v, peer, name, spawn_id)
           send_reply(peer, vector)
           assert_receive {Keeper, ^ref, :released}, 5_000
-
-        # A runner is not measured: its owner hears nothing of a reading.
-        %{"spawn_id" => spawn_id} when spawn_id != nil ->
-          {%{ref: ref}, _request, _spawned} = spawned_runner!(v, peer, name, spawn_id)
-          send_reply(peer, vector)
-          send_reply(peer, %{reply(v, "released") | "spawn_id" => spawn_id})
-          assert_receive {Keeper, ^ref, event}, 5_000
-          assert event == :released
 
         %{"type" => "pool"} ->
           task = Task.async(fn -> Keeper.pool_stats(name, "runner") end)

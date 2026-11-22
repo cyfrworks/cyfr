@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -47,12 +48,18 @@ func keeperFiles(t *testing.T, root string, files ...string) {
 }
 
 func TestOwnReadsTheV2PathAndRefusesAnyOtherHierarchy(t *testing.T) {
-	for self, want := range map[string]string{"0::/\n": "/", "0::/keeper-30001\n": "/keeper-30001", "0::/keeper": "/keeper"} {
+	for self, want := range map[string]string{
+		"0::/\n":                   "/",
+		"0::/keeper-30001/bound\n": "/keeper-30001",
+		"0::/keeper":               "/keeper",
+		"0::/keeper-s-0123456789abcdef0123456789abcdef/bound": "/keeper-s-0123456789abcdef0123456789abcdef",
+		"0::/keeper-30001/bound/inner":                        "/keeper-30001/bound/inner",
+	} {
 		if got, err := Own([]byte(self)); err != nil || got != want {
 			t.Errorf("Own(%q) = %q, %v; want %q", self, got, err, want)
 		}
 	}
-	for _, self := range []string{"", "\n", "12:memory:/docker/abc\n0::/docker/abc\n", "1:name=systemd:/\n", "0::relative\n"} {
+	for _, self := range []string{"", "\n", "12:memory:/docker/abc\n0::/docker/abc\n", "1:name=systemd:/\n", "0::relative\n", "0::/keeper-30001\n"} {
 		if got, err := Own([]byte(self)); err == nil {
 			t.Errorf("Own(%q) = %q, want a refusal", self, got)
 		}
@@ -285,14 +292,22 @@ func TestCreateSetsTheBoundsNoSwapAndTheGroupKill(t *testing.T) {
 		"memory.max": "1073741824", "memory.swap.max": "0",
 		"memory.oom.group": "1", "cpu.max": "200000 100000",
 	} {
-		if got, err := os.ReadFile(filepath.Join(m.root, "keeper-30001", file)); err != nil || string(got) != want {
+		if got, err := os.ReadFile(filepath.Join(m.root, "keeper-30001", boundLeaf, file)); err != nil || string(got) != want {
 			t.Errorf("%s holds %q (%v), want %q", file, got, err, want)
 		}
+	}
+	for file, want := range map[string]string{"memory.oom.group": "1", "cgroup.subtree_control": "+memory +cpu"} {
+		if got, err := os.ReadFile(filepath.Join(m.root, "keeper-30001", file)); err != nil || string(got) != want {
+			t.Errorf("the mark's %s holds %q (%v), want %q", file, got, err, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(m.root, "keeper-30001", "memory.max")); err == nil {
+		t.Error("the mark was given a bound, which would stand where the spawn's does")
 	}
 	if err := g.Add(4321); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(m.root, "keeper-30001", "cgroup.procs")); string(got) != "4321" {
+	if got, _ := os.ReadFile(filepath.Join(m.root, "keeper-30001", boundLeaf, "cgroup.procs")); string(got) != "4321" {
 		t.Fatalf("cgroup.procs holds %q", got)
 	}
 	for _, name := range []string{"", "keeper", "keeper-", "keeper-0", "keeper-30001/..", "../keeper-30001", "keeper-30001x"} {
@@ -315,7 +330,11 @@ func TestCreateNeverReusesAnEarlierSpawnsGroup(t *testing.T) {
 	if again, err := m.Create(Name(30002), 1<<30, 100_000); err == nil || !strings.Contains(err.Error(), "earlier spawn") {
 		t.Fatalf("Create over a group in use = %v, %v", again, err)
 	}
+	files := []string{"memory.oom.group", "cgroup.subtree_control"}
 	for _, file := range boundFiles {
+		files = append(files, filepath.Join(boundLeaf, file))
+	}
+	for _, file := range files {
 		if err := os.Remove(filepath.Join(m.root, "keeper-30002", file)); err != nil {
 			t.Fatal(err)
 		}
@@ -328,41 +347,69 @@ func TestCreateNeverReusesAnEarlierSpawnsGroup(t *testing.T) {
 	}
 }
 
-func TestKillsTellsTheSpawnsBoundFromTheContainers(t *testing.T) {
+func TestKilledForTellsTheSpawnsBoundFromALimitAbove(t *testing.T) {
 	m := &Manager{root: t.TempDir()}
 	g, err := m.Create(Name(30003), 1<<30, 100_000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := filepath.Join(m.root, "keeper-30003", "memory.events")
-	for content, want := range map[string]Kills{
-		"low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n":  {},
-		"low 0\nhigh 0\nmax 19\noom 1\noom_kill 7\noom_group_kill 1\n": {AtBound: true},
-		"low 0\nhigh 0\nmax 0\noom 0\noom_kill 3\noom_group_kill 1\n":  {Outside: true},
-		"low 0\nhigh 0\nmax 40\noom 2\noom_kill 0\noom_group_kill 0\n": {},
-		"oom 1\noom_kill 1\n": {AtBound: true},
-		"low 0\nhigh 0\nmax 536\noom 26\noom_kill 2\noom_group_kill 1\n": {AtBound: true},
+	bound := filepath.Join(m.root, "keeper-30003", boundLeaf, "memory.events.local")
+	mark := filepath.Join(m.root, "keeper-30003", "memory.events.local")
+	const quiet = "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
+	const marked = "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 1\n"
+	const uncounted = "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n"
+	for _, c := range []struct {
+		name, bound, mark string
+		want              Cause
+		waits             int
+	}{
+		{name: "no kill", bound: quiet, mark: quiet, want: NotKilled},
+		{name: "out of memory at the bound, nothing killed", bound: "max 40\noom 2\noom_kill 0\noom_group_kill 0\n", mark: quiet, want: NotKilled},
+		{name: "at the bound", bound: "max 19\noom 1\noom_kill 7\noom_group_kill 1\n", mark: quiet, want: AtBound},
+		{name: "at the bound, many times over", bound: "max 536\noom 26\noom_kill 2\noom_group_kill 1\n", mark: quiet, want: AtBound},
+		{name: "from above", bound: "oom 0\noom_kill 3\noom_group_kill 0\n", mark: marked, want: Above},
+		{name: "from above, after the bound failed with nothing to kill", bound: "oom 1\noom_kill 1\noom_group_kill 0\n", mark: marked, want: Above},
+		{name: "from above, counted by neither level", bound: "oom 0\noom_kill 1\noom_group_kill 0\n", mark: quiet, want: Above},
+		{name: "at both", bound: "oom 1\noom_kill 3\noom_group_kill 1\n", mark: marked, want: Either},
+		{name: "out of memory at the bound, and no group kill ever counted", bound: "oom 1\noom_kill 1\noom_group_kill 0\n", mark: quiet, want: Either, waits: settleAttempts},
+		{name: "a kernel with no group kill count, out of memory at the bound", bound: "oom 1\noom_kill 1\n", mark: uncounted, want: Either},
+		{name: "a kernel with no group kill count, never out of memory at the bound", bound: "oom 0\noom_kill 1\n", mark: uncounted, want: Above},
 	} {
-		if err := os.WriteFile(events, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
+		for file, content := range map[string]string{bound: c.bound, mark: c.mark} {
+			if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if got, err := g.Kills(); err != nil || got != want {
-			t.Errorf("events %q: %+v, %v; want %+v", content, got, err, want)
+		waits := pausing(t, nil)
+		if got, err := g.KilledFor(); err != nil || got != c.want || len(*waits) != c.waits {
+			t.Errorf("%s: %v, %v after %d waits; want %v after %d", c.name, got, err, len(*waits), c.want, c.waits)
 		}
 	}
+
+	// The group kill's count follows the first victim's signal.
+	for file, content := range map[string]string{bound: "oom 1\noom_kill 1\noom_group_kill 0\n", mark: quiet} {
+		if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pausing(t, func() { _ = os.WriteFile(bound, []byte("oom 1\noom_kill 2\noom_group_kill 1\n"), 0o644) })
+	if got, err := g.KilledFor(); err != nil || got != AtBound {
+		t.Errorf("a count that settled read as %v, %v", got, err)
+	}
+
 	for _, content := range []string{"", "oom 1\n", "oom_kill 1\n", "oom one\noom_kill 1\n", "oom 1 2\noom_kill 1\n"} {
-		if err := os.WriteFile(events, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(bound, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := g.Kills(); err == nil {
-			t.Errorf("events %q read as %+v", content, got)
+		if got, err := g.KilledFor(); err == nil {
+			t.Errorf("events %q read as %v", content, got)
 		}
 	}
-	if err := os.Remove(events); err != nil {
+	if err := os.Remove(bound); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := g.Kills(); err == nil {
-		t.Errorf("missing events read as %+v", got)
+	if got, err := g.KilledFor(); err == nil {
+		t.Errorf("missing events read as %v", got)
 	}
 }
 
@@ -376,7 +423,7 @@ func TestUsedIsWhatIsChargedLessInactiveFilePages(t *testing.T) {
 		fails bool
 	}{
 		"charged less inactive file": {files: map[string]string{"memory.current": "20480\n", "memory.stat": stat}, want: 12288},
-		"an empty group":             {files: map[string]string{"memory.current": "0\n", "memory.stat": "inactive_file 0\n"}},
+		"nothing charged":            {files: map[string]string{"memory.current": "0\n", "memory.stat": "anon 0\nshmem 0\ninactive_file 0\n"}, fails: true},
 		"no memory.current":          {files: map[string]string{"memory.stat": stat}, fails: true},
 		"no memory.stat":             {files: map[string]string{"memory.current": "20480\n"}, fails: true},
 		"no inactive_file":           {files: map[string]string{"memory.current": "20480\n", "memory.stat": "anon 4096\n"}, fails: true},
@@ -387,5 +434,90 @@ func TestUsedIsWhatIsChargedLessInactiveFilePages(t *testing.T) {
 		if (err != nil) != c.fails || used != c.want {
 			t.Errorf("%s: Used = %d, %v", name, used, err)
 		}
+	}
+}
+
+// staged serves each of contents to one reader of path in turn, and the last
+// to every reader after: the kernel answering another snapshot at each read.
+func staged(t *testing.T, path string, contents ...string) {
+	t.Helper()
+	last := len(contents) - 1
+	next := func(i int, at string) error {
+		if i == last {
+			return os.WriteFile(at, []byte(contents[i]), 0o600)
+		}
+		return syscall.Mkfifo(at, 0o600)
+	}
+	if err := next(0, path); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < last; i++ {
+			w, err := os.OpenFile(path, os.O_WRONLY, 0)
+			if err != nil {
+				done <- err
+				return
+			}
+			// The reader has opened this one: the next read gets the next.
+			if err = next(i+1, path+".next"); err == nil {
+				err = os.Rename(path+".next", path)
+			}
+			if err == nil {
+				_, err = w.WriteString(contents[i])
+			}
+			w.Close()
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	t.Cleanup(func() {
+		for {
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Error(err)
+				}
+				return
+			default:
+				_, _ = os.ReadFile(path)
+			}
+		}
+	})
+}
+
+// A live group never reads zero, or under what it holds, from a
+// memory.current and a memory.stat that are not of one moment.
+func TestUsedIsNeverReadFromTwoSnapshotsThatDisagree(t *testing.T) {
+	const mib = 1 << 20
+	stat := func(inactive, anon int) string {
+		return "anon " + strconv.Itoa(anon*mib) + "\nshmem 0\ninactive_file " + strconv.Itoa(inactive*mib) + "\n"
+	}
+	changing := make([]string, 0, 40)
+	for i := range 40 {
+		changing = append(changing, stat(i%2+1, 1))
+	}
+	for _, c := range []struct {
+		name    string
+		current int
+		stats   []string
+		want    uint64
+		fails   bool
+	}{
+		{name: "file pages reclaimed and anonymous grown between the reads", current: 64, stats: []string{stat(64, 0), stat(0, 64)}, want: 64 * mib},
+		{name: "a stat that never holds still", current: 64, stats: changing, fails: true},
+		{name: "less left than the same stat says is anonymous", current: 64, stats: []string{stat(60, 16)}, fails: true},
+		{name: "all that is charged read as inactive", current: 64, stats: []string{stat(64, 0)}, fails: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := namespaceRoot(t, map[string]string{"memory.current": strconv.Itoa(c.current*mib) + "\n"})
+			staged(t, filepath.Join(dir, "memory.stat"), c.stats...)
+			if used, err := (&Group{path: dir}).Used(); (err != nil) != c.fails || used != c.want {
+				t.Fatalf("Used = %d, %v; want %d, failing %t", used, err, c.want, c.fails)
+			}
+		})
 	}
 }

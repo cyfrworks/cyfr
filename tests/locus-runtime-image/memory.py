@@ -112,7 +112,7 @@ MARGIN = 1.8
 
 
 def group(uid):
-    return f"/sys/fs/cgroup/keeper-{uid}"
+    return f"/sys/fs/cgroup/keeper-{uid}/bound"
 
 
 def read_group(stack, uid):
@@ -218,7 +218,7 @@ class GroupSampler(threading.Thread):
 
     SCRIPT = r"""
       echo "pid $$"
-      g=/sys/fs/cgroup/keeper-UID
+      g=/sys/fs/cgroup/keeper-UID/bound
       while :; do
         p=; c=; k=; o=; ok=
         { read -r p < $g/memory.peak; read -r c < $g/memory.current; } 2>/dev/null

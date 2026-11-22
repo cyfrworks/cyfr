@@ -11,7 +11,7 @@
 //	{"v":2,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
 //	{"v":2,"type":"resize","spawn_id":…,"rows":…,"cols":…}
 //	{"v":2,"type":"release","spawn_id":…,"grace_ms":…}
-//	{"v":2,"type":"measure","spawn_id":…}
+//	{"v":2,"type":"measure","id":…,"spawn_id":…}
 //	{"v":2,"type":"pool","id":…,"pool":…}
 //	{"v":2,"type":"home_make","id":…,"path":…,"uid":…}
 //	{"v":2,"type":"home_measure","id":…,"path":…,"uid":…}
@@ -21,8 +21,8 @@
 //
 //	{"v":2,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
 //	{"v":2,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request)
-//	{"v":2,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine"}
-//	{"v":2,"type":"measured","spawn_id":…,"bytes":…}
+//	{"v":2,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
+//	{"v":2,"type":"measured","id":…,"bytes":…}
 //	{"v":2,"type":"released","spawn_id":…}
 //	{"v":2,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
 //	{"v":2,"type":"home_made","id":…}
@@ -47,20 +47,22 @@
 // a tmpfs home and the kernel memory charged to it never exceed the bound
 // together. When they cannot stay under it the kernel kills every process
 // of the spawn, and the leader's `exited` carries `"memory": "cap"`. A kill
-// for a limit above the spawn's, the container's, while it was under its
-// own bound carries `"memory": "machine"`. Both are read from the cgroup's
-// own counters and never inferred from the signal; an `exited` of neither,
-// or of counters that could not be read, carries null. A keeper that cannot
-// give a spawn such a cgroup refuses the request as CodeMemoryUnavailable:
-// the bound is enforced or the command does not run. Missing, null and zero
+// for a limit above the spawn's, the container's or the machine's, carries
+// `"memory": "machine"`, whatever the spawn's own bound counted before it.
+// A kill the counters cannot lay to one of the two carries
+// `"memory": "either"` and never "cap". All are read from the cgroup's own
+// counters and never inferred from the signal; an `exited` of no kill, or of
+// counters that could not be read, carries null. A keeper that cannot give
+// a spawn such a cgroup refuses the request as CodeMemoryUnavailable: the
+// bound is enforced or the command does not run. Missing, null and zero
 // `memory_bytes` are refused as CodeBadRequest.
 //
-// A `measure` names a spawn and is answered `measured` with the `bytes` its
-// cgroup uses: memory.current less inactive_file, so the tmpfs pages it
-// wrote count and file pages the kernel gives back first do not. A spawn the
-// keeper does not hold and a group it cannot read are refused as
-// CodeUnmeasured: no reading is ever answered as zero, and a refused reading
-// is never CodeUnknownSpawn, which settles a release.
+// A `measure` has an id of its own and names a spawn, and is answered under
+// that id alone, as a home request is: `measured` with the `bytes` the
+// spawn's cgroup uses, memory.current less inactive_file, so the tmpfs pages
+// it wrote count and file pages the kernel gives back first do not. A spawn
+// the keeper does not hold, a group it cannot read and two files that do not
+// agree are refused as CodeUnmeasured: no reading is ever answered as zero.
 //
 // A spawn's required `cpu_quota`, from MinCPUQuota to MaxCPUQuota, is the
 // microseconds of CPU time its group may use in every CPUPeriod (100000
@@ -161,9 +163,12 @@ const Version = 2
 const (
 	// MemoryCap says that the spawn reached its own memory bound.
 	MemoryCap = "cap"
-	// MemoryMachine says that a limit above the spawn's, the container's,
-	// ended it under its own bound.
+	// MemoryMachine says that a limit above the spawn's, the container's or
+	// the machine's, ended it.
 	MemoryMachine = "machine"
+	// MemoryEither says that one of the two ended it and that the counters
+	// do not say which.
+	MemoryEither = "either"
 )
 
 // IsolationNetns is the one value a spawn's `isolation` takes: a user and
@@ -578,8 +583,11 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 			return nil, refuse(fmt.Sprintf("grace_ms must be within 0..%d", MaxGraceMs))
 		}
 	case TypeMeasure:
-		if !req.only("spawn_id") {
-			return nil, refuse("measure carries only spawn_id")
+		if !req.only("id", "spawn_id") {
+			return nil, refuse("measure carries only id and spawn_id")
+		}
+		if !idPattern.MatchString(req.ID) {
+			return nil, refuse("id must match " + idPattern.String())
 		}
 		if !spawnIDPattern.MatchString(req.SpawnID) {
 			return nil, refuse("spawn_id must be 32 lowercase hex digits")
@@ -841,8 +849,8 @@ func NewSpawned(id, spawnID string, uid, pid int) Spawned {
 	return Spawned{V: Version, Type: TypeSpawned, ID: id, SpawnID: spawnID, UID: uid, PID: pid}
 }
 
-// ErrorReply refuses the request named by ID (spawn, pool, home) or SpawnID
-// (signal, resize, release, measure).
+// ErrorReply refuses the request named by ID (spawn, pool, home, measure) or
+// SpawnID (signal, resize, release).
 type ErrorReply struct {
 	V       int    `json:"v"`
 	Type    string `json:"type"`
@@ -864,7 +872,7 @@ type Exited struct {
 	SpawnID string  `json:"spawn_id"`
 	Code    *int    `json:"code"`
 	Signal  *string `json:"signal"`
-	// Memory is MemoryCap, MemoryMachine or nil.
+	// Memory is MemoryCap, MemoryMachine, MemoryEither or nil.
 	Memory *string `json:"memory"`
 }
 
@@ -873,17 +881,18 @@ func NewExited(spawnID string, code *int, signal, memory *string) Exited {
 	return Exited{V: Version, Type: TypeExited, SpawnID: spawnID, Code: code, Signal: signal, Memory: memory}
 }
 
-// Measured answers a `measure` with the bytes the spawn's cgroup uses.
+// Measured answers the `measure` named by ID with the bytes its spawn's
+// cgroup uses.
 type Measured struct {
-	V       int    `json:"v"`
-	Type    string `json:"type"`
-	SpawnID string `json:"spawn_id"`
-	Bytes   uint64 `json:"bytes"`
+	V     int    `json:"v"`
+	Type  string `json:"type"`
+	ID    string `json:"id"`
+	Bytes uint64 `json:"bytes"`
 }
 
 // NewMeasured builds a `measured` reply.
-func NewMeasured(spawnID string, bytes uint64) Measured {
-	return Measured{V: Version, Type: TypeMeasured, SpawnID: spawnID, Bytes: bytes}
+func NewMeasured(id string, bytes uint64) Measured {
+	return Measured{V: Version, Type: TypeMeasured, ID: id, Bytes: bytes}
 }
 
 // Released reports that a spawn's uid has been retired.

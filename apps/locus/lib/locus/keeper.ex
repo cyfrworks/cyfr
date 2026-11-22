@@ -133,8 +133,9 @@ defmodule Locus.Keeper do
   `{:error, {:memory, limit_bytes}}`, the build wire's `memory` refusal,
   whatever else this side was doing when it heard. Any other `exited` is a
   build's status or signal like any other, a kill for the container's own
-  limit (`machine`) among them. A long-lived spawn's owner hears which of
-  the two it was with the exit. Where cyfr-locus cannot give a spawn
+  limit (`machine`) and one that cannot be laid to either (`either`) among
+  them. A long-lived spawn's owner hears which of the three it was with
+  the exit. Where cyfr-locus cannot give a spawn
   such a cgroup it refuses the request as `memory_unavailable`, and `run/2`
   answers the wire's `unavailable` refusal naming what the deployment
   lacks: the builder's container needs the `writable-cgroups=true`
@@ -728,6 +729,8 @@ defmodule Locus.Keeper do
          conns: %{},
          pools: %{},
          homes: %{},
+         # Each measure in flight by its id: its spawn's ref and its caller.
+         measures: %{},
          # The heir tags fenced while no spawn of them was held: a spawn
          # naming one is refused, so none starts after the fence's answer.
          fences: %{},
@@ -1002,13 +1005,13 @@ defmodule Locus.Keeper do
   def handle_call({:resize, ref, rows, cols}, from, state),
     do: spawn_request(ref, &%{type: :resize, spawn_id: &1, rows: rows, cols: cols}, from, state)
 
-  # The caller waits for cyfr-locus's reply, which names the spawn alone: it
-  # answers every caller waiting on that spawn's reading.
   def handle_call({:measure, ref}, from, state) do
-    case spawn_request(ref, &%{type: :measure, spawn_id: &1}, from, state) do
+    id = "measure-" <> Integer.to_string(state.next_id + 1)
+
+    case spawn_request(ref, &%{type: :measure, id: id, spawn_id: &1}, from, state) do
       {:reply, :ok, state} ->
-        entry = state.requests[ref]
-        {:noreply, put_entry(state, ref, %{entry | measuring: [from | entry.measuring]})}
+        measures = Map.put(state.measures, id, {ref, from})
+        {:noreply, %{state | next_id: state.next_id + 1, measures: measures}}
 
       not_sent ->
         not_sent
@@ -1126,6 +1129,9 @@ defmodule Locus.Keeper do
     end
 
     for {_id, from} <- state.pools,
+        do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
+
+    for {_id, {_ref, from}} <- state.measures,
         do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
 
     for {_id, %{pending: pending}} <- state.homes,
@@ -1596,7 +1602,6 @@ defmodule Locus.Keeper do
         conn: nil,
         frames: "",
         pending: [],
-        measuring: [],
         control_open: extra.kind == :control,
         relay_open: false
       }
@@ -1641,6 +1646,9 @@ defmodule Locus.Keeper do
     end)
   end
 
+  defp on_reply({:error, id, _spawn_id, code}, state) when is_map_key(state.measures, id),
+    do: measured(state, id, {:error, {:refused, code}})
+
   defp on_reply({:error, id, _spawn_id, code}, state)
        when is_binary(id) and is_map_key(state.homes, id),
        do: home_reply(state, id, {:refused, code})
@@ -1659,9 +1667,6 @@ defmodule Locus.Keeper do
     end
   end
 
-  defp on_reply({:error, nil, spawn_id, "unmeasured" = code}, state) when is_binary(spawn_id),
-    do: measured(state, spawn_id, {:error, {:refused, code}})
-
   # A release for a spawn cyfr-locus no longer holds: its retirement is done.
   defp on_reply({:error, nil, spawn_id, "unknown_spawn"}, state) when is_binary(spawn_id),
     do: released(state, spawn_id)
@@ -1673,7 +1678,7 @@ defmodule Locus.Keeper do
     end)
   end
 
-  defp on_reply({:measured, spawn_id, bytes}, state), do: measured(state, spawn_id, {:ok, bytes})
+  defp on_reply({:measured, id, bytes}, state), do: measured(state, id, {:ok, bytes})
   defp on_reply({:released, spawn_id}, state), do: released(state, spawn_id)
 
   defp on_reply({:pool, id, _pool, size, free, quarantined}, state) do
@@ -1734,11 +1739,26 @@ defmodule Locus.Keeper do
 
   defp exited(%{kind: :control}, exit, memory), do: {:exited, exit, memory}
 
-  defp measured(state, spawn_id, answer) do
-    with_request(state, state.spawns[spawn_id], fn ref, entry ->
-      Enum.each(entry.measuring, &GenServer.reply(&1, answer))
-      put_entry(state, ref, %{entry | measuring: []})
-    end)
+  # A reply settles the one measure it names; one whose caller stopped
+  # waiting reaches no one, and never the caller of another.
+  defp measured(state, id, answer) do
+    case Map.pop(state.measures, id) do
+      {nil, _measures} ->
+        state
+
+      {{_ref, from}, measures} ->
+        GenServer.reply(from, answer)
+        %{state | measures: measures}
+    end
+  end
+
+  # A spawn that is gone has no reading, so whoever waits for one hears so.
+  defp unmeasurable(state, ref) do
+    {gone, measures} =
+      Map.split_with(state.measures, fn {_id, {of, _from}} -> of == ref end)
+
+    for {_id, {_ref, from}} <- gone, do: GenServer.reply(from, {:error, :unknown_spawn})
+    %{state | measures: measures}
   end
 
   # A run's entry stays until its caller is done, so a relay connection
@@ -1747,8 +1767,7 @@ defmodule Locus.Keeper do
   # delivered its last frames, or its bound passes. A spawn with a control
   # channel is done at the report.
   defp released(state, spawn_id) do
-    # A spawn that is gone has no reading, so whoever waits for one hears so.
-    state = measured(state, spawn_id, {:error, :unknown_spawn})
+    state = unmeasurable(state, state.spawns[spawn_id])
 
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
       case entry do

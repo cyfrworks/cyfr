@@ -223,7 +223,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       assert_receive {RunnerProcess, ^handle, :released}, 5_000
     end
 
-    for memory <- [nil, "machine"] do
+    for memory <- [nil, "machine", "either"] do
       test "an end that is not at the bound is logged as nothing of the kind (#{inspect(memory)})",
            ctx do
         {name, keeper} = start_client!(ctx)

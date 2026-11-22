@@ -291,6 +291,9 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			}
 
 			if sp.group != nil {
+				if notify {
+					s.awaitExitReported(sp)
+				}
 				if err := sp.group.Remove(); err != nil {
 					s.log.Warn("spawn %s: removing the memory group of kept uid %d: %v", sp.id, uid, err)
 				}

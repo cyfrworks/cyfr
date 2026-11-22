@@ -107,7 +107,7 @@ defmodule Prima.KeeperProtocolTest do
     "pty of cols above the maximum" => "pty",
     "pty of fractional rows" => "pty",
     "measure without a spawn id" => "spawn_id",
-    "measure carrying an id" => "id",
+    "measure without an id" => "id",
     "resize without rows" => "rows",
     "resize carrying an id" => "id",
     "resize of zero rows" => "rows",
@@ -495,7 +495,7 @@ defmodule Prima.KeeperProtocolTest do
   defp expected_reply(%{"type" => "exited"} = r),
     do: {:exited, r["spawn_id"], {:signal, r["signal"]}, memory(r["memory"])}
 
-  defp expected_reply(%{"type" => "measured"} = r), do: {:measured, r["spawn_id"], r["bytes"]}
+  defp expected_reply(%{"type" => "measured"} = r), do: {:measured, r["id"], r["bytes"]}
   defp expected_reply(%{"type" => "released"} = r), do: {:released, r["spawn_id"]}
 
   defp expected_reply(%{"type" => "pool"} = r),
@@ -508,6 +508,7 @@ defmodule Prima.KeeperProtocolTest do
   defp memory(nil), do: nil
   defp memory("cap"), do: :cap
   defp memory("machine"), do: :machine
+  defp memory("either"), do: :either
 
   describe "frames" do
     test "a header over the bound or on an unknown stream is refused as soon as it is in" do
@@ -828,10 +829,10 @@ defmodule Prima.KeeperProtocolTest do
     end
 
     test "a measured's bytes is a whole number, and a reading not made is never one" do
-      measured = %{"v" => 2, "type" => "measured", "spawn_id" => @spawn_id}
+      measured = %{"v" => 2, "type" => "measured", "id" => "25"}
       decode = &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(measured, &1)))
 
-      assert decode.(%{"bytes" => 0}) == {:ok, {:measured, @spawn_id, 0}}
+      assert decode.(%{"bytes" => 0}) == {:ok, {:measured, "25", 0}}
       assert decode.(%{"bytes" => -1}) == {:error, {:invalid_field, "bytes"}}
       assert decode.(%{"bytes" => nil}) == {:error, {:wrong_type, "bytes"}}
       assert decode.(%{}) == {:error, {:missing_field, "bytes"}}

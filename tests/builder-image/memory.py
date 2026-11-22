@@ -90,7 +90,7 @@ while :; do
     END { for (u in n) printf "%%s:%%d:%%d,", u, rss[u], n[u] }'
   groups=""
   for d in /sys/fs/cgroup/keeper-*; do
-    peak="$(cat "$d/memory.peak" 2>/dev/null)" && groups="$groups${d##*keeper-}:$peak,"
+    peak="$(cat "$d/bound/memory.peak" 2>/dev/null)" && groups="$groups${d##*keeper-}:$peak,"
   done
   printf '|%%s|%%s|%%s\n' "$(cat /sys/fs/cgroup/memory.current)" "$(awk '$1 == "shmem" {print $2}' /sys/fs/cgroup/memory.stat)" "$groups"
   sleep 0.1

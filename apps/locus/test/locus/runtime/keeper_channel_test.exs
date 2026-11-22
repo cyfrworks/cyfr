@@ -415,7 +415,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
 
     assert Enum.all?(
              @vectors["replies"],
-             &(&1["type"] != "exited" or &1["memory"] in [nil, "cap", "machine"])
+             &(&1["type"] != "exited" or &1["memory"] in [nil, "cap", "machine", "either"])
            )
 
     exited = Enum.find(@vectors["replies"], &(&1["type"] == "exited" and &1["memory"] == "cap"))

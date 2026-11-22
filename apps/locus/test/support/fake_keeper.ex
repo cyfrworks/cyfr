@@ -21,6 +21,10 @@ defmodule Locus.Test.FakeKeeper do
     `:signal`, `:memory`), killed at its bound or the container's among
     them, in any pool
   - `{:measured, bytes}`: a `measure` of any spawn is answered `bytes`
+  - `:measure_held`: a `measure` is never answered
+  - `{:exit_closed, exited}`: a long-lived command runs until it is ended,
+    and its leader is then reported as `exited` says, as one the kernel
+    killed while it was closing is
   - `{:report_first, reported?}` — a build's command runs before its relay
     dials, so on no input, and its `exited` and `released` are written to
     the channel; the relay waits until `reported?` (a function of no
@@ -305,16 +309,18 @@ defmodule Locus.Test.FakeKeeper do
     state
   end
 
+  defp handle_request(%{"type" => "measure"}, %{mode: :measure_held} = state), do: state
+
   defp handle_request(
-         %{"type" => "measure", "spawn_id" => spawn_id},
+         %{"type" => "measure", "id" => id},
          %{mode: {:measured, bytes}} = state
        ) do
-    send(self(), {:send, %{type: "measured", spawn_id: spawn_id, bytes: bytes}})
+    send(self(), {:send, %{type: "measured", id: id, bytes: bytes}})
     state
   end
 
-  defp handle_request(%{"type" => "measure", "spawn_id" => spawn_id}, state) do
-    send(self(), {:send, %{type: "error", spawn_id: spawn_id, code: "unmeasured"}})
+  defp handle_request(%{"type" => "measure", "id" => id}, state) do
+    send(self(), {:send, %{type: "error", id: id, code: "unmeasured"}})
     state
   end
 
@@ -432,7 +438,8 @@ defmodule Locus.Test.FakeKeeper do
     case {request["pool"], mode} do
       {"build", _mode} -> run_build(fake, spawn_id, request, mode, conn, {dir, input, output})
       {_pool, {:exit, exited}} -> exit_as(fake, spawn_id, conn, exited)
-      {_pool, _mode} -> live(fake, spawn_id, request, conn, dir)
+      {_pool, {:exit_closed, exited}} -> live(fake, spawn_id, request, conn, dir, exited)
+      {_pool, _mode} -> live(fake, spawn_id, request, conn, dir, %{})
     end
   end
 
@@ -515,7 +522,7 @@ defmodule Locus.Test.FakeKeeper do
   # A long-lived spawn: stdin frames reach the command as they arrive, its
   # stdout and its stderr (through a fifo `cat` relays) go back apart as
   # it writes them, and its exit ends the relay.
-  defp live(fake, spawn_id, request, conn, dir) do
+  defp live(fake, spawn_id, request, conn, dir, reported) do
     log = Path.join(dir, "stderr")
     {_, 0} = System.cmd(@mkfifo, ["-m", "600", log], env: Locus.Test.ProcessFamily.no_env())
     env = Enum.map(request["env"], fn {k, v} -> "#{k}=#{v}" end)
@@ -563,10 +570,8 @@ defmodule Locus.Test.FakeKeeper do
         do: %{code: nil, signal: signal_name(status - 128)},
         else: %{code: status, signal: nil}
 
-    send(
-      fake,
-      {:send, Map.merge(%{type: "exited", spawn_id: spawn_id, memory: nil}, exited)}
-    )
+    report = Map.merge(%{type: "exited", spawn_id: spawn_id, memory: nil}, exited)
+    send(fake, {:send, Map.merge(report, reported)})
 
     send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
   end

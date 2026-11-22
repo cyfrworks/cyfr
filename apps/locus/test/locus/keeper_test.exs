@@ -162,9 +162,9 @@ defmodule Locus.KeeperTest do
       assert {{:error, {:memory, 33_554_432}}, ["the command's last words"]} =
                run(name, "true", memory_bytes: 33_554_432)
 
-      # The same end without the kernel's report, or for the container's
-      # limit, is a signal like any other.
-      for memory <- [nil, "machine"] do
+      # The same end without the kernel's report, for the container's limit,
+      # or for one of the two that cannot be told, is a signal like any other.
+      for memory <- [nil, "machine", "either"] do
         :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: memory}})
         assert {{:ok, %{exit: {:signal, "SIGKILL"}}}, _} = run(name, "true")
       end
@@ -925,7 +925,12 @@ defmodule Locus.KeeperTest do
 
     test "a kill at the spawn's cap, one for the container's limit and one for neither reach its owner apart",
          %{name: name, fake: fake} do
-      for {spelled, memory} <- [{"cap", :cap}, {"machine", :machine}, {nil, nil}] do
+      for {spelled, memory} <- [
+            {"cap", :cap},
+            {"machine", :machine},
+            {"either", :either},
+            {nil, nil}
+          ] do
         :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: spelled}})
         assert {:ok, handle} = spawn_live(name, "unused")
 
@@ -944,7 +949,9 @@ defmodule Locus.KeeperTest do
 
       vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "measure"))
       sent = %{vector | "spawn_id" => handle.spawn_id}
-      assert requests(fake, "measure") == [sent, sent]
+      assert [first, second] = requests(fake, "measure")
+      assert first["id"] != second["id"]
+      assert [%{first | "id" => sent["id"]}, %{second | "id" => sent["id"]}] == [sent, sent]
 
       :ok = FakeKeeper.mode(fake, :normal)
       Keeper.release(name, handle, 0)

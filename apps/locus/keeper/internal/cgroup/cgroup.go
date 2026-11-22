@@ -2,7 +2,8 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package cgroup bounds a spawn's memory and CPU with a cgroup v2 group of
-// its own.
+// its own, of two levels: the mark, named for the spawn, and inside it the
+// bound, the one leaf that holds the spawn's processes and both its bounds.
 //
 // The kernel charges a group for the pages its processes touch, the pages
 // of the tmpfs files they write and the kernel memory they cause, and never
@@ -16,6 +17,17 @@
 // in the group. A process leaves a group only by a write to a cgroup.procs
 // file, and every file here belongs to uid 0, so no spawned process moves
 // itself, raises its bounds or clears the group kill.
+//
+// The mark is there to tell which limit killed. It has no limit of its own
+// and memory.oom.group set. For an OOM the kernel kills the highest group
+// with that set between the victim and the group whose limit could not be
+// met, and counts oom_group_kill there and nowhere else in
+// memory.events.local: in the bound for the spawn's own bound, which the
+// walk never climbs past, and in the mark for any limit above it, the
+// container's and the machine's included. One group cannot tell the two: an
+// out-of-memory at its bound that killed nothing, then a kill from above,
+// leaves the counters of a kill at the bound. So no group above a mark may
+// set memory.oom.group.
 //
 // Groups can be made only where the keeper's own cgroup is the root of a
 // cgroup namespace mounted writable, as a container started with Docker's
@@ -61,6 +73,14 @@ const (
 	// which no write here moves, has that long to leave.
 	drainAttempts = 20
 	drainInterval = 50 * time.Millisecond
+	// boundLeaf is the bound inside a spawn's mark.
+	boundLeaf = "bound"
+	// usedAttempts bound the readings taken for one that agrees with itself.
+	usedAttempts = 5
+	// settleAttempts and settleInterval bound the wait for the group kill's
+	// count, which the kernel writes just after it signals the first victim.
+	settleAttempts = 20
+	settleInterval = 10 * time.Millisecond
 	// removeAttempts and removeInterval bound the wait for a group's last
 	// exited process to be reaped before the group can be removed.
 	removeAttempts = 100
@@ -69,7 +89,8 @@ const (
 
 var namePattern = regexp.MustCompile(`^keeper-([1-9][0-9]{0,9}|s-[0-9a-f]{32})$`)
 
-// pause waits between two passes over the namespace root.
+// pause waits between two passes over the namespace root and between two
+// readings of a kill whose count has not settled.
 var pause = time.Sleep
 
 // Name is the group of the spawn running under the pooled uid.
@@ -87,9 +108,11 @@ type Manager struct {
 	root string
 }
 
-// Group is one spawn's group.
+// Group is one spawn's group: its mark and, inside it, its bound.
 type Group struct {
 	name string
+	mark string
+	// path is the bound's: the spawn's processes, limits and use.
 	path string
 }
 
@@ -230,45 +253,78 @@ func describe(pid string) string {
 	return strings.TrimSpace(string(comm)) + ", " + state
 }
 
-// Own returns the cgroup v2 path in a /proc/<pid>/cgroup file. A file naming
-// any other hierarchy is refused: the bound is a cgroup v2 one.
+// Own returns the group a /proc/<pid>/cgroup file says the process is in: a
+// cgroup v2 path, with a spawn's bound read as the spawn's group (Path). A
+// file naming any other hierarchy is refused, the bound being a cgroup v2
+// one, and so is a spawn's mark, which bounds nothing.
 func Own(self []byte) (string, error) {
 	lines := strings.Split(strings.TrimSpace(string(self)), "\n")
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], "0::/") {
 		return "", errors.New("the process is not in a cgroup v2 hierarchy alone")
 	}
-	return strings.TrimPrefix(lines[0], "0::"), nil
+	in := strings.TrimPrefix(lines[0], "0::/")
+	if name, ok := strings.CutSuffix(in, "/"+boundLeaf); ok && ValidName(name) {
+		return "/" + name, nil
+	}
+	if ValidName(in) {
+		return "", fmt.Errorf("the process is in the mark of %s, outside its bound", in)
+	}
+	return "/" + in, nil
 }
 
-// Create makes the group name with its memory bound and its CPU quota, in
-// microseconds of every CPUPeriod. A group of that name left by an earlier
-// spawn is removed first, so a group's counters are always its own spawn's.
+// Create makes the group name: its mark, and inside it the bound with the
+// memory bound and the CPU quota, in microseconds of every CPUPeriod. A
+// group of that name left by an earlier spawn is removed first, so a group's
+// counters are always its own spawn's.
 func (m *Manager) Create(name string, memoryBytes, cpuQuota uint64) (*Group, error) {
 	if !namePattern.MatchString(name) {
 		return nil, fmt.Errorf("group name %q", name)
 	}
-	g := &Group{name: name, path: filepath.Join(m.root, name)}
-	if err := os.Remove(g.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("removing the group an earlier spawn left: %w", err)
-	}
-	if err := os.Mkdir(g.path, 0o755); err != nil {
-		return nil, err
-	}
-	for _, f := range []struct{ file, value string }{
-		{"memory.max", strconv.FormatUint(memoryBytes, 10)},
-		{"memory.swap.max", "0"},
-		{"memory.oom.group", "1"},
-		{"cpu.max", strconv.FormatUint(cpuQuota, 10) + " " + strconv.Itoa(CPUPeriod)},
-	} {
-		if err := os.WriteFile(filepath.Join(g.path, f.file), []byte(f.value), 0o644); err != nil {
-			_ = os.Remove(g.path)
-			return nil, fmt.Errorf("%s: %w", f.file, err)
+	mark := filepath.Join(m.root, name)
+	g := &Group{name: name, mark: mark, path: filepath.Join(mark, boundLeaf)}
+	for _, dir := range []string{g.path, g.mark} {
+		if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("removing the group an earlier spawn left: %w", err)
 		}
+	}
+	if err := g.make(memoryBytes, cpuQuota); err != nil {
+		_ = os.Remove(g.path)
+		_ = os.Remove(g.mark)
+		return nil, err
 	}
 	return g, nil
 }
 
-// Path is the group as its processes read it in /proc/self/cgroup.
+func (g *Group) make(memoryBytes, cpuQuota uint64) error {
+	type setting struct{ file, value string }
+	for _, level := range []struct {
+		dir      string
+		settings []setting
+	}{
+		{g.mark, []setting{
+			{"memory.oom.group", "1"},
+			{"cgroup.subtree_control", "+memory +cpu"},
+		}},
+		{g.path, []setting{
+			{"memory.max", strconv.FormatUint(memoryBytes, 10)},
+			{"memory.swap.max", "0"},
+			{"memory.oom.group", "1"},
+			{"cpu.max", strconv.FormatUint(cpuQuota, 10) + " " + strconv.Itoa(CPUPeriod)},
+		}},
+	} {
+		if err := os.Mkdir(level.dir, 0o755); err != nil {
+			return err
+		}
+		for _, s := range level.settings {
+			if err := os.WriteFile(filepath.Join(level.dir, s.file), []byte(s.value), 0o644); err != nil {
+				return fmt.Errorf("%s: %w", s.file, err)
+			}
+		}
+	}
+	return nil
+}
+
+// Path is the spawn's group as Own reads it of a process in its bound.
 func (g *Group) Path() string { return "/" + g.name }
 
 // Add moves the process pid, and with it everything it forks, into the group.
@@ -276,87 +332,121 @@ func (g *Group) Add(pid int) error {
 	return os.WriteFile(filepath.Join(g.path, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0o644)
 }
 
-// Kills is what the kernel's out-of-memory killer did to a group.
-type Kills struct {
-	// AtBound reports that the group reached its own bound and lost its
-	// processes for it.
-	AtBound bool
-	// Outside reports that processes of the group were killed for a limit
-	// above it, the container's, while the group was under its own bound.
-	Outside bool
-}
+// Cause is what the kernel's out-of-memory killer killed processes of a
+// group for.
+type Cause int
 
-// Kills reads the group's memory.events: `oom` counts the times the group's
-// own limit could not be met, `oom_kill` the processes of the group killed
-// for any limit.
-func (g *Group) Kills() (Kills, error) {
-	raw, err := os.ReadFile(filepath.Join(g.path, "memory.events"))
-	if err != nil {
-		return Kills{}, err
+const (
+	// NotKilled: it killed none.
+	NotKilled Cause = iota
+	// AtBound: the group reached its own bound and lost its processes for it.
+	AtBound
+	// Above: a limit above the group's, the container's or the machine's,
+	// killed them.
+	Above
+	// Either: it killed them, and the counters do not say for which of the
+	// two, so it is neither's to name.
+	Either
+)
+
+// KilledFor reads the cause from the memory.events.local of the bound and of
+// the mark (the package says why). A kill counted in both levels is Either.
+// With no count in the mark, a bound that never ran out of memory was killed
+// from above, since the kernel counts `oom` before it kills at a bound. One
+// that did run out waits for the group kill's count, and is Either if none
+// comes, as on a kernel older than 5.17, which keeps no oom_group_kill.
+func (g *Group) KilledFor() (Cause, error) {
+	for attempt := 0; ; attempt++ {
+		bound, err := counters(filepath.Join(g.path, "memory.events.local"), "oom", "oom_kill")
+		if err != nil {
+			return NotKilled, err
+		}
+		if bound["oom_kill"] == 0 {
+			return NotKilled, nil
+		}
+		mark, err := counters(filepath.Join(g.mark, "memory.events.local"), "oom", "oom_kill")
+		if err != nil {
+			return NotKilled, err
+		}
+		atBound, above := bound["oom_group_kill"] > 0, mark["oom_group_kill"] > 0
+		_, counted := bound["oom_group_kill"]
+		switch {
+		case atBound && above:
+			return Either, nil
+		case atBound:
+			return AtBound, nil
+		case above || bound["oom"] == 0:
+			return Above, nil
+		case !counted || attempt == settleAttempts:
+			return Either, nil
+		}
+		pause(settleInterval)
 	}
-	events, err := parseEvents(raw)
-	if err != nil {
-		return Kills{}, err
-	}
-	killed := events["oom_kill"] > 0
-	return Kills{AtBound: killed && events["oom"] > 0, Outside: killed && events["oom"] == 0}, nil
 }
 
 // Used is the memory the group uses: its memory.current less the
 // inactive_file of its memory.stat, the file pages the kernel gives back
-// first. A tmpfs's pages are no inactive_file, so they count. The two files
-// are not one snapshot: a pair that would read below zero is an error, as a
-// file that does not read is, and never a zero.
+// first. A tmpfs's pages are no inactive_file, so they count.
+//
+// The two files are not one snapshot, and memory.stat may lag the charge. A
+// reading is taken only where they agree: inactive_file is the same either
+// side of memory.current, and what that leaves is above zero and no less
+// than the anon and shmem the same memory.stat counts. Without one in
+// usedAttempts the use is unknown, an error, and never a zero.
 func (g *Group) Used() (uint64, error) {
-	stat, err := os.ReadFile(filepath.Join(g.path, "memory.stat"))
-	if err != nil {
-		return 0, err
-	}
-	current, err := os.ReadFile(filepath.Join(g.path, "memory.current"))
-	if err != nil {
-		return 0, err
-	}
-	charged, err := strconv.ParseUint(strings.TrimSpace(string(current)), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("memory.current: %w", err)
-	}
-	for _, line := range strings.Split(string(stat), "\n") {
-		value, ok := strings.CutPrefix(line, "inactive_file ")
-		if !ok {
-			continue
-		}
-		inactive, err := strconv.ParseUint(value, 10, 64)
+	file := filepath.Join(g.path, "memory.stat")
+	for attempt := 0; attempt < usedAttempts; attempt++ {
+		before, err := counters(file, "inactive_file", "anon", "shmem")
 		if err != nil {
-			return 0, fmt.Errorf("memory.stat: %w", err)
+			return 0, err
 		}
-		if inactive > charged {
-			return 0, fmt.Errorf("inactive_file %d is more than the %d bytes charged", inactive, charged)
+		current, err := os.ReadFile(filepath.Join(g.path, "memory.current"))
+		if err != nil {
+			return 0, err
 		}
-		return charged - inactive, nil
+		charged, err := strconv.ParseUint(strings.TrimSpace(string(current)), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("memory.current: %w", err)
+		}
+		after, err := counters(file, "inactive_file")
+		if err != nil {
+			return 0, err
+		}
+		inactive, held := before["inactive_file"], before["anon"]+before["shmem"]
+		if after["inactive_file"] == inactive && charged > inactive && charged-inactive >= held {
+			return charged - inactive, nil
+		}
 	}
-	return 0, errors.New("memory.stat: no inactive_file line")
+	return 0, fmt.Errorf("memory.current and memory.stat did not agree in %d readings", usedAttempts)
 }
 
-func parseEvents(raw []byte) (map[string]uint64, error) {
-	events := map[string]uint64{}
+// counters reads a cgroup file of `name count` lines that holds every name
+// required.
+func counters(file string, required ...string) (map[string]uint64, error) {
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	base := filepath.Base(file)
+	counts := map[string]uint64{}
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		if len(fields) != 2 {
-			return nil, fmt.Errorf("memory.events: malformed line %q", sc.Text())
+			return nil, fmt.Errorf("%s: malformed line %q", base, sc.Text())
 		}
 		n, err := strconv.ParseUint(fields[1], 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("memory.events: %w", err)
+			return nil, fmt.Errorf("%s: %w", base, err)
 		}
-		events[fields[0]] = n
+		counts[fields[0]] = n
 	}
-	for _, name := range []string{"oom", "oom_kill"} {
-		if _, ok := events[name]; !ok {
-			return nil, fmt.Errorf("memory.events: no %s line", name)
+	for _, name := range required {
+		if _, ok := counts[name]; !ok {
+			return nil, fmt.Errorf("%s: no %s line", base, name)
 		}
 	}
-	return events, sc.Err()
+	return counts, sc.Err()
 }
 
 // Procs lists the processes in the group.
@@ -417,12 +507,21 @@ func (g *Group) Kill(grace time.Duration) bool {
 	return empty()
 }
 
-// Remove removes the group once its processes are gone, waiting briefly for
-// the last of them to be reaped.
+// Remove removes the group, its bound and then its mark, once its processes
+// are gone, waiting briefly for the last of them to be reaped.
 func (g *Group) Remove() error {
+	for _, dir := range []string{g.path, g.mark} {
+		if err := removeEmpty(dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeEmpty(dir string) error {
 	var err error
 	for attempt := 0; attempt < removeAttempts; attempt++ {
-		if err = os.Remove(g.path); err == nil || errors.Is(err, fs.ErrNotExist) {
+		if err = os.Remove(dir); err == nil || errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		time.Sleep(removeInterval)

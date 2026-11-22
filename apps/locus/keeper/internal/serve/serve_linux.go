@@ -656,13 +656,13 @@ func (s *server) handleMeasure(req *protocol.Request) {
 	}
 	s.mu.Unlock()
 	if err != nil {
-		s.log.Error("measure: spawn %s: reading its memory use: %v", req.SpawnID, err)
+		s.log.Error("measure %s: spawn %s: reading its memory use: %v", req.ID, req.SpawnID, err)
 	}
 	if sp == nil || err != nil {
-		s.send(protocol.NewError("", req.SpawnID, protocol.CodeUnmeasured))
+		s.send(protocol.NewError(req.ID, "", protocol.CodeUnmeasured))
 		return
 	}
-	s.send(protocol.NewMeasured(req.SpawnID, used))
+	s.send(protocol.NewMeasured(req.ID, used))
 }
 
 func (s *server) handleSignal(req *protocol.Request) {
@@ -1090,27 +1090,31 @@ func (s *server) watchLeader(sp *spawn) {
 	s.retire(sp, leaderExitGrace, true)
 }
 
-// memoryEnd says what the kernel killed processes of the spawn for, as the
-// group's counters say: its own bound (MemoryCap), or the container's limit
-// while it was under that bound (MemoryMachine); nil for neither, or for
-// counters that do not read. The kernel counts a kill before it delivers it,
-// so a leader reaped after one finds it counted.
+// memoryEnd says what the kernel killed processes of the spawn for, as its
+// group's counters say (cgroup.KilledFor): its own bound (MemoryCap), a
+// limit above it (MemoryMachine), or one of the two that they cannot tell
+// apart (MemoryEither), which is never reported as the cap; nil for no kill,
+// or for counters that do not read. The kernel counts a kill before it
+// delivers it, so a leader reaped after one finds it counted.
 func (s *server) memoryEnd(sp *spawn) *string {
 	if sp.group == nil {
 		return nil
 	}
 	var memory string
-	kills, err := sp.group.Kills()
+	cause, err := sp.group.KilledFor()
 	switch {
 	case err != nil:
 		s.log.Error("spawn %s: reading its memory counters: %v", sp.id, err)
 		return nil
-	case kills.AtBound:
+	case cause == cgroup.AtBound:
 		memory = protocol.MemoryCap
 		s.log.Warn("spawn %s: uid %d reached its memory bound and the kernel killed its processes", sp.id, sp.account.UID)
-	case kills.Outside:
+	case cause == cgroup.Above:
 		memory = protocol.MemoryMachine
-		s.log.Warn("spawn %s: processes of uid %d were killed for the container's memory limit, under the spawn's own bound", sp.id, sp.account.UID)
+		s.log.Warn("spawn %s: processes of uid %d were killed for a memory limit above the spawn's own, the container's or the machine's", sp.id, sp.account.UID)
+	case cause == cgroup.Either:
+		memory = protocol.MemoryEither
+		s.log.Warn("spawn %s: processes of uid %d were killed for memory, and the counters do not say whether at the spawn's own bound or above it", sp.id, sp.account.UID)
 	default:
 		return nil
 	}
@@ -1146,6 +1150,9 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 			// scrub has established; the next spawn under the uid removes
 			// one that was not.
 			if sp.group != nil {
+				if notify {
+					s.awaitExitReported(sp)
+				}
 				if err := sp.group.Remove(); err != nil {
 					s.log.Warn("spawn %s: removing the memory group of uid %d: %v", sp.id, uid, err)
 				}
@@ -1182,11 +1189,19 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 // reportReleased sends `released`, which follows `exited`; a leader that
 // survived retirement is not waited for.
 func (s *server) reportReleased(sp *spawn) {
+	s.awaitExitReported(sp)
+	s.send(protocol.NewReleased(sp.id))
+}
+
+// awaitExitReported gives the leader's watcher clearTimeout to report the
+// exit. A retirement waits for it before it removes the group: the cause of
+// a kill is in the group's counters until that report has read them, however
+// early a release came.
+func (s *server) awaitExitReported(sp *spawn) {
 	select {
 	case <-sp.exitReported:
 	case <-time.After(clearTimeout):
 	}
-	s.send(protocol.NewReleased(sp.id))
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends

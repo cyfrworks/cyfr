@@ -109,12 +109,14 @@ echo "max=$(cat "$own/memory.max") swap=$(cat "$own/memory.swap.max") group=$(ca
 echo max 2>/dev/null > "$own/memory.max" && echo raised
 echo max 2>/dev/null > "$own/cpu.max" && echo unbounded
 echo 0 2>/dev/null > "$own/memory.oom.group" && echo ungrouped
+echo 0 2>/dev/null > "$own/../memory.oom.group" && echo unmarked
+echo $$ 2>/dev/null > "$own/../cgroup.procs" && echo escaped
 echo $$ 2>/dev/null > /sys/fs/cgroup/keeper/cgroup.procs && echo moved
 mkdir "$own/inner" 2>/dev/null && echo nested
 cat /proc/self/cgroup`
 	spawnID, uid, rc := k.spawnBounded(t, "42", script, map[string]string{}, false, 64<<20)
 	rc.readUntil(t, func() bool { return false })
-	group := "0::/" + cgroup.Name(uid) + "\n"
+	group := "0::/" + cgroup.Name(uid) + "/bound\n"
 	want := group + fmt.Sprintf("max=67108864 swap=0 group=1 cpu=%d %d\n", protocol.CPUPeriod, protocol.CPUPeriod) + group
 	if got := string(rc.got[frame.StreamStdout]); got != want {
 		t.Fatalf("the spawn saw\n%s\nwant\n%s", got, want)
@@ -197,17 +199,18 @@ func TestAnExitForAnotherReasonIsNotAMemoryEnd(t *testing.T) {
 
 func (k *keeper) measure(t *testing.T, spawnID string) map[string]any {
 	t.Helper()
-	k.s.handle(&protocol.Request{V: protocol.Version, Type: protocol.TypeMeasure, SpawnID: spawnID})
+	id := "measure-" + spawnID
+	k.s.handle(&protocol.Request{V: protocol.Version, Type: protocol.TypeMeasure, ID: id, SpawnID: spawnID})
 	m := k.reply(t)
-	if m["spawn_id"] != spawnID {
+	if _, named := m["spawn_id"]; named || m["id"] != id {
 		t.Fatalf("measuring %s answered %v", spawnID, m)
 	}
 	return m
 }
 
 // A spawn the keeper does not hold, and one whose group cannot be read, are
-// refused a reading: neither is a zero, and neither is the unknown_spawn
-// that settles a release. It needs no root.
+// refused a reading under the measure's own id, and neither is a zero. It
+// needs no root.
 func TestASpawnWithoutAReadingIsUnmeasured(t *testing.T) {
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -281,15 +284,19 @@ func TestTwoSpawnsOfOneUIDAreMeasuredApartWithTheirTmpfs(t *testing.T) {
 // above is a group of the test's own, standing in for the container's.
 func TestAKillForALimitAboveTheSpawnsIsTheMachines(t *testing.T) {
 	k := boundedKeeper(t)
-	for _, c := range []struct {
+	for i, c := range []struct {
+		name         string
 		above, bound uint64
+		failedBefore bool
 		want         string
 	}{
-		{above: 32 << 20, bound: 256 << 20, want: protocol.MemoryMachine},
-		{above: 256 << 20, bound: 32 << 20, want: protocol.MemoryCap},
+		{name: "machine", above: 32 << 20, bound: 256 << 20, want: protocol.MemoryMachine},
+		{name: "cap", above: 256 << 20, bound: 32 << 20, want: protocol.MemoryCap},
+		{name: "machine after the bound failed with nothing to kill", above: 32 << 20, bound: 256 << 20, failedBefore: true, want: protocol.MemoryMachine},
+		{name: "cap after the bound failed with nothing to kill", above: 256 << 20, bound: 32 << 20, failedBefore: true, want: protocol.MemoryCap},
 	} {
-		t.Run(c.want, func(t *testing.T) {
-			above := filepath.Join(cgroup.Root, fmt.Sprintf("above-%d-%s", os.Getpid(), c.want))
+		t.Run(c.name, func(t *testing.T) {
+			above := filepath.Join(cgroup.Root, fmt.Sprintf("above-%d-%d", os.Getpid(), i))
 			if err := os.Mkdir(above, 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -319,28 +326,11 @@ func TestAKillForALimitAboveTheSpawnsIsTheMachines(t *testing.T) {
 				}
 			})
 
-			stdin, start, err := os.Pipe()
-			if err != nil {
-				t.Fatal(err)
+			if c.failedBefore {
+				k.failAtItsBound(t, group, c.bound)
 			}
-			defer start.Close()
-			defer stdin.Close()
-			argv := []string{"/bin/sh", "-c", "read go && exec " + k.s.self + " hold 128 60"}
-			leader, err := k.s.start(argv[0], argv, nil, []uintptr{stdin.Fd(), 2, 2}, 0, 0, "/")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := group.Add(leader.pid); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := start.WriteString("go\n"); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-leader.done:
-			case <-time.After(30 * time.Second):
-				t.Fatal("no kill within 30 s")
-			}
+			leader, _ := k.runIn(t, group, "exec "+k.s.self+" hold 128 60")
+			k.awaitExit(t, leader)
 			got := "neither"
 			if end := k.s.memoryEnd(&spawn{id: "above", group: group}); end != nil {
 				got = *end
@@ -349,5 +339,123 @@ func TestAKillForALimitAboveTheSpawnsIsTheMachines(t *testing.T) {
 				t.Fatalf("a spawn bound at %d bytes under a limit of %d read %q, want %q", c.bound, c.above, got, c.want)
 			}
 		})
+	}
+}
+
+// runIn starts a shell as root in the group and lets it run script once it
+// is there. It answers the leader and the directory of the cgroup it runs
+// in, as /proc names it.
+func (k *keeper) runIn(t *testing.T, group *cgroup.Group, script string) (*child, string) {
+	t.Helper()
+	stdin, start, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer start.Close()
+	defer stdin.Close()
+	argv := []string{"/bin/sh", "-c", "read go && " + script}
+	leader, err := k.s.start(argv[0], argv, nil, []uintptr{stdin.Fd(), 2, 2}, 0, 0, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := group.Add(leader.pid); err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", leader.pid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := start.WriteString("go\n"); err != nil {
+		t.Fatal(err)
+	}
+	return leader, filepath.Join(cgroup.Root, strings.TrimPrefix(strings.TrimSpace(string(in)), "0::"))
+}
+
+func (k *keeper) awaitExit(t *testing.T, c *child) {
+	t.Helper()
+	select {
+	case <-c.done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("no exit within 30 s")
+	}
+}
+
+// failAtItsBound makes the kernel count an out-of-memory at the group's own
+// bound that kills nothing: the bound lowered over tmpfs pages no process
+// holds, then given back.
+func (k *keeper) failAtItsBound(t *testing.T, group *cgroup.Group, bound uint64) {
+	t.Helper()
+	file, err := os.CreateTemp("/dev/shm", "cyfr-failed-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	t.Cleanup(func() { _ = os.Remove(file.Name()) })
+	writer, dir := k.runIn(t, group, "head -c 8388608 /dev/zero > "+file.Name())
+	k.awaitExit(t, writer)
+	// os.WriteFile opens a cgroup's file non-blocking, and the kernel then
+	// takes a lower memory.max without the reclaim and the OOM it needs.
+	set := func(bytes uint64) {
+		fd, err := unix.Open(filepath.Join(dir, "memory.max"), unix.O_WRONLY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unix.Close(fd)
+		if _, err := unix.Write(fd, []byte(fmt.Sprint(bytes))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(2 << 20)
+	set(bound)
+	events, err := os.ReadFile(filepath.Join(dir, "memory.events.local"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(events)), "\n") {
+		if name, count, ok := strings.Cut(line, " "); ok {
+			counted[name] = count
+		}
+	}
+	if counted["oom"] == "0" || counted["oom_kill"] != "0" {
+		t.Fatalf("no failure without a kill to start from: %v", counted)
+	}
+}
+
+// A release that retires a spawn while its leader's end is still being read
+// leaves the group's counters to be read: a kill heard after a close was
+// asked keeps its cause.
+func TestARetirementLeavesTheCauseOfAKillToBeRead(t *testing.T) {
+	k := boundedKeeper(t)
+	uid := testPoolFirst
+	group, err := k.s.memory.Create(cgroup.Name(uid), 32<<20, protocol.CPUPeriod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leader, dir := k.runIn(t, group, "exec "+k.s.self+" hold 128 60")
+	k.awaitExit(t, leader)
+	sp := &spawn{
+		id:           strings.Repeat("e", 32),
+		pool:         k.s.pools["runner"],
+		account:      k.s.accounts[uid],
+		group:        group,
+		leader:       leader,
+		exitReported: make(chan struct{}),
+		retired:      make(chan struct{}),
+	}
+	k.s.mu.Lock()
+	k.s.spawns[sp.id] = sp
+	k.s.mu.Unlock()
+
+	k.s.retire(sp, 0, true)
+	// The retirement gets as far as it goes before the leader's watcher runs.
+	for deadline := time.Now().Add(700 * time.Millisecond); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(dir); err != nil {
+			break
+		}
+	}
+	k.s.watchLeader(sp)
+	if e := k.replies(t, sp.id)[sp.id]; e["memory"] != protocol.MemoryCap {
+		t.Fatalf("a spawn killed at its cap and retired exited %v", e)
 	}
 }

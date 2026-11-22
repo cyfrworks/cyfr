@@ -314,7 +314,7 @@ func TestSharedInvalidRequestsAreRefusedWithTheirCode(t *testing.T) {
 
 func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 	code, signal := 1, "SIGKILL"
-	atCap, byMachine := MemoryCap, MemoryMachine
+	atCap, byMachine, byEither := MemoryCap, MemoryMachine, MemoryEither
 	built := []any{
 		NewSpawned("7", "00112233445566778899aabbccddeeff", 20007, 41),
 		NewError("8", "", CodeCapacity),
@@ -328,8 +328,9 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewError("31", "", CodeHostsUnresolved),
 		NewError("31", "", CodeGuardUnavailable),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byMachine),
-		NewMeasured("00112233445566778899aabbccddeeff", 256<<20),
-		NewError("", "00112233445566778899aabbccddeeff", CodeUnmeasured),
+		NewMeasured("25", 256<<20),
+		NewError("25", "", CodeUnmeasured),
+		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byEither),
 	}
 	want := loadVectors(t).Replies
 	if len(want) != len(built) {
