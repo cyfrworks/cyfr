@@ -80,6 +80,18 @@ defmodule PrismWeb.SharedAttachmentControllerTest do
     assert get(former, text).status == 404
   end
 
+  test "a file and a refusal refuse the camera, the microphone and screen capture",
+       %{conn: conn, bob: bob, text: text} do
+    conn = log_in_user(conn, bob)
+
+    for {path, status} <- [{text, 200}, {"/shared/sth_nowhere/attachments/msg_none/0-a.txt", 404}] do
+      answer = get(conn, path)
+
+      assert {path, answer.status, get_resp_header(answer, "permissions-policy")} ==
+               {path, status, ["camera=(), microphone=(), display-capture=()"]}
+    end
+  end
+
   test "a visitor with no session is sent to sign in, whether the thread exists or not",
        %{text: text, message: message} do
     for path <- [text, "/shared/sth_nowhere/attachments/#{message.id}/0-plan.txt"] do

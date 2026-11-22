@@ -649,6 +649,19 @@ defmodule Emissary.Web.CanvasControllerTest do
     refute Enum.any?(get_resp_header(conn, "content-security-policy"), &(&1 =~ "sandbox"))
   end
 
+  test "the page, the SDK and their refusals refuse the camera, the microphone and screen capture",
+       %{credential: credential, open: open} do
+    for {what, status, conn} <- [
+          {"the page", 200, page(credential, open.frame_id)},
+          {"no such frame", 404, page(credential, "frm_page_none")},
+          {"the SDK", 200, get(build_conn(), TinctureAssets.canvas_sdk_path())},
+          {"no such SDK", 404, get(build_conn(), "/_c/v1/sdk/cyfr.js")}
+        ] do
+      assert {what, conn.status, get_resp_header(conn, "permissions-policy")} ==
+               {what, status, ["camera=(), microphone=(), display-capture=()"]}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # The SDK the page loads
   # ---------------------------------------------------------------------------
