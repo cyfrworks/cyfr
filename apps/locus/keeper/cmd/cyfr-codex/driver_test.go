@@ -431,8 +431,8 @@ func TestAnAccountsErrorNamesTheSignInAndAKey(t *testing.T) {
 	if errorSentence("authentication") != "The account or key OpenAI Codex used was refused; check its sign-in on the program's terminal, or a key in its settings." {
 		t.Fatalf("an account's error is said in the driver's words: %q", errorSentence("authentication"))
 	}
-	if signedOutSentence != "OpenAI Codex has no sign-in or key it can use; sign it in on the program's terminal, or set a key in its settings." {
-		t.Fatalf("a post with no sign-in and no key says so: %q", signedOutSentence)
+	if signedOutSentence != "OpenAI Codex has no sign-in it can use; sign it in on the program's terminal, with your plan or a key." {
+		t.Fatalf("a post with no sign-in says how to sign in, a key in the environment not being one: %q", signedOutSentence)
 	}
 }
 
@@ -517,7 +517,7 @@ func TestAPostWhileSignedOutIsRefusedUntilASignIn(t *testing.T) {
 	startFresh(s, map[string]any{})
 	work(s, "stp_work", "trn_1")
 	s.send(map[string]any{"t": "post", "id": "stp_post", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "hello"}}})
-	if e := s.expect("refused"); e["reason"] != signedOutSentence {
+	if e := s.expect("refused"); e["reason"] != signedOutSentence || e["account"] != "signed_out" {
 		t.Fatalf("a post while signed out is refused, saying so: %v", e)
 	}
 	if err := os.WriteFile(filepath.Join(s.home, ".codex", "auth.json"), []byte("{}"), 0o600); err != nil {
@@ -526,6 +526,95 @@ func TestAPostWhileSignedOutIsRefusedUntilASignIn(t *testing.T) {
 	postText(s, "stp_post_2", "trn_1", "hello")
 	if idle := s.until("idle"); fmt.Sprint(idle[len(idle)-1]["answered"]) != "[stp_post_2]" {
 		t.Fatalf("after the sign-in the post is a turn: %v", idle)
+	}
+}
+
+// What a start, and a listing with no app-server running, say of the
+// account is what Codex's own answer positively says; an answer it does
+// not know and a read that failed say nothing, and list.
+func TestTheAccountIsSaidOnlyWhereCodexSaysIt(t *testing.T) {
+	for _, c := range []struct {
+		account string
+		says    any
+	}{
+		{`{"account":{"type":"chatgpt","email":null,"planType":"plus"},"requiresOpenaiAuth":true}`, "signed_in"},
+		{`{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}`, "signed_in"},
+		{`{"account":{"type":"amazonBedrock"},"requiresOpenaiAuth":false}`, "signed_in"},
+		{`{"account":{"type":"gcp"},"requiresOpenaiAuth":false}`, "signed_in"},
+		{`{"account":false,"requiresOpenaiAuth":true}`, nil},
+		{`{"account":"","requiresOpenaiAuth":true}`, nil},
+		{`{"account":[],"requiresOpenaiAuth":true}`, nil},
+		{`{"account":{},"requiresOpenaiAuth":true}`, nil},
+		{`{"account":{"type":"chatgpt"},"requiresOpenaiAuth":true}`, nil},
+		{`{"account":{"type":"another"},"requiresOpenaiAuth":true}`, nil},
+		{`{"account":{"type":"apiKey"}}`, nil},
+		{`{"account":{"type":"apiKey"},"requiresOpenaiAuth":"yes"}`, nil},
+		{`{"account":{"Type":"apiKey"},"requiresOpenaiAuth":true}`, nil},
+		{`{"Account":null,"requiresOpenaiAuth":true}`, nil},
+		{`{"requiresOpenaiAuth":false}`, nil},
+		{`{"account":null,"requiresOpenaiAuth":false}`, "signed_in"},
+		{`{"account":null,"requiresOpenaiAuth":true}`, "signed_out"},
+		{`{"account":null}`, nil},
+		{`{"requiresOpenaiAuth":true}`, nil},
+	} {
+		t.Run(c.account, func(t *testing.T) {
+			t.Setenv("FAKE_ACCOUNT", c.account)
+			s := startDriver(t)
+			s.expect("hello")
+			s.send(map[string]any{"t": "models", "id": "m1"})
+			if got := s.next(); got["account"] != c.says || (got["t"] == "refused") != (c.says == "signed_out") {
+				t.Fatalf("a listing says %v of the account, refused only signed out: %v", c.says, got)
+			}
+			s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{}})
+			if got := s.expect("started"); got["account"] != c.says {
+				t.Fatalf("a start says %v of the account: %v", c.says, got)
+			}
+			s.send(map[string]any{"t": "models", "id": "m2"})
+			if got := s.expect("models"); got["account"] != nil {
+				t.Fatalf("a listing that read no account says none: %v", got)
+			}
+		})
+	}
+}
+
+// A listing whose account read failed is refused as that, so the editor
+// says it: no list, no sign-out, and nothing said of the account.
+func TestAListingWhoseAccountCouldNotBeReadSaysSo(t *testing.T) {
+	t.Setenv("FAKE_ACCOUNT", "fail")
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(map[string]any{"t": "models", "id": "m1"})
+	const unread = "OpenAI Codex did not list its models: its account could not be read."
+	if e := s.expect("refused"); e["id"] != "m1" || e["reason"] != unread || e["account"] != nil {
+		t.Fatalf("a failed account read is said as that: %v", e)
+	}
+	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{}})
+	if e := s.expect("started"); e["account"] != nil {
+		t.Fatalf("a start whose account read failed says none: %v", e)
+	}
+}
+
+// A post whose account read failed, or answered a shape not known, is
+// refused as each of those: never as signed out, and saying nothing of the
+// account.
+func TestAnAccountThatCannotBeReadIsNoSignOut(t *testing.T) {
+	const unknown = "OpenAI Codex's account answer is not one CYFR knows, so the post was not written; check its sign-in on the program's terminal."
+	for account, reason := range map[string]string{
+		`fail`:                        "OpenAI Codex's account could not be read, so the post was not written; send it again.",
+		`{"account":null}`:            unknown,
+		`{"requiresOpenaiAuth":true}`: unknown,
+		`{"account":false,"requiresOpenaiAuth":true}`: unknown,
+	} {
+		t.Run(account, func(t *testing.T) {
+			t.Setenv("FAKE_ACCOUNT", account)
+			s := startDriver(t)
+			startFresh(s, map[string]any{})
+			work(s, "stp_work", "trn_1")
+			s.send(map[string]any{"t": "post", "id": "stp_post", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "hello"}}})
+			if e := s.expect("refused"); e["reason"] != reason || e["account"] != nil {
+				t.Fatalf("an account that could not be read is said as that, and as no sign-out: %v", e)
+			}
+		})
 	}
 }
 
@@ -1089,9 +1178,12 @@ func TestModelsAreListedWithOrWithoutAStart(t *testing.T) {
 	s.expect("hello")
 	s.send(map[string]any{"t": "models", "id": "m1"})
 	listed := s.expect("models")
-	if fmt.Sprint(listed["models"]) != "[map[id:fake-sol name:Fake Sol] map[id:fake-mini name:Fake Mini]]" ||
-		fmt.Sprint(listed["efforts"]) != "[low high medium]" {
-		t.Fatalf("every page of Codex's listing, with the efforts any model takes: %v", listed)
+	want := []any{
+		map[string]any{"id": "fake-sol", "name": "Fake Sol", "efforts": []any{"low", "high"}},
+		map[string]any{"id": "fake-mini", "name": "Fake Mini", "efforts": []any{"medium", "high"}},
+	}
+	if _, flat := listed["efforts"]; flat || !reflect.DeepEqual(listed["models"], want) {
+		t.Fatalf("every page of Codex's listing, each model with the efforts it takes and no other's: %v", listed)
 	}
 	access := []any{map[string]any{"id": "full-access", "name": "Full access, no approvals"}}
 	if !reflect.DeepEqual(listed["access"], access) {
@@ -1125,8 +1217,8 @@ func TestAListingOfCodexWithNoSignInIsRefused(t *testing.T) {
 		`{"account":null}`:                                         false,
 		`{"account":null,"requiresOpenaiAuth":"yes"}`:              false,
 	} {
-		if signedOut(json.RawMessage(result)) != out {
-			t.Errorf("signedOut(%s) is %v", result, !out)
+		if (accountOf(rpc{Result: json.RawMessage(result)}) == brainwire.SignedOut) != out {
+			t.Errorf("accountOf(%s) signed out is %v", result, !out)
 		}
 	}
 }

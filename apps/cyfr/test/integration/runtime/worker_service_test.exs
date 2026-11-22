@@ -17,7 +17,9 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
   reports the runner's exit, and the in-flight count, the execution slot
   and the charge row the run held all go back. A runner whose process
   dies is reported at once: its attempt lapses and its waiter answers,
-  while a sibling run in another runner keeps running and completes. A
+  while a sibling run in another runner keeps running and completes. One
+  that dies before it took the run it was given fails that run at once,
+  as one that ran nothing, and gives back what it held. A
   formula's runner that dies while its children run in it takes them
   with it: the service reports the formula and every child it said it
   started, every row fails, and the invoke slots, charge rows and
@@ -48,6 +50,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
   @probe_node "formula:local.nested-probe"
   @slots Opus.Slots
   @lapsed "Execution terminated: runner stopped without cleanup"
+  @untaken "the execution worker's runner ended before it took the run, so nothing ran"
 
   setup tags do
     Arca.Cache.init()
@@ -171,6 +174,43 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
     TwoServices.release!(sibling_held)
     assert_receive {:ran, ^sibling, {:ok, %{status: :completed}}}, 30_000
     assert row(sibling).status == "completed"
+  end
+
+  @tag :capture_log
+  test "a runner killed after it was sent a start and before it took it fails the run at once",
+       %{ctx: ctx, authority: authority, root_id: root_id, attempt: attempt} do
+    children_before = Slots.status(@slots).child_active
+
+    # Every runner a start could be given is stopped, so the one that is
+    # given it has the assign and cannot take it.
+    stopped = stop_waiting_runners!()
+    id = Prima.UUID7.execution_id()
+    test_pid = self()
+
+    spawn_link(fn ->
+      ran = child!(ctx, authority, root_id, attempt, execution_id: id, guest_fn: :spawn)
+      send(test_pid, {:ran, ran})
+    end)
+
+    wait_until(fn -> runner_given(id) != nil end, 10_000, "the runner given the run")
+    given = runner_given(id)
+    assert given.id in Map.keys(stopped)
+    held = row(id).current_attempt
+    wait_until(fn -> held in RuntimeService.status().attempts end, 10_000)
+    assert %{claimed_by: nil, state: "running"} = attempt_row(ctx, id)
+
+    kill_runner_process!(given.id)
+
+    # Well inside the lease the run would otherwise wait out.
+    assert_receive {:ran, {:error, @untaken}}, 10_000
+    assert %{status: "failed", error_message: @untaken} = row(id)
+    assert %{state: "failed", outcome: "error", claimed_by: nil} = attempt_row(ctx, id)
+    refute "execution.lapsed" in event_types(ctx, id)
+
+    wait_until(fn -> Attempt.whereis(id) == nil end)
+    wait_until(fn -> Slots.status(@slots).child_active == children_before end)
+    wait_until(fn -> charges(ctx, authority) == [] end)
+    assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
   end
 
   test "a formula's runner dying mid-fan-out takes its children with it and reclaims every hold they took",
@@ -395,10 +435,48 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
       Enum.find(Locus.Runtime.Test.Runners.runners(Locus.Runtime.RunnerPool), &(&1.id == runner))
 
     %{os_pid: os_pid} = Locus.Runtime.RunnerProcess.info(handle)
-    # `kill` reads nothing from the environment, so it inherits none of it.
-    unset_all = Enum.map(System.get_env(), fn {name, _value} -> {name, nil} end)
-    {_, 0} = System.cmd("kill", ["-KILL", Integer.to_string(os_pid)], env: unset_all)
+    {_, 0} = signal("KILL", os_pid)
     :ok
+  end
+
+  defp signal(name, os_pid) do
+    # `kill` reads nothing from the environment, so it inherits none of it.
+    unset_all = Enum.map(System.get_env(), fn {variable, _value} -> {variable, nil} end)
+
+    System.cmd("kill", ["-" <> name, Integer.to_string(os_pid)],
+      env: unset_all,
+      stderr_to_stdout: true
+    )
+  end
+
+  # The runner the pool handed the run to, whether or not it took it.
+  defp runner_given(id) do
+    Enum.find(
+      Locus.Runtime.Test.Runners.runners(Locus.Runtime.RunnerPool),
+      &(&1.state == :busy and &1.execution_id == id)
+    )
+  end
+
+  # Every runner waiting for a subtree, stopped as it stands and let go on
+  # when the test ends: its id to its OS process.
+  defp stop_waiting_runners! do
+    pool = Locus.Runtime.RunnerPool
+
+    wait_until(
+      fn -> Enum.any?(Locus.Runtime.Test.Runners.runners(pool), &(&1.state == :fresh)) end,
+      60_000,
+      "a runner waiting for a subtree"
+    )
+
+    stopped =
+      for %{id: id, pid: handle, state: state} <- Locus.Runtime.Test.Runners.runners(pool),
+          state in [:fresh, :idle],
+          into: %{},
+          do: {id, Locus.Runtime.RunnerProcess.info(handle).os_pid}
+
+    on_exit(fn -> for {_id, os_pid} <- stopped, do: signal("CONT", os_pid) end)
+    for {_id, os_pid} <- stopped, do: {_, 0} = signal("STOP", os_pid)
+    stopped
   end
 
   defp input(fixture), do: Jason.encode!(fixture.input)

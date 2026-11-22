@@ -105,6 +105,42 @@ defmodule Aqua.ModelsTest do
            }
   end
 
+  # What is known of a program is read and never asked: it needs no box,
+  # and a name with no row standing as a program of the kind knows nothing.
+  test "what is known of a program is its row's at its epoch, and asks nothing" do
+    ctx = Sanctum.TestContext.local()
+    actor = Context.actor(ctx)
+    name = "known-#{System.unique_integer([:positive])}"
+    nothing = %{account: nil, listing: nil}
+    agent = %{"program" => name}
+    assert Aqua.known_program(ctx, agent) == nothing
+
+    {:ok, row} =
+      Arca.McpServerStorage.insert(actor, %{
+        cap: 0,
+        name: name,
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "cyfr-claude-code claude", "env" => %{}})
+      })
+
+    assert Aqua.known_program(ctx, agent) == nothing
+
+    listing = %{models: [%{id: "opus", name: "Opus", efforts: []}], access: []}
+
+    for {what, value} <- [account: :signed_out, listing: listing] do
+      :ok = Arca.Cache.put(Arca.Cache.Keys.brain_known(actor, row.id, row.epoch, what), value)
+    end
+
+    assert Aqua.known_program(ctx, agent) == %{account: :signed_out, listing: listing}
+    assert Aqua.known_program(ctx, %{"catalyst_ref" => "catalyst:local.x"}) == nothing
+
+    {:ok, _raised} = Arca.McpServerStorage.bump_epoch(actor, row.id)
+    assert Aqua.known_program(ctx, agent) == nothing
+  end
+
   test "a model status needs a context" do
     assert Aqua.model_status(nil, [%{"name" => "aqua", "catalyst_ref" => "catalyst:local.x"}]) ==
              %{}

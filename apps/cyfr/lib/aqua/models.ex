@@ -17,6 +17,8 @@ defmodule Aqua.Models do
       and bound to the key its own grant runs it with, or, for a brain
       that is a program, the program row of its name standing
       (`t:status/0`);
+    * `program_listing/2` — what an agent's program lists, by asking it;
+      `known_program/2` — what is known of that program, never asking;
     * `providers/1` — every brain the athanor can connect, with what it
       needs and how it stands, which Aqua's setup offers;
     * `models/2` — one brain asked for its models, the answer connecting
@@ -248,18 +250,36 @@ defmodule Aqua.Models do
   @doc """
   What the program a program brain names lists, read as the person at the
   Aqua page from the harness of the row of that name (`program/2`,
-  `Opus.Brain.models/2`): `{:ok, %{models: [%{id, name}], efforts:
-  [effort], access: [%{id, name}]}}`, the models its `model` may name,
-  the efforts its `effort` option may take and the access choices its
-  `access` option may take, each named in the driver's words. A name with no row, or a row that does not
+  `Opus.Brain.models/2`): `{:ok, %{models: [%{id, name, efforts}], access:
+  [%{id, name}]}}`, the models its `model` may name, with the efforts the
+  `effort` option may take on each, and the access choices its `access`
+  option may take, each named in the driver's words. A name with no row, or a row that does not
   stand as a brain's, is `program/2`'s refusal, and one whose harness did
-  not list them is the holder's (`{:refused, sentence}` among them); a
+  not list them is the holder's (`{:signed_out, sentence}` only where the
+  driver read it signed out, `{:refused, sentence}` among the others); a
   turn's context is refused, since only a person at a screen lists.
   """
-  @spec program_listing(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  @spec program_listing(Context.t(), map()) :: {:ok, Opus.Brain.listing()} | {:error, term()}
   def program_listing(%Context{} = ctx, %{"program" => name}) when is_binary(name) do
     with {:ok, %{row: row_id}} <- program(ctx, name), do: Opus.Brain.models(ctx, row_id)
   end
+
+  @doc """
+  What is known of the program `agent` names, at its row's epoch
+  (`Opus.Brain.known/3`): whether it is signed in or out, only as its own
+  driver said it, and what it last listed. It never asks the program.
+  Nothing is known of a name whose row does not stand (`program/2`), or of
+  an agent that names no program.
+  """
+  @spec known_program(Context.t(), map()) :: Opus.Brain.known()
+  def known_program(%Context{} = ctx, %{"program" => name}) when is_binary(name) do
+    case program(ctx, name) do
+      {:ok, %{row: row_id, epoch: epoch}} -> Opus.Brain.known(ctx, row_id, epoch)
+      {:error, _not_standing} -> %{account: nil, listing: nil}
+    end
+  end
+
+  def known_program(%Context{}, _agent), do: %{account: nil, listing: nil}
 
   defp run_as_caller(ctx, resolved, input) do
     Aqua.Ops.call_tool("execution", ctx, %{

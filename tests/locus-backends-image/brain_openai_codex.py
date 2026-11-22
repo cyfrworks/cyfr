@@ -15,7 +15,9 @@ with exactly its members.
 - A run session's first line is the driver's `hello`, naming the wire's
   version and a boot of its own; `models` with no harness running starts an
   app-server for the listing alone and leaves no process of it, and lists the
-  one access the driver honours, full access with no approvals.
+  one access the driver honours, full access with no approvals, each
+  model with its own efforts, and that the program is signed in, as its
+  start does.
 - A start runs the app-server and starts a thread with the start's tools as
   its dynamic tools, its system prompt as developer instructions, its model,
   and, in the full access it names, Codex's own sandbox and asking off, and
@@ -171,9 +173,11 @@ def main():
         d.send({"t": "models", "id": "mdl_1"})
         listed = d.expect("models", "models with no harness running is listed from an app-server of its own")
         expect([m["id"] for m in listed["models"]] == ["fake-sol", "fake-mini"]
-               and listed["efforts"] == ["low", "high", "medium", "xhigh"]
+               and [m["efforts"] for m in listed["models"]] == [["low", "high"], ["medium", "xhigh"]]
+               and listed["account"] == "signed_in"
                and listed["access"] == [{"id": "full-access", "name": "Full access, no approvals"}],
-               "the listing is Codex's, with the efforts any model takes and the driver's one access", listed)
+               "the listing is Codex's, each model with the efforts it takes, the driver's one access and the sign-in",
+               listed)
         eventually(lambda: not harnesses(stack), "the listing's app-server to end")
 
         # ————— a start, a work and a post —————
@@ -242,7 +246,8 @@ def main():
         d.send({"t": "start", "gen": 4, "session": thread, "config": {"model": "fake-sol"}, "system": SYSTEM,
                 "pending": ["stp_post_1", "stp_never"]})
         resumed = d.expect("started", "a resume answers started")
-        expect(resumed == {"t": "started", "session": thread, "fresh": False, "held": ["stp_post_1"]},
+        expect(resumed == {"t": "started", "session": thread, "fresh": False, "held": ["stp_post_1"],
+                           "account": "signed_in"},
                "the resumed thread is the same, and held names the post its rollout holds", resumed)
         d.send({"t": "work", "id": "stp_work_2", "work": "trn_brain_2", "tools": []})
         d.expect("accepted", "the resumed thread's work is accepted")
