@@ -6,6 +6,7 @@ name: Codex CI (cyfr CLI)
 # Vet, test, and build the Go CLI on every change. security.yml only runs
 # govulncheck; this gives the CLI a real green-build + test signal at PR time.
 # desktop-native builds, installs and smokes the CYFR app around it.
+# screen-idle holds the device screen's idle lock against a real browser.
 
 on:
   push:
@@ -28,7 +29,8 @@ on:
       - 'docker-entrypoint.sh'
       - 'tests/fixtures/**'
       # desktop-native runs the installed CYFR app's home-free smoke,
-      # tests/desktop-proof/native/smoke.sh.
+      # tests/desktop-proof/native/smoke.sh, and screen-idle the screen's
+      # idle check, tests/desktop-proof/screen/idle.sh.
       - 'tests/desktop-proof/**'
       # The app bundles the account pages' sign-in reader
       # (apps/codex/desktop/src/policy.js).
@@ -255,6 +257,27 @@ jobs:
 
       - name: go test
         run: go test -race -count=1 ./...
+
+  screen-idle:
+    # The device screen's five minutes are of input alone: under Ubuntu
+    # 26.04's labwc, a page or a sandboxed frame playing video with sound in
+    # the screen's Chrome does not hold its lock off, where swayidle's
+    # ordinary timeout is held off (tests/desktop-proof/screen/idle.sh).
+    # amd64 alone, as Chrome's package is.
+    name: The screen's idle lock
+    runs-on: ubuntu-latest
+    # The packages, Chrome's download and three cases of half a minute.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+
+      - name: A page that plays does not hold the lock off
+        run: bash tests/desktop-proof/screen/idle.sh
 
   desktop-native:
     # The CYFR app, Electron around this module's cyfr, on each platform it

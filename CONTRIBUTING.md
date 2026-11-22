@@ -267,6 +267,12 @@ same worktree refuses, naming the run that holds it.
   the app's end. Its header names what the smoke leaves to the real-CYFR
   proofs and to a person at the machine.
 
+  Codex CI's `screen-idle` job runs `tests/desktop-proof/screen/idle.sh`:
+  the device screen's idle watch under Ubuntu 26.04's labwc, beside a
+  real Chrome whose page, and whose sandboxed frame, plays video with
+  sound. It needs Docker and Go and binds no port of the machine, so here
+  it runs as `scripts/heavy-check.sh -- bash tests/desktop-proof/screen/idle.sh`.
+
   The Test workflow's `desktop-home` job runs those proofs on Linux amd64
   and arm64 (`tests/desktop-proof/home.sh`, its README): this tree's DEB
   installed in a client container with no Docker, and each tracked

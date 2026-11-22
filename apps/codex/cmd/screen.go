@@ -28,6 +28,7 @@ import (
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/holder"
+	"github.com/cyfr/codex/internal/idle"
 	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
 )
@@ -52,7 +53,7 @@ var screenPath = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
 var screenCmd = &cobra.Command{
 	Use:   "screen",
 	Short: "Show CYFR on this machine's own screen, or stop showing it",
-	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without use, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR.",
+	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without input, whatever is playing on it, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR.",
 }
 
 var screenOnCmd = &cobra.Command{
@@ -330,9 +331,15 @@ func writeScreenFiles(dir, account string) error {
 }
 
 // screenIdle is how long the screen waits without local input before it
-// locks: labwc reports the idle time from real input, which no page can
-// fake.
-const screenIdle = 5 * 60
+// locks. It is counted from input alone (internal/idle): a page playing
+// video with sound holds off the idle notification swayidle takes, so the
+// time is not swayidle's to count.
+const screenIdle = 5 * time.Minute
+
+const (
+	idleLocked    = "Locked after five minutes without use."
+	suspendLocked = "Locked as this device went to sleep."
+)
 
 // screenProxy is CYFR's SOCKS5 proxy on this machine's loopback, the one
 // way this device reaches a tailnet address.
@@ -357,8 +364,8 @@ func screenShellConfig(dir, device, address string, client *http.Client, host st
 }
 
 // runScreenShell is the screen's session inside labwc: the shell's pages on
-// loopback, the on-screen keyboard, swayidle and Chrome on those pages.
-// The idle watch and a suspend send this process SIGUSR1, which locks;
+// loopback, the on-screen keyboard, the watches that lock it (watchScreen)
+// and Chrome on those pages.
 // Chrome's exit locks and starts it again on the lock page; this process's
 // own end (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
 // the sessions at the home first, then starts Chrome again, so no page of
@@ -390,10 +397,10 @@ func runScreenShell(ctx context.Context) error {
 	// before this shell starts its own, on the lock page.
 	profile := "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome")
 	_ = exec.Command("pkill", "-f", "--", profile).Run()
-	// So do a keyboard and an idle watch a killed shell left, the watch
+	// So do a keyboard and a suspend watch a killed shell left, the watch
 	// aimed at that shell's pid.
 	_ = exec.Command("pkill", "-x", "wvkbd-mobintl").Run()
-	_ = exec.Command("pkill", "-f", "--", "^swayidle -w timeout [0-9]+ kill -USR1 ").Run()
+	_ = exec.Command("pkill", "-f", "--", "^swayidle -w before-sleep kill -USR1 ").Run()
 	chrome := &screenChrome{args: chromeArgs}
 	host, _ := os.Hostname()
 	ln, device, err := screenClaim(dir)
@@ -418,30 +425,12 @@ func runScreenShell(ctx context.Context) error {
 		}
 	}()
 
-	idled := make(chan os.Signal, 1)
-	signal.Notify(idled, sigUSR1)
-	defer signal.Stop(idled)
-	go func() {
-		for range idled {
-			sh.Lock("Locked after five minutes without use, or for a suspend.")
-		}
-	}()
-
-	// The idle and suspend lock is swayidle's: a screen without it would
-	// stay unlocked unwatched, so its failure to start, or its exit, locks
-	// the screen and ends this shell, which the launcher starts again with
-	// a new watcher, locked.
-	lockNow := strconv.Itoa(os.Getpid())
-	idle := screenChild(exec.Command("swayidle", "-w",
-		"timeout", strconv.Itoa(screenIdle), "kill -USR1 "+lockNow,
-		"before-sleep", "kill -USR1 "+lockNow))
-	if err := idle.Start(); err != nil {
+	watching, stopWatching, err := watchScreen(ctx, screenIdle, sh.Lock)
+	if err != nil {
 		sh.Lock("")
-		return fmt.Errorf("The screen's idle lock (swayidle) did not start (%v)", err)
+		return err
 	}
-	watching := make(chan error, 1)
-	go func() { watching <- idle.Wait() }()
-	defer func() { _ = idle.Process.Kill() }()
+	defer stopWatching()
 
 	browsing, stopBrowsing := context.WithCancel(ctx)
 	defer stopBrowsing()
@@ -467,13 +456,57 @@ func runScreenShell(ctx context.Context) error {
 	case <-ctx.Done():
 	case ended = <-served:
 	case err := <-watching:
-		ended = fmt.Errorf("The screen's idle lock (swayidle) stopped (%v): the screen locked and starts again", err)
+		ended = fmt.Errorf("%w: the screen locked and starts again", err)
 	case err := <-browser:
 		ended = fmt.Errorf("Chrome did not start (%v)", err)
 	}
 	sh.Lock("")
 	stopBrowsing()
 	return ended
+}
+
+// watchScreen starts what locks the screen with nobody asking: after has
+// passed without input (internal/idle), and the computer is about to
+// suspend (swayidle's before-sleep alone, which sends this process
+// SIGUSR1). A screen without either would stay unlocked unwatched, so one
+// that cannot start is refused and the end of either is told on ended,
+// for the caller to lock and end.
+func watchScreen(ctx context.Context, after time.Duration, lock func(why string)) (ended <-chan error, stop func(), err error) {
+	socket, err := idle.Socket()
+	if err != nil {
+		return nil, nil, fmt.Errorf("The screen's idle lock did not start (%w)", err)
+	}
+	input, err := idle.Start(ctx, socket, after)
+	if err != nil {
+		return nil, nil, fmt.Errorf("The screen's idle lock did not start (%w)", err)
+	}
+	suspending := make(chan os.Signal, 1)
+	signal.Notify(suspending, sigUSR1)
+	sleep := screenChild(exec.Command("swayidle", "-w", "before-sleep", "kill -USR1 "+strconv.Itoa(os.Getpid())))
+	if err := sleep.Start(); err != nil {
+		signal.Stop(suspending)
+		_ = input.Close()
+		return nil, nil, fmt.Errorf("The screen's suspend lock (swayidle) did not start (%w)", err)
+	}
+	failed := make(chan error, 2)
+	go func() {
+		err := input.Run(func() { lock(idleLocked) })
+		failed <- fmt.Errorf("The screen's idle lock stopped (%w)", err)
+	}()
+	go func() {
+		failed <- fmt.Errorf("The screen's suspend lock (swayidle) stopped (%v)", sleep.Wait())
+	}()
+	go func() {
+		for range suspending {
+			lock(suspendLocked)
+		}
+	}()
+	return failed, func() {
+		signal.Stop(suspending)
+		close(suspending)
+		_ = input.Close()
+		_ = sleep.Process.Kill()
+	}, nil
 }
 
 // screenClaim takes the shell's listener, then selects the CYFR in dir in
