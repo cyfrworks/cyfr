@@ -4,9 +4,10 @@
 defmodule Opus.Programs.Session do
   @moduledoc """
   The session routes of `Prima.LocusBackends`, as a holder speaks them under
-  the grant `Opus.Programs.hold/1` answered: `open/2` and `close/2`, then
-  `send/3` and `recv/4` of a `run` session, or `input/3`, `output/4` and
-  `resize/4` of a `terminal` one.
+  the grant `Opus.Programs.hold/1` answered: `open/2`, then `send/3` and
+  `recv/4` of a `run` session, or `input/3`, `output/4` and `resize/4` of
+  a `terminal` one; and the close route (`close/3`), which the box alone
+  speaks, under the grant that opened the session.
 
   Each runs in the calling process, as one request of its own, apart from
   the box's serialized control channel: a `recv` that waits up to its
@@ -165,18 +166,36 @@ defmodule Opus.Programs.Session do
     post(grant, message, max_wait_ms + slack_ms)
   end
 
-  @doc "End the session's process, its answer awaited `timeout_ms` (default #{@send_timeout_ms})."
+  @doc """
+  End the session on the close route, proved by `grant`, the one that
+  opened it, at the service's current boot: `:ok` once the service says
+  its place is back. The answer is awaited `timeout_ms`.
+  """
   @spec close(grant(), String.t(), pos_integer()) :: :ok | {:error, refusal()}
-  def close(grant, session, timeout_ms \\ @send_timeout_ms) do
-    message = Map.put(base(:close, grant), :session, session)
+  def close(grant, session, timeout_ms) do
+    message = Map.put(named(grant), :session, session)
+    max = LocusBackends.max_control_bytes()
 
-    with {:ok, _closed} <- post(grant, message, timeout_ms), do: :ok
+    with {:ok, body} <- encoded(LocusBackends.encode_close(message)),
+         {:ok, _closed} <-
+           request(grant, :close, body, timeout_ms, max, &LocusBackends.read_close_answer/1),
+         do: :ok
   end
 
-  defp base(type, grant),
-    do: %{type: type, owner: %{athanor: grant.athanor, server: grant.server}, e: grant.epoch}
+  defp base(type, grant), do: Map.put(named(grant), :type, type)
+
+  defp named(grant),
+    do: %{owner: %{athanor: grant.athanor, server: grant.server}, e: grant.epoch}
 
   defp post(grant, message, timeout_ms) do
+    max = LocusBackends.max_session_bytes()
+    read = &LocusBackends.read_session_answer(message.type, &1)
+
+    with {:ok, body} <- encoded(LocusBackends.encode_session(message)),
+         do: request(grant, :session, body, timeout_ms, max, read)
+  end
+
+  defp request(grant, operation, body, timeout_ms, max, read) do
     invoke = %{
       athanor: grant.athanor,
       server: grant.server,
@@ -187,19 +206,20 @@ defmodule Opus.Programs.Session do
       nonce: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
     }
 
-    with {:ok, body} <- encode(message),
-         {:ok, header} <- sign(grant, invoke, body) do
+    with {:ok, header} <- sign(grant, invoke, body) do
       headers = [{"content-type", "application/json"}, {LocusBackends.auth_header(), header}]
 
       opts = [
         receive_timeout: timeout_ms,
         private_policy: :operator,
-        max_response_bytes: LocusBackends.max_session_bytes()
+        max_response_bytes: max
       ]
 
-      case Sanctum.Egress.pinned_request(:post, grant.url, headers, body, opts) do
+      url = grant.url <> LocusBackends.route(operation)
+
+      case Sanctum.Egress.pinned_request(:post, url, headers, body, opts) do
         {:ok, 200, _headers, resp_body} ->
-          case LocusBackends.read_session_answer(message.type, resp_body) do
+          case read.(resp_body) do
             {:ok, answer} -> {:ok, answer}
             {:error, error} -> {:error, {:unreadable, error}}
           end
@@ -213,12 +233,8 @@ defmodule Opus.Programs.Session do
     end
   end
 
-  defp encode(message) do
-    case LocusBackends.encode_session(message) do
-      {:ok, body} -> {:ok, body}
-      {:error, error} -> {:error, {:invalid, error}}
-    end
-  end
+  defp encoded({:ok, body}), do: {:ok, body}
+  defp encoded({:error, error}), do: {:error, {:invalid, error}}
 
   defp sign(grant, invoke, body) do
     case LocusBackends.invoke_header(grant.owner_key, invoke, body) do

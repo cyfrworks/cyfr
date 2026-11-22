@@ -513,11 +513,11 @@ defmodule Opus.Programs.TerminalTest do
     test "a close the service does not answer in time is unanswered, and ends the session",
          %{ctx: ctx, row: row, fake: fake, controller: controller} do
       {id, session} = start!(ctx, row)
-      Scripted.hold(fake, "close", 40_000)
+      Scripted.hold(fake, "close", 50_000)
       closing = Task.async(fn -> Programs.close(ctx, id) end)
       assert_receive {:held, "close", backend}, 2_000
 
-      assert {:error, :unanswered} = Task.await(closing, 30_000)
+      assert {:error, :unanswered} = Task.await(closing, 40_000)
       eventually(fn -> gone?(id) end, "the session to end")
       assert Map.has_key?(:sys.get_state(controller).closing, session)
       send(backend, :go)
@@ -536,9 +536,8 @@ defmodule Opus.Programs.TerminalTest do
       assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
       eventually(fn -> gone?(unanswered) end, "the session to end")
 
-      # The close stays owed until nothing of the session runs: with no
-      # holder left the owner is released, which ends every session of it
-      # on the service, and the next tick settles it.
+      # The close stays owed until the service confirms it: with no holder
+      # left the owner is released, and the next tick's close needs none.
       server = row.id
 
       assert_receive {:control, "release", %{"owners" => [%{"server" => ^server}]}, _}, 3_000

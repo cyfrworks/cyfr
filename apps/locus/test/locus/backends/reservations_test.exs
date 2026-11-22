@@ -19,6 +19,9 @@ defmodule Locus.Backends.ReservationsTest do
   @tag_ %{
     ledger: :ledger,
     session: @key,
+    g: 3,
+    e: 7,
+    server: "mcp_one",
     athanor: "ath_one",
     memory_bytes: @bytes,
     home_id: nil
@@ -212,6 +215,29 @@ defmodule Locus.Backends.ReservationsTest do
 
       assert held(after_event) == holds(expected), "#{inspect(state)} on #{inspect(event)}"
     end
+  end
+
+  test "a close finds only what its own version opened, in every state and adopted" do
+    version = %{athanor: @tag_.athanor, server: @tag_.server, generation: 3, epoch: 7}
+    {_owner, id} = @key
+
+    for state <- @states, state != :absent do
+      reservations = in_state(state)
+      assert Reservations.opened(reservations, version, id) == @key, inspect(state)
+
+      for other <- [
+            %{version | athanor: "ath_other"},
+            %{version | server: "mcp_other"},
+            %{version | generation: 4},
+            %{version | epoch: 8}
+          ],
+          do: assert(Reservations.opened(reservations, other, id) == nil, inspect(other))
+
+      assert Reservations.opened(reservations, version, "ss_other") == nil
+    end
+
+    adopted = Reservations.event(Reservations.new(), @key, {:adopted, @tag_})
+    assert Reservations.opened(adopted, version, id) == @key
   end
 
   test "the matrix names every event for every state, and nothing else" do

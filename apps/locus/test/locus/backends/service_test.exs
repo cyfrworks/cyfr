@@ -15,7 +15,10 @@ defmodule Locus.Backends.ServiceTest do
   the body, a message of one mode to a session of the other refused, and,
   through the test environment's `Locus.DirectLauncher`, a
   session end to end: lines sent and received, the owner's secrets masked
-  in every line, a recv replayed by its `after`, a close.
+  in every line, a recv replayed by its `after`; and the close route: no
+  success before the release, whoever follows the session or owns its row
+  by then, nothing of another version's, row's or athanor's ended, and a
+  place kept held past the bound.
 
   Unless a test says otherwise the service's launcher is a stub that
   starts nothing: a session's process never speaks, but for the stderr a
@@ -27,7 +30,7 @@ defmodule Locus.Backends.ServiceTest do
 
   import Prima.Test.Wait
 
-  alias Locus.Backends.{Backend, Owners, Service}
+  alias Locus.Backends.{Backend, LeaseSweeper, Owners, Service}
   alias Prima.LocusBackends, as: LB
 
   @vectors Path.expand("../../../../../tests/fixtures/locus_backends.json", __DIR__)
@@ -45,6 +48,7 @@ defmodule Locus.Backends.ServiceTest do
   # The budget the vectors' hello names, room for every session a vector
   # opens.
   @roomy_budget Jason.decode!(@vectors["hello"]["answer"])["memory"]["budget_bytes"]
+  @owners Module.concat(__MODULE__, Table)
 
   defmodule Launcher do
     @moduledoc false
@@ -122,24 +126,31 @@ defmodule Locus.Backends.ServiceTest do
           {[launcher: Launcher, launcher_server: launcher], []}
       end
 
-    owners =
-      start_supervised!({Owners,
-       [
-         boot: @boot,
-         supervisor: supervisor,
-         clock: fn -> Agent.get(clock, & &1) end,
-         stop_grace_ms: 100,
-         session_opts: session_opts,
-         # Room for every session a vector opens, but where it names
-         # the budget it tests.
-         memory_budget: given["memory_budget"] || @roomy_budget,
-         overcommit: {1, 1}
-       ] ++ launcher_opts})
+    session_opts = Keyword.merge(session_opts, Map.get(context, :session_opts, []))
+
+    # Named, with a ledger of its own, so a test can start it again as the
+    # table that adopts what it held.
+    owners_opts =
+      [
+        name: @owners,
+        ledger: make_ref(),
+        boot: @boot,
+        supervisor: supervisor,
+        clock: fn -> Agent.get(clock, & &1) end,
+        stop_grace_ms: 100,
+        session_opts: session_opts,
+        # Room for every session a vector opens, but where it names
+        # the budget it tests.
+        memory_budget: given["memory_budget"] || @roomy_budget,
+        overcommit: {1, 1}
+      ] ++ launcher_opts
+
+    start_supervised!({Owners, owners_opts})
 
     server =
       start_supervised!(
         Locus.Backends.listener(
-          plug: {Service, owners: owners, key: @key, now: fn -> Agent.get(now, & &1) end},
+          plug: {Service, owners: @owners, key: @key, now: fn -> Agent.get(now, & &1) end},
           ip: {127, 0, 0, 1},
           port: 0,
           startup_log: false
@@ -147,7 +158,14 @@ defmodule Locus.Backends.ServiceTest do
       )
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-    {:ok, port: port, clock: clock, now: now, supervisor: supervisor, owners: owners}
+
+    {:ok,
+     port: port,
+     clock: clock,
+     now: now,
+     supervisor: supervisor,
+     owners: @owners,
+     owners_opts: owners_opts}
   end
 
   # ————— the client —————
@@ -300,7 +318,10 @@ defmodule Locus.Backends.ServiceTest do
         true ->
           {:ok, body} =
             message
-            |> Map.merge(%{owner: %{athanor: @athanor, server: @server}, e: @e})
+            |> Map.merge(%{
+              owner: %{athanor: @athanor, server: @server},
+              e: Keyword.get(opts, :epoch, @e)
+            })
             |> LB.encode_session()
 
           body
@@ -316,6 +337,75 @@ defmodule Locus.Backends.ServiceTest do
 
     {:ok, header} = LB.invoke_header(owner_key, fields, Keyword.get(opts, :signed, body))
     post(ctx.port, route("session"), body, [{"x-cyfr-auth", header}])
+  end
+
+  # A close of `session`, signed by the owner version that says it opened it.
+  defp close(ctx, session, opts \\ []) do
+    owner = %{
+      athanor: Keyword.get(opts, :athanor, @athanor),
+      server: Keyword.get(opts, :server, @server),
+      generation: Keyword.get(opts, :generation, @g),
+      epoch: Keyword.get(opts, :epoch, @e)
+    }
+
+    {:ok, body} =
+      LB.encode_close(%{
+        owner: Map.take(owner, [:athanor, :server]),
+        e: owner.epoch,
+        session: session
+      })
+
+    body = Keyword.get(opts, :body, body)
+    {:ok, owner_key} = LB.owner_key(@key, owner)
+
+    fields =
+      Map.merge(owner, %{
+        boot: Keyword.get(opts, :boot, @boot),
+        ts: Agent.get(ctx.now, & &1),
+        nonce: Keyword.get_lazy(opts, :nonce, fn -> "n_#{System.unique_integer([:positive])}" end)
+      })
+
+    {:ok, header} = LB.invoke_header(owner_key, fields, body)
+    post(ctx.port, route("close"), body, [{"x-cyfr-auth", header}])
+  end
+
+  defp assert_closed(answer) do
+    assert answer.status == 200, answer.body
+    assert {:ok, %{status: :closed}} = LB.read_close_answer(answer.body)
+  end
+
+  # The one session's process, its launcher's release held until the test
+  # lets it go.
+  defp held_release(ctx) do
+    [{_id, pid, _type, _modules}] = DynamicSupervisor.which_children(ctx.supervisor)
+    %{handle: handle} = :sys.get_state(pid)
+    on_exit(fn -> resume(handle) end)
+    :sys.suspend(handle.server)
+    {pid, handle}
+  end
+
+  defp resume(handle) do
+    :sys.resume(handle.server)
+  catch
+    :exit, _gone -> :ok
+  end
+
+  # Until the service holds the close, which it does only unanswered.
+  defp await_held(ctx) do
+    wait_until(fn -> map_size(:sys.get_state(ctx.owners).held) == 1 end, 5_000)
+  end
+
+  defp opened!(ctx, opts \\ []) do
+    answer = invoke(ctx, open_message(opts), Keyword.take(opts, [:epoch]))
+    assert answer.status == 200, answer.body
+    assert {:ok, %{session: session}} = LB.read_session_answer(:open, answer.body)
+    session
+  end
+
+  defp sync_at(ctx, e) do
+    programs = [program("fetch", "exec cat")]
+    answer = control(ctx, sync_message(programs, %{"fetch" => %{"API_TOKEN" => @canary}}, e: e))
+    assert answer.status == 200, answer.body
   end
 
   defp open_message(opts \\ []) do
@@ -347,12 +437,12 @@ defmodule Locus.Backends.ServiceTest do
       answer = post(ctx.port, route("health"), LB.health_body())
       assert answer.status == 200
       assert answer.headers["x-cyfr-boot"] == @boot
-      assert json(answer) == %{"version" => 3, "release" => Prima.Version.current()}
+      assert json(answer) == %{"version" => 4, "release" => Prima.Version.current()}
 
       assert_refused(post(ctx.port, route("health"), ~s({"version":1})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({"version":2})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({})), "version")
-      assert_refused(post(ctx.port, route("health"), ~s({"version":3,"x":1})), "bad_request")
+      assert_refused(post(ctx.port, route("health"), ~s({"version":4,"x":1})), "bad_request")
       assert_refused(post(ctx.port, route("health"), "nope"), "bad_request")
 
       too_large = post(ctx.port, route("health"), String.duplicate(" ", 4097))
@@ -461,7 +551,7 @@ defmodule Locus.Backends.ServiceTest do
 
     test "a body past its bound is refused unread, one not the one signed is unauthorized", ctx do
       max = LB.max_control_bytes()
-      body = ~s({"version":3,"type":"status","owners":[]})
+      body = ~s({"version":4,"type":"status","owners":[]})
 
       fields = %{generation: @g, seq: seq(), cyfr_boot: @cyfr_boot, boot: @boot, ts: @instant}
       {:ok, header} = LB.control_header(LB.control_key(@key), fields, body)
@@ -648,12 +738,19 @@ defmodule Locus.Backends.ServiceTest do
 
       # The vectors' other messages name a session this service never
       # opened: read and verified, they are refused as unknown.
-      for type <- ~w(send recv input output resize close) do
+      for type <- ~w(send recv input output resize) do
         v = @vectors[type]
         at(ctx, v["fields"]["ts"])
         answer = post(ctx.port, route("session"), v["body"], [{"x-cyfr-auth", v["header"]}])
         assert_refused(answer, "unknown_session")
       end
+
+      # A close of one is answered closed: nothing is held for it.
+      v = @vectors["close"]
+      at(ctx, v["fields"]["ts"])
+      answer = post(ctx.port, route("close"), v["body"], [{"x-cyfr-auth", v["header"]}])
+      assert answer.status == 200, answer.body
+      assert answer.body == v["answer"]
     end
 
     test "the vectors' terminal open reads and verifies, in its program's scratch home", ctx do
@@ -675,6 +772,7 @@ defmodule Locus.Backends.ServiceTest do
       assert opened == %{status: :running, session: id, resumed: false}
     end
 
+    @tag session_opts: [release_timeout_ms: 25]
     test "a message of one mode to a session of the other is refused, and a run names no size",
          ctx do
       fetch_sync(ctx)
@@ -709,14 +807,20 @@ defmodule Locus.Backends.ServiceTest do
             {Map.put(bytes, :session, terminal), :input, %{status: :running}},
             {Map.put(resize, :session, terminal), :resize, %{status: :running}},
             {Map.put(output, :session, terminal), :output,
-             %{chunks: [], dropped: 0, running: true}},
-            {%{type: :close, session: run}, :close, %{status: :closed}},
-            {%{type: :close, session: terminal}, :close, %{status: :closed}}
+             %{chunks: [], dropped: 0, running: true}}
           ] do
         answer = invoke(ctx, message)
         assert answer.status == 200, answer.body
         assert {:ok, read} = LB.read_session_answer(type, answer.body)
         assert Map.reject(read, fn {_k, v} -> v == nil end) == expected, inspect(type)
+      end
+
+      # A close takes either mode's session. This launcher reports no
+      # release, so each ends and neither's place is said to be back.
+      for {session, message, type} <- [{run, recv, :recv}, {terminal, output, :output}] do
+        assert_refused(close(ctx, session), "unavailable")
+        answer = invoke(ctx, Map.put(message, :session, session))
+        assert {:ok, %{running: false}} = LB.read_session_answer(type, answer.body)
       end
 
       # A run open naming a size is refused as it is read.
@@ -771,12 +875,135 @@ defmodule Locus.Backends.ServiceTest do
 
       assert {:ok, %{lines: []}} = LB.read_session_answer(:recv, past.body)
 
-      closed = invoke(ctx, %{type: :close, session: session})
-      assert {:ok, %{status: :closed}} = LB.read_session_answer(:close, closed.body)
+      assert_closed(close(ctx, session))
+      assert :sys.get_state(ctx.owners).reservations == %{}
       assert %{running: false} = recv.(3)
 
       sent = invoke(ctx, %{type: :send, session: session, lines: ["late"]})
       assert {:ok, %{status: :ended}} = LB.read_session_answer(:send, sent.body)
+    end
+
+    @tag launcher: :direct
+    @tag given: %{"memory_budget" => 536_870_912}
+    test "a close answers only once the release has given the place back, and an open then has room",
+         ctx do
+      fetch_sync(ctx)
+      session = opened!(ctx, key: "first")
+      {_pid, handle} = held_release(ctx)
+      closing = Task.async(fn -> close(ctx, session) end)
+
+      await_held(ctx)
+      assert Task.yield(closing, 0) == nil, "closed was answered before the release"
+
+      resume(handle)
+      assert_closed(Task.await(closing, 10_000))
+      opened!(ctx, key: "second")
+    end
+
+    for gone <- [:dead_session, :released_owner, :replaced_owner, :lapsed_owner, :adopted_ending] do
+      @tag launcher: :direct
+      @tag gone: gone
+      @tag given: %{"memory_budget" => 536_870_912}
+      test "a close of a #{gone} waits for the release, then an open has room", ctx do
+        fetch_sync(ctx)
+        session = opened!(ctx)
+        {pid, handle} = held_release(ctx)
+
+        case ctx.gone do
+          :dead_session ->
+            Process.exit(pid, :kill)
+
+          :released_owner ->
+            released = %{type: :release, owners: [%{athanor: @athanor, server: @server, e: @e}]}
+            assert control(ctx, released).status == 200
+
+          :replaced_owner ->
+            sync_at(ctx, @e + 1)
+
+          :lapsed_owner ->
+            Agent.update(ctx.clock, &(&1 + 30_000))
+            assert :ok = LeaseSweeper.sweep(ctx.owners)
+
+          :adopted_ending ->
+            # As the service's tree restarts: the table, and every session
+            # process after it.
+            stop_supervised!(Owners)
+            Process.exit(pid, :kill)
+            start_supervised!({Owners, ctx.owners_opts})
+        end
+
+        closing = Task.async(fn -> close(ctx, session) end)
+        await_held(ctx)
+        assert Task.yield(closing, 0) == nil, "closed was answered before the release"
+
+        resume(handle)
+        assert_closed(Task.await(closing, 10_000))
+
+        sync_at(ctx, @e + 1)
+        opened!(ctx, key: "after", epoch: @e + 1)
+      end
+    end
+
+    @tag launcher: :direct
+    @tag session_opts: [release_timeout_ms: 25]
+    @tag given: %{"memory_budget" => 536_870_912}
+    test "past the bound a close is unavailable and the place stays held, until a retry finds it back",
+         ctx do
+      fetch_sync(ctx)
+      session = opened!(ctx, key: "first")
+      {_pid, handle} = held_release(ctx)
+
+      assert_refused(close(ctx, session), "unavailable")
+      assert_refused(invoke(ctx, open_message(key: "second")), "capacity")
+
+      resume(handle)
+      assert_closed(close(ctx, session))
+      opened!(ctx, key: "second")
+    end
+
+    @tag launcher: :direct
+    test "a close ends nothing of another version, row or athanor", ctx do
+      fetch_sync(ctx)
+      sync_at(ctx, @e + 1)
+      successor = opened!(ctx, epoch: @e + 1)
+
+      for proof <- [
+            [],
+            [epoch: @e + 2],
+            [epoch: @e + 1, generation: @g - 1],
+            [epoch: @e + 1, server: "mcp_other"],
+            [epoch: @e + 1, athanor: "ath_other"]
+          ] do
+        assert_closed(close(ctx, successor, proof))
+        recv = %{type: :recv, session: successor, after: 0, max_wait_ms: 0}
+        answer = invoke(ctx, recv, epoch: @e + 1)
+
+        assert {:ok, %{running: true}} = LB.read_session_answer(:recv, answer.body),
+               inspect(proof)
+      end
+    end
+
+    @tag launcher: :direct
+    test "a close's proof is refused replayed, at an old boot, and for another body", ctx do
+      fetch_sync(ctx)
+      session = opened!(ctx)
+
+      old = close(ctx, session, boot: "bb_" <> String.duplicate("0", 32))
+      assert_refused(old, "stale_boot")
+      assert old.headers["connection"] == "close"
+
+      {:ok, other} =
+        LB.encode_close(%{
+          owner: %{athanor: @athanor, server: "mcp_other"},
+          e: @e,
+          session: session
+        })
+
+      assert_refused(close(ctx, session, body: other), "bad_request")
+
+      nonce = "n_close_once"
+      assert_closed(close(ctx, session, nonce: nonce))
+      assert_refused(close(ctx, session, nonce: nonce), "replay")
     end
 
     test "a session message is refused before its body for its owner, and after it for its shape",
@@ -809,7 +1036,8 @@ defmodule Locus.Backends.ServiceTest do
       assert_refused(invoke(ctx, %{open_message() | program: "nope"}), "unknown_program")
 
       unknown = "ss_" <> String.duplicate("9", 32)
-      assert_refused(invoke(ctx, %{type: :close, session: unknown}), "unknown_session")
+      recv = %{type: :recv, session: unknown, after: 0, max_wait_ms: 0}
+      assert_refused(invoke(ctx, recv), "unknown_session")
     end
 
     test "a session body past its bound is refused unread", ctx do

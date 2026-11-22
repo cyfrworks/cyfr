@@ -80,12 +80,15 @@ defmodule CyfrWeb.ContextGuardRosterTest do
          {"live/registry_live.ex", :managed}
        ]},
     # A program row's call: adding one, or its Test, Refresh, Restart,
-    # hosts or Reset folder.
-    "live/programs_live.ex" => {1, [{"live/programs_live.ex", :call}]},
+    # hosts or Reset folder; and a running program's Close, which waits
+    # for its place to be back.
+    "live/programs_live.ex" =>
+      {2, [{"live/programs_live.ex", :call}, {"live/programs_live.ex", :closed}]},
     # A thread with people, made in the overlay; a person added in a thread.
     "live/chat_overlay_live.ex" => {1, [{"live/chat_overlay_live.ex", :create}]},
     "live/shared_thread_live.ex" => {1, [{"live/shared_thread_live.ex", :add}]},
-    "live/shell_live.ex" => {1, [{"live/shell_live.ex", :deliver}]},
+    # A refresh of the tinctures, and a shelf program's Close.
+    "live/shell_live.ex" => {2, [{"live/shell_live.ex", :deliver}]},
     # A model catalyst's install, answered to the page; each ready
     # brain's options and a Set up's start of its program, answered to
     # the agents section itself.

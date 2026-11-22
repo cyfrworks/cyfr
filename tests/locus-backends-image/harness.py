@@ -23,9 +23,9 @@ A Controller is the control plane's side of the backends wire
 tests/fixtures/locus_backends.json: control messages signed under the
 control key with a rising sequence, program environments sealed to the
 owner and the service lifetime `hello` learned, and session messages
-(open, send, recv and close of a `run` session; input, output and resize of
-a `terminal` one, its bytes in padded base64) signed as invokes under each
-owner's key. Every request can be given its own timestamp, nonce, sequence,
+(open, send and recv of a `run` session; input, output and resize of
+a `terminal` one, its bytes in padded base64) and closes, on their own
+route, signed as invokes under each owner's key. Every request can be given its own timestamp, nonce, sequence,
 boot or key, and every signed session message is kept so it can be sent
 again unchanged. The wire carries lines and bytes, never MCP: an
 `McpClient` speaks MCP's JSON-RPC over a run session's lines to the probe
@@ -391,8 +391,8 @@ def check_vectors():
     compare("owner_key", owner_key(key, owner["athanor"], owner["server"], owner["generation"],
                                    owner["epoch"]).hex(), WIRE["owner_key_hex"])
 
-    compare("version", VERSION, 3)
-    compare("routes", sorted(ROUTES), ["control", "health", "session"])
+    compare("version", VERSION, 4)
+    compare("routes", sorted(ROUTES), ["close", "control", "health", "session"])
     for kind in ["hello", "reconcile", "sync", "renew", "release", "status", "home"]:
         vector = WIRE[kind]
         body = vector["body"].encode()
@@ -418,6 +418,7 @@ def check_vectors():
         compare(f"{kind}.canonical", canonical("invoke", [fields[n] for n in SESSION_FIELDS], body), vector["canonical"])
         compare(f"{kind}.header", invoke_header(signing, fields, body), vector["header"])
 
+    compare("close.members", sorted(json.loads(WIRE["close"]["body"])), ["e", "owner", "session", "version"])
     terminal = json.loads(WIRE["open_terminal"]["body"])
     compare("open_terminal.size", [terminal["mode"], 1 <= terminal["rows"] <= BOUNDS["max_pty_size"],
                                    1 <= terminal["cols"] <= BOUNDS["max_pty_size"]], ["terminal", True, True])
@@ -594,12 +595,12 @@ class Controller:
     # ————— sessions —————
 
     def sign_session(self, owner, message, generation=None, boot=None, ts=None, nonce=None, key=None,
-                     version=VERSION, header_owner=None):
+                     version=VERSION, header_owner=None, route="session"):
         """Signs one session message for `owner` as an owner's process does, without sending it.
 
         `header_owner` signs the header for another owner version than the
         body names, so a body that names another owner than its signature
-        can be sent.
+        can be sent. A close is signed alike and posted on its own `route`.
         """
         body = wire_json({**message, "owner": {"athanor": owner["athanor"], "server": owner["server"]},
                           "e": owner["e"], "version": version})
@@ -615,7 +616,7 @@ class Controller:
         }
         signing = key or owner_key(self.key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
         headers = {"content-type": "application/json", AUTH_HEADER: invoke_header(signing, fields, body)}
-        return Request(self.base + ROUTES["session"], headers, body)
+        return Request(self.base + ROUTES[route], headers, body)
 
     def session(self, owner, message, timeout=60, **options):
         """Signs and posts one session message: (status, answer, boot, request)."""
@@ -668,7 +669,9 @@ class Controller:
         return status, answer
 
     def close(self, owner, session, **options):
-        status, answer, _boot, _request = self.session(owner, {"type": "close", "session": session}, **options)
+        """Closes a session by the owner version that opened it, waiting for its place: (status, answer)."""
+        status, answer, _boot, _request = self.session(
+            owner, {"session": session}, route="close", timeout=BOUNDS["close_wait_ms"] / 1000 + 30, **options)
         return status, answer
 
     def lines_until(self, owner, session, found, after=0, timeout_s=20):

@@ -290,11 +290,19 @@ defmodule Opus.Brain do
   def read_on({pid, ref}, boot, seq) when is_binary(boot) and is_integer(seq) and seq >= 0,
     do: GenServer.cast(pid, {:read_on, ref, self(), boot, seq})
 
-  @doc "End the session: its driver's process is closed, the attendant told `:closed`."
-  @spec close(brain()) :: :ok
+  @doc """
+  End the session: its driver's process is closed, the attendant told
+  `:closed`. `:ok` means that the place is back; `{:error, :unanswered}`
+  that Opus still owes the close, which the box that opened the session
+  retries (`Opus.Programs.Box`, "Sessions"). A holder that ended before it
+  was asked left the same close, which is waited on as its own.
+  """
+  @spec close(brain()) :: :ok | {:error, :unanswered}
   def close({pid, ref}) when is_reference(ref) do
-    _ = call(pid, {:close, ref}, Programs.Box.close_timeout_ms() + @answer_margin_ms)
-    :ok
+    GenServer.call(pid, {:close, ref}, Programs.Box.close_timeout_ms() + @answer_margin_ms)
+  catch
+    :exit, {:timeout, _} -> {:error, :unanswered}
+    :exit, _ended -> Programs.left_close(pid)
   end
 
   @doc "The held session of a thread, if one runs."
@@ -364,7 +372,7 @@ defmodule Opus.Brain do
       id = forget_id(record)
       session = owed["session"]
 
-      case call(pid, {:forget, owner(athanor_id, row), record}, @once_ms + @answer_margin_ms) do
+      case call(pid, {:forget, owner(athanor_id, row), record}, once_timeout_ms()) do
         {:ok, %{"t" => "forgot", "id" => ^id, "session" => ^session}} ->
           :forgot
 
@@ -417,7 +425,7 @@ defmodule Opus.Brain do
       case call(
              pid,
              {:once, owner(athanor_id, row), %{"t" => "models", "id" => id}},
-             @once_ms + @answer_margin_ms
+             once_timeout_ms()
            ) do
         {:ok,
          %{
@@ -476,6 +484,10 @@ defmodule Opus.Brain do
         end
     end
   end
+
+  # A one-command holder answers once its session's close has, on its way
+  # out.
+  defp once_timeout_ms, do: @once_ms + Programs.Box.close_timeout_ms() + @answer_margin_ms
 
   defp call(pid, message, timeout) do
     GenServer.call(pid, message, timeout)
@@ -901,10 +913,12 @@ defmodule Opus.Brain do
   def handle_call({:write, _ref, _binding, _command, _opts}, _from, state),
     do: {:reply, {:error, :not_attached}, state}
 
-  def handle_call({:close, ref}, _from, %{ref: ref} = state),
-    do: {:stop, :normal, :ok, ended(state, :closed)}
+  def handle_call({:close, ref}, _from, %{ref: ref} = state) do
+    state = ended(state, :closed)
+    {:stop, :normal, disconnect(state), %{state | reader: nil, grant: nil, session: nil}}
+  end
 
-  def handle_call({:close, _ref}, _from, state), do: {:reply, :ok, state}
+  def handle_call({:close, _ref}, _from, state), do: {:reply, {:error, :unanswered}, state}
 
   # A take-over ends this holder only for a binding that proves now, read
   # here, so nothing proves between the check and the end.
@@ -1113,15 +1127,17 @@ defmodule Opus.Brain do
     "brain-" <> binary_part(digest, 0, 40)
   end
 
+  # What the close of its session answered, `:ok` with none held.
   defp disconnect(state) do
     if state.reader, do: Process.exit(state.reader, :kill)
 
-    if state.grant do
-      if state.session, do: Programs.box_close(state.owner, state.owner.server_id, key(state))
-      Programs.release(state.owner)
-    end
+    closed =
+      if state.session,
+        do: Programs.box_close(state.owner, state.owner.server_id, key(state)),
+        else: :ok
 
-    :ok
+    if state.grant, do: Programs.release(state.owner)
+    closed
   end
 
   # A new process of the driver in the same holder: the last is closed,

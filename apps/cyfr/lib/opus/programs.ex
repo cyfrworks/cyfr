@@ -650,7 +650,9 @@ defmodule Opus.Programs do
   caller waits for it: `{:ok, :closed}` once the service confirmed it,
   `{:ok, :already_gone}` for a session that is not running (or not the
   caller's), and `{:error, :unanswered}` when the service did not
-  confirm it in time, the box still owing the close. The session ends
+  confirm it in time, the box still owing the close. One whose process
+  ended while it was asked waits on the close that process left, and is
+  `:already_gone` only once that is confirmed. The session ends
   `:closed` either way. A person closes their own sessions, those their
   turns started and their browser's; a turn or the browser closes only
   its own.
@@ -664,12 +666,18 @@ defmodule Opus.Programs do
           {:ok, :already_gone}
 
         pid ->
-          GenServer.call(pid, {:close, principal}, Box.close_timeout_ms() + @answer_margin_ms)
+          close_terminal(pid, principal)
       end
     end
   catch
+    :exit, _ -> {:error, :unanswered}
+  end
+
+  defp close_terminal(pid, principal) do
+    GenServer.call(pid, {:close, principal}, Box.close_timeout_ms() + @answer_margin_ms)
+  catch
     :exit, {:timeout, _} -> {:error, :unanswered}
-    :exit, _ -> {:ok, :already_gone}
+    :exit, _ -> with :ok <- left_close(pid), do: {:ok, :already_gone}
   end
 
   @doc """
@@ -1003,10 +1011,11 @@ defmodule Opus.Programs do
   @doc """
   The calling holder's key's session ends: the box closes it, and owes the
   close until the backend confirms it. Answers `:ok` once the backend has
-  confirmed the close (or nothing of the session runs), and
-  `{:error, :unanswered}` when it did not or the close window passed, the
-  close still owed; either way only then, so the holder's release of the
-  owner after it never outruns it.
+  confirmed the close, and so the place is back (or the box knows that
+  nothing of the key runs), and `{:error, :unanswered}` when it did not,
+  the close window passed or the box could send nothing, the close still
+  owed; either way only then, so the holder's release of the owner after
+  it never outruns it.
   """
   @spec box_close(map(), String.t() | nil, String.t()) :: :ok | {:error, :unanswered}
   def box_close(owner, home_id, key) do
@@ -1015,6 +1024,19 @@ defmodule Opus.Programs do
            {:session_close, owner, home_id, key},
            Box.close_timeout_ms()
          ) do
+      :ok -> :ok
+      {:error, _unanswered} -> {:error, :unanswered}
+    end
+  end
+
+  @doc """
+  The holder `holder` has died, and what it left is closed: `:ok` once the
+  close it left is confirmed, or it left none, and `{:error, :unanswered}`
+  while the box still owes it.
+  """
+  @spec left_close(pid()) :: :ok | {:error, :unanswered}
+  def left_close(holder) when is_pid(holder) do
+    case call(@local, {:left_close, holder}, Box.close_timeout_ms()) do
       :ok -> :ok
       {:error, _unanswered} -> {:error, :unanswered}
     end

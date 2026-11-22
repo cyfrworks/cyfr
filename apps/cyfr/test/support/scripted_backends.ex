@@ -10,8 +10,8 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   Everything but the programs is the wire's (`Prima.LocusBackends`). It is
   served by an HTTP listener of its own on a loopback port (`url`), at the
-  wire's `control` and `session` routes; `down/1` and `up/1` stop and start
-  it on the same port. A control message's `x-cyfr-auth` header is verified
+  wire's `control`, `session` and `close` routes; `down/1` and `up/1` stop
+  and start it on the same port. A control message's `x-cyfr-auth` header is verified
   under the control key, its lifetime and its `(generation, seq)` against the
   high-water mark, and its body read strictly (`read_control/1`); a session
   message's header is verified under the key of the owner it names, its
@@ -22,7 +22,11 @@ defmodule Cyfr.Test.ScriptedBackends do
   scripted session does at once: the session message that finds the
   lease run out is refused `lapsed`, every later one `unknown_owner`, a
   renewal answers it unknown and a release or a status names it no more,
-  until a sync admits it as a new owner. Every answer carries `x-cyfr-boot`, and every refusal
+  until a sync admits it as a new owner. A close is verified alike but
+  asks for no owner: it ends only a session that the version its header
+  names opened, and is answered `closed`, since a scripted session's
+  place is back as soon as it ends; it is reported, held and refused as a
+  session message of type `close`. Every answer carries `x-cyfr-boot`, and every refusal
   is `encode_refusal/1` at its code's status. Each accepted control message
   is reported to the test as `{:control, type, message, fields}`, the
   message as its JSON; each session message as `{:session, type, message,
@@ -54,7 +58,9 @@ defmodule Cyfr.Test.ScriptedBackends do
   false`). A session's key is Locus's: its program, home, key and mode.
 
   `set(fake, :reset_send, true)` resets the connection of the next `send`
-  once it has arrived, before any answer. `set(fake, :dropped, n)` makes
+  once it has arrived, before any answer, and `set(fake, :lose_close,
+  true)` that of the next close once it was carried out, so its answer is
+  lost. `set(fake, :dropped, n)` makes
   the next answer that carries lines say `n` were lost before them. `hold/2` holds a control or a
   session message of its type, and `"opened"` holds an open's answer
   once its session stands.
@@ -97,7 +103,8 @@ defmodule Cyfr.Test.ScriptedBackends do
              silent: [],
              answer_version: LocusBackends.version(),
              refuse: %{},
-             reset_send: false
+             reset_send: false,
+             lose_close: false
            }
          end},
         id: :scripted_backends
@@ -153,6 +160,9 @@ defmodule Cyfr.Test.ScriptedBackends do
         path == LocusBackends.route(:session) ->
           serve(conn, &Cyfr.Test.ScriptedBackends.session_request(&1, agent))
 
+        path == LocusBackends.route(:close) ->
+          serve(conn, &Cyfr.Test.ScriptedBackends.close_request(&1, agent))
+
         true ->
           send_resp(conn, 404, "")
       end
@@ -173,6 +183,9 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   @doc false
   def session_request(conn, agent), do: session(conn, agent)
+
+  @doc false
+  def close_request(conn, agent), do: close(conn, agent)
 
   @doc "A new lifetime: every owner and session forgotten and the high-water mark reset, as a restarted service."
   def restart(%{agent: agent}, boot),
@@ -703,6 +716,72 @@ defmodule Cyfr.Test.ScriptedBackends do
     end
   end
 
+  # A close asks nothing of the owner: its header is the proof, and it
+  # ends only what that version opened.
+  defp close(conn, agent) do
+    {:ok, body, conn} = read_body(conn)
+    lapse_expired(agent)
+    st = Agent.get(agent, & &1)
+    header = get_req_header(conn, LocusBackends.auth_header())
+    now = System.os_time(:millisecond)
+
+    with [header] <- header,
+         {:ok, fields} <- LocusBackends.verify(:invoke, st.root, header, body, now) do
+      case LocusBackends.read_close(body) do
+        {:ok, message} -> close_admitted(conn, agent, st, fields, message, Jason.decode!(body))
+        {:error, error} -> refuse(conn, st, LocusBackends.refusal_for(error))
+      end
+    else
+      _unauthenticated -> refuse(conn, st, :unauthorized)
+    end
+  end
+
+  defp close_admitted(conn, agent, st, fields, message, wire) do
+    cond do
+      fields.boot != st.boot ->
+        refuse(conn, st, :stale_boot)
+
+      message.owner != %{athanor: fields.athanor, server: fields.server} or
+          message.e != fields.epoch ->
+        refuse(conn, st, :bad_request)
+
+      true ->
+        held(agent, "close")
+        send(st.test, {:session, "close", wire, fields})
+
+        case pop_refusal(agent, "close") do
+          nil ->
+            if closed(agent, fields, message.session), do: Process.exit(self(), :kill)
+            session_answer(conn, Agent.get(agent, & &1), %{"status" => "closed"})
+
+          {code, status} ->
+            answer(conn, Agent.get(agent, & &1), status, %{
+              "version" => LocusBackends.version(),
+              "error" => code
+            })
+        end
+    end
+  end
+
+  # The close carried out; answers whether its answer is to be lost.
+  defp closed(agent, fields, id) do
+    owner = {fields.athanor, fields.server}
+    version = {fields.generation, fields.epoch}
+
+    Agent.get_and_update(agent, fn st ->
+      sessions =
+        case st.sessions[id] do
+          %{owner: ^owner, version: ^version} = s ->
+            Map.put(st.sessions, id, %{s | running: false})
+
+          _none_of_that_version ->
+            st.sessions
+        end
+
+      {st.lose_close, %{st | sessions: sessions, lose_close: false}}
+    end)
+  end
+
   # A `send` carrying a JSON-RPC request whose method the test refuses.
   defp send_refusal(agent, %{type: :send, lines: lines}) do
     Enum.find_value(lines, fn line ->
@@ -752,6 +831,7 @@ defmodule Cyfr.Test.ScriptedBackends do
 
             s = %{
               owner: {fields.athanor, fields.server},
+              version: {fields.generation, fields.epoch},
               program: message.program,
               key: message.key,
               home_id: message.home_id,
@@ -783,8 +863,7 @@ defmodule Cyfr.Test.ScriptedBackends do
     session_answer(conn, Agent.get(agent, & &1), answer)
   end
 
-  defp handle_session(conn, agent, fields, %{session: id} = message)
-       when message.type != :close do
+  defp handle_session(conn, agent, fields, %{session: id} = message) do
     st = Agent.get(agent, & &1)
 
     case st.sessions[id] do
@@ -796,17 +875,6 @@ defmodule Cyfr.Test.ScriptedBackends do
           do: handle_mode(conn, agent, fields, message),
           else: refuse(conn, st, :bad_request)
     end
-  end
-
-  defp handle_session(conn, agent, _fields, %{type: :close, session: id}) do
-    Agent.update(agent, fn st ->
-      case st.sessions[id] do
-        nil -> st
-        s -> %{st | sessions: Map.put(st.sessions, id, %{s | running: false})}
-      end
-    end)
-
-    session_answer(conn, Agent.get(agent, & &1), %{"status" => "closed"})
   end
 
   defp handle_mode(conn, agent, fields, %{type: :send, session: id, lines: lines}) do

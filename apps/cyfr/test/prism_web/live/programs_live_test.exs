@@ -682,7 +682,12 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     view |> element(~s([data-test="terminal-close"])) |> render_click()
     assert_receive {:session, "close", _message, _fields}, 2_000
-    assert has_element?(view, ~s([data-test="terminal-ended"]), "The program was closed.")
+
+    # The page waits off its process, and says it once the close answered.
+    assert eventually(fn ->
+             has_element?(view, ~s([data-test="terminal-ended"]), "The program was closed.")
+           end)
+
     assert {:ok, []} = Opus.Programs.running(person(user, athanor))
   end
 
@@ -735,7 +740,59 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> render_click()
 
     assert_receive {:session, "close", _message, _fields}, 2_000
-    assert {:ok, []} = Opus.Programs.running(me)
+    assert eventually(fn -> Opus.Programs.running(me) == {:ok, []} end)
+  end
+
+  test "the page answers while a Close waits for the place, and says closed only after",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = driven_row!(athanor)
+
+    {:ok, session} =
+      Opus.Programs.start(person(user, athanor), row.id, %{rows: 24, cols: 80, args: []})
+
+    {view, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    ready!(view, session)
+    Scripted.hold(fake, "close")
+
+    view |> element(~s([data-test="terminal-close"])) |> render_click()
+    assert_receive {:held, "close", service}, 2_000
+
+    # Events the closing session would hold the page on return at once.
+    started = System.monotonic_time(:millisecond)
+    render_hook(view, "terminal_input", %{"session" => session, "terminal_input" => "x"})
+    render_hook(view, "terminal_resize", %{"session" => session, "rows" => 30, "cols" => 90})
+    assert System.monotonic_time(:millisecond) - started < 1_000
+    refute has_element?(view, ~s([data-test="terminal-ended"]))
+
+    send(service, :go)
+
+    assert eventually(fn ->
+             has_element?(view, ~s([data-test="terminal-ended"]), "The program was closed.")
+           end)
+  end
+
+  test "an unanswered Close says so, whatever ending the session announced before its answer",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = driven_row!(athanor)
+
+    {:ok, session} =
+      Opus.Programs.start(person(user, athanor), row.id, %{rows: 24, cols: 80, args: []})
+
+    {view, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    ready!(view, session)
+    Scripted.refuse_once(fake, "close", "internal")
+
+    view |> element(~s([data-test="terminal-close"])) |> render_click()
+
+    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-ended"])) end)
+
+    assert has_element?(
+             view,
+             ~s([data-test="terminal-ended"]),
+             "The close was not confirmed yet; CYFR ends the program."
+           )
   end
 
   defp terminal_pid(session) do

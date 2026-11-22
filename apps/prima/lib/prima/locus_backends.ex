@@ -24,9 +24,10 @@ defmodule Prima.LocusBackends do
 
   | Operation | Route | Body | Answer |
   |---|---|---|---|
-  | `:health` | `/locus/v1/backends/health` | `{"version": 3}` | unauthenticated |
+  | `:health` | `/locus/v1/backends/health` | `{"version": 4}` | unauthenticated |
   | `:control` | `/locus/v1/backends/control` | a control message | its answer, or a refusal |
   | `:session` | `/locus/v1/backends/session` | a session message | its answer, or a refusal |
+  | `:close` | `/locus/v1/backends/close` | a close | `status` `closed`, or a refusal |
 
   Every answer carries `x-cyfr-boot` (`boot_header/0`), the service's
   lifetime, which a control message names back.
@@ -131,7 +132,6 @@ defmodule Prima.LocusBackends do
   | `input` | `owner`, `e`, `session`, `bytes` | `status` |
   | `output` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `chunks[{seq, bytes}]`, `dropped`, `running`, `exit_code?` |
   | `resize` | `owner`, `e`, `session`, `rows`, `cols` | `status` |
-  | `close` | `owner`, `e`, `session` | `status` |
 
   An `open` attaches to the session running for its key and mode
   (`resumed: true`) or starts the program's `command` with `argv` appended
@@ -167,18 +167,36 @@ defmodule Prima.LocusBackends do
   idempotent: a lost answer is replayed by the same `after`. A session
   whose process ended answers `running: false` on every later `recv` or
   `output`, with `exit_code` when its process exited of its own accord
-  with a status (absent for one ended by a signal, by `close`, by idle or
+  with a status (absent for one ended by a signal, by a close, by idle or
   by its owners), and the next `open` with its key answers `resumed:
   false`; an owner that speaks a protocol over a session starts it again
   then. A `send`, `input` or `resize` to an ended session answers `status`
-  `ended`, and one to a running session `running`. `close` ends the
-  session's process and answers `closed`. A session's idle period is the
-  owner's `idle_ms`: a session that no message reached within it is ended.
+  `ended`, and one to a running session `running`. A session's idle period
+  is the owner's `idle_ms`: a session that no message reached within it is
+  ended.
+
+  ## A close (`encode_close/1`, `read_close/1`)
+
+  A close is no session message: it has a route of its own, names exactly
+  `owner`, `e` and `session`, and is signed as an invoke, under the key of
+  the owner version that opened the session and with the service's current
+  lifetime. It asks nothing of that owner's standing, so a replaced,
+  released or lapsed owner closes exactly what it opened, and nothing of
+  another version's, row's or athanor's.
+
+  It ends the session's process and answers `{"status": "closed"}`
+  (`encode_close_answer/1`, `read_close_answer/1`) once what the session
+  held is released, so `closed` means that its place is back. A close that
+  names nothing held that way is answered `closed` and changes nothing.
+  One whose place is not back within `close_wait_ms/0`, the stop grace and
+  the release bound together, or that arrives before the service knows
+  what it still holds, is refused `unavailable`: the place stays held and
+  the same close is sent again.
 
   ## Refusals
 
   A refusal is answered at its code's HTTP status (`status/1`) as
-  `{"version": 3, "error": <code>}` (`encode_refusal/1`).
+  `{"version": 4, "error": <code>}` (`encode_refusal/1`).
 
   ## Authentication
 
@@ -196,8 +214,8 @@ defmodule Prima.LocusBackends do
   `verify_body/3`). The kinds are `control` (`generation`, `seq`,
   `cyfr_boot`, `boot`, `ts`) and `invoke` (`athanor`, `server`,
   `generation`, `epoch`, `boot`, `ts`, `nonce`), in that order, with
-  `generation` written `gen` in the header; a session message is signed
-  as an `invoke`. A listener refuses, in order, `:unknown_version` (a
+  `generation` written `gen` in the header; a session message and a close
+  are signed as an `invoke`. A listener refuses, in order, `:unknown_version` (a
   version token other than `v1`, such as `v2`), `:malformed`,
   `:outside_window` (`ts` further than `window_ms/0` from its clock) and
   `:bad_mac`. Neither the builds key nor a header of the builds service
@@ -223,7 +241,7 @@ defmodule Prima.LocusBackends do
 
   alias Prima.{KeeperProtocol, MacEnvelope, VaultRef}
 
-  @version 3
+  @version 4
   @domain MacEnvelope.domain()
   @service MacEnvelope.service(:backends)
   @label MacEnvelope.label(:backends)
@@ -233,7 +251,8 @@ defmodule Prima.LocusBackends do
   @routes %{
     health: "/locus/v1/backends/health",
     control: "/locus/v1/backends/control",
-    session: "/locus/v1/backends/session"
+    session: "/locus/v1/backends/session",
+    close: "/locus/v1/backends/close"
   }
 
   # A control message is at most a sync of sixteen programs and its sealed
@@ -249,6 +268,7 @@ defmodule Prima.LocusBackends do
   @line_charge_bytes 32
   @max_session_bytes 16_777_216
   @max_recv_wait_ms 30_000
+  @close_wait_ms 17_000
   @max_status_owners 64
   @max_status_answer_bytes @max_control_bytes
   @max_programs 16
@@ -277,6 +297,7 @@ defmodule Prima.LocusBackends do
     line_charge_bytes: @line_charge_bytes,
     max_session_bytes: @max_session_bytes,
     max_recv_wait_ms: @max_recv_wait_ms,
+    close_wait_ms: @close_wait_ms,
     max_status_owners: @max_status_owners,
     max_status_answer_bytes: @max_status_answer_bytes,
     max_programs: @max_programs,
@@ -325,7 +346,7 @@ defmodule Prima.LocusBackends do
   @classes Map.keys(@statuses) |> Enum.sort()
 
   @control_types [:hello, :reconcile, :sync, :renew, :release, :status, :home, :homes]
-  @session_types [:open, :send, :recv, :input, :output, :resize, :close]
+  @session_types [:open, :send, :recv, :input, :output, :resize]
   @run_types [:send, :recv]
   @terminal_types [:input, :output, :resize]
   @owner_states [:running, :draining]
@@ -362,18 +383,18 @@ defmodule Prima.LocusBackends do
     recv: ~w(version type owner e session after max_wait_ms),
     input: ~w(version type owner e session bytes),
     output: ~w(version type owner e session after max_wait_ms),
-    resize: ~w(version type owner e session rows cols),
-    close: ~w(version type owner e session)
+    resize: ~w(version type owner e session rows cols)
   }
+  @close_fields ~w(version owner e session)
   @session_answer_fields %{
     open: ~w(version status session resumed),
     send: ~w(version status),
     recv: ~w(version lines dropped running),
     input: ~w(version status),
     output: ~w(version chunks dropped running),
-    resize: ~w(version status),
-    close: ~w(version status)
+    resize: ~w(version status)
   }
+  @close_answer_fields ~w(version status)
   @session_optional %{open: ~w(home_id rows cols)}
   @session_answer_optional %{recv: ~w(exit_code), output: ~w(exit_code)}
   @program_fields ~w(name command env_names home)
@@ -414,17 +435,17 @@ defmodule Prima.LocusBackends do
     }
   }
 
-  @type operation :: :health | :control | :session
+  @type operation :: :health | :control | :session | :close
   @type kind :: :invoke | :control
   @type control_type ::
           :hello | :reconcile | :sync | :renew | :release | :status | :home | :homes
-  @type session_type :: :open | :send | :recv | :input | :output | :resize | :close
+  @type session_type :: :open | :send | :recv | :input | :output | :resize
   @type owner_state :: :running | :draining
   @type program_status :: :idle | :running | :failed
   @type home :: :scratch | :kept
   @type mode :: :run | :terminal
   @type home_op :: :reset | :retire
-  @type session_status :: :running | :ended | :closed
+  @type session_status :: :running | :ended
   @type home_state :: :empty | :absent
 
   @typedoc "The owner a key or a sealed environment is bound to."
@@ -603,7 +624,9 @@ defmodule Prima.LocusBackends do
               rows: pos_integer(),
               cols: pos_integer()
             }
-          | %{type: :close, owner: owner_ref(), e: pos_integer(), session: String.t()}
+
+  @typedoc "A close: the session, and the owner and epoch that opened it."
+  @type close_message :: %{owner: owner_ref(), e: pos_integer(), session: String.t()}
 
   @typedoc "One buffered line, by its sequence number."
   @type line :: %{seq: pos_integer(), text: String.t()}
@@ -798,7 +821,14 @@ defmodule Prima.LocusBackends do
   @spec max_pty_size() :: pos_integer()
   def max_pty_size, do: KeeperProtocol.max_pty_size()
 
-  @doc "The session message types each mode takes beside `open` and `close`."
+  @doc """
+  How long a close waits for a session's place to come back: the stop
+  grace and the release bound together.
+  """
+  @spec close_wait_ms() :: pos_integer()
+  def close_wait_ms, do: @close_wait_ms
+
+  @doc "The session message types each mode takes beside `open`."
   @spec mode_types(mode()) :: [session_type()]
   def mode_types(:run), do: @run_types
   def mode_types(:terminal), do: @terminal_types
@@ -1690,11 +1720,6 @@ defmodule Prima.LocusBackends do
     end
   end
 
-  defp read_session_typed(:close, wire, message) do
-    with {:ok, session} <- session_id(wire["session"]),
-         do: {:ok, Map.put(message, :session, session)}
-  end
-
   defp key(key) do
     if is_binary(key) and byte_size(key) <= @max_key_bytes and Regex.match?(@key_text, key),
       do: {:ok, key},
@@ -1849,11 +1874,6 @@ defmodule Prima.LocusBackends do
          do: {:ok, %{status: status}}
   end
 
-  defp read_session_answer_typed(:close, wire) do
-    with {:ok, status} <- roster(wire, "status", [:closed], ""),
-         do: {:ok, %{status: status}}
-  end
-
   defp read_session_answer_typed(:recv, wire) do
     with {:ok, lines} <- seq_lines(wire["lines"]),
          {:ok, dropped} <- count(wire, "dropped", ""),
@@ -1929,6 +1949,63 @@ defmodule Prima.LocusBackends do
   end
 
   defp chunk_bytes(_text, at), do: {:error, {:invalid_field, at}}
+
+  # ————— closes —————
+
+  @doc "The body of a close, checked as `read_close/1` will check it."
+  @spec encode_close(close_message()) :: {:ok, binary()} | {:error, read_error()}
+  def encode_close(%{} = message) do
+    wire = message |> wire() |> Map.put("version", @version)
+
+    with {:ok, _message} <- read_close_wire(wire),
+         body = Jason.encode!(wire),
+         :ok <- admit(byte_size(body), :control, @max_control_bytes) do
+      {:ok, body}
+    end
+  end
+
+  @doc "A close's body, read strictly: its size, its version, then every member."
+  @spec read_close(binary()) :: {:ok, close_message()} | {:error, read_error()}
+  def read_close(body) when is_binary(body) do
+    with :ok <- admit(byte_size(body), :control, @max_control_bytes),
+         {:ok, wire} <- object(body) do
+      read_close_wire(wire)
+    end
+  end
+
+  defp read_close_wire(wire) do
+    with :ok <- current_version(wire),
+         :ok <- exact(wire, @close_fields, ""),
+         {:ok, owner} <- owner(wire["owner"], "owner", []),
+         {:ok, e} <- positive(wire, "e", ""),
+         {:ok, session} <- session_id(wire["session"]) do
+      {:ok, %{owner: owner, e: e, session: session}}
+    end
+  end
+
+  @doc "The body of a close's answer, checked as `read_close_answer/1` will check it."
+  @spec encode_close_answer(%{status: :closed}) :: {:ok, binary()} | {:error, read_error()}
+  def encode_close_answer(%{} = answer) do
+    wire = answer |> wire() |> Map.put("version", @version)
+
+    with {:ok, _answer} <- read_close_answer_wire(wire), do: {:ok, Jason.encode!(wire)}
+  end
+
+  @doc "A close's answer, read strictly: its size, its version, then every member."
+  @spec read_close_answer(binary()) :: {:ok, %{status: :closed}} | {:error, read_error()}
+  def read_close_answer(body) when is_binary(body) do
+    with :ok <- admit(byte_size(body), :answer, @max_control_bytes),
+         {:ok, wire} <- object(body) do
+      read_close_answer_wire(wire)
+    end
+  end
+
+  defp read_close_answer_wire(wire) do
+    with :ok <- current_version(wire),
+         :ok <- exact(wire, @close_answer_fields, ""),
+         {:ok, status} <- roster(wire, "status", [:closed], ""),
+         do: {:ok, %{status: status}}
+  end
 
   # ————— refusals —————
 

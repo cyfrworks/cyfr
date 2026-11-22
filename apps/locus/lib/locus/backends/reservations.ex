@@ -8,8 +8,8 @@ defmodule Locus.Backends.Reservations do
   Data only: the owner table holds it and acts on what it answers.
 
   A reservation is a session's heir tag (`t:tag/0`: its ledger, its session,
-  its athanor, its row, its session key, its memory bound and its kept
-  home) and its state:
+  its athanor, its row, the generation and epoch that opened it, its session
+  key, its memory bound and its kept home) and its state:
 
   | State | Holds | Event | Next | Authority |
   |---|---|---|---|---|
@@ -37,7 +37,9 @@ defmodule Locus.Backends.Reservations do
   holds a scratch session's uid of the pool, which only its process takes.
   Every state but `reserved` stands for a process the launcher may still
   run under its tag's row and key (`process?/4`). A tag that names no row
-  or key names a process of no key.
+  or key names a process of no key. A close is proved against its tag's
+  session, athanor, row, generation and epoch (`opened/3`), which an
+  adoption carries, so it needs no owner.
   """
 
   @typedoc "A session's heir tag, which a table that adopts it holds by."
@@ -46,6 +48,8 @@ defmodule Locus.Backends.Reservations do
           session: key(),
           athanor: String.t(),
           server: String.t(),
+          g: pos_integer(),
+          e: pos_integer(),
           key: term(),
           memory_bytes: pos_integer(),
           home_id: String.t() | nil
@@ -141,6 +145,23 @@ defmodule Locus.Backends.Reservations do
 
       _other ->
         false
+    end)
+  end
+
+  @doc """
+  The reservation the session `id` holds as `version` opened it: the one
+  whose tag names that session, athanor, row, generation and epoch, or nil.
+  """
+  @spec opened(t(), map(), String.t()) :: key() | nil
+  def opened(reservations, version, id) do
+    %{athanor: athanor, server: server, generation: g, epoch: e} = version
+
+    Enum.find_value(reservations, fn
+      {key, %{tag: %{session: {_, ^id}, athanor: ^athanor, server: ^server, g: ^g, e: ^e}}} ->
+        key
+
+      _other ->
+        nil
     end)
   end
 

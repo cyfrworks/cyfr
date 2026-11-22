@@ -1394,7 +1394,7 @@ defmodule Opus.ProgramsTest do
       owner = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch}
 
       assert {:ok, %{epoch: 1, url: url}} = Programs.hold(owner)
-      assert url =~ LocusBackends.route(:session)
+      assert url == fake.url
 
       assert_receive {:control, "sync",
                       %{
@@ -2373,6 +2373,9 @@ defmodule Opus.ProgramsTest do
         send(test, {:closed, self(), key, Programs.box_close(owner, owner.server_id, key)})
         holding(test, owner, List.delete(keys, key))
 
+      :release ->
+        Programs.release(owner)
+
       :stop ->
         for key <- keys, do: Programs.box_close(owner, owner.server_id, key)
         Programs.release(owner)
@@ -2462,9 +2465,9 @@ defmodule Opus.ProgramsTest do
       assert %{^sibling => %{running: true}} = Scripted.sessions(fake, row.id)
     end
 
-    # A close the box owes for an open whose holder died settles on the
-    # service's `unknown_owner` once the owner it named is gone, where a
-    # `lapsed` keeps it owed for the drain.
+    # A close the box owes for an open whose holder died needs no owner:
+    # the service confirms it by the opening grant's proof once the owner
+    # it named is gone.
     test "a late close settles after its backend owner expires", %{fake: fake, row: row} do
       controller = start_controller(fake, lease_ms: 500)
       kept = box_holder(row)
@@ -2503,7 +2506,7 @@ defmodule Opus.ProgramsTest do
 
       eventually(
         fn -> :sys.get_state(controller).closing == %{} end,
-        "the gone owner to confirm the late close"
+        "the late close to be confirmed by its proof"
       )
     end
 
@@ -2528,6 +2531,116 @@ defmodule Opus.ProgramsTest do
       tick(controller)
       assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
       assert %{^session => %{running: false}} = Scripted.sessions(fake, row.id)
+    end
+
+    test "a close whose answer was lost waits for the slot, then is confirmed by the opening grant",
+         %{fake: fake, row: row} do
+      controller = start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(holder, "k")
+      assert_receive {:session, "open", _wire, %{generation: 1, epoch: 1}}, 2_000
+
+      Scripted.set(fake, :lose_close, true)
+      send(holder, {:close, "k"})
+      assert_receive {:session, "close", %{"session" => ^session}, _fields}, 2_000
+      assert_receive {:closed, ^holder, "k", {:error, :unanswered}}, 3_000
+      flush_sessions()
+
+      # Without the slot a tick sends nothing, and a waiter hears so at once.
+      Arca.ControlPlane.record(:lost)
+      tick(controller)
+      send(holder, {:close, "k"})
+      assert_receive {:closed, ^holder, "k", {:error, :unanswered}}, 1_000
+      refute_receive {:session, "close", _wire, _fields}, 200
+      assert Map.has_key?(:sys.get_state(controller).closing, session)
+
+      # The slot back under a later generation and a service of a later
+      # lifetime: the retry is the opening grant's, at the current boot.
+      Scripted.set(fake, :boot, "bb_second")
+      Scripted.set(fake, :hwm, {0, 0})
+      Arca.ControlPlane.record(:unclaimed)
+      Prima.Test.Env.put_persistent_term(@generation_key, 2)
+
+      for _ <- 1..2, do: tick(controller)
+
+      assert_receive {:session, "close", %{"session" => ^session},
+                      %{generation: 1, epoch: 1, boot: "bb_second"}},
+                     3_000
+
+      eventually(fn -> :sys.get_state(controller).closing == %{} end, "the close to be confirmed")
+    end
+
+    test "without the slot a lapse ends the session at the service, and no one is told closed",
+         %{fake: fake, row: row} do
+      controller = start_controller(fake, lease_ms: 500)
+      holder = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(holder, "k")
+      flush_sessions()
+      Arca.ControlPlane.record(:lost)
+
+      send(holder, {:close, "k"})
+      assert_receive {:closed, ^holder, "k", {:error, :unanswered}}, 1_000
+      assert %{^session => %{running: true}} = Scripted.sessions(fake, row.id)
+
+      eventually(
+        fn ->
+          Agent.get(fake.agent, fn st ->
+            Enum.any?(st.leases, fn {_key, until} ->
+              until <= System.monotonic_time(:millisecond)
+            end)
+          end)
+        end,
+        "the backend owner's lease to expire"
+      )
+
+      tick(controller)
+      send(holder, {:close, "k"})
+      assert_receive {:closed, ^holder, "k", {:error, :unanswered}}, 1_000
+      refute_received {:session, "close", _wire, _fields}
+
+      # The slot back, the close finds what the lapse gave back.
+      Arca.ControlPlane.record(:unclaimed)
+      tick(controller)
+      assert_receive {:session, "close", %{"session" => ^session}, _fields}, 2_000
+      eventually(fn -> :sys.get_state(controller).closing == %{} end, "the close to be confirmed")
+    end
+
+    test "a second close of a key waits on the first, and a close asked of a dead holder on what it left",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      kept = box_holder(row)
+      dying = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(dying, "k")
+      flush_sessions()
+      Scripted.hold(fake, "close")
+
+      Process.exit(dying, :kill)
+      assert_receive {:held, "close", service}, 2_000
+      left = Task.async(fn -> Programs.left_close(dying) end)
+      send(kept, {:close, "k"})
+
+      assert Task.yield(left, 200) == nil
+      refute_received {:closed, ^kept, "k", _answer}
+      send(service, :go)
+
+      assert Task.await(left) == :ok
+      assert_receive {:closed, ^kept, "k", :ok}, 3_000
+      assert_receive {:session, "close", %{"session" => ^session}, _fields}, 1_000
+      refute_received {:session, "close", _wire, _fields}
+    end
+
+    test "a holder that releases without closing leaves its session a close owed, its row's other holder untouched",
+         %{fake: fake, row: row} do
+      start_controller(fake)
+      kept = box_holder(row)
+      leaving = box_holder(row)
+      assert {:ok, %{session: sibling}} = box_open(kept, "b")
+      assert {:ok, %{session: left}} = box_open(leaving, "a")
+      flush_sessions()
+
+      send(leaving, :release)
+      assert_receive {:session, "close", %{"session" => ^left}, _fields}, 2_000
+      refute_receive {:session, "close", %{"session" => ^sibling}, _fields}, 200
     end
 
     test "a late first answer never closes the session a second open of the key was given",
@@ -2580,6 +2693,28 @@ defmodule Opus.ProgramsTest do
       assert_receive {:opened, ^holder, "a", {:error, :deadline}}, 3_000
       assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
       refute closed == sibling
+    end
+
+    test "a dropped owner's session is a close owed, and no one hears closed before it is confirmed",
+         %{ctx: ctx, fake: fake, row: row} do
+      controller = start_controller(fake)
+      holder = box_holder(row)
+      assert {:ok, %{session: session}} = box_open(holder, "k")
+      Scripted.hold(fake, "close")
+
+      {:ok, _} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "claude", %{enabled: false})
+
+      send(controller, :tick)
+      assert_receive {:heard, ^holder, {Opus.Programs, :stand_down, _key}}, 3_000
+      send(holder, {:close, "k"})
+
+      assert_receive {:held, "close", service}, 2_000
+      refute_receive {:closed, ^holder, "k", _answer}, 200
+      send(service, :go)
+
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      assert_receive {:closed, ^holder, "k", :ok}, 3_000
     end
 
     test "a row that is disabled stands its holders down", %{ctx: ctx, fake: fake, row: row} do

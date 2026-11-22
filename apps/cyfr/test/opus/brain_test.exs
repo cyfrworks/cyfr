@@ -943,6 +943,27 @@ defmodule Opus.BrainTest do
       assert running_sessions(fake, row) == []
     end
 
+    test "a close says unanswered while the box still owes it", %{fake: fake, brain: brain} do
+      Scripted.refuse_once(fake, "close", "unavailable")
+      assert Brain.close(brain) == {:error, :unanswered}
+    end
+
+    test "a close of a holder that ended first waits on the close it left", %{
+      fake: fake,
+      brain: {pid, _ref} = brain
+    } do
+      Scripted.hold(fake, "close")
+      monitor = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 5_000
+      assert_receive {:held, "close", service}, 5_000
+
+      closing = Task.async(fn -> Brain.close(brain) end)
+      assert Task.yield(closing, 200) == nil
+      send(service, :go)
+      assert Task.await(closing) == :ok
+    end
+
     test "the attendant's exit ends it, its session closed", %{
       fake: fake,
       row: row,

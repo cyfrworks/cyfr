@@ -35,8 +35,7 @@ defmodule Prima.LocusBackendsTest do
     {"open_terminal", :open},
     {"input", :input},
     {"output", :output},
-    {"resize", :resize},
-    {"close", :close}
+    {"resize", :resize}
   ]
 
   defp hex(bytes), do: Base.encode16(bytes, case: :lower)
@@ -59,7 +58,7 @@ defmodule Prima.LocusBackendsTest do
   # by the control reader.
   defp read_message(body) do
     case Jason.decode(body) do
-      {:ok, %{"type" => type}} when type in ~w(open send recv input output resize close) ->
+      {:ok, %{"type" => type}} when type in ~w(open send recv input output resize) ->
         LocusBackends.read_session(body)
 
       _ ->
@@ -122,7 +121,7 @@ defmodule Prima.LocusBackendsTest do
       assert :ok = LocusBackends.read_health(LocusBackends.health_body())
       assert {:error, {:version, 1}} = LocusBackends.read_health(~s({"version":1}))
       assert {:error, {:version, nil}} = LocusBackends.read_health("{}")
-      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":3,"x":1}))
+      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":4,"x":1}))
       assert {:error, :not_json} = LocusBackends.read_health("[]")
     end
 
@@ -233,6 +232,37 @@ defmodule Prima.LocusBackendsTest do
 
       assert {:error, {:unknown_type, "open"}} =
                LocusBackends.read_control(@vectors["open"]["body"])
+    end
+
+    test "a close signs under the opening owner's key, and reads and writes back as its vector says" do
+      v = @vectors["close"]
+      fields = atom_keys(v["fields"])
+      {:ok, owner_key} = LocusBackends.owner_key(key(), owner())
+
+      assert {:ok, v["canonical"]} == LocusBackends.canonical(:invoke, fields, v["body"])
+      assert {:ok, v["header"]} == LocusBackends.invoke_header(owner_key, fields, v["body"])
+
+      assert {:ok, ^fields} =
+               LocusBackends.verify(:invoke, key(), v["header"], v["body"], fields.ts)
+
+      assert {:ok, close} = LocusBackends.read_close(v["body"])
+      assert Map.keys(close) |> Enum.sort() == [:e, :owner, :session]
+      assert close.owner == %{athanor: owner().athanor, server: owner().server}
+      assert close.e == owner().epoch
+      assert {:ok, v["body"]} == LocusBackends.encode_close(close)
+
+      assert {:ok, %{status: :closed} = answer} = LocusBackends.read_close_answer(v["answer"])
+      assert {:ok, v["answer"]} == LocusBackends.encode_close_answer(answer)
+
+      # A close is no session message, and a session message no close.
+      assert {:error, {:missing_field, "type"}} = LocusBackends.read_session(v["body"])
+      assert :close not in LocusBackends.session_types()
+
+      assert {:error, {:unknown_field, "type"}} =
+               LocusBackends.encode_close(Map.put(close, :type, :close))
+
+      assert {:error, {:invalid_field, "status"}} =
+               LocusBackends.encode_close_answer(%{status: :running})
     end
 
     test "a recv answers lines in rising sequence, each within the line bound" do
@@ -459,6 +489,7 @@ defmodule Prima.LocusBackendsTest do
             case message["route"] do
               "control" -> {:control, LocusBackends.route(:control)}
               "session" -> {:invoke, LocusBackends.route(:session)}
+              "close" -> {:invoke, LocusBackends.route(:close)}
             end
 
           assert @vectors["routes"][message["route"]] == route
@@ -474,10 +505,11 @@ defmodule Prima.LocusBackendsTest do
           # strictly.
           if message != refused do
             assert {:ok, _message} =
-                     if(kind == :control,
-                       do: LocusBackends.read_control(message["body"]),
-                       else: LocusBackends.read_session(message["body"])
-                     ),
+                     (case message["route"] do
+                        "control" -> LocusBackends.read_control(message["body"])
+                        "session" -> LocusBackends.read_session(message["body"])
+                        "close" -> LocusBackends.read_close(message["body"])
+                      end),
                    name
           end
 
@@ -552,7 +584,7 @@ defmodule Prima.LocusBackendsTest do
                LocusBackends.encode_session_answer(:output, %{ended | running: true})
     end
 
-    test "each mode takes its own messages beside open and close" do
+    test "each mode takes its own messages beside open" do
       assert LocusBackends.modes() == [:run, :terminal]
       assert LocusBackends.mode_types(:run) == [:send, :recv]
       assert LocusBackends.mode_types(:terminal) == [:input, :output, :resize]
@@ -638,13 +670,13 @@ defmodule Prima.LocusBackendsTest do
       assert {:error, {:version, 1}} = LocusBackends.read_control(~s({"version":1,"type":"nope"}))
       assert {:error, {:version, nil}} = LocusBackends.read_control(~s({"type":"hello"}))
       assert {:error, {:version, 1}} = LocusBackends.read_session(~s({"version":1,"type":"open"}))
-      assert {:protocol_mismatch, 3, 2} = LocusBackends.refusal_for({:version, 2})
-      assert {:protocol_mismatch, 3, nil} = LocusBackends.refusal_for({:version, "3"})
+      assert {:protocol_mismatch, 4, 2} = LocusBackends.refusal_for({:version, 2})
+      assert {:protocol_mismatch, 4, nil} = LocusBackends.refusal_for({:version, "4"})
 
-      assert LocusBackends.encode_refusal({:protocol_mismatch, 3, 2}) ==
-               ~s({"error":"version","version":3})
+      assert LocusBackends.encode_refusal({:protocol_mismatch, 4, 2}) ==
+               ~s({"error":"version","version":4})
 
-      assert LocusBackends.status({:protocol_mismatch, 3, nil}) == 409
+      assert LocusBackends.status({:protocol_mismatch, 4, nil}) == 409
 
       assert {:error, {:version, 1}} =
                LocusBackends.read_answer(

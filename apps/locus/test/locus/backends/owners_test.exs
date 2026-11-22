@@ -1283,6 +1283,11 @@ defmodule Locus.Backends.OwnersTest do
         )
 
       assert :sys.get_state(owners).adopted == false
+
+      # Nothing is known to be released before the launcher has answered.
+      assert {:error, :unavailable} =
+               Owners.close(owners, invoke("a", {1, 1}), "ss_" <> String.duplicate("0", 32))
+
       :ok = Owners.sweep(owners)
       assert_receive {:adoption_snapshot, worker, ^owners, tag}, 2_000
       send(owners, {AdoptionRace, {:heir, tag}, :released})
