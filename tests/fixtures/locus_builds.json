@@ -190,6 +190,30 @@
         "body": "{\"class\":\"memory\",\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output:    Compiling vector v0.1.0\"],\"reason\":{\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":1}"
       },
       {
+        "class": "memory",
+        "reason": {
+          "cause": "machine"
+        },
+        "diagnostics": [
+          "compiling: Compiling reagent (rust)...",
+          "output:    Compiling vector v0.1.0"
+        ],
+        "sentence": "the machine ran out of memory and the build was ended",
+        "body": "{\"class\":\"memory\",\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output:    Compiling vector v0.1.0\"],\"reason\":{\"cause\":\"machine\"},\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "memory",
+        "reason": {
+          "cause": "either"
+        },
+        "diagnostics": [
+          "compiling: Compiling reagent (rust)...",
+          "output:    Compiling vector v0.1.0"
+        ],
+        "sentence": "the build ran out of memory and was ended",
+        "body": "{\"class\":\"memory\",\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output:    Compiling vector v0.1.0\"],\"reason\":{\"cause\":\"either\"},\"type\":\"refusal\",\"version\":1}"
+      },
+      {
         "class": "unavailable",
         "reason": "the rust toolchain is not installed in this image",
         "diagnostics": [],
@@ -490,6 +514,21 @@
     {
       "name": "refusal_memory_reason_with_another_field",
       "body": "{\"class\":\"memory\",\"diagnostics\":[],\"reason\":{\"limit_bytes\":1073741824,\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_memory_limit_null",
+      "body": "{\"class\":\"memory\",\"diagnostics\":[],\"reason\":{\"limit_bytes\":null},\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_memory_cause_unknown",
+      "body": "{\"class\":\"memory\",\"diagnostics\":[],\"reason\":{\"cause\":\"cap\"},\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_memory_cause_with_a_limit",
+      "body": "{\"class\":\"memory\",\"diagnostics\":[],\"reason\":{\"cause\":\"machine\",\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":1}",
       "error": "invalid_field"
     },
     {

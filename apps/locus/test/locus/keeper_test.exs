@@ -162,12 +162,15 @@ defmodule Locus.KeeperTest do
       assert {{:error, {:memory, 33_554_432}}, ["the command's last words"]} =
                run(name, "true", memory_bytes: 33_554_432)
 
-      # The same end without the kernel's report, for the container's limit,
-      # or for one of the two that cannot be told, is a signal like any other.
-      for memory <- [nil, "machine", "either"] do
-        :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: memory}})
-        assert {{:ok, %{exit: {:signal, "SIGKILL"}}}, _} = run(name, "true")
+      # A kill for memory that is not at the bound names its cause and no bytes.
+      for {spelled, cause} <- [{"machine", :machine}, {"either", :either}] do
+        :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: spelled}})
+        assert {{:error, {:memory, ^cause}}, _} = run(name, "true", memory_bytes: 33_554_432)
       end
+
+      # The same end without the kernel's report is a signal like any other.
+      :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: nil}})
+      assert {{:ok, %{exit: {:signal, "SIGKILL"}}}, _} = run(name, "true")
     end
 
     test "a keeper that cannot enforce the bound runs nothing: unavailable, naming the option",

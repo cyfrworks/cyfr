@@ -521,6 +521,8 @@ defmodule Prima.BuilderProtocolTest do
         {:timeout, 0},
         {:memory, 1},
         {:memory, 1_073_741_824},
+        {:memory, :machine},
+        {:memory, :either},
         {:unavailable, "keeper"},
         {:failed, {:status, 0}},
         {:failed, {:status, -1}},
@@ -575,6 +577,9 @@ defmodule Prima.BuilderProtocolTest do
             {"memory", %{"limit_bytes" => 0}},
             {"memory", %{"limit_bytes" => -1}},
             {"memory", %{"limit_bytes" => 1.5}},
+            {"memory", %{"limit_bytes" => nil}},
+            {"memory", %{"cause" => "cap"}},
+            {"memory", %{"cause" => "machine", "limit_bytes" => limit}},
             {"memory", "1073741824"},
             {"failed", %{"limit_bytes" => limit}},
             {"timeout", %{"limit_bytes" => limit}}

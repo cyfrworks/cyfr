@@ -131,11 +131,13 @@ defmodule Locus.Keeper do
   and the leader's `exited` says so (`memory` is `cap`), read by cyfr-locus
   from the cgroup's own counters: `run/2` then answers
   `{:error, {:memory, limit_bytes}}`, the build wire's `memory` refusal,
-  whatever else this side was doing when it heard. Any other `exited` is a
-  build's status or signal like any other, a kill for the container's own
-  limit (`machine`) and one that cannot be laid to either (`either`) among
-  them. A long-lived spawn's owner hears which of the three it was with
-  the exit. Where cyfr-locus cannot give a spawn
+  whatever else this side was doing when it heard. A kill for a limit
+  above the bound (`machine`) and one that cannot be laid to either
+  (`either`) are the same refusal naming the cause and no bytes,
+  `{:error, {:memory, :machine | :either}}`. Any other `exited` is a
+  build's status or signal like any other. A long-lived spawn's owner
+  hears which of the three it was with the exit. Where cyfr-locus cannot
+  give a spawn
   such a cgroup it refuses the request as `memory_unavailable`, and `run/2`
   answers the wire's `unavailable` refusal naming what the deployment
   lacks: the builder's container needs the `writable-cgroups=true`
@@ -693,9 +695,10 @@ defmodule Locus.Keeper do
     :ok = Log.finish(s.log, s.on_output)
 
     # The kernel's own report of how the build ended comes first: a build
-    # ended at its bound is that, whatever this side was doing when it heard.
+    # ended for memory is that, whatever this side was doing when it heard.
     cond do
       s.memory == :cap -> {:error, {:memory, s.memory_bytes}}
+      s.memory != nil -> {:error, {:memory, s.memory}}
       s.failure != nil -> {:error, s.failure}
       s.exit == nil -> {:error, {:spawn_failed, :no_exit_reported}}
       true -> {:ok, %{exit: s.exit, stdout: IO.iodata_to_binary(s.stdout)}}

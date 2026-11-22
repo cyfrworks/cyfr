@@ -586,12 +586,30 @@ defmodule Locus.BuilderServiceTest do
       assert {:refusal, {:failed, {:signal, "SIGKILL"}}, _diagnostics} = List.last(lines)
     end
 
-    test "a build killed for the container's limit is failed with its signal, not at its bound",
+    test "a build ended at the machine's limit is a memory end that says the machine ran out",
          %{port: port} do
       _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "machine"}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
-      assert {:refusal, {:failed, {:signal, "SIGKILL"}}, _diagnostics} = List.last(lines)
+      assert {:refusal, refusal, _diagnostics} = List.last(lines)
+      assert refusal == {:memory, :machine}
+
+      said = Prima.BuilderProtocol.describe_refusal(refusal)
+      assert said == "the machine ran out of memory and the build was ended"
+      refute said =~ ~r/bound|SIGKILL|[0-9]/
+    end
+
+    test "a build ended for memory at a limit the kernel cannot name is a memory end that names none",
+         %{port: port} do
+      _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "either"}})
+
+      assert {200, lines} = Wire.build(port, Wire.request("true"))
+      assert {:refusal, refusal, _diagnostics} = List.last(lines)
+      assert refusal == {:memory, :either}
+
+      said = Prima.BuilderProtocol.describe_refusal(refusal)
+      assert said == "the build ran out of memory and was ended"
+      refute said =~ ~r/bound|limit|SIGKILL|[0-9]/
     end
 
     test "a keeper that cannot bound a build runs none: unavailable, naming the option", %{
