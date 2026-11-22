@@ -2104,25 +2104,14 @@ defmodule Opus.BrainTest do
 
     test "a discovery ends on its row's end, its caller answered only once its close is",
          %{fake: fake, ctx: ctx, row: row} do
-      until = System.monotonic_time(:millisecond) + 60_000
-      {holder, command} = one_command!(ctx, row, until)
-      asked = :gen_server.send_request(holder, command)
-      once_driver!(fake, row)
-      written_and_reading!()
+      {_asker, holder, _id} = discovering!(fake, ctx, row)
       Scripted.hold(fake, "close")
       :ok = Opus.Programs.end_mounts(ctx.athanor_id, row.id)
       assert_receive {:held, "close", closer}, 1_000
-
-      # The test is the caller, and what one process sends another arrives in
-      # order: whatever the holder answered before the close is here by the
-      # time it has said it is alive.
-      assert Process.alive?(holder)
-      assert :gen_server.wait_response(asked, 0) == :timeout
-      ended = Process.monitor(holder)
+      refute_received {:asked, _answer}
       send(closer, :go)
-      assert_receive {:DOWN, ^ended, :process, ^holder, :normal}, 1_000
-      given_back!(fake, ctx, row)
-      assert :gen_server.wait_response(asked, 1_000) == {:reply, {:error, :lost}}
+      ends_giving_back!(holder, :normal, fake, ctx, row)
+      assert_receive {:asked, {:error, :lost}}, 1_000
     end
 
     test "a discovery ends when the box tells it to stand down for its row's change",
