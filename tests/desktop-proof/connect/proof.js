@@ -13,6 +13,8 @@ import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice,
 // An account service the CYFR names once reconfigured (the front's
 // directory fault); nothing answers at it.
 const OTHER_DIRECTORY = "https://other.test"
+const UNCONFIRMED = "CYFR locked, but the CYFR did not confirm that it signed this computer out. " +
+  "That sign-in ends when it expires, or when you sign it out under Settings, Keys on your account."
 
 async function connectPhase() {
   const second = await secondClient()
@@ -293,9 +295,10 @@ async function connectPhase() {
     await fault("x.test", "down")
     powerMonitor.emit("lock-screen")
   }, () => fault("x.test", "none"))
-  row("offline_lock", out.before.opens && out.notices.some((n) => n.split(",").includes("unconfirmed")) &&
+  row("offline_lock", out.before.opens && out.chooser.told?.words === UNCONFIRMED && out.chooser.told.stayed &&
     out.signOuts.every((r) => r.fault === "down"),
-  "a lock while the CYFR cannot be reached closes Prism and says the sign-out is unconfirmed", lockDetail(out))
+  "a lock while the CYFR cannot be reached closes Prism, and the chooser stays with the words that the sign-out is unconfirmed until the person goes on",
+  lockDetail(out))
   await openCYFR(out.back, passphrase)
   w = await contentAt(atHome, "Prism again")
 

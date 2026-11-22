@@ -94,10 +94,10 @@ that fails. The proof has 28 rows over three launches of the app (`run.sh`): `co
 | `navigation` | main refuses the top frame sent elsewhere, a window elsewhere, a frame sent to the CYFR's company sign-in and a frame moving the top frame (asked from inside the frame, so the engine's initiator is the frame); Prism's page and the frame allow each | main's decision on each navigation's event and on the window request, read from its window handler; nothing at the front for the company sign-in |
 | `prism_frame_rules` | Prism's own frame rules hold in the app: a frame Prism serves (a canvas) is given no window and cannot move the top frame. This is Prism's sandbox refusing, not the app | the engine's answers in the frame |
 | `confirm` | an API key asked for in Prism waits on the device's own window: a wrong passphrase is refused and asked again, the right one confirms it | the refusal and the same confirmation asked again, no key in Prism; then the key shown in Prism |
-| `lock`, `system_lock`, `renderer_killed` | Prism's Lock, the computer's lock (main's lock-screen event, as the system sends it) and Prism's page's process ended by the kill signal (as the kernel ends one when memory runs out) each close Prism and sign its session out, confirmed | the session's cookie opening a page before; main's sign-out answered at the front with the CYFR's acknowledgement; the chooser opened with no unconfirmed notice; the cookie refused after. On this road `cyfr`'s lock also retires the session through the device's channel, so the refused cookie alone does not tell which retired it; the passkey road shows the sign-out alone |
+| `lock`, `system_lock`, `renderer_killed` | Prism's Lock, the computer's lock (main's lock-screen event, as the system sends it) and Prism's page's process ended by the kill signal (as the kernel ends one when memory runs out) each close Prism and sign its session out, confirmed | the session's cookie opening a page before; main's sign-out answered at the front with the CYFR's acknowledgement; the chooser back and, with nothing to tell, gone on to the device's pages by itself; the cookie refused after. On this road `cyfr`'s lock also retires the session through the device's channel, so the refused cookie alone does not tell which retired it; the passkey road shows the sign-out alone |
 | `system_lock_at_once` | the computer's lock closes Prism's window at once | the window, destroyed before anything is awaited |
 | `reconnect` | the lock left the device locked; its passphrase opens Prism again under a new session | the locked device's page first; a new session cookie |
-| `offline_lock` | with the CYFR unreachable, the lock still closes Prism, and the chooser says the sign-out is unconfirmed | the front taking `down`; the chooser's notice |
+| `offline_lock` | with the CYFR unreachable, the lock still closes Prism, and the chooser stays with the words that the sign-out is unconfirmed until the person goes on | the front taking `down`; the notice's words and the chooser's way on, both in sight, with no move to the device's pages before that way on is pressed |
 | `process_loss` | `cyfr` killed while Prism holds a session: the app closes its content for good, signs the session out, confirmed, and tells the person | the app's message; the acknowledged sign-out; the cookie before and after |
 | `remembered` | launched again, the CYFR's approved account service is not asked about again | the device's pages, with no question |
 | `directory_changed` | a CYFR that names another account service than the one approved is asked about afresh | the question, with the front standing in for a CYFR reconfigured (fault `directory`) |
@@ -165,14 +165,14 @@ page at that same origin, and the ceremony ends).
 
 | Row | What holds | What the row observes |
 |---|---|---|
-| `account_road` | the passkey signs in, the CYFR's company page closes it in the app, and the chooser sends the person to a browser | the sentence's words, visible on the chooser of the passkey road; no request starting a company sign-in and none at the issuer |
+| `account_road` | the passkey signs in, the CYFR's company page closes it in the app, and the chooser stays to send the person to a browser | the sentence's words and the chooser's way on, both in sight, with no move before it is pressed; no request starting a company sign-in and none at the issuer |
 | `device_road` | the device's page says the same once the CYFR refuses the device | the sentence on the device's page; the same two counts |
 
-That chooser is the one macOS and Windows have: the proof gives `cyfr`'s
-answer to it the passkey road's field and leaves the page as it is. On Linux
-the chooser goes on to the device's pages at once, so a notice's words do
-not stay on it. The company run also records, without asserting, what the
-sign-out was answered: whether main's forgery token was missing or stale.
+The chooser is `cyfr`'s own as Linux has it, with nothing stood in: with a
+notice to show it stays until Use this computer's key is pressed, and with
+none it goes on by itself. The company run also records, without asserting,
+what the sign-out was answered: whether main's forgery token was missing or
+stale.
 On a CYFR that requires a company sign-in the app's lock is unconfirmed,
 and the session left can reach only the company page.
 

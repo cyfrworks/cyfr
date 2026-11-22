@@ -312,33 +312,58 @@ export async function decided(wc, url, frame, what) {
   return d.prevented
 }
 
+// The chooser a lock since `shownBefore` (history's length before it)
+// brought back: with nothing to tell it goes on to the device's pages by
+// itself (told: null); with a notice it stays, the notice's words and its
+// way on in sight (told: {words, stayed}, stayed false had it started to
+// go on), until Use this computer's key is pressed here. Answers that and
+// the device's pages it led to.
+export async function afterLock(shownBefore, why) {
+  const seenNow = await waitFor(async () => {
+    const w = content()
+    if (!w || w.webContents.isLoading()) return null
+    if (atDevice(w.webContents.getURL())) return {w, told: null}
+    if (!atBootstrap(w.webContents.getURL())) return null
+    const shows = await js(w.webContents, `(() => { const inSight = (id) => {
+      const e = document.querySelector(id); return !!e && e.getClientRects().length > 0 }
+      return {onward: inSight("#words"), words: inSight("#notice") ? document.querySelector("#notice").textContent : ""} })()`)
+    return shows.onward && w.isVisible() ? {w, told: {words: shows.words}} : null
+  }, `the chooser or the device's pages after ${why}`)
+  const shown = history.slice(shownBefore).some(atBootstrap)
+  if (!seenNow.told) return {shown, told: null, back: seenNow.w}
+  // Asked once more of the page, so a move it began has been heard.
+  await js(seenNow.w.webContents, "1").catch(() => {})
+  const opened = history.findLastIndex(atBootstrap)
+  seenNow.told.stayed = !history.slice(opened + 1).some(atDevice)
+  if (seenNow.told.stayed) await js(seenNow.w.webContents, `document.querySelector("#words").click(); 1`)
+  return {shown, told: seenNow.told, back: await contentAt(atDevice, `the device's pages after ${why}`)}
+}
+
 // A lock by `act`, seen whole: the session's cookie opening a page of the
-// CYFR before it; the device's pages back after it; the sign-out main
-// sent, as the CYFR's front saw it answered; the cookie after; and the
-// notices the chooser was opened with.
+// CYFR before it; the chooser after it and what it told (afterLock); the
+// device's pages it led to; the sign-out main sent, as the CYFR's front
+// saw it answered; and the cookie after.
 export async function lockedOut(w, why, act, then = async () => {}) {
   const cookie = await sessionCookie(w)
   const before = await opens(cookie)
   const from = (await seen("x.test")).length
   const shownBefore = history.length
   await act()
-  const back = await contentAt(atDevice, `the device's pages after ${why}`)
+  const {back, shown, told} = await afterLock(shownBefore, why)
   await then()
   const after = await opens(cookie)
-  const notices = history.slice(shownBefore).filter((u) => atBootstrap(u))
-    .map((u) => new URLSearchParams(new URL(u).hash.slice(1)).get("notice") ?? "")
   const signOuts = (await reachedSince("x.test", from)).filter((r) => r.method === "POST" && r.path === "/auth/logout")
     .map((r) => ({status: r.status, retired: r.retired, fault: r.fault}))
-  return {back, before, after, notices, signOuts, cookie}
+  return {back, before, after, chooser: {shown, told}, signOuts, cookie}
 }
 
 // The sign-out main sent was answered with the CYFR's acknowledgement,
-// the chooser was opened and says nothing unconfirmed, and the cookie
-// that opened a page before opens nothing now.
+// the chooser came back and, with nothing to tell, went on by itself, and
+// the cookie that opened a page before opens nothing now.
 export const signedOut = (out) => out.before.opens && refused(out.after) &&
   out.signOuts.length === 1 && [302, 303].includes(out.signOuts[0].status) && out.signOuts[0].retired === "1" &&
-  out.notices.length > 0 && out.notices.every((n) => !n.split(",").includes("unconfirmed"))
-export const lockDetail = (out) => ({before: out.before, after: out.after, signOuts: out.signOuts, notices: out.notices})
+  out.chooser.shown && out.chooser.told === null
+export const lockDetail = (out) => ({before: out.before, after: out.after, signOuts: out.signOuts, chooser: out.chooser})
 
 // A process's state as /proc shows it: its state line, what it waits in,
 // and its core size limit; or why it could not be read.
