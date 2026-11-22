@@ -7,7 +7,9 @@ defmodule Opus.Browser do
   runs in (the program row of the browser's own definition,
   `Opus.Programs.Definition.browser?/1`), which starts Chrome over its
   debugging pipe inside the box, with its profile in the row's kept
-  folder. The browser is the person's: its session's owner is the
+  folder, which keeps every site the person signs in to there for each
+  later turn: a person who signs it in to CYFR gives Aqua that session.
+  The browser is the person's: its session's owner is the
   person's browser (`Opus.Programs.browser/2`, named here and nowhere
   else), not a turn, so it outlasts the turn that started it and serves
   every later turn of that person.

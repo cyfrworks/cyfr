@@ -97,6 +97,10 @@ defmodule Sanctum.ApiKey do
     granted. One that is not such a reference is
     `{:error, {:invalid_tool, name}}`.
   - `:ip_allowlist` - List of allowed IPs/CIDRs (e.g., ["192.168.1.0/24", "10.0.0.1"])
+  - `:consent_capability` - `%{commit_digest, expires_at}`, the one commit
+    the key may consent to until a future expiry (`consent_capability/2`),
+    taken only from an interactive consent caller. No declared operation
+    passes it: `key.create` mints a key without one.
   """
   def create(ctx, opts, issuance \\ [])
 

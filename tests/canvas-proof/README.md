@@ -270,7 +270,7 @@ the viewport, the sample counts (20 and 20), every sample, and the p50 and
 p95 in milliseconds of each number, labelled with its clock.
 
 **The budget.** Each number's p95 is bound to its canvas budget
-(`ARCHITECTURE.md` §6.9 names the two) for the run's host class, at both
+(`BUDGET_MS` in `proof.mjs` states the two) for the run's host class, at both
 viewports: on the `reference` class, the host the budget was stated on, a
 frame open within 100 ms and a validation within 100 ms; on the
 `github-hosted` class, the GitHub-hosted runner, each within 200 ms to catch

@@ -16,6 +16,11 @@ defmodule Sanctum.Directory do
   reads a session, because every write is self-authenticating. This
   node's own client reads a log this node serves where it is kept
   (`read/2`, from `Sanctum.Directory.Client`), never over HTTP to itself.
+  It keeps the logs and their tombstones and nothing of who reads or
+  writes them: no session, email, sign-in destination or list of the
+  homes an account is admitted at, and a caller's address only as the
+  hash its window counts under (`Arca.RequestRateWindows`). The names
+  accounts claim are the registry's beside it (`Sanctum.Directory.Handles`).
 
   ## Serving
 

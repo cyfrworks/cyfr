@@ -26,6 +26,8 @@ const READY_WITHIN_MS = 20_000
 const UNCONFIRMED = "The CYFR did not confirm that it signed this computer out. That sign-in ends when it expires, or when you sign it out under Settings, Keys on your account."
 const ACCOUNT_PARTITION = "persist:cyfr-account"
 
+// Every window's pages run under these: sandboxed, their context isolated,
+// no Node integration and web security on.
 const SECURE = {
   sandbox: true,
   contextIsolation: true,
@@ -476,6 +478,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     guard(account, "account")
     account.on("select-webauthn-account", chooseAccount)
     if (touchIdGroup && process.platform === "darwin") app.configureWebAuthn({touchID: {keychainAccessGroup: touchIdGroup}})
+    // The app locks on the system's lock or sleep, as on any window's page
+    // lost and on cyfr's locked; the desktop's idle alone does not.
     for (const signal of ["lock-screen", "suspend"]) powerMonitor.on(signal, () => on({type: "lock", why: signal}))
     startCyfr()
   })

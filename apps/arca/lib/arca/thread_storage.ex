@@ -35,7 +35,8 @@ defmodule Arca.ThreadStorage do
   (`archive_idle/2`, the retention kind `archive_days`), never while work
   remains in it or in a crew thread under it. It is an ordinary thread
   behind the list's Archived filter: it stays readable and searchable,
-  admits everything and keeps its files and notes. New work there takes
+  admits everything but the server's nudge and reminder (`Aqua.Nudge`),
+  and keeps its files and notes. New work there takes
   it out again (`unarchive!/2`). A crew member's thread is never
   archived: it is retired (`retire/3`), which stops its work. No thread
   is deleted by age; a deletion is the person's (`delete/3`).

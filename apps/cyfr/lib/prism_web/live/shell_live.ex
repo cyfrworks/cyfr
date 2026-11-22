@@ -126,7 +126,7 @@ defmodule PrismWeb.ShellLive do
   A canvas frame is a page like any tincture's: its messages over the
   port its bridge hands it are the shell verbs of `Prima.TinctureWire`,
   as `frame_verb`. Its handshake hands it its bearer and its `canvas`
-  block (`Prima.TinctureWire.canvas_handshake/4`); `installed` (every
+  block (`Prima.TinctureWire.canvas_handshake/5`); `installed` (every
   listed tincture that is not a canvas, by name) is pushed to each held
   canvas frame after its handshake and whenever the listing changes, and
   `posture`, `covered` and `state` come from the glass. From the live,

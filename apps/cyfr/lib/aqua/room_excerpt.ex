@@ -26,7 +26,9 @@ defmodule Aqua.RoomExcerpt do
   The mark, the count and the lines come from one read
   (`Sanctum.SharedThreads.tail/3`): what someone else wrote past the
   person's read mark is unread, and their own messages never are.
-  Reading moves no read mark.
+  Reading moves no read mark. Unlike the excerpt, that answer is the
+  call's result, kept as a row of the person's own thread as every
+  call's result is (`Arca.TurnStorage.close_step/4`).
   """
 
   alias Sanctum.Context

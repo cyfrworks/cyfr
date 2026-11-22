@@ -135,6 +135,48 @@ defmodule Cyfr.DocsDriftTest do
              "parts #{inspect(@part_names)}"
   end
 
+  # ARCHITECTURE.md is an outline: what one part could change alone is that
+  # part's documentation. Without a ceiling each slice wrote its behaviour
+  # in as an invariant, so its size is held: the whole document, and each
+  # part's section of §3 from its heading to the next, in words as `wc -w`
+  # counts them.
+  @architecture_words 5_000
+  @part_words 120
+  @to_its_owner "ARCHITECTURE.md says who owns a thing, who may reach or trust whom, which " <>
+                  "channel joins two parts and what two parts must both keep. A sentence " <>
+                  "about one part's behaviour belongs in its owner's documentation: move " <>
+                  "it there, and leave the ceiling as it is."
+
+  defp words(text), do: text |> String.split() |> length()
+
+  test "ARCHITECTURE.md holds at most #{@architecture_words} words" do
+    total = words(SourceTree.read(@architecture))
+
+    assert total <= @architecture_words,
+           "ARCHITECTURE.md holds #{total} words, over its #{@architecture_words}. " <>
+             @to_its_owner
+  end
+
+  test "each part's section of ARCHITECTURE.md holds at most #{@part_words} words" do
+    sections =
+      Regex.scan(
+        ~r/^### (\w+)(?: \([^)]*\))?: [^\n]*\n.*?(?=^#|\z)/ms,
+        SourceTree.read(@architecture)
+      )
+
+    # Guards against the scan quietly matching nothing.
+    assert length(sections) == length(@part_names)
+
+    over =
+      for [section, part] <- sections,
+          words(section) > @part_words,
+          do: {part, words(section)}
+
+    assert over == [],
+           "these part sections of ARCHITECTURE.md hold more than #{@part_words} words: " <>
+             "#{inspect(over)}. " <> @to_its_owner
+  end
+
   test "ARCHITECTURE.md's four ports are the port roster" do
     [section] =
       Regex.run(~r/^### 4\.2 The four ports\n(.*?)(?=^### )/ms, SourceTree.read(@architecture),

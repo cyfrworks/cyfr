@@ -18,10 +18,10 @@ defmodule Aqua.Crew do
   `index/2` is the crew the soul is told of, in its prompt and by
   `crew.list`: each member whose brain is ready (`Aqua.Models.model_status/2`),
   by name, brain, what it is good at and what to avoid. A member whose
-  brain is not installed, has no key bound or whose program is not signed
-  in, or whose brain is a program with no row of its name that stands
-  as a brain's, is left out, and every way a job reaches a member holds it to the
-  same readiness (`ready/2`): `crew.ask` and a person's `@name` are
+  brain is not installed or has no key bound, or whose brain is a
+  program with no row of its name that stands as a brain's, is left
+  out, and every way a job reaches a member holds it to the same
+  readiness (`ready/2`): `crew.ask` and a person's `@name` are
   refused `{:crew_unready, member, reason}` before anything is written,
   and a request whose member became unready while it waited is answered
   `failed` with that reason when its delivery comes (an outage of the

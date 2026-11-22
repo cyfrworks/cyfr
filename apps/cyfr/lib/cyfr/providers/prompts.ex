@@ -19,6 +19,7 @@ defmodule Cyfr.Providers.Prompts do
   | kind | its owner's read and doors | facts |
   |---|---|---|
   | `confirmation` | `confirmation.pending`, `request`, `confirm` and `cancel` (`Sanctum.Providers.Confirmation`) | `opened`, `confirmed`, `consumed`, `cancelled`, `voided`, `expired` |
+  | `question` | `question.pending` and `answer` (`Sanctum.Providers.Question`) | `opened`, `answered`, `expired`, `withdrawn` |
 
   The bus grants nothing: only Host's bridge (`Cyfr.TelemetryBridge`)
   publishes on the topic, from each kind's owner's telemetry.

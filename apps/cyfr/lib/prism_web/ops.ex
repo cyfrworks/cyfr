@@ -16,7 +16,9 @@ defmodule PrismWeb.Ops do
   admission and chat changes, a message's attachments among them, use the
   operation catalog and its authorization gate.
 
-  A person's own UI preferences and cache invalidation call their domain
+  A person's own UI preferences, time zone and read marks, cache
+  invalidation, the browser's own sign-out and the person's own terminal
+  sessions (`Opus.Programs`, under their own context) call their domain
   functions directly.
 
   PrismWeb.ToolSeamTest checks the allowed direct domain calls.

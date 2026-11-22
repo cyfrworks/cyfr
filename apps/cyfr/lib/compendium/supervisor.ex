@@ -4,7 +4,7 @@
 defmodule Compendium.Supervisor do
   @moduledoc """
   The component domain's processes: the builds' and the athanor fills'
-  task supervisors, the athanor filler and the projection reconciler.
+  task supervisors and the projection reconciler.
   `one_for_one`, because none of them holds a reference into another: each
   restarts alone.
   """

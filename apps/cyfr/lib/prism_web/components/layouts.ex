@@ -26,7 +26,8 @@ defmodule PrismWeb.Layouts do
   A page that draws nothing over the desktop (`overlay: false`, the
   desktop's own address and the forwards to it) has no overlay. The layer
   takes no pointer where it draws nothing, so the desktop under it stays
-  live.
+  live. The page holds no frame: it is given no frame's port and no
+  bridge hook, which only the desktop's frames carry (`PrismWeb.CanvasLive`).
   """
 
   use PrismWeb, :html
