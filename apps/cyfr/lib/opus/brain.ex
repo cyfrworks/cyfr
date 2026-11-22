@@ -109,7 +109,9 @@ defmodule Opus.Brain do
   runs in a process of its own under the holders' supervisor, which holds
   the row's owner, opens a new process of the driver, writes the one
   command after its `hello`, reads the one answer and ends; it starts no
-  harness session and writes nothing else.
+  harness session and writes nothing else. It reads as a held session
+  is read and watches its caller as an attendant is watched, and any
+  other call of it waits for its end.
 
     * **Cleanup** (`forget/1`) runs for the `brain_cleanup` consumer
       (`Opus.Brain.Cleanup`), for the session one `brain_forget` record
@@ -175,6 +177,23 @@ defmodule Opus.Brain do
   process's lifetime (`Opus.Programs.box_open/4`), and on its way out it
   asks so itself.
 
+  A holder of one command ends the same ways, on its caller's exit, and
+  at the command's deadline, a minute from when its caller asked. The
+  deadline is the whole command's: the box's hold, the session's open
+  (once more after a stale boot) and the write are each given what is
+  left of it and no more, so the way out begins by then, whatever was
+  out. A cleanup's two reads of the store come first, inside it: the pool
+  gives each 15 seconds. The holder hears none of its ends while one of
+  those calls is out, and then at once. On its way out it closes the
+  lifetime it minted, whatever that one's open answered, releases the
+  owner it asked to hold, whether or not that was answered, and only then
+  answers its caller: `lost` when no answer of the
+  driver's came. A close the box could not confirm stays owed, and the
+  caller is answered all the same. The way out waits at most the box's
+  close and release (`Opus.Programs.Box.close_timeout_ms/0`,
+  `Opus.Programs.Box.release_timeout_ms/0`), and its caller that much and
+  a margin past the deadline.
+
   ## Its lifetimes
 
   Each process of the driver is a lifetime of its own
@@ -205,8 +224,8 @@ defmodule Opus.Brain do
   @read_retry_ms 1_000
   # How long what is known of a program is kept (moduledoc).
   @known_ms :timer.hours(24)
-  # How long a cleanup or a discovery waits for its driver's answer, from
-  # the open of its session; past it the answer is lost.
+  # A cleanup's or a discovery's deadline, from when its caller asked: all
+  # of it, the hold, the open, the write and the wait for the answer.
   @once_ms 60_000
   # The refusals of a session route that say the session is not on the
   # service any more.
@@ -424,7 +443,7 @@ defmodule Opus.Brain do
       id = forget_id(record)
       session = owed["session"]
 
-      case call(pid, {:forget, owner(athanor_id, row), record}, once_timeout_ms()) do
+      case ask_once(pid, &{:forget, owner(athanor_id, row), record, &1}) do
         {:ok, %{"t" => "forgot", "id" => ^id, "session" => ^session}} ->
           :forgot
 
@@ -486,11 +505,9 @@ defmodule Opus.Brain do
            ),
          :ok <- brain_row(row),
          {:ok, pid} <- holder({athanor_id, id}) do
-      case call(
-             pid,
-             {:once, owner(athanor_id, row), %{"t" => "models", "id" => id}},
-             once_timeout_ms()
-           ) do
+      command = %{"t" => "models", "id" => id}
+
+      case ask_once(pid, &{:once, owner(athanor_id, row), command, &1}) do
         {:ok, %{"t" => "models", "id" => ^id, "models" => models, "access" => access}} ->
           listing = %{
             models: Enum.map(models, &%{id: &1["id"], name: &1["name"], efforts: &1["efforts"]}),
@@ -546,9 +563,14 @@ defmodule Opus.Brain do
     end
   end
 
-  # A one-command holder answers once its session's close has, on its way
-  # out.
-  defp once_timeout_ms, do: @once_ms + Programs.Box.close_timeout_ms() + @answer_margin_ms
+  # The one command asked of its holder: its deadline goes with it, and
+  # the wait is that deadline, the way out's own bound (`disconnect/1`)
+  # and a margin, since the holder answers on its way out.
+  defp ask_once(pid, message) do
+    way_out = Programs.Box.close_timeout_ms() + Programs.Box.release_timeout_ms()
+    until = System.monotonic_time(:millisecond) + @once_ms
+    call(pid, message.(until), @once_ms + way_out + @answer_margin_ms)
+  end
 
   defp call(pid, message, timeout) do
     GenServer.call(pid, message, timeout)
@@ -694,33 +716,26 @@ defmodule Opus.Brain do
     end
   end
 
-  # One command and its one answer on a new process of the driver: the
-  # owner held, the session opened, the driver's `hello` read, the line
-  # written, and the first event after it read as the answer. Anything
-  # else of the driver's ends it unanswered.
-  defp once(state, command, deadline) do
+  # The driver's first line is its hello (`apply_event/3`): the command is
+  # written then, once, and the line after it is the answer. Anything else
+  # of the driver's ends it unanswered.
+  defp exchanged(%{once: %{command: command}} = state, seq, %{"t" => "hello"}) do
     with {:ok, line} <- encode(command),
-         {:ok, seq} <- hello(state, deadline),
-         :ok <- send_once(state, line),
-         {:ok, _seq, event} <- next(state, seq, deadline),
-         {:ok, answered} <- answer(event, command) do
-      learn(state.owner, answered)
-      {:ok, answered}
+         :ok <- send_once(state, line) do
+      send(state.reader, {:go, seq})
+      {:noreply, %{state | after: seq}}
+    else
+      {:error, reason} -> {:stop, :normal, answering(state, {:error, reason})}
     end
   end
 
-  defp hello(state, deadline) do
-    case next(state, 0, deadline) do
-      {:ok, seq, %{"t" => "hello", "v" => v}} ->
-        if v == Wire.version(), do: {:ok, seq}, else: {:error, :unreadable}
-
-      {:ok, _seq, _not_hello} ->
-        {:error, :unreadable}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+  defp exchanged(%{once: %{command: command}} = state, _seq, event) do
+    result = answer(event, command)
+    with {:ok, answered} <- result, do: learn(state.owner, answered)
+    {:stop, :normal, answering(state, result)}
   end
+
+  defp answering(state, answer), do: %{state | once: %{state.once | answer: answer}}
 
   defp answer(%{"t" => t, "id" => id} = event, %{"id" => id})
        when t in ["forgot", "models", "refused"],
@@ -729,44 +744,14 @@ defmodule Opus.Brain do
   defp answer(_event, _command), do: {:error, :unreadable}
 
   defp send_once(state, line) do
-    case Session.send(state.grant, state.session, [line], @write_ms) do
+    %{grant: grant, session: session} = state
+
+    case cut(state, fn -> Session.send(grant, session, [line], @write_ms) end) do
       {:ok, :running} -> :ok
       {:ok, :ended} -> {:error, :lost}
+      {:error, :deadline} -> {:error, :lost}
       {:error, {:refused, code, _boot}} when code in @gone -> {:error, :lost}
       {:error, reason} -> if uncertain?(reason), do: {:error, :lost}, else: {:error, :not_written}
-    end
-  end
-
-  # The next line of the session past `after_seq`, decoded, by `deadline`.
-  defp next(state, after_seq, deadline) do
-    wait = min(@recv_wait_ms, deadline - System.monotonic_time(:millisecond))
-
-    if wait <= 0 do
-      {:error, :lost}
-    else
-      case Session.recv(state.grant, state.session, after_seq, wait) do
-        {:ok, %{dropped: dropped}} when dropped > 0 ->
-          {:error, :lost}
-
-        {:ok, %{lines: [%{seq: seq, text: text} | _rest]}} ->
-          case Wire.decode(text) do
-            {:ok, event} -> {:ok, seq, event}
-            {:error, _unreadable} -> {:error, :unreadable}
-          end
-
-        {:ok, %{lines: [], running: false}} ->
-          {:error, :lost}
-
-        {:ok, %{lines: []}} ->
-          next(state, after_seq, deadline)
-
-        {:error, {:refused, code, _boot}} when code in @gone ->
-          {:error, :lost}
-
-        {:error, _unanswered} ->
-          Process.sleep(@read_retry_ms)
-          next(state, after_seq, deadline)
-      end
     end
   end
 
@@ -959,11 +944,19 @@ defmodule Opus.Brain do
        starting: nil,
        config: nil,
        asks: %{},
-       generation: nil
+       generation: nil,
+       hold_asked: false,
+       until: nil,
+       once: nil
      }}
   end
 
   @impl true
+  # A call that comes while the holder's one command is out waits for the
+  # holder's end, which its caller sees: so a successor's open never ends
+  # a cleanup that owns the key.
+  def handle_call(_request, _from, %{once: %{}} = state), do: {:noreply, state}
+
   # The binding is read before the driver's session opens and again after
   # it, so one that went stale while the opener or the open waited opens
   # nothing. A take-over asked meanwhile waits in this holder's mailbox.
@@ -1004,7 +997,8 @@ defmodule Opus.Brain do
   def handle_call({:close, ref}, _from, %{ref: ref} = state) do
     closed = disconnect(state)
     state = ended(state, if(closed == :ok, do: :closed, else: :unanswered))
-    {:stop, :normal, closed, %{state | reader: nil, grant: nil, session: nil, lifetime: nil}}
+    left = %{state | reader: nil, grant: nil, hold_asked: false, session: nil, lifetime: nil}
+    {:stop, :normal, closed, left}
   end
 
   def handle_call({:close, _ref}, _from, state), do: {:reply, {:error, :unanswered}, state}
@@ -1036,46 +1030,55 @@ defmodule Opus.Brain do
   # (`replace/2`), so none opens between this decision and the write; one
   # that opened, kept the session and ended before the key was taken is in
   # the thread read here.
-  def handle_call({:forget, owner, record}, from, %{attendant: nil, owner: nil} = state) do
+  def handle_call({:forget, owner, record, until}, from, %{attendant: nil, owner: nil} = state) do
     actor = Prima.Actor.in_athanor(state.athanor_id)
 
     with {:ok, owed} <- owed(actor, record),
          :ok <- no_successor(actor, owed) do
       command = %{"t" => "forget", "id" => forget_id(record), "session" => owed["session"]}
-      handle_call({:once, owner, command}, from, state)
+      handle_call({:once, owner, command, until}, from, state)
     else
       {:error, reason} -> {:stop, :normal, {:error, reason}, state}
     end
   end
 
-  def handle_call({:forget, _owner, _record}, _from, state), do: {:reply, {:error, :busy}, state}
+  def handle_call({:forget, _owner, _record, _until}, _from, state),
+    do: {:reply, {:error, :busy}, state}
 
   # A cleanup's or a discovery's one command, in a holder no attendant
-  # opened: the owner held, a new process of the driver opened, the
-  # command written after its hello and its answer read, and the holder
-  # ends, its session closed on the way out (`terminate/2`).
-  def handle_call({:once, owner, command}, _from, %{attendant: nil, owner: nil} = state) do
-    deadline = System.monotonic_time(:millisecond) + @once_ms
-    state = %{state | owner: owner}
+  # opened: the owner held, a new process of the driver opened and read
+  # (`exchanged/3`), and the caller left waiting and watched until the
+  # holder ends, which answers it (`terminate/2`).
+  def handle_call(
+        {:once, owner, command, until},
+        {caller, _} = from,
+        %{attendant: nil, owner: nil} = state
+      ) do
+    Process.monitor(caller)
+    state = %{state | owner: owner, until: until}
+    Process.send_after(self(), :once_over, left(state, @once_ms))
 
     # Each refusal stops with the state that holds what was taken, so the
-    # way out (`terminate/2`) gives back the owner a failed open held.
+    # way out (`terminate/2`) closes the lifetime a failed open was given
+    # and gives back its owner before the caller is answered.
     case hold(state) do
       {:ok, held} ->
         case fresh(held) do
           {:ok, opened} ->
-            {:stop, :normal, once(opened, command, deadline), opened}
+            once = %{from: from, command: command, answer: {:error, :lost}}
+            {:noreply, read_from(%{opened | once: once}, 0)}
 
-          {:error, reason} ->
-            {:stop, :normal, {:error, reason}, held}
+          {:error, reason, minted} ->
+            {:stop, :normal, {:error, reason}, minted}
         end
 
-      {:error, reason} ->
-        {:stop, :normal, {:error, reason}, state}
+      {:error, reason, asked} ->
+        {:stop, :normal, {:error, reason}, asked}
     end
   end
 
-  def handle_call({:once, _owner, _command}, _from, state), do: {:reply, {:error, :busy}, state}
+  def handle_call({:once, _owner, _command, _until}, _from, state),
+    do: {:reply, {:error, :busy}, state}
 
   @impl true
   def handle_cast(
@@ -1115,6 +1118,16 @@ defmodule Opus.Brain do
   def handle_info({:DOWN, _monitor, :process, pid, _reason}, %{attendant: pid} = state),
     do: {:stop, :normal, %{state | attendant: nil}}
 
+  def handle_info({:DOWN, _monitor, :process, pid, _reason}, %{once: %{from: {pid, _}}} = state),
+    do: {:stop, :normal, state}
+
+  def handle_info(:once_over, %{once: %{}} = state), do: {:stop, :normal, state}
+
+  # A sync of the owner is sent to its holders whatever moved, the
+  # athanor's ceiling alone included, so it says nothing of the one
+  # command's session: whether that still runs is the reader's to find.
+  def handle_info({Opus.Programs, :owner, _grant}, %{once: %{}} = state), do: {:noreply, state}
+
   def handle_info({Opus.Programs, :stand_down, _key}, state),
     do: {:stop, :normal, ended(state, :row_changed)}
 
@@ -1137,6 +1150,7 @@ defmodule Opus.Brain do
   @impl true
   def terminate(_reason, state) do
     disconnect(state)
+    if state.once, do: GenServer.reply(state.once.from, state.once.answer)
     :ok
   end
 
@@ -1174,20 +1188,37 @@ defmodule Opus.Brain do
          {:ok, state} <- fresh(state) do
       ref = %{lifetime: state.lifetime, restarted: :atomics.new(1, [])}
       {:ok, read_from(%{state | ref: ref}, 0)}
+    else
+      {:error, reason, _left} -> {:error, reason}
     end
   end
 
+  # The hold is the holder's own call, which registers it as it is asked,
+  # whatever is answered, and takes what is left as its wait. A refusal
+  # answers with the state that says whether it was asked.
   defp hold(%{grant: nil} = state) do
-    with {:ok, grant} <- Programs.hold(state.owner), do: {:ok, %{state | grant: grant}}
+    case left(state, Programs.Box.hold_timeout_ms()) do
+      0 ->
+        {:error, :deadline, state}
+
+      wait ->
+        asked = %{state | hold_asked: true}
+
+        case Programs.hold(state.owner, wait) do
+          {:ok, grant} -> {:ok, %{asked | grant: grant}}
+          {:error, reason} -> {:error, reason, asked}
+        end
+    end
   end
 
   defp hold(state), do: {:ok, state}
 
   # A new process: its lifetime, minted here before the open is parked or
   # sent, and once more under a grant of the boot that runs when the
-  # service has left the one it was minted for.
+  # service has left the one it was minted for. A refusal answers with the
+  # state that names the lifetime minted.
   defp fresh(state, again? \\ true) do
-    deadline = System.system_time(:millisecond) + @open_ms
+    deadline = System.system_time(:millisecond) + left(state, @open_ms)
 
     named = %{
       program: Programs.Definition.program_name(),
@@ -1197,17 +1228,50 @@ defmodule Opus.Brain do
     }
 
     lifetime = Programs.lifetime(state.grant, named)
+    minted = %{state | lifetime: lifetime}
     params = %{argv: Programs.Words.new([])}
+    holder = self()
 
-    case Programs.box_open(lifetime, self(), params, deadline) do
+    case cut(state, fn -> Programs.box_open(lifetime, holder, params, deadline) end) do
       {:ok, %{session: session}} ->
-        {:ok, %{state | lifetime: lifetime, session: session}}
+        {:ok, %{minted | session: session}}
 
       {:error, {:refused, :stale_boot, _boot}} when again? ->
-        with {:ok, state} <- hold(%{state | grant: nil}), do: fresh(state, false)
+        with {:ok, held} <- hold(%{minted | grant: nil}), do: fresh(held, false)
 
-      refused ->
-        refused
+      {:error, reason} ->
+        {:error, reason, minted}
+    end
+  end
+
+  # What is left of the one command's deadline, `bound` at most; a held
+  # session has none.
+  defp left(%{until: nil}, bound), do: bound
+
+  defp left(%{until: until}, bound),
+    do: min(bound, max(until - System.monotonic_time(:millisecond), 0))
+
+  # A call of the one command's that cannot be handed that bound: an open
+  # waits a margin past its deadline (`Opus.Programs.box_open/4`), and a
+  # write's HTTP timeouts bound neither the name's resolution nor the
+  # whole answer, and one for each remainder would be a connection pool
+  # for each (`Prima.Network.pin/3`). It runs beside the holder and is
+  # given up at the deadline; one past it is not made.
+  defp cut(%{until: nil}, call), do: call.()
+
+  defp cut(state, call) do
+    case left(state, @once_ms) do
+      0 ->
+        {:error, :deadline}
+
+      wait ->
+        task = Task.async(call)
+
+        case Task.yield(task, wait) || Task.shutdown(task, :brutal_kill) do
+          {:ok, answer} -> answer
+          {:exit, reason} -> exit(reason)
+          nil -> {:error, :deadline}
+        end
     end
   end
 
@@ -1227,7 +1291,7 @@ defmodule Opus.Brain do
         do: Programs.box_close(state.lifetime),
         else: {:error, :unanswered}
 
-    if state.grant, do: Programs.release(state.owner)
+    if state.hold_asked, do: Programs.release(state.owner)
     closed
   end
 
@@ -1240,7 +1304,10 @@ defmodule Opus.Brain do
     _ = Programs.box_close(state.lifetime)
     state = reset(%{state | session: nil, reader: nil})
 
-    with {:ok, state} <- fresh(state), do: {:ok, read_from(state, 0)}
+    case fresh(state) do
+      {:ok, state} -> {:ok, read_from(state, 0)}
+      {:error, reason, _minted} -> {:error, reason}
+    end
   end
 
   defp reset(state) do
@@ -1305,6 +1372,15 @@ defmodule Opus.Brain do
     {:noreply, state}
   end
 
+  # A holder of one command takes a line at a time, and reads the rest
+  # again past it: what follows the answer decides nothing.
+  defp lines(%{once: %{}} = state, %{lines: [line | _rest]}) do
+    case decode([line], state, []) do
+      {:ok, [{seq, event}], state} -> exchanged(state, seq, event)
+      {:error, _unreadable, state} -> {:stop, :normal, answering(state, {:error, :unreadable})}
+    end
+  end
+
   defp lines(state, %{lines: lines}) do
     case decode(lines, state, []) do
       {:ok, events, state} ->
@@ -1332,7 +1408,8 @@ defmodule Opus.Brain do
   # What the holder keeps of an event, once: the driver's boot from its
   # hello, which is the session's first line and its only one; the
   # answer to the command it waits on; what it says of the account
-  # (`learn/2`); and the asks it may answer. A line
+  # (`learn/2`), which of a one command is its answer's alone
+  # (`exchanged/3`); and the asks it may answer. A line
   # read again after the attendant asked for it again changes nothing.
   defp apply_event(state, seq, _event) when seq <= state.applied, do: {:ok, state}
 
@@ -1346,7 +1423,7 @@ defmodule Opus.Brain do
   defp apply_event(_state, _seq, %{"t" => "hello"}), do: {:error, :unreadable}
 
   defp apply_event(state, seq, event) do
-    learn(state.owner, event)
+    if state.once == nil, do: learn(state.owner, event)
     {:ok, %{answered(state, event) | applied: seq}}
   end
 

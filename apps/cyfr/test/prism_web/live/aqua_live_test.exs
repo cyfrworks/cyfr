@@ -3885,15 +3885,17 @@ defmodule PrismWeb.AquaLiveTest do
         "the lost listing said"
       )
 
-      # The lost caller's holder still waits on its driver, which answers
-      # it: the retry's is then the row's one session.
+      # The lost caller's holder ends with it and closes its session, which
+      # no driver answered: the retry's is then the row's one session.
+      assert_receive {:session, "close", %{"home_id" => ^home}, _fields}, 5_000
+
       over = fn ->
         not Enum.any?(Cyfr.Test.ScriptedBackends.sessions(fake, home), fn {_id, session} ->
           session.running
         end)
       end
 
-      lists!(fake, row, over)
+      settled(over, "the lost caller's session ended")
       view |> element(card <> ~s( [data-test="list-again"])) |> render_click()
       lists!(fake, row, fn -> has_element?(view, card <> ~s(-model option[value="haiku"])) end)
       Cyfr.Test.Sandbox.end_views()
@@ -4395,13 +4397,20 @@ defmodule PrismWeb.AquaLiveTest do
           {:session, "open", %{"mode" => "run", "home_id" => ^home}, _fields} ->
             :ok
 
-          {:session, "recv", %{"after" => 0}, _fields} ->
-            say(fake, row, %{
-              "t" => "hello",
-              "v" => Opus.Brain.Wire.version(),
-              "driver" => Arca.McpServerStorage.driver(row),
-              "boot" => "b#{System.unique_integer([:positive])}"
-            })
+          {:session, "recv", %{"after" => 0, "session" => session}, _fields} ->
+            # A hello lands in every running session of the row's, so a read
+            # of one that has ended since gets none.
+            if match?(
+                 %{^session => %{running: true}},
+                 Cyfr.Test.ScriptedBackends.sessions(fake, home)
+               ) do
+              say(fake, row, %{
+                "t" => "hello",
+                "v" => Opus.Brain.Wire.version(),
+                "driver" => Arca.McpServerStorage.driver(row),
+                "boot" => "b#{System.unique_integer([:positive])}"
+              })
+            end
 
           {:session, "send", %{"lines" => [line]}, _fields} ->
             case Jason.decode!(line) do
