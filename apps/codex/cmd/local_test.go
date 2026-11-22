@@ -1180,8 +1180,14 @@ func TestALeaveDuringTheShellsOwnLockLeavesMainOnNone(t *testing.T) {
 	// Held until leave waits for the shell that lock holds: what it reads
 	// before that wait, it read inside the other's restart.
 	stacks := make([]byte, 1<<20)
+	// Each by its whole name, as a line of a stack begins and its
+	// arguments end it: a name these begin is another function.
+	const (
+		leaving = "\ngithub.com/cyfr/codex/internal/desktop.(*Service).Run("
+		waiting = "\ngithub.com/cyfr/codex/internal/shell.(*shellLock).Lock("
+	)
 	waits := func(one string) bool {
-		return strings.Contains(one, "(*Service).Run") && strings.Contains(one, "(*shellLock).Lock")
+		return strings.Contains(one, leaving) && strings.Contains(one, waiting)
 	}
 	for deadline := time.Now().Add(20 * time.Second); !slices.ContainsFunc(
 		strings.Split(string(stacks[:runtime.Stack(stacks, true)]), "\n\n"), waits); {
