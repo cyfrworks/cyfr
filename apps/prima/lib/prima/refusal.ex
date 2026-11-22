@@ -739,15 +739,22 @@ defmodule Prima.Refusal do
        "#{member}'s program is not one a crew member can run on — on the Programs page, make " <>
          "it a driven program with a kept folder whose command starts with its driver"}
 
-  # A program brain whose start the backends refused for want of room:
-  # each running program holds a place until it is stopped, or until it
-  # sat `minutes` with no work (`Aqua.Program`).
-  defp row({:program_full, member, minutes}) when is_binary(member) and is_integer(minutes),
+  defp row({:crew_unready, member, :signed_out}) when is_binary(member),
+    do:
+      {:setup_required,
+       "#{member}'s program is signed out. Sign it in, or choose another, on the Aqua page."}
+
+  # A program brain whose start the backends refused for want of room: each
+  # running program holds a place until its turn's work ends.
+  defp row({:program_full, member}) when is_binary(member),
     do:
       {:rate_limited,
-       "#{member} could not start: every place for a running program is taken. Stop the " <>
-         "work in another thread or wait for it to end. A program with no work gives its " <>
-         "place back after #{minutes} minutes."}
+       "#{member} could not start: this CYFR has no room for another running program. Stop " <>
+         "work in another thread or wait for it to end, then send your message again."}
+
+  # How a turn's work on a harness ends short of done (`Aqua.Program`): the
+  # kind is a name, and carries what its sentence names.
+  defp row({:harness, member, kind}) when is_binary(member), do: harness(member, kind)
 
   defp row({:crew_unready, member, :consent_damaged}) when is_binary(member),
     do: {:corrupt, "#{member}'s brain's own grant is damaged — revoke it and grant it again"}
@@ -1722,4 +1729,85 @@ defmodule Prima.Refusal do
   defp signal_class(:confirmation_required), do: :confirmation_required
 
   defp component_digest?(digest), do: Regex.match?(~r/\Asha256:[0-9a-f]{64}\z/, digest)
+
+  defp harness(member, :not_admitted),
+    do: {:forbidden, "#{member} may not start for this work any more."}
+
+  defp harness(member, {:not_admitted, :working}),
+    do: {:forbidden, "#{member} may not go on with this work any more."}
+
+  defp harness(member, :unreached),
+    do: {:unavailable, "#{member} could not be reached: its program did not open."}
+
+  defp harness(member, :start_failed), do: {:unavailable, "#{member} could not start."}
+
+  defp harness(member, {:start_failed, :died}),
+    do: {:unavailable, "#{member} stopped before it started."}
+
+  defp harness(member, {:start_failed, :session}),
+    do: {:unavailable, "#{member} could not start: this thread's session could not be read."}
+
+  defp harness(member, {:start_failed, :over}),
+    do: {:unavailable, "#{member} could not start over."}
+
+  defp harness(member, {:start_failed, :restart}),
+    do: {:unavailable, "#{member} could not go on after a restart."}
+
+  defp harness(member, {:start_failed, :unstarted}),
+    do: {:unavailable, "#{member} did not start."}
+
+  defp harness(member, {:start_unfit, options}) when is_list(options) do
+    if Enum.all?(options, &is_binary/1) do
+      {:invalid_argument,
+       "#{member} could not start with what this work gives it: one of its options " <>
+         "(#{Enum.join(options, ", ")}), its instructions or its tools is not one it takes."}
+    end
+  end
+
+  defp harness(member, :work_refused),
+    do: {:conflict, "#{member} could not be given this work."}
+
+  defp harness(member, {:work_refused, text}) when is_binary(text),
+    do: {:conflict, "#{member} could not be given this work: #{text}"}
+
+  defp harness(member, {:post_refused, :gone}),
+    do:
+      {:conflict,
+       "#{member} could not be given this message: a thread it came from has since been deleted."}
+
+  defp harness(member, {:post_refused, text}) when is_binary(text),
+    do: {:conflict, "#{member} refused the message: #{text}"}
+
+  defp harness(member, :foreign_ask),
+    do: {:forbidden, "#{member} asked for a tool for other work than this, so it was stopped."}
+
+  defp harness(member, :uncertain),
+    do:
+      {:uncertain,
+       "#{member} was interrupted after it was handed your last message, and it is not " <>
+         "handed that message again. Send a message to go on."}
+
+  defp harness(member, :ended), do: {:unavailable, "#{member} stopped before it finished."}
+
+  defp harness(member, {:ended, stop}) when is_binary(stop),
+    do: {:unavailable, "#{member} stopped before it finished (#{stop})."}
+
+  defp harness(member, {:silent, minutes}) when is_integer(minutes),
+    do: {:timeout, "#{member} said nothing for #{minutes} minutes, so its work here ended."}
+
+  defp harness(member, :write_failed),
+    do:
+      {:unavailable,
+       "#{member} stopped: CYFR could not keep what it said. Send a message to go on."}
+
+  defp harness(member, :forgotten),
+    do:
+      {:conflict,
+       "#{member} stopped: its record of this thread was removed while it worked. Send a " <>
+         "message to start over."}
+
+  defp harness(member, {:provider, type, text}) when is_binary(type) and is_binary(text),
+    do: {:unavailable, "#{member} could not answer: #{text}"}
+
+  defp harness(_member, _unknown), do: nil
 end

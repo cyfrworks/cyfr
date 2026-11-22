@@ -69,6 +69,10 @@ defmodule Aqua.Loop.Turn do
     :capabilities,
     :request_cap,
     :system,
+    # What of the prompt moves by itself (`Aqua.Prompt`): a program is
+    # handed it with its first post, and its instructions alone as
+    # `system`; an API request's `system` holds both.
+    :facts,
     :tools,
     :deadline_ms,
     :options,
@@ -155,7 +159,8 @@ defmodule Aqua.Loop.Turn do
         model: model,
         capabilities: capabilities,
         request_cap: request_cap(brain_authority, catalyst),
-        system: prompt.text,
+        system: if(program, do: prompt.instructions, else: prompt.text),
+        facts: prompt.facts,
         tools:
           Request.tool_definitions(offered,
             external: external_tools(offered),

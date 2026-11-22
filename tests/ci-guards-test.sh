@@ -2313,6 +2313,39 @@ else
   fail "$label (the command line did not build)"
 fi
 
+# A command line that calls the tests' cheap key derivation, built as the
+# release builds it: the file is laid over the tree and never written to it.
+cat > "$scratch/cheap-caller.go" <<'GO'
+package main
+
+import "github.com/cyfr/codex/internal/holder"
+
+func init() { holder.CheapDerivationForTests() }
+GO
+printf '{"Replace":{"%s/apps/codex/zz_cheap_caller.go":"%s/cheap-caller.go"}}' "$root" "$scratch" > "$scratch/cheap-overlay.json"
+cheap_built=1
+(cd "$root/apps/codex" &&
+  CGO_ENABLED=0 go build -mod=readonly -overlay "$scratch/cheap-overlay.json" \
+    -ldflags "-s -w -X github.com/cyfr/codex/internal/version.Version=0.1.0" -o "$bins/cheap" .) > "$scratch/out" 2> "$scratch/err" || cheap_built=0
+code=$cheap_built
+
+label="release-binary-check refuses a binary that can reach the cheap key derivation"
+if [ "$cheap_built" = 1 ]; then
+  run "$binary_check" "$bins/cheap"
+  check refused "holds the tests' cheap key derivation"
+else
+  fail "$label (the command line did not build)"
+fi
+
+label="the cheap key derivation refuses by name in the command line built as the release builds it"
+if [ "$cheap_built" = 1 ]; then
+  "$bins/cheap" version > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -ne 0 ] && grep -qF "panic: holder.CheapDerivationForTests: " "$scratch/err"; then pass "$label"; else fail "$label"; fi
+else
+  fail "$label (the command line did not build)"
+fi
+
 # --- scripts/release.sh runs the seed guard against the last tag ---
 
 # A seed repository whose base is tagged as a release, holding release.sh

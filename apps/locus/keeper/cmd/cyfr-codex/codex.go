@@ -16,9 +16,9 @@ import (
 // Codex's app-server protocol on its standard input and output, as the
 // driver speaks it: JSON-RPC 2.0 messages without the `jsonrpc` member, one
 // per line. The driver sends requests (`initialize`, `account/read`,
-// `model/list`, `thread/start`, `thread/resume`, `turn/start`,
-// `turn/steer`, `thread/delete`) and the `initialized` notification, and
-// answers Codex's own requests: `item/tool/call` for CYFR's tools, given
+// `model/list`, `thread/start`, `thread/resume`, `thread/inject_items`,
+// `turn/start`, `turn/steer`, `thread/delete`) and the `initialized`
+// notification, and answers Codex's own requests: `item/tool/call` for CYFR's tools, given
 // to the thread as its dynamic tools, held until CYFR answers it and then
 // answered by its request's id; the approvals, which are allowed; and
 // `currentTime/read`. Every other request is refused. These shapes are
@@ -358,6 +358,14 @@ const signedOutSentence = "OpenAI Codex has no sign-in it can use; sign it in on
 // unknownAccountSentence refuses a post while Codex's account read
 // answered what the driver does not know: no sign-out.
 const unknownAccountSentence = "OpenAI Codex's account answer is not one CYFR knows, so the post was not written; check its sign-in on the program's terminal."
+
+// instructionsSentence refuses a post when Codex did not take the changed
+// instructions that go before it.
+const instructionsSentence = "OpenAI Codex did not take its changed instructions, so the post was not written; send it again."
+
+// unrecordedSentence refuses a post whose changed instructions the folder
+// cannot record: the stale record would hide the change after them.
+const unrecordedSentence = "OpenAI Codex's changed instructions could not be recorded in its folder, so the post was not written; check that the program's folder can be written."
 
 // unreadAccountSentence refuses a post while Codex's account read failed:
 // no sign-out.

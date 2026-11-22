@@ -1067,17 +1067,17 @@ func TestForgetRemovesThatThreadAndNothingElse(t *testing.T) {
 		matches, _ := filepath.Glob(filepath.Join(codex, pattern))
 		return len(matches) > 0
 	}
-	if !exists("sessions/*/*/*/rollout-*-"+gone+".jsonl") || !exists("shell_snapshots/"+gone+".*") || !exists("auth.json") {
-		t.Fatal("the thread's rollout, its snapshot and the sign-in are in the folder (a positive control)")
+	if !exists("sessions/*/*/*/rollout-*-"+gone+".jsonl") || !exists("shell_snapshots/"+gone+".*") || !exists("cyfr-instructions/"+gone) || !exists("auth.json") {
+		t.Fatal("the thread's rollout, its snapshot, the record of its instructions and the sign-in are in the folder (a positive control)")
 	}
 	s.send(map[string]any{"t": "forget", "id": "obx_1", "session": gone})
 	if e := s.expect("forgot"); e["id"] != "obx_1" || e["session"] != gone {
 		t.Fatalf("a forget is answered by its id and the thread: %v", e)
 	}
-	if exists("sessions/*/*/*/rollout-*-"+gone+".jsonl") || exists("shell_snapshots/"+gone+".*") {
-		t.Fatal("the forgotten thread's rollout and the snapshot Codex leaves are gone")
+	if exists("sessions/*/*/*/rollout-*-"+gone+".jsonl") || exists("shell_snapshots/"+gone+".*") || exists("cyfr-instructions/"+gone) {
+		t.Fatal("the forgotten thread's rollout, the snapshot Codex leaves and the record of its instructions are gone")
 	}
-	if !exists("sessions/*/*/*/rollout-*-"+kept+".jsonl") || !exists("shell_snapshots/"+kept+".*") || !exists("auth.json") {
+	if !exists("sessions/*/*/*/rollout-*-"+kept+".jsonl") || !exists("shell_snapshots/"+kept+".*") || !exists("cyfr-instructions/"+kept) || !exists("auth.json") {
 		t.Fatal("another thread and the sign-in stay")
 	}
 	s.send(map[string]any{"t": "forget", "id": "obx_2", "session": gone})
@@ -1426,6 +1426,187 @@ func TestAnUnreadableTotalLeavesTheResumedThreadsFirstUsableOnePartial(t *testin
 			}
 			if got := accountings("stp_third", "hello"); got != "[complete/1]" {
 				t.Fatalf("the totals after the first usable one are complete: %s", got)
+			}
+		})
+	}
+}
+
+// resumedWith resumes `session` in a new process of the driver with the
+// instructions `system`.
+func resumedWith(t *testing.T, home, session, system string) *wireSession {
+	t.Helper()
+	s := startDriverIn(t, home)
+	s.expect("hello")
+	s.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": map[string]any{}, "system": system})
+	s.expect("started")
+	s.expect("usage")
+	work(s, "stp_work", "trn_next")
+	return s
+}
+
+// injectedInto is what every process so far injected into the thread, as
+// Codex read it back in the turn of the post `id`.
+func injectedInto(s *wireSession, id string) []any {
+	s.t.Helper()
+	postText(s, id, "trn_next", "history")
+	var injected []any
+	if err := json.Unmarshal([]byte(saidOf(s.until("idle"))), &injected); err != nil {
+		s.t.Fatal(err)
+	}
+	return injected
+}
+
+func instructionsItem(system string) any {
+	return map[string]any{"type": "message", "role": "developer", "content": []any{map[string]any{"type": "input_text",
+		"text": "Your current instructions, in place of any given earlier in this thread:\n" + system}}}
+}
+
+// A resume's developer instructions do not reach the thread's history, so
+// instructions that changed since the thread was last handed some are
+// injected before the resumed thread's first post, once; unchanged ones
+// never are.
+func TestAResumeInjectsItsInstructionsOnlyWhenTheyChanged(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_next")
+	if got := injectedInto(s, "stp_first"); len(got) != 0 {
+		t.Fatalf("a new thread has its instructions from its start, injected with none: %v", got)
+	}
+	s.end()
+
+	want := []any{}
+	for i, next := range []struct {
+		system  string
+		changed bool
+	}{
+		{"be brief", false},
+		{"be thorough", true},
+		{"be thorough", false},
+		{"be brief", true},
+		{"be brief", false},
+	} {
+		if next.changed {
+			want = append(want, instructionsItem(next.system))
+		}
+		again := resumedWith(t, s.home, session, next.system)
+		for n := 0; n < 2; n++ {
+			if got := injectedInto(again, fmt.Sprintf("stp_post_%d_%d", i, n)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("resume %d, post %d: the thread holds exactly %v, not %v", i, n, want, got)
+			}
+		}
+		again.end()
+	}
+}
+
+// A thread with no record of what it was handed, one made before the
+// record or one whose record was lost, is handed its instructions once.
+func TestAThreadWithNoRecordIsHandedItsInstructionsOnce(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_next")
+	injectedInto(s, "stp_first")
+	s.end()
+	if err := os.RemoveAll(filepath.Join(s.home, ".codex", "cyfr-instructions")); err != nil {
+		t.Fatal(err)
+	}
+	want := []any{instructionsItem("be brief")}
+	for i := 0; i < 2; i++ {
+		again := resumedWith(t, s.home, session, "be brief")
+		if got := injectedInto(again, fmt.Sprintf("stp_post_%d", i)); !reflect.DeepEqual(got, want) {
+			t.Fatalf("resume %d: handed once, %v, not %v", i, want, got)
+		}
+		again.end()
+	}
+}
+
+// An injection Codex refuses writes no post, and is made again at the next
+// resume: nothing is recorded as handed that was not.
+func TestARefusedInjectionWritesNoPostAndIsMadeAgain(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_next")
+	injectedInto(s, "stp_first")
+	s.end()
+
+	t.Setenv("FAKE_INJECT_FAIL", "1")
+	refused := resumedWith(t, s.home, session, "be thorough")
+	refused.send(map[string]any{"t": "post", "id": "stp_unwritten", "work": "trn_next", "content": []any{map[string]any{"type": "text", "text": "history"}}})
+	if e := refused.expect("refused"); e["id"] != "stp_unwritten" || e["reason"] != "OpenAI Codex did not take its changed instructions, so the post was not written; send it again." {
+		t.Fatalf("the post is refused in the driver's words: %v", e)
+	}
+	refused.end()
+
+	t.Setenv("FAKE_INJECT_FAIL", "")
+	again := resumedWith(t, s.home, session, "be thorough")
+	if got, want := injectedInto(again, "stp_written"), []any{instructionsItem("be thorough")}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("the next resume hands them over: %v, not %v", got, want)
+	}
+}
+
+// What a thread was last handed is recorded only if the record was written,
+// and a stale one never stands for what was handed after it: a record
+// Codex's driver cannot rewrite costs a repeated injection, never a skipped
+// change.
+func TestARecordThatCannotBeRewrittenSkipsNoChange(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a file of mode 400, so no record here is past writing")
+	}
+	const brief, thorough = "be brief", "be thorough"
+	for _, c := range []struct {
+		name         string
+		file, folder os.FileMode
+		lost         bool
+		refused      bool
+		want         []string
+	}{
+		{name: "a read-only record", file: 0o400, folder: 0o700, want: []string{thorough, brief}},
+		{name: "a read-only folder", file: 0o600, folder: 0o500, want: []string{thorough, brief}},
+		{name: "no record and nowhere to write one", folder: 0o500, lost: true, want: []string{thorough, brief, brief}},
+		{name: "a record that can neither go nor change", file: 0o400, folder: 0o500, refused: true, want: []string{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := startDriver(t)
+			session := startFresh(s, map[string]any{})
+			work(s, "stp_work", "trn_next")
+			injectedInto(s, "stp_first")
+			s.end()
+
+			folder := filepath.Join(s.home, ".codex", "cyfr-instructions")
+			record := filepath.Join(folder, session)
+			var err error
+			if c.lost {
+				err = os.Remove(record)
+			} else {
+				err = os.Chmod(record, c.file)
+			}
+			if err != nil || os.Chmod(folder, c.folder) != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(folder, 0o700) })
+
+			changed := resumedWith(t, s.home, session, thorough)
+			if c.refused {
+				changed.send(map[string]any{"t": "post", "id": "stp_b", "work": "trn_next", "content": []any{map[string]any{"type": "text", "text": "history"}}})
+				if e := changed.expect("refused"); e["id"] != "stp_b" || e["reason"] != "OpenAI Codex's changed instructions could not be recorded in its folder, so the post was not written; check that the program's folder can be written." {
+					t.Fatalf("nothing is injected that a stale record would hide: %v", e)
+				}
+			} else {
+				injectedInto(changed, "stp_b")
+			}
+			changed.end()
+
+			var got []any
+			for i := 0; i < 2; i++ {
+				again := resumedWith(t, s.home, session, brief)
+				got = injectedInto(again, fmt.Sprintf("stp_a_%d", i))
+				again.end()
+			}
+			want := []any{}
+			for _, system := range c.want {
+				want = append(want, instructionsItem(system))
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("the last instructions handed are the last the thread was given: %v, not %v", got, want)
 			}
 		})
 	}
