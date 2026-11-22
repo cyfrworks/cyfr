@@ -167,6 +167,18 @@ test("with no CYFR open a notice shows on Connect, and a Connect the person make
   assert.deepEqual(went.byItself, ["/"])
 })
 
+test("an answer to a Connect whose clear failed says the sentence on the form and goes nowhere", async () => {
+  for (const hash of ["#token=t", ROAD]) {
+    const {$, went} = await chooser("", {home: HOME}, {home: HOME, notice: "uncleared"}, hash)
+    $("connect").fire("submit")
+    await settled()
+    assert.equal($("notice").textContent, UNCLEARED, hash)
+    assert.deepEqual([$("choose").hidden, $("road").hidden], [false, true], "Connect again")
+    assert.deepEqual([went.byItself, went.pressed], [[], []], hash)
+    assert.equal(went.stored.get("token"), "t", "and a reload still has the run token")
+  }
+})
+
 test("an answer that is an error says the error and goes nowhere", async () => {
   const {$, went} = await chooser("company", {error: "The record could not be read."})
   assert.equal($("notice").textContent, "The record could not be read.")

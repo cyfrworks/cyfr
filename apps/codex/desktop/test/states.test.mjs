@@ -7,12 +7,12 @@
 import assert from "node:assert/strict"
 import {test} from "node:test"
 
-import {initial, step} from "../src/states.js"
+import {ACTS, initial, step} from "../src/states.js"
 
 const READY = "http://127.0.0.1:7340/bootstrap/#token=dG9rZW4"
 const HOME = "https://cyfr.example.com"
 const ACCOUNT = "https://cyfr.run"
-const home = (h = HOME) => ({type: "home", message: {type: "home", home: h, account: ACCOUNT}})
+const home = (h = HOME, attempt = 1) => ({type: "home", message: {type: "home", home: h, account: ACCOUNT, attempt}})
 const locked = (h = "") => ({type: "locked", message: h ? {type: "locked", home: h, account: ACCOUNT} : {type: "locked"}})
 
 // The state after events from the start, and every effect on the way.
@@ -28,7 +28,12 @@ function run(events, accountRoad = false) {
 }
 
 const ready = {type: "ready", url: READY}
-const navigate = (over) => ({type: "navigate", window: "content", url: HOME + "/", target: "top", asker: "top", showing: READY, ...over})
+// Begun by the document showing, unless `over` says another began it.
+const navigate = (over) => ({type: "navigate", window: "content", url: HOME + "/", target: "top", asker: "top", showing: READY,
+  by: over.showing ?? READY, ...over})
+// The account window's top-frame load, begun by the account's own page.
+const accountNavigate = (over) => ({type: "account-navigate", window: "account", target: "top", asker: "top",
+  by: ACCOUNT + "/account/sign#x", ...over})
 // The content window's top frame given HOME, as the device's pages open it.
 const given = navigate({})
 // What main locks for: the company page, on either road, and being sent to
@@ -37,8 +42,9 @@ const company = navigate({url: HOME + "/company-login", showing: HOME + "/login"
 const signedOut = navigate({url: HOME + "/login?error=signed_out", showing: HOME + "/threads", redirect: true})
 const forgot = {type: "forgot", cleared: true}
 const notForgot = {type: "forgot", cleared: false}
-const taken = (h = HOME) => ({type: "taken", home: h, taken: true})
-const proposed = [ready, home(), taken()]
+const taken = {type: "taken", taken: true}
+const notTaken = {type: "taken", taken: false}
+const proposed = [ready, home(), taken]
 const open = [...proposed, {type: "opened", home: HOME}]
 
 test("cyfr's ready shows the chooser; a second ready, or another first page, ends cyfr", () => {
@@ -51,8 +57,8 @@ test("cyfr's ready shows the chooser; a second ready, or another first page, end
 test("a proposal is answered home-ready and replaced by the next until cyfr says it opened", () => {
   const {s, effects} = run(proposed)
   assert.equal(s.name, "proposed")
-  assert.deepEqual(effects.at(-1), {send: {type: "home-ready", fields: {home: HOME}}})
-  assert.equal(run([...proposed, home("https://bob.example"), taken("https://bob.example")]).s.home, "https://bob.example", "after a failure")
+  assert.deepEqual(effects.at(-1), {send: {type: "home-ready", fields: {home: HOME, attempt: 1}}})
+  assert.equal(run([...proposed, home("https://bob.example", 2), taken]).s.home, "https://bob.example", "after a failure")
   assert.equal(run(open).s.name, "open")
   assert.equal(run([...open, home("https://bob.example")]).s.name, "ended", "a proposal after a commit")
   assert.equal(run([...proposed, {type: "opened", home: "https://bob.example"}]).s.name, "ended")
@@ -88,7 +94,10 @@ test("the computer's lock and sleep are no events of main's, which locks for nei
 
 test("main's own lock closes the content first, then tells cyfr, waits for its locked and forgets nothing", () => {
   for (const [road, event, why] of [[false, company, "company sign-in"], [true, company, "company sign-in"], [true, signedOut, "sign-in"]]) {
-    for (const before of [proposed, open]) {
+    const waiting = step(run(proposed, road).s, event)
+    assert.equal(waiting.allow, false, `${why}: nothing of a CYFR not yet open`)
+    assert.deepEqual(waiting.do, [], `${why}: and so no lock of it`)
+    for (const before of [open]) {
       const locking = run([...before, event], road)
       assert.equal(locking.s.name, "locking", why)
       const at = locking.kinds.lastIndexOf("say")
@@ -119,14 +128,14 @@ test("cyfr's own locked is the device's session ending: forgotten, with nothing 
 })
 
 test("the lock is a barrier: what cyfr sent before its locked is dropped, and its locked says what main keeps to", () => {
-  // cyfr committed before it read the lock: opened and its locked were on
-  // the pipe already. cyfr runs on and main keeps to what it committed.
-  const committed = run([...proposed, company, {type: "opened", home: HOME}, locked(HOME)])
+  // What was on the pipe before cyfr read main's lock is dropped: cyfr
+  // runs on and main keeps to what it committed.
+  const committed = run([...open, company, home("https://bob.example", 2), {type: "opened", home: HOME}, locked(HOME)])
   assert.equal(committed.s.name, "open")
   assert.equal(committed.s.home, HOME)
   assert.ok(!committed.kinds.includes("end"))
   assert.deepEqual(committed.effects.at(-1), {chooser: ["company"]})
-  const cancelled = run([...proposed, company, home(), locked()])
+  const cancelled = run([...proposed, locked(), home(), {type: "opened", home: HOME}, forgot])
   assert.equal(cancelled.s.name, "chooser")
   assert.equal(cancelled.s.home, "")
   const other = run([...open, company, locked("https://bob.example")])
@@ -134,7 +143,7 @@ test("the lock is a barrier: what cyfr sent before its locked is dropped, and it
   const own = run([ready, locked(HOME), forgot])
   assert.equal(own.s.name, "chooser", "cyfr's own locked naming a CYFR main never kept to")
   assert.equal(own.s.home, "")
-  assert.equal(run([...proposed, company, locked(), home(), taken()]).s.name, "proposed", "the next proposal after the lock")
+  assert.equal(run([...proposed, locked(), forgot, home(HOME, 2), taken]).s.name, "proposed", "the next proposal after the lock")
 })
 
 test("on the passkey road the content sent to the CYFR's sign-in page locks and shows both ways on", () => {
@@ -142,7 +151,7 @@ test("on the passkey road the content sent to the CYFR's sign-in page locks and 
     ["signing out in Prism", {}],
     ["a kept sign-in that is over, as the app opens it", {url: HOME + "/login", showing: "http://127.0.0.1:7340/bootstrap/"}],
     ["one of the CYFR's pages going there", {url: HOME + "/login", redirect: false}]]) {
-    const at = {...signedOut, ...over}
+    const at = {...signedOut, ...over, by: over.showing ?? signedOut.by}
     const r = step(run(open, true).s, at)
     assert.equal(r.allow, false, name)
     assert.deepEqual(r.do.slice(1), [{close: true}, {send: {type: "lock"}}], name)
@@ -161,39 +170,52 @@ test("the sign-in page as a way on, its own loads, and the six-word road are nev
     ["a frame's load", true, {target: "frame", asker: "frame-inside"}],
     ["a frame asking the top frame", true, {asker: "frame-outside"}, false],
     ["a confirmation window", true, {window: "child"}]]) {
-    const r = step(run(open, road).s, {...signedOut, ...over})
+    const r = step(run(open, road).s, {...signedOut, ...over, by: over.showing ?? signedOut.by})
     assert.equal(r.state.name, "open", name)
     assert.ok(!r.do.some((e) => e.close || e.send), name)
     if (allow !== undefined) assert.equal(r.allow, allow, name)
   }
 })
 
-test("main keeps to a proposed CYFR only once the kept storage is its own, whichever road", () => {
+test("main keeps to a CYFR only once the kept storage is its own and cyfr opened it, whichever road", () => {
   for (const road of [false, true]) {
     const waiting = run([ready, home()], road)
-    assert.deepEqual(waiting.effects.at(-1), {take: {home: HOME}})
+    assert.deepEqual(waiting.effects.at(-1), {take: true})
     assert.ok(!waiting.effects.some((e) => e.send), "no home-ready before it is its own")
     for (const url of [HOME + "/", HOME + "/login", HOME + "/auth/device/complete/x"]) {
       assert.equal(step(waiting.s, navigate({url})).allow, false, url)
     }
     assert.equal(step(waiting.s, navigate({url: HOME + "/", target: "frame", asker: "frame-inside"})).allow, false, "nor a frame")
-    const own = step(waiting.s, taken())
-    assert.deepEqual(own.do, [{send: {type: "home-ready", fields: {home: HOME}}}])
-    assert.equal(step(own.state, given).allow, true)
+    const own = step(waiting.s, taken)
+    assert.deepEqual(own.do, [{send: {type: "home-ready", fields: {home: HOME, attempt: 1}}}])
+    assert.equal(step(own.state, given).allow, false, "nothing of it loads before it is open")
+    assert.equal(step(own.state, navigate({target: "frame", asker: "frame-inside"})).allow, false, "nor a frame")
+    assert.equal(step(step(own.state, {type: "opened", home: HOME}).state, given).allow, true)
   }
-  const replaced = run([ready, home(), home("https://bob.example")]).s
-  assert.deepEqual(step(replaced, taken()), {state: replaced, do: []}, "an answer for a proposal since replaced")
 })
 
-test("a kept storage that could not be made the CYFR's loads nothing of it, locks cyfr's Connect and says so", () => {
-  const refused = run([ready, home(), {type: "taken", home: HOME, taken: false}], true)
-  assert.equal(refused.s.name, "locking")
-  assert.deepEqual(refused.effects.slice(-2), [{close: true}, {send: {type: "lock"}}])
-  assert.ok(!refused.effects.some((e) => e.send?.type === "home-ready" || e.root))
-  const back = run([ready, home(), {type: "taken", home: HOME, taken: false}, locked()], true)
-  assert.equal(back.s.name, "chooser")
-  assert.equal(back.s.home, "", "main keeps to none")
-  assert.deepEqual(back.effects.at(-1), {chooser: ["uncleared"]})
+test("a proposal during a take only replaces what is wanted, and the current number alone is answered", () => {
+  const bob = "https://bob.example"
+  for (const [answer, type, state] of [[taken, "home-ready", "proposed"], [notTaken, "home-failed", "chooser"]]) {
+    const over = run([ready, home(HOME, 1), home(bob, 2), home(HOME, 3)], true)
+    assert.equal(over.kinds.filter((k) => k === "take").length, 1, "one take in flight")
+    assert.ok(!over.effects.some((e) => e.send), "and nobody answered")
+    const ended = step(over.s, answer)
+    assert.equal(ended.state.name, state, type)
+    assert.deepEqual(ended.do.filter((e) => e.send), [{send: {type, fields: {home: HOME, attempt: 3}}}], type)
+    assert.deepEqual(step(ended.state, answer), {state: ended.state, do: []}, "answered once")
+  }
+  const next = run([...proposed, home(bob, 2)], true)
+  assert.equal(next.kinds.filter((k) => k === "take").length, 2, "a proposal after a take ended takes again")
+})
+
+test("a kept storage that could not be made the CYFR's loads nothing of it and fails that attempt alone, with no lock", () => {
+  const refused = run([ready, home(HOME, 7), notTaken], true)
+  assert.equal(refused.s.name, "chooser")
+  assert.equal(refused.s.home, "", "main keeps to none")
+  assert.deepEqual(refused.effects.at(-1), {send: {type: "home-failed", fields: {home: HOME, attempt: 7}}})
+  assert.ok(!refused.effects.some((e) => e.send?.type === "home-ready" || e.send?.type === "lock" || e.close || e.root))
+  assert.equal(step(refused.s, given).allow, false)
 })
 
 test("main alone opens a CYFR committed at its root, on the passkey road, and the notices are told by then", () => {
@@ -201,7 +223,7 @@ test("main alone opens a CYFR committed at its root, on the passkey road, and th
   assert.ok(!run(open, false).effects.some((e) => e.root))
   const told = run([...open, company, locked()], true)
   assert.deepEqual(told.s.notices, ["company"])
-  assert.deepEqual(run([...open, company, locked(), home(), taken(), {type: "opened", home: HOME}], true).s.notices, [])
+  assert.deepEqual(run([...open, company, locked(), home(), taken, {type: "opened", home: HOME}], true).s.notices, [])
 })
 
 const atWays = "http://127.0.0.1:7340/bootstrap/#road=passkey"
@@ -240,7 +262,7 @@ test("only the chooser's own button on the passkey road leaves a CYFR", () => {
     ["an asker the engine does not name", true, open, {asker: "none"}],
     ["a confirmation window", true, open, {window: "child"}],
     ["no CYFR open", true, [ready], {}]]) {
-    const r = step(run(before, road).s, {...another, ...over})
+    const r = step(run(before, road).s, {...another, ...over, by: over.showing ?? another.by})
     assert.equal(r.allow, false, name)
     assert.deepEqual(r.do, [], name)
   }
@@ -279,7 +301,7 @@ test("quitting closes and quits, from any state, and signs nobody out", () => {
 
 test("a hop is the content window's top frame asking; a frame asking, or a confirmation window, is refused", () => {
   const nav = (over) => ({type: "navigate", window: "content", url: ACCOUNT + "/account/sign#x", target: "top", asker: "top",
-    showing: HOME + "/login", ...over})
+    showing: HOME + "/login", by: HOME + "/login", ...over})
   const s = run(open, true).s
   assert.deepEqual(step(s, nav({})).do, [{hop: {url: ACCOUNT + "/account/sign#x", kind: "sign-in"}}])
   for (const refused of [{asker: "frame-inside"}, {asker: "frame-outside"}, {target: "frame"}, {window: "child"}, {asker: "none"}]) {
@@ -293,7 +315,7 @@ test("a hop is the content window's top frame asking; a frame asking, or a confi
 
 test("the account window's top frame returns; its frames load nothing and end nothing", () => {
   const s = run(open, true).s
-  const back = (kind) => step(s, {type: "account-navigate", url: HOME + "/login#a", target: "top", kind})
+  const back = (kind) => step(s, accountNavigate({url: HOME + "/login#a", kind}))
   assert.deepEqual(back("sign-in").do, [{unhop: true}, {deliver: {url: HOME + "/login#a"}}])
   assert.deepEqual(back("confirmation").do, [{unhop: true}, {confirmation: {url: HOME + "/login#a"}}])
   assert.equal(back("confirmation").state.returning, null, "a confirmation's answer reloads nothing")
@@ -303,7 +325,7 @@ test("the account window's top frame returns; its frames load nothing and end no
 })
 
 const ANSWER = HOME + "/login#a"
-const returned = [...open, {type: "account-navigate", url: ANSWER, target: "top", kind: "sign-in"}]
+const returned = [...open, accountNavigate({url: ANSWER, kind: "sign-in"})]
 const ownStart = {type: "started", url: ANSWER, sameDocument: true}
 const reloads = (events) => run([...returned, ...events], true).kinds.filter((k) => k === "reload").length
 
@@ -377,4 +399,59 @@ test("only a way on taken from the chooser clears what it was keeping", () => {
 test("a second launch shows the content window, and nothing once ended", () => {
   assert.deepEqual(step(run(open).s, {type: "second-instance"}).do, [{show: true}])
   assert.deepEqual(step(run([...open, {type: "quit"}]).s, {type: "second-instance"}).do, [])
+})
+
+// One row or more for each act of ACTS: where it is pressed, and what
+// follows only a press. An act with no row fails.
+const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"
+const SIGN_IN = ACCOUNT + "/account/sign#x"
+const PRESSES = {
+  another: [
+    {name: "Connect to another CYFR", event: navigate({url: another.url, showing: atWays}),
+      acted: (r) => r.do.some((e) => e.forget) && r.state.leaving === true}],
+  onward: [
+    {name: "Sign in with your passkey", event: navigate({url: HOME + "/login", showing: atWays}),
+      acted: (r) => r.state.notices.length === 0},
+    {name: "Use this computer's key", event: navigate({url: "http://127.0.0.1:7340/", showing: atWays}),
+      acted: (r) => r.state.notices.length === 0}],
+  hop: [
+    {name: "Sign in with your account", event: navigate({url: SIGN_IN, showing: HOME + "/login"}),
+      acted: (r) => r.do.some((e) => e.hop)}],
+  answer: [
+    {name: "a sign-in's answer", event: accountNavigate({url: HOME + "/login#a", kind: "sign-in"}),
+      acted: (r) => r.do.some((e) => e.deliver) && !!r.state.returning},
+    {name: "a confirmation's answer", event: accountNavigate({url: HOME + "/login#a", kind: "confirmation"}),
+      acted: (r) => r.do.some((e) => e.confirmation)}]
+}
+
+test("every act the person presses is in this table", () => {
+  assert.deepEqual(Object.keys(PRESSES).sort(), Object.keys(ACTS).sort())
+})
+
+test("an act is no redirect, and is begun by the top frame's own document that offers it, at its origin", () => {
+  const s = {...run(open, true).s, notices: ["company"]}
+  const askers = ["top", "frame-inside", "frame-outside", "none"]
+  const documents = {chooser: CHOOSER_DOC, "the chooser with its road": atWays, "the device's pages": "http://127.0.0.1:7340/",
+    "the CYFR's page": HOME + "/login", "the account's page": SIGN_IN, "another site": "https://evil.example/bootstrap/",
+    "the chooser's path at the CYFR": HOME + "/bootstrap/", "the chooser's path on another port": "http://127.0.0.1:7341/bootstrap/",
+    "the CYFR's host on another port": HOME + ":9443/login", "the account's path on another port": ACCOUNT + ":9443/account/sign",
+    none: ""}
+  const offers = {another: ["chooser", "the chooser with its road"], onward: ["chooser", "the chooser with its road"],
+    hop: ["the CYFR's page", "the chooser's path at the CYFR"], answer: ["the account's page"]}
+  for (const [act, rows] of Object.entries(PRESSES)) {
+    for (const {name, event, acted} of rows) {
+      for (const redirect of [false, true]) {
+        for (const asker of askers) {
+          for (const [whose, by] of Object.entries(documents)) {
+            // The engine's shape of a redirect: the first document's frame is
+            // still the initiator, and the window still shows it.
+            const r = step(s, {...event, redirect, asker, by})
+            const press = !redirect && asker === "top" && offers[act].includes(whose)
+            assert.equal(acted(r), press, `${name}: redirect ${redirect}, by ${asker} of ${whose}`)
+            if (!press && act !== "onward") assert.equal(r.allow, false, `${name}, refused: ${redirect} ${asker} ${whose}`)
+          }
+        }
+      }
+    }
+  }
 })

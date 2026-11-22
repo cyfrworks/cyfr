@@ -196,6 +196,12 @@ function cyfr() {
     for (const line of chunk.split("\n").filter(Boolean)) child.heard.push(JSON.parse(line))
   })
   child.say = (m) => child.stdout.write(JSON.stringify({version: 1, ...m}) + "\n")
+  child.attempts = 0
+  // A proposal, numbered as cyfr numbers them: its number.
+  child.proposes = (home, fields = {}) => {
+    child.say({type: "home", home, account: ACCOUNT, attempt: ++child.attempts, ...fields})
+    return child.attempts
+  }
   return child
 }
 
@@ -260,10 +266,10 @@ function signedNobodyOut() {
 // cyfr proposing `home`, and committing it once main answered home-ready:
 // whether it did.
 async function opens(home = HOME) {
-  child.say({type: "home", home, account: ACCOUNT})
+  const attempt = child.proposes(home)
   await settled()
   await settled()
-  if (!child.heard.some((m) => m.type === "home-ready" && m.home === home)) return false
+  if (!child.heard.some((m) => m.type === "home-ready" && m.home === home && m.attempt === attempt)) return false
   child.say({type: "opened", home})
   await settled()
   await settled()
@@ -292,18 +298,18 @@ async function give(w) {
 
 test("an interrupted Connect, through main: a proposal a lock ended gives way to the next, a committed one to none", async () => {
   const said = await started(false)
-  child.say({type: "home", home: HOME, account: ACCOUNT})
+  child.proposes(HOME)
   await settled()
-  assert.deepEqual(child.heard.at(-1), {version: 1, type: "home-ready", home: HOME})
+  assert.deepEqual(child.heard.at(-1), {version: 1, type: "home-ready", home: HOME, attempt: 1})
   child.say({type: "locked"})
   await settled()
   await settled()
-  child.say({type: "home", home: HOME, account: ACCOUNT})
+  child.proposes(HOME)
   await settled()
   assert.deepEqual(child.heard.filter((m) => m.type === "home-ready").length, 2, "the same CYFR proposed again")
   assert.ok(!child.killed, said.join("\n"))
   child.say({type: "opened", home: HOME})
-  child.say({type: "home", home: "https://bob.example", account: ACCOUNT})
+  child.proposes("https://bob.example")
   await settled()
   assert.ok(child.killed, "another proposal after a committed CYFR ends cyfr")
 })
@@ -483,7 +489,7 @@ test("nothing of a CYFR loads, and cyfr hears no home-ready, while the storage i
   await started(true)
   let cleared
   world.clearing = () => new Promise((resolve) => { cleared = resolve })
-  child.say({type: "home", home: PORT_B, account: ACCOUNT})
+  child.proposes(PORT_B)
   await settled()
   assert.deepEqual(child.heard, [])
   for (const url of [PORT_B + "/", PORT_B + "/login", PORT_B + "/auth/device/complete/x"]) {
@@ -492,7 +498,7 @@ test("nothing of a CYFR loads, and cyfr hears no home-ready, while the storage i
   assert.equal(ownerOnDisk(), "", "recorded only once cleared")
   cleared()
   await settled()
-  assert.deepEqual(child.heard, [{version: 1, type: "home-ready", home: PORT_B}])
+  assert.deepEqual(child.heard, [{version: 1, type: "home-ready", home: PORT_B, attempt: 1}])
   assert.equal(ownerOnDisk(), PORT_B)
 })
 
@@ -506,14 +512,13 @@ test("a clear that fails opens nothing, keeps the old owner and says so", async 
     await signsIn(PORT_A, "ada at A")
     await started(true, {relaunch: true})
     fail()
+    const chooser = content()
     assert.equal(await opens(PORT_B), false, name)
     assert.deepEqual(world.loads, [], name)
     assert.ok(!child.killed, name)
-    assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"}, name)
+    assert.deepEqual(child.heard, [{version: 1, type: "home-failed", home: PORT_B, attempt: 1}], `${name}: cyfr is told, and nothing locks`)
     assert.equal(ownerOnDisk(), PORT_A, name)
-    await saysLocked({})
-    const chooser = content()
-    assert.match(chooser.webContents.url, /&road=passkey&notice=uncleared$/, name)
+    assert.ok(!chooser.destroyed, `${name}: the chooser stands, for cyfr's answer to say so`)
     assert.ok(navigate(chooser, PORT_B + "/").prevented, name)
   }
 })
@@ -543,13 +548,144 @@ test("a crash between the clear and the record leaves no session the new origin 
 
 test("a root is loaded only while the record says that CYFR owns the storage", async () => {
   await started(true)
-  child.say({type: "home", home: PORT_B, account: ACCOUNT})
+  child.proposes(PORT_B)
   await settled()
   writeFileSync(path.join(world.profile, "content-owner"), PORT_A)
   child.say({type: "opened", home: PORT_B})
   await settled()
   assert.deepEqual(world.loads, [])
   assert.ok(child.killed)
+})
+
+// Each clear the kept storage is asked for waits for the test: its ends,
+// in order.
+function heldClears() {
+  const held = []
+  world.clearing = () => new Promise((end, fail) => held.push({end, fail}))
+  return held
+}
+
+test("an old clear acknowledges no selection but the current one: A, B, then A again", async () => {
+  await started(true)
+  const held = heldClears()
+  const chooser = content()
+  for (const home of [PORT_A, PORT_B, PORT_A]) {
+    child.proposes(home)
+    await settled()
+    assert.deepEqual(child.heard, [], "nobody is answered while the clear runs")
+    for (const url of [PORT_A + "/", PORT_B + "/"]) assert.ok(navigate(chooser, url).prevented, url)
+  }
+  assert.equal(held.length, 1, "one clear in flight")
+  held[0].end()
+  await settled()
+  assert.equal(held.length, 1, "and no second for the newer proposal")
+  assert.deepEqual(child.heard, [{version: 1, type: "home-ready", home: PORT_A, attempt: 3}])
+  assert.equal(ownerOnDisk(), PORT_A)
+  assert.ok(navigate(chooser, PORT_A + "/").prevented, "nothing of it before it is open")
+  child.say({type: "opened", home: PORT_A})
+  await settled()
+  assert.deepEqual(world.loads, [{url: PORT_A + "/", cookies: []}])
+  assert.equal(ownerOnDisk(), PORT_A, "the record names the CYFR that is open")
+})
+
+test("no proposal comes between the owner being recorded or read and its answer", async () => {
+  for (const [owner, first] of [["", PORT_A], [PORT_A, PORT_A]]) {
+    await started(true)
+    if (owner) {
+      await signsIn(owner, "ada at A")
+      await started(true, {relaunch: true})
+    }
+    child.proposes(first)
+    // The next proposal comes as soon as main has let go of the thread
+    // after the owner is recorded, or read.
+    if (owner) process.nextTick(() => child.proposes(PORT_B))
+    else world.step = (at) => { if (at === "read" && child.attempts === 1) process.nextTick(() => child.proposes(PORT_B)) }
+    await settled()
+    await settled()
+    await settled()
+    for (const {type, home, attempt} of child.heard) {
+      assert.equal(type, "home-ready")
+      assert.equal(home, attempt === 1 ? first : PORT_B, "each number answered for its own CYFR")
+    }
+    assert.equal(child.heard.at(-1).attempt, 2)
+    assert.equal(ownerOnDisk(), PORT_B, "the last answered is the owner")
+    child.say({type: "opened", home: PORT_B})
+    await settled()
+    assert.deepEqual(world.loads, [{url: PORT_B + "/", cookies: []}])
+  }
+})
+
+test("a clear that fails under overlapping proposals fails the current one alone, locking nothing", async () => {
+  await started(true)
+  const held = heldClears()
+  child.proposes(PORT_A)
+  await settled()
+  child.proposes(PORT_B)
+  await settled()
+  held[0].fail(new Error("no"))
+  await settled()
+  assert.deepEqual(child.heard, [{version: 1, type: "home-failed", home: PORT_B, attempt: 2}])
+  assert.ok(content(), "the chooser stands")
+  assert.equal(ownerOnDisk(), "")
+  world.clearing = () => Promise.resolve()
+  assert.ok(await opens(PORT_A), "and the next is taken")
+  assert.equal(ownerOnDisk(), PORT_A)
+})
+
+test("a kill between any two steps under overlapping proposals leaves no CYFR open under another's record", async () => {
+  const C = "https://cyfr.example.com:10443"
+  const steps = ["cleared", "cache cleared", "flushed", "read"]
+  for (const at of ["before the clear", ...steps]) {
+    for (const next of [[PORT_A], [PORT_B, PORT_A], [C], [C, PORT_B]]) {
+      const what = `${next.join(", ")} proposed at ${at}`
+      await started(true)
+      await signsIn(PORT_A, "ada at A")
+      await started(true, {relaunch: true})
+      const held = heldClears()
+      const overlap = () => next.forEach((home) => child.proposes(home))
+      const snapshot = (step) => ({step, owner: ownerOnDisk(), disk: new Map(world.disk), loads: [...world.loads]})
+      const kills = [snapshot("before")]
+      world.step = (step) => {
+        kills.push(snapshot(step))
+        if (step === at) overlap()
+      }
+      child.proposes(PORT_B)
+      await settled()
+      if (at === "before the clear") overlap()
+      await settled()
+      assert.equal(held.length, 1, what)
+      held[0].end()
+      await settled()
+      await settled()
+      kills.push(snapshot("answered"))
+      // Whom main answered is whom cyfr may open.
+      assert.deepEqual(child.heard, [{version: 1, type: "home-ready", home: next.at(-1), attempt: child.attempts}], what)
+      child.say({type: "opened", home: next.at(-1)})
+      await settled()
+      await settled()
+      kills.push(snapshot("after"))
+      assert.ok(!child.killed, what)
+      assert.deepEqual(world.loads.map((l) => l.url), [next.at(-1) + "/"], what)
+      const profile = world.profile
+      for (const {step, owner, disk, loads} of kills) {
+        for (const {url, cookies} of loads) {
+          assert.equal(new URL(url).origin, owner, `${what}, killed at ${step}: open under another's record`)
+          assert.deepEqual(cookies, [], `${what}, killed at ${step}`)
+        }
+        if (owner !== PORT_A) assert.deepEqual(disk.get(CONTENT), [], `${what}, killed at ${step}: A's storage under ${owner}`)
+        for (const home of [PORT_A, PORT_B, C]) {
+          world.profile = profile
+          world.disk = new Map(disk)
+          writeFileSync(path.join(profile, "content-owner"), owner)
+          await started(true, {relaunch: true})
+          assert.ok(await opens(home), what)
+          const kept = home === owner && owner === PORT_A ? (disk.get(CONTENT) ?? []).map((c) => c.value) : []
+          assert.deepEqual(world.loads, [{url: home + "/", cookies: kept}], `${what}, killed at ${step}, then ${home}`)
+          assert.equal(ownerOnDisk(), home, "the record names the CYFR that is open")
+        }
+      }
+    }
+  }
 })
 
 // The chooser's ways on at `home`, whoever was signed in signed out.
@@ -578,6 +714,32 @@ test("Connect to another CYFR clears what was kept and only then has cyfr leave"
   await saysLocked({})
   assert.deepEqual(world.cleared, [CONTENT])
   assert.ok(navigate(content(), PORT_A + "/").prevented, "main keeps to A no more")
+})
+
+test("a redirect keeps the chooser's top frame as its initiator and is no press of Connect to another CYFR", async () => {
+  await started(true)
+  await signsIn(PORT_A, "ada at A")
+  const chooser = await atWays(PORT_A)
+  world.cleared = []
+  assert.ok(redirected(chooser, ANOTHER).prevented)
+  await settled()
+  assert.ok(!chooser.destroyed, "the chooser stands")
+  assert.deepEqual(world.cleared, [], "nothing is cleared")
+  assert.ok(!child.heard.some((m) => m.type === "leave"))
+})
+
+test("the engine's pending address is not the document that began a navigation", async () => {
+  await started(true)
+  await signsIn(PORT_A, "ada at A")
+  const page = content()
+  world.cleared = []
+  const event = {url: ANOTHER, isMainFrame: true, initiator: page.webContents.mainFrame, prevented: false,
+    preventDefault() { this.prevented = true }}
+  page.webContents.getURL = () => "http://127.0.0.1:7340/bootstrap/"
+  page.webContents.emit("will-navigate", event)
+  await settled()
+  assert.ok(event.prevented && !page.destroyed)
+  assert.deepEqual(world.cleared, [], "the CYFR's document pressed nothing of the chooser's")
 })
 
 test("Connect to another CYFR does not advance past a failed clear", async () => {
@@ -659,11 +821,12 @@ test("a lost confirmation window closes alone", async () => {
   assert.equal(page.webContents.reloaded, undefined)
 })
 
-test("a lock after cyfr committed and before main read opened leaves cyfr running and the chooser ready", async () => {
+test("opened and cyfr's locked read in one go leave cyfr running and the chooser ready", async () => {
   await started(false)
-  child.say({type: "home", home: HOME, account: ACCOUNT})
+  child.proposes(HOME)
   await settled()
-  navigate(content(), HOME + "/company-login")
+  assert.ok(navigate(content(), HOME + "/company-login").prevented, "nothing of it before it is open")
+  assert.ok(!child.heard.some((m) => m.type === "lock"), "and so no lock of it")
   child.say({type: "opened", home: HOME})
   await saysLocked()
   assert.equal(child.killed, false)
@@ -685,12 +848,11 @@ test("a frame asking the top frame to go to the sign-in route is refused and ope
 
 test("a CYFR rerouted is a relaunch only after the content closed, and signs nobody out", async () => {
   await started(true)
-  child.say({type: "home", home: HOME, account: ACCOUNT})
+  child.proposes(HOME)
   await settled()
-  await give(content())
   world.cleared = []
   const page = content()
-  child.say({type: "home", home: "https://bob.example", account: ACCOUNT, proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
+  child.proposes("https://bob.example", {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
   await settled()
   assert.ok(page.destroyed)
   signedNobodyOut()
@@ -742,7 +904,8 @@ async function hopped() {
   assert.ok(navigate(page, hop).prevented, "the hop leaves the content window at the sign-in page")
   const account = live().find((w) => w.webContents.url === hop)
   const answer = () => {
-    const back = {url: ANSWER, isMainFrame: true, prevented: false, preventDefault() { this.prevented = true }}
+    const back = {url: ANSWER, isMainFrame: true, initiator: account.webContents.mainFrame, prevented: false,
+      preventDefault() { this.prevented = true }}
     account.webContents.emit("will-navigate", back)
     assert.ok(back.prevented, "the account window does not load the return")
   }
@@ -755,6 +918,15 @@ function fragmentTo(page, url) {
   page.webContents.url = url
   page.webContents.emit("did-navigate-in-page", {}, url, true)
 }
+
+test("a redirect in the account window is no answer of a sign-in's", async () => {
+  const {page} = await hopped()
+  const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+  assert.ok(redirected(account, ANSWER).prevented)
+  await settled()
+  assert.ok(account.destroyed, "the ceremony ended")
+  assert.equal(page.webContents.url, HOME + "/login", "and nothing was delivered")
+})
 
 test("a sign-in's answer returns as a document of its own, though the content window still shows the CYFR's sign-in page", async () => {
   const {page, answer} = await hopped()

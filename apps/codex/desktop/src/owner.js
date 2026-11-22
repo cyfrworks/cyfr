@@ -49,20 +49,29 @@ export function keptStorage(ses, file) {
   }
 
   /**
-   * Make the CYFR at `home` the owner: it is already, or the storage is
-   * cleared and only then recorded as its own. In that order an app that
-   * dies between leaves empty storage under the last owner, never the last
-   * owner's storage under this one.
+   * Make the CYFR main wants the owner: it is already, or the storage is
+   * cleared and the one `wanted` names when the clear has ended is recorded
+   * as its own. One clear serves every proposal that replaced the one it
+   * began for: it empties the whole storage, whoever it began for, and
+   * nothing of any CYFR loads meanwhile, since main keeps to a CYFR only
+   * once it is open (states.js kept) and an open one takes no proposal.
+   * In that order an app that dies between leaves empty storage under the
+   * last owner, never the last owner's storage under this one. `answer`
+   * hears whether it is taken in the turn the owner is read or recorded,
+   * so no proposal comes between the two.
    */
-  async function take(home) {
+  async function take(wanted, answer) {
+    let taken = false
     try {
-      if (holds(home)) return true
-      if (!await clear()) return false
-      record(new URL(home).origin)
-      return true
+      if (holds(wanted())) taken = true
+      else if (await clear()) {
+        record(new URL(wanted()).origin)
+        taken = true
+      }
     } catch {
-      return false
+      taken = false
     }
+    answer(taken)
   }
 
   /** Load the root of the CYFR at `home` into window `w`, only as the owner's. */

@@ -5,7 +5,7 @@
 // addresses and headers alone, so each is tested without a window.
 //
 // Two kinds of session hold pages. A content session holds the device's
-// pages on loopback and, once main is ready for it, the CYFR selected:
+// pages on loopback and, once cyfr opened it, the CYFR selected:
 // one kept across launches on the passkey road, as a browser's is, and
 // otherwise memory-only and new at each lock. The account session, kept across
 // launches, holds the selected CYFR's account service's sign-in page and

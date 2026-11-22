@@ -124,16 +124,20 @@ terminate() {
   if [ "$OS" = windows ]; then taskkill //F //PID "$2" >/dev/null 2>&1; else kill -TERM "$1" 2>/dev/null; fi
 }
 
-# within SECONDS COMMAND...: polls COMMAND until it succeeds, 1 when
-# SECONDS pass first.
-within() {
-  local until=$((SECONDS + $1))
-  shift
+# within_from CAUSE SECONDS COMMAND...: polls COMMAND until it succeeds, 1
+# unless it had SECONDS or fewer after CAUSE, a reading of the shell's
+# clock taken as the cause was done.
+within_from() {
+  local until=$(($1 + $2))
+  shift 2
   until "$@" >/dev/null 2>&1; do
     [ "$SECONDS" -lt "$until" ] || return 1
     sleep 0.2 # sleep-ok: the gap between two polls of an observable condition, bounded by SECONDS
   done
+  [ "$SECONDS" -le "$until" ]
 }
+# within SECONDS COMMAND...: the same, from now.
+within() { within_from "$SECONDS" "$@"; }
 gone() { ! kill -0 "$1" 2>/dev/null; }
 has_renderer() { [ -n "$(renderers "$1")" ]; }
 said() { grep -qF -- "$2" "$RUN/$1.log" 2>/dev/null; }
@@ -173,8 +177,9 @@ ready() {
 # ends NAME PID OSPID: the app terminated ends within 30 s, every process
 # below it with it, and 7340 stops answering; WHY says what stayed.
 ends() {
-  local below
+  local below ended
   below=$(descendants "$3" | awk '{ print $1 }' | tr '\n' ' ')
+  ended=$SECONDS
   terminate "$2" "$3"
   within 30 gone "$2" || { WHY="the app still ran 30 s after it was terminated"; return 1; }
   # shellcheck disable=SC2086 # the process ids, one word each
@@ -182,7 +187,7 @@ ends() {
     WHY="a process it started still ran 30 s after it ended: $(procs | awk -v want=" $below " 'index(want, " " $1 " ")')"
     return 1
   fi
-  within 20 silent || { WHY="127.0.0.1:7340 still answered 20 s after the app ended"; return 1; }
+  within_from "$ended" 20 silent || { WHY="127.0.0.1:7340 was not seen free within 20 s of the app being terminated"; return 1; }
 }
 
 cleanup() {
@@ -318,11 +323,12 @@ else
   if [ -z "$child" ]; then
     fail cyfr "no cyfr desktop-serve runs below the app"
   else
+    killed=$SECONDS
     oskill "$child"
     if ! within 30 said lost 'CYFR: cyfr ended: '; then
       fail cyfr "the app did not say 'cyfr ended' within 30 s of its cyfr's end"
-    elif ! within 20 silent; then
-      fail cyfr "127.0.0.1:7340 still answered 20 s after cyfr ended"
+    elif ! within_from "$killed" 20 silent; then
+      fail cyfr "127.0.0.1:7340 was not seen free within 20 s of cyfr's kill"
     elif gone "$LOST"; then
       exit_of "$LOST"
       fail cyfr "the app ended with its cyfr: exit $CODE"

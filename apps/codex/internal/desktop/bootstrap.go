@@ -20,7 +20,8 @@ import (
 // just connected to main, which opens it at its root, and asks main by an
 // address main alone answers to connect to another.
 // With a CYFR open it goes on to the device's pages by itself only when
-// it has nothing to tell: with a notice it stays, as it does on the
+// it has nothing to tell (a notice main put in the address, or one
+// cyfr's answer names): with a notice it stays, as it does on the
 // passkey road, until the person takes a way on.
 const (
 	bootstrapStyle = `body{background:#0b1418;color:#e8f1f2;font:1.25rem system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:90vh}
@@ -37,7 +38,7 @@ function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.
 if(asked){$("home").textContent=a.home;$("service").textContent=a.confirm}
 if(stay){$("open").textContent=a.home;$("passkey").hidden=$("either").hidden=$("another").hidden=!passkey;$("passkey").onclick=()=>location.assign(a.home+"/login");$("words").onclick=()=>location.assign(a.next)}
 else if(a.next)location.replace(a.next)}
-function connected(a){if(!(passkey&&a.next))show(a)}
+function connected(a){if(!(passkey&&a.next))show(a,notices[a.notice])}
 function connect(address){say("Connecting\u2026");post("/bootstrap/connect",{address}).then(connected)}
 post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;const told=(f.get("notice")||"").split(",").map(n=>notices[n]).filter(Boolean).join(" ");show(a,told);if(passkey&&a.resume&&!told)connect(a.resume)});
 $("connect").addEventListener("submit",e=>{e.preventDefault();connect($("address").value)});

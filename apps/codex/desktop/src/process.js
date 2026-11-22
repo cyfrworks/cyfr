@@ -3,7 +3,8 @@
 
 // The private messages between this main process and the cyfr it starts
 // (tests/fixtures/desktop-process.json): one JSON object a line, each with
-// version 1, its type and exactly its type's fields.
+// version 1, its type and exactly its type's fields: text, but for attempt,
+// the proposal's number, a whole one from 1.
 
 export const VERSION = 1
 
@@ -11,11 +12,12 @@ export const MAX_LINE = 64 * 1024
 
 const FIELDS = {
   ready: {required: ["url"]},
-  home: {required: ["home", "account"], optional: ["proxy", "resolver"]},
+  home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver"]},
   opened: {required: ["home"]},
   locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
   "pick-folder": {required: ["id", "suggested"]},
-  "home-ready": {required: ["home"]},
+  "home-ready": {required: ["home", "attempt"]},
+  "home-failed": {required: ["home", "attempt"]},
   lock: {required: []},
   leave: {required: []},
   shutdown: {required: []},
@@ -23,7 +25,7 @@ const FIELDS = {
 }
 
 const FROM_CYFR = ["ready", "home", "opened", "locked", "pick-folder"]
-const FROM_MAIN = ["home-ready", "lock", "leave", "shutdown", "folder-picked"]
+const FROM_MAIN = ["home-ready", "home-failed", "lock", "leave", "shutdown", "folder-picked"]
 
 export class Refused extends Error {
   constructor(reason) {
@@ -51,7 +53,8 @@ export function readFromCyfr(line) {
     if (!["version", "type", ...required, ...optional].includes(key)) throw new Refused("fields")
   }
   for (const key of [...required, ...optional.filter((k) => Object.hasOwn(m, k))]) {
-    if (typeof m[key] !== "string" || m[key] === "") throw new Refused("fields")
+    const valid = key === "attempt" ? Number.isSafeInteger(m[key]) && m[key] > 0 : typeof m[key] === "string" && m[key] !== ""
+    if (!valid) throw new Refused("fields")
   }
   // Fields that come together or not at all, and a route only beside them.
   const {together = []} = FIELDS[m.type]

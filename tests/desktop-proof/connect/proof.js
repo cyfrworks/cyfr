@@ -6,11 +6,20 @@
 // the road itself, then `remembered` and `changed`, which read the
 // account service this computer approved.
 
+import {fromCause, processLoss} from "../bound.mjs"
 import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, inputs, js, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, undisturbed, waitFor} from "../lib.js"
 
 // An account service the CYFR names once reconfigured (the front's
 // directory fault); nothing answers at it.
 const OTHER_DIRECTORY = "https://other.test"
+// How long a session may outlive its device's channel.
+const ONE_MINUTE = 60_000
+
+// The answer refusing session cookie `value`, or null while it still opens.
+async function refusalOf(value) {
+  const answer = await opens(value)
+  return refused(answer) ? answer : null
+}
 
 async function connectPhase() {
   const second = await secondClient()
@@ -260,21 +269,19 @@ async function connectPhase() {
     lockedBefore: closedAtLock.length}
   offline.before = await opens(offline.cookie)
   await fault("x.test", "down")
-  await js(w.webContents, `document.querySelector('[data-test="device-lock"]').click(); 1`)
+  const ended = fromCause(() => js(w.webContents, `document.querySelector('[data-test="device-lock"]').click(); 1`),
+    () => refusalOf(offline.cookie), ONE_MINUTE)
   const unreached = await afterLock(offline.shownBefore, "a lock while the CYFR is unreachable")
   const atOnce = closedAtLock.slice(offline.lockedBefore)
   const lockedPage = await waitFor(() => js(unreached.back.webContents, `!!document.querySelector('form[action="/unlock"]')`),
     "the locked device's page")
   await fault("x.test", "none")
-  const offlineAfter = await waitFor(async () => {
-    const answer = await opens(offline.cookie)
-    return refused(answer) ? answer : null
-  }, "the session ended with the channel", 60_000)
+  const offlineEnded = await ended
   row("offline_lock", offline.before.opens && atOnce.length > 0 && atOnce.every(Boolean) && unreached.shown &&
-    unreached.told === null && lockedPage && refused(offlineAfter) &&
+    unreached.told === null && lockedPage && offlineEnded.within &&
     (await signOutsSince(offline.from)).length === 0,
   "a lock while the CYFR cannot be reached closes Prism at once and goes on to the locked device's page, and the session ends with the channel",
-  {before: offline.before, after: offlineAfter, atOnce, chooser: unreached.told})
+  {before: offline.before, ended: offlineEnded, atOnce, chooser: unreached.told})
   await openCYFR(unreached.back, passphrase)
   w = await contentAt(atHome, "Prism again")
   await waitFor(() => js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism's page connected")
@@ -290,22 +297,22 @@ async function connectPhase() {
 
   // process_loss: cyfr killed while Prism holds a session: the app closes
   // its content for good and says why, posting no sign-out; the session
-  // rested on cyfr's channel and ends with it, within its one minute.
+  // rested on cyfr's channel and ends with it, within one minute of the
+  // kill: the refusal is looked for from the kill on, whenever the message
+  // shows.
   const cookie = await sessionCookie(w)
   const before = await opens(cookie)
   const from = await frontLength()
-  process.kill(childOfThis("desktop-serve"), "SIGKILL")
-  const message = await waitFor(() => appWindows().find((x) => x.webContents.getURL().startsWith("data:")), "the app's message")
+  const child = childOfThis("desktop-serve")
+  const {message, ended: sessionLost} = await processLoss({kill: () => process.kill(child, "SIGKILL"),
+    message: () => waitFor(() => appWindows().find((x) => x.webContents.getURL().startsWith("data:")), "the app's message"),
+    refusal: () => refusalOf(cookie)}, ONE_MINUTE)
   const told = decodeURIComponent(message.webContents.getURL())
-  const after = await waitFor(async () => {
-    const answer = await opens(cookie)
-    return refused(answer) ? answer : null
-  }, "the device's session ended with its channel", 60_000)
   const signOuts = await signOutsSince(from)
   row("process_loss", before.opens && told.includes("CYFR stopped") && !/sign/.test(told.replace(/^.*<p>/, "")) && !content() &&
-    signOuts.length === 0 && refused(after),
+    signOuts.length === 0 && sessionLost.within,
   "cyfr's loss closes the content and tells the person; the device's session ends with its channel, with no sign-out of the app's",
-  {told: told.replace(/^.*<p>/, "").replace(/<\/p>$/, ""), before, after, signOuts})
+  {told: told.replace(/^.*<p>/, "").replace(/<\/p>$/, ""), before, ended: sessionLost, signOuts})
 }
 
 // The engine's forced crash of window `w`'s page, and what followed.

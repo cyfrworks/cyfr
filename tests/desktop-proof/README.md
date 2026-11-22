@@ -51,7 +51,8 @@ control address) and `authority.pem`.
 
 A script whose folder holds a `proof.js` runs it as the app's entry, on what
 every such proof shares (`lib.js`: the run, the second client, the fronts,
-the app's windows, what a stopped proof records; `launch.sh`: one launch of
+the app's windows, what a stopped proof records; `bound.mjs`: a timed
+row's clock, which starts with its cause; `launch.sh`: one launch of
 the app a phase; `account.js`: the account road's steps): `pack.mjs`
 bundles it as the production entry is bundled, carrying the proof-only
 marker the package guard refuses (`apps/codex/desktop/test/check-package.test.mjs`
@@ -109,8 +110,8 @@ that fails. The proof has 27 rows over three launches of the app (`run.sh`): `co
 | `reconnect` | the lock left the device locked; its passphrase opens Prism again under a new session | the locked device's page first; a new session cookie |
 | `computer_lock` | the computer's lock and sleep are not the app's | main's `lock-screen` and `suspend` events, as the system sends them, and for two seconds after: the same window, page and cookie, still opening a page; no chooser; no sign-out |
 | `renderer_killed` | Prism's page's process ended by the kill signal (as the kernel ends one when memory runs out) is shown again, signed in as before | the engine's report; the same window loaded again and connected; the same cookie; no lock and no sign-out |
-| `offline_lock` | with the CYFR unreachable, Prism's Lock still closes Prism at once and goes on to the locked device's page | the front taking `down`; the content closed before anything is awaited; nothing told and the passphrase asked; no sign-out; the cookie refused within the session's one minute once the front is back |
-| `process_loss` | `cyfr` killed while Prism holds a session: the app closes its content for good and tells the person, and the session ends with the device's channel | the app's message, saying nothing of a sign-out; none posted; the cookie opening a page before and, within its one minute, refused |
+| `offline_lock` | with the CYFR unreachable, Prism's Lock still closes Prism at once and goes on to the locked device's page | the front taking `down`; the content closed before anything is awaited; nothing told and the passphrase asked; no sign-out; the cookie refused, looked for from the press on and seen within one minute of it |
+| `process_loss` | `cyfr` killed while Prism holds a session: the app closes its content for good and tells the person, and the session ends with the device's channel | the app's message, saying nothing of a sign-out; none posted; the cookie opening a page before and refused, looked for from the kill on and seen within one minute of it (`bound.mjs`) |
 | `remembered` | launched again, the CYFR's approved account service is not asked about again | the device's pages, with no question |
 | `asks_again` | launched again, this road keeps no sign-in | the device's page asking for the passphrase, and no cookie |
 | `directory_changed` | a CYFR that names another account service than the one approved is asked about afresh | the question, with the front standing in for a CYFR reconfigured (fault `directory`) |
@@ -184,7 +185,7 @@ account window makes. The app is launched four times (`run.sh`):
 | `another` | signed out, Connect to another CYFR clears all that was kept of the CYFR left, and main keeps to it no more | those marks there before; no cookie of any site and no item of that origin after; the form; main's refusal of that CYFR's page |
 
 **`passkey-self/`** (shape `self`): `uncleared` (with the engine's clear
-made to fail the Connect opens nothing: the content closed at once, the
+made to fail the Connect opens nothing and locks nothing: the same
 chooser's form saying so, nothing of the CYFR loaded and `cyfr` running
 on), `same_origin_hop` (the sign-in opens
 the CYFR's own account page in the account window), `same_origin_sign_in`,

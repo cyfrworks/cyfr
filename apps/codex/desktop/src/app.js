@@ -44,6 +44,14 @@ const SECURE = {
   devTools: false
 }
 
+// Who began a navigation of `contents` (`asker`) and, where that was its
+// top frame, the address of the document committed there (`by`): never one
+// still loading, and never where a redirect goes.
+function begun(event, contents) {
+  const asker = askerOf(event, contents)
+  return {asker, by: asker === "top" ? contents.mainFrame.url : ""}
+}
+
 // Who asked for a navigation of `contents`, as the engine reports its
 // initiator: its top frame ("top"), a frame asking for itself or a frame
 // inside it ("frame-inside"), a frame asking for any other
@@ -116,10 +124,11 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       done.then((cleared) => on({type: "forgot", cleared}))
     }
     if (effect.take) {
-      const {home} = effect.take
-      const done = forgetting.then(() => storage ? storage.take(home) : true)
-      forgetting = done
-      done.then((taken) => on({type: "taken", home, taken}))
+      const answer = (taken) => on({type: "taken", taken})
+      forgetting = forgetting.then(async () => {
+        if (storage) await storage.take(() => state.home, answer)
+        else answer(true)
+      })
     }
     if (effect.root && content && !storage.loadRoot(content, effect.root.home)) {
       on({type: "gone", why: "the sign-in it keeps is another CYFR's"})
@@ -207,8 +216,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const ask = (event, redirect = false) => {
       const opening = first !== null && event.isMainFrame && event.url === first
       if (event.isMainFrame) first = null
+      const {asker, by} = begun(event, contents)
       const decided = on({type: "navigate", window: which, url: event.url, target: event.isMainFrame ? "top" : "frame",
-        asker: opening ? "top" : askerOf(event, contents), showing: contents.getURL(), redirect})
+        asker: opening ? "top" : asker, by, showing: contents.getURL(), redirect})
       if (!decided.allow) event.preventDefault()
     }
     contents.on("will-navigate", (event) => ask(event))
@@ -278,13 +288,14 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const w = window(ses, {width: 560, height: 760, parent: content ?? undefined})
     accountWindow = w
     const contents = w.webContents
-    const ask = (event) => {
-      const decided = on({type: "account-navigate", url: event.url, target: event.isMainFrame ? "top" : "frame",
+    const ask = (event, redirect = false) => {
+      const decided = on({type: "account-navigate", window: "account", url: event.url, target: event.isMainFrame ? "top" : "frame",
+        ...begun(event, contents), redirect,
         kind: hop && content && hop.from === content ? hop.kind : null})
       if (!decided.allow) event.preventDefault()
     }
-    contents.on("will-navigate", ask)
-    contents.on("will-redirect", ask)
+    contents.on("will-navigate", (event) => ask(event))
+    contents.on("will-redirect", (event) => ask(event, true))
     contents.on("will-frame-navigate", (event) => {
       if (!event.isMainFrame) ask(event)
     })

@@ -10,7 +10,7 @@
 
 import {accountAndSetup, accountWindow, armWindow, connectApproved, passkeyFor, signOutOfPrism, signedInPrism,
   startSignIn, toSignIn, usePasskey} from "../account.js"
-import {HOME, UNCLEARED, atBootstrap, chooserWindow, closedAtLock, content, decided, frontLength, inputs, js, literal,
+import {HOME, UNCLEARED, atBootstrap, chooserWindow, content, decided, frontLength, inputs, js, literal,
   passkeys, question, reachedSince, row, run, said, submitConnect, unclearable, waitFor} from "../lib.js"
 
 // The refusal the app's policy gives both passkey calls in a document.
@@ -64,30 +64,30 @@ async function passkeyPhase() {
 }
 
 // uncleared: while the engine cannot clear the kept storage for the CYFR
-// proposed, nothing of it loads: the lock that gives cyfr's Connect up
-// closes the content at once, the chooser's form comes back saying so and
-// cyfr runs on.
+// proposed, nothing of it loads: that attempt alone fails, with no lock,
+// the same chooser's form says so and cyfr runs on.
 async function unclearedConnect() {
   const chooser = await chooserWindow()
   await submitConnect(chooser.webContents)
   await question(chooser.webContents)
   const from = await frontLength()
-  const lockedBefore = closedAtLock.length
+  const saidBefore = said.length
   const refused = await unclearable(chooser, async () => {
     await js(chooser.webContents, `document.querySelector("#approve").click(); 1`)
     return waitFor(async () => {
       const at = content()
-      if (!at || at === chooser || at.webContents.isLoading() || !atBootstrap(at.webContents.getURL())) return null
-      return js(at.webContents, `document.querySelector("#address").getClientRects().length > 0 &&
-        {words: document.querySelector("#notice").textContent}`)
+      if (!at || at.webContents.isLoading() || !atBootstrap(at.webContents.getURL())) return null
+      const words = await js(at.webContents, `document.querySelector("#address").getClientRects().length > 0 &&
+        document.querySelector("#notice").textContent`)
+      return words && !words.startsWith("Connecting") ? {words, same: at === chooser} : null
     }, "the chooser after the clear that failed")
   })
-  const atOnce = closedAtLock.slice(lockedBefore)
+  const locks = said.slice(saidBefore).filter((line) => line.startsWith("locked:"))
   const loaded = (await reachedSince(new URL(HOME).hostname, from)).filter((r) => r.path === "/").length
-  row("uncleared", refused.words === UNCLEARED && atOnce.length > 0 && atOnce.every(Boolean) && loaded === 0 &&
+  row("uncleared", refused.words === UNCLEARED && refused.same && locks.length === 0 && loaded === 0 &&
     !said.some((l) => l.startsWith("cyfr ended")),
-  "a clear that fails opens nothing: the Connect is given up, the chooser says so and cyfr runs on",
-  {words: refused.words, atOnce, loaded})
+  "a clear that fails opens nothing and locks nothing: the Connect fails, its chooser says so and cyfr runs on",
+  {...refused, locks, loaded})
 }
 
 run("passkey-self", {passkey: passkeyPhase}, {accountRoad: true})
