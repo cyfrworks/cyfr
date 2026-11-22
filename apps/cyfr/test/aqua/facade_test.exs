@@ -11,6 +11,7 @@ defmodule Aqua.FacadeTest do
   use ExUnit.Case, async: true
 
   @roster [
+    action_title: 2,
     at_work: 2,
     attachment_blob_path: 3,
     attachment_limits: 0,
@@ -19,6 +20,7 @@ defmodule Aqua.FacadeTest do
     brain_options: 2,
     browser_turned_off: 0,
     describe_note_result: 1,
+    known_program: 2,
     mark_read: 3,
     model_status: 2,
     models: 1,
@@ -83,6 +85,17 @@ defmodule Aqua.FacadeTest do
   test "the virtual catalog is Prima's" do
     assert Aqua.virtual_tool_catalog() == Sanctum.VirtualTools.action_kinds()
     assert Aqua.virtual_tool_catalog() == Aqua.Hands.list_for_panel()
+  end
+
+  test "a permission reads by the words its action is declared with, never its id" do
+    {:ok, {_module, %{operations: operations}}} = Map.fetch(Sanctum.Catalog.operations(), "notes")
+    %{description: words} = Enum.find(operations, &(&1.action == "pin"))
+    assert Aqua.action_title("notes", "pin") == words
+    assert Aqua.action_title("files", "read") == "Files: read"
+
+    for {tool, actions} <- Aqua.virtual_tool_catalog(), {action, _kind} <- actions do
+      refute Aqua.action_title(tool, action) == "#{tool}.#{action}"
+    end
   end
 
   test "the pinned page's bounds and names are Aqua.Notes'" do

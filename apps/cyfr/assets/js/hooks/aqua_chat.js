@@ -19,6 +19,14 @@
 //   into the LiveView upload pipeline via a "track-uploads" CustomEvent on the
 //   live_file_input; image files with auto-generated names get a timestamped
 //   filename so multiple pastes don't collide.
+// - `cyfr:capture`, a DOM event on this composer's textarea with
+//   `{kind: "still" | "clip" | "cancel"}`, takes one still or one clip
+//   (../capture.js) into the same upload; the person still sends the
+//   draft. Prism draws no control for it, and the shipped app refuses the
+//   devices. One runs at a time, and a cancel, this hook's end, the page
+//   left and a live navigation each end it with nothing attached.
+
+import {capture} from "../capture.js"
 
 const MAX_HEIGHT = 160 // px — keep in sync with the textarea's max-h-40 class
 
@@ -45,6 +53,36 @@ const AquaChat = {
     if (el.scrollHeight > el.clientHeight && el.selectionEnd === el.value.length) {
       el.scrollTop = el.scrollHeight
     }
+  },
+
+  // This composer's own upload input: a page may hold more than one pane.
+  _uploadInput() {
+    const scope = this.el.form || this.el.closest("form") || document
+    return scope.querySelector("input[data-phx-upload-ref]")
+  },
+
+  _attach(files) {
+    this._uploadInput()?.dispatchEvent(
+      new CustomEvent("track-uploads", {
+        bubbles: true,
+        detail: { files }
+      })
+    )
+  },
+
+  async _capture(kind) {
+    if (this._capturing || this.el.disabled || !this._uploadInput()) return
+    const capturing = new AbortController()
+    this._capturing = capturing
+    const file = await capture(kind, capturing.signal)
+    if (this._capturing !== capturing) return
+    this._capturing = null
+    if (file) this._attach([file])
+  },
+
+  _endCapture() {
+    this._capturing?.abort()
+    this._capturing = null
   },
 
   mounted() {
@@ -107,21 +145,22 @@ const AquaChat = {
 
       if (files.length === 0) return
       e.preventDefault()
-
-      // This composer's own upload input: a page may hold more than one pane.
-      const scope = this.el.form || this.el.closest("form") || document
-      const fileInput = scope.querySelector("input[data-phx-upload-ref]")
-      if (!fileInput) return
-
-      fileInput.dispatchEvent(
-        new CustomEvent("track-uploads", {
-          bubbles: true,
-          detail: { files }
-        })
-      )
+      this._attach(files)
     }
 
     this.el.addEventListener("paste", this._onPaste)
+
+    this._onCapture = (e) => {
+      if (e.detail?.kind === "cancel") this._endCapture()
+      else this._capture(e.detail?.kind)
+    }
+    this._onLeave = () => this._endCapture()
+    this._onLoading = (e) => {
+      if (["redirect", "patch"].includes(e.detail?.kind)) this._endCapture()
+    }
+    this.el.addEventListener("cyfr:capture", this._onCapture)
+    window.addEventListener("pagehide", this._onLeave)
+    window.addEventListener("phx:page-loading-start", this._onLoading)
   },
 
   updated() {
@@ -130,6 +169,10 @@ const AquaChat = {
   },
 
   destroyed() {
+    this._endCapture()
+    if (this._onCapture) this.el.removeEventListener("cyfr:capture", this._onCapture)
+    if (this._onLeave) window.removeEventListener("pagehide", this._onLeave)
+    if (this._onLoading) window.removeEventListener("phx:page-loading-start", this._onLoading)
     if (this._onInput) this.el.removeEventListener("input", this._onInput)
     if (this._onKeyDown) this.el.removeEventListener("keydown", this._onKeyDown)
     if (this._onPaste) this.el.removeEventListener("paste", this._onPaste)

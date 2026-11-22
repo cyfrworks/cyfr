@@ -736,8 +736,8 @@ defmodule Prima.Refusal do
   defp row({:crew_unready, member, :program_unfit}) when is_binary(member),
     do:
       {:setup_required,
-       "#{member}'s program is not one a brain can run in — on the Programs page, make it a " <>
-         "driven program with a kept folder whose command starts with its driver"}
+       "#{member}'s program is not one a crew member can run on — on the Programs page, make " <>
+         "it a driven program with a kept folder whose command starts with its driver"}
 
   # A program brain whose start the backends refused for want of room:
   # each running program holds a place until it is stopped, or until it

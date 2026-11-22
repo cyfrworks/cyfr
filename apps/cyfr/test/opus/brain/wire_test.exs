@@ -33,6 +33,7 @@ defmodule Opus.Brain.WireTest do
     assert v["accountings"] == Wire.accountings()
     assert v["stops"] == Wire.stops()
     assert v["phases"] == Wire.phases()
+    assert v["accounts"] == Wire.accounts()
     assert v["error_types"] == Wire.error_types()
     assert v["media_types"] == Wire.media_types()
     assert v["native"] == Wire.native()

@@ -78,6 +78,12 @@ func (c *Conn) Refuse(id, reason string) error {
 	return c.Emit(NewEvent("refused").Set("id", id).Set("reason", reason))
 }
 
+// RefuseSignedOut refuses the command `id` for `reason`, saying that the
+// harness's own account answer was signed out.
+func (c *Conn) RefuseSignedOut(id, reason string) error {
+	return c.Emit(NewEvent("refused").Set("id", id).Set("reason", reason).Set("account", SignedOut))
+}
+
 // Accept answers the command `id`: the harness took it.
 func (c *Conn) Accept(id string) error { return c.Emit(NewEvent("accepted").Set("id", id)) }
 

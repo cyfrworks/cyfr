@@ -409,7 +409,7 @@ defmodule Aqua.CrewTest do
 
     for {member, reason, words} <- [
           {"coder", :no_grant, "coder's brain needs only your grant"},
-          {"openai-codex", :program_unfit, "program is not one a brain can run in"},
+          {"openai-codex", :program_unfit, "program is not one a crew member can run on"},
           {"claude-code", :program_missing, "install it from its card on the Aqua page"}
         ] do
       assert {:error, {:crew_unready, ^member, ^reason} = refusal} =
@@ -2156,10 +2156,16 @@ defmodule Aqua.CrewTest do
     blocks =
       delivered_blocks(ctx, room, [
         %{"filename" => "art.bmp", "media_type" => "image/bmp", "bytes" => <<66, 77, 0, 255>>},
-        %{"filename" => "data.bin", "media_type" => "text/plain", "bytes" => <<0xFF, 0xFE, 0>>}
+        %{"filename" => "data.bin", "media_type" => "text/plain", "bytes" => <<0xFF, 0xFE, 0>>},
+        # The composer's clip: sound, whatever its bytes spell.
+        %{"filename" => "recording.webm", "media_type" => "audio/webm", "bytes" => "sound"}
       ])
 
-    for {name, media} <- [{"art.bmp", "image/bmp"}, {"data.bin", "text/plain"}] do
+    for {name, media} <- [
+          {"art.bmp", "image/bmp"},
+          {"data.bin", "text/plain"},
+          {"recording.webm", "audio/webm"}
+        ] do
       assert %{
                "type" => "text",
                "text" => "The file #{name} (#{media}) is attached, and this brain cannot read it."

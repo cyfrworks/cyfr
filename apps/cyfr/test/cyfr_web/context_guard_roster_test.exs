@@ -80,29 +80,35 @@ defmodule CyfrWeb.ContextGuardRosterTest do
          {"live/registry_live.ex", :managed}
        ]},
     # A program row's call: adding one, or its Test, Refresh, Restart,
-    # hosts or Reset folder; and a running program's Close, which waits
-    # for its place to be back.
-    "live/programs_live.ex" =>
-      {2, [{"live/programs_live.ex", :call}, {"live/programs_live.ex", :closed}]},
+    # hosts or Reset folder.
+    "live/programs_live.ex" => {1, [{"live/programs_live.ex", :call}]},
+    # A program's Close from a page that shows its terminal's frame, which
+    # waits for its place to be back, answered to the frame's one owner.
+    "live/components/terminal_component.ex" =>
+      {1, [{"live/components/terminal_component.ex", :terminal_closed}]},
     # A thread with people, made in the overlay; a person added in a thread.
     "live/chat_overlay_live.ex" => {1, [{"live/chat_overlay_live.ex", :create}]},
     "live/shared_thread_live.ex" => {1, [{"live/shared_thread_live.ex", :add}]},
     # A refresh of the tinctures, and a shelf program's Close.
     "live/shell_live.ex" => {2, [{"live/shell_live.ex", :deliver}]},
-    # A model catalyst's install, answered to the page; each ready
-    # brain's options and a Set up's start of its program, answered to
-    # the agents section itself.
+    # A model catalyst's install, answered to the page; each open
+    # editor's options, answered to the agents section itself.
     "live/aqua_live/agents_component.ex" =>
-      {3,
+      {2,
        [
          {"live/aqua_live.ex", :catalyst_installed},
-         {"live/aqua_live/agents_component.ex", :brain_options},
-         {"live/aqua_live/agents_component.ex", :set_up_program}
+         {"live/aqua_live/agents_component.ex", :brain_options}
        ]},
-    # A brain's one `models` call after its grant, and each program brain's
-    # listing on a read of the setup, answered to the page.
+    # A brain's one `models` call after its grant, and the one task out at
+    # a time, which is a program's listing a press asked for or a Sign in's
+    # start of its program, answered to the page.
     "live/aqua_live.ex" =>
-      {2, [{"live/aqua_live.ex", :setup_answer}, {"live/aqua_live.ex", :program_listing}]},
+      {2,
+       [
+         {"live/aqua_live.ex", :setup_answer},
+         {"live/aqua_live.ex", :program_listing},
+         {"live/aqua_live.ex", :sign_in_terminal}
+       ]},
     # The system layer's listener on `prompt.changes`, whose facts
     # the layer takes in the focus it was opened for.
     "live/system_layer.ex" => {1, [{"live/system_layer.ex", :fact}]}

@@ -3,7 +3,7 @@
 
 defmodule Opus.Brain.Wire do
   @moduledoc """
-  The brain wire, version 3, the holder's side (`Opus.Brain`): one JSON
+  The brain wire, version 4, the holder's side (`Opus.Brain`): one JSON
   object per line over a brain driver's `run` session, commands from the
   holder and events from the driver. `tests/fixtures/brain_wire.json` binds
   this module and every driver's side (`apps/locus/keeper/internal/brainwire`,
@@ -21,7 +21,7 @@ defmodule Opus.Brain.Wire do
   read.
   """
 
-  @version 3
+  @version 4
   @max_line_bytes 1_048_576
   @max_id_bytes 256
   @max_list 1_000
@@ -37,6 +37,7 @@ defmodule Opus.Brain.Wire do
   @accountings ~w(complete partial unavailable)
   @stops ~w(end_turn limit error)
   @phases ~w(start end)
+  @accounts ~w(signed_in signed_out)
   @error_types ~w(invalid_request authentication rate_limited overloaded provider_error unknown_model)
   @media_types %{
     "image" => ~w(image/jpeg image/png image/gif image/webp),
@@ -69,10 +70,13 @@ defmodule Opus.Brain.Wire do
   @events %{
     "hello" => {~w(t v driver boot), [], %{"v" => :count, "driver" => :id, "boot" => :id}},
     "started" =>
-      {~w(t session fresh held), [], %{"session" => :id, "fresh" => :boolean, "held" => :ids}},
+      {~w(t session fresh held), ~w(account),
+       %{"session" => :id, "fresh" => :boolean, "held" => :ids, "account" => :account}},
     "gone" => {~w(t), [], %{}},
     "accepted" => {~w(t id), [], %{"id" => :id}},
-    "refused" => {~w(t id reason), [], %{"id" => :id, "reason" => :string}},
+    "refused" =>
+      {~w(t id reason), ~w(account),
+       %{"id" => :id, "reason" => :string, "account" => :signed_out}},
     "text" =>
       {~w(t gen message delta), ~w(work),
        %{"gen" => :count, "work" => :id, "message" => :id, "delta" => :string}},
@@ -102,8 +106,8 @@ defmodule Opus.Brain.Wire do
       {~w(t gen type message), ~w(work),
        %{"gen" => :count, "work" => :id, "type" => :error_type, "message" => :string}},
     "models" =>
-      {~w(t id models efforts access), [],
-       %{"id" => :id, "models" => :models, "efforts" => :strings, "access" => :choices}},
+      {~w(t id models access), ~w(account),
+       %{"id" => :id, "models" => :models, "access" => :choices, "account" => :signed_in}},
     "forgot" => {~w(t id session), [], %{"id" => :id, "session" => :id}}
   }
 
@@ -160,6 +164,10 @@ defmodule Opus.Brain.Wire do
   @doc "The phases an `own` event names."
   @spec phases() :: [String.t()]
   def phases, do: @phases
+
+  @doc "What an event may say of the program's account, as its driver read it."
+  @spec accounts() :: [String.t()]
+  def accounts, do: @accounts
 
   @doc "The types an `error` event names, `Prima.Model`'s refusals a harness can type."
   @spec error_types() :: [String.t()]
@@ -250,13 +258,16 @@ defmodule Opus.Brain.Wire do
   defp of_type?(:strings, value), do: list?(value, &is_binary/1)
   defp of_type?(:content, value), do: list?(value, &block?/1)
   defp of_type?(:tools, value), do: list?(value, &tool?/1)
-  defp of_type?(:models, value), do: list?(value, &choice?/1)
+  defp of_type?(:models, value), do: list?(value, &model?/1)
   defp of_type?(:choices, value), do: list?(value, &choice?/1)
   defp of_type?(:model_counts, value), do: list?(value, &model_counts?/1)
   defp of_type?(:phase, value), do: value in @phases
   defp of_type?(:error_type, value), do: value in @error_types
   defp of_type?(:accounting, value), do: value in @accountings
   defp of_type?(:stop, value), do: value in @stops
+  defp of_type?(:account, value), do: value in @accounts
+  defp of_type?(:signed_in, value), do: value == "signed_in"
+  defp of_type?(:signed_out, value), do: value == "signed_out"
 
   defp of_type?(:config, value) when is_map(value),
     do:
@@ -289,7 +300,14 @@ defmodule Opus.Brain.Wire do
 
   defp tool?(_tool), do: false
 
-  # A model or an access choice: its id and the name a person reads.
+  # A model: its id, the name a person reads and the efforts it takes.
+  defp model?(%{"id" => id, "name" => name, "efforts" => efforts} = model)
+       when map_size(model) == 3,
+       do: id?(id) and is_binary(name) and of_type?(:strings, efforts)
+
+  defp model?(_model), do: false
+
+  # An access choice: its id and the name a person reads.
   defp choice?(%{"id" => id, "name" => name} = choice) when map_size(choice) == 2,
     do: id?(id) and is_binary(name)
 
