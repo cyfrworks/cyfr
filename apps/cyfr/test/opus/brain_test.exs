@@ -2310,6 +2310,10 @@ defmodule Opus.BrainTest do
       # Longer than a release waits: only the holder's own wait on the
       # close of the lifetime it minted keeps the answer back.
       refute_receive {:asked, _answer}, Opus.Programs.Box.release_timeout_ms() + 500
+      # The fake holds both of two closes that come at once, so a second is
+      # told as held or as let through.
+      refute_received {:held, "close", _second}
+      refute_received {:session, "close", _through, _fields}
       send(closing, :go)
       assert_receive {:asked, {:error, :deadline}}, 1_000
       assert_receive {:session, "close", %{"lifetime" => lifetime}, _fields}, 1_000
