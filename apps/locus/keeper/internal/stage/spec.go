@@ -46,9 +46,10 @@ type Spec struct {
 	// ControlFD, to become the command's fd 3.
 	Control bool `json:"control"`
 	// Cgroup is the memory-bounded group the keeper moved this process
-	// into before it sent the spec, as /proc/self/cgroup names it. The stage
-	// executes the command only from inside it: a spec naming none is
-	// refused, so no command runs outside a bound.
+	// into before it sent the spec, as cgroup.Own reads /proc/self/cgroup:
+	// a spawn's bound by the spawn's name. The stage executes the command
+	// only from inside it: a spec naming none is refused, so no command runs
+	// outside a bound.
 	Cgroup string `json:"cgroup"`
 }
 

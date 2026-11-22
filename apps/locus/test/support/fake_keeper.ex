@@ -18,7 +18,14 @@ defmodule Locus.Test.FakeKeeper do
     as a keeper whose cgroup is not writable refuses a bounded spawn
   - `{:exit, exited}` — the command is never run: the relay writes one log
     line and the leader is reported ended as `exited` says (`:code`,
-    `:signal`, `:memory_exceeded`), killed at its memory bound among them
+    `:signal`, `:memory`), killed at its bound or the container's among
+    them, in any pool
+  - `{:measured, reading}`: a `measure` of any spawn is answered `reading`
+    (`:bytes`, `:lesser`)
+  - `:measure_held`: a `measure` is never answered
+  - `{:exit_closed, exited}`: a long-lived command runs until it is ended,
+    and its leader is then reported as `exited` says, as one the kernel
+    killed while it was closing is
   - `{:report_first, reported?}` — a build's command runs before its relay
     dials, so on no input, and its `exited` and `released` are written to
     the channel; the relay waits until `reported?` (a function of no
@@ -42,9 +49,10 @@ defmodule Locus.Test.FakeKeeper do
   as the command writes them, until the command exits. A `signal` request
   signals its process group; a `release` with a grace sends it a term
   signal and the kill once the grace passes. A `pool` request is answered
-  with a pool of four uids, three free and none quarantined. A home request
-  acts on its path as the test's own user: `home_make` makes the folder
-  0700, `home_measure` answers the bytes of the files under it, and
+  with a pool of four uids, three free and none quarantined. A `measure` is
+  refused `unmeasured` outside its mode, since nothing here has a group. A
+  home request acts on its path as the test's own user: `home_make` makes
+  the folder 0700, `home_measure` answers the bytes of the files under it, and
   `home_retire` removes it. A spawn's kept-home and `pty` members are
   recorded among the requests and run as any other spawn; a `resize` is
   recorded and changes nothing, since no spawn here runs on a terminal.
@@ -237,7 +245,11 @@ defmodule Locus.Test.FakeKeeper do
   # keeper saw end from one it had to release; an exit and a release are
   # recorded only once the channel took them.
   defp write(state, message) do
-    sent = :socket.send(state.channel, [Jason.encode!(Map.put(message, :v, 1)), ?\n])
+    sent =
+      :socket.send(state.channel, [
+        Jason.encode!(Map.put(message, :v, Prima.KeeperProtocol.version())),
+        ?\n
+      ])
 
     case message do
       _message when sent != :ok ->
@@ -295,6 +307,21 @@ defmodule Locus.Test.FakeKeeper do
   defp handle_request(%{"type" => "home_retire", "id" => id, "path" => path}, state) do
     File.rm_rf!(path)
     send(self(), {:send, %{type: "home_retired", id: id}})
+    state
+  end
+
+  defp handle_request(%{"type" => "measure"}, %{mode: :measure_held} = state), do: state
+
+  defp handle_request(
+         %{"type" => "measure", "id" => id},
+         %{mode: {:measured, reading}} = state
+       ) do
+    send(self(), {:send, Map.merge(%{type: "measured", id: id}, reading)})
+    state
+  end
+
+  defp handle_request(%{"type" => "measure", "id" => id}, state) do
+    send(self(), {:send, %{type: "error", id: id, code: "unmeasured"}})
     state
   end
 
@@ -409,9 +436,12 @@ defmodule Locus.Test.FakeKeeper do
     output = Path.join(dir, "stdout")
     conn = dial(fake, request)
 
-    if request["pool"] == "build",
-      do: run_build(fake, spawn_id, request, mode, conn, {dir, input, output}),
-      else: live(fake, spawn_id, request, conn, dir)
+    case {request["pool"], mode} do
+      {"build", _mode} -> run_build(fake, spawn_id, request, mode, conn, {dir, input, output})
+      {_pool, {:exit, exited}} -> exit_as(fake, spawn_id, conn, exited)
+      {_pool, {:exit_closed, exited}} -> live(fake, spawn_id, request, conn, dir, exited)
+      {_pool, _mode} -> live(fake, spawn_id, request, conn, dir, %{})
+    end
   end
 
   defp dial(fake, request) do
@@ -432,9 +462,7 @@ defmodule Locus.Test.FakeKeeper do
 
     case mode do
       {:exit, exited} ->
-        finish(conn, [frames(@stream_stderr, "the command's last words\n")])
-        send(fake, {:send, Map.merge(%{type: "exited", spawn_id: spawn_id}, exited)})
-        send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+        exit_as(fake, spawn_id, conn, exited)
 
       _mode ->
         {exited, stdout, ""} = run(fake, spawn_id, request, conn, {dir, input, output})
@@ -442,6 +470,12 @@ defmodule Locus.Test.FakeKeeper do
         send(fake, {:send, exited})
         send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
     end
+  end
+
+  defp exit_as(fake, spawn_id, conn, exited) do
+    finish(conn, [frames(@stream_stderr, "the command's last words\n")])
+    send(fake, {:send, Map.merge(%{type: "exited", spawn_id: spawn_id}, exited)})
+    send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
   end
 
   # The relay's last frames, then the end of both streams.
@@ -477,7 +511,7 @@ defmodule Locus.Test.FakeKeeper do
       spawn_id: spawn_id,
       code: status,
       signal: nil,
-      memory_exceeded: false
+      memory: nil
     }
 
     exited =
@@ -489,7 +523,7 @@ defmodule Locus.Test.FakeKeeper do
   # A long-lived spawn: stdin frames reach the command as they arrive, its
   # stdout and its stderr (through a fifo `cat` relays) go back apart as
   # it writes them, and its exit ends the relay.
-  defp live(fake, spawn_id, request, conn, dir) do
+  defp live(fake, spawn_id, request, conn, dir, reported) do
     log = Path.join(dir, "stderr")
     {_, 0} = System.cmd(@mkfifo, ["-m", "600", log], env: Locus.Test.ProcessFamily.no_env())
     env = Enum.map(request["env"], fn {k, v} -> "#{k}=#{v}" end)
@@ -537,10 +571,8 @@ defmodule Locus.Test.FakeKeeper do
         do: %{code: nil, signal: signal_name(status - 128)},
         else: %{code: status, signal: nil}
 
-    send(
-      fake,
-      {:send, Map.merge(%{type: "exited", spawn_id: spawn_id, memory_exceeded: false}, exited)}
-    )
+    report = Map.merge(%{type: "exited", spawn_id: spawn_id, memory: nil}, exited)
+    send(fake, {:send, Map.merge(report, reported)})
 
     send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
   end

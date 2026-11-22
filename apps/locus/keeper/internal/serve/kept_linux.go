@@ -212,7 +212,7 @@ func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 	s.mu.Unlock()
 	lock.Unlock()
 
-	sp := &spawn{kept: true, account: acct, home: req.HomePath, exitReported: make(chan struct{}), retired: make(chan struct{})}
+	sp := &spawn{kept: true, account: acct, home: req.HomePath, retired: make(chan struct{})}
 	if sp.id, err = randomHex(16); err != nil {
 		s.log.Error("spawn %s: %v", req.ID, err)
 		s.retire(sp, 0, false)
@@ -290,6 +290,9 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 				}
 			}
 
+			if notify {
+				s.reportExitBeforeRemoval(sp)
+			}
 			if sp.group != nil {
 				if err := sp.group.Remove(); err != nil {
 					s.log.Warn("spawn %s: removing the memory group of kept uid %d: %v", sp.id, uid, err)
@@ -301,7 +304,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			s.mu.Unlock()
 			s.log.Info("spawn %s: kept uid %d retired", sp.id, uid)
 			if notify {
-				s.reportReleased(sp)
+				s.send(protocol.NewReleased(sp.id))
 			}
 		}()
 	})

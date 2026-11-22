@@ -81,7 +81,7 @@ defmodule Locus.Builder do
   | `unavailable` | the toolchain, the Cargo seed or cyfr-locus is missing, or cyfr-locus cannot bound the build's memory |
   | `capacity` | no pooled uid is free |
   | `timeout` | the build passed `:timeout_ms` and was ended |
-  | `memory` | the build reached its memory bound and was ended there |
+  | `memory` | the build was ended for memory: at its bound, at a limit above it, or at one of the two where the kernel does not say which |
   | `failed` | the build exited non-zero or by a signal, or its output was refused |
 
   Why an output was refused is said on the progress callback before the
@@ -471,9 +471,9 @@ defmodule Locus.Builder do
       {:error, :capacity} ->
         {:error, {:capacity, Locus.Config.max_concurrent()}}
 
-      # The keeper client's own reading of the wire: a build ended at its bound,
+      # The keeper client's own reading of the wire: a build ended for memory,
       # and a bound this deployment cannot enforce.
-      {:error, {:memory, _limit_bytes} = refusal} ->
+      {:error, {:memory, _limit_or_cause} = refusal} ->
         {:error, refusal}
 
       {:error, {:unavailable, _sentence} = refusal} ->
