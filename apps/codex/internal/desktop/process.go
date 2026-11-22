@@ -30,8 +30,8 @@ const (
 	// fragment.
 	TypeReady = "ready"
 	// Home names the CYFR selected, the account service approved for it and
-	// how to reach it; main answers home-ready once its window keeps to
-	// them.
+	// how to reach it, as a numbered attempt; main answers the attempt it
+	// holds current, home-ready or home-failed, with its number.
 	TypeHome = "home"
 	// Opened says cyfr committed the CYFR home proposed: main holds it as
 	// selected from then on, and until then takes cyfr's next proposal.
@@ -46,8 +46,14 @@ const (
 
 // The messages the app's main process sends cyfr.
 const (
-	TypeHomeReady    = "home-ready"
-	TypeLock         = "lock"
+	TypeHomeReady = "home-ready"
+	// HomeFailed says main could not make what it keeps that CYFR's own:
+	// the attempt it numbers opens nothing. It is no lock.
+	TypeHomeFailed = "home-failed"
+	TypeLock       = "lock"
+	// Leave locks and lets go of the CYFR committed: main sends it once it
+	// cleared what it kept of that CYFR, and cyfr's locked then names none.
+	TypeLeave        = "leave"
 	TypeShutdown     = "shutdown"
 	TypeFolderPicked = "folder-picked"
 )
@@ -56,25 +62,29 @@ const (
 // be absent marked optional.
 var fields = map[string]struct{ required, optional []string }{
 	TypeReady:        {required: []string{"url"}},
-	TypeHome:         {required: []string{"home", "account"}, optional: []string{"proxy", "resolver"}},
+	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver"}},
 	TypeOpened:       {required: []string{"home"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
 	TypePickFolder:   {required: []string{"id", "suggested"}},
-	TypeHomeReady:    {required: []string{"home"}},
+	TypeHomeReady:    {required: []string{"home", "attempt"}},
+	TypeHomeFailed:   {required: []string{"home", "attempt"}},
 	TypeLock:         {},
+	TypeLeave:        {},
 	TypeShutdown:     {},
 	TypeFolderPicked: {required: []string{"id", "path"}},
 }
 
-var fromMain = []string{TypeHomeReady, TypeLock, TypeShutdown, TypeFolderPicked}
+var fromMain = []string{TypeHomeReady, TypeHomeFailed, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked}
 
 // Message is one message in either direction. Path is a folder-picked
-// answer's folder, nil when the person cancelled.
+// answer's folder, nil when the person cancelled. Attempt is a proposal's
+// number, from 1.
 type Message struct {
 	Type      string
 	URL       string
 	Home      string
 	Account   string
+	Attempt   uint64
 	Proxy     string
 	Resolver  string
 	ID        string
@@ -129,6 +139,12 @@ func ReadFromMain(line []byte) (Message, error) {
 		if f == "path" && string(raw) == "null" {
 			continue
 		}
+		if f == "attempt" {
+			if json.Unmarshal(raw, &msg.Attempt) != nil || msg.Attempt == 0 {
+				return Message{}, refuse("fields")
+			}
+			continue
+		}
 		var s string
 		if json.Unmarshal(raw, &s) != nil || s == "" {
 			return Message{}, refuse("fields")
@@ -155,6 +171,13 @@ func (m Message) object() (map[string]any, error) {
 		"resolver": m.Resolver, "id": m.ID, "suggested": m.Suggested}
 	o := map[string]any{"version": Version, "type": m.Type}
 	for _, f := range want.required {
+		if f == "attempt" {
+			if m.Attempt == 0 {
+				return nil, fmt.Errorf("%s needs %s", m.Type, f)
+			}
+			o[f] = m.Attempt
+			continue
+		}
 		if values[f] == "" {
 			return nil, fmt.Errorf("%s needs %s", m.Type, f)
 		}

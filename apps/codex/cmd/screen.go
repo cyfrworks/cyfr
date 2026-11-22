@@ -424,7 +424,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 		}
 	}()
 
-	watches.lock = sh.Lock
+	watches.lock = func(why string) { sh.Lock(why) }
 	watching, stopWatching := context.WithCancel(ctx)
 	kept := make(chan struct{})
 	go func() {

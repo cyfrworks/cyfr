@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -16,6 +17,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/cyfr/codex/internal/shell"
 )
@@ -45,7 +49,7 @@ func ownListener() (listen func() (net.Listener, error), address func() string) 
 
 // The app's cyfr binds the shell's listener before it says ready with the
 // chooser's address and its run token, holds it alone, and ends when main
-// says shutdown, locked.
+// says shutdown, locking and saying no lock of it.
 func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -93,11 +97,20 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(home, ".cyfr", "device")); err != nil || !info.IsDir() {
 		t.Fatalf("the device folder is %v (%v)", info, err)
 	}
+	connecting := connectHeld(t, address(), token)
 	if _, err := io.WriteString(inW, `{"version":1,"type":"shutdown"}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
-	if m := read(); m["type"] != "locked" {
-		t.Fatalf("shutdown did not lock: %v", m)
+	select {
+	case said := <-connecting:
+		if !strings.Contains(said, "CYFR locked. Connect again.") {
+			t.Fatalf("shutdown did not lock: the Connect under way answered %s", said)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown left the Connect under way")
+	}
+	if lines.Scan() {
+		t.Fatalf("an end of cyfr said something, which main would take for a lock: %s", lines.Text())
 	}
 	select {
 	case err := <-ended:
@@ -111,6 +124,89 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 		resp.Body.Close()
 		t.Fatal("the port is still served after shutdown")
 	}
+}
+
+// connectHeld posts the chooser's Connect at listener to a CYFR that takes
+// the connection and answers nothing, and returns what it answers, once
+// that CYFR was reached.
+func connectHeld(t *testing.T, listener, token string) <-chan string {
+	t.Helper()
+	silent, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reached, done := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		close(done)
+		silent.Close()
+	})
+	go func() {
+		c, err := silent.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		close(reached)
+		<-done
+	}()
+	body, err := json.Marshal(map[string]string{"token": token, "address": "https://" + silent.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan string, 1)
+	go func() {
+		req, err := http.NewRequest(http.MethodPost, "http://"+listener+"/bootstrap/connect", bytes.NewReader(body))
+		if err != nil {
+			answered <- err.Error()
+			return
+		}
+		req.Host = shell.Listen
+		req.Header.Set("Origin", shell.Origin)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			answered <- err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		answered <- string(raw)
+	}()
+	select {
+	case <-reached:
+	case said := <-answered:
+		t.Fatalf("Connect answered before it reached the CYFR: %s", said)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Connect never reached the CYFR")
+	}
+	return answered
+}
+
+// What the packaged program's help prints says nothing of a sign-in road
+// or of a proof, and the command the app starts takes no flag for one.
+func TestDesktopServeHelpShowsNoRoad(t *testing.T) {
+	var words bytes.Buffer
+	for _, c := range []*cobra.Command{rootCmd, desktopServeCmd} {
+		c.SetOut(&words)
+		if err := c.Help(); err != nil {
+			t.Fatal(err)
+		}
+		c.SetOut(nil)
+	}
+	help := strings.ToLower(words.String())
+	if !strings.Contains(help, "serve the cyfr app's pages to its main process") {
+		t.Fatalf("that is not the command's help:\n%s", help)
+	}
+	for _, word := range []string{"account-road", "passkey road", "proof"} {
+		if strings.Contains(help, word) {
+			t.Fatalf("the help prints %q:\n%s", word, help)
+		}
+	}
+	desktopServeCmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
+		if f.Name != "help" {
+			t.Errorf("desktop-serve takes --%s", f.Name)
+		}
+	})
 }
 
 // The device's screen shares its account's client record with the CYFR

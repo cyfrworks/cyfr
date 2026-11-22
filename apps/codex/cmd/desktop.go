@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -43,7 +42,8 @@ var desktopServeCmd = &cobra.Command{
 // process alone, says ready to main with the chooser's address, then
 // serves until main sends
 // shutdown, its pipe ends, or it sends a line that is not its message.
-// Every end locks first.
+// Every end locks the device first, saying nothing to main
+// (desktop.Service.End): an end signs nobody out.
 func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), in io.Reader, out io.Writer) error {
 	_ = holder.HardenProcess()
 	dir, err := shell.DeviceDir()
@@ -64,13 +64,6 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 		defer cancel()
 		_ = hs.Shutdown(sctx)
 	}()
-	// What cannot be watched is known before the chooser first asks.
-	watching, stopWatching := context.WithCancel(ctx)
-	defer stopWatching()
-	watchSessionLock(watching, svc.Lock, func(sentence string) {
-		svc.Warn(sentence)
-		fmt.Fprintln(os.Stderr, "cyfr: "+sentence)
-	})
 	if err := to.Send(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
 		return err
 	}
@@ -80,13 +73,13 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 	case err := <-ran:
 		return err
 	case err := <-served:
-		svc.Lock("")
+		svc.End()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
 	case <-ctx.Done():
-		svc.Lock("")
+		svc.End()
 		return nil
 	}
 }
@@ -96,7 +89,6 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 func newDesktopService(device string, send func(desktop.Message) error) *desktop.Service {
 	host, _ := os.Hostname()
 	return &desktop.Service{
-		AccountRoad: runtime.GOOS == "darwin" || runtime.GOOS == "windows",
 		Token:       desktop.NewToken(),
 		Clients:     shell.ClientFile(filepath.Join(device, "client.json")),
 		Record:      filepath.Join(device, "holder.json"),

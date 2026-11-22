@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,13 +54,14 @@ type localApp struct {
 	*desktop.Service
 	t    *testing.T
 	sent chan desktop.Message
+	// proposed counts the attempts open heard.
+	proposed uint64
 }
 
 func newLocalApp(t *testing.T, project string) *localApp {
 	t.Helper()
 	a := &localApp{t: t, sent: make(chan desktop.Message, 16)}
 	a.Service = newDesktopService(t.TempDir(), func(m desktop.Message) error { a.sent <- m; return nil })
-	a.AccountRoad = false
 	a.Shell = func(c *shell.Config) {
 		c.Chip = func() bool { return false }
 		c.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }
@@ -119,7 +121,8 @@ func (a *localApp) form(path string, fields url.Values) string {
 // told the engine's route there, proxy and resolver, when there is one.
 func (a *localApp) open(typed, home string, route ...string) {
 	a.t.Helper()
-	want := desktop.Message{Type: desktop.TypeHome, Home: home, Account: home}
+	a.proposed++
+	want := desktop.Message{Type: desktop.TypeHome, Home: home, Account: home, Attempt: a.proposed}
 	if len(route) == 2 {
 		want.Proxy, want.Resolver = route[0], route[1]
 	}
@@ -135,7 +138,7 @@ func (a *localApp) open(typed, home string, route ...string) {
 	case <-time.After(20 * time.Second):
 		a.t.Fatal("Connect said nothing to main")
 	}
-	a.HomeReady(home)
+	a.HomeReady(home, a.proposed)
 	if got := <-done; got.Next != "/" {
 		a.t.Fatalf("Connect answered %+v", got)
 	}
@@ -196,7 +199,10 @@ type listening struct {
 	hellos chan map[string]any
 	// admitting is the address this CYFR admits a hello at, "" when it
 	// refuses each; connects is each client it was then sent a connect by.
+	// holds is whether it then gives that client its standing and keeps
+	// the channel until the device closes it, refusing whatever it asks.
 	admitting string
+	holds     bool
 	connects  chan map[string]any
 }
 
@@ -233,6 +239,14 @@ func (l *listening) admit(ctx context.Context, conn *websocket.Conn, hello map[s
 	}
 	if connect := read(); connect["type"] == "connect" {
 		l.connects <- connect
+		if l.holds && send(map[string]any{"type": "standing"}) {
+			for m := read(); m != nil; m = read() {
+				if m["type"] == "intent" && !send(map[string]any{"type": "answer", "id": m["id"],
+					"error": map[string]any{"class": "unavailable"}}) {
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -1070,5 +1084,118 @@ func TestAFolderThatCannotBeOpenedBlamesNoDocker(t *testing.T) {
 	want := "The CYFR in " + s.project + " could not be opened here (its compose file is missing), so Docker was not asked and nothing was sent to it. Correct that, then try again."
 	if err == nil || err.Error() != want {
 		t.Fatalf("said %v", err)
+	}
+}
+
+// unlockedLocalApp is a localApp unlocked at its folder's CYFR, every
+// restart of its pages passing through restarted once main was told.
+func unlockedLocalApp(t *testing.T, restarted func()) (a *localApp, home string) {
+	t.Helper()
+	s := newLocalStack(t)
+	cyfr := servingAccounts(t, "")
+	home = "http://localhost:" + strconv.Itoa(cyfr.port)
+	cyfr.admitting, cyfr.holds = home, true
+	s.env(cyfr.port)
+	s.runs("c0ffee", s.project, nil, cyfr.port)
+	a = newLocalApp(t, s.project)
+	adapt := a.Shell
+	a.Shell = func(c *shell.Config) {
+		adapt(c)
+		say := c.Restart
+		c.Restart = func() {
+			say()
+			restarted()
+		}
+	}
+	a.open(home, home)
+	if m := a.heard(); m.Type != desktop.TypeOpened {
+		t.Fatalf("main heard %+v", m)
+	}
+	a.makeAccount()
+	return a, home
+}
+
+// heard is the next message cyfr said to main.
+func (a *localApp) heard() desktop.Message {
+	a.t.Helper()
+	select {
+	case m := <-a.sent:
+		return m
+	case <-time.After(20 * time.Second):
+		a.t.Fatal("cyfr said nothing to main")
+	}
+	return desktop.Message{}
+}
+
+// A lock that closed a channel is said once, by the shell as it restarts
+// the pages.
+func TestALockOfAnUnlockedAppIsSaidOnce(t *testing.T) {
+	var restarts int
+	a, home := unlockedLocalApp(t, func() { restarts++ })
+	a.Lock("Locked.")
+	if restarts != 1 {
+		t.Fatalf("the pages restarted %d times: the app was not unlocked", restarts)
+	}
+	if m := a.heard(); m.Type != desktop.TypeLocked || m.Home != home {
+		t.Fatalf("main heard %+v", m)
+	}
+	select {
+	case m := <-a.sent:
+		t.Fatalf("main heard the one lock again: %+v", m)
+	default:
+	}
+}
+
+// Main's leave that arrives while the shell's own lock still restarts the
+// pages is answered a locked naming none all the same: the lock before it
+// named the CYFR main then left, and main keeps to that until told.
+func TestALeaveDuringTheShellsOwnLockLeavesMainOnNone(t *testing.T) {
+	restarting, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	a, home := unlockedLocalApp(t, func() {
+		once.Do(func() {
+			close(restarting)
+			<-release
+		})
+	})
+	letGo := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(letGo)
+	pressedLock := make(chan struct{})
+	go func() {
+		r := httptest.NewRequest(http.MethodGet, shell.Origin+"/lock", nil)
+		r.Host = shell.Listen
+		a.ServeHTTP(httptest.NewRecorder(), r)
+		close(pressedLock)
+	}()
+	select {
+	case <-restarting:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the shell's own lock restarted nothing")
+	}
+	if m := a.heard(); m.Type != desktop.TypeLocked || m.Home != home {
+		t.Fatalf("main heard %+v", m)
+	}
+	left := make(chan error, 1)
+	go func() { left <- a.Run(strings.NewReader(`{"version":1,"type":"leave"}` + "\n")) }()
+	// Held until leave waits for the shell that lock holds: what it reads
+	// before that wait, it read inside the other's restart.
+	stacks := make([]byte, 1<<20)
+	waits := func(one string) bool {
+		return strings.Contains(one, "(*Service).Run") && strings.Contains(one, "(*shellLock).Lock")
+	}
+	for deadline := time.Now().Add(20 * time.Second); !slices.ContainsFunc(
+		strings.Split(string(stacks[:runtime.Stack(stacks, true)]), "\n\n"), waits); {
+		if time.Now().After(deadline) {
+			t.Fatal("leave never waited for the lock restarting the pages")
+		}
+		time.Sleep(5 * time.Millisecond) // sleep-ok: polls for leave's wait, which says nothing as it begins
+	}
+	letGo()
+	<-pressedLock
+	if err := <-left; err != nil {
+		t.Fatal(err)
+	}
+	if m := a.heard(); m.Type != desktop.TypeLocked || m.Home != "" {
+		t.Fatalf("main heard %+v, not a lock naming none", m)
 	}
 }

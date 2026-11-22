@@ -7,7 +7,6 @@ require (
 	github.com/boombuler/barcode v1.1.0
 	github.com/coder/websocket v1.8.15
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7
-	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/certificate-transparency-go v1.4.0
 	github.com/google/go-tpm v0.9.8
 	github.com/sigstore/protobuf-specs v0.5.2

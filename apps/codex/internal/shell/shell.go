@@ -158,7 +158,7 @@ func DeviceFolder() (string, error) {
 // it. A working client and its
 // certificate are replaced only by an admission that succeeded: until the
 // selected CYFR admits this device, the record changes only where it
-// selects nothing at all (Commit), and every other change the shell makes
+// holds no client and no local project (Commit), and every other change the shell makes
 // (a refused first hello's forget among them) stays in memory.
 type Selection struct {
 	file ClientFile
@@ -232,7 +232,9 @@ func (s *Selection) Update(change func(*ClientRecord) bool) error {
 }
 
 // Commit writes the selection once the app opened it, where the record
-// selects nothing yet or this CYFR already. It writes the account
+// selects this CYFR already or holds no client of another and no local
+// project: the CYFR opened last is then the one remembered, so a person
+// who signs in with a passkey alone can move to another. It writes the account
 // service's address only when this selection approved it; one it took
 // from the record stays as the record holds it now, ended or not.
 func (s *Selection) Commit() error {
@@ -246,7 +248,7 @@ func (s *Selection) Commit() error {
 			}
 			c.Directory = s.rec.Directory
 			return true
-		case c.Home == "" && c.Project == "" && c.ClientID == "" && len(c.Certificate) == 0 && s.approved:
+		case c.Project == "" && c.ClientID == "" && len(c.Certificate) == 0 && s.approved:
 			*c, s.owns = s.rec, true
 			return true
 		}
@@ -2102,12 +2104,17 @@ func (s *Shell) reserve(ctx context.Context) (string, error) {
 // action, and once it returns none begun before it changes or opens
 // anything. What takes no context is finished first: a key made or opened
 // under a passphrase (Argon2id, two of them in a setup) or by the chip.
-func (s *Shell) Lock(why string) {
+// closed is whether this lock closed a channel, and so restarted the
+// pages. Unlocked cannot say it: it is still true while another lock
+// restarts them.
+func (s *Shell) Lock(why string) (closed bool) {
 	locked, _ := s.end(nil)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer locked()
+	closed = s.ch != nil
 	s.lock(why)
+	return closed
 }
 
 // errLocked is an action's end by a lock, and why a lock's own close ended

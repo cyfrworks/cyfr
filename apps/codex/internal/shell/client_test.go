@@ -312,6 +312,29 @@ func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 		t.Fatalf("an opened selection over nothing was not remembered: %+v", c)
 	}
 
+	// The CYFR chosen last is remembered where the record holds no
+	// device's client: what a person signed in by passkey alone has.
+	next, _ := empty.Select("https://bob.example.com", "https://cyfr.run", true)
+	if err := next.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := empty.Load(); c.Home != "https://bob.example.com" {
+		t.Fatalf("launch would open %+v, not the CYFR chosen last", c)
+	}
+	// A working device's client at another CYFR is never replaced by one.
+	device := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	admittedAtA := ClientRecord{Home: "https://cyfr.example.com", Directory: "https://cyfr.run", ClientID: "pcl_a", Certificate: json.RawMessage(`{"a":1}`)}
+	if err := device.Save(admittedAtA); err != nil {
+		t.Fatal(err)
+	}
+	chosen, _ := device.Select("https://bob.example.com", "https://cyfr.run", true)
+	if err := chosen.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := device.Load(); !sameRecord(c, admittedAtA) {
+		t.Fatalf("a choice replaced a working device's client: %+v", c)
+	}
+
 	// A local project the screen selected, not yet admitted anywhere, is
 	// still the account's selection: an opened remote one leaves it, or
 	// the screen would refuse the record at its next start.
