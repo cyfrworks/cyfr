@@ -231,3 +231,12 @@ test("a local CYFR serving its own accounts hops to its sign-in route alone, and
     assert.equal(accountLoad(elsewhere, local), "block", elsewhere)
   }
 })
+
+test("main reads a CYFR's address and its account service's by the one grammar every side reads", () => {
+  const addresses = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/addresses.json", import.meta.url))).addresses
+  assert.ok(addresses.length > 0)
+  for (const a of addresses) {
+    assert.equal(homeMessage({home: a.value, account: "https://cyfr.run"}), a.home, a.value)
+    if (a.value.startsWith("https://")) assert.equal(homeMessage({home: "https://cyfr.example.com", account: a.value}), a.home, a.value)
+  }
+})

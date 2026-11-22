@@ -52,6 +52,8 @@ The CYFR app shows CYFR in a window of its own on Linux, macOS or Windows, conne
 
 The app never gives a page your camera, microphone, screen or other devices.
 
+**A limit, with a CYFR on this computer.** The app checks that your CYFR is the program on its port when you connect and each time this computer's key connects to it, but CYFR's own pages load from this computer's address, whichever program holds the port then. While you are signed in with a passkey, if that CYFR stops and another program on this computer takes its port, that program gets the page's next request, and with it your sign-in there (the session cookie). Signed in with this computer's key, the app locks and closes CYFR's pages when it loses its connection to the CYFR, as it does when the CYFR stops.
+
 ---
 
 ## Staying Connected

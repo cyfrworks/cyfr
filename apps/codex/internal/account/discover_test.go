@@ -158,30 +158,38 @@ func TestAccountServiceVectors(t *testing.T) {
 	}
 }
 
-// An address from a setting or a person is read into the one spelling the
-// CYFR gives its own (Prima.Identity.Encoding.canonical_home), and a port
-// has one spelling.
-func TestCanonicalHome(t *testing.T) {
-	for in, want := range map[string]string{
-		"http://localhost:80":           "http://localhost",
-		"http://localhost:80/":          "http://localhost",
-		"HTTP://LocalHost:4000":         "http://localhost:4000",
-		"https://CYFR.example.com:443":  "https://cyfr.example.com",
-		"https://cyfr.example.com:8443": "https://cyfr.example.com:8443",
-		"http://localhost:65535":        "http://localhost:65535",
-		"http://localhost:04000":        "",
-		"http://localhost:65536":        "",
-		"http://localhost:":             "",
-		"http://localhost:4000/x":       "",
-		"http://localhost:4000#x":       "",
-		"http://localhost:4000?x":       "",
-		"http://user@localhost:4000":    "",
-		"http://\u212ayfr.example.com":  "",
-		"ftp://localhost":               "",
-	} {
-		got, ok := CanonicalHome(in)
-		if got != want || ok != (want != "") || ok && !IsHome(got) {
-			t.Errorf("%q: %q, %v; want %q", in, got, ok, want)
-		}
+// An address has the one grammar every side reads: whether it names a
+// CYFR, whether it is a directory URL, and the one spelling of one a
+// setting or a person wrote another way.
+func TestAddressVectors(t *testing.T) {
+	var v struct {
+		Addresses []struct {
+			Name      string `json:"name"`
+			Value     string `json:"value"`
+			Home      bool   `json:"home"`
+			Directory bool   `json:"directory"`
+			Spelled   string `json:"spelled"`
+		} `json:"addresses"`
+	}
+	fixture(t, "addresses.json", &v)
+	if len(v.Addresses) == 0 {
+		t.Fatal("the fixture holds no address")
+	}
+	for _, a := range v.Addresses {
+		t.Run(a.Name, func(t *testing.T) {
+			if got := IsHome(a.Value); got != a.Home {
+				t.Errorf("%q names a CYFR: %v", a.Value, got)
+			}
+			if got := IsDirectoryURL(a.Value); got != a.Directory {
+				t.Errorf("%q is a directory URL: %v", a.Value, got)
+			}
+			if got, ok := CanonicalHome(a.Value); ok != (a.Spelled != "") || ok && got != a.Spelled {
+				t.Errorf("%q is spelled %q, %v; want %q", a.Value, got, ok, a.Spelled)
+			}
+		})
+	}
+	// No case mapping beyond ASCII makes a host (the Kelvin sign to k).
+	if got, ok := CanonicalHome("http://\u212ayfr.example.com"); ok {
+		t.Errorf("a Unicode host was spelled %q", got)
 	}
 }

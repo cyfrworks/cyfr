@@ -28,9 +28,10 @@ defmodule Prima.Identity.Encoding do
     * **Timestamps** are integer Unix milliseconds, within JCS's integer
       domain.
     * **A home** is named by its origin: `http` or `https`, a lowercase host
-      name, and a port only when it is not the scheme's default, with no
-      path, user, query or fragment. Only that spelling is accepted, so two
-      homes are one exactly when their spellings are equal.
+      name, and a port only when it is not the scheme's default, at most
+      65535 and with no leading zero, with no path, user, query or fragment.
+      Only that spelling is accepted, so two homes are one exactly when
+      their spellings are equal (`tests/fixtures/addresses.json`).
     * **An id** (a client, athanor, carry action, confirmation, request,
       intent or restore id) is 1 to 128 characters of `[A-Za-z0-9_-]`,
       starting with a letter or digit.
@@ -47,12 +48,13 @@ defmodule Prima.Identity.Encoding do
   @signature_bytes 64
   @max_ms 9_007_199_254_740_991
   @default_ports %{"http" => 80, "https" => 443}
+  @max_port 65_535
 
   @host ~r/\A(?=.{1,253}\z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\z/
   @id ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,127}\z/
   @digest ~r/\Asha256:[0-9a-f]{64}\z/
   @identifier ~r/\Aper_[0-9a-f]{64}\z/
-  @path ~r/\A(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]+)*\z/
+  @path ~r/\A(?:\/(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})+)*\z/
   @max_url_bytes 2048
 
   @type reason ::
@@ -138,9 +140,11 @@ defmodule Prima.Identity.Encoding do
 
   @doc """
   The one accepted spelling of a home written another way: its scheme and
-  host lowercased (ASCII only), the scheme's default port and a trailing
-  `/` dropped. Anything that is not a home however it is spelled, such as
-  another scheme, a path, a user, a query or a fragment, is `:error`.
+  host lowercased (ASCII only), its port read as at most five digits (a
+  leading zero among them, an empty one the scheme's own), the scheme's
+  default port and a trailing `/` dropped. Anything that is not a home however it is
+  spelled, such as another scheme, a port past 65535, a path, a user, a
+  query or a fragment, is `:error`.
 
   It is for an origin this side was configured with. A home on the wire
   must already be in its spelling (`home?/1`).
@@ -162,8 +166,9 @@ defmodule Prima.Identity.Encoding do
 
   @doc """
   Whether `value` is a directory URL: a home's origin followed by an
-  optional path of `/`-separated segments with no trailing `/`, no user,
-  query or fragment, at most 2048 bytes.
+  optional path of `/`-separated segments with no trailing `/`, each `%`
+  in it an escape of two hex digits, no user, query or fragment, at most
+  2048 bytes.
   """
   @spec directory_url?(term()) :: boolean()
   def directory_url?(value) when is_binary(value) and byte_size(value) <= @max_url_bytes do
@@ -203,7 +208,9 @@ defmodule Prima.Identity.Encoding do
          when scheme in ["http", "https"] and is_binary(host) <- URI.new(value),
          true <- bare?(uri),
          host = String.downcase(host, :ascii),
-         true <- uri.path in [nil, "", "/"] and Regex.match?(@host, host) do
+         true <- uri.path in [nil, "", "/"] and Regex.match?(@host, host),
+         # `URI.new/1` reads a port of any size.
+         true <- port in 0..@max_port do
       {:ok, origin(scheme, host, port), host}
     else
       _ -> :error
