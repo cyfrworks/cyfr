@@ -2244,8 +2244,10 @@ def check_shape(wf):
     release = release_jobs(wf)[0]
     return (
         check_trigger(wf)
-        or check_tag(wf, build, release)
+        # Read before the tag check, which runs its cases for every mutant
+        # that reaches it.
         or check_linux_package(wf, merge, release)
+        or check_tag(wf, build, release)
         or check_merged_digest(wf, merge)
         or check_release_manifest(wf, merge, release)
         or check_homebrew(wf, release)
