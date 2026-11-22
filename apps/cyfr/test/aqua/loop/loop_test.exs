@@ -1403,6 +1403,81 @@ defmodule Aqua.LoopTest do
     assert %{kind: "text", content: "left it"} = List.last(lines(ctx, thread.id))
   end
 
+  # A workspace thread's report, which Aqua writes on its daily thread, is
+  # a post of the turn it joins whoever answers: one that lands while the
+  # model writes its last answer keeps the turn from completing, and the
+  # next round reads it once, its files with it.
+  test "a report that joins Aqua's turn as the model answers is read in a round of its own, " <>
+         "with its files, and only then does the turn complete",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua build me a tip calculator")
+    script!([{:hold, self()}, reply("Building it."), reply("The report is in.")])
+    task = run(ctx, turn)
+    assert_receive {:scripted_probe, worker, _}, 30_000
+
+    {:ok, %{workspace: workspace}} =
+      Arca.TurnStorage.open_workspace(Sanctum.Context.actor(ctx), %{
+        daily_id: thread.id,
+        id: Prima.UUID7.generate_id("thread"),
+        title: "Tip calculator app",
+        opened_from: turn.message_id,
+        opening: %{
+          id: Prima.UUID7.generate_id("msg"),
+          author: ctx.user_id,
+          content: "build a tip calculator",
+          payload: %{"ask" => "build a tip calculator"}
+        },
+        pointer: %{author: "aqua", sent_by: "aqua", content: "Tip calculator app", payload: %{}},
+        files: fn _thread, _message -> {:ok, []} end,
+        person_id: ctx.user_id,
+        origin: :interactive
+      })
+
+    shot = %{"filename" => "shot.png", "media_type" => "image/png", "bytes" => "SHOT"}
+    {id, refs} = stored!(ctx, thread, [shot])
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{
+          id: id,
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: workspace.id,
+          content: "Built it.",
+          payload: %{"title" => "Tip calculator app", "outcome" => "done", "attachments" => refs}
+        },
+        steer_turn_id: turn.id
+      })
+
+    send(worker, :continue)
+    assert :completed = Task.await(task, 60_000)
+    assert [_first, second] = chat_messages()
+
+    assert List.last(second) == %{
+             "role" => "user",
+             "content" => [
+               %{
+                 "type" => "text",
+                 "text" =>
+                   "[Report from the workspace thread \"Tip calculator app\" " <>
+                     "(#{workspace.id}): done]\nBuilt it."
+               },
+               %{
+                 "type" => "image",
+                 "media_type" => "image/png",
+                 "data" => Base.encode64("SHOT"),
+                 "filename" => "shot.png"
+               }
+             ]
+           }
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    [_first_step, carrier] = Enum.filter(steps, &(&1.kind == "model"))
+    {:ok, report} = Tape.message(ctx, id)
+    assert report.carried_by == carrier.id
+  end
+
   # The user's #7342: a file in a post sent while Aqua works reaches the
   # model as the first post's does, made by the same encoder under the same
   # media types, on its own post where that post stands, and with every

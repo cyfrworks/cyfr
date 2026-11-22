@@ -1093,6 +1093,85 @@ defmodule Arca.TurnTapeStorageTest do
       assert read_ids(actor, next) == held ++ [stars.id, last.id, again.id]
     end
 
+    test "a report Aqua writes into its running turn is a steer as a person's post is: held " <>
+           "until a round takes it in, kept from completing the turn, carried by that round " <>
+           "alone and read where it carried it",
+         %{actor: actor, thread: thread} do
+      %{message: ask, turn: turn} = accept_turn!(actor, thread, "@aqua build it")
+      {turn, _root} = start!(actor, turn)
+      {_first, %{text: reply, calls: [read]}} = round!(actor, turn, "Opening it.", ["c1"])
+
+      {:ok, %{workspace: workspace}} =
+        TurnStorage.open_workspace(actor, %{
+          daily_id: thread.id,
+          id: Prima.UUID7.generate_id("thread"),
+          title: "Moon report",
+          opened_from: ask.id,
+          opening: %{
+            id: Prima.UUID7.generate_id("msg"),
+            author: actor.user_id,
+            content: "write the moon report",
+            payload: %{"ask" => "write the moon report"}
+          },
+          pointer: %{author: "aqua", sent_by: "aqua", content: "Moon report", payload: %{}},
+          files: fn _thread, _message -> {:ok, []} end,
+          person_id: actor.user_id,
+          origin: :interactive
+        })
+
+      {:ok, %{message: report}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "aqua",
+            kind: "report",
+            workspace_id: workspace.id,
+            content: "Done: the moon report."
+          },
+          steer_turn_id: turn.id
+        })
+
+      assert report.turn_id == turn.id
+      result = result!(actor, turn, read)
+      refute report.id in read_ids(actor, turn)
+      assert TurnStorage.steer_pending?(actor, turn.id)
+
+      assert {:error, :steer_pending} =
+               TurnStorage.finish(actor, turn.id, "completed", %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: turn.fence
+               })
+
+      {second, %{text: noted}} = round!(actor, turn, "The report is in.")
+      assert carried_by(report) == second.id
+      refute TurnStorage.steer_pending?(actor, turn.id)
+      assert {:ok, []} = TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})
+      {_third, %{text: last}} = round!(actor, turn, "Nothing more.")
+      assert carried_by(report) == second.id
+
+      assert read_ids(actor, turn) -- [workspace_pointer(actor, thread)] ==
+               [ask.id, reply.id, read.message.id, result.id, report.id, noted.id, last.id]
+
+      assert {:ok, %{status: "completed"}} =
+               TurnStorage.finish(actor, turn.id, "completed", %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: turn.fence
+               })
+    end
+
+    # The daily thread's pointer at the workspace thread it opened.
+    defp workspace_pointer(actor, thread) do
+      Arca.Repo.one!(
+        from(m in Message,
+          where: m.athanor_id == ^actor.athanor_id and m.thread_id == ^thread.id,
+          where: m.kind == "pointer",
+          select: m.id
+        )
+      )
+    end
+
     test "a post no round held reads after the rest of its turn, in the turns after",
          %{actor: actor, thread: thread} do
       %{message: ask, turn: turn} = accept_turn!(actor, thread, "@aqua read it")

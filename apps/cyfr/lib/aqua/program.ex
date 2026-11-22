@@ -315,14 +315,21 @@ defmodule Aqua.Program do
 
   def handle_info(:silence, state), do: silence(%{state | timer: nil})
 
+  # A turn of the thread ended, whoever wrote its end: the clock may run
+  # again, so it is read again with the work's turn as its row says.
+  def handle_info(%Cyfr.Bus.ThreadEvent{kind: :turn_finished}, state),
+    do: {:noreply, state |> settled() |> arm()}
+
   # A post or a result may now be owed: the thread moved.
   def handle_info(%Cyfr.Bus.ThreadEvent{}, %{phase: :ready} = state),
     do: {:noreply, deliver(state)}
 
   def handle_info(%Cyfr.Bus.ThreadEvent{}, state), do: {:noreply, state}
 
+  # The turn's loop ended, perhaps after its turn's end and before its
+  # release: the work's turn as its row says, and the clock with it.
   def handle_info({:DOWN, _monitor, :process, pid, _reason}, %{loop: pid} = state),
-    do: {:noreply, %{state | loop: nil}}
+    do: {:noreply, %{state | loop: nil} |> settled() |> arm()}
 
   def handle_info({:DOWN, _monitor, :process, _pid, _reason}, state), do: {:noreply, state}
 
@@ -412,6 +419,13 @@ defmodule Aqua.Program do
 
   defp refused_open(work, {:not_admitted, _reason}),
     do: "#{work.title} may not start for this work any more."
+
+  # The backends refused for want of room, at its owner's hold or at the
+  # session's open: the person reads why, not that the program is away.
+  defp refused_open(work, {:refused, :capacity, _boot}), do: refused_open(work, :capacity)
+
+  defp refused_open(work, :capacity),
+    do: Prima.Refusal.message({:program_full, work.title, div(Opus.Brain.silence_ms(), 60_000)})
 
   defp refused_open(work, _unavailable),
     do: "#{work.title} could not be reached: its program did not open."
@@ -1328,10 +1342,15 @@ defmodule Aqua.Program do
   end
 
   # Whether the silence ran out, by the database's clock: the open turn's
-  # job ends, saying so; a session with no turn open is closed.
+  # job ends, saying so; a session with no turn open is closed. The work's
+  # turn is read first, so a turn that ended unreleased is not failed again
+  # and a session with a turn of its thread waiting is never closed
+  # (`Arca.TurnStorage.brain_silence/2`).
   defp silence(%{work: nil} = state), do: {:noreply, state}
 
-  defp silence(%{work: work} = state) do
+  defp silence(state) do
+    %{work: work} = state = settled(state)
+
     case Tape.brain_silence(work.guest, state.thread_id) do
       {:ok, %{expired?: true}} ->
         if open_turn(work) do
@@ -1350,6 +1369,20 @@ defmodule Aqua.Program do
         {:noreply, arm(state)}
     end
   end
+
+  # The work's turn as its row reads now, when the loop last said it was
+  # open: one that ended is over here too.
+  defp settled(%{work: %{turn: %{id: id}} = work} = state) do
+    with %{} <- open_turn(work),
+         {:ok, turn} <- Tape.turn(work.guest, id),
+         true <- Tape.terminal?(turn) do
+      %{state | work: %{work | turn: Map.put(work.turn, :status, "over")}}
+    else
+      _open_or_unread -> state
+    end
+  end
+
+  defp settled(state), do: state
 
   defp arm(%{work: nil} = state), do: state
 

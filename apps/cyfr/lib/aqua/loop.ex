@@ -1022,13 +1022,13 @@ defmodule Aqua.Loop do
   end
 
   # By row id, the files of each post written into the turn after the one
-  # that opened it (a drained steer), as blocks the brain takes, made as the
-  # opening post's are (`Turn.file_blocks/3`). Read once a round, beside
-  # `removed_files/2`, and only for the rows the request carries; the turn's
-  # own rows are its agent's, and the opening post's ride `spec.attachments`.
+  # that opened it (a drained steer, `Tape.post?/2`), as blocks the brain
+  # takes, made as the opening post's are (`Turn.file_blocks/3`). Read once
+  # a round, beside `removed_files/2`, and only for the rows the request
+  # carries; the opening post's ride `spec.attachments`.
   defp later_files(%State{spec: spec, turn: turn}, rows) do
     for row <- rows |> Planner.prune() |> Request.carried(),
-        row.turn_id == turn.id and row.id != turn.message_id and row.sent_by != turn.agent,
+        row.turn_id == turn.id and row.id != turn.message_id and Tape.post?(row, turn.agent),
         Aqua.Attachments.refs_of(row) != [],
         into: %{},
         do: {row.id, Turn.file_blocks(spec.ctx, row, spec.capabilities.media_types)}

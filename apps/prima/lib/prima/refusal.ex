@@ -739,6 +739,16 @@ defmodule Prima.Refusal do
        "#{member}'s program is not one a brain can run in — on the Programs page, make it a " <>
          "driven program with a kept folder whose command starts with its driver"}
 
+  # A program brain whose start the backends refused for want of room:
+  # each running program holds a place until it is stopped, or until it
+  # sat `minutes` with no work (`Aqua.Program`).
+  defp row({:program_full, member, minutes}) when is_binary(member) and is_integer(minutes),
+    do:
+      {:rate_limited,
+       "#{member} could not start: every place for a running program is taken. Stop the " <>
+         "work in another thread or wait for it to end. A program with no work gives its " <>
+         "place back after #{minutes} minutes."}
+
   defp row({:crew_unready, member, :consent_damaged}) when is_binary(member),
     do: {:corrupt, "#{member}'s brain's own grant is damaged — revoke it and grant it again"}
 

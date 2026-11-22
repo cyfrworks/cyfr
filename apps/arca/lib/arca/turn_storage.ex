@@ -1636,7 +1636,7 @@ defmodule Arca.TurnStorage do
   end
 
   # A model step opened on a turn carries what its request holds of the
-  # rows others wrote into the turn, the boundary `drain_steer/3` moved
+  # posts written into the turn (`post?/2`), the boundary `drain_steer/3` moved
   # before the request was read bounding them: each post no step carried
   # yet names the step its `carried_by`, its place in every later reading
   # (`projection/2`), and each nudge still waiting names it its
@@ -1648,7 +1648,8 @@ defmodule Arca.TurnStorage do
 
     from(m in Message,
       where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
-      where: m.sent_by != ^turn.agent and m.seq <= ^window and is_nil(m.carried_by)
+      where: m.seq <= ^window and is_nil(m.carried_by),
+      where: ^post(turn.agent)
     )
     |> Arca.Repo.update_all(set: [carried_by: step_id])
 
@@ -2246,6 +2247,7 @@ defmodule Arca.TurnStorage do
       ended_work!(athanor_id, turn, status, attrs)
     end
 
+    :ok = unattended!(athanor_id, turn)
     Arca.ThreadStorage.release_all!(Prima.Actor.in_athanor(athanor_id), turn.thread_id, turn.id)
 
     turn = turn!(athanor_id, turn.id)
@@ -3616,6 +3618,31 @@ defmodule Arca.TurnStorage do
   def write_notes(%Prima.Actor{}, _turn_id, _notes, _attrs), do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
+  # A turn's posts
+  # ---------------------------------------------------------------------------
+
+  # The kinds of row a turn's agent writes that are posts of a turn, never
+  # its own words: a workspace thread's report, which Aqua writes on the
+  # daily thread, opening a turn of Aqua's or joining the one that runs.
+  @handed_in ~w(report)
+
+  @doc """
+  Whether `row`, of a turn whose agent is `agent`, is a post: written into
+  the turn rather than by it. Every row a turn writes itself carries its
+  agent as `sent_by`, so a row of any other sender is a post, and so is a
+  report its agent wrote. What a turn takes in is read by this rule
+  alone: what a model step carries (`consumed!/3`), a steer
+  (`steer_rows/2`), a program's waiting posts (`brain_posts/2`), the
+  projection and a post's place in it (`projection/2`), and a later
+  post's files (`Aqua.Loop`).
+  """
+  @spec post?(map(), String.t()) :: boolean()
+  def post?(%{sent_by: sent_by, kind: kind}, agent), do: sent_by != agent or kind in @handed_in
+
+  # `post?/2` as a condition on a query's message.
+  defp post(agent), do: dynamic([m], m.sent_by != ^agent or m.kind in ^@handed_in)
+
+  # ---------------------------------------------------------------------------
   # The consumption boundary
   # ---------------------------------------------------------------------------
 
@@ -3684,8 +3711,7 @@ defmodule Arca.TurnStorage do
   turn, whose ask is read under that turn's person, origin and
   restrictions alone.
 
-  The order is `seq`'s, but for a post, a row of a turn its agent did not
-  write, which stands where the model step that carried it placed it
+  The order is `seq`'s, but for a post (`post?/2`), which stands where the model step that carried it placed it
   (`carried_by`, `consumed!/3`): right before the first answer, a reply or
   a call, of that step or of a later one of its turn. Every row that step's
   request held reads before it, the results of the calls open when it
@@ -3710,9 +3736,12 @@ defmodule Arca.TurnStorage do
         Arca.Repo.all(
           from(m in Message,
             where: m.athanor_id == ^athanor_id and m.thread_id == ^turn.thread_id,
+            # The turn's own rows and, once taken in, its posts (`post?/2`);
+            # behind the boundary, unattached rows and settled turns' rows.
             where:
               (m.turn_id == ^turn_id and
-                 (m.sent_by == ^turn.agent or m.seq <= ^window or not is_nil(m.carried_by))) or
+                 ((m.sent_by == ^turn.agent and m.kind not in ^@handed_in) or m.seq <= ^window or
+                    not is_nil(m.carried_by))) or
                 (m.seq <= ^window and (is_nil(m.turn_id) or m.turn_id in subquery(settled))),
             where: not (m.kind == "opening" and is_nil(m.turn_id) and is_nil(m.status)),
             order_by: [asc: m.seq]
@@ -3800,8 +3829,8 @@ defmodule Arca.TurnStorage do
 
   defp rows_of(held), do: Enum.map(held, &elem(&1, 1))
 
-  # Whether `row` waits, and from which step on: a post its turn's agent did
-  # not write, from its carrier's seq (`:never` while no model step carried
+  # Whether `row` waits, and from which step on: a post (`post?/2`), from
+  # its carrier's seq (`:never` while no model step carried
   # it), and a restart's mark from the first answer; nil for every other
   # row, and for a post a program's `input` step carried.
   defp waits(%{turn_id: nil}, _agents, _steps), do: nil
@@ -3810,7 +3839,7 @@ defmodule Arca.TurnStorage do
 
   defp waits(%{sent_by: sent_by} = row, agents, steps) when is_binary(sent_by) do
     cond do
-      sent_by == agents[row.turn_id] -> nil
+      not post?(row, agents[row.turn_id]) -> nil
       is_nil(row.carried_by) -> {row.turn_id, :never}
       true -> carrier(row, steps)
     end
@@ -4412,8 +4441,8 @@ defmodule Arca.TurnStorage do
 
   @doc """
   The posts of a program turn that wait for their delivery, in order
-  (`carry/3`): its own rows someone other than its agent wrote, that no
-  step carried yet.
+  (`carry/3`): its rows that are posts (`post?/2`) of the kinds a program
+  is handed, that no step carried yet.
   """
   @spec brain_posts(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def brain_posts(%Prima.Actor{athanor_id: athanor_id}, turn_id)
@@ -4426,14 +4455,16 @@ defmodule Arca.TurnStorage do
 
   def brain_posts(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
 
-  # The posts of a program turn no step carried yet, in order: the turn's
-  # own rows that someone other than its agent wrote.
+  # The posts of a program turn no step carried yet, in order: of what the
+  # program is handed, every row but its own words, a text of its agent's
+  # (`said!/4`).
   # arca:db-raise-ok inside the caller's transaction
   defp waiting_posts(athanor_id, %Turn{} = turn) do
     Arca.Repo.all(
       from(m in Message,
         where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
-        where: m.sent_by != ^turn.agent and m.kind in ^@brain_posts and is_nil(m.carried_by),
+        where: m.kind in ^@brain_posts and is_nil(m.carried_by),
+        where: ^post(turn.agent),
         order_by: [asc: m.seq]
       )
     )
@@ -4811,6 +4842,9 @@ defmodule Arca.TurnStorage do
   # The silence clock (`brain_progress`'s `clock`): it runs only while the
   # program owes output, banks what ran when it pauses, and a line of the
   # program's own restarts its interval. Read by the database's clock.
+  # `idle` marks a clock set with no turn open, which a turn of the thread
+  # opened since holds still (`brain_silence/2`) until that turn's own
+  # obligations set it.
   # arca:db-raise-ok inside the caller's transaction
   defp clocked(progress, athanor_id, turn, silence_ms, native?) do
     now = Arca.ServerMetaStorage.now!()
@@ -4819,17 +4853,38 @@ defmodule Arca.TurnStorage do
     left =
       cond do
         native? -> silence_ms
+        # Work that takes an idle session starts its interval anew.
+        clock["idle"] == true and not is_nil(turn) -> silence_ms
         is_binary(clock["since"]) -> max(clock["left_ms"] - elapsed_ms(clock["since"], now), 0)
         true -> clock["left_ms"]
       end
 
     since = if owes?(athanor_id, turn, progress), do: DateTime.to_iso8601(now)
-    Map.put(progress, "clock", %{"since" => since, "left_ms" => left})
+    Map.put(progress, "clock", %{"since" => since, "left_ms" => left, "idle" => is_nil(turn)})
   end
 
   defp elapsed_ms(since, now) do
     {:ok, at, _offset} = DateTime.from_iso8601(since)
     max(DateTime.diff(now, at, :millisecond), 0)
+  end
+
+  # A program turn's end leaves its session with no turn open, which owes
+  # output (`owes?/3`): the clock runs from now with what is left of its
+  # interval, so a session kept idle is closed when it runs out. A thread
+  # whose clock never started has no session to close.
+  # arca:db-raise-ok inside the caller's transaction
+  defp unattended!(_athanor_id, %Turn{program: nil}), do: :ok
+
+  defp unattended!(athanor_id, %Turn{} = turn) do
+    thread = locked_thread!(athanor_id, turn.thread_id)
+
+    case progress(thread) do
+      %{"clock" => %{"left_ms" => left}} = progress ->
+        put_progress!(athanor_id, thread.id, clocked(progress, athanor_id, nil, left, false))
+
+      _no_clock ->
+        :ok
+    end
   end
 
   # Whether the program owes output: with no turn open, always, so a
@@ -4891,21 +4946,47 @@ defmodule Arca.TurnStorage do
   Whether a program brain's silence ran out, by the database's clock:
   `expired?`, and `due_ms`, the milliseconds left of its interval while
   the clock runs (nil while it is paused), read from the thread's
-  `brain_progress`.
+  `brain_progress`. A clock that runs with no turn open stands still while
+  a turn of the thread is open, accepted and not yet at work included: the
+  session waits for that turn, whose obligations set the clock next.
   """
   @spec brain_silence(Prima.Actor.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def brain_silence(%Prima.Actor{} = actor, thread_id) do
+  def brain_silence(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     with {:ok, %{progress: progress, now: now}} <- brain(actor, thread_id) do
       case progress["clock"] do
-        %{"since" => since, "left_ms" => left} when is_binary(since) ->
-          due = left - elapsed_ms(since, now)
-          {:ok, %{expired?: due <= 0, due_ms: max(due, 0)}}
+        %{"since" => since, "left_ms" => left} = clock when is_binary(since) ->
+          with {:ok, false} <- awaited(athanor_id, thread_id, clock) do
+            due = left - elapsed_ms(since, now)
+            {:ok, %{expired?: due <= 0, due_ms: max(due, 0)}}
+          else
+            {:ok, true} -> {:ok, %{expired?: false, due_ms: nil}}
+            error -> error
+          end
 
         _paused ->
           {:ok, %{expired?: false, due_ms: nil}}
       end
     end
   end
+
+  def brain_silence(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
+
+  # Whether an idle session's clock waits on a turn of its thread that is
+  # open.
+  defp awaited(athanor_id, thread_id, %{"idle" => true}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.brain_silence", fn ->
+      {:ok,
+       Arca.Repo.exists?(
+         from(t in Turn,
+           where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
+           where: t.status in ^@open
+         )
+       )}
+    end)
+  end
+
+  defp awaited(_athanor_id, _thread_id, _clock), do: {:ok, false}
 
   # The thread's `brain_progress` map.
   defp progress(%Thread{brain_progress: nil}), do: %{}
@@ -5491,9 +5572,8 @@ defmodule Arca.TurnStorage do
       owed_notices(athanor_id, turn, progress) != []
   end
 
-  # A steer is a post someone other than the turn's agent wrote into it
-  # after the one that opened it, that no step carried yet (`consumed!/3`,
-  # `carry/3`): every row the turn writes itself carries its agent. A post
+  # A steer is a post (`post?/2`) written into the turn after the one that
+  # opened it, that no step carried yet (`consumed!/3`, `carry/3`). A post
   # a round took in waits until that round's step carries it, so one whose
   # round died first is still owed a round. A turn stopped on an uncertain
   # call goes on only on a line past the boundary its stop moved, so while
@@ -5502,7 +5582,8 @@ defmodule Arca.TurnStorage do
   defp steer_rows(athanor_id, %Turn{} = turn) do
     from(m in Message,
       where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
-      where: m.sent_by != ^turn.agent and is_nil(m.carried_by),
+      where: is_nil(m.carried_by),
+      where: ^post(turn.agent),
       order_by: [asc: m.seq]
     )
     |> steers_of(turn)
