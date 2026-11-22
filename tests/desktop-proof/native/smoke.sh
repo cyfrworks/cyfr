@@ -212,6 +212,23 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
+# macOS keeps the key of the app's on-disk session in the default keychain,
+# found under HOME, and a fresh HOME has none: the app would wait on the
+# system's "Keychain Not Found" dialog, showing no window and not ending.
+# HOME is the run's by now, so security changes the run's keychain list
+# and never the account's own.
+if [ "$OS" = macos ]; then
+  KEYCHAIN="$RUN/home/Library/Keychains/login.keychain-db"
+  if ! { mkdir -p "${KEYCHAIN%/*}" "$RUN/home/Library/Preferences" &&
+    security create-keychain -p smoke "$KEYCHAIN" &&
+    security list-keychains -d user -s "$KEYCHAIN" &&
+    security default-keychain -d user -s "$KEYCHAIN" &&
+    security unlock-keychain -p smoke "$KEYCHAIN"; }; then
+    echo "smoke: the run's HOME could not be given a keychain" >&2
+    exit 1
+  fi
+fi
+
 if ! silent; then
   echo "smoke: $CHOOSER already answers: another program, or another CYFR app, holds 127.0.0.1:7340" >&2
   exit 1
