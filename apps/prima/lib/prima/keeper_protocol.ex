@@ -50,7 +50,9 @@ defmodule Prima.KeeperProtocol do
   answers: `measured`, with the `bytes` the spawn's group uses (its
   `memory.current` less `inactive_file`), or an `error` `unmeasured` where
   the keeper holds no such spawn or cannot take a reading that agrees with
-  itself. A reading not made is unknown, never zero.
+  itself. A reading not made is unknown, and zero is no reading: a
+  `measured` of no `bytes` is refused, where a `home_measured` of none is
+  an empty home.
 
   `decode_reply/1` answers the reply or the first refusal, in this order:
   `:oversize_line`; `:malformed` (not one JSON object); `:bad_version`;
@@ -58,9 +60,9 @@ defmodule Prima.KeeperProtocol do
   member, in the order the type lists them, `{:missing_field, name}`,
   `{:wrong_type, name}` or `{:invalid_field, name}`; and last, for an
   `exited`, `:ambiguous_exit` when it carries both a `code` and a
-  `signal`, or neither. The `bytes` of a `measured` or a `home_measured`
-  reply is a whole number up to 2^53 - 1, the largest every JSON reader
-  carries exactly.
+  `signal`, or neither. The `bytes` of a `measured` is a whole number from
+  1 and that of a `home_measured` from 0, each up to 2^53 - 1, the largest
+  every JSON reader carries exactly.
 
   ## Homes
 
@@ -240,7 +242,7 @@ defmodule Prima.KeeperProtocol do
          memory: {:nullable, :memory_end}
        ]},
     "released" => {:released, [spawn_id: :spawn_id]},
-    "measured" => {:measured, [id: :id, bytes: :measured_bytes]},
+    "measured" => {:measured, [id: :id, bytes: :used_bytes]},
     "pool" => {:pool, [id: :id, pool: :pool, size: :count, free: :count, quarantined: :count]},
     "home_made" => {:home_made, [id: :id]},
     "home_measured" => {:home_measured, [id: :id, bytes: :measured_bytes]},
@@ -320,7 +322,7 @@ defmodule Prima.KeeperProtocol do
            pid :: non_neg_integer()}
           | {:error, id :: String.t() | nil, spawn_id :: String.t() | nil, code :: String.t()}
           | {:exited, spawn_id :: String.t(), exit_status(), memory_end()}
-          | {:measured, id :: String.t(), bytes :: non_neg_integer()}
+          | {:measured, id :: String.t(), bytes :: pos_integer()}
           | {:released, spawn_id :: String.t()}
           | {:pool, id :: String.t(), pool :: String.t(), size :: non_neg_integer(),
              free :: non_neg_integer(), quarantined :: non_neg_integer()}
@@ -881,6 +883,10 @@ defmodule Prima.KeeperProtocol do
 
   defp read(:measured_bytes, name, value) when is_integer(value),
     do: {:error, {:invalid_field, name}}
+
+  # A spawn that is held uses memory, so none is no reading.
+  defp read(:used_bytes, name, 0), do: {:error, {:invalid_field, name}}
+  defp read(:used_bytes, name, value), do: read(:measured_bytes, name, value)
 
   defp read(:memory_end, _name, value) when is_map_key(@memory_ends, value),
     do: {:ok, Map.fetch!(@memory_ends, value)}

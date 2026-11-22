@@ -417,6 +417,23 @@ defmodule Locus.KeeperVectorsTest do
              {{:ok, 12_288}, {:ok, 16_384}}
   end
 
+  test "a measured of no bytes is refused as no reading, and settles no measurement",
+       %{v: v, peer: peer, name: name} do
+    handle = long_lived!(v, peer, name)
+    reading = reply(v, "measured")
+
+    log =
+      capture_log(fn ->
+        task = Task.async(fn -> Keeper.measure(name, handle) end)
+        asked = next_request(peer)
+        send_reply(peer, %{answering(asked, reading) | "bytes" => 0})
+        send_reply(peer, answering(asked, reply(v, "error", &(&1["code"] == "unmeasured"))))
+        assert Task.await(task, 5_000) == {:error, {:refused, "unmeasured"}}
+      end)
+
+    assert log =~ "invalid_field"
+  end
+
   # A long-lived spawn the vectors' `spawned` answered, its owner this test.
   defp long_lived!(v, peer, name) do
     keeper =

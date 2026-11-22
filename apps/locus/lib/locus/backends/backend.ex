@@ -171,7 +171,7 @@ defmodule Locus.Backends.Backend do
   def status(server, timeout), do: GenServer.call(server, :status, timeout)
 
   @doc "The bytes the session's process uses, or `:unknown`: never a zero for a reading not made."
-  @spec measure(GenServer.server()) :: {:ok, non_neg_integer()} | :unknown
+  @spec measure(GenServer.server()) :: {:ok, pos_integer()} | :unknown
   def measure(server) do
     GenServer.call(server, :measure, @call_margin_ms)
   catch

@@ -422,40 +422,120 @@ func (k *keeper) failAtItsBound(t *testing.T, group *cgroup.Group, bound uint64)
 	}
 }
 
-// A release that retires a spawn while its leader's end is still being read
-// leaves the group's counters to be read: a kill heard after a close was
-// asked keeps its cause.
+// The cause of a kill reaches the client before the release, and is read
+// before the counters go, whichever of the leader's watcher and the cleanup
+// runs first: here the watcher is held past the cleanup, and in one case the
+// leader's reaping past every wait of the cleanup's too.
 func TestARetirementLeavesTheCauseOfAKillToBeRead(t *testing.T) {
-	k := boundedKeeper(t)
+	for _, c := range []struct {
+		name           string
+		kept           bool
+		watchAtRemoval bool
+		reapingHeld    bool
+	}{
+		{name: "pooled, the watcher held past the whole cleanup"},
+		{name: "pooled, the watcher held until the counters are gone", watchAtRemoval: true},
+		{name: "pooled, the leader's reaping held past the cleanup's waits", reapingHeld: true},
+		{name: "kept, the watcher held past the whole cleanup", kept: true},
+		{name: "kept, the watcher held until the counters are gone", kept: true, watchAtRemoval: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			k, sp, dir := killedAtItsCap(t, c.kept)
+			reap := func() {}
+			if c.reapingHeld {
+				reaped := sp.leader
+				held := &child{pid: reaped.pid, done: make(chan struct{})}
+				sp.leader = held
+				reap = func() {
+					held.status = reaped.status
+					close(held.done)
+				}
+			}
+
+			k.s.retire(sp, 0, true)
+			switch {
+			case c.watchAtRemoval:
+				for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+					if _, err := os.Stat(dir); err != nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("the cleanup never removed the counters")
+					}
+				}
+				k.s.watchLeader(sp)
+			case c.reapingHeld:
+				select {
+				case <-sp.retired:
+				case <-time.After(3 * clearTimeout):
+				}
+				reap()
+			}
+			select {
+			case <-sp.retired:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the cleanup did not finish")
+			}
+			// The watcher comes late and has nothing left to add.
+			if !c.watchAtRemoval {
+				k.s.watchLeader(sp)
+			}
+			k.s.send(protocol.NewPoolReply("after", "runner", 0, 0, 0))
+
+			var told []map[string]any
+			for {
+				m := k.reply(t)
+				if m["id"] == "after" {
+					break
+				}
+				told = append(told, m)
+			}
+			if len(told) != 2 || told[0]["type"] != protocol.TypeExited || told[0]["memory"] != protocol.MemoryCap ||
+				told[0]["signal"] != "SIGKILL" || told[1]["type"] != protocol.TypeReleased {
+				t.Fatalf("a spawn killed at its cap and retired was told %v; want its exit with cap, then its release", told)
+			}
+		})
+	}
+}
+
+// killedAtItsCap is a spawn, pooled or kept, whose leader the kernel killed
+// at its cap and the keeper reaped, with no watcher started for it. It
+// answers the directory of the spawn's counters too.
+func killedAtItsCap(t *testing.T, kept bool) (*keeper, *spawn, string) {
+	t.Helper()
+	var k *keeper
 	uid := testPoolFirst
-	group, err := k.s.memory.Create(cgroup.Name(uid), 32<<20, protocol.CPUPeriod)
+	sp := &spawn{id: strings.Repeat("e", 32), retired: make(chan struct{})}
+	name := cgroup.Name(uid)
+	if kept {
+		k = keptKeeper(t)
+		uid = testKeptFirst
+		sp.kept = true
+		sp.account = KeptAccount(uid)
+		sp.home = filepath.Join(k.s.cfg.Kept.Root, "vlt_killed")
+		if made := k.homeRequest(t, protocol.TypeHomeMake, "killed", sp.home, uid); made["type"] != protocol.TypeHomeMade {
+			t.Fatalf("home_make: %v", made)
+		}
+		name = cgroup.SpawnName(sp.id)
+	} else {
+		k = boundedKeeper(t)
+		sp.pool = k.s.pools["runner"]
+		sp.account = k.s.accounts[uid]
+	}
+	group, err := k.s.memory.Create(name, 32<<20, protocol.CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}
 	leader, dir := k.runIn(t, group, "exec "+k.s.self+" hold 128 60")
 	k.awaitExit(t, leader)
-	sp := &spawn{
-		id:           strings.Repeat("e", 32),
-		pool:         k.s.pools["runner"],
-		account:      k.s.accounts[uid],
-		group:        group,
-		leader:       leader,
-		exitReported: make(chan struct{}),
-		retired:      make(chan struct{}),
-	}
+	sp.group, sp.leader = group, leader
 	k.s.mu.Lock()
 	k.s.spawns[sp.id] = sp
+	if kept {
+		k.s.keptMaps()
+		k.s.keptLive[uid] = 1
+		k.s.keptHomes[uid] = sp.home
+	}
 	k.s.mu.Unlock()
-
-	k.s.retire(sp, 0, true)
-	// The retirement gets as far as it goes before the leader's watcher runs.
-	for deadline := time.Now().Add(700 * time.Millisecond); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if _, err := os.Stat(dir); err != nil {
-			break
-		}
-	}
-	k.s.watchLeader(sp)
-	if e := k.replies(t, sp.id)[sp.id]; e["memory"] != protocol.MemoryCap {
-		t.Fatalf("a spawn killed at its cap and retired exited %v", e)
-	}
+	return k, sp, dir
 }

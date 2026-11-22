@@ -362,8 +362,10 @@ type spawn struct {
 	// the retirement that removes the spawn from spawns closes it.
 	pty *os.File
 
-	// exitReported closes once `exited` has been sent for the leader.
-	exitReported chan struct{}
+	// exitOnce is the leader's one `exited`: whichever of its watcher and
+	// the retirement comes first reads the cause and sends it, and the other
+	// waits for that.
+	exitOnce sync.Once
 	// retired closes when retirement has finished.
 	retired    chan struct{}
 	retireOnce sync.Once
@@ -806,7 +808,7 @@ func (s *server) handleSpawn(req *protocol.Request) {
 		return
 	}
 
-	sp := &spawn{pool: p, account: s.accounts[uid], exitReported: make(chan struct{}), retired: make(chan struct{})}
+	sp := &spawn{pool: p, account: s.accounts[uid], retired: make(chan struct{})}
 	if sp.id, err = randomHex(16); err == nil {
 		var name string
 		if name, err = home.NewName(uid); err == nil {
@@ -1073,21 +1075,49 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 // watchLeader reports the leader's exit and retires the spawn.
 func (s *server) watchLeader(sp *spawn) {
 	<-sp.leader.done
-	var code *int
-	var sig *string
-	if ws := sp.leader.status; ws.Signaled() {
-		name := unix.SignalName(ws.Signal())
-		if name == "" {
-			name = ws.Signal().String()
-		}
-		sig = &name
-	} else {
-		c := ws.ExitStatus()
-		code = &c
-	}
-	s.send(protocol.NewExited(sp.id, code, sig, s.memoryEnd(sp)))
-	close(sp.exitReported)
+	s.reportExit(sp)
 	s.retire(sp, leaderExitGrace, true)
+}
+
+// reportExit sends the one `exited` of a reaped leader, with what killed it.
+func (s *server) reportExit(sp *spawn) {
+	sp.exitOnce.Do(func() {
+		var code *int
+		var sig *string
+		if ws := sp.leader.status; ws.Signaled() {
+			name := unix.SignalName(ws.Signal())
+			if name == "" {
+				name = ws.Signal().String()
+			}
+			sig = &name
+		} else {
+			c := ws.ExitStatus()
+			code = &c
+		}
+		s.send(protocol.NewExited(sp.id, code, sig, s.memoryEnd(sp)))
+	})
+}
+
+// reportExitBeforeRemoval is a retirement's step before it removes the group
+// and reports the release: the leader's exit is read and sent while its
+// counters stand, however late its watcher runs. A leader the kernel killed
+// for memory will end, and is waited for as long as that takes. Any other
+// that outlived retirement by clearTimeout is not waited for: false, and its
+// group stays, holding what it counts.
+func (s *server) reportExitBeforeRemoval(sp *spawn) bool {
+	select {
+	case <-sp.leader.done:
+	case <-time.After(clearTimeout):
+		if sp.group == nil {
+			return false
+		}
+		if cause, err := sp.group.KilledFor(); err != nil || cause == cgroup.NotKilled {
+			return false
+		}
+		<-sp.leader.done
+	}
+	s.reportExit(sp)
+	return true
 }
 
 // memoryEnd says what the kernel killed processes of the spawn for, as its
@@ -1146,13 +1176,11 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 					s.signalChild(sp.relay, unix.SIGKILL)
 				}
 			}
+			removable := !notify || s.reportExitBeforeRemoval(sp)
 			// A group is removable once it holds no process, which a clean
 			// scrub has established; the next spawn under the uid removes
 			// one that was not.
-			if sp.group != nil {
-				if notify {
-					s.awaitExitReported(sp)
-				}
+			if sp.group != nil && removable {
 				if err := sp.group.Remove(); err != nil {
 					s.log.Warn("spawn %s: removing the memory group of uid %d: %v", sp.id, uid, err)
 				}
@@ -1180,28 +1208,10 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				s.log.Warn("spawn %s: uid %d quarantined: a process or something it left outlived retirement", sp.id, uid)
 			}
 			if notify {
-				s.reportReleased(sp)
+				s.send(protocol.NewReleased(sp.id))
 			}
 		}()
 	})
-}
-
-// reportReleased sends `released`, which follows `exited`; a leader that
-// survived retirement is not waited for.
-func (s *server) reportReleased(sp *spawn) {
-	s.awaitExitReported(sp)
-	s.send(protocol.NewReleased(sp.id))
-}
-
-// awaitExitReported gives the leader's watcher clearTimeout to report the
-// exit. A retirement waits for it before it removes the group: the cause of
-// a kill is in the group's counters until that report has read them, however
-// early a release came.
-func (s *server) awaitExitReported(sp *spawn) {
-	select {
-	case <-sp.exitReported:
-	case <-time.After(clearTimeout):
-	}
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends

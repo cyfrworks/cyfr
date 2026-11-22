@@ -183,7 +183,7 @@ defmodule Locus.Launcher do
 
   @doc "The bytes the process uses; an error where that is not known, never a zero."
   @callback measure(GenServer.server() | keyword(), handle()) ::
-              {:ok, non_neg_integer()} | {:error, error()}
+              {:ok, pos_integer()} | {:error, error()}
 
   @doc "The uids of `pool`."
   @callback pool_stats(GenServer.server() | keyword(), String.t()) ::

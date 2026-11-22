@@ -832,7 +832,8 @@ defmodule Prima.KeeperProtocolTest do
       measured = %{"v" => 2, "type" => "measured", "id" => "25"}
       decode = &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(measured, &1)))
 
-      assert decode.(%{"bytes" => 0}) == {:ok, {:measured, "25", 0}}
+      assert decode.(%{"bytes" => 1}) == {:ok, {:measured, "25", 1}}
+      assert decode.(%{"bytes" => 0}) == {:error, {:invalid_field, "bytes"}}
       assert decode.(%{"bytes" => -1}) == {:error, {:invalid_field, "bytes"}}
       assert decode.(%{"bytes" => nil}) == {:error, {:wrong_type, "bytes"}}
       assert decode.(%{}) == {:error, {:missing_field, "bytes"}}
