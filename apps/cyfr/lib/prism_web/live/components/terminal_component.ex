@@ -40,7 +40,7 @@ defmodule PrismWeb.TerminalComponent do
   use Phoenix.Component
 
   import Phoenix.LiveView,
-    only: [attach_hook: 4, connected?: 1, push_event: 3, put_flash: 3]
+    only: [attach_hook: 4, connected?: 1, push_event: 3, put_flash: 3, put_private: 3]
 
   alias Phoenix.LiveView.Socket
 
@@ -63,7 +63,8 @@ defmodule PrismWeb.TerminalComponent do
   def on_mount(:default, _params, _session, socket) do
     {:cont,
      socket
-     |> assign(terminal: nil, terminal_delivery: nil)
+     |> assign(:terminal, nil)
+     |> put_private(:terminal_delivery, nil)
      |> attach_hook(__MODULE__, :handle_event, &on_event/3)
      |> attach_hook(__MODULE__, :handle_info, &on_info/2)}
   end
@@ -72,14 +73,32 @@ defmodule PrismWeb.TerminalComponent do
   Show a session's frame: `shown` names its `session`, the program's
   `name`, the `back` link and whatever else the page keeps beside them.
   The one shown before is detached, and this one is attached once its
-  hook stands (`terminal_ready`). The one shown already stays as it is.
+  hook stands (`terminal_ready`). The one shown already, named alike, stays
+  as it is; named for another place on the page it moves there, as a
+  frame of its own whose hook attaches afresh, so no delivery the last
+  one was handed holds the next back.
   """
   @spec show(Socket.t(), map()) :: Socket.t()
-  def show(%{assigns: %{terminal: %{session: session}}} = socket, %{session: session}), do: socket
+  def show(
+        %{assigns: %{terminal: %{session: session} = terminal}} = socket,
+        %{session: session} = shown
+      ) do
+    if Map.take(terminal, Map.keys(shown)) == shown do
+      socket
+    else
+      if connected?(socket), do: Opus.Programs.detach(socket.assigns.context, session)
+      terminal = %{Map.merge(terminal, shown) | attached: false, moved: terminal.moved + 1}
+      socket |> put_private(:terminal_delivery, nil) |> assign(:terminal, terminal)
+    end
+  end
 
   def show(socket, shown) do
-    state = %{kept: false, ended: nil, attached: false, closing: nil}
-    socket |> detach() |> assign(terminal: Map.merge(shown, state), terminal_delivery: nil)
+    state = %{kept: false, ended: nil, attached: false, closing: nil, moved: 0}
+
+    socket
+    |> detach()
+    |> put_private(:terminal_delivery, nil)
+    |> assign(:terminal, Map.merge(shown, state))
   end
 
   @doc "Show no frame: the page detaches, which ends nothing."
@@ -138,7 +157,7 @@ defmodule PrismWeb.TerminalComponent do
   defp on_event("terminal_written", %{"session" => session, "delivery" => delivery}, socket)
        when is_binary(delivery) do
     with %{session: ^session} <- socket.assigns.terminal,
-         ^delivery <- socket.assigns.terminal_delivery,
+         ^delivery <- socket.private.terminal_delivery,
          {:error, reason} <- Opus.Programs.taken(socket.assigns.context, session, delivery) do
       {:halt, ended(socket, session, reason)}
     else
@@ -188,7 +207,8 @@ defmodule PrismWeb.TerminalComponent do
       %{session: ^session} ->
         event = if kind == :tail, do: "terminal_tail", else: "terminal_output"
         data = %{session: session, delivery: delivery, data: Base.encode64(bytes)}
-        {:halt, socket |> assign(:terminal_delivery, delivery) |> push_event(event, data)}
+        # Kept out of the assigns, so a delivery renders nothing.
+        {:halt, socket |> put_private(:terminal_delivery, delivery) |> push_event(event, data)}
 
       _other ->
         {:halt, socket}
@@ -311,7 +331,7 @@ defmodule PrismWeb.TerminalComponent do
   def frame(assigns) do
     ~H"""
     <div
-      id={"terminal-#{@terminal.session}"}
+      id={frame_id(@terminal)}
       class="rounded-lg border border-gray-700 bg-gray-950"
       data-test="terminal"
     >
@@ -368,7 +388,7 @@ defmodule PrismWeb.TerminalComponent do
            a session already gone has nothing to show. --%>
       <div
         :if={!@terminal.ended or @terminal.attached}
-        id={"terminal-#{@terminal.session}-screen"}
+        id={frame_id(@terminal) <> "-screen"}
         phx-hook="Terminal"
         phx-update="ignore"
         data-session={@terminal.session}
@@ -379,4 +399,8 @@ defmodule PrismWeb.TerminalComponent do
     </div>
     """
   end
+
+  # A frame moved on its page is another element, so its hook stands again.
+  defp frame_id(%{session: session, moved: 0}), do: "terminal-#{session}"
+  defp frame_id(%{session: session, moved: moved}), do: "terminal-#{session}-#{moved}"
 end

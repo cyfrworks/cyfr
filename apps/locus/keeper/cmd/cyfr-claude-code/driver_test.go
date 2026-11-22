@@ -745,7 +745,16 @@ func TestTheAccountIsSaidOnlyWhereTheHarnessSaysIt(t *testing.T) {
 		says    any
 	}{
 		{`{"subscriptionType":"max","apiProvider":"firstParty"}`, "signed_in"},
-		{`{"subscriptionType":"max"}`, "signed_in"},
+		{`{"apiProvider":"vertex"}`, "signed_in"},
+		{`{"subscriptionType":"max"}`, nil},
+		{`{"apiProvider":"somewhere"}`, nil},
+		{`{"apiProvider":"none"}`, nil},
+		{`{"subscriptionType":"max","tokenSource":7,"apiProvider":"firstParty"}`, nil},
+		{`{"subscriptionType":"max","apiKeySource":null,"apiProvider":"firstParty"}`, nil},
+		{`{"tokenSource":"none","apiKeySource":null,"apiProvider":"firstParty"}`, nil},
+		{`{"tokenSource":"none","subscriptionType":null,"apiProvider":"firstParty"}`, nil},
+		{`{"TokenSource":"none","apiProvider":"firstParty"}`, nil},
+		{`false`, nil},
 		{`{"tokenSource":"claude.ai","apiProvider":"firstParty"}`, "signed_in"},
 		{`{"tokenSource":"none","apiKeySource":"ANTHROPIC_API_KEY","apiProvider":"firstParty"}`, "signed_in"},
 		{`{"tokenSource":"none","apiProvider":"bedrock"}`, "signed_in"},

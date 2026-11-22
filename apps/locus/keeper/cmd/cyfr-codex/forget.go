@@ -300,6 +300,9 @@ func (d *driver) listOnce() ([]json.RawMessage, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	if read.Error != nil {
+		return nil, "", errors.New("its account could not be read")
+	}
 	account := accountOf(read)
 	if account == brainwire.SignedOut {
 		return nil, account, nil

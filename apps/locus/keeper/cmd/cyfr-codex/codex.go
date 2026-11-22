@@ -355,8 +355,12 @@ func errorKind(raw json.RawMessage) string {
 // stored it: the app-server does not use one from the environment.
 const signedOutSentence = "OpenAI Codex has no sign-in it can use; sign it in on the program's terminal, with your plan or a key."
 
-// unreadAccountSentence refuses a post while Codex's account read failed
-// or answered what the driver does not know: no sign-out.
+// unknownAccountSentence refuses a post while Codex's account read
+// answered what the driver does not know: no sign-out.
+const unknownAccountSentence = "OpenAI Codex's account answer is not one CYFR knows, so the post was not written; check its sign-in on the program's terminal."
+
+// unreadAccountSentence refuses a post while Codex's account read failed:
+// no sign-out.
 const unreadAccountSentence = "OpenAI Codex's account could not be read, so the post was not written; send it again."
 
 // errorSentence is the driver's own words for an error of Codex's: its

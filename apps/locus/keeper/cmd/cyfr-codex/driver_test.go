@@ -537,13 +537,25 @@ func TestTheAccountIsSaidOnlyWhereCodexSaysIt(t *testing.T) {
 		account string
 		says    any
 	}{
-		{`{"account":{"type":"chatgpt"},"requiresOpenaiAuth":true}`, "signed_in"},
+		{`{"account":{"type":"chatgpt","email":null,"planType":"plus"},"requiresOpenaiAuth":true}`, "signed_in"},
 		{`{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}`, "signed_in"},
+		{`{"account":{"type":"amazonBedrock"},"requiresOpenaiAuth":false}`, "signed_in"},
+		{`{"account":{"type":"gcp"},"requiresOpenaiAuth":false}`, "signed_in"},
+		{`{"account":false,"requiresOpenaiAuth":true}`, nil},
+		{`{"account":"","requiresOpenaiAuth":true}`, nil},
+		{`{"account":[],"requiresOpenaiAuth":true}`, nil},
+		{`{"account":{},"requiresOpenaiAuth":true}`, nil},
+		{`{"account":{"type":"chatgpt"},"requiresOpenaiAuth":true}`, nil},
+		{`{"account":{"type":"another"},"requiresOpenaiAuth":true}`, nil},
+		{`{"account":{"type":"apiKey"}}`, nil},
+		{`{"account":{"type":"apiKey"},"requiresOpenaiAuth":"yes"}`, nil},
+		{`{"account":{"Type":"apiKey"},"requiresOpenaiAuth":true}`, nil},
+		{`{"Account":null,"requiresOpenaiAuth":true}`, nil},
+		{`{"requiresOpenaiAuth":false}`, nil},
 		{`{"account":null,"requiresOpenaiAuth":false}`, "signed_in"},
 		{`{"account":null,"requiresOpenaiAuth":true}`, "signed_out"},
 		{`{"account":null}`, nil},
 		{`{"requiresOpenaiAuth":true}`, nil},
-		{`fail`, nil},
 	} {
 		t.Run(c.account, func(t *testing.T) {
 			t.Setenv("FAKE_ACCOUNT", c.account)
@@ -565,18 +577,41 @@ func TestTheAccountIsSaidOnlyWhereCodexSaysIt(t *testing.T) {
 	}
 }
 
+// A listing whose account read failed is refused as that, so the editor
+// says it: no list, no sign-out, and nothing said of the account.
+func TestAListingWhoseAccountCouldNotBeReadSaysSo(t *testing.T) {
+	t.Setenv("FAKE_ACCOUNT", "fail")
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(map[string]any{"t": "models", "id": "m1"})
+	const unread = "OpenAI Codex did not list its models: its account could not be read."
+	if e := s.expect("refused"); e["id"] != "m1" || e["reason"] != unread || e["account"] != nil {
+		t.Fatalf("a failed account read is said as that: %v", e)
+	}
+	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{}})
+	if e := s.expect("started"); e["account"] != nil {
+		t.Fatalf("a start whose account read failed says none: %v", e)
+	}
+}
+
 // A post whose account read failed, or answered a shape not known, is
-// refused as that: never as signed out, and saying nothing of the account.
+// refused as each of those: never as signed out, and saying nothing of the
+// account.
 func TestAnAccountThatCannotBeReadIsNoSignOut(t *testing.T) {
-	for _, account := range []string{`fail`, `{"account":null}`, `{"requiresOpenaiAuth":true}`} {
+	const unknown = "OpenAI Codex's account answer is not one CYFR knows, so the post was not written; check its sign-in on the program's terminal."
+	for account, reason := range map[string]string{
+		`fail`:                        "OpenAI Codex's account could not be read, so the post was not written; send it again.",
+		`{"account":null}`:            unknown,
+		`{"requiresOpenaiAuth":true}`: unknown,
+		`{"account":false,"requiresOpenaiAuth":true}`: unknown,
+	} {
 		t.Run(account, func(t *testing.T) {
 			t.Setenv("FAKE_ACCOUNT", account)
 			s := startDriver(t)
 			startFresh(s, map[string]any{})
 			work(s, "stp_work", "trn_1")
 			s.send(map[string]any{"t": "post", "id": "stp_post", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "hello"}}})
-			const unread = "OpenAI Codex's account could not be read, so the post was not written; send it again."
-			if e := s.expect("refused"); e["reason"] != unread || e["account"] != nil {
+			if e := s.expect("refused"); e["reason"] != reason || e["account"] != nil {
 				t.Fatalf("an account that could not be read is said as that, and as no sign-out: %v", e)
 			}
 		})
@@ -1182,8 +1217,8 @@ func TestAListingOfCodexWithNoSignInIsRefused(t *testing.T) {
 		`{"account":null}`:                                         false,
 		`{"account":null,"requiresOpenaiAuth":"yes"}`:              false,
 	} {
-		if signedOut(json.RawMessage(result)) != out {
-			t.Errorf("signedOut(%s) is %v", result, !out)
+		if (accountOf(rpc{Result: json.RawMessage(result)}) == brainwire.SignedOut) != out {
+			t.Errorf("accountOf(%s) signed out is %v", result, !out)
 		}
 	}
 }

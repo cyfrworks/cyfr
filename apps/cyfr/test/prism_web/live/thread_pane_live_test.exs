@@ -1991,7 +1991,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                "Coder's program is not installed here — install it from its card on the " <>
                  "Aqua page",
                "Coder's program is disabled — enable it on the Programs page",
-               "Coder's program is not one a brain can run in — on the Programs page, make " <>
+               "Coder's program is not one a crew member can run on — on the Programs page, make " <>
                  "it a driven program with a kept folder whose command starts with its driver"
              ]
 

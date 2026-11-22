@@ -335,16 +335,19 @@ func (d *driver) response(id string, m rpc) error {
 	}
 	switch w.kind {
 	case "post-account":
-		switch accountOf(m) {
-		case brainwire.SignedIn:
+		account := accountOf(m)
+		if account == brainwire.SignedIn {
 			d.signedIn = true
 			return d.deliver(w)
-		case brainwire.SignedOut:
-			d.waiting = nil
-			return d.c.RefuseSignedOut(w.id, signedOutSentence)
 		}
 		d.waiting = nil
-		return d.c.Refuse(w.id, unreadAccountSentence)
+		switch {
+		case m.Error != nil:
+			return d.c.Refuse(w.id, unreadAccountSentence)
+		case account == brainwire.SignedOut:
+			return d.c.RefuseSignedOut(w.id, signedOutSentence)
+		}
+		return d.c.Refuse(w.id, unknownAccountSentence)
 	case "steer":
 		if m.Error == nil {
 			d.waiting = nil
@@ -391,50 +394,56 @@ func (d *driver) response(id string, m rpc) error {
 	return nil
 }
 
-// accountOf is what Codex's answer to `account/read` says: signed in or
-// signed out, or nothing for a read that failed and for an answer that is
-// neither.
+// accountTypes are the accounts Codex 0.169.0's own schema answers
+// `account/read` with, each with the members it requires beside its type.
+var accountTypes = map[string][]string{
+	"apiKey":        nil,
+	"chatgpt":       {"email", "planType"},
+	"amazonBedrock": nil,
+	"gcp":           nil,
+}
+
+// accountOf is what Codex's answer to `account/read` says. The answer has
+// one shape: `requiresOpenaiAuth` a boolean and `account` present, null or
+// one of accountTypes, the members spelled exactly so. Anything else is
+// not known and says nothing, as a read that failed does, so a shape not
+// yet seen never reads signed out, nor clears a sign-out.
+//
+// In that shape signed out is only no account where one is required (an
+// empty folder, and a key only in the environment), and signed in is an
+// account, a dead key's among them, or none required (another provider).
+// Nothing of the account is kept but that word.
 func accountOf(m rpc) string {
-	switch {
-	case m.Error != nil:
+	if m.Error != nil {
 		return ""
-	case signedOut(m.Result):
-		return brainwire.SignedOut
-	case signedIn(m.Result):
+	}
+	var answer, account map[string]json.RawMessage
+	var requires *bool
+	if json.Unmarshal(m.Result, &answer) != nil ||
+		json.Unmarshal(answer["requiresOpenaiAuth"], &requires) != nil || requires == nil ||
+		json.Unmarshal(answer["account"], &account) != nil {
+		return ""
+	}
+	if account == nil {
+		if *requires {
+			return brainwire.SignedOut
+		}
 		return brainwire.SignedIn
 	}
-	return ""
-}
-
-// signedOut reads `account/read`'s answer: only the one
-// shape Codex 0.169.0 answers with no sign-in, measured on an empty
-// folder (`account` null and `requiresOpenaiAuth` true), is signed out.
-// Any other answer, a field absent or unknown among them, is none, so a
-// sign-in in a shape not yet seen never reads signed out.
-func signedOut(result json.RawMessage) bool {
-	var r struct {
-		Account  json.RawMessage `json:"account"`
-		Requires *bool           `json:"requiresOpenaiAuth"`
+	var kind string
+	if json.Unmarshal(account["type"], &kind) != nil {
+		return ""
 	}
-	if json.Unmarshal(result, &r) != nil || r.Requires == nil {
-		return false
+	members, known := accountTypes[kind]
+	if !known {
+		return ""
 	}
-	// An absent `account` is no shape seen; a present null is.
-	return string(r.Account) == "null" && *r.Requires
-}
-
-// signedIn reads `account/read`'s answer: an account named, a dead key's
-// among them, or none needed. Nothing of the account is kept.
-func signedIn(result json.RawMessage) bool {
-	var r struct {
-		Account  json.RawMessage `json:"account"`
-		Requires *bool           `json:"requiresOpenaiAuth"`
+	for _, member := range members {
+		if _, present := account[member]; !present {
+			return ""
+		}
 	}
-	if json.Unmarshal(result, &r) != nil {
-		return false
-	}
-	none := len(r.Account) == 0 || string(r.Account) == "null"
-	return !none || (r.Requires != nil && !*r.Requires)
+	return brainwire.SignedIn
 }
 
 // startStep is the start's handshake, one answer at a time: `initialize`,

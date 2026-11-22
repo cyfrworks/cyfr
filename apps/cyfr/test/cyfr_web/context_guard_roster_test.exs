@@ -92,19 +92,23 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     # A refresh of the tinctures, and a shelf program's Close.
     "live/shell_live.ex" => {2, [{"live/shell_live.ex", :deliver}]},
     # A model catalyst's install, answered to the page; each open
-    # editor's options and a Sign in's start of its program, answered to
-    # the agents section itself.
+    # editor's options, answered to the agents section itself.
     "live/aqua_live/agents_component.ex" =>
-      {3,
+      {2,
        [
          {"live/aqua_live.ex", :catalyst_installed},
-         {"live/aqua_live/agents_component.ex", :brain_options},
-         {"live/aqua_live/agents_component.ex", :set_up_program}
+         {"live/aqua_live/agents_component.ex", :brain_options}
        ]},
-    # A brain's one `models` call after its grant, and a program's listing
-    # a press asked for, answered to the page.
+    # A brain's one `models` call after its grant, and the one task out at
+    # a time, which is a program's listing a press asked for or a Sign in's
+    # start of its program, answered to the page.
     "live/aqua_live.ex" =>
-      {2, [{"live/aqua_live.ex", :setup_answer}, {"live/aqua_live.ex", :program_listing}]},
+      {2,
+       [
+         {"live/aqua_live.ex", :setup_answer},
+         {"live/aqua_live.ex", :program_listing},
+         {"live/aqua_live.ex", :sign_in_terminal}
+       ]},
     # The system layer's listener on `prompt.changes`, whose facts
     # the layer takes in the focus it was opened for.
     "live/system_layer.ex" => {1, [{"live/system_layer.ex", :fact}]}

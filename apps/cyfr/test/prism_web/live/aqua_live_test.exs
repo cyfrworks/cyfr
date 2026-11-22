@@ -411,10 +411,13 @@ defmodule PrismWeb.AquaLiveTest do
                       %{"home_id" => ^home, "argv" => [], "rows" => 24, "cols" => 80}, _fields},
                      5_000
 
-      # Both stand on this page: the editor, which asked, and the terminal.
+      # Both stand on this page: the editor and the terminal, which is
+      # first. Nothing is asked beside it.
       assert has_element?(view, card <> "-model")
-      lists!(fake, row, fn -> has_element?(view, failed) end, {:signed_out, @signed_out})
       session = sign_in_terminal!(view, card)
+      refute_received {:session, "open", %{"mode" => "run"}, _fields}
+      assert has_element?(view, card <> ~s( [data-test="listing-held"]))
+      refute has_element?(view, failed)
 
       assert view
              |> element("#terminal-#{session}-screen")
@@ -475,9 +478,13 @@ defmodule PrismWeb.AquaLiveTest do
       failed = card <> ~s( [data-test="listing-failed"])
       signed_out = {:signed_out, @signed_out}
 
+      held = card <> ~s( [data-test="listing-held"])
+
+      # The terminal comes, and nothing is asked beside it.
       signed_in_again = fn view ->
         view |> element(sign_in) |> render_click()
-        lists!(fake, row, fn -> has_element?(view, failed) end, signed_out)
+        settled(fn -> has_element?(view, held) end, "the ask held")
+        settled(fn -> has_element?(view, card <> ~s( [id$="-screen"])) end, "the terminal")
       end
 
       {view, _html} = mount_athanor(conn, "/aqua")
@@ -3634,6 +3641,264 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # A write is decided on the member as it is stored when it lands: the
+    # model and the effort are checked together and written together, so an
+    # editor left open puts no effort of the last model on the next.
+    test "an edit left open cannot put the previous model's effort on its successor",
+         %{conn: conn, ctx: ctx} do
+      fake = backends!()
+      row = brain_row!(ctx, "claude-code")
+      :ok = member!(ctx, "claude-code")
+      effort = "#aqua-card-claude-code-option-effort"
+      {view, _html} = mount_athanor(conn, "/aqua")
+      edit!(view, "claude-code")
+
+      listing = [
+        %{"id" => "opus", "name" => "Opus", "efforts" => ["low", "max"]},
+        %{"id" => "haiku", "name" => "Haiku", "efforts" => []}
+      ]
+
+      lists!(fake, row, fn -> has_element?(view, effort <> " option[value=max]") end, listing)
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "claude-code",
+          "model" => "haiku"
+        })
+
+      view |> form(effort, %{"value" => "max"}) |> render_change()
+      {:ok, saved} = get_agent(ctx, "claude-code")
+      assert {saved["model"], saved["options"]["effort"]} == {"haiku", nil}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # A write needs the list this opening of the editor asked for and got.
+    # An earlier opening's, a pending ask and a failed one authorize
+    # nothing, however the pick reaches the page.
+    test "only the list this opening asked for authorizes a write", %{conn: conn, ctx: ctx} do
+      fake = backends!()
+      row = brain_row!(ctx, "claude-code")
+      :ok = member!(ctx, "claude-code")
+      card = "#aqua-card-claude-code"
+      {view, _html} = mount_athanor(conn, "/aqua")
+      edit!(view, "claude-code")
+      lists!(fake, row, fn -> has_element?(view, card <> "-model option[value=haiku]") end)
+      view |> element(card <> "-done") |> render_click()
+      {:ok, before} = get_agent(ctx, "claude-code")
+
+      edit!(view, "claude-code")
+
+      picks = [
+        {"editor_set_model",
+         %{"brain" => "program", "program" => "claude-code", "value" => "haiku"}},
+        {"editor_set_option", %{"option" => "effort", "value" => "low"}}
+      ]
+
+      pick = fn {event, sent} ->
+        html =
+          view
+          |> with_target("#aqua-agents")
+          |> render_change(event, Map.put(sent, "name", "claude-code"))
+
+        assert get_agent(ctx, "claude-code") == {:ok, before}
+        assert html =~ "Try again"
+      end
+
+      # Pending, then refused.
+      Enum.each(picks, pick)
+
+      lists!(
+        fake,
+        row,
+        fn -> has_element?(view, card <> " [data-test=listing-failed]") end,
+        {:refused, "Could not list models"}
+      )
+
+      Enum.each(picks, pick)
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # The page keeps no copy of what is known: it reads it as it renders,
+    # its own event or a card's alike.
+    for press <- ["#aqua-setup summary", "#aqua-card-claude-code-edit"] do
+      @tag press: press
+      test "an open page stops greying the member once the evidence expires, seen at #{press}",
+           %{conn: conn, ctx: ctx, press: press} do
+        fake = backends!()
+        row = brain_row!(ctx, "claude-code")
+        :ok = member!(ctx, "claude-code")
+
+        key =
+          Arca.Cache.Keys.brain_known(Sanctum.Context.actor(ctx), row.id, row.epoch, :account)
+
+        :ok = Arca.Cache.put(key, :signed_out, 600_000)
+        {view, _html} = mount_athanor(conn, "/aqua")
+        settled(fn -> has_element?(view, "#aqua-card-claude-code.opacity-60") end, "signed out")
+        :ok = Arca.Cache.put(key, :signed_out, 0)
+        assert :miss == Arca.Cache.get(key)
+        view |> element(press) |> render_click()
+        refute has_element?(view, "#aqua-card-claude-code.opacity-60")
+
+        if press =~ "-edit" do
+          option = ~s(#aqua-card-claude-code-model option[value="haiku"])
+          lists!(fake, row, fn -> has_element?(view, option) end)
+        end
+
+        Cyfr.Test.Sandbox.end_views()
+      end
+    end
+
+    # Sign in shows the terminal where the person pressed, one that
+    # another panel of the page already shows among them.
+    test "an existing terminal is shown in the editor that requested it", %{conn: conn, ctx: ctx} do
+      backends!()
+      row = brain_row!(ctx, "claude-code")
+      :ok = member!(ctx, "claude-code")
+      card = "#aqua-card-claude-code"
+      key = Arca.Cache.Keys.brain_known(Sanctum.Context.actor(ctx), row.id, row.epoch, :account)
+      :ok = Arca.Cache.put(key, :signed_out, 600_000)
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      settled(fn -> has_element?(view, card <> " [data-test=sign-in]") end, "signed out")
+      view |> element("#aqua-setup-brain-claude-code input") |> render_click()
+
+      view
+      |> element("#aqua-setup-step-program-claude-code [data-test=sign-in]")
+      |> render_click()
+
+      session = sign_in_terminal!(view, "#aqua-setup")
+      [was] = screen_ids(view)
+
+      view |> element(card <> " [data-test=sign-in]") |> render_click()
+      assert sign_in_terminal!(view, card) == session
+      refute has_element?(view, ~s(#aqua-setup [data-test="terminal"]))
+
+      # A frame of its own, so its hook stands again and attaches.
+      assert [screen] = screen_ids(view)
+      refute screen == was
+
+      assert view
+             |> element("#" <> screen)
+             |> render_hook("terminal_ready", %{"session" => session, "rows" => 30, "cols" => 90})
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # The page asks nothing while that terminal runs, so it stays where
+    # the person can end it when its card is gone.
+    test "a terminal whose card is gone stays on the page", %{conn: conn, ctx: ctx} do
+      backends!()
+      row = brain_row!(ctx, "claude-code")
+      :ok = member!(ctx, "claude-code")
+      card = "#aqua-card-claude-code"
+      key = Arca.Cache.Keys.brain_known(Sanctum.Context.actor(ctx), row.id, row.epoch, :account)
+      :ok = Arca.Cache.put(key, :signed_out, 600_000)
+      {view, _html} = mount_athanor(conn, "/aqua")
+      settled(fn -> has_element?(view, card <> " [data-test=sign-in]") end, "signed out")
+      view |> element(card <> " [data-test=sign-in]") |> render_click()
+      session = sign_in_terminal!(view, card)
+
+      view |> element(card <> " button[phx-click=editor_delete]") |> render_click()
+      settled(fn -> not has_element?(view, card) end, "the card gone")
+      assert sign_in_terminal!(view, "#aqua-agents") == session
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Sign in is one thing at a time: an ask already out is let end, then
+    # the terminal opens before any other, and nothing is asked until it
+    # ends, whatever is pressed meanwhile.
+    test "Sign in asks nothing beside its terminal", %{conn: conn, ctx: ctx} do
+      fake = backends!()
+      claude = brain_row!(ctx, "claude-code")
+      codex = brain_row!(ctx, "openai-codex")
+      :ok = member!(ctx, "claude-code")
+      :ok = member!(ctx, "openai-codex")
+      card = "#aqua-card-claude-code"
+      home = claude.id
+      key = Arca.Cache.Keys.brain_known(Sanctum.Context.actor(ctx), home, claude.epoch, :account)
+      :ok = Arca.Cache.put(key, :signed_out, 600_000)
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      settled(fn -> has_element?(view, card <> " [data-test=sign-in]") end, "signed out")
+      edit!(view, "claude-code")
+      assert_receive {:session, "open", %{"mode" => "run", "home_id" => ^home}, _fields}, 5_000
+
+      view |> element(card <> " [data-test=sign-in]") |> render_click()
+      refute_receive {:session, "open", %{"mode" => "terminal"}, _fields}, 500
+
+      screen = card <> ~s( [id$="-screen"][data-session])
+      lists!(fake, claude, fn -> has_element?(view, screen) end, {:signed_out, @signed_out})
+
+      edit!(view, "openai-codex")
+      refute_receive {:session, "open", %{"mode" => "run"}, _fields}, 500
+
+      for held <- [card, "#aqua-card-openai-codex"] do
+        assert has_element?(
+                 view,
+                 held <> ~s( [data-test="listing-held"]),
+                 "It is asked for its list when the sign-in's terminal ends."
+               )
+      end
+
+      Cyfr.Test.ScriptedBackends.end_sessions(fake, home)
+
+      lists_each!(fake, [claude, codex], fn ->
+        has_element?(view, card <> ~s(-model option[value="haiku"])) and
+          has_element?(view, ~s(#aqua-card-openai-codex-model option[value="haiku"]))
+      end)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # A listing whose task is lost ends as failed, with Try again, and the
+    # next press is asked.
+    test "a lost listing task fails its listing and leaves Try again", %{conn: conn, ctx: ctx} do
+      fake = backends!()
+      row = brain_row!(ctx, "claude-code")
+      :ok = member!(ctx, "claude-code")
+      card = "#aqua-card-claude-code"
+      {view, _html} = mount_athanor(conn, "/aqua")
+      settled(fn -> has_element?(view, card <> "-edit") end, "the card")
+      before = Process.list()
+      edit!(view, "claude-code")
+      home = row.id
+      assert_receive {:session, "open", %{"mode" => "run", "home_id" => ^home}, _fields}, 5_000
+
+      assert [task] =
+               for(
+                 pid <- Process.list() -- before,
+                 {:dictionary, held} <- [Process.info(pid, :dictionary)],
+                 match?([page | _] when page == view.pid, held[:"$callers"]),
+                 do: pid
+               )
+
+      # Lost alone, as a task lost after it let the page go is.
+      :sys.replace_state(view.pid, fn state ->
+        Process.unlink(task)
+        state
+      end)
+
+      Process.exit(task, :kill)
+
+      settled(
+        fn -> has_element?(view, card <> ~s( [data-test="listing-failed"]), "did not answer") end,
+        "the lost listing said"
+      )
+
+      # The lost caller's holder still waits on its driver, which answers
+      # it: the retry's is then the row's one session.
+      over = fn ->
+        not Enum.any?(Cyfr.Test.ScriptedBackends.sessions(fake, home), fn {_id, session} ->
+          session.running
+        end)
+      end
+
+      lists!(fake, row, over)
+      view |> element(card <> ~s( [data-test="list-again"])) |> render_click()
+      lists!(fake, row, fn -> has_element?(view, card <> ~s(-model option[value="haiku"])) end)
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     # A real sign-out greys the member's card and its "Runs on" entry, and
     # Aqua's card when it runs on that member, each with Sign in and
     # Change. A page that only reads says it, and asks nothing.
@@ -3899,6 +4164,15 @@ defmodule PrismWeb.AquaLiveTest do
 
     assert "trm_" <> _ = session
     session
+  end
+
+  # The id of each terminal screen the page shows.
+  defp screen_ids(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([id$="-screen"][data-session]))
+    |> LazyHTML.attribute("id")
   end
 
   defp ended?(view, card), do: has_element?(view, card <> ~s( [data-test="terminal-ended"]))

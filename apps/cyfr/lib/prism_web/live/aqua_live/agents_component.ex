@@ -33,13 +33,21 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   editor and for the model picked in the form; a program's editor offers
   what its program lists when asked (`Aqua.program_listing/2`): its
   models, the efforts of the one chosen, and its access choices in the
-  driver's words, closed while the driver offers one. An edit that needs
-  a list which did not come is refused with Try again, and what is stored
-  stands. A card is greyed, with Sign in and Change, only while its
-  program is known signed out (`Aqua.known_program/2`), and offers to
-  install the program while the athanor has no row of that name,
-  prefilled from the program brain's definition
-  (`Opus.Programs.Definition.brains/0`). Every write goes
+  driver's words, closed while the driver offers one.
+
+  A write is decided on the member as it is stored then, read at the
+  write, and on a list asked in this opening of its editor. The model and
+  the options that list allows are checked together and written
+  together. An earlier opening's list names what is shown and authorizes
+  nothing, and neither does an ask pending or failed: the edit is refused
+  with Try again, and what is stored stands.
+
+  A card is greyed, with Sign in and Change, only while its program is
+  known signed out (`Aqua.known_program/2`), and offers to install the
+  program while the athanor has no row of that name, prefilled from the
+  program brain's definition (`Opus.Programs.Definition.brains/0`). A
+  Sign in's terminal stands in the card it was pressed on, and below the
+  crew once that card is gone. Every write goes
   through the `aqua` tool, the gate every writer of an agent file goes
   through; a write that changes a file's provenance asks the page to
   re-read it (`{:refresh, :agents}`), since the chips and the removal
@@ -89,16 +97,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      # key are read with the open editors'.
      |> assign(:making, false)
      |> assign(:draft, %{})
-     # The editors a press opened, by member, each with the program or key
-     # chosen in it to move the member to, or nil.
+     # The editors a press opened, by member: each with the program or key
+     # chosen in it to move the member to (`to`, or nil) and the programs
+     # this opening asked, whose lists alone authorize its writes.
      |> assign(:editing, %{})
-     |> assign(:known, %{})
-     |> assign(:runnable, [])
+     |> assign(:standing, [])
      |> assign(:terminal, nil)
      |> assign(:program_listings, %{})
      |> assign(:installing, nil)
-     |> assign(:setting_up, nil)
-     |> assign(:set_up_refused, %{})
      |> assign(:editor_editing_prompt, nil)
      |> assign(:editor_prompt_content, "")
      |> assign(:editor_prompt_digest, nil)}
@@ -174,11 +180,22 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   def handle_event("close_editor", %{"name" => name}, socket),
     do: {:noreply, update(socket, :editing, &Map.delete(&1, name))}
 
-  # Try again.
-  def handle_event("list_again", %{"program" => program}, socket)
+  # Try again, the opening's own ask in the editor it was pressed in.
+  def handle_event("list_again", %{"program" => program} = params, socket)
       when is_binary(program) and program != "" do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       send(self(), {:ask_programs, [program]})
+      name = params["member"]
+
+      socket =
+        case socket.assigns.editing[name] do
+          %{asked: asked} = editor ->
+            update(socket, :editing, &Map.put(&1, name, %{editor | asked: [program | asked]}))
+
+          nil ->
+            socket
+        end
+
       {:noreply, socket}
     end)
   end
@@ -261,8 +278,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       # Back to what the member is on moves nothing, so needs no connection.
       if stored? or match?({:ok, _named}, named(harness, socket)) do
         ask_chosen(harness)
-        chosen = if stored?, do: nil, else: harness
-        {:noreply, update(socket, :editing, &Map.put(&1, name, chosen))}
+        editor = Map.get(socket.assigns.editing, name, %{to: nil, asked: []})
+
+        asked =
+          case harness do
+            "program:" <> program -> [program | editor.asked]
+            _key -> editor.asked
+          end
+
+        editor = %{to: if(stored?, do: nil, else: harness), asked: asked}
+        {:noreply, update(socket, :editing, &Map.put(&1, name, editor))}
       else
         send(self(), {:refresh, :setup})
         {:noreply, put_flash(socket, :error, @not_connected)}
@@ -504,10 +529,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # One brain option set, or taken off (an empty value: the brain's own
-  # default). The value is cast to the kind the brain declares — the
-  # declaration the page read, never the wire's word — and sent as a
-  # one-option patch the `aqua` door applies under its lock, so an edit of
-  # another option made elsewhere at the same moment is kept.
+  # default). The member is read as it is stored, the value checked
+  # against what the opening's list, or the brain's `describe`, declares
+  # for that model and cast to its kind, never the wire's word, and the
+  # two written together: the brain and model read with a one-option patch
+  # the `aqua` door applies under its lock, so an edit of another option
+  # made elsewhere at the same moment is kept.
   def handle_event(
         "editor_set_option",
         %{"name" => name, "option" => option, "value" => value},
@@ -515,18 +542,26 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       ) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       ctx = socket.assigns.context
-      declared = declared_option(socket, name, option)
 
-      with {:ok, cast} <- cast_option(declared, value),
-           {:ok, _} <-
-             call_aqua(ctx, %{
-               "action" => "update",
-               "name" => name,
-               "options_patch" => %{option => cast}
-             }) do
-        send(self(), {:refresh, :agents})
-        {:noreply, socket}
-      else
+      result =
+        with {:ok, stored} <- stored_member(ctx, name),
+             {:ok, cast} <- cast_option(declared_option(socket, name, stored, option), value) do
+          call_aqua(ctx, %{
+            "action" => "update",
+            "name" => name,
+            "program" => stored["program"],
+            "catalyst_ref" => stored["catalyst_ref"],
+            "model" => stored["model"],
+            "options_patch" => %{option => cast}
+          })
+        end
+
+      send(self(), {:refresh, :agents})
+
+      case result do
+        {:ok, _written} ->
+          {:noreply, socket}
+
         {:refused, sentence} ->
           {:noreply, put_flash(socket, :error, sentence)}
 
@@ -536,71 +571,26 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # Sign in is the person's start of the program: it opens the member's
-  # editor and the program's terminal on this page, the person's own
-  # running one of the row of that name, the one its install opened among
-  # them, so one kept folder never runs two of the program at once from
-  # here; only when none runs does it open one, through the gate like the
-  # Programs page's Open, at a default size the frame corrects when it
-  # attaches. The page asks the program again when that terminal ends. A
-  # refusal stays on the card in the gate's words, or is the section's
-  # flash for a Sign in of the setup's.
+  # Sign in opens the member's editor and asks nothing: the page opens the
+  # program's terminal where it was pressed, and asks when that ends. That
+  # ask is this opening's.
   def handle_event("sign_in", %{"program" => program} = params, socket)
-      when is_binary(program) do
-    CyfrWeb.ContextGuard.guard(socket, fn
-      %{assigns: %{setting_up: nil}} = socket ->
-        ctx = socket.assigns.context
-        tag = CyfrWeb.ContextGuard.capture(ctx)
-        open = %{"name" => program, "rows" => 24, "cols" => 80}
-        member = params["member"]
-        socket = if is_binary(member), do: open_editor(socket, member), else: socket
+      when is_binary(program) and program != "" do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      send(self(), {:sign_in, program, params["panel"]})
 
-        {:noreply,
-         socket
-         |> assign(:setting_up, program)
-         |> assign(:set_up_refused, Map.delete(socket.assigns.set_up_refused, program))
-         |> start_async(
-           :set_up_program,
-           fn ->
-             {tag, {program, member},
-              running_terminal(ctx, program) ||
-                PrismWeb.Ops.run_to_end(fn ->
-                  PrismWeb.Ops.call_tool(ctx, "mcp_servers/open", open)
-                end)}
-           end,
-           supervisor: Prism.TaskSupervisor
-         )}
+      case params["member"] do
+        member when is_binary(member) ->
+          editor = %{to: nil, asked: [program]}
+          {:noreply, update(socket, :editing, &Map.put(&1, member, editor))}
 
-      socket ->
-        {:noreply, socket}
+        _setup ->
+          {:noreply, socket}
+      end
     end)
   end
 
-  # The person's own running terminal of the row named `program`, the
-  # oldest, as the open that started it answers; nil when none runs or
-  # the sessions cannot be read, and then Sign in opens one.
-  defp running_terminal(ctx, program) do
-    case Opus.Programs.running(ctx) do
-      {:ok, sessions} ->
-        Enum.find_value(sessions, fn
-          %{by: :person, name: ^program, session: session} -> {:ok, %{session: session}}
-          _other -> nil
-        end)
-
-      {:error, _unread} ->
-        nil
-    end
-  end
-
   @impl true
-  def handle_async(:set_up_program, {:ok, {tag, whose, result}}, socket) do
-    socket = assign(socket, :setting_up, nil)
-    CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, set_up(&1, whose, result)})
-  end
-
-  # Only the node's shutdown stops a start (`PrismWeb.Ops.run_to_end/1`).
-  def handle_async(:set_up_program, {:exit, _reason}, socket), do: {:noreply, socket}
-
   def handle_async(:brain_options, {:ok, {tag, options}}, socket),
     do:
       CyfrWeb.ContextGuard.deliver(
@@ -676,7 +666,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       send(self(), {:agents_read, brains_read(soul, crew, status)})
     end
 
+    # Options read of a brain or model a member is no longer on are none
+    # of the one it is on now.
+    stood = Map.new(socket.assigns.agents, &{&1["name"], brain_of(&1)})
+    moved = for a <- agents, stood[a["name"]] != brain_of(a), do: a["name"]
+
     socket
+    |> update(:brain_options, &Map.drop(&1, moved))
     |> assign(:agents, agents)
     |> assign(:agents_unread, unread)
     |> assign(:soul, soul)
@@ -719,7 +715,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           }
         ),
       unconnected: for(m <- crew, not m["disabled"], not ready?.(m["name"]), do: m["name"]),
-      programs: for(m <- crew, program = program_of(m), uniq: true, do: program),
       listable:
         for(
           m <- crew,
@@ -730,6 +725,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         )
     }
   end
+
+  defp brain_of(agent), do: Map.take(agent, ~w(program catalyst_ref model))
 
   defp state_of({state, _brain}), do: state
   defp state_of(nil), do: nil
@@ -860,6 +857,22 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp offers(_status, _agent), do: []
 
   @doc """
+  What is known now of each program in `programs`, the ones whose row
+  stands (`Aqua.known_program/2`). Read as the page and the roster render,
+  and kept by neither, so it outlives nothing.
+  """
+  @spec known(term(), [String.t()]) :: map()
+  def known(ctx, programs),
+    do: Map.new(programs, &{&1, Aqua.known_program(ctx, %{"program" => &1})})
+
+  @doc """
+  The programs of `programs` a member can be put on: each but those known
+  signed out.
+  """
+  @spec runnable([String.t()], map()) :: [String.t()]
+  def runnable(programs, known), do: Enum.reject(programs, &signed_out?(known, &1))
+
+  @doc """
   Whether the program named `program` is known signed out
   (`Aqua.known_program/2`), the one thing that greys: never one nothing
   is known of, and never an error's reading.
@@ -940,37 +953,21 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp signs_in?(%{"program" => program}) when is_binary(program), do: true
   defp signs_in?(_agent), do: false
 
-  defp set_up(socket, {program, member}, {:ok, %{session: session}}) do
-    send(self(), {:sign_in_terminal, program, member, session})
-    socket
-  end
-
-  defp set_up(socket, {_program, nil}, {:error, reason}),
-    do: put_flash(socket, :error, error_message(reason))
-
-  defp set_up(socket, {program, _member}, {:error, reason}) do
-    refused = Map.put(socket.assigns.set_up_refused, program, error_message(reason))
-    assign(socket, :set_up_refused, refused)
-  end
-
-  # An editor's opening asks for its program's list, while the row stands,
-  # and reads a key's options.
+  # An editor's opening asks for its program's list, while the row
+  # stands, and reads a key's options afresh: what an earlier opening read
+  # authorizes nothing in this one.
   defp open_editor(socket, name) do
-    socket = update(socket, :editing, &Map.put(&1, name, nil))
     %{agents: agents, model_status: status} = socket.assigns
     program = program_of(member(socket, name))
+    asked = if program && match?({:ready, _}, status[name]), do: [program], else: []
 
-    case {program, status[name]} do
-      {nil, _state} ->
-        load_brain_options(socket, agents, status)
+    socket =
+      socket
+      |> update(:editing, &Map.put(&1, name, %{to: nil, asked: asked}))
+      |> update(:brain_options, &Map.delete(&1, name))
 
-      {program, {:ready, _brain}} ->
-        send(self(), {:ask_programs, [program]})
-        socket
-
-      {_program, _not_standing} ->
-        socket
-    end
+    if asked != [], do: send(self(), {:ask_programs, asked})
+    if program, do: socket, else: load_brain_options(socket, agents, status)
   end
 
   # A program chosen in an editor is asked for its list.
@@ -1025,27 +1022,40 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # Helpers
   # ============================================================================
 
-  # The option as this page read its declaration: a catalyst's from the
-  # brain's `describe`, a program's from its listing for the member's
-  # model, its access among them, `:unlisted` while that list did not
-  # come.
-  defp declared_option(socket, name, option) do
-    agent = member(socket, name)
-
+  # The option as it is declared for `stored`, the member as the write
+  # found it: a program's by the list this opening asked for that program,
+  # for the stored model, its access among them; a key's by the `describe`
+  # read for the brain and model the member still holds. `:unlisted` while
+  # neither stands.
+  defp declared_option(socket, name, stored, option) do
     declared =
-      case program_of(agent) do
+      case program_of(stored) do
         nil ->
-          Map.get(socket.assigns.brain_options, name, [])
+          if brain_of(stored) == brain_of(member(socket, name)),
+            do: Map.get(socket.assigns.brain_options, name, []),
+            else: :unlisted
 
         program ->
-          case listed(socket.assigns.program_listings, program) do
+          case opening_list(
+                 socket.assigns.editing[name],
+                 socket.assigns.program_listings,
+                 program
+               ) do
             nil -> :unlisted
-            listing -> program_options(listing, agent["model"])
+            listing -> program_options(listing, stored["model"])
           end
       end
 
     if declared == :unlisted, do: :unlisted, else: Enum.find(declared, &(&1["name"] == option))
   end
+
+  # The list this opening of an editor asked for and got: never an earlier
+  # opening's, a pending ask's or a failed one's.
+  defp opening_list(%{asked: asked}, listings, program) do
+    if program in asked, do: listed(listings, program)
+  end
+
+  defp opening_list(_closed, _listings, _program), do: nil
 
   # An empty value takes the option off; any other is cast to its kind.
   defp cast_option(:unlisted, _value), do: {:refused, @unlisted}
@@ -1089,44 +1099,66 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         do: {option, nil}
   end
 
-  # A pick's one write: the member's new brain and model (`changes`) and a
-  # patch taking off each option `declared` does not list, computed from
-  # the member's options as they stand when the pick lands, read through
-  # the door, not the page's copy. A read that fails writes nothing, and
-  # so does a declaration that did not come while the member holds an
-  # option it would decide.
-  # A value landing between this read and the write is refused by the
-  # member's turn with its sentence, and the person sets it on the card.
-  defp moved(socket, name, declared, changes) do
-    ctx = socket.assigns.context
-
-    with {:ok, %{} = member} <- call_aqua(ctx, %{"action" => "get", "name" => name}),
-         {:ok, patch} <- patched(member[:options] || %{}, declared) do
-      call_aqua(
-        ctx,
-        Map.merge(changes, %{"action" => "update", "name" => name, "options_patch" => patch})
-      )
-    end
-  end
-
+  # A pick's one write, decided on the member as it is stored when the
+  # pick lands (`stored_member/2`): its new brain and model beside each
+  # option that model declares, at the value held or none, and every other
+  # option it does not declare taken off, so what was checked together is
+  # written together. A read that fails writes nothing, and so does a
+  # declaration that did not come while the member holds an option it
+  # would decide.
   defp patched(options, :unlisted) when map_size(options) > 0, do: :unlisted
   defp patched(_none, :unlisted), do: {:ok, %{}}
-  defp patched(options, declared), do: {:ok, dropped_options(options, declared)}
+
+  defp patched(options, declared) do
+    held = Map.new(declared, fn %{"name" => option} -> {option, options[option]} end)
+    {:ok, Map.merge(held, dropped_options(options, declared))}
+  end
 
   defp member(socket, name),
     do: Enum.find(socket.assigns.agents, %{"name" => name}, &(&1["name"] == name))
 
+  # The member as it is stored now, in the roster's projection.
+  defp stored_member(ctx, name) do
+    with {:ok, %{} = file} <- call_aqua(ctx, %{"action" => "get", "name" => name}) do
+      {:ok,
+       %{
+         "program" => file[:program],
+         "catalyst_ref" => file[:catalyst_ref],
+         "model" => file[:model],
+         "options" => file[:options] || %{}
+       }}
+    end
+  end
+
   defp set_model(socket, name, harness, model) do
+    ctx = socket.assigns.context
+
     result =
-      with {:ok, named} <- target(socket, name, harness),
-           {:ok, declared} <- editable(socket, harness, named, model),
-           do: moved(socket, name, declared, Map.put(named, "model", model))
+      with {:ok, stored} <- stored_member(ctx, name),
+           {:ok, named} <- target(socket, stored, harness),
+           {:ok, declared} <- editable(socket, name, harness, named, model),
+           {:ok, patch} <- patched(stored["options"], declared) do
+        call_aqua(
+          ctx,
+          Map.merge(named, %{
+            "action" => "update",
+            "name" => name,
+            "model" => model,
+            "options_patch" => patch
+          })
+        )
+      end
 
     send(self(), {:refresh, :agents})
 
     case result do
       {:ok, _written} ->
-        update(socket, :editing, &Map.replace(&1, name, nil))
+        update(socket, :editing, fn editing ->
+          case editing[name] do
+            nil -> editing
+            editor -> Map.put(editing, name, %{editor | to: nil})
+          end
+        end)
 
       :error ->
         send(self(), {:refresh, :setup})
@@ -1145,39 +1177,46 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # The brain an edit leaves the member on: the one it is on as it is, any
-  # other only while that one is connected here (`named/2`).
-  defp target(socket, name, harness) do
-    if harness == harness_of(member(socket, name)),
+  # The brain an edit leaves the member on: the one it is stored on as it
+  # is, any other only while that one is connected here (`named/2`).
+  defp target(socket, stored, harness) do
+    if harness == harness_of(stored),
       do: as_named(harness, socket.assigns[:catalyst_refs] || %{}),
       else: named(harness, socket)
   end
 
-  # What an edit may write for `model` on that brain: a program's, by its
-  # listing, its own default taking no effort; a key's, by a model its
-  # provider listed and that model's `describe`.
-  defp editable(socket, "program:" <> program, _named, model) do
-    case listed(socket.assigns.program_listings, program) do
-      nil ->
-        :unlisted
-
-      listing ->
-        if is_nil(model) or Enum.any?(listing.models, &(&1.id == model)),
-          do: {:ok, program_options(listing, model)},
-          else: :not_offered
-    end
+  # What an edit may write for `model` on that brain: a program's, by the
+  # list this opening asked for, its own default taking no effort; a
+  # key's, by a model its provider listed and that model's `describe`.
+  defp editable(socket, name, "program:" <> program, _named, model) do
+    opening_list(socket.assigns.editing[name], socket.assigns.program_listings, program)
+    |> listed_options(model)
   end
 
-  defp editable(socket, "catalyst:" <> provider, named, model) do
+  defp editable(socket, _name, "catalyst:" <> provider, named, model) do
     if model in List.wrap(socket.assigns.models_by_provider[provider]),
       do: {:ok, described(socket.assigns.context, Map.put(named, "model", model))},
       else: :not_offered
   end
 
+  defp listed_options(nil, _model), do: :unlisted
+
+  defp listed_options(listing, model) do
+    if is_nil(model) or Enum.any?(listing.models, &(&1.id == model)),
+      do: {:ok, program_options(listing, model)},
+      else: :not_offered
+  end
+
   # What Make may write: a listed model, and the options the form showed
   # for it.
-  defp makeable(socket, "program:" <> _name = brain, named, model),
-    do: editable(socket, brain, named, model)
+  defp makeable(socket, "program:" <> program = brain, _named, model) do
+    # The form's own ask, made as that program was chosen in it.
+    listing =
+      if socket.assigns.draft["brain"] == brain,
+        do: listed(socket.assigns.program_listings, program)
+
+    listed_options(listing, model)
+  end
 
   defp makeable(socket, "catalyst:" <> provider, _named, model) do
     if model in List.wrap(socket.assigns.models_by_provider[provider]),
@@ -1272,7 +1311,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
     offered? =
       (assigns[:models_by_provider] || %{})
-      |> brains(refs, assigns.runnable, assigns[:providers])
+      |> brains(
+        refs,
+        runnable(assigns.standing, known(assigns.context, assigns.standing)),
+        assigns[:providers]
+      )
       |> Enum.any?(&(&1.value == value))
 
     with true <- offered?,
@@ -1408,14 +1451,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     if is_binary(model) and model not in listed, do: listed ++ [model], else: listed
   end
 
-  # The models a program brain's card offers: the ones its program lists,
-  # and the member's own model when the listing does not name it (or was
-  # not read), so the choice shows what the file holds.
-  defp program_choices(listed, model) do
+  # The models a program brain's card offers: the ones its program listed
+  # for this opening, and the member's own model when that list does not
+  # name it (or has not come), by the name last known, so the choice shows
+  # what the file holds.
+  defp program_choices(listed, model, known) do
     listed = listed || []
+    named = (known && known.listing) || %{models: []}
 
     if is_binary(model) and not Enum.any?(listed, &(&1.id == model)),
-      do: listed ++ [%{id: model, name: model}],
+      do: listed ++ [%{id: model, name: named_choice(named.models, model)}],
       else: listed
   end
 
@@ -1493,14 +1538,18 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   @impl true
   def render(assigns) do
+    # Read here, for a render the roster makes of its own too.
+    known = known(assigns.context, assigns.standing)
+
     assigns =
-      assign(
-        assigns,
+      assigns
+      |> assign(:known, known)
+      |> assign(
         :brains,
         brains(
           assigns[:models_by_provider] || %{},
           assigns[:catalyst_refs] || %{},
-          assigns.runnable,
+          runnable(assigns.standing, known),
           assigns[:providers]
         )
       )
@@ -1556,6 +1605,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         offers={[]}
         signs_in?={signs_in?(@soul)}
         standing={standing(Map.get(@model_status, @soul["name"]), @soul, @known)}
+        terminal={panel_terminal(@terminal, @soul["name"])}
         browser={@browser}
         crew={@crew}
         known={@known}
@@ -1579,8 +1629,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           signs_in?={signs_in?(member)}
           standing={standing(Map.get(@model_status, member["name"]), member, @known)}
           editing={Map.has_key?(@editing, member["name"])}
-          moving_to={@editing[member["name"]]}
-          terminal={if match?(%{}, @terminal) and @terminal.member == member["name"], do: @terminal}
+          editor={@editing[member["name"]]}
+          moving_to={get_in(@editing, [member["name"], :to])}
+          terminal={panel_terminal(@terminal, member["name"])}
           listings={@program_listings}
           known={@known}
           brains={@brains}
@@ -1597,6 +1648,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {member.reason}
         </div>
       </div>
+
+      <PrismWeb.TerminalComponent.frame
+        :if={cardless?(@terminal, @soul, @crew)}
+        terminal={@terminal}
+      />
 
       <!-- Prompt editor modal — the soul's prompt -->
       <.modal
@@ -1726,6 +1782,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :standing, :atom, default: nil
   attr :editing, :boolean, default: false
   attr :moving_to, :string, default: nil
+  attr :editor, :map, default: nil
   attr :terminal, :any, default: nil
   attr :browser, :map, default: nil
   attr :crew, :list, default: []
@@ -1886,6 +1943,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           phx-click="sign_in"
           phx-value-program={@program}
           phx-value-member={if @is_soul, do: @agent["member"], else: @agent["name"]}
+          phx-value-panel={@agent["name"]}
           phx-target={@myself}
           disabled={@setting_up != nil}
           class="text-blue-400 hover:underline disabled:opacity-50"
@@ -2114,7 +2172,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       <.listing_line
         :if={@editing && @asked}
         program={@asked}
-        listing={@listings[@asked]}
+        listing={@asked_listing}
+        member={@agent["name"]}
         myself={@myself}
       />
 
@@ -2145,7 +2204,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             The program's default
           </option>
           <option
-            :for={m <- program_choices(@program_models, @chosen_model)}
+            :for={m <- program_choices(@program_models, @chosen_model, @known[@chosen_program])}
             value={m.id}
             selected={@chosen_model == m.id}
           >
@@ -2313,6 +2372,18 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     """
   end
 
+  # The terminal in the panel where its Sign in was pressed.
+  defp panel_terminal(%{panel: panel} = terminal, panel), do: terminal
+  defp panel_terminal(_terminal, _name), do: nil
+
+  # A terminal whose card is gone (deleted, or refused) stands below the
+  # crew: the page asks nothing while it runs, so the person must still
+  # be able to end it.
+  defp cardless?(%{panel: panel}, soul, crew) when is_binary(panel),
+    do: not Enum.any?(List.wrap(soul) ++ crew, &(&1["name"] == panel))
+
+  defp cardless?(_terminal, _soul, _crew), do: false
+
   # The program or key an editor shows: the one chosen in it to move the
   # member to, else the member's.
   defp chosen("program:" <> program), do: [chosen_program: program, chosen_key: nil]
@@ -2323,8 +2394,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # program or key to move to, the member holds no model of it yet, so no
   # option is offered until one is picked.
   defp offered_here(assigns) do
-    %{agent: agent, moving_to: moving_to, chosen_program: program} = assigns
-    listing = program && listed(assigns.listings, program)
+    %{agent: agent, moving_to: moving_to, chosen_program: program, editor: editor} = assigns
+    # Only what this opening asked: another's list offers nothing here.
+    mine? = program != nil and editor != nil and program in editor.asked
+    listing = if mine?, do: listed(assigns.listings, program)
     here? = is_nil(moving_to)
     ready? = match?({:ready, _}, assigns.model_status)
 
@@ -2340,6 +2413,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       chosen_model: if(here?, do: agent["model"]),
       # An installed program is the one an editor asks.
       asked: if(not here? or ready?, do: program),
+      asked_listing: if(mine?, do: assigns.listings[program]),
       program_models: listing && listing.models,
       options_here: options,
       access: if(here? and listing, do: listing.access, else: [])
@@ -2348,6 +2422,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   attr :program, :string, required: true
   attr :listing, :any, default: nil
+  attr :member, :string, default: nil
   attr :myself, :any, default: "#aqua-agents"
 
   # Where an ask stands in an editor: being asked, or why no list came,
@@ -2357,6 +2432,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp listing_line(%{listing: :asking} = assigns) do
     ~H"""
     <p class="text-[11px] text-gray-400">Asking {program_title(@program)}…</p>
+    """
+  end
+
+  defp listing_line(%{listing: :held} = assigns) do
+    ~H"""
+    <p data-test="listing-held" class="text-[11px] text-gray-400">
+      It is asked for its list when the sign-in's terminal ends.
+    </p>
     """
   end
 
@@ -2370,6 +2453,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         type="button"
         phx-click="list_again"
         phx-value-program={@program}
+        phx-value-member={@member}
         phx-target={@myself}
         data-test="list-again"
         class="text-blue-400 hover:underline"

@@ -251,35 +251,54 @@ const unlistedAccess = "The crew member's access is not one CYFR runs Claude Cod
 // sign-in and no key it can run with, as its `initialize` answer says.
 const signedOutSentence = "Claude Code has no sign-in or key it can use; sign it in on the program's terminal, or set a key in its settings."
 
-// account is what an `initialize` answer's `account` says, as Claude Code
-// 2.1.323 answers it. Signed out is only the one shape it answers with no
-// sign-in and no key, measured on an empty folder (`tokenSource` "none",
-// no `apiKeySource` and no `subscriptionType`, `apiProvider` "firstParty").
-// Signed in is only what it names: a plan (`subscriptionType`, all a plan's
-// sign-in names), a token source, a key source, a dead key's among them,
-// or another provider. Any other answer says nothing, so a sign-in in a
-// shape not yet seen never reads signed out. Nothing of the account is
-// kept but that word.
+// providers are the providers Claude Code names as its `apiProvider`:
+// firstParty, Anthropic's own, and the others it runs on.
+var providers = map[string]bool{
+	"firstParty": true, "bedrock": true, "vertex": true, "foundry": true, "anthropicAws": true,
+	"anthropicGoogleCloud": true, "mantle": true, "gateway": true,
+}
+
+// account is what an `initialize` answer's `account` says. The answer has
+// one shape: an object whose `apiProvider` is one of providers and whose
+// `subscriptionType`, `tokenSource` and `apiKeySource` are each absent or
+// a string that is not empty, the members spelled exactly so. Anything
+// else is not known, and says nothing, so a sign-in in a shape not yet
+// seen never reads signed out.
+//
+// In that shape signed out is only what Claude Code 2.1.323 answered with
+// no sign-in and no key on an empty folder (`tokenSource` "none",
+// "firstParty", the other two absent). Signed in is only what it names: a
+// plan (all a plan's sign-in names), a token source, a key source, a dead
+// key's among them, or another provider. Nothing of the account is kept
+// but that word.
 func account(response json.RawMessage) string {
-	var r struct {
-		Account *struct {
-			Plan         *string `json:"subscriptionType"`
-			TokenSource  *string `json:"tokenSource"`
-			APIKeySource *string `json:"apiKeySource"`
-			APIProvider  *string `json:"apiProvider"`
-		} `json:"account"`
-	}
-	if json.Unmarshal(response, &r) != nil || r.Account == nil {
+	var answer, members map[string]json.RawMessage
+	if json.Unmarshal(response, &answer) != nil || json.Unmarshal(answer["account"], &members) != nil {
 		return ""
 	}
-	named := func(value *string) bool { return value != nil && *value != "" && *value != "none" }
-	a := r.Account
-	switch {
-	case named(a.Plan) || named(a.TokenSource) || named(a.APIKeySource) ||
-		(named(a.APIProvider) && *a.APIProvider != "firstParty"):
+	read := map[string]string{}
+	for _, name := range []string{"apiProvider", "subscriptionType", "tokenSource", "apiKeySource"} {
+		if raw, present := members[name]; present {
+			var value *string
+			if json.Unmarshal(raw, &value) != nil || value == nil || *value == "" {
+				return ""
+			}
+			read[name] = *value
+		}
+	}
+	provider := read["apiProvider"]
+	if !providers[provider] {
+		return ""
+	}
+	if provider != "firstParty" {
 		return brainwire.SignedIn
-	case a.TokenSource != nil && *a.TokenSource == "none" && a.APIKeySource == nil && a.Plan == nil &&
-		a.APIProvider != nil && *a.APIProvider == "firstParty":
+	}
+	for _, name := range []string{"subscriptionType", "tokenSource", "apiKeySource"} {
+		if value, present := read[name]; present && value != "none" {
+			return brainwire.SignedIn
+		}
+	}
+	if len(read) == 2 && read["tokenSource"] == "none" {
 		return brainwire.SignedOut
 	}
 	return ""
