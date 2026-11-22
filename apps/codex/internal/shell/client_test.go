@@ -6,6 +6,7 @@ package shell
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -72,7 +73,7 @@ func device(t *testing.T, home *fakeHome, dir string, clients *memoryClients, se
 		Clients: clients, Directory: home.accounts.URL(),
 		Detect:     func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} },
 		Chip:       func() bool { return false },
-		SetupToken: func(context.Context) string { return setup },
+		SetupToken: func(context.Context) (string, http.RoundTripper) { return setup, nil },
 	})
 	if err != nil {
 		t.Fatal(err)

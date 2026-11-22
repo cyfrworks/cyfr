@@ -70,7 +70,8 @@ func (s *Service) ServedAt(origin string) {
 }
 
 func (s *Service) host() string {
-	return strings.Split(strings.TrimPrefix(s.origin, "http://"), ":")[0]
+	_, at, _ := strings.Cut(s.origin, "://")
+	return strings.Split(at, ":")[0]
 }
 
 // Log is identifier's log as kept.

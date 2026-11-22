@@ -573,7 +573,8 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return local.Shell.SetupToken(t.Context())
+		got, _ := local.Shell.SetupToken(t.Context())
+		return got
 	}
 	for _, c := range []struct {
 		name, log, exit string

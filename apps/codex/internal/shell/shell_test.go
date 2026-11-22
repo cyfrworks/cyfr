@@ -62,11 +62,11 @@ func newBoxAt(t *testing.T, home *fakeHome, dir, directory string, edit ...func(
 	cfg := Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
 		Directory: directory,
-		SetupToken: func(ctx context.Context) string {
+		SetupToken: func(ctx context.Context) (string, http.RoundTripper) {
 			if home.setupOpen(ctx) {
-				return home.setupToken
+				return home.setupToken, nil
 			}
-			return ""
+			return "", nil
 		},
 		Restart: func() { b.restarts.Add(1) },
 		Detect:  func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
@@ -1291,12 +1291,16 @@ func TestPasskey_ALostSendIsSettledOnlyByAnAnswerThatShowsTheLog(t *testing.T) {
 }
 
 // A CYFR that requires a company sign-in closes the channel 1013 with the
-// class forbidden; any other try-again close is a CYFR not reachable now.
-// The page says which, and the app's own words for the first.
+// class forbidden, one whose bound is spent with when to try again; any
+// other try-again close is a CYFR not reachable now. The page says which,
+// in the app's own words for the first two.
 func TestChannel_ACompanySignInIsToldApartFromAnUnreachableCYFR(t *testing.T) {
 	for _, tc := range []struct{ reason, want string }{
 		{"forbidden", CompanySignIn},
 		{"unavailable", "CYFR could not be reached"},
+		{"rate_limited; retry_after_s=37", "CYFR is refusing attempts for the moment. Try again in 37 seconds."},
+		{"rate_limited; retry_after_s=1", "CYFR is refusing attempts for the moment. Try again in 1 second."},
+		{"rate_limited", "CYFR could not be reached"},
 	} {
 		t.Run(tc.reason, func(t *testing.T) {
 			home := newFakeHome(t)

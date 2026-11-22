@@ -27,6 +27,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/account"
 	"github.com/cyfr/codex/internal/account/accounttest"
 	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/disk"
@@ -72,12 +73,17 @@ func newLocalApp(t *testing.T, project string) *localApp {
 }
 
 func (a *localApp) post(path, kind, body string) *httptest.ResponseRecorder {
+	return pressed(a, path, kind, body)
+}
+
+// pressed is a POST as the device's own pages send one.
+func pressed(h http.Handler, path, kind, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, shell.Origin+path, strings.NewReader(body))
 	r.Host = shell.Listen
 	r.Header.Set("Origin", shell.Origin)
 	r.Header.Set("Content-Type", kind)
 	w := httptest.NewRecorder()
-	a.ServeHTTP(w, r)
+	h.ServeHTTP(w, r)
 	return w
 }
 
@@ -109,14 +115,19 @@ func (a *localApp) form(path string, fields url.Values) string {
 	return a.post(path, "application/x-www-form-urlencoded", fields.Encode()).Body.String()
 }
 
-// open presses Connect at typed and takes it to the device's pages.
-func (a *localApp) open(typed, home string) {
+// open presses Connect at typed and takes it to the device's pages, main
+// told the engine's route there, proxy and resolver, when there is one.
+func (a *localApp) open(typed, home string, route ...string) {
 	a.t.Helper()
+	want := desktop.Message{Type: desktop.TypeHome, Home: home, Account: home}
+	if len(route) == 2 {
+		want.Proxy, want.Resolver = route[0], route[1]
+	}
 	done := make(chan chooserAnswer, 1)
 	go func() { done <- a.chooser("/bootstrap/connect", map[string]string{"address": typed}) }()
 	select {
 	case m := <-a.sent:
-		if m != (desktop.Message{Type: desktop.TypeHome, Home: home, Account: home}) {
+		if m != want {
 			a.t.Fatalf("main heard %+v", m)
 		}
 	case got := <-done:
@@ -152,16 +163,25 @@ func (a *localApp) refused(home, words string) {
 // connection, answering the passphrase that unlocks it.
 func (a *localApp) makeAccount() string {
 	a.t.Helper()
-	drawn := pageCode.FindStringSubmatch(a.form("/passphrase", nil))
-	if drawn == nil {
-		a.t.Fatal("no passphrase was drawn")
+	return makeAccountOn(a.t, a)
+}
+
+// makeAccountOn is makeAccount on the device's pages h serves.
+func makeAccountOn(t *testing.T, h http.Handler) string {
+	t.Helper()
+	form := func(path string, fields url.Values) string {
+		return pressed(h, path, "application/x-www-form-urlencoded", fields.Encode()).Body.String()
 	}
-	page := a.form("/setup", url.Values{"name": {"alice"}, "secret": {drawn[1]}, "again": {drawn[1]}})
+	drawn := pageCode.FindStringSubmatch(form("/passphrase", nil))
+	if drawn == nil {
+		t.Fatal("no passphrase was drawn")
+	}
+	page := form("/setup", url.Values{"name": {"alice"}, "secret": {drawn[1]}, "again": {drawn[1]}})
 	proof := pageProof.FindStringSubmatch(page)
 	if proof == nil {
-		a.t.Fatalf("setup reached no recovery code:\n%s", page)
+		t.Fatalf("setup reached no recovery code:\n%s", page)
 	}
-	a.form("/saved", url.Values{"proof": {proof[1]}})
+	form("/saved", url.Values{"proof": {proof[1]}})
 	return drawn[1]
 }
 
@@ -174,6 +194,46 @@ type listening struct {
 	conns  int
 	asked  []string
 	hellos chan map[string]any
+	// admitting is the address this CYFR admits a hello at, "" when it
+	// refuses each; connects is each client it was then sent a connect by.
+	admitting string
+	connects  chan map[string]any
+}
+
+// admit answers hello as the CYFR named l.admitting does one it takes,
+// and hears the connect that follows on the same connection.
+func (l *listening) admit(ctx context.Context, conn *websocket.Conn, hello map[string]any) {
+	send := func(m map[string]any) bool {
+		m["protocol"] = shell.DeviceProtocol
+		raw, err := json.Marshal(m)
+		return err == nil && conn.Write(ctx, websocket.MessageText, raw) == nil
+	}
+	read := func() map[string]any {
+		var m map[string]any
+		if _, raw, err := conn.Read(ctx); err != nil || json.Unmarshal(raw, &m) != nil {
+			return nil
+		}
+		return m
+	}
+	soon := time.Now().Add(time.Minute).UnixMilli()
+	if !send(map[string]any{"type": "sign_in_request", "request": map[string]any{
+		"protocol": account.SignInProtocol, "purpose": "sign_in", "audience": l.admitting,
+		"challenge": strings.Repeat("A", 43), "expires_at": soon, "return": l.admitting + "/login",
+	}}) || read()["type"] != "sign_in_answer" {
+		return
+	}
+	const id, athanor = "pcl_1", "ath_1"
+	if !send(map[string]any{"type": "admitted", "client_id": id,
+		"standing": map[string]any{"client_id": id, "athanor": athanor, "expires_at": soon},
+		"certificate": map[string]any{
+			"protocol": shell.CertificateProtocol, "kid": hello["kid"], "client_id": id,
+			"identifier": hello["identifier"], "athanor": athanor, "audience": l.admitting, "expires_at": soon,
+		}}) {
+		return
+	}
+	if connect := read(); connect["type"] == "connect" {
+		l.connects <- connect
+	}
 }
 
 func (l *listening) reached() (conns, requests int) {
@@ -184,7 +244,7 @@ func (l *listening) reached() (conns, requests int) {
 
 func newListening(t *testing.T, handler http.Handler) *listening {
 	t.Helper()
-	l := &listening{hellos: make(chan map[string]any, 8)}
+	l := &listening{hellos: make(chan map[string]any, 8), connects: make(chan map[string]any, 8)}
 	l.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		l.mu.Lock()
 		l.asked = append(l.asked, r.Host+r.URL.Path)
@@ -200,6 +260,9 @@ func newListening(t *testing.T, handler http.Handler) *listening {
 		var hello map[string]any
 		if _, raw, err := conn.Read(r.Context()); err == nil && json.Unmarshal(raw, &hello) == nil {
 			l.hellos <- hello
+			if l.admitting != "" {
+				l.admit(r.Context(), conn, hello)
+			}
 		}
 		_ = conn.Close(4401, "unauthenticated")
 	}))
@@ -240,7 +303,11 @@ func servingAccounts(t *testing.T, home string) *listening {
 // connection asks Docker several times, and a program started for each
 // call is this test binary again, about a second each under the race
 // detector.
-type folderDocker struct{ s *updateScenario }
+type folderDocker struct {
+	s *updateScenario
+	// after runs once Docker answered a call of that verb.
+	after map[string]func()
+}
 
 func (d folderDocker) Run(ctx context.Context, c access.Call) (access.Result, error) {
 	if err := ctx.Err(); err != nil {
@@ -271,6 +338,9 @@ func (d folderDocker) Run(ctx context.Context, c access.Call) (access.Result, er
 			return res, err
 		}
 	}
+	if then := d.after[c.Args[0]]; then != nil {
+		then()
+	}
 	return res, nil
 }
 
@@ -282,7 +352,7 @@ type answeredEngine struct {
 
 func (e answeredEngine) Docker() access.Docker { return e.docker }
 
-func answeredHere(s *updateScenario) {
+func answeredHere(s *updateScenario, after map[string]func()) {
 	opened := openEngine
 	s.t.Cleanup(func() { openEngine = opened })
 	openEngine = func(dir string) (stackEngine, error) {
@@ -290,24 +360,81 @@ func answeredHere(s *updateScenario) {
 		if err != nil {
 			return nil, err
 		}
-		return answeredEngine{e, folderDocker{s}}, nil
+		return answeredEngine{e, folderDocker{s, after}}, nil
 	}
 }
 
 // localStack is a folder with what Docker says of it.
 type localStack struct {
 	*updateScenario
+	// afterDocker is folderDocker's after.
+	afterDocker map[string]func()
 }
 
 func newLocalStack(t *testing.T) localStack {
 	t.Helper()
 	standInMachine(t)
 	s := newUpdateScenario(t, shippedCompose(t), nil)
-	answeredHere(s)
+	after := map[string]func(){}
+	answeredHere(s, after)
 	s.answer("context.out", "unix:///var/run/docker.sock\n")
 	s.answer("cyfrps.out", "")
 	s.answer("logs.out", "booting\n"+logNotSetUp)
-	return localStack{s}
+	return localStack{s, after}
+}
+
+// envReached writes the folder's .env for access mode, public or tailnet,
+// with port the one published here and its accounts its own, and answers
+// its address.
+func (s localStack) envReached(mode string, port int) string {
+	s.t.Helper()
+	host, more := "cyfr.example.com", ""
+	if mode == access.ModeTailnet {
+		host, more = "box.tail1234.ts.net", "CYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\n"
+	}
+	home := "https://" + host
+	text := "CYFR_ACCESS=" + mode + "\nCYFR_HOST=" + host + "\nCYFR_PUBLIC_URL=" + home + "\n" + more +
+		"CYFR_PORT=" + strconv.Itoa(port) + "\nCYFR_LOCUS_BUILDS_URL=\n" +
+		"CYFR_DIRECTORY_URL=" + home + "\n" + setupTokenVar + "=" + testToken + "\n"
+	if err := os.WriteFile(filepath.Join(s.project, ".env"), []byte(text), 0o600); err != nil {
+		s.t.Fatal(err)
+	}
+	return home
+}
+
+// onlyOnThisComputer lets connections be made to at alone, recording what
+// each was to be made to, and fails any other where it would leave this
+// computer. It stands in for this computer's proxy too, recording whom it
+// was asked for.
+func onlyOnThisComputer(t *testing.T, at string, proxy *url.URL) (dialled, proxied func() []string) {
+	t.Helper()
+	savedDial, savedProxy := dialTCP, computersProxy
+	t.Cleanup(func() { dialTCP, computersProxy = savedDial, savedProxy })
+	var mu sync.Mutex
+	var to, asked []string
+	dialTCP = func(ctx context.Context, network, address string) (net.Conn, error) {
+		mu.Lock()
+		to = append(to, address)
+		mu.Unlock()
+		if address != at {
+			return nil, errors.New("the test makes no such connection")
+		}
+		return savedDial(ctx, network, address)
+	}
+	computersProxy = func(r *http.Request) (*url.URL, error) {
+		mu.Lock()
+		asked = append(asked, r.URL.Host)
+		mu.Unlock()
+		return proxy, nil
+	}
+	copied := func(of *[]string) func() []string {
+		return func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(*of)
+		}
+	}
+	return copied(&to), copied(&asked)
 }
 
 // env writes the folder's .env: local at port, the accounts its own, with
@@ -513,21 +640,24 @@ func TestAStandInOnTheFoldersPortIsNotItsCYFR(t *testing.T) {
 // connection: gone, replaced or started again while it was made, the
 // connection carries nothing.
 func TestAConnectionOutlivingItsContainerCarriesNothing(t *testing.T) {
-	for name, change := range map[string]func(s localStack, port int){
-		"gone":     func(s localStack, _ int) { s.stopped() },
-		"replaced": func(s localStack, port int) { s.runs("dec0de", s.project, nil, port) },
-		"started again": func(s localStack, port int) {
+	for name, c := range map[string]struct {
+		words  string
+		change func(s localStack, port int)
+	}{
+		"gone":     {"is not running", func(s localStack, _ int) { s.stopped() }},
+		"replaced": {"started again", func(s localStack, port int) { s.runs("dec0de", s.project, nil, port) }},
+		"started again": {"started again", func(s localStack, port int) {
 			s.runs("c0ffee", s.project, func(c map[string]any) { c["started"] = "2026-10-28T00:09:09Z" }, port)
-		},
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newLocalStack(t)
 			other := newListening(t, http.NotFoundHandler())
 			s.env(other.port)
 			s.runs("c0ffee", s.project, nil, other.port)
-			standInDial(t, "", nil, func() { change(s, other.port) })
+			standInDial(t, "", nil, func() { c.change(s, other.port) })
 			a := newLocalApp(t, s.project)
-			a.refused("http://localhost:"+strconv.Itoa(other.port), "is not running")
+			a.refused("http://localhost:"+strconv.Itoa(other.port), c.words)
 			if _, requests := other.reached(); requests != 0 {
 				t.Fatalf("%d requests were sent on it", requests)
 			}
@@ -595,12 +725,210 @@ func TestTheSetupTokenIsOnlyForTheAddressRead(t *testing.T) {
 	if err != nil || l.Shell.Address != "http://localhost:4100" {
 		t.Fatalf("read %+v, %v", l.Shell.Address, err)
 	}
-	if got := l.Shell.SetupToken(t.Context()); got != testToken {
+	if got, _ := l.Shell.SetupToken(t.Context()); got != testToken {
 		t.Fatalf("with the folder as read the token is %q", got)
 	}
 	s.env(4200)
-	if got := l.Shell.SetupToken(t.Context()); got != "" {
+	if got, _ := l.Shell.SetupToken(t.Context()); got != "" {
 		t.Fatal("a shell still at 4100 was given the token of the CYFR at 4200")
+	}
+}
+
+// The container whose log said no one is set up is the one the token may
+// be sent to. Replaced, started again or gone once that was read, at the
+// same origin, the first hello is not sent: no connection is made when the
+// change came before it, and none carries a request when it came while
+// the connection was made.
+func TestTheTokensConnectionIsTheContainerRead(t *testing.T) {
+	for _, c := range []struct {
+		name, words string
+		change      func(s localStack, port int)
+	}{
+		{"replaced", "started again", func(s localStack, port int) { s.runs("dec0de", s.project, nil, port) }},
+		{"started again", "started again", func(s localStack, port int) {
+			s.runs("c0ffee", s.project, func(c map[string]any) { c["started"] = "2026-10-28T00:09:09Z" }, port)
+		}},
+		{"gone", "is not running", func(s localStack, _ int) { s.stopped() }},
+	} {
+		for _, when := range []string{"before the dial", "during the dial"} {
+			t.Run(c.name+" "+when, func(t *testing.T) {
+				s := newLocalStack(t)
+				cyfr := servingAccounts(t, "")
+				s.env(cyfr.port)
+				s.runs("c0ffee", s.project, nil, cyfr.port)
+				home := "http://localhost:" + strconv.Itoa(cyfr.port)
+				var read bool
+				var conns, requests int
+				standInDial(t, "", nil, func() {
+					if read && when == "during the dial" {
+						c.change(s, cyfr.port)
+					}
+				})
+				a := newLocalApp(t, s.project)
+				a.open(home, home)
+				s.afterDocker["logs"] = func() {
+					read = true
+					conns, requests = cyfr.reached()
+					if when == "before the dial" {
+						c.change(s, cyfr.port)
+					}
+				}
+				a.makeAccount()
+				if !read {
+					t.Fatal("setup was never read")
+				}
+				noHello(t, cyfr, "the container that was not read")
+				now, asked := cyfr.reached()
+				if asked != requests || when == "before the dial" && now != conns {
+					t.Fatalf("it got %d connections and %d requests", now-conns, asked-requests)
+				}
+				if page := a.page(); !strings.Contains(page, c.words) {
+					t.Fatalf("the page does not say why:\n%s", page)
+				}
+			})
+		}
+	}
+}
+
+// The setup token goes on the connection bound to the container read and
+// follows no redirect off it.
+func TestTheTokensConnectionFollowsNoRedirect(t *testing.T) {
+	s := newLocalStack(t)
+	accounts := servingAccounts(t, "")
+	var turned bool
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/device/websocket" {
+			turned = true
+			http.Redirect(w, r, "https://elsewhere.example.com/device/websocket", http.StatusTemporaryRedirect)
+			return
+		}
+		accounts.srv.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(front.Close)
+	home := "http://localhost:" + strconv.Itoa(accounts.port)
+	s.env(accounts.port)
+	s.runs("c0ffee", s.project, nil, accounts.port)
+	saved := dialTCP
+	t.Cleanup(func() { dialTCP = saved })
+	var strayed []string
+	dialTCP = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address != "127.0.0.1:"+strconv.Itoa(accounts.port) {
+			strayed = append(strayed, address)
+			return nil, errors.New("the test makes no such connection")
+		}
+		return saved(ctx, network, front.Listener.Addr().String())
+	}
+	savedProxy := computersProxy
+	t.Cleanup(func() { computersProxy = savedProxy })
+	computersProxy = func(*http.Request) (*url.URL, error) { return nil, nil }
+	a := newLocalApp(t, s.project)
+	a.open(home, home)
+	a.makeAccount()
+	if !turned || len(strayed) != 0 {
+		t.Fatalf("redirected %v, it connected to %v", turned, strayed)
+	}
+}
+
+// With public and with tailnet access everything cyfr sends that CYFR, the
+// setup token and the channel among it, goes to the loopback listener its
+// folder's container publishes, under the configured address's name, and
+// nothing to that name or through a proxy. The app's engine keeps its own
+// route, a tailnet CYFR's through the folder's SOCKS5 proxy.
+func TestEveryAccessModeIsReachedOnThisComputer(t *testing.T) {
+	for _, c := range []struct {
+		mode  string
+		route []string
+	}{
+		{access.ModePublic, nil},
+		{access.ModeTailnet, []string{"socks5://127.0.0.1:1055", "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"}},
+	} {
+		t.Run(c.mode, func(t *testing.T) {
+			s := newLocalStack(t)
+			accounts := accounttest.New(t)
+			raw, err := url.Parse(accounts.URL())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cyfr := newListening(t, httputil.NewSingleHostReverseProxy(raw))
+			home := s.envReached(c.mode, cyfr.port)
+			accounts.ServedAt(home)
+			cyfr.admitting = home
+			s.runs("c0ffee", s.project, nil, cyfr.port) // and no proxy's container
+			here := "127.0.0.1:" + strconv.Itoa(cyfr.port)
+			dialled, proxied := onlyOnThisComputer(t, here, nil)
+			a := newLocalApp(t, s.project)
+			a.open(home, home, c.route...)
+			a.makeAccount()
+			admission, _ := helloOf(t, cyfr)["admission"].(map[string]any)
+			if admission["setup"] != testToken {
+				t.Fatalf("the first hello's admission is %v", admission)
+			}
+			select {
+			case connect := <-cyfr.connects:
+				if connect["client_id"] != "pcl_1" {
+					t.Fatalf("the channel connected as %v", connect)
+				}
+			default:
+				t.Fatal("the channel never connected")
+			}
+			if to := dialled(); len(to) == 0 || slices.ContainsFunc(to, func(at string) bool { return at != here }) {
+				t.Fatalf("connected to %v, want %s alone", to, here)
+			}
+			if asked := proxied(); len(asked) != 0 {
+				t.Fatalf("this computer's proxy was asked for %v", asked)
+			}
+			cyfr.mu.Lock()
+			defer cyfr.mu.Unlock()
+			for _, asked := range cyfr.asked {
+				if !strings.HasPrefix(asked, strings.TrimPrefix(home, "https://")+"/") {
+					t.Errorf("%s was asked under another name than %s", asked, home)
+				}
+			}
+		})
+	}
+}
+
+// A box in tailnet access with nobody set up sets itself up at its own
+// screen, with no proxy and no other device: its first hello brings the
+// setup token to the loopback listener and that person is admitted.
+func TestAFirstPersonIsAdmittedAtABoxInTailnetAccess(t *testing.T) {
+	s := newLocalStack(t)
+	accounts := accounttest.New(t)
+	raw, err := url.Parse(accounts.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cyfr := newListening(t, httputil.NewSingleHostReverseProxy(raw))
+	home := s.envReached(access.ModeTailnet, cyfr.port)
+	accounts.ServedAt(home)
+	cyfr.admitting = home
+	s.runs("c0ffee", s.project, nil, cyfr.port)
+	here := "127.0.0.1:" + strconv.Itoa(cyfr.port)
+	onlyOnThisComputer(t, here, nil)
+
+	local, err := readLocal(s.project, "screen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := t.TempDir()
+	clients := shell.ClientFile(filepath.Join(device, "client.json"))
+	if err := clients.SelectProject(s.project); err != nil {
+		t.Fatal(err)
+	}
+	cfg := local.Shell
+	cfg.Record, cfg.Clients = filepath.Join(device, "holder.json"), clients
+	cfg.Chip = func() bool { return false }
+	cfg.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }
+	screen, err := shell.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { screen.Lock("") })
+	makeAccountOn(t, &shell.Server{Shell: screen})
+	admission, _ := helloOf(t, cyfr)["admission"].(map[string]any)
+	kept, err := clients.Load()
+	if err != nil || admission["setup"] != testToken || kept.ClientID != "pcl_1" {
+		t.Fatalf("the first person was not admitted: client %q, admission %v (%v)", kept.ClientID, admission, err)
 	}
 }
 
@@ -663,62 +991,41 @@ func TestTheFoldersClientReachesThatCYFRAlone(t *testing.T) {
 	if conns, _ := other.reached(); conns != 0 {
 		t.Fatalf("another program got %d connections", conns)
 	}
-	route := l.Shell.Client.Transport.(*http.Transport).Proxy
-	if proxy, err := route(httptest.NewRequest(http.MethodGet, l.Shell.Address+"/", nil)); proxy != nil || err != nil {
-		t.Fatalf("the CYFR is reached through %v (%v)", proxy, err)
-	}
 }
 
-// A public CYFR's address takes no proxy of the environment either, which
-// is this computer's way to everywhere else alone.
-func TestAFoldersOwnAddressTakesNoProxyOfTheEnvironment(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(scenarioEnv), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	proxy := &url.URL{Scheme: "http", Host: "proxy.example:3128"}
-	saved := computersProxy
-	t.Cleanup(func() { computersProxy = saved })
-	computersProxy = func(*http.Request) (*url.URL, error) { return proxy, nil }
-	l, err := readLocal(dir, "the test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	route := l.Shell.Client.Transport.(*http.Transport).Proxy
-	if got, err := route(httptest.NewRequest(http.MethodGet, "https://cyfr.example.com/", nil)); got != nil || err != nil {
-		t.Fatalf("the CYFR is reached through %v (%v)", got, err)
-	}
-	if got, err := route(httptest.NewRequest(http.MethodGet, "https://cyfr.run/", nil)); got != proxy || err != nil {
-		t.Fatalf("cyfr.run is reached through %v (%v), not this computer's way", got, err)
-	}
-}
-
-// A folder with tailnet access is reached through its SOCKS5 proxy, by cyfr
-// and by the app's engine both, and only while Docker says both its
-// containers publish.
-func TestALocalCYFROnItsTailnetIsReachedThroughItsProxy(t *testing.T) {
-	s := newLocalStack(t)
-	env := "CYFR_ACCESS=tailnet\nCYFR_HOST=box.tail1234.ts.net\nCYFR_PUBLIC_URL=https://box.tail1234.ts.net\n" +
-		"CYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\nCYFR_LOCUS_BUILDS_URL=\nCYFR_PORT=4000\n"
-	if err := os.WriteFile(filepath.Join(s.project, ".env"), []byte(env), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s.runs("c0ffee", s.project, nil, 4000) // and no proxy of its own
-	other := newListening(t, http.NotFoundHandler())
-	dialled := standInDial(t, "127.0.0.1:1055", other, nil)
-	l, err := readLocal(s.project, "the CYFR app")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l.Shell.Address != "https://box.tail1234.ts.net" || l.Proxy != "socks5://127.0.0.1:1055" ||
-		l.Resolver != "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1" {
-		t.Fatalf("read %s by %q, %q", l.Shell.Address, l.Proxy, l.Resolver)
-	}
-	r := httptest.NewRequest(http.MethodGet, l.Shell.Address, nil)
-	if proxy, err := l.Shell.Client.Transport.(*http.Transport).Proxy(r); err != nil || proxy == nil || proxy.String() != l.Proxy {
-		t.Fatalf("cyfr reaches it through %v (%v)", proxy, err)
-	}
-	if err := l.Answers(t.Context()); err == nil || !strings.Contains(err.Error(), "is not running") || len(*dialled) != 0 {
-		t.Fatalf("a program on the proxy's port was taken for it: %v, %v", err, *dialled)
+// The folder's own address takes no proxy of the environment in any
+// access mode, nor the tailnet's, and needs no proxy's container running.
+// Anywhere else takes this computer's own way, the environment's proxy
+// and never the tailnet's.
+func TestAFoldersOwnAddressTakesNoProxy(t *testing.T) {
+	for _, mode := range []string{access.ModeLocal, access.ModePublic, access.ModeTailnet} {
+		t.Run(mode, func(t *testing.T) {
+			s := newLocalStack(t)
+			cyfr := newListening(t, http.NotFoundHandler())
+			if mode == access.ModeLocal {
+				s.env(cyfr.port)
+			} else {
+				s.envReached(mode, cyfr.port)
+			}
+			s.runs("c0ffee", s.project, nil, cyfr.port)
+			here := "127.0.0.1:" + strconv.Itoa(cyfr.port)
+			dialled, proxied := onlyOnThisComputer(t, here, &url.URL{Scheme: "http", Host: "proxy.example:3128"})
+			l, err := readLocal(s.project, "the test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := l.Answers(t.Context()); err != nil {
+				t.Fatalf("it does not answer: %v", err)
+			}
+			if to, asked := dialled(), proxied(); !slices.Equal(to, []string{here}) || len(asked) != 0 {
+				t.Fatalf("it was reached at %v, a proxy asked for %v", to, asked)
+			}
+			if resp, err := l.Shell.Client.Get("https://accounts.example.com/"); err == nil {
+				resp.Body.Close()
+			}
+			if to := dialled(); to[len(to)-1] != "proxy.example:3128" {
+				t.Fatalf("elsewhere was reached by %v, not this computer's way", to)
+			}
+		})
 	}
 }

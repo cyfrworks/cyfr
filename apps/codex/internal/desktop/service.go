@@ -32,7 +32,8 @@ type Local struct {
 	// there: its address, the client that reaches it, the account service
 	// it names, its data directory and its setup capability.
 	Shell shell.Config
-	// Proxy and Resolver are the route to it, empty on this computer's own.
+	// Proxy and Resolver are the engine's route to its pages, empty on
+	// this computer's own.
 	Proxy, Resolver string
 	// Answers is nil when that CYFR itself answers now, and otherwise why
 	// it is not opened, in a sentence for the person. Asking starts

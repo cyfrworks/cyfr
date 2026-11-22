@@ -54,8 +54,7 @@ import (
 type Config struct {
 	// Address is the CYFR's origin, as its certificates name it.
 	Address string
-	// Client reaches the CYFR, the directory and the registry (through the
-	// tailnet's proxy when the CYFR is reached through it).
+	// Client reaches the CYFR, the directory and the registry.
 	Client *http.Client
 	// Record is the device key's record; an account being made is kept
 	// beside it until it is done.
@@ -69,15 +68,17 @@ type Config struct {
 	// detection reads.
 	DataDir string
 	// SetupToken answers the setup token a first hello brings, or "", so
-	// it never travels in an argument. A device whose .env holds the token
-	// whether or not anyone is set up (a box's screen, the CYFR app at a
-	// CYFR on its own computer) answers it from one reading, only while
-	// that reading says no one is set up and names this shell's Address.
+	// it never travels in an argument, and the transport that hello goes
+	// by, bound to what the token was read of (nil, Client's own). A
+	// device whose .env holds the token whether or not anyone is set up (a
+	// box's screen, the CYFR app at a CYFR on its own computer) answers it
+	// from one reading, only while that reading says no one is set up and
+	// names this shell's Address.
 	// Its first hello then brings it whether the device made its account
 	// here or was added to one, since the installation's first person
 	// binds it whoever they are; otherwise it brings none, and the CYFR's
 	// door decides. Unset, a first hello brings none.
-	SetupToken func(context.Context) string
+	SetupToken func(context.Context) (token string, through http.RoundTripper)
 	// Restart starts the browser again on the lock page, after a lock.
 	Restart func()
 	// DisplayName is the name the CYFR lists this device by.
@@ -471,7 +472,7 @@ func New(cfg Config) (*Shell, error) {
 		cfg.Restart = func() {}
 	}
 	if cfg.SetupToken == nil {
-		cfg.SetupToken = func(context.Context) string { return "" }
+		cfg.SetupToken = func(context.Context) (string, http.RoundTripper) { return "", nil }
 	}
 	if cfg.Directory == "" {
 		cfg.Directory = account.DefaultDirectory
@@ -856,9 +857,16 @@ func sentence(err error) string {
 	var dir *account.DirectoryRefusal
 	var refused *RefusedError
 	var unbound *Unbound
+	var refusing *RefusingError
 	switch {
 	case errors.As(err, &unbound):
 		return unbound.Sentence
+	case errors.As(err, &refusing):
+		unit := "seconds"
+		if refusing.Seconds == 1 {
+			unit = "second"
+		}
+		return fmt.Sprintf("CYFR is refusing attempts for the moment. Try again in %d %s.", refusing.Seconds, unit)
 	case errors.As(err, &refused):
 		return refused.Message
 	case errors.Is(err, holder.ErrWrongSecret), errors.Is(err, holder.ErrSecretShape):
@@ -1528,8 +1536,15 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 		if len(s.here.Certificate) > 0 {
 			s.forget()
 		}
+		admission, through := s.admission(ctx)
+		if through != nil {
+			// Client as it is, following no redirect, over that transport.
+			bound := *s.cfg.Client
+			bound.Transport = through
+			d.Client = &bound
+		}
 		h := Hello{Key: s.rec.PublicKey, Identifier: s.rec.Identifier, HolderKind: string(s.rec.Kind),
-			DisplayName: s.cfg.DisplayName, Admission: s.admission(ctx)}
+			DisplayName: s.cfg.DisplayName, Admission: admission}
 		ch, err = d.Hello(ctx, h, key, s.admitted, s.report, s.renewed)
 	}
 	if errors.Is(err, ErrRevoked) {
@@ -1544,17 +1559,17 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	return nil
 }
 
-// admission is the capability a first hello brings: none once this CYFR
-// admitted this device (the door decides), else the setup token, where
-// SetupToken answers one.
-func (s *Shell) admission(ctx context.Context) map[string]any {
+// admission is the capability a first hello brings and the transport it
+// goes by: none once this CYFR admitted this device (the door decides),
+// else the setup token, where SetupToken answers one.
+func (s *Shell) admission(ctx context.Context) (map[string]any, http.RoundTripper) {
 	if s.here.ClientID != "" {
-		return nil
+		return nil, nil
 	}
-	if t := s.cfg.SetupToken(ctx); t != "" {
-		return map[string]any{"setup": t}
+	if t, through := s.cfg.SetupToken(ctx); t != "" {
+		return map[string]any{"setup": t}, through
 	}
-	return nil
+	return nil, nil
 }
 
 // admitted keeps the client and certificate a hello was answered before

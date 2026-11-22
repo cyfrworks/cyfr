@@ -128,7 +128,7 @@ func (e *IntentError) Error() string {
 }
 
 // Dialer opens the home's device channel: its address and the HTTP client
-// (with the tailnet's proxy when the home is reached through it).
+// that reaches it.
 type Dialer struct {
 	Address string
 	Client  *http.Client
@@ -397,11 +397,27 @@ func (c *Channel) recv(ctx context.Context) (message, error) {
 	return m, nil
 }
 
-// closeReason maps the home's close code to why the channel ended.
+// RefusingError is a home that takes no attempt for now, a bound of its
+// verifications spent: it takes one again in Seconds.
+type RefusingError struct{ Seconds int }
+
+func (e *RefusingError) Error() string {
+	return fmt.Sprintf("CYFR refuses attempts for %d s", e.Seconds)
+}
+
+// closeReason maps the home's close code, and for a try-again close its
+// reason (Emissary.Web.DeviceChannel), to why the channel ended.
 func closeReason(err error) error {
 	var closed websocket.CloseError
-	if errors.As(err, &closed) && closed.Code == websocket.StatusTryAgainLater && closed.Reason == "forbidden" {
-		return ErrCompanySignIn
+	if errors.As(err, &closed) && closed.Code == websocket.StatusTryAgainLater {
+		if closed.Reason == "forbidden" {
+			return ErrCompanySignIn
+		}
+		if after, ok := strings.CutPrefix(closed.Reason, "rate_limited; retry_after_s="); ok {
+			if seconds, err := strconv.Atoi(after); err == nil && seconds > 0 {
+				return &RefusingError{Seconds: seconds}
+			}
+		}
 	}
 	switch websocket.CloseStatus(err) {
 	case 4403:

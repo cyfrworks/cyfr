@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,23 +28,29 @@ import (
 // from an earlier reading and nothing comes from outside the folder.
 //
 // A reading is the folder's .env read once and alone (readFolder): the
-// address, the account service, the route and the setup token, with no
-// value taken or interpolated from this process's environment. The binding
-// is the one client to that CYFR (localFolder.client): as each connection
-// opens the folder is read again, a reading naming another CYFR than the
-// one opened sends nothing, and Docker says that the folder's own cyfr
-// container runs publishing the address's port, the same container before
-// the connection was made and after, so that no other program holding the
-// port is taken for it. A retained address therefore never receives what
-// was read for another.
+// address, the account service, the engine's route and the setup token,
+// with no value taken or interpolated from this process's environment.
+//
+// The binding is the one way cyfr itself reaches that CYFR, the same in
+// every access mode (localFolder.transport): the loopback listener, which
+// the folder's cyfr container publishes at 127.0.0.1 and CYFR_PORT, under
+// the configured address's name. That name is what is signed and shown,
+// and is never looked up or connected to. As each connection opens the
+// folder is read again, a reading naming another CYFR than the one opened
+// sends nothing, and Docker names the container publishing that port, by
+// its id and its start: the same before the connection was made and
+// after, so that no other program holding the port is taken for it. A
+// setup token goes only on a connection to the one container whose log
+// was read for it. A retained address therefore never receives what was
+// read for another.
 
-// The route to a CYFR with tailnet access from the computer it runs on:
-// its SOCKS5 proxy on loopback, the one way there, and the engine's
-// resolver rules, so that no name is looked up past it.
+// The engine's route to a CYFR with tailnet access from the computer it
+// runs on, for CYFR's own pages alone: its SOCKS5 proxy on loopback, the
+// one way to that name, and the resolver rules, so that no name is looked
+// up past it.
 const (
-	localProxyPort = 1055
-	localProxy     = "socks5://127.0.0.1:1055"
-	localResolver  = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"
+	localProxy    = "socks5://127.0.0.1:1055"
+	localResolver = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"
 )
 
 // localhostIsIPv4 is the engine's resolver rule elsewhere: localhost is
@@ -96,6 +101,9 @@ func readFolder(dir string) (localReading, error) {
 type localFolder struct {
 	dir, holder string
 	opened      localBound
+	// name is the opened address's host and port, loopback where its
+	// container publishes it on this computer.
+	name, loopback string
 }
 
 // dialTCP makes a connection once a localFolder allows it. A test stands
@@ -120,11 +128,13 @@ func readLocal(dir, holder string) (desktop.Local, error) {
 	if err != nil {
 		return desktop.Local{}, err
 	}
-	f := &localFolder{dir: dir, holder: holder, opened: read.localBound}
-	client, err := f.client()
+	at, err := url.Parse(read.address)
 	if err != nil {
 		return desktop.Local{}, err
 	}
+	f := &localFolder{dir: dir, holder: holder, opened: read.localBound,
+		name: hostPort(at), loopback: net.JoinHostPort("127.0.0.1", strconv.Itoa(read.port))}
+	client := &http.Client{Transport: f.transport(nil)}
 	var l desktop.Local
 	if read.mode == access.ModeTailnet {
 		l.Proxy, l.Resolver = localProxy, localResolver
@@ -140,58 +150,64 @@ func readLocal(dir, holder string) (desktop.Local, error) {
 	return l, nil
 }
 
-// client is the one client to the folder's CYFR. A request to it is bound
-// (dial) and takes no proxy of this process's environment. A request to
-// another program on this computer is refused: the only one this client
-// speaks to is that CYFR. One to anywhere else, the account service at
-// cyfr.run say, takes this computer's own way there. Each request dials,
-// so that each is bound.
-func (f *localFolder) client() (*http.Client, error) {
-	at, err := url.Parse(f.opened.address)
-	if err != nil {
-		return nil, err
+// transport is the one way to the folder's CYFR. A request to its name is
+// sent to loopback on a connection of its own, bound (dial) to named when
+// that is given and otherwise to the container serving as it opens, and
+// through no proxy. A request to another program on this computer is
+// refused: the only one spoken to here is that CYFR. One to anywhere
+// else, the account service at cyfr.run say, takes this computer's own
+// way there.
+func (f *localFolder) transport(named *access.Published) http.RoundTripper {
+	return &folderTransport{
+		f: f,
+		// No connection is kept, so that each request's is bound.
+		bound: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return f.dial(ctx, named)
+			},
+			DisableKeepAlives: true,
+		},
+		elsewhere: &http.Transport{
+			Proxy:               computersProxy,
+			DialContext:         dialTCP,
+			DisableKeepAlives:   true,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
 	}
-	own, bound, to := hostPort(at), hostPort(at), hostPort(at)
-	var socks *url.URL
-	switch f.opened.mode {
-	case access.ModeLocal:
-		to = net.JoinHostPort("127.0.0.1", strconv.Itoa(f.opened.port))
-	case access.ModeTailnet:
-		if socks, err = url.Parse(localProxy); err != nil {
-			return nil, err
-		}
-		bound, to = socks.Host, socks.Host
-	}
-	route := func(r *http.Request) (*url.URL, error) {
-		switch {
-		case hostPort(r.URL) == own:
-			return socks, nil
-		case onThisComputer(r.URL.Hostname()):
-			return nil, &shell.Unbound{Sentence: fmt.Sprintf("%s is not the CYFR in %s, so nothing was sent there.", r.URL.Host, f.dir)}
-		case socks != nil:
-			return socks, nil
-		}
-		return computersProxy(r)
-	}
-	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
-		if address == bound {
-			return f.dial(ctx, to)
-		}
-		return dialTCP(ctx, network, address)
-	}
-	return &http.Client{Transport: &http.Transport{
-		Proxy:               route,
-		DialContext:         dial,
-		DisableKeepAlives:   true,
-		TLSHandshakeTimeout: 10 * time.Second,
-	}}, nil
 }
 
-// dial connects to the folder's CYFR at to, or sends nothing: the folder
-// is read now and must still name the CYFR opened, and the containers
-// Docker says serve it must be the same before and after the connection
-// was made, so that they held the port while it was.
-func (f *localFolder) dial(ctx context.Context, to string) (net.Conn, error) {
+type folderTransport struct {
+	f                *localFolder
+	bound, elsewhere http.RoundTripper
+}
+
+func (t *folderTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if hostPort(r.URL) == t.f.name {
+		sent := r.Clone(r.Context())
+		sent.URL.Scheme, sent.URL.Host = "http", t.f.loopback
+		sent.Host = cmp.Or(r.Host, r.URL.Host)
+		resp, err := t.bound.RoundTrip(sent)
+		if err != nil {
+			return nil, err
+		}
+		resp.Request = r
+		return resp, nil
+	}
+	if onThisComputer(r.URL.Hostname()) {
+		if r.Body != nil {
+			r.Body.Close()
+		}
+		return nil, &shell.Unbound{Sentence: fmt.Sprintf("%s is not the CYFR in %s, so nothing was sent there.", r.URL.Host, t.f.dir)}
+	}
+	return t.elsewhere.RoundTrip(r)
+}
+
+// dial connects to the folder's CYFR on this computer, or sends nothing:
+// the folder is read now and must still name the CYFR opened, and the
+// container Docker says serves it, named's when that is given, must be
+// the same by id and start before and after the connection was made, so
+// that it held the port while it was.
+func (f *localFolder) dial(ctx context.Context, named *access.Published) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, localDialWithin)
 	defer cancel()
 	now, err := f.read()
@@ -202,13 +218,19 @@ func (f *localFolder) dial(ctx context.Context, to string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, err := dialTCP(ctx, "tcp", to)
+	if named == nil {
+		named = &before
+	}
+	if before != *named {
+		return nil, f.replaced()
+	}
+	conn, err := dialTCP(ctx, "tcp", f.loopback)
 	if err != nil {
 		return nil, err
 	}
 	after, err := f.serving(ctx, now.localBound)
-	if err == nil && !slices.Equal(before, after) {
-		err = f.stopped()
+	if err == nil && after != *named {
+		err = f.replaced()
 	}
 	if err != nil {
 		conn.Close()
@@ -234,86 +256,81 @@ func (f *localFolder) stopped() error {
 	return &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s is not running. Run cyfr up in that folder, then try again.", f.dir)}
 }
 
+func (f *localFolder) replaced() error {
+	return &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s started again while this device was connecting, so nothing was sent to it. Try again.", f.dir)}
+}
+
 // serving is Docker's word for what serves at on this computer: the
-// folder's cyfr container, and with tailnet access its tailscale one, each
-// running and publishing its port on loopback. Only a Docker on this
-// computer can say that. Nothing is started and no lock is taken.
-func (f *localFolder) serving(ctx context.Context, at localBound) ([]access.Published, error) {
+// folder's cyfr container, running and publishing the port on loopback.
+// Only a Docker on this computer can say that. Nothing is started and no
+// lock is taken.
+func (f *localFolder) serving(ctx context.Context, at localBound) (access.Published, error) {
 	unsaid := func(why error) error {
 		return &shell.Unbound{Sentence: fmt.Sprintf("Docker could not say whether the CYFR in %s is running (%v), so nothing was sent to it.", f.dir, why)}
 	}
+	var none access.Published
 	e, err := openEngine(f.dir)
 	if err != nil {
-		return nil, unsaid(engineFailure(err))
+		return none, unsaid(engineFailure(err))
 	}
 	docker := e.Docker()
 	here, err := access.DockerIsHere(ctx, docker)
 	if err != nil {
-		return nil, unsaid(err)
+		return none, unsaid(err)
 	}
 	if !here {
-		return nil, unsaid(errors.New("this Docker runs containers on another computer"))
+		return none, unsaid(errors.New("this Docker runs containers on another computer"))
 	}
-	type publisher struct {
-		service string
-		port    int
+	c, ok, err := access.PublishedBy(ctx, docker, f.dir, "cyfr", at.port)
+	switch {
+	case err != nil:
+		return none, unsaid(err)
+	case !ok:
+		return none, f.stopped()
 	}
-	need := []publisher{{"cyfr", at.port}}
-	if at.mode == access.ModeTailnet {
-		need = append(need, publisher{"tailscale", localProxyPort})
-	}
-	var all []access.Published
-	for _, p := range need {
-		c, ok, err := access.PublishedBy(ctx, docker, f.dir, p.service, p.port)
-		switch {
-		case err != nil:
-			return nil, unsaid(err)
-		case !ok:
-			return nil, f.stopped()
-		}
-		all = append(all, c)
-	}
-	return all, nil
+	return c, nil
 }
 
-// setupToken is the setup token for a first hello, or "". It is one
-// reading under the stack's lock: the .env that still names the CYFR
-// opened, that CYFR's container, and that same container's log since its
-// start saying no one is set up. The log is a reason to offer the token
-// and no more. It is a snapshot, and can lag an admission that has
-// committed: the CYFR decides again in its own transaction. The lock is
-// taken without waiting: held by a command changing the stack, or with
-// anything unread, no token is offered and the door decides. .env keeps
-// the token after setup, so it is never offered for being there.
-func (f *localFolder) setupToken(ctx context.Context) string {
+// setupToken is the setup token for a first hello and the one transport
+// it may be sent by, or "". It is one reading under the stack's lock: the
+// .env that still names the CYFR opened, that CYFR's container, and that
+// same container's log since its start saying no one is set up. The
+// transport connects to that container alone, by its id and start, so the
+// token reaches no other. The log is a reason to offer the token and no
+// more. It is a snapshot, and can lag an admission that has committed:
+// the CYFR decides again in its own transaction. The lock is taken
+// without waiting: held by a command changing the stack, or with anything
+// unread, no token is offered and the door decides. .env keeps the token
+// after setup, so it is never offered for being there.
+func (f *localFolder) setupToken(ctx context.Context) (string, http.RoundTripper) {
 	e, err := openEngine(f.dir)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	unlock, err := e.Lock(f.holder)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	defer unlock()
 	now, err := f.read()
 	if err != nil || now.token == "" {
-		return ""
+		return "", nil
 	}
-	serving, err := f.serving(ctx, now.localBound)
+	container, err := f.serving(ctx, now.localBound)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	res, err := e.Docker().Run(ctx, access.Call{
-		Args:     []string{"logs", "--since", serving[0].Started, serving[0].ID},
+		Args:     []string{"logs", "--since", container.Started, container.ID},
 		Deadline: composeRunTimeout,
 	})
 	if err != nil || res.ExitCode != 0 || setUpIn(res) != setUpNone {
-		return ""
+		return "", nil
 	}
-	return now.token
+	return now.token, f.transport(&container)
 }
 
-// answers is nil once the folder's CYFR answers at its address over a
+// answers is nil once the folder's CYFR answers on this computer over a
 // bound connection. Asking starts nothing.
 func (f *localFolder) answers(ctx context.Context, client *http.Client) error {
 	ctx, cancel := context.WithTimeout(ctx, localDialWithin)
@@ -331,7 +348,7 @@ func (f *localFolder) answers(ctx context.Context, client *http.Client) error {
 	case errors.As(err, &unbound):
 		return unbound
 	case err != nil:
-		return &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s is running and does not answer at %s yet. Try again in a moment.", f.dir, f.opened.address)}
+		return &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s is running and does not answer yet. Try again in a moment.", f.dir)}
 	}
 	resp.Body.Close()
 	return nil
