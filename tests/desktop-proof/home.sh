@@ -110,43 +110,88 @@ exec docker "\${args[@]}" "$IMAGE" "\$@"
 EOF
 chmod +x "$REL/bin/cyfr"
 
-step "the run's authority, the account directory and the CYFR, from $IMAGE"
+# The CYFR a script runs against (README.md), named by its folder's
+# `home` file, `separate` without one:
+#   separate  x.test, reading accounts at the directory dir.test
+#   self      x.test serving its own account pages: home and account
+#             service share one origin
+#   company   x.test serving its own account pages and requiring a company
+#             sign-in (join) at the OIDC issuer idp.test, a front with
+#             nothing behind it that only records what reaches it
+SHAPE=separate
+if [ -f "$(dirname "$SCRIPT")/home" ]; then SHAPE="$(tr -d '[:space:]' <"$(dirname "$SCRIPT")/home")"; fi
+case "$SHAPE" in separate | self | company) ;; *) fail "$(dirname "$SCRIPT")/home names no shape this driver makes: '$SHAPE'" ;; esac
+
+step "the run's authority and the CYFR ($SHAPE), from $IMAGE"
 browser_authority
-DIR="$WORK/dir"
 X="$WORK/x"
-browser_home "$DIR" dir.test
-browser_home "$X" x.test
-identity_directory dir.test
-identity_directory x.test
-identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
 SETUP_TOKEN="$(openssl rand -hex 32)"
-identity_reaches_directory "$X" dir.test
-identity_env "$X" CYFR_REGISTRY_URL dir.test
-identity_env "$X" CYFR_SETUP_TOKEN "$SETUP_TOKEN"
 LOG_SECRETS+=("$SETUP_TOKEN")
+browser_home "$X" x.test
+identity_directory x.test
+case "$SHAPE" in
+  separate)
+    DIR="$WORK/dir"
+    browser_home "$DIR" dir.test
+    identity_directory dir.test
+    identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
+    DIRECTORY_HOST=dir.test
+    ;;
+  self | company)
+    identity_env "$X" CYFR_DIRECTORY_SERVE writer
+    DIRECTORY_HOST=x.test
+    ;;
+esac
+if [ "$SHAPE" = company ]; then
+  # The issuer: a certificate of the run's authority and a front at an
+  # address of the run's own, forwarding to a port nothing listens on.
+  IDP="$WORK/idp"
+  mkdir -p "$IDP"
+  browser_certificate idp.test
+  printf 'CYFR_HOST=idp.test\nCYFR_PROXY_PORT=9\n' >"$IDP/.env"
+  identity_directory idp.test
+  IDP_SECRET="$(openssl rand -hex 32)"
+  LOG_SECRETS+=("$IDP_SECRET")
+fi
+identity_reaches_directory "$X" "$DIRECTORY_HOST"
+identity_env "$X" CYFR_REGISTRY_URL "$DIRECTORY_HOST"
+identity_env "$X" CYFR_SETUP_TOKEN "$SETUP_TOKEN"
+if [ "$SHAPE" = company ]; then
+  identity_env "$X" CYFR_COMPANY_LOGIN join
+  identity_env "$X" CYFR_OIDC_ISSUER https://idp.test
+  identity_env "$X" CYFR_OIDC_CLIENT_ID cyfr-desktop-proof
+  identity_env "$X" CYFR_OIDC_CLIENT_SECRET "$IDP_SECRET"
+fi
 
 step "starting them and their fronts"
-server_start "$DIR"
-identity_front_start "$DIR"
+if [ "$SHAPE" = separate ]; then
+  server_start "$DIR"
+  identity_front_start "$DIR"
+fi
 identity_start "$X"
 identity_front_start "$X"
+if [ "$SHAPE" = company ]; then identity_front_start "$IDP"; fi
 
-# What the script and its proof get: the CYFR's address, the run's
-# authority, the setup token, and each front's control address. The app
-# gets the address alone.
+# What the script and its proof get: the CYFR's address, its account
+# directory, the run's authority, the setup token, and each front's
+# control address. The app gets the address alone.
 cp "$BROWSER_AUTHORITY/authority.pem" "$FIXTURE/authority.pem"
-python3 -I -c 'import json, sys; json.dump({"home": "https://x.test", "directory": "https://dir.test", "setup_token": sys.argv[1],
-  "fronts": {"x.test": sys.argv[2], "dir.test": sys.argv[3]}}, open(sys.argv[4], "w"))' \
-  "$SETUP_TOKEN" "$(identity_front_control x.test)" "$(identity_front_control dir.test)" "$FIXTURE/inputs.json"
+fronts=()
+for host in "${!IDENTITY_FRONTS[@]}"; do fronts+=("$host" "$(identity_front_control "$host")"); done
+python3 -I -c 'import json, sys; a = sys.argv; json.dump({"home": "https://x.test", "directory": "https://" + a[1], "setup_token": a[2],
+  "shape": a[3], "fronts": dict(zip(a[5::2], a[6::2]))}, open(a[4], "w"))' \
+  "$DIRECTORY_HOST" "$SETUP_TOKEN" "$SHAPE" "$FIXTURE/inputs.json" "${fronts[@]}"
 if [ -f "$(dirname "$SCRIPT")/proof.js" ]; then
   node "$HERE/pack.mjs" "$(dirname "$SCRIPT")/proof.js" "$FIXTURE/proof.asar"
 fi
 chmod -R a+rwX "$FIXTURE"
 
 step "the client: the installed app, with no Docker"
+hosts=()
+for host in "${!IDENTITY_FRONTS[@]}"; do hosts+=(--add-host "$host:${IDENTITY_FRONTS[$host]}"); done
 docker rm -f "$CLIENT" >/dev/null 2>&1 || true
 docker run -d --name "$CLIENT" --network host --security-opt seccomp=unconfined \
-  --add-host "x.test:${IDENTITY_FRONTS[x.test]}" --add-host "dir.test:${IDENTITY_FRONTS[dir.test]}" \
+  "${hosts[@]}" \
   -v "$DEB:/deb/cyfr-desktop.deb:ro" -v "$HERE:/proof:ro" -v "$FIXTURE:/fixture" \
   ubuntu:24.04 sleep infinity >/dev/null
 docker exec "$CLIENT" bash /proof/client.sh >"$WORK/client.log" 2>&1 || {
