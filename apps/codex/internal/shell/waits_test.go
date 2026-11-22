@@ -674,6 +674,38 @@ func TestLock_APageBesideItsTellingIsTheLockPage(t *testing.T) {
 	<-locked
 }
 
+// A lock hides what is on the screen before it tells the CYFR: while the
+// CYFR has not answered the lock of a session, the browser was already
+// restarted on the lock page.
+func TestLock_HidesTheScreenBeforeItTellsTheCYFR(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	setUpAndOpen(t, home, b)
+	g := newGate(t)
+	g.shut()
+	home.mu.Lock()
+	home.answering = func(op string, _ map[string]any) {
+		if op == "session.lock" {
+			_ = g.pass(context.Background())
+		}
+	}
+	home.mu.Unlock()
+	locked := make(chan struct{})
+	go func() {
+		defer close(locked)
+		b.shell.Lock(suspendedHere)
+	}()
+	g.reached(t)
+	if n := b.restarts.Load(); n != 1 {
+		t.Fatalf("while the CYFR is told, the screen was hidden %d times", n)
+	}
+	g.open()
+	<-locked
+	if n := b.restarts.Load(); n != 1 || b.shell.Unlocked() {
+		t.Fatalf("after the lock: hidden %d times, unlocked %v", n, b.shell.Unlocked())
+	}
+}
+
 // A confirmation a lock cut short is told neither as done nor as failed.
 func TestLock_AConfirmationItCutShortSaysNeitherDoneNorFailed(t *testing.T) {
 	home, b, p := confirmable(t)

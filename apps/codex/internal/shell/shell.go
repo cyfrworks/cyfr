@@ -81,7 +81,8 @@ type Config struct {
 	// binds it whoever they are; otherwise it brings none, and the CYFR's
 	// door decides. Unset, a first hello brings none.
 	SetupToken func(context.Context) (token string, through http.RoundTripper)
-	// Restart starts the browser again on the lock page, after a lock.
+	// Restart hides what is on the screen and shows the lock page, as a
+	// lock begins: it returns at once, waiting on nothing.
 	Restart func()
 	// Unwatched is set for a device that locks itself (a box's screen): why
 	// it may not be unlocked now, or "" while what would lock it is known
@@ -2194,11 +2195,14 @@ func (s *Shell) take(ctx context.Context) (held context.Context, give func(), ok
 // action, it may not.
 func (s *Shell) current() bool { return s.mu.by != nil && s.mu.by.live() }
 
-// lock submits each held session's lock proof, closes the channel, erases
-// the key and every secret the shell held, an account's recovery key
-// among them, and starts the browser again on the lock page, in that
-// order: the sessions end at the CYFR before the page that used them is
-// gone.
+// lock shows the lock page and hides what is on the screen (Restart),
+// then submits each held session's lock proof, closes the channel and
+// erases the key and every secret the shell held, an account's recovery
+// key among them, in that order. What is on the screen is what a person at
+// it can see and use, so it goes first; a session without its channel
+// lasts a minute at most, and is ended a moment later anyway. Restart
+// returns at once, so the hide waits for nothing and nothing waits on it;
+// the CYFR is told within 5 s.
 func (s *Shell) lock(why string) {
 	if s.renewal != nil {
 		s.renewal.Stop()
@@ -2212,6 +2216,7 @@ func (s *Shell) lock(why string) {
 			s.notice = why
 		}
 		s.publish()
+		s.cfg.Restart()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		for _, proof := range s.locks {
 			_, _ = ch.Call(ctx, "session.lock", map[string]any{"proof": proof})
@@ -2228,7 +2233,6 @@ func (s *Shell) lock(why string) {
 	clear(s.proof)
 	s.key, s.locks, s.making, s.confirm, s.passkey, s.passphrase, s.proof = nil, nil, nil, nil, nil, "", nil
 	if ch != nil {
-		s.cfg.Restart()
 		s.open.Store(false)
 	}
 }

@@ -657,10 +657,10 @@ func setUpAndOpen(t *testing.T, home *fakeHome, b *box) string {
 	return p
 }
 
-// A lock submits the pre-signed lock of each session the unlock reserved,
-// redeemed or not, closes the channel, erases the key and starts Chrome
-// again on the lock page; a wrong passphrase after it is said and nothing
-// reaches CYFR; the right one unlocks a new session.
+// A lock hides the screen on the lock page, submits the pre-signed lock
+// of each session the unlock reserved, redeemed or not, closes the
+// channel and erases the key; a wrong passphrase after it is said and
+// nothing reaches CYFR; the right one unlocks a new session.
 func TestLock_RetiresEachSessionAndUnlockNeedsTheSecretAgain(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
