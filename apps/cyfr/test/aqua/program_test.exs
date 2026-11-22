@@ -4103,6 +4103,44 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
+    test "an answer refused after the work ended is followed by no notice",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "list them")
+      %{loop: loop} = working!(ctx, thread, row, fake, turn)
+      attendant = waited_on!(ctx, turn, loop)
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      assert %{"t" => "answer", "id" => answer} = sent()
+
+      # The answer's write returned before the loop is held, waiting again.
+      _ = :sys.get_state(attendant)
+
+      Prima.Test.Wait.wait_until(
+        fn -> Process.info(loop.pid, :status) == {:status, :waiting} end,
+        10_000,
+        "the loop to wait again"
+      )
+
+      true = :erlang.suspend_process(loop.pid)
+
+      say(fake, row, %{
+        "t" => "error",
+        "gen" => 0,
+        "work" => turn.id,
+        "type" => "provider_error",
+        "message" => "The provider failed."
+      })
+
+      say(fake, row, %{"t" => "refused", "id" => answer, "reason" => "It holds no ask."})
+      committed!(ctx, thread, 7)
+      _ = :sys.get_state(attendant)
+      refute_received {:session, "send", _wire, _fields}
+
+      true = :erlang.resume_process(loop.pid)
+      line = "#{@title} could not answer: The provider failed."
+      assert {:failed, ^line} = Task.await(loop, 15_000)
+      assert Enum.map(inputs(ctx, turn), & &1.action) == ["post", "answer"]
+    end
+
     test "a holder killed at work is resumed, though it told nobody that it ended",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "work on it")
