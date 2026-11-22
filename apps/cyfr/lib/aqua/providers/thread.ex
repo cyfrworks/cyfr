@@ -25,16 +25,21 @@ defmodule Aqua.Providers.Thread do
   (`Arca.ThreadStorage.search/3`), and answers each as a pointer (its
   thread, the day or the title, the post, its `seq`, who wrote it, when,
   and 240 bytes around the match); `events` then reads that thread
-  after a `seq`, in a turn fifty posts at most. A crew member's thread is
+  after a `seq`, in a turn fifty posts at most, each worded and named as
+  `Aqua.Reader` reads it to a model; the person's replay is the rows' own
+  text. In a turn both read on past what they withhold: where to go on
+  (`cursor`, `next`) is the last post answered. A crew member's thread is
   neither searched nor read, and another athanor's is not found. A turn
   reads only while the person's Aqua holds it, the holder that made the
-  call: before a read answers, what it carries joins the turn's read
-  threads under the turn's fence (`Aqua.Tape.join_read/4`): each thread
-  whose posts it answers or that those posts carry (a pointer's or a
-  report's workspace thread, an opening's daily thread, a report's kept
-  read threads, a copied file's), and the read threads of the turns that
-  wrote them. So deleting a thread a turn read finds that turn, and
-  blanks the read's result (`Arca.ThreadStorage.delete/3`); a thread
+  call: before a read answers, the one rule decides what it answers and
+  records it under the turn's fence (`Aqua.Tape.join_read/5`): the thread
+  `events` asked to read, and for each post answered its thread, the
+  threads it carries (a pointer's or a report's workspace thread, an
+  opening's daily thread, a reply's helper thread, a report's kept read
+  threads, a copied file's) and the read threads of the turns whose words
+  it is. A post of which one no longer stands is not answered and records
+  nothing. So deleting a thread a turn read finds that turn, and
+    blanks the read's result (`Arca.ThreadStorage.delete/3`); a thread
   deleted before the join is not answered.
 
   `crew` is the second tool this provider serves: `ask` and `list`, the
@@ -1240,7 +1245,7 @@ defmodule Aqua.Providers.Thread do
   The threads whose posts a read's answer carries (`search` and `events`,
   their `threads:` declaration, `Prima.Operation.read_threads/3`): those
   the read joined into its turn before it answered
-  (`Aqua.Tape.join_read/4`), which the answer names. An answer that names
+  (`Aqua.Tape.join_read/5`), which the answer names. An answer that names
   none, the person's own read at the door, carries none.
   """
   @spec read_threads(Prima.Actor.t() | nil, term()) :: [String.t()]
@@ -1250,39 +1255,37 @@ defmodule Aqua.Providers.Thread do
   # Past posts of the athanor's daily and workspace threads, newest first,
   # each as a pointer to open with `events`. From a turn, the posts it
   # answers join the turn's read threads first, under its fence, and only
-  # the posts of threads that still stand then are answered.
+  # those the one rule hands over are answered (`recalled/6`).
   defp search(ctx, args) do
+    limit = min(args["limit"] || @search_max, @search_max) |> max(1)
+
     with {:ok, needle} <- query(args["q"]),
          {:ok, reader} <- recall_reader(ctx, args),
          {:ok, found} <-
-           storage(
-             Arca.ThreadStorage.search(Sanctum.Context.actor(ctx), needle,
-               limit: min(args["limit"] || @search_max, @search_max),
-               before: args["before"]
-             ),
-             "before",
-             args["before"]
-           ),
-         {:ok, posts, threads} <- joined(ctx, reader, found.posts, & &1.message) do
+           storage(older(ctx, needle, args["before"], limit), "before", args["before"]),
+         {:ok, posts, next, threads} <- recalled(ctx, reader, needle, found, limit) do
       results = Enum.map(posts, &pointer(&1, needle))
-      {:ok, with_threads(%{results: results, count: length(results), next: found.next}, threads)}
+      {:ok, with_threads(%{results: results, count: length(results), next: next}, threads)}
     end
+  end
+
+  defp older(ctx, needle, before, limit) do
+    Arca.ThreadStorage.search(Sanctum.Context.actor(ctx), needle, limit: limit, before: before)
   end
 
   # A turn's read of one daily or workspace thread of its athanor: its
   # posts after `after_seq`, at most fifty, joined into the turn's read
-  # threads before they are answered. A crew member's thread, or one of
-  # another athanor, is not found.
+  # threads before they are answered. Where to read on is the last post
+  # answered, so no answer names one withheld. A crew member's thread, or
+  # one of another athanor, is not found.
   defp read_thread(ctx, %{"thread" => id} = args) when is_binary(id) and id != "" do
     actor = Sanctum.Context.actor(ctx)
 
-    with {:ok, reader} <- recall_reader(ctx, args),
+    with {:ok, {:turn, turn}} <- recall_reader(ctx, args),
          {:ok, %{kind: kind}} when kind in ["daily", "workspace"] <-
            Arca.ThreadStorage.get(actor, id),
-         rows when is_list(rows) <- Arca.ThreadStorage.messages(actor, id, read_opts(args)),
-         {:ok, rows, threads} <- joined(ctx, reader, rows, & &1) do
-      rows = Enum.map(rows, &render/1)
-      {:ok, with_threads(%{thread: id, messages: rows, cursor: cursor(rows)}, threads)}
+         {:ok, messages, threads} <- reread(ctx, turn, id, past(args), page(args)) do
+      {:ok, with_threads(%{thread: id, messages: messages, cursor: cursor(messages)}, threads)}
     else
       {:ok, %{}} -> {:error, {:not_found, "thread", id}}
       {:error, :not_found} -> {:error, {:not_found, "thread", id}}
@@ -1295,16 +1298,13 @@ defmodule Aqua.Providers.Thread do
   defp read_thread(_ctx, _args),
     do: {:error, {:invalid_argument, "events requires a 'thread'"}}
 
-  defp read_opts(args) do
-    after_seq = if is_integer(args["after_seq"]), do: [after_seq: args["after_seq"]], else: []
+  defp past(args), do: if(is_integer(args["after_seq"]), do: args["after_seq"])
 
-    limit =
-      case args["limit"] do
-        n when is_integer(n) and n > 0 -> min(n, @read_page_max)
-        _ -> @read_page_max
-      end
-
-    [{:limit, limit}, {:posts, true} | after_seq]
+  defp page(args) do
+    case args["limit"] do
+      n when is_integer(n) and n > 0 -> min(n, @read_page_max)
+      _ -> @read_page_max
+    end
   end
 
   defp query(q) when is_binary(q) do
@@ -1337,27 +1337,81 @@ defmodule Aqua.Providers.Thread do
   defp recall_reader(%Context{plane: :guest}, _args), do: {:error, :not_in_a_turn}
   defp recall_reader(%Context{}, _args), do: {:ok, :person}
 
-  # The rows a read answers, and the threads it joined. The person's read
-  # joins nothing. A turn's joins, under its fence, every thread whose
-  # posts the rows are or carry and the read threads of the turns that
-  # wrote them (`Aqua.Tape.join_read/4`); a row of a thread or carrying one
-  # that no longer stands is not answered.
-  defp joined(_ctx, :person, items, _row), do: {:ok, items, nil}
+  # A turn's reread of the thread `id` past the seq `past`: posts are read
+  # a batch at a time until `most` are handed over or none is left, so
+  # what is withheld is passed here and never by the caller. Each is
+  # worded as the reader words it to one who has no roles to show it by,
+  # named.
+  defp reread(ctx, turn, id, past, most, answered \\ [], threads \\ []) do
+    opts = [limit: @read_page_max, posts: true] ++ if past, do: [after_seq: past], else: []
 
-  defp joined(ctx, {:turn, turn}, items, row) do
-    rows = Enum.map(items, row)
-    threads = Enum.uniq(Enum.map(rows, & &1.thread_id) ++ Tape.carried_threads(rows))
+    with rows when is_list(rows) <-
+           Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), id, opts),
+         {:ok, worded, joined} <- worded(ctx, turn, id, rows, most - length(answered)) do
+      answered = answered ++ worded
+      threads = Enum.sort(Enum.uniq(threads ++ joined))
 
-    case Tape.join_read(ctx, turn, threads, Tape.writing_turns(rows)) do
-      {:ok, %{threads: standing, read_threads: joined}} ->
+      if length(answered) == most or length(rows) < @read_page_max,
+        do: {:ok, answered, threads},
+        else: reread(ctx, turn, id, List.last(rows).seq, most, answered, threads)
+    end
+  end
+
+  defp worded(ctx, turn, id, rows, most) do
+    case Aqua.Reader.join(ctx, turn, rows, [id], most) do
+      {:ok, %{rows: handed, reading: reading, read_threads: joined}} ->
+        reading = %{reading | removed: Aqua.Reader.removed(ctx, handed)}
+
+        worded =
+          for row <- handed, {:said, text} <- [Aqua.Reader.read(row, reading)] do
+            %{render(row) | content: text}
+          end
+
+        {:ok, worded, joined}
+
+      {:error, reason} ->
+        {:error, refusal(reason, nil)}
+    end
+  end
+
+  # The posts a search answers, where an older page starts, and the
+  # threads they joined. The person's search joins and withholds nothing.
+  # A turn's goes through the one rule (`Aqua.Tape.join_read/5`) a batch at
+  # a time until its page is full or no match is left: it records what the
+  # posts it answers depend on and nothing of those it withholds, and
+  # where to go on is the last it answered.
+  defp recalled(ctx, reader, needle, found, limit, so_far \\ {[], []})
+
+  defp recalled(_ctx, :person, _needle, found, _limit, _so_far),
+    do: {:ok, found.posts, found.next, nil}
+
+  defp recalled(ctx, {:turn, turn} = reader, needle, found, limit, {answered, threads}) do
+    rows = Enum.map(found.posts, & &1.message)
+
+    case Tape.join_read(ctx, turn, :search, rows, limit - length(answered)) do
+      {:ok, %{rows: handed, read_threads: joined}} ->
+        now = Map.new(handed, &{&1.id, &1})
+
         kept =
-          Enum.filter(items, fn item ->
-            row = row.(item)
-            needs = [row.thread_id | Tape.carried_threads([row])]
-            Enum.all?(needs, &(&1 in standing))
-          end)
+          for %{message: %{id: id}} = one <- found.posts, row = now[id], do: %{one | message: row}
 
-        {:ok, kept, joined}
+        answered = answered ++ kept
+        threads = Enum.sort(Enum.uniq(threads ++ joined))
+
+        cond do
+          length(answered) == limit ->
+            {:ok, answered, List.last(answered).message.id, threads}
+
+          is_nil(found.next) ->
+            {:ok, answered, nil, threads}
+
+          true ->
+            # A failure past the first batch names nothing of what it passed.
+            case older(ctx, needle, found.next, @search_max) do
+              {:ok, next} -> recalled(ctx, reader, needle, next, limit, {answered, threads})
+              {:error, _} -> {:error, {:unavailable, "Storage"}}
+            end
+        end
 
       {:error, reason} ->
         {:error, refusal(reason, nil)}
@@ -1514,6 +1568,10 @@ defmodule Aqua.Providers.Thread do
       kind: msg.kind,
       content: msg.content,
       status: msg.status,
+      sent_by: msg.sent_by,
+      reply_to: msg.reply_to,
+      outcome: msg.outcome,
+      workspace: msg.workspace_id,
       at: msg.inserted_at
     }
   end

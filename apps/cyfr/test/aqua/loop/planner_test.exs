@@ -301,7 +301,7 @@ defmodule Aqua.Loop.PlannerTest do
 
     assert request["model"] == "m"
     [first, second, last] = request["messages"]
-    assert [%{"text" => "[Summary so far]\nearlier"}] = first["content"]
+    assert [%{"text" => "[Summary of the thread so far]\nearlier"}] = first["content"]
     assert second == hd(messages)
     assert hd(last["content"])["text"] =~ "handoff summary"
     refute Map.has_key?(request, "tools")
