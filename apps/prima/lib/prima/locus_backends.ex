@@ -137,7 +137,9 @@ defmodule Prima.LocusBackends do
   An `open` answers the session running for its lifetime (`resumed:
   true`) or starts the program's `command` with `argv` appended as its
   arguments (`resumed: false`): the administrator allowed the program, and
-  its arguments shape only what runs inside its box. An open of another
+  its arguments shape only what runs inside its box. An open that comes
+  while its lifetime is starting waits, and is told `resumed: true` once
+  that launch has succeeded and its refusal otherwise. An open of another
   lifetime of a key waits until nothing of the key's process is left.
   `home_id` names the kept home the process runs in (`home_id_pattern/0`),
   present for a program whose home is kept and absent for any other. An
@@ -208,8 +210,8 @@ defmodule Prima.LocusBackends do
 
   It ends that lifetime, whether its open has arrived or not: no open of
   it is admitted afterwards, through the last moment one could have been,
-  those waiting and those being prepared are refused, and its process is
-  ended. It answers `{"status": "closed"}` (`encode_close_answer/1`,
+  those waiting are refused, those being prepared are refused once that
+  work has settled, and its process is ended. It answers `{"status": "closed"}` (`encode_close_answer/1`,
   `read_close_answer/1`) once nothing of the lifetime is held, so `closed`
   means that its place is back and stays so. One whose place is not back
   within `close_wait_ms/0`, the stop grace and the release bound together,

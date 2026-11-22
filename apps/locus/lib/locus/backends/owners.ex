@@ -84,13 +84,15 @@ defmodule Locus.Backends.Owners do
 
   `close/3` ends the one lifetime its caller names and asks nothing of
   that owner's standing, which may be replaced, lapsed, released or gone.
-  It marks the lifetime spent, refuses its held opens, gives back what its
-  opens being prepared reserved, so none of them starts, asks the process
-  of each reservation left of it to end (its session, or the fence where
-  no session follows it; `Reservations.of_lifetime/2`, an adopted ending's
-  included) and is held as an open is, under the same bound, until none of
-  it is reserved: then `:ok`, the place back. Past the bound, or before
-  the table has adopted, it is `unavailable` and the reservation stays.
+  It marks the lifetime spent, refuses its held opens, asks the process
+  of each of its reservations that has one to end (its session, or the
+  fence where no session follows it; `Reservations.of_lifetime/2`, an
+  adopted ending's included) and is held as an open is, under the same
+  bound, until none of it is reserved: then `:ok`, the place back. A
+  preparation in flight keeps its reservation until its work answers,
+  since until then it may still make the row's home, and then starts
+  nothing. Past the bound, or before the table has adopted, it is
+  `unavailable` and the reservation stays.
 
   ## Admission by memory
 
@@ -112,9 +114,10 @@ defmodule Locus.Backends.Owners do
   be admitted: a sync and a status report it `failed`, and a status names
   its bound and the limit as its `error`, while each of its opens is still
   `capacity`. An
-  open that answers the session already running for its lifetime reserves
-  nothing more, and one that found it started while it was prepared drops
-  its reservation. What a session holds, from its open's admission until
+  open of a lifetime being prepared, starting or running reserves nothing
+  more: it waits for that preparation and that launch and is answered
+  what they came to, `resumed: true` only of a launch that succeeded.
+  What a session holds, from its open's admission until
   its launcher says nothing of its process is left, is its reservation, in
   the one lifecycle `Locus.Backends.Reservations` writes, each state moved
   by one authority: this table for an open it never started, the launcher
@@ -879,7 +882,7 @@ defmodule Locus.Backends.Owners do
     control_done(%{state | homes: homes})
   end
 
-  defp continue(state, {:open, from, ask}, result), do: opened(state, from, ask, result)
+  defp continue(state, {:open, froms, ask}, result), do: opened(state, froms, ask, result)
 
   # An end asked says nothing of a release: only the reservation does.
   defp continue(state, {:end_asked, _key}, _result), do: state
@@ -1014,14 +1017,14 @@ defmodule Locus.Backends.Owners do
       else: {:hold, state}
   end
 
-  # A closed lifetime's reservation: given back while nothing was asked of
-  # the launcher, its preparation then starting nothing (`still_open/2`),
-  # and otherwise its process asked to end, its session answering no open
-  # as running any more.
+  # A closed lifetime's reservation: one still being prepared is held until
+  # that work answers, which then starts nothing (`opened/4`), and any
+  # other has its process asked to end, its session answering no open as
+  # running any more.
   defp end_reserved(state, {owner_id, session_id} = key) do
     case {state.reservations[key], state.owners} do
       {%{state: :reserved}, _owners} ->
-        reservation(state, key, :abandoned)
+        state
 
       {_asked, %{^owner_id => %{sessions: %{^session_id => session}} = owner}} ->
         state |> put_session(owner, session_id, %{session | closed: true}) |> ask_end(key)
@@ -1082,6 +1085,7 @@ defmodule Locus.Backends.Owners do
          :ok <- not_failed(owner, program, ask.key),
          :error <- running(owner, named),
          :ok <- admissible(state, named),
+         :error <- preparing(state, named),
          :ok <- gone_before(state, owner, ask.key),
          :ok <- home_open(state, message.home_id),
          :ok <- memory_room(state, owner, ask.memory_bytes),
@@ -1097,19 +1101,30 @@ defmodule Locus.Backends.Owners do
           state = put_home(state, message.home_id, &%{&1 | athanor: admitted.athanor, cap: cap})
 
           {_ref, state} =
-            run(state, {:open, from, ask}, @home_timeout_ms * 2, fn ->
+            run(state, {:open, [from], ask}, @home_timeout_ms * 2, fn ->
               kept_ready(launcher, server, message.home_id, cap)
             end)
 
           {:noreply, state}
 
         :scratch ->
-          {_ref, state} = read_pool(state, {:open, from, ask})
+          {_ref, state} = read_pool(state, {:open, [from], ask})
           {:noreply, state}
       end
     else
       {:ok, session_id} ->
         {:reply, {:ok, opened_answer(session_id, true)}, state}
+
+      # A second ask shares what the first comes to.
+      {:starting, session_id} ->
+        session = owner.sessions[session_id]
+        session = %{session | waiting: session.waiting ++ [from]}
+        {:noreply, put_session(state, owner, session_id, session)}
+
+      {:preparing, ref} ->
+        %{continuation: {:open, froms, first}} = entry = state.pending[ref]
+        entry = %{entry | continuation: {:open, froms ++ [from], first}}
+        {:noreply, %{state | pending: Map.put(state.pending, ref, entry)}}
 
       :behind ->
         {:hold, state}
@@ -1140,11 +1155,21 @@ defmodule Locus.Backends.Owners do
       else: :ok
   end
 
-  # The session running for this very lifetime, its deadline passed or not.
+  # The session of this very lifetime, its deadline passed or not: running
+  # only once its launch succeeded, and starting until then.
   defp running(owner, named) do
     Enum.find_value(owner.sessions, :error, fn
-      {id, %{running: true, closed: false, named: ^named}} -> {:ok, id}
+      {id, %{running: true, closed: false, named: ^named, started: true}} -> {:ok, id}
+      {id, %{running: true, closed: false, named: ^named}} -> {:starting, id}
       _another_or_over -> nil
+    end)
+  end
+
+  # This very lifetime's preparation in flight.
+  defp preparing(state, named) do
+    Enum.find_value(state.pending, :error, fn
+      {ref, %{continuation: {:open, _froms, %{named: ^named}}}} -> {:preparing, ref}
+      _other_work -> nil
     end)
   end
 
@@ -1269,49 +1294,35 @@ defmodule Locus.Backends.Owners do
   # key is asked again as its process is about to start: a process of the
   # key that began ending while it was prepared holds it as one found at
   # admission does, its reservation given back first.
-  defp opened(state, from, ask, result) do
+  defp opened(state, froms, ask, result) do
     with {:ok, owner} <- still_open(state, ask),
+         :ok <- admissible(state, ask.named),
          program = Enum.find(owner.definition, &(&1.name == ask.program)),
-         :ok <- claimed(state, program, ask, result) do
-      with :error <- running(owner, ask.named),
-           :ok <- admissible(state, ask.named),
-           :ok <- gone_before(state, owner, ask.key) do
-        start_session(state, owner, program, ask, from)
-      else
-        {:error, code} ->
-          GenServer.reply(from, {:error, code})
-          reservation(state, {ask.owner, ask.session}, :abandoned)
-
-        {:ok, session_id} ->
-          GenServer.reply(from, {:ok, opened_answer(session_id, true)})
-          reservation(state, {ask.owner, ask.session}, :abandoned)
-
-        :behind ->
-          state
-          |> reservation({ask.owner, ask.session}, :abandoned)
-          |> hold({:open, ask.invoke, ask.message}, from)
-      end
+         :ok <- claimed(state, program, ask, result),
+         :ok <- gone_before(state, owner, ask.key) do
+      start_session(state, owner, program, ask, froms)
     else
+      :behind ->
+        state = reservation(state, {ask.owner, ask.session}, :abandoned)
+        Enum.reduce(froms, state, &hold(&2, {:open, ask.invoke, ask.message}, &1))
+
       {:error, code, state} ->
-        GenServer.reply(from, {:error, code})
-        reservation(state, {ask.owner, ask.session}, :abandoned)
+        unopened(state, froms, ask, code)
 
       {:error, code} ->
-        GenServer.reply(from, {:error, code})
-        reservation(state, {ask.owner, ask.session}, :abandoned)
+        unopened(state, froms, ask, code)
     end
   end
 
-  # Its owner still runs, and no close took its reservation back.
+  defp unopened(state, froms, ask, code) do
+    Enum.each(froms, &GenServer.reply(&1, {:error, code}))
+    reservation(state, {ask.owner, ask.session}, :abandoned)
+  end
+
   defp still_open(state, ask) do
     case Map.fetch(state.owners, ask.owner) do
-      {:ok, %{state: :running} = owner} ->
-        if Reservations.held?(state.reservations, {ask.owner, ask.session}),
-          do: {:ok, owner},
-          else: {:error, :lifetime_over}
-
-      _gone ->
-        {:error, :lapsed}
+      {:ok, %{state: :running} = owner} -> {:ok, owner}
+      _gone -> {:error, :lapsed}
     end
   end
 
@@ -1346,7 +1357,7 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  defp start_session(state, owner, program, ask, from) do
+  defp start_session(state, owner, program, ask, froms) do
     session_id = ask.session
     record = owner.programs[program.name]
 
@@ -1383,7 +1394,7 @@ defmodule Locus.Backends.Owners do
           started: false,
           memory_bytes: ask.memory_bytes,
           opened: System.unique_integer([:monotonic]),
-          waiting: [from]
+          waiting: froms
         }
 
         owner = %{
@@ -1409,8 +1420,7 @@ defmodule Locus.Backends.Owners do
             "a session did not start"
         )
 
-        GenServer.reply(from, {:error, :internal})
-        reservation(state, {owner.id, session_id}, :abandoned)
+        unopened(state, froms, ask, :internal)
     end
   end
 
@@ -1462,10 +1472,12 @@ defmodule Locus.Backends.Owners do
   end
 
   defp session_event(state, owner, session_id, session, :started) do
-    Enum.each(
-      session.waiting,
-      &GenServer.reply(&1, {:ok, opened_answer(session_id, false)})
-    )
+    # The first asked for the process, and each after it for that same one.
+    session.waiting
+    |> Enum.with_index()
+    |> Enum.each(fn {from, at} ->
+      GenServer.reply(from, {:ok, opened_answer(session_id, at > 0)})
+    end)
 
     state
     |> put_session(owner, session_id, %{session | started: true, waiting: []})

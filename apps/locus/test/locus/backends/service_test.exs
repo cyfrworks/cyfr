@@ -362,7 +362,7 @@ defmodule Locus.Backends.ServiceTest do
     fields =
       Map.merge(owner, %{
         boot: Keyword.get(opts, :boot, @boot),
-        ts: Agent.get(ctx.now, & &1),
+        ts: Keyword.get_lazy(opts, :ts, fn -> Agent.get(ctx.now, & &1) end),
         nonce: Keyword.get_lazy(opts, :nonce, fn -> "n_#{System.unique_integer([:positive])}" end)
       })
 
@@ -1131,6 +1131,24 @@ defmodule Locus.Backends.ServiceTest do
       far = LB.new_lifetime(until + LB.max_lifetime_ms() + 1, :crypto.strong_rand_bytes(16))
       assert_refused(invoke(ctx, open_message(key: "far", lifetime: far)), "bad_request")
       assert_refused(close(ctx, open_message(key: "far", lifetime: far)), "bad_request")
+    end
+
+    @tag launcher: :direct
+    test "a nonce is kept through the last millisecond its signature is accepted", ctx do
+      fetch_sync(ctx)
+      named = open_message(key: "endpoint")
+      once = [nonce: "n_endpoint", ts: @instant]
+      assert_closed(close(ctx, named, once))
+
+      last = @instant + LB.window_ms()
+      at(ctx, last)
+      assert_refused(close(ctx, named, once), "replay")
+
+      :ok = Service.forget_expired_nonces(last)
+      assert_refused(close(ctx, named, once), "replay")
+
+      at(ctx, last + 1)
+      assert close(ctx, named, once).status == 401
     end
 
     test "a session message is refused before its body for its owner, and after it for its shape",

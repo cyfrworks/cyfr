@@ -663,6 +663,7 @@ defmodule Opus.Programs.TerminalTest do
       assert {:ok, :already_gone} = Programs.close(ctx, "trm_never")
 
       {unanswered, session} = start!(ctx, row)
+      named = :sys.get_state(terminal(unanswered)).lifetime
       Scripted.refuse_once(fake, "close", "internal")
       assert {:error, :unanswered} = Programs.close(ctx, unanswered)
       assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
@@ -674,12 +675,16 @@ defmodule Opus.Programs.TerminalTest do
 
       assert_receive {:control, "release", %{"owners" => [%{"server" => ^server}]}, _}, 3_000
 
+      # What settles it is the service's answer for that lifetime: asked
+      # again, and kept no longer only once answered.
       eventually(
         fn ->
           send(controller, :tick)
-          not Map.has_key?(:sys.get_state(controller).closing, session)
+
+          Scripted.closed?(fake, named) and
+            not Map.has_key?(:sys.get_state(controller).closing, named)
         end,
-        "the owed close to settle on a tick"
+        "the service to confirm the owed close of that lifetime on a tick"
       )
     end
   end

@@ -116,11 +116,15 @@ defmodule Locus.Backends.Service do
     :ok
   end
 
-  @doc "Forget every nonce whose window has passed by `now`, in Unix milliseconds."
+  @doc """
+  Forget every nonce whose window has passed by `now`, in Unix
+  milliseconds: its last millisecond is not passed, as a header is still
+  accepted in it (`Prima.LocusBackends.verify_header/4`).
+  """
   @spec forget_expired_nonces(integer()) :: :ok
   def forget_expired_nonces(now \\ System.system_time(:millisecond)) do
     if :ets.whereis(@nonces) != :undefined,
-      do: :ets.select_delete(@nonces, [{{:_, :"$1"}, [{:"=<", :"$1", now}], [true]}])
+      do: :ets.select_delete(@nonces, [{{:_, :"$1"}, [{:<, :"$1", now}], [true]}])
 
     :ok
   end
@@ -410,9 +414,9 @@ defmodule Locus.Backends.Service do
 
   # ————— nonces —————
 
-  # A nonce is held for as long as its header could verify: until its `ts`
-  # and the window. `record?` records it, only once the body was the one
-  # its header signed.
+  # A nonce is held for as long as its header could verify: through its
+  # `ts` and the window, that millisecond included. `record?` records it,
+  # only once the body was the one its header signed.
   defp nonce(conn, invoke, now, record?) do
     row = {invoke.athanor, invoke.server, invoke.generation, invoke.epoch, invoke.nonce}
 
@@ -427,25 +431,25 @@ defmodule Locus.Backends.Service do
 
   defp unseen(row, now) do
     case :ets.lookup(@nonces, row) do
-      [{^row, expires}] when expires > now -> {:error, :replay}
+      [{^row, expires}] when expires >= now -> {:error, :replay}
       _ -> :ok
     end
   end
 
   defp room(invoke, now) do
     owner = {invoke.athanor, invoke.server, invoke.generation, invoke.epoch, :_}
-    live = [{{owner, :"$1"}, [{:>, :"$1", now}], [true]}]
+    live = [{{owner, :"$1"}, [{:>=, :"$1", now}], [true]}]
 
     if :ets.select_count(@nonces, live) < LocusBackends.max_nonces() do
       :ok
     else
-      :ets.select_delete(@nonces, [{{owner, :"$1"}, [{:"=<", :"$1", now}], [true]}])
+      :ets.select_delete(@nonces, [{{owner, :"$1"}, [{:<, :"$1", now}], [true]}])
       {:error, :nonce_cache_full}
     end
   end
 
   defp record(row, ts, now) do
-    :ets.select_delete(@nonces, [{{row, :"$1"}, [{:"=<", :"$1", now}], [true]}])
+    :ets.select_delete(@nonces, [{{row, :"$1"}, [{:<, :"$1", now}], [true]}])
 
     if :ets.insert_new(@nonces, {row, ts + LocusBackends.nonce_window_ms()}),
       do: :ok,

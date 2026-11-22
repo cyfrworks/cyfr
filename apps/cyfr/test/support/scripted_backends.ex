@@ -99,6 +99,7 @@ defmodule Cyfr.Test.ScriptedBackends do
              programs: %{},
              sessions: %{},
              spent: MapSet.new(),
+             closed: MapSet.new(),
              tools: %{},
              hold: MapSet.new(),
              pool: 32,
@@ -271,6 +272,18 @@ defmodule Cyfr.Test.ScriptedBackends do
   sessions ended, with no message of any client's to find it.
   """
   def lapse(%{agent: agent}), do: lapse_expired(agent)
+
+  @doc "Whether the service carried out a close of the box's `lifetime`, a refused one being none."
+  def closed?(%{agent: agent}, lifetime) do
+    named = %{
+      owner: {lifetime.athanor, lifetime.server},
+      version: {lifetime.generation, lifetime.epoch},
+      key: {lifetime.program, lifetime.home_id, lifetime.key, lifetime.mode},
+      lifetime: lifetime.id
+    }
+
+    Agent.get(agent, &MapSet.member?(&1.closed, named))
+  end
 
   @doc "The sessions of `server`'s owner, by id."
   def sessions(%{agent: agent}, server) do
@@ -819,7 +832,8 @@ defmodule Cyfr.Test.ScriptedBackends do
         end)
 
       spent = MapSet.put(st.spent, named)
-      {st.lose_close, %{st | sessions: sessions, spent: spent, lose_close: false}}
+      closed = MapSet.put(st.closed, named)
+      {st.lose_close, %{st | sessions: sessions, spent: spent, closed: closed, lose_close: false}}
     end)
   end
 
