@@ -68,6 +68,9 @@ defmodule PrismWeb.AquaLive do
   @behaviour PrismWeb.SystemLayer.Hook
   on_mount PrismWeb.SystemLayer.Hook
 
+  @behaviour PrismWeb.TerminalComponent
+  on_mount PrismWeb.TerminalComponent
+
   alias PrismWeb.AquaLive.{
     AgentsComponent,
     NotesComponent,
@@ -76,10 +79,6 @@ defmodule PrismWeb.AquaLive do
   }
 
   alias PrismWeb.{SystemLayer, TerminalComponent}
-
-  # What a program's terminal frame sends while the session it shows is
-  # being closed, which answers nothing until its close has.
-  @asked_of_session ~w(terminal_input terminal_written terminal_resize terminal_keep terminal_close)
 
   # Each section reloads on its own message, so a write refreshes what it
   # changed and nothing else: a note kept here does not re-read the
@@ -118,10 +117,6 @@ defmodule PrismWeb.AquaLive do
       |> assign(:known, %{})
       |> assign(:listings, %{})
       |> assign(:listing, :idle)
-      # The terminal a Sign in showed, and the last delivery its frame
-      # was handed, kept apart so no delivery renders the cards again.
-      |> assign(:terminal, nil)
-      |> assign(:terminal_delivery, nil)
       |> assign(:member_draft, AgentsComponent.empty_draft())
       |> assign(:admin_next, admin_next?(socket.assigns[:context]))
 
@@ -173,100 +168,6 @@ defmodule PrismWeb.AquaLive do
   def handle_event("setup_toggle", %{"open" => open}, socket) when open in ["true", "false"],
     do: {:noreply, assign(socket, :setup_toggled, open != "true")}
 
-  # The frame of the terminal a Sign in showed (`TerminalComponent`), whose
-  # events answer to the page that shows it. A session being closed is
-  # asked nothing meanwhile.
-  def handle_event(
-        event,
-        %{"session" => session},
-        %{assigns: %{terminal: %{session: session, closing: true}}} = socket
-      )
-      when event in @asked_of_session,
-      do: {:reply, %{}, socket}
-
-  def handle_event("terminal_ready", %{"session" => session} = params, socket) do
-    with %{session: ^session, ended: nil} = terminal <- socket.assigns.terminal,
-         {:ok, %{tail: %{bytes: tail}, kept: kept}} <-
-           Opus.Programs.attach(socket.assigns.context, session) do
-      _ = resized(socket, session, params)
-      terminal = %{terminal | kept: kept, attached: true}
-      {:reply, %{data: Base.encode64(tail)}, assign(socket, :terminal, terminal)}
-    else
-      {:error, reason} -> {:reply, %{}, ended(socket, session, reason)}
-      _another_session -> {:reply, %{}, socket}
-    end
-  end
-
-  def handle_event("terminal_input", %{"session" => session, "terminal_input" => data}, socket)
-      when is_binary(data) do
-    case Opus.Programs.input(socket.assigns.context, session, data) do
-      :ok ->
-        {:reply, %{}, socket}
-
-      {:error, reason} when reason in [:unavailable, :too_large] ->
-        {:reply, %{}, put_flash(socket, :error, "The program did not take that; type it again.")}
-
-      {:error, reason} ->
-        {:reply, %{}, ended(socket, session, reason)}
-    end
-  end
-
-  def handle_event("terminal_written", %{"session" => session, "delivery" => delivery}, socket)
-      when is_binary(delivery) do
-    with %{session: ^session} <- socket.assigns.terminal,
-         ^delivery <- socket.assigns.terminal_delivery,
-         {:error, reason} <- Opus.Programs.taken(socket.assigns.context, session, delivery) do
-      {:noreply, ended(socket, session, reason)}
-    else
-      _taken_or_not_the_last -> {:noreply, socket}
-    end
-  end
-
-  def handle_event("terminal_resize", %{"session" => session} = params, socket) do
-    _ = resized(socket, session, params)
-    {:noreply, socket}
-  end
-
-  def handle_event("terminal_keep", %{"session" => session} = params, socket) do
-    kept = params["kept"] == "true"
-
-    case {Opus.Programs.keep(socket.assigns.context, session, kept), socket.assigns.terminal} do
-      {:ok, %{session: ^session} = terminal} ->
-        {:noreply, assign(socket, :terminal, %{terminal | kept: kept})}
-
-      {{:error, reason}, _terminal} ->
-        {:noreply, ended(socket, session, reason)}
-
-      {:ok, _another_session} ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event("terminal_dismiss", _params, socket),
-    do: {:noreply, assign(socket, :terminal, nil)}
-
-  def handle_event(
-        "terminal_close",
-        %{"session" => session},
-        %{assigns: %{terminal: %{session: session} = terminal}} = socket
-      ) do
-    ctx = socket.assigns.context
-    tag = CyfrWeb.ContextGuard.capture(ctx)
-
-    {:noreply,
-     socket
-     |> assign(:terminal, %{terminal | closing: true})
-     |> start_async(
-       :close_terminal,
-       fn ->
-         {tag, session, PrismWeb.Ops.run_to_end(fn -> Opus.Programs.close(ctx, session) end)}
-       end,
-       supervisor: Prism.TaskSupervisor
-     )}
-  end
-
-  def handle_event("terminal_close", _params, socket), do: {:noreply, socket}
-
   # The grant for `ref`, asked in the page's system layer, whose sheet
   # binds the key; a walk that cannot be read is said instead.
   defp ask_grant(socket, ref) do
@@ -308,14 +209,6 @@ defmodule PrismWeb.AquaLive do
   end
 
   def handle_async(:program_listing, {:exit, _reason}, socket), do: {:noreply, socket}
-
-  def handle_async(:close_terminal, {:ok, {tag, session, result}}, socket) do
-    socket = not_closing(socket)
-    CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, closed(&1, session, result)})
-  end
-
-  # Only the node's shutdown stops a Close (`PrismWeb.Ops.run_to_end/1`).
-  def handle_async(:close_terminal, {:exit, _reason}, socket), do: {:noreply, socket}
 
   # The grant this page asked for. Granted, the model got its key: the
   # kept catalogue predates the key, so it is dropped before the re-read —
@@ -369,29 +262,10 @@ defmodule PrismWeb.AquaLive do
 
   # The terminal a Sign in started or found running, shown on this page,
   # in the card of the member whose Sign in it was, or in the setup.
-  def handle_info({:sign_in_terminal, program, member, session}, socket),
-    do: {:noreply, show_terminal(socket, program, member, session)}
-
-  def handle_info({Opus.Programs, session, {kind, delivery, %{bytes: bytes}}}, socket)
-      when kind in [:bytes, :tail] do
-    case socket.assigns.terminal do
-      %{session: ^session} ->
-        event = if kind == :tail, do: "terminal_tail", else: "terminal_output"
-        data = %{session: session, delivery: delivery, data: Base.encode64(bytes)}
-        {:noreply, socket |> assign(:terminal_delivery, delivery) |> push_event(event, data)}
-
-      _another_session ->
-        {:noreply, socket}
-    end
+  def handle_info({:sign_in_terminal, program, member, session}, socket) do
+    shown = %{session: session, name: program, member: member, back: nil}
+    {:noreply, TerminalComponent.show(socket, shown)}
   end
-
-  def handle_info({Opus.Programs, session, {:ended, reason}}, socket),
-    do: {:noreply, ended(socket, session, reason)}
-
-  # The shown session ended, though its end never reached this page as
-  # attached (it died, or was not attached yet).
-  def handle_info(%Cyfr.Bus.Program{kind: :ended, session: session, reason: reason}, socket),
-    do: {:noreply, ended(socket, session, reason)}
 
   def handle_info(%Cyfr.Bus.Program{}, socket), do: {:noreply, socket}
 
@@ -710,76 +584,13 @@ defmodule PrismWeb.AquaLive do
   # The terminal a Sign in showed
   # ============================================================================
 
-  defp show_terminal(
-         %{assigns: %{terminal: %{session: session}}} = socket,
-         _program,
-         _member,
-         session
-       ),
-       do: socket
+  # The person may have signed in there, so its program is asked again.
+  @impl PrismWeb.TerminalComponent
+  def terminal_ended(socket, %{name: program}), do: ask_listings(socket, [program])
+  def terminal_ended(socket, nil), do: socket
 
-  defp show_terminal(socket, program, member, session) do
-    socket = detach(socket)
-
-    assign(socket,
-      terminal_delivery: nil,
-      terminal: %{
-        session: session,
-        name: program,
-        member: member,
-        kept: false,
-        ended: nil,
-        attached: false,
-        closing: false,
-        back: nil
-      }
-    )
-  end
-
-  defp detach(%{assigns: %{terminal: %{session: session, ended: nil}}} = socket) do
-    Opus.Programs.detach(socket.assigns.context, session)
-    socket
-  end
-
-  defp detach(socket), do: socket
-
-  defp resized(socket, session, %{"rows" => rows, "cols" => cols})
-       when is_integer(rows) and is_integer(cols),
-       do: Opus.Programs.resize(socket.assigns.context, session, rows, cols)
-
-  defp resized(_socket, _session, _params), do: {:error, :invalid_size}
-
-  defp not_closing(%{assigns: %{terminal: %{} = terminal}} = socket),
-    do: assign(socket, :terminal, %{terminal | closing: false})
-
-  defp not_closing(socket), do: socket
-
-  defp closed(socket, session, {:ok, _closed_or_gone}), do: ended(socket, session, :closed)
-  defp closed(socket, session, {:error, :unanswered}), do: ended(socket, session, :unanswered)
-
-  defp closed(socket, _session, {:error, reason}),
-    do: put_flash(socket, :error, "Failed: #{error_message(reason)}")
-
-  # The first ending of the shown session is the one said, and the person
-  # may have signed in there, so its program is asked again.
-  defp ended(
-         %{assigns: %{terminal: %{session: session, ended: nil} = terminal}} = socket,
-         session,
-         reason
-       ) do
-    reason =
-      if reason in [:exited, :closed, :idle, :row_changed, :standing, :unanswered],
-        do: reason,
-        else: :not_found
-
-    socket
-    |> detach()
-    |> assign(:terminal, %{terminal | ended: reason})
-    |> push_event("terminal_ended", %{session: session})
-    |> ask_listings([terminal.name])
-  end
-
-  defp ended(socket, _session, _reason), do: socket
+  @impl PrismWeb.TerminalComponent
+  def terminal_dismissed(socket), do: TerminalComponent.detach(socket)
 
   # Every unit's provenance, keyed by its path in the tree: shipped and
   # unedited, shipped but edited here, or the athanor's own. What a card

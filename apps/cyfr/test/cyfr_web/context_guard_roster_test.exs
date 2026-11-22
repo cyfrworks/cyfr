@@ -80,10 +80,12 @@ defmodule CyfrWeb.ContextGuardRosterTest do
          {"live/registry_live.ex", :managed}
        ]},
     # A program row's call: adding one, or its Test, Refresh, Restart,
-    # hosts or Reset folder; and a running program's Close, which waits
-    # for its place to be back.
-    "live/programs_live.ex" =>
-      {2, [{"live/programs_live.ex", :call}, {"live/programs_live.ex", :closed}]},
+    # hosts or Reset folder.
+    "live/programs_live.ex" => {1, [{"live/programs_live.ex", :call}]},
+    # A program's Close from a page that shows its terminal's frame, which
+    # waits for its place to be back, answered to the frame's one owner.
+    "live/components/terminal_component.ex" =>
+      {1, [{"live/components/terminal_component.ex", :terminal_closed}]},
     # A thread with people, made in the overlay; a person added in a thread.
     "live/chat_overlay_live.ex" => {1, [{"live/chat_overlay_live.ex", :create}]},
     "live/shared_thread_live.ex" => {1, [{"live/shared_thread_live.ex", :add}]},
@@ -99,16 +101,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
          {"live/aqua_live/agents_component.ex", :brain_options},
          {"live/aqua_live/agents_component.ex", :set_up_program}
        ]},
-    # A brain's one `models` call after its grant, a program's listing a
-    # press asked for, and the Close of the terminal a Sign in showed,
-    # answered to the page.
+    # A brain's one `models` call after its grant, and a program's listing
+    # a press asked for, answered to the page.
     "live/aqua_live.ex" =>
-      {3,
-       [
-         {"live/aqua_live.ex", :setup_answer},
-         {"live/aqua_live.ex", :program_listing},
-         {"live/aqua_live.ex", :close_terminal}
-       ]},
+      {2, [{"live/aqua_live.ex", :setup_answer}, {"live/aqua_live.ex", :program_listing}]},
     # The system layer's listener on `prompt.changes`, whose facts
     # the layer takes in the focus it was opened for.
     "live/system_layer.ex" => {1, [{"live/system_layer.ex", :fact}]}
