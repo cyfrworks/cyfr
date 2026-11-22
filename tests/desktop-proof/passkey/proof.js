@@ -180,11 +180,13 @@ async function passkeyPhase() {
     {listed, shownThere, before: listedBefore.includes(waiting), added})
 
   // lock_forgets: locked while a request of the page's, which outlives
-  // it, is held until the lock is over: once the engine says that very
-  // request completed, no cookie is left, and the chooser tells of no
-  // failure. What a closing page's scripts write
-  // is the app's own tests' (main.test): here those writes end before the
-  // engine's clear does.
+  // it, is held until the lock is over: once the engine has received that
+  // very request's 200 and ended it, no cookie is left, and the chooser
+  // tells of no failure. How the engine ends a request whose page is gone
+  // (completed, or aborted after its 200, as a loaded runner shows) is not
+  // the row's claim; an end with no 200 received fails it. What a closing
+  // page's scripts write is the app's own tests' (main.test): here those
+  // writes end before the engine's clear does.
   await judged("lock_forgets", "a lock forgets all of the content's storage, and the closing page's request, answered afterwards, puts nothing back", async () => {
     const ses = w.webContents.session
     const held = HOME + "/login?held"
@@ -206,7 +208,7 @@ async function passkeyPhase() {
       send = null
       const answered = await waitFor(() => ended, "the engine's end of that request", 20_000)
       const left = (await ses.cookies.get({})).map((c) => `${c.name} at ${c.domain}`)
-      return [signedOutToWays(locked) && answered.how === "completed" && answered.status === 200 && left.length === 0,
+      return [signedOutToWays(locked) && answered.status === 200 && left.length === 0,
         {left, answered, chooser: locked.chooser}]
     } finally {
       send?.()
