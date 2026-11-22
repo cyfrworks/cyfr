@@ -169,8 +169,9 @@ defmodule Opus.Brain do
   out. A cleanup's two reads of the store come first, inside it: the pool
   gives each 15 seconds. The holder hears none of its ends while one of
   those calls is out, and then at once. On its way out it closes the
-  lifetime it minted, whatever that one's open answered, releases its
-  owner, and only then answers its caller: `lost` when no answer of the
+  lifetime it minted, whatever that one's open answered, releases the
+  owner it asked to hold, whether or not that was answered, and only then
+  answers its caller: `lost` when no answer of the
   driver's came. A close the box could not confirm stays owed, and the
   caller is answered all the same. The way out waits at most the box's
   close and release (`Opus.Programs.Box.close_timeout_ms/0`,
@@ -881,6 +882,7 @@ defmodule Opus.Brain do
        config: nil,
        asks: %{},
        generation: nil,
+       hold_asked: false,
        until: nil,
        once: nil
      }}
@@ -932,7 +934,8 @@ defmodule Opus.Brain do
   def handle_call({:close, ref}, _from, %{ref: ref} = state) do
     closed = disconnect(state)
     state = ended(state, if(closed == :ok, do: :closed, else: :unanswered))
-    {:stop, :normal, closed, %{state | reader: nil, grant: nil, session: nil, lifetime: nil}}
+    left = %{state | reader: nil, grant: nil, hold_asked: false, session: nil, lifetime: nil}
+    {:stop, :normal, closed, left}
   end
 
   def handle_call({:close, _ref}, _from, state), do: {:reply, {:error, :unanswered}, state}
@@ -1006,8 +1009,8 @@ defmodule Opus.Brain do
             {:stop, :normal, {:error, reason}, minted}
         end
 
-      {:error, reason} ->
-        {:stop, :normal, {:error, reason}, state}
+      {:error, reason, asked} ->
+        {:stop, :normal, {:error, reason}, asked}
     end
   end
 
@@ -1123,20 +1126,25 @@ defmodule Opus.Brain do
       ref = %{lifetime: state.lifetime, restarted: :atomics.new(1, [])}
       {:ok, read_from(%{state | ref: ref}, 0)}
     else
-      {:error, reason, _minted} -> {:error, reason}
-      refused -> refused
+      {:error, reason, _left} -> {:error, reason}
     end
   end
 
-  # The hold is the holder's own call, which registers it, and takes what
-  # is left as its wait.
+  # The hold is the holder's own call, which registers it as it is asked,
+  # whatever is answered, and takes what is left as its wait. A refusal
+  # answers with the state that says whether it was asked.
   defp hold(%{grant: nil} = state) do
     case left(state, Programs.Box.hold_timeout_ms()) do
       0 ->
-        {:error, :deadline}
+        {:error, :deadline, state}
 
       wait ->
-        with {:ok, grant} <- Programs.hold(state.owner, wait), do: {:ok, %{state | grant: grant}}
+        asked = %{state | hold_asked: true}
+
+        case Programs.hold(state.owner, wait) do
+          {:ok, grant} -> {:ok, %{asked | grant: grant}}
+          {:error, reason} -> {:error, reason, asked}
+        end
     end
   end
 
@@ -1166,10 +1174,7 @@ defmodule Opus.Brain do
         {:ok, %{minted | session: session}}
 
       {:error, {:refused, :stale_boot, _boot}} when again? ->
-        case hold(%{minted | grant: nil}) do
-          {:ok, held} -> fresh(held, false)
-          {:error, reason} -> {:error, reason, minted}
-        end
+        with {:ok, held} <- hold(%{minted | grant: nil}), do: fresh(held, false)
 
       {:error, reason} ->
         {:error, reason, minted}
@@ -1223,7 +1228,7 @@ defmodule Opus.Brain do
         do: Programs.box_close(state.lifetime),
         else: {:error, :unanswered}
 
-    if state.grant, do: Programs.release(state.owner)
+    if state.hold_asked, do: Programs.release(state.owner)
     closed
   end
 

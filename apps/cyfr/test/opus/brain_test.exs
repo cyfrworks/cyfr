@@ -2243,6 +2243,28 @@ defmodule Opus.BrainTest do
       refute_received {:session, "open", _open, _fields}
     end
 
+    test "a hold cut at the deadline answers only once its holder is no owner's",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.hold(fake, "sync", 30_000)
+      until = due_in!(ctx, row, 1_500)
+      assert_receive {:held, "sync", syncing}, 1_500
+      controller = GenServer.whereis(Opus.Programs.via("local"))
+      :ok = :sys.suspend(controller)
+
+      try do
+        # Past the deadline and short of a release's wait: a Box that cannot
+        # hear the release keeps the answer back.
+        refute_receive {:asked, _answer}, by(until)
+      after
+        :ok = :sys.resume(controller)
+      end
+
+      assert_receive {:asked, {:error, :backends_unavailable}}, 1_000
+      refute is_map_key(:sys.get_state(controller).owners, {ctx.athanor_id, row.id})
+      send(syncing, :go)
+      given_back!(fake, ctx, row)
+    end
+
     test "a stale boot's second hold has only what is left of the deadline",
          %{fake: fake, ctx: ctx, row: row} do
       Scripted.hold(fake, "open", 30_000)
