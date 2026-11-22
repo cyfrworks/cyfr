@@ -24,7 +24,7 @@ import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, bothW
   offered, passkeyFor, signOutOfPrism, signedInPrism, startSignIn, toSignIn, usePasskey} from "../account.js"
 import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
   decisions, fault, frontLength, harvest, history, inputs, js, judged, literal, load, lockDetail, opens, pageKilled, passkeys,
-  reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays,
+  reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays, sleep,
   submit, throughComputerLock, toldUnanswered, unansweredLoad, unclearable, UNCLEARED, undisturbed, waitFor} from "../lib.js"
 
 const OTHER = "desk-b"
@@ -179,9 +179,35 @@ async function passkeyPhase() {
     "the device's Prism and its own window show the same code, and with the passphrase the passkey is added to the account's log",
     {listed, shownThere, before: listedBefore.includes(waiting), added})
 
+  // lock_forgets: locked while the page still writes a cookie and a
+  // request of its own, which outlives it, is held until the lock is over:
+  // neither is left, and the chooser tells of no failure.
+  await judged("lock_forgets", "a lock forgets all of the content's storage, whatever the closing page was still writing or asking", async () => {
+    const ses = w.webContents.session
+    let send = null
+    ses.webRequest.onBeforeRequest({urls: [HOME + "/login?*"]}, (_details, callback) => { send = () => callback({}) })
+    try {
+      await js(w.webContents, `fetch("/login?held", {keepalive: true}).catch(() => {});
+        setInterval(() => { document.cookie = "proof_closing=1; path=/; max-age=60; secure" }, 0); 1`)
+      await waitFor(() => send, "the page's request held")
+      const from = await frontLength()
+      const locked = await lockDevice(w)
+      send()
+      send = null
+      const answered = await waitFor(async () => (await seen(new URL(HOME).hostname)).slice(from)
+        .find((r) => r.path === "/login" && r.status !== null), "the held request's answer", 20_000)
+      await sleep(500) // sleep-ok: how long the proof watches for what must not happen
+      const left = (await ses.cookies.get({})).map((c) => `${c.name} at ${c.domain}`)
+      return [signedOutToWays(locked) && answered.status === 200 && left.length === 0,
+        {left, answered: answered.status, chooser: locked.chooser}]
+    } finally {
+      send?.()
+      ses.webRequest.onBeforeRequest(null)
+    }
+  })
+
   // passkey_sign_in: locked, then signed in again with the new passkey
   // alone: the account window's assertion returns and Prism opens.
-  await lockDevice(w)
   answerWith(() => 0)
   w = await toSignIn()
   a = await startSignIn(w)

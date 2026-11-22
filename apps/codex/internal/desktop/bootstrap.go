@@ -41,7 +41,7 @@ button{font:inherit;padding:.5rem 1rem;margin:.5rem .5rem 0 0}.quiet{background:
 const token=f.get("token")||s.getItem("token")||"",was=history.state||{},reloaded=(performance.getEntriesByType("navigation")[0]||{}).type==="reload";
 const main=f.get("token")?{road:f.get("road"),told:(f.get("notice")||"").split(",")}:{road:was.road,told:reloaded&&was.told||[]},passkey=main.road==="passkey";
 s.setItem("token",token);history.replaceState(main,"",location.pathname);
-const notices={company:"This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet.",unanswered:"The CYFR at {CYFR} did not answer.",uncleared:"The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."};
+const notices={company:"This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet.",unanswered:"The CYFR at {CYFR} did not answer.",unforgotten:"The app locked, and could not clear the sign-in it kept on this computer. To clear it, press Connect to another CYFR, which clears it first.",uncleared:"The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."};
 let asked=null;
 function say(t){$("notice").textContent=t||""}
 function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}

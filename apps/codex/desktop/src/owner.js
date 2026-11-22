@@ -11,8 +11,19 @@
 import {closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync} from "node:fs"
 import path from "node:path"
 
-/** The kept storage of session `ses`, its owner recorded in `file`. */
-export function keptStorage(ses, file) {
+// How many times a clear goes over the storage. A closing page's scripts
+// write until its process has gone, and the engine takes such a write
+// after a clear that began once the window was destroyed (measured); a
+// response to such a page sets nothing (policy.js documentHeaders), so
+// those writes end with the process and the next pass takes them.
+const PASSES = 4
+
+/**
+ * The kept storage of session `ses`, its owner recorded in `file`; `say`
+ * hears why a clear failed: the call that threw, or each cookie left by
+ * its name and site, never its value.
+ */
+export function keptStorage(ses, file, say) {
   const owner = () => {
     try {
       return readFileSync(file, "utf8")
@@ -37,15 +48,26 @@ export function keptStorage(ses, file) {
 
   /** Whether all the storage kept is gone, on disk too. */
   async function clear() {
+    let call
+    let left
     try {
-      await ses.clearStorageData()
-      await ses.clearCache()
-      await ses.cookies.flushStore()
-      // The engine's promise does not say that it deleted: the cookies do.
-      return (await ses.cookies.get({})).length === 0
-    } catch {
-      return false
+      for (let pass = 0; pass < PASSES; pass++) {
+        call = "clearStorageData"
+        await ses.clearStorageData()
+        call = "clearCache"
+        await ses.clearCache()
+        call = "flushStore"
+        await ses.cookies.flushStore()
+        // The engine's promise does not say that it deleted: the cookies do.
+        call = "cookies.get"
+        left = await ses.cookies.get({})
+        if (left.length === 0) return true
+      }
+      say(`not cleared: left ${left.map((c) => `${c.name} at ${c.domain}`).join(", ")}`)
+    } catch (e) {
+      say(`not cleared: ${call} threw: ${e?.message ?? e}`)
     }
+    return false
   }
 
   /**
