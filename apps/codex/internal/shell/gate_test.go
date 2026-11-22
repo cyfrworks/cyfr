@@ -6,6 +6,7 @@ package shell
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -649,17 +650,18 @@ func TestGate_WhatEndedTheRequestDoesNotMatter(t *testing.T) {
 			t.Run(c.title()+", "+first, func(t *testing.T) {
 				s := c.made(t, func(*Config) {})
 				ctx, cancel := context.WithCancel(context.Background())
-				if first == "the deadline" {
-					ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
-				}
 				defer cancel()
+				parent, over := context.Context(ctx), newExpiring()
+				if first == "the deadline" {
+					parent = over
+				}
 				var then string
-				r := c.request(ctx, s, func() {
+				r := c.request(parent, s, func() {
 					switch first {
 					case "the client":
 						cancel()
 					case "the deadline":
-						<-ctx.Done()
+						over.expire()
 					}
 					s.b.shell.Lock(suspendedHere)
 					s.b.shell.mu.Lock()
@@ -682,72 +684,165 @@ func TestGate_WhatEndedTheRequestDoesNotMatter(t *testing.T) {
 	}
 }
 
-// Rule b, at every handler: with the shell held, a request returns at its
-// own deadline and at its generation's end, and the Lock alone waits, its
-// generation already ended.
+// Rule b, at every handler: with the shell held, a request that waits for
+// it returns as its own time runs out and as its generation ends, and the
+// Lock alone waits, its generation already ended. Only the time that ran
+// out waiting is told as a busy device.
 func TestGate_NoHandlerOutwaitsItsRequest(t *testing.T) {
 	for _, c := range handlerCases() {
-		for _, by := range []string{"deadline", "generation"} {
-			t.Run(c.title()+", "+by, func(t *testing.T) {
-				s := c.made(t, func(*Config) {})
-				sh := s.b.shell
-				sh.mu.Lock()
-				held := true
-				defer func() {
-					if held {
-						sh.mu.Unlock()
+		t.Run(c.title(), func(t *testing.T) {
+			var s scene
+			if c.kind != theLock {
+				// Both rows leave the shell as they found it, or fail saying
+				// so, so they share it.
+				s = c.made(t, func(*Config) {})
+			}
+			for _, by := range []string{"deadline", "generation"} {
+				t.Run(by, func(t *testing.T) {
+					s := s
+					if c.kind == theLock {
+						s = c.made(t, func(*Config) {})
 					}
-				}()
-				then := wholeState(t, s.b)
-				sh.genMu.Lock()
-				began := sh.gen
-				sh.genMu.Unlock()
-				ctx := context.Background()
-				if by == "deadline" {
-					var cancel context.CancelFunc
-					ctx, cancel = context.WithTimeout(ctx, 100*time.Millisecond)
-					defer cancel()
+					sh := s.b.shell
+					waiting := waiters(sh)
+					sh.mu.Lock()
+					held := true
+					defer func() {
+						if held {
+							sh.mu.Unlock()
+						}
+					}()
+					then := wholeState(t, s.b)
+					sh.genMu.Lock()
+					began := sh.gen
+					sh.genMu.Unlock()
+					over := newExpiring()
+					answered := make(chan *httptest.ResponseRecorder, 1)
+					go func() {
+						w := httptest.NewRecorder()
+						s.b.srv.ServeHTTP(w, c.request(over, s, nil))
+						answered <- w
+					}()
+					if c.kind == theLock {
+						becomesTrue(t, "the lock ends the generation first", func() bool { return !began.live() })
+						held = false
+						sh.mu.Unlock()
+						returns(t, "the lock", func() { <-answered })
+						return
+					}
+					var w *httptest.ResponseRecorder
+					if c.kind == anAction {
+						waits(t, "the request", waiting)
+					} else {
+						// Of the pages only the app's waits, to keep the terms it read.
+						select {
+						case <-waiting:
+						case w = <-answered:
+						case <-time.After(10 * time.Second):
+							t.Fatal("the page neither answered nor waited")
+						}
+					}
+					if w == nil {
+						if by == "deadline" {
+							over.expire()
+						} else {
+							locked, _ := sh.end(nil)
+							defer locked()
+						}
+						returns(t, "the request", func() { w = <-answered })
+					}
+					if now := wholeState(t, s.b); now != then {
+						t.Fatalf("it changed the shell it never took:\n%s", stateDiff(then, now))
+					}
+					if c.kind != anAction {
+						return
+					}
+					if by == "generation" && w.Code != http.StatusSeeOther {
+						t.Fatalf("a lock's end was answered %d", w.Code)
+					}
+					if by == "deadline" && !strings.Contains(body(w), stillBusy) {
+						t.Fatalf("a wait that outlasted its time was not told so: %d\n%s", w.Code, body(w))
+					}
+				})
+			}
+		})
+	}
+}
+
+// Only a wait that outlasted an action's time, its work not begun, is told
+// as a busy device.
+func TestGate_OnlyTheWaitForTheShellSaysBusy(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		before func(s *Shell, ctx context.Context)
+		held   bool
+		ends   string
+		lock   bool
+		busy   bool
+	}{
+		{name: "waiting to begin", held: true, ends: "deadline", busy: true},
+		{name: "waiting for its work, begun", before: func(s *Shell, ctx context.Context) { s.Begin(ctx) }, held: true, ends: "deadline", busy: true},
+		{name: "waiting again, its work under way", before: func(s *Shell, ctx context.Context) { s.CheckListed(ctx) }, held: true, ends: "deadline"},
+		{name: "waiting as the person left", held: true, ends: "client"},
+		{name: "waiting to begin, then a lock", held: true, ends: "deadline", lock: true},
+		{name: "its time over before it asked a held shell", held: true, ends: "before"},
+		{name: "its time over before it asked a free shell", ends: "before"},
+		{name: "its time over, its work under way, the shell held", before: func(s *Shell, ctx context.Context) { s.CheckListed(ctx) }, held: true, ends: "before"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, b, _ := certifiedLocked(t, func(*Config) {})
+			s := b.shell
+			waiting := waiters(s)
+			over := newExpiring()
+			parent, cancel := context.WithCancel(over)
+			defer cancel()
+			ctx, done := s.act(parent)
+			defer done()
+			if c.before != nil {
+				c.before(s, ctx)
+			}
+			if c.held {
+				s.mu.Lock()
+			}
+			if c.ends == "before" {
+				over.expire()
+				<-ctx.Done()
+			}
+			var ok bool
+			asked := make(chan struct{})
+			go func() {
+				defer close(asked)
+				_, ok = s.pageView(ctx, nil)
+			}()
+			if c.ends != "before" {
+				waits(t, "the action", waiting)
+				if c.ends == "deadline" {
+					over.expire()
+				} else {
+					cancel()
 				}
-				answered := make(chan *httptest.ResponseRecorder, 1)
-				go func() {
-					w := httptest.NewRecorder()
-					s.b.srv.ServeHTTP(w, c.request(ctx, s, nil))
-					answered <- w
-				}()
-				if c.kind == theLock {
-					becomesTrue(t, "the lock ends the generation first", func() bool { return !began.live() })
-					held = false
-					sh.mu.Unlock()
-					returns(t, "the lock", func() { <-answered })
-					return
+			}
+			returns(t, "the action", func() { <-asked })
+			if ok {
+				t.Fatal("it took the shell")
+			}
+			if c.held {
+				s.mu.Unlock()
+			}
+			if c.ends == "deadline" {
+				if _, ok := s.pageView(ctx, nil); ok {
+					t.Fatal("an action whose wait ran out went on")
 				}
-				if by == "generation" && c.kind == anAction {
-					becomesTrue(t, "the action began", func() bool {
-						sh.genMu.Lock()
-						defer sh.genMu.Unlock()
-						return began.active > 0
-					})
-				}
-				if by == "generation" {
-					locked, _ := sh.end(nil)
-					defer locked()
-				}
-				var w *httptest.ResponseRecorder
-				returns(t, "the request", func() { w = <-answered })
-				if now := wholeState(t, s.b); now != then {
-					t.Fatalf("it changed the shell it never took:\n%s", stateDiff(then, now))
-				}
-				if c.kind != anAction {
-					return
-				}
-				if by == "generation" && w.Code != http.StatusSeeOther {
-					t.Fatalf("a lock's end was answered %d", w.Code)
-				}
-				if by == "deadline" && !strings.Contains(body(w), stillBusy) && !strings.Contains(body(w), `class="notice"`) {
-					t.Fatalf("its deadline was told as nothing: %d\n%s", w.Code, body(w))
-				}
-			})
-		}
+			}
+			if c.lock {
+				s.Lock(suspendedHere)
+			}
+			w := httptest.NewRecorder()
+			b.srv.gaveUp(ctx, w, httptest.NewRequest(http.MethodPost, Origin+"/unlock", nil))
+			if said := strings.Contains(body(w), stillBusy); said != c.busy {
+				t.Fatalf("told as a busy device: %v", said)
+			}
+		})
 	}
 }
 
@@ -855,6 +950,12 @@ func TestGate_EveryTakingIsOnTheRoster(t *testing.T) {
 // cancelled it first, it changes nothing after that lock returns; and
 // waiting on a held shell it returns at its deadline and at a lock.
 func TestGate_EveryEntry(t *testing.T) {
+	// The rows on a held shell leave it as they found it, or fail saying
+	// so, so they share one.
+	_, held, passphrase := opened(t, func(*Config) {})
+	held.shell.mu.Lock()
+	held.shell.configured = false
+	held.shell.mu.Unlock()
 	for name, call := range entries() {
 		for _, first := range []string{"the client", "the deadline", "nobody"} {
 			t.Run(name+" after a lock, "+first+" first", func(t *testing.T) {
@@ -885,36 +986,71 @@ func TestGate_EveryEntry(t *testing.T) {
 		}
 		for _, by := range []string{"deadline", "generation"} {
 			t.Run(name+" on a held shell, "+by, func(t *testing.T) {
-				_, b, p := opened(t, func(*Config) {})
-				b.shell.mu.Lock()
-				b.shell.configured = false
-				b.shell.mu.Unlock()
-				b.shell.mu.Lock()
-				defer b.shell.mu.Unlock()
-				then := wholeState(t, b)
-				parent := context.Background()
-				if by == "deadline" {
-					var cancel context.CancelFunc
-					parent, cancel = context.WithTimeout(parent, 50*time.Millisecond)
-					defer cancel()
-				}
-				ctx, done := b.shell.act(parent)
+				waiting := waiters(held.shell)
+				held.shell.mu.Lock()
+				defer held.shell.mu.Unlock()
+				then := wholeState(t, held)
+				over := newExpiring()
+				ctx, done := held.shell.act(over)
 				defer done()
 				returned := make(chan struct{})
 				go func() {
 					defer close(returned)
-					call(b, ctx, p)
+					call(held, ctx, passphrase)
 				}()
-				if by == "generation" {
-					locked, _ := b.shell.end(nil)
+				waits(t, name, waiting)
+				if by == "deadline" {
+					over.expire()
+				} else {
+					locked, _ := held.shell.end(nil)
 					defer locked()
 				}
 				returns(t, name, func() { <-returned })
-				if now := wholeState(t, b); now != then {
+				if now := wholeState(t, held); now != then {
 					t.Fatalf("it changed a shell it never took:\n%s", stateDiff(then, now))
 				}
 			})
 		}
+	}
+}
+
+// overUnheard is a time that ran out just as the shell was given up: the
+// wait hears the shell first, and Err alone says so.
+type overUnheard struct {
+	context.Context
+	over atomic.Bool
+}
+
+func (o *overUnheard) Err() error {
+	if o.over.Load() {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestGate_AShellGivenUpAsTheTimeRanOutWasWaitedForTooLong(t *testing.T) {
+	l := &shellLock{held: make(chan struct{}, 1), releasing: func() {}}
+	l.Lock()
+	ctx := &overUnheard{Context: context.Background()}
+	l.waiting = func() {
+		ctx.over.Store(true)
+		<-l.held
+	}
+	if err := l.lockFor(ctx, newGeneration(), true); !errors.Is(err, errWaitedOut) || len(l.held) != 0 {
+		t.Fatalf("it was answered %v, holding %d", err, len(l.held))
+	}
+}
+
+// An action that could not take the shell asks for no ticket and is not
+// told that the device locked.
+func TestGate_AShellNotTakenIsNoLock(t *testing.T) {
+	_, b, _ := opened(t, func(*Config) {})
+	b.shell.mu.Lock()
+	defer b.shell.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := b.shell.Ticket(ctx, []byte(b.proof)); !errors.Is(err, errNotTaken) {
+		t.Fatalf("it was answered %v", err)
 	}
 }
 
@@ -964,20 +1100,32 @@ func TestGate_ConnectOpensNothingForAnEndedGeneration(t *testing.T) {
 }
 
 // A certificate that arrives for a channel of an ended generation is not
-// kept, and waits for no shell.
+// kept, whether it finds the shell held or free, and waits for neither.
 func TestGate_ARenewalOfAnEndedGenerationIsNotKept(t *testing.T) {
-	_, b, _ := opened(t, func(*Config) {})
-	b.shell.mu.Lock()
-	began := b.shell.gen
-	b.shell.renewed(began, json.RawMessage(`{"kept":"no"}`))
-	locked, _ := b.shell.end(nil)
-	defer locked()
-	// sleep-ok: the renewal's goroutine is given time to reach the held shell
-	time.Sleep(30 * time.Millisecond)
-	b.shell.mu.Unlock()
-	b.shell.mu.Lock()
-	defer b.shell.mu.Unlock()
-	if strings.Contains(string(b.shell.here.Certificate), "kept") {
-		t.Fatal("it was kept")
+	for _, row := range []string{"waiting for a held shell", "finding a free shell"} {
+		t.Run(row, func(t *testing.T) {
+			_, b, _ := opened(t, func(*Config) {})
+			s := b.shell
+			waiting := waiters(s)
+			var locked func()
+			var done <-chan struct{}
+			if row == "waiting for a held shell" {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				done = s.renewed(s.gen, json.RawMessage(`{"kept":"no"}`))
+				waits(t, "the renewal", waiting)
+				locked, _ = s.end(nil)
+			} else {
+				makeDeaf(s)
+				began := s.gen
+				locked, _ = s.end(nil)
+				done = s.renewed(began, json.RawMessage(`{"kept":"no"}`))
+			}
+			defer locked()
+			returns(t, "the renewal", func() { <-done })
+			if strings.Contains(string(s.here.Certificate), "kept") {
+				t.Fatal("it was kept")
+			}
+		})
 	}
 }

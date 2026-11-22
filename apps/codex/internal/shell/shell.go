@@ -477,8 +477,7 @@ type shownState struct {
 // notice, the view, the channel, a ticket or a session. It is compared
 // under mu, as the action takes the shell and again after each wait before
 // what the wait changes (current). What ended the action's own context,
-// the person, its deadline or the lock, decides nothing there: that is
-// read only to choose what the person is told (Server.gaveUp).
+// the person, its deadline or the lock, decides nothing there.
 //
 // A lock ends the generation before it takes the shell, and the next
 // begins once the last lock waiting has locked, so an action begun
@@ -499,11 +498,37 @@ func newGeneration() *generation {
 
 func (g *generation) live() bool { return g.ended.Err() == nil }
 
-type generationKey struct{}
+// underway is one action: the generation it began in, and what was seen of
+// its waits for the shell. took is that it took the shell for its work,
+// which clearing the last notice is not (Begin): from then on its deadline
+// is its work's failure, told as that, and a free shell is still its to
+// say so. outwaited is that its time ran out as it waited for a shell
+// another held: it takes nothing more, and is told of that wait where it
+// never took the shell (waitedOut).
+type underway struct {
+	g               *generation
+	took, outwaited bool
+}
+
+type underwayKey struct{}
+
+func underwayOf(ctx context.Context) *underway {
+	a, _ := ctx.Value(underwayKey{}).(*underway)
+	return a
+}
 
 func generationOf(ctx context.Context) *generation {
-	g, _ := ctx.Value(generationKey{}).(*generation)
-	return g
+	if a := underwayOf(ctx); a != nil {
+		return a.g
+	}
+	return nil
+}
+
+// waitedOut is whether ctx's action's time ran out waiting for the shell,
+// its work not begun: the one failure told as a busy device.
+func waitedOut(ctx context.Context) bool {
+	a := underwayOf(ctx)
+	return a != nil && a.outwaited && !a.took
 }
 
 // stale is whether ctx's action began before a lock.
@@ -521,24 +546,57 @@ type shellLock struct {
 	// by is the generation of the action holding it, nil for a lock.
 	by        *generation
 	releasing func()
+	// waiting is called as an action finds it held, for a test to see.
+	waiting func()
 }
 
 func (l *shellLock) Lock() { l.held <- struct{}{} }
 
-func (l *shellLock) lockFor(ctx context.Context, g *generation) bool {
+// errWaitedOut is a wait for the held shell that the action's deadline
+// ended: no other failure says that this device was busy.
+var errWaitedOut = errors.New("waited for this device past the action's time")
+
+// lockFor takes the shell in g. It waits only where the shell is held,
+// and late is an action that took it before: with its time over, that one
+// still takes a free shell, which is no wait.
+func (l *shellLock) lockFor(ctx context.Context, g *generation, late bool) error {
 	select {
 	case l.held <- struct{}{}:
-	case <-ctx.Done():
-		return false
-	case <-g.ended.Done():
-		return false
+	default:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		l.waiting()
+		select {
+		case l.held <- struct{}{}:
+		case <-ctx.Done():
+			return waitEnded(ctx)
+		case <-g.ended.Done():
+			return errLocked
+		}
+		if ctx.Err() != nil {
+			<-l.held
+			return waitEnded(ctx)
+		}
 	}
-	if ctx.Err() != nil || !g.live() {
+	if !g.live() {
 		<-l.held
-		return false
+		return errLocked
+	}
+	if err := ctx.Err(); err != nil && !late {
+		<-l.held
+		return err
 	}
 	l.by = g
-	return true
+	return nil
+}
+
+// waitEnded is the failure of a wait that ctx's end ended.
+func waitEnded(ctx context.Context) error {
+	if err := ctx.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return errWaitedOut
 }
 
 func (l *shellLock) Unlock() {
@@ -595,7 +653,7 @@ func New(cfg Config) (*Shell, error) {
 		cfg.Clients = ClientFile(filepath.Join(filepath.Dir(cfg.Record), "client.json"))
 	}
 	s := &Shell{cfg: cfg, gen: newGeneration()}
-	s.mu.held, s.mu.releasing = make(chan struct{}, 1), s.publish
+	s.mu.held, s.mu.releasing, s.mu.waiting = make(chan struct{}, 1), s.publish, func() {}
 	rec, err := holder.Load(cfg.Record)
 	switch {
 	case err == nil:
@@ -988,12 +1046,13 @@ func (s *Shell) newPassphrase() string {
 // could: not one begun before a lock, and not one whose wait for the shell
 // ran out.
 func (s *Shell) Begin(ctx context.Context) bool {
-	_, give, ok := s.take(ctx)
+	ctx, give, ok := s.take(ctx)
 	if !ok {
 		return false
 	}
 	defer give()
 	s.notice = ""
+	underwayOf(ctx).took = false // its work has not begun
 	return true
 }
 
@@ -1293,7 +1352,7 @@ func (s *Shell) create(ctx context.Context, name, accepted string) {
 func (s *Shell) Terms(ctx context.Context) (*account.Policy, error) {
 	ctx, give, ok := s.take(ctx)
 	if !ok {
-		return nil, errLocked
+		return nil, errNotTaken
 	}
 	defer give()
 	c, err := s.config(ctx)
@@ -1891,18 +1950,21 @@ func (s *Shell) forget() {
 // renewed persists a certificate the CYFR issued to a channel of g. It
 // arrives on the channel's own goroutine, or during a connect whose caller
 // holds the shell, so it takes the shell on a goroutine of its own, while
-// g is current. A device that dies, or locks, before it is written still
-// holds the old certificate, which locates the client for the next
-// renewal.
-func (s *Shell) renewed(g *generation, cert json.RawMessage) {
+// g is current, and answers a channel closed as that goroutine ends. A
+// device that dies, or locks, before it is written still holds the old
+// certificate, which locates the client for the next renewal.
+func (s *Shell) renewed(g *generation, cert json.RawMessage) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
-		if !s.mu.lockFor(g.ended, g) {
+		defer close(done)
+		if s.mu.lockFor(g.ended, g, false) != nil {
 			return
 		}
 		defer s.mu.Unlock()
 		s.here.Certificate = cert
 		_ = s.cfg.Clients.Update(func(c *ClientRecord) bool { c.Certificate = cert; return true })
 	}()
+	return done
 }
 
 // scheduleRenewal renews the certificate over the channel of g at half its
@@ -1921,7 +1983,7 @@ func (s *Shell) scheduleRenewal(g *generation) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		_ = ch.Renew(ctx)
-		if !s.mu.lockFor(g.ended, g) {
+		if s.mu.lockFor(g.ended, g, false) != nil {
 			return
 		}
 		defer s.mu.Unlock()
@@ -1965,7 +2027,7 @@ var errNoProof = errors.New("not the page that unlocked")
 func (s *Shell) Ticket(ctx context.Context, proof []byte) (string, error) {
 	ctx, give, ok := s.take(ctx)
 	if !ok {
-		return "", errLocked
+		return "", errNotTaken
 	}
 	defer give()
 	if !s.holds(proof) {
@@ -2052,6 +2114,10 @@ func (s *Shell) Lock(why string) {
 // the channel.
 var errLocked = errors.New("locked")
 
+// errNotTaken is an action that could not take the shell, whatever ended
+// it: no sentence says it (Server.gaveUp).
+var errNotTaken = errors.New("this device was not taken for the action")
+
 // end ends the current generation for a lock, which calls locked once it
 // has locked and before it gives the shell up. With only, it ends that one
 // alone, and is false where a lock ended it first.
@@ -2080,7 +2146,7 @@ func (s *Shell) act(parent context.Context) (ctx context.Context, done func()) {
 	g := s.gen
 	g.active++
 	s.genMu.Unlock()
-	ctx, stop := context.WithCancelCause(context.WithValue(parent, generationKey{}, g))
+	ctx, stop := context.WithCancelCause(context.WithValue(parent, underwayKey{}, &underway{g: g}))
 	unhook := context.AfterFunc(g.ended, func() { stop(errLocked) })
 	if !g.live() {
 		stop(errLocked)
@@ -2095,17 +2161,25 @@ func (s *Shell) act(parent context.Context) (ctx context.Context, done func()) {
 }
 
 // take takes the shell for ctx's action, or for one begun now where ctx
-// has none, until give. It is false once that action's context or its
-// generation ended, waiting or before.
+// has none, until give. It is false once that action's generation ended,
+// once a wait of it for the shell ran out, and once its context ended,
+// but where it took the shell before and finds it free (underway).
 func (s *Shell) take(ctx context.Context) (held context.Context, give func(), ok bool) {
 	done := func() {}
-	if generationOf(ctx) == nil {
+	if underwayOf(ctx) == nil {
 		ctx, done = s.act(ctx)
 	}
-	if !s.mu.lockFor(ctx, generationOf(ctx)) {
+	a := underwayOf(ctx)
+	if a.outwaited {
 		done()
 		return ctx, nil, false
 	}
+	if err := s.mu.lockFor(ctx, a.g, a.took); err != nil {
+		a.outwaited = errors.Is(err, errWaitedOut)
+		done()
+		return ctx, nil, false
+	}
+	a.took = true
 	return ctx, func() {
 		s.mu.Unlock()
 		done()
@@ -2160,12 +2234,22 @@ func (s *Shell) lock(why string) {
 // is done. It waits for nothing.
 func (s *Shell) Unlocked() bool { return s.open.Load() }
 
-// InUse is whether the device is unlocked or an action that may unlock it
-// is in flight: what the browser's exit locks.
-func (s *Shell) InUse() bool {
+// BrowserExited locks, as Lock does, as the screen's browser exits, in
+// every state but one: a recovery code shown and not yet saved, which this
+// shell alone holds and a lock would erase.
+func (s *Shell) BrowserExited(why string) {
+	if !s.unsavedRecoveryCode() {
+		s.Lock(why)
+	}
+}
+
+// unsavedRecoveryCode is that one state. With an action in flight it is
+// not: that action may be saving the code, and goes on to send it and to
+// open the device.
+func (s *Shell) unsavedRecoveryCode() bool {
 	s.genMu.Lock()
 	defer s.genMu.Unlock()
-	return s.gen.active > 0 || s.open.Load()
+	return s.gen.active == 0 && s.shown.Load().view.Page == PageRecovery
 }
 
 // unwatchedError refuses an unlock, saying what the page says.

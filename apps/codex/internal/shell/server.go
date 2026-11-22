@@ -452,6 +452,9 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 			return
 		case err == nil:
 			to = ticket
+		case errors.Is(err, errNotTaken):
+			srv.gaveUp(ctx, w, r)
+			return
 		case errors.Is(err, errNoProof):
 			srv.Shell.tell(ctx, "Only the page this device was unlocked on opens CYFR: lock it, then unlock it here.")
 		default:
@@ -469,23 +472,20 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// stillBusy is told where an action's own time ran out with nothing of it
-// said.
+// stillBusy is told of a wait for the shell that outlasted its action's
+// time before that action's work began (waitedOut), and of nothing else.
 const stillBusy = "This device did not get to that in time, because it was busy with what was asked before. Try again in a moment."
 
-// gaveUp answers an action that could not go on. One begun before a lock
-// goes back to the shell's page, which says nothing of it, whatever ended
-// it. Only then is what ended it read: its own deadline is told, and a
-// person who left is told nothing.
+// gaveUp answers an action that could not go on. Only that wait is told
+// here. Any other goes back to the shell's page, which says what the
+// action's own failure said, and of one begun before a lock nothing.
 func (srv *Server) gaveUp(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	if stale(ctx) || !errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+	if stale(ctx) || !waitedOut(ctx) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	v := srv.Shell.shownView()
-	if v.Notice == "" {
-		v.Notice = stillBusy
-	}
+	v.Notice = stillBusy
 	srv.page(w, pageData{View: v})
 }
 

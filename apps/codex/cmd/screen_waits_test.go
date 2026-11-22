@@ -6,6 +6,7 @@
 package cmd
 
 import (
+	"errors"
 	"html"
 	"io"
 	"net/http"
@@ -33,9 +34,19 @@ type hungScreen struct {
 	browser    string
 }
 
-func startHungScreen(t *testing.T) *hungScreen {
+func startHungScreen(t *testing.T, edit ...func(*holder.Record)) *hungScreen {
 	t.Helper()
 	screenProject(t)
+	// The folder's account service too, or a test of making an account asks
+	// cyfr.run.
+	env, err := os.OpenFile(".env", os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = env.WriteString("CYFR_DIRECTORY_URL=http://127.0.0.1:9\n")
+	if err = errors.Join(err, env.Close()); err != nil {
+		t.Fatal(err)
+	}
 	passphrase, err := holder.GeneratePassphrase()
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +58,9 @@ func startHungScreen(t *testing.T) *hungScreen {
 	// An account service on this computer that is not the folder's CYFR is
 	// refused with nothing sent, so this test asks no network.
 	rec.Identifier, rec.Directory = "per_"+strings.Repeat("e", 64), "http://127.0.0.1:9"
+	for _, e := range edit {
+		e(rec)
+	}
 	device := filepath.Join(os.Getenv("HOME"), ".cyfr", "device")
 	if err := os.MkdirAll(device, 0o700); err != nil {
 		t.Fatal(err)
@@ -168,6 +182,55 @@ func TestScreenShell_ALostWatchWaitsForNoUnlock(t *testing.T) {
 // left to finish for.
 func TestScreenShell_TheBrowsersExitLocksAnUnlockInFlight(t *testing.T) {
 	h := startHungScreen(t)
+	pid := h.browserPID()
+	unlocked := h.unlocking()
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	h.soon("the browser's exit's lock", func() { <-unlocked })
+}
+
+// It locks with nothing in flight and no channel open too: the proof a
+// typed passphrase handed the page ends with that page.
+func TestScreenShell_TheBrowsersExitLocksWithNothingInFlight(t *testing.T) {
+	h := startHungScreen(t, func(r *holder.Record) { r.Identifier, r.Directory = "", "" })
+	pid := h.browserPID()
+	post := func(path string, fields url.Values) string {
+		resp, err := h.ask(http.MethodPost, path, fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return html.UnescapeString(string(raw))
+	}
+	const onlyThatPage = "Only the page this device's PIN or passphrase was typed on can do that."
+	_, after, ok := strings.Cut(post("/create", url.Values{"name": {"ada"}, "secret": {h.passphrase}}), `data-proof="`)
+	proof, _, _ := strings.Cut(after, `"`)
+	if !ok || proof == "" {
+		t.Fatal("the typed passphrase handed its page no proof")
+	}
+	if page := post("/saved", url.Values{"proof": {proof}}); strings.Contains(page, onlyThatPage) {
+		t.Fatalf("that page's proof was refused before the browser's exit:\n%s", page)
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the browser started again", func() bool {
+		raw, _ := os.ReadFile(h.browser)
+		return strings.Count(string(raw), "\n") > 1
+	})
+	if page := post("/saved", url.Values{"proof": {proof}}); !strings.Contains(page, onlyThatPage) {
+		t.Fatalf("the proof outlived the browser that held it:\n%s", page)
+	}
+}
+
+// browserPID is the first browser's, once it runs.
+func (h *hungScreen) browserPID() int {
+	h.t.Helper()
 	var pid int
 	h.until("the browser runs", func() bool {
 		raw, err := os.ReadFile(h.browser)
@@ -178,9 +241,5 @@ func TestScreenShell_TheBrowsersExitLocksAnUnlockInFlight(t *testing.T) {
 		pid, err = strconv.Atoi(first)
 		return whole && err == nil && pid > 1
 	})
-	unlocked := h.unlocking()
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-		t.Fatal(err)
-	}
-	h.soon("the browser's exit's lock", func() { <-unlocked })
+	return pid
 }

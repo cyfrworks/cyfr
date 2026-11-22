@@ -139,6 +139,28 @@ func becomesTrue(t *testing.T, what string, ok func() bool) {
 	}
 }
 
+// waiters answers what receives as an action begins to wait for sh, which
+// another holds. It is set before that action begins.
+func waiters(sh *Shell) <-chan struct{} {
+	waiting := make(chan struct{}, 128)
+	sh.mu.waiting = func() {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+	}
+	return waiting
+}
+
+func waits(t *testing.T, what string, waiting <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-waiting:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s never waited for the shell", what)
+	}
+}
+
 // aloud is b.page without the test's own helpers, for a goroutine.
 func (b *box) aloud() string {
 	w := httptest.NewRecorder()
@@ -326,9 +348,6 @@ func TestRender_NoPageWaitsForAnActionInFlight(t *testing.T) {
 	if !strings.Contains(page, `action="/unlock"`) || !strings.Contains(confirm, unlockToConfirm) || !strings.Contains(passkey, unlockToApprove) {
 		t.Fatalf("beside an unlock in flight:\n%s\n%s\n%s", page, confirm, passkey)
 	}
-	if !b.shell.InUse() {
-		t.Fatal("an unlock in flight is no use of the device, so the browser's exit would not lock it")
-	}
 	g.open()
 	<-unlocking
 }
@@ -493,14 +512,11 @@ func TestLock_AnUnlockBegunBeforeItNeverOpensAfterIt(t *testing.T) {
 		home := newFakeHome(t)
 		b := newBox(t, home, t.TempDir())
 		setUpAndOpen(t, home, b)
+		waiting := waiters(b.shell)
 		b.shell.mu.Lock()
 		answered := make(chan *httptest.ResponseRecorder, 1)
 		go func() { answered <- b.post("/open", nil) }()
-		becomesTrue(t, "the action waits", func() bool {
-			b.shell.genMu.Lock()
-			defer b.shell.genMu.Unlock()
-			return b.shell.gen.active > 0
-		})
+		waits(t, "the action", waiting)
 		locked := make(chan struct{})
 		go func() {
 			defer close(locked)
@@ -803,14 +819,21 @@ func TestLock_AnActionCancelledFirstLeavesTheLocksSentence(t *testing.T) {
 func TestLock_AnExpiredActionStopsWaitingForTheShell(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
+	waiting := waiters(b.shell)
 	b.shell.mu.Lock()
 	defer b.shell.mu.Unlock()
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer cancel()
+	over := newExpiring()
+	ctx, done := b.shell.act(over)
+	defer done()
 	began := make(chan struct{})
 	go func() {
 		defer close(began)
 		b.shell.Begin(ctx)
 	}()
+	waits(t, "the action", waiting)
+	over.expire()
 	returns(t, "the expired action", func() { <-began })
+	if !waitedOut(ctx) {
+		t.Fatal("the wait's own failure was not seen")
+	}
 }
