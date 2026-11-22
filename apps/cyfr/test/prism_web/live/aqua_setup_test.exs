@@ -103,6 +103,8 @@ defmodule PrismWeb.AquaSetupTest do
              "key, shared with you, up to 25 requests a day"
            )
 
+    view |> element("#aqua-card-scout-edit") |> render_click()
+
     wait_until(
       fn -> has_element?(view, "#aqua-card-scout-model option[value^=\"chat-fixture::\"]") end,
       10_000,
@@ -228,6 +230,9 @@ defmodule PrismWeb.AquaSetupTest do
     assert has_element?(view, ~s(#aqua-setup-brain-chat-fixture[data-state="ready"]))
     assert has_element?(view, ~s([data-test="setup-aqua-waits"]), "Make a crew member first.")
 
+    wait_until(fn -> has_element?(view, new <> "-open") end, 10_000, "New crew member")
+    view |> element(new <> "-open") |> render_click()
+
     wait_until(
       fn -> has_element?(view, new <> ~s| select[name="brain"] option[value="#{key}"]|) end,
       10_000,
@@ -321,6 +326,7 @@ defmodule PrismWeb.AquaSetupTest do
     # Read again, a second Make under the member's name writes nothing over
     # it.
     {again, _html} = mount_athanor(conn, "/aqua?setup=1")
+    again |> element("#aqua-card-#{member}-edit") |> render_click()
 
     wait_until(
       fn ->
