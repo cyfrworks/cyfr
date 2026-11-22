@@ -17,8 +17,9 @@ import (
 // each request; it writes answers as text, never markup.
 // The road is main's word, in the address. On the passkey road the script
 // connects the CYFR remembered by itself as the app starts, leaves a CYFR
-// just connected to main, which opens it at its root, and asks main by an
-// address main alone answers to connect to another.
+// just connected to main, which opens it at its root, and asks main by
+// addresses main alone answers to connect to another and, where main says
+// the CYFR's page did not load, to open that CYFR again.
 // With a CYFR open it goes on to the device's pages by itself only when
 // it has nothing to tell (a notice main put in the address, or one
 // cyfr's answer names): with a notice it stays, as it does on the
@@ -30,19 +31,21 @@ button{font:inherit;padding:.5rem 1rem;margin:.5rem .5rem 0 0}.quiet{background:
 	bootstrapScript = `const s=sessionStorage,f=new URLSearchParams(location.hash.slice(1)),$=i=>document.getElementById(i);
 const token=f.get("token")||s.getItem("token")||"",passkey=f.get("road")==="passkey",keep=["road","notice"].filter(k=>f.get(k)).map(k=>k+"="+f.get(k)).join("&");
 s.setItem("token",token);history.replaceState(null,"",location.pathname+(keep?"#"+keep:""));
-const notices={company:"This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet.",uncleared:"The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."};
+const notices={company:"This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet.",unanswered:"The CYFR at {CYFR} did not answer.",uncleared:"The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."};
+const main=(f.get("notice")||"").split(",");
 let asked=null;
 function say(t){$("notice").textContent=t||""}
 function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
 function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.next&&(passkey||told));$("confirm").hidden=!asked;$("choose").hidden=!!asked||stay;$("road").hidden=!stay;
 if(asked){$("home").textContent=a.home;$("service").textContent=a.confirm}
-if(stay){$("open").textContent=a.home;$("passkey").hidden=$("either").hidden=$("another").hidden=!passkey;$("passkey").onclick=()=>location.assign(a.home+"/login");$("words").onclick=()=>location.assign(a.next)}
+if(stay){$("open").textContent=a.home;$("passkey").hidden=$("either").hidden=$("another").hidden=!passkey;$("again").hidden=!passkey||!main.includes("unanswered");$("passkey").onclick=()=>location.assign(a.home+"/login");$("words").onclick=()=>location.assign(a.next)}
 else if(a.next)location.replace(a.next)}
 function connected(a){if(!(passkey&&a.next))show(a,notices[a.notice])}
 function connect(address){say("Connecting\u2026");post("/bootstrap/connect",{address}).then(connected)}
-post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;const told=(f.get("notice")||"").split(",").map(n=>notices[n]).filter(Boolean).join(" ");show(a,told);if(passkey&&a.resume&&!told)connect(a.resume)});
+post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;const told=main.map(n=>notices[n]).filter(Boolean).join(" ").replace("{CYFR}",a.home||"");show(a,told);if(passkey&&a.resume&&!told)connect(a.resume)});
 $("connect").addEventListener("submit",e=>{e.preventDefault();connect($("address").value)});
 $("another").addEventListener("click",()=>location.assign("/bootstrap/another"));
+$("again").addEventListener("click",()=>location.assign("/bootstrap/again"));
 $("approve").addEventListener("click",()=>{say("Connecting\u2026");post("/bootstrap/approve",{home:asked.home,directory:asked.confirm}).then(connected)});
 $("decline").addEventListener("click",()=>{show({});say("Nothing was sent to that account service.")});`
 )
@@ -67,6 +70,7 @@ const bootstrapPage = `<!doctype html>
 </section>
 <section id="road" hidden>
 <h1>Sign in to the CYFR at <span class="code" id="open"></span></h1>
+<button id="again" hidden>Try again</button>
 <button id="passkey">Sign in with your passkey</button>
 <p id="either">No passkey on this computer, or you would rather not use one? Use this computer's own key, opened with its PIN or six-word passphrase.</p>
 <button id="words" class="quiet">Use this computer's key</button>

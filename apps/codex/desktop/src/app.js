@@ -132,10 +132,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         else answer(true)
       })
     }
-    if (effect.root && content && !storage.loadRoot(content, effect.root.home)) {
-      on({type: "gone", why: "the sign-in it keeps is another CYFR's"})
+    if (effect.root) {
+      soon((w) => {
+        if (!storage.loadRoot(w, effect.root.home)) on({type: "gone", why: "the sign-in it keeps is another CYFR's"})
+      })
     }
     if (effect.chooser) openContent(chooserAddress(effect.chooser))
+    if (effect.back) soon((w) => w.loadURL(chooserAddress(effect.back)).catch(() => {}))
     if (effect.relaunch) {
       say("starting again with the CYFR's route")
       const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a))
@@ -178,6 +181,16 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       if (content.isMinimized()) content.restore()
       content.focus()
     }
+  }
+
+  // A load main makes in the content window that stands, a turn later: the
+  // engine takes none from inside its report of a load or its question
+  // about one (crbug.com/347742).
+  function soon(load) {
+    const w = content
+    setImmediate(() => {
+      if (w && content === w) load(w)
+    })
   }
 
   // The app's one way out, `end`. It waits END_WAITS_MS at the most for
@@ -290,8 +303,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
       if (isMainFrame) heard({type: "landed", url})
     })
-    contents.on("did-fail-load", (_event, _code, _why, _url, isMainFrame) => {
-      if (isMainFrame) heard({type: "load-failed"})
+    contents.on("did-fail-load", (_event, code, _why, url, isMainFrame) => {
+      if (isMainFrame) heard({type: "load-failed", code, url})
     })
     w.on("closed", () => {
       if (content === w) {

@@ -921,6 +921,64 @@ test("a lost page is shown again in its own window, its session as it was", asyn
   }
 })
 
+// The engine reporting that `w`'s load of `url` failed, its error page
+// committed there (no did-navigate says so).
+function fails(w, url, code = -106, isMainFrame = true) {
+  if (isMainFrame) w.webContents.url = url
+  w.webContents.emit("did-fail-load", {}, code, "", url, isMainFrame)
+}
+
+test("a CYFR's page that did not load gives way to the chooser in its own window, its session as it was", async () => {
+  for (const road of [true, false]) {
+    const said = await signedIn(road)
+    const page = content()
+    const ses = page.webContents.session
+    const windows = world.windows.length
+    fails(page, HOME + "/threads")
+    assert.equal(page.webContents.url, HOME + "/threads", "not from inside the engine's report")
+    await settled()
+    assert.equal(page.webContents.url, READY + (road ? "&road=passkey" : "") + "&notice=unanswered")
+    assert.ok(!page.destroyed && world.windows.length === windows, "the same window")
+    assert.equal(page.webContents.session, ses, "the same session")
+    assert.ok(!child.heard.some((m) => m.type === "lock"))
+    assert.ok(!said.some((line) => line.startsWith("locked:")))
+    signedNobodyOut()
+  }
+})
+
+test("a frame's failed load, and a load given up, leave the page", async () => {
+  await signedIn()
+  const page = content()
+  fails(page, HOME + "/frame", -106, false)
+  fails(page, HOME + "/", -3)
+  await settled()
+  assert.equal(page.webContents.url, HOME + "/")
+})
+
+test("a lock in the turn of a failed load loads nothing into the window it closed", async () => {
+  await signedIn()
+  const page = content()
+  fails(page, HOME + "/threads")
+  await saysLocked()
+  assert.ok(page.destroyed)
+  assert.equal(page.webContents.url, HOME + "/threads")
+  assert.doesNotMatch(content().webContents.url, /unanswered/)
+})
+
+test("Try again loads the CYFR's root, a turn after the press", async () => {
+  await signedIn()
+  const page = content()
+  fails(page, HOME + "/threads")
+  await settled()
+  const chooser = page.webContents.url
+  assert.ok(navigate(page, "http://127.0.0.1:7340/bootstrap/again").prevented)
+  assert.equal(page.webContents.url, chooser, "not from inside the engine's question")
+  await settled()
+  assert.equal(page.webContents.url, HOME + "/")
+  assert.ok(!page.destroyed)
+  signedNobodyOut()
+})
+
 test("a lost confirmation window closes alone", async () => {
   await signedIn()
   const page = content()

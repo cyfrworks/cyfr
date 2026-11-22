@@ -7,7 +7,7 @@
 // account service this computer approved.
 
 import {fromCause, processLoss} from "../bound.mjs"
-import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, inputs, js, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, undisturbed, waitFor} from "../lib.js"
+import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, inputs, js, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
 
 // An account service the CYFR names once reconfigured (the front's
 // directory fault); nothing answers at it.
@@ -262,6 +262,20 @@ async function connectPhase() {
   row("renderer_killed", shownAgain(killed),
     "Prism's page's process killed: the page is shown again in its window, signed in as before", killed)
 
+  // unanswered, opened_again: a page of the CYFR that did not load gives
+  // way to the chooser, and its way on opens Prism with the device unlocked
+  // all along.
+  const unanswered = await unansweredLoad(w)
+  const {cookie: _kept, ...unansweredDetail} = unanswered
+  row("unanswered", toldUnanswered(unanswered, false),
+    "a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR, the device's session as it was", unansweredDetail)
+  await js(w.webContents, `document.querySelector("#words").click(); 1`)
+  const reopenedPast = await openCYFR(w, passphrase).catch((e) => [e.message])
+  const reopened = await waitFor(async () => content() === w && js(w.webContents, `!!document.querySelector(".phx-connected")`),
+    "Prism opened again", 30_000).catch(() => false)
+  row("opened_again", reopened && !reopenedPast.includes("locked"),
+    "the chooser's way on opens Prism again with no passphrase asked", {reopenedPast, reopened})
+
   // offline_lock: with the CYFR's front down (its control answered so) the
   // lock still closes Prism at once and, with nothing to tell, the chooser
   // goes on to the locked device's page; the session ends with the channel.
@@ -271,6 +285,9 @@ async function connectPhase() {
   await fault("x.test", "down")
   const ended = fromCause(() => js(w.webContents, `document.querySelector('[data-test="device-lock"]').click(); 1`),
     () => refusalOf(offline.cookie), ONE_MINUTE)
+  // The lock's own load of the CYFR fails before cyfr says locked: the
+  // chooser that tells of it goes with the content the lock closes.
+  await waitFor(() => closedAtLock.length > offline.lockedBefore, "main's lock")
   const unreached = await afterLock(offline.shownBefore, "a lock while the CYFR is unreachable")
   const atOnce = closedAtLock.slice(offline.lockedBefore)
   const lockedPage = await waitFor(() => js(unreached.back.webContents, `!!document.querySelector('form[action="/unlock"]')`),

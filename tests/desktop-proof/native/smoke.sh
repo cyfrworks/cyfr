@@ -13,15 +13,18 @@
 #              --no-sandbox, --disable-web-security,
 #              --ignore-certificate-errors), ends the app with 2, naming
 #              the switch
-#   startup    the app says ready and the chooser answers 200 on
-#              127.0.0.1:7340
+#   startup    the app says ready, the chooser answers 200 on
+#              127.0.0.1:7340 and the app's window is on the screen, which
+#              it is only once its page has drawn
+#   profile    (Linux, macOS) the app's profile is under the run's HOME,
+#              never the account's own
 #   sandbox    (Linux) every live renderer of the app runs under seccomp
 #              mode 2, in a user namespace other than the app's
 #   second     a second launch for the same account exits 0, saying the
 #              first is shown instead, and the first still serves
 #   renderer   with the content's renderer killed, the app shows the page
-#              again in a renderer of its own, the chooser still answering,
-#              and locks nothing
+#              again in a renderer of its own, the chooser still answering
+#              and the window on the screen, and locks nothing
 #   terminate  the app terminated (SIGTERM; on Windows the forced end Task
 #              Manager's End task gives) ends, its cyfr with it, and 7340
 #              stops answering
@@ -41,7 +44,8 @@
 # CYFR.app/Contents/MacOS/CYFR or CYFR.exe. 127.0.0.1:7340 must be free and
 # no other CYFR app may run for this account. On Linux the run needs a
 # display and a session bus (dbus-run-session -- xvfb-run -a). It needs
-# curl, and node for the listener that holds the port. The run takes a
+# curl, node for the listener that holds the port, and xdotool on Linux
+# to see the window. The run takes a
 # fresh HOME (on Windows a fresh USERPROFILE, APPDATA and LOCALAPPDATA too)
 # and stops every process it started on every exit.
 set -uo pipefail
@@ -57,13 +61,19 @@ case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*) OS=windows ;;
   *) echo "smoke: $(uname -s) is not a platform the app ships for" >&2; exit 64 ;;
 esac
-for tool in curl node; do
+TOOLS=(curl node)
+[ "$OS" != linux ] || TOOLS+=(xdotool)
+for tool in "${TOOLS[@]}"; do
   command -v "$tool" >/dev/null || { echo "smoke: $tool is needed" >&2; exit 64; }
 done
 
 RUN=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-desktop-smoke.XXXXXX") || exit 1
 mkdir -p "$RUN/home"
+ACCOUNT_HOME=$HOME
 export HOME="$RUN/home"
+# The engine on macOS asks the system for the account's folders, which
+# reads this and not HOME.
+[ "$OS" != macos ] || export CFFIXED_USER_HOME="$HOME"
 unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME ELECTRON_RUN_AS_NODE ELECTRON_ENABLE_LOGGING NODE_OPTIONS
 if [ "$OS" = windows ]; then
   mkdir -p "$RUN/home/AppData/Roaming" "$RUN/home/AppData/Local"
@@ -140,6 +150,27 @@ within_from() {
 within() { within_from "$SECONDS" "$@"; }
 gone() { ! kill -0 "$1" 2>/dev/null; }
 has_renderer() { [ -n "$(renderers "$1")" ]; }
+# has_window OSPID: a window of that process is on the screen, as the
+# system lists them.
+has_window() {
+  case "$OS" in
+    linux) [ -n "$(xdotool search --onlyvisible --all --pid "$1" --name '^CYFR' 2>/dev/null)" ] ;;
+    macos)
+      # shellcheck disable=SC2016 # the dollars are JavaScript's
+      [ "$(HOME="$ACCOUNT_HOME" osascript -l JavaScript -e '
+        function run(argv) {
+          ObjC.import("CoreGraphics")
+          var all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(17, 0)))
+          return all.some(function (w) {
+            return String(w.kCGWindowOwnerPID) === argv[0] && Number(w.kCGWindowLayer) === 0 && Number(w.kCGWindowAlpha) > 0
+          }) ? "shown" : "none"
+        }' "$1")" = shown ] ;;
+    windows)
+      # MainWindowHandle is 0 unless a top-level window of it is visible.
+      powershell.exe -NoProfile -NonInteractive -Command \
+        "if ((Get-Process -Id $1).MainWindowHandle -eq 0) { exit 1 }" ;;
+  esac
+}
 said() { grep -qF -- "$2" "$RUN/$1.log" 2>/dev/null; }
 answers() {
   [ "$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' "$CHOOSER")" = 200 ]
@@ -257,7 +288,24 @@ done
 launch first
 FIRST=$LAUNCHED FIRST_OS=$LAUNCHED_OS
 if ready first "$FIRST"; then
-  pass startup "ready, and $CHOOSER answers 200"
+  if within 30 has_window "$FIRST_OS"; then
+    pass startup "ready, $CHOOSER answers 200 and the app's window is on the screen"
+  else
+    fail startup "ready, and no window of the app was on the screen within 30 s"
+  fi
+
+  case "$OS" in
+    linux) PROFILE="$RUN/home/.config/CYFR/Partitions" ;;
+    macos) PROFILE="$RUN/home/Library/Application Support/CYFR/Partitions" ;;
+    *) PROFILE= ;;
+  esac
+  if [ -n "$PROFILE" ]; then
+    if within 30 test -d "$PROFILE"; then
+      pass profile "the app's profile is under the run's HOME"
+    else
+      fail profile "the app kept no profile at $PROFILE within 30 s"
+    fi
+  fi
 
   if [ "$OS" = linux ]; then
     app_ns=$(readlink "/proc/$FIRST_OS/ns/user") || app_ns=
@@ -309,8 +357,10 @@ if ready first "$FIRST"; then
       fail renderer "the app locked as its renderer ended: $(grep -F 'CYFR: locked:' "$RUN/first.log" | head -1)"
     elif ! within 20 answers; then
       fail renderer "the page was shown again, and $CHOOSER did not answer 200"
+    elif ! within 20 has_window "$FIRST_OS"; then
+      fail renderer "a new renderer runs, and no window of the app was on the screen within 20 s"
     else
-      pass renderer "a new renderer shows the page again, the app locked nothing and the chooser answers"
+      pass renderer "a new renderer shows the page again in the window on the screen, the app locked nothing and the chooser answers"
     fi
   fi
 
@@ -321,7 +371,8 @@ if ready first "$FIRST"; then
   fi
 else
   fail startup "$WHY"
-  for check in sandbox second renderer terminate; do
+  for check in profile sandbox second renderer terminate; do
+    [ "$check" != profile ] || [ "$OS" != windows ] || continue
     [ "$check" != sandbox ] || [ "$OS" = linux ] || continue
     fail "$check" "not run: the app did not start"
   done

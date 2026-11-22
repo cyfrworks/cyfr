@@ -104,6 +104,36 @@ test("on the passkey road the chooser stays with both ways on and the way to ano
   }
 })
 
+const UNANSWERED = `The CYFR at ${HOME} did not answer.`
+
+test("a chooser told that the CYFR did not answer names it and offers it again", async () => {
+  const keys = await chooser("", OPEN, OPEN, ROAD + "&notice=unanswered")
+  assert.deepEqual(keys.went.byItself, [])
+  assert.equal(keys.$("notice").textContent, UNANSWERED)
+  assert.deepEqual([keys.$("road").hidden, keys.$("again").hidden, keys.$("passkey").hidden], [false, false, false])
+  keys.$("again").fire("click")
+  await settled()
+  assert.deepEqual(keys.went.pressed, ["/bootstrap/again"], "main's to open")
+  assert.deepEqual(keys.went.asked, [], "and cyfr is asked nothing")
+
+  const words = await chooser("unanswered", OPEN)
+  assert.deepEqual(words.went.byItself, [], "it stays to say so")
+  assert.equal(words.$("notice").textContent, UNANSWERED)
+  assert.deepEqual([words.$("road").hidden, words.$("again").hidden, words.$("words").hidden], [false, true, false])
+  words.$("words").onclick()
+  assert.deepEqual(words.went.pressed, ["/"], "the device's pages, which offer it")
+})
+
+test("Try again shows only where main says the CYFR did not answer, and after a reload there", async () => {
+  for (const notice of ["", "company", "uncleared"]) {
+    const {$} = await chooser("", OPEN, OPEN, ROAD + (notice ? `&notice=${notice}` : ""))
+    assert.equal($("again").hidden, true, notice)
+  }
+  const first = await chooser("", OPEN, OPEN, ROAD + "&notice=unanswered")
+  const again = await chooser("", OPEN, OPEN, new URL(first.went.address, "http://127.0.0.1:7340").hash)
+  assert.deepEqual([again.$("again").hidden, again.$("notice").textContent], [false, UNANSWERED])
+})
+
 test("a reload keeps the road main said", async () => {
   const first = await chooser("", OPEN, OPEN, ROAD)
   assert.equal(first.went.address, "/bootstrap/#road=passkey")

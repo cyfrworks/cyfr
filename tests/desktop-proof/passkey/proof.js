@@ -22,10 +22,10 @@ import {BrowserWindow} from "electron"
 
 import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, bothWays, devicePrism, held, lockDevice,
   offered, passkeyFor, signOutOfPrism, signedInPrism, startSignIn, toSignIn, usePasskey} from "../account.js"
-import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, atBootstrap, bare, childOfThis, content, contentAt, decided,
+import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
   decisions, fault, frontLength, harvest, history, inputs, js, literal, load, lockDetail, opens, pageKilled, passkeys,
   reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays,
-  submit, throughComputerLock, unclearable, UNCLEARED, undisturbed, waitFor} from "../lib.js"
+  submit, throughComputerLock, toldUnanswered, unansweredLoad, unclearable, UNCLEARED, undisturbed, waitFor} from "../lib.js"
 
 const OTHER = "desk-b"
 // The session the first launch left, as its mark alone (sessionMark).
@@ -418,6 +418,18 @@ async function keptPhase() {
   await armWindow(w, [passkeyFor(new URL(HOME).hostname)])
   const calls = await bothCalls(w.webContents, "window")
   row("kept_policy", policyRefuses(calls), "in a kept session too, both passkey calls in Prism's page are refused by the app's policy", {calls})
+
+  // unanswered, try_again: a page of the CYFR that did not load gives way
+  // to the chooser, and its Try again opens Prism on the same sign-in.
+  const unanswered = await unansweredLoad(w)
+  const {cookie, ...detail} = unanswered
+  row("unanswered", toldUnanswered(unanswered, true),
+    "a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR and offering it again, signed in as before", detail)
+  await js(w.webContents, `document.querySelector("#again").click(); 1`)
+  const back = await waitFor(async () => !w.isDestroyed() && atHome(w.webContents.getURL()) && !w.webContents.isLoading() &&
+    js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism after Try again", 30_000).catch(() => false)
+  row("try_again", back && (await sessionCookie(w)) === cookie,
+    "Try again opens Prism at the CYFR's root, signed in as before", {back})
   return "quit"
 }
 

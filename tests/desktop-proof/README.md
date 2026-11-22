@@ -85,7 +85,7 @@ account's passkey on Chromium's virtual authenticator (CDP through its
 gives the app's engine a fake camera and microphone, so a page the app let
 have them would get them. Each row is a claim about the running app and
 fails when the behaviour it names is broken; the proof stops at the first
-that fails. The proof has 27 rows over three launches of the app (`run.sh`): `connect`, then
+that fails. The proof has 29 rows over three launches of the app (`run.sh`): `connect`, then
 `remembered` and `changed` on what that left on this computer.
 
 | Row | What holds | What the row observes |
@@ -110,6 +110,8 @@ that fails. The proof has 27 rows over three launches of the app (`run.sh`): `co
 | `reconnect` | the lock left the device locked; its passphrase opens Prism again under a new session | the locked device's page first; a new session cookie |
 | `computer_lock` | the computer's lock and sleep are not the app's | main's `lock-screen` and `suspend` events, as the system sends them, and for two seconds after: the same window, page and cookie, still opening a page; no chooser; no sign-out |
 | `renderer_killed` | Prism's page's process ended by the kill signal (as the kernel ends one when memory runs out) is shown again, signed in as before | the engine's report; the same window loaded again and connected; the same cookie; no lock and no sign-out |
+| `unanswered` | a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR, the device's session as it was | the front taking `down` and the page loaded again; the sentence and the way on in sight, with no Try again on this road; the same window and cookie; no lock and no sign-out |
+| `opened_again` | that chooser's way on opens Prism again with no passphrase asked | the device's unlocked page, and Prism connected |
 | `offline_lock` | with the CYFR unreachable, Prism's Lock still closes Prism at once and goes on to the locked device's page | the front taking `down`; the content closed before anything is awaited; nothing told and the passphrase asked; no sign-out; the cookie refused, looked for from the press on and seen within one minute of it |
 | `process_loss` | `cyfr` killed while Prism holds a session: the app closes its content for good and tells the person, and the session ends with the device's channel | the app's message, saying nothing of a sign-out; none posted; the cookie opening a page before and refused, looked for from the kill on and seen within one minute of it (`bound.mjs`) |
 | `remembered` | launched again, the CYFR's approved account service is not asked about again | the device's pages, with no question |
@@ -180,6 +182,7 @@ account window makes. The app is launched four times (`run.sh`):
 | `kept_after_kill`, `kept_after_quit`, `kept_after_loss` | killed right after a sign-in, quit, or left by `cyfr`'s loss, the app opens Prism by itself when it is launched again, signed in as before | Prism with nothing pressed; the first launch's cookie by its digest, its end where it was; that cookie opening a page |
 | `renderer_killed` | a lost page is shown again and signs nobody out | as `connect/`'s |
 | `kept_policy` | in a kept session too, both passkey calls are refused by the app's policy | each call's refusal naming the denied feature |
+| `unanswered`, `try_again` | a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR and offering it again; Try again opens Prism on the same sign-in | as `connect/`'s, with Try again in sight; Prism connected at the root under the same cookie |
 | `process_loss` | `cyfr`'s loss closes the content, tells the person and signs nobody out | the app's message; no sign-out; the cookie still opening a page |
 | `system_quit_lost`, `system_quit` | ended by the system, after `cyfr`'s loss or at the chooser, the app quits, and never from inside the engine's `before-quit`, from which a quit is lost | SIGTERM to the app's own process; the app's own quit asked after that event returned; the engine's `quit` within 20 s; the process then gone by itself within 30 s (`launch.sh`) |
 | `another_uncleared` | Connect to another CYFR does not advance past a clear that failed, and says so | the engine's clear made to fail; the ways on and the sentence; the proof's cookie and local storage item still kept |
@@ -205,6 +208,12 @@ page at that same origin, and the ceremony ends).
 The chooser is `cyfr`'s own, with nothing stood in: on the passkey road it
 stays with both ways on, and with a notice to show it stays on either road
 until a way on is taken.
+
+What the app takes for a CYFR's page not loaded is the engine's report of
+a top frame's load of the CYFR failing, never a load given up (code -3);
+that exception and a failure in each of main's states are held by the
+app's own tests, on the engine stood in for. A page that loads and then
+stops answering is reported by nothing, and stays.
 
 A limit of the app: when main's load of a sign-in's answer is rejected,
 as when the CYFR's page still had a load of its own pending, nobody is

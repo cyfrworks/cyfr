@@ -342,13 +342,14 @@ jobs:
         run: node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr${{ matrix.exe }}" --version 0.0.0-ci --arch ${{ matrix.arch }}
 
       # The DEB installs at /opt/cyfr and loads its sandbox's AppArmor
-      # profile; Xvfb and a session bus give the app a display and a bus.
+      # profile; Xvfb and a session bus give the app a display and a bus,
+      # and the smoke sees the app's window with xdotool.
       - name: Install the app (Linux)
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends "$PWD"/apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb xvfb xauth dbus-x11
+          sudo apt-get install -y --no-install-recommends "$PWD"/apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb xvfb xauth dbus-x11 xdotool
           echo "APP=/opt/cyfr/CYFR" >> "$GITHUB_ENV"
 
       - name: Install the app (macOS)

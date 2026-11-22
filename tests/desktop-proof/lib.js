@@ -402,6 +402,37 @@ export const signedOutToWays = (out) => sessionEnded(out) && out.chooser.told !=
 export const lockDetail = (out) => ({before: out.before, after: out.after, held: out.left !== null,
   closedAtOnce: out.closedAtOnce, signOuts: out.signOuts, chooser: out.chooser})
 
+// The sentence for a page of the CYFR that did not load.
+export const UNANSWERED = `The CYFR at ${HOME} did not answer.`
+
+// `w`'s page of the CYFR loaded again while the CYFR's front takes
+// nothing: what the person then has in that window.
+export async function unansweredLoad(w) {
+  const host = new URL(HOME).hostname
+  const cookie = await sessionCookie(w)
+  const from = await frontLength()
+  const saidBefore = said.length
+  await fault(host, "down")
+  try {
+    await js(w.webContents, "location.reload(); 1")
+    const shows = await waitFor(async () => {
+      if (w.isDestroyed() || !atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
+      const at = await js(w.webContents, `(() => { const inSight = (id) => {
+        const e = document.querySelector(id); return !!e && e.getClientRects().length > 0 }
+        return {words: inSight("#notice") ? document.querySelector("#notice").textContent : "",
+          again: inSight("#again"), onward: inSight("#words")} })()`)
+      return at.words && at.onward ? at : null
+    }, "the chooser after a load that failed", 30_000).catch((e) => ({why: e.message}))
+    return {...shows, visible: !w.isDestroyed() && w.isVisible(), window: content() === w,
+      same: (await sessionCookie(w)) === cookie, cookie,
+      locks: said.slice(saidBefore).filter((l) => l.startsWith("locked:")), signOuts: await signOutsSince(from)}
+  } finally {
+    await fault(host, "none")
+  }
+}
+export const toldUnanswered = (out, again) => out.words === UNANSWERED && out.onward && out.again === again && out.visible &&
+  out.window && out.same && out.locks.length === 0 && out.signOuts.length === 0
+
 // The sentence a clear that failed leaves on the chooser.
 export const UNCLEARED = "The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."
 
