@@ -568,7 +568,7 @@ defmodule Locus.BuilderServiceTest do
     test "a build ended at its memory bound answers memory with the configured limit", %{
       port: port
     } do
-      fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: true}})
+      fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "cap"}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
       assert {:refusal, {:memory, 268_435_456}, diagnostics} = List.last(lines)
@@ -580,7 +580,15 @@ defmodule Locus.BuilderServiceTest do
     end
 
     test "a build killed for any other reason is failed with its signal", %{port: port} do
-      _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: false}})
+      _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: nil}})
+
+      assert {200, lines} = Wire.build(port, Wire.request("true"))
+      assert {:refusal, {:failed, {:signal, "SIGKILL"}}, _diagnostics} = List.last(lines)
+    end
+
+    test "a build killed for the container's limit is failed with its signal, not at its bound",
+         %{port: port} do
+      _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "machine"}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
       assert {:refusal, {:failed, {:signal, "SIGKILL"}}, _diagnostics} = List.last(lines)

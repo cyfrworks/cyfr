@@ -302,6 +302,41 @@ func (g *Group) Kills() (Kills, error) {
 	return Kills{AtBound: killed && events["oom"] > 0, Outside: killed && events["oom"] == 0}, nil
 }
 
+// Used is the memory the group uses: its memory.current less the
+// inactive_file of its memory.stat, the file pages the kernel gives back
+// first. A tmpfs's pages are no inactive_file, so they count. The two files
+// are not one snapshot: a pair that would read below zero is an error, as a
+// file that does not read is, and never a zero.
+func (g *Group) Used() (uint64, error) {
+	stat, err := os.ReadFile(filepath.Join(g.path, "memory.stat"))
+	if err != nil {
+		return 0, err
+	}
+	current, err := os.ReadFile(filepath.Join(g.path, "memory.current"))
+	if err != nil {
+		return 0, err
+	}
+	charged, err := strconv.ParseUint(strings.TrimSpace(string(current)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("memory.current: %w", err)
+	}
+	for _, line := range strings.Split(string(stat), "\n") {
+		value, ok := strings.CutPrefix(line, "inactive_file ")
+		if !ok {
+			continue
+		}
+		inactive, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("memory.stat: %w", err)
+		}
+		if inactive > charged {
+			return 0, fmt.Errorf("inactive_file %d is more than the %d bytes charged", inactive, charged)
+		}
+		return charged - inactive, nil
+	}
+	return 0, errors.New("memory.stat: no inactive_file line")
+}
+
 func parseEvents(raw []byte) (map[string]uint64, error) {
 	events := map[string]uint64{}
 	sc := bufio.NewScanner(bytes.NewReader(raw))

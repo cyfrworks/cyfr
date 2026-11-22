@@ -496,7 +496,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
           f"samples; its last counters read {sampler.last_events()}; container peak {mib(sampler.container_peak())} of "
           f"{before['max']} bytes", flush=True)
     expect(any(ended_line in line for line in logs.splitlines()),
-           "detection: the keeper reported the runner ended at its own bound (memory_exceeded, from the group's own "
+           "detection: the keeper reported the runner ended at its own bound (memory cap, from the group's own "
            "counters), and the service logged it", [line for line in logs.splitlines() if "memory" in line][-10:])
     expect(all(ready["current"] < g["current"] < bound for _, _, g in holding)
            and all(a["current"] < b["current"] for (_, _, a), (_, _, b) in zip(holding, holding[1:])),

@@ -365,3 +365,27 @@ func TestKillsTellsTheSpawnsBoundFromTheContainers(t *testing.T) {
 		t.Errorf("missing events read as %+v", got)
 	}
 }
+
+// A group's use is what it is charged less the file pages the kernel gives
+// back first, and a reading that cannot be made is an error, never a zero.
+func TestUsedIsWhatIsChargedLessInactiveFilePages(t *testing.T) {
+	stat := "anon 4096\nfile 12288\ninactive_anon 4096\nshmem 4096\ninactive_file 8192\n"
+	for name, c := range map[string]struct {
+		files map[string]string
+		want  uint64
+		fails bool
+	}{
+		"charged less inactive file": {files: map[string]string{"memory.current": "20480\n", "memory.stat": stat}, want: 12288},
+		"an empty group":             {files: map[string]string{"memory.current": "0\n", "memory.stat": "inactive_file 0\n"}},
+		"no memory.current":          {files: map[string]string{"memory.stat": stat}, fails: true},
+		"no memory.stat":             {files: map[string]string{"memory.current": "20480\n"}, fails: true},
+		"no inactive_file":           {files: map[string]string{"memory.current": "20480\n", "memory.stat": "anon 4096\n"}, fails: true},
+		"a count that does not read": {files: map[string]string{"memory.current": "max\n", "memory.stat": stat}, fails: true},
+		"more inactive than charged": {files: map[string]string{"memory.current": "4096\n", "memory.stat": stat}, fails: true},
+	} {
+		used, err := (&Group{path: namespaceRoot(t, c.files)}).Used()
+		if (err != nil) != c.fails || used != c.want {
+			t.Errorf("%s: Used = %d, %v", name, used, err)
+		}
+	}
+}

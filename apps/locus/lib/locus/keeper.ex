@@ -58,8 +58,9 @@ defmodule Locus.Keeper do
   whose last frames only the retirement waits for. `send/2` writes stdin
   frames through the connection, holding them until the relay attaches;
   `signal/2` signals the spawn; `release/3` asks for its retirement with
-  a grace; `pool_stats/2` reads a pool. A relay that has not attached
-  within 10 s, or that sends a frame the codec refuses or on a stream
+  a grace; `pool_stats/2` reads a pool; `measure/2` reads what the spawn
+  uses, and a reading not made is an error, never a zero. A relay that has
+  not attached within 10 s, or that sends a frame the codec refuses or on a stream
   other than stdout and stderr, has its spawn released with no grace,
   and an owner that dies has its spawn released at once. When the
   channel closes every spawn is already retired, and every owner hears
@@ -99,7 +100,7 @@ defmodule Locus.Keeper do
   pid}` or `{:refused, code}`, `:attached`, `{:control, bytes}` and
   `:control_closed` (once), `{:relay, bytes}` and `:relay_closed` (once),
   `{:stdout, bytes}` and `{:stderr, bytes}`, `{:exited, exit,
-  memory_exceeded}`, `{:error, :relay_protocol}`, `{:error, :channel_lost}`
+  memory}`, `{:error, :relay_protocol}`, `{:error, :channel_lost}`
   and `:released`.
 
   `send_control/2` writes control bytes, holding them until the relay
@@ -127,12 +128,13 @@ defmodule Locus.Keeper do
   ## The memory bound
 
   A spawn that cannot stay under its bound loses every process at once,
-  and the leader's `exited` says so (`memory_exceeded`), read by cyfr-locus
+  and the leader's `exited` says so (`memory` is `cap`), read by cyfr-locus
   from the cgroup's own counters: `run/2` then answers
   `{:error, {:memory, limit_bytes}}`, the build wire's `memory` refusal,
-  whatever else this side was doing when it heard. An `exited` that does
-  not say so is a status or a signal like any other, a kill for the
-  container's own limit among them. Where cyfr-locus cannot give a spawn
+  whatever else this side was doing when it heard. Any other `exited` is a
+  build's status or signal like any other, a kill for the container's own
+  limit (`machine`) among them. A long-lived spawn's owner hears which of
+  the two it was with the exit. Where cyfr-locus cannot give a spawn
   such a cgroup it refuses the request as `memory_unavailable`, and `run/2`
   answers the wire's `unavailable` refusal naming what the deployment
   lacks: the builder's container needs the `writable-cgroups=true`
@@ -311,7 +313,7 @@ defmodule Locus.Keeper do
             on_output: Keyword.get(opts, :on_output, fn _line -> :ok end),
             max_stdout: Keyword.fetch!(opts, :max_stdout_bytes),
             memory_bytes: memory_bytes,
-            memory_exceeded: false,
+            memory: nil,
             stdin: stdin,
             conn: nil,
             conn_open: false,
@@ -458,6 +460,18 @@ defmodule Locus.Keeper do
   end
 
   @doc """
+  The bytes a long-lived spawn uses, read by cyfr-locus from its cgroup.
+  A spawn retired or no longer followed is `:unknown_spawn` and a reading
+  cyfr-locus could not make `{:refused, "unmeasured"}`.
+  """
+  @impl Locus.Launcher
+  def measure(server, %{ref: ref}) do
+    GenServer.call(server, {:measure, ref}, @pool_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
+
+  @doc """
   Make the kept home `id` if it is absent and answer its uid. A home's uid
   is its folder's owner, read with a stat; a new home draws the lowest uid
   of the range that no home under the root owns, no home request in
@@ -551,8 +565,7 @@ defmodule Locus.Keeper do
     reactivate(%{s | conn: conn, conn_open: true})
   end
 
-  defp on_keeper(s, {:exited, exit, memory_exceeded}),
-    do: %{s | exit: exit, memory_exceeded: memory_exceeded}
+  defp on_keeper(s, {:exited, exit, memory}), do: %{s | exit: exit, memory: memory}
 
   defp on_keeper(s, :released), do: %{s | released: true, released_by: now() + @drain_timeout_ms}
 
@@ -680,7 +693,7 @@ defmodule Locus.Keeper do
     # The kernel's own report of how the build ended comes first: a build
     # ended at its bound is that, whatever this side was doing when it heard.
     cond do
-      s.memory_exceeded -> {:error, {:memory, s.memory_bytes}}
+      s.memory == :cap -> {:error, {:memory, s.memory_bytes}}
       s.failure != nil -> {:error, s.failure}
       s.exit == nil -> {:error, {:spawn_failed, :no_exit_reported}}
       true -> {:ok, %{exit: s.exit, stdout: IO.iodata_to_binary(s.stdout)}}
@@ -989,6 +1002,19 @@ defmodule Locus.Keeper do
   def handle_call({:resize, ref, rows, cols}, from, state),
     do: spawn_request(ref, &%{type: :resize, spawn_id: &1, rows: rows, cols: cols}, from, state)
 
+  # The caller waits for cyfr-locus's reply, which names the spawn alone: it
+  # answers every caller waiting on that spawn's reading.
+  def handle_call({:measure, ref}, from, state) do
+    case spawn_request(ref, &%{type: :measure, spawn_id: &1}, from, state) do
+      {:reply, :ok, state} ->
+        entry = state.requests[ref]
+        {:noreply, put_entry(state, ref, %{entry | measuring: [from | entry.measuring]})}
+
+      not_sent ->
+        not_sent
+    end
+  end
+
   def handle_call({:fence, tag}, _from, state) do
     if Enum.any?(state.requests, fn {_ref, entry} -> match?({_pid, ^tag}, entry.heir) end),
       do: {:reply, :pending, state},
@@ -1249,7 +1275,8 @@ defmodule Locus.Keeper do
   defp redact_message(message), do: message
 
   # A request naming a spawn the keeper has reported and not released,
-  # answered once its line is written: the keeper answers only a refusal.
+  # answered once its line is written: the keeper answers a signal and a
+  # resize only with a refusal, and a measure is waited for (`:measure`).
   defp spawn_request(ref, request, _from, state) do
     with %{kind: :handle, released: false, spawn_id: spawn_id} when spawn_id != nil <-
            state.requests[ref],
@@ -1569,6 +1596,7 @@ defmodule Locus.Keeper do
         conn: nil,
         frames: "",
         pending: [],
+        measuring: [],
         control_open: extra.kind == :control,
         relay_open: false
       }
@@ -1631,17 +1659,21 @@ defmodule Locus.Keeper do
     end
   end
 
+  defp on_reply({:error, nil, spawn_id, "unmeasured" = code}, state) when is_binary(spawn_id),
+    do: measured(state, spawn_id, {:error, {:refused, code}})
+
   # A release for a spawn cyfr-locus no longer holds: its retirement is done.
   defp on_reply({:error, nil, spawn_id, "unknown_spawn"}, state) when is_binary(spawn_id),
     do: released(state, spawn_id)
 
-  defp on_reply({:exited, spawn_id, exit, memory_exceeded}, state) do
+  defp on_reply({:exited, spawn_id, exit, memory}, state) do
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
-      notify(entry, ref, exited(entry, exit, memory_exceeded))
+      notify(entry, ref, exited(entry, exit, memory))
       state
     end)
   end
 
+  defp on_reply({:measured, spawn_id, bytes}, state), do: measured(state, spawn_id, {:ok, bytes})
   defp on_reply({:released, spawn_id}, state), do: released(state, spawn_id)
 
   defp on_reply({:pool, id, _pool, size, free, quarantined}, state) do
@@ -1694,14 +1726,20 @@ defmodule Locus.Keeper do
 
   defp refused(_entry, _ref, _code), do: :ok
 
-  defp exited(%{kind: :run}, exit, memory_exceeded), do: {:exited, exit, memory_exceeded}
+  defp exited(%{kind: :run}, exit, memory), do: {:exited, exit, memory}
 
-  # A long-lived spawn's owner hears the exit as `Locus.Launcher` spells it;
-  # an end at the memory bound is a SIGKILL there, as the kernel sent it.
-  defp exited(%{kind: :handle}, {:status, code}, _memory_exceeded), do: {:exited, code, nil}
-  defp exited(%{kind: :handle}, {:signal, signal}, _memory_exceeded), do: {:exited, nil, signal}
+  # A long-lived spawn's owner hears the exit as `Locus.Launcher` spells it.
+  defp exited(%{kind: :handle}, {:status, code}, memory), do: {:exited, code, nil, memory}
+  defp exited(%{kind: :handle}, {:signal, signal}, memory), do: {:exited, nil, signal, memory}
 
-  defp exited(%{kind: :control}, exit, memory_exceeded), do: {:exited, exit, memory_exceeded}
+  defp exited(%{kind: :control}, exit, memory), do: {:exited, exit, memory}
+
+  defp measured(state, spawn_id, answer) do
+    with_request(state, state.spawns[spawn_id], fn ref, entry ->
+      Enum.each(entry.measuring, &GenServer.reply(&1, answer))
+      put_entry(state, ref, %{entry | measuring: []})
+    end)
+  end
 
   # A run's entry stays until its caller is done, so a relay connection
   # that arrives after the report still reaches the caller. A long-lived
@@ -1709,6 +1747,9 @@ defmodule Locus.Keeper do
   # delivered its last frames, or its bound passes. A spawn with a control
   # channel is done at the report.
   defp released(state, spawn_id) do
+    # A spawn that is gone has no reading, so whoever waits for one hears so.
+    state = measured(state, spawn_id, {:error, :unknown_spawn})
+
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
       case entry do
         %{kind: :run} ->

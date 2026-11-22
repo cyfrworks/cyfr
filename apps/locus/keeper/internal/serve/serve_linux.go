@@ -621,6 +621,8 @@ func (s *server) handle(req *protocol.Request) {
 		s.handleRelease(req)
 	case protocol.TypePool:
 		s.handlePool(req)
+	case protocol.TypeMeasure:
+		s.handleMeasure(req)
 	case protocol.TypeHomeMake, protocol.TypeHomeMeasure, protocol.TypeHomeRetire:
 		s.handleHome(req)
 	}
@@ -639,6 +641,28 @@ func (s *server) handlePool(req *protocol.Request) {
 		return
 	}
 	s.send(protocol.NewPoolReply(req.ID, req.Pool, st.Size, st.Free, st.Quarantined))
+}
+
+// handleMeasure answers what a spawn's group uses. The reading is taken
+// under mu: a pooled spawn's group is named by its uid, which no other spawn
+// is given until mu has seen this one gone.
+func (s *server) handleMeasure(req *protocol.Request) {
+	var used uint64
+	var err error
+	s.mu.Lock()
+	sp := s.spawns[req.SpawnID]
+	if sp != nil {
+		used, err = sp.group.Used()
+	}
+	s.mu.Unlock()
+	if err != nil {
+		s.log.Error("measure: spawn %s: reading its memory use: %v", req.SpawnID, err)
+	}
+	if sp == nil || err != nil {
+		s.send(protocol.NewError("", req.SpawnID, protocol.CodeUnmeasured))
+		return
+	}
+	s.send(protocol.NewMeasured(req.SpawnID, used))
 }
 
 func (s *server) handleSignal(req *protocol.Request) {
@@ -1061,29 +1085,36 @@ func (s *server) watchLeader(sp *spawn) {
 		c := ws.ExitStatus()
 		code = &c
 	}
-	s.send(protocol.NewExited(sp.id, code, sig, s.memoryExceeded(sp)))
+	s.send(protocol.NewExited(sp.id, code, sig, s.memoryEnd(sp)))
 	close(sp.exitReported)
 	s.retire(sp, leaderExitGrace, true)
 }
 
-// memoryExceeded reports whether the kernel killed processes of the spawn at
-// the spawn's own memory bound, as the group's counters say; the kernel
-// counts a kill before it delivers it, so a leader reaped after one finds it
-// counted. A kill for the container's limit is not the spawn's bound.
-func (s *server) memoryExceeded(sp *spawn) bool {
+// memoryEnd says what the kernel killed processes of the spawn for, as the
+// group's counters say: its own bound (MemoryCap), or the container's limit
+// while it was under that bound (MemoryMachine); nil for neither, or for
+// counters that do not read. The kernel counts a kill before it delivers it,
+// so a leader reaped after one finds it counted.
+func (s *server) memoryEnd(sp *spawn) *string {
 	if sp.group == nil {
-		return false
+		return nil
 	}
+	var memory string
 	kills, err := sp.group.Kills()
 	switch {
 	case err != nil:
 		s.log.Error("spawn %s: reading its memory counters: %v", sp.id, err)
+		return nil
 	case kills.AtBound:
+		memory = protocol.MemoryCap
 		s.log.Warn("spawn %s: uid %d reached its memory bound and the kernel killed its processes", sp.id, sp.account.UID)
 	case kills.Outside:
+		memory = protocol.MemoryMachine
 		s.log.Warn("spawn %s: processes of uid %d were killed for the container's memory limit, under the spawn's own bound", sp.id, sp.account.UID)
+	default:
+		return nil
 	}
-	return kills.AtBound
+	return &memory
 }
 
 // retire ends a spawn once: every process of its uid is terminated, what

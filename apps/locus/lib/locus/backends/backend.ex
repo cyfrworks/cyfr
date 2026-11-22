@@ -24,7 +24,9 @@ defmodule Locus.Backends.Backend do
   saying whether the end was a crash (`crash: true`: the process exited
   of its own accord with a status other than 0 or by a signal, wrote a
   line past `Prima.LocusBackends.max_line_bytes/0`, or its spawn was
-  refused) and why; once nothing of its process is left (the launcher's `:released`, or
+  refused) and why, and `memory` what memory limit killed the process
+  where that ended the session (`:cap` its own bound, `:machine` the
+  container's), nil otherwise; once nothing of its process is left (the launcher's `:released`, or
   its refusal of the spawn), `:vacated`, after which it holds no uid. A
   spawn the launcher did not answer (`launcher_unavailable`) is
   `:unconfirmed` instead: it may yet run, and only the launcher can say.
@@ -35,6 +37,12 @@ defmodule Locus.Backends.Backend do
   with the stop grace; none of them is a crash. A session ended this way
   answers `running: false` at once, however long its process takes to
   go.
+
+  ## Its use
+
+  `measure/1` answers the bytes the session's process uses, as its
+  launcher reads them, until nothing of it is left. With no process, or a
+  reading that failed, its use is `:unknown`, never zero.
 
   ## Masking
 
@@ -70,8 +78,13 @@ defmodule Locus.Backends.Backend do
   # An answer's room for its members beside its lines.
   @answer_margin_bytes 4_096
 
-  @typedoc "How a session ended: a crash or not, and why."
-  @type ended :: %{crash: boolean(), error: String.t() | nil}
+  @typedoc "How a session ended: a crash or not, why, and what memory limit killed it."
+  @type ended :: %{
+          required(:crash) => boolean(),
+          required(:error) => String.t() | nil,
+          required(:memory) => Prima.KeeperProtocol.memory_end(),
+          optional(:exit_code) => 0..255 | nil
+        }
 
   @typedoc "What `recv/3` answers: lines of a run, chunks of a terminal."
   @type received ::
@@ -157,6 +170,10 @@ defmodule Locus.Backends.Backend do
           stderr_bytes: non_neg_integer()
         }
   def status(server, timeout), do: GenServer.call(server, :status, timeout)
+
+  @doc "The bytes the session's process uses, or `:unknown`: never a zero for a reading not made."
+  @spec measure(GenServer.server()) :: {:ok, non_neg_integer()} | :unknown
+  def measure(server), do: GenServer.call(server, :measure, @call_margin_ms)
 
   @doc "End the session and answer once nothing of its process is left, or its bound passes."
   @spec stop(GenServer.server(), non_neg_integer()) :: :ok
@@ -269,6 +286,16 @@ defmodule Locus.Backends.Backend do
          ),
        stderr_bytes: Relay.stderr_bytes(state.relay)
      }, state}
+  end
+
+  def handle_call(:measure, _from, %{handle: nil} = state), do: {:reply, :unknown, state}
+
+  # A reading is no use of the session: its idle period runs on.
+  def handle_call(:measure, _from, state) do
+    case state.launcher.measure(state.launcher_server, state.handle) do
+      {:ok, _bytes} = reading -> {:reply, reading, state}
+      {:error, _reason} -> {:reply, :unknown, state}
+    end
   end
 
   def handle_call({:stop, grace_ms}, from, state) do
@@ -407,10 +434,10 @@ defmodule Locus.Backends.Backend do
 
   # The leader's end; the session ends once nothing of it is left, so every
   # line it wrote is read first.
-  defp on_event(state, {:exited, code, signal}) do
+  defp on_event(state, {:exited, code, signal, memory}) do
     if state.ending,
       do: state,
-      else: %{state | ending: exit_end(code, signal)}
+      else: %{state | ending: Map.put(exit_end(code, signal), :memory, memory)}
   end
 
   defp on_event(state, :released), do: released(state)
@@ -498,6 +525,8 @@ defmodule Locus.Backends.Backend do
   end
 
   defp ended(%{ended: nil} = state, ended) do
+    # Only an exit heard before the session was asked to end carries a reason.
+    ended = Map.put_new(ended, :memory, nil)
     state = %{state | status: :ended, ended: ended}
     notify(state, {:ended, ended})
     wake(state)
