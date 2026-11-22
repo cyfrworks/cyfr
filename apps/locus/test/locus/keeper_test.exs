@@ -1252,6 +1252,71 @@ defmodule Locus.KeeperTest do
       end
     end
 
+    for op <- [:home_retire, :home_reset] do
+      @tag op: op
+      test "#{op} is never ok beside a make held past its caller's timeout, and is once it landed",
+           %{root: root, uid: uid, op: op} do
+        %{name: name, fake: fake} = kept_client(root, uid, uid)
+        FakeKeeper.mode(fake, {:home_make_held, self()})
+        assert {:timeout, _call} = catch_exit(GenServer.call(name, {:home_ensure, "vlt_a"}, 200))
+        assert_receive {:home_make_held, make}, 2_000
+
+        beside = apply(Keeper, op, [name, "vlt_a"])
+        another_home = apply(Keeper, op, [name, "vlt_b"])
+        :ok = FakeKeeper.release_make(fake, make)
+        Prima.Test.Wait.wait_until(fn -> :sys.get_state(name).homes == %{} end, 5_000)
+        landed = File.exists?(Path.join(root, "vlt_a"))
+        again = apply(Keeper, op, [name, "vlt_a"])
+
+        assert %{
+                 beside: beside,
+                 another_home: another_home,
+                 landed: landed,
+                 again: again,
+                 folder: File.exists?(Path.join(root, "vlt_a"))
+               } == %{
+                 beside: {:error, {:refused, "unavailable"}},
+                 another_home: :ok,
+                 landed: true,
+                 again: :ok,
+                 folder: op == :home_reset
+               }
+      end
+    end
+
+    test "home_retire is never ok beside a reset, which makes the home again, at either of its steps",
+         %{root: root, uid: uid} do
+      %{name: name, fake: fake} = kept_client(root, uid, uid)
+      assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
+      FakeKeeper.mode(fake, {:home_make_held, self()})
+
+      # Its retirement out, unanswered; then its make.
+      :sys.suspend(fake)
+      resetting = Task.async(fn -> Keeper.home_reset(name, "vlt_a") end)
+      Prima.Test.Wait.wait_until(fn -> :sys.get_state(name).homes != %{} end, 5_000)
+      retiring = Task.async(fn -> Keeper.home_retire(name, "vlt_a") end)
+      beside_retirement = Task.yield(retiring, 1_000) || :waits
+      :sys.resume(fake)
+      assert_receive {:home_make_held, make}, 2_000
+      beside_make = Keeper.home_retire(name, "vlt_a")
+      :ok = FakeKeeper.release_make(fake, make)
+      assert :ok = Task.await(resetting, 5_000)
+      made_again = File.exists?(Path.join(root, "vlt_a"))
+
+      assert %{
+               beside_retirement: beside_retirement,
+               beside_make: beside_make,
+               made_again: made_again
+             } == %{
+               beside_retirement: {:ok, {:error, {:refused, "unavailable"}}},
+               beside_make: {:error, {:refused, "unavailable"}},
+               made_again: true
+             }
+
+      assert :ok = Keeper.home_retire(name, "vlt_a")
+      refute File.exists?(Path.join(root, "vlt_a"))
+    end
+
     test "a refused home request is the keeper's code", %{root: root, uid: uid} do
       %{name: name, fake: fake} = kept_client(root, uid, uid)
       :ok = FakeKeeper.mode(fake, :home_refused)

@@ -1550,6 +1550,32 @@ defmodule Locus.Backends.OwnersTest do
     end
   end
 
+  # An open of each key held before it makes its home, with its worker.
+  defp preparing(ctx, owners, keys) do
+    test = self()
+
+    for key <- keys do
+      Agent.update(ctx.stub, &Map.put(&1, :before_ensure, test))
+      opening = Task.async(fn -> open(owners, "a", {1, 1}, "kept", home_id: @home, key: key) end)
+      assert_receive {:home_about_to_be_created, worker}, 2_000
+      {opening, worker}
+    end
+  end
+
+  # What `ask` is answered while what it would wait for is still held.
+  defp at_once(ask) do
+    case Task.yield(Task.async(ask), 2_000) do
+      {:ok, answer} -> answer
+      nil -> :waits
+    end
+  end
+
+  defp running_in(owners, server) do
+    for {_id, %{server: ^server, state: :running} = owner} <- held(owners),
+        {id, %{running: true}} <- owner.sessions,
+        do: id
+  end
+
   describe "kept homes" do
     test "the sessions of one entry share its home, and take no uid of the pool", ctx do
       owners = start_owners(ctx)
@@ -1685,6 +1711,79 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{home_id: @home, state: :absent}} = control(owners, 1, retire)
       assert %{running: false} = Backend.recv(pid, 0, 0)
       refute File.exists?(Path.join(ctx.root, @home))
+    end
+
+    for {op, state, there?} <- [{:retire, :absent, false}, {:reset, :empty, true}] do
+      @tag op: op, answered: state, there?: there?
+      test "a home's #{op} is unavailable at once while any open prepares in it, and succeeds when asked again",
+           ctx do
+        owners = start_owners(ctx)
+        assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
+        [{first, making}, {second, lost}] = preparing(ctx, owners, ["one", "two"])
+        message = %{type: :home, op: ctx.op, athanor: @athanor, home_id: @home}
+        change = fn -> control(owners, 1, message) end
+        other = %{message | home_id: "vlt_01a09fee-2c3d-7e4f-8a5b-000000000002"}
+
+        beside_both = at_once(change)
+        another_home = at_once(fn -> control(owners, 1, other) end)
+        send(making, :continue_ensure)
+        Task.await(first, 5_000)
+        beside_one = at_once(change)
+        Process.exit(lost, :kill)
+        Task.await(second, 5_000)
+        again = change.()
+
+        # The session the settled preparation started ends with the change.
+        wait_until(fn -> running_in(owners, "a") == [] end, 5_000)
+
+        assert %{
+                 beside_both: beside_both,
+                 another_home: match?({:ok, _}, another_home),
+                 beside_one: beside_one,
+                 again: again,
+                 folder: File.exists?(Path.join(ctx.root, @home))
+               } == %{
+                 beside_both: {:error, :unavailable},
+                 another_home: true,
+                 beside_one: {:error, :unavailable},
+                 again: {:ok, %{home_id: @home, state: ctx.answered}},
+                 folder: ctx.there?
+               }
+      end
+    end
+
+    test "another owner's renewal is served, and its session runs, while a home's retire meets a held preparation",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
+      assert {:ok, _} = sync(owners, "b", {1, 1}, idle_programs(1))
+      assert {:ok, %{session: id}} = open(owners, "b", {1, 1}, "b1")
+      [{opening, making}] = preparing(ctx, owners, ["one"])
+
+      retire = %{type: :home, op: :retire, athanor: @athanor, home_id: @home}
+      retired = at_once(fn -> control(owners, 1, retire) end)
+
+      # Inside its lease, then past the one it had.
+      advance(ctx, 20_000)
+      renew = %{type: :renew, lease_ms: 30_000, owners: [%{athanor: @athanor, server: "b", e: 1}]}
+      renewed = at_once(fn -> control(owners, 1, renew) end)
+      advance(ctx, 11_000)
+      :ok = Owners.sweep(owners)
+      runs = running_in(owners, "b")
+
+      send(making, :continue_ensure)
+      Task.await(opening, 5_000)
+
+      assert %{retired: retired, renewed: renewed, runs: runs} == %{
+               retired: {:error, :unavailable},
+               renewed:
+                 {:ok,
+                  %{
+                    renewed: [%{athanor: @athanor, server: "b", e: 1, state: :running}],
+                    unknown: []
+                  }},
+               runs: [id]
+             }
     end
 
     test "a home the launcher cannot keep is unavailable", ctx do

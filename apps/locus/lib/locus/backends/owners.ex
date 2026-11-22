@@ -29,6 +29,7 @@ defmodule Locus.Backends.Owners do
   | `release` | each owner at or below `(g, e)` retired |
   | `reconcile` | each owner not at exactly `g` and its kept `e` retired |
   | `status` | each named owner present, its programs as their sessions report them |
+  | `home` while an open prepares in it | `unavailable`, nothing changed |
   | `home` | every session of the home among the athanor's owners ended, then the home reset or retired |
 
   A sync starts nothing: it is answered on admission with every program
@@ -739,7 +740,22 @@ defmodule Locus.Backends.Owners do
     {:wait, ref, state}
   end
 
+  # A home still being prepared is neither reset nor retired, and the turn is
+  # not held for it: the controller sends a retire again until it is
+  # acknowledged, and a reset is asked again.
   defp apply_control(state, from, _fields, %{type: :home} = message, _open_env) do
+    if preparing_in?(state, message.home_id),
+      do: {:reply, {:error, :unavailable}, state},
+      else: change_home(state, from, message)
+  end
+
+  defp preparing_in?(state, home_id) do
+    Enum.any?(state.pending, fn {_ref, entry} ->
+      match?({:open, _froms, %{home_id: ^home_id}}, entry.continuation)
+    end)
+  end
+
+  defp change_home(state, from, message) do
     pids =
       for {_id, owner} <- state.owners,
           owner.athanor == message.athanor,
