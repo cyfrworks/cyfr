@@ -922,6 +922,143 @@ test("a lost page is shown again in its own window, its session as it was", asyn
   }
 })
 
+// The engine reporting that `w`'s load of `url` failed, its error page
+// committed there (no did-navigate says so).
+function fails(w, url, code = -106, isMainFrame = true) {
+  if (isMainFrame) w.webContents.url = url
+  w.webContents.emit("did-fail-load", {}, code, "", url, isMainFrame)
+}
+
+test("a CYFR's page that did not load gives way to the chooser in its own window, its session as it was", async () => {
+  for (const road of [true, false]) {
+    const said = await signedIn(road)
+    const page = content()
+    const ses = page.webContents.session
+    const windows = world.windows.length
+    fails(page, HOME + "/threads")
+    assert.equal(page.webContents.url, HOME + "/threads", "not from inside the engine's report")
+    await settled()
+    assert.equal(page.webContents.url, READY + (road ? "&road=passkey" : "") + "&notice=unanswered")
+    assert.ok(!page.destroyed && world.windows.length === windows, "the same window")
+    assert.equal(page.webContents.session, ses, "the same session")
+    assert.ok(!child.heard.some((m) => m.type === "lock"))
+    assert.ok(!said.some((line) => line.startsWith("locked:")))
+    signedNobodyOut()
+  }
+})
+
+test("a frame's failed load, and a load given up, leave the page", async () => {
+  await signedIn()
+  const page = content()
+  fails(page, HOME + "/frame", -106, false)
+  fails(page, HOME + "/", -3)
+  await settled()
+  assert.equal(page.webContents.url, HOME + "/")
+})
+
+test("a lock in the turn of a failed load loads nothing into the window it closed", async () => {
+  await signedIn()
+  const page = content()
+  fails(page, HOME + "/threads")
+  await saysLocked()
+  assert.ok(page.destroyed)
+  assert.equal(page.webContents.url, HOME + "/threads")
+  assert.doesNotMatch(content().webContents.url, /unanswered/)
+})
+
+test("Try again loads the CYFR's root, a turn after the press", async () => {
+  await signedIn()
+  const page = content()
+  fails(page, HOME + "/threads")
+  await settled()
+  const chooser = page.webContents.url
+  assert.ok(navigate(page, "http://127.0.0.1:7340/bootstrap/again").prevented)
+  assert.equal(page.webContents.url, chooser, "not from inside the engine's question")
+  await settled()
+  assert.equal(page.webContents.url, HOME + "/")
+  assert.ok(!page.destroyed)
+  signedNobodyOut()
+})
+
+// What `act` has main write to its stderr.
+async function printing(act) {
+  const own = process.stderr.write
+  let out = ""
+  process.stderr.write = (chunk) => {
+    out += chunk
+    return true
+  }
+  try {
+    await act()
+  } finally {
+    process.stderr.write = own
+  }
+  return out
+}
+
+test("the engine's warning of a failed load prints no fragment or query", async () => {
+  await signedIn()
+  const out = await printing(async () => {
+    process.emitWarning("Failed to load URL: https://x.test/complete?q=a-marker#a-marker with error: ERR_EMPTY_RESPONSE", "electron")
+    await settled()
+    await settled()
+  })
+  assert.match(out, /^CYFR: warning: electron: Failed to load URL: https:\/\/x\.test with error: ERR_EMPTY_RESPONSE$/m)
+  assert.doesNotMatch(out, /marker/)
+  assert.equal(process.listenerCount("warning"), 1, "the app's printer alone")
+})
+
+test("every other warning still prints, its code and detail with it, by the same rule", async () => {
+  await signedIn()
+  const out = await printing(async () => {
+    process.emitWarning("old() is deprecated", {type: "DeprecationWarning", code: "DEP0001",
+      detail: "see https://x.test/why?q=a-marker#a-marker"})
+    process.emitWarning("a warning of no kind of its own")
+    await settled()
+    await settled()
+  })
+  assert.match(out, /^CYFR: warning: \[DEP0001\] DeprecationWarning: old\(\) is deprecated\nsee https:\/\/x\.test$/m)
+  assert.match(out, /^CYFR: warning: Warning: a warning of no kind of its own$/m)
+  assert.doesNotMatch(out, /marker/)
+})
+
+test("what main says is printed by the same rule where nobody else takes it", async () => {
+  reset()
+  const out = await printing(async () => {
+    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true})
+    await settled()
+    child.say({type: "ready", url: READY})
+    await settled()
+    child.stderr.write("Error: https://x.test/auth/passkey/complete/a-marker did not answer\n")
+    await settled()
+    child.emit("exit", 1, null)
+    await settled()
+  })
+  assert.match(out, /^CYFR: cyfr ended: https:\/\/x\.test did not answer$/m)
+  assert.doesNotMatch(out, /marker/)
+})
+
+test("cyfr's own lines are printed whole lines at a time, with no fragment or query", async () => {
+  await started(true)
+  const out = await printing(async () => {
+    child.stderr.write("Error: Get \"https://x.te")
+    await settled()
+    child.stderr.write("st/login?t=a-marker\": EOF\nlast, unended: https://x.test/#a-marker")
+    child.stderr.end()
+    await settled()
+    await settled()
+  })
+  assert.doesNotMatch(out, /marker/)
+  assert.match(out, /https:\/\/x\.test/)
+  assert.match(out, /last, unended/)
+})
+
+test("the engine's logging switch in the environment is dropped as the app starts", async () => {
+  process.env.ELECTRON_ENABLE_LOGGING = "1"
+  await started(true)
+  assert.equal(process.env.ELECTRON_ENABLE_LOGGING, undefined)
+})
+
 test("a lost confirmation window closes alone", async () => {
   await signedIn()
   const page = content()

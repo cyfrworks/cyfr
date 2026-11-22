@@ -262,10 +262,12 @@ same worktree refuses, naming the run that holds it.
   as a person does (DEB, DMG, MSI) and runs
   `tests/desktop-proof/native/smoke.sh` against the installed app with no
   CYFR server and no signing credentials: the refused switches,
-  startup and the chooser on 127.0.0.1:7340, the renderers' sandbox on
-  Linux, a second launch, a lost renderer or `cyfr`, an occupied port and
-  the app's end. Its header names what the smoke leaves to the real-CYFR
-  proofs and to a person at the machine.
+  startup with the window on the screen and the chooser on
+  127.0.0.1:7340, the profile under the run's own HOME on Linux and
+  macOS, the renderers' sandbox on Linux, a second launch, a lost
+  renderer or `cyfr`, an occupied port and the app's end. Its header
+  names what the smoke leaves to the real-CYFR proofs and to a person at
+  the machine.
 
   Codex CI's `screen-idle` job runs `tests/desktop-proof/screen/idle.sh`:
   the device screen's idle watch under Ubuntu 26.04's labwc, beside a

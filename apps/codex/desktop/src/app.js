@@ -23,7 +23,7 @@ import {BrowserWindow, app, dialog, session} from "electron"
 
 import {keptStorage} from "./owner.js"
 import {lines, readFromCyfr, toCyfr} from "./process.js"
-import {LOCALHOST_IS_IPV4, accountLoad, documentHeaders, grants, readHop, relyingParty, unlistedSwitch} from "./policy.js"
+import {LOCALHOST_IS_IPV4, accountLoad, documentHeaders, grants, printed, readHop, relyingParty, unlistedSwitch} from "./policy.js"
 import {initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
@@ -44,6 +44,23 @@ const SECURE = {
   spellcheck: false,
   safeDialogs: true,
   devTools: false
+}
+
+// All the app prints: no address with its fragment or query (printed).
+const print = (line) => process.stderr.write(`${printed(line)}\n`)
+
+// The two roads by which the engine prints an address whole, each closed
+// before it has loaded one. It reports every failed load as a process
+// warning, which Node's own printer writes as it is, whoever listens for
+// the failure or handles the load's promise: that printer is replaced.
+// And ELECTRON_ENABLE_LOGGING has it print each page's console with the
+// page's address: the engine reads it again after main's first turn, so
+// dropping it here drops it.
+function ownOutput() {
+  delete process.env.ELECTRON_ENABLE_LOGGING
+  process.removeAllListeners("warning")
+  process.on("warning", ({name, code, message, detail}) =>
+    print(`CYFR: warning: ${code ? `[${code}] ` : ""}${name}: ${message}${detail ? `\n${detail}` : ""}`))
 }
 
 // Who began a navigation of `contents` (`asker`) and, where that was its
@@ -72,7 +89,8 @@ function askerOf(event, contents) {
  * reports what happens, one line a step, for whoever started the app.
  */
 export function startApp({cyfr, accountRoad = process.platform === "darwin" || process.platform === "win32",
-  touchIdGroup = "", say = (line) => process.stderr.write(`CYFR: ${line}\n`)}) {
+  touchIdGroup = "", say = (line) => print(`CYFR: ${line}`)}) {
+  ownOutput()
   // Every switch but the few the app takes (policy.js SWITCHES) is
   // refused: the engine would open a debugging port, lift the sandbox or
   // web security, or trust any certificate for one.
@@ -135,10 +153,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         else answer(true)
       })
     }
-    if (effect.root && content && !storage.loadRoot(content, effect.root.home)) {
-      on({type: "gone", why: "the sign-in it keeps is another CYFR's"})
+    if (effect.root) {
+      soon((w) => {
+        if (!storage.loadRoot(w, effect.root.home)) on({type: "gone", why: "the sign-in it keeps is another CYFR's"})
+      })
     }
     if (effect.chooser) openContent(chooserAddress(effect.chooser))
+    if (effect.back) soon((w) => w.loadURL(chooserAddress(effect.back)).catch(() => {}))
     if (effect.relaunch) {
       say("starting again with the CYFR's route")
       const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a))
@@ -181,6 +202,16 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       if (content.isMinimized()) content.restore()
       content.focus()
     }
+  }
+
+  // A load main makes in the content window that stands, a turn later: the
+  // engine takes none from inside its report of a load or its question
+  // about one (crbug.com/347742).
+  function soon(load) {
+    const w = content
+    setImmediate(() => {
+      if (w && content === w) load(w)
+    })
   }
 
   // The app's one way out, `end`. It waits END_WAITS_MS at the most for
@@ -293,8 +324,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
       if (isMainFrame) heard({type: "landed", url})
     })
-    contents.on("did-fail-load", (_event, _code, _why, _url, isMainFrame) => {
-      if (isMainFrame) heard({type: "load-failed"})
+    contents.on("did-fail-load", (_event, code, _why, url, isMainFrame) => {
+      if (isMainFrame) heard({type: "load-failed", code, url})
     })
     w.on("closed", () => {
       if (content === w) {
@@ -448,11 +479,17 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     let pending = ""
     child.stderr.setEncoding("utf8")
     child.stderr.on("data", (chunk) => {
-      process.stderr.write(chunk)
       pending += chunk
       const whole = pending.split("\n")
       pending = whole.pop()
-      for (const line of whole) if (line.startsWith("Error: ")) last = line
+      for (const line of whole) {
+        print(line)
+        if (line.startsWith("Error: ")) last = line
+      }
+    })
+    child.stderr.on("end", () => {
+      if (pending) print(pending)
+      pending = ""
     })
     child.on("error", (e) => on({type: "gone", why: `it could not start (${e.message})`}))
     child.on("exit", (code, signal) => {

@@ -40,6 +40,8 @@ export function parse(address) {
  * sends itself to the account service's sign-in route, which opens in
  * the account window, also where the CYFR serves that route itself) or
  * "company" (the CYFR's company sign-in, which the app does not offer).
+ * The chooser is main's alone to show (chooserPath): no navigation, no
+ * redirect and no frame loads it, in any window.
  * What a frame may ask, once: it may navigate itself or a frame inside it
  * to an address a frame may load, and never the top frame or a frame not
  * inside it; it never hops or returns. A frame loads no ceremony route. The recovery route is reached from the sign-in inside
@@ -51,6 +53,7 @@ export function contentNavigation({url, target, asker, showing}, state) {
   if (!u) return "block"
   if (target !== "top") return asker === "frame-outside" ? "block" : frameLoad(u, state)
   if (asker === "frame-inside" || asker === "frame-outside") return "block"
+  if (chooserPath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home) return "block"
   if (ceremony(u, state)) {
@@ -66,9 +69,22 @@ export function contentNavigation({url, target, asker, showing}, state) {
 // origin.
 function frameLoad(u, state) {
   if (["about:", "blob:", "data:"].includes(u.protocol)) return "allow"
+  if (chooserPath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home || ceremony(u, state)) return "block"
   return u.origin === state.home && u.pathname !== "/company-login" ? "allow" : "block"
+}
+
+// Whether u is one of the chooser's addresses as cyfr reads them, which
+// is unescaped: main alone loads the chooser (its loads ask no policy), so
+// what it says on main's behalf comes with main's load and no other.
+function chooserPath(u) {
+  if (u.origin !== LOOPBACK) return false
+  try {
+    return decodeURIComponent(u.pathname).startsWith("/bootstrap")
+  } catch {
+    return true // not readable here, and cyfr may read it as the chooser's
+  }
 }
 
 // Whether u is one of the account service's ceremony routes.
@@ -128,6 +144,20 @@ export function accountLoad(address, state) {
 /** Whether a page may be granted `permission`: never a device, a capture or a credential. */
 export function grants(permission) {
   return permission === "clipboard-sanitized-write" || permission === "fullscreen"
+}
+
+/**
+ * `text` as the app prints it: no address in it carries a fragment or a
+ * query. One with a scheme keeps its origin alone, since a path carries a
+ * credential too (a sign-in's ticket, a served file's); what follows an
+ * address up to the next space goes with it, as either may hold any mark
+ * a sentence would end an address with.
+ */
+export function printed(text) {
+  return String(text)
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#@]*@)?([^\s/?#"'`<>\\]*)\S*/gi, "$1$2")
+    .replace(/\bdata:\S*/gi, "data:")
+    .replace(/(^|[^\w.:/~-])(\/[^\s?#]*)[?#]\S*/g, "$1$2")
 }
 
 const PASSKEYS_DENIED = "publickey-credentials-get=(), publickey-credentials-create=()"

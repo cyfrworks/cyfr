@@ -358,6 +358,49 @@ test("every other outcome withdraws a sign-in's return, and no later landing at 
   }
 })
 
+const failed = (over) => ({type: "load-failed", code: -106, url: HOME + "/threads", ...over})
+
+test("a CYFR's page whose load failed shows the chooser saying so, and locks, closes and forgets nothing", () => {
+  for (const road of [true, false]) {
+    for (const code of [-21, -106, -202, -324, -379]) {
+      const before = {...run(open, road).s, notices: ["company"]}
+      const r = step(before, failed({code}))
+      assert.deepEqual(r.do, [{say: `unanswered: the CYFR's page did not load (${code})`}, {back: ["company", "unanswered"]}])
+      assert.deepEqual(r.state, before, "nothing of main's changes")
+    }
+  }
+})
+
+test("a load given up, one elsewhere and one with no CYFR open are no failure of the CYFR's", () => {
+  const cases = {
+    "given up": [open, failed({code: -3})],
+    "the chooser's own": [open, failed({url: "http://127.0.0.1:7340/bootstrap/"})],
+    "the account service's": [open, failed({url: ACCOUNT + "/account/sign"})],
+    "another port of its host": [open, failed({url: HOME + ":9443/"})],
+    "no CYFR": [[ready], failed({})],
+    "being taken": [[ready, home()], failed({})],
+    "proposed": [proposed, failed({})],
+    "locking": [[...open, company], failed({})],
+    "ended": [[...open, {type: "quit"}], failed({})]
+  }
+  for (const [name, [events, event]] of Object.entries(cases)) {
+    const s = run(events, true).s
+    assert.deepEqual(step(s, event), {state: s, do: []}, name)
+  }
+})
+
+test("a lock that follows a load's failure has nothing of it to tell", () => {
+  const {effects} = run([...open, failed({}), locked(HOME), forgot], true)
+  assert.deepEqual(effects.filter((e) => e.chooser).at(-1), {chooser: []})
+})
+
+test("Try again is the passkey road's alone, and its address never loads", () => {
+  for (const [events, road] of [[open, false], [proposed, true], [[ready], true]]) {
+    const s = run(events, road).s
+    assert.deepEqual(step(s, navigate({url: AGAIN, showing: CHOOSER_DOC})), {state: s, allow: false, do: []})
+  }
+})
+
 test("an earlier load call's end leaves the return on its way", () => {
   assert.equal(reloads([ownStart, {type: "delivered"}, {type: "load-ended", url: HOME + "/login#before"}, {type: "landed", url: ANSWER}]), 1)
 })
@@ -404,8 +447,12 @@ test("a second launch shows the content window, and nothing once ended", () => {
 // One row or more for each act of ACTS: where it is pressed, and what
 // follows only a press. An act with no row fails.
 const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"
+const AGAIN = CHOOSER_DOC + "again"
 const SIGN_IN = ACCOUNT + "/account/sign#x"
 const PRESSES = {
+  again: [
+    {name: "Try again", event: navigate({url: AGAIN, showing: atWays}),
+      acted: (r) => r.do.some((e) => e.root?.home === HOME) && r.state.notices.length === 0}],
   another: [
     {name: "Connect to another CYFR", event: navigate({url: another.url, showing: atWays}),
       acted: (r) => r.do.some((e) => e.forget) && r.state.leaving === true}],
@@ -436,7 +483,7 @@ test("an act is no redirect, and is begun by the top frame's own document that o
     "the chooser's path at the CYFR": HOME + "/bootstrap/", "the chooser's path on another port": "http://127.0.0.1:7341/bootstrap/",
     "the CYFR's host on another port": HOME + ":9443/login", "the account's path on another port": ACCOUNT + ":9443/account/sign",
     none: ""}
-  const offers = {another: ["chooser", "the chooser with its road"], onward: ["chooser", "the chooser with its road"],
+  const offers = {again: ["chooser", "the chooser with its road"], another: ["chooser", "the chooser with its road"], onward: ["chooser", "the chooser with its road"],
     hop: ["the CYFR's page", "the chooser's path at the CYFR"], answer: ["the account's page"]}
   for (const [act, rows] of Object.entries(PRESSES)) {
     for (const {name, event, acted} of rows) {

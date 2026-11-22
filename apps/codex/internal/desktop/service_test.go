@@ -1176,6 +1176,26 @@ func TestThePasskeyWayOnNeedsTheFoldersCYFRStillAnswering(t *testing.T) {
 	}
 }
 
+// Try again's press comes with no lock before it: a page of the open
+// folder's CYFR did not load. It asks that CYFR all the same.
+func TestTryAgainNeedsTheFoldersCYFRStillAnswering(t *testing.T) {
+	var running atomic.Bool
+	running.Store(true)
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	a.openedFolder(t)
+	running.Store(false)
+	gone := answer{Home: localAddress, Error: "The CYFR in " + localFolder + " is not running."}
+	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": localAddress}); got != gone {
+		t.Fatalf("with the open folder's CYFR gone the press answered %+v", got)
+	}
+	a.quiet(t)
+	running.Store(true)
+	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": localAddress}); got != (answer{Home: localAddress, Next: "/"}) {
+		t.Fatalf("with it back the press answered %+v", got)
+	}
+	a.quiet(t)
+}
+
 // A lock ends the press while it asks, and a second press waits for none.
 func TestALockEndsThePasskeyWayOnWhileItAsks(t *testing.T) {
 	var running atomic.Bool

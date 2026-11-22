@@ -14,6 +14,9 @@
 // An address is one with an origin or a path standing by itself, as the
 // fronts record one.
 
+/** What a proof puts in an address's query and fragment to see that the app prints neither. */
+export const MARKER = "cyfr-proof-unprinted"
+
 const IN_PATH = /(\/+auth\/+passkey\/+complete\/+|\/+_s\/+|\/+_c\/+v1\/+(?!sdk\/))[^\s/?#"'`<>\\()[\]]+/g
 const AFTER_PATH = /((?:\b[a-z][a-z0-9+.-]*:\/\/|\bdata:|(?<![\w.:/~-])\/)[^\s"'`<>\\?#]*)([?#])[^\s"'`<>\\]*/gi
 

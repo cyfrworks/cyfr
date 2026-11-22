@@ -62,7 +62,8 @@ type Local struct {
 // and only after a home-ready. An answer to any other number is none.
 //
 // With a CYFR open, a Connect at that CYFR's own address is the press of
-// the chooser's passkey way on (again), and one at any other is refused.
+// the chooser's passkey way on or its Try again (again), and one at any
+// other is refused.
 //
 // The road the app offers is main's alone to know (it says it in the
 // chooser's address, and decides every navigation): cyfr answers every
@@ -407,8 +408,8 @@ func (s *Service) approve(ctx context.Context, epoch uint64, req request) answer
 }
 
 // again answers a Connect at the CYFR open, which the chooser's passkey
-// way on presses before it loads that CYFR's own page, a load that takes
-// the kept sign-in along on no connection of the shell's. A folder's CYFR
+// way on and its Try again press before either loads that CYFR's own page,
+// a load that takes the kept sign-in along on no connection of the shell's. A folder's CYFR
 // is asked at the press, so that whatever took a stopped one's port is
 // given none.
 func (s *Service) again(run context.Context, epoch uint64) (answer, bool) {

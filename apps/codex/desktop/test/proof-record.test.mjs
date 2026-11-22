@@ -5,11 +5,11 @@
 // an address it sits (tests/desktop-proof/scrub.mjs, the one scrub).
 
 import assert from "node:assert/strict"
-import {execFileSync} from "node:child_process"
+import {spawnSync} from "node:child_process"
 import {test} from "node:test"
 import {fileURLToPath} from "node:url"
 
-import {scrub, scrubbed} from "../../../../tests/desktop-proof/scrub.mjs"
+import {MARKER, scrub, scrubbed} from "../../../../tests/desktop-proof/scrub.mjs"
 
 const SECRET = "SFMyNTY.g2gDbQAAAB-c2VjcmV0_dGlja2V0.Zm9yZ2Vk"
 const HOME = "https://x.test"
@@ -46,9 +46,22 @@ test("a record stays JSON with every string in it scrubbed, however quoted", () 
   assert.equal(JSON.parse(out).rows.length, 1)
 })
 
+const cli = fileURLToPath(new URL("../../../../tests/desktop-proof/scrub-lines.mjs", import.meta.url))
+const lines = (input) => spawnSync(process.execPath, [cli], {input, encoding: "utf8"})
+
 test("the app's own output is scrubbed line by line as it is written", () => {
-  const cli = fileURLToPath(new URL("../../../../tests/desktop-proof/scrub-lines.mjs", import.meta.url))
-  const out = execFileSync(process.execPath, [cli], {input: Object.values(CARRIERS).join("\n"), encoding: "utf8"})
+  const out = lines(Object.values(CARRIERS).join("\n")).stdout
   assert.ok(!out.includes(SECRET), out)
-  assert.equal(out.trimEnd().split("\n").length, Object.keys(CARRIERS).length)
+  assert.equal(out.trimEnd().split("\n").length, Object.keys(CARRIERS).length + 1, "each line, and the row")
+})
+
+test("the row unprinted fails for each carrier, and for the marker wherever it is, and passes what carries none", () => {
+  for (const [what, line] of Object.entries({...CARRIERS, "the marker alone": `said ${MARKER}`})) {
+    const r = lines(line)
+    assert.equal(r.status, 1, what)
+    assert.match(r.stdout, /^FAIL unprinted: /m, what)
+  }
+  const clean = lines(`CYFR: ready\nCYFR: warning: electron: Failed to load URL: ${HOME} with error: ERR_EMPTY_RESPONSE`)
+  assert.equal(clean.status, 0)
+  assert.match(clean.stdout, /^PASS unprinted: of 2 lines the app printed, 1 of them a failed load's/m)
 })

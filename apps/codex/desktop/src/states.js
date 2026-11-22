@@ -46,6 +46,17 @@
 // the Connect's answer where it was for a proposal (home-failed), which
 // is no lock and touches no other attempt.
 //
+// A CYFR's page whose load failed, as the engine reports it, is no lock:
+// the content window shows the chooser saying so (`unanswered`), and
+// nothing is closed or forgotten. That notice is that chooser's alone: a
+// lock's own load can fail just before the lock is heard, and the lock's
+// chooser has nothing of it to tell.
+//
+// What the chooser tells is main's alone to decide: a notice comes with a
+// load of the chooser main makes for what it observed (chooser, back) or
+// as cyfr's answer to main's home-failed, and no page can make such a
+// load (policy.js chooserPath, bootstrap.go's script).
+//
 // What main takes for the person pressing something is in ACTS, and
 // nowhere else.
 //
@@ -79,6 +90,8 @@
 //                            the kept storage being its own
 //   send {type, fields}      a message to cyfr
 //   chooser {notices}        open the content window at the chooser
+//   back {notices}           show the chooser in the content window as it
+//                            stands, its session as it is
 //   relaunch {proxy, resolver}  once forgotten, or the wait for it is up
 //   end {why}                kill cyfr and tell the person
 //   quit                     once forgotten, or the wait for it is up,
@@ -117,6 +130,10 @@ const atChooser = (url) => {
 // The chooser's Connect to another CYFR: an address main alone answers,
 // never loaded.
 const ANOTHER = LOOPBACK + "/bootstrap/another"
+// Its Try again, the same way: the CYFR open, at its root.
+const AGAIN = LOOPBACK + "/bootstrap/again"
+// The engine's code for a load given up: replaced, stopped or refused.
+const ABORTED = -3
 
 /**
  * Every decision main takes from a navigation as the person pressing
@@ -129,9 +146,14 @@ export const ACTS = {
   another: {window: "content", by: (_, url) => atChooser(url),
     to: (s, e) => s.accountRoad && s.name === "open" && e.url === ANOTHER,
     then: (s) => ({...leave(s), allow: false})},
+  // Try again, on the chooser of a CYFR whose page did not load, which
+  // comes here only once cyfr answered at the press (bootstrap.go onward).
+  again: {window: "content", by: (_, url) => atChooser(url),
+    to: (s, e) => s.accountRoad && s.name === "open" && e.url === AGAIN,
+    then: (s) => ({state: {...s, notices: []}, allow: false, do: [{root: {home: s.home}}]})},
   // A way on from the chooser: the passkey's, or this computer's key's.
   onward: {window: "content", by: (_, url) => atChooser(url),
-    to: (s, e) => e.url !== ANOTHER && !atChooser(e.url) && contentNavigation(e, kept(s)) === "allow",
+    to: (s, e) => contentNavigation(e, kept(s)) === "allow",
     then: (s) => ({state: {...s, notices: []}, allow: true, do: []})},
   // Sign in with your account, on a page of the CYFR: the account hop.
   hop: {window: "content", by: (s, url) => s.name === "open" && parse(url)?.origin === s.home,
@@ -270,8 +292,10 @@ export function step(s, e) {
     case "landed":
       return withdrawn(s, s.returning?.at === "landing" && e.url === s.returning.url ? [{reload: true}] : [])
     case "committed":
-    case "load-failed":
       return withdrawn(s)
+    case "load-failed":
+      if (e.code === ABORTED || s.name !== "open" || parse(e.url)?.origin !== s.home) return withdrawn(s)
+      return withdrawn(s, [{say: `unanswered: the CYFR's page did not load (${e.code})`}, {back: adding(s.notices, "unanswered")}])
     case "load-ended":
       return e.url === s.returning?.url ? withdrawn(s) : same(s)
 
@@ -285,7 +309,6 @@ export function step(s, e) {
       if (act) return act.then(s, e)
       const where = contentNavigation(e, kept(s))
       if (where === "allow") {
-        if (e.target === "top" && e.url === ANOTHER) return {state: s, allow: false, do: []}
         if (sentToSignIn(s, e)) return {...lock(s, "the CYFR asks for a sign-in", ""), allow: false}
         return {state: s, allow: true, do: []}
       }
