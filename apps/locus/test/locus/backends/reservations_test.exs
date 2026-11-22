@@ -19,6 +19,11 @@ defmodule Locus.Backends.ReservationsTest do
   @tag_ %{
     ledger: :ledger,
     session: @key,
+    g: 3,
+    e: 7,
+    key: {"fetch", nil, "k", :run},
+    lifetime: "lt_00000000000000000000000000000000_" <> "00000000000000000000000000000001",
+    server: "mcp_one",
     athanor: "ath_one",
     memory_bytes: @bytes,
     home_id: nil
@@ -212,6 +217,35 @@ defmodule Locus.Backends.ReservationsTest do
 
       assert held(after_event) == holds(expected), "#{inspect(state)} on #{inspect(event)}"
     end
+  end
+
+  test "a close finds only its own lifetime's, in every state and adopted" do
+    named = Map.take(@tag_, [:athanor, :server, :g, :e, :key, :lifetime])
+
+    for state <- @states, state != :absent do
+      reservations = in_state(state)
+      assert Reservations.of_lifetime(reservations, named) == [@key], inspect(state)
+
+      for other <- [
+            %{named | athanor: "ath_other"},
+            %{named | server: "mcp_other"},
+            %{named | g: 4},
+            %{named | g: 2},
+            %{named | e: 8},
+            %{named | e: 6},
+            %{named | key: {"fetch", nil, "another", :run}},
+            %{named | key: {"fetch", nil, "k", :terminal}},
+            %{
+              named
+              | lifetime:
+                  "lt_00000000000000000000000000000000_" <> "00000000000000000000000000000002"
+            }
+          ],
+          do: assert(Reservations.of_lifetime(reservations, other) == [], inspect(other))
+    end
+
+    adopted = Reservations.event(Reservations.new(), @key, {:adopted, @tag_})
+    assert Reservations.of_lifetime(adopted, named) == [@key]
   end
 
   test "the matrix names every event for every state, and nothing else" do

@@ -107,7 +107,7 @@ defmodule Opus.Programs.Box do
 
   ## Grants
 
-  A holder receives a **grant** for its owner — the service's session route,
+  A holder receives a **grant** for its owner — the service's URL,
   the owner, its generation and epoch, the service boot id, the idle period
   the service ends a session after, and the owner key
   (`Prima.LocusBackends.owner_key/2`) it signs its session messages with —
@@ -117,32 +117,52 @@ defmodule Opus.Programs.Box do
 
   ## Sessions
 
-  The box owns every session its holders open, a `run` session of a
-  brain's (`Opus.Brain`) or a `terminal` one (`Opus.Programs.Terminal`).
-  An open is recorded here, with its row, home, key, holder and deadline,
-  before the backend is asked, and the box makes it itself, in a process
-  it monitors whose wait reaches past the deadline; so whatever the
-  backend answers under that key is the box's from its first byte. The
-  answer is settled by the clock when it is accepted: it is given to the
-  open that asked when that open's caller still waits, the deadline has
-  not passed, its holder holds the owner and no close of that session is
-  owed, and the session a key held before is then closed, since two never
-  both stand; the backends service starts a key's process only once
-  nothing of the one before it is left. A terminal's key is its own id, so
-  each start is a session of its own and no other open ever shares it. Any other answer stays only as the session a later open of
-  the key was given, or one another open in flight for the key will be
-  given; otherwise it is closed. A holder that dies, however it dies,
-  leaves the box its sessions to close.
+  Every caller opens through the box: a tool server
+  (`Emissary.External.Server`), a brain's holder (`Opus.Brain`) and a
+  terminal (`Opus.Programs.Terminal`), the browser's among them. Each
+  open names a lifetime (`t:lifetime/0`, `lifetime/2`), one process of one
+  key, fixed before the open is parked or sent and bound to the athanor,
+  row, generation, epoch and service boot of the grant it was made from.
+  An open of a lifetime of another boot than the service's is refused
+  `stale_boot`, by the box or by the service, and never sent again: the
+  caller holds the owner again, for a grant of the boot that runs, and
+  mints another. The box makes
+  the open itself, in a process it monitors, and only while this member
+  holds its slot at that lifetime's generation, read as the open is sent
+  and again as its answer is handed over. The answer is given to the
+  caller that asked while it waits inside its deadline and its holder
+  holds the owner. An open never given, however it failed, has its
+  lifetime closed, so whatever it started is ended and nothing of it
+  starts later. A holder may ask again for a lifetime it was given, which
+  the service answers while that process runs.
 
-  A close is an obligation the box keeps until the backend confirms it:
-  one that fails is sent again on every tick, a holder's release never
-  drops it, and it is forgotten only when the backend confirms it or no
-  longer knows the session or its owner. A holder closing its key's
-  session is answered `:ok` once the backend has confirmed the close, and
-  `{:error, :unanswered}` when it answered otherwise or its close window
-  passed, the close still owed; only then does it release its share; and the box
-  sends no release of an owner while a close for it is out, so a release
-  never outruns a close the box owes.
+  The service alone knows what holds a place. The box keeps the lifetimes
+  it gave, to close them when their holder dies, releases or loses the
+  owner, and the closes it has still to make, and neither says that a
+  place is back: a close is `:ok` only of the service's answer for that
+  lifetime (`Prima.LocusBackends`, "A close"), asked whether or not the
+  box knows of it. A close has no authority over another lifetime.
+
+  Every try of a close is signed as the generation and epoch in its
+  lifetime's name, at the service's current boot, so it needs no owner.
+  One that fails is sent again on every tick, and once the service is
+  greeted, while this member holds its slot. Without the slot, or before a
+  greeting, nothing is sent: the close is kept and whoever waits on it is
+  answered `{:error, :unanswered}` at once. The box sends no release of an
+  owner while a close for it is out. A box that starts knows no lifetime:
+  its reconcile keeps no owner, so the service drains what an earlier one
+  left, as it drains a lease no member renews, and starts a key's next
+  process only once the last one's place is back.
+
+  ## A terminal's id
+
+  A terminal is named by a handle of its lifetime (`terminal_id/4`): its
+  row, opening generation and epoch, home, who of the person started it
+  and the lifetime, proved under a key derived from the box's root
+  together with the athanor and person. So the box reads back the lifetime
+  a caller may close from the id and the caller alone, after a restart
+  too, and reads nothing from an id that is forged or another person's
+  (`named_terminal/3`). It carries no key and grants no session.
 
   ## Shares
 
@@ -164,10 +184,28 @@ defmodule Opus.Programs.Box do
   @claim_kind "mcp_backend"
 
   @control_timeout_ms 10_000
-  # How long past its caller's deadline a box's open is still heard, and
-  # how long a close is awaited.
-  @late_open_ms 30_000
-  @close_ms 10_000
+  # How far past the box's own deadline an open's transport waits, so the
+  # deadline is what answers first.
+  @open_transport_ms 1_000
+  # A close's answer comes within the wire's bound, and the round trip's
+  # margin is for its transport; a holder's call waits a margin beyond both.
+  @close_transport_ms 3_000
+  @close_call_margin_ms 2_000
+
+  # What a terminal's id is proved by ("A terminal's id").
+  @terminal_label Prima.MacEnvelope.label(:backends) <> "/terminal"
+  @terminal_fields [
+    athanor: :string,
+    starter: :string,
+    server: :string,
+    generation: :integer,
+    epoch: :integer,
+    home: :string,
+    lifetime: :string
+  ]
+  @terminal_proof_bytes 43
+  # More than any id this box makes, and the most it reads of one given.
+  @terminal_id_bytes 1_024
 
   @release_wait_ms 3_000
 
@@ -188,6 +226,19 @@ defmodule Opus.Programs.Box do
           boot: String.t(),
           idle_ms: pos_integer(),
           owner_key: binary()
+        }
+
+  @typedoc "One process of one key, as the version that opens it names it."
+  @type lifetime :: %{
+          athanor: String.t(),
+          server: String.t(),
+          generation: pos_integer(),
+          epoch: pos_integer(),
+          program: String.t(),
+          home_id: String.t() | nil,
+          key: String.t(),
+          mode: :run | :terminal,
+          id: LocusBackends.lifetime()
         }
 
   defmodule State do
@@ -222,11 +273,12 @@ defmodule Opus.Programs.Box do
       release_waiters: %{},
       # Kept homes to reset or retire: {athanor, home_id} => %{op, waiters}.
       homes: %{},
-      # Sessions, all the box's: the session
-      # each key's holder was given, {athanor, server, home_id, key} =>
-      # %{session, holder}; each open in flight, ref => its record; the
-      # monitor of each open's process, monitor => ref; and each session
-      # the box owes a close, session => %{owner, inflight}.
+      # What the box routes, none of it evidence of a release ("Sessions"):
+      # each lifetime a holder was given, lifetime => %{holder, ended};
+      # each open in flight, ref => its record; the monitor of each open's
+      # process, monitor => ref; and each close still to be made,
+      # lifetime => %{inflight, waiters}, inflight the monitor of the
+      # process sending it.
       sessions: %{},
       opens: %{},
       open_tasks: %{},
@@ -285,7 +337,35 @@ defmodule Opus.Programs.Box do
 
   @doc "How long a holder waits on the box's close of its session: the close window and a margin."
   @spec close_timeout_ms() :: pos_integer()
-  def close_timeout_ms, do: @close_ms + 2_000
+  def close_timeout_ms, do: close_window_ms() + @close_call_margin_ms
+
+  defp close_window_ms, do: LocusBackends.close_wait_ms() + @close_transport_ms
+
+  @doc "A new lifetime of the key `named`, under `grant` and of its boot."
+  @spec lifetime(
+          grant() | map(),
+          %{
+            required(:program) => String.t(),
+            required(:key) => String.t(),
+            optional(:home_id) => String.t() | nil,
+            optional(:mode) => :run | :terminal
+          }
+        ) :: lifetime()
+  def lifetime(grant, named) do
+    %{
+      athanor: grant.athanor,
+      server: grant.server,
+      generation: grant.generation,
+      epoch: grant.epoch,
+      program: named.program,
+      home_id: Map.get(named, :home_id),
+      key: named.key,
+      mode: Map.get(named, :mode, :run),
+      id: new_lifetime(grant.boot)
+    }
+  end
+
+  defp new_lifetime(boot), do: LocusBackends.new_lifetime(boot, :crypto.strong_rand_bytes(16))
 
   @doc "How long a status or a home message waits on a box."
   @spec control_timeout_ms() :: pos_integer()
@@ -345,26 +425,37 @@ defmodule Opus.Programs.Box do
     end
   end
 
-  # A session open, recorded before the box's open is sent: whatever the
-  # backend answers under the key is the box's from its first byte
-  # (`session_opened/3`). Refused at once past the deadline, for a holder
-  # that does not hold the owner, or for an owner never synced.
-  def handle_call({:session_open, owner, holder, params, deadline}, from, state) do
-    key = {owner.athanor_id, owner.server_id}
+  # An open of one lifetime ("Sessions"). Refused at once past the
+  # deadline, for a holder that does not hold the owner, for an owner never
+  # synced, and for a lifetime being closed or of another generation than
+  # the owner's.
+  def handle_call({:session_open, lifetime, holder, params, deadline}, from, state) do
+    key = owner_of(lifetime)
+    epoch = lifetime.epoch
 
     case state.owners[key] do
-      %{epoch: epoch, generation: g, holders: %{^holder => _ref}} = entry
-      when epoch == owner.epoch and g != nil ->
+      %{epoch: ^epoch, generation: g, holders: %{^holder => _ref}} when g != nil ->
+        open = %{
+          lifetime: lifetime,
+          holder: holder,
+          params: params,
+          deadline: deadline,
+          from: from,
+          timer: nil
+        }
+
         cond do
           now_ms() >= deadline ->
             {:reply, {:error, :deadline}, state}
 
+          g != lifetime.generation or Map.has_key?(state.closing, lifetime) ->
+            {:reply, {:error, {:refused, :lifetime_over, nil}}, state}
+
           stale_ceiling?(state, key) ->
-            state = park_open(state, key, entry, holder, params, deadline, from)
-            {:noreply, dispatch(state)}
+            {:noreply, state |> park_open(open) |> dispatch()}
 
           true ->
-            {:noreply, start_open(state, key, entry, holder, params, deadline, from)}
+            {:noreply, start_open(state, open)}
         end
 
       _not_held ->
@@ -372,22 +463,34 @@ defmodule Opus.Programs.Box do
     end
   end
 
-  # A holder ends its key's session: closing it is the box's obligation
-  # from here until the backend confirms it. The holder is answered once
-  # the backend has answered the close, or the close window has passed, so
-  # its release of the owner never outruns the close.
-  def handle_call({:session_close, owner, home_id, session_key}, {pid, _tag} = from, state) do
-    sk = {owner.athanor_id, owner.server_id, home_id, session_key}
+  # A close of one lifetime, known here or not: the box owes it from here
+  # until the service confirms it, and the caller hears `:ok` of that
+  # confirmation alone.
+  def handle_call({:session_close, lifetime}, from, state) do
+    state = over(state, fn named, _holder -> named == lifetime end)
+    closing = Map.put_new(state.closing, lifetime, %{inflight: nil, waiters: []})
+    closing = Map.update!(closing, lifetime, &%{&1 | waiters: [from | &1.waiters]})
+    {:noreply, send_close(%{state | closing: closing}, lifetime)}
+  end
 
-    case state.sessions[sk] do
-      %{holder: ^pid, session: session} ->
-        state = %{state | sessions: Map.delete(state.sessions, sk)}
-        {:noreply, closing(state, {owner.athanor_id, owner.server_id}, session, nil, from)}
+  def handle_call({:terminal_id, principal, owner, home_id}, from, state) do
+    named = {principal, owner, home_id}
 
-      _another_or_none ->
-        {:reply, :ok, state}
+    case plane_generation(state) do
+      :not_owner ->
+        {:reply, {:error, :control_plane_lost}, state}
+
+      # A terminal's id carries the service's boot, so it waits for the hello.
+      {:ok, _generation} when state.boot == nil ->
+        {:noreply, state |> enqueue({:terminal_id, from, named}) |> dispatch()}
+
+      {:ok, generation} ->
+        {:reply, {:ok, terminal_id(state, named, generation)}, state}
     end
   end
+
+  def handle_call({:terminal_named, id, closer}, _from, state),
+    do: {:reply, named_terminal(state, id, closer), state}
 
   # A holder is stopping: it holds the owner no more, and once no holder
   # does, this member stops running it — the owner is released and the
@@ -401,8 +504,9 @@ defmodule Opus.Programs.Box do
         nil ->
           {state, true}
 
-        %{epoch: registered} = entry when registered <= epoch ->
-          entry = remove_holder(entry, pid)
+        %{epoch: registered} when registered <= epoch ->
+          state = over(state, fn named, holder -> holder == pid and owner_of(named) == key end)
+          entry = remove_holder(state.owners[key], pid)
 
           if entry.holders == %{},
             do: {state |> put_owner(key, entry) |> drop_owner(key), true},
@@ -485,14 +589,14 @@ defmodule Opus.Programs.Box do
           state = if live_keys(state) != [], do: enqueue(state, {:renew}), else: state
           state = Enum.reduce(Map.keys(state.homes), state, &enqueue(&2, {:home, &1}))
           state = enqueue_release(state)
-          state = retry_closing(state)
           renew_claims(state)
 
         :not_owner ->
           state
       end
 
-    {:noreply, dispatch(state)}
+    # Without the slot a retry sends nothing and answers whoever waits.
+    {:noreply, state |> retry_closing() |> dispatch()}
   end
 
   def handle_info({:session_opened, ref, result}, state) when is_map_key(state.opens, ref),
@@ -509,8 +613,8 @@ defmodule Opus.Programs.Box do
     case state.owners[key] do
       %{parked: parked} = entry ->
         case List.keytake(parked, pref, 0) do
-          {{^pref, _holder, _params, _deadline, from, _timer}, rest} ->
-            GenServer.reply(from, {:error, :deadline})
+          {{^pref, open}, rest} ->
+            GenServer.reply(open.from, {:error, :deadline})
             {:noreply, put_owner(state, key, %{entry | parked: rest})}
 
           nil ->
@@ -523,8 +627,8 @@ defmodule Opus.Programs.Box do
   end
 
   # A close answered lets a release it held back go.
-  def handle_info({:session_closed, session, result}, state),
-    do: {:noreply, state |> session_closed(session, result) |> enqueue_release() |> dispatch()}
+  def handle_info({:session_closed, lifetime, result}, state),
+    do: {:noreply, state |> session_closed(lifetime, result) |> enqueue_release() |> dispatch()}
 
   # An open's process that died before it answered: its open is settled
   # as one the box could not make.
@@ -533,7 +637,7 @@ defmodule Opus.Programs.Box do
     {ref, tasks} = Map.pop(state.open_tasks, mref)
     state = %{state | open_tasks: tasks}
 
-    if reason == :normal,
+    if reason == :normal or not Map.has_key?(state.opens, ref),
       do: {:noreply, state},
       else: {:noreply, session_opened(state, ref, {:error, :backends_unavailable})}
   end
@@ -551,31 +655,16 @@ defmodule Opus.Programs.Box do
     {:noreply, %{state | inflight: nil} |> settle(job, spec, result) |> dispatch()}
   end
 
-  # A holder that exits, however it exits, holds its owner no more: the
-  # session it recorded is closed here, since a holder killed never closed
-  # it, and the last one's exit releases the owner and gives up this
-  # member's claim.
+  # A close's process that died before it answered left the close owed.
+  # Any other exit watched here is a holder's.
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    case Enum.find(state.owners, fn {_key, entry} -> entry.holders[pid] == ref end) do
-      {key, entry} ->
-        state = abandon_sessions(state, pid)
-        entry = remove_holder(entry, pid)
-
-        if entry.holders == %{} do
-          state =
-            state
-            |> put_owner(key, entry)
-            |> drop_owner(key)
-            |> pend_release(key, entry.epoch)
-            |> give_up_claim(key)
-
-          {:noreply, state |> enqueue_release() |> dispatch()}
-        else
-          {:noreply, put_owner(state, key, entry)}
-        end
+    case Enum.find(state.closing, &match?({_lifetime, %{inflight: ^ref}}, &1)) do
+      {lifetime, _record} ->
+        state = session_closed(state, lifetime, {:error, :backends_unavailable})
+        {:noreply, state |> enqueue_release() |> dispatch()}
 
       nil ->
-        {:noreply, state}
+        {:noreply, holder_down(state, ref, pid)}
     end
   end
 
@@ -590,6 +679,33 @@ defmodule Opus.Programs.Box do
   # ============================================================================
   # Owners and holders
   # ============================================================================
+
+  # A holder that exits, however it exits, holds its owner no more: the
+  # session it recorded is closed here, since a holder killed never closed
+  # it, and the last one's exit releases the owner and gives up this
+  # member's claim.
+  defp holder_down(state, ref, pid) do
+    case Enum.find(state.owners, fn {_key, entry} -> entry.holders[pid] == ref end) do
+      {key, _entry} ->
+        state = abandon_sessions(state, pid)
+        entry = remove_holder(state.owners[key], pid)
+
+        if entry.holders == %{} do
+          state
+          |> put_owner(key, entry)
+          |> drop_owner(key)
+          |> pend_release(key, entry.epoch)
+          |> give_up_claim(key)
+          |> enqueue_release()
+          |> dispatch()
+        else
+          put_owner(state, key, entry)
+        end
+
+      nil ->
+        state
+    end
+  end
 
   # A holder at the registered epoch joins the owner and waits on its sync.
   # A higher epoch replaces the owner: its holders, which hold a version
@@ -669,12 +785,10 @@ defmodule Opus.Programs.Box do
         for {_pid, ref} <- entry.holders, do: Process.demonitor(ref, [:flush])
         for waiter <- entry.waiters, do: GenServer.reply(waiter, {:error, :released})
 
-        for {_pref, _holder, _params, _deadline, from, timer} <- Map.get(entry, :parked, []) do
-          Process.cancel_timer(timer)
-          GenServer.reply(from, {:error, :not_held})
-        end
+        for {_pref, open} <- entry.parked, do: refuse_open(open, :not_held)
 
-        forget_sessions(%{state | owners: owners}, key)
+        # An owner dropped leaves its lifetimes as closes owed.
+        over(%{state | owners: owners}, fn named, _holder -> owner_of(named) == key end)
     end
   end
 
@@ -948,6 +1062,11 @@ defmodule Opus.Programs.Box do
 
   defp refuse(state, {:home, hkey}, reason), do: home_failed(state, hkey, reason)
 
+  defp refuse(state, {:terminal_id, from, _named}, reason) do
+    GenServer.reply(from, {:error, reason})
+    state
+  end
+
   defp refuse(state, {:homes, from}, reason) do
     GenServer.reply(from, {:error, reason})
     state
@@ -992,6 +1111,11 @@ defmodule Opus.Programs.Box do
           do: %{athanor: athanor, server: server, e: state.owners[key].epoch}
 
     {:send, state |> base_spec(:reconcile) |> Map.put(:body, %{type: :reconcile, keep: keep})}
+  end
+
+  defp prepare({:terminal_id, from, named}, state) do
+    GenServer.reply(from, {:ok, terminal_id(state, named, state.generation)})
+    :skip
   end
 
   defp prepare({:sync, key}, state) do
@@ -1484,6 +1608,7 @@ defmodule Opus.Programs.Box do
     |> Enum.reverse()
     |> Enum.reduce(state, &enqueue_front(&2, &1))
     |> enqueue_front({:reconcile})
+    |> retry_closing()
   end
 
   defp settle_job(state, {:hello}, _spec, result) do
@@ -1732,136 +1857,139 @@ defmodule Opus.Programs.Box do
   # Sessions
   # ============================================================================
 
-  # The box's open runs in a process of its own, monitored here, whose
-  # answer reaches the box whenever it comes: its wait reaches past the
-  # deadline, so a late answer is still heard and settled.
-  defp start_open(state, key, entry, holder, params, deadline, from) do
-    ref = make_ref()
-    box = self()
-    grant = grant(state, key, entry)
+  # The one place an open is sent from: only while this member holds its
+  # slot at the lifetime's generation and the service runs the lifetime's
+  # boot, and in a process of its own, monitored here, whose wait reaches
+  # just past the deadline.
+  defp start_open(state, %{lifetime: lifetime} = open) do
+    cond do
+      not holds_slot?(state, lifetime) ->
+        refuse_open(open, :control_plane_lost)
+        state
 
-    params =
-      %{mode: :run}
-      |> Map.merge(params)
-      |> Map.put(:timeout_ms, max(deadline - now_ms(), 0) + @late_open_ms)
+      not LocusBackends.lifetime_of?(lifetime.id, state.boot) ->
+        refuse_open(open, {:refused, :stale_boot, state.boot})
+        state
 
-    {_pid, mref} =
-      spawn_monitor(fn -> send(box, {:session_opened, ref, Session.open(grant, params)}) end)
+      true ->
+        ref = make_ref()
+        box = self()
+        left = max(open.deadline - now_ms(), 0)
+        grant = grant(state, owner_of(lifetime), lifetime)
 
-    open = %{
-      owner: key,
-      grant: grant,
-      params: params,
-      key: {elem(key, 0), elem(key, 1), params.home_id, params.key},
-      holder: holder,
-      from: from,
-      deadline: deadline,
-      timer: Process.send_after(self(), {:open_deadline, ref}, max(deadline - now_ms(), 0))
-    }
+        params =
+          Map.merge(open.params, %{lifetime: lifetime, timeout_ms: left + @open_transport_ms})
 
-    %{
-      state
-      | opens: Map.put(state.opens, ref, open),
-        open_tasks: Map.put(state.open_tasks, mref, ref)
-    }
+        timer = Process.send_after(self(), {:open_deadline, ref}, left)
+
+        {_pid, mref} =
+          spawn_monitor(fn -> send(box, {:session_opened, ref, Session.open(grant, params)}) end)
+
+        %{
+          state
+          | opens: Map.put(state.opens, ref, %{open | timer: timer}),
+            open_tasks: Map.put(state.open_tasks, mref, ref)
+        }
+    end
   end
 
-  # How an open went, settled by the clock and by who holds the key now. A
-  # session is given to the open that asked for it while its caller still
-  # waits inside the deadline, its holder holds the owner and no close of
-  # that session is owed; otherwise it stays only as the session a later
-  # open of the key was given, or one another open in flight for the key
-  # will be given, and is closed if neither.
+  defp holds_slot?(state, lifetime),
+    do: plane_generation(state) == {:ok, lifetime.generation}
+
+  # How an open went: handed over only inside its deadline, to a holder
+  # that holds the owner, by a member that still holds its slot.
   defp session_opened(state, ref, result) do
     {open, opens} = Map.pop(state.opens, ref)
-    if open.timer, do: Process.cancel_timer(open.timer)
     state = %{state | opens: opens}
 
     case result do
       {:ok, %{session: session, resumed: resumed}} ->
-        if open.from != nil and now_ms() <= open.deadline and holds?(state, open) and
-             not Map.has_key?(state.closing, session) do
-          GenServer.reply(open.from, {:ok, %{session: session, resumed: resumed}})
-          give(state, open, session)
-        else
-          if open.from, do: GenServer.reply(open.from, {:error, :deadline})
-          unclaimed(state, open, session)
+        cond do
+          now_ms() > open.deadline or not holds?(state, open) ->
+            not_given(state, open, :deadline)
+
+          not holds_slot?(state, open.lifetime) ->
+            not_given(state, open, :control_plane_lost)
+
+          true ->
+            Process.cancel_timer(open.timer)
+            GenServer.reply(open.from, {:ok, %{session: session, resumed: resumed}})
+            given = %{holder: open.holder, ended: Map.get(open.params, :ended)}
+            %{state | sessions: Map.put(state.sessions, open.lifetime, given)}
         end
 
       # Refused for a boot the service no longer runs: the box greets the
-      # one the answer names, and the open waits for its owner's sync
-      # under it, once.
-      {:error, {:refused, :stale_boot, boot}} when open.from != nil ->
-        if stale_boot?(open.grant.boot, boot) and holds?(state, open) do
-          state = observe_boot(state, boot)
-          entry = state.owners[open.owner]
-
-          state
-          |> park_open(open.owner, entry, open.holder, open.params, open.deadline, open.from)
-          |> dispatch()
-        else
-          GenServer.reply(open.from, {:error, {:refused, :stale_boot, boot}})
-          state
-        end
+      # one the answer names. The lifetime was that boot's, so the caller is
+      # told, and mints another.
+      {:error, {:refused, :stale_boot, boot} = reason} ->
+        state |> observe_boot(boot) |> not_given(open, reason) |> dispatch()
 
       {:error, reason} ->
-        if open.from, do: GenServer.reply(open.from, {:error, reason})
-        state
+        not_given(state, open, reason)
     end
   end
 
   # The caller's deadline passed with the box's open still out: the caller
-  # is told so, and the open, when it answers, is settled as late.
+  # is told so, and whatever the open does after answers no one.
   defp open_deadline(state, ref) do
-    open = state.opens[ref]
-    GenServer.reply(open.from, {:error, :deadline})
-    %{state | opens: Map.put(state.opens, ref, %{open | from: nil, timer: nil})}
+    {open, opens} = Map.pop(state.opens, ref)
+    not_given(%{state | opens: opens}, open, :deadline)
   end
 
-  defp holds?(state, %{owner: key, holder: holder}),
-    do: match?(%{holders: %{^holder => _}}, state.owners[key])
+  # An open that gave nothing leaves its lifetime a close, unless it asked
+  # again for one already given, which is still its holder's.
+  defp not_given(state, %{lifetime: lifetime} = open, reason) do
+    refuse_open(open, reason)
 
-  # The key's session, given to its holder. A session the key held before,
-  # of a program that ended, is closed: two sessions of one key never both
-  # stand.
-  defp give(state, open, session) do
-    state =
-      case state.sessions[open.key] do
-        %{session: ^session} -> state
-        %{session: before} -> closing(state, open.owner, before)
-        nil -> state
-      end
-
-    entry = %{session: session, holder: open.holder, ended: Map.get(open.params, :ended)}
-    %{state | sessions: Map.put(state.sessions, open.key, entry)}
+    if Map.has_key?(state.sessions, lifetime), do: state, else: owe_close(state, lifetime)
   end
 
-  defp unclaimed(state, open, session) do
-    given? = match?(%{session: ^session}, state.sessions[open.key])
+  defp refuse_open(open, reason) do
+    if open.timer, do: Process.cancel_timer(open.timer)
+    GenServer.reply(open.from, {:error, reason})
+  end
 
-    awaited? =
-      Enum.any?(state.opens, fn {_ref, other} ->
-        other.key == open.key and other.from != nil
+  defp holds?(state, %{lifetime: lifetime, holder: holder}) do
+    epoch = lifetime.epoch
+    match?(%{epoch: ^epoch, holders: %{^holder => _}}, state.owners[owner_of(lifetime)])
+  end
+
+  # The lifetimes `over?` takes by name and holder are over here: an open
+  # still parked is never sent, and one sent or given is a close owed,
+  # which fences an open still on its way.
+  defp over(state, over?) do
+    owners =
+      Map.new(state.owners, fn {key, entry} ->
+        {gone, parked} =
+          Enum.split_with(entry.parked, fn {_pref, open} -> over?.(open.lifetime, open.holder) end)
+
+        for {_pref, open} <- gone, do: refuse_open(open, :not_held)
+        {key, %{entry | parked: parked}}
       end)
 
-    if given? or awaited?, do: state, else: closing(state, open.owner, session, open.grant)
+    {sent, opens} =
+      Map.split_with(state.opens, fn {_ref, open} -> over?.(open.lifetime, open.holder) end)
+
+    for {_ref, open} <- sent, do: refuse_open(open, :not_held)
+
+    {given, sessions} =
+      Map.split_with(state.sessions, fn {lifetime, held} -> over?.(lifetime, held.holder) end)
+
+    state = %{state | owners: owners, opens: opens, sessions: sessions}
+    owed = for({_ref, open} <- sent, do: open.lifetime) ++ Map.keys(given)
+    owed |> Enum.uniq() |> Enum.reduce(state, &owe_close(&2, &1))
   end
 
-  # A holder that died leaves the box its sessions to close; its opens in
-  # flight are settled as their answers come, and no one holds them.
+  # A holder that died leaves the box its lifetimes to close.
   # A terminal that dies before it could say so has its end announced
   # here, from what its open named (`ended`), so no page or shelf shows a
   # session that is gone; one that ended of itself closed its session
   # first, and is no longer here.
   defp abandon_sessions(state, holder) do
-    {gone, kept} = Enum.split_with(state.sessions, fn {_pk, %{holder: h}} -> h == holder end)
-    state = %{state | sessions: Map.new(kept)}
+    for {lifetime, %{holder: ^holder} = held} <- state.sessions,
+        do: announce_ended(lifetime.athanor, held.ended)
 
-    Enum.reduce(gone, state, fn {{athanor, server, _home, _key}, %{session: session} = entry},
-                                acc ->
-      announce_ended(athanor, Map.get(entry, :ended))
-      closing(acc, {athanor, server}, session)
-    end)
+    over(state, fn _lifetime, held_by -> held_by == holder end)
   end
 
   defp announce_ended(_athanor, nil), do: :ok
@@ -1874,101 +2002,165 @@ defmodule Opus.Programs.Box do
     :ok
   end
 
-  # A close the box owes, sent now and again on every tick until the
-  # backend confirms it, the owner is released, or the backend says the
-  # session is gone.
-  # A close records the grant it is signed with when the open that made
-  # the session left one: a late answer is closed even once its owner was
-  # released, whose service then refuses it as unknown and so confirms it.
-  defp closing(state, owner_key, session, grant \\ nil, waiter \\ nil) do
-    record =
-      Map.get(state.closing, session, %{
-        owner: owner_key,
-        grant: grant,
-        inflight: false,
-        waiters: []
-      })
+  defp owner_of(%{athanor: athanor, server: server}), do: {athanor, server}
 
-    record = if waiter, do: %{record | waiters: [waiter | record.waiters]}, else: record
-    send_close(%{state | closing: Map.put(state.closing, session, record)}, session)
+  # A close still to be made, sent now and again on every tick until the
+  # service confirms it.
+  defp owe_close(state, lifetime) do
+    closing = Map.put_new(state.closing, lifetime, %{inflight: nil, waiters: []})
+    send_close(%{state | closing: closing}, lifetime)
   end
 
-  # Whoever waits on a close is answered once it was answered: `:ok` when
-  # nothing of the session runs, `{:error, :unanswered}` otherwise, the
-  # close still owed and sent again on the sweep.
-  defp answer_waiters(record, answer),
-    do: Enum.each(record.waiters, &GenServer.reply(&1, answer))
-
-  defp send_close(state, session) do
-    record = state.closing[session]
-    entry = state.owners[record.owner]
+  defp send_close(state, lifetime) do
+    record = state.closing[lifetime]
 
     cond do
-      record.inflight ->
+      state.boot == nil or plane_generation(state) == :not_owner ->
+        unanswered(state, lifetime)
+
+      record.inflight != nil ->
         state
 
-      record.grant != nil or match?(%{generation: g} when g != nil, entry) ->
-        box = self()
-        grant = record.grant || grant(state, record.owner, entry)
-
-        spawn(fn ->
-          send(box, {:session_closed, session, Session.close(grant, session, @close_ms)})
-        end)
-
-        %{state | closing: Map.put(state.closing, session, %{record | inflight: true})}
-
       true ->
-        # An owner released, or never synced, runs no session.
-        answer_waiters(record, :ok)
-        %{state | closing: Map.delete(state.closing, session)}
+        box = self()
+        grant = grant(state, owner_of(lifetime), lifetime)
+        window = close_window_ms()
+
+        {_pid, inflight} =
+          spawn_monitor(fn ->
+            send(box, {:session_closed, lifetime, Session.close(grant, lifetime, window)})
+          end)
+
+        %{state | closing: Map.put(state.closing, lifetime, %{record | inflight: inflight})}
     end
   end
 
-  defp session_closed(state, session, result) do
-    case state.closing[session] do
+  defp unanswered(state, lifetime) do
+    record = state.closing[lifetime]
+    Enum.each(record.waiters, &GenServer.reply(&1, {:error, :unanswered}))
+    %{state | closing: Map.put(state.closing, lifetime, %{record | waiters: []})}
+  end
+
+  defp session_closed(state, lifetime, result) do
+    case state.closing[lifetime] do
       nil ->
         state
 
       record ->
-        answer_waiters(record, if(closed?(result), do: :ok, else: {:error, :unanswered}))
+        if record.inflight, do: Process.demonitor(record.inflight, [:flush])
 
-        if closed?(result),
-          do: %{state | closing: Map.delete(state.closing, session)},
-          else: %{
-            state
-            | closing: Map.put(state.closing, session, %{record | inflight: false, waiters: []})
-          }
+        if result == :ok do
+          Enum.each(record.waiters, &GenServer.reply(&1, :ok))
+          %{state | closing: Map.delete(state.closing, lifetime)}
+        else
+          closing = Map.put(state.closing, lifetime, %{record | inflight: nil})
+          state = unanswered(%{state | closing: closing}, lifetime)
+
+          # Refused for a boot the service no longer runs: it is greeted,
+          # and the close is sent again under the one it runs.
+          case result do
+            {:error, {:refused, :stale_boot, boot}} -> observe_boot(state, boot)
+            _unanswered -> state
+          end
+        end
     end
   end
 
-  # The backend confirmed the close, or knows neither the session nor its
-  # owner any more: nothing of it runs.
-  defp closed?(:ok), do: true
-
-  defp closed?({:error, {:refused, code, _boot}}) when code in [:unknown_session, :unknown_owner],
-    do: true
-
-  defp closed?(_not_yet), do: false
-
   # The owners a close is out for: their release waits for its answer.
   defp closes_out(state) do
-    for {_session, %{inflight: true, owner: owner}} <- state.closing,
+    for {lifetime, %{inflight: inflight}} <- state.closing,
+        inflight != nil,
         into: MapSet.new(),
-        do: owner
+        do: owner_of(lifetime)
   end
 
   defp retry_closing(state),
     do: Enum.reduce(Map.keys(state.closing), state, &send_close(&2, &1))
 
-  # An owner dropped holds no session any more. The closes owed for it stay
-  # until the backend answers them: its release waits for those out, and a
-  # released owner's service confirms the rest by not knowing it.
-  defp forget_sessions(state, {athanor, server}) do
-    sessions =
-      Map.reject(state.sessions, fn {{a, s, _h, _k}, _} -> a == athanor and s == server end)
+  # ============================================================================
+  # A terminal's id
+  # ============================================================================
 
-    %{state | sessions: sessions}
+  # The id, and the lifetime it names. A terminal's key is its lifetime's
+  # text, so each start is a key of its own and the id need not repeat it.
+  defp terminal_id(state, {principal, owner, home_id}, generation) do
+    {athanor, user} = person_of(principal)
+    who = who_started(principal)
+    text = new_lifetime(state.boot)
+    home = if home_id, do: "kept", else: "scratch"
+    named = %{server: owner.server_id, generation: generation, epoch: owner.epoch, home: home}
+    proof = terminal_proof(state, {athanor, user, who}, Map.put(named, :lifetime, text))
+    fields = [named.server, generation, owner.epoch, home, who, text]
+    id = "trm_" <> Base.url_encode64(Enum.join(fields, "|"), padding: false) <> proof
+
+    {id, terminal_lifetime(athanor, named, text)}
   end
+
+  # Whose the terminal `id` names is and its lifetime, for `closer` of the
+  # athanor and person the id is proved for; `:none` for any other id, so
+  # a forged one and another person's read alike.
+  defp named_terminal(state, "trm_" <> rest, closer)
+       when is_tuple(closer) and byte_size(rest) > @terminal_proof_bytes and
+              byte_size(rest) <= @terminal_id_bytes do
+    size = byte_size(rest) - @terminal_proof_bytes
+    <<payload::binary-size(^size), proof::binary>> = rest
+    {athanor, user} = person_of(closer)
+
+    with {:ok, text} <- Base.url_decode64(payload, padding: false),
+         true <- String.valid?(text),
+         [server, g, e, home, who, lifetime] when home in ["kept", "scratch"] <-
+           String.split(text, "|"),
+         {generation, ""} when generation > 0 <- Integer.parse(g),
+         {epoch, ""} when epoch > 0 <- Integer.parse(e),
+         true <- LocusBackends.lifetime?(lifetime),
+         {:ok, principal} <- started_by(athanor, user, who),
+         named = %{server: server, generation: generation, epoch: epoch, home: home},
+         expected when is_binary(expected) <-
+           terminal_proof(state, {athanor, user, who}, Map.put(named, :lifetime, lifetime)),
+         true <- byte_size(expected) == byte_size(proof) and :crypto.hash_equals(expected, proof) do
+      {:ok, principal, terminal_lifetime(athanor, named, lifetime)}
+    else
+      _not_one_of_theirs -> :none
+    end
+  end
+
+  defp named_terminal(_state, _id, _closer), do: :none
+
+  defp terminal_proof(state, {athanor, user, who}, named) do
+    starter = Prima.Digest.sha256_hex(Jason.encode!([user, who]))
+    message = Map.merge(named, %{athanor: athanor, starter: starter})
+
+    case Prima.MacEnvelope.derive(state.root, @terminal_label, @terminal_fields, message) do
+      {:ok, proof} -> Base.url_encode64(proof, padding: false)
+      {:error, _invalid} -> :error
+    end
+  end
+
+  defp terminal_lifetime(athanor, named, text) do
+    %{
+      athanor: athanor,
+      server: named.server,
+      generation: named.generation,
+      epoch: named.epoch,
+      program: Definition.program_name(),
+      home_id: if(named.home == "kept", do: named.server),
+      key: text,
+      mode: :terminal,
+      id: text
+    }
+  end
+
+  defp person_of({athanor, user}), do: {athanor, user}
+  defp person_of({athanor, user, _who}), do: {athanor, user}
+
+  defp who_started({_athanor, _user}), do: "person"
+  defp who_started({_athanor, _user, :browser}), do: "browser"
+  defp who_started({_athanor, _user, turn_id}), do: "turn:" <> turn_id
+
+  defp started_by(athanor, user, "person"), do: {:ok, {athanor, user}}
+  defp started_by(athanor, user, "browser"), do: {:ok, {athanor, user, :browser}}
+  defp started_by(athanor, user, "turn:" <> turn_id), do: {:ok, {athanor, user, turn_id}}
+  defp started_by(_athanor, _user, _other), do: :error
 
   defp now_ms, do: System.system_time(:millisecond)
 
@@ -1983,7 +2175,7 @@ defmodule Opus.Programs.Box do
     {:ok, owner_key} = LocusBackends.owner_key(state.root, owner)
 
     %{
-      url: state.url <> LocusBackends.route(:session),
+      url: state.url,
       athanor: athanor_id,
       server: server_id,
       generation: entry.generation,
@@ -2058,11 +2250,14 @@ defmodule Opus.Programs.Box do
   # A session open of an owner whose ceiling the service has not confirmed
   # waits for the sync that carries it; the sync's answer starts it, or its
   # deadline answers it.
-  defp park_open(state, key, entry, holder, params, deadline, from) do
+  defp park_open(state, open) do
+    key = owner_of(open.lifetime)
+    entry = state.owners[key]
     pref = make_ref()
-    timer = Process.send_after(self(), {:parked_deadline, key, pref}, max(deadline - now_ms(), 0))
-    parked = Map.get(entry, :parked, []) ++ [{pref, holder, params, deadline, from, timer}]
-    state = put_owner(state, key, Map.put(entry, :parked, parked))
+    left = max(open.deadline - now_ms(), 0)
+    timer = Process.send_after(self(), {:parked_deadline, key, pref}, left)
+    parked = entry.parked ++ [{pref, %{open | timer: timer}}]
+    state = put_owner(state, key, %{entry | parked: parked})
 
     if queued?(state, {:sync, key}), do: state, else: enqueue_front(state, {:sync, key})
   end
@@ -2077,21 +2272,25 @@ defmodule Opus.Programs.Box do
         else
           state = put_owner(state, key, %{entry | parked: []})
 
-          Enum.reduce(parked, state, fn {_pref, holder, params, deadline, from, timer}, state ->
-            Process.cancel_timer(timer)
+          Enum.reduce(parked, state, fn {_pref, open}, state ->
+            Process.cancel_timer(open.timer)
             entry = state.owners[key]
 
             cond do
-              not Map.has_key?(entry.holders, holder) ->
-                GenServer.reply(from, {:error, :not_held})
+              not Map.has_key?(entry.holders, open.holder) ->
+                refuse_open(open, :not_held)
                 state
 
-              now_ms() >= deadline ->
-                GenServer.reply(from, {:error, :deadline})
+              now_ms() >= open.deadline ->
+                refuse_open(open, :deadline)
+                state
+
+              entry.generation != open.lifetime.generation ->
+                refuse_open(open, {:refused, :lifetime_over, nil})
                 state
 
               true ->
-                start_open(state, key, entry, holder, params, deadline, from)
+                start_open(state, %{open | timer: nil})
             end
           end)
         end

@@ -10,8 +10,9 @@ row's kept home:
 - An open in mode `run` starts the row's command with the opener's argv
   appended (`cat -`), in the row's kept home as its HOME, under the
   home's own uid (the kept range, never a pool uid), and answers
-  `resumed: false`; a second open of the key attaches to the same session
-  and answers `resumed: true`.
+  `resumed: false`; a second open of the same lifetime answers the same
+  session, `resumed: true`, and once its process ended is refused
+  `lifetime_over`.
 - Lines sent come back numbered in order; a recv naming the same `after`
   answers the same lines again (a lost answer is replayed), and one naming
   the last line waits its `max_wait_ms` and answers none.
@@ -39,7 +40,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    BOUNDS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, VERSION, Stack, eventually,
+    BOUNDS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, STATUSES, VERSION, Stack, eventually,
     expect, owner_of, require_docker,
 )
 import imagesuite  # noqa: E402
@@ -126,9 +127,10 @@ def scripted_controller(image):
         expect(first["text"] == home_line(HOME) and kept_uid(cat),
                "the program runs in the row's kept home as its HOME, under the home's uid", [first, cat])
         expect(c.hello()[1]["pool"]["free"] == pool["free"], "a kept session takes no uid of the pool")
-        status, again = c.open(OWNER, "cat", key=KEY, argv=ARGV, home_id=HOME)
+        lifetime = c.lifetime(session)
+        status, again = c.open(OWNER, "cat", key=KEY, argv=ARGV, home_id=HOME, lifetime=lifetime)
         expect(status == 200 and again["resumed"] is True and again["session"] == session,
-               "a second open of the key attaches to its running session", again)
+               "a second open of the same lifetime answers its running session", again)
 
         # ————— lines in, numbered lines out —————
         sent = ["one", "two", "three"]
@@ -156,6 +158,9 @@ def scripted_controller(image):
         status, ended = c.recv(OWNER, session, seqs[-1], 0)
         expect(status == 200 and ended["running"] is False and ended["lines"] == [],
                "the retired session answers running: false", ended)
+        status, over = c.open(OWNER, "cat", key=KEY, argv=ARGV, home_id=HOME, lifetime=lifetime)
+        expect((status, over) == (STATUSES["lifetime_over"], {"version": VERSION, "error": "lifetime_over"}),
+               "an open of the ended process's lifetime is refused", over)
         status, reopened = c.open(OWNER, "cat", key=KEY, argv=ARGV, home_id=HOME)
         expect(status == 200 and reopened["resumed"] is False and reopened["session"] != session,
                "the next open of the key starts the program again: resumed false, a new session", reopened)

@@ -181,17 +181,16 @@ defmodule Opus.Programs.TurnSessionTest do
                Map.merge(%{"program" => row.id, "epoch" => row.epoch, "wait_ms" => 0}, args)
              )
 
-    assert_receive {:session, "open", %{"key" => ^id} = open, _fields}, 2_000
+    key = key_of(id)
+    assert_receive {:session, "open", %{"key" => ^key} = open, _fields}, 2_000
     {id, Map.put(open, "session", backend_session(id)), answer}
   end
 
-  # The backend's id of the session the box opened under `key`.
-  defp backend_session(key) do
-    Enum.find_value(:sys.get_state(Programs.via("local")).sessions, fn
-      {{_a, _s, _h, ^key}, %{session: session}} -> session
-      _other -> nil
-    end)
-  end
+  # The key the terminal `id` opened under: its one lifetime's.
+  defp key_of(id), do: :sys.get_state(terminal(id)).lifetime.key
+
+  # The backend's id of the session the terminal `id` was given.
+  defp backend_session(id), do: :sys.get_state(terminal(id)).session
 
   defp terminal(id) do
     [{pid, _owner}] = Registry.lookup(Opus.Programs.Registry, {:terminal, id})
@@ -448,6 +447,13 @@ defmodule Opus.Programs.TurnSessionTest do
         end)
 
       assert_receive {:session, "open", %{"key" => key}, _fields}, 2_000
+
+      assert [id] =
+               Registry.select(Opus.Programs.Registry, [
+                 {{{:terminal, :"$1"}, :_, :_}, [], [:"$1"]}
+               ])
+
+      assert key_of(id) == key
       set_status(turn, "completed")
       :ok = Programs.end_turn(ctx.athanor_id, turn.id)
 
@@ -455,7 +461,7 @@ defmodule Opus.Programs.TurnSessionTest do
       assert {:ok, []} = Programs.running(ctx)
 
       eventually(
-        fn -> Registry.lookup(Opus.Programs.Registry, {:terminal, key}) == [] end,
+        fn -> Registry.lookup(Opus.Programs.Registry, {:terminal, id}) == [] end,
         "the refused start's process to end"
       )
     end
@@ -579,6 +585,19 @@ defmodule Opus.Programs.TurnSessionTest do
       after
         :sys.resume(partition)
       end
+    end
+
+    test "a stop of a program that exited says gone only once its close is confirmed",
+         %{ctx: ctx, row: row, lineage: lineage, fake: fake} do
+      {id, _open, _answer} = start!(ctx, lineage, row)
+      Scripted.refuse_once(fake, "close", "internal")
+      Scripted.end_sessions(fake, row.id, 0)
+      assert_receive {:session, "close", _message, _fields}, 5_000
+      eventually(fn -> :sys.get_state(terminal(id)).ended == :exited end, "the program to exit")
+
+      Scripted.refuse_once(fake, "close", "internal")
+      assert {:error, _unanswered} = call(ctx, lineage, "stop", %{"session" => id})
+      assert {:ok, %{stopped: :already_gone}} = call(ctx, lineage, "stop", %{"session" => id})
     end
 
     test "a stop the backend left unanswered keeps its slot while its session's process lives",
@@ -779,7 +798,8 @@ defmodule Opus.Programs.TurnSessionTest do
                  held_by: self()
                })
 
-      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+      key = key_of(id)
+      assert_receive {:session, "open", %{"key" => ^key}, _fields}, 2_000
 
       assert {:ok, %{programs: programs}} = call(ctx, lineage, "list", %{})
       refute Enum.any?(programs, &(&1.id == browser.id))
