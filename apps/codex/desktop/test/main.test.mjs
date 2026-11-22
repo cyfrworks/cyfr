@@ -760,7 +760,7 @@ async function locksAndForgets() {
 test("what a closing page writes after the lock's clear began is cleared with the rest", async () => {
   const lock = await locksAndForgets()
   const ses = content().webContents.session
-  let writes = 2
+  let writes = 1
   world.step = (at) => {
     if (at === "cleared" && writes-- > 0) ses.jar = [{name: "__phoenix_flash__", domain: "cyfr.example.com", value: "late"}]
   }

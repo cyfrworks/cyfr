@@ -12,11 +12,11 @@ import {closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, wri
 import path from "node:path"
 
 // How many times a clear goes over the storage. A closing page's scripts
-// write until its process has gone, and the engine takes such a write
-// after a clear that began once the window was destroyed (measured); a
-// response to such a page sets nothing (policy.js documentHeaders), so
-// those writes end with the process and the next pass takes them.
-const PASSES = 4
+// write until its process has gone, also after a clear that began once
+// the window was destroyed, and no header rule sees those writes: the
+// second pass takes them, and no measured case had any left after it. A
+// response to such a page sets nothing (policy.js documentHeaders).
+const PASSES = 2
 
 /**
  * The kept storage of session `ses`, its owner recorded in `file`; `say`
