@@ -324,10 +324,12 @@ func workBegunBy(ctx context.Context, begin func([]string) (*workProcess, error)
 		_, _ = io.Copy(io.Discard, work.out)
 		err := work.wait()
 		switch {
-		case end == nil && err == nil:
-			ended <- ending{err: errors.New("setup's work ended before it finished")}
 		case end == nil:
-			ended <- ending{err: fmt.Errorf("setup's work ended before it finished (%v)", err)}
+			why := "setup's work ended before it finished"
+			if err != nil {
+				why += fmt.Sprintf(" (%v)", err)
+			}
+			ended <- ending{err: errors.New(why)}
 		case end.Type == workFailed:
 			ended <- ending{err: workFailure{end.Sentence}}
 		default:
