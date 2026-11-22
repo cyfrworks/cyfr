@@ -216,14 +216,14 @@ trap 'exit 129' HUP
 # found under HOME, and a fresh HOME has none: the app would wait on the
 # system's "Keychain Not Found" dialog, showing no window and not ending.
 # HOME is the run's by now, so security changes the run's keychain list
-# and never the account's own.
+# and never the account's own. create-keychain leaves the keychain unlocked,
+# and unlock-keychain refuses that passphrase for one named login.
 if [ "$OS" = macos ]; then
   KEYCHAIN="$RUN/home/Library/Keychains/login.keychain-db"
   if ! { mkdir -p "${KEYCHAIN%/*}" "$RUN/home/Library/Preferences" &&
     security create-keychain -p smoke "$KEYCHAIN" &&
     security list-keychains -d user -s "$KEYCHAIN" &&
-    security default-keychain -d user -s "$KEYCHAIN" &&
-    security unlock-keychain -p smoke "$KEYCHAIN"; }; then
+    security default-keychain -d user -s "$KEYCHAIN"; }; then
     echo "smoke: the run's HOME could not be given a keychain" >&2
     exit 1
   fi
