@@ -69,6 +69,14 @@ export function row(name, ok, what, detail = {}) {
 
 export class Stop extends Error {}
 
+// The row `name` as `look` judges it, answering [ok, detail]. A look that
+// cannot be had (a control refused, a wait that ran out) fails that row,
+// where it would otherwise stop the proof with no row named.
+export async function judged(name, what, look) {
+  const [ok, detail] = await look().catch((e) => [false, {threw: String(e?.message ?? e)}])
+  row(name, ok, what, detail)
+}
+
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) // sleep-ok: the proof's polling interval
 
 export async function waitFor(check, what, ms = STEP_MS) {

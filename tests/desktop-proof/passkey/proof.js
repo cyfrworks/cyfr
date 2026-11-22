@@ -23,7 +23,7 @@ import {BrowserWindow} from "electron"
 import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, bothWays, devicePrism, held, lockDevice,
   offered, passkeyFor, signOutOfPrism, signedInPrism, startSignIn, toSignIn, usePasskey} from "../account.js"
 import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
-  decisions, fault, frontLength, harvest, history, inputs, js, literal, load, lockDetail, opens, pageKilled, passkeys,
+  decisions, fault, frontLength, harvest, history, inputs, js, judged, literal, load, lockDetail, opens, pageKilled, passkeys,
   reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays,
   submit, throughComputerLock, toldUnanswered, unansweredLoad, unclearable, UNCLEARED, undisturbed, waitFor} from "../lib.js"
 
@@ -421,63 +421,78 @@ async function keptPhase() {
 
   // unanswered, try_again: a page of the CYFR that did not load gives way
   // to the chooser, and its Try again opens Prism on the same sign-in.
-  const unanswered = await unansweredLoad(w)
-  const {cookie, ...detail} = unanswered
-  row("unanswered", toldUnanswered(unanswered, true),
-    "a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR and offering it again, signed in as before", detail)
-  const pressedAt = history.length
-  const frontAt = await frontLength()
-  await js(w.webContents, `document.querySelector("#again").click(); 1`)
-  const back = await waitFor(async () => !w.isDestroyed() && atHome(w.webContents.getURL()) && !w.webContents.isLoading() &&
-    js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism after Try again", 30_000).catch(() => false)
-  // What the retry asked for: the engine's first load of the CYFR after
-  // the press, and that request at the front.
-  const asked = history.slice(pressedAt).find((url) => !url.startsWith(LOOPBACK + "/")) ?? null
-  const answered = (await reachedSince(new URL(HOME).hostname, frontAt)).find((r) => r.method === "GET" && r.path === "/")?.status ?? null
-  row("try_again", asked === HOME + "/" && answered !== null && back === true && cookie !== null && (await sessionCookie(w)) === cookie,
-    "Try again asks for the CYFR's root, and Prism opens signed in as before", {asked: asked && bare(asked), answered, back})
+  let cookie
+  await judged("unanswered",
+    "a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR and offering it again, signed in as before",
+    async () => {
+      const {cookie: kept, ...detail} = await unansweredLoad(w)
+      cookie = kept
+      return [toldUnanswered({cookie, ...detail}, true), detail]
+    })
+  await judged("try_again", "Try again asks for the CYFR's root, and Prism opens signed in as before", async () => {
+    const pressedAt = history.length
+    const frontAt = await frontLength()
+    await js(w.webContents, `document.querySelector("#again").click(); 1`)
+    const back = await waitFor(async () => !w.isDestroyed() && atHome(w.webContents.getURL()) && !w.webContents.isLoading() &&
+      js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism after Try again", 30_000).catch(() => false)
+    // What the retry asked for: the engine's first load of the CYFR after
+    // the press, and that request at the front.
+    const asked = history.slice(pressedAt).find((url) => !url.startsWith(LOOPBACK + "/")) ?? null
+    const answered = (await reachedSince(new URL(HOME).hostname, frontAt)).find((r) => r.method === "GET" && r.path === "/")?.status ?? null
+    return [asked === HOME + "/" && answered !== null && back === true && cookie !== null && (await sessionCookie(w)) === cookie,
+      {asked: asked && bare(asked), answered, back}]
+  })
   await choosersWord(w)
   return "quit"
 }
 
 // What the chooser says on main's behalf is main's alone to decide.
 // chooser_refused: Prism's page in `w` cannot send the window to the
-// chooser with a notice, by a navigation or by a redirect of the CYFR's.
+// chooser with a notice, by a navigation or by a redirect of a load of the
+// CYFR's. The redirect is the engine's answer in the CYFR's place (the
+// session's request hook, which the app does not use): the front sends a
+// load to https alone.
 // chooser_history: the history, which nothing can refuse, brings back the
 // entry main's load made for the failure, and it says nothing of it.
 async function choosersWord(w) {
-  const host = new URL(HOME).hostname
   const to = `${LOOPBACK}/bootstrap/#road=passkey&notice=unanswered`
-  const from = history.length
-  const before = decisions.length
-  await js(w.webContents, `location.assign(${literal(to)}); 1`)
-  const navigated = await decided(w.webContents, to, false, "main's decision on the page's load of the chooser").catch(() => null)
   const hop = "/proof-chooser"
-  await fault(host, "redirect", {from: hop, to})
-  let redirected
-  try {
-    await js(w.webContents, `location.assign(${literal(hop)}); 1`)
-    redirected = await waitFor(() => decisions.slice(before).find((d) => d.window === w.webContents.id && d.name === "will-redirect" && d.main),
-      "main's decision on the redirect to the chooser", 30_000).catch(() => null)
-  } finally {
-    await fault(host, "none")
-  }
-  await waitFor(() => !w.webContents.isLoading(), "the window at rest")
-  row("chooser_refused", navigated === true && redirected?.prevented === true && atHome(w.webContents.getURL()),
+  await judged("chooser_refused",
     "Prism's page cannot send the window to the chooser with a notice, by a navigation or by a redirect: main refuses both and the page stays",
-    {navigated, redirected: redirected?.prevented ?? null, url: bare(w.webContents.getURL()), asked: history.slice(from).map(bare)})
+    async () => {
+      const wc = w.webContents
+      await js(wc, "window.proofStays = true; 1")
+      const from = history.length
+      const before = decisions.length
+      await js(wc, `location.assign(${literal(to)}); 1`)
+      const navigated = await decided(wc, to, false, "main's decision on the page's load of the chooser")
+      let redirected
+      wc.session.webRequest.onBeforeRequest({urls: [HOME + hop]}, (_details, callback) => callback({redirectURL: to}))
+      try {
+        await js(wc, `location.assign(${literal(hop)}); 1`)
+        redirected = await waitFor(() => decisions.slice(before).find((d) => d.window === wc.id && d.name === "will-redirect" && d.main &&
+          atBootstrap(d.url)), "main's decision on the redirect to the chooser", 30_000)
+      } finally {
+        wc.session.webRequest.onBeforeRequest(null)
+      }
+      await waitFor(() => !wc.isLoading(), "the window at rest")
+      const stayed = await js(wc, "window.proofStays === true")
+      return [navigated === true && redirected.prevented === true && stayed === true && atHome(wc.getURL()),
+        {navigated, redirected: redirected.prevented, stayed, url: bare(wc.getURL()), asked: history.slice(from).map(bare)}]
+    })
 
-  await js(w.webContents, "window.history.back(); 1")
-  const shows = await waitFor(async () => {
-    if (!atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
-    const at = await js(w.webContents, `(() => ({type: performance.getEntriesByType("navigation")[0].type,
-      ways: document.querySelector("#words").getClientRects().length > 0,
-      words: document.querySelector("#notice").textContent,
-      again: document.querySelector("#again").getClientRects().length > 0}))()`)
-    return at.ways ? at : null
-  }, "the chooser by the history", 30_000).catch((e) => ({why: e.message}))
-  row("chooser_history", shows.type === "back_forward" && shows.ways && shows.words === "" && shows.again === false,
-    "the history brings back the chooser's entry of a failure with no notice and no Try again", shows)
+  await judged("chooser_history", "the history brings back the chooser's entry of a failure with no notice and no Try again", async () => {
+    await js(w.webContents, "window.history.back(); 1")
+    const shows = await waitFor(async () => {
+      if (!atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
+      const at = await js(w.webContents, `(() => ({type: performance.getEntriesByType("navigation")[0].type,
+        ways: document.querySelector("#words").getClientRects().length > 0,
+        words: document.querySelector("#notice").textContent,
+        again: document.querySelector("#again").getClientRects().length > 0}))()`)
+      return at.ways ? at : null
+    }, "the chooser by the history", 30_000)
+    return [shows.type === "back_forward" && shows.ways && shows.words === "" && shows.again === false, shows]
+  })
 }
 
 async function closedPhase() {
