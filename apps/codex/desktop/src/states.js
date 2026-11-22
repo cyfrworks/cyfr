@@ -24,6 +24,18 @@
 // CYFR main keeps to to load, so its session may hold a sign-in: from
 // then on a lock signs it out, unconfirmed without a forgery token.
 //
+// `returning` is a sign-in's answer on its way into the content window,
+// from its deliver effect to the one navigation that made:
+//   sent       main's load is being made; the engine says that navigation
+//              started within the call that makes it, so before delivered
+//   landing    it started as a change of the fragment alone, which leaves
+//              Prism's page standing though Prism reads an answer only as
+//              its page loads: that navigation landing is the one reload
+// Every other outcome withdraws it, and nothing reloads: another
+// navigation starting (main's started as a whole document, or one that
+// supersedes it, whatever its address), a document committing, a load
+// failing, none started within the call, another CYFR, a lock, an end.
+//
 // The effects (app.js carries each out at once, in order):
 //   close                    destroy every content, confirmation and
 //                            account window and cancel any ceremony
@@ -40,14 +52,20 @@
 //   hold                     the content was given the CYFR main keeps to:
 //                            begin keeping what signing it out needs
 //   token                    read the forgery token of the page shown
-//   hop {url, kind}, return {url}, unhop
+//   hop {url, kind}, unhop
+//   deliver {url}            load a sign-in's answer into the content
+//                            window; answers delivered once that call is over
+//   reload                   load the content window's page again
+//   confirmation {url}       open a confirmation's answer in a window of
+//                            the content's session
+//   show                     bring the content window forward
 //   say {line}
 
 import {LOOPBACK, accountLoad, contentNavigation, contentOpen, homeMessage, parse} from "./policy.js"
 
 /** The state main starts in. */
 export function initial(accountRoad, route = {proxy: "", resolver: ""}) {
-  return {name: "starting", accountRoad, readyURL: "", home: "", account: "", route, held: false}
+  return {name: "starting", accountRoad, readyURL: "", home: "", account: "", route, held: false, returning: null}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
@@ -56,8 +74,9 @@ export const kept = (s) => ["proposed", "open"].includes(s.name)
   : {home: "", account: "", accountRoad: s.accountRoad}
 
 // Into ended, the way every end goes: close, sign out, then `last`.
-const ending = (s, last) => ({state: {...s, name: "ended"}, do: [{close: true}, {retire: {held: s.held}}, last]})
+const ending = (s, last) => ({state: {...s, name: "ended", returning: null}, do: [{close: true}, {retire: {held: s.held}}, last]})
 const same = (s, effects = []) => ({state: s, do: effects})
+const withdrawn = (s, effects = []) => same(s.returning ? {...s, returning: null} : s, effects)
 
 // A home naming a CYFR on another route than main's: main must start
 // again with it before it keeps to it.
@@ -68,7 +87,7 @@ const rerouted = (s, m) => (m.proxy ?? "") !== s.route.proxy || (m.resolver ?? "
 // message), which is then the barrier passed.
 function lock(s, why, notice, heard = null) {
   const next = {...s, name: "locking", before: kept(s), notices: notice ? [notice] : [], barrier: heard !== null,
-    keep: heard, signedOut: false, held: false}
+    keep: heard, signedOut: false, held: false, returning: null}
   return {state: next, do: [{say: `locked: ${why}`}, {close: true}, ...(heard ? [] : [{send: {type: "lock"}}]),
     {retire: {held: s.held}}]}
 }
@@ -82,7 +101,7 @@ function settle(s) {
   const m = s.keep
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, readyURL: s.readyURL,
-    home: again ? m.home : "", account: again ? m.account : "", route: s.route, held: false}
+    home: again ? m.home : "", account: again ? m.account : "", route: s.route, held: false, returning: null}
   return {state: next, do: [{chooser: s.notices}]}
 }
 
@@ -107,7 +126,7 @@ export function step(s, e) {
         return ending(s, {end: "it named a CYFR this app does not open"})
       }
       if (rerouted(s, m)) return ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
-      return {state: {...s, name: "proposed", home: m.home, account: m.account},
+      return {state: {...s, name: "proposed", home: m.home, account: m.account, returning: null},
         do: [{say: `home: ${m.home}`}, {send: {type: "home-ready", fields: {home: m.home}}}]}
     }
     case "opened":
@@ -135,6 +154,21 @@ export function step(s, e) {
       return settle({...s, signedOut: true, notices: e.confirmed ? s.notices : [...s.notices, "unconfirmed"]})
     case "quit":
       return ending(s, {quit: true})
+    case "second-instance":
+      return same(s, [{show: true}])
+
+    // The content window's top frame, as the engine reports it, read for
+    // the answer on its way there (`returning`) alone.
+    case "started":
+      return s.returning?.at === "sent" && e.sameDocument && e.url === s.returning.url
+        ? same({...s, returning: {url: e.url, at: "landing"}}) : withdrawn(s)
+    case "delivered":
+      return s.returning?.at === "landing" ? same(s) : withdrawn(s)
+    case "landed":
+      return withdrawn(s, s.returning?.at === "landing" && e.url === s.returning.url ? [{reload: true}] : [])
+    case "committed":
+    case "load-failed":
+      return withdrawn(s)
 
     // A load in a window of the content's own (the content window or a
     // confirmation window): a hop or the company page acts, from the
@@ -165,14 +199,19 @@ export function step(s, e) {
       return {state: s, open: what === "child" ? "child" : "deny", do: what === "hop" ? [{hop: {url: e.url, kind: "confirmation"}}] : []}
     }
     // A load in the account window: its top frame shows the ceremony or
-    // returns; anything else ends the ceremony, and a frame loads nothing.
+    // returns, as the kind of ceremony the content window now showing began
+    // (`kind`, none otherwise); anything else ends the ceremony, and a frame
+    // loads nothing.
     case "account-navigate": {
       if (e.target !== "top") return {state: s, allow: false, do: []}
       const where = ["starting", "locking"].includes(s.name) ? "block" : accountLoad(e.url, kept(s))
       if (where === "allow") return {state: s, allow: true, do: []}
+      if (where !== "return" || !e.kind) return {state: s, allow: false, do: [{unhop: true}]}
       // The return gives the content window the CYFR: its session is held.
-      if (where === "return") return {state: {...s, held: true}, allow: false, do: [{return: {url: e.url}}, {hold: true}]}
-      return {state: s, allow: false, do: [{unhop: true}]}
+      const given = {...s, held: true}
+      const effects = [{unhop: true}, {hold: true}]
+      if (e.kind === "confirmation") return {state: given, allow: false, do: [...effects, {confirmation: {url: e.url}}]}
+      return {state: {...given, returning: {url: e.url, at: "sent"}}, allow: false, do: [...effects, {deliver: {url: e.url}}]}
     }
   }
   return same(s)

@@ -32,6 +32,7 @@ function reset() {
   world.cleared = []
   world.answer = () => ({status: 503, headers: new Headers()})
   world.page = () => Promise.resolve("forgery-token")
+  world.wholeDocument = false
   world.app.removeAllListeners()
   world.powerMonitor.removeAllListeners()
   world.quit = false
@@ -48,6 +49,7 @@ class Contents extends EventEmitter {
   executeJavaScript() { return world.page(this) }
   reload() {
     this.reloaded = [...(this.reloaded ?? []), this.url]
+    this.emit("did-start-navigation", {url: this.url, isMainFrame: true, isSameDocument: false})
     queueMicrotask(() => {
       this.emit("did-navigate", {}, this.url)
       this.emit("did-finish-load")
@@ -64,10 +66,14 @@ class BrowserWindow extends EventEmitter {
     this.destroyed = false
     world.windows.push(this)
   }
-  // A load that differs from the page shown by its fragment alone is a
-  // same-document navigation, as the engine makes it: no new document.
+  // As Electron 45 makes a load: its navigation starts within the call. A
+  // load of the page shown with a fragment, the same one included, changes
+  // the fragment alone, and still lands after another navigation that
+  // started since; unless the engine makes it a document (wholeDocument).
   loadURL(url) {
-    const inPage = !!this.webContents.url && this.webContents.url.split("#")[0] === url.split("#")[0] && url.includes("#")
+    const inPage = !world.wholeDocument && !!this.webContents.url && url.includes("#") &&
+      this.webContents.url.split("#")[0] === url.split("#")[0]
+    this.webContents.emit("did-start-navigation", {url, isMainFrame: true, isSameDocument: inPage})
     this.webContents.url = url
     queueMicrotask(() => {
       if (inPage) return this.webContents.emit("did-navigate-in-page", {}, url, true)
@@ -398,7 +404,11 @@ test("a lock's notice is its own sign-out's: one unconfirmed before does not mak
   assert.doesNotMatch(content().webContents.url, /unconfirmed/)
 })
 
-test("a sign-in's answer returns as a document of its own, though the content window still shows the CYFR's sign-in page", async () => {
+const ANSWER = HOME + "/login#answer"
+
+// The content window at the CYFR's sign-in page, hopped to the account
+// window, which then sends the answer back (`answer`).
+async function hopped() {
   await started(true)
   child.say({type: "home", home: HOME, account: ACCOUNT})
   child.say({type: "opened", home: HOME})
@@ -411,11 +421,52 @@ test("a sign-in's answer returns as a document of its own, though the content wi
   const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
   assert.ok(navigate(page, hop).prevented, "the hop leaves the content window at the sign-in page")
   const account = live().find((w) => w.webContents.url === hop)
-  const back = {url: HOME + "/login#answer", isMainFrame: true, prevented: false, preventDefault() { this.prevented = true }}
-  account.webContents.emit("will-navigate", back)
-  assert.ok(back.prevented, "the account window does not load the return")
+  const answer = () => {
+    const back = {url: ANSWER, isMainFrame: true, prevented: false, preventDefault() { this.prevented = true }}
+    account.webContents.emit("will-navigate", back)
+    assert.ok(back.prevented, "the account window does not load the return")
+  }
+  return {page, answer}
+}
+
+// The page's own change of its fragment to `url`, as the engine reports it.
+function fragmentTo(page, url) {
+  page.webContents.emit("did-start-navigation", {url, isMainFrame: true, isSameDocument: true})
+  page.webContents.url = url
+  page.webContents.emit("did-navigate-in-page", {}, url, true)
+}
+
+test("a sign-in's answer returns as a document of its own, though the content window still shows the CYFR's sign-in page", async () => {
+  const {page, answer} = await hopped()
+  answer()
   await settled()
   await settled()
-  assert.equal(page.webContents.url, HOME + "/login#answer")
-  assert.deepEqual(page.webContents.reloaded, [HOME + "/login#answer"], "the page loaded again with the answer, as Prism reads it on loading")
+  assert.equal(page.webContents.url, ANSWER)
+  assert.deepEqual(page.webContents.reloaded, [ANSWER], "the page loaded again with the answer, as Prism reads it on loading")
+  fragmentTo(page, ANSWER)
+  await settled()
+  assert.deepEqual(page.webContents.reloaded, [ANSWER], "one reload a return")
+})
+
+test("a sign-in's answer that committed as a whole document reloads nothing, then or at a later fragment of that same address", async () => {
+  const {page, answer} = await hopped()
+  world.wholeDocument = true // the engine's choice, whatever the two addresses
+  answer()
+  await settled()
+  assert.equal(page.webContents.reloaded, undefined)
+  fragmentTo(page, ANSWER)
+  await settled()
+  assert.equal(page.webContents.reloaded, undefined, "a later fragment change to that address is the page's own")
+})
+
+test("a superseded sign-in's answer reloads nothing, as it lands or at a later fragment of that same address", async () => {
+  const {page, answer} = await hopped()
+  answer()
+  // Another navigation starts before the answer lands, which it still does.
+  page.webContents.emit("did-start-navigation", {url: HOME + "/elsewhere", isMainFrame: true, isSameDocument: false})
+  await settled()
+  assert.equal(page.webContents.reloaded, undefined, "the answer landing after it was superseded")
+  fragmentTo(page, ANSWER)
+  await settled()
+  assert.equal(page.webContents.reloaded, undefined, "a later fragment change to that address is the page's own")
 })

@@ -156,8 +156,18 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         .then((token) => { if (typeof token === "string" && token) keep.token = token }, () => {})
     }
     if (effect.hop) startHop(effect.hop.url, effect.hop.kind)
-    if (effect.return) finishHop(effect.return.url)
     if (effect.unhop) endHop()
+    if (effect.deliver && content) {
+      content.loadURL(effect.deliver.url)
+      // That load's navigation has started by now, and been heard.
+      on({type: "delivered"})
+    }
+    if (effect.reload && content) content.webContents.reload()
+    if (effect.confirmation && content) openConfirmation(effect.confirmation.url)
+    if (effect.show && content && !content.isDestroyed()) {
+      if (content.isMinimized()) content.restore()
+      content.focus()
+    }
   }
 
   // ---- the window owner: every window the app has is made here ----
@@ -232,8 +242,19 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       opened.on("closed", () => children.delete(opened))
       confine(opened.webContents, "child", "a window's page stopped", first)
     })
-    contents.on("did-finish-load", () => {
-      if (content === w) on({type: "page", url: contents.getURL()})
+    const heard = (event) => {
+      if (content === w) on(event)
+    }
+    contents.on("did-finish-load", () => heard({type: "page", url: contents.getURL()}))
+    contents.on("did-start-navigation", (details) => {
+      if (details.isMainFrame) heard({type: "started", url: details.url, sameDocument: details.isSameDocument})
+    })
+    contents.on("did-navigate", () => heard({type: "committed"}))
+    contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
+      if (isMainFrame) heard({type: "landed", url})
+    })
+    contents.on("did-fail-load", (_event, _code, _why, _url, isMainFrame) => {
+      if (isMainFrame) heard({type: "load-failed"})
     })
     w.on("closed", () => {
       if (content === w) {
@@ -250,7 +271,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     accountWindow = w
     const contents = w.webContents
     const ask = (event) => {
-      const decided = on({type: "account-navigate", url: event.url, target: event.isMainFrame ? "top" : "frame"})
+      const decided = on({type: "account-navigate", url: event.url, target: event.isMainFrame ? "top" : "frame",
+        kind: hop && content && hop.from === content ? hop.kind : null})
       if (!decided.allow) event.preventDefault()
     }
     contents.on("will-navigate", ask)
@@ -306,27 +328,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     openAccount(url)
   }
 
-  function finishHop(url) {
-    const h = hop
-    endHop()
-    if (!h || h.from !== content || !content) return
-    if (h.kind === "sign-in") {
-      // The hop left the content window at the CYFR's sign-in page, so
-      // the return differs from it by its fragment alone: a same-document
-      // navigation, which Prism's page, reading the answer as it loads,
-      // never sees. Once that fragment is in place the page loads again.
-      const wc = content.webContents
-      if (wc.getURL().split("#")[0] === url.split("#")[0]) {
-        const landed = (_event, at, isMainFrame) => {
-          if (!isMainFrame || at !== url) return
-          wc.off("did-navigate-in-page", landed)
-          if (content && content.webContents === wc) wc.reload()
-        }
-        wc.on("did-navigate-in-page", landed)
-      }
-      content.loadURL(url)
-      return
-    }
+  function openConfirmation(url) {
     const w = new BrowserWindow({
       width: 520, height: 640, parent: content, autoHideMenuBar: true, show: true,
       webPreferences: {...SECURE, session: contentSession}
@@ -466,12 +468,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   // ---- the app ----
 
-  app.on("second-instance", () => {
-    if (content && !content.isDestroyed()) {
-      if (content.isMinimized()) content.restore()
-      content.focus()
-    }
-  })
+  app.on("second-instance", () => on({type: "second-instance"}))
   app.on("web-contents-created", (_event, contents) => {
     contents.on("will-attach-webview", (event) => event.preventDefault())
   })
