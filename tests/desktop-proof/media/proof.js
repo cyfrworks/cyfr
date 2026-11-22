@@ -14,7 +14,7 @@ import {BrowserWindow, app} from "electron"
 
 import api from "../../fixtures/worker_api.json"
 import {accountAndDevice} from "../account.js"
-import {HOME, LOOPBACK, atDevice, atHome, content, contentAt, inputs, js, literal, log, row, run, sleep, waitFor} from "../lib.js"
+import {HOME, atBootstrap, atHome, chooserWindow, contentAt, inputs, js, literal, log, row, run, sleep, waitFor} from "../lib.js"
 
 // ---- the grant: this entry's alone ----
 
@@ -29,24 +29,42 @@ const originOf = (url) => {
   }
 }
 
-// `media` to the pinned window, for its top frame, on the CYFR's origin,
-// read from the asking document's security origin: a frame the page writes
-// has the page's, whatever its address. Everything else is the app's own
-// answer.
-const allows = (permission, contents, isMainFrame, origin) =>
-  permission === "media" && pinned !== null && contents === pinned && isMainFrame === true && origin === HOME
+// `media` to the pinned window, for its top frame, when the asking
+// document's security origin is the CYFR's. An ask that names no security
+// origin is refused: an address says what a frame loaded, not whose
+// document asks. Everything else is the app's own answer.
+const allows = (permission, contents, details) =>
+  permission === "media" && pinned !== null && contents === pinned && details.isMainFrame === true &&
+  originOf(details.securityOrigin) === HOME
 
 // Each session's two permission handlers as the app sets them, with the
-// grant asked first.
+// grant asked first, and kept as installed.
+const installed = new Map()
 app.on("session-created", (ses) => {
+  const handlers = {}
+  installed.set(ses, handlers)
   const onRequest = ses.setPermissionRequestHandler.bind(ses)
-  ses.setPermissionRequestHandler = (own) => onRequest((contents, permission, callback, details) =>
-    allows(permission, contents, details.isMainFrame, originOf(details.securityOrigin ?? details.requestingUrl))
-      ? callback(true) : own(contents, permission, callback, details))
+  ses.setPermissionRequestHandler = (own) => {
+    handlers.request = (contents, permission, callback, details) =>
+      allows(permission, contents, details) ? callback(true) : own(contents, permission, callback, details)
+    return onRequest(handlers.request)
+  }
   const onCheck = ses.setPermissionCheckHandler.bind(ses)
-  ses.setPermissionCheckHandler = (own) => onCheck((contents, permission, origin, details) =>
-    allows(permission, contents, details.isMainFrame, originOf(origin)) || own(contents, permission, origin, details))
+  ses.setPermissionCheckHandler = (own) => {
+    handlers.check = (contents, permission, origin, details) =>
+      allows(permission, contents, details) || own(contents, permission, origin, details)
+    return onCheck(handlers.check)
+  }
 })
+
+// What both installed handlers answer an ask of the pinned page's top
+// frame at the CYFR's address, with `securityOrigin` or none.
+async function handlersAnswer(wc, permission, securityOrigin) {
+  const {request, check} = installed.get(wc.session)
+  const details = {isMainFrame: true, requestingUrl: `${HOME}/`, ...(securityOrigin && {securityOrigin})}
+  return {request: await new Promise((answer) => request(wc, permission, answer, details)),
+    check: check(wc, permission, `${HOME}/`, details)}
+}
 
 // ---- the worker's status, stood in for ----
 
@@ -132,6 +150,16 @@ async function recording(wc) {
 
 async function mediaPhase() {
   await workerStatus()
+
+  // grant_chooser: the chooser itself, in the content window, pinned: its
+  // origin is all that refuses it.
+  const chooser = await chooserWindow()
+  pinned = chooser.webContents
+  const atChooser = {chooser: atBootstrap(chooser.webContents.getURL()), got: await js(chooser.webContents, DEVICES)}
+  pinned = null
+  row("grant_chooser", atChooser.chooser && atChooser.got.every((o) => o === "NotAllowedError"),
+    "granted, the chooser in the same content window is refused them", atChooser)
+
   await accountAndDevice(inputs)
   const w = await contentAt(atHome, "Prism")
   const wc = w.webContents
@@ -176,6 +204,14 @@ async function mediaPhase() {
   row("media_granted", granted.every((o) => o === "granted"),
     "granted by the proof's entry, the CYFR's top page in the content window gets both devices", {granted})
 
+  // grant_security_origin: asked of both installed handlers, since the
+  // engine names a security origin on every media ask it makes: with none
+  // the CYFR's address grants nothing, and with the CYFR's both allow.
+  const unnamed = await handlersAnswer(wc, "media")
+  const named = await handlersAnswer(wc, "media", `${HOME}/`)
+  row("grant_security_origin", !unnamed.request && !unnamed.check && named.request && named.check,
+    "granted, an ask with no security origin is refused by both handlers, whatever address it names", {unnamed, named})
+
   // grant_frame: a frame the page writes, which takes the page's origin,
   // so its not being the top frame is all that refuses it.
   await js(wc, `(() => { const f = document.createElement("iframe"); f.name = "proof-media"; f.id = "proof-media";
@@ -196,8 +232,9 @@ async function mediaPhase() {
     "granted, the CYFR's page in another window of the same session is refused them", elsewhere)
 
   // grant_kind: the grant is for media, and for no other permission.
-  const otherKind = await js(wc, `Notification.requestPermission()`)
-  row("grant_kind", otherKind === "denied", "granted the devices, the page is still refused another permission", {otherKind})
+  const otherKind = {page: await js(wc, `Notification.requestPermission()`), handlers: await handlersAnswer(wc, "notifications", `${HOME}/`)}
+  row("grant_kind", otherKind.page === "denied" && !otherKind.handlers.request && !otherKind.handlers.check,
+    "granted the devices, the page is still refused another permission", otherKind)
 
   // screen_refused: by Prism's own policy before anyone is asked, and by
   // the other road the engine has to a screen.
@@ -287,19 +324,8 @@ async function mediaPhase() {
   const atClose = (await asks(wc))[closing.at]
   row("composer_closed", atClose.live === 0, "the composer closing stops a recording's track", {atClose})
 
-  // grant_origin: the same window and top frame, at another origin.
-  await js(wc, `location.assign(${literal(`${LOOPBACK}/`)}); true`)
-  await contentAt(atDevice, "the device's page in the content window")
-  const loopback = {at: originOf(wc.getURL()), same: content()?.webContents === wc, got: await js(wc, DEVICES)}
-  row("grant_origin", loopback.at === LOOPBACK && loopback.same && loopback.got.every((o) => o === "NotAllowedError"),
-    "granted, the same window's page of another origin, the device's, is refused them", loopback)
-
   // lock: the device's Lock ends a recording with the page that holds it.
-  await js(wc, `location.assign(${literal(`${HOME}/`)}); true`)
-  await contentAt(atHome, "Prism again")
-  await waitFor(() => js(wc, `!!document.querySelector(".phx-connected")`), "Prism's page connected again")
   await openComposer(wc)
-  await js(wc, WATCH)
   await recording(wc)
   const renderer = wc.getOSProcessId()
   await js(wc, `document.querySelector('[data-test="device-lock"]').click(); true`).catch((e) => log(`lock: ${e.message}`))

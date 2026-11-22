@@ -131,7 +131,9 @@ The composer's hook holds the capture all the same (`cyfr:capture`,
 the engine's fake devices and no automatic grant. The grant is the proof
 entry's alone: it wraps each session's two permission handlers as the
 app sets them, and allows `media` to the one content window it pins, for
-that window's top frame on the CYFR's origin. A send needs a worker
+that window's top frame when the asking document's security origin is the
+CYFR's. An ask that names no security origin is refused, whatever address
+it names. A send needs a worker
 service that answers its status, so the entry answers that alone, from
 `tests/fixtures/worker_api.json`. No brain's turn runs in this proof:
 that a brain is told it cannot read the clip is the Elixir test's to
@@ -139,25 +141,29 @@ show (`apps/cyfr/test/aqua/crew_test.exs`).
 
 | Row | What holds | What the row observes |
 |---|---|---|
+| `grant_chooser` | the chooser, in the content window while it is pinned, is refused | each request's `NotAllowedError` |
 | `media_shipped` | with nothing granted, Prism's page and the composer's own capture are refused both devices, and no file is made | each request's `NotAllowedError`; the empty draft |
 | `no_control` | Prism draws no control that captures | the composer's controls, exactly; no control on the page naming a camera, a microphone or a recording |
 | `media_granted` | granted by the entry, the CYFR's top page in the content window gets both | each request's answer |
+| `grant_security_origin` | an ask with no security origin is refused | both installed handlers, asked directly: refused without one though the address is the CYFR's, allowed with the CYFR's |
 | `grant_frame` | a frame of the page's own origin, allowed both by the page, is refused | each request's `NotAllowedError` |
 | `grant_window` | the CYFR's page in another window of the same session is refused | the same, at the CYFR's origin |
-| `grant_kind` | the grant is for media alone | another permission still denied |
+| `grant_kind` | the grant is for media alone | another permission still denied, to the page and by both handlers |
 | `screen_refused` | screen capture is refused | the refusal naming Prism's `display-capture` policy; `getUserMedia`'s road to a screen refused |
 | `capture_sends_nothing` | a still and a clip wait in the draft | two uploads waiting, nothing in the thread |
 | `capture_files` | sent, both are stored, fetched back and decoded | a patterned PNG; sound of over nine and at most ten seconds |
 | `capture_released` | a finished capture keeps no device | every track given, ended |
 | `cancel` | a cancel stops a recording at once and attaches nothing | the track ended; the draft empty |
 | `composer_closed` | the composer closing stops a recording | the track ended |
-| `grant_origin` | the same window's page of another origin, the device's, is refused | each request's `NotAllowedError` |
 | `lock` | the device's Lock ends a recording | the window destroyed and its page's process gone, sooner than the clip would end |
 
 Limits: the clip's timer is the page's, so a page that stalls can run a
 clip over ten seconds. A recording is not tied to the computer's lock:
 it ends by itself within its bound. A thread switched inside the open
 panel keeps the composer, so a clip under way lands in the draft shown.
+An unanswered browser prompt can outlast the composer: its end doesn't
+withdraw the prompt, and whatever the prompt then gives is stopped at
+once and makes no file.
 
 ## The passkey road: `passkey/`, `passkey-self/`, `passkey-company/`
 
