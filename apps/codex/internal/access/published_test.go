@@ -6,6 +6,7 @@ package access
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -81,6 +82,41 @@ func TestPublishedByIsTheFoldersOwnRunningContainer(t *testing.T) {
 	}
 	if _, ok, err := PublishedBy(t.Context(), &answering{answers: map[string]string{}}, dir, "cyfr", 4000); ok || err != nil {
 		t.Fatalf("no container: %v, %v", ok, err)
+	}
+}
+
+// failing is a docker whose every command ends as res and err say.
+type failing struct {
+	res Result
+	err error
+}
+
+func (d failing) Run(context.Context, Call) (Result, error) { return d.res, d.err }
+
+// A failure says what was seen of it: that Docker answered nothing only
+// where it did not.
+func TestADockerFailureSaysWhatWasSeen(t *testing.T) {
+	ended, end := context.WithCancel(t.Context())
+	end()
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		d    failing
+		says string
+	}{
+		{"an exit", t.Context(), failing{Result{ExitCode: 1}, &CallError{ExitCode: 1}}, "failed with exit status 1"},
+		{"an exit and no error", t.Context(), failing{Result{ExitCode: 1}, nil}, "failed with exit status 1"},
+		{"its deadline", t.Context(), failing{Result{ExitCode: 124}, &CallError{ExitCode: 124, Deadline: true}}, "was ended before it answered"},
+		{"the caller's end", ended, failing{Result{ExitCode: -1}, &CallError{ExitCode: -1}}, "was ended before it answered"},
+		{"not run", t.Context(), failing{Result{ExitCode: -1}, errors.New("no docker here")}, "gave no answer: no docker here"},
+	} {
+		_, _, err := PublishedBy(tc.ctx, tc.d, t.TempDir(), "cyfr", 4000)
+		if err == nil || err.Error() != "docker ps "+tc.says {
+			t.Errorf("%s: ps said %v", tc.name, err)
+		}
+		if _, err := DockerIsHere(tc.ctx, tc.d); err == nil || err.Error() != "docker context "+tc.says {
+			t.Errorf("%s: context said %v", tc.name, err)
+		}
 	}
 }
 

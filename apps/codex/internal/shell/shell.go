@@ -485,9 +485,9 @@ type shownState struct {
 type generation struct {
 	ended context.Context
 	end   context.CancelFunc
-	// active and locks are under Shell.genMu: the actions begun in it and
-	// not done, and the locks that ended it and have not locked yet.
-	active, locks int
+	// locks is under Shell.genMu: the locks that ended it and have not
+	// locked yet.
+	locks int
 }
 
 func newGeneration() *generation {
@@ -2144,7 +2144,6 @@ func (s *Shell) end(only *generation) (locked func(), ok bool) {
 func (s *Shell) act(parent context.Context) (ctx context.Context, done func()) {
 	s.genMu.Lock()
 	g := s.gen
-	g.active++
 	s.genMu.Unlock()
 	ctx, stop := context.WithCancelCause(context.WithValue(parent, underwayKey{}, &underway{g: g}))
 	unhook := context.AfterFunc(g.ended, func() { stop(errLocked) })
@@ -2153,9 +2152,6 @@ func (s *Shell) act(parent context.Context) (ctx context.Context, done func()) {
 	}
 	return ctx, func() {
 		unhook()
-		s.genMu.Lock()
-		g.active--
-		s.genMu.Unlock()
 		stop(nil)
 	}
 }
@@ -2233,24 +2229,6 @@ func (s *Shell) lock(why string) {
 // Unlocked is whether the channel stands, until the lock that closes it
 // is done. It waits for nothing.
 func (s *Shell) Unlocked() bool { return s.open.Load() }
-
-// BrowserExited locks, as Lock does, as the screen's browser exits, in
-// every state but one: a recovery code shown and not yet saved, which this
-// shell alone holds and a lock would erase.
-func (s *Shell) BrowserExited(why string) {
-	if !s.unsavedRecoveryCode() {
-		s.Lock(why)
-	}
-}
-
-// unsavedRecoveryCode is that one state. With an action in flight it is
-// not: that action may be saving the code, and goes on to send it and to
-// open the device.
-func (s *Shell) unsavedRecoveryCode() bool {
-	s.genMu.Lock()
-	defer s.genMu.Unlock()
-	return s.gen.active == 0 && s.shown.Load().view.Page == PageRecovery
-}
 
 // unwatchedError refuses an unlock, saying what the page says.
 type unwatchedError string

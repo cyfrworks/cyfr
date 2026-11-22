@@ -603,16 +603,16 @@ func TestAStandInOnTheFoldersPortIsNotItsCYFR(t *testing.T) {
 			name, words string
 			says        func(s localStack, port int)
 		}{
-			{"the stack stopped", "is not running", func(localStack, int) {}},
-			{"its container exited", "is not running", func(s localStack, port int) {
+			{"the stack stopped", "Docker shows no CYFR of", func(localStack, int) {}},
+			{"its container exited", "Docker shows no CYFR of", func(s localStack, port int) {
 				s.runs("c0ffee", s.project, func(c map[string]any) { c["running"] = false }, port)
 			}},
-			{"its container restarting", "is not running", func(s localStack, port int) {
+			{"its container restarting", "Docker shows no CYFR of", func(s localStack, port int) {
 				s.runs("c0ffee", s.project, func(c map[string]any) { c["restarting"] = true }, port)
 			}},
-			{"its container on another port", "is not running", func(s localStack, port int) { s.runs("c0ffee", s.project, nil, port+1) }},
-			{"another folder's container", "is not running", func(s localStack, port int) { s.runs("c0ffee", namesake, nil, port) }},
-			{"Docker not answering", "Docker could not say", func(s localStack, _ int) { s.answer("cyfrps.exit", "1") }},
+			{"its container on another port", "Docker shows no CYFR of", func(s localStack, port int) { s.runs("c0ffee", s.project, nil, port+1) }},
+			{"another folder's container", "Docker shows no CYFR of", func(s localStack, port int) { s.runs("c0ffee", namesake, nil, port) }},
+			{"Docker failing", "(docker ps failed with exit status 1), so nothing was sent to it. Check Docker, then try again.", func(s localStack, _ int) { s.answer("cyfrps.exit", "1") }},
 			{"a Docker on another computer", "containers on another computer", func(s localStack, port int) {
 				s.runs("c0ffee", s.project, nil, port)
 				s.answer("context.out", "tcp://192.0.2.1:2375\n")
@@ -644,7 +644,7 @@ func TestAConnectionOutlivingItsContainerCarriesNothing(t *testing.T) {
 		words  string
 		change func(s localStack, port int)
 	}{
-		"gone":     {"is not running", func(s localStack, _ int) { s.stopped() }},
+		"gone":     {"Docker shows no CYFR of", func(s localStack, _ int) { s.stopped() }},
 		"replaced": {"started again", func(s localStack, port int) { s.runs("dec0de", s.project, nil, port) }},
 		"started again": {"started again", func(s localStack, port int) {
 			s.runs("c0ffee", s.project, func(c map[string]any) { c["started"] = "2026-10-28T00:09:09Z" }, port)
@@ -684,7 +684,7 @@ func TestARetainedAddressNeverReceivesTheSetupToken(t *testing.T) {
 		{"the account service changed", "changed after it was opened", func(s localStack, first, _ int) {
 			s.env(first, "CYFR_DIRECTORY_URL=https://accounts.example.com\n")
 		}},
-		{"the stack stopped and another program took the port", "is not running", func(s localStack, _, _ int) { s.stopped() }},
+		{"the stack stopped and another program took the port", "Docker shows no CYFR of", func(s localStack, _, _ int) { s.stopped() }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newLocalStack(t)
@@ -748,7 +748,7 @@ func TestTheTokensConnectionIsTheContainerRead(t *testing.T) {
 		{"started again", "started again", func(s localStack, port int) {
 			s.runs("c0ffee", s.project, func(c map[string]any) { c["started"] = "2026-10-28T00:09:09Z" }, port)
 		}},
-		{"gone", "is not running", func(s localStack, _ int) { s.stopped() }},
+		{"gone", "Docker shows no CYFR of", func(s localStack, _ int) { s.stopped() }},
 	} {
 		for _, when := range []string{"before the dial", "during the dial"} {
 			t.Run(c.name+" "+when, func(t *testing.T) {
@@ -1027,5 +1027,48 @@ func TestAFoldersOwnAddressTakesNoProxy(t *testing.T) {
 				t.Fatalf("elsewhere was reached by %v, not this computer's way", to)
 			}
 		})
+	}
+}
+
+// Where no answer came, only that is said: not that the folder's CYFR
+// runs, which a Docker that never answered did not say.
+func TestNoAnswerSaysNoMoreThanThat(t *testing.T) {
+	s := newLocalStack(t)
+	silent, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { silent.Close() })
+	port := silent.Addr().(*net.TCPAddr).Port
+	s.env(port)
+	s.runs("c0ffee", s.project, nil, port)
+	local, err := readLocal(s.project, "screen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended, end := context.WithCancel(t.Context())
+	end()
+	err = local.Answers(ended)
+	want := "No answer came from the CYFR in " + s.project + ". Check with docker ps that Docker answers and CYFR runs, then try again in a moment."
+	if err == nil || err.Error() != want {
+		t.Fatalf("said %v", err)
+	}
+}
+
+// A folder that cannot be opened is said so, and that Docker was not asked.
+func TestAFolderThatCannotBeOpenedBlamesNoDocker(t *testing.T) {
+	s := newLocalStack(t)
+	s.env(4321)
+	local, err := readLocal(s.project, "screen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := openEngine
+	t.Cleanup(func() { openEngine = saved })
+	openEngine = func(string) (stackEngine, error) { return nil, errors.New("its compose file is missing") }
+	err = local.Answers(t.Context())
+	want := "The CYFR in " + s.project + " could not be opened here (its compose file is missing), so Docker was not asked and nothing was sent to it. Correct that, then try again."
+	if err == nil || err.Error() != want {
+		t.Fatalf("said %v", err)
 	}
 }

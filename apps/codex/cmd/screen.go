@@ -342,9 +342,9 @@ const (
 // watches that lock it (screenWatches) and Chrome on those pages. While
 // those watches are not known to work it runs on locked, its page saying
 // why.
-// Chrome's exit locks, but for a recovery code shown and not yet saved
-// (shell.BrowserExited), and starts it again on the shell's page; this
-// process's own end (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
+// Chrome's exit locks in every state, for the proof its page held is gone
+// with it, and starts it again on the shell's page; this process's own end
+// (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
 // the sessions at the home first, then starts Chrome again, so no page of
 // the unlocked session outlives it.
 func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) error {
@@ -451,7 +451,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 				return
 			}
 			if browsing.Err() == nil {
-				sh.BrowserExited("Locked because the browser closed.")
+				sh.Lock("Locked because the browser closed.")
 			}
 			select {
 			case <-browsing.Done():

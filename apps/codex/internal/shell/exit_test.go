@@ -18,13 +18,12 @@ import (
 const browserClosed = "Locked because the browser closed."
 
 // exitCase is one state the shell can be in as the screen's browser exits.
-// spared is the one the exit leaves alone. made answers the box, and where
-// an action is in flight what ends once it has.
+// made answers the box, and where an action is in flight what ends once it
+// has.
 type exitCase struct {
-	name   string
-	page   Page
-	spared bool
-	made   func(t *testing.T) (b *box, inFlight <-chan struct{})
+	name string
+	page Page
+	made func(t *testing.T) (b *box, inFlight <-chan struct{})
 }
 
 func exitCases() []exitCase {
@@ -89,12 +88,12 @@ func exitCases() []exitCase {
 			}
 			return b
 		})},
-		{name: "a recovery code shown and not yet saved", page: PageRecovery, spared: true, made: still(func(t *testing.T) *box {
+		{name: "a recovery code shown and not yet saved", page: PageRecovery, made: still(func(t *testing.T) *box {
 			_, b := aBox(t, keep)
 			b.setUp("alice")
 			return b
 		})},
-		{name: "that code shown for a key made before", page: PageRecovery, spared: true, made: still(func(t *testing.T) *box {
+		{name: "that code shown for a key made before", page: PageRecovery, made: still(func(t *testing.T) *box {
 			_, b, p := withKey(t, keep)
 			b.post("/create", url.Values{"name": {"alice"}, "secret": {p}})
 			return b
@@ -170,9 +169,9 @@ func exitCases() []exitCase {
 	}
 }
 
-// The browser's exit locks in every state but one: a recovery code shown
-// and not yet saved.
-func TestExit_LocksInEveryStateButAnUnsavedRecoveryCode(t *testing.T) {
+// The browser's exit is a Lock (cmd runScreenShell), which locks in every
+// state, a recovery code shown and not yet saved among them.
+func TestExit_LocksInEveryState(t *testing.T) {
 	for _, c := range exitCases() {
 		t.Run(c.name, func(t *testing.T) {
 			b, inFlight := c.made(t)
@@ -181,30 +180,17 @@ func TestExit_LocksInEveryStateButAnUnsavedRecoveryCode(t *testing.T) {
 				t.Fatalf("the row made %q, not %q", page, c.page)
 			}
 			var recovery []byte
-			var then string
-			if inFlight == nil {
-				if s.making != nil {
-					recovery = s.making.key
-				}
-				then = wholeState(t, b)
+			if inFlight == nil && s.making != nil {
+				recovery = s.making.key
 			}
 			wasOpen, restarts, notice := s.Unlocked(), b.restarts.Load(), s.shown.Load().view.Notice
 			s.genMu.Lock()
 			began := s.gen
 			s.genMu.Unlock()
 
-			returns(t, "the browser's exit", func() { s.BrowserExited(browserClosed) })
+			returns(t, "the browser's exit", func() { s.Lock(browserClosed) })
 			if inFlight != nil {
 				returns(t, "what was in flight", func() { <-inFlight })
-			}
-			if c.spared {
-				if now := wholeState(t, b); now != then || !began.live() {
-					t.Fatalf("the exit did not leave the code alone:\n%s", stateDiff(then, now))
-				}
-				if b.recovery() == "" {
-					t.Fatal("the code is gone")
-				}
-				return
 			}
 			if began.live() {
 				t.Fatal("the exit ended no generation, so it did not lock")

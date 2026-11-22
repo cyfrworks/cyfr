@@ -6,6 +6,7 @@ package access
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -34,7 +35,7 @@ func PublishedBy(ctx context.Context, d Docker, dir, service string, port int) (
 	ask := func(what string, args ...string) (string, error) {
 		res, err := d.Run(ctx, Call{Args: args, Deadline: probeDeadline})
 		if err != nil || res.ExitCode != 0 {
-			return "", fmt.Errorf("docker %s did not answer", what)
+			return "", noAnswer(ctx, what, res, err)
 		}
 		return string(res.Stdout), nil
 	}
@@ -80,6 +81,20 @@ func PublishedBy(ctx context.Context, d Docker, dir, service string, port int) (
 	return Published{}, false, nil
 }
 
+// noAnswer is a Docker command's failure as it was seen: ended before it
+// answered, failed, or never an answer at all.
+func noAnswer(ctx context.Context, what string, res Result, err error) error {
+	var call *CallError
+	failed := errors.As(err, &call)
+	switch {
+	case ctx.Err() != nil, failed && call.Deadline:
+		return fmt.Errorf("docker %s was ended before it answered", what)
+	case failed, err == nil:
+		return fmt.Errorf("docker %s failed with exit status %d", what, res.ExitCode)
+	}
+	return fmt.Errorf("docker %s gave no answer: %w", what, err)
+}
+
 // DockerIsHere is whether the Docker that calls reach runs its containers
 // on this computer, which its endpoint says: a socket or a pipe, never an
 // address. Only such a Docker can say what answers on this computer's
@@ -87,7 +102,7 @@ func PublishedBy(ctx context.Context, d Docker, dir, service string, port int) (
 func DockerIsHere(ctx context.Context, d Docker) (bool, error) {
 	res, err := d.Run(ctx, Call{Args: []string{"context", "inspect", "--format", "{{.Endpoints.docker.Host}}"}, Deadline: probeDeadline})
 	if err != nil || res.ExitCode != 0 {
-		return false, fmt.Errorf("docker context did not answer")
+		return false, noAnswer(ctx, "context", res, err)
 	}
 	endpoint := strings.TrimSpace(string(res.Stdout))
 	return strings.HasPrefix(endpoint, "unix://") || strings.HasPrefix(endpoint, "npipe://"), nil

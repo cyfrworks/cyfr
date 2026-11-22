@@ -253,7 +253,7 @@ func (f *localFolder) read() (localReading, error) {
 }
 
 func (f *localFolder) stopped() error {
-	return &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s is not running. Run cyfr up in that folder, then try again.", f.dir)}
+	return &shell.Unbound{Sentence: fmt.Sprintf("Docker shows no CYFR of %s running at %s. Run cyfr up in that folder, then try again.", f.dir, f.loopback)}
 }
 
 func (f *localFolder) replaced() error {
@@ -266,12 +266,12 @@ func (f *localFolder) replaced() error {
 // lock is taken.
 func (f *localFolder) serving(ctx context.Context, at localBound) (access.Published, error) {
 	unsaid := func(why error) error {
-		return &shell.Unbound{Sentence: fmt.Sprintf("Docker could not say whether the CYFR in %s is running (%v), so nothing was sent to it.", f.dir, why)}
+		return &shell.Unbound{Sentence: fmt.Sprintf("Docker could not say whether the CYFR in %s is running (%v), so nothing was sent to it. Check Docker, then try again.", f.dir, why)}
 	}
 	var none access.Published
 	e, err := openEngine(f.dir)
 	if err != nil {
-		return none, unsaid(engineFailure(err))
+		return none, &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s could not be opened here (%v), so Docker was not asked and nothing was sent to it. Correct that, then try again.", f.dir, engineFailure(err))}
 	}
 	docker := e.Docker()
 	here, err := access.DockerIsHere(ctx, docker)
@@ -348,7 +348,9 @@ func (f *localFolder) answers(ctx context.Context, client *http.Client) error {
 	case errors.As(err, &unbound):
 		return unbound
 	case err != nil:
-		return &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s is running and does not answer yet. Try again in a moment.", f.dir)}
+		// What was seen is no answer: Docker, the connection or CYFR may be
+		// what held it.
+		return &shell.Unbound{Sentence: fmt.Sprintf("No answer came from the CYFR in %s. Check with docker ps that Docker answers and CYFR runs, then try again in a moment.", f.dir)}
 	}
 	resp.Body.Close()
 	return nil

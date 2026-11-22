@@ -6,6 +6,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"html"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyfr/codex/internal/account/accounttest"
 	"github.com/cyfr/codex/internal/holder"
 	"github.com/cyfr/codex/internal/idle"
 	"github.com/cyfr/codex/internal/idle/idletest"
@@ -195,19 +197,7 @@ func TestScreenShell_TheBrowsersExitLocksAnUnlockInFlight(t *testing.T) {
 func TestScreenShell_TheBrowsersExitLocksWithNothingInFlight(t *testing.T) {
 	h := startHungScreen(t, func(r *holder.Record) { r.Identifier, r.Directory = "", "" })
 	pid := h.browserPID()
-	post := func(path string, fields url.Values) string {
-		resp, err := h.ask(http.MethodPost, path, fields)
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return html.UnescapeString(string(raw))
-	}
-	const onlyThatPage = "Only the page this device's PIN or passphrase was typed on can do that."
+	post := h.posted
 	_, after, ok := strings.Cut(post("/create", url.Values{"name": {"ada"}, "secret": {h.passphrase}}), `data-proof="`)
 	proof, _, _ := strings.Cut(after, `"`)
 	if !ok || proof == "" {
@@ -219,14 +209,99 @@ func TestScreenShell_TheBrowsersExitLocksWithNothingInFlight(t *testing.T) {
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
-	h.until("the browser started again", func() bool {
-		raw, _ := os.ReadFile(h.browser)
-		return strings.Count(string(raw), "\n") > 1
-	})
+	h.startedAgain()
 	if page := post("/saved", url.Values{"proof": {proof}}); !strings.Contains(page, onlyThatPage) {
 		t.Fatalf("the proof outlived the browser that held it:\n%s", page)
 	}
 }
+
+// A recovery code shown and not yet saved ends with the browser that
+// showed it: the screen's next page is the account made again.
+func TestScreenShell_TheBrowsersExitEndsAnUnsavedRecoveryCode(t *testing.T) {
+	screenProject(t)
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts := accounttest.New(t)
+	at, err := url.Parse(accounts.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The folder's own CYFR serves its accounts, so the test asks no network.
+	home := "http://localhost:" + at.Port()
+	env := "CYFR_ACCESS=local\nCYFR_PORT=" + at.Port() + "\nCYFR_SETUP_TOKEN=the-token\nCYFR_DIRECTORY_URL=" + home + "\n"
+	if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	accounts.ServedAt(home)
+	container, err := json.Marshal(map[string]any{"id": "c0ffee", "running": true, "started": "t1", "dir": dir,
+		"ports": map[string]any{at.Port() + "/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": at.Port()}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &hungScreen{browser: filepath.Join(t.TempDir(), "browser")}
+	h.compositor = screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	programs["docker"] = "case \"$1\" in\ncontext) echo unix:///var/run/docker.sock;;\nps) echo c0ffee;;\ninspect) echo '" + string(container) + "';;\nesac"
+	// sleep-ok: a stand-in child that runs until the shell ends it
+	programs["google-chrome-stable"] = "echo $$ >>" + h.browser + "\nexec /bin/sleep 100"
+	screenPrograms(t, programs)
+	h.runningScreen = startScreen(t)
+	pid := h.browserPID()
+	h.shows(`action="/passphrase"`)
+
+	drawn := pageCode.FindStringSubmatch(h.posted("/passphrase", url.Values{}))
+	if drawn == nil {
+		t.Fatal("no passphrase was drawn")
+	}
+	setUp := h.posted("/setup", url.Values{"name": {"ada"}, "secret": {drawn[1]}, "again": {drawn[1]}})
+	proof := pageProof.FindStringSubmatch(setUp)
+	if proof == nil {
+		t.Fatalf("setup reached no recovery code:\n%s", setUp)
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	h.startedAgain()
+	if page := h.posted("/", nil); !strings.Contains(page, "No account yet?") {
+		t.Fatalf("after the browser's exit the account is not to be made again:\n%s", page)
+	}
+	if page := h.posted("/saved", url.Values{"proof": {proof[1]}}); !strings.Contains(page, onlyThatPage) {
+		t.Fatalf("the code's proof outlived the browser that held it:\n%s", page)
+	}
+}
+
+// posted is the page a form is answered with, or with no fields the page
+// at path.
+func (h *hungScreen) posted(path string, fields url.Values) string {
+	h.t.Helper()
+	method := http.MethodPost
+	if fields == nil {
+		method = http.MethodGet
+	}
+	resp, err := h.ask(method, path, fields)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return html.UnescapeString(string(raw))
+}
+
+// startedAgain waits for the browser that follows the first.
+func (h *hungScreen) startedAgain() {
+	h.t.Helper()
+	h.until("the browser started again", func() bool {
+		raw, _ := os.ReadFile(h.browser)
+		return strings.Count(string(raw), "\n") > 1
+	})
+}
+
+const onlyThatPage = "Only the page this device's PIN or passphrase was typed on can do that."
 
 // browserPID is the first browser's, once it runs.
 func (h *hungScreen) browserPID() int {
