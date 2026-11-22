@@ -1687,6 +1687,55 @@ defmodule Locus.Backends.OwnersTest do
       refute File.exists?(Path.join(ctx.root, @home))
     end
 
+    for {op, state, there?} <- [{:retire, :absent, false}, {:reset, :empty, true}] do
+      @tag op: op, answered: state, there?: there?
+      test "a home's #{op} answers once every preparation in it settled, and none starts a session in it",
+           ctx do
+        owners = start_owners(ctx)
+        assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
+        test = self()
+
+        [{first, making}, {second, lost}] =
+          for key <- ["one", "two"] do
+            Agent.update(ctx.stub, &Map.put(&1, :before_ensure, test))
+
+            opening =
+              Task.async(fn -> open(owners, "a", {1, 1}, "kept", home_id: @home, key: key) end)
+
+            assert_receive {:home_about_to_be_created, worker}, 2_000
+            {opening, worker}
+          end
+
+        before = :sys.get_state(owners).high_water
+        message = %{type: :home, op: ctx.op, athanor: @athanor, home_id: @home}
+        changing = Task.async(fn -> send(test, {:changed, control(owners, 1, message)}) end)
+        wait_until(fn -> :sys.get_state(owners).high_water != before end, 2_000)
+
+        # One preparation makes the home and the other's process dies.
+        early = receive(do: ({:changed, answer} -> answer), after: (300 -> nil))
+        send(making, :continue_ensure)
+        one = Task.await(first, 5_000)
+        between = receive(do: ({:changed, answer} -> answer), after: (300 -> nil))
+        Process.exit(lost, :kill)
+        two = Task.await(second, 5_000)
+        {:changed, answer} = Task.await(changing, 5_000)
+
+        assert %{
+                 answered_early: early || between,
+                 answer: answer,
+                 opens: [one, two],
+                 folder: File.exists?(Path.join(ctx.root, @home)),
+                 sessions: sessions_of(owners, "a")
+               } == %{
+                 answered_early: nil,
+                 answer: {:ok, %{home_id: @home, state: ctx.answered}},
+                 opens: [{:error, :unavailable}, {:error, :unavailable}],
+                 folder: ctx.there?,
+                 sessions: []
+               }
+      end
+    end
+
     test "a home the launcher cannot keep is unavailable", ctx do
       owners = start_owners(ctx)
       Agent.update(ctx.stub, &%{&1 | kept_root: nil})

@@ -29,7 +29,7 @@ defmodule Locus.Backends.Owners do
   | `release` | each owner at or below `(g, e)` retired |
   | `reconcile` | each owner not at exactly `g` and its kept `e` retired |
   | `status` | each named owner present, its programs as their sessions report them |
-  | `home` | every session of the home among the athanor's owners ended, then the home reset or retired |
+  | `home` | no open admitted to the home, every preparation in it settled and starting nothing, every session of the home among the athanor's owners ended, then the home reset or retired |
 
   A sync starts nothing: it is answered on admission with every program
   `idle`, or `failed` for none. A retired owner leaves routing at once and
@@ -603,8 +603,8 @@ defmodule Locus.Backends.Owners do
               GenServer.reply(from, reply)
               next_control(state)
 
-            {:wait, ref, state} ->
-              %{state | busy: ref}
+            {:wait, waiting, state} ->
+              change_home(%{state | busy: waiting})
           end
         else
           GenServer.reply(from, {:error, :stale_control})
@@ -739,7 +739,28 @@ defmodule Locus.Backends.Owners do
     {:wait, ref, state}
   end
 
-  defp apply_control(state, from, _fields, %{type: :home} = message, _open_env) do
+  # A home is busy from here, so no preparation of it begins and none in
+  # flight starts a session; its turn waits for those to settle.
+  defp apply_control(state, from, _fields, %{type: :home} = message, _open_env),
+    do: {:wait, {:home, from, message}, put_home(state, message.home_id, &%{&1 | busy: true})}
+
+  # The home whose turn it is, changed once nothing of this table's may
+  # still make it.
+  defp change_home(%{busy: {:home, from, message}} = state) do
+    if preparing_in?(state, message.home_id),
+      do: state,
+      else: reset_or_retire(state, from, message)
+  end
+
+  defp change_home(state), do: state
+
+  defp preparing_in?(state, home_id) do
+    Enum.any?(state.pending, fn {_ref, entry} ->
+      match?({:open, _froms, %{home_id: ^home_id}}, entry.continuation)
+    end)
+  end
+
+  defp reset_or_retire(state, from, message) do
     pids =
       for {_id, owner} <- state.owners,
           owner.athanor == message.athanor,
@@ -748,8 +769,6 @@ defmodule Locus.Backends.Owners do
           pid != nil,
           do: pid
 
-    home = Map.get(state.homes, message.home_id, new_home())
-    state = %{state | homes: Map.put(state.homes, message.home_id, %{home | busy: true})}
     %{launcher: launcher, launcher_server: server, stop_grace_ms: grace_ms} = state
 
     {ref, state} =
@@ -762,7 +781,7 @@ defmodule Locus.Backends.Owners do
         end
       end)
 
-    {:wait, ref, state}
+    %{state | busy: ref}
   end
 
   defp compare(version, owner, definition) do
@@ -883,7 +902,8 @@ defmodule Locus.Backends.Owners do
     control_done(%{state | homes: homes})
   end
 
-  defp continue(state, {:open, froms, ask}, result), do: opened(state, froms, ask, result)
+  defp continue(state, {:open, froms, ask}, result),
+    do: change_home(opened(state, froms, ask, result))
 
   # An end asked says nothing of a release: only the reservation does.
   defp continue(state, {:end_asked, _key}, _result), do: state
@@ -1279,13 +1299,15 @@ defmodule Locus.Backends.Owners do
   end
 
   # The open's work done: the session started, or the refusal, with which
-  # nothing was asked of the launcher and the reservation is released. Its
+  # nothing was asked of the launcher and the reservation is released. A
+  # home being reset or retired takes no session, however ready it was. Its
   # key is asked again as its process is about to start: a process of the
   # key that began ending while it was prepared holds it as one found at
   # admission does, its reservation given back first.
   defp opened(state, froms, ask, result) do
     with {:ok, owner} <- still_open(state, ask),
          :ok <- admissible(state, ask.named),
+         :ok <- home_open(state, ask.home_id),
          program = Enum.find(owner.definition, &(&1.name == ask.program)),
          :ok <- claimed(state, program, ask, result),
          :ok <- gone_before(state, owner, ask.key) do
