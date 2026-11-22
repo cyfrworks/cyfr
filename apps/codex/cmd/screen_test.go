@@ -557,44 +557,48 @@ func TestAccessRewritesTheScreensFiles(t *testing.T) {
 	}
 }
 
-// The box's screen reads whether no one is set up from cyfr's log since
-// its start, under the stack's lock as cyfr setup does, and brings the
-// setup token on an added box's first hello only then: the boot's
-// not-set-up line with no set-up line after it is open; a set-up line
-// after it, a log with neither, one that cannot be read, or a lock another
-// command holds is not.
+// The box's screen reads whether no one is set up from that container's log
+// since its start, under the stack's lock, and brings the setup token on an
+// added box's first hello only then: the boot's not-set-up line with no
+// set-up line after it is open; a set-up line after it, a log with
+// neither, one that cannot be read, or a lock another command holds is
+// not.
 func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
-	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
-	const setUp = "[Cyfr] Set up: this CYFR has its first person.\n"
+	token := func(s localStack) string {
+		dir, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		local, err := readLocal(dir, "screen")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := local.Shell.SetupToken(t.Context())
+		return got
+	}
 	for _, c := range []struct {
 		name, log, exit string
 		want            bool
 	}{
-		{"no one set up", "booting\n" + notSetUp, "0", true},
-		{"set up since the boot", notSetUp + setUp, "0", false},
+		{"no one set up", "booting\n" + logNotSetUp, "0", true},
+		{"set up since the boot", logNotSetUp + logSetUp, "0", false},
 		{"set up at the boot", "booting\n", "0", false},
-		{"a log unread", notSetUp, "1", false},
+		{"a log unread", logNotSetUp, "1", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			standInMachine(t)
-			s := newUpdateScenario(t, shippedCompose(t), nil)
-			dockerStandIn(t, s.fake)
-			s.answer("ps.out", "c0ffee\n")
-			s.answer("inspect.out", "2026-10-28T00:01:02.123456789Z\n")
+			s := newLocalStack(t)
+			s.env(4000)
+			s.runs("c0ffee", s.project, nil, 4000)
 			s.answer("logs.out", c.log)
 			s.answer("logs.exit", c.exit)
-			if got := screenSetupOpen(t.Context()); got != c.want {
-				t.Errorf("setup open %v, want %v", got, c.want)
+			if got := token(s); (got == testToken) != c.want || (got != "" && got != testToken) {
+				t.Errorf("token %q, want it %v", got, c.want)
 			}
 		})
 	}
-	standInMachine(t)
-	s := newUpdateScenario(t, shippedCompose(t), nil)
-	dockerStandIn(t, s.fake)
-	s.answer("ps.out", "c0ffee\n")
-	s.answer("inspect.out", "2026-10-28T00:01:02.123456789Z\n")
-	s.answer("logs.out", "booting\n"+notSetUp)
-	s.answer("logs.exit", "0")
+	s := newLocalStack(t)
+	s.env(4000)
+	s.runs("c0ffee", s.project, nil, 4000)
 	e, err := openEngine(".")
 	if err != nil {
 		t.Fatal(err)
@@ -603,11 +607,8 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if screenSetupOpen(t.Context()) {
+	defer unlock()
+	if token(s) != "" {
 		t.Error("setup read as open under a lock another command holds")
-	}
-	unlock()
-	if screenShellConfig(t.TempDir(), t.TempDir(), "http://localhost:4000", nil, "box", func() {}).SetupOpen == nil {
-		t.Error("the screen's shell does not read whether setup is open")
 	}
 }

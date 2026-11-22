@@ -42,6 +42,7 @@ import (
 //	pair      calls CYFR's `files` twice at once and replies with each answer
 //	twice     replies in two messages
 //	params    replies with what the thread was started or resumed with and the turn's start
+//	history   replies with the items injected into the thread so far, by every process, as JSON
 //	noise     writes a line that is no JSON and one cut short, then replies
 //	die       ends the process with status 3
 //
@@ -52,7 +53,9 @@ import (
 // answer, or "fail". A resume sends the thread's last total again
 // unless FAKE_NO_REPEAT is set, and is refused in words other than a
 // missing rollout's while FAKE_RESUME_FAIL is set. A thread whose rollout
-// file is empty is refused in Codex's words for it.
+// file is empty is refused in Codex's words for it. An injection
+// (`thread/inject_items`) is kept in the thread's rollout, and refused
+// while FAKE_INJECT_FAIL is set or a turn runs.
 const fakeEnv = "CYFR_FAKE_CODEX"
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
@@ -202,6 +205,20 @@ func fakeCodex() int {
 			say(turn, "msg_two", "Two.")
 		case strings.Contains(words, "params"):
 			given, _ := json.Marshal(map[string]any{"thread": thread.opened, "turn": params})
+			reply(turn, string(given))
+		case strings.Contains(words, "history"):
+			injected := []any{}
+			held, _ := os.ReadFile(rolloutOf(thread.id))
+			for _, line := range strings.Split(string(held), "\n") {
+				var entry struct {
+					Type  string `json:"type"`
+					Items []any  `json:"items"`
+				}
+				if json.Unmarshal([]byte(line), &entry) == nil && entry.Type == "fake_injected" {
+					injected = append(injected, entry.Items...)
+				}
+			}
+			given, _ := json.Marshal(injected)
 			reply(turn, string(given))
 		case strings.Contains(words, "noise"):
 			raw([]byte("a line that is no JSON"))
@@ -410,6 +427,16 @@ func fakeCodex() int {
 					userMessage(turn, uuid, words)
 					runTurn(turn, words, params)
 				}()
+			case m.Method == "thread/inject_items":
+				thread.Lock()
+				active := thread.active
+				thread.Unlock()
+				if os.Getenv("FAKE_INJECT_FAIL") != "" || active != "" || str("threadId") != thread.id {
+					fail(-32603, "HARNESS-WORDS the items were not injected")
+					continue
+				}
+				record(map[string]any{"type": "fake_injected", "items": m.Params["items"]})
+				ok(map[string]any{})
 			case m.Method == "turn/steer":
 				thread.Lock()
 				active := thread.active

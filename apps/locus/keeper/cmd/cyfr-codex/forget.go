@@ -25,10 +25,11 @@ import (
 // (or under `archived_sessions/` once archived), its rows in Codex's own
 // databases beside it, which hold its first message and its items, and
 // its shell snapshots, `<codex>/shell_snapshots/<thread>.<n>.sh`, which
-// hold the environment its commands ran in. `<codex>` is CODEX_HOME, or
-// `.codex` in the home. Codex's own `thread/delete` removes the rollout
-// and the rows (0.169.0); the snapshots it leaves, and the driver removes
-// them.
+// hold the environment its commands ran in. The driver keeps one record
+// of its own beside them, the thread's instructions' digest
+// (instructions.go). `<codex>` is CODEX_HOME, or `.codex` in the home.
+// Codex's own `thread/delete` removes the rollout and the rows (0.169.0);
+// the snapshots and the record it leaves, and the driver removes them.
 //
 // A sub-agent's thread is a thread of its own, with its own rollout and
 // snapshots, and the driver looks for the named thread's files alone.
@@ -51,9 +52,9 @@ func codexHome(home string) string {
 	return filepath.Join(home, ".codex")
 }
 
-// threadFiles are the thread's own files in the folder: its rollouts and
-// its shell snapshots, whatever is there under those names; a thread id is
-// a uuid, so it names no other thread's. Beside what it found it answers
+// threadFiles are the thread's own files in the folder: its rollouts, its
+// shell snapshots and the record of its instructions, whatever is there
+// under those names; a thread id is a uuid, so it names no other thread's. Beside what it found it answers
 // each folder or entry it could not inspect: one is never an absence,
 // since what cannot be looked at may hold the transcript, and it takes
 // nothing from what the other inspections found.
@@ -92,6 +93,11 @@ func threadFiles(home, thread string) (found []string, failed []error) {
 		if strings.HasPrefix(entry.Name(), thread+".") {
 			found = append(found, filepath.Join(snapshots, entry.Name()))
 		}
+	}
+	if record, err := instructionsRecord(home, thread); err != nil {
+		failed = append(failed, err)
+	} else if record != "" {
+		found = append(found, record)
 	}
 	sort.Strings(found)
 	return found, failed

@@ -75,6 +75,9 @@ type driver struct {
 	config   brainwire.Config
 	policy   threadPolicy
 	signedIn bool
+	// handing is the instructions the resumed thread is still to be handed
+	// before its first post, none when they are unchanged (instructions.go).
+	handing  string
 	requests int
 	// others is set from the first sign of a thread not the session's (a
 	// sub-agent's): an event of its own, or the session's call of one.
@@ -225,10 +228,20 @@ func (d *driver) post(id, work string, members map[string]json.RawMessage) error
 	return d.deliver(w)
 }
 
-// deliver writes the post: into the native turn under way (`turn/steer`),
+// deliver writes the post, after the changed instructions the thread is
+// still to be handed: into the native turn under way (`turn/steer`),
 // or as a turn of its own. The post is `accepted` once Codex answers its
 // request; one Codex refuses is not written.
 func (d *driver) deliver(w *waiting) error {
+	if d.handing != "" {
+		if !clearHanded(d.home, d.session) {
+			d.waiting = nil
+			return d.c.Refuse(w.id, unrecordedSentence)
+		}
+		w.kind = "instructions"
+		w.request = d.nextID("instructions")
+		return d.h.Write(injectInstructions(w.request, d.session, d.handing))
+	}
 	d.posts[w.uuid] = post{id: w.id, work: w.work}
 	if d.active != "" {
 		w.kind = "steer"
@@ -348,6 +361,14 @@ func (d *driver) response(id string, m rpc) error {
 			return d.c.RefuseSignedOut(w.id, signedOutSentence)
 		}
 		return d.c.Refuse(w.id, unknownAccountSentence)
+	case "instructions":
+		if m.Error != nil {
+			d.waiting = nil
+			return d.c.Refuse(w.id, instructionsSentence)
+		}
+		recordHanded(d.home, d.session, d.handing)
+		d.handing = ""
+		return d.deliver(w)
 	case "steer":
 		if m.Error == nil {
 			d.waiting = nil
@@ -494,6 +515,15 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		d.session = r.Thread.ID
 		d.model = r.Model
 		d.resumed = s.resume
+		switch {
+		case s.system == "":
+		case s.resume && !wasHanded(d.home, d.session, s.system):
+			d.handing = s.system
+		// A new thread has them from its start. One started signed out
+		// takes no post, and CYFR keeps no session of it.
+		case !s.resume && s.account != brainwire.SignedOut:
+			recordHanded(d.home, d.session, s.system)
+		}
 		// `held` is delivery evidence and no more: the pending posts the
 		// thread's rollout was read to hold. A pending post it leaves out is
 		// not established, never proved absent.
@@ -735,6 +765,7 @@ func (d *driver) Close() {
 	d.session = ""
 	d.others = false
 	d.resumed = false
+	d.handing = ""
 	d.active = ""
 	d.turns = map[string]*turn{}
 	d.own = map[string]string{}

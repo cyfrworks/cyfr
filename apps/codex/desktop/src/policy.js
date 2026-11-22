@@ -40,6 +40,8 @@ export function parse(address) {
  * sends itself to the account service's sign-in route, which opens in
  * the account window, also where the CYFR serves that route itself) or
  * "company" (the CYFR's company sign-in, which the app does not offer).
+ * The chooser is main's alone to show (chooserPath): no navigation, no
+ * redirect and no frame loads it, in any window.
  * What a frame may ask, once: it may navigate itself or a frame inside it
  * to an address a frame may load, and never the top frame or a frame not
  * inside it; it never hops or returns. A frame loads no ceremony route. The recovery route is reached from the sign-in inside
@@ -51,6 +53,7 @@ export function contentNavigation({url, target, asker, showing}, state) {
   if (!u) return "block"
   if (target !== "top") return asker === "frame-outside" ? "block" : frameLoad(u, state)
   if (asker === "frame-inside" || asker === "frame-outside") return "block"
+  if (chooserPath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home) return "block"
   if (ceremony(u, state)) {
@@ -66,9 +69,22 @@ export function contentNavigation({url, target, asker, showing}, state) {
 // origin.
 function frameLoad(u, state) {
   if (["about:", "blob:", "data:"].includes(u.protocol)) return "allow"
+  if (chooserPath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home || ceremony(u, state)) return "block"
   return u.origin === state.home && u.pathname !== "/company-login" ? "allow" : "block"
+}
+
+// Whether u is one of the chooser's addresses as cyfr reads them, which
+// is unescaped: main alone loads the chooser (its loads ask no policy), so
+// what it says on main's behalf comes with main's load and no other.
+function chooserPath(u) {
+  if (u.origin !== LOOPBACK) return false
+  try {
+    return decodeURIComponent(u.pathname).startsWith("/bootstrap")
+  } catch {
+    return true // not readable here, and cyfr may read it as the chooser's
+  }
 }
 
 // Whether u is one of the account service's ceremony routes.
@@ -130,6 +146,20 @@ export function grants(permission) {
   return permission === "clipboard-sanitized-write" || permission === "fullscreen"
 }
 
+/**
+ * `text` as the app prints it: no address in it carries a fragment or a
+ * query. One with a scheme keeps its origin alone, since a path carries a
+ * credential too (a sign-in's ticket, a served file's); what follows an
+ * address up to the next space goes with it, as either may hold any mark
+ * a sentence would end an address with.
+ */
+export function printed(text) {
+  return String(text)
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#@]*@)?([^\s/?#"'`<>\\]*)\S*/gi, "$1$2")
+    .replace(/\bdata:\S*/gi, "data:")
+    .replace(/(^|[^\w.:/~-])(\/[^\s?#]*)[?#]\S*/g, "$1$2")
+}
+
 const PASSKEYS_DENIED = "publickey-credentials-get=(), publickey-credentials-create=()"
 
 /**
@@ -141,8 +171,14 @@ const PASSKEYS_DENIED = "publickey-credentials-get=(), publickey-credentials-cre
  * session says so: the account pages' service worker makes a document of
  * what it fetched or kept, which the engine calls no document. Each adds
  * to the document's own policies, which keep restricting it.
+ * A response in a content session to a page that is gone (`pageGone`:
+ * closed by a lock, or none, as a keepalive request's is once its page
+ * went) sets no cookie, so none arrives in storage being forgotten.
  */
-export function documentHeaders(kind, resourceType, headers) {
+export function documentHeaders(kind, resourceType, headers, {pageGone = false} = {}) {
+  if (kind === "content" && pageGone) {
+    headers = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== "set-cookie"))
+  }
   if (kind === "content" && resourceType !== "mainFrame" && resourceType !== "subFrame") return headers
   const out = {}
   const policies = []
@@ -176,6 +212,14 @@ export function documentHeaders(kind, resourceType, headers) {
 export const SWITCHES = ["proxy-server", "host-resolver-rules"]
 
 /**
+ * The engine's resolver rule unless main was started on a route:
+ * localhost is 127.0.0.1 alone, where Docker publishes a local CYFR, and
+ * never ::1, where any other program may listen on the same port and be
+ * given that CYFR's pages, tickets and cookies (cmd/local.go).
+ */
+export const LOCALHOST_IS_IPV4 = "MAP localhost 127.0.0.1"
+
+/**
  * The first switch of `args` (the command line after the executable) the
  * app does not take, as the engine reads switches on `platform`: "-" or
  * "--" before a name, "/" too on Windows, up to an "=" and its value,
@@ -192,9 +236,17 @@ export function unlistedSwitch(args, platform) {
   return null
 }
 
-/** Whether `home` and `account` name a CYFR and an account service's origin. */
+/**
+ * Whether `home` and `account` name a CYFR and an account service's origin
+ * main takes for it: https, or plain http for a local CYFR alone
+ * (http://localhost, with its port) and only at exactly that CYFR's own
+ * origin. cyfr holds the same rule (internal/account ServiceOf;
+ * tests/fixtures/desktop-process.json, account_services).
+ */
 export function homeMessage(m) {
-  return isHome(m.home) && isHome(m.account) && parse(m.account)?.protocol === "https:"
+  if (!isHome(m.home) || !isHome(m.account)) return false
+  if (parse(m.account)?.protocol === "https:") return true
+  return m.account === m.home && parse(m.home)?.hostname === "localhost"
 }
 
 /** The relying party of the account service at `account`: its host. */

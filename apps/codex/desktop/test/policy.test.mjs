@@ -7,10 +7,11 @@ import {test} from "node:test"
 
 import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 import {
-  LOOPBACK, SWITCHES, accountLoad, contentNavigation, contentOpen, documentHeaders, grants, homeMessage, readHop,
+  LOOPBACK, SWITCHES, accountLoad, contentNavigation, contentOpen, documentHeaders, grants, homeMessage, printed, readHop,
   relyingParty, unlistedSwitch
 } from "../src/policy.js"
 
+const processes = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
 const signIn = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_in.json", import.meta.url)))
 const home = signIn["home"]
 const account = "https://accounts.example.com"
@@ -23,7 +24,8 @@ const top = (url, state, showing = home + "/login", asker = "top") => contentNav
 const frame = (url, state, asker = "frame-inside") => contentNavigation({url, target: "frame", asker, showing: home + "/"}, state)
 
 test("a content window loads the device's pages, then the selected CYFR, and nothing else", () => {
-  assert.equal(top(LOOPBACK + "/bootstrap/", before, ""), "allow")
+  assert.equal(top(LOOPBACK + "/bootstrap/", before, ""), "block", "the chooser is main's alone to load")
+  assert.equal(top(LOOPBACK + "/", before, ""), "allow", "the device's pages")
   assert.equal(top(home + "/", before), "block", "the CYFR before main keeps to it")
   assert.equal(top(home + "/threads?x=1", ready), "allow")
   assert.equal(top(home + "/company-login", ready), "company")
@@ -160,6 +162,18 @@ test("content documents deny both passkey calls and workers, keeping their own p
   assert.equal(documentHeaders("content", "script", script), script)
 })
 
+test("a response to a content page that is gone sets no cookie, and a page's own keeps what it sets", () => {
+  for (const type of ["mainFrame", "subFrame", "xhr"]) {
+    const sent = () => ({"set-cookie": ["a=1"], "Set-Cookie": ["b=2"], "Content-Type": ["text/html"]})
+    const gone = documentHeaders("content", type, sent(), {pageGone: true})
+    assert.deepEqual(Object.keys(gone).filter((k) => k.toLowerCase() === "set-cookie"), [], type)
+    assert.deepEqual(gone["Content-Type"], ["text/html"], type)
+    assert.deepEqual(documentHeaders("content", type, sent(), {pageGone: false})["set-cookie"], ["a=1"], type)
+  }
+  assert.deepEqual(documentHeaders("account", "xhr", {"set-cookie": ["a=1"]}, {pageGone: true})["set-cookie"], ["a=1"],
+    "the account service's storage is not the content's")
+})
+
 test("the account window's document frames nothing, keeping its own policies, whichever response it is made of", () => {
   // The account pages' service worker fetches a page as an xhr and answers
   // the next visit's document with that response, or with its kept copy.
@@ -194,4 +208,56 @@ test("home names a CYFR and an https account service", () => {
   assert.equal(homeMessage({home, account: "http://accounts.example.com"}), false)
   assert.equal(homeMessage({home: "javascript:x", account}), false)
   assert.equal(relyingParty("https://accounts.example.com:8443"), "accounts.example.com")
+})
+
+test("nothing the app prints carries an address's fragment or query, or a path's credential", () => {
+  const MARK = "marker'in)it"
+  for (const line of [
+    `Failed to load URL: https://x.test/auth/passkey/complete#${MARK} with error: ERR_EMPTY_RESPONSE`,
+    `Failed to load URL: https://x.test/auth/passkey/complete/${MARK} with error: ERR_EMPTY_RESPONSE`,
+    `Failed to load URL: https://x.test/?q=${MARK} with error: ERR_NETWORK_CHANGED`,
+    `Failed to load URL: http://127.0.0.1:7340/bootstrap/#token=${MARK} with error: ERR_FAILED`,
+    `Error: Get "https://x.test/login?t=${MARK}": EOF`,
+    `https://x.test did not answer as a CYFR (wss://x.test/live?t=${MARK}).`,
+    `https://user:${MARK}@x.test/p`, `POST /confirm?ref=${MARK}`, `(/login#${MARK})`, `data:text/html,${MARK}`,
+    `two https://a.test/#${MARK} and https://b.test/#${MARK}`
+  ]) assert.ok(!printed(line).includes("marker"), printed(line))
+})
+
+test("what the app prints keeps what is no address's fragment, query or credential", () => {
+  for (const line of ["cyfr ended: another program holds 127.0.0.1:7340: close the app using port 7340, then open CYFR again",
+    "home: https://cyfr.example.com", "refused: --inspect is not taken", "cannot open /opt/cyfr/resources/cyfr: no such file"]) {
+    assert.equal(printed(line), line)
+  }
+  assert.equal(printed("Failed to load URL: https://x.test:8443/threads#t with error: ERR_FAILED"),
+    "Failed to load URL: https://x.test:8443 with error: ERR_FAILED")
+})
+
+test("main takes a home's account service by the rule cyfr holds", () => {
+  assert.ok(processes.account_services.length > 0)
+  for (const s of processes.account_services) assert.equal(homeMessage({home: s.home, account: s.account}), s.accepted, s.name)
+})
+
+test("a local CYFR serving its own accounts hops to its sign-in route alone, and nothing else of this computer loads", () => {
+  const origin = "http://localhost:4000"
+  const local = {home: origin, account: origin, accountRoad: true}
+  assert.equal(top(origin + "/threads", local, LOOPBACK + "/"), "allow")
+  assert.equal(top(origin + "/account/sign#x", local, origin + "/login"), "hop")
+  assert.equal(top(origin + "/account/new#x", {...local, account: "https://cyfr.run"}, origin + "/login"), "allow", "the CYFR's own page")
+  assert.equal(accountLoad(origin + "/account/sign", local), "allow")
+  assert.equal(accountLoad(origin + "/login#answer=x", local), "return")
+  assert.equal(accountLoad(origin + "/threads", local), "block")
+  for (const elsewhere of ["http://localhost:4100/", "http://127.0.0.1:4000/", "http://localhost:4100/account/sign"]) {
+    assert.equal(top(elsewhere, local, origin + "/login"), "block", elsewhere)
+    assert.equal(accountLoad(elsewhere, local), "block", elsewhere)
+  }
+})
+
+test("main reads a CYFR's address and its account service's by the one grammar every side reads", () => {
+  const addresses = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/addresses.json", import.meta.url))).addresses
+  assert.ok(addresses.length > 0)
+  for (const a of addresses) {
+    assert.equal(homeMessage({home: a.value, account: "https://cyfr.run"}), a.home, a.value)
+    if (a.value.startsWith("https://")) assert.equal(homeMessage({home: "https://cyfr.example.com", account: a.value}), a.home, a.value)
+  }
 })

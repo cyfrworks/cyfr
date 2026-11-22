@@ -13,15 +13,19 @@
 #              --no-sandbox, --disable-web-security,
 #              --ignore-certificate-errors), ends the app with 2, naming
 #              the switch
-#   startup    the app says ready and the chooser answers 200 on
-#              127.0.0.1:7340
+#   startup    the app says ready, the chooser answers 200 on
+#              127.0.0.1:7340 and the app's window is on the screen, which
+#              it is only once its page has drawn
+#   profile    (Linux, macOS) the app makes its profile under the run's
+#              HOME
 #   sandbox    (Linux) every live renderer of the app runs under seccomp
 #              mode 2, in a user namespace other than the app's
 #   second     a second launch for the same account exits 0, saying the
 #              first is shown instead, and the first still serves
-#   renderer   with the content's renderer killed, the app shows the page
-#              again in a renderer of its own, the chooser still answering,
-#              and locks nothing
+#   renderer   with the content's renderer killed, a new renderer runs
+#              under the app, the chooser still answers, the window is on
+#              the screen and the app locks nothing. That the page is shown
+#              again in it is the real-CYFR proofs' renderer_killed
 #   terminate  the app terminated (SIGTERM; on Windows the forced end Task
 #              Manager's End task gives) ends, its cyfr with it, and 7340
 #              stops answering
@@ -41,7 +45,8 @@
 # CYFR.app/Contents/MacOS/CYFR or CYFR.exe. 127.0.0.1:7340 must be free and
 # no other CYFR app may run for this account. On Linux the run needs a
 # display and a session bus (dbus-run-session -- xvfb-run -a). It needs
-# curl, and node for the listener that holds the port. The run takes a
+# curl, node for the listener that holds the port, and xdotool on Linux
+# to see the window. The run takes a
 # fresh HOME (on Windows a fresh USERPROFILE, APPDATA and LOCALAPPDATA too)
 # and stops every process it started on every exit.
 set -uo pipefail
@@ -57,13 +62,19 @@ case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*) OS=windows ;;
   *) echo "smoke: $(uname -s) is not a platform the app ships for" >&2; exit 64 ;;
 esac
-for tool in curl node; do
+TOOLS=(curl node)
+[ "$OS" != linux ] || TOOLS+=(xdotool)
+for tool in "${TOOLS[@]}"; do
   command -v "$tool" >/dev/null || { echo "smoke: $tool is needed" >&2; exit 64; }
 done
 
 RUN=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-desktop-smoke.XXXXXX") || exit 1
 mkdir -p "$RUN/home"
+ACCOUNT_HOME=$HOME
 export HOME="$RUN/home"
+# The engine on macOS asks the system for the account's folders, which
+# reads this and not HOME.
+[ "$OS" != macos ] || export CFFIXED_USER_HOME="$HOME"
 unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME ELECTRON_RUN_AS_NODE ELECTRON_ENABLE_LOGGING NODE_OPTIONS
 if [ "$OS" = windows ]; then
   mkdir -p "$RUN/home/AppData/Roaming" "$RUN/home/AppData/Local"
@@ -81,17 +92,22 @@ WHY=
 pass() { CHECKS=$((CHECKS + 1)); echo "PASS $1${2:+: $2}"; }
 fail() { CHECKS=$((CHECKS + 1)); FAILED=$((FAILED + 1)); echo "FAIL $1: $2"; }
 
+# A lookup that fails never reads as "not there": each below that looks for
+# what is gone, free or unsaid answers so only when it could look.
+
 # Every running process as `PID PPID ARGS`, a line each; a zombie is none.
+# It fails when the system's list does.
 procs() {
   if [ "$OS" = windows ]; then
     powershell.exe -NoProfile -NonInteractive -Command \
-      'Get-CimInstance Win32_Process | ForEach-Object { "{0} {1} {2}" -f $_.ProcessId, $_.ParentProcessId, $_.CommandLine }' | tr -d '\r'
+      '$ErrorActionPreference = "Stop"; Get-CimInstance Win32_Process | ForEach-Object { "{0} {1} {2}" -f $_.ProcessId, $_.ParentProcessId, $_.CommandLine }' | tr -d '\r'
   else
     ps -A -ww -o pid= -o ppid= -o stat= -o args= | awk '$3 !~ /^Z/ { $3 = ""; print }'
   fi
 }
 
-# The processes below PID, as `PID ARGS`, a line each.
+# The processes below PID, as `PID ARGS`, a line each. It fails when they
+# cannot be listed, as when PID itself is not in the list.
 descendants() {
   procs | awk -v root="$1" '
     { pid = $1; parent[pid] = $2; $1 = ""; $2 = ""; sub(/^ +/, ""); args[pid] = $0 }
@@ -103,14 +119,20 @@ descendants() {
           if (q == root) { print p, args[p]; break }
         }
       }
+      exit !(root in parent)
     }'
 }
 renderers() { descendants "$1" | awk '/--type=renderer/ { print $1 }'; }
 cyfr_of() { descendants "$1" | awk '/desktop-serve/ { print $1; exit }'; }
 
-# 0 when any of PIDS (process ids, as procs reads them) still runs.
-any_alive() { procs | awk -v want=" $* " 'index(want, " " $1 " ") { found = 1 } END { exit !found }'; }
-none_alive() { ! any_alive "$@"; }
+# 0 when the processes were listed and none of PIDS (process ids, as procs
+# reads them) is among them.
+none_alive() {
+  local list found
+  list=$(procs) && [ -n "$list" ] || return 1
+  found=$(awk -v want=" $* " 'index(want, " " $1 " ")' <<<"$list") || return 1
+  [ -z "$found" ]
+}
 
 # The system's id of the shell's child PID, which on Windows is not the
 # shell's own.
@@ -138,14 +160,48 @@ within_from() {
 }
 # within SECONDS COMMAND...: the same, from now.
 within() { within_from "$SECONDS" "$@"; }
-gone() { ! kill -0 "$1" 2>/dev/null; }
+# PID is the shell's own child, which a signal can always be asked of: the
+# one failure of kill -0 on one is that it is gone. No PID is not a gone one.
+gone() { [ -n "$1" ] && ! kill -0 "$1" 2>/dev/null; }
 has_renderer() { [ -n "$(renderers "$1")" ]; }
+# has_window OSPID: the system listed that process's windows, and one is on
+# the screen.
+has_window() {
+  local found
+  case "$OS" in
+    linux) found=$(xdotool search --onlyvisible --all --pid "$1" --name '^CYFR' 2>/dev/null) && [ -n "$found" ] ;;
+    macos)
+      # shellcheck disable=SC2016 # the dollars are JavaScript's
+      found=$(HOME="$ACCOUNT_HOME" osascript -l JavaScript -e '
+        function run(argv) {
+          ObjC.import("CoreGraphics")
+          var all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(17, 0)))
+          return all.some(function (w) {
+            return String(w.kCGWindowOwnerPID) === argv[0] && Number(w.kCGWindowLayer) === 0 && Number(w.kCGWindowAlpha) > 0
+          }) ? "shown" : "none"
+        }' "$1") && [ "$found" = shown ] ;;
+    windows)
+      # MainWindowHandle is 0 unless a top-level window of it is visible. A
+      # process that is not there is an error, never a handle to compare.
+      powershell.exe -NoProfile -NonInteractive -Command \
+        "try { if ((Get-Process -Id $1 -ErrorAction Stop).MainWindowHandle.ToInt64() -ne 0) { exit 0 } } catch { }; exit 1" ;;
+  esac
+}
 said() { grep -qF -- "$2" "$RUN/$1.log" 2>/dev/null; }
+# NAME's log was read and does not say it: grep's 2 is a log it did not read.
+unsaid() {
+  grep -qF -- "$2" "$RUN/$1.log" 2>/dev/null
+  [ $? = 1 ]
+}
 answers() {
   [ "$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' "$CHOOSER")" = 200 ]
 }
-# Nothing answers on 7340 at all.
-silent() { ! curl -s --noproxy '*' --max-time 5 -o /dev/null "$CHOOSER"; }
+# The connection to 7340 was refused: curl's 7. Any other failure, an
+# answer cut short or none in time, is no free port.
+silent() {
+  curl -s --noproxy '*' --max-time 5 -o /dev/null "$CHOOSER"
+  [ $? = 7 ]
+}
 # exit_of PID: CODE is the status the shell's child PID, which has ended,
 # exited with. It runs in this shell, never in a command substitution,
 # whose subshell has no children to wait for.
@@ -178,7 +234,10 @@ ready() {
 # below it with it, and 7340 stops answering; WHY says what stayed.
 ends() {
   local below ended
-  below=$(descendants "$3" | awk '{ print $1 }' | tr '\n' ' ')
+  if ! below=$(descendants "$3" | awk '{ print $1 }' | tr '\n' ' '); then
+    WHY="the processes below the app could not be listed, so their end could not be seen"
+    return 1
+  fi
   ended=$SECONDS
   terminate "$2" "$3"
   within 30 gone "$2" || { WHY="the app still ran 30 s after it was terminated"; return 1; }
@@ -230,7 +289,7 @@ if [ "$OS" = macos ]; then
 fi
 
 if ! silent; then
-  echo "smoke: $CHOOSER already answers: another program, or another CYFR app, holds 127.0.0.1:7340" >&2
+  echo "smoke: 127.0.0.1:7340 was not seen free: another program, or another CYFR app, holds it, or it could not be asked" >&2
   exit 1
 fi
 
@@ -257,13 +316,30 @@ done
 launch first
 FIRST=$LAUNCHED FIRST_OS=$LAUNCHED_OS
 if ready first "$FIRST"; then
-  pass startup "ready, and $CHOOSER answers 200"
+  if within 30 has_window "$FIRST_OS"; then
+    pass startup "ready, $CHOOSER answers 200 and the app's window is on the screen"
+  else
+    fail startup "ready, and no window of the app was on the screen within 30 s"
+  fi
+
+  case "$OS" in
+    linux) PROFILE="$RUN/home/.config/CYFR/Partitions" ;;
+    macos) PROFILE="$RUN/home/Library/Application Support/CYFR/Partitions" ;;
+    *) PROFILE= ;;
+  esac
+  if [ -n "$PROFILE" ]; then
+    if within 30 test -d "$PROFILE"; then
+      pass profile "the app made its profile under the run's HOME"
+    else
+      fail profile "the app kept no profile at $PROFILE within 30 s"
+    fi
+  fi
 
   if [ "$OS" = linux ]; then
     app_ns=$(readlink "/proc/$FIRST_OS/ns/user") || app_ns=
     # The chooser answers on 7340 before its window's renderer need run.
     within 30 has_renderer "$FIRST_OS" || true
-    list=$(renderers "$FIRST_OS")
+    list=$(renderers "$FIRST_OS") || list=
     bad= n=0
     for r in $list; do
       n=$((n + 1))
@@ -273,7 +349,7 @@ if ready first "$FIRST"; then
       [ -n "$ns" ] && [ "$ns" != "$app_ns" ] || bad+="renderer $r is in user namespace '${ns:-unreadable}', the app's is '${app_ns:-unreadable}'; "
     done
     if [ "$n" = 0 ]; then
-      fail sandbox "the app has no live renderer"
+      fail sandbox "no live renderer of the app could be listed"
     elif [ -z "$app_ns" ]; then
       fail sandbox "the app's own user namespace is unreadable"
     elif [ -n "$bad" ]; then
@@ -304,13 +380,15 @@ if ready first "$FIRST"; then
   else
     for r in $old; do oskill "$r"; done
     if ! within 30 fresh; then
-      fail renderer "no new renderer showed the page again within 30 s of its renderer's end$(said first 'CYFR: cyfr ended: ' && echo ": its cyfr ended meanwhile")"
-    elif said first 'CYFR: locked:'; then
-      fail renderer "the app locked as its renderer ended: $(grep -F 'CYFR: locked:' "$RUN/first.log" | head -1)"
+      fail renderer "no new renderer ran within 30 s of its renderer's end$(said first 'CYFR: cyfr ended: ' && echo ": its cyfr ended meanwhile")"
+    elif ! unsaid first 'CYFR: locked:'; then
+      fail renderer "the app locked as its renderer ended, or its output could not be read: $(grep -F 'CYFR: locked:' "$RUN/first.log" | head -1)"
     elif ! within 20 answers; then
-      fail renderer "the page was shown again, and $CHOOSER did not answer 200"
+      fail renderer "a new renderer runs, and $CHOOSER did not answer 200"
+    elif ! within 20 has_window "$FIRST_OS"; then
+      fail renderer "a new renderer runs, and no window of the app was on the screen within 20 s"
     else
-      pass renderer "a new renderer shows the page again, the app locked nothing and the chooser answers"
+      pass renderer "a new renderer runs, the app's window is on the screen, the app locked nothing and the chooser answers"
     fi
   fi
 
@@ -321,7 +399,8 @@ if ready first "$FIRST"; then
   fi
 else
   fail startup "$WHY"
-  for check in sandbox second renderer terminate; do
+  for check in profile sandbox second renderer terminate; do
+    [ "$check" != profile ] || [ "$OS" != windows ] || continue
     [ "$check" != sandbox ] || [ "$OS" = linux ] || continue
     fail "$check" "not run: the app did not start"
   done

@@ -120,6 +120,49 @@ defmodule Aqua.PromptTest do
     end
   end
 
+  describe "the instructions and the turn's facts" do
+    test "what moves by itself is the turn's facts alone, and the whole prompt is the two joined",
+         %{ctx: ctx} do
+      composed = fn seconds ->
+        Prompt.compose(ctx,
+          agent: agent(),
+          program?: true,
+          authority: nil,
+          requests: [
+            %{
+              id: "msg_r1",
+              addressee: "explorer",
+              sent_by: "person",
+              inserted_at: DateTime.add(DateTime.utc_now(), -seconds, :second),
+              content: "plan the move"
+            }
+          ]
+        )
+      end
+
+      five = composed.(300)
+      six = composed.(360)
+
+      assert five.instructions == six.instructions
+      refute five.instructions =~ "## Open requests"
+      refute five.instructions =~ "Current date:"
+      assert five.instructions =~ "## Notes"
+
+      assert "## Open requests\n\n" <> _ = five.facts
+      assert five.facts =~ "- msg_r1 to explorer, asked by the person 5m ago: plan the move\n"
+      assert six.facts =~ "- msg_r1 to explorer, asked by the person 6m ago: plan the move\n"
+      assert five.facts =~ ~r/\n\n---\n\n## Now\n\nCurrent date: [^\n]+ UTC\z/
+      assert five.text == five.instructions <> "\n\n---\n\n" <> five.facts
+    end
+
+    test "with no open request the turn's facts are the time alone", %{ctx: ctx} do
+      prompt = Prompt.compose(ctx, agent: agent(), authority: nil)
+
+      assert prompt.facts =~
+               ~r/\A## Now\n\nCurrent date: \d{4}-\d\d-\d\d, [A-Za-z]+, \d\d:\d\d UTC\z/
+    end
+  end
+
   describe "CYFR's part and the crew member's opening" do
     # CYFR's words for every agent, Aqua's included, the same for every
     # agent on one kind of brain, and what a crew member is told before
@@ -165,7 +208,9 @@ defmodule Aqua.PromptTest do
                "keeps for you: read, edit and run there as you would anywhere.\n" <>
                "- The athanor's files, components and stored state are reached through " <>
                "CYFR's tools only. A call CYFR refuses comes back with a sentence that says " <>
-               "so; carry on with what does not depend on it."
+               "so; carry on with what does not depend on it.\n" <>
+               "- What you leave running ends when you answer. Wait for it before you answer, " <>
+               "and never say you will report on it later."
 
     @search "\n- You have native search: use it when a job needs the web searched."
 

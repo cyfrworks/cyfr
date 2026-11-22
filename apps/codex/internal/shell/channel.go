@@ -93,6 +93,9 @@ type Channel struct {
 	report  func() []string
 	renewed func(json.RawMessage)
 
+	// writing is the one intent being written, which the next waits out.
+	writing chan struct{}
+
 	mu      sync.Mutex
 	next    int
 	waiting map[string]chan answer
@@ -128,7 +131,7 @@ func (e *IntentError) Error() string {
 }
 
 // Dialer opens the home's device channel: its address and the HTTP client
-// (with the tailnet's proxy when the home is reached through it).
+// that reaches it.
 type Dialer struct {
 	Address string
 	Client  *http.Client
@@ -202,11 +205,11 @@ func (d Dialer) open(ctx context.Context, device Device, key Signer, report func
 	defer cancel()
 	conn, _, err := websocket.Dial(dialCtx, d.url(), &websocket.DialOptions{HTTPClient: d.Client})
 	if err != nil {
-		return nil, fmt.Errorf("%w (%v)", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w (%w)", ErrUnavailable, err)
 	}
 	conn.SetReadLimit(1 << 20)
 	c := &Channel{conn: conn, device: device, key: key, report: report, renewed: renewed,
-		waiting: map[string]chan answer{}, done: make(chan struct{})}
+		waiting: map[string]chan answer{}, writing: make(chan struct{}, 1), done: make(chan struct{})}
 	if err := first(c, dialCtx); err != nil {
 		conn.CloseNow()
 		return nil, err
@@ -397,11 +400,27 @@ func (c *Channel) recv(ctx context.Context) (message, error) {
 	return m, nil
 }
 
-// closeReason maps the home's close code to why the channel ended.
+// RefusingError is a home that takes no attempt for now, a bound of its
+// verifications spent: it takes one again in Seconds.
+type RefusingError struct{ Seconds int }
+
+func (e *RefusingError) Error() string {
+	return fmt.Sprintf("CYFR refuses attempts for %d s", e.Seconds)
+}
+
+// closeReason maps the home's close code, and for a try-again close its
+// reason (Emissary.Web.DeviceChannel), to why the channel ended.
 func closeReason(err error) error {
 	var closed websocket.CloseError
-	if errors.As(err, &closed) && closed.Code == websocket.StatusTryAgainLater && closed.Reason == "forbidden" {
-		return ErrCompanySignIn
+	if errors.As(err, &closed) && closed.Code == websocket.StatusTryAgainLater {
+		if closed.Reason == "forbidden" {
+			return ErrCompanySignIn
+		}
+		if after, ok := strings.CutPrefix(closed.Reason, "rate_limited; retry_after_s="); ok {
+			if seconds, err := strconv.Atoi(after); err == nil && seconds > 0 {
+				return &RefusingError{Seconds: seconds}
+			}
+		}
 	}
 	switch websocket.CloseStatus(err) {
 	case 4403:
@@ -511,6 +530,12 @@ func (c *Channel) Err() error {
 
 // Call sends one intent and waits for its answer: the result, an
 // *IntentError for a refusal, or why the channel ended.
+//
+// ctx ends the wait and never a write begun: the websocket closes a
+// connection whose write is cancelled, and a lock cancels what is in
+// flight just before it sends that connection its proofs. A write begun
+// ends with the channel at the latest, and the next intent is written
+// after it.
 func (c *Channel) Call(ctx context.Context, operation string, args map[string]any) (json.RawMessage, error) {
 	c.mu.Lock()
 	if c.ended != nil {
@@ -526,8 +551,36 @@ func (c *Channel) Call(ctx context.Context, operation string, args map[string]an
 	if args == nil {
 		args = map[string]any{}
 	}
-	if err := c.send(ctx, map[string]any{"type": "intent", "id": id, "operation": operation, "args": args}); err != nil {
+	forget := func() {
+		c.mu.Lock()
+		delete(c.waiting, id)
+		c.mu.Unlock()
+	}
+	select {
+	case c.writing <- struct{}{}:
+	case <-ctx.Done():
+		forget()
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		<-c.writing
+		forget()
 		return nil, err
+	}
+	sent := make(chan error, 1)
+	go func() {
+		defer func() { <-c.writing }()
+		sent <- c.send(context.Background(), map[string]any{"type": "intent", "id": id, "operation": operation, "args": args})
+	}()
+	select {
+	case err := <-sent:
+		if err != nil {
+			forget()
+			return nil, err
+		}
+	case <-ctx.Done():
+		forget()
+		return nil, ctx.Err()
 	}
 	select {
 	case a, ok := <-w:
@@ -539,9 +592,7 @@ func (c *Channel) Call(ctx context.Context, operation string, args map[string]an
 		}
 		return a.Result, nil
 	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.waiting, id)
-		c.mu.Unlock()
+		forget()
 		return nil, ctx.Err()
 	}
 }
@@ -575,8 +626,15 @@ func (c *Channel) Renew(ctx context.Context) error {
 	}
 }
 
+// drop ends a channel no session was reserved on, waiting for no answer
+// to its close.
+func (c *Channel) drop() {
+	c.end(errLocked)
+	_ = c.conn.CloseNow()
+}
+
 // Close ends the channel, and with it every session it holds at the home.
 func (c *Channel) Close() {
-	c.end(errors.New("locked"))
+	c.end(errLocked)
 	_ = c.conn.Close(websocket.StatusNormalClosure, "")
 }

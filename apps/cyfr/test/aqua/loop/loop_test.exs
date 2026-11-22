@@ -147,6 +147,27 @@ defmodule Aqua.LoopTest do
     tree
   end
 
+  test "a loop that lost its turn writes no failure sentence: the row presents the fence the " <>
+         "loop acquired",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+    script!([{:probe, self()}, {:error, "the model fell over"}])
+    task = run(ctx, turn)
+    assert_receive {:scripted_probe, worker, _child}, 10_000
+
+    {:ok, held} = Tape.turn(ctx, turn.id)
+    {:ok, _taken} = Tape.supersede(ctx, held)
+    send(worker, :continue)
+    ended = Task.await(task, 30_000)
+
+    lines =
+      for %{kind: "system"} = line <- Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+          do: line.content
+
+    assert lines == []
+    assert ended == :cancelled
+  end
+
   test "a turn refused its root for ownership reads the retry sentence and can be sent again",
        %{ctx: ctx, thread: thread} do
     # This server has lost its slot: the root's admission is refused.

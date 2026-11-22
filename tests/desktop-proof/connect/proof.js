@@ -7,7 +7,7 @@
 // account service this computer approved.
 
 import {fromCause, processLoss} from "../bound.mjs"
-import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, inputs, js, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, undisturbed, waitFor} from "../lib.js"
+import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, historyAtLock, inputs, js, judged, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
 
 // An account service the CYFR names once reconfigured (the front's
 // directory fault); nothing answers at it.
@@ -262,26 +262,57 @@ async function connectPhase() {
   row("renderer_killed", shownAgain(killed),
     "Prism's page's process killed: the page is shown again in its window, signed in as before", killed)
 
+  // unanswered, opened_again: a page of the CYFR that did not load gives
+  // way to the chooser, and its way on opens Prism with the device unlocked
+  // all along.
+  await judged("unanswered",
+    "a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR, the device's session as it was",
+    async () => {
+      const {cookie, ...detail} = await unansweredLoad(w)
+      return [toldUnanswered({cookie, ...detail}, false), detail]
+    })
+  await judged("opened_again",
+    "the chooser's way on shows the device's unlocked page, and Open CYFR there opens Prism with no passphrase asked",
+    async () => {
+      await js(w.webContents, `document.querySelector("#words").click(); 1`)
+      const reopenedPast = await openCYFR(w, passphrase)
+      const reopened = await waitFor(async () => content() === w && js(w.webContents, `!!document.querySelector(".phx-connected")`),
+        "Prism opened again", 30_000)
+      return [JSON.stringify(reopenedPast) === '["unlocked"]' && reopened === true, {reopenedPast, reopened}]
+    })
+
   // offline_lock: with the CYFR's front down (its control answered so) the
   // lock still closes Prism at once and, with nothing to tell, the chooser
   // goes on to the locked device's page; the session ends with the channel.
-  const offline = {cookie: await sessionCookie(w), from: await frontLength(), shownBefore: history.length,
-    lockedBefore: closedAtLock.length}
-  offline.before = await opens(offline.cookie)
-  await fault("x.test", "down")
-  const ended = fromCause(() => js(w.webContents, `document.querySelector('[data-test="device-lock"]').click(); 1`),
-    () => refusalOf(offline.cookie), ONE_MINUTE)
-  const unreached = await afterLock(offline.shownBefore, "a lock while the CYFR is unreachable")
-  const atOnce = closedAtLock.slice(offline.lockedBefore)
-  const lockedPage = await waitFor(() => js(unreached.back.webContents, `!!document.querySelector('form[action="/unlock"]')`),
-    "the locked device's page")
-  await fault("x.test", "none")
-  const offlineEnded = await ended
-  row("offline_lock", offline.before.opens && atOnce.length > 0 && atOnce.every(Boolean) && unreached.shown &&
-    unreached.told === null && lockedPage && offlineEnded.within &&
-    (await signOutsSince(offline.from)).length === 0,
-  "a lock while the CYFR cannot be reached closes Prism at once and goes on to the locked device's page, and the session ends with the channel",
-  {before: offline.before, ended: offlineEnded, atOnce, chooser: unreached.told})
+  let unreached
+  await judged("offline_lock",
+    "a lock while the CYFR cannot be reached closes Prism at once and goes on to the locked device's page, and the session ends with the channel",
+    async () => {
+      const offline = {cookie: await sessionCookie(w), from: await frontLength(),
+        lockedBefore: closedAtLock.length}
+      offline.before = await opens(offline.cookie)
+      let ended, lockedPage
+      try {
+        await fault("x.test", "down")
+        ended = fromCause(() => js(w.webContents, `document.querySelector('[data-test="device-lock"]').click(); 1`),
+          () => refusalOf(offline.cookie), ONE_MINUTE)
+        // The lock's own load of the CYFR fails before cyfr says locked: the
+        // chooser that tells of it goes with the content the lock closes.
+        await waitFor(() => closedAtLock.length > offline.lockedBefore, "main's lock")
+        // The failure's chooser is in history before the lock and is not the lock's.
+        unreached = await afterLock(historyAtLock[offline.lockedBefore], "a lock while the CYFR is unreachable")
+        lockedPage = await waitFor(() => js(unreached.back.webContents, `!!document.querySelector('form[action="/unlock"]')`),
+          "the locked device's page")
+      } finally {
+        await fault("x.test", "none")
+      }
+      const atOnce = closedAtLock.slice(offline.lockedBefore)
+      const offlineEnded = await ended
+      return [offline.before.opens && atOnce.length > 0 && atOnce.every(Boolean) && unreached.shown &&
+        unreached.told === null && lockedPage && offlineEnded.within &&
+        (await signOutsSince(offline.from)).length === 0,
+      {before: offline.before, ended: offlineEnded, atOnce, chooser: unreached.told}]
+    })
   await openCYFR(unreached.back, passphrase)
   w = await contentAt(atHome, "Prism again")
   await waitFor(() => js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism's page connected")

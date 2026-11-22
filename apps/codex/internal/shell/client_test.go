@@ -6,6 +6,7 @@ package shell
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,14 +22,20 @@ import (
 // recovery code as the page does once the page's proof is checked
 // (enrollByPage, asPage), with a key held since a setup allowed to open.
 func enrollNow(s *Shell, ctx context.Context, name string, wait time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	s.enroll(ctx, name, wait, true)
 }
 
 func savedNow(s *Shell, ctx context.Context, accepted string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	s.saved(ctx, accepted)
 }
 
@@ -70,9 +77,9 @@ func device(t *testing.T, home *fakeHome, dir string, clients *memoryClients, se
 	sh, err := New(Config{
 		Address: home.address(), Client: home.srv.Client(), Record: filepath.Join(dir, "key.json"), DataDir: dir,
 		Clients: clients, Directory: home.accounts.URL(),
-		Detect: func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} },
-		Chip:   func() bool { return false },
-		Tokens: func() string { return setup },
+		Detect:     func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} },
+		Chip:       func() bool { return false },
+		SetupToken: func(context.Context) (string, http.RoundTripper) { return setup, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -244,8 +251,8 @@ func TestUnlock_RenewsAnExpiredCertificate(t *testing.T) {
 // One account's device connects to one CYFR. Selecting a remote CYFR
 // changes nothing until it succeeds: the app opens it over a record with
 // no working client, or that CYFR admits this device. A local project's
-// working record survives a selection that never got that far, and a
-// project never takes a remote CYFR's place.
+// working record survives a selection that never got that far, and the
+// screen's project never takes a remote CYFR's place.
 func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 	f := ClientFile(filepath.Join(t.TempDir(), "client.json"))
 	working := ClientRecord{Project: "/home/ada/cyfr", ClientID: "pcl_box", Certificate: json.RawMessage(`{"box":1}`)}
@@ -351,6 +358,67 @@ func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 	}
 	if err := g.SelectProject("/home/ada/other"); err == nil {
 		t.Fatal("a second project took the first one's place")
+	}
+}
+
+// Setting up on this computer may follow a Connect elsewhere: the local
+// CYFR takes the record's place by the rule a remote one does, only once it
+// admits this device.
+func TestALocalSelectionReplacesTheRecordOnceItAdmitsTheDevice(t *testing.T) {
+	f := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	working := ClientRecord{Home: "https://cyfr.example.com", Directory: "https://accounts.example.com",
+		ClientID: "pcl_there", Certificate: json.RawMessage(`{"there":1}`)}
+	if err := f.Save(working); err != nil {
+		t.Fatal(err)
+	}
+	sel, err := f.SelectLocal("/home/ada/cyfr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := sel.Load(); !sameRecord(c, ClientRecord{Project: "/home/ada/cyfr"}) {
+		t.Fatalf("the selection reads as %+v", c)
+	}
+	// Its shell's forget, then the app opening it.
+	if err := sel.Update(func(c *ClientRecord) bool { c.Certificate = nil; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if err := sel.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Load(); !sameRecord(c, working) {
+		t.Fatalf("a local selection replaced a working record before its CYFR admitted this device: %+v", c)
+	}
+	admitted := ClientRecord{Project: "/home/ada/cyfr", ClientID: "pcl_here", Certificate: json.RawMessage(`{"here":1}`)}
+	if err := sel.Update(func(c *ClientRecord) bool {
+		c.ClientID, c.Certificate = admitted.ClientID, admitted.Certificate
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Load(); !sameRecord(c, admitted) {
+		t.Fatalf("the admission did not replace the record: %+v", c)
+	}
+	again, err := f.SelectLocal("/home/ada/cyfr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := again.Load(); !sameRecord(c, admitted) {
+		t.Fatalf("the remembered folder lost its client: %+v", c)
+	}
+	if other, _ := f.SelectLocal("/home/ada/other"); other == nil || other.rec.ClientID != "" {
+		t.Fatal("another folder was given this one's client")
+	}
+
+	empty := ClientFile(filepath.Join(t.TempDir(), "client.json"))
+	first, err := empty.SelectLocal("/home/ada/cyfr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := empty.Load(); !sameRecord(c, ClientRecord{Project: "/home/ada/cyfr"}) {
+		t.Fatalf("an opened local selection over nothing was not remembered: %+v", c)
 	}
 }
 

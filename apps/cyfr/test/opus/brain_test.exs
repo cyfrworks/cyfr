@@ -17,17 +17,18 @@ defmodule Opus.BrainTest do
   not running; a paused turn's
   proof writes a post or an answer of its own work and nothing else; a
   stale open ends no successor. A start writes the caller's configuration
-  unchanged, the member's access among it, and a work whose configuration
-  differs from the running harness's, a later turn's changed access among
-  them, starts the program again with it. A line that does not read, one past the bound, one lost
+  unchanged, the member's access among it, and a work is written to the
+  process that started. A line that does not read, one past the bound, one lost
   unread, a read the box refuses, the row's change, the driver's end, a
   lost answer to a write and a take-over each end the session, its box
-  session closed.
+  session closed. A holder of one command ends as well on its caller's
+  exit, shutdown and its deadline, and on each end its session is closed
+  and its owner and claim are given back.
   """
   use ExUnit.Case, async: false
 
   import Ecto.Query
-  import Prima.Test.Wait, only: [wait_until: 2]
+  import Prima.Test.Wait
 
   alias Arca.TurnStorage
   alias Cyfr.Test.ScriptedBackends, as: Scripted
@@ -44,8 +45,8 @@ defmodule Opus.BrainTest do
     access: [%{id: "default", name: "Default mode"}]
   }
 
-  setup do
-    Cyfr.Test.Sandbox.setup!()
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(Map.take(tags, [:ownership_timeout]))
     Arca.Cache.init()
     fake = Scripted.start(self(), @root)
     _controller = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
@@ -245,6 +246,17 @@ defmodule Opus.BrainTest do
 
   defp hello(boot \\ "boot-one"),
     do: %{"t" => "hello", "v" => Wire.version(), "driver" => "cyfr-claude-code", "boot" => boot}
+
+  # Whether the holder waits on the service's answer to a send.
+  defp sending?(pid) do
+    case Process.info(pid, :current_stacktrace) do
+      {:current_stacktrace, frames} ->
+        Enum.any?(frames, &match?({Opus.Programs.Session, :send, _, _}, &1))
+
+      nil ->
+        false
+    end
+  end
 
   # The next batch handed to this attendant.
   defp batch({_pid, ref}) do
@@ -465,49 +477,6 @@ defmodule Opus.BrainTest do
       assert Brain.write(brain, binding, %{answer | "id" => "stp_twice"}) ==
                {:error, :not_this_work}
     end
-
-    test "a work whose configuration differs closes the driver's process and opens a new one",
-         %{fake: fake, row: row, binding: binding} do
-      brain =
-        started!(fake, row, binding, %{"model" => "opus", "harness_tools" => ["Read", "Grep"]})
-
-      [{first, _}] = running_sessions(fake, row)
-      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
-
-      assert :ok =
-               Brain.write(brain, binding, work,
-                 config: %{"model" => "opus", "harness_tools" => ["Read", "Grep"]}
-               )
-
-      assert %{"t" => "work"} = sent()
-      say(fake, row, %{"t" => "accepted", "id" => "stp_work"})
-      {_boot, [{seq, _}]} = batch(brain)
-      :ok = Brain.read_on(brain, "boot-one", seq)
-
-      # A narrower set of the harness's own tools: nothing of the work is
-      # written, the process is started again.
-      assert {:ok, :restarted} =
-               Brain.write(brain, binding, %{work | "id" => "stp_next"},
-                 config: %{"model" => "opus", "harness_tools" => ["Read"]}
-               )
-
-      refute_sent()
-      assert [{second, _}] = running_sessions(fake, row)
-      assert second != first
-      say(fake, row, hello("boot-two"))
-      assert {"boot-two", [{1, %{"t" => "hello"}}]} = batch(brain)
-      :ok = Brain.read_on(brain, "boot-two", 1)
-
-      resume = %{
-        "t" => "start",
-        "gen" => 0,
-        "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
-        "config" => %{"model" => "opus", "harness_tools" => ["Read"]}
-      }
-
-      assert :ok = Brain.write(brain, binding, resume)
-      assert %{"t" => "start", "session" => _} = sent()
-    end
   end
 
   describe "what is known of the account" do
@@ -580,15 +549,6 @@ defmodule Opus.BrainTest do
       "harness_tools" => ["Read", "Grep"]
     }
 
-    # A work written as it came, on the process that was running.
-    defp worked!(fake, row, brain, binding, work, config, boot \\ "boot-one") do
-      [{running, _}] = running_sessions(fake, row)
-      assert :ok = Brain.write(brain, binding, work, config: config)
-      assert sent() == work
-      accepted!(fake, row, brain, work["id"], boot)
-      assert [{^running, %{running: true}}] = running_sessions(fake, row)
-    end
-
     test "a start writes the caller's configuration unchanged, its access among it",
          %{fake: fake, row: row, binding: binding} do
       brain = opened!(fake, row, binding)
@@ -597,71 +557,11 @@ defmodule Opus.BrainTest do
       assert sent() == start
       harness_started!(fake, row, brain)
       work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
-      worked!(fake, row, brain, binding, work, @named)
-    end
-
-    test "a dead holder that had restarted its driver answers a close unanswered, never closed",
-         %{fake: fake, row: row, binding: binding} do
-      {pid, _ref} = brain = started!(fake, row, binding, @named)
-      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
-
-      assert {:ok, :restarted} =
-               Brain.write(brain, binding, work, config: %{@named | "access" => "another"})
-
-      assert [{_second, %{running: true}}] = running_sessions(fake, row)
-
-      # Its second process still runs: the box's close of it is on its way.
-      Scripted.hold(fake, "close", 30_000)
-      monitor = Process.monitor(pid)
-      Process.exit(pid, :kill)
-      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 5_000
-      assert_receive {:held, "close", service}, 5_000
-
-      assert Brain.close(brain) == {:error, :unanswered}
-      send(service, :go)
-    end
-
-    test "a later turn of the same access works on the running process; one whose access " <>
-           "changed starts the program again, resuming, with its own",
-         %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
-      brain = started!(fake, row, binding, @named)
-      [{first, _}] = running_sessions(fake, row)
-
-      same = admitted!(ctx, binding, next_turn!(ctx, thread.id, turn, "aqua"), row)
-      work = %{"t" => "work", "id" => "stp_same", "work" => same.turn_id, "tools" => []}
-      worked!(fake, row, brain, same, work, @named)
-
-      other =
-        admitted!(ctx, binding, next_turn!(ctx, thread.id, %{id: same.turn_id}, "aqua"), row)
-
-      changed = %{@named | "access" => "another"}
-      flush_opens_and_closes()
-      switched = %{work | "id" => "stp_switched", "work" => other.turn_id}
-      assert {:ok, :restarted} = Brain.write(brain, other, switched, config: changed)
-      refute_sent()
-
-      assert [{"close", %{"session" => ^first}}, {"open", %{"home_id" => home}}] =
-               opens_and_closes(2)
-
-      assert home == row.id
-      assert [{second, %{running: true}}] = running_sessions(fake, row)
-      assert second != first
-
-      say(fake, row, hello("boot-two"))
-      assert {"boot-two", [{1, %{"t" => "hello"}}]} = batch(brain)
-      :ok = Brain.read_on(brain, "boot-two", 1)
-
-      resume = %{
-        "t" => "start",
-        "gen" => 0,
-        "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
-        "config" => changed
-      }
-
-      assert :ok = Brain.write(brain, other, resume)
-      assert sent() == resume
-      harness_started!(fake, row, brain, "boot-two")
-      worked!(fake, row, brain, other, switched, changed, "boot-two")
+      [{running, _}] = running_sessions(fake, row)
+      assert :ok = Brain.write(brain, binding, work)
+      assert sent() == work
+      accepted!(fake, row, brain, work["id"], "boot-one")
+      assert [{^running, %{running: true}}] = running_sessions(fake, row)
     end
   end
 
@@ -1174,6 +1074,47 @@ defmodule Opus.BrainTest do
       refute_sent()
     end
 
+    test "a send the service answers ended may follow its writing, so it is uncertain",
+         %{fake: fake, row: row, binding: binding, brain: brain, answer: answer} do
+      # The reader waits on the attendant once it handed a line, so the
+      # send is the first to meet the ended process.
+      say(fake, row, %{"t" => "text", "gen" => 0, "message" => "m", "delta" => "x"})
+      assert {_boot, [{_seq, %{"t" => "text"}}]} = batch(brain)
+      Scripted.end_sessions(fake, row.id)
+      assert Brain.write(brain, binding, answer) == {:error, :uncertain}
+    end
+
+    test "a write whose holder died with the answer is uncertain",
+         %{fake: fake, binding: binding, brain: {pid, _ref} = brain, answer: answer} do
+      Scripted.hold(fake, "send", 30_000)
+      test = self()
+
+      # Only the attendant writes, so the kill comes from beside it.
+      spawn_link(fn ->
+        wait_until(fn -> sending?(pid) end, 5_000)
+        Process.exit(pid, :kill)
+        send(test, :killed)
+      end)
+
+      assert Brain.write(brain, binding, answer) == {:error, :uncertain}
+      assert_receive :killed, 5_000
+      assert_receive {:held, "send", service}, 5_000
+      send(service, :go)
+    end
+
+    test "a write whose answer outlasts the caller's wait is uncertain, never refused",
+         %{binding: binding, brain: {pid, _ref} = brain, answer: answer} do
+      # The holder is stopped with the write in its mailbox, past the
+      # caller's own timeout, as one whose reply is late.
+      true = :erlang.suspend_process(pid)
+
+      try do
+        assert Brain.write(brain, binding, answer) == {:error, :uncertain}
+      after
+        :erlang.resume_process(pid)
+      end
+    end
+
     test "the driver's death ends the session; nothing more is written",
          %{fake: fake, row: row, binding: binding, brain: {_pid, ref} = brain, answer: answer} do
       Scripted.end_sessions(fake, row.id)
@@ -1358,21 +1299,207 @@ defmodule Opus.BrainTest do
     defp first_read!,
       do: assert_receive({:session, "recv", %{"after" => 0}, _fields}, 5_000)
 
-    # A take-over asked of `holder` waits in its mailbox.
-    defp taking_over!(holder, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
-      {:messages, messages} = Process.info(holder, :messages)
+    # The write answered: the holder reads past the hello. Until then what
+    # the service is told can still be the write's to answer.
+    defp written_and_reading!,
+      do: assert_receive({:session, "recv", %{"after" => 1}, _fields}, 5_000)
 
-      cond do
-        Enum.any?(messages, &match?({:"$gen_call", _from, {:replace, _binding}}, &1)) ->
-          :ok
+    # `opener` waits on the take-over it asked of `holder`, and `holder`
+    # has handled the asking: the opener watches it twice then, for its
+    # end and for the call, and the holder answers what came after.
+    defp taking_over!(holder, opener) do
+      wait_until(
+        fn ->
+          [status: status, monitors: monitors] = Process.info(opener, [:status, :monitors])
+          status == :waiting and Enum.count(monitors, &(&1 == {:process, holder})) == 2
+        end,
+        5_000,
+        "a take-over waiting on the holder"
+      )
 
-        System.monotonic_time(:millisecond) > deadline ->
-          flunk("no take-over waits on the holder")
+      :sys.get_state(holder)
+    end
 
-        true ->
-          # sleep-ok: poll interval of taking_over!'s bounded wait (5 s) on the holder's mailbox
-          Process.sleep(10)
-          taking_over!(holder, deadline)
+    # A discovery past its write, waiting on the driver's answer: the
+    # process that asked, which tells the test what it was answered, the
+    # holder and the command's id.
+    defp discovering!(fake, ctx, row) do
+      test = self()
+      asker = spawn(fn -> send(test, {:asked, Brain.models(ctx, row.id)}) end)
+      %{"t" => "models", "id" => id} = once_driver!(fake, row)
+      written_and_reading!()
+      holder = Brain.whereis(ctx.athanor_id, id)
+      assert is_pid(holder)
+      {asker, holder, id}
+    end
+
+    defp answered!(fake, row, id) do
+      say(fake, row, %{
+        "t" => "models",
+        "id" => id,
+        "models" => [],
+        "access" => []
+      })
+    end
+
+    defp ends_giving_back!(holder, reason, fake, ctx, row) do
+      monitor = Process.monitor(holder)
+      assert_receive {:DOWN, ^monitor, :process, ^holder, ^reason}, 1_000
+      given_back!(fake, ctx, row)
+    end
+
+    # Nothing of the row's is left once the controller's job out has
+    # settled: no session running at the service, no owner of the
+    # controller's and no live claim.
+    defp given_back!(fake, ctx, row) do
+      wait_until(fn -> running_sessions(fake, row) == [] end, 2_000, "the session closed")
+      key = {ctx.athanor_id, row.id}
+      controller = Opus.Programs.via("local")
+
+      wait_until(
+        fn ->
+          state = :sys.get_state(controller)
+
+          state.inflight == nil and not is_map_key(state.owners, key) and
+            not is_map_key(state.claims, key)
+        end,
+        2_000,
+        "the owner and the claim given back"
+      )
+
+      # A claim given up is the row, its lease over.
+      assert {:ok, claim} =
+               Arca.JobClaims.read("mcp_backend", ctx.athanor_id <> ":" <> row.id)
+
+      refute Arca.JobClaims.live?(claim)
+    end
+
+    # A one command brought to each of its ends, the caller telling the
+    # test what it was answered.
+    defp left_by!(:refused_read, fake, ctx, row) do
+      test = self()
+      spawn(fn -> send(test, {:asked, Brain.models(ctx, row.id)}) end)
+      assert_receive {:session, "open", _open, _fields}, 5_000
+      first_read!()
+      Scripted.refuse_once(fake, "recv", "bad_request")
+      say(fake, row, hello())
+    end
+
+    defp left_by!(:write_unanswered, fake, ctx, row) do
+      test = self()
+      spawn(fn -> send(test, {:asked, Brain.models(ctx, row.id)}) end)
+      assert_receive {:session, "open", _open, _fields}, 5_000
+      first_read!()
+      Scripted.set(fake, :reset_send, true)
+      say(fake, row, hello())
+    end
+
+    defp left_by!(:open_refused, fake, ctx, row) do
+      test = self()
+      Scripted.refuse_once(fake, "open", "capacity")
+      spawn(fn -> send(test, {:asked, Brain.models(ctx, row.id)}) end)
+    end
+
+    defp left_by!(ending, fake, ctx, row) do
+      {_asker, holder, id} = discovering!(fake, ctx, row)
+
+      case ending do
+        :answer ->
+          answered!(fake, row, id)
+
+        :unreadable ->
+          say(fake, row, "not a line of the wire")
+
+        :dropped ->
+          Scripted.set(fake, :dropped, 1)
+          answered!(fake, row, id)
+
+        :row_ended ->
+          :ok = Opus.Programs.end_mounts(ctx.athanor_id, row.id)
+
+        :stand_down ->
+          send(holder, {Opus.Programs, :stand_down, {ctx.athanor_id, row.id}})
+
+        :shutdown ->
+          spawn(fn -> DynamicSupervisor.terminate_child(Brain.Holders, holder) end)
+
+        :driver_exit ->
+          Scripted.end_sessions(fake, row.id)
+
+        :reader_death ->
+          Process.exit(:sys.get_state(holder).reader, :kill)
+
+        :deadline ->
+          send(holder, :once_over)
+      end
+    end
+
+    # A discovery asked of a holder of its own by a deadline `ms` away,
+    # where `Brain.models/2` gives a minute: the caller, which tells the
+    # test what it was answered, and when that deadline is.
+    defp due_in!(ctx, row, ms) do
+      until = System.monotonic_time(:millisecond) + ms
+      {holder, command} = one_command!(ctx, row, until)
+      test = self()
+      spawn(fn -> send(test, {:asked, GenServer.call(holder, command, 30_000)}) end)
+      until
+    end
+
+    # A holder of its own and the discovery `until` is the deadline of.
+    defp one_command!(ctx, row, until) do
+      id = "mdl_#{System.unique_integer([:positive])}"
+      {:ok, holder} = DynamicSupervisor.start_child(Brain.Holders, {Brain, {ctx.athanor_id, id}})
+      owner = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch}
+      {holder, {:once, owner, %{"t" => "models", "id" => id}, until}}
+    end
+
+    # A discovery listed whole, its deadline `ms` away.
+    defp listed_within!(fake, ctx, row, ms) do
+      _until = due_in!(ctx, row, ms)
+      %{"t" => "models", "id" => id} = once_driver!(fake, row)
+      written_and_reading!()
+      answered!(fake, row, id)
+      assert_receive {:asked, {:ok, _listed}}, 2_000
+      given_back!(fake, ctx, row)
+      flush_reads()
+    end
+
+    # What is left until `until`, and a second for what follows it.
+    defp by(until), do: max(until - System.monotonic_time(:millisecond), 0) + 1_000
+
+    # The controller's ticks, which renew the owner's lease, until `until`.
+    defp renewing_until(until) do
+      left = until - System.monotonic_time(:millisecond)
+
+      if left > 0 do
+        send(GenServer.whereis(Opus.Programs.via("local")), :tick)
+        # sleep-ok: the real minute passes under renewals, the fixture's lease being 30 s
+        Process.sleep(min(left, 5_000))
+        renewing_until(until)
+      end
+    end
+
+    # `cause` brings Box to close `holder`'s lifetime while the holder hears
+    # nothing. The holder is let run once that close is confirmed, and a
+    # second one would be held past every wait of the test's.
+    defp confirmed_unheard!(fake, holder, cause) do
+      controller = GenServer.whereis(Opus.Programs.via("local"))
+      :erlang.suspend_process(holder)
+
+      try do
+        caused = cause.()
+        assert_receive {:session, "close", _first, _fields}, 3_000
+
+        wait_until(
+          fn -> :sys.get_state(controller).closing == %{} end,
+          2_000,
+          "the first close confirmed"
+        )
+
+        Scripted.hold(fake, "close", 30_000)
+        caused
+      after
+        :erlang.resume_process(holder)
       end
     end
 
@@ -1475,7 +1602,7 @@ defmodule Opus.BrainTest do
       # holder, which takes it up only once its one answer is read.
       set_generation(thread, 1)
       opener = Task.async(fn -> Brain.open(%{binding | generation: 1}) end)
-      taking_over!(cleanup)
+      taking_over!(cleanup, opener.pid)
       assert Task.yield(opener, 0) == nil
       refute_received {:session, "open", _open, _fields}
 
@@ -1879,6 +2006,468 @@ defmodule Opus.BrainTest do
       assert (until - System.monotonic_time(:millisecond)) in (day - 60_000)..day
       :ok = Arca.Cache.invalidate(key)
       assert Brain.known(ctx, row.id, row.epoch) == %{account: nil, listing: @listing}
+    end
+
+    test "a discovery whose caller dies ends, its session closed, its owner and claim given back",
+         %{fake: fake, ctx: ctx, row: row} do
+      {asker, holder, _id} = discovering!(fake, ctx, row)
+      Process.exit(asker, :kill)
+      ends_giving_back!(holder, :normal, fake, ctx, row)
+    end
+
+    test "a cleanup whose caller dies while its session opens writes nothing, all given back",
+         %{fake: fake, ctx: ctx, row: row, thread: thread} do
+      record = owed!(ctx, thread.id, row)
+      Scripted.hold(fake, "opened")
+      asker = spawn(fn -> Brain.forget(record) end)
+      assert_receive {:held, "opened", service}, 5_000
+      holder = Brain.whereis(ctx.athanor_id, thread.id)
+
+      # The driver's hello stands before the open answers: what is read
+      # first, the hello or the caller's death, decides the write.
+      say(fake, row, hello())
+      Process.exit(asker, :kill)
+      send(service, :go)
+      ends_giving_back!(holder, :normal, fake, ctx, row)
+      refute_sent()
+    end
+
+    test "a discovery waiting on its driver ends on shutdown at once, all given back",
+         %{fake: fake, ctx: ctx, row: row} do
+      {_asker, holder, _id} = discovering!(fake, ctx, row)
+      stopper = Task.async(fn -> DynamicSupervisor.terminate_child(Brain.Holders, holder) end)
+      ends_giving_back!(holder, :shutdown, fake, ctx, row)
+      assert Task.await(stopper) == :ok
+      assert_receive {:asked, {:error, :lost}}, 1_000
+    end
+
+    test "a discovery ends on its row's end, its caller answered only once its close is",
+         %{fake: fake, ctx: ctx, row: row} do
+      {_asker, holder, _id} = discovering!(fake, ctx, row)
+      Scripted.hold(fake, "close")
+      :ok = Opus.Programs.end_mounts(ctx.athanor_id, row.id)
+      assert_receive {:held, "close", closer}, 1_000
+      refute_received {:asked, _answer}
+      send(closer, :go)
+      ends_giving_back!(holder, :normal, fake, ctx, row)
+      assert_receive {:asked, {:error, :lost}}, 1_000
+    end
+
+    test "a discovery ends when the box tells it to stand down for its row's change",
+         %{fake: fake, ctx: ctx, row: row} do
+      {_asker, holder, _id} = discovering!(fake, ctx, row)
+
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^row.id),
+          set: [epoch: row.epoch + 1]
+        )
+
+      changed = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch + 1}
+      ended = Process.monitor(holder)
+      reading = Process.monitor(:sys.get_state(holder).reader)
+
+      # The replaced session's close and the successor's sync each end it at
+      # the service, which the reader would hear: with both held there, only
+      # the box's telling stops the reading.
+      Scripted.hold(fake, "close")
+      Scripted.hold(fake, "sync")
+
+      successor =
+        Task.async(fn ->
+          with {:ok, _grant} <- Opus.Programs.hold(changed), do: Opus.Programs.release(changed)
+        end)
+
+      assert_receive {:held, "close", closer}, 1_000
+      assert_receive {:held, "sync", syncing}, 1_000
+      assert_receive {:DOWN, ^reading, :process, _reader, :killed}, 1_000
+      send(closer, :go)
+      send(syncing, :go)
+      assert_receive {:DOWN, ^ended, :process, ^holder, :normal}, 1_000
+      assert_receive {:asked, {:error, :lost}}, 1_000
+      assert Task.await(successor) == :ok
+      given_back!(fake, ctx, row)
+    end
+
+    test "a discovery ends when its driver exits, all given back",
+         %{fake: fake, ctx: ctx, row: row} do
+      {_asker, holder, _id} = discovering!(fake, ctx, row)
+      Scripted.end_sessions(fake, row.id)
+      ends_giving_back!(holder, :normal, fake, ctx, row)
+      assert_receive {:asked, {:error, :lost}}, 1_000
+    end
+
+    test "a discovery ends when its reader dies, all given back",
+         %{fake: fake, ctx: ctx, row: row} do
+      {_asker, holder, _id} = discovering!(fake, ctx, row)
+      Process.exit(:sys.get_state(holder, 1_000).reader, :kill)
+      ends_giving_back!(holder, :normal, fake, ctx, row)
+      assert_receive {:asked, {:error, :lost}}, 1_000
+    end
+
+    test "a discovery ends at the first read the box refuses, all given back",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.refuse_once(fake, "recv", "bad_request")
+      test = self()
+      spawn(fn -> send(test, {:asked, Brain.models(ctx, row.id)}) end)
+      assert_receive {:asked, {:error, :lost}}, 3_000
+      given_back!(fake, ctx, row)
+    end
+
+    test "a discovery sets its deadline, a minute, and ends when it comes, all given back",
+         %{fake: fake, ctx: ctx, row: row} do
+      # A trace session of the test's own: it reads the timer the holder
+      # sets and delivers that timer's message, so no minute is waited out.
+      session = :trace.session_create(:brain_deadline, self(), [])
+      on_exit(fn -> :trace.session_destroy(session) end)
+      :trace.process(session, :new_processes, true, [:call])
+      :trace.function(session, {:erlang, :send_after, :_}, true, [])
+
+      {_asker, holder, _id} = discovering!(fake, ctx, row)
+
+      # The minute is the caller's, so the timer is what is left of it.
+      assert_receive {:trace, ^holder, :call, {:erlang, :send_after, [ms, ^holder, due | _]}}
+                     when ms in 55_000..60_000,
+                     1_000
+
+      send(holder, due)
+      ends_giving_back!(holder, :normal, fake, ctx, row)
+      assert_receive {:asked, {:error, :lost}}, 1_000
+    end
+
+    test "a sync of its owner under the same version does not end a discovery",
+         %{fake: fake, ctx: ctx, row: row} do
+      {_asker, holder, id} = discovering!(fake, ctx, row)
+      controller = GenServer.whereis(Opus.Programs.via("local"))
+      Cyfr.Test.Settings.put("athanor_program_memory_bytes", 2_147_483_648)
+      send(controller, :tick)
+      assert_receive {:control, "sync", %{"athanor_memory_bytes" => 2_147_483_648}, _}, 2_000
+      # The sync settled, and what it told the holder is handled.
+      wait_until(
+        fn -> :sys.get_state(controller).inflight == nil end,
+        2_000,
+        "the sync to settle"
+      )
+
+      :sys.get_state(holder)
+
+      answered!(fake, row, id)
+      assert_receive {:asked, {:ok, %{models: []}}}, 5_000
+    end
+
+    test "a discovery takes the first line after the hello as its answer, whatever follows it",
+         %{fake: fake, ctx: ctx, row: row} do
+      task = Task.async(fn -> Brain.models(ctx, row.id) end)
+      assert_receive {:session, "open", _open, _fields}, 5_000
+      first_read!()
+      # The read after the hello is held, so both lines come in its answer.
+      Scripted.hold(fake, "recv")
+      say(fake, row, hello())
+      %{"t" => "models", "id" => id} = sent()
+      assert_receive {:held, "recv", read}, 5_000
+      answered!(fake, row, id)
+      say(fake, row, "not a line of the wire")
+      send(read, :go)
+      assert {:ok, %{models: []}} = Task.await(task, 5_000)
+    end
+
+    test "a discovery whose driver's first line is no hello writes nothing and reads unreadable",
+         %{fake: fake, ctx: ctx, row: row} do
+      for first <- [
+            %{"t" => "accepted", "id" => "stp_1"},
+            Map.put(hello(), "v", Wire.version() + 1)
+          ] do
+        task = Task.async(fn -> Brain.models(ctx, row.id) end)
+        assert_receive {:session, "open", _open, _fields}, 5_000
+        first_read!()
+        say(fake, row, first)
+        assert Task.await(task, 5_000) == {:error, :unreadable}
+        refute_sent()
+      end
+    end
+
+    test "a holder of one command shows neither its command nor its grant's key in its status",
+         %{fake: fake, ctx: ctx, row: row, thread: thread} do
+      record = owed!(ctx, thread.id, row)
+      task = Task.async(fn -> Brain.forget(record) end)
+      assert %{"t" => "forget", "id" => id, "session" => @session} = once_driver!(fake, row)
+      written_and_reading!()
+      holder = Brain.whereis(ctx.athanor_id, thread.id)
+
+      status =
+        inspect(:sys.get_status(holder, 1_000), limit: :infinity, printable_limit: :infinity)
+
+      refute status =~ @session
+      refute status =~ id
+      refute status =~ inspect(:sys.get_state(holder).grant.owner_key)
+
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(task, 5_000) == :forgot
+    end
+
+    test "an open held to just before the deadline and then the write: the write is cut at it, " <>
+           "and the caller answered after the close",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.hold(fake, "opened", 30_000)
+      until = due_in!(ctx, row, 3_000)
+      assert_receive {:held, "opened", opening}, 2_000
+      # sleep-ok: the open is held until just before the deadline, which is the case itself
+      Process.sleep(max(until - 1_500 - System.monotonic_time(:millisecond), 0))
+
+      Scripted.hold(fake, "send", 30_000)
+      Scripted.hold(fake, "close", 30_000)
+      say(fake, row, hello())
+      send(opening, :go)
+      assert_receive {:held, "send", writing}, 1_500
+
+      assert_receive {:held, "close", closing}, by(until)
+      refute_received {:asked, _answer}
+      send(closing, :go)
+      assert_receive {:asked, {:error, :lost}}, 1_000
+      given_back!(fake, ctx, row)
+      send(writing, :go)
+    end
+
+    test "an open out at the deadline is cut at it, and the caller answered after its lifetime's close",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.hold(fake, "opened", 30_000)
+      until = due_in!(ctx, row, 1_500)
+      assert_receive {:held, "opened", opening}, 1_500
+      Scripted.hold(fake, "close", 30_000)
+
+      assert_receive {:held, "close", closing}, by(until)
+      # Longer than a release waits: only the holder's own wait on the
+      # close of the lifetime it minted keeps the answer back.
+      refute_receive {:asked, _answer}, Opus.Programs.Box.release_timeout_ms() + 500
+      # The fake holds both of two closes that come at once, so a second is
+      # told as held or as let through.
+      refute_received {:held, "close", _second}
+      refute_received {:session, "close", _through, _fields}
+      send(closing, :go)
+      assert_receive {:asked, {:error, :deadline}}, 1_000
+      assert_receive {:session, "close", %{"lifetime" => lifetime}, _fields}, 1_000
+      given_back!(fake, ctx, row)
+      refute_received {:session, "close", %{"lifetime" => ^lifetime}, _fields}
+      send(opening, :go)
+    end
+
+    test "a refused open's close, confirmed before its holder hears of either, is the only one",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.refuse_once(fake, "open", "capacity")
+      Scripted.hold(fake, "open", 15_000)
+      until = System.monotonic_time(:millisecond) + 60_000
+      {holder, command} = one_command!(ctx, row, until)
+      asked = :gen_server.send_request(holder, command)
+      assert_receive {:held, "open", opening}, 3_000
+
+      confirmed_unheard!(fake, holder, fn -> send(opening, :go) end)
+
+      assert {:reply, {:error, {:refused, :capacity, _boot}}} =
+               :gen_server.wait_response(asked, 1_000)
+
+      refute_received {:session, "close", _wire, _fields}
+      given_back!(fake, ctx, row)
+    end
+
+    test "a replaced row's close, confirmed before its holder hears of it, is the only one",
+         %{fake: fake, ctx: ctx, row: row} do
+      {_asker, holder, _id} = discovering!(fake, ctx, row)
+
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^row.id),
+          set: [epoch: row.epoch + 1]
+        )
+
+      changed = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch + 1}
+
+      successor =
+        confirmed_unheard!(fake, holder, fn ->
+          Task.async(fn ->
+            with {:ok, _grant} <- Opus.Programs.hold(changed), do: Opus.Programs.release(changed)
+          end)
+        end)
+
+      assert_receive {:asked, {:error, :lost}}, 1_000
+      refute_received {:session, "close", _wire, _fields}
+      assert Task.await(successor) == :ok
+      given_back!(fake, ctx, row)
+    end
+
+    test "a hold out at the deadline is cut at it, and nothing is opened",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.hold(fake, "sync", 30_000)
+      until = due_in!(ctx, row, 1_500)
+      assert_receive {:held, "sync", syncing}, 1_500
+
+      assert_receive {:asked, {:error, :backends_unavailable}}, by(until)
+      send(syncing, :go)
+      given_back!(fake, ctx, row)
+      refute_received {:session, "open", _open, _fields}
+    end
+
+    test "a hold cut at the deadline answers only once its holder is no owner's",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.hold(fake, "sync", 30_000)
+      until = due_in!(ctx, row, 1_500)
+      assert_receive {:held, "sync", syncing}, 1_500
+      controller = GenServer.whereis(Opus.Programs.via("local"))
+      :ok = :sys.suspend(controller)
+
+      try do
+        # Past the deadline and short of a release's wait: a Box that cannot
+        # hear the release keeps the answer back.
+        refute_receive {:asked, _answer}, by(until)
+      after
+        :ok = :sys.resume(controller)
+      end
+
+      assert_receive {:asked, {:error, :backends_unavailable}}, 1_000
+      refute is_map_key(:sys.get_state(controller).owners, {ctx.athanor_id, row.id})
+      send(syncing, :go)
+      given_back!(fake, ctx, row)
+    end
+
+    test "a stale boot's second hold has only what is left of the deadline",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.hold(fake, "open", 30_000)
+      Scripted.refuse_once(fake, "open", "stale_boot")
+      until = due_in!(ctx, row, 3_000)
+      assert_receive {:held, "open", opening}, 2_000
+      Scripted.hold(fake, "sync", 30_000)
+      send(opening, :go)
+      assert_receive {:held, "sync", syncing}, 2_000
+
+      # The way out's release waits behind the sync still out, its bound.
+      assert_receive {:asked, {:error, :backends_unavailable}},
+                     by(until) + Opus.Programs.Box.release_timeout_ms()
+
+      send(syncing, :go)
+      given_back!(fake, ctx, row)
+    end
+
+    test "opens with little time left share the connection pool of those with plenty",
+         %{fake: fake, ctx: ctx, row: row} do
+      pools = fn -> DynamicSupervisor.count_children(Req.FinchSupervisor).active end
+      listed_within!(fake, ctx, row, 20_000)
+      warm = pools.()
+
+      # No run of the others gives these, so a pool of each would be new.
+      for ms <- [1_700, 2_100, 2_600, 3_300] do
+        listed_within!(fake, ctx, row, ms)
+        assert pools.() == warm, "an open with #{ms} ms left made a connection pool"
+      end
+    end
+
+    test "nothing is asked of the box for a command whose deadline has passed",
+         %{ctx: ctx, row: row} do
+      _until = due_in!(ctx, row, 0)
+      assert_receive {:asked, {:error, :deadline}}, 1_000
+      refute_received {:control, "sync", _sync, _fields}
+      refute_received {:session, "open", _open, _fields}
+    end
+
+    for path <- [:models, :forget] do
+      test "a #{path}'s caller waits its deadline, the way out's bound and a margin",
+           %{fake: fake, ctx: ctx, row: row, thread: thread} do
+        record = owed!(ctx, thread.id, row)
+        session = :trace.session_create(:brain_caller, self(), [])
+        on_exit(fn -> :trace.session_destroy(session) end)
+        :trace.process(session, :new_processes, true, [:call])
+        :trace.function(session, {GenServer, :call, 3}, true, [])
+
+        asked = System.monotonic_time(:millisecond)
+
+        task =
+          case unquote(path) do
+            :models -> Task.async(fn -> Brain.models(ctx, row.id) end)
+            :forget -> Task.async(fn -> Brain.forget(record) end)
+          end
+
+        %{"id" => id} = once_driver!(fake, row)
+        say(fake, row, %{"t" => "refused", "id" => id, "reason" => "no"})
+        assert Task.await(task, 5_000) == {:error, {:refused, "no"}}
+
+        asker = task.pid
+
+        assert_receive {:trace, ^asker, :call, {GenServer, :call, [_holder, message, wait]}}
+                       when elem(message, 0) in [:once, :forget],
+                       1_000
+
+        deadline = elem(message, tuple_size(message) - 1) - asked
+        box = Opus.Programs.Box
+
+        # Both are read from what the caller sent: neither moves alone.
+        assert_in_delta wait,
+                        deadline + box.close_timeout_ms() + box.release_timeout_ms() + 5_000,
+                        500
+      end
+    end
+
+    for exit <- [
+          :answer,
+          :unreadable,
+          :dropped,
+          :row_ended,
+          :stand_down,
+          :shutdown,
+          :driver_exit,
+          :reader_death,
+          :deadline,
+          :refused_read,
+          :write_unanswered,
+          :open_refused
+        ] do
+      test "the caller's answer comes after the close: #{exit}",
+           %{fake: fake, ctx: ctx, row: row} do
+        Scripted.hold(fake, "close", 30_000)
+        left_by!(unquote(exit), fake, ctx, row)
+        assert_receive {:held, "close", closing}, 2_000
+        refute_receive {:asked, _answer}, 300
+        send(closing, :go)
+        assert_receive {:asked, _answer}, 2_000
+      end
+    end
+
+    @tag :long
+    @tag timeout: 180_000
+    @tag ownership_timeout: 180_000
+    test "at the real minute, a write begun just before the deadline is cut at it and its " <>
+           "caller answered with nothing of the holder's left",
+         %{fake: fake, ctx: ctx, row: row} do
+      Scripted.hold(fake, "opened", 90_000)
+      began = System.monotonic_time(:millisecond)
+      test = self()
+      spawn(fn -> send(test, {:asked, Brain.models(ctx, row.id)}) end)
+      assert_receive {:held, "opened", opening}, 5_000
+      renewing_until(began + 58_000)
+
+      Scripted.hold(fake, "send", 30_000)
+      say(fake, row, hello())
+      send(opening, :go)
+      assert_receive {:held, "send", writing}, 2_000
+
+      assert_receive {:asked, answer}, 10_000
+      assert answer == {:error, :lost}
+      assert System.monotonic_time(:millisecond) - began < 64_000
+      assert running_sessions(fake, row) == []
+      state = :sys.get_state(Opus.Programs.via("local"))
+      refute is_map_key(state.owners, {ctx.athanor_id, row.id})
+      send(writing, :go)
+    end
+
+    test "a line that answers another command says nothing of the account",
+         %{fake: fake, ctx: ctx, row: row} do
+      task = Task.async(fn -> Brain.models(ctx, row.id) end)
+      once_driver!(fake, row)
+
+      say(fake, row, %{
+        "t" => "refused",
+        "id" => "mdl_another",
+        "reason" => "Sign it in.",
+        "account" => "signed_out"
+      })
+
+      assert Task.await(task, 10_000) == {:error, :unreadable}
+      assert Brain.known(ctx, row.id, row.epoch).account == nil
     end
 
     test "discovery runs for no turn, no other athanor and no row but a brain's",

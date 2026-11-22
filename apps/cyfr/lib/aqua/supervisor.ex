@@ -46,8 +46,8 @@ defmodule Aqua.Supervisor do
         # acceptance cut short rolls back whole, and the next tick asks
         # again.
         Supervisor.child_spec(Aqua.Nudge, shutdown: 5_000),
-        # The attendants of held program sessions (`Aqua.Program`), one per
-        # thread and agent, started on demand: before the loops, so a loop
+        # The attendants of turns on programs (`Aqua.Program`), one per
+        # turn while a loop holds it, started on demand: before the loops, so a loop
         # stops before the attendant it is told by. The registry and the
         # supervisor whose children register in it restart together. An
         # attendant's end ends the session it attends (`Opus.Brain`).

@@ -414,8 +414,61 @@ defmodule Prima.RefusalTest do
     {"No provider found for scheme ftp", :internal}
   ]
 
-  # The access and setup rows are rostered with their classes too.
-  @rostered @rostered ++ for({reason, class, _sentence} <- @access_rows, do: {reason, class})
+  # How a turn's work on a program ends, each sentence as a person reads it.
+  @program_rows [
+    {{:crew_unready, "Aqua", :signed_out}, :setup_required,
+     "Aqua's program is signed out. Sign it in, or choose another, on the Aqua page."},
+    {{:program_full, "Aqua"}, :rate_limited,
+     "Aqua could not start: this CYFR has no room for another running program. Stop work in " <>
+       "another thread or wait for it to end, then send your message again."},
+    {{:harness, "Aqua", :not_admitted}, :forbidden, "Aqua may not start for this work any more."},
+    {{:harness, "Aqua", {:not_admitted, :working}}, :forbidden,
+     "Aqua may not go on with this work any more."},
+    {{:harness, "Aqua", :unreached}, :unavailable,
+     "Aqua could not be reached: its program did not open."},
+    {{:harness, "Aqua", :start_failed}, :unavailable, "Aqua could not start."},
+    {{:harness, "Aqua", {:start_failed, :died}}, :unavailable, "Aqua stopped before it started."},
+    {{:harness, "Aqua", {:start_failed, :session}}, :unavailable,
+     "Aqua could not start: this thread's session could not be read."},
+    {{:harness, "Aqua", {:start_failed, :over}}, :unavailable, "Aqua could not start over."},
+    {{:harness, "Aqua", {:start_failed, :restart}}, :unavailable,
+     "Aqua could not go on after a restart."},
+    {{:harness, "Aqua", {:start_failed, :unstarted}}, :unavailable, "Aqua did not start."},
+    {{:harness, "Aqua", {:start_unfit, ["effort", "model"]}}, :invalid_argument,
+     "Aqua could not start with what this work gives it: one of its options (effort, model), " <>
+       "its instructions or its tools is not one it takes."},
+    {{:harness, "Aqua", :work_refused}, :conflict, "Aqua could not be given this work."},
+    {{:harness, "Aqua", {:work_refused, "No harness runs."}}, :conflict,
+     "Aqua could not be given this work: No harness runs."},
+    {{:harness, "Aqua", {:post_refused, "Send it again."}}, :conflict,
+     "Aqua refused the message: Send it again."},
+    {{:harness, "Aqua", {:post_refused, :gone}}, :conflict,
+     "Aqua could not be given this message: a thread it came from has since been deleted."},
+    {{:harness, "Aqua", :foreign_ask}, :forbidden,
+     "Aqua asked for a tool for other work than this, so it was stopped."},
+    {{:harness, "Aqua", :uncertain}, :uncertain,
+     "Aqua was interrupted after it was handed your last message, and it is not handed that " <>
+       "message again. Send a message to go on."},
+    {{:harness, "Aqua", :ended}, :unavailable, "Aqua stopped before it finished."},
+    {{:harness, "Aqua", {:ended, "limit"}}, :unavailable,
+     "Aqua stopped before it finished (limit)."},
+    {{:harness, "Aqua", {:silent, 30}}, :timeout,
+     "Aqua said nothing for 30 minutes, so its work here ended."},
+    {{:harness, "Aqua", :write_failed}, :unavailable,
+     "Aqua stopped: CYFR could not keep what it said. Send a message to go on."},
+    {{:harness, "Aqua", :forgotten}, :conflict,
+     "Aqua stopped: its record of this thread was removed while it worked. Send a message to " <>
+       "start over."},
+    {{:harness, "Aqua", {:provider, "rate_limited", "Ask again later."}}, :unavailable,
+     "Aqua could not answer: Ask again later."}
+  ]
+
+  # The access, setup and program rows are rostered with their classes too.
+  @rostered @rostered ++
+              for(
+                {reason, class, _sentence} <- @access_rows ++ @program_rows,
+                do: {reason, class}
+              )
 
   # What a guest error's type reads as.
   @guest_types %{
@@ -501,6 +554,13 @@ defmodule Prima.RefusalTest do
 
     test "every access and setup row reads as its class and its words" do
       for {reason, class, sentence} <- @access_rows do
+        assert %Refusal{class: ^class, message: ^sentence} = Refusal.classify(reason),
+               "#{inspect(reason)} reads as #{inspect(Refusal.classify(reason))}"
+      end
+    end
+
+    test "every end of a turn's work on a program reads as its class and its words" do
+      for {reason, class, sentence} <- @program_rows do
         assert %Refusal{class: ^class, message: ^sentence} = Refusal.classify(reason),
                "#{inspect(reason)} reads as #{inspect(Refusal.classify(reason))}"
       end

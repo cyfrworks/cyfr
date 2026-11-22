@@ -69,16 +69,13 @@ defmodule Aqua.ProgramNameTest do
     assert Scripted.sessions(fake, theirs.id) == %{}
 
     # The row is replaced under the same name, as the Programs page
-    # removes one: its sessions end, then another row is added.
-    assert Aqua.Program.holding?(ctx.athanor_id, thread.id, "coder")
+    # removes one, once the turn's session ended with it.
+    assert Enum.all?(Scripted.sessions(fake, first.id), fn {_id, session} ->
+             not session.running
+           end)
+
     assert {:ok, _} = McpServerStorage.delete(Sanctum.Context.actor(ctx), "claude")
     :ok = Opus.Programs.end_mounts(ctx.athanor_id, first.id)
-
-    Prima.Test.Wait.wait_until(
-      fn -> not Aqua.Program.holding?(ctx.athanor_id, thread.id, "coder") end,
-      10_000,
-      "the removed row's session to end"
-    )
 
     second = row!(ctx)
     refute second.id == first.id

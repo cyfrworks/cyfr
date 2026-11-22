@@ -27,7 +27,22 @@ defmodule Aqua.Loop do
   turn's row, its posts and its usage name.
 
   Every write goes through `Aqua.Tape` under the actor's guest-planed
-  context; the loop process never runs a child on itself.
+  context; the loop process never runs a child on itself. A loop writes
+  only under the fence it acquired: it never reads the fence again from
+  the turn's row, and each row it writes, a failure's sentence among them,
+  presents that fence in the transaction that writes it, so a loop whose
+  turn was taken writes nothing: it is cancelled, or refused its resume.
+
+  ## A turn on a program
+
+  A program lives for one turn: while a loop holds the turn, a launch's
+  wait and a steer at the finish included. Whatever way the loop returns,
+  an end or a pause, the turn's session is closed and the close waited on
+  first (`Aqua.Program.close/2`). A close that was not answered is
+  Opus's: it owes it and retries it, and the next start is admitted or
+  refused on what is true then. Aqua knows nothing else of a process. A turn whose member's program is
+  another row than the one the thread's session is stored with forgets
+  that session before its start and starts over from the thread's posts.
 
   ## A scheduled turn
 
@@ -86,6 +101,9 @@ defmodule Aqua.Loop do
   # beside the retry's (`Aqua.Loop.Stream`).
   @recoverable ~w(rate_limited overloaded incomplete_stream)
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
+  # A write refused for one of these found the turn taken or over: whoever
+  # took it says what became of it.
+  @taken [:superseded, :not_open, :already_finished]
   # A refusal for want of a key bound to the brain is the brain's own
   # state, a key to enter (`Aqua.Loop.Turn.key_refusals/0`); a key the
   # provider refused (`authentication`) is the provider's to say, as a
@@ -138,7 +156,10 @@ defmodule Aqua.Loop do
       # The program row a program brain runs on (`Aqua.Loop.Turn`), whose
       # session `Aqua.Program` attends: such a turn asks no model, has no
       # deadline and no step cap.
-      program: nil
+      program: nil,
+      # The turn's attendant and this loop's monitor of it, from its first
+      # wait on it to its return (`attended/2`).
+      attendant: nil
     ]
   end
 
@@ -148,6 +169,7 @@ defmodule Aqua.Loop do
           | {:failed, term()}
           | :cancelled
           | {:uncertain, term()}
+          | {:unwritten, result()}
 
   # ---------------------------------------------------------------------------
   # Entry points
@@ -157,7 +179,9 @@ defmodule Aqua.Loop do
   Run an accepted turn as its root: claim the root on this process,
   start the turn with its pins, and loop. `opts`: `:ctx` (the actor's
   external-plane context), `:turn_id`. Ends the turn itself on every
-  outcome but a pause. A turn another process on this boot holds is
+  outcome but a pause: `{:unwritten, result}` is an end that could not be
+  written, which its caller settles as a loop's that died. A turn another
+  process on this boot holds is
   refused `{:error, :held}` before anything is read (`holder/1`).
   """
   @spec run(keyword()) :: result() | {:error, term()}
@@ -165,7 +189,7 @@ defmodule Aqua.Loop do
     ctx = Keyword.fetch!(opts, :ctx)
     turn_id = Keyword.fetch!(opts, :turn_id)
 
-    hold(turn_id, fn ->
+    hold(ctx, turn_id, fn ->
       with {:ok, turn} <- Tape.turn(ctx, turn_id) do
         case claim_and_start(ctx, turn) do
           {:ok, state} ->
@@ -194,8 +218,8 @@ defmodule Aqua.Loop do
           {:error, reason} ->
             reason = unclaimed(ctx, turn, reason)
             say_unrun(ctx, turn, reason)
-            _ = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
-            {:failed, reason}
+            finish = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
+            unrun(turn, {:failed, reason}, finish)
         end
       end
     end)
@@ -227,8 +251,7 @@ defmodule Aqua.Loop do
   # points at the Aqua page.
   defp never_ran(ctx, claim, turn, reason) do
     say_unrun(ctx, turn, reason)
-    end_unrun(ctx, claim, turn, describe(reason))
-    {:failed, reason}
+    end_unrun(ctx, claim, turn, reason)
   end
 
   # A turn that never ran says why in the thread where the person can act
@@ -260,38 +283,41 @@ defmodule Aqua.Loop do
 
   defp say_unrun(_ctx, _turn, _reason), do: :ok
 
-  defp unrun_line(ctx, turn, line) do
-    Tape.append(ctx, turn.thread_id, %{
-      author: Prima.Author.system(),
-      sent_by: turn.agent,
-      kind: "system",
-      content: line,
-      turn_id: turn.id,
-      execution_id: turn.root_execution_id
-    })
-  end
+  defp unrun_line(ctx, turn, line), do: Tape.append_line(ctx, turn, line)
 
   defp refused_key_line(%{"message" => message}) when is_binary(message),
     do: "The model refused its key: #{message}"
 
   defp refused_key_line(_error), do: "The model refused its key."
 
-  defp end_unrun(ctx, claim, turn, error) do
+  defp end_unrun(ctx, claim, turn, reason) do
+    error = describe(reason)
     Opus.suspend_lease_watch(claim.keeper)
-    _ = Tape.finish(ctx, turn, "failed", %{error: error})
-    Opus.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
+    finish = Tape.finish(ctx, turn, "failed", %{error: error})
+    ended = unrun(turn, {:failed, reason}, finish)
+
+    # A root closed as failed takes no successor, and recovery adopts a
+    # turn whose end was not written by opening one.
+    failed = if match?({:unwritten, _result}, ended), do: nil, else: error
+    Opus.release_turn_root(ctx, claim.execution_id, claim: claim, failed: failed)
+    ended
   end
 
   defp setup_required(ctx, turn) do
-    _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
+    finish = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
 
     Tape.announce(ctx, turn.thread_id, :consent_required, %{
       ref: @grant,
       user_id: ctx.user_id
     })
 
-    {:failed, :setup_required}
+    unrun(turn, {:failed, :setup_required}, finish)
   end
+
+  # A turn that never ran answers why, whoever wrote its end: only an end
+  # that could not be written is answered as one.
+  defp unrun(_turn, result, {:error, reason}) when reason in @taken, do: result
+  defp unrun(turn, result, finish), do: finished(turn, "failed", result, finish)
 
   @doc """
   Continue a turn on this process: `:resume` a paused turn (the root is
@@ -307,7 +333,7 @@ defmodule Aqua.Loop do
     mode = Keyword.get(opts, :mode, :resume)
     turn_id = Keyword.fetch!(opts, :turn_id)
 
-    hold(turn_id, fn ->
+    hold(ctx, turn_id, fn ->
       with {:ok, turn} <- Tape.turn(ctx, turn_id),
            {:ok, claim, turn} <- reclaim(ctx, turn, mode),
            {:ok, spec} <- rebuilt(ctx, turn) do
@@ -366,15 +392,19 @@ defmodule Aqua.Loop do
   end
 
   # The hold is let go before the result is returned, so the process that
-  # awaits this loop can start the turn's next loop at once.
-  defp hold(turn_id, fun) do
+  # awaits this loop can start the turn's next loop at once. A program
+  # lives while a loop holds its turn: what a dead loop's attendant left is
+  # closed before this one starts, and what this one held before it returns.
+  defp hold(%Context{athanor_id: athanor_id}, turn_id, fun) do
     key = {:turn, turn_id}
 
     case Registry.register(@holders, key, nil) do
       {:ok, _} ->
         try do
+          :ok = Aqua.Program.close(athanor_id, turn_id)
           fun.()
         after
+          :ok = Aqua.Program.close(athanor_id, turn_id)
           Registry.unregister(@holders, key)
         end
 
@@ -385,6 +415,7 @@ defmodule Aqua.Loop do
 
   @doc """
   Abort a turn from outside its process: the fence of the turn is raised;
+  a program's session is closed, so that it is written nothing more;
   then `stop` is called, with which the caller stops the turn's process if
   one still runs, and with it every worker under it
   (`Aqua.Loop.Worker`); then the dispatched steps of the turn are
@@ -408,7 +439,7 @@ defmodule Aqua.Loop do
 
     with :ok <- held(),
          {:ok, superseded} <- Tape.supersede(guest, turn),
-         :ok <- close_program(ctx, turn),
+         :ok <- Aqua.Program.close(ctx.athanor_id, turn.id),
          :ok <- stop_aborted(stop, holder),
          :ok <- held(),
          :ok <- settle_aborted(ctx, superseded, reason),
@@ -429,7 +460,7 @@ defmodule Aqua.Loop do
   @spec abort_ended(Context.t(), String.t(), [map()], (-> term())) :: :ok | {:error, term()}
   def abort_ended(%Context{} = ctx, turn_id, steps, stop \\ fn -> :ok end)
       when is_binary(turn_id) and is_list(steps) and is_function(stop, 0) do
-    with :ok <- close_program_of(ctx, turn_id),
+    with :ok <- Aqua.Program.close(ctx.athanor_id, turn_id),
          :ok <- stop_aborted(stop, holder(turn_id)) do
       Enum.reduce(steps, :ok, fn step, result ->
         case cancel_dispatched(ctx, %{id: turn_id}, step) do
@@ -437,20 +468,6 @@ defmodule Aqua.Loop do
           error -> if result == :ok, do: error, else: result
         end
       end)
-    end
-  end
-
-  # A program brain's session ends before anything of its turn stops, so
-  # it is written nothing after the fence moved: Stop closes the session.
-  defp close_program(%Context{} = ctx, %{program: row} = turn) when is_binary(row),
-    do: Aqua.Program.close(ctx.athanor_id, turn.thread_id, turn.agent)
-
-  defp close_program(_ctx, _turn), do: :ok
-
-  defp close_program_of(ctx, turn_id) do
-    case Tape.turn(Context.enter_guest(ctx), turn_id) do
-      {:ok, turn} -> close_program(ctx, turn)
-      {:error, _gone} -> :ok
     end
   end
 
@@ -662,6 +679,7 @@ defmodule Aqua.Loop do
   defp conclude(%State{} = state, {result, ended}) do
     case result do
       {:paused, _} ->
+        unwatch(ended)
         result
 
       _ ->
@@ -683,8 +701,8 @@ defmodule Aqua.Loop do
             conclude(state, loop(ended))
 
           finish ->
-            final = finished(ended, status, result, finish)
-            release_program(ended, status)
+            final = finished(ended.turn, status, result, finish)
+            unwatch(ended)
             release(ended)
             final
         end
@@ -710,22 +728,26 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp finished(ended, status, result, finish) do
+  defp finished(turn, status, result, finish) do
     case finish do
       {:ok, _} ->
         result
 
+      # A moved fence wins: the loop is cancelled.
+      {:error, reason} when reason in @taken ->
+        :cancelled
+
       other ->
         # Saying "completed" while the row still says "running" puts the
         # runtime and the rows in disagreement, and the runner would take
-        # the next message believing this one had landed. The row is left
-        # for recovery, which is what owns a turn nobody finished.
+        # the next message believing this one had landed. The runner
+        # settles it as a loop's that died (`Aqua.Runner`).
         Logger.error(
-          "[Aqua.Loop] turn #{ended.turn.id} could not be finished as #{status}: " <>
+          "[Aqua.Loop] turn #{turn.id} could not be finished as #{status}: " <>
             "#{inspect(other)}"
         )
 
-        {:uncertain, "the turn's terminal write did not land"}
+        {:unwritten, result}
     end
   end
 
@@ -734,19 +756,9 @@ defmodule Aqua.Loop do
   defp terminal({:failed, reason}), do: {"failed", describe(reason)}
   defp terminal({:uncertain, reason}), do: {"uncertain", describe(reason)}
 
-  # A program turn that completed leaves its session for the next turn of
-  # the thread; one that ended otherwise closes it, and the next resumes.
-  defp release_program(%State{program: %{}, turn: turn} = state, status) do
-    Aqua.Program.release(
-      ctx(state).athanor_id,
-      turn.thread_id,
-      turn.agent,
-      turn.id,
-      status != "completed"
-    )
-  end
-
-  defp release_program(_state, _status), do: :ok
+  # The loop waits on its attendant no more, whose end is now its own close.
+  defp unwatch(%State{attendant: {_pid, monitor}}), do: Process.demonitor(monitor, [:flush])
+  defp unwatch(%State{}), do: :ok
 
   defp release(%State{claim: %{execution_id: execution_id} = claim} = state) do
     Opus.release_turn_root(ctx(state), execution_id, claim: claim)
@@ -798,8 +810,8 @@ defmodule Aqua.Loop do
 
   # A program turn's round: once its start is admitted and attended, the
   # turn waits on the attendant, which proposes the program's asks (the
-  # next page round decides and runs them), says when the native turn
-  # ended (the turn may complete) and when its job ended.
+  # next page round decides and runs them) and says how its work ended
+  # (`t:Aqua.Program.finish/0`).
   # A start that failed says why in the thread's own line, as a failure
   # after the hand-over does: the start's result is a step's, which the
   # thread never draws as a post.
@@ -809,50 +821,64 @@ defmodule Aqua.Loop do
         attended(state, start)
 
       {:ok, %{dispatch_state: "closed", error: error}} when is_binary(error) ->
-        start_failed(state, error)
+        program_failed(state, error)
 
-      _unstarted ->
-        start_failed(state, "#{program_title(state)} did not start.")
+      {:ok, _unstarted} ->
+        program_ended(state, harness(state, {:start_failed, :unstarted}))
+
+      {:error, _unread} ->
+        program_ended(state, harness(state, :write_failed))
     end
   end
 
-  defp start_failed(state, sentence) do
-    _ = system_row(state, sentence)
-    {:halt, {:failed, sentence}, state}
+  defp harness(%State{} = state, kind), do: {:harness, program_title(state), kind}
+
+  defp program_ended(%State{} = state, reason),
+    do: program_failed(state, Prima.Refusal.message(reason))
+
+  # A moved fence wins: the sentence's own write presents the loop's, and
+  # one refused so leaves the turn to whoever took it, this loop cancelled.
+  defp program_failed(%State{} = state, sentence) do
+    case system_row(state, sentence) do
+      {:error, reason} when reason in @taken -> {:halt, :cancelled, state}
+      _written_or_unkept -> {:halt, {:failed, sentence}, state}
+    end
   end
 
-  # The attendant is watched while the turn waits on it: one that ends
-  # ends the turn's wait, as the program's job is over with it, and says
-  # so unless it was closed on purpose. Meanwhile what it tells of the
-  # program's own work is taken (`native/2`), as it is while a call runs.
+  # The attendant is watched from the turn's first wait on it to the
+  # loop's return, through the calls between: one that ends, whenever it
+  # does, ends the turn's wait and is never replaced, as the program's job
+  # is over with it. Meanwhile what it tells of the program's own work is
+  # taken (`native/2`), as it is while a call runs.
+  defp attended(%State{attendant: {pid, _monitor}} = state, _start) do
+    :ok = Aqua.Program.watch(pid, state.turn)
+    attending(state)
+  end
+
   defp attended(%State{} = state, start) do
-    case Aqua.Program.watch(program_work(state, start.id), self()) do
-      {:ok, attendant} -> attending(state, Process.monitor(attendant))
-      {:error, sentence} -> {:halt, {:failed, sentence}, state}
+    case Aqua.Program.attendant(program_work(state, start.id), self()) do
+      {:ok, pid} -> attended(%{state | attendant: {pid, Process.monitor(pid)}}, start)
+      {:error, reason} -> program_ended(state, reason)
     end
   end
 
-  defp attending(%State{} = state, monitor) do
+  defp attending(%State{attendant: {_pid, monitor}} = state) do
     turn_id = state.turn.id
 
     receive do
       {:page_call, ^turn_id} ->
-        Process.demonitor(monitor, [:flush])
         {:continue, state}
 
       {Aqua.Program, ^turn_id, {:native, native}} ->
-        state |> native(native) |> attending(monitor)
+        state |> native(native) |> attending()
 
       # The attendant told the native turn's end first (`native/2`), which
       # settled the program's own tools.
-      {Aqua.Program, ^turn_id, :idle} ->
-        Process.demonitor(monitor, [:flush])
+      {Aqua.Program, ^turn_id, {:end, :done}} ->
         {:halt, :completed, state}
 
-      {Aqua.Program, ^turn_id, {:ended, {:failed, sentence}}} ->
-        Process.demonitor(monitor, [:flush])
-        _ = system_row(state, sentence)
-        {:halt, {:failed, sentence}, state}
+      {Aqua.Program, ^turn_id, {:end, {_refused_or_lost, reason}}} ->
+        program_ended(state, reason)
 
       # Closed on purpose: Stop closes the session before it stops the
       # turn, which says nothing more in the thread.
@@ -860,9 +886,7 @@ defmodule Aqua.Loop do
         {:halt, :cancelled, state}
 
       {:DOWN, ^monitor, :process, _pid, _reason} ->
-        sentence = "#{program_title(state)} stopped before it finished."
-        _ = system_row(state, sentence)
-        {:halt, {:failed, sentence}, state}
+        program_ended(state, harness(state, :ended))
     end
   end
 
@@ -875,9 +899,10 @@ defmodule Aqua.Loop do
     end
   end
 
-  # What the attendant needs of the turn: its contexts, the turn as its
-  # row stands, the admitting step, the row, the thread's session
-  # generation as stored now, and what the work runs with.
+  # What the attendant needs of the turn: its contexts, the turn as this
+  # loop holds it, whose fence is the one it acquired, the admitting step,
+  # the row, the thread's session generation as stored now and what the
+  # work runs with.
   defp program_work(%State{spec: spec, program: program} = state, start_id) do
     generation =
       case Tape.brain(spec.guest, state.turn.thread_id) do
@@ -885,16 +910,10 @@ defmodule Aqua.Loop do
         {:error, _} -> state.generation
       end
 
-    turn =
-      case Tape.turn(spec.guest, state.turn.id) do
-        {:ok, turn} -> turn
-        {:error, _} -> state.turn
-      end
-
     %{
       ctx: spec.ctx,
       guest: spec.guest,
-      turn: turn,
+      turn: state.turn,
       start: start_id,
       program: program,
       agent: state.turn.agent,
@@ -902,6 +921,7 @@ defmodule Aqua.Loop do
       generation: generation,
       config: program_config(spec),
       system: spec.system,
+      facts: spec.facts,
       tools: spec.tools
     }
   end
@@ -911,9 +931,9 @@ defmodule Aqua.Loop do
 
   # The whole configuration the harness runs with: the agent's model and
   # every option its file and the turn name, none dropped, so a narrowing
-  # option reaches the holder, which compares the whole of it at each
-  # `work` and refuses, before writing, one the wire does not take
-  # (`Aqua.Program`). An absent member is the harness's default.
+  # option reaches the turn's start, which refuses, before writing, one the
+  # wire does not take (`Aqua.Program`). An absent member is the harness's
+  # default.
   defp program_config(spec) do
     spec.brain_options
     |> Map.put("model", spec.model)
@@ -1763,7 +1783,7 @@ defmodule Aqua.Loop do
       case Aqua.Program.attend(program_work(state, step.id), holder(state.turn.id) || self()) do
         {:ok, :started} -> {:ok, "#{program_title(state)} started"}
         {:ok, :went_on} -> {:ok, "#{program_title(state)} went on"}
-        {:error, sentence} -> {:error, sentence}
+        {:error, reason} -> {:error, Prima.Refusal.message(reason)}
       end
     else
       dispatch_call(state, step, call)
@@ -2300,8 +2320,8 @@ defmodule Aqua.Loop do
     call = Binding.resolve("program", args, tool_call_id: "start")
     recorded = recorded("program", call)
 
-    # Replay safe: attending again reattaches to the held session, or
-    # opens one, and sets the work and the configuration it runs with; it
+    # Replay safe: attending again opens a session that resumes the
+    # thread's, and sets the work and the configuration it runs with; it
     # never replays an input or a tool's effect, and each write is checked
     # again against the admission (`Opus.Brain`). Before a session's
     # identity is committed, another start may make a fresh session.
@@ -2326,13 +2346,51 @@ defmodule Aqua.Loop do
       }
     }
 
-    with :ok <- join_startup(state),
+    with {:ok, state} <- moved_over(state),
+         :ok <- join_startup(state),
          {:ok, _step} <- Tape.propose_call(guest(state), state.turn, proposal) do
       {:ok, %{state | model?: false}}
     end
   end
 
   defp open_program(%State{} = state), do: {:ok, state}
+
+  # A turn whose program is another row than the one the thread's native
+  # session is stored with, its member's program moved since: the session
+  # is forgotten, the stored row's transcript owed its removal first
+  # (`Arca.TurnStorage.forget_session/3`), and the program starts over
+  # from the thread's posts, which the thread is told.
+  defp moved_over(%State{program: %{row: row}} = state) do
+    guest = guest(state)
+
+    with {:ok, kept} <- Tape.brain(guest, state.turn.thread_id),
+         %{session: session, generation: generation, progress: %{"row" => stored}}
+         when is_binary(session) and stored != row <- kept,
+         {:ok, raised} <- Tape.forget_session(guest, state.turn, generation) do
+      line =
+        "#{program_title(state)} runs on another program now, so it starts over from the " <>
+          "thread's posts."
+
+      case system_row(state, line) do
+        {:error, reason} when reason in @taken -> {:error, :superseded}
+        _written_or_unkept -> {:ok, %{state | generation: raised}}
+      end
+    else
+      {:error, :superseded} = superseded -> superseded
+      {:error, _unread} -> unstarted(state, {:start_failed, :session})
+      _same_row_or_no_session -> {:ok, state}
+    end
+  end
+
+  # A turn that ends before its program is started says why.
+  defp unstarted(%State{} = state, kind) do
+    sentence = Prima.Refusal.message(harness(state, kind))
+
+    case system_row(state, sentence) do
+      {:error, reason} when reason in @taken -> {:error, :superseded}
+      _written_or_unkept -> {:error, sentence}
+    end
+  end
 
   # What the program is given before its first answer joins the turn's
   # read threads before its start is decided, as a request's rows join
@@ -2349,14 +2407,10 @@ defmodule Aqua.Loop do
     with {:ok, posts} <- Tape.brain_posts(guest, turn),
          {:ok, context} <- startup_context(state, posts),
          {:ok, %{rows: handed}} <- Reader.join(guest, turn, posts ++ context) do
-      if Enum.any?(handed, &(&1.id == turn.message_id)), do: :ok, else: post_gone(state)
+      if Enum.any?(handed, &(&1.id == turn.message_id)),
+        do: :ok,
+        else: unstarted(state, {:post_refused, :gone})
     end
-  end
-
-  defp post_gone(%State{} = state) do
-    sentence = Aqua.Program.post_gone(program_title(state))
-    _ = system_row(state, sentence)
-    {:error, sentence}
   end
 
   defp startup_context(%State{spec: spec} = state, [first | _]) do
@@ -2405,9 +2459,20 @@ defmodule Aqua.Loop do
   defp page_round(%State{} = state) do
     drain_notices(state.turn.id)
 
-    case page_items(state) do
-      [] -> {:continue, state}
-      items -> dispatch(state, items)
+    case proposed_calls(state) do
+      {:ok, []} ->
+        {:continue, state}
+
+      {:ok, items} ->
+        dispatch(state, items)
+
+      # A program waits on the answer to what it asked, so a failed read
+      # of that is never read as nothing asked.
+      {:error, _unread} when state.program != nil ->
+        program_ended(state, harness(state, :write_failed))
+
+      {:error, _unread} ->
+        {:continue, state}
     end
   end
 
@@ -2420,15 +2485,21 @@ defmodule Aqua.Loop do
   end
 
   # The page's and the program brain's calls still proposed in the turn.
-  defp page_items(%State{} = state) do
-    case Tape.steps(guest(state), state.turn) do
-      {:ok, steps} ->
-        for %{purpose: purpose, dispatch_state: "proposed"} = step <- steps,
-            purpose in ["page", "brain"],
-            do: %{step: step, call: recall(state, step)}
+  defp proposed_calls(%State{} = state) do
+    with {:ok, steps} <- Tape.steps(guest(state), state.turn) do
+      {:ok,
+       for(
+         %{purpose: purpose, dispatch_state: "proposed"} = step <- steps,
+         purpose in ["page", "brain"],
+         do: %{step: step, call: recall(state, step)}
+       )}
+    end
+  end
 
-      _unread ->
-        []
+  defp page_items(%State{} = state) do
+    case proposed_calls(state) do
+      {:ok, items} -> items
+      {:error, _unread} -> []
     end
   end
 
@@ -3120,16 +3191,8 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp system_row(%State{} = state, text) do
-    Tape.append(guest(state), state.turn.thread_id, %{
-      author: Prima.Author.system(),
-      sent_by: state.turn.agent,
-      kind: "system",
-      content: text,
-      turn_id: state.turn.id,
-      execution_id: state.turn.root_execution_id
-    })
-  end
+  defp system_row(%State{} = state, text),
+    do: Tape.append_line(guest(state), state.turn, text)
 
   defp announce(%State{} = state, kind, data),
     do: Tape.announce(guest(state), state.turn.thread_id, kind, data)

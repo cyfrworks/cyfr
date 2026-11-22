@@ -19,7 +19,8 @@ import (
 
 // The software holder's Argon2id parameters (version 1.3). They are fixed:
 // Open refuses a record that names others, so editing the file cannot make a
-// guess cheaper.
+// guess cheaper, and nothing a released cyfr can do reaches any other. A
+// test binary alone can derive at a lower cost (cheap.go).
 const (
 	argonTime    = 3
 	argonMemory  = 64 * 1024 // KiB
@@ -63,6 +64,18 @@ type SoftwareBlob struct {
 	KeyLen     uint32 `json:"key_len"`
 }
 
+// argonCost is what of a derivation a test binary may lower.
+type argonCost struct{ time, memoryKiB uint32 }
+
+// derivationCost is the fixed cost, or in a test binary the one it chose.
+// Each seal and each open reads it once.
+func derivationCost() argonCost {
+	if c := testCost.Load(); c != nil {
+		return *c
+	}
+	return argonCost{time: argonTime, memoryKiB: argonMemory}
+}
+
 // aad is the associated data AES-GCM authenticates with the seed: the record
 // version as a 4-byte big-endian integer, then the 32-byte public key. A
 // record given another public key or relabelled with another version no
@@ -74,15 +87,16 @@ func (r *Record) aad() []byte {
 
 // sealSoftware encrypts seed under passphrase with fresh salt and nonce.
 func sealSoftware(seed, passphrase, aad []byte) (*SoftwareBlob, error) {
+	cost := derivationCost()
 	b := &SoftwareBlob{Salt: make([]byte, saltSize), Nonce: make([]byte, nonceSize),
-		Time: argonTime, MemoryKiB: argonMemory, Threads: argonThreads, KeyLen: argonKeyLen}
+		Time: cost.time, MemoryKiB: cost.memoryKiB, Threads: argonThreads, KeyLen: argonKeyLen}
 	if _, err := rand.Read(b.Salt); err != nil {
 		return nil, err
 	}
 	if _, err := rand.Read(b.Nonce); err != nil {
 		return nil, err
 	}
-	aead, err := passphraseAEAD(passphrase, b.Salt)
+	aead, err := passphraseAEAD(passphrase, b.Salt, cost)
 	if err != nil {
 		return nil, err
 	}
@@ -92,14 +106,15 @@ func sealSoftware(seed, passphrase, aad []byte) (*SoftwareBlob, error) {
 
 // openSoftware decrypts b's seed with passphrase. The caller erases it.
 func openSoftware(b *SoftwareBlob, passphrase, aad []byte) ([]byte, error) {
-	if b.Time != argonTime || b.MemoryKiB != argonMemory || b.Threads != argonThreads || b.KeyLen != argonKeyLen {
+	cost := derivationCost()
+	if b.Time != cost.time || b.MemoryKiB != cost.memoryKiB || b.Threads != argonThreads || b.KeyLen != argonKeyLen {
 		return nil, fmt.Errorf("the key record's Argon2id parameters (time %d, memory %d KiB, threads %d, key %d bytes) are not CYFR's",
 			b.Time, b.MemoryKiB, b.Threads, b.KeyLen)
 	}
 	if len(b.Salt) != saltSize || len(b.Nonce) != nonceSize {
 		return nil, errors.New("the key record's salt or nonce has the wrong length")
 	}
-	aead, err := passphraseAEAD(passphrase, b.Salt)
+	aead, err := passphraseAEAD(passphrase, b.Salt, cost)
 	if err != nil {
 		return nil, err
 	}
@@ -113,8 +128,8 @@ func openSoftware(b *SoftwareBlob, passphrase, aad []byte) ([]byte, error) {
 // passphraseAEAD derives the AES-256-GCM key from passphrase and salt. The
 // derived key is erased here; the AES key schedule the cipher expands from it
 // lives inside crypto/aes, beyond this package's reach.
-func passphraseAEAD(passphrase, salt []byte) (cipher.AEAD, error) {
-	key := argon2.IDKey(passphrase, salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+func passphraseAEAD(passphrase, salt []byte, cost argonCost) (cipher.AEAD, error) {
+	key := argon2.IDKey(passphrase, salt, cost.time, cost.memoryKiB, argonThreads, argonKeyLen)
 	defer clear(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {

@@ -20,7 +20,8 @@
 // the visible Lock, five minutes without local input, a suspend, the
 // browser's exit or the shell's own, submits those proofs, closes the
 // channel (which ends every session it holds at the CYFR), erases the key
-// and starts the browser again on the lock page. A shell that dies without
+// and starts the browser again on the lock page. It waits for no work in
+// flight: it ends that work's generation first (generation). A shell that dies without
 // locking leaves sessions that expire within 60 seconds at the CYFR, as
 // nothing renews them.
 package shell
@@ -43,6 +44,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cyfr/codex/internal/account"
@@ -54,8 +56,7 @@ import (
 type Config struct {
 	// Address is the CYFR's origin, as its certificates name it.
 	Address string
-	// Client reaches the CYFR, the directory and the registry (through the
-	// tailnet's proxy when the CYFR is reached through it).
+	// Client reaches the CYFR, the directory and the registry.
 	Client *http.Client
 	// Record is the device key's record; an account being made is kept
 	// beside it until it is done.
@@ -68,18 +69,18 @@ type Config struct {
 	// DataDir is the CYFR's actual data directory, whose volume the
 	// detection reads.
 	DataDir string
-	// Tokens reads the setup token a first hello brings, when there is
-	// one, so it never travels in an argument.
-	Tokens func() (setup string)
-	// SetupOpen is set for a device whose .env holds the setup token
-	// whether or not anyone is set up (a box's screen), and says whether
-	// no one is set up on this CYFR yet. Such a device's first hello
-	// brings the token only then, whether it made its account here or was
-	// added to one, since the installation's first person binds it
-	// whoever they are; on a CYFR someone is set up on it brings none, and
-	// the CYFR's door decides. Unset, a first hello brings whatever token
-	// Tokens reads.
-	SetupOpen func(context.Context) bool
+	// SetupToken answers the setup token a first hello brings, or "", so
+	// it never travels in an argument, and the transport that hello goes
+	// by, bound to what the token was read of (nil, Client's own). A
+	// device whose .env holds the token whether or not anyone is set up (a
+	// box's screen, the CYFR app at a CYFR on its own computer) answers it
+	// from one reading, only while that reading says no one is set up and
+	// names this shell's Address.
+	// Its first hello then brings it whether the device made its account
+	// here or was added to one, since the installation's first person
+	// binds it whoever they are; otherwise it brings none, and the CYFR's
+	// door decides. Unset, a first hello brings none.
+	SetupToken func(context.Context) (token string, through http.RoundTripper)
 	// Restart starts the browser again on the lock page, after a lock.
 	Restart func()
 	// Unwatched is set for a device that locks itself (a box's screen): why
@@ -151,9 +152,10 @@ func DeviceFolder() (string, error) {
 	return filepath.Join(home, ".cyfr", "device"), nil
 }
 
-// Selection is a remote CYFR being selected over this account's client
-// record. It reads as that CYFR's record, with the client and certificate
-// held there when the record already selects it. A working client and its
+// Selection is a CYFR, a remote one or a local project's, being selected
+// over this account's client record. It reads as that CYFR's record, with
+// the client and certificate held there when the record already selects
+// it. A working client and its
 // certificate are replaced only by an admission that succeeded: until the
 // selected CYFR admits this device, the record changes only where it
 // holds no client and no local project (Commit), and every other change the shell makes
@@ -185,6 +187,22 @@ func (f ClientFile) Select(home, directory string, approved bool) (*Selection, e
 		rec.ClientID, rec.Certificate = c.ClientID, c.Certificate
 	}
 	return &Selection{file: f, rec: rec, approved: approved, owns: owns}, nil
+}
+
+// SelectLocal begins selecting the CYFR in project, a local project's
+// absolute directory. Its account service is that project's own setting,
+// so the record keeps no approval of one; it writes nothing.
+func (f ClientFile) SelectLocal(project string) (*Selection, error) {
+	c, err := f.Load()
+	if err != nil {
+		return nil, err
+	}
+	rec := ClientRecord{Project: project}
+	owns := c.Project == project && c.Home == ""
+	if owns {
+		rec.ClientID, rec.Certificate = c.ClientID, c.Certificate
+	}
+	return &Selection{file: f, rec: rec, approved: true, owns: owns}, nil
 }
 
 // Load is the selected CYFR's record.
@@ -401,10 +419,25 @@ type making struct {
 // Shell is the device's state: its key record, its client at this CYFR,
 // at most one key open and its channel, the lock proofs of the sessions it
 // holds, an account being made, and what the next page says.
+//
+// One action at a time holds mu, through whatever it asks of Docker, the
+// CYFR and the account service. So neither of what never waits for one
+// takes it as an action does: a page that shows only what the shell knows
+// is drawn from shown, what that was as mu was last released, and a lock
+// ends the generation every action in flight began in (generation) before
+// it takes mu.
 type Shell struct {
 	cfg Config
 
-	mu   sync.Mutex
+	mu    shellLock
+	shown atomic.Pointer[shownState]
+	// open is whether the channel stands, read without mu: it ends as the
+	// lock that closes it does.
+	open atomic.Bool
+
+	genMu sync.Mutex
+	gen   *generation
+
 	rec  *holder.Record
 	here ClientRecord
 	// key is the open key: unlocked while ch stands, or held from a setup
@@ -431,6 +464,154 @@ type Shell struct {
 	// request that carries it (holds).
 	proof []byte
 }
+
+// shownState is what a page read draws without mu: the view as a plain
+// read is shown it, so no secret, and what was read of the account
+// service's configuration.
+type shownState struct {
+	view       View
+	terms      *account.Policy
+	configured bool
+}
+
+// A generation is the time between two locks. An action belongs to the one
+// it began in, and changes nothing once that one ended: not the state, the
+// notice, the view, the channel, a ticket or a session. It is compared
+// under mu, as the action takes the shell and again after each wait before
+// what the wait changes (current). What ended the action's own context,
+// the person, its deadline or the lock, decides nothing there.
+//
+// A lock ends the generation before it takes the shell, and the next
+// begins once the last lock waiting has locked, so an action begun
+// meanwhile begins in one that ended.
+type generation struct {
+	ended context.Context
+	end   context.CancelFunc
+	// locks is under Shell.genMu: the locks that ended it and have not
+	// locked yet.
+	locks int
+}
+
+func newGeneration() *generation {
+	g := &generation{}
+	g.ended, g.end = context.WithCancel(context.Background())
+	return g
+}
+
+func (g *generation) live() bool { return g.ended.Err() == nil }
+
+// underway is one action: the generation it began in, and what was seen of
+// its waits for the shell. took is that it took the shell for its work,
+// which clearing the last notice is not (Begin): from then on its deadline
+// is its work's failure, told as that, and a free shell is still its to
+// say so. outwaited is that its time ran out as it waited for a shell
+// another held: it takes nothing more, and is told of that wait where it
+// never took the shell (waitedOut).
+type underway struct {
+	g               *generation
+	took, outwaited bool
+}
+
+type underwayKey struct{}
+
+func underwayOf(ctx context.Context) *underway {
+	a, _ := ctx.Value(underwayKey{}).(*underway)
+	return a
+}
+
+func generationOf(ctx context.Context) *generation {
+	if a := underwayOf(ctx); a != nil {
+		return a.g
+	}
+	return nil
+}
+
+// waitedOut is whether ctx's action's time ran out waiting for the shell,
+// its work not begun: the one failure told as a busy device.
+func waitedOut(ctx context.Context) bool {
+	a := underwayOf(ctx)
+	return a != nil && a.outwaited && !a.took
+}
+
+// stale is whether ctx's action began before a lock.
+func stale(ctx context.Context) bool {
+	g := generationOf(ctx)
+	return g != nil && !g.live()
+}
+
+// shellLock is the shell's one lock. An action's wait for it ends on that
+// action's own context and on the end of its generation (lockFor); a lock
+// alone waits for nothing but it (Lock). It publishes what the shell knows
+// each time it is released.
+type shellLock struct {
+	held chan struct{}
+	// by is the generation of the action holding it, nil for a lock.
+	by        *generation
+	releasing func()
+	// waiting is called as an action finds it held, for a test to see.
+	waiting func()
+}
+
+func (l *shellLock) Lock() { l.held <- struct{}{} }
+
+// errWaitedOut is a wait for the held shell that the action's deadline
+// ended: no other failure says that this device was busy.
+var errWaitedOut = errors.New("waited for this device past the action's time")
+
+// lockFor takes the shell in g. It waits only where the shell is held,
+// and late is an action that took it before: with its time over, that one
+// still takes a free shell, which is no wait.
+func (l *shellLock) lockFor(ctx context.Context, g *generation, late bool) error {
+	select {
+	case l.held <- struct{}{}:
+	default:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		l.waiting()
+		select {
+		case l.held <- struct{}{}:
+		case <-ctx.Done():
+			return waitEnded(ctx)
+		case <-g.ended.Done():
+			return errLocked
+		}
+		if ctx.Err() != nil {
+			<-l.held
+			return waitEnded(ctx)
+		}
+	}
+	if !g.live() {
+		<-l.held
+		return errLocked
+	}
+	if err := ctx.Err(); err != nil && !late {
+		<-l.held
+		return err
+	}
+	l.by = g
+	return nil
+}
+
+// waitEnded is the failure of a wait that ctx's end ended.
+func waitEnded(ctx context.Context) error {
+	if err := ctx.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return errWaitedOut
+}
+
+func (l *shellLock) Unlock() {
+	l.releasing()
+	l.by = nil
+	<-l.held
+}
+
+// A test stands in for these, to end a generation as either runs.
+var (
+	loadRecord = holder.Load
+	openKey    = (*holder.Record).Open
+)
 
 // New is a shell over cfg's key record, locked.
 func New(cfg Config) (*Shell, error) {
@@ -464,8 +645,8 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Unwatched == nil {
 		cfg.Unwatched = func() string { return "" }
 	}
-	if cfg.Tokens == nil {
-		cfg.Tokens = func() string { return "" }
+	if cfg.SetupToken == nil {
+		cfg.SetupToken = func(context.Context) (string, http.RoundTripper) { return "", nil }
 	}
 	if cfg.Directory == "" {
 		cfg.Directory = account.DefaultDirectory
@@ -473,7 +654,8 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Clients == nil {
 		cfg.Clients = ClientFile(filepath.Join(filepath.Dir(cfg.Record), "client.json"))
 	}
-	s := &Shell{cfg: cfg}
+	s := &Shell{cfg: cfg, gen: newGeneration()}
+	s.mu.held, s.mu.releasing, s.mu.waiting = make(chan struct{}, 1), s.publish, func() {}
 	rec, err := holder.Load(cfg.Record)
 	switch {
 	case err == nil:
@@ -487,6 +669,7 @@ func New(cfg Config) (*Shell, error) {
 	if s.unfinished, err = s.readAttempt(); err != nil {
 		return nil, fmt.Errorf("the account this device was making cannot be read (%v)", err)
 	}
+	s.publish()
 	return s, nil
 }
 
@@ -517,8 +700,11 @@ func (s *Shell) refresh() {
 	if s.ch != nil {
 		return
 	}
-	rec, err := holder.Load(s.cfg.Record)
+	rec, err := loadRecord(s.cfg.Record)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if !s.current() {
 		return
 	}
 	if rec == nil || s.rec == nil || !bytes.Equal(rec.PublicKey, s.rec.PublicKey) {
@@ -556,6 +742,9 @@ var errOtherAttempt = errors.New("another account is being made with this key")
 // attempt is kept, so two first uses never make two accounts for one key,
 // and every later save over its own.
 func (s *Shell) saveAttempt(a account.Attempt) error {
+	if !s.current() {
+		return errLocked
+	}
 	if s.unfinished == nil || s.unfinished.Identifier != a.Identifier {
 		err := createJSON(s.attemptPath(), a)
 		if errors.Is(err, fs.ErrExist) {
@@ -678,8 +867,11 @@ type View struct {
 // chip draws its passphrase at the first View; the pages read pageView,
 // which draws nothing.
 func (s *Shell) View() View {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	_, give, ok := s.take(context.Background())
+	if !ok {
+		return s.shownView()
+	}
+	defer give()
 	if s.rec == nil && !s.cfg.Chip() {
 		s.newPassphrase()
 	}
@@ -688,55 +880,84 @@ func (s *Shell) View() View {
 
 // pageView is View as the pages draw it for a request carrying proof: the
 // recovery code only when proof is the current one, compared under the
-// same lock that reads the code.
-func (s *Shell) pageView(proof []byte) View {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// same lock that reads the code. It is false where the action could not
+// take the shell.
+func (s *Shell) pageView(ctx context.Context, proof []byte) (View, bool) {
+	_, give, ok := s.take(ctx)
+	if !ok {
+		return View{}, false
+	}
+	defer give()
 	v := s.view()
 	if !s.holds(proof) {
 		v.RecoveryCode = ""
 	}
 	v.Passphrase, v.Confirm, v.Passkey = "", nil, nil
-	return v
+	return v, true
+}
+
+// shownView is pageView for a plain read, waiting for no action in
+// flight: what the shell knew as it was last released.
+func (s *Shell) shownView() View {
+	return s.onThisMachine(s.shown.Load().view)
+}
+
+// publish keeps what a plain read is shown. The caller holds the shell.
+func (s *Shell) publish() {
+	v := s.known()
+	v.RecoveryCode, v.Passphrase, v.Confirm, v.Passkey = "", "", nil, nil
+	s.shown.Store(&shownState{view: v, terms: s.terms, configured: s.configured})
 }
 
 // confirmView is pageView for the request that names ref: a drawn
 // confirmation's preview goes only to a request naming its reference, the
 // one the CYFR handed the page that asked, never to a plain read.
-func (s *Shell) confirmView(ref string) View {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Shell) confirmView(ctx context.Context, ref string) (View, bool) {
+	_, give, ok := s.take(ctx)
+	if !ok {
+		return View{}, false
+	}
+	defer give()
 	v := s.view()
 	v.RecoveryCode, v.Passphrase, v.Confirm, v.Passkey = "", "", nil, nil
 	if s.confirm != nil && ref != "" && s.confirm.Ref == ref {
 		v.Confirm = s.confirm
 	}
-	return v
+	return v, true
 }
 
 // passkeyView is pageView for the request that names ref: a drawn
 // passkey request and its code go only to a request naming its reference,
 // the one Prism opened the window with, never to a plain read.
-func (s *Shell) passkeyView(ref string) View {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Shell) passkeyView(ctx context.Context, ref string) (View, bool) {
+	_, give, ok := s.take(ctx)
+	if !ok {
+		return View{}, false
+	}
+	defer give()
 	v := s.view()
 	v.RecoveryCode, v.Passphrase, v.Confirm, v.Passkey = "", "", nil, nil
 	if s.passkey != nil && ref != "" && s.passkey.Ref == ref {
 		v.Page, v.Passkey = PagePasskey, s.passkey
 	}
-	return v
+	return v, true
 }
 
 // drawPassphrase draws a new passphrase for a page's setup on a machine
 // without a usable chip, replacing the one drawn before, and answers it
 // for that request's answer alone; "" where the setup takes a PIN, or
 // there is no setup.
-func (s *Shell) drawPassphrase() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Shell) drawPassphrase(ctx context.Context) string {
+	_, give, ok := s.take(ctx)
+	if !ok {
+		return ""
+	}
+	defer give()
 	s.refresh()
 	if s.rec != nil || (s.cfg.Chip() && s.passphrase == "") {
+		return ""
+	}
+	if !s.current() {
 		return ""
 	}
 	s.passphrase = ""
@@ -763,8 +984,17 @@ func (s *Shell) holds(proof []byte) bool {
 	return err == nil && subtle.ConstantTimeCompare(got[:n], s.proof) == 1
 }
 
-func (s *Shell) view() View {
-	v := View{Notice: s.notice, Storage: s.cfg.Detect(s.cfg.DataDir), Chip: s.cfg.Chip()}
+func (s *Shell) view() View { return s.onThisMachine(s.known()) }
+
+// onThisMachine adds to v what is read of this machine as a page is drawn.
+func (s *Shell) onThisMachine(v View) View {
+	v.Storage, v.Chip = s.cfg.Detect(s.cfg.DataDir), s.cfg.Chip()
+	return v
+}
+
+// known is the page the shell's state gives. The caller holds the shell.
+func (s *Shell) known() View {
+	v := View{Notice: s.notice}
 	if s.terms != nil {
 		v.Terms = s.terms.URL
 	}
@@ -814,15 +1044,37 @@ func (s *Shell) newPassphrase() string {
 	return s.passphrase
 }
 
-// Begin clears the last notice as an action starts.
-func (s *Shell) Begin() {
-	s.mu.Lock()
+// Begin clears the last notice as an action starts, and is whether it
+// could: not one begun before a lock, and not one whose wait for the shell
+// ran out.
+func (s *Shell) Begin(ctx context.Context) bool {
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return false
+	}
+	defer give()
 	s.notice = ""
-	s.mu.Unlock()
+	underwayOf(ctx).took = false // its work has not begun
+	return true
 }
 
-// say sets the sentence the next page shows.
-func (s *Shell) say(format string, args ...any) { s.notice = fmt.Sprintf(format, args...) }
+// say sets the sentence the next page shows, for an action whose
+// generation is current.
+func (s *Shell) say(format string, args ...any) {
+	if s.current() {
+		s.notice = fmt.Sprintf(format, args...)
+	}
+}
+
+// tell is say for what a page's answer found once its action was done.
+func (s *Shell) tell(ctx context.Context, sentence string) {
+	_, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
+	s.say("%s", sentence)
+}
 
 // sentence is what the person reads for a failure, naming this device as
 // the shell's Config does.
@@ -833,6 +1085,17 @@ func (s *Shell) sentence(err error) string { return sentence(err) }
 const CompanySignIn = "This CYFR requires company sign-in. Open its address in a browser to continue. " +
 	"The CYFR app does not support company sign-in yet."
 
+// Unbound is a Config.Client's refusal to connect where what it is bound
+// to no longer holds: nothing was sent, and the person reads Sentence.
+// Moved is the CYFR now named at another address or account service than
+// this shell's, which a shell made afresh would follow.
+type Unbound struct {
+	Sentence string
+	Moved    bool
+}
+
+func (u *Unbound) Error() string { return u.Sentence }
+
 // sentence is what the person reads for a failure of this screen.
 func sentence(err error) string {
 	var locked unwatchedError
@@ -842,7 +1105,17 @@ func sentence(err error) string {
 	var intent *IntentError
 	var dir *account.DirectoryRefusal
 	var refused *RefusedError
+	var unbound *Unbound
+	var refusing *RefusingError
 	switch {
+	case errors.As(err, &unbound):
+		return unbound.Sentence
+	case errors.As(err, &refusing):
+		unit := "seconds"
+		if refusing.Seconds == 1 {
+			unit = "second"
+		}
+		return fmt.Sprintf("CYFR is refusing attempts for the moment. Try again in %d %s.", refusing.Seconds, unit)
 	case errors.As(err, &refused):
 		return refused.Message
 	case errors.Is(err, holder.ErrWrongSecret), errors.Is(err, holder.ErrSecretShape):
@@ -901,14 +1174,17 @@ func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 // when the machine has no usable chip, given twice, and writes it before
 // anything is shown or sent, so its code, a retry and a lost answer all
 // name the same key.
-func (s *Shell) Make(secret, again []byte) { s.makeKey(secret, again) }
+func (s *Shell) Make(secret, again []byte) { s.makeKey(context.Background(), secret, again) }
 
 // makeKey is Make, answering the passphrase it drew when the chip could
 // not keep the PIN, or "".
-func (s *Shell) makeKey(secret, again []byte) (drawn string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Shell) makeKey(ctx context.Context, secret, again []byte) (drawn string) {
 	defer erase(secret, again)
+	_, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	defer s.drawnSince(s.passphrase, &drawn)
 	s.refresh()
 	if s.rec != nil {
@@ -936,13 +1212,16 @@ func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
 	var rec *holder.Record
 	if chip {
 		rec, err = holder.NewChip(secret)
-		if errors.Is(err, holder.ErrNoChip) {
-			s.newPassphrase()
-			s.say("This machine's chip cannot keep your PIN safely (%v). Use the passphrase below instead.", err)
-			return nil, err
-		}
 	} else {
 		rec, err = holder.NewSoftware(secret)
+	}
+	if !s.current() {
+		return nil, errLocked
+	}
+	if chip && errors.Is(err, holder.ErrNoChip) {
+		s.newPassphrase()
+		s.say("This machine's chip cannot keep your PIN safely (%v). Use the passphrase below instead.", err)
+		return nil, err
 	}
 	if err != nil {
 		s.say("This device could not make its key: %v.", err)
@@ -976,9 +1255,12 @@ func (s *Shell) Setup(ctx context.Context, name, accepted string, secret, again 
 // the key was not opened, and the passphrase it drew when the chip could
 // not keep the PIN, or "".
 func (s *Shell) setup(ctx context.Context, name, accepted string, secret, again []byte) (proof, drawn string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer erase(secret, again)
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	defer s.drawnSince(s.passphrase, &drawn)
 	s.refresh()
 	if s.rec != nil {
@@ -998,9 +1280,13 @@ func (s *Shell) setup(ctx context.Context, name, accepted string, secret, again 
 	if err != nil {
 		return
 	}
-	key, err := rec.Open(secret)
+	key, err := openKey(rec, secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
+		return
+	}
+	if !s.current() {
+		key.Erase()
 		return
 	}
 	s.key = key
@@ -1012,8 +1298,11 @@ func (s *Shell) setup(ctx context.Context, name, accepted string, secret, again 
 // Create makes an account whose first key is this device's, as Setup does,
 // for a key made before.
 func (s *Shell) Create(ctx context.Context, name, accepted string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	s.refresh()
 	if s.creatable() {
 		s.create(ctx, name, accepted)
@@ -1025,19 +1314,25 @@ func (s *Shell) Create(ctx context.Context, name, accepted string) {
 // to, and the key is erased again. It answers that proof, or "" when the
 // key was not opened, and then nothing is made.
 func (s *Shell) createOpened(ctx context.Context, name, accepted string, secret []byte) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer erase(secret)
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return ""
+	}
+	defer give()
 	s.refresh()
 	if !s.creatable() {
 		return ""
 	}
-	key, err := s.rec.Open(secret)
+	key, err := openKey(s.rec, secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
 		return ""
 	}
 	key.Erase()
+	if !s.current() {
+		return ""
+	}
 	proof := s.issueProof()
 	s.create(ctx, name, accepted)
 	return proof
@@ -1057,27 +1352,48 @@ func (s *Shell) create(ctx context.Context, name, accepted string) {
 // Terms is the policy a new account accepts at this device's directory, or
 // nil where its registry asks for none.
 func (s *Shell) Terms(ctx context.Context) (*account.Policy, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return nil, errNotTaken
+	}
+	defer give()
 	c, err := s.config(ctx)
 	return c.Policy, err
 }
 
 func (s *Shell) config(ctx context.Context) (account.Config, error) {
-	c, err := account.Directory{URL: s.cfg.Directory, Client: s.cfg.Client}.Config(ctx)
-	if err == nil {
+	c, err := s.directoryConfig(ctx)
+	if err == nil && s.current() {
 		s.terms, s.configured = c.Policy, true
 	}
 	return c, err
 }
 
+func (s *Shell) directoryConfig(ctx context.Context) (account.Config, error) {
+	return account.Directory{URL: s.cfg.Directory, Client: s.cfg.Client}.Config(ctx)
+}
+
 // readTerms reads the directory's configuration once, so a page that
-// makes an account shows the terms it accepts before it is submitted.
-func (s *Shell) readTerms(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// makes an account shows the terms it accepts before it is submitted. It
+// holds the shell only to keep what it read, in the generation it began
+// reading in.
+func (s *Shell) readTerms(parent context.Context) {
+	if s.shown.Load().configured {
+		return
+	}
+	ctx, done := s.act(parent)
+	defer done()
+	c, err := s.directoryConfig(ctx)
+	if err != nil {
+		return
+	}
+	_, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	if !s.configured {
-		_, _ = s.config(ctx)
+		s.terms, s.configured = c.Policy, true
 	}
 }
 
@@ -1120,6 +1436,9 @@ func (s *Shell) begin(c account.Config, name, accepted string) {
 		s.say("Your account could not be composed: %v.", err)
 		return
 	}
+	if !s.current() {
+		return
+	}
 	s.making = &making{attempt: a, key: key, code: code}
 }
 
@@ -1129,14 +1448,17 @@ func (s *Shell) begin(c account.Config, name, accepted string) {
 // typed the PIN (the held key, an account's recovery key, its claim, its
 // acceptance, its name) passes through here. Without the proof nothing is
 // done, and the page says so.
-func (s *Shell) asPage(proof []byte, act func()) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Shell) asPage(ctx context.Context, proof []byte, act func(context.Context)) {
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	if !s.holds(proof) {
 		s.say("Only the page this device's PIN or passphrase was typed on can do that. Nothing was sent.")
 		return
 	}
-	act()
+	act(ctx)
 }
 
 // saved says the recovery code is saved and submits the account (register,
@@ -1147,6 +1469,9 @@ func (s *Shell) asPage(proof []byte, act func()) {
 // page reaches it under the lock, through asPage.
 func (s *Shell) saved(ctx context.Context, accepted string) {
 	s.refresh()
+	if !s.current() {
+		return
+	}
 	m := s.making
 	if m == nil || m.taken || s.listedElsewhere(m) {
 		return
@@ -1175,8 +1500,11 @@ func (s *Shell) saved(ctx context.Context, accepted string) {
 // Resume finishes an account an earlier run began making, with its
 // recovery code, which re-derives the recovery key.
 func (s *Shell) Resume(ctx context.Context, code string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	s.resume(ctx, code)
 }
 
@@ -1185,9 +1513,12 @@ func (s *Shell) Resume(ctx context.Context, code string) {
 // issues the proof, which the account's later steps (a name, the terms)
 // take. It answers that proof, or "".
 func (s *Shell) resumeByPage(ctx context.Context, code string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.resume(ctx, code) {
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return ""
+	}
+	defer give()
+	if !s.resume(ctx, code) || !s.current() {
 		return ""
 	}
 	return s.issueProof()
@@ -1223,6 +1554,9 @@ func (s *Shell) resume(ctx context.Context, code string) bool {
 		s.say("That recovery code is not this account's.")
 		return false
 	}
+	if !s.current() {
+		return false
+	}
 	s.making = &making{attempt: *s.unfinished, key: key, saved: true}
 	s.submit(ctx)
 	return true
@@ -1247,13 +1581,19 @@ func madeWith(genesis map[string]any, identifier string, key ed25519.PrivateKey)
 // Rename takes another name for the account being made, whose name
 // someone took meanwhile or the registry keeps reserved.
 func (s *Shell) Rename(ctx context.Context, name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	s.rename(ctx, name)
 }
 
 func (s *Shell) rename(ctx context.Context, name string) {
 	s.refresh()
+	if !s.current() {
+		return
+	}
 	m := s.making
 	if m == nil || !m.taken || s.listedElsewhere(m) {
 		return
@@ -1283,7 +1623,12 @@ func (s *Shell) listedElsewhere(m *making) bool {
 func (s *Shell) submit(ctx context.Context) {
 	m := s.making
 	now := func() int64 { return s.cfg.Now().UnixMilli() }
-	err := account.Submit(ctx, &m.attempt, m.key, now, s.cfg.Client, s.saveAttempt)
+	a := m.attempt // Submit changes it as it goes
+	err := account.Submit(ctx, &a, m.key, now, s.cfg.Client, s.saveAttempt)
+	if !s.current() {
+		return
+	}
+	m.attempt = a
 	switch {
 	case errors.Is(err, account.ErrNameTaken):
 		m.taken = true
@@ -1323,7 +1668,7 @@ func (s *Shell) firstConnection(ctx context.Context) {
 	if s.key == nil {
 		return
 	}
-	if err := s.connect(ctx, s.key); err != nil {
+	if err := s.connect(ctx, s.key); err != nil && s.current() {
 		s.key.Erase()
 		s.key = nil
 		s.say("%s", s.sentence(err))
@@ -1342,8 +1687,11 @@ var pollEvery = 2 * time.Second
 // carrying the current proof, compared under this lock, opens it, and any
 // other leaves the device locked for its PIN.
 func (s *Shell) enrollByPage(ctx context.Context, name string, wait time.Duration, proof []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	s.enroll(ctx, name, wait, s.holds(proof))
 }
 
@@ -1405,6 +1753,9 @@ func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, use
 	}
 	pub := s.rec.PublicKey
 	s.refresh()
+	if !s.current() {
+		return
+	}
 	switch {
 	case s.rec == nil || !bytes.Equal(s.rec.PublicKey, pub):
 		return
@@ -1436,8 +1787,11 @@ func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, use
 // A log that cannot be read, or an account that is gone, changes nothing:
 // the unlock goes on and the CYFR decides.
 func (s *Shell) CheckListed(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	s.refresh()
 	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil || s.making != nil {
 		return
@@ -1451,6 +1805,9 @@ func (s *Shell) CheckListed(ctx context.Context) {
 		return
 	}
 	if _, listed := state.Key(account.Kid(s.rec.PublicKey)); listed {
+		return
+	}
+	if !s.current() {
 		return
 	}
 	unlisted := *s.rec
@@ -1473,20 +1830,27 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) { s.unlock(ctx, secre
 // unlock is Unlock, answering the proof the opened key issues, or "" when
 // the key was not opened.
 func (s *Shell) unlock(ctx context.Context, secret []byte) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer erase(secret)
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return ""
+	}
+	defer give()
 	s.refresh()
-	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil {
+	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil || !s.current() {
 		return ""
 	}
 	if s.key != nil {
 		s.key.Erase()
 		s.key = nil
 	}
-	key, err := s.rec.Open(secret)
+	key, err := openKey(s.rec, secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
+		return ""
+	}
+	if !s.current() {
+		key.Erase()
 		return ""
 	}
 	proof := s.issueProof()
@@ -1506,18 +1870,38 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	if err := s.watched(); err != nil {
 		return err
 	}
+	if !s.current() {
+		return errLocked
+	}
+	began := s.mu.by
+	renewed := func(cert json.RawMessage) { s.renewed(began, cert) }
 	d := Dialer{Address: s.cfg.Address, Client: s.cfg.Client}
 	var ch *Channel
 	var err error
 	if s.certified() {
-		ch, err = d.Open(ctx, Device{Binding: s.binding(), Certificate: s.here.Certificate}, key, s.report, s.renewed)
+		ch, err = d.Open(ctx, Device{Binding: s.binding(), Certificate: s.here.Certificate}, key, s.report, renewed)
 	} else {
 		if len(s.here.Certificate) > 0 {
 			s.forget()
 		}
+		admission, through := s.admission(ctx)
+		if through != nil {
+			// Client as it is, following no redirect, over that transport.
+			bound := *s.cfg.Client
+			bound.Transport = through
+			d.Client = &bound
+		}
 		h := Hello{Key: s.rec.PublicKey, Identifier: s.rec.Identifier, HolderKind: string(s.rec.Kind),
-			DisplayName: s.cfg.DisplayName, Admission: s.admission(ctx)}
-		ch, err = d.Hello(ctx, h, key, s.admitted, s.report, s.renewed)
+			DisplayName: s.cfg.DisplayName, Admission: admission}
+		ch, err = d.Hello(ctx, h, key, s.admitted, s.report, renewed)
+	}
+	// The handshake's last write can be out as a lock ends the generation.
+	// What began before that lock opens nothing.
+	if !s.current() {
+		if ch != nil {
+			ch.drop()
+		}
+		return errLocked
 	}
 	if errors.Is(err, ErrRevoked) {
 		s.forget()
@@ -1526,27 +1910,31 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 		return err
 	}
 	s.key, s.ch = key, ch
-	s.scheduleRenewal()
-	go s.watch(ch)
+	s.open.Store(true)
+	s.scheduleRenewal(began)
+	go s.watch(ch, began)
 	return nil
 }
 
-// admission is the capability a first hello brings: none once this CYFR
-// admitted this device (the door decides), else the setup token (for a
-// device with SetupOpen, only while no one is set up).
-func (s *Shell) admission(ctx context.Context) map[string]any {
+// admission is the capability a first hello brings and the transport it
+// goes by: none once this CYFR admitted this device (the door decides),
+// else the setup token, where SetupToken answers one.
+func (s *Shell) admission(ctx context.Context) (map[string]any, http.RoundTripper) {
 	if s.here.ClientID != "" {
-		return nil
+		return nil, nil
 	}
-	if t := s.cfg.Tokens(); t != "" && (s.cfg.SetupOpen == nil || s.cfg.SetupOpen(ctx)) {
-		return map[string]any{"setup": t}
+	if t, through := s.cfg.SetupToken(ctx); t != "" {
+		return map[string]any{"setup": t}, through
 	}
-	return nil
+	return nil, nil
 }
 
 // admitted keeps the client and certificate a hello was answered before
 // the connection goes on.
 func (s *Shell) admitted(a Admitted) error {
+	if !s.current() {
+		return errLocked
+	}
 	s.here.ClientID, s.here.Certificate = a.ClientID, a.Certificate
 	return s.cfg.Clients.Update(func(c *ClientRecord) bool {
 		c.ClientID, c.Certificate = a.ClientID, a.Certificate
@@ -1561,22 +1949,29 @@ func (s *Shell) forget() {
 	_ = s.cfg.Clients.Update(func(c *ClientRecord) bool { c.Certificate = nil; return true })
 }
 
-// renewed persists a certificate the CYFR issued. It arrives on the
-// channel's own goroutine, or during a connect whose caller holds the
-// shell, so it takes the shell's lock on a goroutine of its own. A device
-// that dies before it is written still holds the old certificate, which
-// locates the client for the next renewal.
-func (s *Shell) renewed(cert json.RawMessage) {
+// renewed persists a certificate the CYFR issued to a channel of g. It
+// arrives on the channel's own goroutine, or during a connect whose caller
+// holds the shell, so it takes the shell on a goroutine of its own, while
+// g is current, and answers a channel closed as that goroutine ends. A
+// device that dies, or locks, before it is written still holds the old
+// certificate, which locates the client for the next renewal.
+func (s *Shell) renewed(g *generation, cert json.RawMessage) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
-		s.mu.Lock()
+		defer close(done)
+		if s.mu.lockFor(g.ended, g, false) != nil {
+			return
+		}
 		defer s.mu.Unlock()
 		s.here.Certificate = cert
 		_ = s.cfg.Clients.Update(func(c *ClientRecord) bool { c.Certificate = cert; return true })
 	}()
+	return done
 }
 
-// scheduleRenewal renews the certificate over the channel at half its life.
-func (s *Shell) scheduleRenewal() {
+// scheduleRenewal renews the certificate over the channel of g at half its
+// life.
+func (s *Shell) scheduleRenewal(g *generation) {
 	i := readIssued(s.here.Certificate)
 	if i.ExpiresAt <= i.NotBefore {
 		return
@@ -1585,31 +1980,43 @@ func (s *Shell) scheduleRenewal() {
 	wait := max(at.Sub(s.cfg.Now()), time.Second)
 	ch := s.ch
 	s.renewal = time.AfterFunc(wait, func() {
+		// Not g's: a write cancelled would close the channel under the
+		// lock's proofs (Channel.Call). The lock's close ends it.
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		_ = ch.Renew(ctx)
-		s.mu.Lock()
-		if s.ch == ch {
-			s.scheduleRenewal()
+		if s.mu.lockFor(g.ended, g, false) != nil {
+			return
 		}
-		s.mu.Unlock()
+		defer s.mu.Unlock()
+		if s.ch == ch {
+			s.scheduleRenewal(g)
+		}
 	})
 }
 
 // watch locks the device when its channel ends under it: an ended
 // standing or a CYFR gone away ends the unlock, with the reason on the
 // lock page.
-func (s *Shell) watch(ch *Channel) {
+func (s *Shell) watch(ch *Channel, g *generation) {
 	<-ch.Done()
+	// A lock that ended g locks, and is why, also where what it cut short
+	// is what ended the channel.
+	locked, first := s.end(g)
+	if !first {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer locked()
 	if s.ch != ch {
 		return
 	}
-	if errors.Is(ch.Err(), ErrRevoked) {
+	err := ch.Err()
+	if errors.Is(err, ErrRevoked) {
 		s.forget()
 	}
-	s.lock(s.sentence(ch.Err()))
+	s.lock(s.sentence(err))
 }
 
 // errNoProof is a request for a ticket without the current proof.
@@ -1620,8 +2027,11 @@ var errNoProof = errors.New("not the page that unlocked")
 // browser goes: the CYFR's completion page with the ticket in its
 // fragment, which no request carries.
 func (s *Shell) Ticket(ctx context.Context, proof []byte) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return "", errNotTaken
+	}
+	defer give()
 	if !s.holds(proof) {
 		return "", errNoProof
 	}
@@ -1666,6 +2076,9 @@ func (s *Shell) reserve(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if !s.current() {
+		return "", errLocked
+	}
 	// The lock is kept before the reservation is spent: a lock from here
 	// on retires it, redeemed or not.
 	s.locks = append(s.locks, lock)
@@ -1680,15 +2093,106 @@ func (s *Shell) reserve(ctx context.Context) (string, error) {
 	if err := json.Unmarshal(raw, &got); err != nil || got.SessionID != session || got.Ticket == "" {
 		return "", ErrRefused
 	}
+	if !s.current() {
+		return "", errLocked
+	}
 	return got.Ticket, nil
 }
 
 // Lock locks the device, why saying what the lock page tells the person.
-func (s *Shell) Lock(why string) {
+// It ends the generation before it takes the shell, so it waits for no
+// action, and once it returns none begun before it changes or opens
+// anything. What takes no context is finished first: a key made or opened
+// under a passphrase (Argon2id, two of them in a setup) or by the chip.
+// closed is whether this lock closed a channel, and so restarted the
+// pages. Unlocked cannot say it: it is still true while another lock
+// restarts them.
+func (s *Shell) Lock(why string) (closed bool) {
+	locked, _ := s.end(nil)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer locked()
+	closed = s.ch != nil
 	s.lock(why)
+	return closed
 }
+
+// errLocked is an action's end by a lock, and why a lock's own close ended
+// the channel.
+var errLocked = errors.New("locked")
+
+// errNotTaken is an action that could not take the shell, whatever ended
+// it: no sentence says it (Server.gaveUp).
+var errNotTaken = errors.New("this device was not taken for the action")
+
+// end ends the current generation for a lock, which calls locked once it
+// has locked and before it gives the shell up. With only, it ends that one
+// alone, and is false where a lock ended it first.
+func (s *Shell) end(only *generation) (locked func(), ok bool) {
+	s.genMu.Lock()
+	defer s.genMu.Unlock()
+	g := s.gen
+	if only != nil && (g != only || !g.live()) {
+		return nil, false
+	}
+	g.locks++
+	g.end()
+	return func() {
+		s.genMu.Lock()
+		defer s.genMu.Unlock()
+		if g.locks--; g.locks == 0 {
+			s.gen = newGeneration()
+		}
+	}, true
+}
+
+// act begins an action in the current generation, until done: its context
+// ends with parent's and with that generation.
+func (s *Shell) act(parent context.Context) (ctx context.Context, done func()) {
+	s.genMu.Lock()
+	g := s.gen
+	s.genMu.Unlock()
+	ctx, stop := context.WithCancelCause(context.WithValue(parent, underwayKey{}, &underway{g: g}))
+	unhook := context.AfterFunc(g.ended, func() { stop(errLocked) })
+	if !g.live() {
+		stop(errLocked)
+	}
+	return ctx, func() {
+		unhook()
+		stop(nil)
+	}
+}
+
+// take takes the shell for ctx's action, or for one begun now where ctx
+// has none, until give. It is false once that action's generation ended,
+// once a wait of it for the shell ran out, and once its context ended,
+// but where it took the shell before and finds it free (underway).
+func (s *Shell) take(ctx context.Context) (held context.Context, give func(), ok bool) {
+	done := func() {}
+	if underwayOf(ctx) == nil {
+		ctx, done = s.act(ctx)
+	}
+	a := underwayOf(ctx)
+	if a.outwaited {
+		done()
+		return ctx, nil, false
+	}
+	if err := s.mu.lockFor(ctx, a.g, a.took); err != nil {
+		a.outwaited = errors.Is(err, errWaitedOut)
+		done()
+		return ctx, nil, false
+	}
+	a.took = true
+	return ctx, func() {
+		s.mu.Unlock()
+		done()
+	}, true
+}
+
+// current is whether the action holding the shell may still change it: its
+// generation has not ended. The caller holds the shell; holding it by no
+// action, it may not.
+func (s *Shell) current() bool { return s.mu.by != nil && s.mu.by.live() }
 
 // lock submits each held session's lock proof, closes the channel, erases
 // the key and every secret the shell held, an account's recovery key
@@ -1700,13 +2204,20 @@ func (s *Shell) lock(why string) {
 		s.renewal.Stop()
 		s.renewal = nil
 	}
-	if s.ch != nil {
+	ch := s.ch
+	if ch != nil {
+		// A page drawn while the CYFR is told is the lock page already.
+		s.ch, s.confirm, s.passkey = nil, nil, nil
+		if why != "" {
+			s.notice = why
+		}
+		s.publish()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		for _, proof := range s.locks {
-			_, _ = s.ch.Call(ctx, "session.lock", map[string]any{"proof": proof})
+			_, _ = ch.Call(ctx, "session.lock", map[string]any{"proof": proof})
 		}
 		cancel()
-		s.ch.Close()
+		ch.Close()
 	}
 	if s.key != nil {
 		s.key.Erase()
@@ -1715,22 +2226,16 @@ func (s *Shell) lock(why string) {
 		clear(s.making.key)
 	}
 	clear(s.proof)
-	wasOpen := s.ch != nil
-	s.ch, s.key, s.locks, s.making, s.confirm, s.passkey, s.passphrase, s.proof = nil, nil, nil, nil, nil, nil, "", nil
-	if wasOpen {
-		if why != "" {
-			s.notice = why
-		}
+	s.key, s.locks, s.making, s.confirm, s.passkey, s.passphrase, s.proof = nil, nil, nil, nil, nil, "", nil
+	if ch != nil {
 		s.cfg.Restart()
+		s.open.Store(false)
 	}
 }
 
-// Unlocked is whether the channel stands.
-func (s *Shell) Unlocked() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ch != nil
-}
+// Unlocked is whether the channel stands, until the lock that closes it
+// is done. It waits for nothing.
+func (s *Shell) Unlocked() bool { return s.open.Load() }
 
 // unwatchedError refuses an unlock, saying what the page says.
 type unwatchedError string
@@ -1747,6 +2252,12 @@ func (s *Shell) watched() error {
 	return nil
 }
 
+// What a locked device says where it is asked to confirm or approve.
+const (
+	unlockToConfirm = "Unlock this device first, then confirm the change again from the page that asked."
+	unlockToApprove = "Unlock this device first, then approve the passkey again from Your devices."
+)
+
 // confirmWindow is how long a drawn confirmation or passkey request may
 // wait for the PIN.
 const confirmWindow = 60 * time.Second
@@ -1755,15 +2266,21 @@ const confirmWindow = 60 * time.Second
 // (confirmation.pending), its preview, and shows it on this device's own
 // page. Nothing a browser sent is drawn but the ref.
 func (s *Shell) Draw(ctx context.Context, ref string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	if s.ch == nil {
-		s.say("Unlock this device first, then confirm the change again from the page that asked.")
+		s.say(unlockToConfirm)
 		return
 	}
 	p, err := s.pending(ctx, ref)
 	if err != nil {
 		s.say("%s", s.sentence(err))
+		return
+	}
+	if !s.current() {
 		return
 	}
 	s.confirm = p
@@ -1827,9 +2344,12 @@ func (s *Shell) answer(ctx context.Context, ref string, key Signer) error {
 // request, which confirmation.confirm presents. The page says what the
 // CYFR answered.
 func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer erase(secret)
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	drawn := s.confirm
 	if drawn == nil || drawn.Ref != ref || s.ch == nil {
 		return
@@ -1845,6 +2365,9 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 		return
 	}
 	now, err := s.pending(ctx, ref)
+	if !s.current() {
+		return
+	}
 	if err != nil {
 		s.confirm = nil
 		s.say("%s Nothing was signed.", s.sentence(err))
@@ -1855,13 +2378,20 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 		s.say("The change CYFR holds is not the one shown, so nothing was signed.")
 		return
 	}
-	fresh, err := s.rec.Open(secret)
+	fresh, err := openKey(s.rec, secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
 		return
 	}
+	if !s.current() {
+		fresh.Erase()
+		return
+	}
 	err = s.answer(ctx, ref, fresh)
 	fresh.Erase()
+	if !s.current() {
+		return
+	}
 	s.confirm = nil
 	if err != nil {
 		s.say("CYFR did not take the confirmation: %s", s.sentence(err))
@@ -1881,13 +2411,19 @@ var errNotWaiting = errors.New("CYFR holds no passkey request by that name")
 // compares the one this device derives with the one the asking browser
 // shows.
 func (s *Shell) DrawPasskey(ctx context.Context, ref string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return
+	}
+	defer give()
 	if s.ch == nil {
-		s.say("Unlock this device first, then approve the passkey again from Your devices.")
+		s.say(unlockToApprove)
 		return
 	}
 	p, err := s.waiting(ctx, ref)
+	if !s.current() {
+		return
+	}
 	if err != nil {
 		if s.passkey != nil && s.passkey.Ref == ref {
 			s.passkey = nil
@@ -1952,11 +2488,14 @@ func (s *Shell) waitingSentence(err error) string {
 // says what happened. It answers whether the request is settled: the
 // account lists the passkey now, or the person cancelled it.
 func (s *Shell) DecidePasskey(ctx context.Context, ref, digest string, approve bool, secret []byte) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer erase(secret)
+	ctx, give, ok := s.take(ctx)
+	if !ok {
+		return false
+	}
+	defer give()
 	if s.ch == nil {
-		s.say("Unlock this device first, then approve the passkey again from Your devices.")
+		s.say(unlockToApprove)
 		return false
 	}
 	drawn := s.passkey
@@ -1975,6 +2514,9 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref, digest string, approve b
 		return false
 	}
 	now, err := s.waiting(ctx, ref)
+	if !s.current() {
+		return false
+	}
 	if err == nil && now.Digest != drawn.Digest {
 		err = errNotWaiting
 	}
@@ -1983,9 +2525,13 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref, digest string, approve b
 		s.say("%s", s.waitingSentence(err))
 		return false
 	}
-	fresh, err := s.rec.Open(secret)
+	fresh, err := openKey(s.rec, secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
+		return false
+	}
+	if !s.current() {
+		fresh.Erase()
 		return false
 	}
 	directory := s.rec.Directory
@@ -1995,6 +2541,9 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref, digest string, approve b
 	d := account.Directory{URL: directory, Client: s.cfg.Client}
 	err = account.Approve(ctx, d, s.rec.Identifier, s.rec.PublicKey, fresh.Sign, drawn.Key, s.cfg.Now().UnixMilli())
 	fresh.Erase()
+	if !s.current() {
+		return false
+	}
 	s.passkey = nil
 	switch {
 	case err == nil:

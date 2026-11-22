@@ -36,6 +36,7 @@ function reset({relaunch = false} = {}) {
     world.disk = new Map()
     world.profile = path.join(world.profiles, String(++world.profileCount))
   }
+  world.switches = []
   world.loads = []
   world.step = () => {}
   world.unclearable = false
@@ -63,6 +64,7 @@ class Contents extends EventEmitter {
     this.mainFrame = {processId: 1, routingId: win.id, get url() { return win.webContents.url }}
   }
   getURL() { return this.url }
+  isDestroyed() { return !!world.windows.find((w) => w.webContents === this)?.destroyed }
   async executeJavaScript(script) { world.scripted.push(script) }
   reload() {
     this.reloaded = [...(this.reloaded ?? []), this.url]
@@ -132,7 +134,7 @@ function fromPartition(partition) {
     const ses = new EventEmitter()
     Object.assign(ses, {
       partition,
-      webRequest: {onHeadersReceived() {}},
+      webRequest: {onHeadersReceived(handler) { ses.received = handler }},
       setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDevicePermissionHandler() {},
       setDisplayMediaRequestHandler() {},
       jar: [...(world.disk.get(partition) ?? [])],
@@ -165,7 +167,7 @@ function fromPartition(partition) {
 }
 
 world.app = Object.assign(new EventEmitter(), {
-  commandLine: {getSwitchValue: () => "", hasSwitch: () => false},
+  commandLine: {getSwitchValue: () => "", hasSwitch: () => false, appendSwitch: (...a) => world.switches.push(a)},
   enableSandbox() {}, requestSingleInstanceLock: () => true, configureWebAuthn() {},
   relaunch(options) { world.relaunched = options },
   whenReady: () => Promise.resolve(),
@@ -742,6 +744,65 @@ test("the engine's pending address is not the document that began a navigation",
   assert.deepEqual(world.cleared, [], "the CYFR's document pressed nothing of the chooser's")
 })
 
+// cyfr's locked over the CYFR open at PORT_A, and the forgetting ended.
+async function locksAndForgets() {
+  const said = await started(true)
+  await signsIn(PORT_A, "ada at A")
+  return async () => {
+    await saysLocked({home: PORT_A, account: ACCOUNT})
+    for (let i = 0; i < 12; i++) await settled()
+    return said
+  }
+}
+
+test("what a closing page writes after the lock's clear began is cleared with the rest", async () => {
+  const lock = await locksAndForgets()
+  const ses = content().webContents.session
+  let writes = 1
+  world.step = (at) => {
+    if (at === "cleared" && writes-- > 0) ses.jar = [{name: "__phoenix_flash__", domain: "cyfr.example.com", value: "late"}]
+  }
+  const said = await lock()
+  assert.deepEqual(ses.jar, [])
+  assert.deepEqual(cookiesOnDisk(), [], "written out")
+  assert.ok(!said.some((line) => line.startsWith("not cleared")), said.join("; "))
+  assert.doesNotMatch(content().webContents.url, /notice=/)
+})
+
+test("a lock's clear that truly fails says which cookie was left or which call threw, and nothing it was handed", async () => {
+  const handed = () => Promise.reject(new Error("cookie=a-secret at /private/file"))
+  for (const [fail, why] of [
+    [(ses) => { world.unclearable = true; ses.jar = [{name: "_cyfr_key", domain: "cyfr.example.com", value: "a-secret"}] },
+      /^not cleared: left _cyfr_key at cyfr\.example\.com$/],
+    [() => { world.clearing = handed }, /^not cleared: clearStorageData threw$/],
+    [() => { world.step = (at) => { if (at === "cache cleared") throw new Error("cookie=a-secret at /private/file") } }, /^not cleared: clearCache threw$/],
+    [() => { world.step = (at) => { if (at === "flushed") throw new Error("cookie=a-secret at /private/file") } }, /^not cleared: flushStore threw$/],
+    [() => { world.step = (at) => { if (at === "read") throw new Error("cookie=a-secret at /private/file") } }, /^not cleared: cookies.get threw$/]]) {
+    const lock = await locksAndForgets()
+    fail(content().webContents.session)
+    const said = await lock()
+    assert.ok(said.some((line) => why.test(line)), `${why}: ${said.join("; ")}`)
+    assert.ok(!said.some((line) => /a-secret|private/.test(line)), said.join("; "))
+    assert.match(content().webContents.url, /notice=unforgotten$/)
+  }
+})
+
+test("a response to a page the lock closed sets no cookie, and the next page's own does", async () => {
+  const lock = await locksAndForgets()
+  const page = content()
+  await lock()
+  const answered = (webContents) => {
+    let out
+    page.webContents.session.received({webContents, resourceType: "xhr", responseHeaders: {"set-cookie": ["a=1"]}},
+      (r) => { out = r.responseHeaders })
+    return out
+  }
+  assert.ok(page.destroyed)
+  assert.equal(answered(page.webContents)["set-cookie"], undefined, "the closed page's")
+  assert.equal(answered(undefined)["set-cookie"], undefined, "no page's")
+  assert.deepEqual(answered(content().webContents)["set-cookie"], ["a=1"], "the page showing")
+})
+
 test("Connect to another CYFR does not advance past a failed clear", async () => {
   await started(true)
   await signsIn(PORT_A, "ada at A")
@@ -919,6 +980,143 @@ test("a lost page is shown again in its own window, its session as it was", asyn
     assert.ok(!child.heard.some((m) => m.type === "lock"))
     signedNobodyOut()
   }
+})
+
+// The engine reporting that `w`'s load of `url` failed, its error page
+// committed there (no did-navigate says so).
+function fails(w, url, code = -106, isMainFrame = true) {
+  if (isMainFrame) w.webContents.url = url
+  w.webContents.emit("did-fail-load", {}, code, "", url, isMainFrame)
+}
+
+test("a CYFR's page that did not load gives way to the chooser in its own window, its session as it was", async () => {
+  for (const road of [true, false]) {
+    const said = await signedIn(road)
+    const page = content()
+    const ses = page.webContents.session
+    const windows = world.windows.length
+    fails(page, HOME + "/threads")
+    assert.equal(page.webContents.url, HOME + "/threads", "not from inside the engine's report")
+    await settled()
+    assert.equal(page.webContents.url, READY + (road ? "&road=passkey" : "") + "&notice=unanswered")
+    assert.ok(!page.destroyed && world.windows.length === windows, "the same window")
+    assert.equal(page.webContents.session, ses, "the same session")
+    assert.ok(!child.heard.some((m) => m.type === "lock"))
+    assert.ok(!said.some((line) => line.startsWith("locked:")))
+    signedNobodyOut()
+  }
+})
+
+test("a frame's failed load, and a load given up, leave the page", async () => {
+  await signedIn()
+  const page = content()
+  fails(page, HOME + "/frame", -106, false)
+  fails(page, HOME + "/", -3)
+  await settled()
+  assert.equal(page.webContents.url, HOME + "/")
+})
+
+test("a lock in the turn of a failed load loads nothing into the window it closed", async () => {
+  await signedIn()
+  const page = content()
+  fails(page, HOME + "/threads")
+  await saysLocked()
+  assert.ok(page.destroyed)
+  assert.equal(page.webContents.url, HOME + "/threads")
+  assert.doesNotMatch(content().webContents.url, /unanswered/)
+})
+
+test("Try again loads the CYFR's root, a turn after the press", async () => {
+  await signedIn()
+  const page = content()
+  fails(page, HOME + "/threads")
+  await settled()
+  const chooser = page.webContents.url
+  assert.ok(navigate(page, "http://127.0.0.1:7340/bootstrap/again").prevented)
+  assert.equal(page.webContents.url, chooser, "not from inside the engine's question")
+  await settled()
+  assert.equal(page.webContents.url, HOME + "/")
+  assert.ok(!page.destroyed)
+  signedNobodyOut()
+})
+
+// What `act` has main write to its stderr.
+async function printing(act) {
+  const own = process.stderr.write
+  let out = ""
+  process.stderr.write = (chunk) => {
+    out += chunk
+    return true
+  }
+  try {
+    await act()
+  } finally {
+    process.stderr.write = own
+  }
+  return out
+}
+
+test("the engine's warning of a failed load prints no fragment or query", async () => {
+  await signedIn()
+  const out = await printing(async () => {
+    process.emitWarning("Failed to load URL: https://x.test/complete?q=a-marker#a-marker with error: ERR_EMPTY_RESPONSE", "electron")
+    await settled()
+    await settled()
+  })
+  assert.match(out, /^CYFR: warning: electron: Failed to load URL: https:\/\/x\.test with error: ERR_EMPTY_RESPONSE$/m)
+  assert.doesNotMatch(out, /marker/)
+  assert.equal(process.listenerCount("warning"), 1, "the app's printer alone")
+})
+
+test("every other warning still prints, its code and detail with it, by the same rule", async () => {
+  await signedIn()
+  const out = await printing(async () => {
+    process.emitWarning("old() is deprecated", {type: "DeprecationWarning", code: "DEP0001",
+      detail: "see https://x.test/why?q=a-marker#a-marker"})
+    process.emitWarning("a warning of no kind of its own")
+    await settled()
+    await settled()
+  })
+  assert.match(out, /^CYFR: warning: \[DEP0001\] DeprecationWarning: old\(\) is deprecated\nsee https:\/\/x\.test$/m)
+  assert.match(out, /^CYFR: warning: Warning: a warning of no kind of its own$/m)
+  assert.doesNotMatch(out, /marker/)
+})
+
+test("what main says is printed by the same rule where nobody else takes it", async () => {
+  reset()
+  const out = await printing(async () => {
+    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true})
+    await settled()
+    child.say({type: "ready", url: READY})
+    await settled()
+    child.stderr.write("Error: https://x.test/auth/passkey/complete/a-marker did not answer\n")
+    await settled()
+    child.emit("exit", 1, null)
+    await settled()
+  })
+  assert.match(out, /^CYFR: cyfr ended: https:\/\/x\.test did not answer$/m)
+  assert.doesNotMatch(out, /marker/)
+})
+
+test("cyfr's own lines are printed whole lines at a time, with no fragment or query", async () => {
+  await started(true)
+  const out = await printing(async () => {
+    child.stderr.write("Error: Get \"https://x.te")
+    await settled()
+    child.stderr.write("st/login?t=a-marker\": EOF\nlast, unended: https://x.test/#a-marker")
+    child.stderr.end()
+    await settled()
+    await settled()
+  })
+  assert.doesNotMatch(out, /marker/)
+  assert.match(out, /https:\/\/x\.test/)
+  assert.match(out, /last, unended/)
+})
+
+test("the engine's logging switch in the environment is dropped as the app starts", async () => {
+  process.env.ELECTRON_ENABLE_LOGGING = "1"
+  await started(true)
+  assert.equal(process.env.ELECTRON_ENABLE_LOGGING, undefined)
 })
 
 test("a lost confirmation window closes alone", async () => {
@@ -1105,4 +1303,26 @@ test("a lock over a chooser that is keeping a notice leaves the notice there, un
   await settled()
   await saysLocked()
   assert.doesNotMatch(content().webContents.url, /notice=/, "told once the person went on")
+})
+
+test("with no route localhost is 127.0.0.1 alone, and that is no route a CYFR is restarted for", async () => {
+  await started(false)
+  assert.deepEqual(world.switches, [["host-resolver-rules", "MAP localhost 127.0.0.1"]])
+  world.relaunched = null
+  child.say({type: "home", home: "http://localhost:4000", account: "https://cyfr.run", attempt: 1})
+  await settled()
+  await settled()
+  assert.equal(world.relaunched, null)
+  assert.ok(child.heard.some((m) => m.type === "home-ready" && m.home === "http://localhost:4000" && m.attempt === 1))
+})
+
+test("started on a route main keeps that route's rules alone", async () => {
+  const bare = world.app.commandLine.getSwitchValue
+  world.app.commandLine.getSwitchValue = (name) => (name === "host-resolver-rules" ? "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1" : "")
+  try {
+    await started(false)
+    assert.deepEqual(world.switches, [])
+  } finally {
+    world.app.commandLine.getSwitchValue = bare
+  }
 })

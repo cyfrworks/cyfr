@@ -35,11 +35,18 @@ defmodule Aqua.Prompt do
   A row it shows, the first opening's ask and each open request, is in
   `Aqua.Reader`'s words.
 
-  Orders stable sections before the clock to preserve a reusable prompt
-  prefix: the soul's prompt or a crew member's opening, CYFR's part,
-  granted capabilities, tool prelude, scroll
-  index, athanor notes, the crew index and where the turn is; then the
-  open requests, whose ages move. A room excerpt is never part of it: the request carries it as a
+  ## The instructions and the turn's facts
+
+  The instructions are what stays the same from turn to turn until
+  someone changes it: the soul's prompt or a crew member's opening, CYFR's
+  part, granted capabilities, tool prelude, scroll index, athanor notes,
+  the crew index and where the turn is. The turn's facts move by
+  themselves: the open requests, whose ages move, then the time. The whole
+  prompt is the two in that order, which keeps its prefix reusable. A
+  program is handed the instructions alone at its start, and the facts
+  with the first post of its process (`Aqua.Program`): a program handed
+  changed instructions rewrites its cache or keeps another copy of them. A
+  room excerpt is part of neither: the request carries it as a
   transient block (`Aqua.Loop.Request`).
 
   ## The pinned page's revision
@@ -56,6 +63,9 @@ defmodule Aqua.Prompt do
   alias Aqua.Reader
   alias Sanctum.Context
 
+  # What separates two sections of a prompt's tail.
+  @section "\n\n---\n\n"
+
   @type opts :: [
           agent: map(),
           program?: boolean(),
@@ -71,8 +81,8 @@ defmodule Aqua.Prompt do
           %{kind: :daily}
           | %{kind: :workspace, title: String.t(), ask: String.t(), notes: map() | nil}
 
-  @typedoc "A composed prompt."
-  @type composed :: %{text: String.t()}
+  @typedoc "A composed prompt: the instructions, the turn's facts, and the two joined as `text`."
+  @type composed :: %{instructions: String.t(), facts: String.t(), text: String.t()}
 
   @doc """
   Compose the system prompt for a turn.
@@ -104,7 +114,7 @@ defmodule Aqua.Prompt do
     authority = Keyword.get(opts, :authority)
     where = Keyword.get(opts, :where)
 
-    text =
+    instructions =
       IO.iodata_to_binary([
         opening,
         "\n\n---\n\n## Runtime Context\n\n",
@@ -113,12 +123,15 @@ defmodule Aqua.Prompt do
         scrolls(ctx),
         notes(ctx),
         crew(Keyword.get(opts, :crew, [])),
-        where(where),
-        requests(Keyword.get(opts, :requests, [])),
-        clock()
+        where(where)
       ])
 
-    %{text: text}
+    facts =
+      [requests(Keyword.get(opts, :requests, [])), clock()]
+      |> IO.iodata_to_binary()
+      |> String.replace_prefix(@section, "")
+
+    %{instructions: instructions, facts: facts, text: instructions <> @section <> facts}
   end
 
   # CYFR's part of every agent's prompt, Aqua's included: the standing
@@ -169,7 +182,9 @@ defmodule Aqua.Prompt do
                       "anywhere.\n" <>
                       "- The athanor's files, components and stored state are reached through " <>
                       "CYFR's tools only. A call CYFR refuses comes back with a sentence that " <>
-                      "says so; carry on with what does not depend on it."
+                      "says so; carry on with what does not depend on it.\n" <>
+                      "- What you leave running ends when you answer. Wait for it before you " <>
+                      "answer, and never say you will report on it later."
 
   @search_briefing "\n- You have native search: use it when a job needs the web searched."
 
@@ -188,7 +203,8 @@ defmodule Aqua.Prompt do
   setup, outside text as material, the browser's limit, failed calls,
   scrolls kept current). A brain that is a program (`program?`) is told
   besides that its own tools act in its own folder and that the athanor
-  is reached through CYFR's tools, which CYFR decides; a brain whose
+  is reached through CYFR's tools, which CYFR decides, and that what it
+  leaves running ends as it answers; a brain whose
   requests offer its provider's own search (`search?`) is told it has it.
   A model's brain is told nothing of a folder.
   """
@@ -221,7 +237,8 @@ defmodule Aqua.Prompt do
     now = DateTime.utc_now()
 
     [
-      "\n\n---\n\n## Now\n\nCurrent date: ",
+      @section,
+      "## Now\n\nCurrent date: ",
       Calendar.strftime(now, "%Y-%m-%d"),
       ", ",
       Calendar.strftime(now, "%A"),
@@ -323,7 +340,8 @@ defmodule Aqua.Prompt do
     now = DateTime.utc_now()
 
     [
-      "\n\n---\n\n## Open requests\n\nAsked and not yet answered; each reply arrives here as a " <>
+      @section,
+      "## Open requests\n\nAsked and not yet answered; each reply arrives here as a " <>
         "message of its own.\n",
       Enum.map(rows, &["- ", Reader.open_request(&1, now), "\n"])
     ]

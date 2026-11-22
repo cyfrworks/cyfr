@@ -9,11 +9,8 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"github.com/cyfr/codex/internal/account"
 	"io"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -91,7 +88,7 @@ var screenShellCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runScreenShell(cmd.Context())
+		return runScreenShell(cmd.Context(), shell.ListenLoopback)
 	},
 }
 
@@ -340,55 +337,33 @@ const (
 	suspendLocked = "Locked as this device went to sleep."
 )
 
-// screenProxy is CYFR's SOCKS5 proxy on this machine's loopback, the one
-// way this device reaches a tailnet address.
-const screenProxy = "socks5://127.0.0.1:1055"
-
-// screenShellConfig is the box's own screen's shell in dir, for the CYFR
-// at address: the key and the client there of the account the screen runs
-// as, kept in its device folder, device.
-func screenShellConfig(dir, device, address string, client *http.Client, host string, restart func()) shell.Config {
-	return shell.Config{
-		Address: address, Client: client, DisplayName: host,
-		Record:    filepath.Join(device, "holder.json"),
-		Clients:   shell.ClientFile(filepath.Join(device, "client.json")),
-		Directory: directoryURL(),
-		DataDir:   filepath.Join(dir, "data"),
-		Tokens:    screenTokens,
-		// .env keeps the setup token after setup: the box brings it only
-		// while no one is set up.
-		SetupOpen: screenSetupOpen,
-		Restart:   restart,
-	}
-}
-
 // runScreenShell is the screen's session inside labwc: the shell's pages on
-// loopback, the on-screen keyboard, the watches that lock it
-// (screenWatches) and Chrome on those pages. While those watches are not
-// known to work it runs on locked, its page saying why.
-// Chrome's exit locks and starts it again on the lock page; this process's
-// own end (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
+// loopback (listen takes their address), the on-screen keyboard, the
+// watches that lock it (screenWatches) and Chrome on those pages. While
+// those watches are not known to work it runs on locked, its page saying
+// why.
+// Chrome's exit locks in every state, for the proof its page held is gone
+// with it, and starts it again on the shell's page; this process's own end
+// (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
 // the sessions at the home first, then starts Chrome again, so no page of
 // the unlocked session outlives it.
-func runScreenShell(ctx context.Context) error {
+func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) error {
 	_ = holder.HardenProcess()
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	head, err := currentHead()
+	local, err := readLocal(dir, "screen")
 	if err != nil {
 		return fmt.Errorf("The screen cannot read how CYFR is reached here (%v)", err)
 	}
-	address := access.Describe(head).Address
-	client := &http.Client{}
 	chromeArgs := []string{"--no-first-run", "--no-default-browser-check", "--disable-extensions",
 		"--ozone-platform=wayland", "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome"), "--app=" + shell.Origin + "/"}
 
-	if head.Mode == access.ModeTailnet {
-		proxy, _ := url.Parse(screenProxy)
-		client.Transport = &http.Transport{Proxy: http.ProxyURL(proxy)}
-		chromeArgs = append(chromeArgs, "--proxy-server="+screenProxy, "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1")
+	if local.Proxy != "" {
+		chromeArgs = append(chromeArgs, "--proxy-server="+local.Proxy, "--host-resolver-rules="+local.Resolver)
+	} else {
+		chromeArgs = append(chromeArgs, "--host-resolver-rules="+localhostIsIPv4)
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
@@ -403,7 +378,7 @@ func runScreenShell(ctx context.Context) error {
 	_ = exec.Command("pkill", "-f", "--", "^swayidle -d -w -C /dev/null before-sleep kill -USR1 ").Run()
 	chrome := &screenChrome{args: chromeArgs}
 	host, _ := os.Hostname()
-	ln, device, err := screenClaim(dir)
+	ln, device, err := screenClaim(listen, dir)
 	if err != nil {
 		return err
 	}
@@ -413,14 +388,30 @@ func runScreenShell(ctx context.Context) error {
 			chrome.restart()
 		}
 	})
-	cfg := screenShellConfig(dir, device, address, client, host, chrome.restart)
+	cfg := local.Shell
+	cfg.DisplayName, cfg.Restart = host, chrome.restart
+	cfg.Record = filepath.Join(device, "holder.json")
+	cfg.Clients = shell.ClientFile(filepath.Join(device, "client.json"))
 	cfg.Unwatched = watches.Unwatched
 	sh, err := shell.New(cfg)
 	if err != nil {
 		ln.Close()
 		return err
 	}
-	srv := &shell.Server{Shell: sh, Reachable: func() bool { return screenReachable(client, address) }}
+	// A folder naming another CYFR than the one this shell opened ends it:
+	// the launcher starts it again on the reading made then.
+	moved := make(chan error, 1)
+	srv := &shell.Server{Shell: sh, Reachable: func() bool {
+		err := local.Answers(ctx)
+		var unbound *shell.Unbound
+		if errors.As(err, &unbound) && unbound.Moved {
+			select {
+			case moved <- err:
+			default:
+			}
+		}
+		return err == nil
+	}}
 	served := make(chan error, 1)
 	go func() { served <- srv.ServeOn(ctx, ln) }()
 
@@ -433,7 +424,7 @@ func runScreenShell(ctx context.Context) error {
 		}
 	}()
 
-	watches.lock = sh.Lock
+	watches.lock = func(why string) { sh.Lock(why) }
 	watching, stopWatching := context.WithCancel(ctx)
 	kept := make(chan struct{})
 	go func() {
@@ -459,7 +450,7 @@ func runScreenShell(ctx context.Context) error {
 				browser <- err
 				return
 			}
-			if browsing.Err() == nil && sh.Unlocked() {
+			if browsing.Err() == nil {
 				sh.Lock("Locked because the browser closed.")
 			}
 			select {
@@ -475,6 +466,8 @@ func runScreenShell(ctx context.Context) error {
 	case ended = <-served:
 	case err := <-browser:
 		ended = fmt.Errorf("Chrome did not start (%v)", err)
+	case err := <-moved:
+		ended = fmt.Errorf("The screen starts again on this folder's settings (%v)", err)
 	}
 	sh.Lock("")
 	stopBrowsing()
@@ -484,8 +477,8 @@ func runScreenShell(ctx context.Context) error {
 // screenClaim takes the shell's listener, then selects the CYFR in dir in
 // this account's client record: the record is shared with the CYFR app,
 // so only the one process holding the listener writes it.
-func screenClaim(dir string) (net.Listener, string, error) {
-	ln, err := shell.ListenLoopback()
+func screenClaim(listen func() (net.Listener, error), dir string) (net.Listener, string, error) {
+	ln, err := listen()
 	if err != nil {
 		return nil, "", fmt.Errorf("The screen cannot take %s, which another program holds (%v)", shell.Listen, err)
 	}
@@ -535,69 +528,3 @@ func (c *screenChrome) restart() {
 		_ = c.proc.Signal(syscall.SIGTERM)
 	}
 }
-
-// screenSetupOpen is whether no one is set up on the CYFR in the working
-// directory yet, as cyfr's log since its start says, read under the
-// stack's lock as cyfr setup reads it (readSetUp). The lock is taken
-// without waiting: held by a command changing the stack, or with a log
-// that cannot be read, setup is taken as closed, so the door decides and
-// the next unlock asks again.
-func screenSetupOpen(ctx context.Context) bool {
-	e, err := openEngine(".")
-	if err != nil {
-		return false
-	}
-	unlock, err := e.Lock("screen")
-	if err != nil {
-		return false
-	}
-	defer unlock()
-	head, err := e.Head()
-	if err != nil {
-		return false
-	}
-	return readSetUp(ctx, e, head) == setUpNone
-}
-
-// screenTokens reads .env's setup token as the server reads it, each time
-// a page needs it, so it never travels in an argument.
-func screenTokens() string {
-	values, err := access.ReadEnvValues(".env")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(values[setupTokenVar])
-}
-
-// screenReachable is whether the home answers now, within two seconds.
-func screenReachable(client *http.Client, address string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address+"/", nil)
-	if err != nil {
-		return false
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return true
-}
-
-// directoryURL is the directory a new account is made at and a name is
-// looked up through: CYFR_DIRECTORY_URL from the environment or from the
-// .env here, as the server reads it, else cyfr.run.
-func directoryURL() string {
-	if v := strings.TrimSpace(os.Getenv(directoryVar)); v != "" {
-		return v
-	}
-	if values, err := access.ReadEnvValues(".env"); err == nil {
-		if v := strings.TrimSpace(values[directoryVar]); v != "" {
-			return v
-		}
-	}
-	return account.DefaultDirectory
-}
-
-const directoryVar = "CYFR_DIRECTORY_URL"
