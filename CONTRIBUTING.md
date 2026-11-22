@@ -267,8 +267,9 @@ same worktree refuses, naming the run that holds it.
   The Test workflow's `desktop-home` job runs those proofs on Linux amd64
   and arm64 (`tests/desktop-proof/home.sh`, its README): this tree's DEB
   installed in a client container with no Docker, and each tracked
-  `tests/desktop-proof/*/run.sh` against a CYFR and an account directory
-  from the run's app image of the same architecture. Run here, it needs
+  `tests/desktop-proof/*/run.sh` against a CYFR of the shape its folder
+  names (its own or another account service, or one requiring a company
+  sign-in) from the run's app image of the same architecture. Run here, it needs
   127.0.0.1:7340 free on this machine for its whole run, so not beside a
   handoff whose Go rows run.
 
