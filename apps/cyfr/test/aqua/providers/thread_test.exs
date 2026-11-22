@@ -1242,8 +1242,8 @@ defmodule Aqua.Providers.ThreadTest do
       assert read_threads(ctx, turn) == [work.id]
     end
 
-    test "a withheld report records none of what it carries, and a page of withheld posts " <>
-           "still answers where to read on",
+    test "a withheld report records none of what it carries, and an empty page never " <>
+           "carries its sequence",
          %{ctx: ctx, thread: daily} do
       work = workspace!(ctx, "Surviving")
       gone = workspace!(ctx, "Source")
@@ -1251,7 +1251,7 @@ defmodule Aqua.Providers.ThreadTest do
       rereader = running!(ctx, workspace!(ctx, "Elsewhere"))
       {:ok, opened} = Aqua.Tape.message(ctx, searcher.message_id)
 
-      report =
+      _report =
         say!(ctx, daily, "fares rise on Monday", %{
           author: "aqua",
           sent_by: "aqua",
@@ -1274,9 +1274,97 @@ defmodule Aqua.Providers.ThreadTest do
                  "after_seq" => opened.seq
                })
 
-      assert cursor == report.seq
+      assert cursor == nil
       assert joined == [daily.id]
       assert read_threads(ctx, rereader) == [daily.id]
+    end
+
+    test "a reread's cursor is the last post it answered: it reads past what it withholds, " <>
+           "and records nothing past its page",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Paged")
+      gone = workspace!(ctx, "Source")
+      beyond = workspace!(ctx, "Beyond the page")
+
+      withheld = fn n ->
+        say!(ctx, work, "withheld #{n}", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: work.id,
+          payload: %{"read_threads" => [gone.id]}
+        })
+      end
+
+      first = say!(ctx, work, "first")
+      for n <- 1..60, do: withheld.(n)
+      second = say!(ctx, work, "second")
+      withheld.(61)
+
+      third =
+        say!(ctx, work, "third", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "pointer",
+          workspace_id: beyond.id
+        })
+
+      withheld.(62)
+      assert {:ok, _} = Aqua.Tape.delete_thread(ctx, gone.id)
+      reader = running!(ctx, daily)
+      args = %{"action" => "events", "thread" => work.id, "limit" => 2}
+
+      assert {:ok, %{messages: page, cursor: cursor, read_threads: joined}} =
+               in_turn(ctx, reader, args)
+
+      assert Enum.map(page, & &1.id) == [first.id, second.id]
+      assert cursor == second.seq
+      assert joined == [work.id]
+      assert read_threads(ctx, reader) == [work.id]
+
+      assert {:ok, %{messages: [last], cursor: cursor}} =
+               in_turn(ctx, reader, Map.put(args, "after_seq", cursor))
+
+      assert last.id == third.id and cursor == third.seq
+
+      assert {:ok, %{messages: [], cursor: nil}} =
+               in_turn(ctx, reader, Map.put(args, "after_seq", cursor))
+    end
+
+    test "a search goes on past the matches it withholds and never answers one as where to go on",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Matched")
+      gone = workspace!(ctx, "Source")
+      visible = for n <- 1..2, do: say!(ctx, daily, "needle visible #{n}")
+
+      for n <- 1..21 do
+        say!(ctx, work, "needle withheld #{n}", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: work.id,
+          payload: %{"read_threads" => [gone.id]}
+        })
+      end
+
+      assert {:ok, _} = Aqua.Tape.delete_thread(ctx, gone.id)
+      reader = running!(ctx, workspace!(ctx, "Searching"))
+      args = %{"action" => "search", "q" => "needle", "limit" => 1}
+
+      assert {:ok, %{results: [newer], count: 1, next: next}} = in_turn(ctx, reader, args)
+      assert newer.message == List.last(visible).id
+      assert next == newer.message
+
+      assert {:ok, %{results: [older], next: next}} =
+               in_turn(ctx, reader, Map.put(args, "before", next))
+
+      assert older.message == hd(visible).id
+
+      assert {:ok, %{results: [], next: nil}} =
+               in_turn(ctx, reader, Map.put(args, "before", next))
+
+      assert {:ok, %{results: [], next: nil}} =
+               in_turn(ctx, reader, %{"action" => "search", "q" => "needle withheld"})
     end
 
     test "a reread words the reader's own speech, request and post by who said each",

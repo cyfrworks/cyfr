@@ -477,30 +477,37 @@ defmodule Aqua.Tape do
       TurnStorage.join_threads(Sanctum.Context.actor(ctx), turn.id, threads, %{fence: turn.fence})
 
   @doc """
-  Join what `turn` is about to read of `sources` and answer those it may
-  read, as they now read: the one rule, decided and recorded in one
-  transaction under the turn's fence (`TurnStorage.join_read/3`). `read`
-  is `:history`, the turn reading what its thread holds (a request's
-  rows, a program's post and context), whose rows of other threads are
-  citations brought in; or the threads the turn asked to read, `[]` for a
-  search, all of whose sources are brought in.
+  Join what `turn` is about to read of `rows` and answer those it may
+  read, as they now read, with the posts they cite: the one rule, decided
+  and recorded in one transaction under the turn's fence from the rows as
+  they stand there (`TurnStorage.join_read/3`), so only their ids go in.
+  `read` is `:history`, the turn reading what its thread holds (a
+  request's rows, a program's post and context); the threads the turn
+  asked to read; or `:search`, whose answer points at posts and quotes no
+  citation. `most` bounds how many are handed over, and so recorded.
 
-  Each source says what it depends on: a pointer's, a report's or a
-  wait's workspace thread, an opening's daily thread and a reply's
-  helper thread; the read threads a report kept and those a copied file
-  carries (`Aqua.Attachments.copied_threads/1`); and the turn a crew row
-  or a report came from.
+  What a row says of itself is this module's to read, from the row the
+  transaction read: a pointer's, a report's or a wait's workspace thread
+  and an opening's daily thread; the read threads a report kept and those
+  a copied file carries (`Aqua.Attachments.copied_threads/1`); the turn a
+  crew row or a report came from; and the posts an opening cites.
   """
-  @spec join_read(Context.t(), turn(), :history | [String.t()], [row()]) ::
-          {:ok, %{rows: [row()], threads: [String.t()], read_threads: [String.t()]}}
-          | {:error, term()}
-  def join_read(%Context{} = ctx, turn, read, sources) when is_list(sources) do
-    {history?, asked} = if read == :history, do: {true, []}, else: {false, read}
-
+  @spec join_read(
+          Context.t(),
+          turn(),
+          :history | :search | [String.t()],
+          [row()],
+          pos_integer() | nil
+        ) :: {:ok, map()} | {:error, term()}
+  def join_read(%Context{} = ctx, turn, read, rows, most \\ nil) when is_list(rows) do
     TurnStorage.join_read(Sanctum.Context.actor(ctx), turn.id, %{
       fence: turn.fence,
-      read: asked,
-      sources: Enum.map(sources, &source(&1, history? and &1.thread_id == turn.thread_id))
+      read: if(is_list(read), do: read, else: []),
+      history?: read == :history,
+      cite?: read != :search,
+      most: most,
+      rows: Enum.map(rows, & &1.id),
+      also: &said_by/1
     })
   end
 
@@ -1204,17 +1211,14 @@ defmodule Aqua.Tape do
   @spec payload(row()) :: map()
   def payload(row), do: Threads.payload(row)
 
-  defp source(row, held?) do
+  # What a row says it depends on and cites, read from that row alone
+  # (`TurnStorage.join_read/3`'s `also:`).
+  defp said_by(row) do
     %{
-      id: row.id,
-      thread_id: row.thread_id,
-      turn_id: row.turn_id,
-      sent_by: row.sent_by,
-      kind: row.kind,
-      held?: held?,
       names: named(row),
       copies: kept(row) ++ files_carried(row),
-      from: from_turn(row)
+      from: from_turn(row),
+      cites: cites(row)
     }
   end
 
@@ -1227,10 +1231,19 @@ defmodule Aqua.Tape do
     end
   end
 
-  # A reply is the helper's words. A request delivered into a helper's
-  # thread names its room, with which that thread is deleted anyway.
-  defp named(%{reply_to: to} = row) when is_binary(to), do: ids(payload(row)["from_thread"])
   defp named(_row), do: []
+
+  defp cites(%{kind: "opening"} = row) do
+    case payload(row) do
+      %{"from" => %{"thread" => daily}, "refs" => refs} when is_binary(daily) and is_list(refs) ->
+        %{thread: daily, posts: ids(refs)}
+
+      _none ->
+        nil
+    end
+  end
+
+  defp cites(_row), do: nil
 
   defp kept(%{kind: "report"} = row), do: ids(payload(row)["read_threads"])
   defp kept(_row), do: []

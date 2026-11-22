@@ -1251,7 +1251,7 @@ defmodule Aqua.Program do
   defp prompt_context(_work, _kind), do: {:ok, nil}
 
   # What a delivery brings in joined the turn before it was worded
-  # (`Aqua.Reader.join/4`).
+  # (`Aqua.Reader.join/5`).
   defp carry(work, deliver, row_id) do
     Tape.carry(work.guest, work.turn, %{
       deliver: deliver,

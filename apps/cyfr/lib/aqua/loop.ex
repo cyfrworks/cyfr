@@ -41,7 +41,7 @@ defmodule Aqua.Loop do
   read threads (`turns.read_threads`) before they are read, so deleting a
   thread finds every turn that read it. A request's rows, and what a
   program is given, go through the one rule before they are worded
-  (`Aqua.Reader.join/4`, `Arca.TurnStorage.join_read/3`), which reads
+  (`Aqua.Reader.join/5`, `Arca.TurnStorage.join_read/3`), which reads
   them again as they stand, says which the turn is handed, and records
   the threads those depend on. A call's result closes with the threads
   it carries (`Aqua.Loop.Policy.threads_of/3`). The room excerpt is the
@@ -1001,7 +1001,7 @@ defmodule Aqua.Loop do
     do: author in Prima.Author.reserved()
 
   # The rows the turn reads now and their reading, joined before any is
-  # read (`Aqua.Reader.join/4`).
+  # read (`Aqua.Reader.join/5`).
   defp projected(%State{} = state) do
     guest = guest(state)
 
@@ -2336,7 +2336,7 @@ defmodule Aqua.Loop do
 
   # What the program is given before its first answer joins the turn's
   # read threads before its start is decided, as a request's rows join
-  # before they are read (`Aqua.Reader.join/4`), so a thread's deletion
+  # before they are read (`Aqua.Reader.join/5`), so a thread's deletion
   # finds the turn: the turn's posts, and for a thread with no native
   # session the thread so far a fresh session's first post carries
   # (`Aqua.Program.context_rows/2`). The post that opened the turn is one

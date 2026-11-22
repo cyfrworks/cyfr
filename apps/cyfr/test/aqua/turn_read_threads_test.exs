@@ -711,6 +711,130 @@ defmodule Aqua.TurnReadThreadsTest do
       assert_forgotten(ctx, daily, kept)
     end
 
+    test "a report finalized after it was seen joins the source list of the text it answers",
+         %{ctx: ctx, thread: daily} do
+      reported = workspace!(ctx, "Reporting")
+      added = workspace!(ctx, "Another source")
+      reader = running!(ctx, workspace!(ctx, "Reading"))
+      seen = say!(ctx, daily, "Report", %{kind: "report", workspace_id: reported.id})
+
+      assert {:ok, _} =
+               Threads.update_message(Sanctum.Context.actor(ctx), seen.id, %{
+                 payload: %{"read_threads" => [added.id]},
+                 content: "Final report"
+               })
+
+      assert {:ok, %{rows: [now], read_threads: joined}} =
+               Aqua.Reader.join(ctx, reader, [seen], [daily.id])
+
+      assert now.content == "Final report"
+      assert joined == Enum.sort([daily.id, reported.id, added.id])
+    end
+
+    # What crew delivers when its lookup of the helper's turn failed: the
+    # turn the reply came from and no thread (`Aqua.Crew`'s reply payload).
+    test "a reply delivered without its helper's thread joins it when read, by the turn it " <>
+           "came from",
+         %{ctx: ctx, thread: daily} do
+      {:ok, helper} = Tape.crew_thread(ctx, daily.id, "planner")
+      writer = running!(ctx, helper)
+      {:ok, _} = Tape.finish(ctx, writer, "cancelled")
+      assert read_threads(ctx, writer) == []
+      reply = helpers_reply!(ctx, daily, writer)
+      reader = running!(ctx, daily)
+
+      assert {:ok, %{rows: [handed], read_threads: joined}} =
+               Aqua.Reader.join(ctx, reader, [reply])
+
+      assert handed.id == reply.id
+      assert joined == [helper.id]
+      kept = kept_since_reading!(ctx, daily)
+
+      assert {:ok, _} = Tape.delete_thread(ctx, helper.id)
+      assert_forgotten(ctx, daily, kept)
+      assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, reader.id)
+    end
+
+    test "a reply whose helper's thread is gone is not brought in, though it names no thread",
+         %{ctx: ctx, thread: daily} do
+      {:ok, helper} = Tape.crew_thread(ctx, daily.id, "planner")
+      writer = running!(ctx, helper)
+      {:ok, _} = Tape.finish(ctx, writer, "cancelled")
+      reply = helpers_reply!(ctx, daily, writer)
+      assert {:ok, _} = Tape.delete_thread(ctx, helper.id)
+      reader = running!(ctx, workspace!(ctx, "Reading"))
+
+      assert {:ok, %{rows: [], read_threads: joined}} =
+               Aqua.Reader.join(ctx, reader, [reply], [daily.id])
+
+      assert joined == [daily.id]
+    end
+
+    test "a deleted opening's citation registers nothing", %{ctx: ctx, thread: daily} do
+      work = cited_by!(ctx, daily, say!(ctx, daily, "The shop opens on Friday"))
+      seen = rows(ctx, work)
+      reader = running!(ctx, workspace!(ctx, "Elsewhere"))
+      assert {:ok, _} = Tape.delete_thread(ctx, work.id)
+
+      assert {:ok, %{rows: [], read_threads: joined}} =
+               Aqua.Reader.join(ctx, reader, seen, [work.id])
+
+      assert joined == []
+    end
+
+    test "a withheld opening's citation registers nothing", %{ctx: ctx, thread: daily} do
+      gone = workspace!(ctx, "Source")
+      work = workspace!(ctx, "Citing")
+      cited = say!(ctx, daily, "The shop opens on Friday")
+
+      say!(ctx, work, "when does it open", %{
+        kind: "opening",
+        status: "error",
+        payload: %{
+          "title" => "Citing",
+          "asked_by" => ctx.user_id,
+          "from" => %{"thread" => daily.id},
+          "refs" => [cited.id],
+          "attachments" => [%{"filename" => "shop.txt", "read_threads" => [gone.id]}]
+        }
+      })
+
+      assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
+      reader = running!(ctx, workspace!(ctx, "Elsewhere"))
+
+      assert {:ok, %{rows: [], read_threads: joined}} =
+               Aqua.Reader.join(ctx, reader, rows(ctx, work), [work.id])
+
+      assert joined == [work.id]
+    end
+
+    for kind <- ~w(system error) do
+      @kind kind
+      test "a cited #{kind} post is quoted as a reread words it", %{ctx: ctx, thread: daily} do
+        note =
+          say!(ctx, daily, "The job stopped.", %{
+            kind: @kind,
+            author: Prima.Author.system(),
+            sent_by: "aqua"
+          })
+
+        work = cited_by!(ctx, daily, note)
+        reader = running!(ctx, workspace!(ctx, "Reading"))
+
+        assert {:ok, %{rows: [reread], reading: direct}} =
+                 Aqua.Reader.join(ctx, reader, [note], [daily.id])
+
+        assert {:said, worded} = Aqua.Reader.read(reread, direct)
+        assert worded == "[A line from the server, not the person]\nThe job stopped."
+
+        assert {:ok, %{rows: [opening], reading: reading}} =
+                 Aqua.Reader.join(ctx, reader, rows(ctx, work), [work.id])
+
+        assert {:said, by_citation} = Aqua.Reader.read(opening, reading)
+        assert by_citation =~ "[Post #{note.id} of the daily thread, by the server]\n#{worded}"
+      end
+    end
+
     test "a citation is a post only: a call's result in the daily thread is none",
          %{ctx: ctx, thread: daily} do
       internal = say!(ctx, daily, "INTERNAL-RESULT", %{sent_by: "aqua", kind: "tool_result"})
@@ -1271,6 +1395,17 @@ defmodule Aqua.TurnReadThreadsTest do
     {:ok, _} = Tape.finish(ctx, writer, "cancelled")
     assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
     quoted
+  end
+
+  defp helpers_reply!(ctx, daily, writer) do
+    say!(ctx, daily, "The plan is ready.", %{
+      author: Prima.Author.agent(),
+      sent_by: "planner",
+      addressee: "aqua",
+      reply_to: writer.message_id,
+      outcome: "done",
+      payload: %{"from_turn" => writer.id}
+    })
   end
 
   # A workspace thread whose opening, refused before it ran, cites `cited`.

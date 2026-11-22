@@ -7,9 +7,10 @@ defmodule Aqua.Reader do
   program's post and context, and a turn's reread of a thread say of each.
 
   `read/2` words one row and loads nothing: an opening expands only the
-  `refs` it is handed. So a caller joins before it reads (`join/4`): the
-  rows and the posts their openings cite (`sources/2`) go through the one
-  rule of what is handed over and what joins (`Aqua.Tape.join_read/4`).
+  `refs` it is handed. So a caller joins before it reads (`join/5`): the
+  one rule (`Aqua.Tape.join_read/5`) says which rows are handed over and
+  which posts those cite, as both now read, and records what they depend
+  on.
 
   Only an API request has roles and calls to show what is the reading
   agent's own (`me`), so only there is a row its own or none. A program's
@@ -44,73 +45,30 @@ defmodule Aqua.Reader do
         }
 
   @doc """
-  `rows` and the posts their openings cite: a citation is a post a model
-  reads (no call, result or note) of the opening's daily thread, and one
-  deleted since is none.
+  Join what `turn` is about to read of `rows`, then answer the rows it
+  may read, as they now read, and their reading, which holds the posts
+  they cite: the turn's agent's for `:history`, its own thread's, and
+  `:nobody`'s for a reread of the threads `read` names, both named.
+  `most` bounds the rows answered.
   """
-  @spec sources(Context.t(), [Tape.row()]) :: [Tape.row()]
-  def sources(%Context{} = guest, rows) when is_list(rows) do
-    cited =
-      for %{kind: "opening"} = opening <- rows,
-          %{"from" => %{"thread" => daily}, "refs" => ids} when is_list(ids) <-
-            [Tape.payload(opening)],
-          id <- ids,
-          is_binary(id),
-          {:ok, %{thread_id: ^daily} = row} <- [Tape.message(guest, id)],
-          citable?(row),
-          do: row
-
-    Enum.uniq_by(rows ++ cited, & &1.id)
-  end
-
-  defp citable?(row),
-    do: Arca.ThreadStorage.post?(row) and row.kind not in ~w(error system)
-
-  @doc """
-  Join what `turn` is about to read of `rows` (`sources/2`), then answer
-  the rows it may read, as they now read, and their reading: the turn's
-  agent's for `:history`, its own thread's, and `:nobody`'s for a reread
-  of the threads `read` names, both named.
-  """
-  @spec join(Context.t(), Tape.turn(), [Tape.row()], :history | [String.t()]) ::
+  @spec join(Context.t(), Tape.turn(), [Tape.row()], :history | [String.t()], pos_integer() | nil) ::
           {:ok, %{rows: [Tape.row()], reading: reading(), read_threads: [String.t()]}}
           | {:error, term()}
-  def join(%Context{} = guest, turn, rows, read \\ :history) when is_list(rows) do
-    sources = sources(guest, rows)
-    asked = MapSet.new(rows, & &1.id)
-    {me, threads} = if read == :history, do: {turn.agent, []}, else: {:nobody, read}
-    cited_in = for row <- sources, row.id not in asked, do: row.thread_id
-
-    # The open turns are read before the rows are read again: a post's
-    # carry is then never older than the turn's end it is judged by.
-    with {:ok, open} <- open(guest, turn, Enum.uniq(threads ++ cited_in)),
-         {:ok, joined} <- Tape.join_read(guest, turn, read, sources),
-         {:ok, refused} <- Tape.refused_posts(guest, joined.rows) do
-      {handed, cited} = Enum.split_with(joined.rows, &(&1.id in asked))
-
+  def join(%Context{} = guest, turn, rows, read \\ :history, most \\ nil) when is_list(rows) do
+    with {:ok, joined} <- Tape.join_read(guest, turn, read, rows, most),
+         {:ok, refused} <- Tape.refused_posts(guest, joined.rows ++ joined.cited) do
       reading = %{
-        me: me,
-        open: open,
+        me: if(read == :history, do: turn.agent, else: :nobody),
+        open: [turn.id | joined.open],
         refused: refused,
         named?: true,
-        refs: Map.new(cited, &{&1.id, &1}),
+        refs: Map.new(joined.cited, &{&1.id, &1}),
         removed: %{},
         display: &Sanctum.Tenancy.Users.display_name/1
       }
 
-      {:ok, %{rows: handed, reading: reading, read_threads: joined.read_threads}}
+      {:ok, %{rows: joined.rows, reading: reading, read_threads: joined.read_threads}}
     end
-  end
-
-  # The reading turn, and the open turns of the threads it reads besides
-  # its own history: whose posts may still be taken.
-  defp open(guest, turn, threads) do
-    Enum.reduce_while(threads, {:ok, [turn.id]}, fn thread, {:ok, open} ->
-      case Tape.open_turns(guest, thread) do
-        {:ok, turns} -> {:cont, {:ok, open ++ Enum.map(turns, & &1.id)}}
-        {:error, _unread} = unread -> {:halt, unread}
-      end
-    end)
   end
 
   @doc """
@@ -321,9 +279,14 @@ defmodule Aqua.Reader do
   defp reported(%{"outcome" => "error"}), do: "error, Aqua could not run it"
   defp reported(_payload), do: "done"
 
-  defp sender(%{sent_by: "person"} = row, reading), do: reading.display.(row.author)
-  defp sender(%{sent_by: sent_by}, _reading) when is_binary(sent_by), do: sent_by
-  defp sender(row, reading), do: reading.display.(row.author)
+  defp sender(row, reading) do
+    cond do
+      # A line in the server's voice, whoever's turn wrote it.
+      server?(row) -> "the server"
+      agent?(row) -> row.sent_by
+      true -> reading.display.(row.author)
+    end
+  end
 
   defp request_text(row, reading) do
     asker = if row.sent_by == "person", do: reading.display.(row.author), else: row.sent_by
