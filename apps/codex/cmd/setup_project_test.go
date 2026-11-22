@@ -139,7 +139,7 @@ func TestAReadingThatNeverCameBackBlamesNoDocker(t *testing.T) {
 				_, in := io.Pipe()
 				return &workProcess{in: in, out: strings.NewReader("not a message\n"), wait: func() error { return nil }}, nil
 			},
-			why: "setup's work ended with no answer",
+			why: "setup's work ended before it finished",
 		},
 		"given up": {
 			start: func() (*workProcess, error) {
