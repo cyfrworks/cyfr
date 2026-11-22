@@ -24,7 +24,7 @@ import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, bothW
   offered, passkeyFor, signOutOfPrism, signedInPrism, startSignIn, toSignIn, usePasskey} from "../account.js"
 import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
   decisions, fault, frontLength, harvest, history, inputs, js, judged, literal, load, lockDetail, opens, pageKilled, passkeys,
-  reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays, sleep,
+  reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays,
   submit, throughComputerLock, toldUnanswered, unansweredLoad, unclearable, UNCLEARED, undisturbed, waitFor} from "../lib.js"
 
 const OTHER = "desk-b"
@@ -180,30 +180,37 @@ async function passkeyPhase() {
     {listed, shownThere, before: listedBefore.includes(waiting), added})
 
   // lock_forgets: locked while a request of the page's, which outlives
-  // it, is held until the lock is over: its answer leaves no cookie, and
-  // the chooser tells of no failure. What a closing page's scripts write
+  // it, is held until the lock is over: once the engine says that very
+  // request completed, no cookie is left, and the chooser tells of no
+  // failure. What a closing page's scripts write
   // is the app's own tests' (main.test): here those writes end before the
   // engine's clear does.
   await judged("lock_forgets", "a lock forgets all of the content's storage, and the closing page's request, answered afterwards, puts nothing back", async () => {
     const ses = w.webContents.session
+    const held = HOME + "/login?held"
     let send = null
-    ses.webRequest.onBeforeRequest({urls: [HOME + "/login?*"]}, (_details, callback) => { send = () => callback({}) })
+    let id = null
+    let ended = null
+    ses.webRequest.onBeforeRequest({urls: [held]}, (details, callback) => {
+      id = details.id
+      send = () => callback({})
+    })
+    const end = (how) => (details) => { if (details.id === id) ended = {how, status: details.statusCode ?? null, error: details.error ?? null} }
+    ses.webRequest.onCompleted({urls: [held]}, end("completed"))
+    ses.webRequest.onErrorOccurred({urls: [held]}, end("failed"))
     try {
-      await js(w.webContents, `fetch("/login?held", {keepalive: true}).catch(() => {}); 1`)
+      await js(w.webContents, `fetch(${literal(held)}, {keepalive: true}).catch(() => {}); 1`)
       await waitFor(() => send, "the page's request held")
-      const from = await frontLength()
       const locked = await lockDevice(w)
       send()
       send = null
-      const answered = await waitFor(async () => (await seen(new URL(HOME).hostname)).slice(from)
-        .find((r) => r.path === "/login" && r.status !== null), "the held request's answer", 20_000)
-      await sleep(500) // sleep-ok: how long the proof watches for what must not happen
+      const answered = await waitFor(() => ended, "the engine's end of that request", 20_000)
       const left = (await ses.cookies.get({})).map((c) => `${c.name} at ${c.domain}`)
-      return [signedOutToWays(locked) && answered.status === 200 && left.length === 0,
-        {left, answered: answered.status, chooser: locked.chooser}]
+      return [signedOutToWays(locked) && answered.how === "completed" && answered.status === 200 && left.length === 0,
+        {left, answered, chooser: locked.chooser}]
     } finally {
       send?.()
-      ses.webRequest.onBeforeRequest(null)
+      for (const hook of ["onBeforeRequest", "onCompleted", "onErrorOccurred"]) ses.webRequest[hook](null)
     }
   })
 

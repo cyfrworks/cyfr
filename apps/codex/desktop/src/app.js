@@ -19,7 +19,7 @@
 import {spawn} from "node:child_process"
 import path from "node:path"
 
-import {BrowserWindow, app, dialog, session, webContents} from "electron"
+import {BrowserWindow, app, dialog, session} from "electron"
 
 import {keptStorage} from "./owner.js"
 import {lines, readFromCyfr, toCyfr} from "./process.js"
@@ -242,7 +242,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   function guard(ses, kind) {
     ses.webRequest.onHeadersReceived((details, callback) => {
-      const page = details.webContentsId === undefined ? undefined : webContents.fromId(details.webContentsId)
+      const page = details.webContents
       callback({responseHeaders: documentHeaders(kind, details.resourceType, details.responseHeaders ?? {},
         {pageGone: !page || page.isDestroyed()})})
     })

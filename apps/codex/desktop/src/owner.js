@@ -20,8 +20,9 @@ const PASSES = 2
 
 /**
  * The kept storage of session `ses`, its owner recorded in `file`; `say`
- * hears why a clear failed: the call that threw, or each cookie left by
- * its name and site, never its value.
+ * hears why a clear failed in what the app itself knows: the name of the
+ * call that threw, never the text of its error, or each cookie left by its
+ * name and site, never its value.
  */
 export function keptStorage(ses, file, say) {
   const owner = () => {
@@ -64,8 +65,8 @@ export function keptStorage(ses, file, say) {
         if (left.length === 0) return true
       }
       say(`not cleared: left ${left.map((c) => `${c.name} at ${c.domain}`).join(", ")}`)
-    } catch (e) {
-      say(`not cleared: ${call} threw: ${e?.message ?? e}`)
+    } catch {
+      say(`not cleared: ${call} threw`)
     }
     return false
   }

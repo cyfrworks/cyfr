@@ -59,7 +59,6 @@ function reset({relaunch = false} = {}) {
 class Contents extends EventEmitter {
   constructor(win, ses) {
     super()
-    this.id = win.id
     this.session = ses
     this.url = ""
     this.mainFrame = {processId: 1, routingId: win.id, get url() { return win.webContents.url }}
@@ -216,8 +215,7 @@ function request({url}) {
 
 mock.module("electron", {exports: {
   BrowserWindow, app: world.app, dialog: {showMessageBox: async () => ({response: 0})},
-  powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request},
-  webContents: {fromId: (id) => world.windows.find((w) => w.id === id && !w.destroyed)?.webContents}
+  powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request}
 }})
 let child = null
 mock.module("node:child_process", {exports: {spawn: (_program, args) => {
@@ -771,19 +769,20 @@ test("what a closing page writes after the lock's clear began is cleared with th
   assert.doesNotMatch(content().webContents.url, /notice=/)
 })
 
-test("a lock's clear that truly fails says which cookie was left or which call threw, and never a value", async () => {
+test("a lock's clear that truly fails says which cookie was left or which call threw, and nothing it was handed", async () => {
+  const handed = () => Promise.reject(new Error("cookie=a-secret at /private/file"))
   for (const [fail, why] of [
     [(ses) => { world.unclearable = true; ses.jar = [{name: "_cyfr_key", domain: "cyfr.example.com", value: "a-secret"}] },
       /^not cleared: left _cyfr_key at cyfr\.example\.com$/],
-    [() => { world.clearing = () => Promise.reject(new Error("no")) }, /^not cleared: clearStorageData threw: no$/],
-    [() => { world.step = (at) => { if (at === "cache cleared") throw new Error("no") } }, /^not cleared: clearCache threw: no$/],
-    [() => { world.step = (at) => { if (at === "flushed") throw new Error("no") } }, /^not cleared: flushStore threw: no$/],
-    [() => { world.step = (at) => { if (at === "read") throw new Error("no") } }, /^not cleared: cookies.get threw: no$/]]) {
+    [() => { world.clearing = handed }, /^not cleared: clearStorageData threw$/],
+    [() => { world.step = (at) => { if (at === "cache cleared") throw new Error("cookie=a-secret at /private/file") } }, /^not cleared: clearCache threw$/],
+    [() => { world.step = (at) => { if (at === "flushed") throw new Error("cookie=a-secret at /private/file") } }, /^not cleared: flushStore threw$/],
+    [() => { world.step = (at) => { if (at === "read") throw new Error("cookie=a-secret at /private/file") } }, /^not cleared: cookies.get threw$/]]) {
     const lock = await locksAndForgets()
     fail(content().webContents.session)
     const said = await lock()
     assert.ok(said.some((line) => why.test(line)), `${why}: ${said.join("; ")}`)
-    assert.ok(!said.some((line) => line.includes("a-secret")))
+    assert.ok(!said.some((line) => /a-secret|private/.test(line)), said.join("; "))
     assert.match(content().webContents.url, /notice=unforgotten$/)
   }
 })
@@ -792,16 +791,16 @@ test("a response to a page the lock closed sets no cookie, and the next page's o
   const lock = await locksAndForgets()
   const page = content()
   await lock()
-  const answered = (webContentsId) => {
+  const answered = (webContents) => {
     let out
-    page.webContents.session.received({webContentsId, resourceType: "xhr", responseHeaders: {"set-cookie": ["a=1"]}},
+    page.webContents.session.received({webContents, resourceType: "xhr", responseHeaders: {"set-cookie": ["a=1"]}},
       (r) => { out = r.responseHeaders })
     return out
   }
   assert.ok(page.destroyed)
-  assert.equal(answered(page.id)["set-cookie"], undefined, "the closed page's")
+  assert.equal(answered(page.webContents)["set-cookie"], undefined, "the closed page's")
   assert.equal(answered(undefined)["set-cookie"], undefined, "no page's")
-  assert.deepEqual(answered(content().id)["set-cookie"], ["a=1"], "the page showing")
+  assert.deepEqual(answered(content().webContents)["set-cookie"], ["a=1"], "the page showing")
 })
 
 test("Connect to another CYFR does not advance past a failed clear", async () => {
