@@ -135,10 +135,6 @@ defmodule Cyfr.DocsDriftTest do
              "parts #{inspect(@part_names)}"
   end
 
-  # ARCHITECTURE.md is an outline: what one part could change alone is that
-  # part's documentation. Its size is held, in words as `wc -w` counts them:
-  # the whole document, and each part's section of §3, from its heading to
-  # the next heading of its level or above.
   @architecture_words 5_000
   @part_words 120
   @to_its_owner "ARCHITECTURE.md says who owns a thing, who may reach or trust whom, which " <>
@@ -150,7 +146,7 @@ defmodule Cyfr.DocsDriftTest do
 
   defp part_words(doc) do
     for [section, part] <-
-          Regex.scan(~r/^### (\w+)(?: \([^)]*\))?: [^\n]*\n.*?(?=^[#]{1,3} |\z)/ms, doc),
+          Regex.scan(~r/^### (\w+)(?: \([^)]*\))?: [^\n]*\n.*?(?=^[#]{2,3} |\z)/ms, doc),
         do: {part, words(section)}
   end
 
@@ -174,16 +170,34 @@ defmodule Cyfr.DocsDriftTest do
     assert over == [],
            "these part sections of ARCHITECTURE.md hold more than #{@part_words} words: " <>
              "#{inspect(over)}. " <> @to_its_owner
+  end
 
-    # A nested heading does not end a part's section: what stands under it
-    # counts.
-    nested =
-      String.replace(doc, ~r/^### Aqua: [^\n]*\n/m, fn heading ->
-        heading <> "\n#### Nested\n\n" <> String.duplicate("word ", @part_words) <> "\n"
-      end)
+  test "a part's section runs through a nested heading and a fenced line to the next part" do
+    sample = """
+    ## 3. Modules
 
-    assert {"Aqua", count} = List.keyfind(part_words(nested), "Aqua", 0)
-    assert count > @part_words
+    ### One (Alias): first
+
+    one two
+
+    #### Nested
+
+    three
+
+    ```
+    # four
+    ```
+
+    ### Two: second
+
+    five
+
+    ## 4. Next
+
+    six
+    """
+
+    assert part_words(sample) == [{"One", 13}, {"Two", 4}]
   end
 
   test "ARCHITECTURE.md's four ports are the port roster" do

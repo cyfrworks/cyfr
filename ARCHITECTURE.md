@@ -6,7 +6,7 @@ This document outlines CYFR's architecture in the present tense of its end state
 
 ### 1.1 What CYFR is for
 
-CYFR is a home for a person's work with AI and a place to talk with other people: an assistant, the components it builds and runs, files, schedules and credentials, on infrastructure the person controls. It rests on one idea: **a model proposes, and CYFR decides.** Only a declared operation, admitted by one gate under a consent for exactly that action and those resources, carries an action out. The person gives that consent; the one no person gives is provisioning's, for the shipped seed (§5.4). Credentials live in a vault no model sees.
+CYFR is a home for a person's work with AI and a place to talk with other people: an assistant, the components it builds and runs, files, schedules and credentials, on infrastructure the person controls. It rests on one idea: **a model proposes, and CYFR decides.** Only a declared operation, admitted by one gate under a consent for exactly that action and those resources, carries an action out. The person gives that consent; the one no person gives is provisioning's, for the shipped seed (§5.4). No model sees a credential.
 
 ### 1.2 Principles
 
@@ -43,7 +43,7 @@ L1  Foundations     Cyfr (Host)  >  Sanctum  >  Arca
 L0  Prima           types, wire shapes, behaviours, pure primitives, the actor
 ```
 
-The order describes dependencies, not a request's path. Only Host's composition modules (`Cyfr.Application`, `CyfrWeb.Endpoint`, `CyfrWeb.Router`) name the layers above them, to wire them, beside the boundary catalog (`Cyfr.Boundaries`), which names every module it judges; Emissary is the one surface that also implements a port (§4.2). A new concern goes in the lowest layer whose neighbours do not need it.
+The order describes dependencies, not a request's path. Codex shares no code with the control plane. Only Host's composition modules (`Cyfr.Application`, `CyfrWeb.Endpoint`, `CyfrWeb.Router`) name the layers above them, to wire them, beside the boundary catalog (`Cyfr.Boundaries`), which names every module it judges; Emissary is the one surface that also implements a port (§4.2). A new concern goes in the lowest layer whose neighbours do not need it.
 
 **Why.** Each layer can be understood knowing only what is below it, and builds and scans, not review, keep it so.
 
@@ -108,7 +108,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Prism: the screen
 
 - The system layer, the frame manager, the shell, the desktop and its pages (§7), and browser sign-in.
-- It dispatches through the gate and reads domain facades. Beside the gate it reaches a domain or Sanctum directly only for what its person already holds, their presentation state and the sessions and frames open on their screen, through the modules a roster names (`Cyfr.Boundaries`). Its sign-in pages decide through Sanctum (§5.3).
+- It dispatches through the gate and reads domain facades. Beside the gate it calls a domain or Sanctum only through the modules a roster names, each with its reason (`Cyfr.Boundaries`). Its sign-in pages decide through Sanctum (§5.3).
 - Its setup page admits an installation's first person and changes nothing on the machine.
 
 ### Codex: the command line and the CYFR app
@@ -194,7 +194,7 @@ Identity and standing are established at the authentication boundary (`Sanctum.C
 
 ### 5.3 One gate
 
-The screen, the command line, the wire and the assistant share one operation declaration and one gate, on two planes: external callers and calls inside a running chain. Some requests are decided before, or instead of, the gate. Host keeps a roster of such entries (`Cyfr.Boundaries.admission_entries/0`), and a seam test drives each to a refusal and finds it recorded. A sign-in's answer is decided by Sanctum itself (`Sanctum.SignIn`), outside that roster.
+The screen, the command line, the wire and the assistant share one operation declaration and one gate, on two planes: external callers and calls inside a running chain. Some requests are decided before, or instead of, the gate. Host rosters those entries (`Cyfr.Boundaries.admission_entries/0`), and a seam test holds the roster. A sign-in's answer is decided by Sanctum itself (`Sanctum.SignIn`), outside that roster.
 
 ### 5.4 Consent
 
@@ -210,7 +210,7 @@ Guest egress is a HostAPI operation: Opus decides it under the attempt's authori
 
 ### 5.7 Isolation of untrusted processes
 
-Untrusted processes run apart from the control plane, with restricted privileges, bounded resources and full cleanup before a uid is used again. A runner has a user and a network namespace of its own, with no route. A build or a program shares its island's network and its container's process and IPC namespaces with its neighbours, so the uid alone keeps neighbours apart, with the limits `Prima.LocusRoles` states. The sessions of one kept folder share that folder's uid, its files and the egress rule set for that uid. The island's egress guard holds a process that names hosts to the addresses its keeper resolved at its start, and one that names none to the island's default rule. The assistant's browser runs without its engine's own sandbox, so a page that breaks the renderer gets that browser's process: its profile and the person's sign-ins kept there, the egress its uid is allowed, and the driver's protocol towards the host.
+Untrusted processes run apart from the control plane, with restricted privileges and bounded resources. A pooled uid, and a retired kept folder's, is cleaned in full before it is used again. A runner has a user and a network namespace of its own, with no route. A build or a program shares its island's network and its container's process and IPC namespaces with its neighbours, so the uid alone keeps neighbours apart, with the limits `Prima.LocusRoles` states. The sessions of one kept folder share that folder's uid and its files, and a second starts beside a live one with no cleanup between. The island's egress guard holds a uid to the addresses its keeper resolved at a start that names hosts, and to the island's default rule at one that names none. The rule belongs to the uid and is set at each start, so the latest start's rule holds for every session of a kept folder. The assistant's browser runs without its engine's own sandbox, so a page that breaks the renderer gets that browser's process: its profile and the person's sign-ins kept there, the egress its uid is allowed, and the driver's protocol towards the host.
 
 ### 5.8 Separate meanings
 
@@ -222,7 +222,7 @@ Resource limits, platform ceilings, capacity ceilings, depth caps and invocation
 
 ### 6.1 Members and the cell lease
 
-Each control-plane member owns its slot through a database lease with a generation of its own; a peer joining invalidates no healthy member's slot, and host calls bind to the member that issued them. **A stale owner admits no work, dispenses no credential, emits no result and overwrites no successor's state**, which is verified live in the transaction that writes.
+Each control-plane member owns its slot through a database lease with a generation of its own; a peer joining invalidates no healthy member's slot, and host calls bind to the member that issued them. **A stale owner admits no work, dispenses no credential, emits no result and overwrites no successor's state**, which is verified live in the transaction that writes: a take-over or a release waits for a write that has verified its slot to commit, and the member's own renewal does not.
 
 ### 6.2 Boot and standing transitions
 
@@ -234,11 +234,11 @@ A row or document the host owns publishes fenced: staged immutable, and committe
 
 ### 6.4 Decision audit
 
-The gate records a decision for every admission but the reads its catalog lists as unrecorded, for every refusal, and a completion after. The audit never decides: a missing completion is unknown, never success. Audit traffic never consumes the capacity that renewing ownership needs.
+The gate records a decision for every admission but the reads its catalog lists as unrecorded, for every refusal, and a completion after. The audit never decides: a lost audit write is counted and the result stands, and a missing completion is unknown, never success. Audit traffic never consumes the capacity that renewing ownership needs.
 
 ### 6.5 Attempts and outcomes
 
-Each admitted guest holds a durable attempt generation its effects are fenced against. A crash past a step that is not replay-safe is uncertain, and a possibly completed effect is replayed only under a contract that proves it safe.
+Each admitted guest holds a durable attempt generation its effects are fenced against. A crash past a step that is not replay-safe is uncertain, a possibly completed effect is replayed only under a contract that proves it safe, and every exit path releases what the attempt held and stops its dependents in order.
 
 ### 6.6 Revocation bounds
 
@@ -250,14 +250,14 @@ One baseline migration is the schema, on both adapters alike, and a database run
 
 ### 6.8 Configuration and settings
 
-Configuration is parsed explicitly, and an invalid security-relevant value is refused. The access mode is a deployment setting from which the home's address, listeners, origins and proxy trust follow (`Cyfr.RuntimeConfig`): only the machine's own `cyfr` writes it, and the boot refuses a setting that contradicts it.
+Configuration is parsed explicitly, and an invalid security-relevant value is refused. An unreadable settings store refuses the boot. The access mode is a deployment setting from which the home's address, listeners, origins and proxy trust follow (`Cyfr.RuntimeConfig`): only the machine's own `cyfr` writes it, and the boot refuses a setting that contradicts it.
 
 ### 6.9 Backup, runtime and budgets
 
-- Update, backup and restore are the machine's `cyfr` commands, and each stops this host's stack for its snapshot or its change. An update is refused before anything stops when its schema fingerprint is not the running cell's, and goes on while another host of the cell already runs its release. A restore refuses while any server of the cell holds a live slot.
+- Update, backup and restore are the machine's `cyfr` commands, and each stops this host's stack for its snapshot or its change. An update is refused before anything stops when its schema fingerprint is not the running cell's, and goes on beside a peer already on its release. A backup, like a restore, refuses while another server of the cell holds a live slot.
 - A restore is declared: the boot consumes its marker under the live lease before any admission path opens, and its one transition retires or suspends every authority the backup carried, so restored authority never re-enables itself. *Not built yet:* an outside rollback floor against an undeclared restore.
 - A storage reserve keeps headroom to take authority away (`Cyfr.StorageReserve`): below it the gate admits only reads, the operations declared `reduces_authority` and the confirmations they need, and the cell's renewal and shutdown never refuse.
-- A latency budget is stated by the proof that measures it.
+- Startup and shutdown run in dependency order, and a latency budget is stated by the proof that measures it.
 
 **Why.** Correctness rests on the lease verified where the write happens, never on a member's belief that it still owns.
 
