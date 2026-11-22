@@ -9,9 +9,9 @@ defmodule Cyfr.Cluster.CellTest do
   death costs a successor, what a live partition costs nobody, and which
   member proposes itself for a singleton.
 
-  Every bound here follows from `Cyfr.Cell`'s lease and renew interval
-  (ARCHITECTURE.md §6.1), measured rather than assumed, and every
-  measurement is reported with the margin it had.
+  Every bound here follows from `Cyfr.Cell`'s lease and renew interval,
+  measured rather than assumed, and every measurement is reported with
+  the margin it had.
   """
 
   use Cyfr.Cluster.Case, async: false

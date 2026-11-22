@@ -136,10 +136,9 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # ARCHITECTURE.md is an outline: what one part could change alone is that
-  # part's documentation. Without a ceiling each slice wrote its behaviour
-  # in as an invariant, so its size is held: the whole document, and each
-  # part's section of §3 from its heading to the next, in words as `wc -w`
-  # counts them.
+  # part's documentation. Its size is held, in words as `wc -w` counts them:
+  # the whole document, and each part's section of §3, from its heading to
+  # the next heading of its level or above.
   @architecture_words 5_000
   @part_words 120
   @to_its_owner "ARCHITECTURE.md says who owns a thing, who may reach or trust whom, which " <>
@@ -147,7 +146,13 @@ defmodule Cyfr.DocsDriftTest do
                   "about one part's behaviour belongs in its owner's documentation: move " <>
                   "it there, and leave the ceiling as it is."
 
-  defp words(text), do: text |> String.split() |> length()
+  defp words(text), do: text |> String.split(~r/\s+/u, trim: true) |> length()
+
+  defp part_words(doc) do
+    for [section, part] <-
+          Regex.scan(~r/^### (\w+)(?: \([^)]*\))?: [^\n]*\n.*?(?=^[#]{1,3} |\z)/ms, doc),
+        do: {part, words(section)}
+  end
 
   test "ARCHITECTURE.md holds at most #{@architecture_words} words" do
     total = words(SourceTree.read(@architecture))
@@ -158,23 +163,27 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   test "each part's section of ARCHITECTURE.md holds at most #{@part_words} words" do
-    sections =
-      Regex.scan(
-        ~r/^### (\w+)(?: \([^)]*\))?: [^\n]*\n.*?(?=^#|\z)/ms,
-        SourceTree.read(@architecture)
-      )
+    doc = SourceTree.read(@architecture)
+    parts = part_words(doc)
 
     # Guards against the scan quietly matching nothing.
-    assert length(sections) == length(@part_names)
+    assert length(parts) == length(@part_names)
 
-    over =
-      for [section, part] <- sections,
-          words(section) > @part_words,
-          do: {part, words(section)}
+    over = Enum.filter(parts, fn {_part, count} -> count > @part_words end)
 
     assert over == [],
            "these part sections of ARCHITECTURE.md hold more than #{@part_words} words: " <>
              "#{inspect(over)}. " <> @to_its_owner
+
+    # A nested heading does not end a part's section: what stands under it
+    # counts.
+    nested =
+      String.replace(doc, ~r/^### Aqua: [^\n]*\n/m, fn heading ->
+        heading <> "\n#### Nested\n\n" <> String.duplicate("word ", @part_words) <> "\n"
+      end)
+
+    assert {"Aqua", count} = List.keyfind(part_words(nested), "Aqua", 0)
+    assert count > @part_words
   end
 
   test "ARCHITECTURE.md's four ports are the port roster" do

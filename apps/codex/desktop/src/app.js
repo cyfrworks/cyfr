@@ -26,8 +26,6 @@ const READY_WITHIN_MS = 20_000
 const UNCONFIRMED = "The CYFR did not confirm that it signed this computer out. That sign-in ends when it expires, or when you sign it out under Settings, Keys on your account."
 const ACCOUNT_PARTITION = "persist:cyfr-account"
 
-// Every window's pages run under these: sandboxed, their context isolated,
-// no Node integration and web security on.
 const SECURE = {
   sandbox: true,
   contextIsolation: true,
