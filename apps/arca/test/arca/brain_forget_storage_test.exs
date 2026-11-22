@@ -10,7 +10,7 @@ defmodule Arca.BrainForgetStorageTest do
   reset forgets, and a lost transcript's when the session is stored with
   another row than the one whose brain lost it. Each names the row the
   session is stored with, as the batch that keeps it stores it
-  (`Arca.TurnStorage.commit_brain/3`). A session stored with no row, an
+  (`Arca.TurnStorage.commit_events/3`). A session stored with no row, an
   adapter catalyst's, or with a row gone or keeping no folder, owes
   nothing; a deletion refused records nothing. Every check reads the
   whole record the store holds.
@@ -73,19 +73,41 @@ defmodule Arca.BrainForgetStorageTest do
     set_turn!(turn, status: "running")
     {:ok, model} = TurnStorage.put_step(actor, turn.id, %{kind: "model", fence: turn.fence})
 
-    {:ok, %{calls: [%{step: step}]}} =
-      TurnStorage.record_response(actor, turn.id, model.id, %{
-        fence: turn.fence,
-        tool_calls: [
-          %{
-            tool_call_id: "call_#{System.unique_integer([:positive])}",
-            name: "program",
-            tool: "program",
-            action: "start",
-            arguments: %{"action" => "start", "program" => row.id, "epoch" => row.epoch}
-          }
-        ]
-      })
+    call_id = "call_#{System.unique_integer([:positive])}"
+
+    {:ok, %{asks: [%{step: step}]}} =
+      TurnStorage.commit_events(
+        actor,
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{
+          events: [
+            {:ask,
+             %{
+               kind: "tool",
+               tool: "program",
+               action: "start",
+               idempotency_key: "call:#{turn.id}:#{model.id}:#{call_id}",
+               call: %{
+                 kind: "tool_call",
+                 content: "program",
+                 payload: %{
+                   "tool_call_id" => call_id,
+                   "name" => "program",
+                   "tool" => "program",
+                   "action" => "start",
+                   "arguments" => %{
+                     "action" => "start",
+                     "program" => row.id,
+                     "epoch" => row.epoch
+                   },
+                   "step_id" => model.id
+                 }
+               }
+             }}
+          ],
+          position: {:step, model.id}
+        }
+      )
 
     if Keyword.get(opts, :dispatch, true),
       do: {:ok, _} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
@@ -133,25 +155,27 @@ defmodule Arca.BrainForgetStorageTest do
   end
 
   # One batch of a new driver process of `row`, its hello among its lines.
-  defp batch(actor, thread, row, agent, generation, attrs),
-    do:
-      TurnStorage.commit_brain(
-        actor,
-        thread.id,
-        Map.merge(
-          %{
-            agent: agent,
-            generation: generation,
-            boot: "boot-#{System.unique_integer([:positive])}",
-            hello: true,
-            seq: 1,
-            row_id: row.id,
-            epoch: row.epoch,
-            silence_ms: 1_800_000
-          },
-          attrs
-        )
-      )
+  defp batch(actor, thread, row, agent, generation, attrs) do
+    {turn, attrs} = Map.pop(attrs, :turn)
+
+    TurnStorage.commit_events(actor, %{thread: thread.id, agent: agent, turn: turn}, %{
+      events: [],
+      position:
+        {:session,
+         Map.merge(
+           %{
+             generation: generation,
+             boot: "boot-#{System.unique_integer([:positive])}",
+             hello: true,
+             seq: 1,
+             row_id: row.id,
+             epoch: row.epoch,
+             silence_ms: 1_800_000
+           },
+           attrs
+         )}
+    })
+  end
 
   # An open turn of "aqua" in `thread` whose brain runs on `row` (none
   # for a catalyst's).
@@ -394,15 +418,19 @@ defmodule Arca.BrainForgetStorageTest do
       before = whole(actor, room)
 
       assert_raise KeyError, fn ->
-        TurnStorage.commit_brain(actor, room.id, %{
-          agent: "aqua",
-          boot: "boot-#{System.unique_integer([:positive])}",
-          hello: true,
-          seq: 1,
-          row_id: row.id,
-          epoch: row.epoch,
-          silence_ms: 1_800_000,
-          session: "named"
+        TurnStorage.commit_events(actor, %{thread: room.id, agent: "aqua", turn: nil}, %{
+          events: [],
+          position:
+            {:session,
+             %{
+               boot: "boot-#{System.unique_integer([:positive])}",
+               hello: true,
+               seq: 1,
+               row_id: row.id,
+               epoch: row.epoch,
+               silence_ms: 1_800_000,
+               session: "named"
+             }}
         })
       end
 

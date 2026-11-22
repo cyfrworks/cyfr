@@ -36,13 +36,21 @@ defmodule Arca.TurnInputsStorageTest do
   # A turn of Aqua's on a program brain, accepted on `message` in `thread`
   # (a person's post unless another is given) and started with its root,
   # as the loop starts one.
-  defp running!(actor, thread, message \\ nil) do
+  defp running!(actor, thread, message \\ nil),
+    do: started!(actor, accepted!(actor, thread, message))
+
+  defp accepted!(actor, thread, message) do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, thread.id, %{
         message: message || %{author: actor.user_id, sent_by: "person", content: "go"},
         turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
+    turn
+  end
+
+  # An accepted turn started with its root, as the loop starts one.
+  defp started!(actor, turn) do
     budget_id = "bgt_#{System.unique_integer([:positive])}"
 
     {:ok, %{execution: execution, attempt: attempt}} =
@@ -147,22 +155,32 @@ defmodule Arca.TurnInputsStorageTest do
       )
 
   defp commit(actor, thread, turn, attrs) do
-    TurnStorage.commit_brain(
+    {told, progress} = Map.split(attrs, [:said, :asks, :accepted, :refused, :usage])
+
+    TurnStorage.commit_events(
       actor,
-      thread.id,
-      Map.merge(
-        %{
-          agent: "aqua",
-          generation: 0,
-          boot: "boot-1",
-          seq: System.unique_integer([:positive, :monotonic]),
-          row_id: "prg_brain",
-          epoch: 1,
-          silence_ms: @silence,
-          turn: turn && %{id: turn.id, fence: turn.fence}
-        },
-        attrs
-      )
+      %{thread: thread.id, agent: "aqua", turn: turn && %{id: turn.id, fence: turn.fence}},
+      %{
+        events:
+          Enum.map(Map.get(told, :said, []), &{:text, &1}) ++
+            Enum.map(Map.get(told, :asks, []), &{:ask, &1}) ++
+            Enum.map(Map.get(told, :accepted, []), &{:took, &1}) ++
+            Enum.map(Map.get(told, :refused, []), &{:refused, &1}) ++
+            Enum.map(Map.get(told, :usage, []), &{:usage, &1}),
+        position:
+          {:session,
+           Map.merge(
+             %{
+               generation: 0,
+               boot: "boot-1",
+               seq: System.unique_integer([:positive, :monotonic]),
+               row_id: "prg_brain",
+               epoch: 1,
+               silence_ms: @silence
+             },
+             progress
+           )}
+      }
     )
   end
 
@@ -264,6 +282,96 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:ok, _} = commit(actor, daily, turn, %{answered: [later_step.id], busy: false})
     assert progress(daily)["owed"] == []
     assert {:ok, %{status: "completed"}} = finish(actor, turn, "completed")
+  end
+
+  test "what a session was given is the first post it took in the newest turn that took one, " <>
+         "and after it only the posts it took: nothing refused, uncertain or never sent counts",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    {:ok, _} = TurnStorage.close_step(actor, start.id, "ok", %{fence: turn.fence})
+    assert TurnStorage.brain_given(actor, daily.id) == {:ok, %{seq: nil, taken: []}}
+
+    opening = opening(actor, turn)
+    {:ok, %{step: first}} = carry(actor, turn, "post", opening)
+    # Written, not yet taken: nothing is given.
+    assert TurnStorage.brain_given(actor, daily.id) == {:ok, %{seq: nil, taken: []}}
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [first.id]})
+
+    [refused, unsent, lost, taken] = for n <- 1..4, do: steer!(actor, daily, turn, "#{n}")
+
+    [refusal, _unsent, losing, taking] =
+      for row <- [refused, unsent, lost, taken],
+          do: elem(carry(actor, turn, "post", row), 1)
+
+    {:ok, _} =
+      commit(actor, daily, turn, %{refused: [refusal.step.id], accepted: [taking.step.id]})
+
+    {1, _} =
+      Arca.Repo.update_all(from(s in TurnStep, where: s.id == ^losing.step.id),
+        set: [dispatch_state: "closed", outcome: "uncertain"]
+      )
+
+    assert TurnStorage.brain_given(actor, daily.id) ==
+             {:ok, %{seq: opening.seq, taken: [taken.id]}}
+
+    # The next turn's first post taken is where what was given now stands.
+    {:ok, _} = finish(actor, turn, "failed")
+    next = running!(actor, daily, %{author: actor.user_id, sent_by: "person", content: "again"})
+    next_start = start!(actor, next)
+    {:ok, _} = TurnStorage.close_step(actor, next_start.id, "ok", %{fence: next.fence})
+    again = opening(actor, next)
+    {:ok, %{step: carried}} = carry(actor, next, "post", again)
+
+    assert TurnStorage.brain_given(actor, daily.id) ==
+             {:ok, %{seq: opening.seq, taken: [taken.id]}}
+
+    {:ok, _} = commit(actor, daily, next, %{accepted: [carried.id]})
+    assert TurnStorage.brain_given(actor, daily.id) == {:ok, %{seq: again.seq, taken: []}}
+
+    assert TurnStorage.brain_given(%{actor | athanor_id: "ath_another"}, daily.id) ==
+             {:error, :thread_not_found}
+  end
+
+  test "what was given is the newest turn's first delivery taken, though an older turn's " <>
+         "later steer has the greater seq",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    {:ok, _} = TurnStorage.close_step(actor, start.id, "ok", %{fence: turn.fence})
+    {:ok, %{step: first}} = carry(actor, turn, "post", opening(actor, turn))
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [first.id]})
+
+    # Job B is queued, then job A is steered: A's steer is written after
+    # B's opening.
+    queued = accepted!(actor, daily, %{author: actor.user_id, sent_by: "person", content: "B"})
+    more = steer!(actor, daily, turn, "more for A")
+    {:ok, %{step: steered}} = carry(actor, turn, "post", more)
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [steered.id]})
+    {:ok, _} = finish(actor, turn, "failed")
+
+    next = started!(actor, queued)
+    next_start = start!(actor, next)
+    {:ok, _} = TurnStorage.close_step(actor, next_start.id, "ok", %{fence: next.fence})
+    opened = opening(actor, next)
+    {:ok, %{step: taken}} = carry(actor, next, "post", opened)
+    {:ok, _} = commit(actor, daily, next, %{accepted: [taken.id]})
+
+    assert opened.seq < more.seq
+    assert TurnStorage.brain_given(actor, daily.id) == {:ok, %{seq: opened.seq, taken: [more.id]}}
+  end
+
+  test "a recovery prompt the program took is given as a post is, and a session forgotten " <>
+         "since was given nothing",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    {:ok, _} = TurnStorage.close_step(actor, start.id, "ok", %{fence: turn.fence})
+    opened = opening(actor, turn)
+    # The post was written and its answer lost: a recovery prompt continues it.
+    {:ok, %{step: _lost}} = carry(actor, turn, "post", opened)
+    {:ok, %{step: noticed}} = carry(actor, turn, "notice", opened)
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [noticed.id]})
+    assert TurnStorage.brain_given(actor, daily.id) == {:ok, %{seq: opened.seq, taken: []}}
+
+    assert {:ok, 1} =
+             TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+
+    assert TurnStorage.brain_given(actor, daily.id) == {:ok, %{seq: nil, taken: []}}
   end
 
   test "a refused post is one whose delivery closed error: none still dispatched, taken or " <>
@@ -500,13 +608,18 @@ defmodule Arca.TurnInputsStorageTest do
       }
     end
 
-    assert {:ok, %{asks: [first]}} = commit(actor, daily, turn, %{asks: [ask.("toolu_1")]})
+    assert {:ok, %{asks: [%{step: first}]}} =
+             commit(actor, daily, turn, %{asks: [ask.("toolu_1")]})
+
     assert {:ok, %{asks: []}} = commit(actor, daily, turn, %{asks: [ask.("toolu_1")]})
     assert %TurnStep{purpose: "brain", dispatch_state: "proposed", tool: "files"} = step(first.id)
     assert %Message{kind: "tool_call"} = Arca.Repo.get!(Message, step(first.id).message_id)
 
     paused = launch_paused!(actor, turn)
-    assert {:ok, %{asks: [held]}} = commit(actor, daily, paused, %{asks: [ask.("toolu_2")]})
+
+    assert {:ok, %{asks: [%{step: held}]}} =
+             commit(actor, daily, paused, %{asks: [ask.("toolu_2")]})
+
     assert step(held.id).dispatch_state == "proposed"
     assert fresh(actor, turn).status == "paused"
   end
@@ -664,7 +777,7 @@ defmodule Arca.TurnInputsStorageTest do
       call: %{kind: "tool_call", content: "files", payload: %{"tool_call_id" => "toolu_9"}}
     }
 
-    {:ok, %{asks: [asked]}} = commit(actor, daily, turn, %{asks: [ask]})
+    {:ok, %{asks: [%{step: asked}]}} = commit(actor, daily, turn, %{asks: [ask]})
     assert {:ok, %{due_ms: nil}} = TurnStorage.brain_silence(actor, daily.id)
     left = progress(daily)["clock"]["left_ms"]
     assert left in (@silence - 25_000)..(@silence - 20_000)
@@ -873,7 +986,7 @@ defmodule Arca.TurnInputsStorageTest do
       call: %{kind: "tool_call", content: "files", payload: %{"tool_call_id" => "toolu_answered"}}
     }
 
-    {:ok, %{asks: [asked]}} = commit(actor, daily, turn, %{asks: [ask]})
+    {:ok, %{asks: [%{step: asked}]}} = commit(actor, daily, turn, %{asks: [ask]})
     {:ok, asked} = TurnStorage.dispatch_step(actor, asked.id, %{fence: turn.fence})
 
     {:ok, %{result: result}} =

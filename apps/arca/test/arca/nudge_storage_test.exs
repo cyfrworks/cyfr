@@ -138,13 +138,19 @@ defmodule Arca.NudgeStorageTest do
   # The model's answer, which closes its step.
   defp answered!(actor, turn, step) do
     {:ok, _} =
-      TurnStorage.record_response(actor, turn.id, step.id, %{
-        fence: turn.fence,
-        text: "Still waiting on the build.",
-        usage: %{},
-        stop_reason: "end_turn",
-        tool_calls: []
-      })
+      TurnStorage.commit_events(
+        actor,
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{
+          events: [
+            {:text, %{text: "Still waiting on the build."}},
+            {:usage,
+             %{"models" => [%{"model" => "m", "counts" => %{}}], "accounting" => "complete"}},
+            {:stop, "end_turn"}
+          ],
+          position: {:step, step.id}
+        }
+      )
   end
 
   # Aqua's report that its work in the workspace thread waits on the
@@ -439,19 +445,25 @@ defmodule Arca.NudgeStorageTest do
         })
 
       {:ok, _} =
-        TurnStorage.commit_brain(actor, workspace.id, %{
-          agent: "aqua",
-          generation: 0,
-          boot: "boot-1",
-          seq: 1,
-          hello: true,
-          row_id: "prg_brain",
-          epoch: 1,
-          silence_ms: 60_000,
-          turn: %{id: turn.id, fence: turn.fence},
-          accepted: [step.id],
-          busy: true
-        })
+        TurnStorage.commit_events(
+          actor,
+          %{thread: workspace.id, agent: "aqua", turn: %{id: turn.id, fence: turn.fence}},
+          %{
+            events: [{:took, step.id}],
+            position:
+              {:session,
+               %{
+                 generation: 0,
+                 boot: "boot-1",
+                 seq: 1,
+                 hello: true,
+                 row_id: "prg_brain",
+                 epoch: 1,
+                 silence_ms: 60_000,
+                 busy: true
+               }}
+          }
+        )
 
       assert {:ok, _} = nudge(actor, workspace, held)
     end

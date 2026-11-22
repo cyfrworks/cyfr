@@ -132,7 +132,6 @@ defmodule Aqua.Loop do
       # (`program_work/2`).
       :generation,
       steps: 0,
-      usage: %{input: 0, output: 0},
       activity: [],
       # The places in `activity` of a program brain's own tools still shown
       # running (`own_activity/3`), settled when its native turn or its
@@ -1296,22 +1295,14 @@ defmodule Aqua.Loop do
   defp on_response(%State{} = state, step, data) do
     content = List.wrap(data["content"])
     text = content |> Enum.filter(&(&1["type"] == "text")) |> Enum.map_join("", & &1["text"])
-    {resolved, tool_calls} = resolve_calls(state, step, content)
-    usage = data["usage"] || %{}
+    asks = resolve_calls(state, step, content)
 
-    with {:ok, %{calls: recorded}} <-
-           Tape.record_response(guest(state), state.turn, step, %{
-             text: if(text == "", do: nil, else: text),
-             usage: usage,
-             stop_reason: data["stop_reason"],
-             tool_calls: tool_calls
-           }) do
-      state = count_usage(state, usage)
+    with {:ok, %{asks: recorded}} <-
+           commit_response(state, step, data, if(text == "", do: nil, else: text), asks) do
+      state = count_usage(state, data)
 
-      items =
-        Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
-          %{step: call_step, call: call}
-        end)
+      # Each step runs the call its own row records (`asked/1`).
+      items = Enum.map(recorded, &asked/1)
 
       # A page's waiting calls are placed in front of the round's own,
       # with reads among them running beside each other as any batch's
@@ -1334,37 +1325,93 @@ defmodule Aqua.Loop do
   end
 
   defp resolve_calls(%State{} = state, step, content) do
-    resolved =
-      for %{"type" => "tool_call"} = block <- content do
-        name = block["name"] || ""
-        args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
-
-        {block, Binding.resolve(name, args, tool_call_id: block["id"])}
-      end
-
-    {resolved, Enum.map(resolved, fn {block, call} -> call_attrs(state, step, block, call) end)}
+    for %{"type" => "tool_call"} = block <- content do
+      name = block["name"] || ""
+      args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
+      ask(state, step, block, Binding.resolve(name, args, tool_call_id: block["id"]))
+    end
   end
 
-  defp call_attrs(%State{} = state, model_step, block, call) do
+  # An ask the writer recorded, with the call its own row records, as a
+  # recovery reads it (`recall/2`).
+  defp asked(%{step: step, message: row}), do: %{step: step, call: call_of(row)}
+
+  # A model's call as the step proposed for it, with its `tool_call` row,
+  # as a program's ask is (`Arca.TurnStorage.commit_events/3`).
+  defp ask(%State{} = state, model_step, block, call) do
     name = block["name"] || ""
     args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
     id = block["id"] || Prima.UUID7.generate_id("call")
-
     recorded = recorded(name, call)
 
-    Map.merge(recorded, %{
-      tool_call_id: id,
-      name: name,
-      arguments: args,
-      provider_data: block["provider_data"],
-      idempotency_key: "call:#{state.turn.id}:#{model_step.id}:#{id}"
-    })
+    %{
+      kind: recorded.step_kind,
+      tool: recorded.tool,
+      action: recorded.action,
+      recovery: recorded.recovery,
+      child_execution_id: recorded.child_execution_id,
+      idempotency_key: "call:#{state.turn.id}:#{model_step.id}:#{id}",
+      call: %{
+        kind: "tool_call",
+        content: name,
+        payload:
+          %{
+            "tool_call_id" => id,
+            "name" => name,
+            "tool" => recorded.tool,
+            "action" => recorded.action,
+            "arguments" => args,
+            "provider_data" => block["provider_data"],
+            "kind" => recorded.kind,
+            "step_id" => model_step.id
+          }
+          |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+          |> Map.new()
+      }
+    }
+  end
+
+  # A model's response lands whole with its step's close, through the one
+  # writer of what a harness says (`Aqua.Tape.commit_events/3`): its text,
+  # its calls and its usage, counted onto the step.
+  defp commit_response(%State{} = state, step, data, text, asks) do
+    events =
+      if(text, do: [{:text, %{text: text}}], else: []) ++
+        Enum.map(asks, &{:ask, &1}) ++
+        [{:usage, usage_event(state, data)}, {:stop, data["stop_reason"]}]
+
+    Tape.commit_events(
+      guest(state),
+      %{
+        thread: state.turn.thread_id,
+        agent: state.turn.agent,
+        turn: %{id: state.turn.id, fence: state.turn.fence}
+      },
+      %{events: events, position: {:step, step.id}}
+    )
+  end
+
+  # What the model ran and its counts, as a program's usage is told: the
+  # model the catalyst says answered, else the one asked for; a count it
+  # did not tell is not a zero, so the result is partial, and with neither
+  # count it is unknown.
+  defp usage_event(%State{spec: spec}, data) do
+    usage = if is_map(data["usage"]), do: data["usage"], else: %{}
+    counts = for {name, n} <- usage, is_integer(n), into: %{}, do: {name, n}
+    told = Enum.count(~w(input_tokens output_tokens), &Map.has_key?(counts, &1))
+    model = if is_binary(data["model"]), do: data["model"], else: spec.model || "default"
+
+    case told do
+      0 -> %{"models" => [], "accounting" => "unavailable"}
+      1 -> %{"models" => [%{"model" => model, "counts" => counts}], "accounting" => "partial"}
+      2 -> %{"models" => [%{"model" => model, "counts" => counts}], "accounting" => "complete"}
+    end
   end
 
   @doc false
-  # What a step records of a call as it was bound, a model's
-  # (`call_attrs/4`) or a page's (`Aqua.PageCalls.proposal/3`): one
-  # recording, so a page's call is recorded as Aqua's call of its kind is.
+  # What a step records of a call as it was bound, a model's (`ask/4`) or a
+  # page's (`Aqua.PageCalls.proposal/3`): one recording, so a page's call is
+  # recorded as Aqua's call of its kind is.
   @spec recorded(String.t(), {:ok, Call.t()} | {:error, term()}) :: map()
   def recorded(name, call) do
     {tool, action, kind, recovery, child, step_kind} =
@@ -1408,16 +1455,17 @@ defmodule Aqua.Loop do
   defp step_kind(%Call{kind: :ui}), do: "ui"
   defp step_kind(_call), do: "tool"
 
-  defp count_usage(%State{} = state, usage) do
-    input = usage["input_tokens"] || 0
-    output = usage["output_tokens"] || 0
-    totals = %{input: state.usage.input + input, output: state.usage.output + output}
-    announce(state, :usage, totals)
+  # What the turn has used is told as its rows count it (`Aqua.Tape.usage/2`),
+  # and the request's measured size is kept for the next plan.
+  defp count_usage(%State{} = state, data) do
+    announce(state, :usage, Tape.usage(guest(state), state.turn.thread_id))
 
-    if input > 0 do
-      %{state | usage: totals, observed: input, observed_seq: state.sent_upto}
-    else
-      %{state | usage: totals}
+    case (data["usage"] || %{})["input_tokens"] do
+      input when is_integer(input) and input > 0 ->
+        %{state | observed: input, observed_seq: state.sent_upto}
+
+      _none ->
+        state
     end
   end
 
@@ -2742,18 +2790,21 @@ defmodule Aqua.Loop do
 
   # The call a proposed step was recorded for, from its tool_call row.
   defp recall(%State{} = state, %{message_id: message_id}) when is_binary(message_id) do
-    with {:ok, row} <- Tape.message(guest(state), message_id) do
-      payload = Tape.payload(row)
-
-      Binding.resolve(payload["name"] || "", payload["arguments"] || %{},
-        tool_call_id: payload["tool_call_id"]
-      )
-    else
+    case Tape.message(guest(state), message_id) do
+      {:ok, row} -> call_of(row)
       _ -> {:error, "the call's row is gone"}
     end
   end
 
   defp recall(_state, _step), do: {:error, "the step names no call"}
+
+  defp call_of(row) do
+    payload = Tape.payload(row)
+
+    Binding.resolve(payload["name"] || "", payload["arguments"] || %{},
+      tool_call_id: payload["tool_call_id"]
+    )
+  end
 
   # ---------------------------------------------------------------------------
   # Compaction
@@ -2863,21 +2914,13 @@ defmodule Aqua.Loop do
   defp keep_notes(%State{} = state, step, request) do
     case model_call(state, step, request, nil) do
       {:ok, data} ->
-        {resolved, tool_calls} = resolve_calls(state, step, List.wrap(data["content"]))
-        usage = data["usage"] || %{}
+        asks = resolve_calls(state, step, List.wrap(data["content"]))
 
-        with {:ok, %{calls: recorded}} <-
-               Tape.record_response(guest(state), state.turn, step, %{
-                 text: nil,
-                 usage: usage,
-                 stop_reason: data["stop_reason"],
-                 tool_calls: tool_calls
-               }) do
-          state = count_usage(state, usage)
+        with {:ok, %{asks: recorded}} <- commit_response(state, step, data, nil, asks) do
+          state = count_usage(state, data)
 
-          Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
-            keep_note(state, call_step, call)
-          end)
+          for %{step: call_step, call: call} <- Enum.map(recorded, &asked/1),
+              do: keep_note(state, call_step, call)
 
           {:flushed, state}
         else
@@ -2989,13 +3032,7 @@ defmodule Aqua.Loop do
            |> Enum.filter(&(&1["type"] == "text"))
            |> Enum.map_join("", & &1["text"]),
          {:ok, summary} <- Planner.summary_text(summary),
-         {:ok, _} <-
-           Tape.record_response(guest(state), state.turn, step, %{
-             text: nil,
-             usage: data["usage"] || %{},
-             stop_reason: data["stop_reason"],
-             tool_calls: []
-           }),
+         {:ok, _} <- commit_response(state, step, data, nil, []),
          {:ok, _} <-
            Tape.append_compaction(guest(state), state.turn, %{
              summary: summary,

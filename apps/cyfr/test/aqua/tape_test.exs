@@ -131,6 +131,84 @@ defmodule Aqua.TapeTest do
     assert [_] = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
   end
 
+  test "the writer keeps the order it is given: an ask then a text are written and broadcast " <>
+         "in that order",
+       %{ctx: ctx, thread: thread} do
+    turn = started!(ctx, thread, "@aqua in order")
+    assert_receive %ThreadEvent{kind: :message, data: _}
+    guest = Sanctum.Context.enter_guest(ctx)
+    {:ok, step} = Tape.record_model_intent(guest, turn, %{idempotency_key: "model:order"})
+
+    ask = %{
+      kind: "tool",
+      tool: "files",
+      action: "read",
+      idempotency_key: "call:order:c1",
+      call: %{
+        kind: "tool_call",
+        content: "files.read",
+        payload: %{"tool_call_id" => "c1", "name" => "files.read", "arguments" => %{}}
+      }
+    }
+
+    assert {:ok, %{said: [%{id: text_id} = text], asks: [%{message: %{id: call_id} = call}]}} =
+             Tape.commit_events(
+               guest,
+               %{
+                 thread: turn.thread_id,
+                 agent: turn.agent,
+                 turn: %{id: turn.id, fence: turn.fence}
+               },
+               %{events: [{:ask, ask}, {:text, %{text: "Read."}}], position: {:step, step.id}}
+             )
+
+    assert call.seq < text.seq
+    assert_receive %ThreadEvent{kind: :message, data: %{id: first}}
+    assert_receive %ThreadEvent{kind: :message, data: %{id: second}}
+    assert [first, second] == [call_id, text_id]
+  end
+
+  test "a turn's usage reads one way on either harness: its counted steps added up by model, " <>
+         "partial when one result was not counted, unknown while none was",
+       %{ctx: ctx, thread: thread} do
+    turn = started!(ctx, thread, "@aqua count")
+    guest = Sanctum.Context.enter_guest(ctx)
+    scope = %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}}
+
+    respond = fn usage ->
+      {:ok, step} =
+        Tape.record_model_intent(guest, turn, %{
+          idempotency_key: "model:#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, _} =
+        Tape.commit_events(guest, scope, %{events: [{:usage, usage}], position: {:step, step.id}})
+    end
+
+    counts = fn input, output ->
+      %{
+        "models" => [
+          %{"model" => "m", "counts" => %{"input_tokens" => input, "output_tokens" => output}}
+        ],
+        "accounting" => "complete"
+      }
+    end
+
+    assert Tape.usage(guest, thread.id) ==
+             %{input: 0, output: 0, models: [], accounting: :unavailable}
+
+    respond.(counts.(10, 4))
+
+    assert Tape.usage(guest, thread.id) ==
+             %{input: 10, output: 4, models: ["m"], accounting: :complete}
+
+    respond.(counts.(5, 1))
+    respond.(%{"models" => [], "accounting" => "unavailable"})
+
+    assert Tape.usage(guest, thread.id) ==
+             %{input: 15, output: 5, models: ["m"], accounting: :partial}
+  end
+
   test "rows are broadcast only after they committed, and a moved fence refuses", %{
     ctx: ctx,
     thread: thread
@@ -141,24 +219,48 @@ defmodule Aqua.TapeTest do
 
     {:ok, step} = Tape.record_model_intent(guest, turn, %{idempotency_key: "model:1"})
 
-    assert {:ok, %{text: text, calls: [%{message: call, step: call_step}]}} =
-             Tape.record_response(guest, turn, step, %{
-               text: "Reading.",
-               usage: %{"input_tokens" => 1},
-               stop_reason: "tool_call",
-               tool_calls: [
-                 %{
-                   tool_call_id: "c1",
-                   name: "files.read",
-                   tool: "files",
-                   action: "read",
-                   arguments: %{},
-                   kind: "read",
-                   idempotency_key: "call:1:c1",
-                   child_execution_id: "exec_c1"
-                 }
-               ]
-             })
+    assert {:ok, %{said: [text], asks: [%{message: call, step: call_step}]}} =
+             Tape.commit_events(
+               guest,
+               %{
+                 thread: turn.thread_id,
+                 agent: turn.agent,
+                 turn: %{id: turn.id, fence: turn.fence}
+               },
+               %{
+                 events: [
+                   {:text, %{text: "Reading."}},
+                   {:ask,
+                    %{
+                      kind: "tool",
+                      tool: "files",
+                      action: "read",
+                      child_execution_id: "exec_c1",
+                      idempotency_key: "call:1:c1",
+                      call: %{
+                        kind: "tool_call",
+                        content: "files.read",
+                        payload: %{
+                          "tool_call_id" => "c1",
+                          "name" => "files.read",
+                          "tool" => "files",
+                          "action" => "read",
+                          "arguments" => %{},
+                          "kind" => "read",
+                          "step_id" => step.id
+                        }
+                      }
+                    }},
+                   {:usage,
+                    %{
+                      "models" => [%{"model" => "m", "counts" => %{"input_tokens" => 1}}],
+                      "accounting" => "complete"
+                    }},
+                   {:stop, "tool_call"}
+                 ],
+                 position: {:step, step.id}
+               }
+             )
 
     assert_receive %ThreadEvent{kind: :message, data: %{id: text_id}}
     assert text_id == text.id
