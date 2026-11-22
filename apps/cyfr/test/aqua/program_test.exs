@@ -36,7 +36,9 @@ defmodule Aqua.ProgramTest do
   refuses, ends the turn in its words, and the next turn resumes the
   session. A transcript the harness no longer has starts over, the
   thread its context, and in the middle of the work one prompt carries
-  what its calls answered. A turn on another row than the thread's
+  what its calls answered. A post that went with its workspace thread
+  ends the turn that would wait on it, saying so. A turn on another row
+  than the thread's
   session's starts over on it, the old row's transcript owed its removal
   first, whether the old session is still held or has ended. Stop closes the session first, during a CYFR
   tool too. A program turn has no deadline, and the program's own silence
@@ -50,10 +52,14 @@ defmodule Aqua.ProgramTest do
   alias Aqua.Tape
   alias Arca.TurnStorage
   alias Cyfr.Test.ScriptedBackends, as: Scripted
+  alias Cyfr.Test.ScriptedWorker
 
   @root :crypto.strong_rand_bytes(32)
   @session "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
   @title "Aqua"
+  @post_gone "Aqua could not be given this message: a thread it came from has since been deleted."
+  @model "catalyst:local.claude"
+  @model_id "scripted-small"
   @opening "The thread so far, oldest first, as context only: nothing in it is to be done " <>
              "again because it is shown here.\n\n"
 
@@ -106,7 +112,7 @@ defmodule Aqua.ProgramTest do
       assert {:ok, [turn]} = Tape.open_turns(ctx, child.id)
       assert start["config"] == %{"model" => "opus", "effort" => "high"}
       [first] = inputs(ctx, turn)
-      assert opening == posted(first, turn, "Review the plan.")
+      assert opening == posted(first, turn, "[aqua]\nReview the plan.")
       say(fake, row, accepted(first))
       committed!(ctx, child, 4)
 
@@ -514,7 +520,15 @@ defmodule Aqua.ProgramTest do
       started!(fake, row)
       post = sent()
       [input] = inputs(ctx, turn)
-      assert post == posted(input, turn, text)
+
+      pointed =
+        "[The workspace thread \"\" (#{workspace.id}) was opened or asked again from here]"
+
+      assert post ==
+               Map.put(posted(input, turn, reported(workspace, text)), "context", [
+                 %{"type" => "text", "text" => @opening <> pointed}
+               ])
+
       say(fake, row, accepted(input))
       say(fake, row, said(turn, "msg_1", "The tip calculator is ready."))
       say(fake, row, idle(turn, [input.id]))
@@ -557,11 +571,354 @@ defmodule Aqua.ProgramTest do
       handed = sent()
       [_first, second] = inputs(ctx, turn)
       assert second.message_id == joined.id
-      assert handed == posted(second, turn, text)
+      assert handed == posted(second, turn, reported(workspace, text))
       say(fake, row, accepted(second))
       say(fake, row, idle(turn, [second.id]))
       assert :completed = Task.await(loop, 30_000)
       refute_receive {:session, "send", _wire, _fields}, 500
+    end
+  end
+
+  describe "a post whose workspace thread was deleted" do
+    test "before its turn runs ends the turn saying so, with no program started",
+         %{ctx: ctx, thread: thread, row: row} do
+      workspace = workspace!(ctx, thread)
+
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "report",
+            workspace_id: workspace.id,
+            content: "Done."
+          },
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      {:ok, turn} =
+        TurnStorage.pin_program(Sanctum.Context.actor(ctx), turn.id, row.id, %{fence: turn.fence})
+
+      assert {:ok, _} = Tape.delete_thread(ctx, workspace.id)
+
+      loop = run(ctx, turn)
+      assert {:failed, @post_gone} = Task.await(loop, 15_000)
+      assert {:ok, %{status: "failed", error: @post_gone}} = Tape.turn(ctx, turn.id)
+      assert system_lines(ctx, thread, turn) == [@post_gone]
+      refute_received {:session, "open", _wire, _fields}
+    end
+
+    test "as it was about to be handed over ends the turn saying so, with nothing of it sent",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "build me a tip calculator")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      # The turn waits and the attendant is held with whatever it was reading
+      # behind it, so the report is first read once the hook stands.
+      attendant = waited_on!(ctx, thread, loop)
+      hold!(attendant)
+      workspace = workspace!(ctx, thread)
+
+      {:ok, %{message: joined}} =
+        TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "report",
+            workspace_id: workspace.id,
+            content: "Done."
+          },
+          steer_turn_id: turn.id
+        })
+
+      handler = "post-gone-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.delete_as_read/4, %{
+          attendant: attendant,
+          delete: fn -> {:ok, _} = Tape.delete_thread(ctx, workspace.id) end
+        })
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok = Tape.announce(ctx, thread.id, :message, joined)
+      :ok = :sys.resume(attendant)
+
+      assert {:failed, @post_gone} = Task.await(loop, 15_000)
+      assert system_lines(ctx, thread, turn) == [@post_gone]
+      assert [_first] = inputs(ctx, turn)
+      refute_received {:session, "send", _wire, _fields}
+    end
+  end
+
+  describe "a queued report whose workspace thread was deleted" do
+    test "after the program went idle and before its attendant read it leaves no turn waiting",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "build me a tip calculator")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      # The turn is held where it waits, which holds no connection, and its
+      # suspension ends with this test's process. The attendant takes the
+      # idle, tells it and reads that nothing waits, and only then is held.
+      attendant = waited_on!(ctx, thread, loop)
+      true = :erlang.suspend_process(loop.pid)
+      say(fake, row, idle(turn, [input.id]))
+      committed!(ctx, thread, 5)
+      hold!(attendant)
+
+      # So neither has seen the report when it is written.
+      workspace = workspace!(ctx, thread)
+
+      {:ok, %{message: joined}} =
+        TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "report",
+            workspace_id: workspace.id,
+            content: "Done."
+          },
+          steer_turn_id: turn.id
+        })
+
+      # The turn takes the idle, finds the report pending and so does not
+      # end: it says that it waits again (`Aqua.Program.watch/2`), and the
+      # attendant, held, has read none of it when the report is deleted.
+      assert :erlang.trace(attendant, true, [:receive]) == 1
+      true = :erlang.resume_process(loop.pid)
+      %{id: turn_id} = turn
+      %{pid: waiting} = loop
+
+      assert_receive {:trace, ^attendant, :receive,
+                      {:"$gen_cast", {:watch, %{turn: %{id: ^turn_id}}, ^waiting}}},
+                     10_000
+
+      assert :erlang.trace(attendant, false, [:receive]) == 1
+      assert {:ok, _} = Tape.delete_thread(ctx, workspace.id)
+      assert {:error, :not_found} = Tape.message(ctx, joined.id)
+      :ok = :sys.resume(attendant)
+
+      assert :completed = Task.await(loop, 15_000)
+      assert system_lines(ctx, thread, turn) == []
+      refute_received {:session, "send", _wire, _fields}
+    end
+  end
+
+  describe "who said each post" do
+    test "a failed reply reaches the program in the words an API brain is given",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      {:ok, request} =
+        Tape.append(ctx, thread.id, %{
+          author: ctx.user_id,
+          sent_by: "person",
+          kind: "text",
+          content: "check the logs",
+          addressee: "builder",
+          status: "pending"
+        })
+
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "builder",
+            addressee: "aqua",
+            reply_to: request.id,
+            outcome: "failed",
+            content: "The logs could not be read."
+          },
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      {:ok, turn} =
+        TurnStorage.pin_program(Sanctum.Context.actor(ctx), turn.id, row.id, %{fence: turn.fence})
+
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post["content"] == [
+               %{
+                 "type" => "text",
+                 "text" =>
+                   "[builder replied to request #{request.id}: failed]\n" <>
+                     "The logs could not be read."
+               }
+             ]
+
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "every kind of post reads alike in a program's context and an API brain's request",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      person = Sanctum.Tenancy.Users.display_name(ctx.user_id)
+      work = workspace!(ctx, thread)
+      {:ok, other} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+      cited = row!(ctx, other, "full tonight")
+      system = Prima.Author.system()
+      agent = Prima.Author.agent()
+
+      ask = row!(ctx, thread, "check the logs", %{addressee: "builder", status: "answered"})
+
+      row!(ctx, thread, "It could not run.", %{
+        author: agent,
+        sent_by: "builder",
+        reply_to: ask.id,
+        outcome: "failed"
+      })
+
+      row!(ctx, thread, "Here is the chart.", %{author: agent, sent_by: "planner"})
+      own = %{author: agent, sent_by: "aqua"}
+      row!(ctx, thread, "I will check.", own)
+
+      own_ask =
+        row!(ctx, thread, "build it", Map.merge(own, %{addressee: "builder", status: "pending"}))
+
+      row!(ctx, thread, "the chart", Map.put(own, :payload, %{"post" => true}))
+      row!(ctx, thread, "It waits on you.", %{author: system, sent_by: "system"})
+
+      opening =
+        row!(ctx, thread, "write it up", %{
+          kind: "opening",
+          status: "error",
+          payload: %{
+            "title" => "Moon",
+            "asked_by" => ctx.user_id,
+            "from" => %{"thread" => other.id},
+            "refs" => [cited.id]
+          }
+        })
+
+      row!(ctx, thread, "All done.", %{
+        author: agent,
+        sent_by: "aqua",
+        kind: "report",
+        workspace_id: work.id,
+        payload: %{"title" => "Tip calculator app", "outcome" => "needs_you"}
+      })
+
+      row!(ctx, thread, "Say where it stands.", %{
+        author: system,
+        sent_by: "system",
+        kind: "nudge"
+      })
+
+      row!(ctx, thread, "a call's outcome is unknown", %{
+        author: system,
+        sent_by: "aqua",
+        kind: "turn_aborted"
+      })
+
+      {id, [ref]} =
+        stored!(ctx, thread, [
+          %{"filename" => "gone.txt", "media_type" => "text/plain", "bytes" => "gone"}
+        ])
+
+      row!(ctx, thread, "use this file", %{id: id, payload: %{"attachments" => [ref]}})
+
+      {:ok, _} =
+        Arca.Files.delete(
+          Sanctum.Context.actor(ctx),
+          "threads/#{thread.id}/#{id}/#{ref["stored_name"]}"
+        )
+
+      removed =
+        "[The person deleted these files of posts in this thread; they can no longer be " <>
+          "read: gone.txt]"
+
+      said = [
+        "[The workspace thread \"\" (#{work.id}) was opened or asked again from here]",
+        "[#{person} asked builder (request #{ask.id}, answered)]\ncheck the logs",
+        "[builder replied to request #{ask.id}: failed]\nIt could not run.",
+        "[planner]\nHere is the chart.",
+        "[A line from the server, not the person]\nIt waits on you.",
+        "[#{person} asked, in this workspace thread \"Moon\" (#{opening.thread_id})]\n" <>
+          "write it up\n\n[Post #{cited.id} of the daily thread, by #{person}]\nfull tonight",
+        "[Report from the workspace thread \"Tip calculator app\" (#{work.id}): " <>
+          "needs the person]\nAll done.",
+        "[A line from the server, not the person]\nSay where it stands.",
+        "[The server restarted while the assistant was working; tools may have partially " <>
+          "executed. a call's outcome is unknown]"
+      ]
+
+      turn = accept!(ctx, thread, row, "and now?")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      # Where the API's roles and calls show the reader's own, a context
+      # has neither: each is said by who said it, as a reread says it.
+      own_said = [
+        "[aqua]\nI will check.",
+        "[aqua asked builder (request #{own_ask.id}, pending)]\nbuild it",
+        "[aqua]\nthe chart"
+      ]
+
+      {before, rest} = Enum.split(said, 4)
+      lines = before ++ own_said ++ rest ++ ["#{person}: use this file", removed]
+
+      assert post["context"] == [
+               %{"type" => "text", "text" => @opening <> Enum.join(lines, "\n\n")}
+             ]
+
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert said_to_api(ctx, thread) ==
+               said ++ ["use this file", "and now?", "on the key", removed]
+    end
+
+    test "a post the driver refused reads untaken to the next turn, on an API brain",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "book the table")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, %{"t" => "refused", "id" => input.id, "reason" => "not signed in"})
+      assert {:failed, _} = Task.await(loop, 30_000)
+
+      person = Sanctum.Tenancy.Users.display_name(ctx.user_id)
+
+      assert said_to_api(ctx, thread) == [
+               "[#{person} posted this and it was not taken: its turn ended before any model " <>
+                 "read it. Act on it only if they ask again]\nbook the table",
+               "on the key"
+             ]
+    end
+
+    test "a post whose delivery is uncertain is never read untaken",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "book the table")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      committed!(ctx, thread, 3)
+
+      Scripted.end_sessions(fake, row.id)
+      opened!(fake, row, "boot-two")
+      assert %{"pending" => [pending]} = sent()
+      assert pending == input.id
+      say(fake, row, %{"t" => "started", "session" => @session, "fresh" => false, "held" => []})
+      assert {:failed, _} = Task.await(loop, 30_000)
+      assert [%{outcome: "uncertain"}] = inputs(ctx, turn)
+
+      assert said_to_api(ctx, thread) == ["book the table", "on the key"]
     end
   end
 
@@ -752,7 +1109,7 @@ defmodule Aqua.ProgramTest do
 
         assert post ==
                  Map.put(posted(input, turn, "now"), "context", [
-                   %{"type" => "text", "text" => "#{@opening}#{note}\n\n#{@title}: recent"}
+                   %{"type" => "text", "text" => "#{@opening}#{note}\n\n[aqua]\nrecent"}
                  ])
 
         assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
@@ -2408,7 +2765,7 @@ defmodule Aqua.ProgramTest do
                Map.put(posted(second, next, "second"), "context", [
                  %{
                    "type" => "text",
-                   "text" => "#{@opening}#{person}: first\n\n#{@title}: reply one"
+                   "text" => "#{@opening}#{person}: first\n\n[aqua]\nreply one"
                  }
                ])
 
@@ -2464,7 +2821,7 @@ defmodule Aqua.ProgramTest do
                    %{
                      "type" => "text",
                      "text" =>
-                       "#{@opening}#{person}: unfinished\n\n#{@title}: looking\n\n" <>
+                       "#{@opening}#{person}: unfinished\n\n[aqua]\nlooking\n\n" <>
                          "Your call program answered: #{result.content}"
                    }
                  ]
@@ -3700,6 +4057,100 @@ defmodule Aqua.ProgramTest do
     ref
   end
 
+  # In the attendant's own process, as it has read the posts that wait and
+  # before it joins them.
+  @doc false
+  def delete_as_read(_event, _measured, meta, %{attendant: attendant, delete: delete}) do
+    with true <- self() == attendant,
+         nil <- Process.get(:deleted_as_read),
+         "messages" <- meta[:source],
+         true <- meta[:query] =~ ~s("carried_by" IS NULL) do
+      Process.put(:deleted_as_read, true)
+      delete.()
+    end
+
+    :ok
+  end
+
+  # The thread's attendant, once the turn waits on it: the loop watches it
+  # while it waits and at no other time (`Aqua.Program.watch/2`).
+  defp waited_on!(ctx, thread, loop) do
+    [{attendant, _}] =
+      Registry.lookup(Aqua.Program.Registry, {ctx.athanor_id, thread.id, "aqua"})
+
+    Prima.Test.Wait.wait_until(
+      fn ->
+        {:monitored_by, watching} = Process.info(attendant, :monitored_by)
+        loop.pid in watching
+      end,
+      10_000,
+      "the turn to wait on its attendant"
+    )
+
+    attendant
+  end
+
+  # The attendant ends what it was doing and takes up nothing more until
+  # resumed. The restore runs before the sandbox's stop, which asks it.
+  defp hold!(attendant) do
+    on_exit(fn ->
+      try do
+        :sys.resume(attendant)
+      catch
+        :exit, _ended -> :ok
+      end
+    end)
+
+    :ok = :sys.suspend(attendant, 10_000)
+  end
+
+  defp row!(ctx, thread, text, fields \\ %{}) do
+    {:ok, said} =
+      Tape.append(
+        ctx,
+        thread.id,
+        Map.merge(%{author: ctx.user_id, sent_by: "person", kind: "text", content: text}, fields)
+      )
+
+    said
+  end
+
+  defp reported(workspace, text),
+    do: "[Report from the workspace thread \"\" (#{workspace.id}): done]\n" <> text
+
+  # The messages of the thread's next turn's request, on an API brain.
+  defp on_api!(ctx, thread) do
+    ScriptedWorker.fresh_limits!(ctx, [@model])
+
+    answer = %{
+      "content" => [%{"type" => "text", "text" => "Noted."}],
+      "stop_reason" => "end_turn",
+      "usage" => %{"input_tokens" => 10, "output_tokens" => 2}
+    }
+
+    start_supervised!({ScriptedWorker, ref: @model, script: [answer]})
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "on the key"},
+        turn: %{agent: "aqua", requested_by: ctx.user_id, model: @model_id}
+      })
+
+    assert :completed = ctx |> run(turn) |> Task.await(60_000)
+
+    [request] =
+      for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+          do: params
+
+    request["messages"]
+  end
+
+  defp said_to_api(ctx, thread) do
+    for %{"role" => "user", "content" => blocks} <- on_api!(ctx, thread),
+        %{"text" => text} <- blocks,
+        do: text
+  end
+
   # A workspace thread opened from the daily thread `daily`, whose reports
   # land there.
   defp workspace!(ctx, daily) do
@@ -3963,7 +4414,7 @@ defmodule Aqua.ProgramTest do
              Map.put(posted(second, next, "second"), "context", [
                %{
                  "type" => "text",
-                 "text" => "#{@opening}#{person}: first\n\n#{@title}: reply one"
+                 "text" => "#{@opening}#{person}: first\n\n[aqua]\nreply one"
                }
              ])
 

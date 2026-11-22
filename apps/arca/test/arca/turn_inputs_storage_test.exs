@@ -266,6 +266,49 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:ok, %{status: "completed"}} = finish(actor, turn, "completed")
   end
 
+  test "a refused post is one whose delivery closed error: none still dispatched, taken or " <>
+         "uncertain, and none a model step carried",
+       %{actor: actor, daily: daily, turn: turn} do
+    [refused, taken, lost, waiting] =
+      posts = for n <- 1..4, do: steer!(actor, daily, turn, "#{n}")
+
+    [refusal, taking, losing, _sent] =
+      for row <- posts, do: elem(carry(actor, turn, "post", row), 1)
+
+    assert {:ok, _} =
+             commit(actor, daily, turn, %{refused: [refusal.step.id], accepted: [taking.step.id]})
+
+    {1, _} =
+      Arca.Repo.update_all(from(s in TurnStep, where: s.id == ^losing.step.id),
+        set: [dispatch_state: "closed", outcome: "uncertain"]
+      )
+
+    read = steer!(actor, daily, turn, "to the model")
+
+    {:ok, model} =
+      TurnStorage.put_step(actor, turn.id, %{
+        kind: "model",
+        idempotency_key: "model:#{read.id}",
+        dispatch_state: "dispatched",
+        fence: turn.fence
+      })
+
+    {1, _} =
+      Arca.Repo.update_all(from(m in Message, where: m.id == ^read.id),
+        set: [carried_by: model.id]
+      )
+
+    {1, _} =
+      Arca.Repo.update_all(from(s in TurnStep, where: s.id == ^model.id),
+        set: [dispatch_state: "closed", outcome: "error"]
+      )
+
+    ids = [refused.id, taken.id, lost.id, waiting.id, read.id]
+    assert TurnStorage.refused_posts(actor, ids) == {:ok, [refused.id]}
+
+    assert TurnStorage.refused_posts(%{actor | athanor_id: "ath_another"}, ids) == {:ok, []}
+  end
+
   test "a delivery is checked before its row: a take-over, a start not decided, another " <>
          "generation, a delivery already recorded and a turn that is over record nothing",
        %{actor: actor, daily: daily, turn: turn} do

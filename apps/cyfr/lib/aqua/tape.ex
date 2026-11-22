@@ -477,22 +477,51 @@ defmodule Aqua.Tape do
       TurnStorage.join_threads(Sanctum.Context.actor(ctx), turn.id, threads, %{fence: turn.fence})
 
   @doc """
-  Join what the turn read of the athanor's threads into its read threads
-  before its read answers (`TurnStorage.join_read/3`), under the turn's
-  row lock and its fence: `threads` (each whose posts it read or that those
-  posts carry, `carried_threads/1`) and the read threads of `turns`
-  (`writing_turns/1`). Answers the threads that still stood, whose posts
-  alone the read may answer, and the read threads joined.
+  Join what `turn` is about to read of `rows` and answer those it may
+  read, as they now read, with the posts they cite: the one rule, decided
+  and recorded in one transaction under the turn's fence from the rows as
+  they stand there (`TurnStorage.join_read/3`), so only their ids go in.
+  `read` is `:history`, the turn reading what its thread holds (a
+  request's rows, a program's post and context); the threads the turn
+  asked to read; or `:search`, whose answer points at posts and quotes no
+  citation. `most` bounds how many are handed over, and so recorded.
+
+  What a row says of itself is this module's to read, from the row the
+  transaction read: a pointer's, a report's or a wait's workspace thread
+  and an opening's daily thread; the read threads a report kept and those
+  a copied file carries (`Aqua.Attachments.copied_threads/1`); the turn a
+  crew row or a report came from; and the posts an opening cites.
   """
-  @spec join_read(Context.t(), turn(), [String.t()], [String.t()]) ::
-          {:ok, %{threads: [String.t()], read_threads: [String.t()]}} | {:error, term()}
-  def join_read(%Context{} = ctx, turn, threads, turns),
-    do:
-      TurnStorage.join_read(Sanctum.Context.actor(ctx), turn.id, %{
-        fence: turn.fence,
-        threads: threads,
-        threads_from: turns
-      })
+  @spec join_read(
+          Context.t(),
+          turn(),
+          :history | :search | [String.t()],
+          [row()],
+          pos_integer() | nil
+        ) :: {:ok, map()} | {:error, term()}
+  def join_read(%Context{} = ctx, turn, read, rows, most \\ nil) when is_list(rows) do
+    TurnStorage.join_read(Sanctum.Context.actor(ctx), turn.id, %{
+      fence: turn.fence,
+      read: if(is_list(read), do: read, else: []),
+      history?: read == :history,
+      cite?: read != :search,
+      most: most,
+      rows: Enum.map(rows, & &1.id),
+      also: &said_by/1
+    })
+  end
+
+  @doc """
+  Of `rows`, the posts a program refused, by each delivery's outcome and
+  never by the carry (`TurnStorage.refused_posts/2`).
+  """
+  @spec refused_posts(Context.t(), [row()]) :: {:ok, [String.t()]} | {:error, term()}
+  def refused_posts(%Context{} = ctx, rows) when is_list(rows) do
+    case for(%{id: id, carried_by: step} <- rows, is_binary(step), do: id) do
+      [] -> {:ok, []}
+      ids -> TurnStorage.refused_posts(Sanctum.Context.actor(ctx), ids)
+    end
+  end
 
   @doc """
   Whether the caller still holds `turn`, open, at the fence it read,
@@ -1182,64 +1211,49 @@ defmodule Aqua.Tape do
   @spec payload(row()) :: map()
   def payload(row), do: Threads.payload(row)
 
-  @doc """
-  The athanor's other threads whose posts `rows` carry: a row naming a
-  workspace thread (a pointer, a report, the server's post of its wait)
-  names it, a report the read threads its record kept of the turn that
-  reported, so they join even once that turn's row is gone, an opening
-  the daily thread its refs are posts of, and a copied file the read
-  threads of the post it was copied from
-  (`Aqua.Attachments.copied_threads/1`). By these, forgetting a thread
-  finds the turn that read it. What every reader of rows joins besides the
-  read threads of the turns that wrote them (`writing_turns/1`).
-  """
-  @spec carried_threads([row()]) :: [String.t()]
-  def carried_threads(rows) when is_list(rows),
-    do: Enum.flat_map(rows, &(carried(&1) ++ files_carried(&1)))
+  # What a row says it depends on and cites, read from that row alone
+  # (`TurnStorage.join_read/3`'s `also:`).
+  defp said_by(row) do
+    %{
+      names: named(row),
+      copies: kept(row) ++ files_carried(row),
+      from: from_turn(row),
+      cites: cites(row)
+    }
+  end
 
-  defp carried(%{workspace_id: id} = row) when is_binary(id), do: [id | kept(row)]
+  defp named(%{workspace_id: id}) when is_binary(id), do: [id]
 
-  defp carried(%{kind: "opening"} = row) do
+  defp named(%{kind: "opening"} = row) do
     case payload(row) do
-      %{"from" => %{"thread" => id}} when is_binary(id) and id != "" -> [id]
-      _ -> []
+      %{"from" => %{"thread" => id}} -> ids(id)
+      _none -> []
     end
   end
 
-  defp carried(_row), do: []
+  defp named(_row), do: []
+
+  defp cites(%{kind: "opening"} = row) do
+    case payload(row) do
+      %{"from" => %{"thread" => daily}, "refs" => refs} when is_binary(daily) and is_list(refs) ->
+        %{thread: daily, posts: ids(refs)}
+
+      _none ->
+        nil
+    end
+  end
+
+  defp cites(_row), do: nil
+
+  defp kept(%{kind: "report"} = row), do: ids(payload(row)["read_threads"])
+  defp kept(_row), do: []
 
   defp files_carried(row),
     do: Enum.flat_map(Aqua.Attachments.refs_of(row), &Aqua.Attachments.copied_threads/1)
 
-  defp kept(%{kind: "report"} = row) do
-    case payload(row)["read_threads"] do
-      ids when is_list(ids) -> Enum.filter(ids, &(is_binary(&1) and &1 != ""))
-      _ -> []
-    end
-  end
+  defp from_turn(row), do: ids(payload(row)["from_turn"])
 
-  defp kept(_row), do: []
-
-  @doc """
-  The turns whose words `rows` carry: each row's own turn, and the turn a
-  crew row came from (a delivered request's asking turn, a reply's member
-  turn). A person's own row names none.
-  """
-  @spec writing_turns([row()]) :: [String.t()]
-  def writing_turns(rows) when is_list(rows) do
-    rows
-    |> Enum.flat_map(fn row ->
-      from =
-        case payload(row) do
-          %{"from_turn" => id} when is_binary(id) -> [id]
-          _ -> []
-        end
-
-      [Map.get(row, :turn_id) | from]
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-  end
+  defp ids(stored), do: for(id <- List.wrap(stored), is_binary(id) and id != "", do: id)
 
   @doc "One message row of the tenant."
   @spec message(Context.t(), String.t()) :: {:ok, row()} | {:error, term()}

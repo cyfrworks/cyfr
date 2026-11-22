@@ -32,6 +32,9 @@ defmodule Aqua.Prompt do
       asked, read from its first opening, and its notes
       (`Aqua.Notes.thread_notes/1`); none for a crew member's thread.
 
+  A row it shows, the first opening's ask and each open request, is in
+  `Aqua.Reader`'s words.
+
   Orders stable sections before the clock to preserve a reusable prompt
   prefix: the soul's prompt or a crew member's opening, CYFR's part,
   granted capabilities, tool prelude, scroll
@@ -50,6 +53,7 @@ defmodule Aqua.Prompt do
 
   require Logger
 
+  alias Aqua.Reader
   alias Sanctum.Context
 
   @type opts :: [
@@ -265,8 +269,8 @@ defmodule Aqua.Prompt do
     [
       "\n\n---\n\n## Where you are\n\nYou are working the workspace thread \"",
       title,
-      "\", which the person's daily thread opened for one piece of work. They asked:\n\n",
-      quoted(ask),
+      "\", which the person's daily thread opened for one piece of work. ",
+      Reader.asked(ask),
       "\n\nDo the work here and post what you make with `thread.post`. When it is done, " <>
         "report it with `workspace.report` as `done`, saying what worked and what did not; " <>
         "when it cannot go on without the person, report `needs_you` and say what you need " <>
@@ -283,9 +287,6 @@ defmodule Aqua.Prompt do
 
   defp thread_notes(%{content: content}),
     do: ["\n\n### This thread's notes\n\n", content]
-
-  defp quoted(text),
-    do: text |> String.trim() |> String.split("\n") |> Enum.map_join("\n", &("> " <> &1))
 
   # Who the soul may hand a job to: the crew index, one line a member.
   defp crew([]), do: []
@@ -324,42 +325,8 @@ defmodule Aqua.Prompt do
     [
       "\n\n---\n\n## Open requests\n\nAsked and not yet answered; each reply arrives here as a " <>
         "message of its own.\n",
-      Enum.map(rows, fn row ->
-        asker = if row.sent_by == "person", do: "the person", else: row.sent_by
-
-        [
-          "- ",
-          row.id,
-          " to ",
-          row.addressee,
-          ", asked by ",
-          asker,
-          " ",
-          age(row.inserted_at, now),
-          " ago: ",
-          first_line(row.content),
-          "\n"
-        ]
-      end)
+      Enum.map(rows, &["- ", Reader.open_request(&1, now), "\n"])
     ]
-  end
-
-  defp age(%DateTime{} = at, now) do
-    seconds = max(DateTime.diff(now, at, :second), 0)
-
-    cond do
-      seconds < 120 -> "#{seconds}s"
-      seconds < 7_200 -> "#{div(seconds, 60)}m"
-      seconds < 172_800 -> "#{div(seconds, 3_600)}h"
-      true -> "#{div(seconds, 86_400)}d"
-    end
-  end
-
-  defp age(_at, _now), do: "a while"
-
-  defp first_line(content) do
-    line = (content || "") |> String.trim() |> String.split("\n", parts: 2) |> hd()
-    if String.length(line) > 160, do: String.slice(line, 0, 160) <> "…", else: line
   end
 
   # Describe only granted scopes, using the names from
