@@ -932,7 +932,7 @@ defmodule Prima.BuilderProtocol do
     do: "the build passed its budget of #{budget_ms} ms"
 
   def describe_refusal({:memory, :machine}),
-    do: "the machine ran out of memory and the build was ended"
+    do: "CYFR ran out of memory for builds and the build was ended"
 
   def describe_refusal({:memory, :either}), do: "the build ran out of memory and was ended"
 

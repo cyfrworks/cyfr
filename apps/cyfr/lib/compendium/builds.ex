@@ -613,8 +613,8 @@ defmodule Compendium.Builds do
     "Builder: " <> BuilderProtocol.describe_refusal(refused)
   end
 
-  # `memory` with its bound, `unavailable` naming what is missing, and a
-  # build killed by a signal: the builder's own sentence.
+  # `memory` with its bound or its cause, `unavailable` naming what is
+  # missing, and a build killed by a signal: the builder's own sentence.
   defp refusal({:refused, refused, _diagnostics}),
     do: "Builder: " <> BuilderProtocol.describe_refusal(refused)
 

@@ -29,9 +29,12 @@
 //	{"v":2,"type":"home_measured","id":…,"bytes":…}
 //	{"v":2,"type":"home_retired","id":…}
 //
-// `exited` is sent once, when a spawn's leader process is reaped. `released`
-// is sent once, when the spawn's uid has been retired, whether retirement
-// followed a `release` or the leader's exit.
+// `exited` is sent at most once and always before `released`: when a spawn's
+// leader process is reaped or, where retirement's bounded wait for that ran
+// out and the counters hold a kill for memory, then, with SIGKILL. A leader
+// retirement stopped waiting for with no such kill has none. `released` is
+// sent once, when the spawn's uid has been retired, whether retirement
+// followed a `release` or the leader's exit, and no exit follows it.
 //
 // A spawn's `env` is the whole environment block its command receives
 // beside the variables the stage sets itself (PATH, HOME, USER, LOGNAME and

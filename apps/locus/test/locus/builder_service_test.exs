@@ -586,7 +586,7 @@ defmodule Locus.BuilderServiceTest do
       assert {:refusal, {:failed, {:signal, "SIGKILL"}}, _diagnostics} = List.last(lines)
     end
 
-    test "a build ended at the machine's limit is a memory end that says the machine ran out",
+    test "a build ended at a limit above its own is a memory end that says CYFR ran out for builds",
          %{port: port} do
       _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "machine"}})
 
@@ -595,7 +595,7 @@ defmodule Locus.BuilderServiceTest do
       assert refusal == {:memory, :machine}
 
       said = Prima.BuilderProtocol.describe_refusal(refusal)
-      assert said == "the machine ran out of memory and the build was ended"
+      assert said == "CYFR ran out of memory for builds and the build was ended"
       refute said =~ ~r/bound|SIGKILL|[0-9]/
     end
 

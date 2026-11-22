@@ -198,7 +198,7 @@
           "compiling: Compiling reagent (rust)...",
           "output:    Compiling vector v0.1.0"
         ],
-        "sentence": "the machine ran out of memory and the build was ended",
+        "sentence": "CYFR ran out of memory for builds and the build was ended",
         "body": "{\"class\":\"memory\",\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output:    Compiling vector v0.1.0\"],\"reason\":{\"cause\":\"machine\"},\"type\":\"refusal\",\"version\":1}"
       },
       {

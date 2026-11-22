@@ -39,6 +39,11 @@ defmodule Prima.KeeperProtocol do
   bounds where it runs, whichever of them it lacks the means for; it
   refuses every spawn so, and none runs unbounded.
 
+  An `exited` comes at most once and before its spawn's `released`, never
+  after. Where retirement's bounded wait for the leader's reaping ran out,
+  a spawn killed for memory has one with `SIGKILL` and the cause, and any
+  other has none.
+
   An `exited`'s `memory` says what the kernel killed processes of the
   spawn for, as its group's own counters say: `"cap"` for its own bound;
   `"machine"` for a limit above it, the container's or the machine's,

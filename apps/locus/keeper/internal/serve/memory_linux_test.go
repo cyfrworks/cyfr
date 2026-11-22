@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -535,8 +536,9 @@ func (k *keeper) failAtItsBound(t *testing.T, group *cgroup.Group, bound uint64)
 
 // The cause of a kill reaches the client before the release, and is read
 // before the counters go, whichever of the leader's watcher and the cleanup
-// runs first: here the watcher is held past the cleanup, and in one case the
-// leader's reaping past every wait of the cleanup's too.
+// runs first: here the watcher is held past the cleanup, and in some cases
+// the leader's reaping until the cleanup has ended, which waits for it only
+// so long.
 func TestARetirementLeavesTheCauseOfAKillToBeRead(t *testing.T) {
 	for _, c := range []struct {
 		name           string
@@ -546,26 +548,20 @@ func TestARetirementLeavesTheCauseOfAKillToBeRead(t *testing.T) {
 	}{
 		{name: "pooled, the watcher held past the whole cleanup"},
 		{name: "pooled, the watcher held until the counters are gone", watchAtRemoval: true},
-		{name: "pooled, the leader's reaping held past the cleanup's waits", reapingHeld: true},
+		{name: "pooled, the leader never reaped while the cleanup runs", reapingHeld: true},
 		{name: "kept, the watcher held past the whole cleanup", kept: true},
 		{name: "kept, the watcher held until the counters are gone", kept: true, watchAtRemoval: true},
+		{name: "kept, the leader never reaped while the cleanup runs", kept: true, reapingHeld: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			k, sp, dir := killedAtItsCap(t, c.kept)
 			reap := func() {}
 			if c.reapingHeld {
-				reaped := sp.leader
-				held := &child{pid: reaped.pid, done: make(chan struct{})}
-				sp.leader = held
-				reap = func() {
-					held.status = reaped.status
-					close(held.done)
-				}
+				reap = holdReaping(t, sp)
 			}
 
 			k.s.retire(sp, 0, true)
-			switch {
-			case c.watchAtRemoval:
+			if c.watchAtRemoval {
 				for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 					if _, err := os.Stat(dir); err != nil {
 						break
@@ -575,32 +571,14 @@ func TestARetirementLeavesTheCauseOfAKillToBeRead(t *testing.T) {
 					}
 				}
 				k.s.watchLeader(sp)
-			case c.reapingHeld:
-				select {
-				case <-sp.retired:
-				case <-time.After(3 * clearTimeout):
-				}
-				reap()
 			}
-			select {
-			case <-sp.retired:
-			case <-time.After(10 * time.Second):
-				t.Fatal("the cleanup did not finish")
-			}
+			awaitRetired(t, sp)
+			reap()
 			// The watcher comes late and has nothing left to add.
 			if !c.watchAtRemoval {
 				k.s.watchLeader(sp)
 			}
-			k.s.send(protocol.NewPoolReply("after", "runner", 0, 0, 0))
-
-			var told []map[string]any
-			for {
-				m := k.reply(t)
-				if m["id"] == "after" {
-					break
-				}
-				told = append(told, m)
-			}
+			told := k.toldSoFar(t)
 			if len(told) != 2 || told[0]["type"] != protocol.TypeExited || told[0]["memory"] != protocol.MemoryCap ||
 				told[0]["signal"] != "SIGKILL" || told[1]["type"] != protocol.TypeReleased {
 				t.Fatalf("a spawn killed at its cap and retired was told %v; want its exit with cap, then its release", told)
@@ -609,10 +587,78 @@ func TestARetirementLeavesTheCauseOfAKillToBeRead(t *testing.T) {
 	}
 }
 
-// killedAtItsCap is a spawn, pooled or kept, whose leader the kernel killed
-// at its cap and the keeper reaped, with no watcher started for it. It
-// answers the directory of the spawn's counters too.
+// A release is the last word on its spawn: a leader that outlived the
+// cleanup's wait for it and was killed for no memory is released with no
+// exit, and its watcher, let go afterwards, sends none. Nothing is left to
+// read its counters, so its empty group goes.
+func TestNothingOfASpawnFollowsItsRelease(t *testing.T) {
+	for _, kept := range []bool{false, true} {
+		t.Run(fmt.Sprintf("kept %t", kept), func(t *testing.T) {
+			k, sp, dir := endedSpawn(t, kept, "exit 0")
+			reap := holdReaping(t, sp)
+
+			k.s.retire(sp, 0, true)
+			awaitRetired(t, sp)
+			if _, err := os.Stat(dir); err == nil {
+				t.Error("the released spawn's empty group was left in place")
+			}
+			reap()
+			k.s.watchLeader(sp)
+
+			if told := k.toldSoFar(t); len(told) != 1 || told[0]["type"] != protocol.TypeReleased {
+				t.Fatalf("a spawn released before its leader was reaped was told %v; want its release and nothing after it", told)
+			}
+		})
+	}
+}
+
+// holdReaping makes the spawn's reaped leader read as one not reaped yet,
+// until the function it answers is called.
+func holdReaping(t *testing.T, sp *spawn) func() {
+	reaped := sp.leader
+	held := &child{pid: reaped.pid, done: make(chan struct{})}
+	sp.leader = held
+	reap := sync.OnceFunc(func() {
+		held.status = reaped.status
+		close(held.done)
+	})
+	t.Cleanup(reap)
+	return reap
+}
+
+func awaitRetired(t *testing.T, sp *spawn) {
+	t.Helper()
+	select {
+	case <-sp.retired:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the cleanup did not finish")
+	}
+}
+
+// toldSoFar is every line the keeper sent before the call.
+func (k *keeper) toldSoFar(t *testing.T) []map[string]any {
+	t.Helper()
+	k.s.send(protocol.NewPoolReply("after", "runner", 0, 0, 0))
+	var told []map[string]any
+	for {
+		m := k.reply(t)
+		if m["id"] == "after" {
+			return told
+		}
+		told = append(told, m)
+	}
+}
+
 func killedAtItsCap(t *testing.T, kept bool) (*keeper, *spawn, string) {
+	t.Helper()
+	return endedSpawn(t, kept, "exec exe hold 128 60")
+}
+
+// endedSpawn is a spawn, pooled or kept, under a bound of 32 MiB, whose
+// leader ran script, ended and was reaped, with no watcher started for it.
+// In script "exe" names the keeper's own binary. It answers the directory of
+// the spawn's counters too.
+func endedSpawn(t *testing.T, kept bool, script string) (*keeper, *spawn, string) {
 	t.Helper()
 	var k *keeper
 	uid := testPoolFirst
@@ -637,7 +683,7 @@ func killedAtItsCap(t *testing.T, kept bool) (*keeper, *spawn, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leader, dir := k.runIn(t, group, "exec "+k.s.self+" hold 128 60")
+	leader, dir := k.runIn(t, group, strings.ReplaceAll(script, "exe ", k.s.self+" "))
 	k.awaitExit(t, leader)
 	sp.group, sp.leader = group, leader
 	k.s.mu.Lock()
