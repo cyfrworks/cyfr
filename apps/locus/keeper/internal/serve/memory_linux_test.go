@@ -341,8 +341,12 @@ func TestAKillForALimitAboveTheSpawnsIsTheMachines(t *testing.T) {
 			case <-time.After(30 * time.Second):
 				t.Fatal("no kill within 30 s")
 			}
-			if got := k.s.memoryEnd(&spawn{id: "above", group: group}); got == nil || *got != c.want {
-				t.Fatalf("a kill at %d bytes above a bound of %d read %v, want %s", c.above, c.bound, got, c.want)
+			got := "neither"
+			if end := k.s.memoryEnd(&spawn{id: "above", group: group}); end != nil {
+				got = *end
+			}
+			if got != c.want {
+				t.Fatalf("a spawn bound at %d bytes under a limit of %d read %q, want %q", c.bound, c.above, got, c.want)
 			}
 		})
 	}
