@@ -9,10 +9,12 @@ macOS and Windows, with no CYFR and no signing credentials (Codex CI's
 **`screen/idle.sh`, the device screen's idle lock**, with no CYFR (Codex
 CI's `screen-idle` job, amd64): this tree's watches under Ubuntu 26.04's
 labwc beside a real Chrome with the screen's flags, with nothing playing,
-with a page playing video with sound and with a sandboxed frame playing
-it. Each row holds that the watch locks, and that the control, swayidle's
-ordinary timeout, is held off exactly while something plays: a row whose
-page held no idle inhibitor fails rather than show nothing. The frame
+with a page playing a video a tap started and with a sandboxed frame
+playing one; and the suspend watch over the real swayidle and a stand-in logind.
+Each video row holds that the watch locks while the control, swayidle's
+ordinary timeout, is held off, and that this same control fires once the
+playback ends: a page that held no idle inhibitor, or a control that could
+not fire, fails rather than show nothing. The frame
 stands for an app's, with Prism's sandbox for no grant; no CYFR serves
 it. Its header names the rest.
 

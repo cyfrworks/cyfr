@@ -113,6 +113,66 @@ func TestWatch_EndsWhenItCanTellNoMore(t *testing.T) {
 	}
 }
 
+// A watch is lost, for its owner to lock, when it is not known to work: a
+// compositor that stops answering, one that stalls inside a message and an
+// event that cannot be placed.
+func TestWatch_IsLostWhenNotKnownToWork(t *testing.T) {
+	for name, c := range map[string]struct {
+		fault func(c *idletest.Compositor)
+		want  string
+	}{
+		"it stops answering after the handshake":   {func(c *idletest.Compositor) { c.Freeze() }, "did not answer"},
+		"it stalls inside a header":                {func(c *idletest.Compositor) { c.Stall(12, 5) }, "connection ended"},
+		"it stalls inside a body":                  {func(c *idletest.Compositor) { c.Stall(12, 10) }, "connection ended"},
+		"an unknown event for the notification":    {func(c *idletest.Compositor) { c.Send(idletest.NotificationObject, 7) }, "cannot place"},
+		"a known event with a body it has not":     {func(c *idletest.Compositor) { c.Send(idletest.NotificationObject, 0, 1) }, "cannot place"},
+		"an event for no object of the watch's":    {func(c *idletest.Compositor) { c.Send(99, 0) }, "cannot place"},
+		"an answer to a round trip it never asked": {func(c *idletest.Compositor) { c.Send(3, 0, 0) }, "cannot place"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			comp := idletest.Start(t, idletest.Options{})
+			_, ended := started(t, comp, time.Hour)
+			c.fault(comp)
+			select {
+			case err := <-ended:
+				if err == nil || !strings.Contains(err.Error(), c.want) {
+					t.Fatalf("lost saying %v, want %q", err, c.want)
+				}
+			case <-time.After(idle.CheckEvery + 2*idle.AnswerWithin):
+				t.Fatal("the watch went on believing it watches")
+			}
+		})
+	}
+}
+
+// A person's continued input is met with silence, which is not a stall:
+// the round trips go on and the watch with them.
+func TestWatch_SilenceUnderContinuedInputIsHealthy(t *testing.T) {
+	t.Parallel()
+	c := idletest.Start(t, idletest.Options{})
+	idled, ended := started(t, c, time.Hour)
+	for len(c.Synced) > 0 {
+		<-c.Synced
+	}
+	// More round trips than one deadline holds.
+	for range int(idle.AnswerWithin/idle.CheckEvery) + 2 {
+		c.Input()
+		select {
+		case <-c.Synced:
+		case err := <-ended:
+			t.Fatalf("healthy silence was taken for a stall: %v", err)
+		case <-time.After(idle.CheckEvery + idle.AnswerWithin):
+			t.Fatal("the watch stopped showing that it works")
+		}
+	}
+	select {
+	case <-idled:
+		t.Fatal("input counted as idle")
+	default:
+	}
+}
+
 func TestSocket(t *testing.T) {
 	for _, c := range []struct{ display, dir, want string }{
 		{"wayland-0", "/run/user/1000", "/run/user/1000/wayland-0"},

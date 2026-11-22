@@ -1380,3 +1380,37 @@ func TestSelection_ARefusedFirstHelloLeavesTheWorkingRecord(t *testing.T) {
 		t.Fatalf("a refused first hello replaced the working record:\n%s", after)
 	}
 }
+
+// A device that locks itself unlocks only while what would lock it is
+// known to work: otherwise no PIN or passphrase opens it and no open
+// device hands out a ticket, and the page says why in place of the form.
+func TestUnwatched_PermitsNoUnlock(t *testing.T) {
+	const why = "This screen stays locked because it cannot tell when this device goes to sleep."
+	home := newFakeHome(t)
+	var unwatched atomic.Value
+	unwatched.Store("")
+	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), func(c *Config) {
+		c.Unwatched = func() string { return unwatched.Load().(string) }
+	})
+	p := b.setUp("alice")
+	b.post("/saved", nil)
+	if !b.shell.Unlocked() {
+		t.Fatalf("a watched box did not finish its setup:\n%s", b.page())
+	}
+
+	unwatched.Store(why)
+	if w := b.post("/open", nil); strings.Contains(w.Header().Get("Location")+w.Body.String(), "/auth/device/complete") {
+		t.Fatal("an unwatched box handed out a ticket")
+	}
+	b.shell.Lock("")
+	if w := b.post("/unlock", url.Values{"secret": {p}}); b.shell.Unlocked() || strings.Contains(w.Header().Get("Location")+w.Body.String(), "/auth/device/complete") {
+		t.Fatal("an unwatched box unlocked")
+	}
+	page := b.page()
+	if !strings.Contains(page, why) || strings.Contains(page, `action="/unlock"`) || strings.Contains(page, "CYFR is locked") {
+		t.Fatalf("an unwatched box's page is\n%s", page)
+	}
+
+	unwatched.Store("")
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+}

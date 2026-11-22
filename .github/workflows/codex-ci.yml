@@ -260,13 +260,15 @@ jobs:
 
   screen-idle:
     # The device screen's five minutes are of input alone: under Ubuntu
-    # 26.04's labwc, a page or a sandboxed frame playing video with sound in
-    # the screen's Chrome does not hold its lock off, where swayidle's
-    # ordinary timeout is held off (tests/desktop-proof/screen/idle.sh).
+    # 26.04's labwc, a page or a sandboxed frame playing a video a tap started,
+    # in the screen's Chrome, does not hold its lock off, where swayidle's
+    # ordinary timeout is held off; and the screen takes swayidle for a
+    # suspend watch only once it subscribed to sleep
+    # (tests/desktop-proof/screen/idle.sh).
     # amd64 alone, as Chrome's package is.
     name: The screen's idle lock
     runs-on: ubuntu-latest
-    # The packages, Chrome's download and three cases of half a minute.
+    # The packages, Chrome's download and five cases of half a minute at most.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

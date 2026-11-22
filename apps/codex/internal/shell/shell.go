@@ -82,6 +82,10 @@ type Config struct {
 	SetupOpen func(context.Context) bool
 	// Restart starts the browser again on the lock page, after a lock.
 	Restart func()
+	// Unwatched is set for a device that locks itself (a box's screen): why
+	// it may not be unlocked now, or "" while what would lock it is known
+	// to work. While it says why, nothing unlocks and the pages show that.
+	Unwatched func() string
 	// DisplayName is the name the CYFR lists this device by.
 	DisplayName string
 	// Detect reads the disks; disk.Detect unless a test replaces it.
@@ -455,6 +459,9 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Restart == nil {
 		cfg.Restart = func() {}
 	}
+	if cfg.Unwatched == nil {
+		cfg.Unwatched = func() string { return "" }
+	}
 	if cfg.Tokens == nil {
 		cfg.Tokens = func() string { return "" }
 	}
@@ -826,6 +833,10 @@ const CompanySignIn = "This CYFR requires company sign-in. Open its address in a
 
 // sentence is what the person reads for a failure of this screen.
 func sentence(err error) string {
+	var locked unwatchedError
+	if errors.As(err, &locked) {
+		return string(locked)
+	}
 	var intent *IntentError
 	var dir *account.DirectoryRefusal
 	var refused *RefusedError
@@ -1490,6 +1501,9 @@ func (s *Shell) unlock(ctx context.Context, secret []byte) string {
 // present; one whose standing ended here keeps no certificate, so its
 // next unlock says hello again.
 func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
+	if err := s.watched(); err != nil {
+		return err
+	}
 	d := Dialer{Address: s.cfg.Address, Client: s.cfg.Client}
 	var ch *Channel
 	var err error
@@ -1624,6 +1638,9 @@ func (s *Shell) reserve(ctx context.Context) (string, error) {
 	if s.ch == nil {
 		return "", errors.New("locked")
 	}
+	if err := s.watched(); err != nil {
+		return "", err
+	}
 	raw, err := s.ch.Call(ctx, "session.unlock", nil)
 	if err != nil {
 		return "", err
@@ -1711,6 +1728,21 @@ func (s *Shell) Unlocked() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ch != nil
+}
+
+// unwatchedError refuses an unlock, saying what the page says.
+type unwatchedError string
+
+func (e unwatchedError) Error() string { return string(e) }
+
+// watched refuses while the device is not known to lock itself. A lock
+// follows each such loss (Config.Unwatched), so a caller that saw none
+// lost is ended by it.
+func (s *Shell) watched() error {
+	if why := s.cfg.Unwatched(); why != "" {
+		return unwatchedError(why)
+	}
+	return nil
 }
 
 // confirmWindow is how long a drawn confirmation or passkey request may

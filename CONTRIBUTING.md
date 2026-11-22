@@ -269,8 +269,9 @@ same worktree refuses, naming the run that holds it.
 
   Codex CI's `screen-idle` job runs `tests/desktop-proof/screen/idle.sh`:
   the device screen's idle watch under Ubuntu 26.04's labwc, beside a
-  real Chrome whose page, and whose sandboxed frame, plays video with
-  sound. It needs Docker and Go and binds no port of the machine, so here
+  real Chrome whose page, and whose sandboxed frame, plays a video
+  a tap started, and the suspend watch with the real swayidle on a stand-in
+  logind, subscribed and not. It needs Docker and Go and binds no port of the machine, so here
   it runs as `scripts/heavy-check.sh -- bash tests/desktop-proof/screen/idle.sh`.
 
   The Test workflow's `desktop-home` job runs those proofs on Linux amd64

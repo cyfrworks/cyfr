@@ -27,6 +27,9 @@ const (
 	NotifierName uint32 = 12
 )
 
+// NotificationObject is the id a watch's notification has, for Send.
+const NotificationObject uint32 = 6
+
 // Asked is a notification a client asked for.
 type Asked struct {
 	// InputOnly is whether it was get_input_idle_notification.
@@ -40,6 +43,8 @@ type Compositor struct {
 	Socket string
 	// Asked receives each notification asked for.
 	Asked chan Asked
+	// Synced receives each round trip answered.
+	Synced chan struct{}
 
 	options Options
 	ln      net.Listener
@@ -51,7 +56,7 @@ type Compositor struct {
 // Options are how it differs from labwc with a page playing nothing.
 type Options struct {
 	// Inhibited is a client holding an idle inhibitor, as a browser does
-	// for a page playing video with sound.
+	// for a page playing a video that a tap or click started.
 	Inhibited bool
 	// Version is the notifier's; 0 is 2.
 	Version uint32
@@ -65,6 +70,7 @@ type Options struct {
 
 type client struct {
 	c        net.Conn
+	frozen   bool
 	write    sync.Mutex
 	registry uint32
 	bound    map[uint32]string
@@ -90,7 +96,7 @@ func Start(t testing.TB, o Options) *Compositor {
 	if o.Version == 0 {
 		o.Version = 2
 	}
-	c := &Compositor{Socket: filepath.Join(dir, "s"), Asked: make(chan Asked, 8), options: o, clients: map[*client]bool{}}
+	c := &Compositor{Socket: filepath.Join(dir, "s"), Asked: make(chan Asked, 8), Synced: make(chan struct{}, 64), options: o, clients: map[*client]bool{}}
 	if c.ln, err = net.Listen("unix", c.Socket); err != nil {
 		_ = os.RemoveAll(dir)
 		t.Fatal(err)
@@ -137,6 +143,39 @@ func (c *Compositor) Input() {
 			}
 			n.timer.Reset(n.after)
 		}
+	}
+}
+
+// Freeze stops answering, each connection left open, as a compositor
+// that hangs does.
+func (c *Compositor) Freeze() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for cl := range c.clients {
+		cl.frozen = true
+	}
+}
+
+// Stall begins a message of size bytes, sends its first n and then stops
+// answering, as a compositor that hangs as it writes does.
+func (c *Compositor) Stall(size, n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	whole := append(words(NotificationObject, uint32(size)<<16), make([]byte, size-8)...)
+	for cl := range c.clients {
+		cl.frozen = true
+		cl.write.Lock()
+		_, _ = cl.c.Write(whole[:n])
+		cl.write.Unlock()
+	}
+}
+
+// Send sends an event of any kind.
+func (c *Compositor) Send(object, opcode uint32, body ...uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for cl := range c.clients {
+		cl.send(object, opcode, words(body...))
 	}
 }
 
@@ -189,9 +228,18 @@ func (c *Compositor) serve(cl *client) {
 func (c *Compositor) answer(cl *client, object, opcode uint32, body []byte) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if cl.frozen {
+		return true
+	}
 	switch {
 	case object == 1 && opcode == 0 && len(body) == 4: // sync
-		cl.send(wire.Uint32(body), 0, words(0))
+		id := wire.Uint32(body)
+		cl.send(id, 0, words(0))
+		cl.send(1, 1, words(id)) // wl_display.delete_id, as the server follows a callback
+		select {
+		case c.Synced <- struct{}{}:
+		default:
+		}
 	case object == 1 && opcode == 1 && len(body) == 4: // get_registry
 		cl.registry = wire.Uint32(body)
 		cl.send(cl.registry, 0, global(7, "wl_compositor", 6))

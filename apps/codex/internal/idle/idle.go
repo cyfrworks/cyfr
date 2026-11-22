@@ -6,7 +6,13 @@
 // ext_idle_notifier_v1's get_input_idle_notification (version 2): the
 // notification every idle daemon takes, get_idle_notification, is held off
 // by any client's idle inhibitor, and a browser takes one for a page that
-// plays video with sound.
+// plays a video a tap or click started, with sound or without.
+//
+// A watch is known to work, never assumed to: it makes a round trip with
+// the compositor every CheckEvery, which a person's continued input, met
+// with silence, does not disturb, and it is lost at a round trip or a
+// message not complete within AnswerWithin and at any event it cannot
+// place.
 package idle
 
 import (
@@ -32,6 +38,9 @@ const (
 	notifier
 	notification
 	accepted
+	// alive is the round trip's callback, one at a time: its id is used
+	// again once the compositor said it deleted the last.
+	alive
 )
 
 // The requests and events it uses, by their opcodes.
@@ -39,6 +48,7 @@ const (
 	displaySync        = 0
 	displayGetRegistry = 1
 	displayError       = 0
+	displayDeleteID    = 1
 
 	registryBind         = 0
 	registryGlobal       = 0
@@ -46,8 +56,11 @@ const (
 
 	callbackDone = 0
 
+	seatCapabilities = 0
+
 	notifierGetInputIdle = 2
 	notificationIdled    = 0
+	notificationResumed  = 1
 
 	// inputIdleVersion is the notifier's first version with
 	// get_input_idle_notification.
@@ -58,8 +71,12 @@ const (
 	header = 8
 	// maxMessage is the most a Wayland message holds.
 	maxMessage = 4096
-	// answerWithin bounds the compositor's answers while the watch starts.
-	answerWithin = 5 * time.Second
+
+	// CheckEvery is how often a watch is asked to show that it works, and
+	// AnswerWithin how long it has to show it: the same for any watch that
+	// locks the screen.
+	CheckEvery   = 2 * time.Second
+	AnswerWithin = 5 * time.Second
 )
 
 var wire = binary.NativeEndian
@@ -91,7 +108,7 @@ func Socket() (string, error) {
 // cannot say it of input alone is refused: there is no falling back to the
 // notification a page can hold off.
 func Start(ctx context.Context, socket string, after time.Duration) (*Watch, error) {
-	ctx, cancel := context.WithTimeout(ctx, answerWithin)
+	ctx, cancel := context.WithTimeout(ctx, AnswerWithin)
 	defer cancel()
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	if err != nil {
@@ -120,6 +137,9 @@ func (w *Watch) ask(after time.Duration) error {
 	var seats, notifiers bool
 	var version uint32
 	err := w.until(listed, func(m message) error {
+		if err := w.place(m); err != nil {
+			return err
+		}
 		if m.object != registry || m.opcode != registryGlobal {
 			return nil
 		}
@@ -157,23 +177,64 @@ func (w *Watch) ask(after time.Duration) error {
 			return err
 		}
 	}
-	return w.until(accepted, w.removed)
+	return w.until(accepted, w.place)
 }
 
+var (
+	errSilent   = fmt.Errorf("the compositor did not answer within %v", AnswerWithin)
+	errUnplaced = errors.New("the compositor sent an event the watch cannot place")
+)
+
 // Run calls idled each time the seat has had no input for the time asked,
-// once for each stretch without any. It returns when the watch can tell no
-// more: the compositor went or refused, its seat or notifier went, or Close.
+// once for each stretch without any. It returns when the watch is not
+// known to work: the compositor went, refused, stalled or sent what cannot
+// be placed, its seat or notifier went, or Close. The time idled takes is
+// not the compositor's to answer in.
 func (w *Watch) Run(idled func()) error {
+	asking := false
+	due := time.Now().Add(CheckEvery)
 	for {
+		if !time.Now().Before(due) {
+			if asking {
+				return errSilent
+			}
+			if err := w.conn.SetWriteDeadline(time.Now().Add(AnswerWithin)); err != nil {
+				return err
+			}
+			if err := w.send(display, displaySync, words(alive)); err != nil {
+				return err
+			}
+			asking, due = true, time.Now().Add(AnswerWithin)
+		}
+		if err := w.conn.SetReadDeadline(due); err != nil {
+			return err
+		}
+		if _, err := w.r.Peek(1); err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				continue
+			}
+			return fmt.Errorf("the compositor's connection ended: %w", err)
+		}
+		// A message begun completes, or the watch is lost.
+		if err := w.conn.SetReadDeadline(time.Now().Add(AnswerWithin)); err != nil {
+			return err
+		}
 		m, err := w.next()
-		if err != nil {
+		switch {
+		case err != nil:
 			return err
-		}
-		if err := w.removed(m); err != nil {
-			return err
-		}
-		if m.object == notification && m.opcode == notificationIdled {
+		case m.object == alive && m.opcode == callbackDone && len(m.body) == 4 && asking:
+		case m.deletes(alive) && asking:
+			asking, due = false, time.Now().Add(CheckEvery)
+		case m.object == notification && m.opcode == notificationIdled && len(m.body) == 0:
 			idled()
+			if asking {
+				due = time.Now().Add(AnswerWithin)
+			}
+		default:
+			if err := w.place(m); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -181,17 +242,33 @@ func (w *Watch) Run(idled func()) error {
 // Close ends the watch, and Run with it.
 func (w *Watch) Close() error { return w.conn.Close() }
 
-func (w *Watch) removed(m message) error {
-	if m.object != registry || m.opcode != registryGlobalRemove {
+// place is nil for an event with nothing to say to the watch, and why the
+// watch is lost for any other: it is every event but the ones its reader
+// acts on.
+func (w *Watch) place(m message) error {
+	switch {
+	case m.deletes(listed), m.deletes(accepted):
+		return nil
+	case m.object == registry && m.opcode == registryGlobal:
+		_, _, _, err := m.global()
+		return err
+	case m.object == registry && m.opcode == registryGlobalRemove && len(m.body) == 4:
+		if name := wire.Uint32(m.body); name == w.seatName || name == w.notifierName {
+			return errors.New("the compositor took away the seat or its idle notifier")
+		}
+		return nil
+	case m.object == seat && m.opcode == seatCapabilities && len(m.body) == 4:
+		return nil
+	case m.object == notification && len(m.body) == 0 &&
+		(m.opcode == notificationIdled || m.opcode == notificationResumed):
 		return nil
 	}
-	if len(m.body) < 4 {
-		return errShort
-	}
-	if name := wire.Uint32(m.body); name == w.seatName || name == w.notifierName {
-		return errors.New("the compositor took away the seat or its idle notifier")
-	}
-	return nil
+	return fmt.Errorf("%w (object %d, opcode %d)", errUnplaced, m.object, m.opcode)
+}
+
+// deletes is whether m is the display saying it deleted id.
+func (m message) deletes(id uint32) bool {
+	return m.object == display && m.opcode == displayDeleteID && len(m.body) == 4 && wire.Uint32(m.body) == id
 }
 
 // until reads to callback's done, giving each message before it to each.
