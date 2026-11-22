@@ -480,19 +480,76 @@ defmodule Aqua.Tape do
   Join what the turn read of the athanor's threads into its read threads
   before its read answers (`TurnStorage.join_read/3`), under the turn's
   row lock and its fence: `threads` (each whose posts it read or that those
-  posts carry, `carried_threads/1`) and the read threads of `turns`
-  (`writing_turns/1`). Answers the threads that still stood, whose posts
-  alone the read may answer, and the read threads joined.
+  posts carry, `carried_threads/1`), the read threads of `turns`
+  (`writing_turns/1`) and `stored`, what the turn's own rows carry, which
+  joins as stored, standing or not. Answers the threads of `threads` that
+  still stood and the read threads joined.
   """
-  @spec join_read(Context.t(), turn(), [String.t()], [String.t()]) ::
+  @spec join_read(Context.t(), turn(), [String.t()], [String.t()], [String.t()]) ::
           {:ok, %{threads: [String.t()], read_threads: [String.t()]}} | {:error, term()}
-  def join_read(%Context{} = ctx, turn, threads, turns),
+  def join_read(%Context{} = ctx, turn, threads, turns, stored \\ []),
     do:
       TurnStorage.join_read(Sanctum.Context.actor(ctx), turn.id, %{
         fence: turn.fence,
         threads: threads,
+        stored: stored,
         threads_from: turns
       })
+
+  @doc """
+  Join what `turn` is about to read of `sources` (`join_read/5`): each
+  source's own thread when it is another than the turn's, the threads it
+  carries (`carried_threads/1`), the threads `read` names, which the turn
+  asked to read, and the read threads of the turns that wrote them
+  (`writing_turns/1`). The turn's own thread stands while the turn is
+  open. Answers the sources handed over, in their order, and the read
+  threads joined.
+
+  A turn that asked to read nothing reads what its thread holds: a row
+  of that thread is handed over while the workspace thread it names
+  stands, and what it carries joins as stored, since a list of read
+  threads keeps the ids of threads deleted since. Every other source is
+  brought in (a citation, and all a reread or a search answers) and is
+  handed over only when its own and carried threads all stand.
+  """
+  @spec join_sources(Context.t(), turn(), [row()], [String.t()]) ::
+          {:ok, %{rows: [row()], read_threads: [String.t()]}} | {:error, term()}
+  def join_sources(%Context{} = ctx, turn, sources, read \\ []) do
+    elsewhere = for %{thread_id: id} <- sources, id != turn.thread_id, do: id
+    threads = Enum.uniq(read ++ elsewhere ++ carried_threads(sources))
+
+    held? = &(read == [] and &1.thread_id == turn.thread_id)
+    stored = sources |> Enum.filter(held?) |> carried_threads()
+
+    with {:ok, %{threads: standing, read_threads: joined}} <-
+           join_read(ctx, turn, threads, writing_turns(sources), stored) do
+      stands = MapSet.new([turn.thread_id | standing])
+
+      handed =
+        Enum.filter(sources, fn row ->
+          needs =
+            if held?.(row),
+              do: List.wrap(Map.get(row, :workspace_id)),
+              else: [row.thread_id | carried_threads([row])]
+
+          Enum.all?(needs, &(&1 in stands))
+        end)
+
+      {:ok, %{rows: handed, read_threads: joined}}
+    end
+  end
+
+  @doc """
+  Of `rows`, the posts a program refused, by each delivery's outcome and
+  never by the carry (`TurnStorage.refused_posts/2`).
+  """
+  @spec refused_posts(Context.t(), [row()]) :: {:ok, [String.t()]} | {:error, term()}
+  def refused_posts(%Context{} = ctx, rows) when is_list(rows) do
+    case for(%{id: id, carried_by: step} <- rows, is_binary(step), do: id) do
+      [] -> {:ok, []}
+      ids -> TurnStorage.refused_posts(Sanctum.Context.actor(ctx), ids)
+    end
+  end
 
   @doc """
   Whether the caller still holds `turn`, open, at the fence it read,

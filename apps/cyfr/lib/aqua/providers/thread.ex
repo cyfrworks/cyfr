@@ -25,7 +25,9 @@ defmodule Aqua.Providers.Thread do
   (`Arca.ThreadStorage.search/3`), and answers each as a pointer (its
   thread, the day or the title, the post, its `seq`, who wrote it, when,
   and 240 bytes around the match); `events` then reads that thread
-  after a `seq`, in a turn fifty posts at most. A crew member's thread is
+  after a `seq`, in a turn fifty posts at most, each worded and named as
+  `Aqua.Reader` reads it to a model; the person's replay is the rows' own
+  text. A crew member's thread is
   neither searched nor read, and another athanor's is not found. A turn
   reads only while the person's Aqua holds it, the holder that made the
   call: before a read answers, what it carries joins the turn's read
@@ -1263,7 +1265,7 @@ defmodule Aqua.Providers.Thread do
              "before",
              args["before"]
            ),
-         {:ok, posts, threads} <- joined(ctx, reader, found.posts, & &1.message) do
+         {:ok, posts, threads} <- joined(ctx, reader, found.posts) do
       results = Enum.map(posts, &pointer(&1, needle))
       {:ok, with_threads(%{results: results, count: length(results), next: found.next}, threads)}
     end
@@ -1276,12 +1278,11 @@ defmodule Aqua.Providers.Thread do
   defp read_thread(ctx, %{"thread" => id} = args) when is_binary(id) and id != "" do
     actor = Sanctum.Context.actor(ctx)
 
-    with {:ok, reader} <- recall_reader(ctx, args),
+    with {:ok, {:turn, turn}} <- recall_reader(ctx, args),
          {:ok, %{kind: kind}} when kind in ["daily", "workspace"] <-
            Arca.ThreadStorage.get(actor, id),
          rows when is_list(rows) <- Arca.ThreadStorage.messages(actor, id, read_opts(args)),
-         {:ok, rows, threads} <- joined(ctx, reader, rows, & &1) do
-      rows = Enum.map(rows, &render/1)
+         {:ok, rows, threads} <- reread(ctx, turn, id, rows) do
       {:ok, with_threads(%{thread: id, messages: rows, cursor: cursor(rows)}, threads)}
     else
       {:ok, %{}} -> {:error, {:not_found, "thread", id}}
@@ -1337,27 +1338,46 @@ defmodule Aqua.Providers.Thread do
   defp recall_reader(%Context{plane: :guest}, _args), do: {:error, :not_in_a_turn}
   defp recall_reader(%Context{}, _args), do: {:ok, :person}
 
-  # The rows a read answers, and the threads it joined. The person's read
-  # joins nothing. A turn's joins, under its fence, every thread whose
-  # posts the rows are or carry and the read threads of the turns that
-  # wrote them (`Aqua.Tape.join_read/4`); a row of a thread or carrying one
-  # that no longer stands is not answered.
-  defp joined(_ctx, :person, items, _row), do: {:ok, items, nil}
+  # A turn's reread: each row's content as the reader words it, named, its
+  # thread's open turns being those whose posts may still be taken. A row
+  # that is the reader's own, or no model's words, keeps its content.
+  defp reread(ctx, turn, id, rows) do
+    with {:ok, open} <- Tape.open_turns(ctx, id),
+         {:ok, %{rows: kept, reading: reading, read_threads: joined}} <-
+           Aqua.Reader.join(ctx, turn, rows, Enum.map(rows, & &1.thread_id)) do
+      reading = %{
+        reading
+        | open: Enum.map(open, & &1.id),
+          removed: Aqua.Reader.removed(ctx, kept)
+      }
 
-  defp joined(ctx, {:turn, turn}, items, row) do
-    rows = Enum.map(items, row)
-    threads = Enum.uniq(Enum.map(rows, & &1.thread_id) ++ Tape.carried_threads(rows))
+      {:ok, Enum.map(kept, &%{render(&1) | content: content(&1, reading)}), joined}
+    else
+      {:error, reason} -> {:error, refusal(reason, nil)}
+    end
+  end
 
-    case Tape.join_read(ctx, turn, threads, Tape.writing_turns(rows)) do
-      {:ok, %{threads: standing, read_threads: joined}} ->
-        kept =
-          Enum.filter(items, fn item ->
-            row = row.(item)
-            needs = [row.thread_id | Tape.carried_threads([row])]
-            Enum.all?(needs, &(&1 in standing))
-          end)
+  defp content(row, reading) do
+    case Aqua.Reader.read(row, reading) do
+      {:said, text} -> text
+      _own_or_none -> row.content
+    end
+  end
 
-        {:ok, kept, joined}
+  # The posts a search answers, and the threads they joined. The person's
+  # search joins nothing. A turn's joins, under its fence, every thread
+  # whose posts it found or those posts carry and the read threads of the
+  # turns that wrote them (`Aqua.Tape.join_sources/4`); a post of a thread
+  # or carrying one that no longer stands is not answered.
+  defp joined(_ctx, :person, found), do: {:ok, found, nil}
+
+  defp joined(ctx, {:turn, turn}, found) do
+    rows = Enum.map(found, & &1.message)
+
+    case Tape.join_sources(ctx, turn, rows, Enum.map(rows, & &1.thread_id)) do
+      {:ok, %{rows: standing, read_threads: joined}} ->
+        ids = MapSet.new(standing, & &1.id)
+        {:ok, Enum.filter(found, &MapSet.member?(ids, &1.message.id)), joined}
 
       {:error, reason} ->
         {:error, refusal(reason, nil)}
@@ -1514,6 +1534,10 @@ defmodule Aqua.Providers.Thread do
       kind: msg.kind,
       content: msg.content,
       status: msg.status,
+      sent_by: msg.sent_by,
+      reply_to: msg.reply_to,
+      outcome: msg.outcome,
+      workspace: msg.workspace_id,
       at: msg.inserted_at
     }
   end

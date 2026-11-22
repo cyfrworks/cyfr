@@ -409,6 +409,175 @@ defmodule Aqua.TurnReadThreadsTest do
     end
   end
 
+  describe "a reread that expands an opening's citation" do
+    test "joins what the cited post's writing turn read, so deleting that finds the reader",
+         %{ctx: ctx, thread: daily} do
+      gone = fares!(ctx)
+      writer = running!(ctx, daily)
+      :ok = Tape.join_threads(ctx, writer, [gone.id])
+      cited = say!(ctx, daily, "They rise on Monday.", %{sent_by: "aqua", turn_id: writer.id})
+      {:ok, _} = Tape.finish(ctx, writer, "cancelled")
+
+      work = cited_by!(ctx, daily, cited)
+      {:ok, reading} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+      reader = accept!(ctx, reading, "@aqua what was asked there?")
+
+      script!([
+        calls([{"e1", "thread", %{"action" => "events", "thread" => work.id}}]),
+        reply("When the fares rise.")
+      ])
+
+      assert :completed = run(ctx, reader)
+      assert read_threads(ctx, reader) == Enum.sort([work.id, daily.id, gone.id])
+      read = result(ctx, reader, "e1")
+      assert read.content =~ "They rise on Monday."
+      kept = kept_since_reading!(ctx, reading)
+
+      assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
+
+      assert_blanked(ctx, reader, "e1", read)
+      assert_forgotten(ctx, reading, kept)
+    end
+
+    test "joins a cited report's source, and once the source is gone does not expand it",
+         %{ctx: ctx, thread: daily} do
+      source = fares!(ctx)
+      reported = workspace!(ctx, "Fare table")
+
+      report =
+        say!(ctx, daily, "The table is written.", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: reported.id,
+          payload: %{"title" => "Fare table", "read_threads" => [source.id]}
+        })
+
+      work = cited_by!(ctx, daily, report)
+      {:ok, reading} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+      reader = accept!(ctx, reading, "@aqua what was asked there?")
+
+      script!([
+        calls([{"e1", "thread", %{"action" => "events", "thread" => work.id}}]),
+        reply("A table."),
+        calls([{"e2", "thread", %{"action" => "events", "thread" => work.id}}]),
+        reply("Only the ask.")
+      ])
+
+      assert :completed = run(ctx, reader)
+
+      assert read_threads(ctx, reader) ==
+               Enum.sort([work.id, daily.id, reported.id, source.id])
+
+      read = result(ctx, reader, "e1")
+      assert read.content =~ "The table is written."
+
+      assert {:ok, _} = Tape.delete_thread(ctx, source.id)
+      assert_blanked(ctx, reader, "e1", read)
+
+      again = accept!(ctx, reading, "@aqua and now?")
+      assert :completed = run(ctx, again)
+      reread = result(ctx, again, "e2").content
+      assert reread =~ "what do the fares do"
+      refute reread =~ "The table is written."
+    end
+  end
+
+  describe "after a deletion, what still stands" do
+    test "a reread in the daily thread itself expands no cited report whose source is gone",
+         %{ctx: ctx, thread: daily} do
+      source = fares!(ctx)
+      reported = workspace!(ctx, "Fare table")
+
+      report =
+        say!(ctx, daily, "The table is written.", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: reported.id,
+          payload: %{"title" => "Fare table", "read_threads" => [source.id]}
+        })
+
+      work = cited_by!(ctx, daily, report)
+      assert {:ok, _} = Tape.delete_thread(ctx, source.id)
+      reader = accept!(ctx, daily, "@aqua what was asked there?")
+
+      script!([
+        calls([{"e1", "thread", %{"action" => "events", "thread" => work.id}}]),
+        reply("The ask.")
+      ])
+
+      assert :completed = run(ctx, reader)
+      reread = result(ctx, reader, "e1").content
+      assert reread =~ "what do the fares do"
+      refute reread =~ "The table is written."
+    end
+
+    test "a row of the turn's thread is not handed over once the workspace thread it names " <>
+           "is gone, though it was read before the deletion",
+         %{ctx: ctx, thread: daily} do
+      gone = workspace!(ctx, "Gone")
+
+      pointer =
+        say!(ctx, daily, "Gone", %{sent_by: "aqua", kind: "pointer", workspace_id: gone.id})
+
+      kept = say!(ctx, daily, "still here")
+      assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
+      turn = running!(ctx, daily)
+
+      assert {:ok, %{rows: rows}} = Aqua.Reader.join(ctx, turn, [pointer, kept])
+      assert Enum.map(rows, & &1.id) == [kept.id]
+    end
+
+    test "a workspace thread's report still reaches Aqua when a thread an earlier turn there " <>
+           "read was deleted",
+         %{ctx: ctx} do
+      gone = fares!(ctx)
+      work = workspace!(ctx, "Fare table", "open")
+      first = accept!(ctx, work, "@aqua look at the fares")
+
+      script!([
+        calls([{"e1", "thread", %{"action" => "events", "thread" => gone.id}}]),
+        reply("Looked."),
+        calls([
+          {"r1", "workspace",
+           %{
+             "action" => "report",
+             "outcome" => "done",
+             "summary" => "The unrelated chart is ready."
+           }}
+        ]),
+        reply("Reported."),
+        reply("Noted.")
+      ])
+
+      assert :completed = run(ctx, first)
+      assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
+
+      later = accept!(ctx, work, "@aqua now draw a chart of the weather, and report")
+      assert :completed = run(ctx, later)
+
+      assert %{} = Crew.drain_all()
+      {:ok, today} = Aqua.Day.current(ctx)
+      assert [%{turn_id: delivered}] = Enum.filter(rows(ctx, today), &(&1.kind == "report"))
+      await_status(ctx, delivered, "completed")
+
+      assert Jason.encode!(List.last(chat_requests())["messages"]) =~
+               "The unrelated chart is ready."
+    end
+
+    test "a workspace thread keeps its ask when the daily thread it was opened from is deleted",
+         %{ctx: ctx, thread: daily} do
+      work = cited_by!(ctx, daily, say!(ctx, daily, "the fares"))
+      assert {:ok, _} = Tape.delete_thread(ctx, daily.id)
+      turn = accept!(ctx, work, "@aqua go on")
+      script!([reply("Going on.")])
+
+      assert :completed = run(ctx, turn)
+      assert Jason.encode!(hd(chat_requests())["messages"]) =~ "what do the fares do"
+    end
+  end
+
   # Each proof deletes `gone` and holds three things: before the deletion
   # the reading turn's row names exactly the threads it read, `gone` among
   # them; after it, the reader's result that carried `gone`'s posts holds
@@ -906,15 +1075,33 @@ defmodule Aqua.TurnReadThreadsTest do
     gone
   end
 
-  defp say!(ctx, thread, content) do
+  defp say!(ctx, thread, content, fields \\ %{}) do
     {:ok, row} =
-      Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
-        author: ctx.user_id,
-        sent_by: "person",
-        content: content
-      })
+      Threads.append(
+        Sanctum.Context.actor(ctx),
+        thread.id,
+        Map.merge(%{author: ctx.user_id, sent_by: "person", content: content}, fields)
+      )
 
     row
+  end
+
+  # A workspace thread whose opening, refused before it ran, cites `cited`.
+  defp cited_by!(ctx, daily, cited) do
+    work = workspace!(ctx, "Citing")
+
+    say!(ctx, work, "what do the fares do", %{
+      kind: "opening",
+      status: "error",
+      payload: %{
+        "title" => "Citing",
+        "asked_by" => ctx.user_id,
+        "from" => %{"thread" => daily.id},
+        "refs" => [cited.id]
+      }
+    })
+
+    work
   end
 
   # What a reader's thread keeps after its turn read: a compaction, which

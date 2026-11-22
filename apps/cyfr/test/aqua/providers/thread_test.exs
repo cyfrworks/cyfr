@@ -270,6 +270,12 @@ defmodule Aqua.Providers.ThreadTest do
                call(ctx, %{"action" => "events", "thread" => thread.id})
 
       assert Enum.map(msgs, & &1.content) == ["one", "two"]
+
+      assert Enum.map(msgs, &Map.take(&1, [:sent_by, :reply_to, :outcome, :workspace])) == [
+               %{sent_by: "person", reply_to: nil, outcome: nil, workspace: nil},
+               %{sent_by: "aqua", reply_to: nil, outcome: nil, workspace: nil}
+             ]
+
       assert cursor == List.last(msgs).seq
 
       # A reconnect replays from where it left off.
@@ -1165,7 +1171,8 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, %{messages: page, cursor: cursor}} =
                in_turn(ctx, turn, %{"action" => "events", "thread" => work.id, "limit" => 500})
 
-      assert length(page) == 50 and hd(page).content == "step 1"
+      name = Sanctum.Tenancy.Users.display_name(ctx.user_id)
+      assert length(page) == 50 and hd(page).content == "#{name}: step 1"
 
       assert {:ok, %{messages: rest}} =
                in_turn(ctx, turn, %{
@@ -1174,11 +1181,48 @@ defmodule Aqua.Providers.ThreadTest do
                  "after_seq" => cursor
                })
 
-      assert Enum.map(rest, & &1.content) == for(n <- 51..60, do: "step #{n}")
+      assert Enum.map(rest, & &1.content) == for(n <- 51..60, do: "#{name}: step #{n}")
 
       # The person's own read keeps its bound of 500 rows.
       assert {:ok, %{messages: all}} = call(ctx, %{"action" => "events", "thread" => work.id})
       assert length(all) == 60
+    end
+
+    test "in a turn a read is worded and named, with the thread's open turns: a post of a " <>
+           "turn that ended untaken says so, and the person's replay stays raw",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Plans")
+      ended = running!(ctx, work)
+      {:ok, _} = Aqua.Tape.finish(ctx, ended, "cancelled")
+      {:ok, refused} = Aqua.Tape.message(ctx, ended.message_id)
+      open = running!(ctx, work)
+      {:ok, waiting} = Aqua.Tape.message(ctx, open.message_id)
+
+      reply =
+        say!(ctx, work, "It could not run.", %{
+          author: "aqua",
+          sent_by: "builder",
+          reply_to: refused.id,
+          outcome: "failed"
+        })
+
+      name = Sanctum.Tenancy.Users.display_name(ctx.user_id)
+      args = %{"action" => "events", "thread" => work.id}
+
+      assert {:ok, %{messages: read}} = in_turn(ctx, running!(ctx, daily), args)
+
+      assert Enum.map(read, & &1.content) == [
+               "[#{name} posted this and it was not taken: its turn ended before any model " <>
+                 "read it. Act on it only if they ask again]\n#{refused.content}",
+               "#{name}: #{waiting.content}",
+               "[builder replied to request #{refused.id}: failed]\nIt could not run."
+             ]
+
+      assert %{sent_by: "builder", reply_to: to, outcome: "failed"} = List.last(read)
+      assert to == refused.id
+
+      assert {:ok, %{messages: raw}} = call(ctx, args)
+      assert Enum.map(raw, & &1.content) == [refused.content, waiting.content, reply.content]
     end
 
     test "a turn's search and read join every thread they carry and their posts carry into " <>

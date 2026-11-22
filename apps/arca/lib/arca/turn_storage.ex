@@ -31,14 +31,12 @@ defmodule Arca.TurnStorage do
 
   `turns.read_threads` are the ids of the threads whose posts the turn
   has read (`Arca.ThreadStorage.threads_text/1`), a list that only grows,
-  by which a thread's deletion finds the turn. It grows in the
-  transaction that writes the step a read belongs to, after the turn row
-  is taken: `put_step/3` joins the threads the step opens with
-  (`:threads`) and the read threads of the turns whose words the rows it
-  sends carry (`:threads_from`): the thread's earlier turns, and a crew
-  member's turn whose reply, or the soul's turn whose request, a row
-  brings across threads. `close_step/4` joins the threads its result
-  carries (`:threads`).
+  by which a thread's deletion finds the turn. What a turn reads of
+  threads' rows joins before it is read (`join_read/3`), with the read
+  threads of the turns whose words those rows carry. A step's threads
+  join in the transaction that writes it, after the turn row is taken:
+  those it opens with (`put_step/3`'s `:threads` and `:threads_from`) and
+  those its result carries (`close_step/4`'s `:threads`).
 
   ## The thread claim
 
@@ -3508,14 +3506,42 @@ defmodule Arca.TurnStorage do
   def join_threads(%Prima.Actor{}, _turn_id, _threads, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  Join what a turn read of the athanor's threads into its read threads,
-  before its read answers (`thread.search`, `thread.events`): under the
+  Of the posts `ids`, those a program refused: carried by an `input` step
+  closed `error`, which is a delivery the driver said it did not write.
+  A delivery still dispatched or closed `uncertain` is none, and neither
+  is a post whose carrier is a model step, however that step ended.
+  """
+  @spec refused_posts(Prima.Actor.t(), [String.t()]) :: {:ok, [String.t()]} | {:error, term()}
+  def refused_posts(%Prima.Actor{athanor_id: athanor_id}, ids)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(ids) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.refused_posts", fn ->
+      {:ok,
+       Arca.Repo.all(
+         from(m in Message,
+           join: s in TurnStep,
+           on: s.id == m.carried_by and s.athanor_id == m.athanor_id,
+           where: m.athanor_id == ^athanor_id and m.id in ^ids,
+           where: s.kind == "input" and s.dispatch_state == "closed" and s.outcome == "error",
+           select: m.id
+         )
+       )}
+    end)
+  end
+
+  def refused_posts(%Prima.Actor{}, _ids), do: {:error, :no_athanor}
+
+  @doc """
+  Join what a turn reads of the athanor's threads into its read threads,
+  before it is read (a request's rows, a program's post and context,
+  `thread.search`, `thread.events`): under the
   turn's row lock and only while the caller still holds the turn at
   `attrs[:fence]` and the turn is open, the thread rows `attrs[:threads]`
   names are taken in the one order (`Arca.ThreadStorage.lock_threads!/2`),
   and each that stands joins, with the read threads of the turns
   `attrs[:threads_from]` names, as a step's opening joins them; a turn
-  named there that is not found adds nothing.
+  named there that is not found adds nothing. The ids `attrs[:stored]`
+  names, which the rows of the turn's own thread carry, join as stored,
+  standing or not, as those turns' read threads do.
 
   Answers the ids of the threads that stood, whose posts the read may
   answer (`threads`), and every id the read joined (`read_threads`). A
@@ -3539,7 +3565,11 @@ defmodule Arca.TurnStorage do
           for thread <- Arca.ThreadStorage.lock_threads!(actor, Map.get(attrs, :threads, [])),
               do: thread.id
 
-        joined = standing ++ turns_threads!(athanor_id, Map.get(attrs, :threads_from, []))
+        joined =
+          standing ++
+            threads!(Map.get(attrs, :stored, [])) ++
+            turns_threads!(athanor_id, Map.get(attrs, :threads_from, []))
+
         _turn = join_threads!(athanor_id, turn, joined)
         %{threads: standing, read_threads: joined |> Enum.uniq() |> Enum.sort()}
       end)
@@ -3986,13 +4016,10 @@ defmodule Arca.TurnStorage do
       the turn that closed (`:not_closed`); for `"notice"`, the recovery
       prompt, a post the turn carried or such a result row (running only).
 
-  What the delivery brings in joins the turn's read threads before
-  anything is written, as a model step joins what its request carries:
-  `:threads` (the ids of the threads whose posts it carries) and the read
-  threads of the turns in `:threads_from`, whose words it carries; a
-  delivery taken back leaves them joined. A post or a notice joins the
-  posts owed an answer, and the silence clock pauses on the delivery not
-  yet taken (`brain_progress`). A notice leaves the recovery obligation it answers
+  What the delivery brings in joined the turn's read threads before it
+  was read (`join_read/3`). A post or a notice joins the posts owed an
+  answer, and the silence clock pauses on the delivery not yet taken
+  (`brain_progress`). A notice leaves the recovery obligation it answers
   (`reconcile_brain/3`) where it stands until the driver answers for its
   write (`commit_brain/3`) or a reconcile settles it; until then its step
   alone keeps another notice of its row from being offered
@@ -4023,7 +4050,6 @@ defmodule Arca.TurnStorage do
            do: Arca.Repo.rollback(:carried)
 
         row = delivered!(athanor_id, turn, deliver, row_id)
-        turn = join_threads!(athanor_id, turn, opened_threads!(athanor_id, attrs))
 
         step =
           insert_step!(athanor_id, turn, %{

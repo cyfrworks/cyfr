@@ -49,9 +49,12 @@ defmodule Aqua.Program do
   ask's result as its `answer`, then each post of the open turn that
   waits, each first recorded as an `input` step (`carry/3`) whose id the
   command carries, so a delivery is attempted once whatever restarts
-  follow. A post carries its files after its text as the API path words
-  them (`Aqua.Loop.Turn.file_block/2`), an image or a PDF as itself where
-  the wire carries its type; a file never refuses a post, and one past
+  follow. A post and a fresh session's context are in the words
+  `Aqua.Reader` gives an API request, and what they bring in joins the
+  turn before it is read. A post carries its files after its text as the
+  API path words them (`Aqua.Loop.Turn.file_block/2`), an image or a PDF
+  as itself where the wire carries its type; a file never refuses a
+  post, and one past
   the line's bound is named as too large to hand over.
   `accepted` says the write was taken and nothing more: a post's
   obligation ends when an `idle` names it.
@@ -91,7 +94,7 @@ defmodule Aqua.Program do
 
   require Logger
 
-  alias Aqua.Tape
+  alias Aqua.{Reader, Tape}
   alias Sanctum.Context
 
   @registry Aqua.Program.Registry
@@ -107,7 +110,7 @@ defmodule Aqua.Program do
                      "done again because it is shown here.\n\n"
   @context_separator "\n\n"
   # The kinds of row a fresh session's context carries: the thread's posts.
-  @context_kinds ~w(text opening report)
+  @context_kinds ~w(text opening report nudge pointer turn_aborted)
 
   @typedoc "What a turn's dispatch of its `program.start` hands the attendant."
   @type work :: %{
@@ -138,6 +141,14 @@ defmodule Aqua.Program do
   def context_rows(rows, seq) when is_list(rows), do: Enum.filter(rows, &context_row?(&1, seq))
 
   defp context_row?(row, seq), do: row.kind in @context_kinds and row.seq < seq
+
+  @doc """
+  What the member `title` says when a post is not handed over, its
+  workspace thread deleted: the turn that would wait on it ends saying so.
+  """
+  @spec post_gone(String.t()) :: String.t()
+  def post_gone(title),
+    do: "#{title} could not be given this message: a thread it came from has since been deleted."
 
   @doc """
   Attend `work`'s turn, for the loop `loop`: open the session if none is
@@ -1047,15 +1058,21 @@ defmodule Aqua.Program do
   end
 
   defp post(%{work: work} = state, row) do
-    {context, read} = if state.fresh?, do: context(work, {:before, row.seq}), else: {nil, []}
+    earlier = if state.fresh?, do: thread_rows(work, {:before, row.seq}), else: []
 
-    with {:ok, %{step: step}} <- carry(work, "post", row.id, [row | read]) do
+    with {:ok, %{rows: rows, reading: reading}} <-
+           Reader.join(work.guest, work.turn, [row | earlier]),
+         {[post], earlier} <- Enum.split_with(rows, &(&1.id == row.id)),
+         {:ok, %{step: step}} <- carry(work, "post", row.id) do
+      {:said, text} = Reader.read(post, %{reading | named?: false})
+      context = context(work, earlier, reading)
+
       command =
         %{
           "t" => "post",
           "id" => step.id,
           "work" => work.turn.id,
-          "content" => [%{"type" => "text", "text" => row.content || ""}],
+          "content" => [%{"type" => "text", "text" => text}],
           "context" => context
         }
         |> reject_nil()
@@ -1069,7 +1086,13 @@ defmodule Aqua.Program do
           not_written(state, step, reason)
       end
     else
-      {:error, _reason} -> state
+      # The post went with its workspace thread after it was read as
+      # waiting. The turn may wait on it alone, and then would for good.
+      {[], _earlier} ->
+        fail(shut(state), post_gone(work.title))
+
+      {:error, _reason} ->
+        state
     end
   end
 
@@ -1136,11 +1159,13 @@ defmodule Aqua.Program do
   # started anew in the middle of the work (`"fresh"`), the thread so far
   # with what the work's calls answered, which are not run again.
   defp notice(%{work: work} = state, kind, row_id) do
-    {context, read} =
-      if kind == "fresh", do: context(work, {:all, answers(work)}), else: {nil, []}
+    prompt =
+      with {:ok, context} <- prompt_context(work, kind),
+           {:ok, carried} <- carry(work, "notice", row_id),
+           do: {:ok, carried, context}
 
-    case carry(work, "notice", row_id, read) do
-      {:ok, %{step: step, row: row}} ->
+    case prompt do
+      {:ok, %{step: step, row: row}, context} ->
         command =
           %{
             "t" => "post",
@@ -1198,17 +1223,23 @@ defmodule Aqua.Program do
       (row.content || "")
   end
 
-  # What the rows a delivery carries bring in joins the turn first: the
-  # threads they and their files carry and the read threads of the turns
-  # whose words they are.
-  defp carry(work, deliver, row_id, rows \\ []) do
+  defp prompt_context(work, "fresh") do
+    rows = thread_rows(work, {:all, answers(work)})
+
+    with {:ok, joined} <- Reader.join(work.guest, work.turn, rows),
+         do: {:ok, context(work, joined.rows, joined.reading)}
+  end
+
+  defp prompt_context(_work, _kind), do: {:ok, nil}
+
+  # What a delivery brings in joined the turn before it was worded
+  # (`Aqua.Reader.join/4`).
+  defp carry(work, deliver, row_id) do
     Tape.carry(work.guest, work.turn, %{
       deliver: deliver,
       row_id: row_id,
       generation: work.generation,
-      silence_ms: Opus.Brain.silence_ms(),
-      threads: Tape.carried_threads(rows),
-      threads_from: rows |> Tape.writing_turns() |> Enum.reject(&(&1 == work.turn.id))
+      silence_ms: Opus.Brain.silence_ms()
     })
   end
 
@@ -1231,58 +1262,54 @@ defmodule Aqua.Program do
     end
   end
 
-  # The thread so far for a fresh session, the newest that fit: its posts
-  # before a post (`{:before, seq}`), or every post and the result rows
-  # of the open work's asks (`{:all, ids}`), for one started anew in the
-  # middle of it. It opens saying it is context only, and when older posts
-  # are left out one line says how many, in room kept for it.
-  defp context(work, bound) do
+  # The rows a fresh session's context may carry: the thread's posts
+  # before a post (`{:before, seq}`), or every post and the result rows of
+  # the open work's asks (`{:all, ids}`), for one started anew in the
+  # middle of it.
+  defp thread_rows(work, bound) do
     case Tape.projection(work.guest, work.turn) do
-      {:ok, rows} ->
-        readable = rows |> Enum.filter(&read?(work, &1, bound)) |> Enum.reverse()
-
-        room =
-          @context_bytes - encoded_bytes(@context_opening) -
-            encoded_bytes(left_out(length(readable)) <> @context_separator)
-
-        kept =
-          readable
-          |> Enum.reduce_while({[], 0}, fn read, {kept, size} ->
-            line = line(work, read)
-            taken = size + encoded_bytes(line) + encoded_bytes(@context_separator)
-
-            if taken > room,
-              do: {:halt, {kept, size}},
-              else: {:cont, {[{read, line} | kept], taken}}
-          end)
-          |> elem(0)
-
-        context_of(readable, kept)
-
-      {:error, _} ->
-        {nil, []}
+      {:ok, rows} -> Enum.filter(rows, &in_context?(&1, bound))
+      {:error, _unread} -> []
     end
   end
 
-  defp context_of([], _kept), do: {nil, []}
+  # The thread so far for a fresh session, the newest of `rows` that fit.
+  # It opens saying it is context only, and when older posts are left out
+  # one line says how many, in room kept for it.
+  defp context(_work, [], _reading), do: nil
 
-  defp context_of(readable, kept) do
+  defp context(work, rows, reading) do
+    room =
+      @context_bytes - encoded_bytes(@context_opening) -
+        encoded_bytes(left_out(length(rows)) <> @context_separator)
+
+    {kept, _size} =
+      rows
+      |> Enum.reverse()
+      |> Enum.reduce_while({[], 0}, fn row, {kept, size} ->
+        line = line(work, row, reading)
+        taken = size + encoded_bytes(line) + encoded_bytes(@context_separator)
+
+        if taken > room,
+          do: {:halt, {kept, size}},
+          else: {:cont, {[line | kept], taken}}
+      end)
+
     lines =
-      case length(readable) - length(kept) do
-        0 -> Enum.map(kept, &elem(&1, 1))
-        dropped -> [left_out(dropped) | Enum.map(kept, &elem(&1, 1))]
+      case length(rows) - length(kept) do
+        0 -> kept
+        dropped -> [left_out(dropped) | kept]
       end
 
-    {[%{"type" => "text", "text" => @context_opening <> Enum.join(lines, @context_separator)}],
-     Enum.map(kept, &elem(&1, 0))}
+    [%{"type" => "text", "text" => @context_opening <> Enum.join(lines, @context_separator)}]
   end
 
   defp left_out(1), do: "[1 earlier post of the thread is not shown here.]"
   defp left_out(n), do: "[#{n} earlier posts of the thread are not shown here.]"
 
-  defp read?(_work, row, {:before, seq}), do: context_row?(row, seq)
+  defp in_context?(row, {:before, seq}), do: context_row?(row, seq)
 
-  defp read?(_work, row, {:all, answers}),
+  defp in_context?(row, {:all, answers}),
     do: row.kind in @context_kinds or (row.kind == "tool_result" and row.id in answers)
 
   # The result rows of the open work's asks that closed, never its start's.
@@ -1304,22 +1331,27 @@ defmodule Aqua.Program do
   # encodes it: escaping is the characters' own, so a text's parts add up.
   defp encoded_bytes(text), do: byte_size(Jason.encode!(text)) - 2
 
-  defp line(_work, %{kind: "tool_result"} = row),
+  defp line(_work, %{kind: "tool_result"} = row, _reading),
     do: "Your call #{Tape.payload(row)["name"]} answered: #{row.content}"
 
-  defp line(work, row), do: "#{author(work, row)}: #{row.content}"
+  # What the member said itself goes under its title. Its own post and
+  # request read as none where their calls show them, and a context has
+  # no calls, so they go as its words too. A row's deleted files are
+  # named after it, inside its share of the room.
+  defp line(work, row, reading) do
+    reading = %{reading | removed: Reader.removed(work.guest, [row])}
 
-  # A person's row names them by its author, their id; its `sent_by` is
-  # only "person".
-  defp author(work, %{sent_by: agent}) when agent == work.agent, do: work.title
+    text =
+      case Reader.read(row, reading) do
+        {:said, text} -> text
+        _own_or_none -> "#{work.title}: #{row.content}"
+      end
 
-  defp author(_work, %{author: author}) when is_binary(author) do
-    if author in Prima.Author.reserved(),
-      do: "CYFR",
-      else: Sanctum.Tenancy.Users.display_name(author)
+    case reading.removed[row.id] do
+      nil -> text
+      refs -> text <> @context_separator <> Reader.removed_note(refs)
+    end
   end
-
-  defp author(_work, _row), do: "CYFR"
 
   # ---------------------------------------------------------------------------
   # Its end, and the clock
