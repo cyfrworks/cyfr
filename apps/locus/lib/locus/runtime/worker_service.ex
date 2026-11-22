@@ -56,7 +56,9 @@ defmodule Locus.Runtime.WorkerService do
   the service, however the service ends, since a report carries this
   boot and a restarted service holds none of its predecessor's attempts.
   The attempts an ended report would have named lapse on their leases,
-  and the service logs each runner whose report it ended. A
+  and the service logs each runner whose report it ended. A `start` none
+  of which reached the runner it was given ran nothing, and is sent once
+  more, to another runner (`Locus.Runtime.RunnerProcess.assign/5`). A
   `start` no runner can be found for answers `{:error, :unavailable}`,
   and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
   with the keeper's account of why; the listener refuses either `503`,
@@ -340,7 +342,7 @@ defmodule Locus.Runtime.WorkerService do
   # Starting
   # ---------------------------------------------------------------------------
 
-  defp start_pooled(state, token, assignment, input, keys, caller) do
+  defp start_pooled(state, token, assignment, input, keys, caller, resend? \\ true) do
     execution_id = assignment.execution_id
 
     if Map.has_key?(state.executions, execution_id) do
@@ -379,6 +381,15 @@ defmodule Locus.Runtime.WorkerService do
             {:error, :malformed} ->
               :ok = RunnerPool.taint(RunnerPool, pid, 0)
               {:reply, {:error, :malformed}, state}
+
+            {:error, {:unsent, reason}} when resend? ->
+              Logger.warning(
+                "[Locus.Runtime.WorkerService] the assign of #{execution_id} reached nothing of " <>
+                  "runner #{runner} (#{inspect(reason)}) and is sent to another"
+              )
+
+              :ok = RunnerPool.taint(RunnerPool, pid, 0)
+              start_pooled(state, token, assignment, input, keys, caller, false)
 
             {:error, reason} ->
               Logger.error(

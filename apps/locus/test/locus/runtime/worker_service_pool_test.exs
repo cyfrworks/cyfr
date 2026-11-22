@@ -19,6 +19,12 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   it. An unclean completion with no child cancelled is not reported. A
   caller that awaits the reports is answered once every one in flight is.
 
+  A start none of which reached the runner it was given (the runner's
+  relay gone, or going as the assign arrived, its handle gone, its channel
+  closed before the write) is sent once more, to another runner, and the
+  service lives through each. One that may have reached its runner is not,
+  and the service lives through that too.
+
   A keeper that refuses every runner makes the status report the
   refusal, with the keeper's reason and the sentence naming what the
   deployment lacks, beside the bound every runner would run under, and
@@ -128,12 +134,146 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
     {attempt, spawn}
   end
 
+  # The fresh runner the pool hands out to the next start.
+  defp waiting!(context) do
+    fresh = fn ->
+      Enum.find(Runners.runners(Locus.Runtime.RunnerPool), &(&1.state == :fresh))
+    end
+
+    wait_until(fn -> fresh.() != nil end, 5_000, "a fresh runner")
+    %{pid: handle} = fresh.()
+    Enum.find(ScriptedKeeper.spawns(context.keeper), &(&1.owner == handle))
+  end
+
+  defp given(context, attempt) do
+    for spawn <- ScriptedKeeper.spawns(context.keeper),
+        String.contains?(ScriptedKeeper.read(spawn), attempt.assignment),
+        do: spawn
+  end
+
+  defp assert_given_to_another(context, dead, attempt) do
+    wait_until(fn -> given(context, attempt) != [] end)
+    assert [other] = given(context, attempt)
+    refute other.ref == dead.ref
+    assert attempt.attempt in elem(WorkerService.status(), 1).attempts
+  end
+
+  defp queued(pid), do: elem(Process.info(pid, :message_queue_len), 1)
+
   defp write(spawn, message), do: ScriptedKeeper.write(spawn, RunnerControl.encode(message))
 
   defp cancels(spawn) do
     for line <- String.split(ScriptedKeeper.read(spawn), "\n", trim: true),
         {:ok, %{type: :cancel_child, execution_id: id}} <- [RunnerControl.decode(line)],
         do: id
+  end
+
+  describe "a start that reached no runner" do
+    @tag :capture_log
+    test "is sent to another when the runner's relay had ended", context do
+      attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+      dead = waiting!(context)
+      :ok = ScriptedKeeper.end_relay(dead)
+      wait_until(fn -> :sys.get_state(dead.owner).relay == nil end)
+
+      assert {200, %{"ok" => true}} = post(context, :start, start_args(attempt))
+      assert_given_to_another(context, dead, attempt)
+    end
+
+    @tag :capture_log
+    test "is sent to another when the relay ends as the assign arrives", context do
+      attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+      dead = waiting!(context)
+      service = Process.whereis(WorkerService)
+
+      :ok = :sys.suspend(dead.owner)
+      :ok = ScriptedKeeper.end_relay(dead)
+      started = Task.async(fn -> post(context, :start, start_args(attempt)) end)
+      # The relay's end, then the assign.
+      wait_until(fn -> queued(dead.owner) >= 2 end)
+      :ok = :sys.resume(dead.owner)
+
+      assert {200, %{"ok" => true}} = Task.await(started, 15_000)
+      assert Process.whereis(WorkerService) == service
+      assert_given_to_another(context, dead, attempt)
+    end
+
+    @tag :capture_log
+    test "is sent to another when the runner's handle went as it was handed out", context do
+      attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+      dead = waiting!(context)
+      service = Process.whereis(WorkerService)
+      pool = Process.whereis(Locus.Runtime.RunnerPool)
+
+      :ok = :sys.suspend(pool)
+      started = Task.async(fn -> post(context, :start, start_args(attempt)) end)
+      # The take, then the handle's end behind it.
+      wait_until(fn -> queued(pool) >= 1 end)
+      monitor = Process.monitor(dead.owner)
+      Process.exit(dead.owner, :kill)
+      assert_receive {:DOWN, ^monitor, :process, _pid, :killed}, 5_000
+      :ok = :sys.resume(pool)
+
+      assert {200, %{"ok" => true}} = Task.await(started, 15_000)
+      assert Process.whereis(WorkerService) == service
+      assert_given_to_another(context, dead, attempt)
+    end
+
+    for reason <- [:control_closed, :unknown_runner, :einval] do
+      @reason reason
+      @tag :capture_log
+      test "is sent to another when the write was refused #{reason}", context do
+        attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+        dead = waiting!(context)
+        :ok = ScriptedKeeper.refuse_write(dead, @reason)
+
+        assert {200, %{"ok" => true}} = post(context, :start, start_args(attempt))
+        assert_given_to_another(context, dead, attempt)
+      end
+    end
+
+    @tag :capture_log
+    test "is not sent again when the write may have arrived", context do
+      attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+      dead = waiting!(context)
+      :ok = ScriptedKeeper.refuse_write(dead, :closed)
+
+      assert {503, %{"error" => "unavailable"}} = post(context, :start, start_args(attempt))
+      assert given(context, attempt) == []
+    end
+
+    @tag :capture_log
+    test "is not sent again when the handle died holding it, and the service lives", context do
+      attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+      dead = waiting!(context)
+      service = Process.whereis(WorkerService)
+
+      :ok = :sys.suspend(dead.owner)
+      started = Task.async(fn -> post(context, :start, start_args(attempt)) end)
+      # The handle has the assign and can answer nothing of it.
+      wait_until(fn -> queued(dead.owner) >= 1 end)
+      Process.exit(dead.owner, :kill)
+
+      assert {503, %{"error" => "unavailable"}} = Task.await(started, 15_000)
+      assert Process.whereis(WorkerService) == service
+      assert given(context, attempt) == []
+    end
+
+    @tag :capture_log
+    test "is sent once more and no further", context do
+      # An idle runner of the athanor and a fresh one, neither writable.
+      {done, idle} = started!(context)
+      write(idle, %{type: :complete, execution_id: done.execution_id, clean: true})
+      wait_until(fn -> elem(WorkerService.status(), 1).runners.idle == 1 end)
+      fresh = waiting!(context)
+      :ok = ScriptedKeeper.refuse_write(idle, :control_closed)
+      :ok = ScriptedKeeper.refuse_write(fresh, :control_closed)
+
+      attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+      assert {503, %{"error" => "unavailable"}} = post(context, :start, start_args(attempt))
+      assert given(context, attempt) == []
+      assert elem(WorkerService.status(), 1).attempts == []
+    end
   end
 
   describe "a kill" do

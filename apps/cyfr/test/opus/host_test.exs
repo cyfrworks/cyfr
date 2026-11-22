@@ -13,7 +13,8 @@ defmodule Opus.HostTest do
   by the calling runner. Anything that fails answers `lost`, or the
   specific refusal attach names. A runner exit report is signed with the
   reporting worker service's own dispatch key, and lapses only the
-  attempts dispatched to it. A boot that does not hold the control
+  attempts dispatched to it; one naming a single attempt that no runner
+  took fails that run at once. A boot that does not hold the control
   plane answers every call `lost`: it unseals nothing, its open attempts
   stop without closing their runs, and neither they, their waiters nor a
   runner exit report writes a row.
@@ -39,6 +40,7 @@ defmodule Opus.HostTest do
   alias Cyfr.Test.{AttemptFixtures, AttemptWaiter}
 
   @service "wrk_host_test"
+  @untaken "the execution worker's runner ended before it took the run, so nothing ran"
 
   @vectors_path Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
   @external_resource @vectors_path
@@ -712,7 +714,7 @@ defmodule Opus.HostTest do
         AttemptFixtures.body("runner_exited", %{
           "member" => Keyword.get(opts, :member, fixture.member),
           "runner" => runner,
-          "attempts" => [fixture.attempt]
+          "attempts" => Keyword.get(opts, :attempts, [fixture.attempt])
         })
 
       fields = %{
@@ -768,6 +770,86 @@ defmodule Opus.HostTest do
                Arca.Repo.get!(Arca.Schemas.Execution, child)
 
       assert message == "Parent execution (#{fixture.execution_id}) terminated"
+    end
+
+    test "fails at once a run its runner never took, and a later attach of it is lost" do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          attach: false
+        )
+
+      assert %{"ok" => true} = report(fixture)
+
+      assert {:error, @untaken} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: @untaken} = row(fixture)
+
+      assert %{state: "failed", outcome: "error", claimed_by: nil} =
+               Arca.ExecutionAttempts.get(
+                 Prima.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
+
+      events = terminal_events(fixture)
+
+      # An attach the runner sent before it died finds nothing to take, and
+      # a report given again changes nothing.
+      assert %{"error" => "lost"} = attach(fixture)
+      assert %{"ok" => true} = report(fixture)
+      assert %{status: "failed", error_message: @untaken} = row(fixture)
+      assert terminal_events(fixture) == events
+    end
+
+    test "answers the lapse at once for a runner whose claim was written and never answered" do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          attach: false
+        )
+
+      assert :ok =
+               Arca.ExecutionAttempts.claim(
+                 Prima.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt,
+                 fixture.fence,
+                 fixture.runner,
+                 AttemptFixtures.stored()
+               )
+
+      monitor = Process.monitor(fixture.pid)
+      assert %{"ok" => true} = report(fixture)
+      assert_receive {:DOWN, ^monitor, :process, _pid, :normal}, 5_000
+
+      lapsed = "Execution terminated: runner stopped without cleanup"
+      assert {:error, {:uncertain, ^lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: ^lapsed} = row(fixture)
+    end
+
+    # A runner chooses what its `exit` lists, and the service adds that to
+    # the attempt it assigned: only a report naming one attempt alone is
+    # the service's own word that the attempt was that runner's.
+    test "fails no untaken run named beside another, or for another worker, boot or member" do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          attach: false
+        )
+
+      other = Prima.UUID7.generate_id("att")
+
+      assert %{"ok" => true} = report(fixture, attempts: [other, fixture.attempt])
+      assert %{"ok" => true} = report(fixture, attempts: [fixture.attempt, other])
+      assert %{"ok" => true} = report(fixture, service: "wrk_other")
+      assert %{"ok" => true} = report(fixture, boot: "boot_other")
+      assert %{"error" => "lost"} = report(fixture, member: "#{fixture.member}_stale")
+
+      assert Process.alive?(fixture.pid)
+      assert %{status: "running"} = row(fixture)
+      assert %{"ok" => _secrets} = attach(fixture)
+      Opus.Attempt.release(fixture.pid, "not started")
     end
 
     test "a waiter admitted on the guest plane answers the lapsed row's uncertainty" do

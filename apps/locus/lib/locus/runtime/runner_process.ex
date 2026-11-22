@@ -51,6 +51,10 @@ defmodule Locus.Runtime.RunnerProcess do
   # A line past the protocol's bound before its newline is not a frame.
   @max_line_bytes RunnerControl.max_line_bytes()
 
+  # The keeper's refusals of a write that come before any byte of it: the
+  # channel closed or unknown, or its socket (`:einval`) already closed.
+  @unwritten [:control_closed, :unknown_runner, :einval]
+
   # How long the process's end is held for its control stream to close.
   @control_drain_ms 1_000
 
@@ -73,7 +77,9 @@ defmodule Locus.Runtime.RunnerProcess do
   Assign the runner the attempt `token` names: bind its relay to the
   attempt (`Locus.Runtime.Relay.bind/2`, `host_url` being where its calls go when
   the assignment names no address), then send the `assign` with `input`
-  and the opened `keys`. Raises for an `assign` the protocol refuses.
+  and the opened `keys`. `{:error, {:unsent, reason}}` when nothing of it
+  reached the runner, so it may be sent to another; any other error may
+  follow a write. Raises for an `assign` the protocol refuses.
   """
   @spec assign(pid(), String.t(), String.t(), Prima.WorkerAuth.attempt_keys(), String.t()) ::
           :ok | {:error, term()}
@@ -85,6 +91,10 @@ defmodule Locus.Runtime.RunnerProcess do
       |> IO.iodata_to_binary()
 
     GenServer.call(pid, {:assign, line, %{assignment: token, keys: keys, host_url: host_url}})
+  catch
+    # An exit's reason carries the call, the attempt's keys among it.
+    :exit, {:noproc, _call} -> {:error, {:unsent, :gone}}
+    :exit, _reason -> {:error, :handle_failed}
   end
 
   @doc "End the runner: a term signal, `grace_ms` to report, then the kill."
@@ -142,12 +152,12 @@ defmodule Locus.Runtime.RunnerProcess do
     do: {:reply, :ok, %{state | binding: binding, pending: [state.pending, line]}}
 
   def handle_call({:assign, _line, _binding}, _from, %{relay: nil} = state),
-    do: {:reply, {:error, {:relay, :closed}}, state}
+    do: {:reply, {:error, {:unsent, {:relay, :closed}}}, state}
 
   def handle_call({:assign, line, binding}, _from, state) do
-    case Locus.Runtime.Relay.bind(state.relay, binding) do
-      :ok -> {:reply, state.keeper.send(state.channel, line), state}
-      {:error, reason} -> {:reply, {:error, {:relay, reason}}, state}
+    case bind(state.relay, binding) do
+      :ok -> {:reply, written(state.keeper.send(state.channel, line)), state}
+      {:error, reason} -> {:reply, {:error, {:unsent, {:relay, reason}}}, state}
     end
   end
 
@@ -355,6 +365,16 @@ defmodule Locus.Runtime.RunnerProcess do
 
     %{state | relay: relay, binding: nil}
   end
+
+  # The relay can end before its exit is read here.
+  defp bind(relay, binding) do
+    Locus.Runtime.Relay.bind(relay, binding)
+  catch
+    :exit, _reason -> {:error, :closed}
+  end
+
+  defp written({:error, reason}) when reason in @unwritten, do: {:error, {:unsent, reason}}
+  defp written(answer), do: answer
 
   defp release_runner(%{channel: nil} = state, _grace_ms), do: state
   defp release_runner(%{released: true} = state, _grace_ms), do: state
