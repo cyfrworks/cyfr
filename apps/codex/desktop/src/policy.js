@@ -171,8 +171,14 @@ const PASSKEYS_DENIED = "publickey-credentials-get=(), publickey-credentials-cre
  * session says so: the account pages' service worker makes a document of
  * what it fetched or kept, which the engine calls no document. Each adds
  * to the document's own policies, which keep restricting it.
+ * A response in a content session to a page that is gone (`pageGone`:
+ * closed by a lock, or none, as a keepalive request's is once its page
+ * went) sets no cookie, so none arrives in storage being forgotten.
  */
-export function documentHeaders(kind, resourceType, headers) {
+export function documentHeaders(kind, resourceType, headers, {pageGone = false} = {}) {
+  if (kind === "content" && pageGone) {
+    headers = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== "set-cookie"))
+  }
   if (kind === "content" && resourceType !== "mainFrame" && resourceType !== "subFrame") return headers
   const out = {}
   const policies = []

@@ -162,6 +162,18 @@ test("content documents deny both passkey calls and workers, keeping their own p
   assert.equal(documentHeaders("content", "script", script), script)
 })
 
+test("a response to a content page that is gone sets no cookie, and a page's own keeps what it sets", () => {
+  for (const type of ["mainFrame", "subFrame", "xhr"]) {
+    const sent = () => ({"set-cookie": ["a=1"], "Set-Cookie": ["b=2"], "Content-Type": ["text/html"]})
+    const gone = documentHeaders("content", type, sent(), {pageGone: true})
+    assert.deepEqual(Object.keys(gone).filter((k) => k.toLowerCase() === "set-cookie"), [], type)
+    assert.deepEqual(gone["Content-Type"], ["text/html"], type)
+    assert.deepEqual(documentHeaders("content", type, sent(), {pageGone: false})["set-cookie"], ["a=1"], type)
+  }
+  assert.deepEqual(documentHeaders("account", "xhr", {"set-cookie": ["a=1"]}, {pageGone: true})["set-cookie"], ["a=1"],
+    "the account service's storage is not the content's")
+})
+
 test("the account window's document frames nothing, keeping its own policies, whichever response it is made of", () => {
   // The account pages' service worker fetches a page as an xhr and answers
   // the next visit's document with that response, or with its kept copy.
