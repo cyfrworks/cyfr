@@ -48,7 +48,8 @@ import (
 // It refuses to start without `app-server` last, answers nothing before
 // `initialize`, writes a canary to its standard error, which the driver
 // must never pass on, and keeps a sign-in, `auth.json`, while
-// FAKE_SIGNED_OUT is unset. A resume sends the thread's last total again
+// FAKE_SIGNED_OUT is unset; FAKE_ACCOUNT, when set, is its account's
+// answer, or "fail". A resume sends the thread's last total again
 // unless FAKE_NO_REPEAT is set, and is refused in words other than a
 // missing rollout's while FAKE_RESUME_FAIL is set. A thread whose rollout
 // file is empty is refused in Codex's words for it.
@@ -319,7 +320,11 @@ func fakeCodex() int {
 				fail(-32600, "initialize with experimentalApi first")
 			case m.Method == "initialized":
 			case m.Method == "account/read":
-				if _, err := os.Stat(auth); err == nil {
+				if answer := os.Getenv("FAKE_ACCOUNT"); answer == "fail" {
+					fail(-32603, "HARNESS-WORDS the account could not be read")
+				} else if answer != "" {
+					ok(json.RawMessage(answer))
+				} else if _, err := os.Stat(auth); err == nil {
 					ok(map[string]any{"account": map[string]any{"type": "chatgpt", "email": "FAKE-ACCOUNT-CANARY@example.invalid", "planType": "plus"}, "requiresOpenaiAuth": true})
 				} else {
 					ok(map[string]any{"account": nil, "requiresOpenaiAuth": true})

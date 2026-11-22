@@ -38,8 +38,9 @@ defmodule Compendium.AquaAgent do
   (for a program, one its harness lists); `options`, the brain
   options its every request sets (a flat map of strings, integers and
   booleans, which the brain's `describe` declares; for a program, its
-  `effort` and its `access`, one of the access choices the program's
-  driver lists, `Aqua.Models.program_listing/2`); and `disabled: true`,
+  `effort`, one of those its model takes, and its `access`, one of the
+  access choices the program's driver lists,
+  `Aqua.Models.program_listing/2`); and `disabled: true`,
   how a shipped member is taken out of the crew (shipped files revert,
   they don't delete).
 

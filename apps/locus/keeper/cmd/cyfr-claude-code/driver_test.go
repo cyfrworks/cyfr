@@ -713,9 +713,13 @@ func TestModelsAreListedWithOrWithoutAStart(t *testing.T) {
 	s.expect("hello")
 	s.send(map[string]any{"t": "models", "id": "m1"})
 	listed := s.expect("models")
-	if fmt.Sprint(listed["models"]) != "[map[id:default name:Default] map[id:fake-opus name:Fake Opus] map[id:fake-haiku name:Fake Haiku]]" ||
-		fmt.Sprint(listed["efforts"]) != "[low high medium max]" {
-		t.Fatalf("the harness's listing, with the efforts any model takes: %v", listed)
+	want := []any{
+		map[string]any{"id": "default", "name": "Default", "efforts": []any{"low", "high"}},
+		map[string]any{"id": "fake-opus", "name": "Fake Opus", "efforts": []any{"low", "medium", "high", "max"}},
+		map[string]any{"id": "fake-haiku", "name": "Fake Haiku", "efforts": []any{}},
+	}
+	if _, flat := listed["efforts"]; flat || !reflect.DeepEqual(listed["models"], want) {
+		t.Fatalf("the harness's listing, each model with the efforts it takes and no other's: %v", listed)
 	}
 	access := []any{map[string]any{"id": "default", "name": "Default mode"}}
 	if !reflect.DeepEqual(listed["access"], access) {
@@ -726,6 +730,54 @@ func TestModelsAreListedWithOrWithoutAStart(t *testing.T) {
 	s.send(map[string]any{"t": "models", "id": "m2"})
 	if again := s.expect("models"); fmt.Sprint(again["models"]) != fmt.Sprint(listed["models"]) || !reflect.DeepEqual(again["access"], access) {
 		t.Fatalf("a running harness's listing is its start's: %v", again)
+	}
+}
+
+// What a start, and a listing with no harness running, say of the
+// account is what the harness's own answer positively says: signed out
+// only on the one shape it answers with no sign-in, which alone refuses a
+// listing; signed in only where it names a plan, a token source, a key
+// source or another provider; and nothing for any other answer, which
+// lists.
+func TestTheAccountIsSaidOnlyWhereTheHarnessSaysIt(t *testing.T) {
+	for _, c := range []struct {
+		account string
+		says    any
+	}{
+		{`{"subscriptionType":"max","apiProvider":"firstParty"}`, "signed_in"},
+		{`{"subscriptionType":"max"}`, "signed_in"},
+		{`{"tokenSource":"claude.ai","apiProvider":"firstParty"}`, "signed_in"},
+		{`{"tokenSource":"none","apiKeySource":"ANTHROPIC_API_KEY","apiProvider":"firstParty"}`, "signed_in"},
+		{`{"tokenSource":"none","apiProvider":"bedrock"}`, "signed_in"},
+		{`{"tokenSource":"none","subscriptionType":"pro","apiProvider":"firstParty"}`, "signed_in"},
+		{`{"tokenSource":"none","apiProvider":"firstParty"}`, "signed_out"},
+		{`{"apiKeySource":"none","tokenSource":"none","apiProvider":"firstParty"}`, nil},
+		{`{"subscriptionType":"","apiProvider":"firstParty"}`, nil},
+		{`{"apiProvider":"firstParty"}`, nil},
+		{`{"tokenSource":"none"}`, nil},
+		{`{"tokenSource":7}`, nil},
+		{`{}`, nil},
+		{`null`, nil},
+		{``, nil},
+	} {
+		t.Run(c.account, func(t *testing.T) {
+			t.Setenv("FAKE_ACCOUNT", c.account)
+			s := startDriver(t)
+			s.expect("hello")
+			s.send(map[string]any{"t": "models", "id": "m1"})
+			if got := s.next(); got["account"] != c.says || (got["t"] == "refused") != (c.says == "signed_out") {
+				t.Fatalf("a listing says %v of the account, refused only signed out: %v", c.says, got)
+			}
+			s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{}})
+			if got := s.expect("started"); got["account"] != c.says {
+				t.Fatalf("a start says %v of the account: %v", c.says, got)
+			}
+			// A running harness's listing reads no account, so it says none.
+			s.send(map[string]any{"t": "models", "id": "m2"})
+			if got := s.expect("models"); got["account"] != nil {
+				t.Fatalf("a listing that read no account says none: %v", got)
+			}
+		})
 	}
 }
 

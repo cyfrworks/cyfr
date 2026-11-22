@@ -89,8 +89,8 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     "live/shared_thread_live.ex" => {1, [{"live/shared_thread_live.ex", :add}]},
     # A refresh of the tinctures, and a shelf program's Close.
     "live/shell_live.ex" => {2, [{"live/shell_live.ex", :deliver}]},
-    # A model catalyst's install, answered to the page; each ready
-    # brain's options and a Set up's start of its program, answered to
+    # A model catalyst's install, answered to the page; each open
+    # editor's options and a Sign in's start of its program, answered to
     # the agents section itself.
     "live/aqua_live/agents_component.ex" =>
       {3,
@@ -99,10 +99,16 @@ defmodule CyfrWeb.ContextGuardRosterTest do
          {"live/aqua_live/agents_component.ex", :brain_options},
          {"live/aqua_live/agents_component.ex", :set_up_program}
        ]},
-    # A brain's one `models` call after its grant, and each program brain's
-    # listing on a read of the setup, answered to the page.
+    # A brain's one `models` call after its grant, a program's listing a
+    # press asked for, and the Close of the terminal a Sign in showed,
+    # answered to the page.
     "live/aqua_live.ex" =>
-      {2, [{"live/aqua_live.ex", :setup_answer}, {"live/aqua_live.ex", :program_listing}]},
+      {3,
+       [
+         {"live/aqua_live.ex", :setup_answer},
+         {"live/aqua_live.ex", :program_listing},
+         {"live/aqua_live.ex", :close_terminal}
+       ]},
     # The system layer's listener on `prompt.changes`, whose facts
     # the layer takes in the focus it was opened for.
     "live/system_layer.ex" => {1, [{"live/system_layer.ex", :fact}]}

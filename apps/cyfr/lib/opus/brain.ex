@@ -134,12 +134,28 @@ defmodule Opus.Brain do
       and session, or not a removal.
     * **Discovery** (`models/2`) runs only for a person at a screen, an
       interactive caller of the row's athanor (`Opus.Programs.caller/1`),
-      for a brain's row of that athanor: the models, efforts and access
-      choices the harness's driver lists. A turn's caller is a stranger to it.
+      for a brain's row of that athanor: the models, each with the efforts
+      it takes, and the access choices the harness's driver lists. A turn's
+      caller is a stranger to it.
 
   A forgetting transaction answers the sessions it owed
   (`t:Arca.ThreadStorage.forgotten/0`), and its caller closes their holders
   at once (`forgotten/2`), which also wakes the consumer.
+
+  ## What is known of a program
+
+  A driver names in three events what it read positively in its program's
+  own account answer (`Opus.Brain.Wire`, `account`): a `started` either
+  word, a `models` that it is signed in, a `refused` that it is signed
+  out. That member alone sets or clears what is known of the account: an
+  error of any type, an `idle`, a refusal or a start without it and a
+  failed ask change nothing, so nothing is ever inferred signed out. A
+  listing that answered is known beside it, for the names a person reads.
+
+  This module is the one writer of both, in `Arca.Cache` by the athanor,
+  the row and its epoch, for a day. A restart of CYFR forgets them, and
+  then nothing is known. Both are the program's word and grant nothing.
+  `known/3` reads them and asks no program.
 
   ## Its end
 
@@ -187,6 +203,8 @@ defmodule Opus.Brain do
   @recv_wait_ms 20_000
   @read_retries 60
   @read_retry_ms 1_000
+  # How long what is known of a program is kept (moduledoc).
+  @known_ms :timer.hours(24)
   # How long a cleanup or a discovery waits for its driver's answer, from
   # the open of its session; past it the answer is lost.
   @once_ms 60_000
@@ -224,6 +242,15 @@ defmodule Opus.Brain do
 
   @typedoc "A held session: its holder and its handle."
   @type brain :: {pid(), handle()}
+
+  @typedoc "What a program lists: its models, each with the efforts it takes, and its access choices."
+  @type listing :: %{
+          models: [%{id: String.t(), name: String.t(), efforts: [String.t()]}],
+          access: [%{id: String.t(), name: String.t()}]
+        }
+
+  @typedoc "What is known of a program (moduledoc, \"What is known of a program\")."
+  @type known :: %{account: :signed_in | :signed_out | nil, listing: listing() | nil}
 
   @doc """
   The most milliseconds of a program's own silence a job runs before it
@@ -414,10 +441,28 @@ defmodule Opus.Brain do
   end
 
   @doc """
-  The models, efforts and access choices the driver of the brain's row
+  What is known of the program of the row `row_id` at `epoch` in the
+  context's athanor (moduledoc, "What is known of a program"). It asks
+  nothing: nil where nothing is known.
+  """
+  @spec known(Sanctum.Context.t(), String.t(), pos_integer()) :: known()
+  def known(%Sanctum.Context{} = ctx, row_id, epoch) do
+    actor = Sanctum.Context.actor(ctx)
+
+    %{
+      account: recalled(actor, row_id, epoch, :account),
+      listing: recalled(actor, row_id, epoch, :listing)
+    }
+  end
+
+  @doc """
+  The models and access choices the driver of the brain's row
   `row_id` lists, for a person at a screen (moduledoc, "Two paths no turn
-  admits"): `{:ok, %{models: [%{id, name}], efforts: [effort], access:
-  [%{id, name}]}}`, each access choice named in the driver's words;
+  admits"): `{:ok, %{models: [%{id, name, efforts}], access:
+  [%{id, name}]}}`, each model with the efforts it takes and each access
+  choice named in the driver's words;
+  `{:error, {:signed_out, text}}` when the driver refused it and read the
+  program signed out, `text` the refusal's sentence;
   `{:error,
   :not_interactive}` for any other caller, a turn's among them;
   `:not_standing` or `:unavailable` as `Opus.Programs.caller/1` answers;
@@ -428,13 +473,7 @@ defmodule Opus.Brain do
   not come.
   """
   @spec models(Sanctum.Context.t(), String.t()) ::
-          {:ok,
-           %{
-             models: [%{id: String.t(), name: String.t()}],
-             efforts: [String.t()],
-             access: [%{id: String.t(), name: String.t()}]
-           }}
-          | {:error, term()}
+          {:ok, listing()} | {:error, {:signed_out, String.t()}} | {:error, term()}
   def models(%Sanctum.Context{athanor_id: athanor_id} = ctx, row_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
     id = "mdl_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
@@ -452,20 +491,17 @@ defmodule Opus.Brain do
              {:once, owner(athanor_id, row), %{"t" => "models", "id" => id}},
              once_timeout_ms()
            ) do
-        {:ok,
-         %{
-           "t" => "models",
-           "id" => ^id,
-           "models" => models,
-           "efforts" => efforts,
-           "access" => access
-         }} ->
-          {:ok,
-           %{
-             models: Enum.map(models, &%{id: &1["id"], name: &1["name"]}),
-             efforts: efforts,
-             access: Enum.map(access, &%{id: &1["id"], name: &1["name"]})
-           }}
+        {:ok, %{"t" => "models", "id" => ^id, "models" => models, "access" => access}} ->
+          listing = %{
+            models: Enum.map(models, &%{id: &1["id"], name: &1["name"], efforts: &1["efforts"]}),
+            access: Enum.map(access, &%{id: &1["id"], name: &1["name"]})
+          }
+
+          remember(owner(athanor_id, row), :listing, listing)
+          {:ok, listing}
+
+        {:ok, %{"t" => "refused", "reason" => text, "account" => "signed_out"}} ->
+          {:error, {:signed_out, text}}
 
         {:ok, %{"t" => "refused", "reason" => reason}} ->
           {:error, {:refused, reason}}
@@ -666,8 +702,10 @@ defmodule Opus.Brain do
     with {:ok, line} <- encode(command),
          {:ok, seq} <- hello(state, deadline),
          :ok <- send_once(state, line),
-         {:ok, _seq, event} <- next(state, seq, deadline) do
-      answer(event, command)
+         {:ok, _seq, event} <- next(state, seq, deadline),
+         {:ok, answered} <- answer(event, command) do
+      learn(state.owner, answered)
+      {:ok, answered}
     end
   end
 
@@ -729,6 +767,30 @@ defmodule Opus.Brain do
           Process.sleep(@read_retry_ms)
           next(state, after_seq, deadline)
       end
+    end
+  end
+
+  # ===========================================================================
+  # What is known
+  # ===========================================================================
+
+  # An event's account member, which only the three events that may say
+  # it carry (`Opus.Brain.Wire`); any other event changes nothing.
+  defp learn(owner, %{"account" => "signed_in"}), do: remember(owner, :account, :signed_in)
+  defp learn(owner, %{"account" => "signed_out"}), do: remember(owner, :account, :signed_out)
+  defp learn(_owner, _event), do: :ok
+
+  defp remember(owner, what, value) do
+    actor = Prima.Actor.in_athanor(owner.athanor_id)
+    key = Arca.Cache.Keys.brain_known(actor, owner.server_id, owner.epoch, what)
+    _ = Arca.Cache.put(key, value, @known_ms)
+    :ok
+  end
+
+  defp recalled(actor, row_id, epoch, what) do
+    case Arca.Cache.get(Arca.Cache.Keys.brain_known(actor, row_id, epoch, what)) do
+      {:ok, value} -> value
+      :miss -> nil
     end
   end
 
@@ -1269,7 +1331,8 @@ defmodule Opus.Brain do
 
   # What the holder keeps of an event, once: the driver's boot from its
   # hello, which is the session's first line and its only one; the
-  # answer to the command it waits on; and the asks it may answer. A line
+  # answer to the command it waits on; what it says of the account
+  # (`learn/2`); and the asks it may answer. A line
   # read again after the attendant asked for it again changes nothing.
   defp apply_event(state, seq, _event) when seq <= state.applied, do: {:ok, state}
 
@@ -1282,7 +1345,10 @@ defmodule Opus.Brain do
   defp apply_event(%{boot: nil}, _seq, _not_hello), do: {:error, :unreadable}
   defp apply_event(_state, _seq, %{"t" => "hello"}), do: {:error, :unreadable}
 
-  defp apply_event(state, seq, event), do: {:ok, %{answered(state, event) | applied: seq}}
+  defp apply_event(state, seq, event) do
+    learn(state.owner, event)
+    {:ok, %{answered(state, event) | applied: seq}}
+  end
 
   defp answered(%{outstanding: {"start", _}} = state, %{"t" => "started"}),
     do: %{state | outstanding: nil, harness: :started, config: state.starting, starting: nil}

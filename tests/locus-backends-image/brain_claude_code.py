@@ -15,7 +15,8 @@ its message is one of the events, with exactly its members.
 - A run session's first line is the driver's `hello`, naming the wire's
   version and a boot of its own; `models` with no harness running starts one
   for the listing alone and leaves no process of it, and lists the one
-  access the driver honours, Default mode.
+  access the driver honours, Default mode, and each model with its own
+  efforts.
 - A start naming Default mode, or no access, runs the harness in its default
   permission mode, its own tools allowed, seen as the harness's whole command
   line and the driver's whole answers. A start naming an access the driver
@@ -72,6 +73,7 @@ FILES = {
 }
 SYSTEM = "You are a crew member of this athanor."
 WORK = "trn_brain_1"
+LISTED = [("default", ["low", "medium", "high"]), ("fake-opus", ["low", "medium", "high", "max"]), ("fake-haiku", [])]
 TIMEOUT_S = 60
 
 
@@ -158,10 +160,11 @@ def main():
                "hello names the wire's version, the driver and a boot of its own", hello)
         d.send({"t": "models", "id": "mdl_1"})
         listed = d.expect("models", "models with no harness running is listed from a harness of its own")
-        expect([m["id"] for m in listed["models"]] == ["default", "fake-opus", "fake-haiku"]
-               and listed["efforts"] == ["low", "medium", "high", "max"]
+        expect([(m["id"], m["efforts"]) for m in listed["models"]] == LISTED
+               and "account" not in listed
                and listed["access"] == [{"id": "default", "name": "Default mode"}],
-               "the listing is the harness's, with the efforts any model takes and the driver's one access", listed)
+               "the listing is the harness's, each model with the efforts it takes, the driver's one access, and "
+               "nothing of an account the harness does not name", listed)
         eventually(lambda: not harnesses(stack), "the listing's harness to end")
 
         # ————— a start, a work and a post —————

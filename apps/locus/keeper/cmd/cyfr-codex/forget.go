@@ -290,18 +290,19 @@ func (o *oneOff) close() { o.p.Stop() }
 // listOnce is Codex's model listing, every page of it up to listingPages,
 // read once Codex's account read says it has a sign-in (`signedOut`),
 // from an app-server of its own.
-func (d *driver) listOnce() ([]json.RawMessage, error) {
+func (d *driver) listOnce() ([]json.RawMessage, string, error) {
 	o, err := d.openOneOff()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer o.close()
-	account, err := o.call(func(id string) []byte { return request(id, "account/read", map[string]any{}) })
+	read, err := o.call(func(id string) []byte { return request(id, "account/read", map[string]any{}) })
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if account.Error == nil && signedOut(account.Result) {
-		return nil, errSignedOut
+	account := accountOf(read)
+	if account == brainwire.SignedOut {
+		return nil, account, nil
 	}
 	var listing []json.RawMessage
 	cursor := ""
@@ -312,14 +313,14 @@ func (d *driver) listOnce() ([]json.RawMessage, error) {
 		}
 		answer, err := o.call(func(id string) []byte { return request(id, "model/list", params) })
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		var page struct {
 			Data       []json.RawMessage `json:"data"`
 			NextCursor *string           `json:"nextCursor"`
 		}
 		if answer.Error != nil || json.Unmarshal(answer.Result, &page) != nil {
-			return nil, errors.New("it refused to list them")
+			return nil, "", errors.New("it refused to list them")
 		}
 		listing = append(listing, page.Data...)
 		if page.NextCursor == nil || *page.NextCursor == "" {
@@ -327,5 +328,5 @@ func (d *driver) listOnce() ([]json.RawMessage, error) {
 		}
 		cursor = *page.NextCursor
 	}
-	return listing, nil
+	return listing, account, nil
 }

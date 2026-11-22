@@ -36,6 +36,14 @@ defmodule Opus.BrainTest do
 
   @root :crypto.strong_rand_bytes(32)
 
+  @listing %{
+    models: [
+      %{id: "opus", name: "Opus", efforts: ["low", "high"]},
+      %{id: "haiku", name: "Haiku", efforts: []}
+    ],
+    access: [%{id: "default", name: "Default mode"}]
+  }
+
   setup do
     Cyfr.Test.Sandbox.setup!()
     Arca.Cache.init()
@@ -269,13 +277,15 @@ defmodule Opus.BrainTest do
   end
 
   # The driver answers the start just written, and the holder reads it.
-  defp harness_started!(fake, row, brain, boot \\ "boot-one") do
-    say(fake, row, %{
+  defp harness_started!(fake, row, brain, boot \\ "boot-one", says \\ %{}) do
+    started = %{
       "t" => "started",
       "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
       "fresh" => true,
       "held" => []
-    })
+    }
+
+    say(fake, row, Map.merge(started, says))
 
     assert {^boot, [{seq, %{"t" => "started"}}]} = batch(brain)
     :ok = Brain.read_on(brain, boot, seq)
@@ -497,6 +507,66 @@ defmodule Opus.BrainTest do
 
       assert :ok = Brain.write(brain, binding, resume)
       assert %{"t" => "start", "session" => _} = sent()
+    end
+  end
+
+  describe "what is known of the account" do
+    test "a start's account member sets and clears it, and a refused post's sets it",
+         %{fake: fake, ctx: ctx, row: row, binding: binding} do
+      known = fn -> Brain.known(ctx, row.id, row.epoch).account end
+      brain = opened!(fake, row, binding)
+      assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => 0, "config" => %{}})
+      assert %{"t" => "start"} = sent()
+      harness_started!(fake, row, brain, "boot-one", %{"account" => "signed_in"})
+      assert known.() == :signed_in
+
+      assert :ok = Brain.write(brain, binding, post(binding))
+      assert %{"t" => "post", "id" => id} = sent()
+
+      say(fake, row, %{
+        "t" => "refused",
+        "id" => id,
+        "reason" => "Sign it in.",
+        "account" => "signed_out"
+      })
+
+      assert {"boot-one", [{seq, %{"t" => "refused"}}]} = batch(brain)
+      :ok = Brain.read_on(brain, "boot-one", seq)
+      assert known.() == :signed_out
+    end
+
+    for before <- [nil, :signed_out, :signed_in] do
+      @tag before: before
+      test "an authentication error, an account read's failure, an idle after an error and a " <>
+             "start that names no account neither set nor clear it, known #{inspect(before)}",
+           %{fake: fake, ctx: ctx, row: row, binding: binding, before: before} do
+        key = Arca.Cache.Keys.brain_known(Sanctum.Context.actor(ctx), row.id, row.epoch, :account)
+        if before, do: :ok = Arca.Cache.put(key, before, :timer.hours(1))
+        known = fn -> Brain.known(ctx, row.id, row.epoch).account end
+
+        brain = started!(fake, row, binding)
+        assert known.() == before
+
+        assert :ok = Brain.write(brain, binding, post(binding))
+        assert %{"t" => "post", "id" => id} = sent()
+        work = %{"gen" => 0, "work" => binding.turn_id}
+
+        for event <- [
+              %{"t" => "refused", "id" => id, "reason" => "The account could not be read."},
+              Map.merge(work, %{
+                "t" => "error",
+                "type" => "authentication",
+                "message" => "Refused."
+              }),
+              Map.merge(work, %{"t" => "idle", "answered" => [], "stop" => "error"})
+            ] do
+          say(fake, row, event)
+          type = event["t"]
+          assert {"boot-one", [{seq, %{"t" => ^type}}]} = batch(brain)
+          :ok = Brain.read_on(brain, "boot-one", seq)
+          assert known.() == before
+        end
+      end
     end
   end
 
@@ -1741,25 +1811,74 @@ defmodule Opus.BrainTest do
       say(fake, row, %{
         "t" => "models",
         "id" => id,
-        "models" => [%{"id" => "opus", "name" => "Opus"}, %{"id" => "haiku", "name" => "Haiku"}],
-        "efforts" => ["low", "high"],
+        "models" => [
+          %{"id" => "opus", "name" => "Opus", "efforts" => ["low", "high"]},
+          %{"id" => "haiku", "name" => "Haiku", "efforts" => []}
+        ],
         "access" => [%{"id" => "default", "name" => "Default mode"}]
       })
 
-      assert Task.await(task, 10_000) ==
-               {:ok,
-                %{
-                  models: [%{id: "opus", name: "Opus"}, %{id: "haiku", name: "Haiku"}],
-                  efforts: ["low", "high"],
-                  access: [%{id: "default", name: "Default mode"}]
-                }}
-
+      assert Task.await(task, 10_000) == {:ok, @listing}
       assert running_sessions(fake, row) == []
+      # What it listed is known, and an answer that names no account says
+      # nothing of it.
+      assert Brain.known(ctx, row.id, row.epoch) == %{account: nil, listing: @listing}
 
       task = Task.async(fn -> Brain.models(ctx, row.id) end)
       %{"id" => id} = once_driver!(fake, row)
       say(fake, row, %{"t" => "refused", "id" => id, "reason" => "not listed"})
       assert Task.await(task, 10_000) == {:error, {:refused, "not listed"}}
+      assert Brain.known(ctx, row.id, row.epoch) == %{account: nil, listing: @listing}
+    end
+
+    test "a listing's account alone says signed out and signed in, for that row at that epoch",
+         %{fake: fake, ctx: ctx, row: row} do
+      ask = fn answer ->
+        task = Task.async(fn -> Brain.models(ctx, row.id) end)
+        %{"id" => id} = once_driver!(fake, row)
+        say(fake, row, Map.put(answer, "id", id))
+        Task.await(task, 10_000)
+      end
+
+      listed = %{
+        "t" => "models",
+        "models" => [
+          %{"id" => "opus", "name" => "Opus", "efforts" => ["low", "high"]},
+          %{"id" => "haiku", "name" => "Haiku", "efforts" => []}
+        ],
+        "access" => [%{"id" => "default", "name" => "Default mode"}]
+      }
+
+      refused = %{"t" => "refused", "reason" => "Sign it in."}
+
+      assert ask.(Map.put(refused, "account", "signed_out")) ==
+               {:error, {:signed_out, "Sign it in."}}
+
+      assert Brain.known(ctx, row.id, row.epoch) == %{account: :signed_out, listing: nil}
+
+      # A refusal and a listing that name no account clear nothing.
+      assert ask.(refused) == {:error, {:refused, "Sign it in."}}
+      assert Brain.known(ctx, row.id, row.epoch) == %{account: :signed_out, listing: nil}
+      assert ask.(listed) == {:ok, @listing}
+      assert Brain.known(ctx, row.id, row.epoch) == %{account: :signed_out, listing: @listing}
+
+      assert ask.(Map.put(listed, "account", "signed_in")) == {:ok, @listing}
+      assert Brain.known(ctx, row.id, row.epoch) == %{account: :signed_in, listing: @listing}
+
+      # It is the athanor's, the row's and that epoch's, and nobody else's.
+      {other, _user} = person!("brain-knows-nothing")
+      nothing = %{account: nil, listing: nil}
+      assert Brain.known(other, row.id, row.epoch) == nothing
+      assert Brain.known(ctx, row.id, row.epoch + 1) == nothing
+      assert Brain.known(ctx, "mcp_another", row.epoch) == nothing
+
+      # Kept a day, as a restart of CYFR forgets it with the cache.
+      key = Arca.Cache.Keys.brain_known(Sanctum.Context.actor(ctx), row.id, row.epoch, :account)
+      [{^key, :signed_in, until}] = :ets.lookup(Arca.Cache.table_name(), key)
+      day = :timer.hours(24)
+      assert (until - System.monotonic_time(:millisecond)) in (day - 60_000)..day
+      :ok = Arca.Cache.invalidate(key)
+      assert Brain.known(ctx, row.id, row.epoch) == %{account: nil, listing: @listing}
     end
 
     test "discovery runs for no turn, no other athanor and no row but a brain's",
