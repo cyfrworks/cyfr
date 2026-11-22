@@ -448,17 +448,18 @@ async function keptPhase() {
 
 // What the chooser says on main's behalf is main's alone to decide.
 // chooser_refused: Prism's page in `w` cannot send the window to the
-// chooser with a notice, by a navigation or by a redirect of a load of the
-// CYFR's. The redirect is the engine's answer in the CYFR's place (the
-// session's request hook, which the app does not use): the front sends a
-// load to https alone.
-// chooser_history: the history, which nothing can refuse, brings back the
-// entry main's load made for the failure, and it says nothing of it.
+// chooser with a notice, by a navigation, by a redirect of a load of the
+// CYFR's or by its history, whose entry before this one is the chooser's
+// that main showed for the failure. The redirect is the engine's answer in
+// the CYFR's place (the session's request hook, which the app does not
+// use): the front sends a load to https alone.
+// chooser_history: the engine's own move in that history, which asks main
+// nothing, brings that entry back, and it says nothing of the failure.
 async function choosersWord(w) {
   const to = `${LOOPBACK}/bootstrap/#road=passkey&notice=unanswered`
   const hop = "/proof-chooser"
   await judged("chooser_refused",
-    "Prism's page cannot send the window to the chooser with a notice, by a navigation or by a redirect: main refuses both and the page stays",
+    "Prism's page cannot send the window to the chooser, by a navigation, a redirect or its history: main refuses each and the page stays",
     async () => {
       const wc = w.webContents
       await js(wc, "window.proofStays = true; 1")
@@ -475,14 +476,18 @@ async function choosersWord(w) {
       } finally {
         wc.session.webRequest.onBeforeRequest(null)
       }
+      const backAt = decisions.length
+      await js(wc, "window.history.back(); 1")
+      const byHistory = await waitFor(() => decisions.slice(backAt).find((d) => d.window === wc.id && d.name === "will-navigate" && d.main &&
+        atBootstrap(d.url)), "main's decision on the page's move back to the chooser", 30_000)
       await waitFor(() => !wc.isLoading(), "the window at rest")
       const stayed = await js(wc, "window.proofStays === true")
-      return [navigated === true && redirected.prevented === true && stayed === true && atHome(wc.getURL()),
-        {navigated, redirected: redirected.prevented, stayed, url: bare(wc.getURL()), asked: history.slice(from).map(bare)}]
+      return [navigated === true && redirected.prevented === true && byHistory.prevented === true && stayed === true && atHome(wc.getURL()),
+        {navigated, redirected: redirected.prevented, byHistory: byHistory.prevented, stayed, url: bare(wc.getURL()), asked: history.slice(from).map(bare)}]
     })
 
   await judged("chooser_history", "the history brings back the chooser's entry of a failure with no notice and no Try again", async () => {
-    await js(w.webContents, "window.history.back(); 1")
+    w.webContents.navigationHistory.goBack()
     const shows = await waitFor(async () => {
       if (!atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
       const at = await js(w.webContents, `(() => ({type: performance.getEntriesByType("navigation")[0].type,

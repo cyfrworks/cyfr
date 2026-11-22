@@ -18,8 +18,9 @@ import (
 // carries a run token alone, which main's own loads do and no page's can
 // (a wrong one is refused above anything it says). It is kept in this
 // entry of the history, where no page of another origin writes: a reload
-// of main's load still shows it, and coming back to the entry by history,
-// as a page can make the window do, shows the road and no notice.
+// of main's load still shows it, and coming back to the entry by history
+// (main refuses a page that move, and is not asked for the engine's own)
+// shows the road and no notice.
 // On the passkey road the script
 // connects the CYFR remembered by itself as the app starts, leaves a CYFR
 // just connected to main, which opens it at its root, and asks main by
