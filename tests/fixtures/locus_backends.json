@@ -195,14 +195,13 @@
     ],
     "stderr_tail_bytes": 65536,
     "stderr_tail_slack_bytes": 4096,
-    "close_wait_ms": 17000,
-    "max_lifetime_ms": 60000
+    "close_wait_ms": 17000
   },
   "builds_key_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
   "close": {
     "answer": "{\"status\":\"closed\",\"version\":4}",
-    "body": "{\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_1789305279605_1e46e5094ac1e25f9ad51d2d13ea3066\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"version\":4}",
-    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249605\nn_close_7d3e9a\nd4989b7e6f8105c89783a2ada68c88988b85ae8b848462e4d40449b0b7ca4604",
+    "body": "{\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_1e46e5094ac1e25f9ad51d2d13ea3066\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"version\":4}",
+    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249605\nn_close_7d3e9a\n74a70ad406ce078f13b1c1b43bcadecc07f4c5ccf5e977abfffb9770985c6dad",
     "fields": {
       "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
       "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
@@ -212,8 +211,8 @@
       "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
       "ts": 1789305249605
     },
-    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249605 nonce=n_close_7d3e9a body=d4989b7e6f8105c89783a2ada68c88988b85ae8b848462e4d40449b0b7ca4604 mac=iTZ9T2uyWNQ-zQPZIb1UWEwabj_ozXT3buaNtIs2hqA",
-    "mac": "iTZ9T2uyWNQ-zQPZIb1UWEwabj_ozXT3buaNtIs2hqA"
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249605 nonce=n_close_7d3e9a body=74a70ad406ce078f13b1c1b43bcadecc07f4c5ccf5e977abfffb9770985c6dad mac=ZaxHi3GDJUJxtOUv1cv6Q0HC_8IMPIsMCgnV0q-0RaY",
+    "mac": "ZaxHi3GDJUJxtOUv1cv6Q0HC_8IMPIsMCgnV0q-0RaY"
   },
   "comment": "The vectors pinning Prima.LocusBackends, the backends wire between CYFR's programs controller and the backends service Locus serves; apps/prima/test/prima/locus_backends_test.exs consumes every section, and every end of the wire (the Locus service, CYFR's client and the image probe) reproduces them. Every consumer derives the control, seal and owner keys from the service key over the label, reproduces each control message's, each session message's and the close's canonical string, MAC and header, reads each control and session body and its answer to its members and writes them back to the same bytes, opens the sealed environment for its owner and lifetime only, parses every accepted header, refuses every malformed one as its kind and every one at another version token (v2) as unknown_version, refuses every invalid message with the error named and answers it with the refusal named, refuses every header under auth_rejected at its instant with its reason, and masks the input to the output. Integers are decimal in canonical strings and headers, and a header names its body's hex SHA-256 as body=, which an accepted header parses to as its body_hash. reserved_env_prefixes is Prima.KeeperProtocol's list, which the wire reserves. The fences are the service's, against state the wire does not hold: every fence_rejected vector runs against a fresh service at the boot the control vectors name, under the service key, each message presented at its now, with its headers beside its signature, and answered at its status until the refused one, which is the held message if one is held (its head sent and its body sent only once every later message is answered), else the last; it is refused with the code named, its body unread where read_body is false. advance_ms moves the service's lease clock; given names the pool its launcher answers (\"unavailable\" for none, 64 free uids otherwise), the live nonces the owner's cache already holds, and the stderr each program's process writes as it starts, which an open starts. The auth_rejected vectors are the envelope's alone: their bodies are bytes a signature covers, read as no message. The accepted sync's program names `hosts`, which every consumer reads back. A program may name `hosts`, the only hosts its processes reach beside the resolver and the deployment's private hosts, under Prima.KeeperProtocol's rule (1 to max_hosts distinct exact hostnames: the hosts_ vectors are refused); an open whose hosts resolve to no address is refused hosts_unresolved, and one the island's guard does not hold to them guard_unavailable. A hello and a status answer carry the box's memory{budget_bytes, admission_limit_bytes, held_bytes}, and a sync may carry athanor_memory_bytes, a positive count of bytes (the *_athanor_memory vectors are refused): the ceiling of the owner's athanor on the bounds its sessions on the box hold. given's memory_budget is the service's memory budget B with an overcommit of 1 (absent, room for every session the vector opens), under which the capacity_memory vector's second open, each at the default 512 MiB bound, is refused by memory alone while the pool has room. A session is opened in mode run, whose lines the run vectors (open, send, recv) carry, or in mode terminal (open_terminal, naming rows and cols, each 1 to bounds.max_pty_size; input, output and resize), whose bytes travel as standard base64 with padding both ways, an input of 1 to bounds.max_chunk_bytes bytes, and whose output is buffered in chunks of at most that many: every consumer signs, reads and writes the terminal vectors back as the run's, and a message of one mode to a session of the other is refused bad_request. A run's lines are masked one by one (masking); a terminal's output is masked as a stream (masking_stream): each chunk in turn releases what released names, the end of a chunk that begins a secret held until later bytes settle it, and what is held when the output ends is end. A close is posted on routes.close with a body of owner, e and session alone, signed as an invoke under the owner version that opened the session: it needs no owner the service runs, so replay_close's first close, of a session the service never held, is answered closed, and one that waits for its place back is answered within bounds.close_wait_ms.",
   "control_key_hex": "466b3f00f5014372ba873d401976202e19b4ff8c3b403f0baf73bdb048f423fc",
@@ -270,8 +269,8 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_1789305280001_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_0000000000000000000000000000dead ts=1789305250001 nonce=n_fence_boot body=d57e1a022c7c58f28e412598252118d3b067b3ad746a9b877810f7de9a85f163 mac=Hl2YUP2H2Z4w0CE7ucCCuVP8FEOx2pjVESZiYtDKMRo",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_0000000000000000000000000000dead ts=1789305250001 nonce=n_fence_boot body=ad097e61a9b6720128dacc071e5fb50069c45284767c23a87f7fe65d831c83fd mac=EwIRI9odulpZuHIBEyMjuBGm47SFxZ1RxHaKFJMskjk",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -283,8 +282,8 @@
       "refusal": "stale_boot",
       "sequence": [
         {
-          "body": "{\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_1789305280001_1e46e5094ac1e25f9ad51d2d13ea3066\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_0000000000000000000000000000dead ts=1789305250001 nonce=n_fence_close_boot body=ba25a751db352ee16f17ff21ef0f5da7b3487a2adf23a33218acaee1300d22f2 mac=_pte280j5T2dOvl0zuxJD2v33ra5dlzwc6H7B6HUdvE",
+          "body": "{\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_1e46e5094ac1e25f9ad51d2d13ea3066\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_0000000000000000000000000000dead ts=1789305250001 nonce=n_fence_close_boot body=74a70ad406ce078f13b1c1b43bcadecc07f4c5ccf5e977abfffb9770985c6dad mac=iYNFRIejWjWzUP42kfCpaDYqnM4atejV7pllBb13jS4",
           "now": 1789305250001,
           "read_body": false,
           "route": "close"
@@ -384,8 +383,8 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":6,\"key\":\"fence\",\"lifetime\":\"lt_1789305280001_da8314aa026fdbfe56ad8b06bbadc0c5\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=6 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_stale body=e916212e0353bc197f89b55ced86d08441b618c3d27db43931ac53e938df5ad6 mac=20GTZxBuiUQu8nBvKhJTUMHBNva1DnRFqVc9THzQ7n4",
+          "body": "{\"argv\":[],\"e\":6,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_da8314aa026fdbfe56ad8b06bbadc0c5\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=6 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_stale body=fed93f1d7e120fc719b77f12fb9aaf303220def5847ae92938e63e10ca09c4e0 mac=rsTCOSgMPt4kbAEdjG7ZNPkho8vOIPIlf19D01f4G-g",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -404,8 +403,8 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":8,\"key\":\"fence\",\"lifetime\":\"lt_1789305280001_67b77d787c1e6c790cc1a88a53529d82\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=8 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_ahead body=6de9cc27876152a0bba9912535b97664908cfa6b3de81c98cfe46cc443abd1ac mac=BlBFwi8o9rhyGyakDSWDM-9sE6VFcbVizqDMRyhKC50",
+          "body": "{\"argv\":[],\"e\":8,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_67b77d787c1e6c790cc1a88a53529d82\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=8 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_ahead body=0c5d7f375eb4aefe64142481c6ae371240ac8d6b1024ee93a0b2c634aa60bf3c mac=RPx1AMADpgTibSiPqyA2Ii1MRVbCcN7n7ojGAC9LSyQ",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -447,8 +446,8 @@
           "advance_ms": 1000
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_1789305280001_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapsed body=d57e1a022c7c58f28e412598252118d3b067b3ad746a9b877810f7de9a85f163 mac=qX_5Zs-c2ReNgGNKrELGTO5fTFhlz4l5bXLfdlBFnFQ",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapsed body=ad097e61a9b6720128dacc071e5fb50069c45284767c23a87f7fe65d831c83fd mac=mI8goLiTbG6dn5VzW5So9CmNoDbRd2P_nKPmeq91_1g",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -467,8 +466,8 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"held\",\"lifetime\":\"lt_1789305280000_c9587f14e77b435881bc103f4a054020\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_held body=82c92dc4d3b9dbbe96ff3c89559634c77959c989afc7f9a6bc9c0a144726388c mac=M_iRs6Z47V0D2zdc8ana9EH43ZeQFUR_aX61xcxX6Dk",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"held\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_c9587f14e77b435881bc103f4a054020\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_held body=1aafee48b8ceb2a855df792aa5b65becccfe6c16f3ff87bf179a71fd513ce05d mac=CMxw9KgeByXTXLP3V_HHHZKmVmOUzwfcr0H36vQe6gg",
           "now": 1789305250000,
           "route": "session",
           "status": 200
@@ -477,8 +476,8 @@
           "advance_ms": 1000
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_1789305280001_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapse body=d57e1a022c7c58f28e412598252118d3b067b3ad746a9b877810f7de9a85f163 mac=_DlZj4hr0-bRWhrW56Lmjex_82To1h2OZljyq2JWpvM",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapse body=ad097e61a9b6720128dacc071e5fb50069c45284767c23a87f7fe65d831c83fd mac=BlgYYPkebymNszr09A8gjd54PNVExTLD9rVQ-H2mCbw",
           "now": 1789305250001,
           "route": "session",
           "status": 409
@@ -497,8 +496,8 @@
       "refusal": "unknown_owner",
       "sequence": [
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_1789305280000_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_fence_unknown body=0dcec50ff965e4a5caf08a004a72981e436940b03d727068106f6e2927547580 mac=1bpmwPK2WLT_fOJ8gjnarIITrJDnDbX8ah9SHbUPYc4",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_fence_unknown body=ad097e61a9b6720128dacc071e5fb50069c45284767c23a87f7fe65d831c83fd mac=QSRSHUzBD1Wkzokudm2vb5DXKwMuPwCGSC9VGIekkaM",
           "now": 1789305250000,
           "read_body": false,
           "route": "session"
@@ -517,15 +516,15 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_1789305280001_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=d57e1a022c7c58f28e412598252118d3b067b3ad746a9b877810f7de9a85f163 mac=V9znYyn9Pr-Y3tmRuBXkkYxGrnRgD06kNkcC_0wE240",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=ad097e61a9b6720128dacc071e5fb50069c45284767c23a87f7fe65d831c83fd mac=4qh-6j9BjLce2oDpCz3YhPl1vOyZ2l2RVTWF4W6QfkM",
           "now": 1789305250001,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_1789305280001_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=d57e1a022c7c58f28e412598252118d3b067b3ad746a9b877810f7de9a85f163 mac=V9znYyn9Pr-Y3tmRuBXkkYxGrnRgD06kNkcC_0wE240",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=ad097e61a9b6720128dacc071e5fb50069c45284767c23a87f7fe65d831c83fd mac=4qh-6j9BjLce2oDpCz3YhPl1vOyZ2l2RVTWF4W6QfkM",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -537,15 +536,15 @@
       "refusal": "replay",
       "sequence": [
         {
-          "body": "{\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_1789305280001_1e46e5094ac1e25f9ad51d2d13ea3066\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_close_replay body=ba25a751db352ee16f17ff21ef0f5da7b3487a2adf23a33218acaee1300d22f2 mac=i77M-CYjGkNBjUEd-xI2i1DHhxYYZ7zbdM1thptRe0I",
+          "body": "{\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_1e46e5094ac1e25f9ad51d2d13ea3066\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_close_replay body=74a70ad406ce078f13b1c1b43bcadecc07f4c5ccf5e977abfffb9770985c6dad mac=kCWiwTZyUZYQM2v1BW4XCIE2SJIlivfXE9U1ZjLRRY0",
           "now": 1789305250001,
           "route": "close",
           "status": 200
         },
         {
-          "body": "{\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_1789305280001_1e46e5094ac1e25f9ad51d2d13ea3066\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_close_replay body=ba25a751db352ee16f17ff21ef0f5da7b3487a2adf23a33218acaee1300d22f2 mac=i77M-CYjGkNBjUEd-xI2i1DHhxYYZ7zbdM1thptRe0I",
+          "body": "{\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_1e46e5094ac1e25f9ad51d2d13ea3066\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_close_replay body=74a70ad406ce078f13b1c1b43bcadecc07f4c5ccf5e977abfffb9770985c6dad mac=kCWiwTZyUZYQM2v1BW4XCIE2SJIlivfXE9U1ZjLRRY0",
           "now": 1789305250001,
           "read_body": false,
           "route": "close"
@@ -567,8 +566,8 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_1789305280001_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_full body=d57e1a022c7c58f28e412598252118d3b067b3ad746a9b877810f7de9a85f163 mac=tVc1382tbJRhSSN35liSZVMiVHnXQ34SmLpSoHMKr2g",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_full body=ad097e61a9b6720128dacc071e5fb50069c45284767c23a87f7fe65d831c83fd mac=KR23KINcL0fPAA3xjp2zuTNwXKoBe2GldCjnPCaaMAk",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -594,15 +593,15 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"lifetime\":\"lt_1789305280000_eb8de10b6771ae123b825e8eddfe9cf1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=87901e8180151ad933a2d2bbf4d923d69efc228aa80937746ddef66f5b31e2f5 mac=aJbkBpEi89E4v595yJQqhCHKrMIc_RdtvDPQgAhMDlM",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_eb8de10b6771ae123b825e8eddfe9cf1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=36321a879a553beb71a3953a3e2b7d7eb9456f0801a957bdfb6bda8dd272ed3c mac=Z0s8lX3gLMDVlfMGrx7ixm9LWHZFLnB7QTPmPWHSBJU",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"lifetime\":\"lt_1789305280000_c1656d5446f33af2e52fd33fbf6e5d9c\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=a0d79c2d9113b22e186ba4f82774ceaa832f47d8b5a90d6d55576633943e4dfc mac=Cu3p90ndCCrWJGq0cwBpFmFYFz76VGcn0Qi9UpDENzA",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_c1656d5446f33af2e52fd33fbf6e5d9c\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=28052867570b2952411937cccd9a99b60c525e92194c81e9731073d5e90c4670 mac=bN_o56C7bx2dl0bUNs_l4TPk5-6SdR93AAL7XV_qtcE",
           "now": 1789305250000,
           "read_body": true,
           "route": "session"
@@ -628,15 +627,15 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"lifetime\":\"lt_1789305280000_eb8de10b6771ae123b825e8eddfe9cf1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=87901e8180151ad933a2d2bbf4d923d69efc228aa80937746ddef66f5b31e2f5 mac=aJbkBpEi89E4v595yJQqhCHKrMIc_RdtvDPQgAhMDlM",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_eb8de10b6771ae123b825e8eddfe9cf1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=36321a879a553beb71a3953a3e2b7d7eb9456f0801a957bdfb6bda8dd272ed3c mac=Z0s8lX3gLMDVlfMGrx7ixm9LWHZFLnB7QTPmPWHSBJU",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"lifetime\":\"lt_1789305280000_c1656d5446f33af2e52fd33fbf6e5d9c\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=a0d79c2d9113b22e186ba4f82774ceaa832f47d8b5a90d6d55576633943e4dfc mac=Cu3p90ndCCrWJGq0cwBpFmFYFz76VGcn0Qi9UpDENzA",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_c1656d5446f33af2e52fd33fbf6e5d9c\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=28052867570b2952411937cccd9a99b60c525e92194c81e9731073d5e90c4670 mac=bN_o56C7bx2dl0bUNs_l4TPk5-6SdR93AAL7XV_qtcE",
           "now": 1789305250000,
           "read_body": true,
           "route": "session"
@@ -658,15 +657,15 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"lifetime\":\"lt_1789305280000_eb8de10b6771ae123b825e8eddfe9cf1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=87901e8180151ad933a2d2bbf4d923d69efc228aa80937746ddef66f5b31e2f5 mac=aJbkBpEi89E4v595yJQqhCHKrMIc_RdtvDPQgAhMDlM",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_eb8de10b6771ae123b825e8eddfe9cf1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=36321a879a553beb71a3953a3e2b7d7eb9456f0801a957bdfb6bda8dd272ed3c mac=Z0s8lX3gLMDVlfMGrx7ixm9LWHZFLnB7QTPmPWHSBJU",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"lifetime\":\"lt_1789305280000_c1656d5446f33af2e52fd33fbf6e5d9c\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=a0d79c2d9113b22e186ba4f82774ceaa832f47d8b5a90d6d55576633943e4dfc mac=Cu3p90ndCCrWJGq0cwBpFmFYFz76VGcn0Qi9UpDENzA",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_c1656d5446f33af2e52fd33fbf6e5d9c\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=28052867570b2952411937cccd9a99b60c525e92194c81e9731073d5e90c4670 mac=bN_o56C7bx2dl0bUNs_l4TPk5-6SdR93AAL7XV_qtcE",
           "now": 1789305250000,
           "read_body": true,
           "route": "session"
@@ -688,8 +687,8 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_1789305280000_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_fence body=0dcec50ff965e4a5caf08a004a72981e436940b03d727068106f6e2927547580 mac=4UrTjFwA4A3_Q3pFQ0H8QErVO7cf8Xfn_Co1cYeN_eA",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_bdc6236c163c8068c1214f9282b94703\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_fence body=ad097e61a9b6720128dacc071e5fb50069c45284767c23a87f7fe65d831c83fd mac=cXz1BFO6NrQa5w5-HjAJ1djcCX1WKz8ukB2wcPbac8I",
           "now": 1789305250000,
           "read_body": true,
           "route": "session"
@@ -740,113 +739,113 @@
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k0\",\"lifetime\":\"lt_1789305280000_09ce2c41249ecc7b8ec1702556efeec2\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b1\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=22e27b3244b7edf224949d015f626136ebf2001ff201c7494fb4e7db5321cbc1 mac=fH8QsUxFzE8KSA6g7Fu59uE6WFGc_gD7BUo_og1__no",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k0\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_09ce2c41249ecc7b8ec1702556efeec2\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b1\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=85f30ed6e4eeab8e44276402e2a94b238103837c30756408c510135ecc383eb3 mac=FwewaQspu3XJ0GupkRcJ3ICxS-Y48f7eFCYZairLu30",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k1\",\"lifetime\":\"lt_1789305280000_b38f06a2c49e49cfe89dd8fe0703c4c1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b2\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=2ec8fcd5d0291e73a874c7a597dda2688a834365a6494db78002300785cdb2cf mac=gxZTAlpHTgY9owNWWleaTzCFsh9N37Bj88KNUujqzH8",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k1\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_b38f06a2c49e49cfe89dd8fe0703c4c1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b2\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=af9ccd17aa777a1a5dd6d674e202a2637f63d3aa31ba546c5d1b2ccead2492b6 mac=YKUUvq7AvNdnPkXBkR0XJUgqL5f_lnzO8sOgLIR36QE",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k2\",\"lifetime\":\"lt_1789305280000_befd9023337796e02010e70e7ad28dde\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b3\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_2 body=013745f6c19585e7366e667397106634254bbe2a63bbac622210bd894aae4ce2 mac=E65eRkL8gsaGk3KAxrYfhfK9J1xP7aPixkGr3KLUsSc",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k2\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_befd9023337796e02010e70e7ad28dde\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b3\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_2 body=95607f14bb40708433306cde7332fda5595819f5ecf17a3595e23291d5475b05 mac=tz9-_vKtesS_6yz1twCXJakEdNsBzIhc4eLCuZTjF6k",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k3\",\"lifetime\":\"lt_1789305280000_7252bd87decb76d2bf3804064f2cefdc\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b4\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_3 body=2d02aa21573698491fabcd070e0f037ea144bae75eb70ccf117676b0a7ee6c0f mac=CpOefusHqIiN0aluhGc6KpAO4D7ykyrh5kmhhBw-G3U",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k3\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_7252bd87decb76d2bf3804064f2cefdc\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b4\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_3 body=de86ed2b5a1faf9ceaca5e592839b12dc734dbbb8baaad22c50a074fc9166d74 mac=tYQKleYCtSqq7TXz234ZvYhm3kX_DCkda_eDNaG6AV4",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k4\",\"lifetime\":\"lt_1789305280000_cb5fc6cf15837d05223218e00bffdc73\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b5\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_4 body=5e75eec6480c119729bac04de55a9ddccc7c2f8523d683111b7ab19d446879d1 mac=2cXFYzXVyU37bZ5uGcdZ-9n8qGGic0CiWArBbB-InTA",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k4\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_cb5fc6cf15837d05223218e00bffdc73\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b5\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_4 body=936ecd38b81d87608a430c3422e5fb0bbe520ff1d66a2f57944170584f992d30 mac=LhAn2xiGbVwDC42ECg8lilc9q5HoGU945tA8VgCvpaw",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k5\",\"lifetime\":\"lt_1789305280000_4c5fa9d076577be4386ce85c3aaad803\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b6\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_5 body=f645a2cbf0ccc3c75aa25709b36a3c3e4a889720a0c2f614e354046cf843ff63 mac=xVO9QlT3oirC5pNHEl7ulVMxI5AGtuQRS0hQrRuBEkA",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k5\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_4c5fa9d076577be4386ce85c3aaad803\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b6\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_5 body=d9a359a961ae73d5be5cac1253e1bdfbb0eddd3953a95e1cb1384dbd8ec9c8df mac=0xxQ80lcP0a_uQlV4jlXBPfigwq7d1Ib1VwGVuJ9bHQ",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k6\",\"lifetime\":\"lt_1789305280000_a362b18835b5205228b9262091d5d588\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b7\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_6 body=ccc52d0b4fdaecec31a3c7b3b80a92562828ac827d754e96835d3f7a290e473f mac=9fjVM0qZwG10BY3g4Fx7wcp0Jir0_n3CSvT663P2pT8",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k6\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_a362b18835b5205228b9262091d5d588\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b7\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_6 body=c96a9b74f58c42eb1c3241fc49413c2bfb4c6a97278d8e2e76ce49c8db0a383b mac=urhdalM7tLg5Dr7qdXHKvFzySj9A0UtyJof5lKHEjHs",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k7\",\"lifetime\":\"lt_1789305280000_7c474c4a0f519536cf51d2b023544884\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b8\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_7 body=cbd6c06cc73b249cc0dcc40cb4c5c2d56feac340f324decd82c25c484120b5e3 mac=ueEzdJVNBSvAw5RM9xuXCiuLbdfvMAe5qCUh7wAZAWg",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k7\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_7c474c4a0f519536cf51d2b023544884\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b8\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_7 body=5d8f8db184c26404937eb55d28b90427be76bd6c4b2a7ddd2de0c5dedba7b7d7 mac=ZtX0Zm7sG__cSk5mW1qRwEY5NX_usWmsEHt7FUI5hPY",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k8\",\"lifetime\":\"lt_1789305280000_a665b901d14dda0da93bee4af988ebf6\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b9\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_8 body=5a0c601b41ffe30a17a44a3e1600347a48628636cdf682115fd1a75414812dc7 mac=ZwJ2fVcSWIJvFOAWYmeOCxC-SVUEYbe9Jr5ab5bRu98",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k8\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_a665b901d14dda0da93bee4af988ebf6\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b9\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_8 body=0377445974ededb15669dfd46218841f424577bffceb5259dfbc2933a2cef5bf mac=KaoZNTFB94FwopCJh9Dy5jmja44Zt2HiVIaxgc2bnuQ",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k9\",\"lifetime\":\"lt_1789305280000_8264cb63c20c54b70813b463a10d3c95\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b10\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_9 body=ef2e69dc99c5fe1979f5c2cdee60962159ba90e204bfbabde00aa4565ec55100 mac=HiB9Jluge1Oihj6-YNfsYcHx3fDP-Yqz01UDqdppOeg",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k9\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_8264cb63c20c54b70813b463a10d3c95\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b10\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_9 body=20e6b5e490a346aa93849f5e549c4fe436554747ab1aa38fa1e8bb2712129776 mac=w1X92aRwZrm2s-Gpna8ziSzuPHO2AS7-vA1TPjzEkh8",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k10\",\"lifetime\":\"lt_1789305280000_b3ac1b64ac785565287bb01d57ad61fc\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b11\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_10 body=64c6f62beee9be740e7ad9b4c946b35eb5d8fbbd8b3f425583d37535b1dbbe24 mac=LMntIyxBQSCbc8CPB57OUe5FpAzAufxE0aSfS4Kky2I",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k10\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_b3ac1b64ac785565287bb01d57ad61fc\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b11\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_10 body=59fd7fd24423b89c6de29aac249ddbca45aefbcb4da76029dc3a4f80d1cd2337 mac=rxSje5rOWqERctjp1qED-3C_s-o1LsEmp3Y83qZVWAo",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k11\",\"lifetime\":\"lt_1789305280000_6c38738980569190d78b0b07844c63c7\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b12\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_11 body=6705c4f24622f3d8284dc388b4e4332386d9e2f7f2d5f03d6e792e212d1cd23c mac=sP8ShnMokYm6RF6ZYDjJ3StuwH8eiV3kTfXa0h6abno",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k11\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_6c38738980569190d78b0b07844c63c7\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b12\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_11 body=fba42b85c79c537544772358ddbe52c42467181546e4d364182c9e2b27732cd6 mac=3-rqV2cC6bPrUh7N27RJ_Jldc0lMsPtvAUkv_IF2H_Y",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k12\",\"lifetime\":\"lt_1789305280000_17dd11cb817fa4e0b663ae12aafcf999\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b13\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_12 body=add884d196bc011f1fddfc247a1109266f081a9ea110d1a442acbb7e858dfd8b mac=Ga7lE9aSIE-qOFMKYJRaEb2YrKDX8QWWPNC74PjTXKM",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k12\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_17dd11cb817fa4e0b663ae12aafcf999\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b13\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_12 body=0a697c5db0d7972dad1312d345b987dbc2a4256eee5a98dce798f3d3015eeb51 mac=8jqg7niNed8KuqPshqWyBmORhFPEIPE9EtXdjW1MvxU",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k13\",\"lifetime\":\"lt_1789305280000_02bf68082bde2bee5c11d4538c505563\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b14\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_13 body=fcc6e3ed0331a12b973411de64f0c6350e002456d57424ec7ea0cc6568a6b0d6 mac=pfWHTcvFHMKVpI6T04dELZifuLmv0-8gsoBFX4ZYL7s",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k13\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_02bf68082bde2bee5c11d4538c505563\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b14\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_13 body=d257eda90be0918fec7b75e37cf153e2562a0d59dca7dc4f01bed5352c1b94f8 mac=6hsNi61idSurQK7oZ3fDJNe7q-fsCbN3kxBWp3rBWao",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k14\",\"lifetime\":\"lt_1789305280000_59d24bcc9187057d3c19a6512025b375\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b15\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_14 body=ef077442a238e664095a61973163ca49770955ca15a04fb3a3e4dd973ae6c198 mac=msE8hESqUxZeNgF5UP8P9MznAA--1HJMQHFr9GEOsLs",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k14\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_59d24bcc9187057d3c19a6512025b375\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b15\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_14 body=19f2e564985156372bcb87fa45e13f95750615f516e5a833a53c7ce7aef158de mac=6LZlYXwZz6zbvhV4e0gly3UHrO16xncUqlPJssh6p2Y",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"key\":\"k15\",\"lifetime\":\"lt_1789305280000_87168c0b93be2fd55f8adcd87fe9b558\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b16\",\"type\":\"open\",\"version\":4}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_15 body=21fa6546d7940af238f88bd7f92bb01484f91a4ae51e6b1c593a7f7cacefa273 mac=yAnwEBPx7tVCxJLEMMIBf6tyX9XkGKP8iLRQS-YrDvM",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k15\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_87168c0b93be2fd55f8adcd87fe9b558\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b16\",\"type\":\"open\",\"version\":4}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_15 body=456f6e5a1ac6ae8db4e71cfd98b2d43c3f22e77c9f6dc141c5b47f224586ab09 mac=rGiD3yc7yi43zfupDEg6kV-27-bAfd3l0aMmns_L5O0",
           "now": 1789305250000,
           "route": "session",
           "status": 200
@@ -1337,19 +1336,19 @@
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_1789305279602_365187d12ca20488cd8d89b41962520b\",\"mode\":\"attach\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_365187d12ca20488cd8d89b41962520b\",\"mode\":\"attach\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
       "error": "invalid_field",
       "name": "open_unknown_mode",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":\"../etc\",\"key\":\"mcp\",\"lifetime\":\"lt_1789305279602_f333c5124e46203618090c6d6604d333\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":\"../etc\",\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_f333c5124e46203618090c6d6604d333\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
       "error": "invalid_field",
       "name": "open_bad_home_id",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":null,\"key\":\"mcp\",\"lifetime\":\"lt_1789305279602_4a9826004485bae1a5acc9689674f488\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":null,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_4a9826004485bae1a5acc9689674f488\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
       "error": "invalid_field",
       "name": "open_null_home_id",
       "refusal": "bad_request"
@@ -1361,7 +1360,7 @@
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"has space\",\"lifetime\":\"lt_1789305279602_f856f52618085ab2f1de202dd6f3271d\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"has space\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_f856f52618085ab2f1de202dd6f3271d\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
       "error": "invalid_field",
       "name": "open_bad_key",
       "refusal": "bad_request"
@@ -1487,31 +1486,31 @@
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[],\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_1789305279602_4c96348dcb17ca344c528fe0c969bee2\",\"mode\":\"sign_in\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+      "body": "{\"argv\":[],\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_4c96348dcb17ca344c528fe0c969bee2\",\"mode\":\"sign_in\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
       "error": "invalid_field",
       "name": "open_sign_in_mode",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"--stdio\"],\"cols\":120,\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_1789305279602_3866d33f039a424a6530f1d34d487ed0\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":4}",
+      "body": "{\"argv\":[\"--stdio\"],\"cols\":120,\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_3866d33f039a424a6530f1d34d487ed0\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":4}",
       "error": "unknown_field",
       "name": "open_run_with_size",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"auth\",\"login\"],\"e\":7,\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"key\":\"person\",\"lifetime\":\"lt_1789305279602_a348c2fe99c0a5050bd1944d6cfb147f\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":4}",
+      "body": "{\"argv\":[\"auth\",\"login\"],\"e\":7,\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"key\":\"person\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_a348c2fe99c0a5050bd1944d6cfb147f\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":4}",
       "error": "missing_field",
       "name": "open_terminal_without_cols",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"auth\",\"login\"],\"cols\":120,\"e\":7,\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"key\":\"person\",\"lifetime\":\"lt_1789305279602_70231e8bc21a488ec7790783c5510e10\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":0,\"type\":\"open\",\"version\":4}",
+      "body": "{\"argv\":[\"auth\",\"login\"],\"cols\":120,\"e\":7,\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"key\":\"person\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_70231e8bc21a488ec7790783c5510e10\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":0,\"type\":\"open\",\"version\":4}",
       "error": "invalid_field",
       "name": "open_terminal_zero_rows",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"auth\",\"login\"],\"cols\":1001,\"e\":7,\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"key\":\"person\",\"lifetime\":\"lt_1789305279602_cfa15476a66ac3903fa9eb2f44b9b4a9\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":4}",
+      "body": "{\"argv\":[\"auth\",\"login\"],\"cols\":1001,\"e\":7,\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"key\":\"person\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_cfa15476a66ac3903fa9eb2f44b9b4a9\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":4}",
       "error": "invalid_field",
       "name": "open_terminal_too_wide",
       "refusal": "bad_request"
@@ -1582,6 +1581,11 @@
     ]
   },
   "label": "cyfr-locus/v1/backends",
+  "lifetime": {
+    "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+    "random_hex": "1e46e5094ac1e25f9ad51d2d13ea3066",
+    "text": "lt_3b4da9d6aa28e513d474b18ac4d4d29e_1e46e5094ac1e25f9ad51d2d13ea3066"
+  },
   "literal_env_names": [
     "NODE_ENV",
     "LOG_LEVEL",
@@ -1649,8 +1653,8 @@
   },
   "open": {
     "answer": "{\"resumed\":false,\"session\":\"ss_5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"status\":\"running\",\"version\":4}",
-    "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_1789305279602_1d863e7e5413ef4542c743d14c14c367\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
-    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249602\nn_open_7d3e9a\n1e3b96800afed9f7a9361a2a68bfafbf832ca4fe1167b6a2de3ed3d1e0a6d01e",
+    "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_1d863e7e5413ef4542c743d14c14c367\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":4}",
+    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249602\nn_open_7d3e9a\n571db789839b8446644186f5e7359fd227fc223648fb71472159176aa804a448",
     "fields": {
       "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
       "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
@@ -1660,13 +1664,13 @@
       "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
       "ts": 1789305249602
     },
-    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_open_7d3e9a body=1e3b96800afed9f7a9361a2a68bfafbf832ca4fe1167b6a2de3ed3d1e0a6d01e mac=1UrdVK7ZZYZgi_xJudB1mUnnDQs2g7DSWP1mee7pGRQ",
-    "mac": "1UrdVK7ZZYZgi_xJudB1mUnnDQs2g7DSWP1mee7pGRQ"
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_open_7d3e9a body=571db789839b8446644186f5e7359fd227fc223648fb71472159176aa804a448 mac=eWZbClInwQHSOLal0dnVswG2zfBYp_7EOfxh0LT3fn0",
+    "mac": "eWZbClInwQHSOLal0dnVswG2zfBYp_7EOfxh0LT3fn0"
   },
   "open_terminal": {
     "answer": "{\"resumed\":false,\"session\":\"ss_6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b\",\"status\":\"running\",\"version\":4}",
-    "body": "{\"argv\":[\"auth\",\"login\"],\"cols\":120,\"e\":7,\"key\":\"person\",\"lifetime\":\"lt_1789305279606_4e7c627a81bb57075c7847e3e598c6a7\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":4}",
-    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249606\nn_open_terminal_7d3e9a\nd6102b19a9fcd92fd3d6ac3fa5c001f1339893ca3bca8035e19f7ff8553420c1",
+    "body": "{\"argv\":[\"auth\",\"login\"],\"cols\":120,\"e\":7,\"key\":\"person\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_4e7c627a81bb57075c7847e3e598c6a7\",\"mode\":\"terminal\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"rows\":40,\"type\":\"open\",\"version\":4}",
+    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249606\nn_open_terminal_7d3e9a\n2d79fdecce061f7d9efcde4848c28c100becf6be1d881d7c6622711125777187",
     "fields": {
       "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
       "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
@@ -1676,8 +1680,8 @@
       "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
       "ts": 1789305249606
     },
-    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249606 nonce=n_open_terminal_7d3e9a body=d6102b19a9fcd92fd3d6ac3fa5c001f1339893ca3bca8035e19f7ff8553420c1 mac=Tovl-LRU-Q5kJSRwgXY3MY2ip3LM-1kF9pngkQeHqnc",
-    "mac": "Tovl-LRU-Q5kJSRwgXY3MY2ip3LM-1kF9pngkQeHqnc"
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249606 nonce=n_open_terminal_7d3e9a body=2d79fdecce061f7d9efcde4848c28c100becf6be1d881d7c6622711125777187 mac=AEVu6Kzn28vTBZgPzHSPbQc_eTcltlWyX6kkiDciTzc",
+    "mac": "AEVu6Kzn28vTBZgPzHSPbQc_eTcltlWyX6kkiDciTzc"
   },
   "output": {
     "answer": "{\"chunks\":[{\"bytes\":\"G1sxbVBhc3RlIGNvZGUgaGVyZSBpZiBwcm9tcHRlZCA+IBtbMG0=\",\"seq\":2},{\"bytes\":\"//4gcmF3IA0K\",\"seq\":3}],\"dropped\":1,\"running\":true,\"version\":4}",

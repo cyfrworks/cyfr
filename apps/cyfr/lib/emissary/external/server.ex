@@ -45,9 +45,10 @@ defmodule Emissary.External.Server do
   program's session through the controller, the only way to open one
   (`Opus.Programs.box_open/4`), under the key `"mcp"`, in the row's own
   home when it keeps one, as one lifetime per process of the command
-  (`Opus.Programs.lifetime/3`): this process keeps it until that process
+  (`Opus.Programs.lifetime/2`): this process keeps it until that process
   ends and asks again for it, which the service answers while it runs,
-  and opens another once the service says it is over. A server process
+  and opens another once the service says it is over, or runs another
+  boot than the lifetime's, under a grant of that boot. A server process
   started again holds no lifetime, so it starts its program afresh. A
   program started
   afresh (`resumed: false`) is initialized at the legacy protocol revision
@@ -992,6 +993,12 @@ defmodule Emissary.External.Server do
         _ = Opus.Programs.box_close(state.lifetime)
         open_program(with_lifetime(state))
 
+      # The service runs another boot than the lifetime's: holding again
+      # answers a grant of that one, and the next is minted under it.
+      {:error, {:refused, :stale_boot, _boot}, state} ->
+        _ = Opus.Programs.box_close(state.lifetime)
+        ensure_session(%{state | grant: nil, lifetime: nil})
+
       answer ->
         answer
     end
@@ -1005,7 +1012,7 @@ defmodule Emissary.External.Server do
       mode: :run
     }
 
-    %{state | lifetime: Opus.Programs.lifetime(state.grant, named, open_deadline())}
+    %{state | lifetime: Opus.Programs.lifetime(state.grant, named)}
   end
 
   defp open_deadline, do: System.system_time(:millisecond) + @connect_call_timeout_ms

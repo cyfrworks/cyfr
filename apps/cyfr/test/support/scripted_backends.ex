@@ -26,8 +26,8 @@ defmodule Cyfr.Test.ScriptedBackends do
   a reconcile that keeps none ends the sessions of the owner it replaces.
   An open answers the session running for its lifetime, waits while
   another lifetime's runs under its key, and is refused `lifetime_over`
-  for a lifetime closed, ended or past its deadline by the system's
-  clock. A close is verified alike but asks for no owner: it ends the one
+  for a lifetime closed, ended or of another boot than the one it runs.
+  A close is verified alike but asks for no owner: it ends the one
   lifetime it names, opened or not, and is answered `closed`, since a
   scripted session's place is back as soon as it ends; it is reported,
   held and refused as a session message of type `close`, with the
@@ -781,8 +781,7 @@ defmodule Cyfr.Test.ScriptedBackends do
         refuse(conn, st, :stale_boot)
 
       message.owner != %{athanor: fields.athanor, server: fields.server} or
-        message.e != fields.epoch or
-          not LocusBackends.lifetime_within?(message.lifetime, fields.ts) ->
+          message.e != fields.epoch ->
         refuse(conn, st, :bad_request)
 
       true ->
@@ -869,12 +868,8 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp handle_session(conn, agent, fields, %{type: :open} = message) do
-    if LocusBackends.lifetime_within?(message.lifetime, fields.ts) do
-      bound = now() + LocusBackends.close_wait_ms()
-      opening(conn, agent, lifetime(fields, message), message, bound)
-    else
-      refuse(conn, Agent.get(agent, & &1), :bad_request)
-    end
+    bound = now() + LocusBackends.close_wait_ms()
+    opening(conn, agent, lifetime(fields, message), message, bound)
   end
 
   defp handle_session(conn, agent, fields, %{session: id} = message) do
@@ -915,7 +910,6 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp admitted(st, named, message) do
-    {:ok, until} = LocusBackends.lifetime_until(named.lifetime)
     running = for {id, %{running: true} = s} <- st.sessions, do: {id, s}
     own = Enum.find(running, fn {_id, s} -> s.named == named end)
 
@@ -927,7 +921,8 @@ defmodule Cyfr.Test.ScriptedBackends do
       Map.get(st.owners, named.owner) != named.version ->
         {{:error, :lapsed}, st}
 
-      MapSet.member?(st.spent, named) or System.os_time(:millisecond) > until ->
+      MapSet.member?(st.spent, named) or
+          not LocusBackends.lifetime_of?(named.lifetime, st.boot) ->
         {{:error, :lifetime_over}, st}
 
       Enum.any?(running, fn {_id, %{named: other}} ->

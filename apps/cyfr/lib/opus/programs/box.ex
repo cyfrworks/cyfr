@@ -120,9 +120,13 @@ defmodule Opus.Programs.Box do
   Every caller opens through the box: a tool server
   (`Emissary.External.Server`), a brain's holder (`Opus.Brain`) and a
   terminal (`Opus.Programs.Terminal`), the browser's among them. Each
-  open names a lifetime (`t:lifetime/0`, `lifetime/3`), one process of one
+  open names a lifetime (`t:lifetime/0`, `lifetime/2`), one process of one
   key, fixed before the open is parked or sent and bound to the athanor,
-  row, generation and epoch of the grant it was made from. The box makes
+  row, generation, epoch and service boot of the grant it was made from.
+  An open of a lifetime of another boot than the service's is refused
+  `stale_boot`, by the box or by the service, and never sent again: the
+  caller holds the owner again, for a grant of the boot that runs, and
+  mints another. The box makes
   the open itself, in a process it monitors, and only while this member
   holds its slot at that lifetime's generation, read as the open is sent
   and again as its answer is handed over. The answer is given to the
@@ -337,11 +341,7 @@ defmodule Opus.Programs.Box do
 
   defp close_window_ms, do: LocusBackends.close_wait_ms() + @close_transport_ms
 
-  @doc """
-  A new lifetime of the key `named` under `grant`, admitted through
-  `deadline` (Unix milliseconds), no further ahead than the wire allows
-  (`Prima.LocusBackends.max_lifetime_ms/0`).
-  """
+  @doc "A new lifetime of the key `named`, under `grant` and of its boot."
   @spec lifetime(
           grant() | map(),
           %{
@@ -349,10 +349,9 @@ defmodule Opus.Programs.Box do
             required(:key) => String.t(),
             optional(:home_id) => String.t() | nil,
             optional(:mode) => :run | :terminal
-          },
-          integer()
+          }
         ) :: lifetime()
-  def lifetime(grant, named, deadline) do
+  def lifetime(grant, named) do
     %{
       athanor: grant.athanor,
       server: grant.server,
@@ -362,14 +361,11 @@ defmodule Opus.Programs.Box do
       home_id: Map.get(named, :home_id),
       key: named.key,
       mode: Map.get(named, :mode, :run),
-      id: new_lifetime(deadline)
+      id: new_lifetime(grant.boot)
     }
   end
 
-  defp new_lifetime(deadline) do
-    until = min(deadline, now_ms() + LocusBackends.max_lifetime_ms())
-    LocusBackends.new_lifetime(max(until, 1), :crypto.strong_rand_bytes(16))
-  end
+  defp new_lifetime(boot), do: LocusBackends.new_lifetime(boot, :crypto.strong_rand_bytes(16))
 
   @doc "How long a status or a home message waits on a box."
   @spec control_timeout_ms() :: pos_integer()
@@ -477,14 +473,19 @@ defmodule Opus.Programs.Box do
     {:noreply, send_close(%{state | closing: closing}, lifetime)}
   end
 
-  def handle_call({:terminal_id, principal, owner, home_id, deadline}, _from, state) do
-    case plane_generation(state) do
-      {:ok, generation} ->
-        {:reply, {:ok, terminal_id(state, principal, {owner, generation, home_id}, deadline)},
-         state}
+  def handle_call({:terminal_id, principal, owner, home_id}, from, state) do
+    named = {principal, owner, home_id}
 
+    case plane_generation(state) do
       :not_owner ->
         {:reply, {:error, :control_plane_lost}, state}
+
+      # A terminal's id carries the service's boot, so it waits for the hello.
+      {:ok, _generation} when state.boot == nil ->
+        {:noreply, state |> enqueue({:terminal_id, from, named}) |> dispatch()}
+
+      {:ok, generation} ->
+        {:reply, {:ok, terminal_id(state, named, generation)}, state}
     end
   end
 
@@ -1061,6 +1062,11 @@ defmodule Opus.Programs.Box do
 
   defp refuse(state, {:home, hkey}, reason), do: home_failed(state, hkey, reason)
 
+  defp refuse(state, {:terminal_id, from, _named}, reason) do
+    GenServer.reply(from, {:error, reason})
+    state
+  end
+
   defp refuse(state, {:homes, from}, reason) do
     GenServer.reply(from, {:error, reason})
     state
@@ -1105,6 +1111,11 @@ defmodule Opus.Programs.Box do
           do: %{athanor: athanor, server: server, e: state.owners[key].epoch}
 
     {:send, state |> base_spec(:reconcile) |> Map.put(:body, %{type: :reconcile, keep: keep})}
+  end
+
+  defp prepare({:terminal_id, from, named}, state) do
+    GenServer.reply(from, {:ok, terminal_id(state, named, state.generation)})
+    :skip
   end
 
   defp prepare({:sync, key}, state) do
@@ -1847,33 +1858,38 @@ defmodule Opus.Programs.Box do
   # ============================================================================
 
   # The one place an open is sent from: only while this member holds its
-  # slot at the lifetime's generation, and in a process of its own,
-  # monitored here, whose wait reaches just past the deadline.
+  # slot at the lifetime's generation and the service runs the lifetime's
+  # boot, and in a process of its own, monitored here, whose wait reaches
+  # just past the deadline.
   defp start_open(state, %{lifetime: lifetime} = open) do
-    if holds_slot?(state, lifetime) do
-      ref = make_ref()
-      box = self()
-      left = max(open.deadline - now_ms(), 0)
-      grant = grant(state, owner_of(lifetime), lifetime)
-
-      params =
-        Map.merge(open.params, %{lifetime: lifetime, timeout_ms: left + @open_transport_ms})
-
-      timer = Process.send_after(self(), {:open_deadline, ref}, left)
-
-      {_pid, mref} =
-        spawn_monitor(fn -> send(box, {:session_opened, ref, Session.open(grant, params)}) end)
-
-      open = open |> Map.put(:boot, state.boot) |> Map.put(:timer, timer)
-
-      %{
+    cond do
+      not holds_slot?(state, lifetime) ->
+        refuse_open(open, :control_plane_lost)
         state
-        | opens: Map.put(state.opens, ref, open),
-          open_tasks: Map.put(state.open_tasks, mref, ref)
-      }
-    else
-      refuse_open(open, :control_plane_lost)
-      state
+
+      not LocusBackends.lifetime_of?(lifetime.id, state.boot) ->
+        refuse_open(open, {:refused, :stale_boot, state.boot})
+        state
+
+      true ->
+        ref = make_ref()
+        box = self()
+        left = max(open.deadline - now_ms(), 0)
+        grant = grant(state, owner_of(lifetime), lifetime)
+
+        params =
+          Map.merge(open.params, %{lifetime: lifetime, timeout_ms: left + @open_transport_ms})
+
+        timer = Process.send_after(self(), {:open_deadline, ref}, left)
+
+        {_pid, mref} =
+          spawn_monitor(fn -> send(box, {:session_opened, ref, Session.open(grant, params)}) end)
+
+        %{
+          state
+          | opens: Map.put(state.opens, ref, %{open | timer: timer}),
+            open_tasks: Map.put(state.open_tasks, mref, ref)
+        }
     end
   end
 
@@ -1902,16 +1918,11 @@ defmodule Opus.Programs.Box do
             %{state | sessions: Map.put(state.sessions, open.lifetime, given)}
         end
 
-      # Refused for a boot the service no longer runs, so nothing of it was
-      # admitted: the box greets the one the answer names, and the open
-      # waits for its owner's sync under it, once.
+      # Refused for a boot the service no longer runs: the box greets the
+      # one the answer names. The lifetime was that boot's, so the caller is
+      # told, and mints another.
       {:error, {:refused, :stale_boot, boot} = reason} ->
-        if stale_boot?(open.boot, boot) and holds?(state, open) do
-          Process.cancel_timer(open.timer)
-          state |> observe_boot(boot) |> park_open(open) |> dispatch()
-        else
-          not_given(state, open, reason)
-        end
+        state |> observe_boot(boot) |> not_given(open, reason) |> dispatch()
 
       {:error, reason} ->
         not_given(state, open, reason)
@@ -2072,10 +2083,10 @@ defmodule Opus.Programs.Box do
 
   # The id, and the lifetime it names. A terminal's key is its lifetime's
   # text, so each start is a key of its own and the id need not repeat it.
-  defp terminal_id(state, principal, {owner, generation, home_id}, deadline) do
+  defp terminal_id(state, {principal, owner, home_id}, generation) do
     {athanor, user} = person_of(principal)
     who = who_started(principal)
-    text = new_lifetime(deadline)
+    text = new_lifetime(state.boot)
     home = if home_id, do: "kept", else: "scratch"
     named = %{server: owner.server_id, generation: generation, epoch: owner.epoch, home: home}
     proof = terminal_proof(state, {athanor, user, who}, Map.put(named, :lifetime, text))
@@ -2101,7 +2112,7 @@ defmodule Opus.Programs.Box do
            String.split(text, "|"),
          {generation, ""} when generation > 0 <- Integer.parse(g),
          {epoch, ""} when epoch > 0 <- Integer.parse(e),
-         {:ok, _until} <- LocusBackends.lifetime_until(lifetime),
+         true <- LocusBackends.lifetime?(lifetime),
          {:ok, principal} <- started_by(athanor, user, who),
          named = %{server: server, generation: generation, epoch: epoch, home: home},
          expected when is_binary(expected) <-

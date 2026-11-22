@@ -335,6 +335,18 @@ defmodule Opus.BrainTest do
       assert {"boot-one", [{1, %{"t" => "hello", "boot" => "boot-one"}}]} = batch(brain)
     end
 
+    test "a holder handed a grant of a boot the service has left opens under the one it runs",
+         %{fake: fake, row: row, binding: binding} do
+      owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch}
+      # A live owner answers the brain's hold at once, with the boot it was synced under.
+      assert {:ok, %{boot: "bb_first"}} = Opus.Programs.hold(owner)
+      Scripted.restart(fake, "bb_second")
+
+      assert {:ok, _brain} = Brain.open(binding)
+      assert_receive {:session, "open", _open, %{boot: "bb_second"}}, 5_000
+      assert [_one] = running_sessions(fake, row)
+    end
+
     test "a driver whose hello names another version is ended before anything is written to it",
          %{fake: fake, row: row, binding: binding} do
       {:ok, {pid, ref} = brain} = Brain.open(binding)

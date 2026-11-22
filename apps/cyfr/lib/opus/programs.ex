@@ -480,14 +480,10 @@ defmodule Opus.Programs do
          :ok <- at_epoch(row, Map.get(opts, :epoch)),
          owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
          home_id = if(row.home == "kept", do: row.id),
-         deadline = Map.get(opts, :deadline, System.system_time(:millisecond) + @start_ms),
-         {:ok, {id, lifetime}} <- new_terminal(principal, owner, home_id, deadline) do
+         deadline = Map.get(opts, :deadline, System.system_time(:millisecond) + @start_ms) do
       {athanor_id, user_id, turn_id} = parts(principal)
 
       spec = [
-        name: terminal_name(id, principal),
-        id: id,
-        lifetime: lifetime,
         athanor_id: athanor_id,
         user_id: user_id,
         turn_id: turn_id,
@@ -502,25 +498,54 @@ defmodule Opus.Programs do
         cols: cols
       ]
 
-      wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
-
-      case DynamicSupervisor.start_child(@relays, {Terminal, spec}) do
-        {:ok, pid} -> open(pid, deadline, wait)
-        # A browser's row whose session already runs (`Terminal`).
-        :ignore -> {:error, :already_running}
-        {:error, reason} -> {:error, reason}
-      end
+      started(principal, spec, deadline, _again? = true)
     end
   catch
     :exit, _ -> {:error, :backends_unavailable}
   end
 
+  # One try of a start is one id and one lifetime. One of a boot the
+  # service no longer runs is refused before anything of it runs, and is
+  # made again once, when the try before it has gone.
+  defp started(principal, spec, deadline, again?) do
+    with {:ok, {id, lifetime}} <- new_terminal(principal, spec[:owner], spec[:home_id]) do
+      named = [name: terminal_name(id, principal), id: id, lifetime: lifetime] ++ spec
+      wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
+
+      case DynamicSupervisor.start_child(@relays, {Terminal, named}) do
+        {:ok, pid} ->
+          ended = Process.monitor(pid)
+
+          case open(pid, deadline, wait) do
+            {:error, {:refused, :stale_boot, _boot}} when again? ->
+              receive do
+                {:DOWN, ^ended, :process, ^pid, _reason} ->
+                  started(principal, spec, deadline, false)
+              after
+                wait -> {:error, :deadline}
+              end
+
+            answer ->
+              Process.demonitor(ended, [:flush])
+              answer
+          end
+
+        # A browser's row whose session already runs (`Terminal`).
+        :ignore ->
+          {:error, :already_running}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
   # The terminal's id, made by the box, whose root proves it: the handle
-  # of the one lifetime this start is, fixed before anything is asked.
-  defp new_terminal(principal, owner, home_id, deadline) do
+  # of the one lifetime this try is, fixed before anything is asked.
+  defp new_terminal(principal, owner, home_id) do
     call(
       box_of(owner.athanor_id),
-      {:terminal_id, principal, owner, home_id, deadline},
+      {:terminal_id, principal, owner, home_id},
       Box.control_timeout_ms()
     )
   end
@@ -1028,11 +1053,11 @@ defmodule Opus.Programs do
 
   @doc """
   A new lifetime of `named` (its `program`, `key`, `mode`, `:run` unless it
-  names one, and `home_id`) under `grant`, admitted through `deadline`:
-  one process, which `box_open/4` opens and `box_close/1` ends.
+  names one, and `home_id`) under `grant` and of its service boot: one
+  process, which `box_open/4` opens and `box_close/1` ends.
   """
-  @spec lifetime(grant(), map(), integer()) :: Box.lifetime()
-  defdelegate lifetime(grant, named, deadline), to: Box
+  @spec lifetime(grant(), map()) :: Box.lifetime()
+  defdelegate lifetime(grant, named), to: Box
 
   @doc """
   The box's open of `lifetime` for the holder `holder`, the only open
@@ -1040,9 +1065,10 @@ defmodule Opus.Programs do
   (`argv`, and a terminal's `rows` and `cols`), answered by `deadline`
   (Unix milliseconds). Answers the lifetime's session, `{:error,
   :deadline}` past it, `{:error, :control_plane_lost}` for a member
-  without its slot, or the refusal, `lifetime_over` for one closed, ended
-  or past its admission. An open that is never given has its lifetime
-  closed (`Opus.Programs.Box`, "Sessions").
+  without its slot, or the refusal: `lifetime_over` for one closed or
+  ended, and `stale_boot` for one of another boot of the service, whose
+  caller holds again and mints another. An open that is never given has
+  its lifetime closed (`Opus.Programs.Box`, "Sessions").
   """
   @spec box_open(Box.lifetime(), pid(), map(), integer()) ::
           {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}

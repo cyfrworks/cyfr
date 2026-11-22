@@ -588,18 +588,20 @@ defmodule Prima.LocusBackendsTest do
                LocusBackends.encode_session_answer(:output, %{ended | running: true})
     end
 
-    test "a lifetime carries its one deadline, held within its bound of the time that signs for it" do
-      ts = @vectors["open"]["fields"]["ts"]
-      max = @vectors["bounds"]["max_lifetime_ms"]
-      lifetime = LocusBackends.new_lifetime(ts + max, <<1::128>>)
+    test "a lifetime carries its boot's tag, and is of that boot alone" do
+      %{"boot" => boot, "random_hex" => random, "text" => text} = @vectors["lifetime"]
 
-      assert LocusBackends.lifetime_until(lifetime) == {:ok, ts + max}
-      assert LocusBackends.lifetime_within?(lifetime, ts)
-      refute LocusBackends.lifetime_within?(lifetime, ts - 1)
-      refute LocusBackends.new_lifetime(ts + max, <<2::128>>) == lifetime
+      assert LocusBackends.new_lifetime(boot, Base.decode16!(random, case: :lower)) == text
+      assert LocusBackends.lifetime?(text)
+      assert LocusBackends.lifetime_of?(text, boot)
+      refute LocusBackends.lifetime_of?(text, boot <> "0")
+      refute LocusBackends.lifetime_of?(text, nil)
+      refute LocusBackends.new_lifetime(boot, <<2::128>>) == text
 
-      for text <- [nil, "lt_soon", "lt_0_" <> String.duplicate("a", 32), lifetime <> "\n"],
-          do: assert(LocusBackends.lifetime_until(text) == :error, inspect(text))
+      dated = "lt_1789305279602_" <> random
+
+      for bad <- [nil, "lt_soon", dated, String.upcase(text), text <> "\n"],
+          do: refute(LocusBackends.lifetime?(bad), inspect(bad))
     end
 
     test "each mode takes its own messages beside open" do

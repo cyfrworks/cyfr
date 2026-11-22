@@ -300,7 +300,8 @@ class Sessions(unittest.TestCase):
         self.assertEqual((body["owner"], body["e"], body["version"]),
                          ({"athanor": "ath_unit", "server": "mcp_unit"}, 3, harness.VERSION))
         self.assertNotIn("home_id", body)
-        self.assertRegex(body["lifetime"], r"\Alt_[0-9]+_[0-9a-f]{32}\Z")
+        self.assertRegex(body["lifetime"], r"\Alt_[0-9a-f]{32}_[0-9a-f]{32}\Z")
+        self.assertEqual(body["lifetime"], harness.new_lifetime("bb", body["lifetime"][-32:]))
         self.assertTrue(request.url.endswith(harness.ROUTES["session"]))
         signing = harness.owner_key(bytes(32), "ath_unit", "mcp_unit", 1, 3)
         fields = {"athanor": "ath_unit", "server": "mcp_unit", "generation": 1, "epoch": 3, "boot": "bb", "ts": 1,

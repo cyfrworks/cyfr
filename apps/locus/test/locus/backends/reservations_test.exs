@@ -22,7 +22,7 @@ defmodule Locus.Backends.ReservationsTest do
     g: 3,
     e: 7,
     key: {"fetch", nil, "k", :run},
-    lifetime: "lt_1789305279602_" <> "00000000000000000000000000000001",
+    lifetime: "lt_00000000000000000000000000000000_" <> "00000000000000000000000000000001",
     server: "mcp_one",
     athanor: "ath_one",
     memory_bytes: @bytes,
@@ -235,7 +235,11 @@ defmodule Locus.Backends.ReservationsTest do
             %{named | e: 6},
             %{named | key: {"fetch", nil, "another", :run}},
             %{named | key: {"fetch", nil, "k", :terminal}},
-            %{named | lifetime: "lt_1789305279602_" <> "00000000000000000000000000000002"}
+            %{
+              named
+              | lifetime:
+                  "lt_00000000000000000000000000000000_" <> "00000000000000000000000000000002"
+            }
           ],
           do: assert(Reservations.of_lifetime(reservations, other) == [], inspect(other))
     end

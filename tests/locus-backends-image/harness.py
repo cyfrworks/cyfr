@@ -163,9 +163,9 @@ def wire_json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
-def new_lifetime():
-    """A lifetime's text, admitted through half the wire's bound from now."""
-    return f"lt_{now_ms() + BOUNDS['max_lifetime_ms'] // 2}_{secrets.token_hex(16)}"
+def new_lifetime(boot, random_hex=None):
+    """A lifetime's text, of the service's `boot`."""
+    return f"lt_{hashlib.sha256(boot.encode()).hexdigest()[:32]}_{random_hex or secrets.token_hex(16)}"
 
 
 def b64url(data):
@@ -425,6 +425,8 @@ def check_vectors():
         compare(f"{kind}.canonical", canonical("invoke", [fields[n] for n in SESSION_FIELDS], body), vector["canonical"])
         compare(f"{kind}.header", invoke_header(signing, fields, body), vector["header"])
 
+    minted = WIRE["lifetime"]
+    compare("lifetime", new_lifetime(minted["boot"], minted["random_hex"]), minted["text"])
     compare("close.members", sorted(json.loads(WIRE["close"]["body"])),
             ["e", "key", "lifetime", "mode", "owner", "program", "version"])
     terminal = json.loads(WIRE["open_terminal"]["body"])
@@ -614,7 +616,7 @@ class Controller:
         An open that names no lifetime is given one of its own.
         """
         if message.get("type") == "open" and "lifetime" not in message:
-            message = {**message, "lifetime": new_lifetime()}
+            message = {**message, "lifetime": new_lifetime(boot or self.boot)}
         body = wire_json({**message, "owner": {"athanor": owner["athanor"], "server": owner["server"]},
                           "e": owner["e"], "version": version})
         signer = header_owner or owner

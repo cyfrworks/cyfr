@@ -137,7 +137,6 @@ defmodule Locus.Backends.ServiceTest do
         boot: @boot,
         supervisor: supervisor,
         clock: fn -> Agent.get(clock, & &1) end,
-        now: fn -> Agent.get(now, & &1) end,
         stop_grace_ms: 100,
         session_opts: session_opts,
         # Room for every session a vector opens, but where it names
@@ -422,7 +421,7 @@ defmodule Locus.Backends.ServiceTest do
       mode: Keyword.get(opts, :mode, :run),
       lifetime:
         Keyword.get_lazy(opts, :lifetime, fn ->
-          LB.new_lifetime(@instant + 30_000, :crypto.strong_rand_bytes(16))
+          LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
         end),
       argv: Keyword.get(opts, :argv, [])
     }
@@ -960,6 +959,26 @@ defmodule Locus.Backends.ServiceTest do
     end
 
     @tag launcher: :direct
+    test "a close names a lifetime of the last boot and drains the process this boot adopted",
+         ctx do
+      fetch_sync(ctx)
+      session = opened!(ctx)
+      {pid, handle} = held_release(ctx)
+
+      stop_supervised!(Owners)
+      Process.exit(pid, :kill)
+      next = "bb_" <> String.duplicate("1", 32)
+      start_supervised!({Owners, Keyword.put(ctx.owners_opts, :boot, next)})
+
+      closing = Task.async(fn -> close(ctx, session, boot: next) end)
+      await_held(ctx)
+      assert Task.yield(closing, 0) == nil, "closed was answered before the adopted release"
+
+      resume(handle)
+      assert_closed(Task.await(closing, 10_000))
+    end
+
+    @tag launcher: :direct
     test "a lapse alone, with no close asked, gives the place back, and only at the release",
          ctx do
       fetch_sync(ctx)
@@ -1007,7 +1026,7 @@ defmodule Locus.Backends.ServiceTest do
             # Its own version, naming another lifetime or another key.
             {%{
                successor
-               | lifetime: LB.new_lifetime(@instant + 30_000, :crypto.strong_rand_bytes(16))
+               | lifetime: LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
              }, [epoch: @e + 1]},
             {%{successor | key: "another"}, [epoch: @e + 1]},
             {%{successor | mode: :terminal}, [epoch: @e + 1]}
@@ -1061,6 +1080,22 @@ defmodule Locus.Backends.ServiceTest do
     end
 
     @tag launcher: :direct
+    test "a fence holds for the boot, whatever the wall clock does", ctx do
+      fetch_sync(ctx)
+      use = open_message(key: "rollback")
+      assert_closed(close(ctx, use))
+
+      # The wall runs on past any window and is then set back.
+      at(ctx, @instant + 3_600_000)
+      assert :ok = Owners.sweep(ctx.owners)
+      at(ctx, @instant)
+      late = invoke(ctx, use)
+
+      assert {late.status, json(late)["error"]} == {409, "lifetime_over"},
+             "a rolled back clock reopened a closed lifetime"
+    end
+
+    @tag launcher: :direct
     test "a second holder of a key in one epoch waits for the first's release, and the first's delayed close ends nothing of it",
          ctx do
       fetch_sync(ctx)
@@ -1087,7 +1122,7 @@ defmodule Locus.Backends.ServiceTest do
     end
 
     @tag launcher: :direct
-    test "a lost answer's retry past the deadline answers what still runs, and admits nothing once it ended",
+    test "a lost answer's retry, however late, answers what still runs, and admits nothing once it ended",
          ctx do
       fetch_sync(ctx, "read -r line; exit 0")
       use = open_message(key: "retried")
@@ -1096,7 +1131,7 @@ defmodule Locus.Backends.ServiceTest do
       lost = invoke(ctx, use)
       assert {:ok, %{session: session}} = LB.read_session_answer(:open, lost.body)
 
-      # Past the deadline, signed again, so inside the header's window.
+      # Much later, signed again, so inside the header's window.
       at(ctx, @instant + 90_000)
       retry = invoke(ctx, use)
 
@@ -1111,26 +1146,21 @@ defmodule Locus.Backends.ServiceTest do
       retry = invoke(ctx, use)
 
       assert {retry.status, json(retry)["error"]} == {409, "lifetime_over"},
-             "a retry past the deadline started a process"
+             "a late retry of an ended lifetime started a process"
 
       assert :sys.get_state(ctx.owners).reservations == %{}
     end
 
     @tag launcher: :direct
-    test "a lifetime never admitted is refused past its deadline, admitted at its last moment, and never further ahead than its bound",
+    test "a lifetime never closed is admitted however late, and one of another boot never",
          ctx do
       fetch_sync(ctx)
-      until = @instant + 30_000
+      minted = open_message(key: "late")
+      other = LB.new_lifetime("bb_" <> String.duplicate("0", 32), :crypto.strong_rand_bytes(16))
 
-      at(ctx, until + 1)
-      assert_refused(invoke(ctx, open_message(key: "late")), "lifetime_over")
-
-      at(ctx, until)
-      assert invoke(ctx, open_message(key: "last")).status == 200
-
-      far = LB.new_lifetime(until + LB.max_lifetime_ms() + 1, :crypto.strong_rand_bytes(16))
-      assert_refused(invoke(ctx, open_message(key: "far", lifetime: far)), "bad_request")
-      assert_refused(close(ctx, open_message(key: "far", lifetime: far)), "bad_request")
+      at(ctx, @instant + 3_600_000)
+      assert invoke(ctx, minted).status == 200
+      assert_refused(invoke(ctx, open_message(key: "other", lifetime: other)), "lifetime_over")
     end
 
     @tag launcher: :direct

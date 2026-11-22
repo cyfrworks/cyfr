@@ -310,11 +310,7 @@ defmodule Locus.Backends.OwnersTest do
 
   # A lifetime of its own for each open, unless the test asks again for one.
   defp lifetime,
-    do:
-      Prima.LocusBackends.new_lifetime(
-        System.system_time(:millisecond) + 60_000,
-        :crypto.strong_rand_bytes(16)
-      )
+    do: Prima.LocusBackends.new_lifetime("bb_owners", :crypto.strong_rand_bytes(16))
 
   defp open(owners, server, version, program, opts \\ []) do
     athanor = Keyword.get(opts, :athanor, @athanor)
@@ -1279,6 +1275,25 @@ defmodule Locus.Backends.OwnersTest do
       # The launcher's word frees it.
       :sys.resume(handle.server)
       wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
+    end
+
+    test "a lifetime closed in the table's last boot is refused by the next, though no fence outlived it",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      lifetime = lifetime()
+      assert {:ok, _} = open(owners, "a", {1, 1}, "b1", lifetime: lifetime)
+      named = %{program: "b1", home_id: nil, key: "k", mode: :run, lifetime: lifetime}
+      assert :ok = Owners.close(owners, invoke("a", {1, 1}), named)
+
+      stop_supervised!(Owners)
+      owners = start_owners(ctx, boot: "bb_next")
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+
+      assert open(owners, "a", {1, 1}, "b1", lifetime: lifetime) == {:error, :lifetime_over},
+             "the last boot's closed lifetime started again"
+
+      assert sessions_of(owners, "a") == []
     end
 
     test "a table restarted by its supervisor adopts the processes its predecessor followed",

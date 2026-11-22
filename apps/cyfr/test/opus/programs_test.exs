@@ -697,6 +697,28 @@ defmodule Opus.ProgramsTest do
     assert_receive {:invoke, "tools/call", %{boot: "bb_second"}}
   end
 
+  test "a second service boot gets a lifetime of its own, and the last one's close ends nothing of it",
+       %{ctx: ctx, fake: fake} do
+    controller = start_controller(fake)
+    vault_entry(ctx)
+    row = mcp_row(ctx, "restart-lifetime")
+    pid = connect(ctx, row)
+    old = :sys.get_state(pid).lifetime
+    assert :ok == Programs.box_close(old)
+
+    Scripted.restart(fake, "bb_second")
+    tick(controller)
+    await_grant(pid, &(&1.boot == "bb_second"))
+    assert {:ok, _} = Emissary.External.Server.call_tool(pid, "search", %{})
+
+    current = :sys.get_state(pid).lifetime
+    assert :ok == Programs.box_close(old)
+    running = Enum.any?(Scripted.sessions(fake, row.id), fn {_id, session} -> session.running end)
+
+    assert {old != current, running} == {true, true},
+           "the closed lifetime came back, and its old close ended the replacement"
+  end
+
   test "a new generation is greeted, and every live owner synced and granted under it",
        %{ctx: ctx, fake: fake} do
     controller = start_controller(fake)
@@ -1297,7 +1319,7 @@ defmodule Opus.ProgramsTest do
 
     defp opened(grant, home_id, mode) do
       named = %{program: "program", home_id: home_id, key: "k", mode: mode}
-      asked(grant, Programs.lifetime(grant, named, soon()))
+      asked(grant, Programs.lifetime(grant, named))
     end
 
     defp asked(grant, lifetime) do
@@ -1312,7 +1334,7 @@ defmodule Opus.ProgramsTest do
     } do
       grant = held(ctx, fake, "keyed")
       named = %{program: "program", home_id: "vlt_keyed", key: "k", mode: :run}
-      lifetime = Programs.lifetime(grant, named, soon())
+      lifetime = Programs.lifetime(grant, named)
       run = asked(grant, lifetime)
       assert %{resumed: true, session: same} = asked(grant, lifetime)
       assert same == run.session
@@ -2366,14 +2388,14 @@ defmodule Opus.ProgramsTest do
   defp holding(test, held, named) do
     receive do
       {:open, key, deadline} ->
-        lifetime = lifetime(held, key, deadline)
+        lifetime = lifetime(held, key)
         send(test, {:opened, self(), key, opened_by(self(), lifetime, deadline)})
         holding(test, held, Map.put(named, key, {lifetime, :open}))
 
       # As a terminal opens: by a courier, so the holder can close meanwhile.
       {:open_beside, key, deadline} ->
         holder = self()
-        lifetime = lifetime(held, key, deadline)
+        lifetime = lifetime(held, key)
 
         spawn(fn ->
           send(test, {:opened, holder, key, opened_by(holder, lifetime, deadline)})
@@ -2394,7 +2416,7 @@ defmodule Opus.ProgramsTest do
       # A key it never opened is closed as a lifetime of its own.
       {:close, key} ->
         {lifetime, _open} =
-          Map.get_lazy(named, key, fn -> {lifetime(held, key, soon()), :open} end)
+          Map.get_lazy(named, key, fn -> {lifetime(held, key), :open} end)
 
         send(test, {:closed, self(), key, Programs.box_close(lifetime)})
         holding(test, held, Map.put(named, key, {lifetime, :closed}))
@@ -2415,7 +2437,7 @@ defmodule Opus.ProgramsTest do
     end
   end
 
-  defp lifetime(%{owner: owner, grant: grant}, key, deadline) do
+  defp lifetime(%{owner: owner, grant: grant}, key) do
     named = %{
       program: Opus.Programs.Definition.program_name(),
       home_id: owner.server_id,
@@ -2423,7 +2445,7 @@ defmodule Opus.ProgramsTest do
       mode: :run
     }
 
-    Programs.lifetime(grant, named, deadline)
+    Programs.lifetime(grant, named)
   end
 
   defp opened_by(holder, lifetime, deadline) do
@@ -2911,15 +2933,38 @@ defmodule Opus.ProgramsTest do
       assert %{^session => %{running: false}} = Scripted.sessions(fake, row.id)
     end
 
+    test "an open of a lifetime of a boot the box knows is over is refused stale_boot and never sent",
+         %{fake: fake, row: row} do
+      controller = start_controller(fake)
+      holder = box_holder(row)
+      Scripted.restart(fake, "bb_second")
+      tick(controller)
+      assert_receive {:heard, ^holder, {Opus.Programs, :owner, %{boot: "bb_second"}}}, 3_000
+      flush_sessions()
+
+      # The holder mints under the grant it was first given, the last boot's.
+      send(holder, {:open, "k", soon()})
+
+      assert_receive {:opened, ^holder, "k", {:error, {:refused, :stale_boot, "bb_second"}}},
+                     3_000
+
+      refute_receive {:session, "open", _wire, _fields}, 100
+    end
+
     test "a close of a lifetime the box does not know is answered by the service alone",
          %{fake: fake, row: row} do
       start_controller(fake)
 
       unknown =
         Programs.lifetime(
-          %{athanor: row.athanor_id, server: row.id, generation: 1, epoch: row.epoch},
-          %{program: "program", key: "k"},
-          soon()
+          %{
+            athanor: row.athanor_id,
+            server: row.id,
+            generation: 1,
+            epoch: row.epoch,
+            boot: "bb_first"
+          },
+          %{program: "program", key: "k"}
         )
 
       Scripted.refuse_once(fake, "close", "unavailable")

@@ -182,7 +182,7 @@ defmodule Opus.Brain.CleanupTest do
         if params,
           do:
             Opus.Programs.box_open(
-              Opus.Programs.lifetime(grant, params, deadline),
+              Opus.Programs.lifetime(grant, params),
               self(),
               Map.take(params, [:argv]),
               deadline

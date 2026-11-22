@@ -162,10 +162,11 @@ defmodule Opus.Brain do
   ## Its lifetimes
 
   Each process of the driver is a lifetime of its own
-  (`Opus.Programs.lifetime/3`), minted before it is opened and kept in
-  memory alone: one admitted start opens several over a turn's recovery,
-  and a restart of CYFR leaves nobody who could close one, so what it left
-  is the box's reconcile's. The handle names the first, so a close of a
+  (`Opus.Programs.lifetime/2`) of the service's boot, minted before it is
+  opened (once more, under a new grant, when that boot is over) and kept
+  in memory alone: one admitted start opens several over a turn's
+  recovery, and a restart of CYFR leaves nobody who could close one, so
+  what it left is the box's reconcile's. The handle names the first, so a close of a
   holder that has died asks for that lifetime's place. A restart
   (`{:ok, :restarted}`) puts another process behind the same handle, which
   from then on cannot name what its holder left: a close of it once the
@@ -1121,8 +1122,9 @@ defmodule Opus.Brain do
   defp hold(state), do: {:ok, state}
 
   # A new process: its lifetime, minted here before the open is parked or
-  # sent.
-  defp fresh(state) do
+  # sent, and once more under a grant of the boot that runs when the
+  # service has left the one it was minted for.
+  defp fresh(state, again? \\ true) do
     deadline = System.system_time(:millisecond) + @open_ms
 
     named = %{
@@ -1132,11 +1134,19 @@ defmodule Opus.Brain do
       mode: :run
     }
 
-    lifetime = Programs.lifetime(state.grant, named, deadline)
+    lifetime = Programs.lifetime(state.grant, named)
     params = %{argv: Programs.Words.new([])}
 
-    with {:ok, %{session: session}} <- Programs.box_open(lifetime, self(), params, deadline),
-         do: {:ok, %{state | lifetime: lifetime, session: session}}
+    case Programs.box_open(lifetime, self(), params, deadline) do
+      {:ok, %{session: session}} ->
+        {:ok, %{state | lifetime: lifetime, session: session}}
+
+      {:error, {:refused, :stale_boot, _boot}} when again? ->
+        with {:ok, state} <- hold(%{state | grant: nil}), do: fresh(state, false)
+
+      refused ->
+        refused
+    end
   end
 
   # The service's key of the thread's session.
