@@ -188,7 +188,9 @@ async function passkeyPhase() {
     ses.webRequest.onBeforeRequest({urls: [HOME + "/login?*"]}, (_details, callback) => { send = () => callback({}) })
     try {
       await js(w.webContents, `fetch("/login?held", {keepalive: true}).catch(() => {});
-        setInterval(() => { document.cookie = "proof_closing=1; path=/; max-age=60; secure" }, 0); 1`)
+        for (let n = 0; n < 4; n++) setInterval(() => {
+          for (let i = 0; i < 50; i++) document.cookie = "proof_closing=" + i + "; path=/; max-age=60; secure"
+        }, 0); 1`)
       await waitFor(() => send, "the page's request held")
       const from = await frontLength()
       const locked = await lockDevice(w)
