@@ -777,20 +777,18 @@ defmodule PrismWeb.TopbarLive do
           </.indicator>
         </div>
 
-        <!-- Lock: a box's own screen, unlocked by its shell, locks there -->
-        <form
+        <!-- Lock: a device unlocked by its shell locks there, by a top-level
+             navigation to the shell's /lock: a form from an https CYFR to
+             that plain-http loopback would carry Origin: null, which the
+             shell refuses, and meet Chrome's insecure-form interstitial -->
+        <a
           :if={PrismWeb.DeviceUnlockController.shell?(@context)}
-          method="post"
-          action={PrismWeb.DeviceUnlockController.lock_url()}
+          href={PrismWeb.DeviceUnlockController.lock_url()}
           data-test="device-lock"
+          class="flex items-center gap-2 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 hover:text-white transition-colors"
         >
-          <button
-            type="submit"
-            class="flex items-center gap-2 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 hover:text-white transition-colors"
-          >
-            <.icon name="lock" class="h-3.5 w-3.5" /> Lock
-          </button>
-        </form>
+          <.icon name="lock" class="h-3.5 w-3.5" /> Lock
+        </a>
 
         <!-- User -->
         <.indicator

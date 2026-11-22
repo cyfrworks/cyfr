@@ -1197,12 +1197,14 @@ jobs:
 
   # Dockerfile built once per run, beside the Locus image, for every job
   # that runs it: the app-image-suites and app-image-locus-suites jobs'
-  # groups each load this build.
+  # groups each load this build, and desktop-home's amd64 leg.
   app-image:
     name: The app image, built once for this run
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    steps:
+    env:
+      IMAGE_ARTIFACT: app-image
+    steps: &app-image-build
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the app image
         uses: ./.github/actions/image-build
@@ -1219,12 +1221,82 @@ jobs:
       - name: Upload the app image
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: app-image
+          name: ${{ env.IMAGE_ARTIFACT }}
           path: ${{ runner.temp }}/app-image/cyfr.tar.zst
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
           overwrite: true
+
+  # The same build on a native arm64 runner, for desktop-home's arm64 leg
+  # alone.
+  app-image-arm64:
+    name: The app image on arm64, built once for this run
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      IMAGE_ARTIFACT: app-image-arm64
+    steps: *app-image-build
+
+  # The CYFR app against a real CYFR (tests/desktop-proof/README.md), on
+  # amd64 and native arm64: this tree's app package, built here, installed
+  # in a client container with no Docker, and every tracked
+  # tests/desktop-proof/*/run.sh run against a CYFR and an account
+  # directory from this run's app image of the same architecture.
+  desktop-home:
+    name: CYFR app against a real CYFR (Linux ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    # Electron's download, the package, two homes and the proofs.
+    timeout-minutes: 45
+    needs: [app-image, app-image-arm64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-latest, artifact: app-image}
+          - {arch: arm64, runner: ubuntu-24.04-arm, artifact: app-image-arm64}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/codex/desktop/package-lock.json
+      - name: Build the app's package
+        run: |
+          set -euo pipefail
+          (cd apps/codex && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr/cyfr" .)
+          cd apps/codex/desktop
+          npm ci --ignore-scripts --no-audit --no-fund
+          node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version 0.0.0-ci --arch ${{ matrix.arch }}
+      - name: Fetch the app image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/app-image
+      - name: Load the app image
+        run: zstd -dc "$RUNNER_TEMP/app-image/cyfr.tar.zst" | docker load
+      - name: The proofs against a real CYFR
+        env:
+          PROOF_OUT: ${{ runner.temp }}/desktop-proof
+        run: bash tests/desktop-proof/home.sh "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb" cyfr:push
+      # What each proof recorded: its rows, its log and the app's output.
+      # No secret is in them: a proof records addresses without their
+      # fragments, headings and notices, never a page's text, and the
+      # authority's key and the setup token stay in the run's scratch
+      # directory, which the run removes.
+      - name: Keep the proofs' records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: desktop-proof-${{ matrix.arch }}
+          path: ${{ runner.temp }}/desktop-proof
+          if-no-files-found: ignore
+          retention-days: 7
 
   builder-image:
     name: Builder image (lock lifecycle, isolation, memory bound, headroom)

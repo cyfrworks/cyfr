@@ -110,10 +110,17 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.retire) {
       const out = {held: effect.retire.held ? holder ?? {token: ""} : null, ses: contentSession}
       holder = null
-      // A sign-out still running from before is waited for too.
+      // A sign-out still running from before is waited for too. Once a
+      // lock has told the person its answer, the next answers for itself.
       const before = retiring
-      retiring = retire(out).then(async (confirmed) => (await before) && confirmed)
-      if (state.name === "locking") retiring.then((confirmed) => on({type: "signed-out", confirmed}))
+      const now = retire(out).then(async (confirmed) => (await before) && confirmed)
+      retiring = now
+      if (state.name === "locking") {
+        now.then((confirmed) => {
+          if (retiring === now) retiring = Promise.resolve(true)
+          on({type: "signed-out", confirmed})
+        })
+      }
     }
     if (effect.chooser) openContent(state.readyURL + (effect.chooser.length ? `&notice=${effect.chooser.join(",")}` : ""))
     if (effect.relaunch) {
