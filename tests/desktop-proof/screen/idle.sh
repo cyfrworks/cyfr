@@ -32,7 +32,8 @@
 # apps/codex/cmd's tests hold to five. The taps are a virtual pointer's
 # (tap.py), real input to labwc: Chrome takes no inhibitor for playback
 # that no input started. The stand-in is no logind: that a real sleep
-# reaches swayidle is logind's and the kernel's.
+# reaches swayidle is logind's and the kernel's, and that one it did not
+# report locks at the waking is apps/codex/cmd's tests', on stand-in clocks.
 #
 # Usage: bash tests/desktop-proof/screen/idle.sh
 # It needs Docker, Go, linux/amd64 (Chrome's package), Ubuntu's archive and

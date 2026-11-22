@@ -264,7 +264,7 @@ jobs:
     # in the screen's Chrome, does not hold its lock off, where swayidle's
     # ordinary timeout is held off; and the screen takes swayidle for a
     # suspend watch only once it subscribed to sleep
-    # (tests/desktop-proof/screen/idle.sh).
+    # and answered (tests/desktop-proof/screen/idle.sh).
     # amd64 alone, as Chrome's package is.
     name: The screen's idle lock
     runs-on: ubuntu-latest

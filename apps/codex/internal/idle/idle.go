@@ -11,8 +11,8 @@
 // A watch is known to work, never assumed to: it makes a round trip with
 // the compositor every CheckEvery, which a person's continued input, met
 // with silence, does not disturb, and it is lost at a round trip or a
-// message not complete within AnswerWithin and at any event it cannot
-// place.
+// message not complete within AnswerWithin, each by its own deadline, and
+// at any event it cannot place.
 package idle
 
 import (
@@ -215,21 +215,29 @@ func (w *Watch) Run(idled func()) error {
 			}
 			return fmt.Errorf("the compositor's connection ended: %w", err)
 		}
-		// A message begun completes, or the watch is lost.
-		if err := w.conn.SetReadDeadline(time.Now().Add(AnswerWithin)); err != nil {
+		// A message begun has a bound of its own beside the round trip's,
+		// whose deadline it never moves.
+		by := time.Now().Add(AnswerWithin)
+		if asking && due.Before(by) {
+			by = due
+		}
+		if err := w.conn.SetReadDeadline(by); err != nil {
 			return err
 		}
 		m, err := w.next()
 		switch {
+		case asking && !time.Now().Before(due):
+			return errSilent
 		case err != nil:
 			return err
 		case m.object == alive && m.opcode == callbackDone && len(m.body) == 4 && asking:
 		case m.deletes(alive) && asking:
 			asking, due = false, time.Now().Add(CheckEvery)
 		case m.object == notification && m.opcode == notificationIdled && len(m.body) == 0:
+			began := time.Now()
 			idled()
 			if asking {
-				due = time.Now().Add(AnswerWithin)
+				due = due.Add(time.Since(began))
 			}
 		default:
 			if err := w.place(m); err != nil {

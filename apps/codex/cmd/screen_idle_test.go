@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -57,6 +58,23 @@ const swayidleHears = swayidleSays + `trap 'said "Got SIGUSR1"' USR1
 said "Got sleep lock: 12"
 while :; do /bin/sleep 0.1; done`
 
+// swayidleNeverAnswers is a swayidle that says it holds its sleep lock
+// and never comes to answer, as one stopped before its event loop.
+// sleep-ok: the stand-in runs on until its watch stops it.
+const swayidleNeverAnswers = swayidleSays + `trap '' USR1
+said "Got sleep lock: 12"
+while :; do /bin/sleep 0.1; done`
+
+// swayidleAnswersThen is a swayidle that subscribed, answered once, and
+// then does as the rest of the script says, answering no more.
+// sleep-ok: the stand-in waits for its question.
+const swayidleAnswersThen = swayidleSays + `answered=
+trap 'said "Got SIGUSR1"; answered=1' USR1
+said "Got sleep lock: 12"
+while [ -z "$answered" ]; do /bin/sleep 0.05; done
+trap '' USR1
+`
+
 // swayidleHearsNothing is swayidle where it cannot subscribe: it says so,
 // answers, and runs on all the same.
 // sleep-ok: the stand-in runs on until its watch stops it.
@@ -95,16 +113,25 @@ type watched struct {
 	*screenWatches
 	changes chan string
 	locks   chan string
+	// openAtLock is whether the last lock found the gate open.
+	openAtLock atomic.Bool
 }
 
 func startWatches(t *testing.T, after time.Duration) *watched {
 	t.Helper()
+	return startWatchesBy(t, after, screenClocks)
+}
+
+func startWatchesBy(t *testing.T, after time.Duration, clocks func() (boot, monotonic time.Duration, err error)) *watched {
+	t.Helper()
 	w := &watched{changes: make(chan string, 32), locks: make(chan string, 32)}
 	w.screenWatches = newScreenWatches(after, func(why string) { w.changes <- why })
+	w.clocks = clocks
 	w.lock = func(why string) {
 		if why == "" && w.Unwatched() == "" {
 			t.Error("a loss locked before it was published, so an unlock could follow that lock")
 		}
+		w.openAtLock.Store(w.Unwatched() == "")
 		w.locks <- why
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -143,7 +170,7 @@ func TestScreenWatch_LocksWhateverHoldsTheScreenAwake(t *testing.T) {
 
 // A suspend locks, through the one command swayidle was given and no
 // configuration can replace, and the screen may be unlocked again only
-// once swayidle holds the next sleep's lock.
+// once swayidle holds the next sleep's lock and has answered again.
 func TestScreenWatch_ASuspendLocks(t *testing.T) {
 	screenCompositor(t, idletest.Options{})
 	programs := quietScreen()
@@ -151,9 +178,10 @@ func TestScreenWatch_ASuspendLocks(t *testing.T) {
 	// the lock's release, and the next lock at the waking.
 	// sleep-ok: the stand-in's sleep, then it runs on until its watch stops it.
 	programs["swayidle"] = swayidleSays + `[ "$1 $2 $3 $4 $5" = "-d -w -C /dev/null before-sleep" ] && [ "$#" = 6 ] || exit 64
-trap 'said "Got SIGUSR1"' USR1
+answered=
+trap 'said "Got SIGUSR1"; answered=1' USR1
 said "Got sleep lock: 12"
-/bin/sleep 0.2
+while [ -z "$answered" ]; do /bin/sleep 0.05; done
 sh -c "$6"
 said "Releasing inhibitor lock 12"
 /bin/sleep 0.5
@@ -201,15 +229,119 @@ func TestScreenWatch_AWatchNoLongerKnownToWorkLocks(t *testing.T) {
 		screenCompositor(t, idletest.Options{})
 		programs := quietScreen()
 		// sleep-ok: the stand-in runs on, answering nothing, until stopped.
-		programs["swayidle"] = swayidleSays + `trap '' USR1
-said "Got sleep lock: 12"
-while :; do /bin/sleep 0.1; done`
+		programs["swayidle"] = swayidleAnswersThen + `while :; do /bin/sleep 0.1; done`
 		screenPrograms(t, programs)
 		w := startWatches(t, time.Hour)
 		w.becomes(t, "")
 		w.becomes(t, sleepUnwatched)
 		lockedWith(t, w.locks, "")
 	})
+}
+
+// The lock got is no answer: a swayidle that says it holds one and never
+// answers permits no unlock, at the start, at the waking, or where it took
+// another without saying that it let the last go.
+func TestScreenWatch_ALockGotPermitsNoUnlockUntilAnAnswer(t *testing.T) {
+	t.Run("at the start", func(t *testing.T) {
+		screenCompositor(t, idletest.Options{})
+		programs := quietScreen()
+		programs["swayidle"] = swayidleNeverAnswers
+		screenPrograms(t, programs)
+		w := startWatches(t, time.Hour)
+		w.becomes(t, sleepUnwatched) // its first change, so it was never ""
+		lockedWith(t, w.locks, "")
+	})
+	for name, again := range map[string]string{
+		"at the waking": `said "Releasing inhibitor lock 12"
+said "Got sleep lock: 13"`,
+		"another taken, none let go": `said "Got sleep lock: 13"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			screenCompositor(t, idletest.Options{})
+			programs := quietScreen()
+			// sleep-ok: the stand-in runs on, answering nothing, until stopped.
+			programs["swayidle"] = swayidleAnswersThen + again + "\nwhile :; do /bin/sleep 0.1; done"
+			screenPrograms(t, programs)
+			w := startWatches(t, time.Hour)
+			w.becomes(t, "")
+			w.becomes(t, sleepUnwatched)
+			lockedWith(t, w.locks, suspendLocked)
+			lockedWith(t, w.locks, "") // the question's deadline
+			select {
+			case why := <-w.changes:
+				t.Fatalf("it became %q on a lock got and no answer", why)
+			default:
+			}
+		})
+	}
+}
+
+// A sleep nothing reported, as with logind gone while the bus and swayidle
+// stay up, locks on the first tick after waking, the gate closed first,
+// and the watches start again: one the monotonic clock stood still in, and
+// one it ran on through, as suspend to idle may leave it, seen by the
+// boot clock alone. Time awake, which both counted, is no sleep.
+func TestScreenWatch_ASleepSwayidleDidNotReportLocksOnTheFirstTickAfterWaking(t *testing.T) {
+	for name, sleep := range map[string]struct{ boot, monotonic time.Duration }{
+		"the monotonic clock stood still": {time.Second, 0},
+		"both clocks ran on":              {time.Hour, time.Hour},
+	} {
+		t.Run(name, func(t *testing.T) {
+			screenCompositor(t, idletest.Options{})
+			screenPrograms(t, quietScreen())
+			var boot, monotonic atomic.Int64
+			reads := make(chan int64, 256)
+			w := startWatchesBy(t, time.Hour, func() (time.Duration, time.Duration, error) {
+				// In screenClocks' order, so time both count between is no sleep.
+				b, m := boot.Load(), monotonic.Load()
+				select {
+				case reads <- b:
+				default:
+				}
+				return time.Duration(b), time.Duration(m), nil
+			})
+			advance := func(b, m time.Duration) {
+				monotonic.Add(int64(m))
+				to := boot.Add(int64(b))
+				for {
+					select {
+					case read := <-reads:
+						if read == to {
+							return
+						}
+					case <-time.After(10 * time.Second):
+						t.Fatal("the watch read no clock")
+					}
+				}
+			}
+			w.becomes(t, "")
+
+			// Awake, up to the latest a tick may come.
+			advance(idle.AnswerWithin, idle.AnswerWithin)
+			advance(watchesTick, watchesTick) // the tick before this one has been acted on
+			select {
+			case why := <-w.locks:
+				t.Fatalf("time awake locked the screen (%q)", why)
+			default:
+			}
+
+			advance(sleep.boot, sleep.monotonic)
+			// That reading was the first tick after the waking.
+			select {
+			case why := <-w.locks:
+				if why != suspendLocked {
+					t.Fatalf("locked saying %q, want %q", why, suspendLocked)
+				}
+			case <-time.After(watchesTick):
+				t.Fatal("the first tick after the waking did not lock")
+			}
+			if w.openAtLock.Load() {
+				t.Fatal("the sleep locked with the gate still open")
+			}
+			w.becomes(t, sleepUnwatched)
+			w.becomes(t, "")
+		})
+	}
 }
 
 // screenWatchAfter is set where tests/desktop-proof/screen/idle.sh runs
@@ -244,6 +376,8 @@ type runningScreen struct {
 	t     *testing.T
 	ended chan error
 	done  chan struct{}
+	// offered is whether a page read meanwhile offered the screen's use.
+	offered bool
 }
 
 // watchedPage is what a watched screen shows in these tests, whose CYFR
@@ -285,7 +419,9 @@ func (s *runningScreen) shows(want string) string {
 		}
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if page = html.UnescapeString(string(raw)); strings.Contains(page, want) {
+		page = html.UnescapeString(string(raw))
+		s.offered = s.offered || strings.Contains(page, watchedPage)
+		if strings.Contains(page, want) {
 			return page
 		}
 	}
@@ -347,6 +483,7 @@ func TestScreenShell_AWatchThatCannotStartShowsWhy(t *testing.T) {
 	}{
 		"a compositor that cannot count input alone": {idletest.Options{Version: 1}, swayidleHears, idleUnwatched},
 		"swayidle running with no subscription":      {idletest.Options{}, swayidleHearsNothing, sleepUnwatched},
+		"swayidle with a lock and no answer":         {idletest.Options{}, swayidleNeverAnswers, sleepUnwatched},
 		"swayidle exiting":                           {idletest.Options{}, "exit 42", sleepUnwatched},
 		"no swayidle":                                {idletest.Options{}, "", sleepUnwatched},
 	} {
@@ -370,6 +507,9 @@ func TestScreenShell_AWatchThatCannotStartShowsWhy(t *testing.T) {
 			// Through a second try, as through the first.
 			time.Sleep(watchesAgain + 200*time.Millisecond) // sleep-ok: the shell's own wait before it tries again
 			s.staysLockedSaying(c.want)
+			if s.offered {
+				t.Fatal("a screen that could not start its watches offered its use meanwhile")
+			}
 		})
 	}
 }

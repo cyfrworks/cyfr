@@ -71,10 +71,16 @@ type Options struct {
 type client struct {
 	c        net.Conn
 	frozen   bool
+	drag     *drag
 	write    sync.Mutex
 	registry uint32
 	bound    map[uint32]string
 	notes    []*note
+}
+
+// drag is when an answer begins and how long it then takes.
+type drag struct {
+	begins, takes time.Duration
 }
 
 type note struct {
@@ -170,6 +176,16 @@ func (c *Compositor) Stall(size, n int) {
 	}
 }
 
+// Drag answers the next round trip slowly: the answer after begins, all
+// but the last bytes of its last message, and those takes later.
+func (c *Compositor) Drag(begins, takes time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for cl := range c.clients {
+		cl.drag = &drag{begins, takes}
+	}
+}
+
 // Send sends an event of any kind.
 func (c *Compositor) Send(object, opcode uint32, body ...uint32) {
 	c.mu.Lock()
@@ -234,6 +250,20 @@ func (c *Compositor) answer(cl *client, object, opcode uint32, body []byte) bool
 	switch {
 	case object == 1 && opcode == 0 && len(body) == 4: // sync
 		id := wire.Uint32(body)
+		if d := cl.drag; d != nil {
+			cl.drag = nil
+			whole := words(id, 12<<16, 0, 1, 12<<16|1, id)
+			time.AfterFunc(d.begins, func() {
+				cl.write.Lock()
+				cut := len(whole) - 4
+				_, _ = cl.c.Write(whole[:cut])
+				time.AfterFunc(d.takes, func() {
+					defer cl.write.Unlock()
+					_, _ = cl.c.Write(whole[cut:])
+				})
+			})
+			return true
+		}
 		cl.send(id, 0, words(0))
 		cl.send(1, 1, words(id)) // wl_display.delete_id, as the server follows a callback
 		select {

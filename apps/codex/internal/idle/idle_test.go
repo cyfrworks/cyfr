@@ -122,6 +122,7 @@ func TestWatch_IsLostWhenNotKnownToWork(t *testing.T) {
 		want  string
 	}{
 		"it stops answering after the handshake":   {func(c *idletest.Compositor) { c.Freeze() }, "did not answer"},
+		"an answer begun in time that ends late":   {func(c *idletest.Compositor) { c.Drag(idle.AnswerWithin-time.Second, 2*time.Second) }, "did not answer"},
 		"it stalls inside a header":                {func(c *idletest.Compositor) { c.Stall(12, 5) }, "connection ended"},
 		"it stalls inside a body":                  {func(c *idletest.Compositor) { c.Stall(12, 10) }, "connection ended"},
 		"an unknown event for the notification":    {func(c *idletest.Compositor) { c.Send(idletest.NotificationObject, 7) }, "cannot place"},
@@ -143,6 +144,26 @@ func TestWatch_IsLostWhenNotKnownToWork(t *testing.T) {
 				t.Fatal("the watch went on believing it watches")
 			}
 		})
+	}
+}
+
+// Another event in the middle of a round trip never moves its deadline.
+func TestWatch_AnEventDoesNotRenewTheRoundTrip(t *testing.T) {
+	t.Parallel()
+	c := idletest.Start(t, idletest.Options{})
+	_, ended := started(t, c, time.Hour)
+	c.Freeze()
+	// The round trip is asked within CheckEvery and is due AnswerWithin on.
+	deadline := idle.CheckEvery + idle.AnswerWithin
+	event := time.AfterFunc(deadline-time.Second, func() { c.Send(idletest.NotificationObject, 0) })
+	defer event.Stop()
+	select {
+	case err := <-ended:
+		if err == nil || !strings.Contains(err.Error(), "did not answer") {
+			t.Fatalf("lost saying %v", err)
+		}
+	case <-time.After(deadline + 2*time.Second):
+		t.Fatal("an event renewed the round trip's deadline")
 	}
 }
 

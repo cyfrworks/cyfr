@@ -26,19 +26,32 @@ const (
 	sleepUnwatched  = "This screen stays locked because it cannot tell when this device goes to sleep."
 )
 
-// watchesAgain is how long after losing its watches the screen starts them
-// again.
-const watchesAgain = time.Second
+const (
+	// watchesAgain is how long after losing its watches the screen starts
+	// them again.
+	watchesAgain = time.Second
+	// watchesTick is how often they look at their deadlines and at whether
+	// the machine slept, so also the longest they take to see that it did.
+	watchesTick = 250 * time.Millisecond
+)
 
 // screenWatches are what lock the screen with nobody asking: after has
 // passed without input (internal/idle), and the device is going to sleep
-// (swayidle). The screen may be unlocked only while both are known to work
-// (Unwatched is ""), and known is observed, never that a process started.
-// Losing either locks at once; the page then says which, and the watches
-// are started again for as long as the screen runs.
+// (swayidle, which locks before the screen goes dark). The screen may be
+// unlocked only while both are known to work (Unwatched is ""), and known
+// is observed, never that a process started. That the machine slept is
+// observed here too, whatever swayidle heard: either the boot clock ran on
+// where the monotonic clock stood still, or, as in a suspend to idle that
+// leaves both running, the boot clock ran on past a tick by more than
+// idle.AnswerWithin, in which the shell itself watched nothing. A sleep
+// locks on the first tick after waking and starts the watches again.
+// Losing either watch locks at once; the page then says which, and the
+// watches are started again for as long as the screen runs.
 type screenWatches struct {
 	after time.Duration
 	lock  func(why string)
+	// clocks reads the boot clock and the monotonic clock.
+	clocks func() (boot, monotonic time.Duration, err error)
 	// changed hears each change of Unwatched, once it has changed.
 	changed func(why string)
 
@@ -49,7 +62,7 @@ type screenWatches struct {
 }
 
 func newScreenWatches(after time.Duration, changed func(why string)) *screenWatches {
-	return &screenWatches{after: after, changed: changed, why: watchesStarting, settled: make(chan struct{})}
+	return &screenWatches{after: after, clocks: screenClocks, changed: changed, why: watchesStarting, settled: make(chan struct{})}
 }
 
 // Unwatched is why the screen may not be unlocked now, or "".
@@ -109,6 +122,12 @@ func (w *screenWatches) keep(ctx context.Context) {
 	}
 }
 
+// suspended locks for a sleep, the gate closed first.
+func (w *screenWatches) suspended() {
+	w.set(sleepUnwatched)
+	w.lock(suspendLocked)
+}
+
 // watch runs both watches until one is not known to work, and says which.
 func (w *screenWatches) watch(ctx context.Context) error {
 	socket, err := idle.Socket()
@@ -132,9 +151,27 @@ func (w *screenWatches) watch(ctx context.Context) error {
 	}
 	defer sleep.stop()
 
+	boot, monotonic, err := w.clocks()
+	if err != nil {
+		return unwatched{sleepUnwatched, err}
+	}
+	stoodStill, looked := boot-monotonic, boot
+	tick := time.NewTicker(watchesTick)
+	defer tick.Stop()
+	// due is when swayidle is to have subscribed, to have answered, or to
+	// be asked next.
 	subscribed, asked := false, false
-	next := time.NewTimer(idle.AnswerWithin)
-	defer next.Stop()
+	due := time.Now().Add(idle.AnswerWithin)
+	ask := func() error {
+		if err := sleep.ask(); err != nil {
+			return unwatched{sleepUnwatched, err}
+		}
+		asked, due = true, time.Now().Add(idle.AnswerWithin)
+		return nil
+	}
+	silent := func() error {
+		return unwatched{sleepUnwatched, sleep.failure("swayidle did not answer")}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -144,41 +181,61 @@ func (w *screenWatches) watch(ctx context.Context) error {
 		case <-sleep.exited:
 			return unwatched{sleepUnwatched, sleep.failure("swayidle stopped")}
 		case <-suspending:
+			began := time.Now()
 			w.lock(suspendLocked)
-			if asked {
-				next.Reset(idle.AnswerWithin) // the lock's time is not swayidle's
-			}
+			due = due.Add(time.Since(began)) // the lock's time is not swayidle's
 		case event := <-sleep.events:
 			switch event {
 			case sleepSubscribed:
-				subscribed, asked = true, false
-				w.set("")
-				next.Reset(idle.CheckEvery)
+				// The lock got may precede swayidle's event loop: only the
+				// answer to a question asked after it opens the gate.
+				if w.Unwatched() == "" {
+					w.suspended()
+				}
+				subscribed = true
+				if err := ask(); err != nil {
+					return err
+				}
 			case sleepReleased:
 				// Until swayidle holds the next sleep's lock, at the waking,
-				// the watch is not known to work.
+				// and answers again, the watch is not known to work.
 				subscribed, asked = false, false
-				w.set(sleepUnwatched)
-				w.lock(suspendLocked)
-				next.Reset(2 * idle.AnswerWithin)
+				w.suspended()
+				due = time.Now().Add(2 * idle.AnswerWithin)
 			case sleepAnswered:
-				if subscribed && asked {
-					asked = false
-					next.Reset(idle.CheckEvery)
+				if !subscribed || !asked {
+					break
 				}
+				if !time.Now().Before(due) {
+					return silent()
+				}
+				asked, due = false, time.Now().Add(idle.CheckEvery)
+				w.set("")
 			}
-		case <-next.C:
+		case <-tick.C:
+			boot, monotonic, err := w.clocks()
+			if err != nil {
+				return unwatched{sleepUnwatched, err}
+			}
+			asleep := boot-monotonic-stoodStill > watchesTick
+			frozen := boot-looked > watchesTick+idle.AnswerWithin
+			if asleep || frozen {
+				w.suspended()
+				return unwatched{sleepUnwatched, errors.New("this device slept")}
+			}
+			looked = boot
+			if time.Now().Before(due) {
+				break
+			}
 			switch {
 			case !subscribed:
 				return unwatched{sleepUnwatched, sleep.failure("swayidle did not show that it hears this device's sleep")}
 			case asked:
-				return unwatched{sleepUnwatched, sleep.failure("swayidle stopped answering")}
+				return silent()
 			}
-			if err := sleep.ask(); err != nil {
-				return unwatched{sleepUnwatched, err}
+			if err := ask(); err != nil {
+				return err
 			}
-			asked = true
-			next.Reset(idle.AnswerWithin)
 		}
 	}
 }
@@ -196,9 +253,11 @@ const (
 // PrepareForSleep was made (main.c setup_sleep_listener), so the lock got
 // is the subscription shown; it releases that lock as the device goes to
 // sleep, after running before-sleep's command, and takes the next at the
-// waking. SIGUSR1 is answered from its event loop and, with no timeout of
-// its own, does nothing else. A swayidle that words these otherwise is
-// never known to work, and the screen then stays locked and says so.
+// waking. It holds SIGUSR1 back from before it takes the first lock and
+// answers it only from its event loop, so the answer shows the loop runs;
+// with no timeout of its own it does nothing else on it. A swayidle that
+// words the lock got or the answer otherwise is never known to work, and
+// the screen then stays locked and says so.
 var (
 	swayidleSaid = regexp.MustCompile(`^\S+ \S+ - \[Line \d+\] (.*)$`)
 	swayidleGot  = regexp.MustCompile(`^Got sleep lock: \d+$`)
