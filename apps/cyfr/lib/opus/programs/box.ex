@@ -368,7 +368,7 @@ defmodule Opus.Programs.Box do
 
   defp new_lifetime(deadline) do
     until = min(deadline, now_ms() + LocusBackends.max_lifetime_ms())
-    LocusBackends.new_lifetime(max(until, 1))
+    LocusBackends.new_lifetime(max(until, 1), :crypto.strong_rand_bytes(16))
   end
 
   @doc "How long a status or a home message waits on a box."

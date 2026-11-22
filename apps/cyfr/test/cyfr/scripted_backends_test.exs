@@ -236,7 +236,8 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
       program: "cat",
       key: "key",
       mode: :run,
-      lifetime: Wire.new_lifetime(System.os_time(:millisecond) + 30_000),
+      lifetime:
+        Wire.new_lifetime(System.os_time(:millisecond) + 30_000, :crypto.strong_rand_bytes(16)),
       argv: []
     }
 

@@ -447,6 +447,13 @@ defmodule Opus.Programs.TurnSessionTest do
         end)
 
       assert_receive {:session, "open", %{"key" => key}, _fields}, 2_000
+
+      assert [id] =
+               Registry.select(Opus.Programs.Registry, [
+                 {{{:terminal, :"$1"}, :_, :_}, [], [:"$1"]}
+               ])
+
+      assert key_of(id) == key
       set_status(turn, "completed")
       :ok = Programs.end_turn(ctx.athanor_id, turn.id)
 
@@ -454,7 +461,7 @@ defmodule Opus.Programs.TurnSessionTest do
       assert {:ok, []} = Programs.running(ctx)
 
       eventually(
-        fn -> Registry.lookup(Opus.Programs.Registry, {:terminal, key}) == [] end,
+        fn -> Registry.lookup(Opus.Programs.Registry, {:terminal, id}) == [] end,
         "the refused start's process to end"
       )
     end

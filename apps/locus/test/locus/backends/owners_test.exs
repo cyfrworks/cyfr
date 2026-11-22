@@ -298,7 +298,11 @@ defmodule Locus.Backends.OwnersTest do
 
   # A lifetime of its own for each open, unless the test asks again for one.
   defp lifetime,
-    do: Prima.LocusBackends.new_lifetime(System.system_time(:millisecond) + 60_000)
+    do:
+      Prima.LocusBackends.new_lifetime(
+        System.system_time(:millisecond) + 60_000,
+        :crypto.strong_rand_bytes(16)
+      )
 
   defp open(owners, server, version, program, opts \\ []) do
     athanor = Keyword.get(opts, :athanor, @athanor)

@@ -1002,7 +1002,7 @@ defmodule Locus.ListenerTest do
         home_id: nil,
         key: "k#{System.unique_integer([:positive])}",
         mode: :run,
-        lifetime: LB.new_lifetime(@instant + 30_000),
+        lifetime: LB.new_lifetime(@instant + 30_000, :crypto.strong_rand_bytes(16)),
         argv: []
       })
 
@@ -1413,7 +1413,7 @@ defmodule Locus.ListenerTest do
           home_id: nil,
           key: "never-opened",
           mode: :run,
-          lifetime: LB.new_lifetime(@instant + 30_000)
+          lifetime: LB.new_lifetime(@instant + 30_000, :crypto.strong_rand_bytes(16))
         })
 
       signed = fn opts -> [{"x-cyfr-auth", invoke_header(ctx, body, opts)}] end

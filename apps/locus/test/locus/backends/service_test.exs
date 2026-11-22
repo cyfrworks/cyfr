@@ -420,7 +420,10 @@ defmodule Locus.Backends.ServiceTest do
       home_id: nil,
       key: Keyword.get(opts, :key, "mcp"),
       mode: Keyword.get(opts, :mode, :run),
-      lifetime: Keyword.get_lazy(opts, :lifetime, fn -> LB.new_lifetime(@instant + 30_000) end),
+      lifetime:
+        Keyword.get_lazy(opts, :lifetime, fn ->
+          LB.new_lifetime(@instant + 30_000, :crypto.strong_rand_bytes(16))
+        end),
       argv: Keyword.get(opts, :argv, [])
     }
     |> Map.merge(Map.new(Keyword.take(opts, [:rows, :cols])))
@@ -1002,7 +1005,10 @@ defmodule Locus.Backends.ServiceTest do
             {successor, [epoch: @e + 1, server: "mcp_other"]},
             {successor, [epoch: @e + 1, athanor: "ath_other"]},
             # Its own version, naming another lifetime or another key.
-            {%{successor | lifetime: LB.new_lifetime(@instant + 30_000)}, [epoch: @e + 1]},
+            {%{
+               successor
+               | lifetime: LB.new_lifetime(@instant + 30_000, :crypto.strong_rand_bytes(16))
+             }, [epoch: @e + 1]},
             {%{successor | key: "another"}, [epoch: @e + 1]},
             {%{successor | mode: :terminal}, [epoch: @e + 1]}
           ] do
@@ -1122,7 +1128,7 @@ defmodule Locus.Backends.ServiceTest do
       at(ctx, until)
       assert invoke(ctx, open_message(key: "last")).status == 200
 
-      far = LB.new_lifetime(until + LB.max_lifetime_ms() + 1)
+      far = LB.new_lifetime(until + LB.max_lifetime_ms() + 1, :crypto.strong_rand_bytes(16))
       assert_refused(invoke(ctx, open_message(key: "far", lifetime: far)), "bad_request")
       assert_refused(close(ctx, open_message(key: "far", lifetime: far)), "bad_request")
     end

@@ -182,7 +182,7 @@ defmodule Prima.LocusBackends do
   A lifetime is one use of a key: one process, from its open to the
   release of what it held (the service's own lifetime is its boot, and is
   another thing). Its identity is the text `lifetime` carries
-  (`new_lifetime/1`, `lt_<until>_<32 hexadecimal digits>`) together with
+  (`new_lifetime/2`, `lt_<until>_<32 hexadecimal digits>`) together with
   the athanor, row, generation and epoch that sign for it and its
   `(program, home_id, key, mode)`, fixed before its open is sent.
 
@@ -654,7 +654,7 @@ defmodule Prima.LocusBackends do
               cols: pos_integer()
             }
 
-  @typedoc "A lifetime's text (`new_lifetime/1`), the admission deadline in it."
+  @typedoc "A lifetime's text (`new_lifetime/2`), the admission deadline in it."
   @type lifetime :: String.t()
 
   @typedoc "A close: the lifetime, its key, and the owner and epoch that opened it."
@@ -873,10 +873,13 @@ defmodule Prima.LocusBackends do
   @spec max_lifetime_ms() :: pos_integer()
   def max_lifetime_ms, do: @max_lifetime_ms
 
-  @doc "A new lifetime, admitted through `until`, in Unix milliseconds."
-  @spec new_lifetime(pos_integer()) :: lifetime()
-  def new_lifetime(until) when is_integer(until) and until > 0,
-    do: "lt_#{until}_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+  @doc """
+  A lifetime's text, admitted through `until` in Unix milliseconds and
+  told from every other by `random`, 16 bytes its caller drew.
+  """
+  @spec new_lifetime(pos_integer(), <<_::128>>) :: lifetime()
+  def new_lifetime(until, <<random::binary-size(16)>>) when is_integer(until) and until > 0,
+    do: "lt_#{until}_" <> Base.encode16(random, case: :lower)
 
   @doc "The last moment `lifetime` may be admitted, in Unix milliseconds."
   @spec lifetime_until(term()) :: {:ok, pos_integer()} | :error

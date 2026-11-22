@@ -591,12 +591,12 @@ defmodule Prima.LocusBackendsTest do
     test "a lifetime carries its one deadline, held within its bound of the time that signs for it" do
       ts = @vectors["open"]["fields"]["ts"]
       max = @vectors["bounds"]["max_lifetime_ms"]
-      lifetime = LocusBackends.new_lifetime(ts + max)
+      lifetime = LocusBackends.new_lifetime(ts + max, <<1::128>>)
 
       assert LocusBackends.lifetime_until(lifetime) == {:ok, ts + max}
       assert LocusBackends.lifetime_within?(lifetime, ts)
       refute LocusBackends.lifetime_within?(lifetime, ts - 1)
-      refute LocusBackends.new_lifetime(ts + max) == lifetime
+      refute LocusBackends.new_lifetime(ts + max, <<2::128>>) == lifetime
 
       for text <- [nil, "lt_soon", "lt_0_" <> String.duplicate("a", 32), lifetime <> "\n"],
           do: assert(LocusBackends.lifetime_until(text) == :error, inspect(text))
