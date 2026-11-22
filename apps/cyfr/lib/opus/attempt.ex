@@ -76,7 +76,8 @@ defmodule Opus.Attempt do
 
   ## Stopping
 
-  A run whose runner was not started is closed failed (`refuse/2`); one
+  A run whose runner was not started is closed failed (`refuse/2`), as is
+  one whose runner ended before it took it (`stop_unclosed/2`); one
   whose runner attached is never refused, since the start it answers for
   happened.
 
@@ -193,6 +194,7 @@ defmodule Opus.Attempt do
   @ask_window_ms 60_000
 
   @redacted "[REDACTED]"
+  @untaken "the execution worker's runner ended before it took the run, so nothing ran"
 
   @derive {Inspect,
            only: [
@@ -556,9 +558,15 @@ defmodule Opus.Attempt do
   @typedoc """
   Who holds an attempt: the worker service it was dispatched to (nil when
   the control plane holds it), that service's boot, and the runner that
-  claimed it (nil to match any).
+  claimed it (nil to match any). `assigned?` is set by a report that is the
+  worker service's own word that it gave that runner the attempt.
   """
-  @type holder :: %{service_id: String.t() | nil, boot_id: String.t(), runner: String.t() | nil}
+  @type holder :: %{
+          required(:service_id) => String.t() | nil,
+          required(:boot_id) => String.t(),
+          required(:runner) => String.t() | nil,
+          optional(:assigned?) => boolean()
+        }
 
   @doc """
   What the attempt of `execution_id` was admitted with, for the runner
@@ -594,6 +602,12 @@ defmodule Opus.Attempt do
   no runner is a lapse, whose runner may still be running, and a row a
   caller ended is that caller's kill to count: each stops the attempt
   without closing the run, leaving it to its waiter's lost close.
+
+  A holder that is `assigned?` also ends an attempt that has answered no
+  attach: its runner ended before it took the run. This process alone
+  answers an attach, and every effect needs that answer, so nothing of
+  the run ran and an attach still on its way finds nothing to take. It
+  closes the run failed, or answers the row as it stands if that ended.
   """
   @spec stop_unclosed(String.t(), holder()) :: :ok
   def stop_unclosed(attempt, %{boot_id: boot_id} = holder)
@@ -798,12 +812,15 @@ defmodule Opus.Attempt do
   end
 
   def handle_call({:stop_unclosed, attempt, holder}, _from, state) do
-    held? =
+    dispatched? =
       state.attempt == attempt and state.service_id == holder.service_id and
-        state.boot_id == holder.boot_id and
-        (is_nil(holder.runner) or state.claimed_by == holder.runner)
+        state.boot_id == holder.boot_id
+
+    held? = is_nil(holder.runner) or state.claimed_by == holder.runner
 
     cond do
+      not dispatched? -> {:reply, :ok, state}
+      is_nil(state.claimed_by) and Map.get(holder, :assigned?, false) -> close_untaken(state)
       not held? -> {:reply, :ok, state}
       runner_ended?(state, holder) -> close_lost(state)
       true -> {:stop, :normal, :ok, release_holds(state)}
@@ -1110,6 +1127,12 @@ defmodule Opus.Attempt do
     state = release_holds(state)
     send(state.waiter, {__MODULE__, self(), result})
     {:stop, :normal, :ok, state}
+  end
+
+  # A row that ended first (a lapse of a claim written and never answered,
+  # a cancel) is answered as it stands, never as a run of which nothing ran.
+  defp close_untaken(state) do
+    if row_live(state) == false, do: close_lost(state), else: refuse_run(state, @untaken)
   end
 
   # A waiter that exited kills its run and lapses its row. The kill of a

@@ -7,7 +7,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -46,6 +45,7 @@ type starting struct {
 	tools   []map[string]any
 	stage   string
 	request string
+	account string
 }
 
 // waiting is the delivery the holder waits on Codex's answer for: the
@@ -252,32 +252,32 @@ func (d *driver) answer(id, ask, content string, isError bool) error {
 	return d.c.Accept(id)
 }
 
-// models answers Codex's model listing: from the running app-server, or
-// from one of its own, started and closed for it, when none runs.
+// models answers Codex's model listing: from the running app-server, which
+// reads no account and so says none, or from one of its own, started and
+// closed for it, when none runs, which says the account it read.
 func (d *driver) models(id string) error {
 	if d.h != nil && !d.running() {
 		return d.c.Refuse(id, "The harness is starting: its models are listed once it has started.")
 	}
 	if d.h == nil {
-		listing, err := d.listOnce()
-		if errors.Is(err, errSignedOut) {
-			return d.c.Refuse(id, signedOutSentence)
-		}
+		listing, account, err := d.listOnce()
 		if err != nil {
 			return d.c.Refuse(id, "OpenAI Codex did not list its models: "+err.Error()+".")
 		}
-		return d.listed(id, listing)
+		if account == brainwire.SignedOut {
+			return d.c.RefuseSignedOut(id, signedOutSentence)
+		}
+		return d.listed(id, listing, account)
 	}
 	d.waiting = &waiting{id: id, kind: "models", request: d.nextID("models")}
 	return d.h.Write(request(d.waiting.request, "model/list", map[string]any{}))
 }
 
 // listed answers a listing: each model as Codex names it, with the efforts
-// any of them takes, in the listing's order.
-func (d *driver) listed(id string, listing []json.RawMessage) error {
-	models := []map[string]string{}
-	efforts := []string{}
-	seen := map[string]bool{}
+// that model takes, in the listing's order, and what was read of the
+// account for it.
+func (d *driver) listed(id string, listing []json.RawMessage, account string) error {
+	models := []brainwire.Model{}
 	for _, raw := range listing {
 		var entry struct {
 			ID          string `json:"id"`
@@ -286,18 +286,17 @@ func (d *driver) listed(id string, listing []json.RawMessage) error {
 				Effort string `json:"reasoningEffort"`
 			} `json:"supportedReasoningEfforts"`
 		}
-		if json.Unmarshal(raw, &entry) != nil || !brainwire.IsID(entry.ID) || len(models) >= brainwire.MaxList {
+		if json.Unmarshal(raw, &entry) != nil {
 			continue
 		}
-		models = append(models, map[string]string{"id": entry.ID, "name": entry.DisplayName})
+		efforts := make([]string, 0, len(entry.Efforts))
 		for _, level := range entry.Efforts {
-			if level.Effort != "" && !seen[level.Effort] && len(efforts) < brainwire.MaxList {
-				seen[level.Effort] = true
-				efforts = append(efforts, level.Effort)
-			}
+			efforts = append(efforts, level.Effort)
 		}
+		models = brainwire.AppendModel(models, entry.ID, entry.DisplayName, efforts)
 	}
-	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", models).Set("efforts", efforts).Set("access", accessChoices))
+	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", models).Set("access", accessChoices).
+		SetOptional("account", account))
 }
 
 // ---------------------------------------------------------------------------
@@ -336,12 +335,19 @@ func (d *driver) response(id string, m rpc) error {
 	}
 	switch w.kind {
 	case "post-account":
-		if m.Error == nil && signedIn(m.Result) {
+		account := accountOf(m)
+		if account == brainwire.SignedIn {
 			d.signedIn = true
 			return d.deliver(w)
 		}
 		d.waiting = nil
-		return d.c.Refuse(w.id, signedOutSentence)
+		switch {
+		case m.Error != nil:
+			return d.c.Refuse(w.id, unreadAccountSentence)
+		case account == brainwire.SignedOut:
+			return d.c.RefuseSignedOut(w.id, signedOutSentence)
+		}
+		return d.c.Refuse(w.id, unknownAccountSentence)
 	case "steer":
 		if m.Error == nil {
 			d.waiting = nil
@@ -383,45 +389,61 @@ func (d *driver) response(id string, m rpc) error {
 			return d.h.Write(request(w.request, "model/list", map[string]any{"cursor": *page.NextCursor}))
 		}
 		d.waiting = nil
-		return d.listed(w.id, w.listing)
+		return d.listed(w.id, w.listing, "")
 	}
 	return nil
 }
 
-// errSignedOut is a one-off listing's answer while Codex has no sign-in
-// (`signedOut`): the listing is refused in `signedOutSentence`, so a
-// person setting the brain up reads that it is still to sign in.
-var errSignedOut = errors.New("signed out")
-
-// signedOut reads `account/read`'s answer for a listing: only the one
-// shape Codex 0.169.0 answers with no sign-in, measured on an empty
-// folder (`account` null and `requiresOpenaiAuth` true), is signed out.
-// Any other answer, a field absent or unknown among them, lists as
-// before, so a sign-in in a shape not yet seen never reads signed out.
-func signedOut(result json.RawMessage) bool {
-	var r struct {
-		Account  json.RawMessage `json:"account"`
-		Requires *bool           `json:"requiresOpenaiAuth"`
-	}
-	if json.Unmarshal(result, &r) != nil || r.Requires == nil {
-		return false
-	}
-	// An absent `account` is no shape seen; a present null is.
-	return string(r.Account) == "null" && *r.Requires
+// accountTypes are the accounts Codex 0.169.0's own schema answers
+// `account/read` with, each with the members it requires beside its type.
+var accountTypes = map[string][]string{
+	"apiKey":        nil,
+	"chatgpt":       {"email", "planType"},
+	"amazonBedrock": nil,
+	"gcp":           nil,
 }
 
-// signedIn reads `account/read`'s answer: no account, when Codex needs
-// one, is a program with no sign-in. Nothing of the account is kept.
-func signedIn(result json.RawMessage) bool {
-	var r struct {
-		Account  json.RawMessage `json:"account"`
-		Requires *bool           `json:"requiresOpenaiAuth"`
+// accountOf is what Codex's answer to `account/read` says. The answer has
+// one shape: `requiresOpenaiAuth` a boolean and `account` present, null or
+// one of accountTypes, the members spelled exactly so. Anything else is
+// not known and says nothing, as a read that failed does, so a shape not
+// yet seen never reads signed out, nor clears a sign-out.
+//
+// In that shape signed out is only no account where one is required (an
+// empty folder, and a key only in the environment), and signed in is an
+// account, a dead key's among them, or none required (another provider).
+// Nothing of the account is kept but that word.
+func accountOf(m rpc) string {
+	if m.Error != nil {
+		return ""
 	}
-	if json.Unmarshal(result, &r) != nil {
-		return false
+	var answer, account map[string]json.RawMessage
+	var requires *bool
+	if json.Unmarshal(m.Result, &answer) != nil ||
+		json.Unmarshal(answer["requiresOpenaiAuth"], &requires) != nil || requires == nil ||
+		json.Unmarshal(answer["account"], &account) != nil {
+		return ""
 	}
-	none := len(r.Account) == 0 || string(r.Account) == "null"
-	return !none || (r.Requires != nil && !*r.Requires)
+	if account == nil {
+		if *requires {
+			return brainwire.SignedOut
+		}
+		return brainwire.SignedIn
+	}
+	var kind string
+	if json.Unmarshal(account["type"], &kind) != nil {
+		return ""
+	}
+	members, known := accountTypes[kind]
+	if !known {
+		return ""
+	}
+	for _, member := range members {
+		if _, present := account[member]; !present {
+			return ""
+		}
+	}
+	return brainwire.SignedIn
 }
 
 // startStep is the start's handshake, one answer at a time: `initialize`,
@@ -439,7 +461,8 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		s.request = d.nextID("account")
 		return d.h.Write(request(s.request, "account/read", map[string]any{}))
 	case "account":
-		d.signedIn = m.Error == nil && signedIn(m.Result)
+		s.account = accountOf(m)
+		d.signedIn = s.account == brainwire.SignedIn
 		s.stage = "thread"
 		s.request = d.nextID("thread")
 		if s.resume {
@@ -478,7 +501,8 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		if s.resume && len(s.pending) > 0 {
 			held, _ = heldPosts(d.home, d.session, s.pending)
 		}
-		return d.c.Emit(brainwire.NewEvent("started").Set("session", d.session).Set("fresh", !s.resume).Set("held", held))
+		return d.c.Emit(brainwire.NewEvent("started").Set("session", d.session).Set("fresh", !s.resume).Set("held", held).
+			SetOptional("account", s.account))
 	}
 	return nil
 }

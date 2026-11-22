@@ -202,18 +202,28 @@ export async function accountAndSetup(inputs) {
   return {second, recovery}
 }
 
-/**
- * The app's Connect to the CYFR, its account service approved: the CYFR
- * opened, which sends who is not signed in to the chooser's ways on, and
- * from there the device's pages.
- */
-export async function connectApproved() {
+// The app's Connect to the CYFR, its account service approved.
+async function approve() {
   const w = await contentAt((u) => u.startsWith(LOOPBACK + "/bootstrap/"), "the chooser")
   await waitFor(() => js(w.webContents, `!document.querySelector("#choose").hidden`), "the chooser's form")
   await js(w.webContents, `document.querySelector("#address").value = ${literal(HOME)};
     document.querySelector("#connect").requestSubmit(); 1`)
   await waitFor(() => js(w.webContents, `!document.querySelector("#confirm").hidden`), "the account service asked about")
   await js(w.webContents, `document.querySelector("#approve").click(); 1`)
+}
+
+/** Connect on the six-word road, which goes on to the device's pages by itself. */
+export async function connectOnward() {
+  await approve()
+  return contentAt(atDevice, "the device's pages")
+}
+
+/**
+ * Connect on the passkey road: the CYFR opened, which sends who is not
+ * signed in to the chooser's ways on, and from there the device's pages.
+ */
+export async function connectApproved() {
+  await approve()
   await js((await bothWays()).webContents, `document.querySelector("#words").click(); 1`)
   return contentAt(atDevice, "the device's pages")
 }
@@ -243,9 +253,9 @@ export async function enrolDevice(w, second) {
  * computer's device enrolled through the app's Connect, Prism opened:
  * answers the second client, the passphrase and the recovery code.
  */
-export async function accountAndDevice(inputs) {
+export async function accountAndDevice(inputs, connect = connectApproved) {
   const {second, recovery} = await accountAndSetup(inputs)
-  const w = await connectApproved()
+  const w = await connect()
   const passphrase = await enrolDevice(w, second)
   await openCYFR(w, passphrase)
   return {second, passphrase, recovery}

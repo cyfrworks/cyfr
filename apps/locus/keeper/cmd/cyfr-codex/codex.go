@@ -350,15 +350,24 @@ func errorKind(raw json.RawMessage) string {
 	return "provider_error"
 }
 
-// signedOutSentence refuses a post while Codex has no sign-in and no key
-// it can run with, as its account read answers.
-const signedOutSentence = "OpenAI Codex has no sign-in or key it can use; sign it in on the program's terminal, or set a key in its settings."
+// signedOutSentence refuses a post and a listing while Codex has no
+// sign-in, as its account read answers. A key counts only once its login
+// stored it: the app-server does not use one from the environment.
+const signedOutSentence = "OpenAI Codex has no sign-in it can use; sign it in on the program's terminal, with your plan or a key."
+
+// unknownAccountSentence refuses a post while Codex's account read
+// answered what the driver does not know: no sign-out.
+const unknownAccountSentence = "OpenAI Codex's account answer is not one CYFR knows, so the post was not written; check its sign-in on the program's terminal."
+
+// unreadAccountSentence refuses a post while Codex's account read failed:
+// no sign-out.
+const unreadAccountSentence = "OpenAI Codex's account could not be read, so the post was not written; send it again."
 
 // errorSentence is the driver's own words for an error of Codex's: its
 // words, which name its account, its endpoint or a sign-in, never leave the
 // box. An account's error says only what the type tells: the account or
 // key Codex ran with was refused, never which one, as the Claude Code
-// driver says it. A post while Codex has neither is refused as that
+// driver says it. A post while Codex has no sign-in is refused as that
 // (`signedOutSentence`).
 func errorSentence(kind string) string {
 	switch kind {

@@ -24,7 +24,8 @@ defmodule Aqua do
   - `Aqua.AgentConfig` — the soul's and the crew's definitions and their catalysts;
     `Aqua.Roster` — who may be addressed.
   - `Aqua.Models` — what a model can do, the model listing, an agent's
-    brain options and whether each agent's brain is ready; `Aqua.ConsentStatus` — whether what the
+    brain options, whether each agent's brain is ready and what is known
+    of its program; `Aqua.ConsentStatus` — whether what the
     athanor consented to still covers its sources.
   - `Aqua.ScheduleNotes` — a schedule's outcome kept as a note when the
     schedule asked for it; `Aqua.ScheduleTurns` — a schedule's line for
@@ -83,11 +84,45 @@ defmodule Aqua do
   defdelegate brain_options(ctx, agent), to: Models
 
   @doc """
-  The models, efforts and access choices a program brain's program lists.
-  See `Aqua.Models.program_listing/2`.
+  The models, each with its efforts, and the access choices a program
+  brain's program lists, by asking it. See `Aqua.Models.program_listing/2`.
   """
   @spec program_listing(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   defdelegate program_listing(ctx, agent), to: Models
+
+  @doc "What is known of an agent's program, never asking it. See `Aqua.Models.known_program/2`."
+  @spec known_program(Context.t(), map()) :: %{
+          account: :signed_in | :signed_out | nil,
+          listing: map() | nil
+        }
+  defdelegate known_program(ctx, agent), to: Models
+
+  @doc """
+  The words a person reads for the permission `action` of `tool`: those
+  its operation is declared with (`Prima.Operation`), as the system layer
+  names a change, and for a virtual tool, which declares its family's
+  title alone, that title and the action. Never the `tool.action` name.
+  """
+  @spec action_title(String.t(), String.t()) :: String.t()
+  def action_title(tool, action) do
+    with nil <- declared_words(tool, action),
+         %{title: title} <- Sanctum.VirtualTools.table()[tool] do
+      "#{title}: #{action}"
+    else
+      words when is_binary(words) -> words
+      _undeclared -> "Another action"
+    end
+  end
+
+  defp declared_words(tool, action) do
+    case Sanctum.Catalog.operations() do
+      %{^tool => {_module, %{operations: operations}}} ->
+        Enum.find_value(operations, &(&1.action == action && &1.description))
+
+      _not_in_the_table ->
+        nil
+    end
+  end
 
   @doc "Every local source whose consent no longer answers. See `Aqua.ConsentStatus.stale_refs/1`."
   @spec stale_consent_refs(Context.t()) ::
