@@ -23,7 +23,7 @@ const OPEN = {home: HOME, next: "/"}
 
 // The chooser opened with `notice` while cyfr answers `state`: its
 // elements, each as hidden as the page starts it, and where it went.
-async function chooser(notice, state, connected = OPEN) {
+async function chooser(notice, state, connected = OPEN, hash = "#token=t" + (notice ? `&notice=${notice}` : "")) {
   const elements = new Map()
   for (const [tag, id] of page.matchAll(/<[a-z0-9]+\b[^>]*\bid="([a-z]+)"[^>]*>/g)) {
     const listeners = {}
@@ -37,8 +37,8 @@ async function chooser(notice, state, connected = OPEN) {
     URLSearchParams,
     document: {getElementById: (id) => elements.get(id)},
     sessionStorage: {getItem: (k) => stored.get(k) ?? null, setItem: (k, v) => stored.set(k, v)},
-    history: {replaceState() {}},
-    location: {pathname: "/bootstrap/", hash: "#token=t" + (notice ? `&notice=${notice}` : ""),
+    history: {replaceState: (_state, _title, to) => { went.address = to }},
+    location: {pathname: "/bootstrap/", hash,
       replace: (to) => went.byItself.push(to), assign: (to) => went.pressed.push(to)},
     fetch: async (path) => ({ok: true, json: async () => (path === "/bootstrap/state" ? state : connected)})
   })
@@ -59,6 +59,15 @@ test("with a notice to show the chooser stays, says it, and offers its way on to
     $("words").onclick()
     assert.deepEqual(went.pressed, ["/"], "Use this computer's key goes on")
   }
+})
+
+test("a reload of a chooser that stays keeps its notice, and its address never keeps the token", async () => {
+  const first = await chooser("company,unconfirmed", OPEN)
+  assert.doesNotMatch(first.went.address, /token/)
+  const again = await chooser("", OPEN, OPEN, new URL(first.went.address, "http://127.0.0.1:7340").hash)
+  assert.deepEqual(again.went.byItself, [], "the reload did not move on")
+  assert.equal(again.$("notice").textContent, `${COMPANY} ${UNCONFIRMED}`)
+  assert.equal((await chooser("", OPEN)).went.address, "/bootstrap/", "with none, the bare address")
 })
 
 test("with no notice to show the chooser moves on by itself", async () => {

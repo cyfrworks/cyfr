@@ -24,6 +24,11 @@
 // CYFR main keeps to to load, so its session may hold a sign-in: from
 // then on a lock signs it out, unconfirmed without a forgery token.
 //
+// `notices` is what main has to tell and the person has not yet gone on
+// from: every lock adds to it and carries it, and the chooser shows it and
+// stays. Only a way on taken from the chooser, its top frame leaving it,
+// clears it.
+//
 // `returning` is a sign-in's answer on its way into the content window,
 // from its deliver effect to the one navigation that made:
 //   sent       main's load is being made; the engine says that navigation
@@ -67,7 +72,7 @@ import {LOOPBACK, accountLoad, contentNavigation, contentOpen, homeMessage, pars
 
 /** The state main starts in. */
 export function initial(accountRoad, route = {proxy: "", resolver: ""}) {
-  return {name: "starting", accountRoad, readyURL: "", home: "", account: "", route, held: false, returning: null}
+  return {name: "starting", accountRoad, readyURL: "", home: "", account: "", route, held: false, returning: null, notices: []}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
@@ -79,6 +84,12 @@ export const kept = (s) => ["proposed", "open"].includes(s.name)
 const ending = (s, last) => ({state: {...s, name: "ended", returning: null}, do: [{close: true}, {retire: {held: s.held}}, last]})
 const same = (s, effects = []) => ({state: s, do: effects})
 const withdrawn = (s, effects = []) => same(s.returning ? {...s, returning: null} : s, effects)
+const adding = (notices, notice) => !notice || notices.includes(notice) ? notices : [...notices, notice]
+const atChooser = (url) => {
+  const u = parse(url)
+  return !!u && u.origin === LOOPBACK && u.pathname === "/bootstrap/"
+}
+const tookWayOn = (e) => e.window === "content" && e.target === "top" && atChooser(e.showing) && !atChooser(e.url)
 
 // A home naming a CYFR on another route than main's: main must start
 // again with it before it keeps to it.
@@ -88,7 +99,7 @@ const rerouted = (s, m) => (m.proxy ?? "") !== s.route.proxy || (m.resolver ?? "
 // starts; cyfr is told unless it said locked itself (`heard`, its
 // message), which is then the barrier passed.
 function lock(s, why, notice, heard = null) {
-  const next = {...s, name: "locking", before: kept(s), notices: notice ? [notice] : [], barrier: heard !== null,
+  const next = {...s, name: "locking", before: kept(s), notices: adding(s.notices, notice), barrier: heard !== null,
     keep: heard, signedOut: false, held: false, returning: null}
   return {state: next, do: [{say: `locked: ${why}`}, {close: true}, ...(heard ? [] : [{send: {type: "lock"}}]),
     {retire: {held: s.held}}]}
@@ -103,7 +114,7 @@ function settle(s) {
   const m = s.keep
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, readyURL: s.readyURL,
-    home: again ? m.home : "", account: again ? m.account : "", route: s.route, held: false, returning: null}
+    home: again ? m.home : "", account: again ? m.account : "", route: s.route, held: false, returning: null, notices: s.notices}
   return {state: next, do: [{chooser: s.notices}]}
 }
 
@@ -153,7 +164,7 @@ export function step(s, e) {
       return lock(s, e.why, e.notice ?? "")
     case "signed-out":
       if (s.name !== "locking") return same(s)
-      return settle({...s, signedOut: true, notices: e.confirmed ? s.notices : [...s.notices, "unconfirmed"]})
+      return settle({...s, signedOut: true, notices: e.confirmed ? s.notices : adding(s.notices, "unconfirmed")})
     case "quit":
       return ending(s, {quit: true})
     case "second-instance":
@@ -184,7 +195,8 @@ export function step(s, e) {
       const where = contentNavigation(e, kept(s))
       if (where === "allow") {
         const given = e.target === "top" && !!kept(s).home && parse(e.url)?.origin === kept(s).home
-        return given ? {state: {...s, held: true}, allow: true, do: [{hold: true}]} : {state: s, allow: true, do: []}
+        const next = tookWayOn(e) ? {...s, notices: []} : s
+        return given ? {state: {...next, held: true}, allow: true, do: [{hold: true}]} : {state: next, allow: true, do: []}
       }
       if (where === "hop" && e.window === "content") return {state: s, allow: false, do: [{hop: {url: e.url, kind: "sign-in"}}]}
       if (where === "company" && e.window === "content") {

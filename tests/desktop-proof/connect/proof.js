@@ -291,14 +291,26 @@ async function connectPhase() {
   // offline_lock: with the CYFR's front down (its control answered so),
   // the lock still closes Prism and the chooser says the sign-out is
   // unconfirmed.
+  // Over the chooser keeping that notice: a second lock, as a computer
+  // that locks and then sleeps sends, and a reload of it, as Ctrl+R does.
+  const over = [async () => powerMonitor.emit("suspend"), async (chooser) => {
+    const loaded = new Promise((resolve) => chooser.webContents.once("did-finish-load", resolve))
+    chooser.webContents.reload()
+    await loaded
+  }]
   out = await lockedOut(w, "a lock while the CYFR is unreachable", async () => {
     await fault("x.test", "down")
     powerMonitor.emit("lock-screen")
-  }, () => fault("x.test", "none"))
+  }, () => fault("x.test", "none"), over)
   row("offline_lock", out.before.opens && out.chooser.told?.words === UNCONFIRMED && out.chooser.told.stayed &&
     out.signOuts.every((r) => r.fault === "down"),
   "a lock while the CYFR cannot be reached closes Prism, and the chooser stays with the words that the sign-out is unconfirmed until the person goes on",
   lockDetail(out))
+  // notice_kept: neither that second lock nor that reload erased what
+  // nobody had yet gone on from. That going on clears it is renderer_killed's
+  // to show, whose confirmed lock then goes on by itself.
+  row("notice_kept", out.chooser.kept.length === over.length && out.chooser.kept.every((told) => told?.words === UNCONFIRMED && told.stayed),
+    "a second lock and a reload over the chooser that is keeping a notice leave the notice there", {kept: out.chooser.kept})
   await openCYFR(out.back, passphrase)
   w = await contentAt(atHome, "Prism again")
 

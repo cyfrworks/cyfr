@@ -312,14 +312,12 @@ export async function decided(wc, url, frame, what) {
   return d.prevented
 }
 
-// The chooser a lock since `shownBefore` (history's length before it)
-// brought back: with nothing to tell it goes on to the device's pages by
-// itself (told: null); with a notice it stays, the notice's words and its
-// way on in sight (told: {words, stayed}, stayed false had it started to
-// go on), until Use this computer's key is pressed here. Answers that and
-// the device's pages it led to.
-export async function afterLock(shownBefore, why) {
-  const seenNow = await waitFor(async () => {
+// Where the app came to rest after a lock: with nothing to tell the
+// chooser goes on to the device's pages by itself (told: null); with a
+// notice it stays, the notice's words and its way on in sight (told:
+// {words, stayed}, stayed false had it started to go on).
+async function atRest(why) {
+  const rest = await waitFor(async () => {
     const w = content()
     if (!w || w.webContents.isLoading()) return null
     if (atDevice(w.webContents.getURL())) return {w, told: null}
@@ -329,32 +327,50 @@ export async function afterLock(shownBefore, why) {
       return {onward: inSight("#words"), words: inSight("#notice") ? document.querySelector("#notice").textContent : ""} })()`)
     return shows.onward && w.isVisible() ? {w, told: {words: shows.words}} : null
   }, `the chooser or the device's pages after ${why}`)
-  const shown = history.slice(shownBefore).some(atBootstrap)
-  if (!seenNow.told) return {shown, told: null, back: seenNow.w}
+  if (!rest.told) return rest
   // Asked once more of the page, so a move it began has been heard.
-  await js(seenNow.w.webContents, "1").catch(() => {})
-  const opened = history.findLastIndex(atBootstrap)
-  seenNow.told.stayed = !history.slice(opened + 1).some(atDevice)
-  if (seenNow.told.stayed) await js(seenNow.w.webContents, `document.querySelector("#words").click(); 1`)
-  return {shown, told: seenNow.told, back: await contentAt(atDevice, `the device's pages after ${why}`)}
+  await js(rest.w.webContents, "1").catch(() => {})
+  rest.told.stayed = !history.slice(history.findLastIndex(atBootstrap) + 1).some(atDevice)
+  return rest
+}
+
+// The chooser a lock since `shownBefore` (history's length before it)
+// brought back, and what it told (atRest); then each of `over` done to a
+// chooser that stayed, with what it told after each (kept); then Use this
+// computer's key pressed where one still stays. Answers those and the
+// device's pages it led to.
+export async function afterLock(shownBefore, why, over = []) {
+  let rest = await atRest(why)
+  const shown = history.slice(shownBefore).some(atBootstrap)
+  const told = rest.told
+  const kept = []
+  for (const act of over) {
+    if (!rest.told?.stayed) break
+    await act(rest.w)
+    rest = await atRest(why)
+    kept.push(rest.told)
+  }
+  if (rest.told?.stayed) await js(rest.w.webContents, `document.querySelector("#words").click(); 1`)
+  const back = rest.told ? await contentAt(atDevice, `the device's pages after ${why}`) : rest.w
+  return {shown, told, kept, back}
 }
 
 // A lock by `act`, seen whole: the session's cookie opening a page of the
 // CYFR before it; the chooser after it and what it told (afterLock); the
 // device's pages it led to; the sign-out main sent, as the CYFR's front
 // saw it answered; and the cookie after.
-export async function lockedOut(w, why, act, then = async () => {}) {
+export async function lockedOut(w, why, act, then = async () => {}, over = []) {
   const cookie = await sessionCookie(w)
   const before = await opens(cookie)
   const from = (await seen("x.test")).length
   const shownBefore = history.length
   await act()
-  const {back, shown, told} = await afterLock(shownBefore, why)
+  const {back, shown, told, kept} = await afterLock(shownBefore, why, over)
   await then()
   const after = await opens(cookie)
   const signOuts = (await reachedSince("x.test", from)).filter((r) => r.method === "POST" && r.path === "/auth/logout")
     .map((r) => ({status: r.status, retired: r.retired, fault: r.fault}))
-  return {back, before, after, chooser: {shown, told}, signOuts, cookie}
+  return {back, before, after, chooser: {shown, told, kept}, signOuts, cookie}
 }
 
 // The sign-out main sent was answered with the CYFR's acknowledgement,

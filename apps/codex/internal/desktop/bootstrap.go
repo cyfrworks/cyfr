@@ -10,8 +10,9 @@ import (
 
 // The chooser's one style and one script, each allowed by its hash alone.
 // The script keeps the run token from the first address's fragment in
-// sessionStorage, private to this origin, takes it off the address, and
-// sends it with each request; it writes answers as text, never markup.
+// sessionStorage, private to this origin, takes it off the address, where
+// it leaves the notice alone so that a reload still shows it, and sends
+// the token with each request; it writes answers as text, never markup.
 // With a CYFR open it goes on to the device's pages by itself only when
 // it has nothing to tell: with a notice it stays, as it does on the
 // passkey road, until the person takes a way on.
@@ -20,7 +21,7 @@ const (
 main{max-width:34rem;padding:1rem}label{display:block;margin:1rem 0}input{display:block;width:100%;font:inherit;padding:.5rem;margin-top:.25rem;box-sizing:border-box}
 button{font:inherit;padding:.5rem 1rem;margin:.5rem .5rem 0 0}.warn{color:#ffb4a2}.quiet{background:none;color:inherit;border:1px solid #567}.code{font-family:monospace;word-break:break-all}`
 	bootstrapScript = `const s=sessionStorage,f=new URLSearchParams(location.hash.slice(1)),$=i=>document.getElementById(i);
-if(f.get("token"))s.setItem("token",f.get("token"));history.replaceState(null,"",location.pathname);
+if(f.get("token"))s.setItem("token",f.get("token"));history.replaceState(null,"",location.pathname+(f.get("notice")?"#notice="+f.get("notice"):""));
 const notices={company:"This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet.",
 unconfirmed:"CYFR locked, but the CYFR did not confirm that it signed this computer out. That sign-in ends when it expires, or when you sign it out under Settings, Keys on your account."};
 let asked=null;

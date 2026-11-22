@@ -499,3 +499,24 @@ test("a sign-in's answer whose load call rejects reloads nothing as it lands, or
   await settled()
   assert.equal(page.webContents.reloaded, undefined, "a later fragment change to that address is the page's own")
 })
+
+test("a lock over a chooser that is keeping a notice leaves the notice there, until a way on is taken from it", async () => {
+  await signedIn()
+  const lockNow = async (signal) => {
+    world.powerMonitor.emit(signal)
+    await settled()
+    child.say({type: "locked", home: HOME, account: ACCOUNT})
+    await settled()
+    await settled()
+  }
+  await lockNow("lock-screen") // the CYFR answers 503: unconfirmed
+  assert.match(content().webContents.url, /notice=unconfirmed$/)
+  await lockNow("suspend")
+  assert.match(content().webContents.url, /notice=unconfirmed$/, "kept through the lock over it")
+  const chooser = content()
+  assert.ok(!navigate(chooser, "http://127.0.0.1:7340/").prevented)
+  chooser.loadURL("http://127.0.0.1:7340/")
+  await settled()
+  await lockNow("lock-screen")
+  assert.doesNotMatch(content().webContents.url, /notice=/, "told once the person went on")
+})

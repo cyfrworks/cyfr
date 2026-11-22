@@ -98,6 +98,7 @@ that fails. The proof has 28 rows over three launches of the app (`run.sh`): `co
 | `system_lock_at_once` | the computer's lock closes Prism's window at once | the window, destroyed before anything is awaited |
 | `reconnect` | the lock left the device locked; its passphrase opens Prism again under a new session | the locked device's page first; a new session cookie |
 | `offline_lock` | with the CYFR unreachable, the lock still closes Prism, and the chooser stays with the words that the sign-out is unconfirmed until the person goes on | the front taking `down`; the notice's words and the chooser's way on, both in sight, with no move to the device's pages before that way on is pressed |
+| `notice_kept` | a second lock and a reload over the chooser that is keeping a notice leave the notice there | the words, staying, after each; `renderer_killed` then shows that the way on taken from it cleared it |
 | `process_loss` | `cyfr` killed while Prism holds a session: the app closes its content for good, signs the session out, confirmed, and tells the person | the app's message; the acknowledged sign-out; the cookie before and after |
 | `remembered` | launched again, the CYFR's approved account service is not asked about again | the device's pages, with no question |
 | `directory_changed` | a CYFR that names another account service than the one approved is asked about afresh | the question, with the front standing in for a CYFR reconfigured (fault `directory`) |
@@ -176,6 +177,11 @@ what the sign-out was answered: whether main's forgery token was missing or
 stale.
 On a CYFR that requires a company sign-in the app's lock is unconfirmed,
 and the session left can reach only the company page.
+
+A limit of the app: when main's load of a sign-in's answer is rejected,
+as when the CYFR's page still had a load of its own pending, nobody is
+signed in and nothing says so, and pressing Sign in again works. And a
+notice not yet read is lost when the person quits.
 
 Not here: the computer's real lock and sleep, Touch ID and Windows Hello (a
 person at the machine), and macOS and Windows (`desktop-native`).
