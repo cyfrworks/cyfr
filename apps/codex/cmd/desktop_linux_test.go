@@ -58,7 +58,8 @@ func TestTheChooserSaysWhenThisComputersLockIsNotHeard(t *testing.T) {
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	ended := make(chan error, 1)
-	go func() { ended <- runDesktopServe(context.Background(), inR, outW); outW.Close() }()
+	listen, address := ownListener()
+	go func() { ended <- runDesktopServe(context.Background(), listen, inR, outW); outW.Close() }()
 	lines := bufio.NewScanner(outR)
 	if !lines.Scan() {
 		t.Fatal("cyfr said nothing")
@@ -68,7 +69,8 @@ func TestTheChooserSaysWhenThisComputersLockIsNotHeard(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, token, _ := strings.Cut(ready.URL, "#token=")
-	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:7340/bootstrap/state", strings.NewReader(`{"token":"`+token+`"}`))
+	req, _ := http.NewRequest(http.MethodPost, "http://"+address()+"/bootstrap/state", strings.NewReader(`{"token":"`+token+`"}`))
+	req.Host = "127.0.0.1:7340"
 	req.Header.Set("Origin", "http://127.0.0.1:7340")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)

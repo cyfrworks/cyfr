@@ -208,9 +208,17 @@ export function unlistedSwitch(args, platform) {
   return null
 }
 
-/** Whether `home` and `account` name a CYFR and an account service's origin. */
+/**
+ * Whether `home` and `account` name a CYFR and an account service's origin
+ * main takes for it: https, or plain http for a local CYFR alone
+ * (http://localhost, with its port) and only at exactly that CYFR's own
+ * origin. cyfr holds the same rule (internal/account ServiceOf;
+ * tests/fixtures/desktop-process.json, account_services).
+ */
 export function homeMessage(m) {
-  return isHome(m.home) && isHome(m.account) && parse(m.account)?.protocol === "https:"
+  if (!isHome(m.home) || !isHome(m.account)) return false
+  if (parse(m.account)?.protocol === "https:") return true
+  return m.account === m.home && parse(m.home)?.hostname === "localhost"
 }
 
 /** The relying party of the account service at `account`: its host. */

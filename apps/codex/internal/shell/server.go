@@ -536,10 +536,15 @@ func (srv *Server) Serve(ctx context.Context) error {
 }
 
 // ListenLoopback takes the shell's one listener, Listen, for this process
-// alone: on Windows no other socket may bind the same address beside it
-// (exclusiveAddress).
-func ListenLoopback() (net.Listener, error) {
-	return (&net.ListenConfig{Control: exclusiveAddress}).Listen(context.Background(), "tcp4", Listen)
+// alone. It is what cyfr gives the commands that serve the shell.
+func ListenLoopback() (net.Listener, error) { return ListenAt(Listen) }
+
+// ListenAt takes address for this process alone: on Windows no other
+// socket may bind the same address beside it (exclusiveAddress). A test
+// gives those commands an address of its own with it, so that none binds
+// Listen, which a CYFR app or a proof on the same machine may hold.
+func ListenAt(address string) (net.Listener, error) {
+	return (&net.ListenConfig{Control: exclusiveAddress}).Listen(context.Background(), "tcp4", address)
 }
 
 // ServeOn serves the pages on ln, the shell's listener, until ctx ends.

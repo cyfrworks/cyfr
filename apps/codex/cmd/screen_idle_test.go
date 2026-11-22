@@ -35,7 +35,8 @@ func TestScreenShell_AnIdleWatcherThatExitsLocksAndEndsTheShell(t *testing.T) {
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err := runScreenShell(ctx)
+	listen, _ := ownListener()
+	err := runScreenShell(ctx, listen)
 	if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "idle lock (swayidle) stopped") {
 		t.Fatalf("idle watcher exited 42, screen ran until outer cancellation: err=%v context=%v", err, ctx.Err())
 	}
@@ -61,7 +62,8 @@ func TestScreenShell_NoIdleWatcherEndsTheShell(t *testing.T) {
 	t.Setenv("PATH", bin)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := runScreenShell(ctx); err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "swayidle") {
+	listen, _ := ownListener()
+	if err := runScreenShell(ctx, listen); err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "swayidle") {
 		t.Fatalf("no swayidle: err=%v context=%v", err, ctx.Err())
 	}
 }
@@ -72,7 +74,8 @@ func TestScreenShellHelper(t *testing.T) {
 	if os.Getenv("CYFR_SCREEN_SHELL_HELPER") == "" {
 		t.Skip("run by TestScreenShell_AKilledShellLeavesNoChildBehind")
 	}
-	_ = runScreenShell(context.Background())
+	listen, _ := ownListener()
+	_ = runScreenShell(context.Background(), listen)
 }
 
 // A shell killed outright leaves no keyboard, idle watch or Chrome behind:

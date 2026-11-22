@@ -72,8 +72,9 @@ type Config struct {
 	// one, so it never travels in an argument.
 	Tokens func() (setup string)
 	// SetupOpen is set for a device whose .env holds the setup token
-	// whether or not anyone is set up (a box's screen), and says whether
-	// no one is set up on this CYFR yet. Such a device's first hello
+	// whether or not anyone is set up (a box's screen, the CYFR app at a
+	// CYFR on its own computer), and says whether no one is set up on this
+	// CYFR yet. Such a device's first hello
 	// brings the token only then, whether it made its account here or was
 	// added to one, since the installation's first person binds it
 	// whoever they are; on a CYFR someone is set up on it brings none, and
@@ -147,9 +148,10 @@ func DeviceFolder() (string, error) {
 	return filepath.Join(home, ".cyfr", "device"), nil
 }
 
-// Selection is a remote CYFR being selected over this account's client
-// record. It reads as that CYFR's record, with the client and certificate
-// held there when the record already selects it. A working client and its
+// Selection is a CYFR, a remote one or a local project's, being selected
+// over this account's client record. It reads as that CYFR's record, with
+// the client and certificate held there when the record already selects
+// it. A working client and its
 // certificate are replaced only by an admission that succeeded: until the
 // selected CYFR admits this device, the record changes only where it
 // selects nothing at all (Commit), and every other change the shell makes
@@ -181,6 +183,22 @@ func (f ClientFile) Select(home, directory string, approved bool) (*Selection, e
 		rec.ClientID, rec.Certificate = c.ClientID, c.Certificate
 	}
 	return &Selection{file: f, rec: rec, approved: approved, owns: owns}, nil
+}
+
+// SelectLocal begins selecting the CYFR in project, a local project's
+// absolute directory. Its account service is that project's own setting,
+// so the record keeps no approval of one; it writes nothing.
+func (f ClientFile) SelectLocal(project string) (*Selection, error) {
+	c, err := f.Load()
+	if err != nil {
+		return nil, err
+	}
+	rec := ClientRecord{Project: project}
+	owns := c.Project == project && c.Home == ""
+	if owns {
+		rec.ClientID, rec.Certificate = c.ClientID, c.Certificate
+	}
+	return &Selection{file: f, rec: rec, approved: true, owns: owns}, nil
 }
 
 // Load is the selected CYFR's record.

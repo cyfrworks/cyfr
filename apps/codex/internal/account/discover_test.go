@@ -129,3 +129,31 @@ func (h hostRewriter) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.Host = h.host
 	return http.DefaultTransport.RoundTrip(r)
 }
+
+// The app takes a CYFR's account service by one rule, which its main
+// process holds too (desktop/test/policy.test.mjs).
+func TestAccountServiceVectors(t *testing.T) {
+	var v struct {
+		Services []struct {
+			Name     string `json:"name"`
+			Home     string `json:"home"`
+			Account  string `json:"account"`
+			Accepted bool   `json:"accepted"`
+		} `json:"account_services"`
+	}
+	fixture(t, "desktop-process.json", &v)
+	if len(v.Services) == 0 {
+		t.Fatal("the fixture names no account service")
+	}
+	for _, s := range v.Services {
+		t.Run(s.Name, func(t *testing.T) {
+			got, ok := ServiceOf(s.Home, s.Account)
+			if ok != s.Accepted || ok && (got.Directory != s.Account || got.Origin != s.Account) {
+				t.Fatalf("got %+v, %v; want accepted %v", got, ok, s.Accepted)
+			}
+		})
+	}
+	if got, ok := ServiceOf("http://localhost:4000", "http://localhost:4000/accounts"); !ok || got.Origin != "http://localhost:4000" {
+		t.Fatalf("a local CYFR's own directory under a path: %+v, %v", got, ok)
+	}
+}

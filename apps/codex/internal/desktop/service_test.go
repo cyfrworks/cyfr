@@ -741,3 +741,255 @@ func TestLockedNamesTheCommittedCYFR(t *testing.T) {
 		t.Fatalf("after the commit main heard %+v", m)
 	}
 }
+
+const (
+	localFolder  = "/home/ada/cyfr"
+	localAddress = "http://localhost:4000"
+)
+
+// rememberLocal is a over a client record that selects a folder on this
+// computer, whose CYFR's settings name directory and which answers while
+// running holds.
+func rememberLocal(t *testing.T, dir, directory string, running *atomic.Bool) *app {
+	t.Helper()
+	a := newApp(t, dir, offline())
+	if err := a.Clients.SelectProject(localFolder); err != nil {
+		t.Fatal(err)
+	}
+	a.Local = func(project string) (Local, error) {
+		if project != localFolder {
+			t.Errorf("the app read %s, not the folder remembered", project)
+		}
+		return Local{Shell: shell.Config{Address: localAddress, Client: offline(), Directory: directory},
+			Answers: running.Load}, nil
+	}
+	return a
+}
+
+func (a *app) record(t *testing.T) string {
+	t.Helper()
+	c, err := a.Clients.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(c)
+	return string(raw)
+}
+
+// The folder remembered opens on one press: its address is in the
+// chooser's field, and Connect opens it with the account service its own
+// settings name, reading no sign-in page and asking nothing, cyfr.run or
+// not.
+func TestARememberedLocalCYFROpensOnOnePress(t *testing.T) {
+	for _, tc := range []struct{ name, directory, origin string }{
+		{"cyfr.run", account.DefaultDirectory, account.DefaultDirectory},
+		{"another https service", "https://accounts.example.com/cyfr", "https://accounts.example.com"},
+		{"its own", localAddress, localAddress},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var running atomic.Bool
+			running.Store(true)
+			a := rememberLocal(t, t.TempDir(), tc.directory, &running)
+			a.AccountRoad = true
+			before := a.record(t)
+			shown := a.post(t, "/bootstrap/state", map[string]string{})
+			if shown != (answer{Home: localAddress}) {
+				t.Fatalf("the chooser shows %+v", shown)
+			}
+			done := a.connect(t, "/bootstrap/connect", map[string]string{"address": shown.Home})
+			if m := a.next(t); m != (Message{Type: TypeHome, Home: localAddress, Account: tc.origin}) {
+				t.Fatalf("main heard %+v", m)
+			}
+			if w := a.get("/"); w.Code != http.StatusSeeOther {
+				t.Fatal("the device's pages were served before main was ready")
+			}
+			a.HomeReady(localAddress)
+			want := answer{Home: localAddress, Next: "/", Passkey: localAddress + "/login"}
+			if got := answered(t, done); got != want {
+				t.Fatalf("answered %+v", got)
+			}
+			a.opened(t, localAddress)
+			if w := a.get("/"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Set up CYFR") {
+				t.Fatalf("the device's pages are not served: %d %s", w.Code, w.Body)
+			}
+			if n := a.discovered.Load(); n != 0 {
+				t.Fatalf("%d sign-in pages were read", n)
+			}
+			if got := a.record(t); got != before {
+				t.Fatalf("the record became %s", got)
+			}
+			if got := a.post(t, "/bootstrap/state", map[string]string{}); got != want {
+				t.Fatalf("the chooser of the open CYFR shows %+v", got)
+			}
+			a.Lock("Locked.")
+			if m := a.next(t); m != (Message{Type: TypeLocked, Home: localAddress, Account: tc.origin}) {
+				t.Fatalf("main heard %+v", m)
+			}
+		})
+	}
+}
+
+// A CYFR with tailnet access opens over the route read for it, which every
+// locked names again.
+func TestALocalCYFROnItsTailnetNamesItsRoute(t *testing.T) {
+	const home = "https://box.tail9f3a3c.ts.net"
+	a := newApp(t, t.TempDir(), offline())
+	if err := a.Clients.SelectProject(localFolder); err != nil {
+		t.Fatal(err)
+	}
+	a.Local = func(string) (Local, error) {
+		return Local{Shell: shell.Config{Address: home, Client: offline(), Directory: account.DefaultDirectory},
+			Proxy: "socks5://127.0.0.1:1055", Resolver: "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+			Answers: func() bool { return true }}, nil
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": home})
+	want := Message{Type: TypeHome, Home: home, Account: account.DefaultDirectory,
+		Proxy: "socks5://127.0.0.1:1055", Resolver: "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"}
+	if m := a.next(t); m != want {
+		t.Fatalf("main heard %+v", m)
+	}
+	a.HomeReady(home)
+	answered(t, done)
+	a.opened(t, home)
+	a.Lock("Locked.")
+	want.Type = TypeLocked
+	if m := a.next(t); m != want {
+		t.Fatalf("main heard %+v", m)
+	}
+}
+
+// A CYFR on this computer that does not answer is named and opens nothing;
+// the same press opens it once it answers.
+func TestALocalCYFRThatDoesNotAnswerIsNamedAndOpensNothing(t *testing.T) {
+	var running atomic.Bool
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	before := a.record(t)
+	got := a.post(t, "/bootstrap/connect", map[string]string{"address": localAddress})
+	want := "The CYFR in /home/ada/cyfr does not answer at http://localhost:4000. If it is not running, run cyfr up in that folder, then connect again."
+	if got != (answer{Error: want}) {
+		t.Fatalf("answered %+v", got)
+	}
+	a.quiet(t)
+	if w := a.get("/"); w.Code != http.StatusSeeOther || a.record(t) != before {
+		t.Fatal("a CYFR that does not answer opened or changed the record")
+	}
+	running.Store(true)
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": localAddress})
+	if m := a.next(t); m.Type != TypeHome {
+		t.Fatalf("main heard %+v", m)
+	}
+	a.HomeReady(localAddress)
+	if got := answered(t, done); got.Next != "/" {
+		t.Fatalf("answered %+v", got)
+	}
+}
+
+// The edges of plain http: a local CYFR naming any origin but its own,
+// this computer's others included, opens nothing and is sent nothing.
+func TestALocalCYFRTakesPlainHTTPOnlyAtItsOwnOrigin(t *testing.T) {
+	for _, directory := range []string{"http://localhost:4100", "http://127.0.0.1:4000", "http://127.0.0.1:7340",
+		"http://accounts.example.com", "not an address"} {
+		var asked atomic.Bool
+		var running atomic.Bool
+		running.Store(true)
+		a := rememberLocal(t, t.TempDir(), directory, &running)
+		read := a.Local
+		a.Local = func(project string) (Local, error) {
+			l, err := read(project)
+			l.Answers = func() bool { asked.Store(true); return true }
+			return l, err
+		}
+		if got := a.post(t, "/bootstrap/connect", map[string]string{"address": localAddress}); got.Next != "" || !strings.Contains(got.Error, directory) {
+			t.Errorf("%s: answered %+v", directory, got)
+		}
+		a.quiet(t)
+		if asked.Load() {
+			t.Errorf("%s: the CYFR was asked anything", directory)
+		}
+	}
+}
+
+// The other edge: a CYFR elsewhere that names this computer, or any plain
+// http address, as its account service is refused by the reader, and
+// nothing of the app goes there.
+func TestACYFRElsewhereNamingPlainHTTPIsRefused(t *testing.T) {
+	for _, directory := range []string{localAddress, "http://accounts.example.com"} {
+		var reached []string
+		client := &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			reached = append(reached, r.URL.String())
+			page := `<div data-account-directory="` + directory + `"></div>`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(page)), Request: r}, nil
+		})}
+		a := newApp(t, t.TempDir(), client)
+		a.Discover = account.Discover
+		if got := a.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"}); got.Next != "" || got.Confirm != "" || got.Error == "" {
+			t.Errorf("%s: answered %+v", directory, got)
+		}
+		a.quiet(t)
+		if len(reached) != 1 || reached[0] != "https://cyfr.example.com/login" {
+			t.Errorf("%s: the app reached %v", directory, reached)
+		}
+	}
+}
+
+// Plain http opens the remembered folder's CYFR and nothing else: with no
+// folder remembered, or at another address, Connect takes https alone.
+func TestOnlyTheRememberedFolderOpensOverPlainHTTP(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	a.Local = func(string) (Local, error) {
+		t.Error("a folder was read with none remembered")
+		return Local{}, errors.New("none")
+	}
+	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": localAddress}); got.Error == "" {
+		t.Fatalf("no folder remembered: answered %+v", got)
+	}
+	var running atomic.Bool
+	running.Store(true)
+	b := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	if got := b.post(t, "/bootstrap/connect", map[string]string{"address": "http://localhost:4100"}); got.Error == "" {
+		t.Fatalf("another local address: answered %+v", got)
+	}
+	a.quiet(t)
+	b.quiet(t)
+}
+
+// A folder that cannot be read says so on the chooser, and Connect to a
+// CYFR elsewhere still goes on.
+func TestAFolderThatCannotBeReadLeavesConnect(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	if err := a.Clients.SelectProject(localFolder); err != nil {
+		t.Fatal(err)
+	}
+	a.Local = func(string) (Local, error) { return Local{}, errors.New("no .env") }
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Error != "The app cannot read the CYFR in /home/ada/cyfr (no .env)." {
+		t.Fatalf("the chooser shows %+v", got)
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	if m := a.next(t); m.Type != TypeHome || m.Home != "https://cyfr.example.com" {
+		t.Fatalf("main heard %+v", m)
+	}
+	a.HomeReady("https://cyfr.example.com")
+	answered(t, done)
+}
+
+// The chooser shown again offers the CYFR open, which the record names
+// only once it admitted this device: never the one the record still holds.
+func TestTheChooserOffersTheCYFROpenNotTheRecords(t *testing.T) {
+	for _, held := range []shell.ClientRecord{{Project: localFolder}, {Home: "https://first.example.com", Directory: account.DefaultDirectory}} {
+		a := newApp(t, t.TempDir(), offline())
+		a.AccountRoad = true
+		held.ClientID, held.Certificate = "pcl_held", json.RawMessage(`{"held":1}`)
+		if err := a.Clients.Save(held); err != nil {
+			t.Fatal(err)
+		}
+		done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "second.example.com"})
+		a.next(t)
+		a.HomeReady("https://second.example.com")
+		answered(t, done)
+		a.opened(t, "https://second.example.com")
+		want := answer{Home: "https://second.example.com", Next: "/", Passkey: "https://second.example.com/login"}
+		if got := a.post(t, "/bootstrap/state", map[string]string{}); got != want {
+			t.Errorf("over %+v the chooser shows %+v", held, got)
+		}
+	}
+}

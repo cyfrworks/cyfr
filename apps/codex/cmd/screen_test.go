@@ -583,7 +583,7 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 			s.answer("inspect.out", "2026-10-28T00:01:02.123456789Z\n")
 			s.answer("logs.out", c.log)
 			s.answer("logs.exit", c.exit)
-			if got := screenSetupOpen(t.Context()); got != c.want {
+			if got := localSetupOpen(t.Context(), ".", "screen"); got != c.want {
 				t.Errorf("setup open %v, want %v", got, c.want)
 			}
 		})
@@ -603,11 +603,11 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if screenSetupOpen(t.Context()) {
+	if localSetupOpen(t.Context(), ".", "screen") {
 		t.Error("setup read as open under a lock another command holds")
 	}
 	unlock()
-	if screenShellConfig(t.TempDir(), t.TempDir(), "http://localhost:4000", nil, "box", func() {}).SetupOpen == nil {
+	if local, err := readLocal(".", "screen"); err != nil || local.Shell.SetupOpen == nil {
 		t.Error("the screen's shell does not read whether setup is open")
 	}
 }

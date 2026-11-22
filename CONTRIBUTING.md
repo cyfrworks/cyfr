@@ -273,8 +273,8 @@ same worktree refuses, naming the run that holds it.
   `tests/desktop-proof/*/run.sh` against a CYFR of the shape its folder
   names (its own or another account service, or one requiring a company
   sign-in) from the run's app image of the same architecture. Run here, it needs
-  127.0.0.1:7340 free on this machine for its whole run, so not beside a
-  handoff whose Go rows run.
+  127.0.0.1:7340 free on this machine for its whole run; no test binds it
+  (a Go test gives the commands that serve it a port of its own).
 
   Past `handoff`, the pull request's run on GitHub is the check, and it
   runs every check in parallel; a CI job is reproduced here by running
