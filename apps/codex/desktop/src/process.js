@@ -7,8 +7,6 @@
 
 export const VERSION = 1
 
-/** cyfr's arguments as main starts it, by the road the app offers (the vectors' start). */
-export const startArgs = (accountRoad) => accountRoad ? ["desktop-serve", "--account-road"] : ["desktop-serve"]
 export const MAX_LINE = 64 * 1024
 
 const FIELDS = {
@@ -19,12 +17,13 @@ const FIELDS = {
   "pick-folder": {required: ["id", "suggested"]},
   "home-ready": {required: ["home"]},
   lock: {required: []},
+  leave: {required: []},
   shutdown: {required: []},
   "folder-picked": {required: ["id", "path"]}
 }
 
 const FROM_CYFR = ["ready", "home", "opened", "locked", "pick-folder"]
-const FROM_MAIN = ["home-ready", "lock", "shutdown", "folder-picked"]
+const FROM_MAIN = ["home-ready", "lock", "leave", "shutdown", "folder-picked"]
 
 export class Refused extends Error {
   constructor(reason) {

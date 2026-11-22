@@ -46,8 +46,11 @@ const (
 
 // The messages the app's main process sends cyfr.
 const (
-	TypeHomeReady    = "home-ready"
-	TypeLock         = "lock"
+	TypeHomeReady = "home-ready"
+	TypeLock      = "lock"
+	// Leave locks and lets go of the CYFR committed: main sends it once it
+	// cleared what it kept of that CYFR, and cyfr's locked then names none.
+	TypeLeave        = "leave"
 	TypeShutdown     = "shutdown"
 	TypeFolderPicked = "folder-picked"
 )
@@ -62,11 +65,12 @@ var fields = map[string]struct{ required, optional []string }{
 	TypePickFolder:   {required: []string{"id", "suggested"}},
 	TypeHomeReady:    {required: []string{"home"}},
 	TypeLock:         {},
+	TypeLeave:        {},
 	TypeShutdown:     {},
 	TypeFolderPicked: {required: []string{"id", "path"}},
 }
 
-var fromMain = []string{TypeHomeReady, TypeLock, TypeShutdown, TypeFolderPicked}
+var fromMain = []string{TypeHomeReady, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked}
 
 // Message is one message in either direction. Path is a folder-picked
 // answer's folder, nil when the person cancelled.

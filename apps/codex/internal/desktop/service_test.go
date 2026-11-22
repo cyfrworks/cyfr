@@ -656,54 +656,38 @@ func TestAConnectThatFailsAfterHomeReadyLeavesTheServiceFree(t *testing.T) {
 	a.opened(t, "https://cyfr.example.com")
 }
 
-// Where the app signs in with the account's passkey, an open CYFR's
-// answer offers that CYFR's own sign-in page beside the device's pages,
-// and so does the chooser shown again after a lock; only the Connect that
-// opened it sends the window to that CYFR's root, where a kept sign-in
-// lands. Elsewhere it offers the device's pages alone.
-func TestAnOpenCYFROffersThePasskeyRoadWhereTheAppHasIt(t *testing.T) {
-	for _, road := range []bool{true, false} {
-		a := newApp(t, t.TempDir(), offline())
-		a.AccountRoad = road
-		done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
-		a.next(t)
-		a.HomeReady("https://cyfr.example.com")
-		want := answer{Home: "https://cyfr.example.com", Next: "/"}
-		if road {
-			want.Passkey = "https://cyfr.example.com/login"
-		}
-		connected := want
-		if road {
-			connected.Open = "https://cyfr.example.com/"
-		}
-		if got := answered(t, done); got != connected {
-			t.Fatalf("account road %v: answered %+v", road, got)
-		}
-		a.opened(t, "https://cyfr.example.com")
-		a.Lock("Locked.")
-		a.next(t)
-		if got := a.post(t, "/bootstrap/state", map[string]string{}); got != want {
-			t.Fatalf("account road %v: the chooser after a lock shows %+v", road, got)
-		}
+// An open CYFR's answer offers the device's pages, and so does the chooser
+// shown again after a lock, whichever road the app offers: cyfr is not
+// told the road, and names no address of that CYFR to load.
+func TestAnOpenCYFRAnswersEveryChooserAlike(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	a.next(t)
+	a.HomeReady("https://cyfr.example.com")
+	want := answer{Home: "https://cyfr.example.com", Next: "/"}
+	if got := answered(t, done); got != want {
+		t.Fatalf("answered %+v", got)
+	}
+	a.opened(t, "https://cyfr.example.com")
+	a.Lock("")
+	a.next(t)
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got != want {
+		t.Fatalf("the chooser after a lock shows %+v", got)
 	}
 }
 
-// At launch on the passkey road the chooser is given the CYFR remembered
-// to connect by itself, once a run: after any Connect began, and on the
-// six-word road, it is not.
-func TestARememberedCYFRResumesOnceOnThePasskeyRoad(t *testing.T) {
+// At launch the chooser is given the CYFR remembered, which on the passkey
+// road it connects by itself, once a run: after any Connect began it is
+// given none.
+func TestARememberedCYFRResumesOnce(t *testing.T) {
 	dir := t.TempDir()
 	record := shell.ClientFile(filepath.Join(dir, "client.json"))
 	if err := record.Save(shell.ClientRecord{Home: "https://cyfr.example.com", Directory: account.DefaultDirectory}); err != nil {
 		t.Fatal(err)
 	}
-	if got := newApp(t, dir, offline()).post(t, "/bootstrap/state", map[string]string{}); got.Resume != "" || got.Home != "https://cyfr.example.com" {
-		t.Fatalf("the six-word road's chooser shows %+v", got)
-	}
 	a := newApp(t, dir, offline())
-	a.AccountRoad = true
-	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Resume != "https://cyfr.example.com" {
-		t.Fatalf("the passkey road's chooser shows %+v", got)
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Resume != "https://cyfr.example.com" || got.Home != "https://cyfr.example.com" {
+		t.Fatalf("the chooser shows %+v", got)
 	}
 	a.Discover = func(context.Context, *http.Client, string) (account.Discovered, error) {
 		return account.Discovered{}, errors.New("unreachable")
@@ -716,9 +700,10 @@ func TestARememberedCYFRResumesOnceOnThePasskeyRoad(t *testing.T) {
 	}
 }
 
-// Connect to another CYFR leaves the one open, locked and named in no
-// locked, for a Connect to the next, which is then the one remembered. On
-// the six-word road, which has no such button, it is refused.
+// Main's leave (Connect to another CYFR, sent once main cleared what it
+// kept) lets go of the CYFR open, locked and named in no locked, for a
+// Connect to the next, which is then the one remembered. No page of cyfr's
+// can do it.
 func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
 	const first, second = "https://cyfr.example.com", "https://bob.example.com"
 	open := func(a *app, home string) {
@@ -733,24 +718,27 @@ func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
 		}
 		a.opened(t, home)
 	}
-	words := newApp(t, t.TempDir(), offline())
-	open(words, first)
-	if got := words.post(t, "/bootstrap/another", map[string]string{}); got.Error == "" {
-		t.Fatalf("the six-word road left its CYFR: %+v", got)
-	}
-	words.quiet(t)
-
 	a := newApp(t, t.TempDir(), offline())
-	a.AccountRoad = true
 	open(a, first)
-	if got := a.post(t, "/bootstrap/another", map[string]string{}); got.Error != "" {
-		t.Fatalf("Connect to another answered %+v", got)
+	if w := a.get("/bootstrap/another"); w.Code != http.StatusNotFound {
+		t.Fatalf("cyfr serves Connect to another itself: %d", w.Code)
+	}
+	a.quiet(t)
+	in, main := io.Pipe()
+	ran := make(chan error, 1)
+	go func() { ran <- a.Run(in) }()
+	t.Cleanup(func() {
+		main.Close()
+		<-ran
+	})
+	if _, err := io.WriteString(main, `{"version":1,"type":"leave"}`+"\n"); err != nil {
+		t.Fatal(err)
 	}
 	if m := a.next(t); m.Type != TypeLocked || m.Home != "" {
 		t.Fatalf("main heard %+v, not a lock keeping to none", m)
 	}
 	a.quiet(t)
-	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Next != "" || got.Passkey != "" || got.Resume != "" || got.Home != first {
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Next != "" || got.Resume != "" || got.Home != first {
 		t.Fatalf("the chooser shows %+v", got)
 	}
 	if w := a.get("/"); w.Code != http.StatusSeeOther {

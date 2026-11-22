@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -15,11 +16,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // The app's cyfr binds the shell's listener before it says ready with the
 // chooser's address and its run token, holds it alone, and ends when main
-// says shutdown, saying no lock of it.
+// says shutdown, locking and saying no lock of it.
 func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -27,7 +31,7 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	ended := make(chan error, 1)
-	go func() { ended <- runDesktopServe(context.Background(), inR, outW, false); outW.Close() }()
+	go func() { ended <- runDesktopServe(context.Background(), inR, outW); outW.Close() }()
 	lines := bufio.NewScanner(outR)
 	read := func() map[string]any {
 		t.Helper()
@@ -51,15 +55,24 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 		t.Fatalf("the chooser is not served (%v)", err)
 	}
 	resp.Body.Close()
-	if err := runDesktopServe(context.Background(), strings.NewReader(""), io.Discard, false); err == nil ||
+	if err := runDesktopServe(context.Background(), strings.NewReader(""), io.Discard); err == nil ||
 		!strings.Contains(err.Error(), "close the app using port 7340") {
 		t.Fatalf("a second cyfr took the port: %v", err)
 	}
 	if info, err := os.Stat(filepath.Join(home, ".cyfr", "device")); err != nil || !info.IsDir() {
 		t.Fatalf("the device folder is %v (%v)", info, err)
 	}
+	connecting := connectHeld(t, token)
 	if _, err := io.WriteString(inW, `{"version":1,"type":"shutdown"}`+"\n"); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case said := <-connecting:
+		if !strings.Contains(said, "CYFR locked. Connect again.") {
+			t.Fatalf("shutdown did not lock: the Connect under way answered %s", said)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown left the Connect under way")
 	}
 	if lines.Scan() {
 		t.Fatalf("an end of cyfr said something, which main would take for a lock: %s", lines.Text())
@@ -77,35 +90,86 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	}
 }
 
-// cyfr is started as the shared vectors list, and takes the passkey road
-// from main's flag alone, never from the platform it runs on.
-func TestDesktopServeTakesTheRoadFromItsStart(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "desktop-process.json"))
+// connectHeld posts the chooser's Connect to a CYFR that takes the
+// connection and answers nothing, and returns what it answers, once that
+// CYFR was reached.
+func connectHeld(t *testing.T, token string) <-chan string {
+	t.Helper()
+	silent, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var vectors struct {
-		Start []struct {
-			Name        string   `json:"name"`
-			AccountRoad bool     `json:"account_road"`
-			Args        []string `json:"args"`
-		} `json:"start"`
-	}
-	if err := json.Unmarshal(raw, &vectors); err != nil || len(vectors.Start) == 0 {
-		t.Fatalf("no start vectors (%v)", err)
-	}
-	saved := desktopAccountRoad
-	t.Cleanup(func() { desktopAccountRoad = saved })
-	for _, c := range vectors.Start {
-		desktopAccountRoad = false
-		found, rest, err := rootCmd.Find(c.Args)
-		if err != nil || found != desktopServeCmd {
-			t.Fatalf("%s: %v names %v (%v)", c.Name, c.Args, found.Name(), err)
+	reached, done := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		close(done)
+		silent.Close()
+	})
+	go func() {
+		c, err := silent.Accept()
+		if err != nil {
+			return
 		}
-		if err := found.ParseFlags(rest); err != nil || desktopAccountRoad != c.AccountRoad {
-			t.Fatalf("%s: the road is %v (%v)", c.Name, desktopAccountRoad, err)
+		defer c.Close()
+		close(reached)
+		<-done
+	}()
+	body, err := json.Marshal(map[string]string{"token": token, "address": "https://" + silent.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan string, 1)
+	go func() {
+		req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:7340/bootstrap/connect", bytes.NewReader(body))
+		if err != nil {
+			answered <- err.Error()
+			return
+		}
+		req.Header.Set("Origin", "http://127.0.0.1:7340")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			answered <- err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		answered <- string(raw)
+	}()
+	select {
+	case <-reached:
+	case said := <-answered:
+		t.Fatalf("Connect answered before it reached the CYFR: %s", said)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Connect never reached the CYFR")
+	}
+	return answered
+}
+
+// What the packaged program's help prints says nothing of a sign-in road
+// or of a proof, and the command the app starts takes no flag for one.
+func TestDesktopServeHelpShowsNoRoad(t *testing.T) {
+	var words bytes.Buffer
+	for _, c := range []*cobra.Command{rootCmd, desktopServeCmd} {
+		c.SetOut(&words)
+		if err := c.Help(); err != nil {
+			t.Fatal(err)
+		}
+		c.SetOut(nil)
+	}
+	help := strings.ToLower(words.String())
+	if !strings.Contains(help, "serve the cyfr app's pages to its main process") {
+		t.Fatalf("that is not the command's help:\n%s", help)
+	}
+	for _, word := range []string{"account-road", "passkey road", "proof"} {
+		if strings.Contains(help, word) {
+			t.Fatalf("the help prints %q:\n%s", word, help)
 		}
 	}
+	desktopServeCmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
+		if f.Name != "help" {
+			t.Errorf("desktop-serve takes --%s", f.Name)
+		}
+	})
 }
 
 // The device's screen shares its account's client record with the CYFR

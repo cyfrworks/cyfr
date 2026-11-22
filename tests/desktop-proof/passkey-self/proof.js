@@ -10,7 +10,8 @@
 
 import {accountAndSetup, accountWindow, armWindow, connectApproved, passkeyFor, signOutOfPrism, signedInPrism,
   startSignIn, toSignIn, usePasskey} from "../account.js"
-import {HOME, decided, inputs, js, literal, passkeys, row, run, waitFor} from "../lib.js"
+import {HOME, UNCLEARED, atBootstrap, chooserWindow, closedAtLock, content, decided, frontLength, inputs, js, literal,
+  passkeys, question, reachedSince, row, run, said, submitConnect, unclearable, waitFor} from "../lib.js"
 
 // The refusal the app's policy gives both passkey calls in a document.
 const policyRefuses = (answers) => /^NotAllowedError: .*'publickey-credentials-get' feature is not enabled/.test(answers[0]) &&
@@ -19,6 +20,7 @@ const policyRefuses = (answers) => /^NotAllowedError: .*'publickey-credentials-g
 async function passkeyPhase() {
   await accountAndSetup(inputs)
   const mine = [...passkeys.values()].filter((c) => c.rpId === new URL(HOME).hostname)
+  await unclearedConnect()
   await connectApproved()
 
   // same_origin_hop: the CYFR's sign-in hops to its own account pages,
@@ -59,6 +61,33 @@ async function passkeyPhase() {
   const refused = await decided(account, HOME + "/", false, "main's decision on the CYFR's page in the account window")
   const ended = await waitFor(() => !accountWindow(), "the ceremony ended")
   row("home_paths", refused && ended, "the account window refuses the CYFR's own page at the same origin, and the ceremony ends", {refused})
+}
+
+// uncleared: while the engine cannot clear the kept storage for the CYFR
+// proposed, nothing of it loads: the lock that gives cyfr's Connect up
+// closes the content at once, the chooser's form comes back saying so and
+// cyfr runs on.
+async function unclearedConnect() {
+  const chooser = await chooserWindow()
+  await submitConnect(chooser.webContents)
+  await question(chooser.webContents)
+  const from = await frontLength()
+  const lockedBefore = closedAtLock.length
+  const refused = await unclearable(chooser, async () => {
+    await js(chooser.webContents, `document.querySelector("#approve").click(); 1`)
+    return waitFor(async () => {
+      const at = content()
+      if (!at || at === chooser || at.webContents.isLoading() || !atBootstrap(at.webContents.getURL())) return null
+      return js(at.webContents, `document.querySelector("#address").getClientRects().length > 0 &&
+        {words: document.querySelector("#notice").textContent}`)
+    }, "the chooser after the clear that failed")
+  })
+  const atOnce = closedAtLock.slice(lockedBefore)
+  const loaded = (await reachedSince(new URL(HOME).hostname, from)).filter((r) => r.path === "/").length
+  row("uncleared", refused.words === UNCLEARED && atOnce.length > 0 && atOnce.every(Boolean) && loaded === 0 &&
+    !said.some((l) => l.startsWith("cyfr ended")),
+  "a clear that fails opens nothing: the Connect is given up, the chooser says so and cyfr runs on",
+  {words: refused.words, atOnce, loaded})
 }
 
 run("passkey-self", {passkey: passkeyPhase}, {accountRoad: true})

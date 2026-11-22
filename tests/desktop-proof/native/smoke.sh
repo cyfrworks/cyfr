@@ -19,9 +19,9 @@
 #              mode 2, in a user namespace other than the app's
 #   second     a second launch for the same account exits 0, saying the
 #              first is shown instead, and the first still serves
-#   renderer   with the content's renderer killed, the app locks ("the page
-#              stopped") and a renderer of its own shows the chooser again,
-#              which answers
+#   renderer   with the content's renderer killed, the app shows the page
+#              again in a renderer of its own, the chooser still answering,
+#              and locks nothing
 #   terminate  the app terminated (SIGTERM; on Windows the forced end Task
 #              Manager's End task gives) ends, its cyfr with it, and 7340
 #              stops answering
@@ -281,14 +281,14 @@ if ready first "$FIRST"; then
     fail renderer "the app has no live renderer to lose"
   else
     for r in $old; do oskill "$r"; done
-    if ! within 30 said first 'CYFR: locked: the page stopped'; then
-      fail renderer "the app did not say 'locked: the page stopped' within 30 s of its renderer's end"
-    elif ! within 30 fresh; then
-      fail renderer "the app locked, and no new renderer showed the chooser within 30 s$(said first 'CYFR: cyfr ended: ' && echo ": its cyfr ended meanwhile")"
+    if ! within 30 fresh; then
+      fail renderer "no new renderer showed the page again within 30 s of its renderer's end$(said first 'CYFR: cyfr ended: ' && echo ": its cyfr ended meanwhile")"
+    elif said first 'CYFR: locked:'; then
+      fail renderer "the app locked as its renderer ended: $(grep -F 'CYFR: locked:' "$RUN/first.log" | head -1)"
     elif ! within 20 answers; then
-      fail renderer "the app locked, and $CHOOSER did not answer 200 again"
+      fail renderer "the page was shown again, and $CHOOSER did not answer 200"
     else
-      pass renderer "locked: the page stopped, and a new renderer shows the chooser, which answers"
+      pass renderer "a new renderer shows the page again, the app locked nothing and the chooser answers"
     fi
   fi
 

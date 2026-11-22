@@ -12,8 +12,8 @@
 // sign-in started and nothing reaching the issuer.
 
 import {accountAndSetup, armWindow, connectApproved, enrolDevice, startSignIn, toSignIn, usePasskey} from "../account.js"
-import {HOME, afterLock, atDevice, content, frontLength, history, inputs, js, passkeys, row, run, seen, signOutsSince,
-  submit, text, waitFor} from "../lib.js"
+import {HOME, UNCLEARED, afterLock, atBootstrap, atDevice, closedAtLock, content, frontLength, history, inputs, js, passkeys,
+  row, run, seen, signOutsSince, submit, text, unclearable, waitFor} from "../lib.js"
 
 const COMPANY = "This CYFR requires company sign-in. Open its address in a browser to continue. " +
   "The CYFR app does not support company sign-in yet."
@@ -39,22 +39,35 @@ async function passkeyPhase() {
   await armWindow(a, mine)
   const from = await frontLength()
   const shownBefore = history.length
+  const lockedBefore = closedAtLock.length
   await usePasskey(a)
-  // Over the chooser keeping that notice: a reload of it, as Ctrl+R does.
+  // Over the chooser keeping that notice: a reload of it, as Ctrl+R does,
+  // and a second lock, which Connect to another CYFR leaves when the
+  // engine cannot clear.
   const over = [async (chooser) => {
     const loaded = new Promise((resolve) => chooser.webContents.once("did-finish-load", resolve))
     chooser.webContents.reload()
     await loaded
-  }]
+  }, (chooser) => unclearable(chooser, async () => {
+    await waitFor(() => js(chooser.webContents, `document.querySelector("#another").getClientRects().length > 0`), "Connect to another CYFR")
+    await js(chooser.webContents, `document.querySelector("#another").click(); 1`)
+    await waitFor(() => {
+      const at = content()
+      return at && at !== chooser && !at.webContents.isLoading() && atBootstrap(at.webContents.getURL())
+    }, "the chooser after the second lock")
+  })]
   const {back, told, kept} = await afterLock(shownBefore, "the company page", {over})
   const afterAccount = await companySignIn()
   const signOuts = await signOutsSince(from)
-  row("account_road", !!told?.words.includes(COMPANY) && told.stayed && afterAccount.none && signOuts.length === 0,
+  const atOnce = closedAtLock.slice(lockedBefore)
+  row("account_road", atOnce.length > 0 && atOnce.every(Boolean) && !!told?.words.includes(COMPANY) && told.stayed && afterAccount.none && signOuts.length === 0,
     "on the passkey road the company sign-in closes the CYFR in the app, the chooser stays with the words that send the person to a browser, and no company sign-in starts or reaches the issuer",
     {chooser: told, ...afterAccount, signOuts})
-  // notice_kept: the reload erased nothing nobody had yet gone on from.
-  row("notice_kept", kept.length === over.length && kept.every((k) => k?.words === COMPANY && k.stayed),
-    "a reload of the chooser that is keeping a notice leaves the notice there", {kept})
+  // notice_kept: neither the reload nor the second lock erased what
+  // nobody had yet gone on from.
+  row("notice_kept", kept.length === over.length && kept.every((k) => k?.stayed) && kept[0].words === COMPANY &&
+    kept[1].words === `${COMPANY} ${UNCLEARED}`,
+  "a reload and a second lock over the chooser that is keeping a notice leave the notice there", {kept})
 
   // device_road: the six-word road's device, added to the account, is
   // refused by the CYFR for its company sign-in, and its page says so.

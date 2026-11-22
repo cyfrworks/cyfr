@@ -6,7 +6,7 @@
 // the road itself, then `remembered` and `changed`, which read the
 // account service this computer approved.
 
-import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, harvest, history, inputs, js, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, said, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOut, sleep, submit, submitConnect, text, throughComputerLock, undisturbed, waitFor} from "../lib.js"
+import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, inputs, js, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, undisturbed, waitFor} from "../lib.js"
 
 // An account service the CYFR names once reconfigured (the front's
 // directory fault); nothing answers at it.
@@ -231,7 +231,7 @@ async function connectPhase() {
   // lock: the device's Lock in Prism's top bar. cyfr's lock ends the
   // session through the device's channel; the app posts no sign-out.
   let out = await lockedOut(w, "the device's Lock", () => js(w.webContents, `document.querySelector('[data-test="device-lock"]').click(); 1`))
-  row("lock", signedOut(out) && out.signOuts.length === 0 && out.left === null,
+  row("lock", signedOutOnward(out) && out.signOuts.length === 0 && out.left === null,
     "the device's Lock closes Prism, the session that opened a page opens nothing, and the app forgot it", lockDetail(out))
 
   // reconnect: unlocked again with the passphrase, a new session.
@@ -250,8 +250,34 @@ async function connectPhase() {
   // renderer_killed: Prism's page's process ended by the kill signal: the
   // page is shown again, in its window and under its session.
   const killed = await pageKilled(w)
-  row("renderer_killed", shownAgain(killed) && !said.slice(said.lastIndexOf("locked: the device locked") + 1).some((l) => l.startsWith("locked:")),
+  row("renderer_killed", shownAgain(killed),
     "Prism's page's process killed: the page is shown again in its window, signed in as before", killed)
+
+  // offline_lock: with the CYFR's front down (its control answered so) the
+  // lock still closes Prism at once and, with nothing to tell, the chooser
+  // goes on to the locked device's page; the session ends with the channel.
+  const offline = {cookie: await sessionCookie(w), from: await frontLength(), shownBefore: history.length,
+    lockedBefore: closedAtLock.length}
+  offline.before = await opens(offline.cookie)
+  await fault("x.test", "down")
+  await js(w.webContents, `document.querySelector('[data-test="device-lock"]').click(); 1`)
+  const unreached = await afterLock(offline.shownBefore, "a lock while the CYFR is unreachable")
+  const atOnce = closedAtLock.slice(offline.lockedBefore)
+  const lockedPage = await waitFor(() => js(unreached.back.webContents, `!!document.querySelector('form[action="/unlock"]')`),
+    "the locked device's page")
+  await fault("x.test", "none")
+  const offlineAfter = await waitFor(async () => {
+    const answer = await opens(offline.cookie)
+    return refused(answer) ? answer : null
+  }, "the session ended with the channel", 60_000)
+  row("offline_lock", offline.before.opens && atOnce.length > 0 && atOnce.every(Boolean) && unreached.shown &&
+    unreached.told === null && lockedPage && refused(offlineAfter) &&
+    (await signOutsSince(offline.from)).length === 0,
+  "a lock while the CYFR cannot be reached closes Prism at once and goes on to the locked device's page, and the session ends with the channel",
+  {before: offline.before, after: offlineAfter, atOnce, chooser: unreached.told})
+  await openCYFR(unreached.back, passphrase)
+  w = await contentAt(atHome, "Prism again")
+  await waitFor(() => js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism's page connected")
 
   // The forced crash, recorded and not asserted (../README.md): the
   // engine's own crash of Prism's page, which on some machines begins and
@@ -274,7 +300,7 @@ async function connectPhase() {
   const after = await waitFor(async () => {
     const answer = await opens(cookie)
     return refused(answer) ? answer : null
-  }, "the device's session ended with its channel", 75_000)
+  }, "the device's session ended with its channel", 60_000)
   const signOuts = await signOutsSince(from)
   row("process_loss", before.opens && told.includes("CYFR stopped") && !/sign/.test(told.replace(/^.*<p>/, "")) && !content() &&
     signOuts.length === 0 && refused(after),

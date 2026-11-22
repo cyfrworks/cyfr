@@ -21,14 +21,8 @@ import (
 )
 
 func init() {
-	desktopServeCmd.Flags().BoolVar(&desktopAccountRoad, "account-road", false,
-		"the app signs in with the account's passkey too")
 	rootCmd.AddCommand(desktopServeCmd)
 }
-
-// desktopAccountRoad is whether the app offers the passkey road, which
-// main decides (by the platform) and says as it starts cyfr.
-var desktopAccountRoad bool
 
 // desktopServeCmd is the cyfr the CYFR app's main process starts and
 // talks to over its stdin and stdout (internal/desktop): no person runs
@@ -39,7 +33,7 @@ var desktopServeCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runDesktopServe(cmd.Context(), os.Stdin, os.Stdout, desktopAccountRoad)
+		return runDesktopServe(cmd.Context(), os.Stdin, os.Stdout)
 	},
 }
 
@@ -48,7 +42,7 @@ var desktopServeCmd = &cobra.Command{
 // shutdown, its pipe ends, or it sends a line that is not its message.
 // Every end locks the device first, saying nothing to main
 // (desktop.Service.End): an end signs nobody out.
-func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer, accountRoad bool) error {
+func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 	_ = holder.HardenProcess()
 	dir, err := shell.DeviceDir()
 	if err != nil {
@@ -61,7 +55,6 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer, accountRo
 	to := desktop.NewWriter(out)
 	host, _ := os.Hostname()
 	svc := &desktop.Service{
-		AccountRoad: accountRoad,
 		Token:       desktop.NewToken(),
 		Clients:     shell.ClientFile(filepath.Join(dir, "client.json")),
 		Record:      filepath.Join(dir, "holder.json"),

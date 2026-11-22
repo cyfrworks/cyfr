@@ -35,8 +35,10 @@ const given = navigate({})
 // sign in, on the passkey road.
 const company = navigate({url: HOME + "/company-login", showing: HOME + "/login"})
 const signedOut = navigate({url: HOME + "/login?error=signed_out", showing: HOME + "/threads", redirect: true})
-const forgot = {type: "forgot"}
-const proposed = [ready, home()]
+const forgot = {type: "forgot", cleared: true}
+const notForgot = {type: "forgot", cleared: false}
+const taken = (h = HOME) => ({type: "taken", home: h, taken: true})
+const proposed = [ready, home(), taken()]
 const open = [...proposed, {type: "opened", home: HOME}]
 
 test("cyfr's ready shows the chooser; a second ready, or another first page, ends cyfr", () => {
@@ -50,7 +52,7 @@ test("a proposal is answered home-ready and replaced by the next until cyfr says
   const {s, effects} = run(proposed)
   assert.equal(s.name, "proposed")
   assert.deepEqual(effects.at(-1), {send: {type: "home-ready", fields: {home: HOME}}})
-  assert.equal(run([...proposed, home("https://bob.example")]).s.home, "https://bob.example", "after a failure")
+  assert.equal(run([...proposed, home("https://bob.example"), taken("https://bob.example")]).s.home, "https://bob.example", "after a failure")
   assert.equal(run(open).s.name, "open")
   assert.equal(run([...open, home("https://bob.example")]).s.name, "ended", "a proposal after a commit")
   assert.equal(run([...proposed, {type: "opened", home: "https://bob.example"}]).s.name, "ended")
@@ -132,7 +134,7 @@ test("the lock is a barrier: what cyfr sent before its locked is dropped, and it
   const own = run([ready, locked(HOME), forgot])
   assert.equal(own.s.name, "chooser", "cyfr's own locked naming a CYFR main never kept to")
   assert.equal(own.s.home, "")
-  assert.equal(run([...proposed, company, locked(), home()]).s.name, "proposed", "the next proposal after the lock")
+  assert.equal(run([...proposed, company, locked(), home(), taken()]).s.name, "proposed", "the next proposal after the lock")
 })
 
 test("on the passkey road the content sent to the CYFR's sign-in page locks and shows both ways on", () => {
@@ -164,6 +166,88 @@ test("the sign-in page as a way on, its own loads, and the six-word road are nev
     assert.ok(!r.do.some((e) => e.close || e.send), name)
     if (allow !== undefined) assert.equal(r.allow, allow, name)
   }
+})
+
+test("main keeps to a proposed CYFR only once the kept storage is its own, whichever road", () => {
+  for (const road of [false, true]) {
+    const waiting = run([ready, home()], road)
+    assert.deepEqual(waiting.effects.at(-1), {take: {home: HOME}})
+    assert.ok(!waiting.effects.some((e) => e.send), "no home-ready before it is its own")
+    for (const url of [HOME + "/", HOME + "/login", HOME + "/auth/device/complete/x"]) {
+      assert.equal(step(waiting.s, navigate({url})).allow, false, url)
+    }
+    assert.equal(step(waiting.s, navigate({url: HOME + "/", target: "frame", asker: "frame-inside"})).allow, false, "nor a frame")
+    const own = step(waiting.s, taken())
+    assert.deepEqual(own.do, [{send: {type: "home-ready", fields: {home: HOME}}}])
+    assert.equal(step(own.state, given).allow, true)
+  }
+  const replaced = run([ready, home(), home("https://bob.example")]).s
+  assert.deepEqual(step(replaced, taken()), {state: replaced, do: []}, "an answer for a proposal since replaced")
+})
+
+test("a kept storage that could not be made the CYFR's loads nothing of it, locks cyfr's Connect and says so", () => {
+  const refused = run([ready, home(), {type: "taken", home: HOME, taken: false}], true)
+  assert.equal(refused.s.name, "locking")
+  assert.deepEqual(refused.effects.slice(-2), [{close: true}, {send: {type: "lock"}}])
+  assert.ok(!refused.effects.some((e) => e.send?.type === "home-ready" || e.root))
+  const back = run([ready, home(), {type: "taken", home: HOME, taken: false}, locked()], true)
+  assert.equal(back.s.name, "chooser")
+  assert.equal(back.s.home, "", "main keeps to none")
+  assert.deepEqual(back.effects.at(-1), {chooser: ["uncleared"]})
+})
+
+test("main alone opens a CYFR committed at its root, on the passkey road, and the notices are told by then", () => {
+  assert.deepEqual(run(open, true).effects.at(-1), {root: {home: HOME}})
+  assert.ok(!run(open, false).effects.some((e) => e.root))
+  const told = run([...open, company, locked()], true)
+  assert.deepEqual(told.s.notices, ["company"])
+  assert.deepEqual(run([...open, company, locked(), home(), taken(), {type: "opened", home: HOME}], true).s.notices, [])
+})
+
+const atWays = "http://127.0.0.1:7340/bootstrap/#road=passkey"
+const another = navigate({url: "http://127.0.0.1:7340/bootstrap/another", showing: atWays})
+
+test("Connect to another CYFR clears first and only then tells cyfr to leave", () => {
+  const clearing = run([...open, another], true)
+  assert.equal(clearing.s.name, "locking")
+  assert.deepEqual(clearing.effects.slice(-2), [{close: true}, {forget: true}])
+  assert.ok(!clearing.effects.some((e) => ["leave", "lock"].includes(e.send?.type)), "cyfr is told nothing before the clear")
+  assert.deepEqual(run([...open, another, forgot], true).effects.at(-1), {send: {type: "leave"}})
+  const left = run([...open, another, forgot, locked()], true)
+  assert.equal(left.s.name, "chooser")
+  assert.deepEqual(left.effects.at(-1), {chooser: []})
+  const own = run([...open, another, locked(HOME), forgot], true)
+  assert.equal(own.s.name, "locking", "a lock of cyfr's own meanwhile does not stand for its answer")
+  assert.equal(run([...open, another, locked(HOME), forgot, locked()], true).s.name, "chooser")
+})
+
+test("Connect to another CYFR does not advance past a failed clear", () => {
+  assert.deepEqual(run([...open, another, notForgot], true).effects.at(-1), {send: {type: "lock"}}, "cyfr is never told to leave")
+  const stayed = run([...open, another, notForgot, locked(HOME)], true)
+  assert.equal(stayed.s.name, "open")
+  assert.equal(stayed.s.home, HOME)
+  assert.deepEqual(stayed.effects.at(-1), {chooser: ["uncleared"]})
+  assert.deepEqual(run([...open, company, locked(HOME), another, notForgot, locked(HOME)], true).effects.at(-1),
+    {chooser: ["company", "uncleared"]}, "beside what it was keeping")
+})
+
+test("only the chooser's own button on the passkey road leaves a CYFR", () => {
+  for (const [name, road, before, over] of [
+    ["the six-word road", false, open, {}],
+    ["a CYFR's page", true, open, {showing: HOME + "/threads"}],
+    ["a device's page", true, open, {showing: "http://127.0.0.1:7340/"}],
+    ["a frame asking the top frame", true, open, {asker: "frame-outside"}],
+    ["an asker the engine does not name", true, open, {asker: "none"}],
+    ["a confirmation window", true, open, {window: "child"}],
+    ["no CYFR open", true, [ready], {}]]) {
+    const r = step(run(before, road).s, {...another, ...over})
+    assert.equal(r.allow, false, name)
+    assert.deepEqual(r.do, [], name)
+  }
+})
+
+test("a forgetting that failed is said on the chooser", () => {
+  assert.deepEqual(run([...open, locked(HOME), notForgot], true).effects.at(-1), {chooser: ["uncleared"]})
 })
 
 test("a lost page is shown again and locks nothing", () => {

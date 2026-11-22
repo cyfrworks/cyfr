@@ -5,17 +5,12 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import {test} from "node:test"
 
-import {MAX_LINE, Refused, VERSION, lines, readFromCyfr, startArgs, toCyfr} from "../src/process.js"
+import {MAX_LINE, Refused, VERSION, lines, readFromCyfr, toCyfr} from "../src/process.js"
 
 const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
 
 test("main speaks the vectors' version", () => {
   assert.equal(vectors["version"], VERSION)
-})
-
-test("main starts cyfr as pinned, naming the road the app offers", () => {
-  assert.ok(vectors["start"].length > 0)
-  for (const {name, account_road, args} of vectors["start"]) assert.deepEqual(startArgs(account_road), args, name)
 })
 
 test("main reads each message cyfr sends as pinned", () => {

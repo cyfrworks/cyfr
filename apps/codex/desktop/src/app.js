@@ -11,16 +11,18 @@
 // shows them in a content window. On the six-word road alone its session
 // is memory-only and new at every lock. On macOS and Windows a person may
 // sign in with the account's passkey instead, and is then kept signed in
-// as a browser keeps them: the content session is one, kept on disk. The
-// CYFR's own sign-in page hops to its account service, which opens in the
-// one account window, and the answer returns only to the content session
-// that hopped.
+// as a browser keeps them: the content session is one, kept on disk, and
+// one CYFR's alone (owner.js). The CYFR's own sign-in page hops to its
+// account service, which opens in the one account window, and the answer
+// returns only to the content session that hopped.
 
 import {spawn} from "node:child_process"
+import path from "node:path"
 
 import {BrowserWindow, app, dialog, session} from "electron"
 
-import {lines, readFromCyfr, startArgs, toCyfr} from "./process.js"
+import {keptStorage} from "./owner.js"
+import {lines, readFromCyfr, toCyfr} from "./process.js"
 import {accountLoad, documentHeaders, grants, readHop, relyingParty, unlistedSwitch} from "./policy.js"
 import {initial, kept, step} from "./states.js"
 
@@ -88,7 +90,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   let hop = null // {kind, request, from, timer}
   let contentSession = null
   let generation = 0
-  // What the last lock forgets, which quitting waits for.
+  let storage = null // the passkey road's kept storage (owner.js)
+  // What is being forgotten or taken, one after the other, which quitting
+  // waits for.
   let forgetting = Promise.resolve()
 
   // ---- the one place: every event goes through step ----
@@ -105,10 +109,22 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.close) closeContent()
     if (effect.send) send(effect.send.type, effect.send.fields)
     if (effect.forget) {
-      forgetting = Promise.resolve(contentSession?.clearStorageData()).catch(() => {})
-      forgetting.then(() => on({type: "forgot"}))
+      // A session in memory is never used again, cleared or not.
+      const ses = contentSession
+      const done = forgetting.then(() => storage ? storage.clear() : discard(ses))
+      forgetting = done
+      done.then((cleared) => on({type: "forgot", cleared}))
     }
-    if (effect.chooser) openContent(state.readyURL + (effect.chooser.length ? `&notice=${effect.chooser.join(",")}` : ""))
+    if (effect.take) {
+      const {home} = effect.take
+      const done = forgetting.then(() => storage ? storage.take(home) : true)
+      forgetting = done
+      done.then((taken) => on({type: "taken", home, taken}))
+    }
+    if (effect.root && content && !storage.loadRoot(content, effect.root.home)) {
+      on({type: "gone", why: "the sign-in it keeps is another CYFR's"})
+    }
+    if (effect.chooser) openContent(chooserAddress(effect.chooser))
     if (effect.relaunch) {
       say("starting again with the CYFR's route")
       const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a))
@@ -152,6 +168,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       content.focus()
     }
   }
+
+  // The chooser's address: cyfr's own, with the road this app offers,
+  // which is main's alone to say, and what main has to tell.
+  const chooserAddress = (notices) =>
+    state.readyURL + (accountRoad ? "&road=passkey" : "") + (notices.length ? `&notice=${notices.join(",")}` : "")
+
+  const discard = (ses) => Promise.resolve(ses?.clearStorageData()).then(() => true, () => true)
 
   // ---- the window owner: every window the app has is made here ----
 
@@ -367,7 +390,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   let quitting = false
 
   function startCyfr() {
-    child = spawn(cyfr, startArgs(accountRoad), {stdio: ["pipe", "pipe", "pipe"], windowsHide: true})
+    child = spawn(cyfr, ["desktop-serve"], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true})
     send = (type, fields) => {
       if (child.stdin.writable) child.stdin.write(toCyfr(type, fields))
     }
@@ -430,7 +453,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (accountRoad) {
       // The engine writes cookies within half a minute, which an app that is
       // killed does not have.
-      const {cookies} = session.fromPartition(CONTENT_PARTITION)
+      const ses = session.fromPartition(CONTENT_PARTITION)
+      storage = keptStorage(ses, path.join(app.getPath("userData"), "content-owner"))
+      const {cookies} = ses
       cookies.on("changed", () => cookies.flushStore().catch(() => {}))
     }
     startCyfr()

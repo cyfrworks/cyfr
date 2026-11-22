@@ -19,12 +19,12 @@ import path from "node:path"
 
 import {BrowserWindow} from "electron"
 
-import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, devicePrism, held, lockDevice,
+import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, bothWays, devicePrism, held, lockDevice,
   offered, passkeyFor, signOutOfPrism, signedInPrism, startSignIn, toSignIn, usePasskey} from "../account.js"
 import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, atBootstrap, bare, childOfThis, content, contentAt, decided,
   decisions, fault, frontLength, harvest, history, inputs, js, literal, load, lockDetail, opens, pageKilled, passkeys,
-  reachedSince, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOut, submit,
-  throughComputerLock, undisturbed, waitFor} from "../lib.js"
+  reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays,
+  submit, throughComputerLock, unclearable, UNCLEARED, undisturbed, waitFor} from "../lib.js"
 
 const OTHER = "desk-b"
 // The session the first launch left, as its mark alone (sessionMark).
@@ -112,7 +112,7 @@ async function passkeyPhase() {
   // forgets, and the chooser shows both ways on; its passkey button goes on
   // to the sign-in page.
   let out = await lockDevice(w)
-  row("device_lock", signedOut(out) && out.left === null && out.signOuts.length === 0,
+  row("device_lock", signedOutToWays(out) && out.left === null && out.signOuts.length === 0,
     "the device's Lock ends its session, the app forgets it and the chooser shows both ways on", lockDetail(out))
   w = await toSignIn()
 
@@ -236,8 +236,21 @@ async function passkeyPhase() {
   // redirect to its sign-in page is refused and the chooser shows both
   // ways on; the one sign-out posted is the person's.
   out = await signOutOfPrism(w)
-  row("sign_out", signedOut(out) && out.signOuts.length === 1 && out.signOuts[0].status === 302,
+  row("sign_out", signedOutToWays(out) && out.signOuts.length === 1 && out.signOuts[0].status === 302,
     "Prism's Sign out ends the session, and the chooser shows both ways on", lockDetail(out))
+
+  // signed_out_root: the CYFR opens to no one after that: its root, given
+  // the content window, is sent to sign in, which main refuses, and the
+  // chooser shows the ways on again; the old cookie opens nothing.
+  const root = HOME + "/"
+  const decidedBefore = decisions.length
+  await js(out.back.webContents, `location.assign(${literal(root)}); 1`)
+  const sentBack = await waitFor(() => decisions.slice(decidedBefore).find((d) => d.name === "will-redirect" && d.main &&
+    d.url.startsWith(HOME + "/login")), "the CYFR sending the signed-out to sign in")
+  await bothWays()
+  const oldCookie = await opens(out.cookie)
+  row("signed_out_root", sentBack.prevented && refused(oldCookie),
+    "after signing out the CYFR sends its root to sign in, and the chooser shows the ways on", {sentBack, oldCookie})
 
   // sign_in_again: from the chooser's passkey button a fresh assertion
   // signs in again, under a new session.
@@ -426,21 +439,62 @@ async function closedPhase() {
 async function leftPhase() {
   const w = await stillSignedIn("kept_after_loss", "launched again after cyfr's loss, the app is still signed in")
 
-  // another: signed out, Connect to another CYFR leaves this one: main
-  // keeps to none and the chooser's form shows, connecting nothing by
-  // itself.
+  // another_uncleared, another: signed out, with marks of the proof's own
+  // in the kept storage (signing out drops the session's cookie itself).
+  // While the engine cannot clear, Connect to another CYFR does not
+  // advance: the ways on again, saying so, the marks still there. Once it
+  // can, main clears them and only then is the CYFR left: the form, main
+  // keeping to it no more, and nothing of it in the storage.
+  await plant(w)
   const out = await signOutOfPrism(w)
-  await js(out.back.webContents, `document.querySelector("#another").click(); 1`)
+  const planted = await storageOf(out.back.webContents.session)
+  const stayed = await unclearable(out.back, async () => {
+    await js(out.back.webContents, `document.querySelector("#another").click(); 1`)
+    await waitFor(() => content() && content() !== out.back, "another chooser")
+    const at = await bothWays()
+    return {at, words: await js(at.webContents, `document.querySelector("#notice").textContent`)}
+  })
+  const still = await storageOf(stayed.at.webContents.session)
+  const marked = (got) => got.cookies.includes(MARK) && got.local === "kept"
+  row("another_uncleared", stayed.words === UNCLEARED && marked(planted) && marked(still),
+    "Connect to another CYFR does not advance past a clear that failed, and says so", {words: stayed.words, planted, still})
+
+  await js(stayed.at.webContents, `document.querySelector("#another").click(); 1`)
   const form = await waitFor(async () => {
     const at = content()
-    if (!at || at === out.back || at.webContents.isLoading() || !atBootstrap(at.webContents.getURL())) return null
+    if (!at || at === stayed.at || at.webContents.isLoading() || !atBootstrap(at.webContents.getURL())) return null
     return await js(at.webContents, `document.querySelector("#address").getClientRects().length > 0`) ? at : null
   }, "the chooser's form")
   const away = HOME + "/?from=left"
   await js(form.webContents, `location.assign(${literal(away)}); 1`)
   const leftRefused = await decided(form.webContents, away, false, "main's decision on the CYFR left")
-  row("another", signedOut(out) && leftRefused,
-    "signed out, Connect to another CYFR shows the form, and main keeps to the CYFR left no more", {leftRefused})
+  const gone = await storageOf(form.webContents.session)
+  row("another", signedOutToWays(out) && leftRefused && gone.cookies.length === 0 && gone.local === null,
+    "signed out, Connect to another CYFR clears all that was kept of the CYFR left, and main keeps to it no more",
+    {leftRefused, gone})
+}
+
+const MARK = "proof_left"
+
+// Marks of the proof's own in what the content keeps of the CYFR showing.
+async function plant(w) {
+  await w.webContents.session.cookies.set({url: HOME, name: MARK, value: "1", secure: true,
+    expirationDate: Math.floor(Date.now() / 1000) + 3600})
+  await js(w.webContents, `localStorage.setItem(${literal(MARK)}, "kept"); 1`)
+}
+
+// What session `ses` keeps: every cookie's name, whatever its site, and
+// the mark in the CYFR's local storage, read by a window of the proof's
+// own in that session on a document of that origin that sets no cookie.
+async function storageOf(ses) {
+  const cookies = (await ses.cookies.get({})).map((c) => c.name)
+  const probe = new BrowserWindow({show: false, webPreferences: {session: ses}})
+  try {
+    await probe.loadURL(HOME + "/favicon.ico")
+    return {cookies, local: await js(probe.webContents, `localStorage.getItem(${literal(MARK)})`)}
+  } finally {
+    probe.destroy()
+  }
 }
 
 // The answer a browser of the proof's own (a fresh session, outside the

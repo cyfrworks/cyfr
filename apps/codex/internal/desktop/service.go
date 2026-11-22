@@ -38,11 +38,10 @@ import (
 // home and waits for its home-ready; only then are the device's pages,
 // and the ticket they hand over, served.
 //
-// Where the app signs in with the account's passkey (AccountRoad), the
-// person stays signed in as in a browser: the CYFR remembered is connected
-// by itself as the app starts, a CYFR just connected opens at its own root,
-// and main brings back the chooser, with both ways on and the way to
-// another CYFR, only where that CYFR asks for a sign-in.
+// The road the app offers is main's alone to know (it says it in the
+// chooser's address, and decides every navigation): cyfr answers every
+// chooser alike. Main opens a CYFR committed at its root, and lets go of
+// one by leave.
 type Service struct {
 	// Token is the run token the chooser's requests carry.
 	Token string
@@ -61,9 +60,6 @@ type Service struct {
 	Discover func(ctx context.Context, client *http.Client, home string) (account.Discovered, error)
 	// Shell adapts a selected CYFR's shell configuration; nil leaves it.
 	Shell func(*shell.Config)
-	// AccountRoad is whether the app signs in with the account's passkey
-	// too (main's word: macOS and Windows), beside the device's six words.
-	AccountRoad bool
 
 	mu sync.Mutex
 	// epoch counts locks. A chooser request belongs to the epoch it
@@ -154,7 +150,6 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		"/bootstrap/state":   s.state,
 		"/bootstrap/connect": s.connect,
 		"/bootstrap/approve": s.approve,
-		"/bootstrap/another": s.another,
 	}[r.URL.Path]
 	if !ok || r.Method != http.MethodPost {
 		http.NotFound(w, r)
@@ -233,29 +228,20 @@ type request struct {
 // answer is what the chooser does next: show a sentence, ask to approve a
 // directory for a CYFR, or go to the device's pages.
 //
-// Once a CYFR is open, Next is the device's pages and, where the app signs
-// in with the account's passkey (AccountRoad), Passkey is that CYFR's own
-// sign-in page, which the page offers first. There too Open, in the answer
-// to the Connect that opened it alone, is that CYFR's root, where a kept
-// sign-in lands, and Resume, before any Connect of this run, is the
-// remembered CYFR, which the page connects by itself.
+// Once a CYFR is open, Next is the device's pages. Resume, before any
+// Connect of this run, is the remembered CYFR, which a chooser on the
+// passkey road connects by itself.
 type answer struct {
 	Home    string `json:"home,omitempty"`
 	Confirm string `json:"confirm,omitempty"`
 	Next    string `json:"next,omitempty"`
-	Passkey string `json:"passkey,omitempty"`
-	Open    string `json:"open,omitempty"`
 	Resume  string `json:"resume,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
 
 // opened is the answer for the CYFR open at home.
 func (s *Service) opened(home string) answer {
-	a := answer{Home: home, Next: "/"}
-	if s.AccountRoad {
-		a.Passkey = home + "/login"
-	}
-	return a
+	return answer{Home: home, Next: "/"}
 }
 
 func (s *Service) state(context.Context, uint64, request) answer {
@@ -270,24 +256,10 @@ func (s *Service) state(context.Context, uint64, request) answer {
 		return s.opened(home)
 	}
 	a := answer{Home: c.Home}
-	if s.AccountRoad && !began {
+	if !began {
 		a.Resume = c.Home
 	}
 	return a
-}
-
-// another leaves the CYFR open, locked, for the chooser's Connect: main
-// hears a locked that names none and keeps to none. The client record
-// stays as it is until the next CYFR is opened (shell.Selection).
-func (s *Service) another(_ context.Context, epoch uint64, _ request) answer {
-	if !s.AccountRoad {
-		return answer{Error: "Quit this app and open it again to connect to another CYFR."}
-	}
-	if !s.live(epoch) {
-		return answer{Error: lockedSentence}
-	}
-	s.lock("", true)
-	return answer{}
 }
 
 // homeOf reads a typed address as a CYFR's https origin: a bare name is
@@ -426,11 +398,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
 	s.committed = proposal
-	a := s.opened(home)
-	if s.AccountRoad {
-		a.Open = home + "/"
-	}
-	return a
+	return s.opened(home)
 }
 
 // remoteDisks is what a device of a remote CYFR reports: its own system
@@ -471,7 +439,9 @@ func (s *Service) End() {
 	s.lock("", false)
 }
 
-// lock is Lock, which leaves the CYFR open as well when leave says to.
+// lock is Lock, which lets go of the CYFR open as well when leave says to
+// (main's leave): the client record stays as it is until the next CYFR is
+// opened (shell.Selection).
 func (s *Service) lock(why string, leave bool) {
 	s.mu.Lock()
 	sh := s.sh
@@ -527,6 +497,8 @@ func (s *Service) Run(in io.Reader) error {
 			s.HomeReady(m.Home)
 		case TypeLock:
 			s.Lock("Locked.")
+		case TypeLeave:
+			s.lock("", true)
 		case TypeShutdown:
 			s.End()
 			return nil

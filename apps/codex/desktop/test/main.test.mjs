@@ -10,9 +10,11 @@
 
 import assert from "node:assert/strict"
 import {EventEmitter} from "node:events"
-import {readFileSync} from "node:fs"
+import {mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs"
+import {tmpdir} from "node:os"
+import path from "node:path"
 import {PassThrough} from "node:stream"
-import {mock, test} from "node:test"
+import {after, mock, test} from "node:test"
 
 import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 
@@ -23,9 +25,20 @@ const READY = "http://127.0.0.1:7340/bootstrap/#token=dG9rZW4"
 
 // ---- Electron, stood in for ----
 
-const world = {}
+const world = {disk: new Map(), profiles: mkdtempSync(path.join(tmpdir(), "cyfr-main-test-")), profileCount: 0}
+after(() => rmSync(world.profiles, {recursive: true, force: true}))
 
-function reset() {
+// A launch: on a profile of its own, or on the one the last launch left
+// (`relaunch`), which holds of the cookies what had been written out, as
+// after a kill.
+function reset({relaunch = false} = {}) {
+  if (!relaunch) {
+    world.disk = new Map()
+    world.profile = path.join(world.profiles, String(++world.profileCount))
+  }
+  world.loads = []
+  world.step = () => {}
+  world.unclearable = false
   world.windows = []
   world.sessions = new Map()
   world.fetched = []
@@ -78,6 +91,10 @@ class BrowserWindow extends EventEmitter {
   // another load of the page still pending (refuseLoad), rejects first,
   // sends no did-fail-load, and lands afterwards all the same.
   loadURL(url) {
+    const ses = this.webContents.session
+    if (/^https?:/.test(url) && !url.startsWith("http://127.0.0.1:7340/")) {
+      world.loads.push({url, cookies: ses.jar.map((c) => c.value)})
+    }
     const inPage = !world.wholeDocument && !!this.webContents.url && url.includes("#") &&
       this.webContents.url.split("#")[0] === url.split("#")[0]
     this.webContents.emit("did-start-navigation", {url, isMainFrame: true, isSameDocument: inPage})
@@ -118,14 +135,28 @@ function fromPartition(partition) {
       webRequest: {onHeadersReceived() {}},
       setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDevicePermissionHandler() {},
       setDisplayMediaRequestHandler() {},
-      cookies: Object.assign(new EventEmitter(), {async flushStore() { world.flushed.push(partition) }}),
+      jar: [...(world.disk.get(partition) ?? [])],
+      cookies: Object.assign(new EventEmitter(), {
+        async flushStore() {
+          world.flushed.push(partition)
+          world.disk.set(partition, [...ses.jar])
+          world.step("flushed")
+        },
+        async get() {
+          world.step("read")
+          return [...ses.jar]
+        }
+      }),
+      async clearCache() { world.step("cache cleared") },
       async fetch(url) {
         world.fetched.push(url)
         throw new Error("main asks the CYFR nothing")
       },
-      clearStorageData() {
+      async clearStorageData() {
         world.cleared.push(partition)
-        return world.clearing()
+        await world.clearing()
+        if (!world.unclearable) ses.jar = []
+        world.step("cleared")
       }
     })
     world.sessions.set(partition, ses)
@@ -138,6 +169,10 @@ world.app = Object.assign(new EventEmitter(), {
   enableSandbox() {}, requestSingleInstanceLock: () => true, configureWebAuthn() {},
   relaunch(options) { world.relaunched = options },
   whenReady: () => Promise.resolve(),
+  getPath(name) {
+    assert.equal(name, "userData")
+    return world.profile
+  },
   exit(code) { world.exited = code },
   quit() {
     const event = {prevented: false, preventDefault() { this.prevented = true }}
@@ -184,8 +219,8 @@ const {startApp} = await import("../src/app.js")
 // A turn of the event loop: what main does on a line or an event is done.
 const settled = () => new Promise((resolve) => setImmediate(resolve))
 
-async function started(accountRoad) {
-  reset()
+async function started(accountRoad, launch) {
+  reset(launch)
   const said = []
   startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad, say: (line) => said.push(line)})
   await settled()
@@ -222,13 +257,28 @@ function signedNobodyOut() {
   assert.deepEqual(world.cleared, [], "nothing cleared")
 }
 
-// The CYFR at HOME opened, its page showing.
+// cyfr proposing `home`, and committing it once main answered home-ready:
+// whether it did.
+async function opens(home = HOME) {
+  child.say({type: "home", home, account: ACCOUNT})
+  await settled()
+  await settled()
+  if (!child.heard.some((m) => m.type === "home-ready" && m.home === home)) return false
+  child.say({type: "opened", home})
+  await settled()
+  await settled()
+  return true
+}
+
+// The CYFR at HOME opened, its page showing: main's own load on the
+// passkey road, the device's pages' on the six-word road. What opening
+// took is forgotten by the stand-in.
 async function signedIn(accountRoad = true) {
   const said = await started(accountRoad)
-  child.say({type: "home", home: HOME, account: ACCOUNT})
-  child.say({type: "opened", home: HOME})
-  await settled()
-  await give(content())
+  assert.ok(await opens())
+  if (!accountRoad) await give(content())
+  assert.equal(content().webContents.url, HOME + "/")
+  world.cleared = []
   return said
 }
 
@@ -258,11 +308,13 @@ test("an interrupted Connect, through main: a proposal a lock ended gives way to
   assert.ok(child.killed, "another proposal after a committed CYFR ends cyfr")
 })
 
-test("main says the road it offers as it starts cyfr", async () => {
+test("the road is main's word, in the chooser's address, and cyfr is started with no flag", async () => {
   await started(true)
-  assert.deepEqual(world.spawned, [["desktop-serve", "--account-road"]])
+  assert.deepEqual(world.spawned, [["desktop-serve"]])
+  assert.equal(content().webContents.url, READY + "&road=passkey")
   await started(false)
   assert.deepEqual(world.spawned, [["desktop-serve"]])
+  assert.equal(content().webContents.url, READY)
 })
 
 test("the computer's lock and sleep leave everything as it was", async () => {
@@ -289,8 +341,8 @@ test("a lock closes the content and the ceremony before anything is awaited, and
   assert.ok(account, "the hop opened the account window")
   assert.ok(navigate(page, HOME + "/company-login").prevented)
   assert.ok(page.destroyed && account.destroyed, "both closed at once")
+  assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"}, "and cyfr told, before anything is awaited")
   await settled()
-  assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"})
   assert.equal(content(), undefined, "no chooser before cyfr's locked")
   await saysLocked()
   assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\/.*notice=company$/)
@@ -323,7 +375,8 @@ test("on the passkey road the content session is one kept on disk, through a loc
   redirected(content(), HOME + "/login?error=signed_out")
   await saysLocked()
   assert.equal(content().webContents.session.partition, kept.partition, "after a lock")
-  await signedIn()
+  await started(true, {relaunch: true})
+  assert.ok(await opens())
   assert.equal(content().webContents.session.partition, kept.partition, "at the next start")
 })
 
@@ -360,6 +413,186 @@ test("the device's session ending forgets the content's storage, and the chooser
     await settled()
     assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//)
   }
+})
+
+// Two CYFRs on two ports of one host share their cookies.
+const PORT_A = "https://cyfr.example.com:8443"
+const PORT_B = "https://cyfr.example.com:9443"
+const CONTENT = "persist:cyfr-content"
+const ownerOnDisk = () => {
+  try {
+    return readFileSync(path.join(world.profile, "content-owner"), "utf8")
+  } catch {
+    return ""
+  }
+}
+const cookiesOnDisk = () => (world.disk.get(CONTENT) ?? []).map((c) => c.value)
+
+// The CYFR at `home` opened and `who` signed in there, written out.
+async function signsIn(home, who) {
+  assert.ok(await opens(home))
+  const ses = content().webContents.session
+  ses.jar = [...ses.jar, {name: "_cyfr_key", value: who}]
+  ses.cookies.emit("changed")
+  await settled()
+  assert.deepEqual(cookiesOnDisk(), [who])
+}
+
+test("two CYFRs on two ports of one host never see the same storage across launches", async () => {
+  await started(true)
+  await signsIn(PORT_A, "ada at A")
+  assert.equal(ownerOnDisk(), PORT_A, "the owner is the origin, its port with it")
+
+  await started(true, {relaunch: true})
+  assert.ok(await opens(PORT_A))
+  assert.deepEqual(world.cleared, [], "its own CYFR again: nothing cleared")
+  assert.deepEqual(world.loads, [{url: PORT_A + "/", cookies: ["ada at A"]}], "still signed in")
+
+  await started(true, {relaunch: true})
+  assert.ok(await opens(PORT_B))
+  assert.deepEqual(world.cleared, [CONTENT], "another origin: cleared once")
+  assert.deepEqual(world.loads, [{url: PORT_B + "/", cookies: []}], "nothing of A's")
+  assert.equal(ownerOnDisk(), PORT_B)
+  assert.deepEqual(cookiesOnDisk(), [])
+
+  await started(true, {relaunch: true})
+  assert.ok(await opens(PORT_A))
+  assert.deepEqual(world.cleared, [CONTENT], "and back again: cleared again")
+})
+
+test("another scheme or host is another owner too", async () => {
+  for (const [from, to] of [["https://localhost:4000", "http://localhost:4000"], [HOME, "https://bob.example"]]) {
+    await started(true)
+    await signsIn(from, "ada")
+    await started(true, {relaunch: true})
+    await opens(to)
+    assert.deepEqual(world.cleared, [CONTENT], to)
+    assert.deepEqual(cookiesOnDisk(), [], to)
+  }
+})
+
+test("a storage with no owner recorded is cleared before any CYFR is kept to", async () => {
+  await started(true)
+  world.disk.set(CONTENT, [{name: "_cyfr_key", value: "nobody's"}])
+  await started(true, {relaunch: true})
+  assert.ok(await opens(PORT_A))
+  assert.deepEqual(world.loads, [{url: PORT_A + "/", cookies: []}])
+})
+
+test("nothing of a CYFR loads, and cyfr hears no home-ready, while the storage is being cleared for it", async () => {
+  await started(true)
+  let cleared
+  world.clearing = () => new Promise((resolve) => { cleared = resolve })
+  child.say({type: "home", home: PORT_B, account: ACCOUNT})
+  await settled()
+  assert.deepEqual(child.heard, [])
+  for (const url of [PORT_B + "/", PORT_B + "/login", PORT_B + "/auth/device/complete/x"]) {
+    assert.ok(navigate(content(), url).prevented, url)
+  }
+  assert.equal(ownerOnDisk(), "", "recorded only once cleared")
+  cleared()
+  await settled()
+  assert.deepEqual(child.heard, [{version: 1, type: "home-ready", home: PORT_B}])
+  assert.equal(ownerOnDisk(), PORT_B)
+})
+
+test("a clear that fails opens nothing, keeps the old owner and says so", async () => {
+  for (const [name, fail] of [
+    ["clearStorageData rejects", () => { world.clearing = () => Promise.reject(new Error("no")) }],
+    ["the cookies stay", () => { world.unclearable = true }],
+    ["the cache stays", () => { world.step = (at) => { if (at === "cache cleared") throw new Error("no") } }],
+    ["the store is not written out", () => { world.step = (at) => { if (at === "flushed") throw new Error("no") } }]]) {
+    await started(true)
+    await signsIn(PORT_A, "ada at A")
+    await started(true, {relaunch: true})
+    fail()
+    assert.equal(await opens(PORT_B), false, name)
+    assert.deepEqual(world.loads, [], name)
+    assert.ok(!child.killed, name)
+    assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"}, name)
+    assert.equal(ownerOnDisk(), PORT_A, name)
+    await saysLocked({})
+    const chooser = content()
+    assert.match(chooser.webContents.url, /&road=passkey&notice=uncleared$/, name)
+    assert.ok(navigate(chooser, PORT_B + "/").prevented, name)
+  }
+})
+
+test("a crash between the clear and the record leaves no session the new origin can reach", async () => {
+  await started(true)
+  await signsIn(PORT_A, "ada at A")
+  await started(true, {relaunch: true})
+  // The whole of what is on disk at each step, as a kill would leave it.
+  const snapshot = (at) => ({at, owner: ownerOnDisk(), disk: new Map(world.disk)})
+  const crashes = [snapshot("before")]
+  world.step = (at) => crashes.push(snapshot(at))
+  assert.ok(await opens(PORT_B))
+  crashes.push(snapshot("after"))
+  assert.deepEqual(crashes.map((c) => c.at), ["before", "cleared", "cache cleared", "flushed", "read", "after"])
+  const profile = world.profile
+  for (const {at, owner, disk} of crashes) {
+    assert.ok(owner === PORT_A || (owner === PORT_B && disk.get(CONTENT).length === 0), `at ${at}: ${owner}`)
+    world.profile = profile
+    world.disk = new Map(disk)
+    writeFileSync(path.join(profile, "content-owner"), owner)
+    await started(true, {relaunch: true})
+    assert.ok(await opens(PORT_B), at)
+    assert.deepEqual(world.loads, [{url: PORT_B + "/", cookies: []}], `started again after a crash at ${at}`)
+  }
+})
+
+test("a root is loaded only while the record says that CYFR owns the storage", async () => {
+  await started(true)
+  child.say({type: "home", home: PORT_B, account: ACCOUNT})
+  await settled()
+  writeFileSync(path.join(world.profile, "content-owner"), PORT_A)
+  child.say({type: "opened", home: PORT_B})
+  await settled()
+  assert.deepEqual(world.loads, [])
+  assert.ok(child.killed)
+})
+
+// The chooser's ways on at `home`, whoever was signed in signed out.
+async function atWays(home) {
+  redirected(content(), home + "/login?error=signed_out")
+  await saysLocked({home, account: ACCOUNT})
+  return content()
+}
+const ANOTHER = "http://127.0.0.1:7340/bootstrap/another"
+
+test("Connect to another CYFR clears what was kept and only then has cyfr leave", async () => {
+  await started(true)
+  await signsIn(PORT_A, "ada at A")
+  const chooser = await atWays(PORT_A)
+  let cleared
+  world.cleared = []
+  world.clearing = () => new Promise((resolve) => { cleared = resolve })
+  assert.ok(navigate(chooser, ANOTHER).prevented)
+  assert.ok(chooser.destroyed, "closed at once")
+  await settled()
+  assert.ok(!child.heard.some((m) => m.type === "leave"), "not before the clear")
+  cleared()
+  await settled()
+  assert.deepEqual(child.heard.at(-1), {version: 1, type: "leave"})
+  assert.deepEqual(cookiesOnDisk(), [], "gone on disk before cyfr is told")
+  await saysLocked({})
+  assert.deepEqual(world.cleared, [CONTENT])
+  assert.ok(navigate(content(), PORT_A + "/").prevented, "main keeps to A no more")
+})
+
+test("Connect to another CYFR does not advance past a failed clear", async () => {
+  await started(true)
+  await signsIn(PORT_A, "ada at A")
+  const chooser = await atWays(PORT_A)
+  world.clearing = () => Promise.reject(new Error("no"))
+  navigate(chooser, ANOTHER)
+  await settled()
+  assert.ok(!child.heard.some((m) => m.type === "leave"), "cyfr still holds A")
+  assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"})
+  await saysLocked({home: PORT_A, account: ACCOUNT})
+  assert.match(content().webContents.url, /notice=uncleared$/)
+  assert.equal(ownerOnDisk(), PORT_A)
+  assert.deepEqual(cookiesOnDisk(), ["ada at A"])
 })
 
 test("quitting waits for what a lock is forgetting", async () => {
@@ -455,6 +688,7 @@ test("a CYFR rerouted is a relaunch only after the content closed, and signs nob
   child.say({type: "home", home: HOME, account: ACCOUNT})
   await settled()
   await give(content())
+  world.cleared = []
   const page = content()
   child.say({type: "home", home: "https://bob.example", account: ACCOUNT, proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
   await settled()
@@ -497,10 +731,9 @@ const ANSWER = HOME + "/login#answer"
 // window, which then sends the answer back (`answer`).
 async function hopped() {
   await started(true)
-  child.say({type: "home", home: HOME, account: ACCOUNT})
-  child.say({type: "opened", home: HOME})
-  await settled()
+  assert.ok(await opens())
   const page = content()
+  page.webContents.url = "http://127.0.0.1:7340/bootstrap/#road=passkey"
   navigate(page, HOME + "/login")
   page.loadURL(HOME + "/login")
   await settled()

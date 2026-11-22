@@ -9,6 +9,9 @@
 // The states:
 //   starting   cyfr runs and has not said ready
 //   chooser    the chooser or the device's pages show; main keeps to no CYFR
+//   taking     cyfr proposed `home`; main keeps to none until the kept
+//              storage is that CYFR's own (owner.js), which is the one way
+//              in for every road that names a CYFR
 //   proposed   cyfr proposed `home`; main answered home-ready and keeps to it
 //   open       cyfr committed `home`; main keeps to it
 //   locking    a lock runs: the content is closed; it ends once cyfr's
@@ -21,7 +24,7 @@
 //
 // A lock is the device's, never the computer's: the app does not lock
 // when the computer locks or sleeps, when a page is lost (it is shown
-// again) or as it quits. There are three:
+// again) or as it quits. There are five:
 //   cyfr's locked, unasked   the device's session ended (its Lock, or its
 //                            connection lost): the content's storage is
 //                            forgotten with it
@@ -29,10 +32,16 @@
 //   sent to sign in          on the passkey road, the CYFR sent the
 //                            content to its sign-in page: nobody is signed
 //                            in, so the chooser shows both ways on
-// The last two forget nothing, and neither does any end: on the passkey
+//   Connect to another CYFR  on the passkey road, the chooser's: the
+//                            storage is cleared first, and only then is
+//                            cyfr told to leave the CYFR open; uncleared,
+//                            cyfr is told to lock and keeps it
+//   not taken                the kept storage could not be made the
+//                            proposed CYFR's: nothing of it loads
+// Only the first and the fourth forget, and no end does: on the passkey
 // road the sign-in is the CYFR's ordinary browser session, kept across
 // quitting and starting again and ended by signing out in Prism or by
-// that CYFR.
+// that CYFR. A clear that fails says so on the chooser (`uncleared`).
 //
 // `notices` is what main has to tell and the person has not yet gone on
 // from: every lock adds to it and carries it, and the chooser shows it and
@@ -56,7 +65,11 @@
 //   close                    destroy every content, confirmation and
 //                            account window and cancel any ceremony
 //   forget                   clear the content session's storage; answers
-//                            a forgot event
+//                            a forgot event, saying whether it is cleared
+//   take {home}              make the kept storage that CYFR's own; answers
+//                            a taken event, saying whether it is
+//   root {home}              load that CYFR's root into the content window,
+//                            the kept storage being its own
 //   send {type, fields}      a message to cyfr
 //   chooser {notices}        open the content window at the chooser
 //   relaunch {proxy, resolver}  once forgotten
@@ -93,6 +106,9 @@ const atChooser = (url) => {
   const u = parse(url)
   return !!u && u.origin === LOOPBACK && u.pathname === "/bootstrap/"
 }
+// The chooser's Connect to another CYFR: an address main alone answers,
+// never loaded.
+const ANOTHER = LOOPBACK + "/bootstrap/another"
 const tookWayOn = (e) => e.window === "content" && e.target === "top" && atChooser(e.showing) && !atChooser(e.url)
 
 // Whether a load main allows is the CYFR sending the content's top frame
@@ -117,6 +133,14 @@ function lock(s, why, notice, heard = null) {
   const next = {...s, name: "locking", before: kept(s), notices: adding(s.notices, notice), barrier: heard !== null,
     keep: heard, forgotten: heard === null, returning: null}
   return {state: next, do: [{say: `locked: ${why}`}, {close: true}, heard ? {forget: true} : {send: {type: "lock"}}]}
+}
+
+// Connect to another CYFR: the content closes and its storage is cleared
+// before cyfr is told anything (the forgot event tells it).
+function leave(s) {
+  const next = {...s, name: "locking", before: kept(s), barrier: false, keep: null, forgotten: false, leaving: true,
+    returning: null}
+  return {state: next, do: [{say: "locked: the person left this CYFR"}, {close: true}, {forget: true}]}
 }
 
 // A lock past its barrier that has forgotten what it forgets: main keeps to the
@@ -149,17 +173,21 @@ export function step(s, e) {
     case "home": {
       const m = e.message
       if (s.name === "locking") return same(s) // from before the lock
-      if (!["chooser", "proposed"].includes(s.name) || !homeMessage(m)) {
+      if (!["chooser", "taking", "proposed"].includes(s.name) || !homeMessage(m)) {
         return ending(s, {end: "it named a CYFR this app does not open"})
       }
       if (rerouted(s, m)) return ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
-      return {state: {...s, name: "proposed", home: m.home, account: m.account, returning: null},
-        do: [{say: `home: ${m.home}`}, {send: {type: "home-ready", fields: {home: m.home}}}]}
+      return {state: {...s, name: "taking", home: m.home, account: m.account, returning: null},
+        do: [{say: `home: ${m.home}`}, {take: {home: m.home}}]}
     }
+    case "taken":
+      if (s.name !== "taking" || e.home !== s.home) return same(s) // for a proposal since replaced or locked away
+      if (!e.taken) return lock(s, "the kept sign-in could not be cleared", "uncleared")
+      return {state: {...s, name: "proposed"}, do: [{send: {type: "home-ready", fields: {home: s.home}}}]}
     case "opened":
       if (s.name === "locking") return same(s) // from before the lock
       if (s.name !== "proposed" || e.home !== s.home) return ending(s, {end: "it opened a CYFR this app was not keeping to"})
-      return same({...s, name: "open"})
+      return s.accountRoad ? same({...s, name: "open", notices: []}, [{root: {home: s.home}}]) : same({...s, name: "open"})
     case "locked": {
       const m = e.message
       if (s.name === "starting") return same(s)
@@ -172,8 +200,14 @@ export function step(s, e) {
       return ending(s, {end: e.why})
 
     // ---- the system, the windows, the person ----
-    case "forgot":
-      return s.name === "locking" ? settle({...s, forgotten: true}) : same(s)
+    case "forgot": {
+      if (s.name !== "locking") return same(s)
+      const notices = e.cleared ? s.notices : adding(s.notices, "uncleared")
+      if (!s.leaving) return settle({...s, forgotten: true, notices})
+      // cyfr answers what it is sent now with a locked of its own.
+      return same({...s, leaving: false, forgotten: true, notices: e.cleared ? [] : notices},
+        [{send: {type: e.cleared ? "leave" : "lock"}}])
+    }
     case "lost":
       return same(s, [{reload: true}])
     case "quit":
@@ -204,6 +238,10 @@ export function step(s, e) {
       if (["starting", "locking"].includes(s.name)) return {state: s, allow: false, do: []}
       const where = contentNavigation(e, kept(s))
       if (where === "allow") {
+        if (e.target === "top" && e.url === ANOTHER) {
+          const pressed = s.accountRoad && s.name === "open" && e.window === "content" && e.asker === "top" && atChooser(e.showing)
+          return {...(pressed ? leave(s) : same(s)), allow: false}
+        }
         if (sentToSignIn(s, e)) return {...lock(s, "the CYFR asks for a sign-in", ""), allow: false}
         return {state: tookWayOn(e) ? {...s, notices: []} : s, allow: true, do: []}
       }
