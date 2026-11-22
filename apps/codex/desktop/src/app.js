@@ -59,7 +59,8 @@ const print = (line) => process.stderr.write(`${printed(line)}\n`)
 function ownOutput() {
   delete process.env.ELECTRON_ENABLE_LOGGING
   process.removeAllListeners("warning")
-  process.on("warning", (warning) => print(`CYFR: warning: ${warning.name}: ${warning.message}`))
+  process.on("warning", ({name, code, message, detail}) =>
+    print(`CYFR: warning: ${code ? `[${code}] ` : ""}${name}: ${message}${detail ? `\n${detail}` : ""}`))
 }
 
 // Who began a navigation of `contents` (`asker`) and, where that was its

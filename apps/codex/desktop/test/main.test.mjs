@@ -1007,6 +1007,36 @@ test("the engine's warning of a failed load prints no fragment or query", async 
   assert.equal(process.listenerCount("warning"), 1, "the app's printer alone")
 })
 
+test("every other warning still prints, its code and detail with it, by the same rule", async () => {
+  await signedIn()
+  const out = await printing(async () => {
+    process.emitWarning("old() is deprecated", {type: "DeprecationWarning", code: "DEP0001",
+      detail: "see https://x.test/why?q=a-marker#a-marker"})
+    process.emitWarning("a warning of no kind of its own")
+    await settled()
+    await settled()
+  })
+  assert.match(out, /^CYFR: warning: \[DEP0001\] DeprecationWarning: old\(\) is deprecated\nsee https:\/\/x\.test$/m)
+  assert.match(out, /^CYFR: warning: Warning: a warning of no kind of its own$/m)
+  assert.doesNotMatch(out, /marker/)
+})
+
+test("what main says is printed by the same rule where nobody else takes it", async () => {
+  reset()
+  const out = await printing(async () => {
+    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true})
+    await settled()
+    child.say({type: "ready", url: READY})
+    await settled()
+    child.stderr.write("Error: https://x.test/auth/passkey/complete/a-marker did not answer\n")
+    await settled()
+    child.emit("exit", 1, null)
+    await settled()
+  })
+  assert.match(out, /^CYFR: cyfr ended: https:\/\/x\.test did not answer$/m)
+  assert.doesNotMatch(out, /marker/)
+})
+
 test("cyfr's own lines are printed whole lines at a time, with no fragment or query", async () => {
   await started(true)
   const out = await printing(async () => {
