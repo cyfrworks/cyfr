@@ -109,6 +109,39 @@ defmodule Aqua.ReaderTest do
     assert Reader.read(server, named) == {:said, "[A line from the server, not the person]\nhi"}
   end
 
+  test "a reading with no roles says the reader's own by who said it, and a result as an answer" do
+    nobody = reading(%{me: :nobody})
+
+    assert Reader.read(row(author: @agent, sent_by: "aqua"), nobody) == {:said, "[aqua]\nhi"}
+
+    assert Reader.read(row(author: @agent, sent_by: "aqua", payload: ~s({"post":true})), nobody) ==
+             {:said, "[aqua]\nhi"}
+
+    assert Reader.read(
+             row(author: @agent, sent_by: "aqua", addressee: "builder", status: "pending"),
+             nobody
+           ) == {:said, "[aqua asked builder (request msg_1, pending)]\nhi"}
+
+    assert Reader.read(row(kind: "error", author: @system), nobody) ==
+             {:said, "[A line from the server, not the person]\nhi"}
+
+    assert Reader.read(
+             row(kind: "tool_result", author: @system, payload: ~s({"name":"files"})),
+             nobody
+           ) == {:said, "Your call files answered: hi"}
+  end
+
+  test "a cited question that was refused keeps its warning" do
+    opening = row(kind: "opening", payload: ~s({"title":"Moon","refs":["msg_q"]}))
+    question = row(id: "msg_q", turn_id: "trn_over", carried_by: "stp_1", content: "book it")
+
+    assert {:said, read} =
+             Reader.read(opening, reading(%{refs: %{"msg_q" => question}, refused: ["msg_q"]}))
+
+    assert read =~
+             "[Post msg_q of the daily thread, by Ada]\n[Ada posted this and it was not taken"
+  end
+
   test "an opening expands the citations it is handed alone and never names a deleted file" do
     moon = %{"filename" => "moon.png", "stored_name" => "0-moon.png"}
     notes = %{"filename" => "notes.txt", "stored_name" => "1-notes.txt"}

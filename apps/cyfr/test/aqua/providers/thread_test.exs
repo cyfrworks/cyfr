@@ -1225,6 +1225,81 @@ defmodule Aqua.Providers.ThreadTest do
       assert Enum.map(raw, & &1.content) == [refused.content, waiting.content, reply.content]
     end
 
+    test "a reread past the last post records the thread it asked to read",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Short")
+      last = say!(ctx, work, "the only post")
+      turn = running!(ctx, daily)
+
+      assert {:ok, %{messages: [], read_threads: joined}} =
+               in_turn(ctx, turn, %{
+                 "action" => "events",
+                 "thread" => work.id,
+                 "after_seq" => last.seq
+               })
+
+      assert joined == [work.id]
+      assert read_threads(ctx, turn) == [work.id]
+    end
+
+    test "a withheld report records none of what it carries, and a page of withheld posts " <>
+           "still answers where to read on",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Surviving")
+      gone = workspace!(ctx, "Source")
+      searcher = running!(ctx, daily)
+      rereader = running!(ctx, workspace!(ctx, "Elsewhere"))
+      {:ok, opened} = Aqua.Tape.message(ctx, searcher.message_id)
+
+      report =
+        say!(ctx, daily, "fares rise on Monday", %{
+          author: "aqua",
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: work.id,
+          payload: %{"read_threads" => [gone.id]}
+        })
+
+      assert {:ok, _} = Aqua.Tape.delete_thread(ctx, gone.id)
+
+      assert {:ok, %{results: [], read_threads: []}} =
+               in_turn(ctx, searcher, %{"action" => "search", "q" => "fares rise"})
+
+      assert read_threads(ctx, searcher) == []
+
+      assert {:ok, %{messages: [], cursor: cursor, read_threads: joined}} =
+               in_turn(ctx, rereader, %{
+                 "action" => "events",
+                 "thread" => daily.id,
+                 "after_seq" => opened.seq
+               })
+
+      assert cursor == report.seq
+      assert joined == [daily.id]
+      assert read_threads(ctx, rereader) == [daily.id]
+    end
+
+    test "a reread words the reader's own speech, request and post by who said each",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Own words")
+      own = %{author: "aqua", sent_by: "aqua"}
+      say!(ctx, work, "I will check.", own)
+
+      asked =
+        say!(ctx, work, "build it", Map.merge(own, %{addressee: "builder", status: "pending"}))
+
+      say!(ctx, work, "the chart", Map.put(own, :payload, %{"post" => true}))
+
+      assert {:ok, %{messages: read}} =
+               in_turn(ctx, running!(ctx, daily), %{"action" => "events", "thread" => work.id})
+
+      assert Enum.map(read, & &1.content) == [
+               "[aqua]\nI will check.",
+               "[aqua asked builder (request #{asked.id}, pending)]\nbuild it",
+               "[aqua]\nthe chart"
+             ]
+    end
+
     test "a turn's search and read join every thread they carry and their posts carry into " <>
            "the turn, before they answer",
          %{ctx: ctx, thread: daily} do
@@ -1267,7 +1342,7 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, %{messages: read, read_threads: joined}} =
                in_turn(ctx, other, %{"action" => "events", "thread" => work.id})
 
-      assert "fares rise on Monday" in Enum.map(read, & &1.content)
+      assert "[aqua]\nfares rise on Monday" in Enum.map(read, & &1.content)
       assert joined == Enum.sort([news.id, work.id])
       assert read_threads(ctx, other) == joined
     end

@@ -655,6 +655,60 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  describe "a queued report whose workspace thread was deleted" do
+    test "after the program went idle and before its attendant read it leaves no turn waiting",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "build me a tip calculator")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      workspace = workspace!(ctx, thread)
+
+      {:ok, %{message: joined}} =
+        TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "report",
+            workspace_id: workspace.id,
+            content: "Done."
+          },
+          steer_turn_id: turn.id
+        })
+
+      [{attendant, _}] =
+        Registry.lookup(Aqua.Program.Registry, {ctx.athanor_id, thread.id, "aqua"})
+
+      handler = "queued-gone-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold_before_posts/4, %{
+          attendant: attendant,
+          loop: loop.pid,
+          test: self()
+        })
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      say(fake, row, idle(turn, [input.id]))
+
+      # The loop found the report pending, and the attendant has not read it.
+      assert_receive :loop_found_pending, 10_000
+      assert_receive {:held_before_posts, held}, 10_000
+      on_exit(fn -> send(held, :read_posts) end)
+      assert {:ok, _} = Tape.delete_thread(ctx, workspace.id)
+      assert {:error, :not_found} = Tape.message(ctx, joined.id)
+      send(held, :read_posts)
+
+      assert :completed = Task.await(loop, 15_000)
+      assert system_lines(ctx, thread, turn) == []
+      refute_received {:session, "send", _wire, _fields}
+    end
+  end
+
   describe "who said each post" do
     test "a failed reply reaches the program in the words an API brain is given",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
@@ -722,6 +776,13 @@ defmodule Aqua.ProgramTest do
       })
 
       row!(ctx, thread, "Here is the chart.", %{author: agent, sent_by: "planner"})
+      own = %{author: agent, sent_by: "aqua"}
+      row!(ctx, thread, "I will check.", own)
+
+      own_ask =
+        row!(ctx, thread, "build it", Map.merge(own, %{addressee: "builder", status: "pending"}))
+
+      row!(ctx, thread, "the chart", Map.put(own, :payload, %{"post" => true}))
       row!(ctx, thread, "It waits on you.", %{author: system, sent_by: "system"})
 
       opening =
@@ -794,7 +855,16 @@ defmodule Aqua.ProgramTest do
       post = sent()
       [input] = inputs(ctx, turn)
 
-      lines = said ++ ["#{person}: use this file", removed]
+      # Where the API's roles and calls show the reader's own, a context
+      # has neither: each is said by who said it, as a reread says it.
+      own_said = [
+        "[aqua]\nI will check.",
+        "[aqua asked builder (request #{own_ask.id}, pending)]\nbuild it",
+        "[aqua]\nthe chart"
+      ]
+
+      {before, rest} = Enum.split(said, 4)
+      lines = before ++ own_said ++ rest ++ ["#{person}: use this file", removed]
 
       assert post["context"] == [
                %{"type" => "text", "text" => @opening <> Enum.join(lines, "\n\n")}
@@ -1035,7 +1105,7 @@ defmodule Aqua.ProgramTest do
 
         assert post ==
                  Map.put(posted(input, turn, "now"), "context", [
-                   %{"type" => "text", "text" => "#{@opening}#{note}\n\n#{@title}: recent"}
+                   %{"type" => "text", "text" => "#{@opening}#{note}\n\n[aqua]\nrecent"}
                  ])
 
         assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
@@ -2691,7 +2761,7 @@ defmodule Aqua.ProgramTest do
                Map.put(posted(second, next, "second"), "context", [
                  %{
                    "type" => "text",
-                   "text" => "#{@opening}#{person}: first\n\n#{@title}: reply one"
+                   "text" => "#{@opening}#{person}: first\n\n[aqua]\nreply one"
                  }
                ])
 
@@ -2747,7 +2817,7 @@ defmodule Aqua.ProgramTest do
                    %{
                      "type" => "text",
                      "text" =>
-                       "#{@opening}#{person}: unfinished\n\n#{@title}: looking\n\n" <>
+                       "#{@opening}#{person}: unfinished\n\n[aqua]\nlooking\n\n" <>
                          "Your call program answered: #{result.content}"
                    }
                  ]
@@ -3998,6 +4068,34 @@ defmodule Aqua.ProgramTest do
     :ok
   end
 
+  # The attendant is held after it read the results owed and before it
+  # reads the posts that wait; the loop's refused end says it found one.
+  @doc false
+  def hold_before_posts(_event, _measured, meta, config) do
+    query = meta[:query] || ""
+
+    cond do
+      self() == config.loop and query =~ ~r/^rollback/i ->
+        send(config.test, :loop_found_pending)
+
+      self() == config.attendant and is_nil(Process.get(:held_before_posts)) and
+        meta[:source] == "turn_steps" and query =~ "LEFT OUTER JOIN" ->
+        Process.put(:held_before_posts, true)
+        send(config.test, {:held_before_posts, self()})
+
+        receive do
+          :read_posts -> :ok
+        after
+          30_000 -> :ok
+        end
+
+      true ->
+        :ok
+    end
+
+    :ok
+  end
+
   defp row!(ctx, thread, text, fields \\ %{}) do
     {:ok, said} =
       Tape.append(
@@ -4308,7 +4406,7 @@ defmodule Aqua.ProgramTest do
              Map.put(posted(second, next, "second"), "context", [
                %{
                  "type" => "text",
-                 "text" => "#{@opening}#{person}: first\n\n#{@title}: reply one"
+                 "text" => "#{@opening}#{person}: first\n\n[aqua]\nreply one"
                }
              ])
 

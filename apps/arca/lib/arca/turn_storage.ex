@@ -32,11 +32,12 @@ defmodule Arca.TurnStorage do
   `turns.read_threads` are the ids of the threads whose posts the turn
   has read (`Arca.ThreadStorage.threads_text/1`), a list that only grows,
   by which a thread's deletion finds the turn. What a turn reads of
-  threads' rows joins before it is read (`join_read/3`), with the read
-  threads of the turns whose words those rows carry. A step's threads
-  join in the transaction that writes it, after the turn row is taken:
-  those it opens with (`put_step/3`'s `:threads` and `:threads_from`) and
-  those its result carries (`close_step/4`'s `:threads`).
+  threads' rows is decided and recorded in one transaction before it is
+  read (`join_read/3`): which rows it is handed and the threads they
+  depend on. A step's threads join in the transaction that writes it,
+  after the turn row is taken: those it opens with (`put_step/3`'s
+  `:threads` and `:threads_from`) and those its result carries
+  (`close_step/4`'s `:threads`).
 
   ## The thread claim
 
@@ -193,6 +194,9 @@ defmodule Arca.TurnStorage do
   # The open turns a takeover moves: an `accepted` turn has no root
   # attempt yet, so nothing of it is held to take over.
   @held @open -- ["accepted"]
+
+  # The most ids one statement binds (`join_read/3`), under both adapters' bound.
+  @ids_per_statement 5_000
 
   # ---------------------------------------------------------------------------
   # Acceptance
@@ -3530,28 +3534,65 @@ defmodule Arca.TurnStorage do
 
   def refused_posts(%Prima.Actor{}, _ids), do: {:error, :no_athanor}
 
-  @doc """
-  Join what a turn reads of the athanor's threads into its read threads,
-  before it is read (a request's rows, a program's post and context,
-  `thread.search`, `thread.events`): under the
-  turn's row lock and only while the caller still holds the turn at
-  `attrs[:fence]` and the turn is open, the thread rows `attrs[:threads]`
-  names are taken in the one order (`Arca.ThreadStorage.lock_threads!/2`),
-  and each that stands joins, with the read threads of the turns
-  `attrs[:threads_from]` names, as a step's opening joins them; a turn
-  named there that is not found adds nothing. The ids `attrs[:stored]`
-  names, which the rows of the turn's own thread carry, join as stored,
-  standing or not, as those turns' read threads do.
+  @typedoc """
+  A row a turn would read (`join_read/3`), as its caller saw it: its
+  identity, thread, turn, sender and kind, whether it is the turn's own
+  thread's history (`held?`), the threads it names, the read threads
+  copied into it (a report's kept, a copied file's) and the turns whose
+  words it carries (`from`).
+  """
+  @type source :: %{
+          id: String.t(),
+          thread_id: String.t(),
+          turn_id: String.t() | nil,
+          sent_by: String.t() | nil,
+          kind: String.t(),
+          held?: boolean(),
+          names: [String.t()],
+          copies: [String.t()],
+          from: [String.t()]
+        }
 
-  Answers the ids of the threads that stood, whose posts the read may
-  answer (`threads`), and every id the read joined (`read_threads`). A
-  thread deleted before this takes its row is not among them; one deleted
-  after finds this turn by its read threads, as a deletion finds every
-  turn that read it. `{:error, :superseded}` for a caller whose fence
-  moved, `{:error, :not_open}` for a turn that ended.
+  @doc """
+  The one decision of what a turn reads of the athanor's threads, made and
+  recorded before it is read (a request's rows, a program's post and
+  context, `thread.search`, `thread.events`): under the turn's row lock
+  and only while the caller still holds the turn at `attrs[:fence]` and
+  the turn is open, the threads are taken in the one order
+  (`Arca.ThreadStorage.lock_threads!/2`), which a deletion takes first
+  too, and `attrs[:sources]` (`t:source/0`) are read again as they stand
+  under them. So nothing a deletion removed or blanked is handed over from
+  an older reading.
+
+  A source depends on the threads it names, the read threads copied into
+  it, those of the turns whose words it is (`from`, and its own turn
+  when that turn wrote it: a post written into a turn, a person's among
+  them, is not the turn's words, `post?/2`), and, when it is brought in,
+  its own thread.
+
+    * One of the turn's own thread's history is handed over as it now
+      reads. A deletion takes with it the rows that name the deleted
+      workspace thread and the summaries made of what it held.
+    * One brought in (a citation, and all a reread or a search answers)
+      is handed over only when every thread it depends on stands.
+
+  What joins is the threads `attrs[:read]` names, which the turn asked to
+  read, and what the rows handed over depend on, each while it stands.
+  Only the read threads copied into a row of the turn's own history join
+  as stored, standing or not, since those words are the thread's to keep.
+  A source not handed over records nothing.
+
+  Answers the rows handed over, in their order and as they now read
+  (`rows`), the ids of `attrs[:read]` that stood (`threads`), and every
+  id the read joined (`read_threads`). A thread deleted before this takes
+  its row is not among them; one deleted after finds this turn by its
+  read threads, as a deletion finds every turn that read it.
+  `{:error, :superseded}` for a caller whose fence moved,
+  `{:error, :not_open}` for a turn that ended.
   """
   @spec join_read(Prima.Actor.t(), String.t(), map()) ::
-          {:ok, %{threads: [String.t()], read_threads: [String.t()]}} | {:error, term()}
+          {:ok, %{rows: [map()], threads: [String.t()], read_threads: [String.t()]}}
+          | {:error, term()}
   def join_read(%Prima.Actor{athanor_id: athanor_id} = actor, turn_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.join_read", fn ->
@@ -3561,22 +3602,80 @@ defmodule Arca.TurnStorage do
         unless turn.status in Prima.TurnState.open_statuses(),
           do: Arca.Repo.rollback(:not_open)
 
+        read = threads!(Map.get(attrs, :read, []))
+        sources = Map.get(attrs, :sources, [])
+        depends = depends!(athanor_id, sources)
+        wanted = Enum.uniq(read ++ Enum.concat(Map.values(depends)))
+
         standing =
-          for thread <- Arca.ThreadStorage.lock_threads!(actor, Map.get(attrs, :threads, [])),
-              do: thread.id
+          MapSet.new(Arca.ThreadStorage.lock_threads!(actor, wanted), & &1.id)
 
-        joined =
-          standing ++
-            threads!(Map.get(attrs, :stored, [])) ++
-            turns_threads!(athanor_id, Map.get(attrs, :threads_from, []))
+        now = rows_now!(athanor_id, Enum.map(sources, & &1.id))
 
+        handed =
+          for source <- sources,
+              row = now[source.id],
+              source.held? or Enum.all?(depends[source.id], &(&1 in standing)),
+              do: {source, row}
+
+        needed = read ++ Enum.flat_map(handed, fn {source, _row} -> depends[source.id] end)
+        stored = for {%{held?: true, copies: copies}, _row} <- handed, id <- copies, do: id
+        joined = Enum.filter(needed, &(&1 in standing)) ++ threads!(stored)
         _turn = join_threads!(athanor_id, turn, joined)
-        %{threads: standing, read_threads: joined |> Enum.uniq() |> Enum.sort()}
+
+        %{
+          rows: Enum.map(handed, &elem(&1, 1)),
+          threads: Enum.filter(read, &(&1 in standing)),
+          read_threads: joined |> Enum.uniq() |> Enum.sort()
+        }
       end)
     end)
+    |> Arca.Data.project()
   end
 
   def join_read(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
+  # By source id, the threads each depends on (`join_read/3`).
+  # arca:db-raise-ok inside the caller's transaction
+  defp depends!(athanor_id, sources) do
+    turns =
+      sources
+      |> Enum.flat_map(&[&1.turn_id | &1.from])
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+      |> Enum.chunk_every(@ids_per_statement)
+      |> Enum.flat_map(fn ids ->
+        Arca.Repo.all(
+          from(t in Turn,
+            where: t.athanor_id == ^athanor_id and t.id in ^ids,
+            select: {t.id, {t.agent, t.read_threads}}
+          )
+        )
+      end)
+      |> Map.new(fn {id, {agent, read}} -> {id, {agent, Arca.ThreadStorage.threads_of(read)}} end)
+
+    Map.new(sources, fn source ->
+      wrote =
+        case turns[source.turn_id] do
+          {agent, read} -> if post?(source, agent), do: [], else: read
+          nil -> []
+        end
+
+      carried = for id <- source.from, {_agent, read} <- [turns[id]], thread <- read, do: thread
+      own = if source.held?, do: [], else: [source.thread_id]
+      {source.id, threads!(own ++ source.names ++ source.copies ++ wrote ++ carried)}
+    end)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp rows_now!(athanor_id, ids) do
+    ids
+    |> Enum.chunk_every(@ids_per_statement)
+    |> Enum.flat_map(fn ids ->
+      Arca.Repo.all(from(m in Message, where: m.athanor_id == ^athanor_id and m.id in ^ids))
+    end)
+    |> Map.new(&{&1.id, &1})
+  end
 
   @doc """
   Whether the caller still holds the turn `turn_id`, open, at `fence`,

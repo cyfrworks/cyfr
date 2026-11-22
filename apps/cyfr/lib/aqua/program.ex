@@ -82,6 +82,14 @@ defmodule Aqua.Program do
   its removal first, closes its holder, and starts over on the new row
   from the thread's posts, which the thread is told.
 
+  ## A post deleted before it was handed over
+
+  A post goes with the workspace thread it names. One that opened the
+  turn, or that went as it was handed over, ends the turn saying so
+  (`post_gone/1`). One that went before the attendant read it as waiting
+  owes nothing: when the program was already idle, the waiting loop is
+  told so again and the turn completes, so no turn waits for good.
+
   ## Silence
 
   Thirty minutes (`Opus.Brain.silence_ms/0`) of the program's own silence
@@ -304,7 +312,7 @@ defmodule Aqua.Program do
         {:noreply, open(%{state | recovering?: true})}
 
       state.phase == :ready ->
-        {:noreply, deliver(state)}
+        {:noreply, state |> deliver() |> rested()}
 
       true ->
         {:noreply, state}
@@ -994,17 +1002,35 @@ defmodule Aqua.Program do
   defp deliver(state), do: state
 
   defp deliver_next(%{work: work} = state, turn) do
-    with nil <- next_notice(work, turn),
-         nil <- next_result(work, turn),
-         nil <- next_post(work, turn) do
-      state
-    else
+    case next_owed(work, turn) do
+      nil -> state
       {:notice, %{context?: true, message_id: row_id}} -> notice(state, "fresh", row_id)
       {:notice, %{action: kind, message_id: row_id}} -> notice(state, kind, row_id)
       {:answer, result} -> answer(state, result)
       {:post, row} -> post(state, row)
     end
   end
+
+  defp next_owed(work, turn),
+    do: next_notice(work, turn) || next_result(work, turn) || next_post(work, turn)
+
+  # The loop waits again after it found something pending. When that was
+  # deleted before it was handed over, nothing is owed either way and the
+  # program has been idle since it said so: it is told so again, and the
+  # turn ends rather than wait for good on an idle that will not come.
+  defp rested(%{phase: :ready, outstanding: nil, work: work} = state) do
+    with %{id: id} = turn <- open_turn(work),
+         nil <- next_owed(work, turn),
+         {:ok, %{progress: %{"busy" => false} = progress}} <-
+           Tape.brain(work.guest, state.thread_id),
+         [] <- Map.get(progress, "owed", []) do
+      tell(state, {__MODULE__, id, :idle})
+    else
+      _owed_or_at_work -> state
+    end
+  end
+
+  defp rested(state), do: state
 
   defp next_notice(work, turn) do
     case Tape.brain_notices(work.guest, turn) do
@@ -1076,7 +1102,7 @@ defmodule Aqua.Program do
           "context" => context
         }
         |> reject_nil()
-        |> with_files(work, row)
+        |> with_files(work, post)
 
       case write(state, command) do
         :ok ->
@@ -1213,15 +1239,7 @@ defmodule Aqua.Program do
         "thread so far is above, with what your calls in this work answered; they are not " <>
         "run again. Go on with the last message, or say where it stands."
 
-  defp notice_text(_work, _answer, row) do
-    payload = Tape.payload(row)
-
-    "Your work was interrupted before your call #{payload["name"]} " <>
-      "(#{payload["tool_call_id"]}) was answered, so its answer comes as this message " <>
-      "instead. It answered" <>
-      if(payload["is_error"], do: " with an error: ", else: ": ") <>
-      (row.content || "")
-  end
+  defp notice_text(_work, _answer, row), do: Reader.late_answer(row)
 
   defp prompt_context(work, "fresh") do
     rows = thread_rows(work, {:all, answers(work)})
@@ -1331,21 +1349,12 @@ defmodule Aqua.Program do
   # encodes it: escaping is the characters' own, so a text's parts add up.
   defp encoded_bytes(text), do: byte_size(Jason.encode!(text)) - 2
 
-  defp line(_work, %{kind: "tool_result"} = row, _reading),
-    do: "Your call #{Tape.payload(row)["name"]} answered: #{row.content}"
-
-  # What the member said itself goes under its title. Its own post and
-  # request read as none where their calls show them, and a context has
-  # no calls, so they go as its words too. A row's deleted files are
-  # named after it, inside its share of the room.
+  # A context has no roles and no calls, so each row is said by who said
+  # it (`me: :nobody`). A row's deleted files are named after it, inside
+  # its share of the room.
   defp line(work, row, reading) do
-    reading = %{reading | removed: Reader.removed(work.guest, [row])}
-
-    text =
-      case Reader.read(row, reading) do
-        {:said, text} -> text
-        _own_or_none -> "#{work.title}: #{row.content}"
-      end
+    reading = %{reading | me: :nobody, removed: Reader.removed(work.guest, [row])}
+    {:said, text} = Reader.read(row, reading)
 
     case reading.removed[row.id] do
       nil -> text

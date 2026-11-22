@@ -40,16 +40,12 @@ defmodule Aqua.Loop do
   Every way a turn reads a thread's posts joins that thread to the turn's
   read threads (`turns.read_threads`) before they are read, so deleting a
   thread finds every turn that read it. A request's rows, and what a
-  program is given, join before they are worded (`Aqua.Reader.join/4`):
-  each other thread whose posts they bring in (a workspace thread's
-  pointer or report, the daily thread an opening refers to and the posts
-  it cites), with the read threads a report kept of the turn that
-  reported, those every copied file carries from the post it came from,
-  and those of the turns that wrote the rows and the posts cited,
-  compaction summaries among them. What may then be read is
-  `Aqua.Tape.join_sources/4`'s rule. A call's result closes with the
-  threads it carries (`Aqua.Loop.Policy.threads_of/3`). The room excerpt
-  is the athanor's own members' words and joins nothing.
+  program is given, go through the one rule before they are worded
+  (`Aqua.Reader.join/4`, `Arca.TurnStorage.join_read/3`), which reads
+  them again as they stand, says which the turn is handed, and records
+  the threads those depend on. A call's result closes with the threads
+  it carries (`Aqua.Loop.Policy.threads_of/3`). The room excerpt is the
+  athanor's own members' words and joins nothing.
 
   A model, hand or launched child's read threads join its turn when its
   step closes, before anything of its answer is used — a model's before
@@ -974,13 +970,18 @@ defmodule Aqua.Loop do
   # blocks, so a round without them would not show the model what it was
   # asked about.
   defp request(%State{spec: spec} = state, rows, reading, excerpt, files) do
+    # The opening post's files were read as the turn was built: they go only
+    # while that post is still the turn's to read.
+    attachments =
+      if Enum.any?(rows, &(&1.id == state.turn.message_id)), do: spec.attachments, else: []
+
     rows = Planner.prune(rows)
     authors = rows |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.reject(&agent_or_system?/1)
 
     messages =
       Request.messages(rows, %{reading | named?: length(authors) > 1},
         excerpt: excerpt,
-        attachments: spec.attachments,
+        attachments: attachments,
         task_message_id: state.turn.message_id,
         files: files
       )

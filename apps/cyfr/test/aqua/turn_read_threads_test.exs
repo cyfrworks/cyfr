@@ -578,6 +578,169 @@ defmodule Aqua.TurnReadThreadsTest do
     end
   end
 
+  describe "what a turn is handed, decided as its read is recorded" do
+    test "a summary a deletion removed is not read from a snapshot taken before it",
+         %{ctx: ctx, thread: daily} do
+      gone = fares!(ctx)
+      writer = running!(ctx, daily)
+      :ok = Tape.join_threads(ctx, writer, [gone.id])
+
+      {:ok, _} =
+        Tape.append_compaction(ctx, writer, %{
+          summary: "SUMMARY-OF-THE-FARES",
+          first_kept_seq: 1,
+          summarized_through_seq: 0
+        })
+
+      {:ok, _} = Tape.finish(ctx, writer, "cancelled")
+      reader = running!(ctx, daily)
+      snapshot = rows(ctx, daily)
+      assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
+
+      assert {:ok, %{rows: handed, reading: reading}} = Aqua.Reader.join(ctx, reader, snapshot)
+      sent = Jason.encode!(Aqua.Loop.Request.messages(handed, reading))
+      refute sent =~ "SUMMARY-OF-THE-FARES"
+      assert sent =~ "launch it"
+    end
+
+    test "the files of a post deleted after the turn took them up reach no request",
+         %{ctx: ctx, thread: daily} do
+      gone = workspace!(ctx, "Charted")
+      say!(ctx, daily, "earlier today")
+      id = Prima.UUID7.generate_id("msg")
+
+      file = %{
+        "filename" => "chart.txt",
+        "media_type" => "text/plain",
+        "bytes" => "FILE-OF-THE-CHART"
+      }
+
+      {:ok, refs} = Aqua.Attachments.copy(ctx, daily.id, id, [file])
+
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, daily.id, %{
+          message: %{
+            id: id,
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "report",
+            workspace_id: gone.id,
+            content: "Charted.",
+            payload: %{"attachments" => refs}
+          },
+          turn: %{agent: "aqua", requested_by: ctx.user_id, model: @model_id}
+        })
+
+      script!([reply("Noted.")])
+      handler = "projected-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.delete_as_projected/4, %{
+          thread: daily.id,
+          delete: fn -> {:ok, _} = Tape.delete_thread(ctx, gone.id) end
+        })
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      _ended = run(ctx, turn)
+
+      assert {:error, :not_found} = Threads.get_message(Sanctum.Context.actor(ctx), id)
+      refute Jason.encode!(chat_requests()) =~ "FILE-OF-THE-CHART"
+    end
+
+    test "a new citation quotes no source deleted since its writer read it",
+         %{ctx: ctx, thread: daily} do
+      cited = quote_of_deleted!(ctx, daily)
+      work = cited_by!(ctx, daily, cited)
+      {:ok, elsewhere} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+      reader = running!(ctx, elsewhere)
+
+      assert {:ok, %{rows: [opening], reading: reading}} =
+               Aqua.Reader.join(ctx, reader, rows(ctx, work), [work.id])
+
+      assert {:said, read} = Aqua.Reader.read(opening, reading)
+      assert read =~ "what do the fares do"
+      refute read =~ "They rise on Monday."
+    end
+
+    test "a reread answers no words of a writer whose source is gone, and still answers what " <>
+           "was written after the deletion and what the person said",
+         %{ctx: ctx, thread: daily} do
+      say!(ctx, daily, "call the plumber")
+      _quote = quote_of_deleted!(ctx, daily)
+      later = accept!(ctx, daily, "@aqua what is the weather?")
+      {:ok, elsewhere} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+
+      script!([
+        reply("Sunny all week."),
+        calls([{"e1", "thread", %{"action" => "events", "thread" => daily.id}}]),
+        reply("Read it.")
+      ])
+
+      assert :completed = run(ctx, later)
+      reader = accept!(ctx, elsewhere, "@aqua what was said there?")
+      assert :completed = run(ctx, reader)
+
+      read = result(ctx, reader, "e1").content
+      refute read =~ "They rise on Monday."
+      assert read =~ "Sunny all week."
+      assert read =~ "call the plumber"
+    end
+
+    test "a helper's reply joins the helper's thread, so deleting it finds the reader",
+         %{ctx: ctx, thread: daily} do
+      {:ok, helper} = Tape.crew_thread(ctx, daily.id, "planner")
+      writer = running!(ctx, helper)
+      {:ok, _} = Tape.finish(ctx, writer, "cancelled")
+
+      say!(ctx, daily, "The plan is ready.", %{
+        author: Prima.Author.agent(),
+        sent_by: "planner",
+        addressee: "aqua",
+        reply_to: writer.message_id,
+        outcome: "done",
+        payload: %{"from_turn" => writer.id, "from_thread" => helper.id}
+      })
+
+      reader = accept!(ctx, daily, "@aqua what did the planner say?")
+      script!([reply("The plan is ready.")])
+      assert :completed = run(ctx, reader)
+      assert read_threads(ctx, reader) == [helper.id]
+      kept = kept_since_reading!(ctx, daily)
+
+      assert {:ok, _} = Tape.delete_thread(ctx, helper.id)
+      assert_forgotten(ctx, daily, kept)
+    end
+
+    test "a citation is a post only: a call's result in the daily thread is none",
+         %{ctx: ctx, thread: daily} do
+      internal = say!(ctx, daily, "INTERNAL-RESULT", %{sent_by: "aqua", kind: "tool_result"})
+      work = cited_by!(ctx, daily, internal)
+      {:ok, elsewhere} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+
+      assert {:ok, %{rows: [opening], reading: reading}} =
+               Aqua.Reader.join(ctx, running!(ctx, elsewhere), rows(ctx, work), [work.id])
+
+      assert {:said, read} = Aqua.Reader.read(opening, reading)
+      refute read =~ "INTERNAL-RESULT"
+      refute read =~ "[Post "
+    end
+
+    test "a cited question that was not taken still says so", %{ctx: ctx, thread: daily} do
+      ended = running!(ctx, daily)
+      {:ok, _} = Tape.finish(ctx, ended, "cancelled")
+      {:ok, question} = Tape.message(ctx, ended.message_id)
+      work = cited_by!(ctx, daily, question)
+      {:ok, elsewhere} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+
+      assert {:ok, %{rows: [opening], reading: reading}} =
+               Aqua.Reader.join(ctx, running!(ctx, elsewhere), rows(ctx, work), [work.id])
+
+      assert {:said, read} = Aqua.Reader.read(opening, reading)
+      assert read =~ "posted this and it was not taken"
+      assert read =~ question.content
+    end
+  end
+
   # Each proof deletes `gone` and holds three things: before the deletion
   # the reading turn's row names exactly the threads it read, `gone` among
   # them; after it, the reader's result that carried `gone`'s posts holds
@@ -1084,6 +1247,30 @@ defmodule Aqua.TurnReadThreadsTest do
       )
 
     row
+  end
+
+  # In the loop's process, as it has read its rows and before it joins them.
+  @doc false
+  def delete_as_projected(_event, _measured, meta, %{thread: thread, delete: delete}) do
+    with nil <- Process.get(:deleted_as_projected),
+         "messages" <- meta[:source],
+         true <- meta[:query] =~ "'opening'" and thread in List.wrap(meta[:params]) do
+      Process.put(:deleted_as_projected, true)
+      delete.()
+    end
+
+    :ok
+  end
+
+  # Aqua's post in `daily` that quotes a thread its turn read, deleted since.
+  defp quote_of_deleted!(ctx, daily) do
+    gone = fares!(ctx)
+    writer = running!(ctx, daily)
+    :ok = Tape.join_threads(ctx, writer, [gone.id])
+    quoted = say!(ctx, daily, "They rise on Monday.", %{sent_by: "aqua", turn_id: writer.id})
+    {:ok, _} = Tape.finish(ctx, writer, "cancelled")
+    assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
+    quoted
   end
 
   # A workspace thread whose opening, refused before it ran, cites `cited`.

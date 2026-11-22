@@ -483,7 +483,7 @@ defmodule Aqua.Loop.Request do
           blocks: [
             %{
               "type" => "text",
-              "text" => "[Summary of the thread so far]\n" <> (compaction.content || "")
+              "text" => Reader.summary(compaction)
             }
           ],
           step: nil
