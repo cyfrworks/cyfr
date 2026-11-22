@@ -173,6 +173,19 @@ defmodule Arca.Cache.Keys do
     do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.tincture_scan_running/1")
 
   @doc """
+  One thing known of the program in an athanor's row at one epoch: what
+  its driver last read of the account (`:account`), or last listed
+  (`:listing`). `Opus.Brain` is the one writer. The row's next epoch is
+  another program's definition, of which nothing is known.
+  """
+  def brain_known(%Prima.Actor{athanor_id: athanor_id}, row_id, epoch, what)
+      when is_binary(athanor_id) and athanor_id != "" and what in [:account, :listing],
+      do: {:brain_known, athanor_id, row_id, epoch, what}
+
+  def brain_known(%Prima.Actor{}, _row_id, _epoch, _what),
+    do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.brain_known/4")
+
+  @doc """
   An established caller memo — `Sanctum.Caller`'s short-TTL cache of one
   finished Context, keyed by the session row hash and the focus coordinate.
   """

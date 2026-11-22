@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package brainwire is the brain wire, version 3, a driver's side, for
+// Package brainwire is the brain wire, version 4, a driver's side, for
 // every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex):
 // tests/fixtures/brain_wire.json defines it (its "comment") and binds this
 // package and the holder (Opus.Brain.Wire) to the same lines. Commands come
@@ -25,10 +25,14 @@ import (
 )
 
 const (
-	Version      = 3
+	Version      = 4
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000
+	// SignedIn and SignedOut are what an event may say of the account: what
+	// the driver read positively in its harness's own account answer.
+	SignedIn  = "signed_in"
+	SignedOut = "signed_out"
 	// uuidPrefix starts what a post's uuid is derived from.
 	uuidPrefix = "cyfr-brain-post\x00"
 )
@@ -60,6 +64,9 @@ const (
 	tErrorType
 	tAccounting
 	tStop
+	tAccount
+	tSignedIn
+	tSignedOut
 )
 
 // Spec is one message: the members it always carries, those it may, and
@@ -82,6 +89,7 @@ var CountNames = []string{"input_tokens", "output_tokens", "cache_read_tokens", 
 var accountings = []string{"complete", "partial", "unavailable"}
 var stops = []string{"end_turn", "limit", "error"}
 var phases = []string{"start", "end"}
+var accounts = []string{SignedIn, SignedOut}
 var errorTypes = []string{"invalid_request", "authentication", "rate_limited", "overloaded", "provider_error", "unknown_model"}
 var mediaTypes = map[string][]string{
 	"image":    {"image/jpeg", "image/png", "image/gif", "image/webp"},
@@ -107,11 +115,12 @@ var Commands = map[string]Spec{
 var Events = map[string]Spec{
 	"hello": {[]string{"t", "v", "driver", "boot"}, nil,
 		map[string]fieldType{"v": tCount, "driver": tID, "boot": tID}},
-	"started": {[]string{"t", "session", "fresh", "held"}, nil,
-		map[string]fieldType{"session": tID, "fresh": tBoolean, "held": tIDs}},
+	"started": {[]string{"t", "session", "fresh", "held"}, []string{"account"},
+		map[string]fieldType{"session": tID, "fresh": tBoolean, "held": tIDs, "account": tAccount}},
 	"gone":     {[]string{"t"}, nil, map[string]fieldType{}},
 	"accepted": {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
-	"refused":  {[]string{"t", "id", "reason"}, nil, map[string]fieldType{"id": tID, "reason": tString}},
+	"refused": {[]string{"t", "id", "reason"}, []string{"account"},
+		map[string]fieldType{"id": tID, "reason": tString, "account": tSignedOut}},
 	"text": {[]string{"t", "gen", "message", "delta"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "message": tID, "delta": tString}},
 	"said": {[]string{"t", "gen", "message", "text"}, []string{"work"},
@@ -126,8 +135,8 @@ var Events = map[string]Spec{
 		map[string]fieldType{"gen": tCount, "work": tID, "answered": tIDs, "stop": tStop}},
 	"error": {[]string{"t", "gen", "type", "message"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "type": tErrorType, "message": tString}},
-	"models": {[]string{"t", "id", "models", "efforts", "access"}, nil,
-		map[string]fieldType{"id": tID, "models": tModels, "efforts": tStrings, "access": tChoices}},
+	"models": {[]string{"t", "id", "models", "access"}, []string{"account"},
+		map[string]fieldType{"id": tID, "models": tModels, "access": tChoices, "account": tSignedIn}},
 	"forgot": {[]string{"t", "id", "session"}, nil, map[string]fieldType{"id": tID, "session": tID}},
 }
 
@@ -229,7 +238,9 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 		return listOf(raw, BlockOK)
 	case tTools:
 		return listOf(raw, toolOK)
-	case tModels, tChoices:
+	case tModels:
+		return listOf(raw, modelOK)
+	case tChoices:
 		return listOf(raw, idNameOK)
 	case tModelCounts:
 		return listOf(raw, modelCountsOK)
@@ -265,6 +276,12 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 		return OneOf(raw, accountings)
 	case tStop:
 		return OneOf(raw, stops)
+	case tAccount:
+		return OneOf(raw, accounts)
+	case tSignedIn:
+		return OneOf(raw, []string{SignedIn})
+	case tSignedOut:
+		return OneOf(raw, []string{SignedOut})
 	}
 	return false
 }
@@ -365,6 +382,11 @@ func idNameOK(raw json.RawMessage) bool {
 	return ok && ofType(tID, m["id"]) && ofType(tString, m["name"])
 }
 
+func modelOK(raw json.RawMessage) bool {
+	m, ok := objectOf(raw, "id", "name", "efforts")
+	return ok && ofType(tID, m["id"]) && ofType(tString, m["name"]) && ofType(tStrings, m["efforts"])
+}
+
 func modelCountsOK(raw json.RawMessage) bool {
 	m, ok := objectOf(raw, "model", "counts")
 	return ok && ofType(tID, m["model"]) && ofType(tCounts, m["counts"])
@@ -392,6 +414,32 @@ type Config struct {
 	Effort       string    `json:"effort"`
 	Access       *string   `json:"access"`
 	HarnessTools *[]string `json:"harness_tools"`
+}
+
+// Model is one model a driver lists: its id, the name a person reads and
+// the efforts that model takes.
+type Model struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Efforts []string `json:"efforts"`
+}
+
+// AppendModel is `models` with a harness's model added, its efforts each
+// once in the harness's order, as far as the wire takes them: a model with
+// no id the wire takes, or one past the list's bound, is left out.
+func AppendModel(models []Model, id, name string, efforts []string) []Model {
+	if !IsID(id) || len(models) >= MaxList {
+		return models
+	}
+	m := Model{ID: id, Name: name, Efforts: []string{}}
+	seen := map[string]bool{}
+	for _, effort := range efforts {
+		if effort != "" && !seen[effort] && len(m.Efforts) < MaxList {
+			seen[effort] = true
+			m.Efforts = append(m.Efforts, effort)
+		}
+	}
+	return append(models, m)
 }
 
 // Choice is one access choice a driver lists: the id a start's

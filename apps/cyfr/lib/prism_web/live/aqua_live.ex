@@ -30,11 +30,11 @@ defmodule PrismWeb.AquaLive do
 
   This is also where a person sets Aqua up, at the top of the page
   (`/a/<athanor>/aqua?setup=1` opens it, and it is open while Aqua's
-  brain is not connected), in three steps. The brains: every installed
-  catalyst that speaks `model/chat@1` (`Aqua.providers/1`), a key someone
-  shared with the person first, then each program brain CYFR ships
-  (`Opus.Programs.Definition.brains/0`), with what each needs; one step
-  for each brain ticked — its grant, asked in the page's system layer
+  brain is not connected), in three steps. The programs and keys: every
+  installed catalyst that speaks `model/chat@1` (`Aqua.providers/1`), a
+  key someone shared with the person first, then each program brain CYFR
+  ships (`Opus.Programs.Definition.brains/0`), with what each needs; one
+  step for each one ticked — its grant, asked in the page's system layer
   (`PrismWeb.SystemLayer`), whose sheet takes the key in CYFR's own
   credential prompt, the grant alone for a brain that needs nothing else
   of the person, or, for a program brain, the Programs page's form,
@@ -42,24 +42,40 @@ defmodule PrismWeb.AquaLive do
   signs it in — reachable in `lite`, so a box that never opens `dev`
   still gets its key in. A grant for a brain ends in one `models` call
   (`Aqua.models/2`) whose answer the page shows, so a key the provider
-  refuses reads as the provider says. A program brain whose row stands
-  is asked for its program's listing (`Aqua.program_listing/2`) on each
-  read of the setup: it is signed in once that answers, and its refusal
-  (a program with no sign-in is refused) says what is left to do. The
-  crew: the form that makes a crew member (`AgentsComponent.member_form/1`),
-  under the name the person gives it, on a connected harness or key, with
-  a model and the options that one lists; Make asks nothing, and as many
-  members run on one harness as the person makes.
-  Aqua: which crew member it runs on, whose brain, model and options Aqua
-  takes, which asks nothing either. A
+  refuses reads as the provider says. The crew: the form that makes a
+  crew member (`AgentsComponent.member_form/1`), under the name the
+  person gives it, on a program or key, with a model and the options
+  that one lists; Make asks nothing, and as many members run on one
+  program as the person makes. Aqua: which crew member it runs on, whose
+  brain, model and options Aqua takes, which asks nothing either. A
   source whose consent moved is consented again in the page's system
   layer.
+
+  ## What the page knows of a program
+
+  A read of the page asks no program: it shows the stored settings and
+  what is known (`Aqua.known_program/2`), which only the driver's own
+  account answer sets. It keeps no copy of that: each render reads it, so
+  what `Opus.Brain` let go of is not shown. Signed out is said of that
+  alone. A program whose row stands and of which nothing is known is
+  installed, and is offered.
+
+  A program is asked for its list (`Aqua.program_listing/2`) only by a
+  press: an editor's opening, another program chosen in one, its Try
+  again, and a Sign in, asked when its terminal ends. One thing is out
+  at a time. A Sign in waits for an ask already out, then its terminal
+  comes before any other ask, and the page asks nothing until it ends.
+  An ask that failed, or whose task was lost, says so and changes nothing
+  it knows.
   """
 
   use PrismWeb, :live_view
 
   @behaviour PrismWeb.SystemLayer.Hook
   on_mount PrismWeb.SystemLayer.Hook
+
+  @behaviour PrismWeb.TerminalComponent
+  on_mount PrismWeb.TerminalComponent
 
   alias PrismWeb.AquaLive.{
     AgentsComponent,
@@ -68,7 +84,7 @@ defmodule PrismWeb.AquaLive do
     ScrollsComponent
   }
 
-  alias PrismWeb.SystemLayer
+  alias PrismWeb.{SystemLayer, TerminalComponent}
 
   # Each section reloads on its own message, so a write refreshes what it
   # changed and nothing else: a note kept here does not re-read the
@@ -94,17 +110,23 @@ defmodule PrismWeb.AquaLive do
       # Aqua's setup: whether the address asked for it and for whom, the
       # brains it offers, the ones ticked, each connected brain's answer to
       # its `models` call, how the roster's brains stand, the program
-      # brains and each one's listing, what the form that makes a crew
-      # member holds, and whether its last step leads to the
+      # brains, each one's listing once a press asked for it, the programs
+      # waiting to be asked, the one task out, the Sign in waiting on its
+      # terminal and why the last was refused, what the form that makes a
+      # crew member holds, and whether its last step leads to the
       # administrator's own setup.
       |> assign(:setup_asked, false)
+      |> assign(:setup_toggled, nil)
       |> assign(:providers, nil)
       |> assign(:ticked, MapSet.new())
       |> assign(:answers, %{})
       |> assign(:agents_read, nil)
       |> assign(:programs, nil)
       |> assign(:listings, %{})
-      |> assign(:listing, :idle)
+      |> assign(:waiting, [])
+      |> assign(:out, nil)
+      |> assign(:sign_in, nil)
+      |> assign(:sign_in_refused, %{})
       |> assign(:member_draft, AgentsComponent.empty_draft())
       |> assign(:admin_next, admin_next?(socket.assigns[:context]))
 
@@ -113,6 +135,10 @@ defmodule PrismWeb.AquaLive do
     if connected?(socket) and socket.assigns[:context] do
       actor = Sanctum.Context.actor(socket.assigns.context)
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
+      user_id = socket.assigns.context.user_id
+
+      if is_binary(user_id) and user_id != "",
+        do: Cyfr.Bus.subscribe(actor, Cyfr.Bus.programs(actor, user_id))
 
       # Paint first, load after: five tool reads and a registry walk stand
       # between the mount and the roster, and the frame shows its spinner
@@ -125,8 +151,11 @@ defmodule PrismWeb.AquaLive do
 
   # `?setup=1` opens Aqua's setup.
   @impl true
-  def handle_params(params, _uri, socket),
-    do: {:noreply, assign(socket, :setup_asked, params["setup"] == "1")}
+  def handle_params(params, _uri, socket) do
+    asked? = params["setup"] == "1"
+    socket = assign(socket, :setup_asked, asked?)
+    {:noreply, if(asked?, do: assign(socket, :setup_toggled, nil), else: socket)}
+  end
 
   @impl true
   def handle_event("open_consent", %{"ref" => ref}, socket) when is_binary(ref) and ref != "" do
@@ -143,6 +172,11 @@ defmodule PrismWeb.AquaLive do
 
     {:noreply, assign(socket, :ticked, ticked)}
   end
+
+  # The person opened or closed the setup: the page keeps it so, since a
+  # render would otherwise close what they opened to press in it.
+  def handle_event("setup_toggle", %{"open" => open}, socket) when open in ["true", "false"],
+    do: {:noreply, assign(socket, :setup_toggled, open != "true")}
 
   # The grant for `ref`, asked in the page's system layer, whose sheet
   # binds the key; a walk that cannot be read is said instead.
@@ -164,28 +198,6 @@ defmodule PrismWeb.AquaLive do
   # ============================================================================
   # Loads and refreshes
   # ============================================================================
-
-  # The program brains' listings, for the focus they were asked under:
-  # each one's models and efforts, or the sentence it was refused with, a
-  # program with no sign-in among them; then the programs asked meanwhile.
-  # A listing that answers under another focus is dropped, and so are the
-  # programs asked meanwhile: the setup read under the new focus asks its
-  # own. A program's ask that raised or exited answered as one unread
-  # (`listing/2`), so the task always answers.
-  @impl true
-  def handle_async(:program_listing, {:ok, {tag, results}}, socket) do
-    waiting = socket.assigns.listing
-    socket = assign(socket, :listing, :idle)
-
-    CyfrWeb.ContextGuard.deliver(socket, tag, fn socket ->
-      socket =
-        Enum.reduce(results, socket, fn {name, result}, acc -> listed(acc, name, result) end)
-
-      {:noreply, ask_listings(socket, waiting)}
-    end)
-  end
-
-  def handle_async(:program_listing, {:exit, _reason}, socket), do: {:noreply, socket}
 
   # The grant this page asked for. Granted, the model got its key: the
   # kept catalogue predates the key, so it is dropped before the re-read —
@@ -231,10 +243,42 @@ defmodule PrismWeb.AquaLive do
 
   # The roster read how its brains stand: the setup is open while the
   # soul's is not connected, and names the crew members whose is not.
-  def handle_info({:agents_read, read}, socket) do
-    unasked = Enum.reject(read[:listable] || [], &Map.has_key?(socket.assigns.listings, &1))
-    {:noreply, socket |> assign(:agents_read, read) |> ask_listings(unasked)}
+  def handle_info({:agents_read, read}, socket),
+    do: {:noreply, assign(socket, :agents_read, read)}
+
+  # A press in an editor asks these programs for their lists.
+  def handle_info({:ask_programs, names}, socket), do: {:noreply, ask_listings(socket, names)}
+
+  # A Sign in: the terminal first, shown in the panel where the person
+  # pressed (a card by its name, or the setup), and the program asked when
+  # that terminal ends.
+  def handle_info({:sign_in, program, panel}, %{assigns: %{sign_in: nil}} = socket) do
+    {:noreply,
+     socket
+     |> assign(:sign_in, {program, panel})
+     |> update(:sign_in_refused, &Map.delete(&1, program))
+     |> ask_listings([program])}
   end
+
+  def handle_info({:sign_in, _program, _panel}, socket), do: {:noreply, socket}
+
+  # What the one task out answered, taken only under the focus it was
+  # asked under.
+  def handle_info({:program_listing, tag, results}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, all_listed(&1, results)})
+
+  def handle_info({:sign_in_terminal, tag, result}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, terminal_opened(&1, result)})
+
+  # The task out ended with no answer taken (it was lost, or answered
+  # under another focus): what it was doing failed.
+  def handle_info(
+        {:DOWN, task, :process, _pid, _reason},
+        %{assigns: %{out: %{task: task, doing: doing}}} = socket
+      ),
+      do: {:noreply, socket |> assign(:out, nil) |> lost(doing)}
+
+  def handle_info(%Cyfr.Bus.Program{}, socket), do: {:noreply, socket}
 
   # What the form that makes a crew member holds, as the roster keeps it:
   # the setup shows the same form.
@@ -441,12 +485,10 @@ defmodule PrismWeb.AquaLive do
 
   defp load_section(socket, :setup) do
     ctx = socket.assigns.context
-    programs = program_brains(ctx)
 
     socket
     |> assign(:providers, Aqua.providers(ctx))
-    |> assign(:programs, programs)
-    |> ask_listings(for %{state: :ready, name: name} <- programs, do: name)
+    |> assign(:programs, program_brains(ctx))
   end
 
   # The program brains CYFR ships (`Opus.Programs.Definition.brains/0`),
@@ -462,35 +504,130 @@ defmodule PrismWeb.AquaLive do
     end
   end
 
-  # Each program brain whose row stands is asked for its listing once per
-  # read of the setup, and the program a crew member names the first time
-  # the roster says its row stands: the one place the page learns whether
-  # a program is signed in, since a program with no sign-in has its
-  # listing refused. One listing task runs at a time, off the page's
-  # process and ended with it, so one row never runs two listings at once;
-  # a program asked while it runs is asked by the next. The answer a
-  # program held stays shown until its new one comes.
-  defp ask_listings(socket, names) do
-    socket =
-      update(socket, :listings, fn listings ->
-        Enum.reduce(names, listings, &Map.put_new(&2, &1, :asking))
-      end)
+  # The programs whose row stands, shipped or named by a member: all that
+  # anything is known of.
+  defp standing(programs, read) do
+    shipped = for %{state: :ready, name: name} <- programs || [], do: name
+    Enum.uniq(shipped ++ ((read || %{})[:listable] || []))
+  end
 
-    case socket.assigns.listing do
-      :idle -> start_listing(socket, Enum.uniq(names))
-      waiting -> assign(socket, :listing, Enum.uniq(waiting ++ names))
+  # ============================================================================
+  # One thing at a time
+  # ============================================================================
+
+  # An ask authorizes nothing until it answered, so asking takes the last
+  # answer away.
+  defp ask_listings(socket, names) do
+    socket
+    |> update(:listings, &Map.merge(&1, Map.new(names, fn name -> {name, :asking} end)))
+    |> update(:waiting, &Enum.uniq(&1 ++ names))
+    |> next()
+  end
+
+  # What runs next once nothing is out: a Sign in's terminal before any
+  # ask, and no ask while that terminal runs. The programs asked while one
+  # ask was out are the next one's, so one row never runs two at once.
+  defp next(%{assigns: %{out: nil}} = socket) do
+    %{sign_in: sign_in, waiting: waiting, terminal: terminal} = socket.assigns
+
+    cond do
+      sign_in != nil -> open_terminal(socket, sign_in)
+      waiting == [] or held?(sign_in, terminal) -> socket
+      true -> start_listing(socket, waiting)
     end
   end
 
-  defp start_listing(socket, []), do: assign(socket, :listing, :idle)
+  defp next(socket), do: socket
+
+  defp held?(sign_in, terminal), do: sign_in != nil or match?(%{ended: nil}, terminal)
+
+  # An editor's line for an ask that waits on the terminal.
+  defp shown_listings(listings, waiting, sign_in, terminal) do
+    if held?(sign_in, terminal),
+      do: Map.merge(listings, Map.new(waiting, &{&1, :held})),
+      else: listings
+  end
 
   defp start_listing(socket, names) do
+    socket
+    |> assign(:waiting, [])
+    |> start({:ask, names}, fn ctx, page, tag ->
+      results = while_shown(page, fn -> Map.new(names, &{&1, listing(ctx, &1)}) end)
+      {:program_listing, tag, results}
+    end)
+  end
+
+  # The person's own running terminal of the row of that name, the one its
+  # install opened among them, so one kept folder never runs two of the
+  # program at once from here; only when none runs is one opened, through
+  # the gate like the Programs page's Open, at a default size the frame
+  # corrects when it attaches. That call runs to its end.
+  defp open_terminal(socket, {program, _panel}) do
+    start(socket, :sign_in, fn ctx, _page, tag ->
+      opened =
+        running_terminal(ctx, program) ||
+          run_to_end(fn ->
+            PrismWeb.Ops.call_tool(ctx, "mcp_servers/open", %{
+              "name" => program,
+              "rows" => 24,
+              "cols" => 80
+            })
+          end)
+
+      {:sign_in_terminal, tag, opened}
+    end)
+  end
+
+  # The person's own running terminal of the row named `program`, the
+  # oldest, as the open that started it answers; nil when none runs or
+  # the sessions cannot be read, and then Sign in opens one.
+  defp running_terminal(ctx, program) do
+    case Opus.Programs.running(ctx) do
+      {:ok, sessions} ->
+        Enum.find_value(sessions, fn
+          %{by: :person, name: ^program, session: session} -> {:ok, %{session: session}}
+          _other -> nil
+        end)
+
+      {:error, _unread} ->
+        nil
+    end
+  end
+
+  # The one task out, off the page's process and watched, so a lost one
+  # ends what it was doing.
+  defp start(socket, doing, work) do
     ctx = socket.assigns.context
     tag = CyfrWeb.ContextGuard.capture(ctx)
+    page = self()
 
-    socket
-    |> assign(:listing, [])
-    |> start_async(:program_listing, fn -> {tag, Map.new(names, &{&1, listing(ctx, &1)})} end)
+    {:ok, task} =
+      Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        send(page, work.(ctx, page, tag))
+      end)
+
+    assign(socket, :out, %{task: Process.monitor(task), doing: doing})
+  end
+
+  # `fun`, ended with a page that goes as a link would end it: a page that
+  # stops normally lets it finish, so no query is cut short there. The
+  # link is the watcher's alone: the task's loss is the page's to say, and
+  # never takes the page along.
+  defp while_shown(page, fun) do
+    watcher =
+      spawn_link(fn ->
+        watched = Process.monitor(page)
+
+        receive do
+          {:DOWN, ^watched, :process, ^page, :normal} -> :ok
+          {:DOWN, ^watched, :process, ^page, _gone} -> exit(:shutdown)
+        end
+      end)
+
+    result = fun.()
+    Process.unlink(watcher)
+    Process.exit(watcher, :kill)
+    result
   end
 
   # One program's listing; one that raised or exited did not answer.
@@ -502,20 +639,92 @@ defmodule PrismWeb.AquaLive do
     :exit, _reason -> {:error, :lost}
   end
 
+  defp answered(%{assigns: %{out: %{task: task}}} = socket) do
+    Process.demonitor(task, [:flush])
+    assign(socket, :out, nil)
+  end
+
+  defp answered(socket), do: socket
+
+  defp all_listed(socket, results) do
+    results
+    |> Enum.reduce(answered(socket), fn {name, result}, acc -> listed(acc, name, result) end)
+    |> next()
+  end
+
+  # An answer to an ask since asked again authorizes nothing: the one that
+  # waits is the one to take.
   defp listed(socket, name, result) do
     answer =
       case result do
         {:ok, %{models: _models} = listing} -> {:ok, listing}
-        {:error, {:refused, sentence}} when is_binary(sentence) -> {:error, sentence}
-        {:error, _unanswered} -> {:error, "it cannot be read right now — try again"}
+        {:error, reason} -> {:error, unlisted_words(reason, AgentsComponent.program_title(name))}
       end
 
-    update(
-      socket,
-      :listings,
-      &if(Map.has_key?(&1, name), do: Map.put(&1, name, answer), else: &1)
-    )
+    if name in socket.assigns.waiting,
+      do: socket,
+      else: update(socket, :listings, &Map.put(&1, name, answer))
   end
+
+  defp lost(socket, {:ask, names}) do
+    names
+    |> Enum.reduce(socket, fn name, acc -> listed(acc, name, {:error, :lost}) end)
+    |> next()
+  end
+
+  defp lost(socket, :sign_in), do: no_terminal(socket, "Its terminal did not open. Try again.")
+
+  defp terminal_opened(socket, result) do
+    socket = answered(socket)
+
+    case {result, socket.assigns.sign_in} do
+      {{:ok, %{session: session}}, {program, panel}} ->
+        shown = %{session: session, name: program, panel: panel, back: nil}
+        socket |> assign(:sign_in, nil) |> TerminalComponent.show(shown) |> next()
+
+      {{:error, reason}, _sign_in} ->
+        no_terminal(socket, error_message(reason))
+    end
+  end
+
+  # A Sign in whose terminal did not open says why where it was pressed and
+  # asks nothing.
+  defp no_terminal(socket, why) do
+    {program, panel} = socket.assigns.sign_in
+
+    socket =
+      socket
+      |> assign(:sign_in, nil)
+      |> update(:waiting, &List.delete(&1, program))
+      |> update(:listings, &Map.delete(&1, program))
+
+    socket =
+      if panel,
+        do: update(socket, :sign_in_refused, &Map.put(&1, program, why)),
+        else: put_flash(socket, :error, why)
+
+    next(socket)
+  end
+
+  # Why a list did not come, said as that: the program's sentence, signed
+  # out only where its driver read that, no room, or no answer.
+  defp unlisted_words({:signed_out, sentence}, _title), do: sentence
+  defp unlisted_words({:refused, sentence}, _title) when is_binary(sentence), do: sentence
+
+  defp unlisted_words({:refused, :capacity, _boot}, _title),
+    do: "This CYFR has no room for another running program right now."
+
+  defp unlisted_words(_unanswered, title),
+    do: "#{title} did not answer, so its list of models is not shown."
+
+  # The person may have signed in there: what waited on the terminal, its
+  # program first among it, is asked.
+  @impl PrismWeb.TerminalComponent
+  def terminal_ended(socket, %{}), do: next(socket)
+  def terminal_ended(socket, nil), do: socket
+
+  @impl PrismWeb.TerminalComponent
+  def terminal_dismissed(socket), do: socket |> TerminalComponent.detach() |> next()
 
   # Every unit's provenance, keyed by its path in the tree: shipped and
   # unedited, shipped but edited here, or the athanor's own. What a card
@@ -635,24 +844,29 @@ defmodule PrismWeb.AquaLive do
   end
 
   @doc """
-  Aqua's setup, in three steps a person reads as three. The brains: every
-  brain the athanor can connect, a key shared with them first, then the
-  program brains CYFR ships (`Opus.Programs.Definition.brains/0`), each
-  with what it needs; one step for each brain ticked; each connected
-  brain's answer to its `models` call, and a program brain signed in once
-  its program's listing answers. The crew: the form that makes a crew
-  member (`AgentsComponent.member_form/1`), and the
-  members made, each ready or what it waits on. Aqua: which crew member
-  it runs on, done once Aqua reads ready, and until then the state of
-  the crew's grant it waits on, with its Grant
-  (`AgentsComponent.grant_line/1`). Then the crew members whose brain is
-  not connected and, for an administrator who has not seen it, their own
-  setup next.
+  Aqua's setup, in three steps a person reads as three. The programs and
+  keys: every brain the athanor can connect, a key shared with them
+  first, then the program brains CYFR ships
+  (`Opus.Programs.Definition.brains/0`), each with what it needs; one
+  step for each one ticked; each connected brain's answer to its
+  `models` call, and a program as what is known of it says: signed in,
+  signed out, or installed while nothing is known, which completes the
+  step and still offers its sign-in once ticked. The crew: the form that
+  makes a crew member (`AgentsComponent.member_form/1`), and the members
+  made, each ready or what it waits on, a member whose program is known
+  signed out not ready. Aqua: which crew member it runs on, done once
+  Aqua reads ready, and until then the state of the crew's grant it waits
+  on, with its Grant (`AgentsComponent.grant_line/1`). Then the crew
+  members whose brain is not connected and, for an administrator who has
+  not seen it, their own setup next.
   """
   attr :open, :boolean, required: true
   attr :providers, :any, required: true
   attr :programs, :any, required: true
+  attr :known, :map, required: true
+  attr :runnable, :list, required: true
   attr :listings, :map, required: true
+  attr :terminal, :any, required: true
   attr :ticked, :any, required: true
   attr :answers, :map, required: true
   attr :agents_read, :any, required: true
@@ -671,8 +885,17 @@ defmodule PrismWeb.AquaLive do
 
     read = assigns.agents_read || %{}
     programs = assigns.programs || []
-    signed_in = Enum.filter(programs, &signed_in?(&1, assigns.listings))
-    members = read[:members] || []
+    known = assigns.known
+
+    members =
+      for member <- read[:members] || [] do
+        out? = AgentsComponent.signed_out?(known, member.agent["program"])
+        Map.merge(member, %{ready: member.ready and not out?, signed_out: out?})
+      end
+
+    soul_ready? =
+      read[:soul_ready] == true and
+        not AgentsComponent.signed_out?(known, read[:soul_program])
 
     assigns =
       assigns
@@ -682,21 +905,22 @@ defmodule PrismWeb.AquaLive do
       |> assign(:program_steps, Enum.filter(programs, &program_step?(&1, assigns)))
       |> assign(
         :connected?,
-        Enum.any?(providers, &(&1.state == :ready)) or signed_in != []
+        Enum.any?(providers, &(&1.state == :ready)) or
+          Enum.any?(programs, &(program_state(&1, known) in ["signed_in", "installed"]))
       )
       |> assign(
         :crew_brains,
         AgentsComponent.brains(
           assigns.models_by_provider,
           assigns.catalyst_refs,
-          assigns.listings,
+          assigns.runnable,
           assigns.providers
         )
       )
       |> assign(:unconnected, read[:unconnected] || [])
       |> assign(:soul, read[:soul])
       |> assign(:member, read[:member])
-      |> assign(:soul_ready, read[:soul_ready] == true)
+      |> assign(:soul_ready, soul_ready?)
       |> assign(:soul_state, read[:soul_state])
       |> assign(:members, members)
       |> assign(:member_title, Enum.find_value(members, &(&1.name == read[:member] && &1.title)))
@@ -707,22 +931,28 @@ defmodule PrismWeb.AquaLive do
       open={@open}
       class="rounded-lg border border-gray-800 bg-gray-900/60 p-4"
     >
-      <summary class="cursor-pointer text-sm font-medium text-gray-200">Set up Aqua</summary>
+      <summary
+        phx-click="setup_toggle"
+        phx-value-open={to_string(@open)}
+        class="cursor-pointer text-sm font-medium text-gray-200"
+      >
+        {if @soul_ready, do: "Aqua's setup", else: "Set up Aqua"}
+      </summary>
       <div class="mt-3 space-y-5 text-xs text-gray-300">
         <p>
-          Aqua answers with the brain of a crew member: connect the brains you have, make a crew
+          Aqua runs on a crew member: connect the programs and keys you have, make a crew
           member on one, and choose the one Aqua runs on.
         </p>
 
         <section id="aqua-setup-step-brains" data-done={to_string(@connected?)} class="space-y-2">
-          <h4 class="text-[11px] uppercase tracking-wider text-gray-400">1. Brains</h4>
+          <h4 class="text-[11px] uppercase tracking-wider text-gray-400">1. Programs and keys</h4>
 
           <p
             :if={match?({:error, _}, @providers)}
             data-test="setup-unavailable"
             class="text-amber-300"
           >
-            The brains installed here cannot be read right now — try again.
+            The keys this CYFR can connect cannot be read right now — try again.
           </p>
 
           <p
@@ -730,7 +960,7 @@ defmodule PrismWeb.AquaLive do
             data-test="setup-needs"
             class="text-amber-300"
           >
-            Tick the brains you have: a key from a model provider, or {program_titles(@programs)} on your own plan.
+            Tick what you have: a key from a model provider, or {program_titles(@programs)} on your own plan.
           </p>
 
           <ul id="aqua-setup-brains" class="space-y-1.5">
@@ -774,13 +1004,12 @@ defmodule PrismWeb.AquaLive do
               </span>
             </li>
             <%!-- A program brain runs in the program row of its name,
-                  signed in on its own terminal: signed in once its
-                  program's listing answers, which it does not while the
-                  program has no sign-in. --%>
+                  signed in on its own terminal: signed in, or out, only as
+                  its driver said, and installed while nothing is known. --%>
             <li
               :for={program <- @programs}
               id={"aqua-setup-brain-" <> program.name}
-              data-state={program_state(program, @listings)}
+              data-state={program_state(program, @known)}
               class="flex flex-wrap items-center gap-2"
             >
               <label class="flex items-center gap-2 cursor-pointer">
@@ -794,14 +1023,14 @@ defmodule PrismWeb.AquaLive do
                 <span class="font-medium text-gray-100">{program.title}</span>
                 <span class="text-gray-400">{program_need_line(program)}</span>
               </label>
-              <%= case {program.state, @listings[program.name]} do %>
-                <% {:ready, {:ok, _listing}} -> %>
+              <%= case {program.state, program_state(program, @known)} do %>
+                <% {:ready, "signed_in"} -> %>
                   <span class="text-emerald-400">signed in</span>
-                <% {:ready, {:error, sentence}} -> %>
-                  <span data-test="setup-signed-out" class="text-amber-300">{sentence}</span>
-                <% {:ready, _asking} -> %>
-                  <span class="text-gray-400">Asking {program.title}…</span>
-                <% {state, _listing} when state in [:program_disabled, :program_unfit, :model_unavailable] -> %>
+                <% {:ready, "signed_out"} -> %>
+                  <span data-test="setup-signed-out" class="text-amber-300">signed out</span>
+                <% {:ready, _installed} -> %>
+                  <span class="text-gray-400">installed</span>
+                <% {state, _shown} when state in [:program_disabled, :program_unfit, :model_unavailable] -> %>
                   <span class="text-amber-300">{plan_line(state)}</span>
                 <% _missing -> %>
               <% end %>
@@ -851,17 +1080,22 @@ defmodule PrismWeb.AquaLive do
                 {program.title}: sign it in on its terminal.
                 <button
                   type="button"
-                  phx-click="set_up_program"
+                  phx-click="sign_in"
                   phx-value-program={program.name}
                   phx-target="#aqua-agents"
-                  data-test="set-up-program"
+                  data-test="sign-in"
                   class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-0.5 text-[11px] font-medium text-white"
                 >
-                  Set up {program.name}
+                  Sign in
                 </button>
               <% end %>
             </li>
           </ol>
+
+          <TerminalComponent.frame
+            :if={@terminal && is_nil(@terminal.panel)}
+            terminal={@terminal}
+          />
         </section>
 
         <section
@@ -872,7 +1106,7 @@ defmodule PrismWeb.AquaLive do
           <h4 class="text-[11px] uppercase tracking-wider text-gray-400">2. Crew</h4>
 
           <p :if={not @connected?} data-test="setup-crew-waits" class="text-gray-400">
-            Connect a brain first.
+            Connect a program or key first.
           </p>
 
           <%!-- A member is made only when the person presses Make, under
@@ -880,6 +1114,7 @@ defmodule PrismWeb.AquaLive do
           <AgentsComponent.member_form
             id="aqua-setup-new-member"
             brains={@crew_brains}
+            listings={@listings}
             draft={@member_draft}
           />
 
@@ -921,12 +1156,14 @@ defmodule PrismWeb.AquaLive do
                 :for={member <- @members}
                 value={member.name}
                 selected={member.name == @member}
+                disabled={member.signed_out}
+                class={member.signed_out && "text-gray-500"}
               >
-                {AgentsComponent.runs_on_label(member.agent, @listings)}
+                {AgentsComponent.runs_on_label(member.agent, @known)}
               </option>
             </select>
             <p class="mt-1 text-gray-500">
-              Aqua answers with that member's brain, model and options.
+              Aqua answers with that member's program or key, model and options.
             </p>
           </form>
 
@@ -947,7 +1184,7 @@ defmodule PrismWeb.AquaLive do
         </section>
 
         <p :if={@unconnected != []} data-test="setup-unconnected" class="text-gray-400">
-          No connected brain yet for {Enum.join(@unconnected, ", ")}. Pick one on its card below.
+          No connected program or key yet for {Enum.join(@unconnected, ", ")}. Pick one on its card below.
         </p>
 
         <p :if={@admin_next} data-test="setup-admin-next">
@@ -969,34 +1206,30 @@ defmodule PrismWeb.AquaLive do
     do: state in [:needs_grant, :needs_key] and MapSet.member?(ticked, provider)
 
   # A program brain ticked is a step while its program is to install, or
-  # stands and its listing says it has no sign-in yet. Its tick is kept
-  # apart from the catalysts', which may share a name.
+  # stands and is not known signed in. Its tick is kept apart from the
+  # catalysts', which may share a name.
   defp program_step?(%{state: :program_missing} = program, assigns),
     do: MapSet.member?(assigns.ticked, program_tick(program))
 
-  defp program_step?(%{state: :ready, name: name} = program, assigns),
+  defp program_step?(%{state: :ready} = program, assigns),
     do:
-      match?({:error, _}, assigns.listings[name]) and
+      program_state(program, assigns.known) != "signed_in" and
         MapSet.member?(assigns.ticked, program_tick(program))
 
   defp program_step?(_program, _assigns), do: false
 
   defp program_tick(%{name: name}), do: "program:" <> name
 
-  # A program brain is signed in when its row stands and its program's
-  # listing answered: a program with no sign-in has its listing refused.
-  defp signed_in?(%{state: :ready, name: name}, listings),
-    do: match?({:ok, _}, listings[name])
-
-  defp signed_in?(_program, _listings), do: false
-
-  defp program_state(program, listings) do
-    case {program.state, listings[program.name]} do
-      {:ready, {:ok, _listing}} -> "signed_in"
-      {:ready, {:error, _sentence}} -> "signed_out"
-      {state, _listing} -> to_string(state)
+  # A program whose row stands is what its driver last said of its
+  # account, and installed while it said nothing.
+  defp program_state(%{state: :ready, name: name}, known) do
+    case get_in(known, [name, :account]) do
+      nil -> "installed"
+      account -> to_string(account)
     end
   end
+
+  defp program_state(%{state: state}, _known), do: to_string(state)
 
   defp program_titles(programs) do
     case Enum.map(programs, & &1.title) do
@@ -1013,7 +1246,7 @@ defmodule PrismWeb.AquaLive do
 
   defp plan_line(:program_unfit),
     do:
-      "it is not one a brain can run in — on the Programs page, make it a driven program " <>
+      "it is not one Aqua can run on — on the Programs page, make it a driven program " <>
         "with a kept folder whose command starts with its driver"
 
   defp plan_line(:model_unavailable), do: unready_line(:model_unavailable)
@@ -1066,18 +1299,37 @@ defmodule PrismWeb.AquaLive do
   defp soul_unconnected?(%{soul: soul, soul_ready: false}) when is_binary(soul), do: true
   defp soul_unconnected?(_read), do: false
 
+  defp setup_open?(nil, asked?, read), do: asked? or soul_unconnected?(read)
+  defp setup_open?(toggled?, _asked?, _read), do: toggled?
+
   # ============================================================================
   # Render
   # ============================================================================
 
   @impl true
   def render(assigns) do
+    standing = standing(assigns.programs, assigns.agents_read)
+    known = AgentsComponent.known(assigns.context, standing)
+
+    # `rendered` has the roster render, and so read what is known, whenever
+    # the page does.
+    assigns =
+      assigns
+      |> assign(:standing, standing)
+      |> assign(:known, known)
+      |> assign(:runnable, AgentsComponent.runnable(standing, known))
+      |> assign(:rendered, make_ref())
+      |> assign(
+        :shown,
+        shown_listings(assigns.listings, assigns.waiting, assigns.sign_in, assigns.terminal)
+      )
+
     ~H"""
     <div class="space-y-6">
       <div>
         <h3 class="text-sm font-medium text-gray-200">Aqua</h3>
         <p class="text-[11px] text-gray-500 mt-0.5">
-          One assistant, Aqua, and its crew: who it hands a job to, each on a brain of its own. Aqua runs on the crew member you choose. How a job is done is a scroll any of them reads.
+          One assistant, Aqua, and its crew: who it hands a job to, each on a program or key of its own. Aqua runs on the crew member you choose. How a job is done is a scroll any of them reads.
         </p>
       </div>
 
@@ -1086,10 +1338,13 @@ defmodule PrismWeb.AquaLive do
       <.consent_status stale_consents={@stale_consents} />
 
       <.setup
-        open={@setup_asked or soul_unconnected?(@agents_read)}
+        open={setup_open?(@setup_toggled, @setup_asked, @agents_read)}
         providers={@providers}
         programs={@programs}
-        listings={@listings}
+        known={@known}
+        runnable={@runnable}
+        listings={@shown}
+        terminal={@terminal}
         ticked={@ticked}
         answers={@answers}
         agents_read={@agents_read}
@@ -1108,7 +1363,12 @@ defmodule PrismWeb.AquaLive do
         provenance={@provenance}
         models_by_provider={@models_by_provider}
         catalyst_refs={@catalyst_refs}
-        program_listings={@listings}
+        standing={@standing}
+        rendered={@rendered}
+        program_listings={@shown}
+        setting_up={@sign_in && elem(@sign_in, 0)}
+        set_up_refused={@sign_in_refused}
+        terminal={@terminal}
         providers={@providers}
       />
 
