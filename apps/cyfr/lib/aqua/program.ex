@@ -816,8 +816,8 @@ defmodule Aqua.Program do
         state.phase == :working and id == work.start ->
           fail(shut(state), turned_away(work, refusal, {:work_refused, reason}))
 
-        state.phase == :ready and match?(%{id: ^id, deliver: "answer"}, state.outstanding) ->
-          renotice(%{state | outstanding: nil}, state.outstanding)
+        match?(%{id: ^id, deliver: "answer"}, state.outstanding) ->
+          refused_answer(%{state | outstanding: nil}, effects, state.outstanding)
 
         match?(%{id: ^id}, state.outstanding) ->
           fail(shut(state), turned_away(work, refusal, {:post_refused, reason}))
@@ -827,6 +827,19 @@ defmodule Aqua.Program do
       end
     end)
   end
+
+  # An answer the harness refused goes as a notice only while the work
+  # goes on: never once it ended, nor in the batch that ends it, whose
+  # error or stop is read after its answers.
+  defp refused_answer(%{phase: :ready, work: work} = state, effects, answer) do
+    if ends?(effects, work.turn.id), do: state, else: renotice(state, answer)
+  end
+
+  defp refused_answer(state, _effects, _answer), do: state
+
+  defp ends?(%{errors: [_ | _]}, _turn_id), do: true
+  defp ends?(%{idle: %{"work" => id, "stop" => stop}}, id), do: stop != "end_turn"
+  defp ends?(_effects, _turn_id), do: false
 
   # Signed out is the member's own state, never the driver's words. Every
   # other failure of an account stays the driver's or the provider's.

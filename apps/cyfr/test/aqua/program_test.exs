@@ -4103,42 +4103,74 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
-    test "an answer refused after the work ended is followed by no notice",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      turn = accept!(ctx, thread, row, "list them")
-      %{loop: loop} = working!(ctx, thread, row, fake, turn)
-      attendant = waited_on!(ctx, turn, loop)
-      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
-      assert %{"t" => "answer", "id" => answer} = sent()
+    for {ended, ending, words} <- [
+          {"an error in an earlier batch", :earlier_error,
+           "could not answer: The provider failed."},
+          {"an error in its own batch", :error, "could not answer: The provider failed."},
+          {"a stop in its own batch", :stop, "stopped before it finished (limit)."}
+        ] do
+      @tag ending: ending, words: words
+      test "an answer refused as the work ended, by #{ended}, is followed by no notice",
+           %{ctx: ctx, thread: thread, row: row, fake: fake, ending: ending, words: words} do
+        turn = accept!(ctx, thread, row, "list them")
+        %{loop: loop} = working!(ctx, thread, row, fake, turn)
+        attendant = waited_on!(ctx, turn, loop)
+        say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+        assert %{"t" => "answer", "id" => answer} = sent()
+        _ = :sys.get_state(attendant)
 
-      # The answer's write returned before the loop is held, waiting again.
-      _ = :sys.get_state(attendant)
+        # The loop is held where it waits, so it closes nothing meanwhile.
+        Prima.Test.Wait.wait_until(
+          fn -> Process.info(loop.pid, :status) == {:status, :waiting} end,
+          10_000,
+          "the loop to wait again"
+        )
 
-      Prima.Test.Wait.wait_until(
-        fn -> Process.info(loop.pid, :status) == {:status, :waiting} end,
-        10_000,
-        "the loop to wait again"
-      )
+        true = :erlang.suspend_process(loop.pid)
 
-      true = :erlang.suspend_process(loop.pid)
+        error = %{
+          "t" => "error",
+          "gen" => 0,
+          "work" => turn.id,
+          "type" => "provider_error",
+          "message" => "The provider failed."
+        }
 
-      say(fake, row, %{
-        "t" => "error",
-        "gen" => 0,
-        "work" => turn.id,
-        "type" => "provider_error",
-        "message" => "The provider failed."
-      })
+        refusal = %{"t" => "refused", "id" => answer, "reason" => "It holds no ask."}
 
-      say(fake, row, %{"t" => "refused", "id" => answer, "reason" => "It holds no ask."})
-      committed!(ctx, thread, 7)
-      _ = :sys.get_state(attendant)
-      refute_received {:session, "send", _wire, _fields}
+        if ending == :earlier_error do
+          say(fake, row, error)
+          committed!(ctx, thread, 6)
+          say(fake, row, refusal)
+          committed!(ctx, thread, 7)
+        else
+          # The reader reads on only once the attendant took a batch: with
+          # one handed and held, the two lines after it are read as one.
+          hold!(attendant)
+          say(fake, row, text(turn, "msg_0", "still here", :none))
+          holder = Opus.Brain.whereis(ctx.athanor_id, thread.id)
 
-      true = :erlang.resume_process(loop.pid)
-      line = "#{@title} could not answer: The provider failed."
-      assert {:failed, ^line} = Task.await(loop, 15_000)
-      assert Enum.map(inputs(ctx, turn), & &1.action) == ["post", "answer"]
+          Prima.Test.Wait.wait_until(
+            fn -> :sys.get_state(holder).handed == 6 end,
+            10_000,
+            "the line before them to be handed"
+          )
+
+          last = if ending == :error, do: error, else: %{idle(turn, []) | "stop" => "limit"}
+          say(fake, row, refusal)
+          say(fake, row, last)
+          :ok = :sys.resume(attendant)
+          committed!(ctx, thread, 8)
+        end
+
+        _ = :sys.get_state(attendant)
+        refute_received {:session, "send", _wire, _fields}
+
+        true = :erlang.resume_process(loop.pid)
+        said = "#{@title} #{words}"
+        assert {:failed, ^said} = Task.await(loop, 15_000)
+        assert Enum.map(inputs(ctx, turn), & &1.action) == ["post", "answer"]
+      end
     end
 
     test "a holder killed at work is resumed, though it told nobody that it ended",
