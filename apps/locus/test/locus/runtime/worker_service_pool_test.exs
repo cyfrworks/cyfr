@@ -19,6 +19,9 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   it. An unclean completion with no child cancelled is not reported. A
   caller that awaits the reports is answered once every one in flight is.
 
+  An exit is reported under the runner the service assigned, whatever
+  runner its frame names.
+
   A start none of which reached the runner it was given (the runner's
   relay gone, or going as the assign arrived, its handle gone, its channel
   closed before the write) is sent once more, to another runner, and the
@@ -339,6 +342,16 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
 
       assert [%{args: %{"attempts" => held}}] = reports(context)
       assert Enum.sort(held) == Enum.sort([root.attempt, "att_child", "att_other"])
+    end
+
+    test "an exit is reported under the runner the service assigned", context do
+      {root, runner} = started!(context)
+      assigned = runner_id(root)
+      write(runner, %{type: :exit, runner: "runner_named_in_the_frame", open: [root.attempt]})
+
+      assert [%{args: %{"attempts" => held, "runner" => reported}}] = reports(context)
+      assert reported == assigned
+      assert held == [root.attempt]
     end
 
     test "a child's cancel then the runner's unclean completion is reported, naming the child",

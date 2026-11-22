@@ -42,7 +42,8 @@ defmodule Locus.Runtime.WorkerService do
   assigned, or that completes unclean after a `cancel_child` for a child
   it held, is reported at once to the member that assigned its subtree —
   every attempt one runner holds was issued by one member, and no other
-  lapses them — naming that member and the runner, and signed with the
+  lapses them — naming that member and the runner the service assigned,
+  never the one an `exit` names, and signed with the
   service's dispatch key (`Locus.Runtime.HostClient.runner_exited/5`). The report
   names every attempt the service assigned that runner: the subtree's
   root, then every child the runner said it started, then what its `exit`
@@ -278,13 +279,13 @@ defmodule Locus.Runtime.WorkerService do
     end
   end
 
-  def handle_info({RunnerPool, pid, {:exit, runner, open}}, state) do
+  def handle_info({RunnerPool, pid, {:exit, _named, open}}, state) do
     case Map.get(state.assigned, pid) do
       nil ->
         {:noreply, state}
 
       assignment ->
-        state = report(state, runner, assignment, open)
+        state = report(state, assignment.runner, assignment, open)
         {:noreply, forget(state, pid)}
     end
   end

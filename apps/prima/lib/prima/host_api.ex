@@ -560,7 +560,9 @@ defmodule Prima.HostAPI do
   with the attempts it was started with and had not closed. CYFR lapses
   each of them that was dispatched to the reporting service and boot, is
   claimed by that runner and is still running, and stops what it holds
-  for each. A report speaks for its own boot only: another boot of the
+  for each. A report always names the attempt the service assigned; one
+  named alone that no runner took is closed failed at once. A report
+  speaks for its own boot only: another boot of the
   same service lapses nothing, and neither does a member the report's
   `member` does not name.
   """
