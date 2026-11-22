@@ -25,6 +25,7 @@ defmodule Aqua.RunnerTest do
 
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
   alias Aqua.{Runner, Tape}
@@ -1684,6 +1685,104 @@ defmodule Aqua.RunnerTest do
              Threads.messages(Sanctum.Context.actor(ctx), thread.id),
              &(&1.kind == "turn_aborted")
            )
+  end
+
+  @tag capture_log: true
+  test "a loop that died ends its turn under the fence it acquired, never its successor's",
+       %{ctx: ctx, thread: thread} do
+    script!([{:probe, self()}, reply("never resumed")])
+    {:ok, %{turn_id: id}} = Runner.send_message(ctx, thread.id, "@aqua first")
+    pids = running!(thread)
+
+    # The turn is taken between the loop's death and the runner's hearing it.
+    :ok = :sys.suspend(pids.runner)
+    {:ok, held} = Tape.turn(ctx, id)
+    {:ok, taken} = Tape.supersede(ctx, held)
+    Process.exit(pids.loop, :kill)
+    :ok = :sys.resume(pids.runner)
+
+    wait_until(fn ->
+      not Process.alive?(pids.runner) or
+        not match?({:ok, %{status: "running"}}, Tape.turn(ctx, id))
+    end)
+
+    assert {:ok, ^taken} = Tape.turn(ctx, id)
+    send(pids.call, :continue)
+  end
+
+  for moved <- [:before, :after] do
+    @tag moved: moved
+    test "a resume whose turn was taken #{moved} its refusal is not ended under the fence that took it",
+         %{ctx: ctx, thread: thread, moved: moved} do
+      start_supervised!(
+        {ScriptedWorker,
+         ref: [@model, "catalyst:local.http"],
+         script: [
+           call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+           {:crash, :before_response}
+         ]}
+      )
+
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^id}}, 60_000
+      wait_until(fn -> match?(%{paused: true}, Runner.state(thread.id, ctx.athanor_id)) end)
+
+      # The consent it pinned moved, so its resume is refused.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(t in Arca.Schemas.Turn, where: t.id == ^id),
+          set: [consent_id: "moved"]
+        )
+
+      # The resuming loop waits just after it read the turn.
+      read = {__MODULE__, :read, id}
+      test = self()
+
+      :ok =
+        :telemetry.attach(
+          read,
+          [:arca, :repo, :query],
+          fn _event, _measured, %{source: source}, _config ->
+            if source == "turns" and Aqua.Loop.holder(id) == self() and
+                 Process.put(read, true) == nil do
+              send(test, {:read, self()})
+              receive do: (:go -> :ok), after: (30_000 -> :ok)
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(read) end)
+
+      assert {:ok, %{admitted: :steer}} = Runner.send_message(ctx, thread.id, "@aqua go on")
+      assert_receive {:read, loop}, 10_000
+      runner = Runner.whereis(thread.id)
+      :ok = :sys.suspend(runner)
+      gone = Process.monitor(loop)
+
+      take = fn ->
+        {:ok, held} = Tape.turn(ctx, id)
+        {:ok, taken} = Tape.supersede(ctx, held)
+        taken
+      end
+
+      taken =
+        if moved == :before do
+          taken = take.()
+          send(loop, :go)
+          assert_receive {:DOWN, ^gone, :process, _pid, _reason}, 30_000
+          taken
+        else
+          send(loop, :go)
+          assert_receive {:DOWN, ^gone, :process, _pid, _reason}, 30_000
+          take.()
+        end
+
+      :ok = :sys.resume(runner)
+      # The loop's answer is ahead of this call in the runner's mailbox.
+      assert %{running: false} = Runner.state(thread.id, ctx.athanor_id)
+      assert {:ok, ^taken} = Tape.turn(ctx, id)
+    end
   end
 
   @tag :stop_handoff

@@ -1393,3 +1393,39 @@ func TestAStartNamingAnAccessTheDriverDoesNotListEndsIt(t *testing.T) {
 		t.Fatalf("the listed access starts the harness (a positive control): %d %q", status, s.stderr.String())
 	}
 }
+
+// Claude Code replays the system prompt a session was first started with
+// unless its snapshot is off, so every start, a resume's too, turns it off
+// and carries the instructions of that start.
+func TestEveryStartHandsOverItsOwnInstructions(t *testing.T) {
+	s := startDriver(t)
+	s.expect("hello")
+	session := ""
+	for i, system := range []string{"be brief", "be thorough", "be thorough"} {
+		if i > 0 {
+			s.end()
+			s = startDriverIn(t, s.home)
+			s.expect("hello")
+		}
+		start := map[string]any{"t": "start", "gen": 3, "config": map[string]any{}, "system": system}
+		if session != "" {
+			start["session"] = session
+		}
+		s.send(start)
+		session = s.expect("started")["session"].(string)
+		work(s, "stp_work", []any{})
+		postText(s, fmt.Sprintf("stp_post_%d", i), "handed")
+		var got map[string]any
+		for _, e := range s.until("idle") {
+			if e["t"] == "said" {
+				if err := json.Unmarshal([]byte(e["text"].(string)), &got); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		want := map[string]any{"subtype": "initialize", "systemPromptSnapshot": false, "appendSystemPrompt": system}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("start %d initializes with exactly %v, not %v", i, want, got)
+		}
+	}
+}

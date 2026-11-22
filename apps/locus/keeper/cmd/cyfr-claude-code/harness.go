@@ -97,8 +97,10 @@ func controlRequest(id string, request map[string]any) []byte {
 }
 
 // initializeLine carries CYFR's system prompt, appended to the harness's.
+// The snapshot is off at every start: with it, a resume replays the prompt
+// the session was first started with and never reads this one (2.1.323).
 func initializeLine(system string) []byte {
-	request := map[string]any{"subtype": "initialize"}
+	request := map[string]any{"subtype": "initialize", "systemPromptSnapshot": false}
 	if system != "" {
 		request["appendSystemPrompt"] = system
 	}

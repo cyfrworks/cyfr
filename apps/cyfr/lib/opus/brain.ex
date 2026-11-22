@@ -5,8 +5,8 @@ defmodule Opus.Brain do
   @moduledoc """
   The holder of a program used as a brain: one session of a brain's
   driver (`apps/locus/keeper/cmd/cyfr-claude-code`, `cmd/cyfr-codex`) for
-  one thread, kept open for as long as the work needs it, as
-  `Opus.Browser` keeps the person's browser. A thread keeps one native
+  one thread, held for one turn's work and closed by its attendant as
+  that ends (`Aqua.Program`). A thread keeps one native
   session (`brain_session`) whichever agent its turns address, so one
   holder runs per thread. The driver runs beside the harness in its
   program row's box and speaks the harness's own protocol to it; this
@@ -17,7 +17,7 @@ defmodule Opus.Brain do
   ## One attendant
 
   The process that opens the session (`open/1`) is its one attached
-  process, the attendant: it alone writes (`write/4`), it is handed what
+  process, the attendant: it alone writes (`write/3`), it is handed what
   the driver says, and its exit ends the session. A later `open/1` for
   the same thread, another agent's work among them, for work that proves
   itself, ends this one first (`:replaced`), so a take-over never shares
@@ -56,17 +56,12 @@ defmodule Opus.Brain do
   next start resumes the native session, whose transcript says what it
   holds (`started.held`).
 
-  A `work` runs with the configuration its caller names, or the running
-  harness's own when it names none: the member's model and options, its
-  access among them, which the driver translates into the harness's own
-  settings (`brain_wire.json`). One that differs from the configuration
-  the running harness was started with writes nothing: the driver's
-  process is closed and a new one opened in the same holder, `{:ok,
-  :restarted}`, and the attendant starts it again, resuming. A member
-  whose access or effort changed between turns therefore runs the next
-  turn in a harness started with it. The configuration is the caller's
-  word to the driver and grants nothing: every call the harness asks for
-  is still decided by CYFR's gate.
+  The harness runs with the configuration its `start` names, unchanged:
+  the member's model and options, its access among them, which the driver
+  translates into the harness's own settings (`brain_wire.json`). Every
+  turn starts a process of its own, so that is the turn's configuration.
+  It is the caller's word to the driver and grants nothing: every call the
+  harness asks for is still decided by CYFR's gate.
 
   ## The binding to admitted work
 
@@ -104,7 +99,7 @@ defmodule Opus.Brain do
 
   ## Two paths no turn admits
 
-  A `models` or a `forget` is never a delivery: `write/4` refuses both
+  A `models` or a `forget` is never a delivery: `write/3` refuses both
   with nothing written, so no turn and no binding reaches either. Each
   runs in a process of its own under the holders' supervisor, which holds
   the row's owner, opens a new process of the driver, writes the one
@@ -201,11 +196,9 @@ defmodule Opus.Brain do
   opened (once more, under a new grant, when that boot is over) and kept
   in memory alone: one admitted start opens several over a turn's
   recovery, and a restart of CYFR leaves nobody who could close one, so
-  what it left is the box's reconcile's. The handle names the first, so a close of a
-  holder that has died asks for that lifetime's place. A restart
-  (`{:ok, :restarted}`) puts another process behind the same handle, which
-  from then on cannot name what its holder left: a close of it once the
-  holder has died is `{:error, :unanswered}`.
+  what it left is the box's reconcile's. A holder runs one process, and
+  its handle is that process's lifetime, so a close of a holder that has
+  died asks for that lifetime's place.
   """
 
   use GenServer, restart: :temporary
@@ -257,7 +250,7 @@ defmodule Opus.Brain do
         }
 
   @typedoc "What a held session's messages carry and its close names (moduledoc, \"Its lifetimes\")."
-  @type handle :: %{lifetime: Programs.Box.lifetime(), restarted: :atomics.atomics_ref()}
+  @type handle :: Programs.Box.lifetime()
 
   @typedoc "A held session: its holder and its handle."
   @type brain :: {pid(), handle()}
@@ -325,24 +318,28 @@ defmodule Opus.Brain do
   @doc """
   Write `command` (a brain wire command: `start`, `work`, `post` or
   `answer`) under `binding`, read again from the store just before it is
-  written (moduledoc). `opts`: `config`, the configuration a `work`'s turn
-  runs with, the running harness's own when absent. Answers `:ok` once the
-  service took it, `{:ok, :restarted}` for a `work` whose configuration
-  differs from the running harness's (nothing written; a new process
-  runs), or `{:error, reason}` with
-  nothing written: `:not_a_delivery` (a `models` or a `forget`, which no
-  binding writes), `:busy` (before the `hello`, or while the last
-  command's answer is outstanding), `:not_attached`, `:unreadable`,
-  `:running` (a `start` while a harness runs), `:not_started`,
-  `:not_this_work`, `:not_this_generation` (a `start` naming another
-  generation than the binding's), `{:not_admitted, reason}`; or
-  `{:error, :uncertain}`, a write that may have reached the driver, after
-  which the session ends.
+  written (moduledoc). Answers `:ok` once the service took it, or
+  `{:error, reason}` with nothing written: `:not_a_delivery` (a `models`
+  or a `forget`, which no binding writes), `:busy` (before the `hello`, or
+  while the last command's answer is outstanding), `:not_attached`,
+  `:unreadable`, `:running` (a `start` while a harness runs),
+  `:not_started`, `:not_this_work`, `:not_this_generation` (a `start`
+  naming another generation than the binding's), `{:not_admitted,
+  reason}`, `:ended` (the service held no such session), `:not_written`
+  (the service refused it) or `:unavailable` (the holder ended before it
+  took the write); or `{:error, :uncertain}`, a write that may have
+  reached the driver, its answer lost among them: the holder's reply that
+  did not come, the holder's death while it wrote and a service that
+  answers the session ended, which can follow the writing.
   """
-  @spec write(brain(), binding(), Wire.message(), keyword()) ::
-          :ok | {:ok, :restarted} | {:error, term()}
-  def write({pid, ref}, binding, %{} = command, opts \\ []) when is_map(ref) do
-    call(pid, {:write, ref, binding, command, opts}, @write_ms + @open_ms + @answer_margin_ms)
+  @spec write(brain(), binding(), Wire.message()) :: :ok | {:error, term()}
+  def write({pid, ref}, binding, %{} = command) when is_map(ref) do
+    GenServer.call(pid, {:write, ref, binding, command}, @write_ms + @answer_margin_ms)
+  catch
+    # Only a holder that had ended before it took the write surely wrote
+    # nothing: one that takes a write answers it before it stops.
+    :exit, {gone, _call} when gone in [:noproc, :normal] -> {:error, :unavailable}
+    :exit, _timeout_or_death -> {:error, :uncertain}
   end
 
   @doc """
@@ -359,21 +356,15 @@ defmodule Opus.Brain do
   told `:closed` or `:unanswered` as this answers. `:ok` means that the
   place is back; `{:error, :unanswered}` that the service has not said
   so, the box then owing the close. A holder that ended before it was
-  asked is answered for the lifetime its handle names, unless it had
-  restarted its driver (moduledoc, "Its lifetimes").
+  asked is answered for the lifetime its handle is (moduledoc, "Its
+  lifetimes").
   """
   @spec close(brain()) :: :ok | {:error, :unanswered}
   def close({pid, ref}) when is_map(ref) do
     GenServer.call(pid, {:close, ref}, Programs.Box.close_timeout_ms() + @answer_margin_ms)
   catch
     :exit, {:timeout, _} -> {:error, :unanswered}
-    :exit, _ended -> close_ended(ref)
-  end
-
-  defp close_ended(%{lifetime: lifetime, restarted: restarted}) do
-    if :atomics.get(restarted, 1) == 0,
-      do: Programs.box_close(lifetime),
-      else: {:error, :unanswered}
+    :exit, _ended -> Programs.box_close(ref)
   end
 
   @doc "The held session of a thread, if one runs."
@@ -941,8 +932,6 @@ defmodule Opus.Brain do
        handed: nil,
        outstanding: nil,
        harness: :none,
-       starting: nil,
-       config: nil,
        asks: %{},
        generation: nil,
        hold_asked: false,
@@ -983,15 +972,15 @@ defmodule Opus.Brain do
   def handle_call({:open, _attendant, _binding}, _from, state),
     do: {:reply, {:error, :busy}, state}
 
-  def handle_call({:write, ref, binding, command, opts}, {pid, _tag}, %{ref: ref} = state) do
+  def handle_call({:write, ref, binding, command}, {pid, _tag}, %{ref: ref} = state) do
     cond do
       pid != state.attendant -> {:reply, {:error, :not_attached}, state}
       state.boot == nil or state.outstanding != nil -> {:reply, {:error, :busy}, state}
-      true -> deliver(state, binding, command, opts)
+      true -> deliver(state, binding, command)
     end
   end
 
-  def handle_call({:write, _ref, _binding, _command, _opts}, _from, state),
+  def handle_call({:write, _ref, _binding, _command}, _from, state),
     do: {:reply, {:error, :not_attached}, state}
 
   def handle_call({:close, ref}, _from, %{ref: ref} = state) do
@@ -1186,8 +1175,7 @@ defmodule Opus.Brain do
   defp connect(state) do
     with {:ok, state} <- hold(state),
          {:ok, state} <- fresh(state) do
-      ref = %{lifetime: state.lifetime, restarted: :atomics.new(1, [])}
-      {:ok, read_from(%{state | ref: ref}, 0)}
+      {:ok, read_from(%{state | ref: state.lifetime}, 0)}
     else
       {:error, reason, _left} -> {:error, reason}
     end
@@ -1295,36 +1283,6 @@ defmodule Opus.Brain do
     closed
   end
 
-  # A new process of the driver in the same holder: the last is closed,
-  # and what it held is forgotten. The handle is marked first, since it
-  # names the last one's lifetime alone.
-  defp restart(state) do
-    if state.reader, do: Process.exit(state.reader, :kill)
-    :atomics.put(state.ref.restarted, 1, 1)
-    _ = Programs.box_close(state.lifetime)
-    state = reset(%{state | session: nil, reader: nil})
-
-    case fresh(state) do
-      {:ok, state} -> {:ok, read_from(state, 0)}
-      {:error, reason, _minted} -> {:error, reason}
-    end
-  end
-
-  defp reset(state) do
-    %{
-      state
-      | boot: nil,
-        after: 0,
-        applied: 0,
-        handed: nil,
-        outstanding: nil,
-        harness: :none,
-        starting: nil,
-        config: nil,
-        asks: %{}
-    }
-  end
-
   defp read_from(state, after_seq) do
     holder = self()
     grant = state.grant
@@ -1428,10 +1386,10 @@ defmodule Opus.Brain do
   end
 
   defp answered(%{outstanding: {"start", _}} = state, %{"t" => "started"}),
-    do: %{state | outstanding: nil, harness: :started, config: state.starting, starting: nil}
+    do: %{state | outstanding: nil, harness: :started}
 
   defp answered(%{outstanding: {"start", _}} = state, %{"t" => "gone"}),
-    do: %{state | outstanding: nil, harness: :none, starting: nil}
+    do: %{state | outstanding: nil, harness: :none}
 
   defp answered(%{outstanding: {_t, id}} = state, %{"t" => t, "id" => id})
        when t in ["accepted", "refused"],
@@ -1447,28 +1405,21 @@ defmodule Opus.Brain do
 
   # Neither path no turn admits is a delivery: nothing a binding proves
   # writes either.
-  defp deliver(state, _binding, %{"t" => t}, _opts) when t in ["models", "forget"],
+  defp deliver(state, _binding, %{"t" => t}) when t in ["models", "forget"],
     do: {:reply, {:error, :not_a_delivery}, state}
 
-  defp deliver(state, binding, %{"t" => t} = command, opts) when is_binary(t) do
+  defp deliver(state, binding, %{"t" => t} = command) when is_binary(t) do
     with :ok <- this_place(state, binding),
          :ok <- in_turn(state, binding, command),
          {:ok, _turn} <- admitted(binding, t),
          {:ok, line} <- encode(command) do
-      if t == "work" and changed?(state.config, opts[:config]),
-        do: restarted(state),
-        else: send_line(state, command, line)
+      send_line(state, command, line)
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
-  defp deliver(state, _binding, _command, _opts), do: {:reply, {:error, :unreadable}, state}
-
-  # Only a work runs with a configuration its caller names, the running
-  # harness's own when it names none.
-  defp changed?(_running, nil), do: false
-  defp changed?(running, config), do: running != config
+  defp deliver(state, _binding, _command), do: {:reply, {:error, :unreadable}, state}
 
   # A binding is of this holder's athanor, thread and row, and of the
   # agent whose work opened it.
@@ -1512,20 +1463,14 @@ defmodule Opus.Brain do
 
   defp in_turn(_state, _binding, _not_a_delivery), do: {:error, :unreadable}
 
-  defp restarted(state) do
-    case restart(state) do
-      {:ok, state} -> {:reply, {:ok, :restarted}, state}
-      {:error, reason} -> {:stop, :normal, {:error, reason}, ended(state, :unavailable)}
-    end
-  end
-
   defp send_line(state, command, line) do
     case Session.send(state.grant, state.session, [line], @write_ms) do
       {:ok, :running} ->
         {:reply, :ok, written(state, command)}
 
+      # The service answers ended too for a write that failed part way.
       {:ok, :ended} ->
-        {:stop, :normal, {:error, :ended}, ended(state, :exited)}
+        {:stop, :normal, {:error, :uncertain}, ended(state, :interrupted)}
 
       {:error, {:refused, code, _boot}} when code in @gone ->
         {:stop, :normal, {:error, :ended}, ended(state, :exited)}
@@ -1549,7 +1494,6 @@ defmodule Opus.Brain do
       state
       | outstanding: {"start", nil},
         harness: :starting,
-        starting: command["config"],
         generation: command["gen"]
     }
 
