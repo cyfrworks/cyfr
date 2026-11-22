@@ -81,16 +81,12 @@ func newWorkProject(t *testing.T) workProject {
 	}
 	p.answer("context.out", "unix:///var/run/docker.sock\n")
 	t.Setenv("PATH", fake+string(os.PathListSeparator)+tools)
-	t.Setenv("FAKE_DOCKER_DIR", fake)
+	workSeesDocker(t, fake)
 
-	saved, savedKeeps, savedSg, savedDesktop := machine, workKeeps, sgProgram, dockerDesktop
-	t.Cleanup(func() { machine, workKeeps, sgProgram, dockerDesktop = saved, savedKeeps, savedSg, savedDesktop })
+	saved, savedSg, savedDesktop := machine, sgProgram, dockerDesktop
+	t.Cleanup(func() { machine, sgProgram, dockerDesktop = saved, savedSg, savedDesktop })
 	machine.system = func() string { return "linux" }
 	sgProgram = filepath.Join(fake, "no-sg")
-	// The stand-ins' own controls, which the work needs under test alone.
-	workKeeps = func(name string) bool {
-		return savedKeeps(name) || name == "FAKE_DOCKER_DIR" || strings.HasPrefix(name, "CYFR_CMD_TEST_")
-	}
 	return p
 }
 

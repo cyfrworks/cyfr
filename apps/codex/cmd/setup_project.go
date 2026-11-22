@@ -319,6 +319,8 @@ func setupWork(ctx context.Context, step func(string), args ...string) (workMess
 		_, _ = io.Copy(io.Discard, work.out)
 		err := work.wait()
 		switch {
+		case end == nil && err == nil:
+			ended <- ending{err: errors.New("setup's work ended with no answer")}
 		case end == nil:
 			ended <- ending{err: fmt.Errorf("setup's work ended before it finished (%v)", err)}
 		case end.Type == workFailed:

@@ -35,6 +35,19 @@ func workStandIn() int {
 	return Main()
 }
 
+// workSeesDocker has setup's work, a process of its own, reach the docker
+// on this test's PATH, which logs into dir: the work keeps the stand-ins'
+// own controls, which it needs under test alone.
+func workSeesDocker(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("FAKE_DOCKER_DIR", dir)
+	saved := workKeeps
+	t.Cleanup(func() { workKeeps = saved })
+	workKeeps = func(name string) bool {
+		return saved(name) || name == "FAKE_DOCKER_DIR" || strings.HasPrefix(name, "CYFR_CMD_TEST_")
+	}
+}
+
 // workHere has setup's work done in this process, over this test's engine
 // and Docker: for what reads a folder, never a run, which takes the
 // working directory and the signals of a process of its own.
@@ -96,6 +109,61 @@ func TestALookNamingNoContainerSendsNothing(t *testing.T) {
 			}
 			if err := l.Answers(t.Context()); err == nil || !strings.Contains(err.Error(), "named no container") {
 				t.Errorf("it answers %v", err)
+			}
+		})
+	}
+}
+
+// A reading that never came back from setup's work says so, and blames no
+// Docker it did not see: the work may not have begun, ended with no
+// answer, or not answered before it was given up.
+func TestAReadingThatNeverCameBackBlamesNoDocker(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nCYFR_PORT=4100\nCYFR_LOCUS_BUILDS_URL=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read, err := readFolder(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		start func() (*workProcess, error)
+		why   string
+	}{
+		"not begun": {
+			start: func() (*workProcess, error) { return nil, errors.New("sg is gone") },
+			why:   "setup's work could not begin (sg is gone)",
+		},
+		"ended with no answer": {
+			start: func() (*workProcess, error) {
+				_, in := io.Pipe()
+				return &workProcess{in: in, out: strings.NewReader("not a message\n"), wait: func() error { return nil }}, nil
+			},
+			why: "setup's work ended with no answer",
+		},
+		"given up": {
+			start: func() (*workProcess, error) {
+				_, in := io.Pipe()
+				out, _ := io.Pipe()
+				return &workProcess{in: in, out: out, wait: func() error { return nil }}, nil
+			},
+			why: "it was ended before it answered",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			saved := startWork
+			t.Cleanup(func() { startWork = saved })
+			startWork = func([]string) (*workProcess, error) { return c.start() }
+			ended, end := context.WithCancel(t.Context())
+			if name == "given up" {
+				end()
+			}
+			defer end()
+			f := &localFolder{dir: dir, opened: read.localBound}
+			_, err := f.look(ended, workLook, dir)
+			want := "The CYFR in " + dir + " could not be read here (" + c.why + "), so nothing was sent to it. Try again."
+			if err == nil || err.Error() != want {
+				t.Fatalf("said %v, want %q", err, want)
 			}
 		})
 	}

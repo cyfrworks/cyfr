@@ -265,16 +265,16 @@ func (f *localFolder) look(ctx context.Context, args ...string) (folderLook, err
 	case errors.As(err, &failed):
 		return folderLook{}, &shell.Unbound{Sentence: failed.sentence}
 	case err != nil:
-		return folderLook{}, &shell.Unbound{Sentence: dockerUnsaid(f.dir, err)}
+		return folderLook{}, &shell.Unbound{Sentence: unread(f.dir, err)}
 	case end.Look == nil:
-		return folderLook{}, &shell.Unbound{Sentence: dockerUnsaid(f.dir, errNoReading)}
+		return folderLook{}, &shell.Unbound{Sentence: unread(f.dir, errNoReading)}
 	case end.Look.Bound != f.opened:
 		return folderLook{}, &shell.Unbound{Moved: true, Sentence: fmt.Sprintf(
 			"The settings of the CYFR in %s changed after it was opened here, so nothing was sent to it. Quit CYFR and open it again.", f.dir)}
 	case end.Look.Refused != "":
 		return folderLook{}, &shell.Unbound{Sentence: end.Look.Refused}
 	case end.Look.Container.ID == "":
-		return folderLook{}, &shell.Unbound{Sentence: dockerUnsaid(f.dir, errNoReading)}
+		return folderLook{}, &shell.Unbound{Sentence: unread(f.dir, errNoReading)}
 	}
 	return *end.Look, nil
 }
@@ -302,6 +302,15 @@ func (f *localFolder) setupToken(ctx context.Context) (string, http.RoundTripper
 
 func notRunning(dir string, port int) string {
 	return fmt.Sprintf("Docker shows no CYFR of %s running at %s. Run cyfr up in that folder, then try again.", dir, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+}
+
+// unread is a reading of dir that never came back from setup's work,
+// which is all this process saw: whether Docker was asked, it cannot say.
+func unread(dir string, why error) string {
+	if errors.Is(why, context.Canceled) || errors.Is(why, context.DeadlineExceeded) {
+		why = errors.New("it was ended before it answered")
+	}
+	return fmt.Sprintf("The CYFR in %s could not be read here (%v), so nothing was sent to it. Try again.", dir, why)
 }
 
 func dockerUnsaid(dir string, why error) string {
