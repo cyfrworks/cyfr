@@ -437,7 +437,7 @@ def test_spawn(stack):
 def test_cgroup(stack):
     for runner in stack.runner_processes():
         facts = runner_facts(stack, runner)
-        expect(facts.get("cgroup") == f"0::/keeper-{runner['uid']}",
+        expect(facts.get("cgroup") == f"0::/keeper-{runner['uid']}/bound",
                f"cgroup: runner uid {runner['uid']} runs in its own group, placed from the parent side before it ran", facts)
 
 
