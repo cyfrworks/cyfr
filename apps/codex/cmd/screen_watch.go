@@ -30,8 +30,8 @@ const (
 	// watchesAgain is how long after losing its watches the screen starts
 	// them again.
 	watchesAgain = time.Second
-	// watchesTick is how often they look at their deadlines and at whether
-	// the machine slept, so also the longest they take to see that it did.
+	// watchesTick is the interval between their looks at their deadlines
+	// and at whether the machine slept.
 	watchesTick = 250 * time.Millisecond
 )
 
