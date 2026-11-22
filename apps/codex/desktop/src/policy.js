@@ -146,6 +146,20 @@ export function grants(permission) {
   return permission === "clipboard-sanitized-write" || permission === "fullscreen"
 }
 
+/**
+ * `text` as the app prints it: no address in it carries a fragment or a
+ * query. One with a scheme keeps its origin alone, since a path carries a
+ * credential too (a sign-in's ticket, a served file's); what follows an
+ * address up to the next space goes with it, as either may hold any mark
+ * a sentence would end an address with.
+ */
+export function printed(text) {
+  return String(text)
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#@]*@)?([^\s/?#"'`<>\\]*)\S*/gi, "$1$2")
+    .replace(/\bdata:\S*/gi, "data:")
+    .replace(/(^|[^\w.:/~-])(\/[^\s?#]*)[?#]\S*/g, "$1$2")
+}
+
 const PASSKEYS_DENIED = "publickey-credentials-get=(), publickey-credentials-create=()"
 
 /**

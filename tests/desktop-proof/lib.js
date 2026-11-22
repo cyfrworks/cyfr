@@ -30,7 +30,7 @@ import path from "node:path"
 import {BrowserWindow, app, net, powerMonitor, session} from "electron"
 
 import {startApp} from "../../apps/codex/desktop/src/app.js"
-import {scrub, scrubbed} from "./scrub.mjs"
+import {MARKER, scrub, scrubbed} from "./scrub.mjs"
 
 export const FIXTURE = process.env.CYFR_DESKTOP_PROOF_FIXTURE
 export const PHASE = process.env.CYFR_DESKTOP_PROOF_PHASE
@@ -419,7 +419,7 @@ export async function unansweredLoad(w) {
   let out
   await fault(host, "down")
   try {
-    await js(w.webContents, `location.assign(${literal(page)}); 1`)
+    await js(w.webContents, `location.assign(${literal(`${page}?q=${MARKER}#${MARKER}`)}); 1`)
     const shows = await waitFor(async () => {
       if (w.isDestroyed() || !atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
       const at = await js(w.webContents, `(() => { const inSight = (id) => {

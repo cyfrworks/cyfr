@@ -979,6 +979,55 @@ test("Try again loads the CYFR's root, a turn after the press", async () => {
   signedNobodyOut()
 })
 
+// What `act` has main write to its stderr.
+async function printing(act) {
+  const own = process.stderr.write
+  let out = ""
+  process.stderr.write = (chunk) => {
+    out += chunk
+    return true
+  }
+  try {
+    await act()
+  } finally {
+    process.stderr.write = own
+  }
+  return out
+}
+
+test("the engine's warning of a failed load prints no fragment or query", async () => {
+  await signedIn()
+  const out = await printing(async () => {
+    process.emitWarning("Failed to load URL: https://x.test/complete?q=a-marker#a-marker with error: ERR_EMPTY_RESPONSE", "electron")
+    await settled()
+    await settled()
+  })
+  assert.match(out, /^CYFR: warning: electron: Failed to load URL: https:\/\/x\.test with error: ERR_EMPTY_RESPONSE$/m)
+  assert.doesNotMatch(out, /marker/)
+  assert.equal(process.listenerCount("warning"), 1, "the app's printer alone")
+})
+
+test("cyfr's own lines are printed whole lines at a time, with no fragment or query", async () => {
+  await started(true)
+  const out = await printing(async () => {
+    child.stderr.write("Error: Get \"https://x.te")
+    await settled()
+    child.stderr.write("st/login?t=a-marker\": EOF\nlast, unended: https://x.test/#a-marker")
+    child.stderr.end()
+    await settled()
+    await settled()
+  })
+  assert.doesNotMatch(out, /marker/)
+  assert.match(out, /https:\/\/x\.test/)
+  assert.match(out, /last, unended/)
+})
+
+test("the engine's logging switch in the environment is dropped as the app starts", async () => {
+  process.env.ELECTRON_ENABLE_LOGGING = "1"
+  await started(true)
+  assert.equal(process.env.ELECTRON_ENABLE_LOGGING, undefined)
+})
+
 test("a lost confirmation window closes alone", async () => {
   await signedIn()
   const page = content()

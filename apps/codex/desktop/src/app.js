@@ -23,7 +23,7 @@ import {BrowserWindow, app, dialog, session} from "electron"
 
 import {keptStorage} from "./owner.js"
 import {lines, readFromCyfr, toCyfr} from "./process.js"
-import {accountLoad, documentHeaders, grants, readHop, relyingParty, unlistedSwitch} from "./policy.js"
+import {accountLoad, documentHeaders, grants, printed, readHop, relyingParty, unlistedSwitch} from "./policy.js"
 import {initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
@@ -44,6 +44,22 @@ const SECURE = {
   spellcheck: false,
   safeDialogs: true,
   devTools: false
+}
+
+// All the app prints: no address with its fragment or query (printed).
+const print = (line) => process.stderr.write(`${printed(line)}\n`)
+
+// The two roads by which the engine prints an address whole, each closed
+// before it has loaded one. It reports every failed load as a process
+// warning, which Node's own printer writes as it is, whoever listens for
+// the failure or handles the load's promise: that printer is replaced.
+// And ELECTRON_ENABLE_LOGGING has it print each page's console with the
+// page's address: the engine reads it again after main's first turn, so
+// dropping it here drops it.
+function ownOutput() {
+  delete process.env.ELECTRON_ENABLE_LOGGING
+  process.removeAllListeners("warning")
+  process.on("warning", (warning) => print(`CYFR: warning: ${warning.name}: ${warning.message}`))
 }
 
 // Who began a navigation of `contents` (`asker`) and, where that was its
@@ -72,7 +88,8 @@ function askerOf(event, contents) {
  * reports what happens, one line a step, for whoever started the app.
  */
 export function startApp({cyfr, accountRoad = process.platform === "darwin" || process.platform === "win32",
-  touchIdGroup = "", say = (line) => process.stderr.write(`CYFR: ${line}\n`)}) {
+  touchIdGroup = "", say = (line) => print(`CYFR: ${line}`)}) {
+  ownOutput()
   // Every switch but the few the app takes (policy.js SWITCHES) is
   // refused: the engine would open a debugging port, lift the sandbox or
   // web security, or trust any certificate for one.
@@ -458,11 +475,17 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     let pending = ""
     child.stderr.setEncoding("utf8")
     child.stderr.on("data", (chunk) => {
-      process.stderr.write(chunk)
       pending += chunk
       const whole = pending.split("\n")
       pending = whole.pop()
-      for (const line of whole) if (line.startsWith("Error: ")) last = line
+      for (const line of whole) {
+        print(line)
+        if (line.startsWith("Error: ")) last = line
+      }
+    })
+    child.stderr.on("end", () => {
+      if (pending) print(pending)
+      pending = ""
     })
     child.on("error", (e) => on({type: "gone", why: `it could not start (${e.message})`}))
     child.on("exit", (code, signal) => {

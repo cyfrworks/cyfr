@@ -211,6 +211,13 @@ The chooser is `cyfr`'s own, with nothing stood in: on the passkey road it
 stays with both ways on, and with a notice to show it stays on either road
 until a way on is taken.
 
+Every script with a `proof.js` has one row more, `unprinted`, in its
+`app-NAME.log`: nothing the app printed carries an address's fragment or
+query, or a credential. `scrub-lines.mjs` reads that output raw, and a
+line the scrub would have cut fails the script. `unanswered` fails its
+load at an address with a marker in its query and fragment, which the
+engine's warning of that failure would print.
+
 What the app takes for a CYFR's page not loaded is the engine's report of
 a top frame's load of the CYFR failing, never a load given up (code -3);
 that exception and a failure in each of main's states are held by the

@@ -7,7 +7,7 @@ import {test} from "node:test"
 
 import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 import {
-  LOOPBACK, SWITCHES, accountLoad, contentNavigation, contentOpen, documentHeaders, grants, homeMessage, readHop,
+  LOOPBACK, SWITCHES, accountLoad, contentNavigation, contentOpen, documentHeaders, grants, homeMessage, printed, readHop,
   relyingParty, unlistedSwitch
 } from "../src/policy.js"
 
@@ -195,4 +195,27 @@ test("home names a CYFR and an https account service", () => {
   assert.equal(homeMessage({home, account: "http://accounts.example.com"}), false)
   assert.equal(homeMessage({home: "javascript:x", account}), false)
   assert.equal(relyingParty("https://accounts.example.com:8443"), "accounts.example.com")
+})
+
+test("nothing the app prints carries an address's fragment or query, or a path's credential", () => {
+  const MARK = "marker'in)it"
+  for (const line of [
+    `Failed to load URL: https://x.test/auth/passkey/complete#${MARK} with error: ERR_EMPTY_RESPONSE`,
+    `Failed to load URL: https://x.test/auth/passkey/complete/${MARK} with error: ERR_EMPTY_RESPONSE`,
+    `Failed to load URL: https://x.test/?q=${MARK} with error: ERR_NETWORK_CHANGED`,
+    `Failed to load URL: http://127.0.0.1:7340/bootstrap/#token=${MARK} with error: ERR_FAILED`,
+    `Error: Get "https://x.test/login?t=${MARK}": EOF`,
+    `https://x.test did not answer as a CYFR (wss://x.test/live?t=${MARK}).`,
+    `https://user:${MARK}@x.test/p`, `POST /confirm?ref=${MARK}`, `(/login#${MARK})`, `data:text/html,${MARK}`,
+    `two https://a.test/#${MARK} and https://b.test/#${MARK}`
+  ]) assert.ok(!printed(line).includes("marker"), printed(line))
+})
+
+test("what the app prints keeps what is no address's fragment, query or credential", () => {
+  for (const line of ["cyfr ended: another program holds 127.0.0.1:7340: close the app using port 7340, then open CYFR again",
+    "home: https://cyfr.example.com", "refused: --inspect is not taken", "cannot open /opt/cyfr/resources/cyfr: no such file"]) {
+    assert.equal(printed(line), line)
+  }
+  assert.equal(printed("Failed to load URL: https://x.test:8443/threads#t with error: ERR_FAILED"),
+    "Failed to load URL: https://x.test:8443 with error: ERR_FAILED")
 })
