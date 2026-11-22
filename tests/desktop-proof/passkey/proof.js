@@ -179,18 +179,17 @@ async function passkeyPhase() {
     "the device's Prism and its own window show the same code, and with the passphrase the passkey is added to the account's log",
     {listed, shownThere, before: listedBefore.includes(waiting), added})
 
-  // lock_forgets: locked while the page still writes a cookie and a
-  // request of its own, which outlives it, is held until the lock is over:
-  // neither is left, and the chooser tells of no failure.
-  await judged("lock_forgets", "a lock forgets all of the content's storage, whatever the closing page was still writing or asking", async () => {
+  // lock_forgets: locked while a request of the page's, which outlives
+  // it, is held until the lock is over: its answer leaves no cookie, and
+  // the chooser tells of no failure. What a closing page's scripts write
+  // is the app's own tests' (main.test): here those writes end before the
+  // engine's clear does.
+  await judged("lock_forgets", "a lock forgets all of the content's storage, and the closing page's request, answered afterwards, puts nothing back", async () => {
     const ses = w.webContents.session
     let send = null
     ses.webRequest.onBeforeRequest({urls: [HOME + "/login?*"]}, (_details, callback) => { send = () => callback({}) })
     try {
-      await js(w.webContents, `fetch("/login?held", {keepalive: true}).catch(() => {});
-        for (let n = 0; n < 4; n++) setInterval(() => {
-          for (let i = 0; i < 50; i++) document.cookie = "proof_closing=" + i + "; path=/; max-age=60; secure"
-        }, 0); 1`)
+      await js(w.webContents, `fetch("/login?held", {keepalive: true}).catch(() => {}); 1`)
       await waitFor(() => send, "the page's request held")
       const from = await frontLength()
       const locked = await lockDevice(w)

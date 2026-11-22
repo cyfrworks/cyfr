@@ -210,7 +210,7 @@ account window makes. The app is launched four times (`run.sh`):
 | `no_passkey` | Sign in opens the app's account window at the account service; with no passkey it says so and offers to make one | the account window's origin and page |
 | `offer` | a passkey made in the account window returns to the CYFR's sign-in page, which shows its code | the code in the content window; the passkey the authenticator added |
 | `matched_code` | the device's Your devices and its own window show the same code, and with the passphrase the passkey is added to the account | the code in both; the account's log at the directory, without that key before and with it after |
-| `lock_forgets` | a lock forgets all of the content's storage, whatever the closing page was still writing or asking | the page writing a cookie until closed and a keepalive request of its sign-in page held past the lock, then answered; no cookie left afterwards; the ways on, nothing told |
+| `lock_forgets` | a lock forgets all of the content's storage, and the closing page's request, answered afterwards, puts nothing back | a keepalive request of the sign-in page held past the lock, then answered; no cookie left afterwards; the ways on, nothing told (what a closing page's scripts write is the app's own tests') |
 | `passkey_sign_in` | the new passkey alone signs in: the account window's answer returns and Prism opens | Prism, a session, the account offered |
 | `devices` | Your devices lists the passkey and how it signs in | the listed passkey |
 | `confirm` | a key asked for in Prism is confirmed with the passkey in the account window | the confirmation's page; the key shown |
