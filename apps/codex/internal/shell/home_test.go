@@ -66,6 +66,10 @@ type fakeHome struct {
 	shapes       []string
 	// stale is a certificate this CYFR will not take any more (4408).
 	stale func(cert map[string]any) bool
+	// answering runs as an intent's answer is to be sent, holding nothing.
+	answering func(op string, args map[string]any)
+	// standing is how many channels stand: a session lives only on one.
+	standing int
 }
 
 // fakeClient is one device admitted here: its key and the certificate it
@@ -256,6 +260,14 @@ func (h *fakeHome) channel(w http.ResponseWriter, r *http.Request) {
 	// pairing is revoked and closed 4403.
 	done := make(chan struct{})
 	defer close(done)
+	h.mu.Lock()
+	h.standing++
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		h.standing--
+		h.mu.Unlock()
+	}()
 	go h.closeAtExpiry(conn, c, done)
 	end := func(code websocket.StatusCode) {
 		if code == 4403 {
@@ -299,6 +311,12 @@ func (h *fakeHome) channel(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			result, refusal := h.intent(stringOf(m, "operation"), m["args"].(map[string]any), binding)
+			h.mu.Lock()
+			answering := h.answering
+			h.mu.Unlock()
+			if answering != nil {
+				answering(stringOf(m, "operation"), m["args"].(map[string]any))
+			}
 			answer := map[string]any{"type": "answer", "id": m["id"]}
 			if refusal != nil {
 				answer["error"] = refusal

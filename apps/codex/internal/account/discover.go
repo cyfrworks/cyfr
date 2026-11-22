@@ -10,18 +10,43 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"golang.org/x/net/html"
 )
 
-// Discovered is the directory a CYFR names on its sign-in page: the URL
-// whole, base path included, and the origin its account pages are served
-// at.
+// Discovered is the directory a CYFR names, on its sign-in page or, a
+// local one, in its own settings: the URL whole, base path included, and
+// the origin its account pages are served at.
 type Discovered struct {
 	Directory string
 	Origin    string
+}
+
+// ServiceOf is directory as the account service of the CYFR at home, when
+// the app may open that CYFR with it. An account service is https, with
+// one exception, the one place plain http is taken: a local CYFR
+// (http://localhost, with its port) that serves its accounts at exactly its
+// own origin, since loopback has no network path for TLS to protect and no
+// other program's origin is trusted with them. A CYFR elsewhere naming an
+// http one, and a local one naming any other http origin, loopback
+// included, have none. The app's main process holds the same rule
+// (apps/codex/desktop/src/policy.js homeMessage;
+// tests/fixtures/desktop-process.json, account_services).
+func ServiceOf(home, directory string) (Discovered, bool) {
+	origin, _, ok := DirectoryOrigin(directory)
+	if !ok || !IsHome(home) {
+		return Discovered{}, false
+	}
+	if !strings.HasPrefix(directory, "https://") {
+		u, err := url.Parse(home)
+		if err != nil || u.Hostname() != "localhost" || origin != home {
+			return Discovered{}, false
+		}
+	}
+	return Discovered{Directory: directory, Origin: origin}, true
 }
 
 // Why a sign-in page names no directory the app can use

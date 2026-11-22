@@ -280,8 +280,10 @@ same worktree refuses, naming the run that holds it.
   `tests/desktop-proof/*/run.sh` against a CYFR of the shape its folder
   names (its own or another account service, or one requiring a company
   sign-in) from the run's app image of the same architecture. Run here, it needs
-  127.0.0.1:7340 free on this machine for its whole run, so not beside a
-  handoff whose Go rows run.
+  127.0.0.1:7340 free on this machine for its whole run, so not beside
+  another such proof or the native smoke, which binds that port on purpose.
+  The Go tests do not: each gives the commands that serve it a port of its
+  own.
 
   Past `handoff`, the pull request's run on GitHub is the check, and it
   runs every check in parallel; a CI job is reproduced here by running
@@ -374,8 +376,9 @@ same worktree refuses, naming the run that holds it.
   the tree, and a tag whose own run fails them publishes nothing. The
   tag's GoReleaser run checks every command line binary it builds before
   archiving any (`scripts/ci/release-binary-check.sh`,
-  each build's post hook): one built with a build tag or holding the
-  update proof's code fails the release.
+  each build's post hook): one built with a build tag, or holding the
+  update proof's code or the tests' cheap key derivation, fails the
+  release.
 - `scripts/heavy-check.sh` queues the checks of everyone sharing a host.
   It cuts the machine's cores into four quarters of whole cores, and a
   check takes one: named test paths in one partition, a compile,

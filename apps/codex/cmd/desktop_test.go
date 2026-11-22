@@ -14,12 +14,38 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/cyfr/codex/internal/shell"
 )
+
+// ownListener is what production gives as shell.ListenLoopback, on a port
+// of the test's own: its first listener takes a free one and every other
+// asks for that same one, which address answers. No test binds shell.Listen.
+func ownListener() (listen func() (net.Listener, error), address func() string) {
+	var mu sync.Mutex
+	taken := "127.0.0.1:0"
+	listen = func() (net.Listener, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		ln, err := shell.ListenAt(taken)
+		if err == nil {
+			taken = ln.Addr().String()
+		}
+		return ln, err
+	}
+	address = func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return taken
+	}
+	return listen, address
+}
 
 // The app's cyfr binds the shell's listener before it says ready with the
 // chooser's address and its run token, holds it alone, and ends when main
@@ -31,7 +57,8 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	ended := make(chan error, 1)
-	go func() { ended <- runDesktopServe(context.Background(), inR, outW); outW.Close() }()
+	listen, address := ownListener()
+	go func() { ended <- runDesktopServe(context.Background(), listen, inR, outW); outW.Close() }()
 	lines := bufio.NewScanner(outR)
 	read := func() map[string]any {
 		t.Helper()
@@ -50,19 +77,27 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	if ready["type"] != "ready" || ready["version"] != float64(1) || !ok || len(token) != 43 {
 		t.Fatalf("ready was %v", ready)
 	}
-	resp, err := http.Get("http://127.0.0.1:7340/bootstrap/")
+	chooser := func() (*http.Response, error) {
+		req, err := http.NewRequest(http.MethodGet, "http://"+address()+"/bootstrap/", nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Host = shell.Listen
+		return http.DefaultClient.Do(req)
+	}
+	resp, err := chooser()
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("the chooser is not served (%v)", err)
 	}
 	resp.Body.Close()
-	if err := runDesktopServe(context.Background(), strings.NewReader(""), io.Discard); err == nil ||
+	if err := runDesktopServe(context.Background(), listen, strings.NewReader(""), io.Discard); err == nil ||
 		!strings.Contains(err.Error(), "close the app using port 7340") {
 		t.Fatalf("a second cyfr took the port: %v", err)
 	}
 	if info, err := os.Stat(filepath.Join(home, ".cyfr", "device")); err != nil || !info.IsDir() {
 		t.Fatalf("the device folder is %v (%v)", info, err)
 	}
-	connecting := connectHeld(t, token)
+	connecting := connectHeld(t, address(), token)
 	if _, err := io.WriteString(inW, `{"version":1,"type":"shutdown"}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -85,15 +120,16 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("shutdown did not end cyfr")
 	}
-	if _, err := http.Get("http://127.0.0.1:7340/bootstrap/"); err == nil {
+	if resp, err := chooser(); err == nil {
+		resp.Body.Close()
 		t.Fatal("the port is still served after shutdown")
 	}
 }
 
-// connectHeld posts the chooser's Connect to a CYFR that takes the
-// connection and answers nothing, and returns what it answers, once that
-// CYFR was reached.
-func connectHeld(t *testing.T, token string) <-chan string {
+// connectHeld posts the chooser's Connect at listener to a CYFR that takes
+// the connection and answers nothing, and returns what it answers, once
+// that CYFR was reached.
+func connectHeld(t *testing.T, listener, token string) <-chan string {
 	t.Helper()
 	silent, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -119,12 +155,13 @@ func connectHeld(t *testing.T, token string) <-chan string {
 	}
 	answered := make(chan string, 1)
 	go func() {
-		req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:7340/bootstrap/connect", bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, "http://"+listener+"/bootstrap/connect", bytes.NewReader(body))
 		if err != nil {
 			answered <- err.Error()
 			return
 		}
-		req.Header.Set("Origin", "http://127.0.0.1:7340")
+		req.Host = shell.Listen
+		req.Header.Set("Origin", shell.Origin)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -180,18 +217,20 @@ func TestTheScreenWritesTheSharedRecordOnlyHoldingItsListener(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	record := filepath.Join(home, ".cyfr", "device", "client.json")
-	held, err := net.Listen("tcp4", "127.0.0.1:7340")
+	listen, _ := ownListener()
+	held, err := listen()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := screenClaim("/home/ada/cyfr"); err == nil {
+	if _, _, err := screenClaim(listen, "/home/ada/cyfr"); err == nil {
 		t.Fatal("the screen went on without its listener")
 	}
 	if _, err := os.Stat(record); !os.IsNotExist(err) {
 		t.Fatalf("a screen without its listener wrote the record (%v)", err)
 	}
 	held.Close()
-	ln, _, err := screenClaim("/home/ada/cyfr")
+	free, _ := ownListener()
+	ln, _, err := screenClaim(free, "/home/ada/cyfr")
 	if err != nil {
 		t.Fatal(err)
 	}

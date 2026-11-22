@@ -116,7 +116,7 @@ The order describes dependencies, not a request's path. Codex shares no code wit
 - The `cyfr` binary, speaking MCP to Emissary with an API key alone, its operation catalog generated from the gate's table. It signs no one in and confirms nothing.
 - The machine: its access engine alone owns the deployment file's access settings and the stack's access services (§6.8, §6.9).
 - The device's shell, on the box's screen and in the CYFR app: the one place a protected device's key is unlocked (§9.3).
-- The CYFR app, which shows Prism from a machine that runs no stack and keeps each window to the home it opened.
+- The CYFR app, which shows Prism and keeps each window to the home it opened.
 
 ### Locus: where untrusted things run
 

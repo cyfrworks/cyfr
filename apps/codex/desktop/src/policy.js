@@ -176,6 +176,14 @@ export function documentHeaders(kind, resourceType, headers) {
 export const SWITCHES = ["proxy-server", "host-resolver-rules"]
 
 /**
+ * The engine's resolver rule unless main was started on a route:
+ * localhost is 127.0.0.1 alone, where Docker publishes a local CYFR, and
+ * never ::1, where any other program may listen on the same port and be
+ * given that CYFR's pages, tickets and cookies (cmd/local.go).
+ */
+export const LOCALHOST_IS_IPV4 = "MAP localhost 127.0.0.1"
+
+/**
  * The first switch of `args` (the command line after the executable) the
  * app does not take, as the engine reads switches on `platform`: "-" or
  * "--" before a name, "/" too on Windows, up to an "=" and its value,
@@ -192,9 +200,17 @@ export function unlistedSwitch(args, platform) {
   return null
 }
 
-/** Whether `home` and `account` name a CYFR and an account service's origin. */
+/**
+ * Whether `home` and `account` name a CYFR and an account service's origin
+ * main takes for it: https, or plain http for a local CYFR alone
+ * (http://localhost, with its port) and only at exactly that CYFR's own
+ * origin. cyfr holds the same rule (internal/account ServiceOf;
+ * tests/fixtures/desktop-process.json, account_services).
+ */
 export function homeMessage(m) {
-  return isHome(m.home) && isHome(m.account) && parse(m.account)?.protocol === "https:"
+  if (!isHome(m.home) || !isHome(m.account)) return false
+  if (parse(m.account)?.protocol === "https:") return true
+  return m.account === m.home && parse(m.home)?.hostname === "localhost"
 }
 
 /** The relying party of the account service at `account`: its host. */

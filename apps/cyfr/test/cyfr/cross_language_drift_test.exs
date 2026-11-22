@@ -408,6 +408,12 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "account_names.json" => [
       {"apps/prima/test/prima/authority/blob_test.exs", ~w(unicode keys same different)}
     ],
+    "addresses.json" => [
+      {"apps/codex/desktop/test/policy.test.mjs", ~w(addresses)},
+      {"apps/codex/internal/account/discover_test.go", ~w(addresses)},
+      {"apps/cyfr/assets/test/account/identity.test.mjs", ~w(addresses)},
+      {"apps/prima/test/prima/identity_test.exs", ~w(addresses)}
+    ],
     "brain_wire.json" => [
       {"apps/cyfr/test/opus/brain/wire_test.exs",
        ~w(version max_line_bytes max_id_bytes max_list config counts accountings stops phases accounts error_types media_types native commands events read refuse)},
@@ -452,7 +458,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(kinds narrowable_kinds preview refusals version)}
     ],
     "desktop-process.json" => [
+      {"apps/codex/desktop/test/policy.test.mjs", ~w(account_services)},
       {"apps/codex/desktop/test/process.test.mjs", ~w(version go_to_main main_to_go refused)},
+      {"apps/codex/internal/account/discover_test.go", ~w(account_services)},
       {"apps/codex/internal/desktop/process_test.go", ~w(version go_to_main main_to_go refused)}
     ],
     "device.json" => [

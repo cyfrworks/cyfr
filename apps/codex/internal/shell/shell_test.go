@@ -5,6 +5,7 @@ package shell
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -47,6 +48,45 @@ type box struct {
 	proof string
 }
 
+// fixedDerivation puts back the derivation a person's key is made and
+// opened under.
+var fixedDerivation func()
+
+// The shell's tests derive keys cheaply: their tables make and open a key a
+// row, which at the fixed cost runs past the time Go and CI give a package.
+func TestMain(m *testing.M) {
+	fixedDerivation = holder.CheapDerivationForTests()
+	os.Exit(m.Run())
+}
+
+// The shell makes a key, opens it and refuses a wrong passphrase under the
+// fixed derivation too, on every system these tests run on.
+func TestAKeyUnderTheFixedDerivationIsMadeOpenedAndRefused(t *testing.T) {
+	t.Cleanup(func() { holder.CheapDerivationForTests() })
+	fixedDerivation()
+	home := newFakeHome(t)
+	dir := t.TempDir()
+	sh := device(t, home, dir, &memoryClients{}, "")
+	p := enrolled(t, home, sh) // made, and opened by its first unlock
+	rec, err := holder.Load(filepath.Join(dir, "key.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := rec.Software; b == nil || b.Time != 3 || b.MemoryKiB != 65536 || b.Threads != 4 || b.KeyLen != 32 {
+		t.Fatalf("the key's record names %+v", b)
+	}
+	sh.Lock("")
+	wrong := "abandon ability able about above zoo"
+	sh.Unlock(t.Context(), []byte(wrong))
+	if sh.Unlocked() || !strings.Contains(sh.View().Notice, "That is not this device's PIN or passphrase.") {
+		t.Fatalf("a wrong passphrase: unlocked %v, %q", sh.Unlocked(), sh.View().Notice)
+	}
+	sh.Unlock(t.Context(), []byte(string(p)))
+	if !sh.Unlocked() {
+		t.Fatalf("the right passphrase did not open the key again: %q", sh.View().Notice)
+	}
+}
+
 func newBox(t *testing.T, home *fakeHome, dir string) *box {
 	t.Helper()
 	return newBoxAt(t, home, dir, home.accounts.URL())
@@ -61,12 +101,16 @@ func newBoxAt(t *testing.T, home *fakeHome, dir, directory string, edit ...func(
 	cfg := Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
 		Directory: directory,
-		Tokens:    func() string { return home.setupToken },
-		SetupOpen: home.setupOpen,
-		Restart:   func() { b.restarts.Add(1) },
-		Detect:    func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
-		Now:       func() time.Time { return time.Unix(0, b.now.Load()) },
-		Chip:      func() bool { return false },
+		SetupToken: func(ctx context.Context) (string, http.RoundTripper) {
+			if home.setupOpen(ctx) {
+				return home.setupToken, nil
+			}
+			return "", nil
+		},
+		Restart: func() { b.restarts.Add(1) },
+		Detect:  func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
+		Now:     func() time.Time { return time.Unix(0, b.now.Load()) },
+		Chip:    func() bool { return false },
 	}
 	for _, e := range edit {
 		e(&cfg)
@@ -1286,12 +1330,16 @@ func TestPasskey_ALostSendIsSettledOnlyByAnAnswerThatShowsTheLog(t *testing.T) {
 }
 
 // A CYFR that requires a company sign-in closes the channel 1013 with the
-// class forbidden; any other try-again close is a CYFR not reachable now.
-// The page says which, and the app's own words for the first.
+// class forbidden, one whose bound is spent with when to try again; any
+// other try-again close is a CYFR not reachable now. The page says which,
+// in the app's own words for the first two.
 func TestChannel_ACompanySignInIsToldApartFromAnUnreachableCYFR(t *testing.T) {
 	for _, tc := range []struct{ reason, want string }{
 		{"forbidden", CompanySignIn},
 		{"unavailable", "CYFR could not be reached"},
+		{"rate_limited; retry_after_s=37", "CYFR is refusing attempts for the moment. Try again in 37 seconds."},
+		{"rate_limited; retry_after_s=1", "CYFR is refusing attempts for the moment. Try again in 1 second."},
+		{"rate_limited", "CYFR could not be reached"},
 	} {
 		t.Run(tc.reason, func(t *testing.T) {
 			home := newFakeHome(t)

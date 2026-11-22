@@ -88,7 +88,9 @@ while :; do /bin/sleep 0.1; done`
 // hearing sleep.
 func quietScreen() map[string]string {
 	return map[string]string{
-		"pkill":                "exit 0",
+		"pkill": "exit 0",
+		// No screen's test asks this machine's Docker.
+		"docker":               "exit 1",
 		"wvkbd-mobintl":        "exec /bin/sleep 30", // sleep-ok: a stand-in child that runs until the shell ends it
 		"swayidle":             swayidleHears,
 		"google-chrome-stable": "exec /bin/sleep 30", // sleep-ok: a stand-in child that runs until the shell ends it
@@ -376,6 +378,8 @@ type runningScreen struct {
 	t     *testing.T
 	ended chan error
 	done  chan struct{}
+	// address is where this test's own listener serves the pages.
+	address func() string
 	// offered is whether a page read meanwhile offered the screen's use.
 	offered bool
 }
@@ -390,16 +394,32 @@ func startScreen(t *testing.T) *runningScreen {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &runningScreen{t: t, ended: make(chan error, 1), done: make(chan struct{})}
+	listen, address := ownListener()
+	s := &runningScreen{t: t, ended: make(chan error, 1), done: make(chan struct{}), address: address}
 	go func() {
 		defer close(s.done)
-		s.ended <- runScreenShell(ctx)
+		s.ended <- runScreenShell(ctx, listen)
 	}()
 	t.Cleanup(func() {
 		cancel()
 		<-s.done
 	})
 	return s
+}
+
+// ask sends what the screen's own browser sends to the shell's one
+// address, to this test's listener in its place.
+func (s *runningScreen) ask(method, path string, form url.Values) (*http.Response, error) {
+	req, err := http.NewRequest(method, "http://"+s.address()+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Host = shell.Listen
+	if form != nil {
+		req.Header.Set("Origin", shell.Origin)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	return http.DefaultClient.Do(req)
 }
 
 // shows waits for the shell's own page to show want, the shell running.
@@ -413,7 +433,7 @@ func (s *runningScreen) shows(want string) string {
 			s.t.Fatalf("the shell ended where it must stay locked and say why: %v", err)
 		default:
 		}
-		resp, err := http.Get(shell.Origin + "/")
+		resp, err := s.ask(http.MethodGet, "/", nil)
 		if err != nil {
 			continue
 		}
@@ -437,13 +457,7 @@ func (s *runningScreen) staysLockedSaying(why string) {
 	if strings.Contains(page, `action="/unlock"`) || strings.Contains(page, `action="/setup"`) || !strings.Contains(page, `http-equiv="refresh"`) {
 		s.t.Fatalf("a screen that cannot watch offers a way to unlock, or keeps its page:\n%s", page)
 	}
-	req, err := http.NewRequest(http.MethodPost, shell.Origin+"/unlock", strings.NewReader(url.Values{"secret": {"135790"}}.Encode()))
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	req.Header.Set("Origin", shell.Origin)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.ask(http.MethodPost, "/unlock", url.Values{"secret": {"135790"}})
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -536,7 +550,8 @@ func TestScreenShellHelper(t *testing.T) {
 	if os.Getenv("CYFR_SCREEN_SHELL_HELPER") == "" {
 		t.Skip("run by TestScreenShell_AKilledShellLeavesNoChildBehind")
 	}
-	_ = runScreenShell(context.Background())
+	listen, _ := ownListener()
+	_ = runScreenShell(context.Background(), listen)
 }
 
 // A shell killed outright leaves no keyboard, suspend watch or Chrome
@@ -593,5 +608,58 @@ func TestScreenShell_AKilledShellLeavesNoChildBehind(t *testing.T) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+	}
+}
+
+// A folder that names another CYFR than the one the screen opened ends
+// the screen's shell, which its launcher starts again on that reading,
+// and Chrome is given localhost as 127.0.0.1 alone.
+func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	if err := os.MkdirAll(screenDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	chromed := filepath.Join(t.TempDir(), "chrome.args")
+	programs := quietScreen()
+	// sleep-ok: a stand-in child that runs until the shell ends it
+	programs["google-chrome-stable"] = `echo "$@" >` + chromed + `; exec /bin/sleep 30`
+	screenPrograms(t, programs)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	listen, address := ownListener()
+	ended := make(chan error, 1)
+	go func() { ended <- runScreenShell(ctx, listen) }()
+	for {
+		if raw, err := os.ReadFile(chromed); err == nil && strings.HasSuffix(string(raw), "\n") {
+			if !strings.Contains(string(raw), "--host-resolver-rules=MAP localhost 127.0.0.1") {
+				t.Errorf("Chrome was started with %s", raw)
+			}
+			break
+		}
+		select {
+		case err := <-ended:
+			t.Fatalf("the screen ended first: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\nCYFR_PORT=4322\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://"+address()+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "127.0.0.1:7340"
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		resp.Body.Close()
+	}
+	select {
+	case err := <-ended:
+		if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "starts again") {
+			t.Fatalf("the screen ended with %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the screen kept the CYFR it read before")
 	}
 }

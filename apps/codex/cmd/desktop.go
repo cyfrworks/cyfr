@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,35 +34,28 @@ var desktopServeCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runDesktopServe(cmd.Context(), os.Stdin, os.Stdout)
+		return runDesktopServe(cmd.Context(), shell.ListenLoopback, os.Stdin, os.Stdout)
 	},
 }
 
-// runDesktopServe binds the shell's listener for this process alone, says
-// ready to main with the chooser's address, then serves until main sends
+// runDesktopServe takes the shell's listener through listen, for this
+// process alone, says ready to main with the chooser's address, then
+// serves until main sends
 // shutdown, its pipe ends, or it sends a line that is not its message.
 // Every end locks the device first, saying nothing to main
 // (desktop.Service.End): an end signs nobody out.
-func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
+func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), in io.Reader, out io.Writer) error {
 	_ = holder.HardenProcess()
 	dir, err := shell.DeviceDir()
 	if err != nil {
 		return fmt.Errorf("this account's device folder cannot be made (%v)", err)
 	}
-	ln, err := shell.ListenLoopback()
+	ln, err := listen()
 	if err != nil {
 		return fmt.Errorf("another program holds %s: close the app using port 7340, then open CYFR again (%v)", shell.Listen, err)
 	}
 	to := desktop.NewWriter(out)
-	host, _ := os.Hostname()
-	svc := &desktop.Service{
-		Token:       desktop.NewToken(),
-		Clients:     shell.ClientFile(filepath.Join(dir, "client.json")),
-		Record:      filepath.Join(dir, "holder.json"),
-		Client:      &http.Client{},
-		DisplayName: host,
-		Send:        to.Send,
-	}
+	svc := newDesktopService(dir, to.Send)
 	hs := &http.Server{Handler: svc, ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- hs.Serve(ln) }()
@@ -87,5 +81,26 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 	case <-ctx.Done():
 		svc.End()
 		return nil
+	}
+}
+
+// newDesktopService is what desktop-serve serves over this user's device
+// folder, saying to main through send.
+func newDesktopService(device string, send func(desktop.Message) error) *desktop.Service {
+	host, _ := os.Hostname()
+	return &desktop.Service{
+		Token:       desktop.NewToken(),
+		Clients:     shell.ClientFile(filepath.Join(device, "client.json")),
+		Record:      filepath.Join(device, "holder.json"),
+		Client:      &http.Client{},
+		DisplayName: host,
+		Send:        send,
+		Local: func(project string) (desktop.Local, error) {
+			l, err := readLocal(project, "the CYFR app")
+			if err != nil {
+				return desktop.Local{}, engineFailure(err)
+			}
+			return l, nil
+		},
 	}
 }
