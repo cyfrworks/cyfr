@@ -40,6 +40,9 @@ defmodule Locus.Test.FakeKeeper do
     as a keeper refuses one whose hosts resolve to nothing or whose egress
     its guard does not confirm
   - `:home_refused` — every home request is refused with `internal`
+  - `{:home_make_held, test}`: a `home_make` is told to `test` as
+    `{:home_make_held, request}` and answered only once released
+    (`release_make/2`), having made nothing until then
   - `{:uid_busy, uids}` — a `home_make` on one of `uids` is refused with
     `uid_busy`, as cyfr-locus refuses a kept uid that is retiring,
     quarantined or live under another home
@@ -135,6 +138,9 @@ defmodule Locus.Test.FakeKeeper do
 
   def mode(fake, mode), do: GenServer.call(fake, {:mode, mode})
 
+  @doc "Carries out the `home_make` held in `{:home_make_held, test}`, and holds no later one."
+  def release_make(fake, request), do: GenServer.call(fake, {:release_make, request})
+
   @doc "Every request received so far, decoded, oldest first."
   def requests(fake), do: GenServer.call(fake, :requests)
 
@@ -190,6 +196,10 @@ defmodule Locus.Test.FakeKeeper do
   @impl true
   def handle_call({:mode, mode}, _from, state), do: {:reply, :ok, %{state | mode: mode}}
   def handle_call(:requests, _from, state), do: {:reply, Enum.reverse(state.requests), state}
+
+  def handle_call({:release_make, request}, _from, state),
+    do: {:reply, :ok, handle_request(request, %{state | mode: :normal})}
+
   def handle_call(:exits, _from, state), do: {:reply, Enum.reverse(state.exits), state}
   def handle_call(:sent, _from, state), do: {:reply, Enum.reverse(state.sent), state}
 
@@ -289,6 +299,14 @@ defmodule Locus.Test.FakeKeeper do
        )
        when is_map_key(uids, uid) do
     send(self(), {:send, %{type: "error", id: id, code: "uid_busy"}})
+    state
+  end
+
+  defp handle_request(
+         %{"type" => "home_make"} = request,
+         %{mode: {:home_make_held, test}} = state
+       ) do
+    send(test, {:home_make_held, request})
     state
   end
 

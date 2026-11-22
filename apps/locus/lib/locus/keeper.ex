@@ -77,7 +77,10 @@ defmodule Locus.Keeper do
   home request in flight is making (this node's group lists the root),
   and asks cyfr-locus to make the home under it; `home_measure/2`,
   `home_reset/2` (a retirement, then a make under the same uid) and
-  `home_retire/2` ask cyfr-locus, which acts as the home's uid. A spec
+  `home_retire/2` ask cyfr-locus, which acts as the home's uid. A reset or
+  a retirement of a home that a request in flight will still make (a make,
+  or a reset) is refused `unavailable`, whether its caller still waits or
+  not, never taken for absent: it is asked again once that has landed. A spec
   naming a made kept `home` spawns there under the home's uid, with its
   `home_max_bytes`; one naming a home not made is refused `home_absent`
   before cyfr-locus is asked. A spec's `pty` size goes with its spawn, and
@@ -920,7 +923,8 @@ defmodule Locus.Keeper do
   end
 
   def handle_call({op, id}, from, state) when op in [:home_measure, :home_reset, :home_retire] do
-    with {:ok, kept, path} <- home_path(state, id) do
+    with {:ok, kept, path} <- home_path(state, id),
+         :ok <- unmade(state, op, path) do
       case {op, home_uid(kept, path)} do
         {:home_measure, :absent} ->
           {:reply, :absent, state}
@@ -1491,6 +1495,20 @@ defmodule Locus.Keeper do
       nil -> []
       uids -> Enum.map(uids, &String.to_integer/1)
     end
+  end
+
+  # A request that will still make the home leaves nothing to call absent,
+  # and no change of it to run beside: cyfr-locus serves each request apart,
+  # so one sent now could pass it.
+  defp unmade(_state, :home_measure, _path), do: :ok
+
+  defp unmade(state, _change, path) do
+    making? =
+      Enum.any?(state.homes, fn {_id, entry} ->
+        entry.path == path and elem(entry.pending, 0) in [:ensure, :reset, :made]
+      end)
+
+    if making?, do: {:error, "unavailable"}, else: :ok
   end
 
   # Asks cyfr-locus for `type` on the home at `path` of `uid`, answered when
