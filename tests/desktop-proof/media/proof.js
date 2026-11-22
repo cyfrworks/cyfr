@@ -13,7 +13,7 @@ import {createServer} from "node:http"
 import {BrowserWindow, app} from "electron"
 
 import api from "../../fixtures/worker_api.json"
-import {accountAndDevice} from "../account.js"
+import {accountAndDevice, connectOnward} from "../account.js"
 import {HOME, atBootstrap, atHome, chooserWindow, contentAt, inputs, js, literal, log, row, run, sleep, waitFor} from "../lib.js"
 
 // ---- the grant: this entry's alone ----
@@ -160,7 +160,7 @@ async function mediaPhase() {
   row("grant_chooser", atChooser.chooser && atChooser.got.every((o) => o === "NotAllowedError"),
     "granted, the chooser in the same content window is refused them", atChooser)
 
-  await accountAndDevice(inputs)
+  await accountAndDevice(inputs, connectOnward)
   const w = await contentAt(atHome, "Prism")
   const wc = w.webContents
   await waitFor(() => js(wc, `!!document.querySelector(".phx-connected")`), "Prism's page connected")
