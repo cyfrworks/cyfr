@@ -8,11 +8,9 @@
 // holds the account's passkey, as this computer's platform would once the
 // person has one here.
 
-import {powerMonitor} from "electron"
-
-import {accountAndSetup, accountWindow, armWindow, connectApproved, passkeyFor, signedInPrism, startSignIn,
-  toSignIn, usePasskey} from "../account.js"
-import {HOME, atDevice, contentAt, decided, inputs, js, literal, passkeys, row, run, waitFor} from "../lib.js"
+import {accountAndSetup, accountWindow, armWindow, connectApproved, passkeyFor, signOutOfPrism, signedInPrism,
+  startSignIn, toSignIn, usePasskey} from "../account.js"
+import {HOME, decided, inputs, js, literal, passkeys, row, run, waitFor} from "../lib.js"
 
 // The refusal the app's policy gives both passkey calls in a document.
 const policyRefuses = (answers) => /^NotAllowedError: .*'publickey-credentials-get' feature is not enabled/.test(answers[0]) &&
@@ -54,8 +52,7 @@ async function passkeyPhase() {
 
   // home_paths: from the account window, the CYFR's own pages, at the same
   // origin as the account page, are refused and end the ceremony.
-  powerMonitor.emit("lock-screen")
-  await contentAt(atDevice, "the device's pages after the lock")
+  await signOutOfPrism(w)
   a = await startSignIn(await toSignIn())
   const account = {id: a.webContents.id}
   await js(a.webContents, `location.href = ${literal(HOME + "/")}; 1`)

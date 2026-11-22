@@ -8,7 +8,7 @@ import {test} from "node:test"
 import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 import {
   LOOPBACK, SWITCHES, accountLoad, contentNavigation, contentOpen, documentHeaders, grants, homeMessage, readHop,
-  relyingParty, retired, unlistedSwitch
+  relyingParty, unlistedSwitch
 } from "../src/policy.js"
 
 const signIn = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_in.json", import.meta.url)))
@@ -167,21 +167,6 @@ test("the account window's document frames nothing, keeping its own policies, wh
     const got = documentHeaders("account", resourceType, {"Content-Security-Policy": ["script-src 'self'"]})
     assert.deepEqual(got["Content-Security-Policy"], ["script-src 'self'", "frame-src 'none'"], resourceType)
     assert.ok(!("Permissions-Policy" in got), resourceType)
-  }
-})
-
-test("a sign-out is retired only by the selected CYFR's own signed-out redirect that says so", () => {
-  const h = (o) => new Headers(o)
-  const ack = {"cyfr-session-retired": "1"}
-  assert.equal(retired(303, h({"location": "/login?error=signed_out", ...ack}), home), true)
-  assert.equal(retired(302, h({"location": home + "/login?error=signed_out", ...ack}), home), true)
-  assert.equal(retired(303, h({"location": "/login?error=signed_out"}), home), false, "an anonymous sign-out")
-  assert.equal(retired(503, h(ack), home), false)
-  assert.equal(retired(200, h(ack), home), false)
-  assert.equal(retired(303, h({"location": "/", ...ack}), home), false)
-  for (const elsewhere of ["/archive/login?error=signed_out", "https://evil.example/login?error=signed_out",
-    "/login?error=signed_out&x=1", "/login?error=signed_out#x", "//evil.example/login?error=signed_out"]) {
-    assert.equal(retired(303, h({"location": elsewhere, ...ack}), home), false, elsewhere)
   }
 })
 

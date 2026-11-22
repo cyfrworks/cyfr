@@ -84,7 +84,7 @@ account's passkey on Chromium's virtual authenticator (CDP through its
 gives the app's engine a fake camera and microphone, so a page the app let
 have them would get them. Each row is a claim about the running app and
 fails when the behaviour it names is broken; the proof stops at the first
-that fails. The proof has 28 rows over three launches of the app (`run.sh`): `connect`, then
+that fails. The proof has 26 rows over three launches of the app (`run.sh`): `connect`, then
 `remembered` and `changed` on what that left on this computer.
 
 | Row | What holds | What the row observes |
@@ -92,9 +92,8 @@ that fails. The proof has 28 rows over three launches of the app (`run.sh`): `co
 | `docker_absent` | the client has no Docker program or socket | the client's own environment |
 | `account`, `setup` | the person's account made at `dir.test` with the passkey, and `x.test` set up with it, on the second client | the account pages and the CYFR answering |
 | `media_control` | this run's camera and microphone are there to grant | the second client, which grants them, gets both |
-| `chooser` | the app opens at Connect to a CYFR and, where it cannot hear the computer's lock (the container has no system bus), says so in one sentence | the chooser's page |
+| `chooser` | the app opens at Connect to a CYFR, with nothing to tell and, on this road, no passkey and no other CYFR to go to | the chooser's page |
 | `custom_directory` | an account service other than cyfr.run is shown whole and asked about | the chooser's question |
-| `lock_during_connect` | a lock while a Connect runs ends it; the chooser comes back and `cyfr` runs on | `cyfr`'s request for the CYFR's sign-in page held at the front (fault `hold`), then, after the lock, given up by `cyfr`; the chooser again; no end of `cyfr` |
 | `decline` | Cancel says nothing was sent, and nothing of the app reaches the account service until it is approved; the next Connect asks again | the front of `dir.test`, from before the first question to the approval |
 | `device_pages` | once approved, the device's pages | the device's pages |
 | `enrolment_page` | with a passphrase given, the enrolment page shows the key's code beside the account service's address | the enrolment page alone; that the key is made under the passphrase is the Go holder's tests' to show, not this row's |
@@ -106,13 +105,13 @@ that fails. The proof has 28 rows over three launches of the app (`run.sh`): `co
 | `navigation` | main refuses the top frame sent elsewhere, a window elsewhere, a frame sent to the CYFR's company sign-in and a frame moving the top frame (asked from inside the frame, so the engine's initiator is the frame); Prism's page and the frame allow each | main's decision on each navigation's event and on the window request, read from its window handler; nothing at the front for the company sign-in |
 | `prism_frame_rules` | Prism's own frame rules hold in the app: a frame Prism serves (a canvas) is given no window and cannot move the top frame. This is Prism's sandbox refusing, not the app | the engine's answers in the frame |
 | `confirm` | an API key asked for in Prism waits on the device's own window: a wrong passphrase is refused and asked again, the right one confirms it | the refusal and the same confirmation asked again, no key in Prism; then the key shown in Prism |
-| `lock`, `system_lock`, `renderer_killed` | Prism's Lock, the computer's lock (main's lock-screen event, as the system sends it) and Prism's page's process ended by the kill signal (as the kernel ends one when memory runs out) each close Prism and sign its session out, confirmed | the session's cookie opening a page before; main's sign-out answered at the front with the CYFR's acknowledgement; the chooser back and, with nothing to tell, gone on to the device's pages by itself; the cookie refused after. On this road `cyfr`'s lock also retires the session through the device's channel, so the refused cookie alone does not tell which retired it; the passkey road shows the sign-out alone |
-| `system_lock_at_once` | the computer's lock closes Prism's window at once | the window, destroyed before anything is awaited |
+| `lock` | Prism's Lock closes Prism, ends its session and forgets it | the session's cookie opening a page before and refused after; none left in the content's session; no sign-out posted by the app (`cyfr`'s lock ends the session through the device's channel); the chooser back and, with nothing to tell, gone on to the device's pages by itself |
 | `reconnect` | the lock left the device locked; its passphrase opens Prism again under a new session | the locked device's page first; a new session cookie |
-| `offline_lock` | with the CYFR unreachable, the lock still closes Prism, and the chooser stays with the words that the sign-out is unconfirmed until the person goes on | the front taking `down`; the notice's words and the chooser's way on, both in sight, with no move to the device's pages before that way on is pressed |
-| `notice_kept` | a second lock and a reload over the chooser that is keeping a notice leave the notice there | the words, staying, after each; `renderer_killed` then shows that the way on taken from it cleared it |
-| `process_loss` | `cyfr` killed while Prism holds a session: the app closes its content for good, signs the session out, confirmed, and tells the person | the app's message; the acknowledged sign-out; the cookie before and after |
+| `computer_lock` | the computer's lock and sleep are not the app's | main's `lock-screen` and `suspend` events, as the system sends them, and for two seconds after: the same window, page and cookie, still opening a page; no chooser; no sign-out |
+| `renderer_killed` | Prism's page's process ended by the kill signal (as the kernel ends one when memory runs out) is shown again, signed in as before | the engine's report; the same window loaded again and connected; the same cookie; no lock and no sign-out |
+| `process_loss` | `cyfr` killed while Prism holds a session: the app closes its content for good and tells the person, and the session ends with the device's channel | the app's message, saying nothing of a sign-out; none posted; the cookie opening a page before and, within its one minute, refused |
 | `remembered` | launched again, the CYFR's approved account service is not asked about again | the device's pages, with no question |
+| `asks_again` | launched again, this road keeps no sign-in | the device's page asking for the passphrase, and no cookie |
 | `directory_changed` | a CYFR that names another account service than the one approved is asked about afresh | the question, with the front standing in for a CYFR reconfigured (fault `directory`) |
 | `approval_ended` | that earlier approval has ended: named again, the first account service is asked about again, and nothing of the app reaches it | the question; the front of `dir.test` |
 
@@ -123,8 +122,8 @@ and how soon the engine reported the page gone. When it has not within
 (also kept whenever a proof stops), and the proof ends the process with the
 kill signal and goes on. This shows a limit of the app: when a page's
 process starts to crash and does not exit, the engine reports nothing, and
-the window stays open and unanswering until the person closes it or the
-computer locks. On GitHub's Linux runners the engine reported nothing for
+the window stays open and unanswering until the person closes it. A
+process reported gone has its page shown again. On GitHub's Linux runners the engine reported nothing for
 over a minute; on the machine this proof was written on it reported the
 page gone within a tenth of a second.
 
@@ -137,9 +136,10 @@ the app's own output too, before it is written (`scrub.mjs`).
 ## The passkey road: `passkey/`, `passkey-self/`, `passkey-company/`
 
 The app runs with the passkey road on, as on macOS and Windows; on Linux it
-offers the six-word road alone. The chooser offers Sign in with your
-passkey only on macOS and Windows, so the proof goes from the device's pages
-to the CYFR's sign-in page itself, as that button does. The app's account
+offers the six-word road alone. The road is main's to say, by the hidden
+flag it starts `cyfr` with, so the chooser here is the one macOS and Windows
+have: the proof presses its Sign in with your passkey where it shows, and
+from the device's pages goes to the sign-in page by its address. The app's account
 window gets a virtual authenticator (CDP through its own
 `webContents.debugger`) standing in for this computer's platform
 authenticator, armed afresh for each ceremony with the passkeys this
@@ -149,11 +149,15 @@ stood in for, with what it offered recorded.
 **`passkey/`** (shape `separate`). This computer's device is enrolled on the
 six-word road first: a passkey a browser makes is approved only on a
 device's own screen, so it is the trusted device for the passkey the
-account window makes.
+account window makes. The app is launched four times (`run.sh`):
+`passkey`, killed right after a sign-in; `kept`, which then quits;
+`closed`, where `cyfr` is then lost; and `left`, signed out for another CYFR.
 
 | Row | What holds | What the row observes |
 |---|---|---|
+| `first_open` | a CYFR just connected opens at its root; sent from there to sign in, main refuses that and the chooser shows both ways on | the navigation to the root; main's decision on the redirect; both ways and Connect to another CYFR in sight |
 | `device` | this computer's device is enrolled and opens Prism | Prism |
+| `device_lock` | the device's Lock ends its session, the app forgets it, and the chooser shows both ways on | the cookie before and after; none left in the content's session; no sign-out |
 | `passkeys_policy` | with a usable authenticator in the content window, both passkey calls in the CYFR's page and a frame are refused by the app's policy | each call's refusal naming the denied feature |
 | `no_passkey` | Sign in opens the app's account window at the account service; with no passkey it says so and offers to make one | the account window's origin and page |
 | `offer` | a passkey made in the account window returns to the CYFR's sign-in page, which shows its code | the code in the content window; the passkey the authenticator added |
@@ -161,13 +165,19 @@ account window makes.
 | `passkey_sign_in` | the new passkey alone signs in: the account window's answer returns and Prism opens | Prism, a session, the account offered |
 | `devices` | Your devices lists the passkey and how it signs in | the listed passkey |
 | `confirm` | a key asked for in Prism is confirmed with the passkey in the account window | the confirmation's page; the key shown |
-| `sign_out_alone` | the lock signs the passkey's session out, acknowledged; with no device channel, the sign-out alone retires it | the cookie opening a page before; the acknowledgement at the front; the cookie refused after |
-| `resume` | after the lock the CYFR sends the content to its sign-in, and a fresh assertion opens Prism | the sign-in page; a new session; the old cookie refused |
+| `computer_lock` | the computer's lock and sleep leave the passkey's session as it was | as `connect/`'s |
+| `sign_out` | Prism's Sign out ends the session and the chooser shows both ways on | the person's one sign-out answered with a redirect; the cookie before and after; the chooser, staying |
+| `sign_in_again` | after signing out only a fresh assertion opens Prism | the sign-in page by the chooser's button; a new session; the old cookie refused |
 | `choose_cancel` | with two accounts' passkeys the app offers both; Cancel signs no one in; choosing @desk-a signs in as @desk-a | what the dialog offered; the page's refusal; Prism |
 | `account_offline` | with the account service unreachable the account window opens the copy its worker stored, and that copy still carries main's refusal of a frame | the service's front taking `down` and answering none of it; the worker controlling the page it served; the engine's report of main's policy refusing the frame |
 | `account_window` | main refuses a frame's load in the account window, and the CYFR's own page by navigation and by redirect, and either of those ends the ceremony | the engine's report of the policy main adds refusing that frame's address, apart from the account service's own policy, and nothing of it at the service's front; main's decisions; the window gone; nothing at the CYFR's front |
 | `recovery` | the recovery code adds a passkey in the account window's recovery page, which returns to the sign-in and signs in | the passkey added; Prism |
 | `wrong_window` | an answer made for another browser's sign-in signs no one in when given to the content window. This is the CYFR's binding of an answer to the browser that asked, holding in the app | the CYFR's refusal; the page's cookie opens nothing |
+| `kept_after_kill`, `kept_after_quit`, `kept_after_loss` | killed right after a sign-in, quit, or left by `cyfr`'s loss, the app opens Prism by itself when it is launched again, signed in as before | Prism with nothing pressed; the first launch's cookie by its digest, its end where it was; that cookie opening a page |
+| `renderer_killed` | a lost page is shown again and signs nobody out | as `connect/`'s |
+| `kept_policy` | in a kept session too, both passkey calls are refused by the app's policy | each call's refusal naming the denied feature |
+| `process_loss` | `cyfr`'s loss closes the content, tells the person and signs nobody out | the app's message; no sign-out; the cookie still opening a page |
+| `another` | signed out, Connect to another CYFR shows the form and main keeps to the CYFR left no more | the form; main's refusal of that CYFR's page |
 
 **`passkey-self/`** (shape `self`): `same_origin_hop` (the sign-in opens
 the CYFR's own account page in the account window), `same_origin_sign_in`,
@@ -179,16 +189,13 @@ page at that same origin, and the ceremony ends).
 
 | Row | What holds | What the row observes |
 |---|---|---|
-| `account_road` | the passkey signs in, the CYFR's company page closes it in the app, and the chooser stays to send the person to a browser | the sentence's words and the chooser's way on, both in sight, with no move before it is pressed; no request starting a company sign-in and none at the issuer |
+| `account_road` | the passkey signs in, the CYFR's company page closes it in the app, and the chooser stays to send the person to a browser | the sentence's words and the chooser's way on, both in sight, with no move before it is pressed; no sign-out posted; no request starting a company sign-in and none at the issuer |
+| `notice_kept` | a reload of the chooser that is keeping a notice leaves the notice there | the words, staying, after it |
 | `device_road` | the device's page says the same once the CYFR refuses the device | the sentence on the device's page; the same two counts |
 
-The chooser is `cyfr`'s own as Linux has it, with nothing stood in: with a
-notice to show it stays until Use this computer's key is pressed, and with
-none it goes on by itself. The company run also records, without asserting,
-what the sign-out was answered: whether main's forgery token was missing or
-stale.
-On a CYFR that requires a company sign-in the app's lock is unconfirmed,
-and the session left can reach only the company page.
+The chooser is `cyfr`'s own, with nothing stood in: on the passkey road it
+stays with both ways on, and with a notice to show it stays on either road
+until a way on is taken.
 
 A limit of the app: when main's load of a sign-in's answer is rejected,
 as when the CYFR's page still had a load of its own pending, nobody is

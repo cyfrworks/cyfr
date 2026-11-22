@@ -8,16 +8,27 @@
 // authenticator standing in for this computer's platform authenticator.
 // This computer's device is enrolled on the six-word road first: it is the
 // trusted device that approves the passkey the account window makes.
+//
+// The app is launched four times: `passkey`, the road itself, killed right
+// after a sign-in; `kept`, which is still signed in and then quits;
+// `closed`, still signed in after that, and then cyfr is lost; `left`,
+// still signed in after that, and then signed out, for another CYFR.
 
-import {BrowserWindow, powerMonitor} from "electron"
+import {readFileSync, writeFileSync} from "node:fs"
+import path from "node:path"
 
-import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, devicePrism, held,
-  offered, passkeyFor, signedInPrism, startSignIn, toSignIn, usePasskey} from "../account.js"
-import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atDevice, bare, content, contentAt, decided, decisions, fault,
-  harvest, inputs, js, literal, load, lockDetail, lockedOut, opens, passkeys, reachedSince, row, run, section, seen,
-  sessionCookie, signedOut, submit, waitFor} from "../lib.js"
+import {BrowserWindow} from "electron"
+
+import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, devicePrism, held, lockDevice,
+  offered, passkeyFor, signOutOfPrism, signedInPrism, startSignIn, toSignIn, usePasskey} from "../account.js"
+import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, atBootstrap, bare, childOfThis, content, contentAt, decided,
+  decisions, fault, frontLength, harvest, history, inputs, js, literal, load, lockDetail, opens, pageKilled, passkeys,
+  reachedSince, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOut, submit,
+  throughComputerLock, undisturbed, waitFor} from "../lib.js"
 
 const OTHER = "desk-b"
+// The session the first launch left, as its mark alone (sessionMark).
+const SESSION = path.join(OUT, "passkey-session.json")
 
 // The refusal the app's policy gives both passkey calls in a document.
 const policyRefuses = (answers) => /^NotAllowedError: .*'publickey-credentials-get' feature is not enabled/.test(answers[0]) &&
@@ -75,6 +86,13 @@ async function passkeyPhase() {
   // account, @desk-b, whose passkey this computer will also hold.
   const {second, passphrase, recovery} = await accountAndDevice(inputs)
   let w = await signedInPrism()
+  // first_open: a CYFR just connected opens at its own root, which sends
+  // who is not signed in to its sign-in page; main refuses that redirect,
+  // and the chooser shows both ways on (connectApproved took one).
+  const sent = decisions.find((d) => d.name === "will-redirect" && d.main && new URL(d.url).origin === HOME &&
+    new URL(d.url).pathname === "/login")
+  row("first_open", history.includes(HOME + "/") && !!sent?.prevented,
+    "a CYFR just connected opens at its root; sent from there to sign in, the app shows both ways on", {sent})
   row("device", true, "this computer's device is enrolled on the six-word road and opens Prism", {})
   const beforeOther = new Set(passkeys.keys())
   await load(second, `${DIRECTORY}/account/new#name=${OTHER}`)
@@ -90,9 +108,12 @@ async function passkeyPhase() {
   await harvest()
   const otherPasskeys = [...passkeys.values()].filter((c) => !beforeOther.has(c.credentialId))
 
-  // The sign-in page, signed out: the device locked.
-  powerMonitor.emit("lock-screen")
-  await contentAt(atDevice, "the device's pages after the lock")
+  // device_lock: the device's Lock ends its session, which the app
+  // forgets, and the chooser shows both ways on; its passkey button goes on
+  // to the sign-in page.
+  let out = await lockDevice(w)
+  row("device_lock", signedOut(out) && out.left === null && out.signOuts.length === 0,
+    "the device's Lock ends its session, the app forgets it and the chooser shows both ways on", lockDetail(out))
   w = await toSignIn()
 
   // passkeys_policy: with an authenticator that holds a passkey for the
@@ -159,8 +180,7 @@ async function passkeyPhase() {
 
   // passkey_sign_in: locked, then signed in again with the new passkey
   // alone: the account window's assertion returns and Prism opens.
-  powerMonitor.emit("lock-screen")
-  await contentAt(atDevice, "the device's pages after the lock")
+  await lockDevice(w)
   answerWith(() => 0)
   w = await toSignIn()
   a = await startSignIn(w)
@@ -207,29 +227,32 @@ async function passkeyPhase() {
   row("confirm", what === `Confirm a change at ${HOME}` && shownKey,
     "a key asked for in Prism is confirmed with the passkey in the account window, and Prism shows it", {what})
 
-  // sign_out_alone: a lock signs the passkey's session out, acknowledged;
-  // on this road there is no device channel, so the cookie that opened a
-  // page before is refused by the sign-out alone.
-  let out = await lockedOut(w, "the computer's lock", async () => powerMonitor.emit("lock-screen"))
-  row("sign_out_alone", signedOut(out),
-    "the computer's lock signs the passkey's session out, acknowledged, and with no device channel its cookie opens nothing after", lockDetail(out))
+  // computer_lock: the computer's lock and sleep are not the app's.
+  const through = await throughComputerLock(w)
+  row("computer_lock", undisturbed(through),
+    "the computer's lock and sleep leave Prism open under the passkey's session", through)
 
-  // resume: the CYFR opens to no one after the lock: its pages send the
-  // content to its sign-in, and a fresh assertion signs in again.
-  await js(content().webContents, `location.assign(${literal(HOME + "/")}); 1`)
-  w = await contentAt((u) => u.startsWith(HOME + "/login"), "the sign-in page after the lock")
+  // sign_out: Prism's Sign out ends the passkey's session: the CYFR's
+  // redirect to its sign-in page is refused and the chooser shows both
+  // ways on; the one sign-out posted is the person's.
+  out = await signOutOfPrism(w)
+  row("sign_out", signedOut(out) && out.signOuts.length === 1 && out.signOuts[0].status === 302,
+    "Prism's Sign out ends the session, and the chooser shows both ways on", lockDetail(out))
+
+  // sign_in_again: from the chooser's passkey button a fresh assertion
+  // signs in again, under a new session.
   a = await startSignIn(await toSignIn())
   await armWindow(a)
   await usePasskey(a)
   w = await signedInPrism()
   const again = await sessionCookie(w)
-  row("resume", !!again && again !== out.cookie && !(await opens(out.cookie)).opens,
-    "after the lock the CYFR sends the content to its sign-in, and only a fresh assertion opens Prism", {})
+  row("sign_in_again", !!again && again !== out.cookie && !(await opens(out.cookie)).opens,
+    "after signing out only a fresh assertion opens Prism", {})
 
   // choose_cancel: with two accounts' passkeys on this computer the app
   // offers both; Cancel signs no one in and the page says so; choosing
   // @desk-a signs in as @desk-a.
-  out = await lockedOut(w, "the computer's lock", async () => powerMonitor.emit("lock-screen"))
+  out = await signOutOfPrism(w)
   w = await toSignIn()
   a = await startSignIn(w)
   await armWindow(a, [...held.values(), ...otherPasskeys])
@@ -249,7 +272,7 @@ async function passkeyPhase() {
   // every connection down), the account pages' worker opens the sign-in
   // from the copy it stored in this run, and that copy carries main's
   // policy: the engine reports it refusing a frame there.
-  out = await lockedOut(w, "the computer's lock", async () => powerMonitor.emit("lock-screen"))
+  out = await signOutOfPrism(w)
   const service = new URL(DIRECTORY).hostname
   const toService = await toSignIn()
   await fault(service, "down")
@@ -336,7 +359,7 @@ async function passkeyPhase() {
   // wrong_window: an answer made for another browser's sign-in, given to
   // the content window, signs no one in: the CYFR binds it to the browser
   // that asked. This is the CYFR's binding holding in the app.
-  out = await lockedOut(w, "the computer's lock", async () => powerMonitor.emit("lock-screen"))
+  out = await signOutOfPrism(w)
   const other = await otherBrowserAnswer(fresh[0])
   await js(content().webContents, `location.assign(${literal(other)}); 1`)
   w = await contentAt((u) => u.startsWith(HOME + "/login"), "the sign-in page with the other browser's answer")
@@ -346,6 +369,78 @@ async function passkeyPhase() {
   const opened = visitor ? await opens(visitor) : {opens: false}
   row("wrong_window", /nobody was signed in|different browser/.test(refusedAnswer) && !opened.opens,
     "an answer made for another browser's sign-in signs no one in when given to the content window", {refusedAnswer, opened})
+
+  // The last sign-in, and the app killed right after it: a cookie the
+  // engine had not yet written would be lost with it.
+  a = await startSignIn(await toSignIn())
+  await armWindow(a, fresh.map((c) => held.get(c.credentialId) ?? c))
+  await usePasskey(a)
+  w = await signedInPrism()
+  writeFileSync(SESSION, JSON.stringify(await sessionMark(w)))
+  return "kill"
+}
+
+// The launch opened Prism by itself under the session the first launch
+// left, nothing asked: the same cookie, its end where it was, so no later
+// request renews it.
+async function stillSignedIn(name, what) {
+  const w = await signedInPrism()
+  const [was, is] = [JSON.parse(readFileSync(SESSION, "utf8")), await sessionMark(w)]
+  const opened = await opens(await sessionCookie(w))
+  row(name, opened.opens && is.digest === was.digest && is.expires === was.expires && !accountWindow(), what, {was, is, opened})
+  return w
+}
+
+async function keptPhase() {
+  let w = await stillSignedIn("kept_after_kill",
+    "killed right after a sign-in and launched again, the app opens Prism by itself, signed in as before")
+
+  // renderer_killed: a lost page is shown again and signs nobody out.
+  const killed = await pageKilled(w)
+  row("renderer_killed", shownAgain(killed), "Prism's page's process killed: the page is shown again, signed in as before", killed)
+
+  // kept_policy: the kept session's documents still carry the app's
+  // passkey refusal.
+  await armWindow(w, [passkeyFor(new URL(HOME).hostname)])
+  const calls = await bothCalls(w.webContents, "window")
+  row("kept_policy", policyRefuses(calls), "in a kept session too, both passkey calls in Prism's page are refused by the app's policy", {calls})
+  return "quit"
+}
+
+async function closedPhase() {
+  const w = await stillSignedIn("kept_after_quit", "quit and launched again, the app is still signed in")
+
+  // process_loss: cyfr's loss closes the content and signs nobody out.
+  const cookie = await sessionCookie(w)
+  const from = await frontLength()
+  process.kill(childOfThis("desktop-serve"), "SIGKILL")
+  const message = await waitFor(() => appWindows().find((x) => x.webContents.getURL().startsWith("data:")), "the app's message")
+  const told = decodeURIComponent(message.webContents.getURL()).replace(/^.*<p>/, "").replace(/<\/p>$/, "")
+  const after = await opens(cookie)
+  const signOuts = await signOutsSince(from)
+  row("process_loss", told.startsWith("CYFR stopped") && !content() && after.opens && signOuts.length === 0,
+    "cyfr's loss closes the content and tells the person, and signs nobody out", {told, after, signOuts})
+  return "quit"
+}
+
+async function leftPhase() {
+  const w = await stillSignedIn("kept_after_loss", "launched again after cyfr's loss, the app is still signed in")
+
+  // another: signed out, Connect to another CYFR leaves this one: main
+  // keeps to none and the chooser's form shows, connecting nothing by
+  // itself.
+  const out = await signOutOfPrism(w)
+  await js(out.back.webContents, `document.querySelector("#another").click(); 1`)
+  const form = await waitFor(async () => {
+    const at = content()
+    if (!at || at === out.back || at.webContents.isLoading() || !atBootstrap(at.webContents.getURL())) return null
+    return await js(at.webContents, `document.querySelector("#address").getClientRects().length > 0`) ? at : null
+  }, "the chooser's form")
+  const away = HOME + "/?from=left"
+  await js(form.webContents, `location.assign(${literal(away)}); 1`)
+  const leftRefused = await decided(form.webContents, away, false, "main's decision on the CYFR left")
+  row("another", signedOut(out) && leftRefused,
+    "signed out, Connect to another CYFR shows the form, and main keeps to the CYFR left no more", {leftRefused})
 }
 
 // The answer a browser of the proof's own (a fresh session, outside the
@@ -378,4 +473,4 @@ async function otherBrowserAnswer(credential) {
   }
 }
 
-run("passkey", {passkey: passkeyPhase}, {accountRoad: true})
+run("passkey", {passkey: passkeyPhase, kept: keptPhase, closed: closedPhase, left: leftPhase}, {accountRoad: true})

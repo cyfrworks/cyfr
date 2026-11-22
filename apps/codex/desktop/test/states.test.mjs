@@ -28,8 +28,14 @@ function run(events, accountRoad = false) {
 }
 
 const ready = {type: "ready", url: READY}
+const navigate = (over) => ({type: "navigate", window: "content", url: HOME + "/", target: "top", asker: "top", showing: READY, ...over})
 // The content window's top frame given HOME, as the device's pages open it.
-const given = {type: "navigate", window: "content", url: HOME + "/", target: "top", asker: "top", showing: READY}
+const given = navigate({})
+// What main locks for: the company page, on either road, and being sent to
+// sign in, on the passkey road.
+const company = navigate({url: HOME + "/company-login", showing: HOME + "/login"})
+const signedOut = navigate({url: HOME + "/login?error=signed_out", showing: HOME + "/threads", redirect: true})
+const forgot = {type: "forgot"}
 const proposed = [ready, home()]
 const open = [...proposed, {type: "opened", home: HOME}]
 
@@ -51,13 +57,14 @@ test("a proposal is answered home-ready and replaced by the next until cyfr says
   assert.equal(run([ready, {type: "opened", home: HOME}]).s.name, "ended", "opened with nothing proposed")
 })
 
-test("a home on another route starts the app again with it, closing and signing out first", () => {
+test("a home on another route starts the app again with it, closing first and forgetting nothing", () => {
   const rerouted = {type: "home", message: {type: "home", home: "https://bob.example", account: ACCOUNT,
     proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}}
   const {s, effects} = run([...proposed, given, rerouted])
   assert.equal(s.name, "ended")
-  assert.deepEqual(effects.slice(-3), [{close: true}, {retire: {held: true}},
+  assert.deepEqual(effects.slice(-2), [{close: true},
     {relaunch: {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}}])
+  assert.ok(!effects.some((e) => e.forget))
 })
 
 test("nothing loads and no window opens before ready", () => {
@@ -69,91 +76,121 @@ test("nothing loads and no window opens before ready", () => {
   assert.equal(step(s, {type: "open-window", url: "http://127.0.0.1:7340/confirm?ref=c"}).open, "deny")
 })
 
-test("a lock from any state closes the content first, then tells cyfr and signs out, and waits for both", () => {
+test("the computer's lock and sleep are no events of main's, which locks for neither", () => {
   for (const before of [[ready], proposed, open]) {
-    const {s, effects} = run([...before, {type: "lock", why: "lock-screen"}])
-    assert.equal(s.name, "locking")
-    const at = effects.findIndex((e) => e.say === "locked: lock-screen")
-    assert.deepEqual(effects.slice(at + 1).map((e) => Object.keys(e)[0]), ["close", "send", "retire"])
-    assert.deepEqual(effects[at + 2], {send: {type: "lock"}})
+    for (const type of ["lock", "lock-screen", "suspend"]) {
+      assert.deepEqual(run([...before, {type, why: type}], true), run(before, true), type)
+    }
   }
-  const waiting = run([...open, {type: "lock", why: "x"}, {type: "signed-out", confirmed: true}])
-  assert.equal(waiting.s.name, "locking", "the sign-out alone does not end the lock")
-  assert.ok(!waiting.kinds.slice(-1).includes("chooser"))
-  const barrier = run([...open, {type: "lock", why: "x"}, locked(HOME)])
-  assert.equal(barrier.s.name, "locking", "cyfr's locked alone does not end it")
+})
+
+test("main's own lock closes the content first, then tells cyfr, waits for its locked and forgets nothing", () => {
+  for (const [road, event, why] of [[false, company, "company sign-in"], [true, company, "company sign-in"], [true, signedOut, "sign-in"]]) {
+    for (const before of [proposed, open]) {
+      const locking = run([...before, event], road)
+      assert.equal(locking.s.name, "locking", why)
+      const at = locking.kinds.lastIndexOf("say")
+      assert.match(locking.effects[at].say, new RegExp(`^locked: the CYFR asks for a ${why}$`))
+      assert.deepEqual(locking.effects.slice(at + 1), [{close: true}, {send: {type: "lock"}}])
+      assert.equal(step(locking.s, given).allow, false, "nothing loads while locking")
+      assert.deepEqual(run([...before, event, forgot], road).s.name, "locking", "only cyfr's locked ends it")
+      const past = run([...before, event, locked(HOME)], road)
+      assert.equal(past.s.name, "open", why)
+      assert.ok("chooser" in past.effects.at(-1), why)
+      assert.ok(!past.kinds.includes("forget"), why)
+    }
+  }
+})
+
+test("cyfr's own locked is the device's session ending: forgotten, with nothing sent back, before the chooser shows", () => {
+  for (const road of [false, true]) {
+    for (const before of [[ready], proposed, open]) {
+      const locking = run([...before, locked(HOME)], road)
+      assert.equal(locking.s.name, "locking")
+      assert.deepEqual(locking.effects.slice(-3), [{say: "locked: the device locked"}, {close: true}, {forget: true}])
+      assert.equal(run([...before, locked(HOME), locked(HOME)], road).s.name, "locking", "the chooser waits for what is forgotten")
+      assert.deepEqual(run([...before, locked(HOME), forgot], road).effects.at(-1), {chooser: []})
+    }
+  }
+  assert.equal(run([...open, locked(HOME), forgot]).s.name, "open")
+  assert.equal(run([...open, locked(), forgot]).s.name, "chooser", "Connect to another CYFR: a locked naming none")
 })
 
 test("the lock is a barrier: what cyfr sent before its locked is dropped, and its locked says what main keeps to", () => {
   // cyfr committed before it read the lock: opened and its locked were on
   // the pipe already. cyfr runs on and main keeps to what it committed.
-  const committed = run([...proposed, {type: "lock", why: "lock-screen"}, {type: "opened", home: HOME}, locked(HOME),
-    {type: "signed-out", confirmed: true}])
+  const committed = run([...proposed, company, {type: "opened", home: HOME}, locked(HOME)])
   assert.equal(committed.s.name, "open")
   assert.equal(committed.s.home, HOME)
   assert.ok(!committed.kinds.includes("end"))
-  assert.deepEqual(committed.effects.at(-1), {chooser: []})
-  const cancelled = run([...proposed, {type: "lock", why: "x"}, home(), locked(), {type: "signed-out", confirmed: true}])
+  assert.deepEqual(committed.effects.at(-1), {chooser: ["company"]})
+  const cancelled = run([...proposed, company, home(), locked()])
   assert.equal(cancelled.s.name, "chooser")
-  const unasked = run([ready, {type: "lock", why: "x"}, locked(HOME), {type: "signed-out", confirmed: true}])
-  assert.equal(unasked.s.name, "chooser", "a locked naming a CYFR main kept to none before")
-  assert.equal(unasked.s.home, "")
-  const other = run([...open, {type: "lock", why: "x"}, locked("https://bob.example"), {type: "signed-out", confirmed: true}])
-  assert.equal(other.s.name, "chooser", "a locked naming another CYFR")
-  const own = run([ready, locked(HOME), {type: "signed-out", confirmed: true}])
-  assert.equal(own.s.name, "chooser", "cyfr's own locked naming a CYFR main never kept to")
   assert.equal(cancelled.s.home, "")
-  assert.equal(run([...proposed, {type: "lock", why: "x"}, locked(), {type: "signed-out", confirmed: true}, home()]).s.name, "proposed",
-    "the next proposal after the lock")
+  const other = run([...open, company, locked("https://bob.example")])
+  assert.equal(other.s.name, "chooser", "a locked naming another CYFR")
+  const own = run([ready, locked(HOME), forgot])
+  assert.equal(own.s.name, "chooser", "cyfr's own locked naming a CYFR main never kept to")
+  assert.equal(own.s.home, "")
+  assert.equal(run([...proposed, company, locked(), home()]).s.name, "proposed", "the next proposal after the lock")
 })
 
-test("cyfr's own locked is a lock whose barrier is passed: nothing is sent back", () => {
-  const {s, kinds} = run([...open, locked(HOME)])
-  assert.equal(s.name, "locking")
-  assert.ok(!kinds.slice(kinds.indexOf("close")).includes("send"))
-  assert.equal(run([...open, locked(HOME), {type: "signed-out", confirmed: true}]).s.name, "open")
-})
-
-test("an unconfirmed sign-out, and the company page, are said on the chooser", () => {
-  assert.deepEqual(run([...open, {type: "lock", why: "x"}, locked(HOME), {type: "signed-out", confirmed: false}]).effects.at(-1),
-    {chooser: ["unconfirmed"]})
-  const company = run([...open, {type: "navigate", window: "content", url: HOME + "/company-login", target: "top", asker: "top",
-    showing: HOME + "/login"}], true)
-  assert.equal(company.s.name, "locking")
-  assert.ok(company.kinds.includes("retire"), "the company page's lock signs the session out")
-  assert.deepEqual(step(company.s, locked(HOME)).state.notices, ["company"])
-})
-
-test("cyfr's loss ends main from any state, closing first and signing out", () => {
-  for (const before of [[], [ready], proposed, open, [...open, {type: "lock", why: "x"}]]) {
-    const {s, kinds} = run([...before, {type: "gone", why: "it exited (1)"}])
-    assert.equal(s.name, "ended")
-    assert.deepEqual(kinds.slice(-3), ["close", "retire", "end"])
+test("on the passkey road the content sent to the CYFR's sign-in page locks and shows both ways on", () => {
+  for (const [name, over] of [
+    ["signing out in Prism", {}],
+    ["a kept sign-in that is over, as the app opens it", {url: HOME + "/login", showing: "http://127.0.0.1:7340/bootstrap/"}],
+    ["one of the CYFR's pages going there", {url: HOME + "/login", redirect: false}]]) {
+    const at = {...signedOut, ...over}
+    const r = step(run(open, true).s, at)
+    assert.equal(r.allow, false, name)
+    assert.deepEqual(r.do.slice(1), [{close: true}, {send: {type: "lock"}}], name)
+    assert.deepEqual(run([...open, at, locked(HOME)], true).effects.at(-1), {chooser: []}, name)
   }
-  assert.deepEqual(run([...open, {type: "gone", why: "x"}, {type: "lock", why: "y"}, ready]).kinds.slice(-3), ["close", "retire", "end"],
-    "nothing more once ended")
+})
+
+test("the sign-in page as a way on, its own loads, and the six-word road are never sent to sign in", () => {
+  const login = HOME + "/login"
+  for (const [name, road, over, allow] of [
+    ["the chooser's passkey", true, {url: login, showing: "http://127.0.0.1:7340/bootstrap/", redirect: false}, true],
+    ["the sign-in page loading itself", true, {url: login, showing: login, redirect: false}, true],
+    ["the sign-in page's redirect to itself", true, {url: login + "?error=refused", showing: login}, true],
+    ["the six-word road", false, {}, true],
+    ["a page that is not the sign-in", true, {url: HOME + "/login/else"}, true],
+    ["a frame's load", true, {target: "frame", asker: "frame-inside"}],
+    ["a frame asking the top frame", true, {asker: "frame-outside"}, false],
+    ["a confirmation window", true, {window: "child"}]]) {
+    const r = step(run(open, road).s, {...signedOut, ...over})
+    assert.equal(r.state.name, "open", name)
+    assert.ok(!r.do.some((e) => e.close || e.send), name)
+    if (allow !== undefined) assert.equal(r.allow, allow, name)
+  }
+})
+
+test("a lost page is shown again and locks nothing", () => {
+  for (const road of [false, true]) {
+    const s = run(open, road).s
+    assert.deepEqual(step(s, {type: "lost"}), {state: s, do: [{reload: true}]})
+  }
+})
+
+test("cyfr's loss ends main from any state, closing first, and signs nobody out", () => {
+  for (const before of [[], [ready], proposed, open, [...open, company]]) {
+    const {s, kinds} = run([...before, {type: "gone", why: "it exited (1)"}], true)
+    assert.equal(s.name, "ended")
+    assert.deepEqual(kinds.slice(-2), ["close", "end"])
+    assert.ok(!kinds.includes("forget"))
+  }
+  assert.deepEqual(run([...open, {type: "gone", why: "x"}, company, ready, locked(HOME)]).kinds.slice(-2), ["close", "end"],
+    "nothing more once ended, a lock neither")
   assert.deepEqual(run([...open, {type: "gone", why: "x"}, {type: "quit"}]).effects.at(-1), {quit: true}, "but quitting, which goes")
 })
 
-test("quitting closes, signs out and quits, from any state", () => {
-  for (const before of [[ready], proposed, open, [...open, {type: "lock", why: "x"}]]) {
-    assert.deepEqual(run([...before, {type: "quit"}]).kinds.slice(-3), ["close", "retire", "quit"])
+test("quitting closes and quits, from any state, and signs nobody out", () => {
+  for (const before of [[ready], proposed, open, [...open, company]]) {
+    const {kinds} = run([...before, {type: "quit"}], true)
+    assert.deepEqual(kinds.slice(-2), ["close", "quit"])
+    assert.ok(!kinds.includes("forget"))
   }
-})
-
-test("the session is held from the moment the content window is given the CYFR, and then a lock signs it out", () => {
-  assert.deepEqual(run([...open, given]).effects.at(-1), {hold: true})
-  assert.equal(run([...open, given]).s.held, true)
-  assert.equal(run([...open, {...given, url: READY}]).s.held, false, "the device's pages hold nothing")
-  assert.equal(run([...open, {...given, target: "frame", asker: "top"}]).s.held, false, "a frame is not the window")
-  // A lock before any page committed: the sign-out is tried, unconfirmed
-  // without a token, and the storage cleared (app.js retire).
-  const early = run([...open, given, {type: "lock", why: "lock-screen"}])
-  assert.deepEqual(early.effects.at(-1), {retire: {held: true}})
-  assert.deepEqual(run([...open, given, {type: "page", url: HOME + "/"}]).effects.at(-1), {token: true})
-  assert.deepEqual(run([...open, {type: "page", url: HOME + "/"}]).effects, run(open).effects, "no token without the session held")
-  assert.equal(run([...open, given, {type: "lock", why: "x"}, locked(HOME), {type: "signed-out", confirmed: false}]).s.held, false,
-    "a new content window holds nothing yet")
 })
 
 test("a hop is the content window's top frame asking; a frame asking, or a confirmation window, is refused", () => {
@@ -166,17 +203,17 @@ test("a hop is the content window's top frame asking; a frame asking, or a confi
     assert.equal(r.allow, false, JSON.stringify(refused))
     assert.deepEqual(r.do, [], JSON.stringify(refused))
   }
-  const locking = step(s, {type: "lock", why: "x"}).state
+  const locking = step(s, company).state
   assert.equal(step(locking, nav({url: HOME + "/"})).allow, false, "nothing loads while locking")
 })
 
 test("the account window's top frame returns; its frames load nothing and end nothing", () => {
   const s = run(open, true).s
   const back = (kind) => step(s, {type: "account-navigate", url: HOME + "/login#a", target: "top", kind})
-  assert.deepEqual(back("sign-in").do, [{unhop: true}, {hold: true}, {deliver: {url: HOME + "/login#a"}}])
-  assert.deepEqual(back("confirmation").do, [{unhop: true}, {hold: true}, {confirmation: {url: HOME + "/login#a"}}])
+  assert.deepEqual(back("sign-in").do, [{unhop: true}, {deliver: {url: HOME + "/login#a"}}])
+  assert.deepEqual(back("confirmation").do, [{unhop: true}, {confirmation: {url: HOME + "/login#a"}}])
   assert.equal(back("confirmation").state.returning, null, "a confirmation's answer reloads nothing")
-  assert.deepEqual(back(null), {state: s, allow: false, do: [{unhop: true}]}, "no ceremony of the content window showing: nothing is delivered or held")
+  assert.deepEqual(back(null), {state: s, allow: false, do: [{unhop: true}]}, "no ceremony of the content window showing: nothing is delivered")
   assert.deepEqual(step(s, {type: "account-navigate", url: HOME + "/login#a", target: "frame"}), {state: s, allow: false, do: []})
   assert.deepEqual(step(s, {type: "account-navigate", url: HOME + "/", target: "top"}).do, [{unhop: true}])
 })
@@ -204,7 +241,7 @@ test("every other outcome withdraws a sign-in's return, and no later landing at 
     "the load failed": [...landing, {type: "load-failed"}],
     "main's load call ended before it landed": [...landing, {type: "load-ended", url: ANSWER}],
     "another fragment landed": [...landing, {type: "landed", url: HOME + "/login#b"}],
-    "a lock": [...landing, {type: "lock", why: "lock-screen"}],
+    "a lock": [...landing, company],
     "cyfr's own lock": [...landing, locked(HOME)],
     "the window gone": [...landing, {type: "quit"}],
     "cyfr gone": [...landing, {type: "gone", why: "it exited"}]
@@ -220,7 +257,7 @@ test("an earlier load call's end leaves the return on its way", () => {
 })
 
 test("before ready and while locking, a top-frame load in the account window is refused and ends any ceremony; a frame's ends nothing", () => {
-  const states = {starting: initial(true), locking: run([...open, {type: "lock", why: "lock-screen"}], true).s}
+  const states = {starting: initial(true), locking: run([...open, company], true).s}
   for (const [name, s] of Object.entries(states)) {
     for (const url of [ACCOUNT + "/account/sign", ANSWER, HOME + "/"]) {
       const at = {type: "account-navigate", url, kind: "sign-in"}
@@ -230,30 +267,26 @@ test("before ready and while locking, a top-frame load in the account window is 
   }
 })
 
-const CHOOSER = "http://127.0.0.1:7340/bootstrap/#notice=unconfirmed"
-const unconfirmedLock = [...open, given, {type: "lock", why: "lock-screen"}, {type: "signed-out", confirmed: false}, locked(HOME)]
-const lockAgain = [{type: "lock", why: "suspend"}, {type: "signed-out", confirmed: true}, locked(HOME)]
-const shownNotices = (events) => run(events).effects.filter((x) => x.chooser).at(-1).chooser
+const CHOOSER = "http://127.0.0.1:7340/bootstrap/#notice=company"
+const companyLock = [...open, company, locked(HOME)]
+const deviceLock = [locked(HOME), forgot]
+const shownNotices = (events) => run(events, true).effects.filter((x) => x.chooser).at(-1).chooser
 
 test("a lock over a chooser that is keeping a notice leaves the notice there", () => {
-  assert.deepEqual(shownNotices([...unconfirmedLock, ...lockAgain]), ["unconfirmed"], "a second lock")
-  assert.deepEqual(shownNotices([...unconfirmedLock, ...lockAgain, ...lockAgain]), ["unconfirmed"], "a third")
-  assert.deepEqual(shownNotices([...unconfirmedLock, locked(HOME), {type: "signed-out", confirmed: true}]), ["unconfirmed"], "cyfr's own lock")
-  assert.deepEqual(shownNotices([...unconfirmedLock, {type: "lock", why: "suspend"}, {type: "signed-out", confirmed: false}, locked(HOME)]),
-    ["unconfirmed"], "unconfirmed again is said once")
-  assert.deepEqual(shownNotices([...unconfirmedLock, {type: "lock", why: "x", notice: "company"}, {type: "signed-out", confirmed: true}, locked(HOME)]),
-    ["unconfirmed", "company"], "another notice joins it")
+  assert.deepEqual(shownNotices([...companyLock, ...deviceLock]), ["company"], "cyfr's own lock")
+  assert.deepEqual(shownNotices([...companyLock, ...deviceLock, ...deviceLock]), ["company"], "and another")
+  assert.deepEqual(shownNotices([...companyLock, company, locked(HOME)]), ["company"], "the company page again is said once")
 })
 
 test("only a way on taken from the chooser clears what it was keeping", () => {
-  const from = (over) => ({type: "navigate", window: "content", url: "http://127.0.0.1:7340/", target: "top", asker: "top", showing: CHOOSER, ...over})
+  const from = (over) => navigate({url: "http://127.0.0.1:7340/", showing: CHOOSER, ...over})
   for (const [name, way] of [["Use this computer's key", from({})], ["Sign in with your passkey", from({url: HOME + "/login"})]]) {
-    assert.deepEqual(shownNotices([...unconfirmedLock, way, ...lockAgain]), [], name)
+    assert.deepEqual(shownNotices([...companyLock, way, ...deviceLock]), [], name)
   }
   for (const [name, event] of [["a frame's load", from({target: "frame"})], ["a load refused", from({url: "https://evil.example/"})],
     ["a confirmation window's", from({window: "child"})], ["the chooser itself again", from({url: CHOOSER})],
-    ["its page finishing", {type: "page", url: CHOOSER}], ["a second launch", {type: "second-instance"}]]) {
-    assert.deepEqual(shownNotices([...unconfirmedLock, event, ...lockAgain]), ["unconfirmed"], name)
+    ["a lost page shown again", {type: "lost"}], ["a second launch", {type: "second-instance"}]]) {
+    assert.deepEqual(shownNotices([...companyLock, event, ...deviceLock]), ["company"], name)
   }
 })
 

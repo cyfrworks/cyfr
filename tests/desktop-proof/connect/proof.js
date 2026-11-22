@@ -6,15 +6,11 @@
 // the road itself, then `remembered` and `changed`, which read the
 // account service this computer approved.
 
-import {powerMonitor} from "electron"
-
-import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, fromApp, harvest, history, inputs, js, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, processState, question, reachedSince, record, refused, row, run, said, secondClient, section, seen, sessionCookie, signedOut, sleep, submit, submitConnect, text, waitFor} from "../lib.js"
+import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, harvest, history, inputs, js, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, said, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOut, sleep, submit, submitConnect, text, throughComputerLock, undisturbed, waitFor} from "../lib.js"
 
 // An account service the CYFR names once reconfigured (the front's
 // directory fault); nothing answers at it.
 const OTHER_DIRECTORY = "https://other.test"
-const UNCONFIRMED = "CYFR locked, but the CYFR did not confirm that it signed this computer out. " +
-  "That sign-in ends when it expires, or when you sign it out under Settings, Keys on your account."
 
 async function connectPhase() {
   const second = await secondClient()
@@ -54,15 +50,16 @@ async function connectPhase() {
   row("media_control", control.every((m) => m === "granted"),
     "the run's camera and microphone are granted to a page by a browser that allows them", {control})
 
-  // chooser: the app's first page, saying where this computer's lock goes
-  // unheard (the container has no system bus).
+  // chooser: the app's first page, with nothing to tell and, on this
+  // road, no passkey and no other CYFR to go to.
   let w = await contentAt(atBootstrap, "the chooser")
   const chooser = await waitFor(async () => {
-    const c = await js(w.webContents, `({choose: !document.querySelector("#choose").hidden, warning: document.querySelector("#warning").textContent})`)
-    return c.choose && c.warning ? c : null
-  }, "the chooser with its warning")
-  row("chooser", chooser.warning.startsWith("CYFR cannot tell when this computer locks or sleeps here"),
-    "the app opens at Connect to a CYFR and says in one sentence that it cannot hear this computer's lock", chooser)
+    const c = await js(w.webContents, `({choose: !document.querySelector("#choose").hidden, notice: document.querySelector("#notice").textContent,
+      ways: ["#passkey", "#another"].filter((id) => document.querySelector(id).getClientRects().length > 0)})`)
+    return c.choose ? c : null
+  }, "the chooser")
+  row("chooser", chooser.notice === "" && chooser.ways.length === 0,
+    "the app opens at Connect to a CYFR, with nothing to tell", chooser)
 
   // custom_directory: an account service other than cyfr.run is shown
   // whole and asked about.
@@ -73,33 +70,6 @@ async function connectPhase() {
     "a CYFR on another account service than cyfr.run shows it whole and asks about it", asked)
   await js(w.webContents, `document.querySelector("#decline").click()`)
   const declined = await waitFor(() => js(w.webContents, `document.querySelector("#notice").textContent || null`), "the decline")
-
-  // lock_during_connect: a lock while a Connect runs (cyfr's request for
-  // the CYFR's sign-in page seen held at its front) ends it: cyfr gives
-  // that request up, the chooser comes back and cyfr runs on.
-  await fault("x.test", "hold")
-  const xFrom = (await seen("x.test")).length
-  await submitConnect(w.webContents)
-  const inFlight = await waitFor(async () => {
-    const all = await seen("x.test")
-    const i = all.findIndex((r, n) => n >= xFrom && fromApp(r) && r.path === "/login" && r.fault === "hold" && !r.aborted)
-    return i >= 0 ? {index: i} : null
-  }, "cyfr's Connect to ask the CYFR")
-  const lockedAt = Date.now()
-  powerMonitor.emit("lock-screen")
-  // Given up after the lock, and before cyfr's own bound on reading a
-  // CYFR's sign-in page (10 s from its request) would have.
-  const held = await waitFor(async () => {
-    const r = (await seen("x.test"))[inFlight.index]
-    return r.aborted ? r : null
-  }, "cyfr to give the Connect's request up")
-  const givenUp = held.abortedAt >= lockedAt && held.abortedAt - held.at < 10_000
-  const relocked = await chooserWindow()
-  await fault("x.test", "none")
-  row("lock_during_connect", givenUp && said.includes("locked: lock-screen") && !said.some((l) => l.startsWith("cyfr ended")),
-    "a lock while cyfr's Connect is in flight ends it: cyfr gives its request up, the chooser comes back and cyfr runs on",
-  {said, heldFor: held.abortedAt - held.at, afterLock: held.abortedAt - lockedAt})
-  w = relocked
 
   // decline: Cancel said nothing was sent, and from the first question to
   // the approval below nothing of the app reached the account service.
@@ -258,82 +228,30 @@ async function connectPhase() {
     "a key asked for in Prism waits on this device's own window: a wrong passphrase is refused and asked again, the right one confirms it",
     {wrong, keyAfterWrong, child: confirm.isDestroyed() ? "closed" : bare(confirm.webContents.getURL())})
 
-  // The lock rows. On this road cyfr's lock also retires the session
-  // through the device's channel, so the cookie refused afterwards does
-  // not tell which retired it; the sign-out's own acknowledgement, read
-  // at the CYFR's front, shows main's sign-out ran and was confirmed. The
-  // passkey road, with no device channel, shows the sign-out alone
-  // retiring the session.
-
-  // lock: the device's Lock in Prism's top bar.
-  let out = await lockedOut(w, "the device's Lock", () => js(w.webContents, `document.querySelector('[data-test="device-lock"]').click()`))
-  row("lock", signedOut(out),
-    "the device's Lock closes Prism; main's sign-out of a session that opened a page is acknowledged, and its cookie opens nothing", lockDetail(out))
+  // lock: the device's Lock in Prism's top bar. cyfr's lock ends the
+  // session through the device's channel; the app posts no sign-out.
+  let out = await lockedOut(w, "the device's Lock", () => js(w.webContents, `document.querySelector('[data-test="device-lock"]').click(); 1`))
+  row("lock", signedOut(out) && out.signOuts.length === 0 && out.left === null,
+    "the device's Lock closes Prism, the session that opened a page opens nothing, and the app forgot it", lockDetail(out))
 
   // reconnect: unlocked again with the passphrase, a new session.
   const start = await openCYFR(out.back, passphrase)
   w = await contentAt(atHome, "Prism again")
+  await waitFor(() => js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism's page connected")
   const renewed = await sessionCookie(w)
   row("reconnect", start[0] === "locked" && !!renewed && renewed !== out.cookie,
     "the lock left the device locked; its passphrase opens Prism again under a new session", {start})
 
-  // system_lock: the computer's lock closes Prism at once, before anything
-  // is awaited, and signs its session out.
-  const prism = w
-  out = await lockedOut(w, "the computer's lock", async () => {
-    powerMonitor.emit("lock-screen")
-    row("system_lock_at_once", prism.isDestroyed(), "the computer's lock closes Prism's window at once", {})
-  })
-  row("system_lock", signedOut(out),
-    "after the computer's lock main's sign-out is acknowledged and the cookie that opened a page opens nothing", lockDetail(out))
-  await openCYFR(out.back, passphrase)
-  w = await contentAt(atHome, "Prism again")
+  // computer_lock: the computer's lock and sleep are not the app's.
+  const through = await throughComputerLock(w)
+  row("computer_lock", undisturbed(through),
+    "the computer's lock and sleep leave Prism open under the same session", through)
 
-  // offline_lock: with the CYFR's front down (its control answered so),
-  // the lock still closes Prism and the chooser says the sign-out is
-  // unconfirmed.
-  // Over the chooser keeping that notice: a second lock, as a computer
-  // that locks and then sleeps sends, and a reload of it, as Ctrl+R does.
-  const over = [async () => powerMonitor.emit("suspend"), async (chooser) => {
-    const loaded = new Promise((resolve) => chooser.webContents.once("did-finish-load", resolve))
-    chooser.webContents.reload()
-    await loaded
-  }]
-  out = await lockedOut(w, "a lock while the CYFR is unreachable", async () => {
-    await fault("x.test", "down")
-    powerMonitor.emit("lock-screen")
-  }, () => fault("x.test", "none"), over)
-  row("offline_lock", out.before.opens && out.chooser.told?.words === UNCONFIRMED && out.chooser.told.stayed &&
-    out.signOuts.every((r) => r.fault === "down"),
-  "a lock while the CYFR cannot be reached closes Prism, and the chooser stays with the words that the sign-out is unconfirmed until the person goes on",
-  lockDetail(out))
-  // notice_kept: neither that second lock nor that reload erased what
-  // nobody had yet gone on from. That going on clears it is renderer_killed's
-  // to show, whose confirmed lock then goes on by itself.
-  row("notice_kept", out.chooser.kept.length === over.length && out.chooser.kept.every((told) => told?.words === UNCONFIRMED && told.stayed),
-    "a second lock and a reload over the chooser that is keeping a notice leave the notice there", {kept: out.chooser.kept})
-  await openCYFR(out.back, passphrase)
-  w = await contentAt(atHome, "Prism again")
-
-  // renderer_killed: Prism's page's process ended by the kill signal, as
-  // the kernel ends one when memory runs out: the engine reports the page
-  // gone, the app locks at once, and its sign-out is acknowledged.
-  const killed = {pid: w.webContents.getOSProcessId()}
-  out = await lockedOut(w, "Prism's page's process killed", async () => {
-    const prism = w
-    const start = Date.now()
-    prism.webContents.once("render-process-gone", (_e, details) => {
-      // Main's own handler ran first (it was added as the window was made).
-      Object.assign(killed, {reason: details.reason, reportedMs: Date.now() - start, closedAtOnce: prism.isDestroyed()})
-    })
-    log(`killing the renderer of window ${prism.webContents.id}, pid ${killed.pid}`)
-    process.kill(killed.pid, "SIGKILL")
-  })
-  row("renderer_killed", killed.reason === "killed" && killed.closedAtOnce && said.includes("locked: the page stopped") && signedOut(out),
-    "Prism's page's process killed: the engine reports it gone, the app closes Prism at once and its sign-out is acknowledged",
-    {...lockDetail(out), killed})
-  await openCYFR(out.back, passphrase)
-  w = await contentAt(atHome, "Prism again")
+  // renderer_killed: Prism's page's process ended by the kill signal: the
+  // page is shown again, in its window and under its session.
+  const killed = await pageKilled(w)
+  row("renderer_killed", shownAgain(killed) && !said.slice(said.lastIndexOf("locked: the device locked") + 1).some((l) => l.startsWith("locked:")),
+    "Prism's page's process killed: the page is shown again in its window, signed in as before", killed)
 
   // The forced crash, recorded and not asserted (../README.md): the
   // engine's own crash of Prism's page, which on some machines begins and
@@ -343,23 +261,24 @@ async function connectPhase() {
   // then the proof ends that process itself and goes on.
   record.forcedCrash = await forcedCrash(w)
   log(`forced crash: ${JSON.stringify(record.forcedCrash)}`)
-  await openCYFR(await contentAt(atDevice, "the device's pages after the forced crash"), passphrase)
-  w = await contentAt(atHome, "Prism again")
 
   // process_loss: cyfr killed while Prism holds a session: the app closes
-  // its content for good, signs the session out, confirmed, and says why.
+  // its content for good and says why, posting no sign-out; the session
+  // rested on cyfr's channel and ends with it, within its one minute.
   const cookie = await sessionCookie(w)
   const before = await opens(cookie)
-  const from = (await seen("x.test")).length
+  const from = await frontLength()
   process.kill(childOfThis("desktop-serve"), "SIGKILL")
   const message = await waitFor(() => appWindows().find((x) => x.webContents.getURL().startsWith("data:")), "the app's message")
   const told = decodeURIComponent(message.webContents.getURL())
-  const signOuts = (await reachedSince("x.test", from)).filter((r) => r.method === "POST" && r.path === "/auth/logout")
-    .map((r) => ({status: r.status, retired: r.retired}))
-  const after = await opens(cookie)
-  row("process_loss", before.opens && told.includes("CYFR stopped") && !told.includes("did not confirm") && !content() &&
-    signOuts.length === 1 && signOuts[0].retired === "1" && refused(after),
-  "cyfr's loss while Prism holds a session closes the content, signs it out, confirmed, and tells the person",
+  const after = await waitFor(async () => {
+    const answer = await opens(cookie)
+    return refused(answer) ? answer : null
+  }, "the device's session ended with its channel", 75_000)
+  const signOuts = await signOutsSince(from)
+  row("process_loss", before.opens && told.includes("CYFR stopped") && !/sign/.test(told.replace(/^.*<p>/, "")) && !content() &&
+    signOuts.length === 0 && refused(after),
+  "cyfr's loss closes the content and tells the person; the device's session ends with its channel, with no sign-out of the app's",
   {told: told.replace(/^.*<p>/, "").replace(/<\/p>$/, ""), before, after, signOuts})
 }
 
@@ -368,19 +287,26 @@ async function forcedCrash(w) {
   const wc = w.webContents
   const pid = wc.getOSProcessId()
   const start = Date.now()
+  const again = reloaded(w)
   const gone = new Promise((resolve) => wc.once("render-process-gone", (_e, details) =>
     resolve({reason: details.reason, afterMs: Date.now() - start})))
   const within = (ms) => Promise.race([gone, sleep(ms).then(() => null)]) // sleep-ok: how long the record waits on the engine's report
   wc.forcefullyCrashRenderer()
   const reported = await within(15_000)
-  if (reported) return {pid, reported}
+  if (reported) {
+    await again
+    return {pid, reported}
+  }
   const state = processState(pid)
   try {
     process.kill(pid, "SIGKILL")
   } catch (e) {
+    await again
     return {pid, reported: null, state, machine: machine(), killed: e.code}
   }
-  return {pid, reported: null, state, machine: machine(), afterKill: await within(15_000)}
+  const afterKill = await within(15_000)
+  await again
+  return {pid, reported: null, state, machine: machine(), afterKill}
 }
 
 // What a Connect in the chooser `w` led to: the question about an
@@ -398,10 +324,14 @@ async function connected(w) {
 }
 
 // remembered: launched again, the account service this computer approved
-// for the CYFR is not asked about again; Connect opens the device's pages.
+// for the CYFR is not asked about again; Connect opens the device's pages,
+// which ask for the passphrase again: this road keeps no sign-in.
 async function rememberedPhase() {
   const next = await connected(await chooserWindow())
   row("remembered", next.next === "the device's pages", "launched again, the CYFR's approved account service is not asked about again", next)
+  const locked = await js(content().webContents, `!!document.querySelector('form[action="/unlock"]')`)
+  row("asks_again", locked && !(await sessionCookie(content())),
+    "launched again, the six-word road keeps no session and asks for the passphrase again", {locked})
 }
 
 // changed: the CYFR now names another account service (its front

@@ -452,7 +452,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(kinds narrowable_kinds preview refusals version)}
     ],
     "desktop-process.json" => [
-      {"apps/codex/desktop/test/process.test.mjs", ~w(version go_to_main main_to_go refused)},
+      {"apps/codex/cmd/desktop_test.go", ~w(start)},
+      {"apps/codex/desktop/test/process.test.mjs",
+       ~w(version start go_to_main main_to_go refused)},
       {"apps/codex/internal/desktop/process_test.go", ~w(version go_to_main main_to_go refused)}
     ],
     "device.json" => [

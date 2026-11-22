@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -22,8 +21,14 @@ import (
 )
 
 func init() {
+	desktopServeCmd.Flags().BoolVar(&desktopAccountRoad, "account-road", false,
+		"the app signs in with the account's passkey too")
 	rootCmd.AddCommand(desktopServeCmd)
 }
+
+// desktopAccountRoad is whether the app offers the passkey road, which
+// main decides (by the platform) and says as it starts cyfr.
+var desktopAccountRoad bool
 
 // desktopServeCmd is the cyfr the CYFR app's main process starts and
 // talks to over its stdin and stdout (internal/desktop): no person runs
@@ -34,15 +39,16 @@ var desktopServeCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runDesktopServe(cmd.Context(), os.Stdin, os.Stdout)
+		return runDesktopServe(cmd.Context(), os.Stdin, os.Stdout, desktopAccountRoad)
 	},
 }
 
 // runDesktopServe binds the shell's listener for this process alone, says
 // ready to main with the chooser's address, then serves until main sends
 // shutdown, its pipe ends, or it sends a line that is not its message.
-// Every end locks first.
-func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
+// Every end locks the device first, saying nothing to main
+// (desktop.Service.End): an end signs nobody out.
+func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer, accountRoad bool) error {
 	_ = holder.HardenProcess()
 	dir, err := shell.DeviceDir()
 	if err != nil {
@@ -55,7 +61,7 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 	to := desktop.NewWriter(out)
 	host, _ := os.Hostname()
 	svc := &desktop.Service{
-		AccountRoad: runtime.GOOS == "darwin" || runtime.GOOS == "windows",
+		AccountRoad: accountRoad,
 		Token:       desktop.NewToken(),
 		Clients:     shell.ClientFile(filepath.Join(dir, "client.json")),
 		Record:      filepath.Join(dir, "holder.json"),
@@ -71,13 +77,6 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 		defer cancel()
 		_ = hs.Shutdown(sctx)
 	}()
-	// What cannot be watched is known before the chooser first asks.
-	watching, stopWatching := context.WithCancel(ctx)
-	defer stopWatching()
-	watchSessionLock(watching, svc.Lock, func(sentence string) {
-		svc.Warn(sentence)
-		fmt.Fprintln(os.Stderr, "cyfr: "+sentence)
-	})
 	if err := to.Send(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
 		return err
 	}
@@ -87,13 +86,13 @@ func runDesktopServe(ctx context.Context, in io.Reader, out io.Writer) error {
 	case err := <-ran:
 		return err
 	case err := <-served:
-		svc.Lock("")
+		svc.End()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
 	case <-ctx.Done():
-		svc.Lock("")
+		svc.End()
 		return nil
 	}
 }

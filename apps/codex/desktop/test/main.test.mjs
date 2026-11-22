@@ -29,9 +29,12 @@ function reset() {
   world.windows = []
   world.sessions = new Map()
   world.fetched = []
+  world.scripted = []
   world.cleared = []
-  world.answer = () => ({status: 503, headers: new Headers()})
-  world.page = () => Promise.resolve("forgery-token")
+  world.clearing = () => Promise.resolve()
+  world.flushed = []
+  world.spawned = []
+  world.relaunched = null
   world.wholeDocument = false
   world.refuseLoad = false
   world.app.removeAllListeners()
@@ -47,7 +50,7 @@ class Contents extends EventEmitter {
     this.mainFrame = {processId: 1, routingId: win.id, get url() { return win.webContents.url }}
   }
   getURL() { return this.url }
-  executeJavaScript() { return world.page(this) }
+  async executeJavaScript(script) { world.scripted.push(script) }
   reload() {
     this.reloaded = [...(this.reloaded ?? []), this.url]
     this.emit("did-start-navigation", {url: this.url, isMainFrame: true, isSameDocument: false})
@@ -115,13 +118,15 @@ function fromPartition(partition) {
       webRequest: {onHeadersReceived() {}},
       setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDevicePermissionHandler() {},
       setDisplayMediaRequestHandler() {},
-      // As Electron's session.fetch does with a manual redirect, which the
-      // real-CYFR proof met: it rejects rather than answer it.
-      async fetch(_url, init) {
-        if (init?.redirect === "manual") throw new TypeError("Redirect was cancelled")
-        throw new Error("no fetch in this stand-in")
+      cookies: Object.assign(new EventEmitter(), {async flushStore() { world.flushed.push(partition) }}),
+      async fetch(url) {
+        world.fetched.push(url)
+        throw new Error("main asks the CYFR nothing")
       },
-      async clearStorageData() { world.cleared.push(partition) }
+      clearStorageData() {
+        world.cleared.push(partition)
+        return world.clearing()
+      }
     })
     world.sessions.set(partition, ses)
   }
@@ -130,7 +135,8 @@ function fromPartition(partition) {
 
 world.app = Object.assign(new EventEmitter(), {
   commandLine: {getSwitchValue: () => "", hasSwitch: () => false},
-  enableSandbox() {}, requestSingleInstanceLock: () => true, relaunch() {}, configureWebAuthn() {},
+  enableSandbox() {}, requestSingleInstanceLock: () => true, configureWebAuthn() {},
+  relaunch(options) { world.relaunched = options },
   whenReady: () => Promise.resolve(),
   exit(code) { world.exited = code },
   quit() {
@@ -158,25 +164,10 @@ function cyfr() {
   return child
 }
 
-// net.request, answering as world.answer says: a 3xx as a redirect, which
-// the app must answer rather than follow, anything else as a response.
-function request({method, url, session: ses, redirect}) {
-  const r = new EventEmitter()
-  let body = ""
-  Object.assign(r, {
-    setHeader() {},
-    abort() { r.aborted = true },
-    end(data) {
-      body = data
-      world.fetched.push({partition: ses.partition, url, body, method, redirect})
-      Promise.resolve(world.answer(url)).then((answer) => {
-        const raw = Object.fromEntries([...answer.headers].map(([k, v]) => [k, [v]]))
-        if (answer.status >= 300 && answer.status < 400) r.emit("redirect", answer.status, method, answer.headers.get("location"), raw)
-        else r.emit("response", {statusCode: answer.status, headers: raw, resume() {}})
-      })
-    }
-  })
-  return r
+// Main makes no request of its own: one it made is recorded.
+function request({url}) {
+  world.fetched.push(url)
+  throw new Error("main asks the CYFR nothing")
 }
 
 mock.module("electron", {exports: {
@@ -184,7 +175,10 @@ mock.module("electron", {exports: {
   powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request}
 }})
 let child = null
-mock.module("node:child_process", {exports: {spawn: () => (child = cyfr())}})
+mock.module("node:child_process", {exports: {spawn: (_program, args) => {
+  world.spawned.push(args)
+  return (child = cyfr())
+}}})
 const {startApp} = await import("../src/app.js")
 
 // A turn of the event loop: what main does on a line or an event is done.
@@ -204,17 +198,33 @@ const live = () => world.windows.filter((w) => !w.destroyed)
 const content = () => live().find((w) => w.webContents.url.startsWith("http"))
 
 // A navigation of `w`'s top frame to `url`, asked for by its top frame.
-function navigate(w, url) {
+function navigate(w, url, how = "will-navigate") {
   const event = {url, isMainFrame: true, initiator: w.webContents.mainFrame, prevented: false,
     preventDefault() { this.prevented = true }}
-  w.webContents.emit("will-navigate", event)
+  w.webContents.emit(how, event)
   return event
 }
 
-// The CYFR at HOME opened on the passkey road, its page showing and its
-// forgery token read.
-async function signedIn() {
-  const said = await started(true)
+// The CYFR sending `w`'s top frame on to `url`.
+const redirected = (w, url) => navigate(w, url, "will-redirect")
+
+// cyfr's answer to main's lock, or its own lock, all that follows done.
+async function saysLocked(message = {home: HOME, account: ACCOUNT}) {
+  child.say({type: "locked", ...message})
+  await settled()
+  await settled()
+}
+
+// Nothing of the person's sign-in was touched.
+function signedNobodyOut() {
+  assert.deepEqual(world.fetched, [], "no request of main's own")
+  assert.deepEqual(world.scripted, [], "no script run in a page")
+  assert.deepEqual(world.cleared, [], "nothing cleared")
+}
+
+// The CYFR at HOME opened, its page showing.
+async function signedIn(accountRoad = true) {
+  const said = await started(accountRoad)
   child.say({type: "home", home: HOME, account: ACCOUNT})
   child.say({type: "opened", home: HOME})
   await settled()
@@ -248,7 +258,27 @@ test("an interrupted Connect, through main: a proposal a lock ended gives way to
   assert.ok(child.killed, "another proposal after a committed CYFR ends cyfr")
 })
 
-test("a lock closes the content and the ceremony before anything is awaited, and signs out with what it held", async () => {
+test("main says the road it offers as it starts cyfr", async () => {
+  await started(true)
+  assert.deepEqual(world.spawned, [["desktop-serve", "--account-road"]])
+  await started(false)
+  assert.deepEqual(world.spawned, [["desktop-serve"]])
+})
+
+test("the computer's lock and sleep leave everything as it was", async () => {
+  for (const road of [true, false]) {
+    await signedIn(road)
+    const page = content()
+    for (const signal of ["lock-screen", "suspend", "shutdown"]) world.powerMonitor.emit(signal)
+    await settled()
+    assert.ok(!page.destroyed, "the page stays")
+    assert.equal(page.webContents.url, HOME + "/")
+    assert.ok(!child.heard.some((m) => m.type === "lock"), "cyfr is not told to lock")
+    signedNobodyOut()
+  }
+})
+
+test("a lock closes the content and the ceremony before anything is awaited, and the chooser waits for cyfr's locked", async () => {
   await signedIn()
   const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
   const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
@@ -257,76 +287,152 @@ test("a lock closes the content and the ceremony before anything is awaited, and
   navigate(page, hop)
   const account = live().find((w) => w.webContents.url === hop)
   assert.ok(account, "the hop opened the account window")
-  world.page = () => new Promise(() => {}) // a page that never answers again
-  world.powerMonitor.emit("lock-screen")
+  assert.ok(navigate(page, HOME + "/company-login").prevented)
   assert.ok(page.destroyed && account.destroyed, "both closed at once")
+  await settled()
   assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"})
-  await settled()
-  assert.deepEqual(world.fetched.map((f) => [f.url, f.body]), [[HOME + "/auth/logout", "_csrf_token=forgery-token"]])
   assert.equal(content(), undefined, "no chooser before cyfr's locked")
-  child.say({type: "locked", home: HOME, account: ACCOUNT})
-  await settled()
-  assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\/.*notice=unconfirmed$/)
+  await saysLocked()
+  assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\/.*notice=company$/)
+  signedNobodyOut()
 })
 
-test("cyfr's loss signs out what the content held, and says when it is unconfirmed", async () => {
-  await signedIn()
-  child.emit("exit", 1, null)
-  await settled()
-  await settled()
-  assert.deepEqual(world.fetched.map((f) => f.url), [HOME + "/auth/logout"])
-  const told = live().map((w) => decodeURIComponent(w.webContents.url)).find((u) => u.startsWith("data:"))
-  assert.match(told, /CYFR stopped/)
-  assert.match(told, /did not confirm that it signed this computer out/)
+test("signing out in Prism, and a kept sign-in that is over, show the chooser and forget nothing", async () => {
+  for (const [name, showing, url] of [["signed out", HOME + "/threads", HOME + "/login?error=signed_out"],
+    ["over, as the app opens it", "http://127.0.0.1:7340/bootstrap/", HOME + "/login"]]) {
+    await signedIn()
+    const page = content()
+    page.webContents.url = showing
+    assert.ok(redirected(page, url).prevented, name)
+    assert.ok(page.destroyed, name)
+    await settled()
+    assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"}, name)
+    await saysLocked()
+    const chooser = content()
+    assert.match(chooser.webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//, name)
+    assert.doesNotMatch(chooser.webContents.url, /notice=/, name)
+    assert.ok(!navigate(chooser, HOME + "/login").prevented, "the chooser's passkey goes on to the sign-in page")
+    signedNobodyOut()
+  }
 })
 
-test("closing the content window signs out with what was held for it", async () => {
+test("on the passkey road the content session is one kept on disk, through a lock and the next start", async () => {
   await signedIn()
-  world.answer = () => ({status: 303, headers: new Headers({"location": "/login?error=signed_out", "cyfr-session-retired": "1"})})
-  content().destroy()
+  const kept = content().webContents.session
+  assert.match(kept.partition, /^persist:/)
+  redirected(content(), HOME + "/login?error=signed_out")
+  await saysLocked()
+  assert.equal(content().webContents.session.partition, kept.partition, "after a lock")
+  await signedIn()
+  assert.equal(content().webContents.session.partition, kept.partition, "at the next start")
+})
+
+test("on the six-word road the content session is memory's alone and new at every lock", async () => {
+  await signedIn(false)
+  const first = content().webContents.session.partition
+  assert.doesNotMatch(first, /^persist:/)
+  await saysLocked()
+  const next = content().webContents.session.partition
+  assert.doesNotMatch(next, /^persist:/)
+  assert.notEqual(next, first)
+})
+
+test("a changed cookie of the kept session is written out at once", async () => {
+  await signedIn()
+  const {session} = content().webContents
+  world.flushed = []
+  session.cookies.emit("changed")
+  assert.deepEqual(world.flushed, [session.partition])
+})
+
+test("the device's session ending forgets the content's storage, and the chooser waits until it is forgotten", async () => {
+  for (const road of [true, false]) {
+    await signedIn(road)
+    const page = content()
+    let cleared
+    world.clearing = () => new Promise((resolve) => { cleared = resolve })
+    await saysLocked()
+    assert.ok(page.destroyed, "closed at once")
+    assert.deepEqual(world.cleared, [page.webContents.session.partition])
+    assert.equal(content(), undefined, "no chooser while it is being forgotten")
+    assert.ok(!child.heard.some((m) => m.type === "lock"), "nothing sent back")
+    cleared()
+    await settled()
+    assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//)
+  }
+})
+
+test("quitting waits for what a lock is forgetting", async () => {
+  await signedIn()
+  let cleared
+  world.clearing = () => new Promise((resolve) => { cleared = resolve })
+  await saysLocked()
+  world.app.quit()
   await settled()
+  assert.equal(world.quit, false)
+  cleared()
   await settled()
-  assert.deepEqual(world.fetched.map((f) => f.url), [HOME + "/auth/logout"])
   assert.equal(world.quit, true)
 })
 
-test("a lock on the company page signs its session out", async () => {
+test("cyfr's loss closes the windows, says so and signs nobody out", async () => {
   await signedIn()
-  const event = navigate(content(), HOME + "/company-login")
-  assert.ok(event.prevented)
+  const page = content()
+  child.emit("exit", null, "SIGKILL")
   await settled()
-  assert.deepEqual(world.fetched.map((f) => f.url), [HOME + "/auth/logout"])
-  child.say({type: "locked", home: HOME, account: ACCOUNT})
-  await settled()
-  assert.match(content().webContents.url, /notice=company,unconfirmed$/)
+  assert.ok(page.destroyed)
+  const told = live().map((w) => decodeURIComponent(w.webContents.url)).find((u) => u.startsWith("data:"))
+  assert.match(told, /CYFR stopped/)
+  assert.doesNotMatch(told, /sign/, "nothing about a sign-out")
+  signedNobodyOut()
 })
 
-test("a lock in open H before any page committed is unconfirmed, and the session's storage is cleared", async () => {
-  await started(true)
-  world.page = () => new Promise(() => {}) // the token never arrives
-  child.say({type: "home", home: HOME, account: ACCOUNT})
-  child.say({type: "opened", home: HOME})
-  await settled()
+test("closing the content window, and quitting, quit and sign nobody out", async () => {
+  for (const end of [() => content().destroy(), () => world.app.quit()]) {
+    await signedIn()
+    end()
+    await settled()
+    assert.equal(world.quit, true)
+    assert.deepEqual(child.heard.at(-1), {version: 1, type: "shutdown"})
+    assert.ok(!child.heard.some((m) => m.type === "lock"))
+    signedNobodyOut()
+  }
+})
+
+test("a lost page is shown again in its own window, its session as it was", async () => {
+  for (const road of [true, false]) {
+    await signedIn(road)
+    const page = content()
+    page.webContents.emit("render-process-gone", {}, {reason: "killed"})
+    assert.equal(page.webContents.reloaded, undefined, "not from inside the engine's report")
+    await settled()
+    assert.ok(!page.destroyed)
+    assert.deepEqual(page.webContents.reloaded, [HOME + "/"])
+    assert.ok(!child.heard.some((m) => m.type === "lock"))
+    signedNobodyOut()
+  }
+})
+
+test("a lost confirmation window closes alone", async () => {
+  await signedIn()
   const page = content()
-  navigate(page, HOME + "/") // given the CYFR; no page has committed
-  world.powerMonitor.emit("lock-screen")
+  page.webContents.opens({url: "http://127.0.0.1:7340/confirm?ref=cfm_1"})
+  const opened = new BrowserWindow({webPreferences: {session: page.webContents.session}})
+  page.webContents.emit("did-create-window", opened)
+  opened.webContents.emit("render-process-gone", {}, {reason: "killed"})
   await settled()
-  assert.deepEqual(world.fetched, [], "nothing to send without the token")
-  assert.ok(world.cleared.includes(page.webContents.session.partition), "the session's storage cleared")
-  child.say({type: "locked", home: HOME, account: ACCOUNT})
-  await settled()
-  assert.match(content().webContents.url, /notice=unconfirmed$/)
+  assert.ok(opened.destroyed)
+  assert.ok(!page.destroyed)
+  assert.equal(page.webContents.reloaded, undefined)
 })
 
 test("a lock after cyfr committed and before main read opened leaves cyfr running and the chooser ready", async () => {
   await started(false)
   child.say({type: "home", home: HOME, account: ACCOUNT})
   await settled()
-  world.powerMonitor.emit("lock-screen")
+  navigate(content(), HOME + "/company-login")
   child.say({type: "opened", home: HOME})
-  child.say({type: "locked", home: HOME, account: ACCOUNT})
-  await settled()
-  await settled()
+  await saysLocked()
   assert.equal(child.killed, false)
   assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//)
   const next = navigate(content(), HOME + "/threads")
@@ -344,19 +450,16 @@ test("a frame asking the top frame to go to the sign-in route is refused and ope
   assert.equal(live().length, 1, "no account window")
 })
 
-test("a CYFR rerouted is a relaunch only after the content closed and its session was signed out", async () => {
+test("a CYFR rerouted is a relaunch only after the content closed, and signs nobody out", async () => {
   await started(true)
   child.say({type: "home", home: HOME, account: ACCOUNT})
   await settled()
   await give(content())
-  world.relaunched = null
-  world.app.relaunch = (options) => { world.relaunched = options }
   const page = content()
   child.say({type: "home", home: "https://bob.example", account: ACCOUNT, proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
   await settled()
   assert.ok(page.destroyed)
-  assert.deepEqual(world.fetched.map((f) => f.url), [HOME + "/auth/logout"])
-  await settled()
+  signedNobodyOut()
   assert.ok(world.relaunched?.args.includes("--proxy-server=socks5://127.0.0.1:1055"))
 })
 
@@ -386,36 +489,6 @@ test("a confirmation window loads the address it was opened for, whatever frame 
   assert.equal(load(url, canvas), true, "its first load, of the address the handler opened it for")
   assert.equal(load("http://127.0.0.1:7340/passkey?ref=pk_1", canvas), false, "a later load a frame asks for")
   assert.equal(page.webContents.opens({url: "https://evil.example/"}).action, "deny")
-})
-
-test("the sign-out reads the redirect the CYFR answers, and an acknowledged one is confirmed", async () => {
-  await signedIn()
-  world.answer = () => ({status: 302, headers: new Headers({"location": "/login?error=signed_out", "cyfr-session-retired": "1"})})
-  world.powerMonitor.emit("lock-screen")
-  await settled()
-  assert.deepEqual(world.fetched.map((f) => [f.method, f.redirect]), [["POST", "manual"]])
-  child.say({type: "locked", home: HOME, account: ACCOUNT})
-  await settled()
-  assert.doesNotMatch(content().webContents.url, /unconfirmed/)
-})
-
-test("a lock's notice is its own sign-out's: one unconfirmed before does not make a later acknowledged one unconfirmed", async () => {
-  await signedIn()
-  world.powerMonitor.emit("lock-screen") // the CYFR answers 503: unconfirmed
-  await settled()
-  child.say({type: "locked", home: HOME, account: ACCOUNT})
-  await settled()
-  await settled()
-  assert.match(content().webContents.url, /notice=unconfirmed$/)
-  await give(content())
-  world.answer = () => ({status: 303, headers: new Headers({"location": "/login?error=signed_out", "cyfr-session-retired": "1"})})
-  world.powerMonitor.emit("lock-screen")
-  await settled()
-  child.say({type: "locked", home: HOME, account: ACCOUNT})
-  await settled()
-  await settled()
-  assert.equal(world.fetched.length, 2, "each lock sent its sign-out")
-  assert.doesNotMatch(content().webContents.url, /unconfirmed/)
 })
 
 const ANSWER = HOME + "/login#answer"
@@ -502,21 +575,15 @@ test("a sign-in's answer whose load call rejects reloads nothing as it lands, or
 
 test("a lock over a chooser that is keeping a notice leaves the notice there, until a way on is taken from it", async () => {
   await signedIn()
-  const lockNow = async (signal) => {
-    world.powerMonitor.emit(signal)
-    await settled()
-    child.say({type: "locked", home: HOME, account: ACCOUNT})
-    await settled()
-    await settled()
-  }
-  await lockNow("lock-screen") // the CYFR answers 503: unconfirmed
-  assert.match(content().webContents.url, /notice=unconfirmed$/)
-  await lockNow("suspend")
-  assert.match(content().webContents.url, /notice=unconfirmed$/, "kept through the lock over it")
+  navigate(content(), HOME + "/company-login")
+  await saysLocked()
+  assert.match(content().webContents.url, /notice=company$/)
+  await saysLocked() // the device's own
+  assert.match(content().webContents.url, /notice=company$/, "kept through the lock over it")
   const chooser = content()
   assert.ok(!navigate(chooser, "http://127.0.0.1:7340/").prevented)
   chooser.loadURL("http://127.0.0.1:7340/")
   await settled()
-  await lockNow("lock-screen")
+  await saysLocked()
   assert.doesNotMatch(content().webContents.url, /notice=/, "told once the person went on")
 })

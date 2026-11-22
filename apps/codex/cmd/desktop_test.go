@@ -19,7 +19,7 @@ import (
 
 // The app's cyfr binds the shell's listener before it says ready with the
 // chooser's address and its run token, holds it alone, and ends when main
-// says shutdown, locked.
+// says shutdown, saying no lock of it.
 func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -27,7 +27,7 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	ended := make(chan error, 1)
-	go func() { ended <- runDesktopServe(context.Background(), inR, outW); outW.Close() }()
+	go func() { ended <- runDesktopServe(context.Background(), inR, outW, false); outW.Close() }()
 	lines := bufio.NewScanner(outR)
 	read := func() map[string]any {
 		t.Helper()
@@ -51,7 +51,7 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 		t.Fatalf("the chooser is not served (%v)", err)
 	}
 	resp.Body.Close()
-	if err := runDesktopServe(context.Background(), strings.NewReader(""), io.Discard); err == nil ||
+	if err := runDesktopServe(context.Background(), strings.NewReader(""), io.Discard, false); err == nil ||
 		!strings.Contains(err.Error(), "close the app using port 7340") {
 		t.Fatalf("a second cyfr took the port: %v", err)
 	}
@@ -61,8 +61,8 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	if _, err := io.WriteString(inW, `{"version":1,"type":"shutdown"}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
-	if m := read(); m["type"] != "locked" {
-		t.Fatalf("shutdown did not lock: %v", m)
+	if lines.Scan() {
+		t.Fatalf("an end of cyfr said something, which main would take for a lock: %s", lines.Text())
 	}
 	select {
 	case err := <-ended:
@@ -74,6 +74,37 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	}
 	if _, err := http.Get("http://127.0.0.1:7340/bootstrap/"); err == nil {
 		t.Fatal("the port is still served after shutdown")
+	}
+}
+
+// cyfr is started as the shared vectors list, and takes the passkey road
+// from main's flag alone, never from the platform it runs on.
+func TestDesktopServeTakesTheRoadFromItsStart(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "desktop-process.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors struct {
+		Start []struct {
+			Name        string   `json:"name"`
+			AccountRoad bool     `json:"account_road"`
+			Args        []string `json:"args"`
+		} `json:"start"`
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil || len(vectors.Start) == 0 {
+		t.Fatalf("no start vectors (%v)", err)
+	}
+	saved := desktopAccountRoad
+	t.Cleanup(func() { desktopAccountRoad = saved })
+	for _, c := range vectors.Start {
+		desktopAccountRoad = false
+		found, rest, err := rootCmd.Find(c.Args)
+		if err != nil || found != desktopServeCmd {
+			t.Fatalf("%s: %v names %v (%v)", c.Name, c.Args, found.Name(), err)
+		}
+		if err := found.ParseFlags(rest); err != nil || desktopAccountRoad != c.AccountRoad {
+			t.Fatalf("%s: the road is %v (%v)", c.Name, desktopAccountRoad, err)
+		}
 	}
 }
 

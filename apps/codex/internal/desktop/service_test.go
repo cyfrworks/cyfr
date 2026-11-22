@@ -445,28 +445,37 @@ func TestALockBeforeTheFirstConnectionErasesTheKeyAndTheProof(t *testing.T) {
 	}
 }
 
-// Every end of main's messages locks the device and says so: lock,
-// shutdown, the pipe's end, and a line that is not main's, which also
-// ends the run with its refusal.
-func TestEveryEndOfMainsMessagesLocks(t *testing.T) {
+// Every end of main's messages locks the device and says none of it:
+// shutdown, the pipe's end and a line that is not main's, which also ends
+// the run with its refusal. Only main's lock is answered locked. That an
+// end locked shows in the selection it ended.
+func TestEveryEndOfMainsMessagesLocksAndSaysNoLock(t *testing.T) {
 	for _, tc := range []struct {
 		name, in string
-		locks    int
+		said     int
 		refused  bool
 	}{
-		{"lock, then the pipe's end", `{"version":1,"type":"lock"}` + "\n", 2, false},
-		{"shutdown, unread after", `{"version":1,"type":"shutdown"}` + "\n" + `{"version":1,"type":"lock"}` + "\n", 1, false},
-		{"a line that is not main's", `{"type":"lock"}` + "\n", 1, true},
-		{"a line past the bound", strings.Repeat("x", MaxLine+2) + "\n", 1, true},
-		{"a reply to no folder asked for", `{"version":1,"type":"folder-picked","id":"f1","path":null}` + "\n", 1, false},
+		{"lock, then the pipe's end", `{"version":1,"type":"lock"}` + "\n", 1, false},
+		{"shutdown, unread after", `{"version":1,"type":"shutdown"}` + "\n" + `{"version":1,"type":"lock"}` + "\n", 0, false},
+		{"a line that is not main's", `{"type":"lock"}` + "\n", 0, true},
+		{"a line past the bound", strings.Repeat("x", MaxLine+2) + "\n", 0, true},
+		{"a reply to no folder asked for", `{"version":1,"type":"folder-picked","id":"f1","path":null}` + "\n", 0, false},
+		{"the pipe's end alone", "", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newApp(t, t.TempDir(), nil)
+			a := newApp(t, t.TempDir(), offline())
+			selecting := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+			if m := a.next(t); m.Type != TypeHome {
+				t.Fatalf("main heard %+v", m)
+			}
 			err := a.Run(strings.NewReader(tc.in))
 			if tc.refused != errors.Is(err, ErrRefused) {
 				t.Fatalf("the run ended with %v", err)
 			}
-			for range tc.locks {
+			if got := answered(t, selecting); got.Error != lockedSentence {
+				t.Fatalf("the end did not lock: the selection answered %+v", got)
+			}
+			for range tc.said {
 				if m := a.next(t); m.Type != TypeLocked {
 					t.Fatalf("main heard %+v", m)
 				}
@@ -476,6 +485,7 @@ func TestEveryEndOfMainsMessagesLocks(t *testing.T) {
 	}
 }
 
+// The chooser's page runs its one script and style, each by its hash.
 func TestTheChooserPageRunsOnlyItsOwnScript(t *testing.T) {
 	a := newApp(t, t.TempDir(), nil)
 	w := a.get("/bootstrap/")
@@ -648,8 +658,9 @@ func TestAConnectThatFailsAfterHomeReadyLeavesTheServiceFree(t *testing.T) {
 
 // Where the app signs in with the account's passkey, an open CYFR's
 // answer offers that CYFR's own sign-in page beside the device's pages,
-// and so does the chooser shown again after a lock; elsewhere it offers
-// the device's pages alone.
+// and so does the chooser shown again after a lock; only the Connect that
+// opened it sends the window to that CYFR's root, where a kept sign-in
+// lands. Elsewhere it offers the device's pages alone.
 func TestAnOpenCYFROffersThePasskeyRoadWhereTheAppHasIt(t *testing.T) {
 	for _, road := range []bool{true, false} {
 		a := newApp(t, t.TempDir(), offline())
@@ -661,7 +672,11 @@ func TestAnOpenCYFROffersThePasskeyRoadWhereTheAppHasIt(t *testing.T) {
 		if road {
 			want.Passkey = "https://cyfr.example.com/login"
 		}
-		if got := answered(t, done); got != want {
+		connected := want
+		if road {
+			connected.Open = "https://cyfr.example.com/"
+		}
+		if got := answered(t, done); got != connected {
 			t.Fatalf("account road %v: answered %+v", road, got)
 		}
 		a.opened(t, "https://cyfr.example.com")
@@ -673,22 +688,80 @@ func TestAnOpenCYFROffersThePasskeyRoadWhereTheAppHasIt(t *testing.T) {
 	}
 }
 
-// What this app cannot do here (Warn) the chooser shows on every state it
-// is asked for, before a CYFR opens and after.
-func TestTheChooserShowsWhatTheAppCannotDoHere(t *testing.T) {
+// At launch on the passkey road the chooser is given the CYFR remembered
+// to connect by itself, once a run: after any Connect began, and on the
+// six-word road, it is not.
+func TestARememberedCYFRResumesOnceOnThePasskeyRoad(t *testing.T) {
+	dir := t.TempDir()
+	record := shell.ClientFile(filepath.Join(dir, "client.json"))
+	if err := record.Save(shell.ClientRecord{Home: "https://cyfr.example.com", Directory: account.DefaultDirectory}); err != nil {
+		t.Fatal(err)
+	}
+	if got := newApp(t, dir, offline()).post(t, "/bootstrap/state", map[string]string{}); got.Resume != "" || got.Home != "https://cyfr.example.com" {
+		t.Fatalf("the six-word road's chooser shows %+v", got)
+	}
+	a := newApp(t, dir, offline())
+	a.AccountRoad = true
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Resume != "https://cyfr.example.com" {
+		t.Fatalf("the passkey road's chooser shows %+v", got)
+	}
+	a.Discover = func(context.Context, *http.Client, string) (account.Discovered, error) {
+		return account.Discovered{}, errors.New("unreachable")
+	}
+	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"}); got.Error == "" {
+		t.Fatalf("an unreachable CYFR answered %+v", got)
+	}
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Resume != "" || got.Home != "https://cyfr.example.com" {
+		t.Fatalf("a Connect that failed is tried again by itself: %+v", got)
+	}
+}
+
+// Connect to another CYFR leaves the one open, locked and named in no
+// locked, for a Connect to the next, which is then the one remembered. On
+// the six-word road, which has no such button, it is refused.
+func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
+	const first, second = "https://cyfr.example.com", "https://bob.example.com"
+	open := func(a *app, home string) {
+		t.Helper()
+		done := a.connect(t, "/bootstrap/connect", map[string]string{"address": home})
+		if m := a.next(t); m.Type != TypeHome || m.Home != home {
+			t.Fatalf("main heard %+v", m)
+		}
+		a.HomeReady(home)
+		if got := answered(t, done); got.Next != "/" {
+			t.Fatalf("Connect answered %+v", got)
+		}
+		a.opened(t, home)
+	}
+	words := newApp(t, t.TempDir(), offline())
+	open(words, first)
+	if got := words.post(t, "/bootstrap/another", map[string]string{}); got.Error == "" {
+		t.Fatalf("the six-word road left its CYFR: %+v", got)
+	}
+	words.quiet(t)
+
 	a := newApp(t, t.TempDir(), offline())
-	const sentence = "CYFR cannot tell when this computer locks here."
-	a.Warn(sentence)
-	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Warning != sentence {
+	a.AccountRoad = true
+	open(a, first)
+	if got := a.post(t, "/bootstrap/another", map[string]string{}); got.Error != "" {
+		t.Fatalf("Connect to another answered %+v", got)
+	}
+	if m := a.next(t); m.Type != TypeLocked || m.Home != "" {
+		t.Fatalf("main heard %+v, not a lock keeping to none", m)
+	}
+	a.quiet(t)
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Next != "" || got.Passkey != "" || got.Resume != "" || got.Home != first {
 		t.Fatalf("the chooser shows %+v", got)
 	}
-	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
-	a.next(t)
-	a.HomeReady("https://cyfr.example.com")
-	answered(t, done)
-	a.opened(t, "https://cyfr.example.com")
-	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Warning != sentence || got.Next != "/" {
-		t.Fatalf("the chooser of an open CYFR shows %+v", got)
+	if w := a.get("/"); w.Code != http.StatusSeeOther {
+		t.Fatal("the device's pages of the CYFR left are still served")
+	}
+	open(a, second)
+	if c, err := a.Clients.Load(); err != nil || c.Home != second {
+		t.Fatalf("launch would open %+v (%v), not the CYFR chosen last", c, err)
+	}
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Home != second {
+		t.Fatalf("the chooser names %+v", got)
 	}
 }
 

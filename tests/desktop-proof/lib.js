@@ -17,8 +17,11 @@
 // FIXTURE/out/NAME.txt (a PASS or FAIL line a row, then RESULT PHASE
 // passed or failed) and writes NAME-PHASE.json. Nothing it records holds
 // a credential: no page text, only addresses, headings and notices, and
-// everything it writes is scrubbed first (write, scrub.mjs).
+// everything it writes is scrubbed first (write, scrub.mjs). A phase may
+// end as the person ends the app, by quitting, or as a kill ends it
+// (finish); either way its record is written first.
 
+import {createHash} from "node:crypto"
 import {appendFileSync, readFileSync, readdirSync, writeFileSync} from "node:fs"
 import path from "node:path"
 
@@ -313,9 +316,10 @@ export async function decided(wc, url, frame, what) {
 }
 
 // Where the app came to rest after a lock: with nothing to tell the
-// chooser goes on to the device's pages by itself (told: null); with a
-// notice it stays, the notice's words and its way on in sight (told:
-// {words, stayed}, stayed false had it started to go on).
+// six-word road's chooser goes on to the device's pages by itself (told:
+// null); with a notice, and on the passkey road, it stays, its words and
+// its way on in sight (told: {words, stayed}, stayed false had it started
+// to go on).
 async function atRest(why) {
   const rest = await waitFor(async () => {
     const w = content()
@@ -336,10 +340,11 @@ async function atRest(why) {
 
 // The chooser a lock since `shownBefore` (history's length before it)
 // brought back, and what it told (atRest); then each of `over` done to a
-// chooser that stayed, with what it told after each (kept); then Use this
-// computer's key pressed where one still stays. Answers those and the
-// device's pages it led to.
-export async function afterLock(shownBefore, why, over = []) {
+// chooser that stayed, with what it told after each (kept); then, with
+// `onward`, Use this computer's key pressed where one still stays. Answers
+// those and where that left the app: the device's pages, or the chooser
+// that stayed.
+export async function afterLock(shownBefore, why, {over = [], onward = true} = {}) {
   let rest = await atRest(why)
   const shown = history.slice(shownBefore).some(atBootstrap)
   const told = rest.told
@@ -350,36 +355,86 @@ export async function afterLock(shownBefore, why, over = []) {
     rest = await atRest(why)
     kept.push(rest.told)
   }
-  if (rest.told?.stayed) await js(rest.w.webContents, `document.querySelector("#words").click(); 1`)
-  const back = rest.told ? await contentAt(atDevice, `the device's pages after ${why}`) : rest.w
-  return {shown, told, kept, back}
+  if (!onward || !rest.told) return {shown, told, kept, back: rest.w}
+  if (rest.told.stayed) await js(rest.w.webContents, `document.querySelector("#words").click(); 1`)
+  return {shown, told, kept, back: await contentAt(atDevice, `the device's pages after ${why}`)}
 }
+
+// Each sign-out the app's windows posted to the CYFR since `from`.
+export const signOutsSince = async (from) => (await reachedSince(new URL(HOME).hostname, from))
+  .filter((r) => r.method === "POST" && r.path === "/auth/logout").map((r) => ({status: r.status, fault: r.fault}))
+export const frontLength = async () => (await seen(new URL(HOME).hostname)).length
 
 // A lock by `act`, seen whole: the session's cookie opening a page of the
-// CYFR before it; the chooser after it and what it told (afterLock); the
-// device's pages it led to; the sign-out main sent, as the CYFR's front
-// saw it answered; and the cookie after.
-export async function lockedOut(w, why, act, then = async () => {}, over = []) {
+// CYFR before it; the chooser after it and what it told (afterLock); what
+// the content's session then holds; every sign-out posted from the app's
+// windows, as the CYFR's front saw it answered; and the cookie after.
+export async function lockedOut(w, why, act, options) {
   const cookie = await sessionCookie(w)
   const before = await opens(cookie)
-  const from = (await seen("x.test")).length
+  const from = await frontLength()
   const shownBefore = history.length
   await act()
-  const {back, shown, told, kept} = await afterLock(shownBefore, why, over)
-  await then()
+  const {back, shown, told, kept} = await afterLock(shownBefore, why, options)
+  const left = await sessionCookie(back)
   const after = await opens(cookie)
-  const signOuts = (await reachedSince("x.test", from)).filter((r) => r.method === "POST" && r.path === "/auth/logout")
-    .map((r) => ({status: r.status, retired: r.retired, fault: r.fault}))
-  return {back, before, after, chooser: {shown, told, kept}, signOuts, cookie}
+  return {back, before, after, left, chooser: {shown, told, kept}, signOuts: await signOutsSince(from), cookie}
 }
 
-// The sign-out main sent was answered with the CYFR's acknowledgement,
-// the chooser came back and, with nothing to tell, went on by itself, and
-// the cookie that opened a page before opens nothing now.
-export const signedOut = (out) => out.before.opens && refused(out.after) &&
-  out.signOuts.length === 1 && [302, 303].includes(out.signOuts[0].status) && out.signOuts[0].retired === "1" &&
-  out.chooser.shown && out.chooser.told === null
-export const lockDetail = (out) => ({before: out.before, after: out.after, signOuts: out.signOuts, chooser: out.chooser})
+// The session that opened a page opens nothing now and the chooser came
+// back with nothing to tell: gone on by itself on the six-word road, and
+// with both ways on, staying, on the passkey road.
+export const signedOut = (out) => out.before.opens && refused(out.after) && out.chooser.shown &&
+  (out.chooser.told === null || (out.chooser.told.stayed && out.chooser.told.words === ""))
+export const lockDetail = (out) => ({before: out.before, after: out.after, held: out.left !== null, signOuts: out.signOuts,
+  chooser: out.chooser})
+
+// The computer locked and asleep, as the system tells every program, while
+// Prism shows in `w`: what of the session it changed.
+export async function throughComputerLock(w) {
+  const cookie = await sessionCookie(w)
+  const from = await frontLength()
+  const shownBefore = history.length
+  for (const signal of ["lock-screen", "suspend"]) powerMonitor.emit(signal)
+  await sleep(2000) // sleep-ok: how long the proof watches for what must not happen
+  const stands = !w.isDestroyed() && content() === w && atHome(w.webContents.getURL())
+  return {stands, chooser: history.slice(shownBefore).some(atBootstrap), same: stands && (await sessionCookie(w)) === cookie,
+    after: await opens(cookie), signOuts: await signOutsSince(from)}
+}
+export const undisturbed = (out) => out.stands && !out.chooser && out.same && out.after.opens && out.signOuts.length === 0
+
+// Prism's page's process ended by the kill signal, as the kernel ends one
+// when memory runs out: what the engine reported, and the page shown again.
+export async function pageKilled(w) {
+  const cookie = await sessionCookie(w)
+  const from = await frontLength()
+  const wc = w.webContents
+  const killed = {pid: wc.getOSProcessId()}
+  wc.once("render-process-gone", (_e, details) => { killed.reason = details.reason })
+  const again = reloaded(w)
+  log(`killing the renderer of window ${wc.id}, pid ${killed.pid}`)
+  process.kill(killed.pid, "SIGKILL")
+  await again
+  return {...killed, window: content() === w, shows: atHome(wc.getURL()), same: (await sessionCookie(w)) === cookie,
+    after: await opens(cookie), signOuts: await signOutsSince(from)}
+}
+export const shownAgain = (out) => out.reason === "killed" && out.window && out.shows && out.same && out.after.opens &&
+  out.signOuts.length === 0
+
+// Prism's page loaded again in `w` and connected, once it next finishes a load.
+export function reloaded(w) {
+  let loaded = false
+  w.webContents.once("did-finish-load", () => { loaded = true })
+  return waitFor(async () => loaded && !w.webContents.isLoading() && js(w.webContents, `!!document.querySelector(".phx-connected")`),
+    "Prism's page shown again")
+}
+
+// What tells one session cookie from another, and when it ends, with
+// nothing of the cookie itself.
+export async function sessionMark(w) {
+  const [cookie] = await w.webContents.session.cookies.get({url: HOME, name: "_cyfr_key"})
+  return cookie ? {digest: createHash("sha256").update(cookie.value).digest("hex").slice(0, 16), expires: cookie.expirationDate ?? null} : null
+}
 
 // A process's state as /proc shows it: its state line, what it waits in,
 // and its core size limit; or why it could not be read.
@@ -468,9 +523,13 @@ export function childOfThis(word) {
 // The proof's name: its folder, and the stem of every file it writes.
 export let proof = "proof"
 
-export function finish(code) {
+// The launch's end, its record written first: by the proof (nothing given),
+// by quitting as the person quits ("quit"), or by the kill signal ("kill").
+export function finish(code, end) {
   write(`${proof}.txt`, `RESULT ${PHASE} ${code === 0 ? "passed" : "failed"}`)
   writeFileSync(path.join(OUT, `${proof}-${PHASE}.json`), scrubbed(record, 2))
+  if (code === 0 && end === "quit") return app.quit()
+  if (code === 0 && end === "kill") return process.kill(process.pid, "SIGKILL")
   app.exit(code)
 }
 
@@ -492,7 +551,8 @@ export async function where() {
  * Run the proof `name` (its folder): the production app started with
  * `options` beside startApp's own (accountRoad), then the phase this
  * launch is (CYFR_DESKTOP_PROOF_PHASE) of `phases`, writing
- * FIXTURE/out/NAME.txt, NAME.log and NAME-PHASE.json.
+ * FIXTURE/out/NAME.txt, NAME.log and NAME-PHASE.json, and ended as the
+ * phase answers (finish).
  */
 export function run(name, phases, options = {}) {
   proof = name
@@ -501,7 +561,7 @@ export function run(name, phases, options = {}) {
     log(`app: ${line}`)
   }})
   if (!phases[PHASE]) throw new Error(`no phase ${PHASE}`)
-  app.whenReady().then(phases[PHASE]).then(() => finish(record.rows.every((r) => r.ok) ? 0 : 1), async (e) => {
+  app.whenReady().then(phases[PHASE]).then((end) => finish(record.rows.every((r) => r.ok) ? 0 : 1, end), async (e) => {
     if (!(e instanceof Stop)) {
       record.stopped = e.stack ?? String(e)
       write(`${proof}.txt`, `FAIL stopped: ${e.message}`)

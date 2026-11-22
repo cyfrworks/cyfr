@@ -37,6 +37,12 @@ import (
 // approves it, and a decline contacts nothing there. Selecting sends main
 // home and waits for its home-ready; only then are the device's pages,
 // and the ticket they hand over, served.
+//
+// Where the app signs in with the account's passkey (AccountRoad), the
+// person stays signed in as in a browser: the CYFR remembered is connected
+// by itself as the app starts, a CYFR just connected opens at its own root,
+// and main brings back the chooser, with both ways on and the way to
+// another CYFR, only where that CYFR asks for a sign-in.
 type Service struct {
 	// Token is the run token the chooser's requests carry.
 	Token string
@@ -56,7 +62,7 @@ type Service struct {
 	// Shell adapts a selected CYFR's shell configuration; nil leaves it.
 	Shell func(*shell.Config)
 	// AccountRoad is whether the app signs in with the account's passkey
-	// too (macOS and Windows), beside the device's six words.
+	// too (main's word: macOS and Windows), beside the device's six words.
 	AccountRoad bool
 
 	mu sync.Mutex
@@ -78,17 +84,12 @@ type Service struct {
 	// committed is the CYFR the device's pages serve, as home named it:
 	// every locked names it again.
 	committed Message
-	// warning is what the chooser tells the person this app cannot do
-	// here (Warn).
-	warning string
-}
-
-// Warn has the chooser tell the person, in one sentence, what this app
-// cannot do on this computer, such as lock with it.
-func (s *Service) Warn(sentence string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.warning = sentence
+	// began is whether a Connect began in this run: the remembered CYFR
+	// is connected by itself once, as the app starts, and never again.
+	began bool
+	// ended is whether cyfr is ending, which main hears as its end and
+	// never as a lock.
+	ended bool
 }
 
 type selection struct {
@@ -153,6 +154,7 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		"/bootstrap/state":   s.state,
 		"/bootstrap/connect": s.connect,
 		"/bootstrap/approve": s.approve,
+		"/bootstrap/another": s.another,
 	}[r.URL.Path]
 	if !ok || r.Method != http.MethodPost {
 		http.NotFound(w, r)
@@ -203,7 +205,7 @@ func (s *Service) begin(ctx context.Context, epoch uint64) (context.Context, *an
 		return nil, &answer{Error: "This app is connected to a CYFR already. Quit it and open it again to connect to another."}
 	}
 	run, stop := context.WithCancel(ctx)
-	s.connecting, s.stop = true, stop
+	s.connecting, s.stop, s.began = true, stop, true
 	return run, nil
 }
 
@@ -233,16 +235,18 @@ type request struct {
 //
 // Once a CYFR is open, Next is the device's pages and, where the app signs
 // in with the account's passkey (AccountRoad), Passkey is that CYFR's own
-// sign-in page, which the page offers first.
+// sign-in page, which the page offers first. There too Open, in the answer
+// to the Connect that opened it alone, is that CYFR's root, where a kept
+// sign-in lands, and Resume, before any Connect of this run, is the
+// remembered CYFR, which the page connects by itself.
 type answer struct {
 	Home    string `json:"home,omitempty"`
 	Confirm string `json:"confirm,omitempty"`
 	Next    string `json:"next,omitempty"`
 	Passkey string `json:"passkey,omitempty"`
+	Open    string `json:"open,omitempty"`
+	Resume  string `json:"resume,omitempty"`
 	Error   string `json:"error,omitempty"`
-	// Warning is what this app cannot do on this computer (Warn), which
-	// the chooser shows whatever else it shows.
-	Warning string `json:"warning,omitempty"`
 }
 
 // opened is the answer for the CYFR open at home.
@@ -260,14 +264,30 @@ func (s *Service) state(context.Context, uint64, request) answer {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
 	s.mu.Lock()
-	open, warning := s.pages != nil, s.warning
+	open, began, home := s.pages != nil, s.began, s.committed.Home
 	s.mu.Unlock()
-	a := answer{Home: c.Home}
 	if open {
-		a = s.opened(c.Home)
+		return s.opened(home)
 	}
-	a.Warning = warning
+	a := answer{Home: c.Home}
+	if s.AccountRoad && !began {
+		a.Resume = c.Home
+	}
 	return a
+}
+
+// another leaves the CYFR open, locked, for the chooser's Connect: main
+// hears a locked that names none and keeps to none. The client record
+// stays as it is until the next CYFR is opened (shell.Selection).
+func (s *Service) another(_ context.Context, epoch uint64, _ request) answer {
+	if !s.AccountRoad {
+		return answer{Error: "Quit this app and open it again to connect to another CYFR."}
+	}
+	if !s.live(epoch) {
+		return answer{Error: lockedSentence}
+	}
+	s.lock("", true)
+	return answer{}
 }
 
 // homeOf reads a typed address as a CYFR's https origin: a bare name is
@@ -406,7 +426,11 @@ func (s *Service) selectHome(run context.Context, epoch uint64, home string, fou
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
 	s.committed = proposal
-	return s.opened(home)
+	a := s.opened(home)
+	if s.AccountRoad {
+		a.Open = home + "/"
+	}
+	return a
 }
 
 // remoteDisks is what a device of a remote CYFR reports: its own system
@@ -435,9 +459,25 @@ func (s *Service) HomeReady(home string) {
 // not, and the time since the last lock ends, so every chooser request
 // begun in it, in discovery, awaiting approval or awaiting main's
 // home-ready, publishes nothing more.
-func (s *Service) Lock(why string) {
+func (s *Service) Lock(why string) { s.lock(why, false) }
+
+// End locks as cyfr ends, whatever ends it, and says nothing to main,
+// which hears the end itself: an end is no lock of the person's, and main
+// forgets a sign-in at none.
+func (s *Service) End() {
+	s.mu.Lock()
+	s.ended = true
+	s.mu.Unlock()
+	s.lock("", false)
+}
+
+// lock is Lock, which leaves the CYFR open as well when leave says to.
+func (s *Service) lock(why string, leave bool) {
 	s.mu.Lock()
 	sh := s.sh
+	if leave {
+		s.sh, s.pages, s.committed = nil, nil, Message{}
+	}
 	s.epoch++
 	if s.stop != nil {
 		s.stop()
@@ -461,22 +501,25 @@ func (s *Service) Lock(why string) {
 // sayLocked tells main the device locked, naming the CYFR committed.
 func (s *Service) sayLocked() {
 	s.mu.Lock()
-	m := s.committed
+	m, ended := s.committed, s.ended
 	s.mu.Unlock()
+	if ended {
+		return
+	}
 	m.Type = TypeLocked
 	_ = s.Send(m)
 }
 
 // Run reads main's messages from in until shutdown or the end of in,
-// which lock first; a line that is not one of main's messages locks and
-// ends the run with its refusal.
+// which end it (End); a line that is not one of main's messages ends it
+// with its refusal.
 func (s *Service) Run(in io.Reader) error {
 	lines := bufio.NewScanner(in)
 	lines.Buffer(make([]byte, 0, 4096), MaxLine+1)
 	for lines.Scan() {
 		m, err := ReadFromMain(lines.Bytes())
 		if err != nil {
-			s.Lock("")
+			s.End()
 			return err
 		}
 		switch m.Type {
@@ -485,13 +528,13 @@ func (s *Service) Run(in io.Reader) error {
 		case TypeLock:
 			s.Lock("Locked.")
 		case TypeShutdown:
-			s.Lock("")
+			s.End()
 			return nil
 		case TypeFolderPicked:
 			// No folder is asked for yet; an answer to none is ignored.
 		}
 	}
-	s.Lock("")
+	s.End()
 	if err := lines.Err(); err != nil {
 		return errors.Join(refuse("size"), err)
 	}
