@@ -758,4 +758,34 @@ defmodule PrismWeb.CoreComponents do
     ></textarea>
     """
   end
+
+  # ============================================================================
+  # Uploads
+  # ============================================================================
+
+  # What an upload refused, in words beside it: an entry's own refusal, or
+  # without one the upload's as a whole. LiveView sends no form whose
+  # upload holds a refusal and says nothing, so each upload draws both.
+  attr :upload, Phoenix.LiveView.UploadConfig, required: true
+  attr :entry, Phoenix.LiveView.UploadEntry, default: nil
+
+  def upload_refusal(assigns) do
+    errors =
+      case assigns.entry do
+        nil -> upload_errors(assigns.upload)
+        entry -> upload_errors(assigns.upload, entry)
+      end
+
+    assigns = assign(assigns, :errors, errors)
+
+    ~H"""
+    <span :for={error <- @errors} role="alert" data-test="upload-refusal" class="text-xs text-red-300">
+      {refusal_words(error)}
+    </span>
+    """
+  end
+
+  defp refusal_words(:too_large), do: "too large, remove it"
+  defp refusal_words(:too_many_files), do: "too many files, remove some"
+  defp refusal_words(_failed), do: "could not be uploaded, remove it"
 end

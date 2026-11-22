@@ -1083,6 +1083,53 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, "span.text-xs", "kept-elsewhere.txt")
   end
 
+  test "a file the composer refuses says why beside it, until it is removed", %{
+    conn: conn,
+    athanor: athanor,
+    thread: thread
+  } do
+    pane = open_pane(conn, athanor, thread)
+
+    files = [
+      %{
+        name: "big.bin",
+        content: :binary.copy("x", Aqua.attachment_limits().max_file_bytes + 1),
+        type: "application/octet-stream"
+      }
+    ]
+
+    # The refusal is the upload's own, made as it is announced.
+    pane |> file_input("form[phx-submit=submit]", :attachments, files) |> preflight_upload()
+
+    assert has_element?(pane, ~s([data-test="upload-refusal"]), "too large, remove it")
+
+    pane |> element(~s(button[phx-click="cancel_upload"])) |> render_click()
+
+    refute has_element?(pane, ~s([data-test="upload-refusal"]))
+  end
+
+  test "more files than a message takes are said in the composer, until one is removed", %{
+    conn: conn,
+    athanor: athanor,
+    thread: thread
+  } do
+    pane = open_pane(conn, athanor, thread)
+
+    files =
+      for n <- 0..Aqua.attachment_limits().max_files,
+          do: %{name: "f#{n}.txt", content: "x", type: "text/plain"}
+
+    pane |> file_input("form[phx-submit=submit]", :attachments, files) |> preflight_upload()
+
+    assert has_element?(pane, ~s([data-test="upload-refusal"]), "too many files, remove some")
+
+    pane
+    |> element(~s(div:first-child > button[phx-click="cancel_upload"]))
+    |> render_click()
+
+    refute has_element?(pane, ~s([data-test="upload-refusal"]))
+  end
+
   test "the person a running turn is for is named with the verb that agrees with them", %{
     conn: conn,
     user: user,

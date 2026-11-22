@@ -739,10 +739,6 @@ defmodule PrismWeb.FilesLive do
   defp sent_status("offered"), do: "waiting"
   defp sent_status(status), do: status
 
-  defp upload_error(:too_large), do: "too large"
-  defp upload_error(:too_many_files), do: "too many files"
-  defp upload_error(other), do: to_string(other)
-
   # ---- render ---------------------------------------------------------------
 
   @impl true
@@ -1026,9 +1022,7 @@ defmodule PrismWeb.FilesLive do
             <.live_file_input upload={@uploads.files} class="text-sm text-gray-400" />
             <div :for={entry <- @uploads.files.entries} class="text-xs text-gray-400 flex gap-2">
               <span class="font-mono">{entry.client_name}</span>
-              <span :for={err <- upload_errors(@uploads.files, entry)} class="text-red-400">
-                {upload_error(err)}
-              </span>
+              <.upload_refusal upload={@uploads.files} entry={entry} />
               <button
                 type="button"
                 phx-click="cancel_upload"
@@ -1038,6 +1032,7 @@ defmodule PrismWeb.FilesLive do
                 ×
               </button>
             </div>
+            <.upload_refusal upload={@uploads.files} />
             <.button type="submit" variant="ghost" class="text-xs px-2 py-0.5">Upload</.button>
           </form>
         </.card>
