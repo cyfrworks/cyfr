@@ -2183,6 +2183,7 @@ defmodule PrismWeb.ThreadPaneLive do
             <span :if={entry.progress > 0 and entry.progress < 100} class="text-gray-500">
               {entry.progress}%
             </span>
+            <.upload_refusal upload={@uploads.attachments} entry={entry} />
             <button
               type="button"
               phx-click="cancel_upload"
@@ -2193,6 +2194,7 @@ defmodule PrismWeb.ThreadPaneLive do
               ×
             </button>
           </div>
+          <.upload_refusal upload={@uploads.attachments} />
         </div>
 
         <div class="flex gap-2 items-end">

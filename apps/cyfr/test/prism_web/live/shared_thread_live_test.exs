@@ -123,6 +123,43 @@ defmodule PrismWeb.SharedThreadLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "a file the composer refuses says why beside it", %{
+    conn: conn,
+    alice: alice,
+    thread: thread
+  } do
+    pane = open!(conn, alice, thread.id)
+
+    files = [
+      %{
+        name: "big.bin",
+        content: :binary.copy("x", Sanctum.SharedThreads.limits().max_file_bytes + 1),
+        type: "application/octet-stream"
+      }
+    ]
+
+    pane |> file_input("#shared-composer", :files, files) |> preflight_upload()
+
+    assert has_element?(pane, ~s([data-test="upload-refusal"]), "too large, remove it")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "more files than a post takes are said in the composer", %{
+    conn: conn,
+    alice: alice,
+    thread: thread
+  } do
+    pane = open!(conn, alice, thread.id)
+    files = for n <- 0..10, do: %{name: "f#{n}.txt", content: "x", type: "text/plain"}
+
+    pane |> file_input("#shared-composer", :files, files) |> preflight_upload()
+
+    assert has_element?(pane, ~s([data-test="upload-refusal"]), "too many files, remove some")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   # A name is asked of the registry, which holds it here until the test
   # releases it, past the browser's 30 s wait on the event (stood in for
   # by one second), then answers that no one holds it.
