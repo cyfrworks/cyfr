@@ -32,7 +32,7 @@
 // to the DMG and to the app, and Gatekeeper's assessment of both, which no
 // rehearsed DMG passes.
 
-import {execFileSync, spawnSync} from "node:child_process"
+import {spawnSync} from "node:child_process"
 import {createHash} from "node:crypto"
 import {copyFileSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, closeSync, readdirSync, rmSync, writeFileSync} from "node:fs"
 import {createRequire} from "node:module"
@@ -160,12 +160,44 @@ export function signer(files) {
   }
 }
 
+/**
+ * Run a macOS tool that could wait on a person (a keychain's prompt, a
+ * mounted image, Apple's servers): {ok, out, err}, or Refused when it has
+ * not answered in `seconds`.
+ */
+export function tool(cmd, args, seconds = 120) {
+  const r = spawnSync(cmd, args, {encoding: "utf8", timeout: seconds * 1000, killSignal: "SIGKILL"})
+  if (r.error?.code === "ETIMEDOUT") throw new Refused(`${cmd} ${args[0]} did not answer in ${seconds} seconds`)
+  if (r.error) throw r.error
+  return {ok: r.status === 0, out: r.stdout, err: r.stderr}
+}
+
+// A tool's run that must succeed, or Refused saying `what`.
+function must(cmd, args, what, seconds) {
+  const r = tool(cmd, args, seconds)
+  if (!r.ok) throw new Refused(`${what}: ${(r.err || r.out).trim()}`)
+  return r
+}
+
+/**
+ * The promise `work`, or Refused saying `what` when it has not settled in
+ * `minutes`: electron-builder's build and Apple's notary run in this
+ * process, where a timer is their bound.
+ */
+export function within(work, minutes, what) {
+  let timer
+  const bound = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Refused(`${what} did not finish in ${minutes} minutes`)), minutes * 60000)
+  })
+  return Promise.race([work, bound]).finally(() => clearTimeout(timer))
+}
+
 /** The decoded property list of a provisioning profile's bytes (macOS). */
 export function decodeProfile(bytes) {
   const dir = mkdtempSync(path.join(tmpdir(), "cyfr-profile-"))
   try {
     writeFileSync(path.join(dir, "p"), bytes)
-    return plist.parse(execFileSync("security", ["cms", "-D", "-i", path.join(dir, "p")], {encoding: "utf8"}))
+    return plist.parse(must("security", ["cms", "-D", "-i", path.join(dir, "p")], "the provisioning profile does not decode").out)
   } finally {
     rmSync(dir, {recursive: true, force: true})
   }
@@ -201,10 +233,7 @@ export function signedCode(app) {
   return out
 }
 
-function codesign(args) {
-  const r = spawnSync("codesign", args, {encoding: "utf8"})
-  return {ok: r.status === 0, out: r.stdout, err: r.stderr}
-}
+const codesign = (args) => tool("codesign", args)
 
 const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex")
 
@@ -213,46 +242,41 @@ const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest(
 function unsigned(file, dir, name) {
   const copy = path.join(dir, name)
   copyFileSync(file, copy)
-  if (codesign(["-d", copy]).ok) execFileSync("codesign", ["--remove-signature", copy])
+  if (codesign(["-d", copy]).ok) must("codesign", ["--remove-signature", copy], `${name}'s signature was not removed`)
   return sha256(copy)
 }
 
 /**
- * Check a signed CYFR.app at `app`: each signature verifies strictly, is
- * the team's, hardened and timestamped, with exactly its kind's
- * entitlements; the embedded profile is the supplied one and lists the
- * app's signing certificate; the bundled cyfr is the verified one at
- * `cyfr`. Throws Refused naming the first difference.
+ * Check a signed CYFR.app at `app`: it embeds the supplied profile, which
+ * checkProfile passes for the team and group and which lists the app's
+ * signing certificate; each signature verifies strictly, is by that
+ * certificate, hardened and timestamped, with exactly its kind's
+ * entitlements; the bundled cyfr is the verified one at `cyfr`.
+ * Throws Refused naming the first difference.
  */
 export function checkApp(app, {cyfr, team, group, profile}) {
-  const verify = codesign(["--verify", "--deep", "--strict", "--verbose=2", app])
-  if (!verify.ok) throw new Refused(`CYFR.app's signature does not verify: ${verify.err.trim()}`)
-  const want = entitlements(team, group)
-  for (const file of signedCode(app)) {
-    const name = path.relative(path.dirname(app), file)
-    const shown = codesign(["-d", "--verbose=2", file])
-    if (!shown.ok) throw new Refused(`${name} is not signed`)
-    if (!/^TeamIdentifier=(.*)$/m.test(shown.err) || shown.err.match(/^TeamIdentifier=(.*)$/m)[1] !== team) {
-      throw new Refused(`${name} is not signed by the team`)
-    }
-    if (!/^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime[^)]*\)/m.test(shown.err)) throw new Refused(`${name} lacks the hardened runtime`)
-    if (!/^Timestamp=/m.test(shown.err)) throw new Refused(`${name} has no secure timestamp`)
-    const listed = codesign(["-d", "--entitlements", "-", "--xml", file])
-    const got = listed.out.trim() ? plist.parse(listed.out) : {}
-    if (JSON.stringify(sorted(got)) !== JSON.stringify(sorted(want[kindOf(app, file)]))) {
-      throw new Refused(`${name} has entitlements other than its own`)
-    }
-  }
+  must("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], "CYFR.app's signature does not verify")
   const embedded = path.join(app, "Contents", "embedded.provisionprofile")
   let bytes
   try { bytes = readFileSync(embedded) } catch { throw new Refused("CYFR.app embeds no provisioning profile") }
   if (!bytes.equals(profile)) throw new Refused("CYFR.app embeds another provisioning profile")
+  const decoded = decodeProfile(profile)
+  checkProfile(decoded, {team, group})
+  const want = entitlements(team, group)
   const dir = mkdtempSync(path.join(tmpdir(), "cyfr-signed-"))
   try {
-    execFileSync("codesign", ["-d", `--extract-certificates=${path.join(dir, "cert")}`, app], {stdio: "ignore"})
-    const leaf = readFileSync(path.join(dir, "cert0"))
-    const certificates = decodeProfile(profile).DeveloperCertificates ?? []
-    if (!certificates.some((c) => Buffer.from(c).equals(leaf))) throw new Refused("the provisioning profile does not list CYFR.app's signing certificate")
+    // The first certificate of a signature is its signer's.
+    let read = 0
+    const signer = (file) => {
+      const prefix = path.join(dir, `c${read++}.`)
+      must("codesign", ["-d", `--extract-certificates=${prefix}`, file], `${path.basename(file)}'s certificate was not read`)
+      return readFileSync(`${prefix}0`)
+    }
+    const leaf = signer(app)
+    if (!(decoded.DeveloperCertificates ?? []).some((c) => Buffer.from(c).equals(leaf))) {
+      throw new Refused("the provisioning profile does not list CYFR.app's signing certificate")
+    }
+    for (const file of signedCode(app)) checkSignature(app, file, leaf, signer, want)
     const helper = path.join(app, "Contents", "Resources", "cyfr")
     if (unsigned(helper, dir, "packaged") !== unsigned(cyfr, dir, "verified")) {
       throw new Refused("CYFR.app/Contents/Resources/cyfr is not the verified cyfr")
@@ -262,15 +286,27 @@ export function checkApp(app, {cyfr, team, group, profile}) {
   }
 }
 
+// One signed file of the app: signed by the app's certificate (`leaf`;
+// `signer` reads a file's), hardened, timestamped, with exactly the
+// entitlements of its kind.
+function checkSignature(app, file, leaf, signer, want) {
+  const name = path.relative(path.dirname(app), file)
+  const shown = codesign(["-d", "--verbose=2", file])
+  if (!shown.ok) throw new Refused(`${name} is not signed`)
+  if (!leaf.equals(signer(file))) throw new Refused(`${name} is not signed by CYFR.app's certificate`)
+  if (!/^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime[^)]*\)/m.test(shown.err)) throw new Refused(`${name} lacks the hardened runtime`)
+  if (!/^Timestamp=/m.test(shown.err)) throw new Refused(`${name} has no secure timestamp`)
+  const listed = codesign(["-d", "--entitlements", "-", "--xml", file])
+  const got = listed.out.trim() ? plist.parse(listed.out) : {}
+  if (JSON.stringify(sorted(got)) !== JSON.stringify(sorted(want[kindOf(app, file)]))) {
+    throw new Refused(`${name} has entitlements other than its own`)
+  }
+}
+
 function sorted(value) {
   if (Array.isArray(value)) return value.map(sorted)
   if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map((k) => [k, sorted(value[k])]))
   return value
-}
-
-function run(cmd, args, what) {
-  const r = spawnSync(cmd, args, {encoding: "utf8"})
-  if (r.status !== 0) throw new Refused(`${what}: ${(r.stderr || r.stdout).trim()}`)
 }
 
 /**
@@ -282,21 +318,21 @@ export function checkDmg(file, expect, {rehearsed = false} = {}) {
   const release = (app) => {
     checkApp(app, expect)
     if (rehearsed) return
-    run("xcrun", ["stapler", "validate", app], "CYFR.app has no stapled notarisation")
-    run("spctl", ["--assess", "--type", "execute", app], "Gatekeeper refuses CYFR.app")
+    must("xcrun", ["stapler", "validate", app], "CYFR.app has no stapled notarisation")
+    must("spctl", ["--assess", "--type", "execute", app], "Gatekeeper refuses CYFR.app")
   }
   if (file.endsWith(".app")) return release(file)
-  run("codesign", ["--verify", "--strict", file], "the DMG's signature does not verify")
+  must("codesign", ["--verify", "--strict", file], "the DMG's signature does not verify")
   if (!rehearsed) {
-    run("xcrun", ["stapler", "validate", file], "the DMG has no stapled notarisation")
-    run("spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", file], "Gatekeeper refuses the DMG")
+    must("xcrun", ["stapler", "validate", file], "the DMG has no stapled notarisation")
+    must("spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", file], "Gatekeeper refuses the DMG")
   }
   const mount = mkdtempSync(path.join(tmpdir(), "cyfr-dmg-"))
-  execFileSync("hdiutil", ["attach", "-nobrowse", "-readonly", "-mountpoint", mount, file], {stdio: "ignore"})
+  must("hdiutil", ["attach", "-nobrowse", "-readonly", "-mountpoint", mount, file], "the DMG does not mount", 300)
   try {
     release(path.join(mount, "CYFR.app"))
   } finally {
-    spawnSync("hdiutil", ["detach", mount], {stdio: "ignore"})
+    tool("hdiutil", ["detach", mount], 120)
     rmSync(mount, {recursive: true, force: true})
   }
 }

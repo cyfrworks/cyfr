@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import {test} from "node:test"
 
 import {Refused} from "../scripts/check-package.mjs"
-import {APPLE, REHEARSAL, checkProfile, entitlements, kindOf, signingInputs, webauthnGroup} from "../scripts/mac-sign.mjs"
+import {APPLE, REHEARSAL, checkProfile, entitlements, kindOf, signingInputs, tool, webauthnGroup, within} from "../scripts/mac-sign.mjs"
 
 const team = "AB12CD34EF"
 const der = Buffer.from([0x30, 0x82, 0x01, 0x00]).toString("base64")
@@ -37,7 +37,8 @@ test("a distribution build refuses each missing Apple input, naming it and no va
       assert.throws(() => signingInputs({...real, [name]: value}), refusal(name), `${name}=${JSON.stringify(value)}`)
     }
   }
-  assert.throws(() => signingInputs({...real, APPLE_TEAM_ID: "not a team"}), refusal("APPLE_TEAM_ID"))
+  assert.throws(() => signingInputs({...real, APPLE_TEAM_ID: "ab12-cd34"}),
+    (e) => refusal("APPLE_TEAM_ID")(e) && !e.message.includes("ab12-cd34"))
   assert.throws(() => signingInputs({...real, APPLE_PROVISIONING_PROFILE: Buffer.from("<plist/>").toString("base64")}),
     refusal("APPLE_PROVISIONING_PROFILE"))
   assert.throws(() => signingInputs({...real, APPLE_CERTIFICATE: Buffer.from("PEM").toString("base64")}), refusal("APPLE_CERTIFICATE"))
@@ -53,6 +54,7 @@ test("a rehearsal takes its own inputs, refuses any Apple input beside them and 
     // Present at all, even empty, as a workflow sets a missing secret.
     assert.throws(() => signingInputs({...rehearsal, [name]: ""}, {rehearse: true}), refusal(name), name)
   }
+  assert.throws(() => signingInputs({...rehearsal, ...real}, {rehearse: true}), (e) => APPLE.every((n) => refusal(n)(e)), "every Apple input")
   // Nor does a release build take a rehearsal's inputs for its own.
   assert.throws(() => signingInputs(rehearsal), refusal("APPLE_CERTIFICATE"))
 })
@@ -115,4 +117,13 @@ test("each signed file is the kind its place makes it", () => {
     [`${app}/Contents/Frameworks/CYFR Helper (Evil).app`]: "none"
   }
   for (const [file, kind] of Object.entries(kinds)) assert.equal(kindOf(app, file), kind, file)
+})
+
+// Each step that could wait on a person, or on Apple, ends in a sentence
+// within its bound instead of holding the release's job to its limit.
+test("a tool or a build that does not answer in its bound is refused, saying so", async () => {
+  assert.throws(() => tool("sleep", ["5"], 1), (e) => e instanceof Refused && e.message === "sleep 5 did not answer in 1 seconds")
+  assert.equal(tool("true", []).ok, true)
+  await assert.rejects(within(new Promise(() => {}), 0.001, "the notary"), (e) => e instanceof Refused && e.message === "the notary did not finish in 0.001 minutes")
+  assert.equal(await within(Promise.resolve("done"), 1, "the build"), "done")
 })

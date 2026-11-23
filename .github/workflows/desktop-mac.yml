@@ -45,8 +45,10 @@ jobs:
     name: CYFR app (macOS arm64, signed)
     runs-on: macos-latest
     # Electron's download, the build and Apple's notary, which answers in
-    # minutes and sometimes in more.
-    timeout-minutes: 60
+    # minutes and sometimes in more: the build bounds the app's packing,
+    # signing and notarising at 40 minutes and the DMG's notarising at 30,
+    # each ending with a sentence.
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash

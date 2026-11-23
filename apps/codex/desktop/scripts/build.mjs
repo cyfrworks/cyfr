@@ -38,7 +38,7 @@ import {build as bundle} from "esbuild"
 import {Arch, Platform, build} from "electron-builder"
 
 import {Refused, checkPackage, filesOf} from "./check-package.mjs"
-import {APP_ID, checkDmg, checkProfile, decodeProfile, notarizeDmg, signer, signingInputs, writeEntitlements} from "./mac-sign.mjs"
+import {APP_ID, checkDmg, checkProfile, decodeProfile, notarizeDmg, signer, signingInputs, within, writeEntitlements} from "./mac-sign.mjs"
 import {addCyfrToPath} from "./msi-path.mjs"
 
 // Every file the package installs is root's alone to change.
@@ -53,6 +53,13 @@ if (!values.cyfr || !values.version || !["amd64", "arm64"].includes(values.arch)
   process.exit(64)
 }
 
+// A refusal ends the build with its sentence; anything else is a fault.
+function refuse(e) {
+  if (!(e instanceof Refused)) throw e
+  console.error(`refused: ${e.message}`)
+  process.exit(1)
+}
+
 const os = {linux: "linux", darwin: "darwin", win32: "windows"}[process.platform]
 // The Mac distribution's inputs, read and checked before anything is built.
 let signing = null
@@ -60,9 +67,7 @@ if (values.distribution && os === "darwin") {
   try {
     signing = signingInputs(process.env, {rehearse: values.rehearse})
   } catch (e) {
-    if (!(e instanceof Refused)) throw e
-    console.error(`refused: ${e.message}`)
-    process.exit(1)
+    refuse(e)
   }
 } else if (values.rehearse) {
   console.error("refused: a rehearsal signs a Mac package, and this is not a Mac")
@@ -113,9 +118,7 @@ if (signing) {
   try {
     checkProfile(decodeProfile(signing.profile), signing)
   } catch (e) {
-    if (!(e instanceof Refused)) throw e
-    console.error(`refused: ${e.message}`)
-    process.exit(1)
+    refuse(e)
   }
   // electron-builder imports the identity into a keychain of its own for
   // the build and removes it after; it signs a pull request's build only
@@ -138,7 +141,7 @@ writeFileSync(path.join(stage, "after-remove.tpl"), template("after-remove.tpl")
   "\nif [ \"$(readlink /usr/bin/cyfr)\" = '/opt/${sanitizedProductName}/resources/cyfr' ]; then rm -f /usr/bin/cyfr; fi\n")
 
 const artifact = `cyfr-desktop_${values.version}_${os}_${values.arch}.\${ext}`
-await build({
+const packed = build({
   targets: {linux: Platform.LINUX, darwin: Platform.MAC, windows: Platform.WINDOWS}[os]
     .createTarget({linux: "deb", darwin: "dmg", windows: "msi"}[os], values.arch === "arm64" ? Arch.arm64 : Arch.x64),
   config: {
@@ -198,17 +201,18 @@ await build({
   },
   publish: "never"
 })
+// A distribution's build waits on the keychain and on Apple's notary, each
+// bounded so that a release fails with a sentence, not at its job's limit.
+await (signing ? within(packed, 40, "packing, signing and notarising the app").catch(refuse) : packed)
 const built = artifact.replace("${ext}", {linux: "deb", darwin: "dmg", windows: "msi"}[os])
 if (signing) {
   const dmg = path.join(values.out, built)
   try {
-    if (!signing.rehearsed) await notarizeDmg(dmg, signing)
+    if (!signing.rehearsed) await within(notarizeDmg(dmg, signing), 30, "notarising the DMG")
     checkDmg(dmg, {cyfr: values.cyfr, ...signing}, {rehearsed: signing.rehearsed})
   } catch (e) {
     rmSync(dmg, {force: true})
-    if (!(e instanceof Refused)) throw e
-    console.error(`refused: ${e.message}`)
-    process.exit(1)
+    refuse(e)
   }
 }
 console.log(`built ${built}${signing?.rehearsed ? " (rehearsed: not notarised, not for release)" : ""} in ${values.out}`)
