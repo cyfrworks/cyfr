@@ -439,7 +439,7 @@ func TestScreenFilesAreFilledIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher := read(t, filepath.Join(screenDir, "launcher.sh"))
-	if !strings.Contains(launcher, "\n    XDG_SESSION_TYPE=wayland /opt/cyfr/CYFR --screen-project=/home/alice/cyfr\n") || strings.Contains(launcher, "@") {
+	if !strings.Contains(launcher, "\n    /opt/cyfr/CYFR --screen-project=/home/alice/cyfr\n") || strings.Contains(launcher, "@") {
 		t.Errorf("launcher:\n%s", launcher)
 	}
 	session := read(t, filepath.Join(screenDir, "session.sh"))

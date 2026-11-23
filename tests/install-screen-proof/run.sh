@@ -34,7 +34,9 @@
 # asks a fresh confirmation, confirmed on this device after a Cancel and
 # a wrong PIN; the shell killed; its connection to CYFR severed past 60 s
 # while a Prism page stays open; and the session open on the screen, which
-# no file of the screen's account holds and a reboot ends. After each
+# no cookie store of the screen's account holds, read by the cookie's name
+# since the engine encrypts a stored cookie's value, so a search for the
+# value proves nothing, and which a reboot ends. After each
 # lock, kill, cut and reboot the session cookie the screen last sent CYFR
 # (read from the request heads root observes on the guest's loopback,
 # box.py, never kept in the evidence) is sent to sign in, and at the end
@@ -905,24 +907,22 @@ screen_session_gone() {
   guest_root '! loginctl list-sessions --no-legend | grep -qw tty1'
 }
 
-# The session open on the screen is on no disk: no file the screen's
-# account writes holds its cookie while Prism is open, and after a reboot
-# the screen boots locked and that cookie opens nothing.
+# The session open on the screen is on no disk: no cookie store of the
+# screen's account holds its cookie while Prism is open, and after a
+# reboot the screen boots locked and that cookie opens nothing.
 screen_keeps_no_session() {
-  local stored
+  local stored closes
   step "the session open on the screen is on no disk, and a reboot ends it"
   screen_unlock
   check "the screen sends CYFR that unlock's session cookie" screen_cookie kept
   check "the home serves it" cookie_is in kept
-  # Read each 5 s for 45 s: a store on disk may take a cookie some
-  # seconds after the page was sent it, as a browser's cookie store
-  # writes in batches.
-  check "no file of the screen's account holds that cookie, read for 45 s" guest_ssh 'v=$(sed -n "s/^Cookie: [^=]*=//p" ~/proof-cookies/kept.header) && [ -n "$v" ] &&
-    for n in $(seq 1 9); do [ -z "$(grep -rlsF -- "$v" ~/.config ~/.cache ~/.local ~/.cyfr ~/cyfr/.cyfr /tmp /var/tmp)" ] || exit 1; sleep 5; done'
-  # The app's cookie stores keep a value encrypted, which no search for
-  # it finds: they are read by the cookie's name (box.py stored).
-  stored=$(guest_root_out "python3 -I /root/box.py stored /home/proof/.config")
-  check "no cookie store of the screen's account holds CYFR's session cookie (it holds ${stored:-unread})" test "$stored" = 0
+  # The stores are read by the cookie's name (box.py stored), each 5 s
+  # for 45 s: a cookie store takes its writes in batches, seconds after
+  # the page was sent the cookie.
+  closes=$((SECONDS + 45))
+  while stored=$(guest_root_out "python3 -I /root/box.py stored /home/proof/.config") && [ "$stored" = 0 ] &&
+    [ "$SECONDS" -lt "$closes" ]; do sleep 5; done
+  check "no cookie store of the screen's account holds CYFR's session cookie, read for 45 s (it holds ${stored:-unread})" test "$stored" = 0
   guest_reboot
   screen_back
   shell_page rebooted
