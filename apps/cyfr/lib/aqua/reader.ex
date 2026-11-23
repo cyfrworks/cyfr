@@ -146,10 +146,12 @@ defmodule Aqua.Reader do
   def read(%{kind: "report"} = row, _reading), do: {:said, report_text(row)}
   def read(%{kind: "nudge"} = row, _reading), do: {:said, server_text(row)}
 
+  # A stop, a take-over, a restart and an unknown outcome each leave one;
+  # what is true of them all is said, then the row's own words of its cause.
   def read(%{kind: "turn_aborted"} = row, _reading) do
     {:said,
-     "[The server restarted while the assistant was working; tools may have partially executed. " <>
-       (row.content || "") <> "]"}
+     "[The assistant's work here was interrupted before it finished; tools may have partially " <>
+       "executed. " <> (row.content || "") <> "]"}
   end
 
   def read(%{kind: "text"} = row, %{me: me} = reading) do

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cyfr/codex/internal/access"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -31,15 +32,18 @@ type machineSeams struct {
 	supported func() bool
 	// arch is this program's architecture.
 	arch func() string
-	// reachable is whether Docker answers this process.
-	reachable func() bool
+	// reachable is whether Docker answers this process before ctx ends.
+	reachable func(ctx context.Context) bool
+	// dockerHere is whether the Docker this process reaches runs its
+	// containers on this computer.
+	dockerHere func(ctx context.Context) (bool, error)
 	// installed is whether dpkg holds the package installed.
 	installed func(pkg string) bool
 	// running is whether the Docker service runs.
 	running func() bool
 	// groups lists the groups of account, or of this process when account
 	// is empty.
-	groups func(account string) []string
+	groups func(ctx context.Context, account string) []string
 	// displayManager is whether a display manager has the screen.
 	displayManager func() bool
 	// screenService is whether the cyfr-screen service is enabled, and
@@ -71,6 +75,9 @@ var machine = machineSeams{
 	},
 	arch:      func() string { return runtime.GOARCH },
 	reachable: dockerAnswers,
+	dockerHere: func(ctx context.Context) (bool, error) {
+		return access.DockerIsHere(ctx, dockerProgram{})
+	},
 	installed: func(pkg string) bool {
 		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status}", pkg).Output()
 		return err == nil && string(out) == "installed"
@@ -83,12 +90,12 @@ var machine = machineSeams{
 		return exec.Command("systemctl", "is-enabled", "--quiet", "cyfr-screen").Run() == nil,
 			exec.Command("systemctl", "is-active", "--quiet", "cyfr-screen").Run() == nil
 	},
-	groups: func(account string) []string {
+	groups: func(ctx context.Context, account string) []string {
 		args := []string{"-nG"}
 		if account != "" {
 			args = append(args, account)
 		}
-		out, _ := exec.Command("id", args...).Output()
+		out, _ := exec.CommandContext(ctx, "id", args...).Output()
 		return strings.Fields(string(out))
 	},
 	system: func() string { return runtime.GOOS },
@@ -133,7 +140,7 @@ func administrator() (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	return account.Username, slices.ContainsFunc(machine.groups(account.Username), func(g string) bool { return slices.Contains(administrators, g) }), nil
+	return account.Username, slices.ContainsFunc(machine.groups(context.Background(), account.Username), func(g string) bool { return slices.Contains(administrators, g) }), nil
 }
 
 // mayAdminister refuses, before anything asks, runs or is written, an
@@ -183,9 +190,43 @@ func unlockSudo(out io.Writer, again string) error {
 	return nil
 }
 
+// dockerProgram is askDocker as an access.Docker.
+type dockerProgram struct{}
+
+func (dockerProgram) Run(ctx context.Context, c access.Call) (access.Result, error) {
+	return askDocker(ctx, c)
+}
+
+// askDocker runs docker as it is, for what is asked of Docker before a
+// project, and so an engine, exists: whether it answers and where it runs
+// containers. It changes nothing. ctx's end ends docker.
+func askDocker(ctx context.Context, c access.Call) (access.Result, error) {
+	if c.Deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.Deadline)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, "docker", c.Args...)
+	cmd.WaitDelay = dockerWaitDelay
+	out, err := cmd.Output()
+	res := access.Result{Stdout: out}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		res.ExitCode = exit.ExitCode()
+	}
+	return res, err
+}
+
+// dockerWaitDelay bounds how long an interrupted docker's output may take
+// to drain.
+const dockerWaitDelay = 10 * time.Second
+
 // dockerAnswers asks Docker for its info. It runs before a project or an
 // engine exists.
-func dockerAnswers() bool { return exec.Command("docker", "info").Run() == nil }
+func dockerAnswers(ctx context.Context) bool {
+	_, err := askDocker(ctx, access.Call{Args: []string{"info"}})
+	return err == nil
+}
 
 // requirementCommands are the commands that give account what this machine
 // lacks of Docker, each only if needed.
@@ -198,30 +239,37 @@ func requirementCommands(account string) []string {
 	if !machine.running() {
 		commands = append(commands, "systemctl enable --now docker")
 	}
-	if !slices.Contains(machine.groups(account), dockerGroup) {
+	if !slices.Contains(machine.groups(context.Background(), account), dockerGroup) {
 		commands = append(commands, "usermod -aG docker "+account)
 	}
 	return commands
 }
 
-// prepareMachine is cyfr init's first step at a terminal when this
-// account cannot reach Docker. On Ubuntu 26.04 it shows what is missing,
+// prepareMachine is cyfr init's first step. Where only a new login gives
+// this process the docker group (loginIsMissing) it says so and ends init,
+// at a terminal or not. Otherwise, at a terminal when this account cannot
+// reach Docker: on Ubuntu 26.04 it shows what is missing,
 // asks, and installs it through one sudo (mayAdminister, unlockSudo); on macOS and Windows it
 // waits for Docker Desktop (awaitDockerDesktop). It answers true when init
 // ends here, the rest of it run in a process carrying the docker group or
 // the installation declined, false when this process goes on to prepare
 // the project. Running init again is the retry.
 func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (bool, error) {
+	// Only a new login cures this, with a terminal or without, so it is
+	// said before anything is installed or written.
+	if loginIsMissing(ctx) {
+		return true, fmt.Errorf("%s. Then run `cyfr init` again", loginAgain)
+	}
 	if !askTerminal() {
 		return false, nil
 	}
 	if system := machine.system(); system == "darwin" || system == "windows" {
-		if machine.reachable() {
+		if machine.reachable(ctx) {
 			return false, nil
 		}
 		return awaitDockerDesktop(ctx, system, out)
 	}
-	if !machine.supported() || machine.reachable() {
+	if !machine.supported() || machine.reachable(ctx) {
 		return false, nil
 	}
 	account, err := user.Current()
@@ -254,11 +302,11 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 		if err != nil {
 			return false, err
 		}
-		if machine.reachable() {
+		if machine.reachable(ctx) {
 			return false, nil
 		}
 	}
-	return continueWithGroup("init", args, account.Username, out, errOut)
+	return continueWithGroup(ctx, "init", args, account.Username, out, errOut)
 }
 
 // dockerDesktopPage is where Docker offers Docker Desktop's installer for
@@ -317,7 +365,7 @@ func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool
 	}
 	tick := time.NewTicker(dockerPoll)
 	defer tick.Stop()
-	for !machine.reachable() {
+	for !machine.reachable(ctx) {
 		select {
 		case <-ctx.Done():
 			return false, interruption{errQuestionInterrupted}
@@ -334,8 +382,8 @@ func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool
 // reaches Docker. It runs nothing when Docker already answers this account,
 // a rootless Docker included, or when there is no sg to run it with, and
 // answers true when that run did the work.
-func withDockerGroup(subcommand string, args []string, out, errOut io.Writer) (bool, error) {
-	if !machine.supported() || machine.reachable() {
+func withDockerGroup(ctx context.Context, subcommand string, args []string, out, errOut io.Writer) (bool, error) {
+	if !machine.supported() || machine.reachable(ctx) {
 		return false, nil
 	}
 	if _, err := os.Stat(sgProgram); err != nil {
@@ -345,7 +393,31 @@ func withDockerGroup(subcommand string, args []string, out, errOut io.Writer) (b
 	if err != nil {
 		return false, err
 	}
-	return continueWithGroup(subcommand, args, account.Username, out, errOut)
+	return continueWithGroup(ctx, subcommand, args, account.Username, out, errOut)
+}
+
+// loginAgain is said where only a new login gives this account the docker
+// group: there is no sg, which is also newgrp, both of them an optional
+// package's on Ubuntu 26.04.
+const loginAgain = "Docker does not answer this account until you log out and in again"
+
+// loginIsMissing is whether only a new login lets this process reach
+// Docker: this computer's own Docker does not answer it, /etc/group lists
+// its account in the docker group, the process is older than that, and
+// there is no sg to reach the group with.
+func loginIsMissing(ctx context.Context) bool {
+	if machine.system() != "linux" {
+		return false
+	}
+	if _, err := os.Stat(sgProgram); err == nil {
+		return false
+	}
+	account, err := user.Current()
+	if err != nil || !staleGroup(ctx, account.Username) {
+		return false
+	}
+	here, err := machine.dockerHere(ctx)
+	return err == nil && here && !machine.reachable(ctx)
 }
 
 // sgProgram runs a command with a group the account's processes do not
@@ -353,15 +425,24 @@ func withDockerGroup(subcommand string, args []string, out, errOut io.Writer) (b
 // tests stand in for it.
 var sgProgram = "/usr/bin/sg"
 
+// staleGroup is whether /etc/group lists account in the docker group and
+// this process lacks it, being older than that.
+func staleGroup(ctx context.Context, account string) bool {
+	return slices.Contains(machine.groups(ctx, account), dockerGroup) && !slices.Contains(machine.groups(ctx, ""), dockerGroup)
+}
+
 // continueWithGroup runs cyfr subcommand again, with the flags the person
 // gave, through sg with the docker group, keeping this process's terminal,
 // environment and directory. It answers false, having run nothing, when
 // /etc/group does not list the account in the group, and when this process
 // already has it: sg would give it nothing, and its child would land here
-// again.
-func continueWithGroup(subcommand string, args []string, account string, out, errOut io.Writer) (bool, error) {
-	if !slices.Contains(machine.groups(account), dockerGroup) || slices.Contains(machine.groups(""), dockerGroup) {
+// again. With no sg it runs nothing and says to log in again (loginAgain).
+func continueWithGroup(ctx context.Context, subcommand string, args []string, account string, out, errOut io.Writer) (bool, error) {
+	if !staleGroup(ctx, account) {
 		return false, nil
+	}
+	if _, err := os.Stat(sgProgram); err != nil {
+		return true, fmt.Errorf("%s. Then run `cyfr %s` again", loginAgain, subcommand)
 	}
 	self, err := os.Executable()
 	if err != nil {

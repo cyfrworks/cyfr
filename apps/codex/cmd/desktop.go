@@ -55,7 +55,7 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 		return fmt.Errorf("another program holds %s: close the app using port 7340, then open CYFR again (%v)", shell.Listen, err)
 	}
 	to := desktop.NewWriter(out)
-	svc := newDesktopService(dir, to.Send)
+	svc := newDesktopService(ctx, dir, to.Send)
 	hs := &http.Server{Handler: svc, ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- hs.Serve(ln) }()
@@ -85,8 +85,8 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 }
 
 // newDesktopService is what desktop-serve serves over this user's device
-// folder, saying to main through send.
-func newDesktopService(device string, send func(desktop.Message) error) *desktop.Service {
+// folder until ctx ends, saying to main through send.
+func newDesktopService(ctx context.Context, device string, send func(desktop.Message) error) *desktop.Service {
 	host, _ := os.Hostname()
 	return &desktop.Service{
 		Token:       desktop.NewToken(),
@@ -96,8 +96,10 @@ func newDesktopService(device string, send func(desktop.Message) error) *desktop
 		DisplayName: host,
 		Send:        send,
 		Local: func(project string) (desktop.Local, error) {
-			l, err := readLocal(project, "the CYFR app")
+			work := shell.NewWork(ctx)
+			l, err := readLocal(work, project, "the CYFR app")
 			if err != nil {
+				work.End()
 				return desktop.Local{}, engineFailure(err)
 			}
 			return l, nil

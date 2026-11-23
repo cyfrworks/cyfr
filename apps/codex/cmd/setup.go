@@ -56,7 +56,7 @@ Exit status 1: CYFR was not set up and started, the message saying why.`,
 		if port < 0 || port > 65535 {
 			return fmt.Errorf("--port takes a port from 1 to 65535, or 0 for a free one; %d is none", port)
 		}
-		if continued, err := withDockerGroup("setup", continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
+		if continued, err := withDockerGroup(ctx, "setup", continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
 			return err
 		}
 		return runSetup(ctx, setupOptions{port: port, noPull: noPull, noOpen: noOpen}, cmd.OutOrStdout())
@@ -96,7 +96,7 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 	// Without a Docker this account can use, the pages serve only to say
 	// so: their start is refused, and nothing is written, the setup's lock
 	// and address file included, so the folder stays as it was found.
-	docker := machine.reachable()
+	docker := machine.reachable(ctx)
 	if docker {
 		// One setup serves a project's pages: a second would race the
 		// first for .env and for the address file. The lock is the
@@ -291,7 +291,7 @@ func (s *setupSession) Start() error {
 	// since: it is asked again here, before the run's first write, outside
 	// the lock, since docker info takes its time and the pages read the
 	// state meanwhile.
-	docker := s.docker && !s.begun() && machine.reachable()
+	docker := s.docker && !s.begun() && machine.reachable(s.ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.started || s.ctx.Err() != nil {

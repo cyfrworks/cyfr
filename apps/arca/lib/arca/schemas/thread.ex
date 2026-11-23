@@ -56,7 +56,7 @@ defmodule Arca.Schemas.Thread do
   raised (`Arca.TurnStorage`).
 
   `brain_progress` is a program brain's session as its attendant last
-  committed it (`Aqua.Program`, `Arca.TurnStorage.commit_events/3`), one
+  committed it (`Aqua.Harness.Program`, `Arca.TurnStorage.commit_events/3`), one
   JSON map: `row` and `epoch`, the program row and epoch the native
   session (`brain_session`) is stored with, written in the same write as
   the session a `started` names and in no other, so a new driver's hello
