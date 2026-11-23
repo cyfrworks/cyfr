@@ -10,7 +10,8 @@ defmodule Aqua.Day do
   `time_zone` in their preferences when it differs from what is stored
   (`Sanctum.Tenancy.Users.put_prefs/2`, `PrismWeb.ShellLive`). `UTC` until
   one arrives, and for a stored zone the zone database does not know.
-  `today/1` is the one reader of that preference.
+  `today/1` reads that preference for the day, and `stored_zone/1` for
+  Aqua's browser, which reads pages in it (`Aqua.BrowserSetting.start/1`).
 
   The current daily thread is the one whose `day` is that date, made if
   none exists (`Arca.ThreadStorage.daily/2`); nothing else about the day is
@@ -51,6 +52,17 @@ defmodule Aqua.Day do
   @spec zone?(term()) :: boolean()
   def zone?(zone) do
     Prima.TinctureWire.time_zone?(zone) and match?({:ok, _}, now_in(zone))
+  end
+
+  @doc """
+  The zone stored in `prefs`, a person's preferences, when the day can be
+  read in it, or nil for none: a person with no zone stored has the
+  image's for Aqua's browser.
+  """
+  @spec stored_zone(map()) :: String.t() | nil
+  def stored_zone(prefs) when is_map(prefs) do
+    zone = prefs["time_zone"]
+    if zone?(zone), do: zone
   end
 
   @doc "The date now in the context's person's stored zone."

@@ -844,5 +844,98 @@
         "event": 7
       }
     ]
+  },
+  "person": {
+    "comment": "What the driver is started with of its person (the driver's --person, Opus.Browser.Frame.start_args/1): their language and time zone, as their own browser reported them to CYFR, a JSON object of locale and time_zone in the grammar CYFR holds that report to. Neither stored is no argument, and Chrome's own values, the image's en-US and UTC. Each accepted person is started with argv; their pages read languages as navigator.languages, which the driver hands Chrome comma-separated as its acceptLanguage, and send accept_language, Chrome's weighing of them, as their Accept-Language; each refused one starts nothing.",
+    "accept": [
+      {
+        "name": "a language and a time zone",
+        "person": {
+          "locale": "de-DE",
+          "time_zone": "Asia/Tokyo"
+        },
+        "argv": [
+          "--person",
+          "{\"locale\":\"de-DE\",\"time_zone\":\"Asia/Tokyo\"}"
+        ],
+        "accept_language": "de-DE,de;q=0.9",
+        "languages": [
+          "de-DE",
+          "de"
+        ]
+      },
+      {
+        "name": "a language alone",
+        "person": {
+          "locale": "fr"
+        },
+        "argv": [
+          "--person",
+          "{\"locale\":\"fr\"}"
+        ],
+        "accept_language": "fr",
+        "languages": [
+          "fr"
+        ]
+      },
+      {
+        "name": "a time zone alone",
+        "person": {
+          "time_zone": "America/Argentina/Buenos_Aires"
+        },
+        "argv": [
+          "--person",
+          "{\"time_zone\":\"America/Argentina/Buenos_Aires\"}"
+        ],
+        "accept_language": "",
+        "languages": []
+      },
+      {
+        "name": "neither: Chrome's own",
+        "person": {},
+        "argv": [],
+        "accept_language": "",
+        "languages": []
+      }
+    ],
+    "refuse": [
+      {
+        "name": "a language out of its grammar",
+        "person": {
+          "locale": "de_DE"
+        }
+      },
+      {
+        "name": "an empty language",
+        "person": {
+          "locale": ""
+        }
+      },
+      {
+        "name": "a zone that climbs out",
+        "person": {
+          "time_zone": "../etc/passwd"
+        }
+      },
+      {
+        "name": "a zone of four parts",
+        "person": {
+          "time_zone": "A/B/C/D"
+        }
+      },
+      {
+        "name": "a key besides the two",
+        "person": {
+          "locale": "de",
+          "mode": "dark"
+        }
+      },
+      {
+        "name": "a value that is no string",
+        "person": {
+          "time_zone": 5
+        }
+      }
+    ]
   }
 }

@@ -1296,6 +1296,24 @@ defmodule PrismWeb.ShellDesktopTest do
       assert zone.() == "Asia/Singapore"
     end
 
+    test "the desktop keeps the language the browser reports as the person's, and one that is no tag leaves it",
+         %{conn: conn, user: user} do
+      locale = fn ->
+        {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+        Sanctum.Tenancy.Users.prefs(row)["locale"]
+      end
+
+      assert locale.() == nil
+      shell!(put_connect_params(conn, %{"locale" => "de-DE", "time_zone" => "Asia/Kolkata"}))
+      assert locale.() == "de-DE"
+
+      shell!(put_connect_params(conn, %{"locale" => "de_DE"}))
+      assert locale.() == "de-DE"
+
+      shell!(conn)
+      assert locale.() == "de-DE"
+    end
+
     test "settings of chat with a ref opens the chat at that shared thread, read under the person's seat",
          %{conn: conn, user: user} do
       {:ok, plans} = Sanctum.SharedThreads.create(user.user_id, "Plans together")

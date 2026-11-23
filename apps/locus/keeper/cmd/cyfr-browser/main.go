@@ -83,11 +83,14 @@ func run(args []string) int {
 	chunk := flags.Int("chunk", defaultChunk, "bytes of response text one res frame carries")
 	keepMS := flags.Int64("keep-ms", defaultKeepMS, "milliseconds an unacknowledged response is kept")
 	netLog := flags.String("net-log", "", "a file Chrome logs its network to")
+	personFlag := flags.String("person", "", "the person's language and time zone, a JSON object of locale and time_zone")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 || *chunk < 1 || *chunk > maxChunk || *keepMS < 1 || *chrome == "" {
-		fmt.Fprintf(os.Stderr, "usage: cyfr-browser [--chrome PATH] [--net-log PATH] [--chunk 1-%d] [--keep-ms MS]\n", maxChunk)
+	who, err := readPerson(*personFlag)
+	if flags.NArg() != 0 || *chunk < 1 || *chunk > maxChunk || *keepMS < 1 || *chrome == "" || err != nil {
+		fmt.Fprintf(os.Stderr, "usage: cyfr-browser [--chrome PATH] [--net-log PATH] [--chunk 1-%d] [--keep-ms MS] "+
+			"[--person '{\"locale\":TAG,\"time_zone\":ZONE}']\n", maxChunk)
 		return 2
 	}
 	// The end is taken before anything is announced: a TERM that comes
@@ -103,6 +106,7 @@ func run(args []string) int {
 	s := newSlot(os.Stdout, *chunk, time.Duration(*keepMS)*time.Millisecond)
 	hello := helloMessage{T: "hello", V: 1, Chunk: *chunk, KeepMS: *keepMS}
 	b := newBrowser()
+	b.person = who
 	home, err := browserHome()
 	if err != nil {
 		hello.Error = "The browser could not start: " + err.Error() + "."
@@ -294,6 +298,13 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 	if b.agent, err = ownAgent(ctx, b.c, v.UserAgent); err != nil {
 		p.kill()
 		return nil, fmt.Errorf("Chrome did not say how it names itself (%v)", err)
+	}
+	if err := b.person.check(ctx, b.c); err != nil {
+		p.kill()
+		return nil, fmt.Errorf("Chrome refused the person's language or time zone (%v)", err)
+	}
+	if languages := b.person.languages(); languages != nil {
+		b.agent["acceptLanguage"] = strings.Join(languages, ",")
 	}
 	return p, nil
 }

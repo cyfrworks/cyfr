@@ -191,6 +191,14 @@ defmodule Aqua do
   defdelegate put_time_zone(user_id, zone), to: Aqua.Day, as: :put_zone
 
   @doc """
+  Keep `locale`, the language the person's browser reported, as theirs
+  when it is a language tag and differs from the stored one
+  (`Aqua.Language.put/2`).
+  """
+  @spec put_locale(String.t(), term()) :: :ok | {:error, term()}
+  defdelegate put_locale(user_id, locale), to: Aqua.Language, as: :put
+
+  @doc """
   The date now in the person's own time zone (`Aqua.Day.today/1`): which
   daily thread is today's. A read, which makes no thread.
   """

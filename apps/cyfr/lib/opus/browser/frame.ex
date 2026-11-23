@@ -32,6 +32,42 @@ defmodule Opus.Browser.Frame do
   @put_part_bytes 1_048_576
   @call_max_body 65_536
 
+  @typedoc """
+  What the driver is started with of its person: their language and time
+  zone, each absent when none is stored, which leaves Chrome's own.
+  """
+  @type person :: %{optional(String.t()) => String.t()}
+
+  @doc """
+  The driver's arguments for `person`, a map of `"locale"` and
+  `"time_zone"` (the vectors' `person`): none with neither, else
+  `--person` and the two as one JSON object; `:invalid_person` for a key
+  besides the two or a value out of the grammar CYFR holds the browser's
+  report to (`Prima.TinctureWire.locale?/1`, `time_zone?/1`), so nothing
+  out of it reaches Chrome.
+  """
+  @spec start_args(person()) :: {:ok, [String.t()]} | {:error, :invalid_person}
+  def start_args(person) when person == %{}, do: {:ok, []}
+
+  def start_args(%{} = person) do
+    valid? =
+      Enum.all?(person, fn
+        {"locale", tag} -> Prima.TinctureWire.locale?(tag)
+        {"time_zone", zone} -> Prima.TinctureWire.time_zone?(zone)
+        _other -> false
+      end)
+
+    # The two keys in this order, as the driver's flag and the vectors
+    # spell them.
+    ordered = for key <- ~w(locale time_zone), Map.has_key?(person, key), do: {key, person[key]}
+
+    if valid?,
+      do: {:ok, ["--person", Jason.encode!(Jason.OrderedObject.new(ordered))]},
+      else: {:error, :invalid_person}
+  end
+
+  def start_args(_person), do: {:error, :invalid_person}
+
   @doc "The most bytes a body the driver sends may hold."
   @spec max_to_host() :: pos_integer()
   def max_to_host, do: @max_to_host

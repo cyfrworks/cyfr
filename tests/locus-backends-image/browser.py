@@ -70,7 +70,13 @@ container starts:
   headers of a public request (unless CYFR_TEST_OFFLINE=1) as Chrome's own
   network log records them. None says Headless: the shell names itself as
   the Chromium it is, its own brands without HeadlessChrome at its own
-  version, and navigator.webdriver reads false.
+  version, and navigator.webdriver reads false. Started with its person
+  (the vector file's person), the page and its dedicated worker read the
+  person's time zone, a Date's offset in it, their locale and language as
+  navigator.language and navigator.languages, the public request carries
+  that language as its Accept-Language, and an ordinary font and a colour
+  emoji render; a session started with no person reads Chrome's own
+  en-US and UTC.
 - A browser's start removes the Chrome the driver once fetched into its
   home and leaves the profile as it was.
 - A cookie a page set three seconds before the browser's session ended
@@ -151,6 +157,8 @@ TAIL_BYTES = 256 * 1024
 INPUT_BYTES = BOUNDS["max_chunk_bytes"]
 # A put's bound and the bytes one part carries, a call's body's bound and a call's fields.
 PUT = FRAMES["put"]
+# The person the browser is started with in the session that reads its kind: their language and zone, its argv.
+PERSON = FRAMES["person"]["accept"][0]
 CALL = FRAMES["call"]
 CALL_FIELDS = FRAMES["messages"]["call"]["fields"]
 # Where a put's files sit: the reserved origin, under a public tincture's address.
@@ -867,14 +875,34 @@ FULL_CHROME_PAGE = "cyfr-restore-fixture"
 
 
 # A page that reads what a site reads of the browser's kind and titles itself with it.
+# A page that reads what a site reads of the browser: its kind; its language and time zone, its own and a dedicated
+# worker's; and whether an ordinary font and a colour emoji render, each against a face no font has.
 KIND_PAGE = ("<title>reading</title><script>(async () => { const d = navigator.userAgentData;"
              " const high = d ? await d.getHighEntropyValues(['fullVersionList']) : null;"
+             " const width = font => { const x = document.createElement('canvas').getContext('2d');"
+             " x.font = '32px ' + font; return x.measureText('Hamburgefonstiv 0123').width };"
+             " const coloured = () => { const c = document.createElement('canvas'); c.width = c.height = 48;"
+             " const x = c.getContext('2d'); x.font = '32px \"Noto Color Emoji\"'; x.textBaseline = 'top';"
+             " x.fillText('\\u{1F600}', 0, 0); const p = x.getImageData(0, 0, 48, 48).data;"
+             " for (let i = 0; i < p.length; i += 4) if (p[i + 3] > 0 && (Math.abs(p[i] - p[i + 1]) > 40"
+             " || Math.abs(p[i + 1] - p[i + 2]) > 40)) return true; return false };"
+             " const read = 'postMessage({language: navigator.language, languages: navigator.languages,"
+             " timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone})';"
+             " const worker = await new Promise(r => { const w = new Worker(URL.createObjectURL(new Blob([read],"
+             " {type: 'text/javascript'}))); w.onmessage = e => r(e.data); w.onerror = () => r('error') });"
              " document.title = 'kind ' + JSON.stringify({ua: navigator.userAgent, webdriver: navigator.webdriver,"
-             " brands: d ? d.brands : null, fullVersionList: high ? high.fullVersionList : null}); })();</script>")
+             " brands: d ? d.brands : null, fullVersionList: high ? high.fullVersionList : null,"
+             " timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,"
+             " locale: Intl.DateTimeFormat().resolvedOptions().locale,"
+             " offset: new Date(Date.UTC(2026, 0, 15, 12)).getTimezoneOffset(),"
+             " language: navigator.language, languages: navigator.languages, worker,"
+             " dejavu: width('\"DejaVu Sans\", monospace') !== width('\"No Such Face\", monospace'),"
+             " emoji: coloured()}); })();</script>")
 
 
 def request_headers(text, marker):
-    """The User-Agent and Sec-CH-UA headers of each request a Chrome network log shows sent with `marker` in its path."""
+    """The User-Agent, Sec-CH-UA and Accept-Language headers of each request a Chrome network log shows sent with
+    `marker` in its path."""
     log = net_log(text)
     sent = []
     for event in log.get("events", []):
@@ -886,11 +914,15 @@ def request_headers(text, marker):
         kept = {}
         for header in headers:
             name, _, value = str(header).partition(": ")
-            if name.lower() == "user-agent" or name.lower().startswith("sec-ch-ua"):
+            if name.lower() in ("user-agent", "accept-language") or name.lower().startswith("sec-ch-ua"):
                 kept[name.lower()] = value
         if kept:
             sent.append(kept)
     return sent
+
+
+# Asia/Tokyo, the vectors' person's zone, is nine hours ahead of UTC all year: getTimezoneOffset reads -540.
+PERSON_OFFSET = -540
 
 
 def browser_kind(stack, c, uid):
@@ -899,8 +931,8 @@ def browser_kind(stack, c, uid):
     headers as Chrome's own network log records them. None says Headless: the headless shell names itself as the
     Chromium it is, its own brands without HeadlessChrome at its own version, and navigator.webdriver reads false."""
     log = f"{KEPT_ROOT}/{BROWSER_HOME}/kind-netlog.json"
-    k = Host(stack, c, BROWSER_HOME, ["--net-log", log])
-    expect("error" not in k.hello(), "a session that logs Chrome's network says hello")
+    k = Host(stack, c, BROWSER_HOME, ["--net-log", log] + PERSON["argv"])
+    expect("error" not in k.hello(), "a session that logs Chrome's network, started with its person, says hello")
     offline = os.environ.get("CYFR_TEST_OFFLINE") == "1"
     ids, seen, read = iter(range(9000, 9100)), [], {}
     for win in ("thr_kind_first", "thr_kind_later"):
@@ -930,6 +962,21 @@ def browser_kind(stack, c, uid):
         expect(offline or all(names[0] in request.get("sec-ch-ua", "") and '"Chromium"' in request["sec-ch-ua"]
                               for request in sent[win]),
                f"the public request from {win} carries the same brands in Sec-CH-UA", sent)
+    person = PERSON["person"]
+    for win, seen_by_page in read.items():
+        expect(seen_by_page["timeZone"] == person["time_zone"] and seen_by_page["offset"] == PERSON_OFFSET
+               and seen_by_page["locale"] == person["locale"],
+               f"the page in {win} reads the person's time zone, a Date's offset in it and their locale", seen_by_page)
+        expect(seen_by_page["language"] == PERSON["languages"][0] and seen_by_page["languages"] == PERSON["languages"],
+               f"the page in {win} reads the person's language as navigator.language and navigator.languages",
+               seen_by_page)
+        expect(isinstance(seen_by_page["worker"], dict) and seen_by_page["worker"]["languages"] == PERSON["languages"]
+               and seen_by_page["worker"]["timeZone"] == person["time_zone"],
+               f"a dedicated worker of the page in {win} reads the same language and time zone", seen_by_page)
+        expect(seen_by_page["dejavu"] is True and seen_by_page["emoji"] is True,
+               f"the page in {win} renders an ordinary font and a colour emoji", seen_by_page)
+        expect(offline or all(request.get("accept-language") == PERSON["accept_language"] for request in sent[win]),
+               f"the public request from {win} carries the person's language as its Accept-Language", sent)
     expect("headless" not in json.dumps([read, sent]).lower(),
            "no page or request reads Headless in the User-Agent, the client hints or userAgentData, in the first "
            "window or a later one", [read, sent])
@@ -986,6 +1033,13 @@ def pages(stack, c, uid):
            [seen, out])
     print(f"measure: a shared worker saw {json.dumps(out['shared'])}; a srcdoc frame's call "
           f"{'was' if 'srcdoc' in senders else 'was not'} passed up ({out['srcdoc']})", flush=True)
+
+    # A session started with no person, as one for a person who never opened a screen, reads Chrome's own: the
+    # image's language and UTC.
+    ok(p.put_html(next(ids), "thr_own", KIND_PAGE, "own"), "a page that reads the browser's language is put")
+    own = json.loads(titled(p, "thr_own", "kind ", ids, seen))
+    expect(own["language"] == "en-US" and own["languages"] == ["en-US"] and own["timeZone"] in ("UTC", "Etc/UTC")
+           and own["offset"] == 0, "with no person, the page reads Chrome's own language and UTC", own)
 
     # A page of one file loads the same way.
     shown = ok(p.put_html(next(ids), "thr_one", ONE_PAGE, "one"), "a page of one file is put")

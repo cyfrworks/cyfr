@@ -57,6 +57,19 @@ type frameVectors struct {
 			Event json.RawMessage `json:"event"`
 		} `json:"refuse"`
 	} `json:"input"`
+	Person struct {
+		Accept []struct {
+			Name           string   `json:"name"`
+			Person         person   `json:"person"`
+			Argv           []string `json:"argv"`
+			AcceptLanguage string   `json:"accept_language"`
+			Languages      []string `json:"languages"`
+		} `json:"accept"`
+		Refuse []struct {
+			Name   string          `json:"name"`
+			Person json.RawMessage `json:"person"`
+		} `json:"refuse"`
+	} `json:"person"`
 }
 
 func loadFrameVectors(t *testing.T) frameVectors {
@@ -267,5 +280,37 @@ func TestInputVectors(t *testing.T) {
 	}
 	if _, ok := parseInput(list()); ok {
 		t.Error("a message of no event was accepted")
+	}
+}
+
+// The driver is started with its person as the vectors spell it: each
+// accepted argv reads as its person, whose Accept-Language and languages
+// are the vectors'; no argument is Chrome's own; and each refused person
+// is refused, so the driver does not start.
+func TestPersonVectors(t *testing.T) {
+	v := loadFrameVectors(t)
+	if len(v.Person.Accept) == 0 || len(v.Person.Refuse) == 0 {
+		t.Fatal("the vectors hold no person")
+	}
+	for _, c := range v.Person.Accept {
+		value := ""
+		if len(c.Argv) > 0 {
+			if len(c.Argv) != 2 || c.Argv[0] != "--person" {
+				t.Fatalf("%s: argv %q is not --person and its value", c.Name, c.Argv)
+			}
+			value = c.Argv[1]
+		}
+		got, err := readPerson(value)
+		if err != nil || got != c.Person {
+			t.Errorf("%s: %q read as %+v (%v), want %+v", c.Name, value, got, err, c.Person)
+		}
+		if languages := got.languages(); !slices.Equal(languages, c.Languages) && !(languages == nil && len(c.Languages) == 0) {
+			t.Errorf("%s: languages %q, want %q", c.Name, languages, c.Languages)
+		}
+	}
+	for _, c := range v.Person.Refuse {
+		if got, err := readPerson(string(c.Person)); err == nil {
+			t.Errorf("%s: %s was read as %+v", c.Name, c.Person, got)
+		}
 	}
 }

@@ -130,7 +130,11 @@ defmodule Opus.BrowserTest do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, thread.id, %{
         message: %{author: ctx.user_id, sent_by: "person", content: "look it up"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+        turn: %{
+          agent: "aqua",
+          requested_by: ctx.user_id,
+          origin: Keyword.get(opts, :origin, :interactive)
+        }
       })
 
     root = "exe_turn_root_#{System.unique_integer([:positive])}"
@@ -633,6 +637,26 @@ defmodule Opus.BrowserTest do
     end
   end
 
+  describe "what the browser starts with" do
+    test "a schedule's turn, with no screen open, starts the browser in the person's stored language and zone",
+         %{ctx: ctx} do
+      [%{"person" => %{"locale" => locale, "time_zone" => zone}, "argv" => argv} | _] =
+        (@vectors |> File.read!() |> Jason.decode!())["person"]["accept"]
+
+      assert :ok = Aqua.put_locale(ctx.user_id, locale)
+      assert :ok = Aqua.put_time_zone(ctx.user_id, zone)
+      {_turn, lineage} = turn!(ctx, origin: :schedule)
+
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      assert_receive {:session, "open", %{"program" => _, "argv" => ^argv}, _fields}, 5_000
+    end
+
+    test "a person with neither stored starts it with Chrome's own", %{ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      assert_receive {:session, "open", %{"program" => _, "argv" => []}, _fields}, 5_000
+    end
+  end
+
   describe "the person's setting" do
     test "off, every action is refused before any browser starts", %{ctx: ctx, lineage: lineage} do
       assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
@@ -689,7 +713,7 @@ defmodule Opus.BrowserTest do
 
       assert {:ok, %{"text" => ^text}} =
                Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn ->
-                 true
+                 {:ok, %{}}
                end)
     end
 
@@ -701,7 +725,9 @@ defmodule Opus.BrowserTest do
 
       task =
         Task.async(fn ->
-          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn -> true end)
+          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn ->
+            {:ok, %{}}
+          end)
         end)
 
       assert_receive {:driver, :holding, _session, id}, 5_000
@@ -734,7 +760,9 @@ defmodule Opus.BrowserTest do
 
       task =
         Task.async(fn ->
-          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn -> true end)
+          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn ->
+            {:ok, %{}}
+          end)
         end)
 
       assert_receive {:driver, :holding, _session, id}, 5_000
@@ -862,7 +890,7 @@ defmodule Opus.BrowserTest do
 
       assert {:error, :response_too_large} =
                Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn ->
-                 true
+                 {:ok, %{}}
                end)
 
       assert :sys.get_state(holder(ctx)).pending == %{}
@@ -1394,7 +1422,7 @@ defmodule Opus.BrowserTest do
                Opus.Browser.put(
                  caller,
                  %{root: "/t/x/local/p", entry: "index.html", files: [large]},
-                 fn -> true end
+                 fn -> {:ok, %{}} end
                )
 
       at_bound = %{large | bytes: :binary.copy("x", max_bytes)}
@@ -1403,7 +1431,7 @@ defmodule Opus.BrowserTest do
                Opus.Browser.put(
                  caller,
                  %{root: "/t/x/local/p", entry: "index.html", files: [at_bound]},
-                 fn -> true end
+                 fn -> {:ok, %{}} end
                )
 
       # Of the three, only the one within the bound reached the driver.
@@ -2154,7 +2182,7 @@ defmodule Opus.BrowserTest do
       gone = Prima.UUID7.generate_id("thread")
 
       assert {:error, :unavailable} =
-               Opus.Browser.watch(ctx, gone, %{width: 1280, height: 720}, fn -> true end)
+               Opus.Browser.watch(ctx, gone, %{width: 1280, height: 720}, fn -> {:ok, %{}} end)
 
       refute_received {:session, "open", _open, _fields}
       assert browser_sessions(ctx) == []
@@ -2331,7 +2359,7 @@ defmodule Opus.BrowserTest do
 
       assert {:ok, %{"text" => ^text}} =
                Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn ->
-                 true
+                 {:ok, %{}}
                end)
 
       refute_received {Opus.Browser, _ref, {:image, _n, _held}}
@@ -2381,12 +2409,12 @@ defmodule Opus.BrowserTest do
           do:
             assert(
               {:error, :not_owned} =
-                Opus.Browser.watch(caller, lineage["thread_id"], size, fn -> true end)
+                Opus.Browser.watch(caller, lineage["thread_id"], size, fn -> {:ok, %{}} end)
             )
 
       assert {:error, :not_owned} =
                Opus.Browser.watch(ctx, lineage["thread_id"], %{width: 1280, height: 9000}, fn ->
-                 true
+                 {:ok, %{}}
                end)
 
       refute_received {:session, "open", _open, _fields}
@@ -2664,7 +2692,9 @@ defmodule Opus.BrowserTest do
 
       task =
         Task.async(fn ->
-          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn -> true end)
+          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn ->
+            {:ok, %{}}
+          end)
         end)
 
       assert_receive {:driver, :holding, _session, id}, 5_000
@@ -2762,7 +2792,7 @@ defmodule Opus.BrowserTest do
       result =
         try do
           Opus.Browser.watch(ctx, lineage["thread_id"], %{width: 1280, height: 720}, fn ->
-            true
+            {:ok, %{}}
           end)
         after
           :sys.resume(pid)
@@ -2995,7 +3025,7 @@ defmodule Opus.BrowserTest do
   end
 
   defp watch!(ctx, window, size \\ %{width: 1280, height: 720}) do
-    assert {:ok, watch} = Opus.Browser.watch(ctx, window, size, fn -> true end)
+    assert {:ok, watch} = Opus.Browser.watch(ctx, window, size, fn -> {:ok, %{}} end)
     watch
   end
 
@@ -3061,7 +3091,7 @@ defmodule Opus.BrowserTest do
     pid =
       spawn(fn ->
         {:ok, _watch} =
-          Opus.Browser.watch(ctx, window, %{width: 1280, height: 720}, fn -> true end)
+          Opus.Browser.watch(ctx, window, %{width: 1280, height: 720}, fn -> {:ok, %{}} end)
 
         send(test, {:watching, self()})
         forward(test)
