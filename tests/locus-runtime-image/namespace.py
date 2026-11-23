@@ -36,6 +36,16 @@ runner's own uid, outside that namespace, may not):
   its own: its clone with CLONE_NEWUSER, alone or with CLONE_NEWNET, is
   refused EPERM, where the same clone without a namespace flag makes a
   child; `unshare -U` is refused; and it still starts a thread.
+- `measure`: one real runner, the release's own runner command with its
+  control channel and relay as the shipped service spawns it, its relay
+  attached and its control channel held open by this machine (no worker
+  service speaks on it, and a runner with nothing assigned waits on it):
+  its place is `warm` and no athanor's; once the keeper has read its
+  group, a measure answers a reading above zero under that owner; assigned
+  `run` for an athanor, `warm` for that athanor and `run` again for another
+  run, each measure answers above zero under the owner of the moment;
+  after its `release`, a measure sent with it is still answered with a
+  reading before `released`, and one after `released` is `unmeasured`.
 - `spawn`: the shipped service fills its pool; every runner runs under a
   pooled uid whose user namespace maps only that uid and gid to themselves
   with setgroups denied, and holds no capability in any of the five sets,
@@ -64,7 +74,8 @@ kernel.apparmor_restrict_unprivileged_userns is 1 and Docker's default
 AppArmor profile, which allows them then, is not in force (`docker info`
 lists no `name=apparmor` security option). The service steps sign their
 requests with the scripted control plane's keys (control_plane.py); none
-of them needs the service to reach it.
+of them needs the service to reach it. The keeper steps' clients speak
+keeper protocol 3, each placing the place its spawn names first.
 
 Usage: tests/locus-runtime-image/namespace.py IMAGE [STEP]...
 """
@@ -84,14 +95,17 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from control_plane import ControlPlane  # noqa: E402
-from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, ROLE, RUN_DIR, SERVICE, SERVICE_UID, SERVICE_USER,  # noqa: E402
-                   Stack, expect, run, wait_until)
+from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, RELEASE, ROLE, RUN_DIR, SERVICE, SERVICE_UID,  # noqa: E402
+                   SERVICE_USER, Stack, expect, run, wait_until)
 from imagesuite import PROJECT_PREFIX, read_output, read_word, run_name  # noqa: E402
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
-STEPS = ("refusals", "connect", "relay", "nested", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
+KEEPER_STEPS = ("refusals", "connect", "relay", "nested", "measure")
+STEPS = KEEPER_STEPS + ("spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
 POOL = f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['isolation']}"
 TOKEN = "0123456789abcdef" * 4
+# The place every spawn of the keeper steps but `measure` names.
+PLACE = "p1"
 # The bound every spawn names (`memory_bytes`, which the keeper requires): room enough for a shell and curl.
 MEMORY_BYTES = 64 << 20
 # One CPU of every 100000-microsecond period.
@@ -176,9 +190,17 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
     return run(*args, check=False, timeout=timeout)
 
 
-def spawn_line(spawn_id, argv, isolated=True, env=None, control=False, attach=f"{RUN_DIR}/attach.sock"):
-    request = {"v": 2, "type": "spawn", "id": spawn_id, "pool": ROLE["pool"], "argv": argv, "env": env or {},
-               "memory_bytes": MEMORY_BYTES, "cpu_quota": CPU_QUOTA, "attach": {"path": attach, "token": TOKEN}}
+def place_line(place, kind="warm", athanor=None):
+    request = {"v": 3, "type": "place", "id": place, "kind": kind}
+    if athanor:
+        request["athanor"] = athanor
+    return json.dumps(request)
+
+
+def spawn_line(spawn_id, argv, isolated=True, env=None, control=False, attach=f"{RUN_DIR}/attach.sock", place=PLACE,
+               memory_bytes=MEMORY_BYTES):
+    request = {"v": 3, "type": "spawn", "id": spawn_id, "place": place, "pool": ROLE["pool"], "argv": argv, "env": env or {},
+               "memory_bytes": memory_bytes, "cpu_quota": CPU_QUOTA, "attach": {"path": attach, "token": TOKEN}}
     if control:
         request["control"] = True
     if isolated:
@@ -186,8 +208,20 @@ def spawn_line(spawn_id, argv, isolated=True, env=None, control=False, attach=f"
     return json.dumps(request)
 
 
+# The client's first request: the place its spawn names, whose answer it prints before it sends the spawn.
+PLACE_FIRST = f"printf '%s\\n' '{place_line(PLACE)}' >&3; read -r line <&3; echo \"reply:$line\"; "
+
+
 def replies(stdout):
     return [json.loads(line[len("reply:"):]) for line in stdout.splitlines() if line.startswith("reply:")]
+
+
+def after_placed(ran, step):
+    """The replies the client read after its first, which must be the keeper's `placed` for the place its spawn names."""
+    got = replies(ran.stdout)
+    expect(got[:1] == [{"v": 3, "type": "placed", "id": PLACE}],
+           f"{step}: the keeper placed {PLACE} before the client sent the spawn naming it", {"replies": got, "stderr": ran.stderr[-2000:]})
+    return got[1:]
 
 
 def test_refusals(image):
@@ -196,10 +230,10 @@ def test_refusals(image):
            and "kernel.apparmor_restrict_unprivileged_userns" in refused.stderr,
            f"under Docker's default seccomp profile cyfr-locus refuses to serve the isolated pool, naming both settings (exit {refused.returncode})",
            refused.stderr)
-    client = (f"printf '%s\\n' '{spawn_line('1', ['/bin/true'], isolated=False)}' >&3; "
-              "read -r line <&3; echo \"reply:$line\"")
+    client = PLACE_FIRST + (f"printf '%s\\n' '{spawn_line('1', ['/bin/true'], isolated=False)}' >&3; "
+                            "read -r line <&3; echo \"reply:$line\"")
     answered = keeper_run(image, client)
-    expect(replies(answered.stdout) == [{"v": 2, "type": "error", "id": "1", "code": "bad_request"}],
+    expect(after_placed(answered, "refusals") == [{"v": 3, "type": "error", "id": "1", "code": "bad_request"}],
            "under the profile, a spawn of the isolated pool without isolation is refused as bad_request",
            answered.stdout + answered.stderr)
 
@@ -218,10 +252,10 @@ def test_connect(image):
     client = ('addr=$(getent hosts "$(cat /etc/hostname)" | awk "{print \\$1; exit}"); '
               'for t in 127.0.0.1:9 "$addr:9"; do '
               'echo "own $t:$(curl -sv --max-time 3 "http://$t/" 2>&1 | grep -o "Connection refused\\|Network is unreachable" | head -n1)"; done; '
-              f"printf '%s\\n' \"$(printf '%s' '{request}' | sed \"s/@ADDR@/$addr/\")\" >&3; "
+              + PLACE_FIRST + f"printf '%s\\n' \"$(printf '%s' '{request}' | sed \"s/@ADDR@/$addr/\")\" >&3; "
               'read -r line <&3; echo "reply:$line"; read -r line <&3; echo "reply:$line"')
     ran = keeper_run(image, client)
-    got = replies(ran.stdout)
+    got = after_placed(ran, "connect")
     expect(len(got) == 2 and got[0]["type"] == "spawned" and POOL_FIRST <= got[0]["uid"] <= POOL_LAST,
            "connect: under the profile the keeper serves and spawns a command of the isolated pool", ran.stdout + ran.stderr)
     own = re.findall(r"^own (\S+):(.*)$", ran.stdout, re.M)
@@ -316,11 +350,11 @@ def relay_session(image, command, opens, env=None):
     try:
         request = spawn_line("1", ["/bin/sh", "-c", command], env=env, control=True, attach=f"{Attach.MOUNT}/a.sock")
         assert "'" not in request
-        client = (f"printf '%s\\n' '{request}' >&3; "
-                  'for n in 1 2 3; do read -r line <&3; echo "reply:$line"; done')
+        client = PLACE_FIRST + (f"printf '%s\\n' '{request}' >&3; "
+                                'for n in 1 2 3; do read -r line <&3; echo "reply:$line"; done')
         ran = keeper_run(image, client, mounts=[attach.mount])
         serving.join(60)
-        return replies(ran.stdout), attach.result, ran
+        return after_placed(ran, "a spawn of the isolated pool with its relay"), attach.result, ran
     finally:
         attach.close()
 
@@ -381,6 +415,174 @@ def test_nested(image):
     expect("Operation not permitted" in facts.get("unshare", "") and not facts.get("unshare", "").endswith(" status 0"),
            "nested: a runner's `unshare -U` is refused", detail)
     expect(facts.get("thread") == "7", "nested: a runner still starts a thread and joins it", detail)
+
+
+# The runner as the shipped service spawns it from a release (Locus.Runtime.Release.runner_command/1): the release's
+# own command, the service's environment it shares (that module's shared names, as the image sets them) and the
+# runner's own (Locus.Runtime.Settings.runner_environment/1), under the bound and grace the service's defaults give
+# (Locus.Runtime.Settings). Its id names its place, as the runner pool's does.
+RUNNER_ARGV = ["/bin/sh", "-c", 'RELEASE_TMP="${TMPDIR:-/tmp}" exec "$0" start', RELEASE["bin"]]
+SHARED_ENVIRONMENT = ("LANG", "LANGUAGE", "LC_ALL", "ELIXIR_ERL_OPTIONS")
+RUNNER = "runner_measured"
+RUNNER_ENV = {"RELEASE_DISTRIBUTION": "none", "RUNTIME_ROLE": "runner", "RUNTIME_RUNNER_ID": RUNNER, "RUNTIME_SERVICE_ID": SERVICE,
+              "RUNTIME_BOOT_ID": "boot_measured", "RUNTIME_WATCHDOG_GRACE_MS": "5000"}
+RUNNER_MEMORY_BYTES = 384 << 20
+RELEASE_GRACE_MS = 2_000
+ATHANOR = "ath_measured"
+# The runner's owners, one step each, read once the keeper has read its group: the place's own, then what each
+# `assign` sent before the step makes it.
+OWNERS = (
+    ("fresh", "warm", None, "fresh"),
+    ("assigned", "run", ATHANOR, f"assigned a run of {ATHANOR}"),
+    ("warm", "warm", ATHANOR, f"back at rest, still {ATHANOR}'s"),
+    ("reused", "run", ATHANOR, f"reused for another run of {ATHANOR}"),
+)
+
+# The measure step's client, after the variables places_client sets. `ask` sends one measure of the place and
+# reads up to its answer; `poll` asks until a reading answers it, the keeper reading each group once a second.
+# Every reply read is printed as `read:<step>:<reply>`. The release and a measure go in one write, and the replies
+# are read up to `released`; then one more measure.
+PLACES_CLIENT = r"""
+ask() {
+  n=$((n + 1))
+  printf '{"v":3,"type":"measure","id":"m%s","place":"%s"}\n' "$n" "$place" >&3
+  while read -r line <&3; do
+    echo "read:$1:$line"
+    case "$line" in *"\"id\":\"m$n\","*) return 0 ;; esac
+  done
+  return 1
+}
+poll() {
+  tries=0
+  while [ "$tries" -lt 50 ]; do
+    ask "$1" || return 1
+    case "$line" in *'"type":"measured"'*) return 0 ;; esac
+    tries=$((tries + 1))
+    sleep 0.2
+  done
+  return 1
+}
+n=0
+printf '%s\n' "$placing" >&3; read -r line <&3; echo "read:placed:$line"
+printf '%s\n' "$spawning" >&3; read -r line <&3; echo "read:spawned:$line"
+sid=$(printf '%s' "$line" | sed -n 's/.*"spawn_id":"\([0-9a-f]*\)".*/\1/p')
+[ -n "$sid" ] || exit 1
+@OWNERS@
+n=$((n + 1))
+printf '{"v":3,"type":"release","spawn_id":"%s","grace_ms":%s}\n{"v":3,"type":"measure","id":"m%s","place":"%s"}\n' \
+  "$sid" "$grace" "$n" "$place" >&3
+while read -r line <&3; do
+  echo "read:release:$line"
+  case "$line" in *'"type":"released"'*) break ;; esac
+done
+ask after
+"""
+
+
+def runner_env(image):
+    """The runner's whole environment: the shared names as the image sets them, then the runner's own."""
+    config = json.loads(run("docker", "image", "inspect", "--format", "{{json .Config.Env}}", image).stdout or "null") or []
+    image_env = dict(entry.split("=", 1) for entry in config)
+    return {**{name: image_env[name] for name in SHARED_ENVIRONMENT if name in image_env}, **RUNNER_ENV}
+
+
+def places_client(env):
+    """The measure step's client: the runner placed warm, spawned with `env` in its place, read under each owner, released and read again."""
+    variables = {
+        "place": RUNNER,
+        "grace": str(RELEASE_GRACE_MS),
+        "placing": place_line(RUNNER),
+        "spawning": spawn_line("1", RUNNER_ARGV, env=env, control=True, attach=f"{Attach.MOUNT}/a.sock", place=RUNNER,
+                               memory_bytes=RUNNER_MEMORY_BYTES),
+    }
+    assigns = {step: json.dumps({"v": 3, "type": "assign", "place": RUNNER, "kind": kind, "athanor": athanor})
+               for step, kind, athanor, _ in OWNERS if athanor}
+    assert "'" not in "".join(variables.values()) + "".join(assigns.values())
+    owners = "".join((f"printf '%s\\n' '{assigns[step]}' >&3\n" if step in assigns else "") + f"poll {step} || exit 1\n"
+                     for step, *_ in OWNERS)
+    return "".join(f"{name}='{value}'\n" for name, value in variables.items()) + PLACES_CLIENT.replace("@OWNERS@\n", owners)
+
+
+def transcript(stdout):
+    """What the measure step's client read, as (its step, the reply), in the order it arrived; a line that is no JSON stays text."""
+    read = []
+    for line in stdout.splitlines():
+        if line.startswith("read:"):
+            step, _, reply = line[len("read:"):].partition(":")
+            try:
+                read.append((step, json.loads(reply)))
+            except ValueError:
+                read.append((step, reply))
+    return read
+
+
+def reading(reply, kind, athanor=None):
+    """Whether `reply` answers its measure with a reading above zero of a place whose owner is `kind` and `athanor`, and nothing else."""
+    if not isinstance(reply, dict):
+        return False
+    owner = {"v": 3, "type": "measured", "id": reply.get("id"), "kind": kind, **({"athanor": athanor} if athanor else {})}
+    return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
+            and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
+            and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
+
+
+def unmeasured(reply):
+    return isinstance(reply, dict) and reply == {"v": 3, "type": "error", "id": reply.get("id"), "code": "unmeasured"}
+
+
+def judge_places(read, detail):
+    """The measure step's verdict on what its client read (`transcript`)."""
+    steps = {}
+    for step, reply in read:
+        steps.setdefault(step, []).append(reply)
+    expect(steps.get("placed") == [{"v": 3, "type": "placed", "id": RUNNER}], f"measure: the keeper placed the runner's place {RUNNER}, warm",
+           detail)
+    spawned = (steps.get("spawned") or [None])[0]
+    expect(isinstance(spawned, dict)
+           and {key: value for key, value in spawned.items() if key not in ("spawn_id", "uid", "pid")} == {"v": 3, "type": "spawned", "id": "1"}
+           and re.fullmatch(r"[0-9a-f]{32}", str(spawned.get("spawn_id"))) is not None
+           and type(spawned.get("uid")) is int and POOL_FIRST <= spawned["uid"] <= POOL_LAST
+           and type(spawned.get("pid")) is int and spawned["pid"] > 0,
+           "measure: the runner is spawned in its place, under a uid of the isolated pool", detail)
+    ids = [reply.get("id") for _, reply in read if isinstance(reply, dict) and reply.get("type") in ("measured", "error")]
+    expect(ids == [f"m{n}" for n in range(1, len(ids) + 1)], "measure: every measure was answered once, under its own id, in the order sent",
+           detail)
+    for step, kind, athanor, what in OWNERS:
+        got = steps.get(step, [])
+        # Only the first reading is waited for: until the keeper has read the group, its place is unmeasured.
+        expect(got and (step == OWNERS[0][0] or len(got) == 1) and all(unmeasured(reply) for reply in got[:-1])
+               and reading(got[-1], kind, athanor),
+               f"measure: {what}, the runner is read above zero under that owner ({kind}, {athanor or 'no athanor'})", detail)
+    _, kind, athanor, _ = OWNERS[-1]
+    released = steps.get("release", [])
+    end = next((n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") == "released"), None)
+    measures = [n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") in ("measured", "error")]
+    expect(end is not None and released[end] == {"v": 3, "type": "released", "spawn_id": spawned["spawn_id"]}
+           and len(measures) == 1 and measures[0] < end and reading(released[measures[0]], kind, athanor),
+           "measure: after its release, the runner's place is still read above zero, answered before its released", detail)
+    after = steps.get("after", [])
+    expect(len(after) == 1 and unmeasured(after[0]), "measure: after its released, the runner's place is free: its measure is unmeasured",
+           detail)
+
+
+def test_measure(image):
+    env = runner_env(image)
+    attach = Attach()
+    serving = threading.Thread(target=attach.serve, args=(False,), daemon=True)
+    serving.start()
+    try:
+        ran = keeper_run(image, places_client(env), mounts=[attach.mount])
+        serving.join(60)
+    finally:
+        attach.close()
+    read = transcript(ran.stdout)
+    carried = attach.result or {}
+    for step, reply in read:
+        if isinstance(reply, dict) and reply.get("type") == "measured":
+            print(f"measure: {step}: {reply.get('kind')} of {reply.get('athanor', 'no athanor')}, "
+                  f"{reply.get('bytes', 0) / (1 << 20):.0f} MiB (lesser {reply.get('lesser')}), read {reply.get('age_ms')} ms before", flush=True)
+    judge_places(read, {"read": read, "runner_stderr": carried.get("got", {}).get(2, b"").decode(errors="replace")[-3000:],
+                        "attach": carried.get("error"), "keeper": ran.stderr[-3000:]})
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +743,9 @@ def main(image, steps):
         test_relay(image)
     if "nested" in steps:
         test_nested(image)
-    service_steps = [s for s in steps if s not in ("refusals", "connect", "relay", "nested")]
+    if "measure" in steps:
+        test_measure(image)
+    service_steps = [s for s in steps if s not in KEEPER_STEPS]
     if not service_steps:
         return
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
