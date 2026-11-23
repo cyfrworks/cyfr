@@ -169,7 +169,7 @@ func ReadFromMain(line []byte) (Message, error) {
 			continue
 		}
 		if f == "attempt" {
-			if json.Unmarshal(raw, &msg.Attempt) != nil || msg.Attempt == 0 {
+			if string(raw) == "null" || json.Unmarshal(raw, &msg.Attempt) != nil || msg.Attempt == 0 || msg.Attempt > maxWhole {
 				return Message{}, refuse("fields")
 			}
 			continue
@@ -179,7 +179,8 @@ func ReadFromMain(line []byte) (Message, error) {
 			if f == "pick" {
 				n = &msg.Pick
 			}
-			if json.Unmarshal(raw, n) != nil || *n > maxWhole {
+			// null is no number: JSON leaves a number it decodes as it was.
+			if string(raw) == "null" || json.Unmarshal(raw, n) != nil || *n > maxWhole {
 				return Message{}, refuse("fields")
 			}
 			continue

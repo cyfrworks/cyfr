@@ -1833,17 +1833,15 @@ func TestTheServicesEndEndsTheChoosersWaitsAndLeavesASetupRunning(t *testing.T) 
 		t.Fatal("a wait answered before anything happened")
 	}
 	a.End()
-	if got := folderAnswer(t, pick); got.Error == "" || got.Folder != "" {
-		t.Fatalf("the pick's wait answered %+v at the service's end", got)
-	}
-	select {
-	case w := <-step:
-		var got answer
-		if json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Error == "" || got.Setup != nil {
-			t.Fatalf("the setup's wait answered %d %s at the service's end", w.Code, w.Body)
+	for name, wait := range map[string]<-chan *httptest.ResponseRecorder{"the pick's": pick, "the setup's": step} {
+		select {
+		case w := <-wait:
+			if w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "steps") {
+				t.Fatalf("%s wait answered %d %s at the service's end", name, w.Code, w.Body)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s wait outlived the service", name)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the setup's wait outlived the service")
 	}
 	for _, path := range []string{"/bootstrap/state", "/bootstrap/setup"} {
 		if w := a.request(context.Background(), path, map[string]string{}, nil); w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "steps") {
@@ -1853,7 +1851,46 @@ func TestTheServicesEndEndsTheChoosersWaitsAndLeavesASetupRunning(t *testing.T) 
 	if setupCtx.Err() != nil {
 		t.Fatal("the service's end stopped the person's setup")
 	}
-	d.ends <- nil
+	// It ends unrecorded: nothing is written after the test.
+	d.ends <- errors.New("stopped")
+}
+
+// A chooser request that passed ServeHTTP's check before End finished
+// is admitted or refused in the hold that decides the end: it answers 503
+// at once and never parks, a pick's wait and a setup's alike, and one that
+// acts begins nothing.
+func TestARequestThatLostTheRaceWithTheEndAnswersAtOnce(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	a.Folder = "/home/ada/cyfr"
+	d := driveSetup(a)
+	started := a.post(t, "/bootstrap/start", map[string]string{})
+	<-d.ctxs
+	// It ends unrecorded: nothing is written after the test.
+	t.Cleanup(func() { d.ends <- errors.New("stopped") })
+	a.End()
+	for _, c := range []struct{ path, body string }{
+		{"/bootstrap/folder", `{"token":"` + a.Token + `","picks":0}`},
+		{"/bootstrap/setup", `{"token":"` + a.Token + `","seen":` + strconv.FormatUint(started.Setup.Seq, 10) + `}`},
+		// A request that acts is refused there too, and begins nothing.
+		{"/bootstrap/start", `{"token":"` + a.Token + `","run":1}`},
+	} {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		r := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://"+shell.Listen+c.path, strings.NewReader(c.body))
+		r.Host = shell.Listen
+		r.Header.Set("Origin", shell.Origin)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		// Past ServeHTTP's check, as a request is that paused there.
+		a.bootstrap(w, r)
+		parked := ctx.Err() != nil
+		cancel()
+		if parked || w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s after the end answered %d %s, parked until its deadline: %v", c.path, w.Code, w.Body, parked)
+		}
+	}
+	if d.runs.Load() != 1 {
+		t.Fatalf("%d setups ran", d.runs.Load())
+	}
 }
 
 // setupAfter is the setup's state once it changed past seen, within 5 s.

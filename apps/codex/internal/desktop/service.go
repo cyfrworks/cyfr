@@ -220,9 +220,16 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
+	// Admitted, with its epoch, in the one hold that decides whether the
+	// service has ended: a request that lost the race with End answers
+	// 503 and never parks.
 	s.mu.Lock()
-	epoch := s.epoch
+	epoch, ended := s.epoch, s.ended
 	s.mu.Unlock()
+	if ended {
+		http.Error(w, "This CYFR app has ended.", http.StatusServiceUnavailable)
+		return
+	}
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	h.Set("Referrer-Policy", "no-referrer")
@@ -278,6 +285,10 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cancel()
 	a := route.act(s, ctx, epoch, req)
+	if a.ended {
+		http.Error(w, "This CYFR app has ended.", http.StatusServiceUnavailable)
+		return
+	}
 	if a.Folder != "" {
 		a.Found = s.found(a.Folder)
 	}
@@ -454,6 +465,8 @@ type answer struct {
 	Resume  string        `json:"resume,omitempty"`
 	Notice  string        `json:"notice,omitempty"`
 	Error   string        `json:"error,omitempty"`
+	// ended is the service's end, met by a wait: answered 503.
+	ended bool
 }
 
 // DockerAnswer is whether Docker answers this account on this computer,
@@ -804,6 +817,10 @@ func (s *Service) waitWoken() chan struct{} {
 func (s *Service) awaitFolder(ctx context.Context, epoch uint64, req request) answer {
 	for {
 		s.mu.Lock()
+		if s.ended {
+			s.mu.Unlock()
+			return answer{ended: true}
+		}
 		if s.epoch != epoch {
 			s.mu.Unlock()
 			return answer{Error: lockedSentence}
@@ -924,6 +941,10 @@ func (s *Service) start(_ context.Context, _ uint64, req request) answer {
 func (s *Service) awaitSetup(ctx context.Context, epoch uint64, req request) answer {
 	for {
 		s.mu.Lock()
+		if s.ended {
+			s.mu.Unlock()
+			return answer{ended: true}
+		}
 		if s.epoch != epoch {
 			s.mu.Unlock()
 			return answer{Error: lockedSentence}
@@ -1034,8 +1055,11 @@ func (s *Service) Lock(why string) { s.lock(why, false) }
 // which hears the end itself: an end is no lock of the person's, and main
 // forgets a sign-in at none.
 func (s *Service) End() {
+	// Ended and woken in one hold: a wait checks ended in the hold it
+	// parks in, so none parks past it.
 	s.mu.Lock()
 	s.ended = true
+	s.wake()
 	s.mu.Unlock()
 	s.lock("", false)
 }
