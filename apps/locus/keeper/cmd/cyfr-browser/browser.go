@@ -82,14 +82,16 @@ type window struct {
 	op sync.Mutex
 	// mu guards the window's put, the files its document is answered from;
 	// gen, which moves on whenever its main frame commits another document
-	// or it closes; next, the put a show is loading; and docs, by the
-	// network id of each main-frame navigation a put answered since the
-	// last commit, that put (page.go).
-	mu   sync.Mutex
-	put  *put
-	gen  int64
-	next *put
-	docs map[string]*put
+	// or it closes; next, the put a show is loading; docs, by the network
+	// id of each main-frame navigation a put answered since the last
+	// commit, that put; and waiting, the requests for files held until
+	// that commit is taken or the show ends (page.go).
+	mu      sync.Mutex
+	put     *put
+	gen     int64
+	next    *put
+	docs    map[string]*put
+	waiting []fileRequest
 	// unnamed says a target attached to the window was refused its naming
 	// (agent.go) and was not let run, which the window's next action says.
 	unnamed bool

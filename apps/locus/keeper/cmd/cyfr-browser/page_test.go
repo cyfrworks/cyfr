@@ -1430,3 +1430,59 @@ func TestAFrameThatCannotBeNamedNeverRuns(t *testing.T) {
 		t.Fatalf("the window's next action answered %v", read)
 	}
 }
+
+// A page's file is answered from the put its document belongs to however
+// Chrome orders the request and the report of its document's commit: a
+// request that comes after the next put's entry was answered and before
+// its commit is reported waits, and is answered from the put that stands
+// once the commit is taken, or from the earlier put when the show fails
+// with no commit. Chrome reports the commit from the page's process and
+// pauses the new document's requests from its own, so either may come
+// first.
+func TestAFileIsAnsweredFromItsPutHoweverItsCommitIsOrdered(t *testing.T) {
+	next := []siteFile{{"index.html", "text/html", "<title>Put</title><script>fetch('big.bin')</script>"},
+		{"big.bin", "application/octet-stream", "the next put's bytes"}}
+	for _, commits := range []bool{true, false} {
+		r := newPageRig(t)
+		if got := r.h.put(1, "thr_01", testRoot+"/first", "index.html", testSite, 64); got["ok"] == nil {
+			t.Fatal(got)
+		}
+		r.f.navigated()
+		r.f.fail(reservedOrigin+testRoot, navFail{hangs: true, late: true})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		p := &put{id: 2, root: testRoot, entry: "index.html", files: map[string]putFile{}}
+		for _, f := range next {
+			p.files[f.path] = putFile{typ: f.typ, data: []byte(f.body)}
+		}
+		shown := make(chan error, 1)
+		go func() {
+			_, err := r.b.run(ctx, request{Win: "thr_01", Op: "page", put: p})
+			shown <- err
+		}()
+		nav := r.f.navigated()
+		if commits {
+			// The new document's request is paused before its commit is
+			// reported.
+			id := r.f.pauseAs("S1", "Fetch", "GET", reservedOrigin+testRoot+"/big.bin", "M1", true, "")
+			r.f.commit("S1", reservedOrigin+testRoot, "L"+nav.request)
+			if a := r.f.answer(id); a.method != "Fetch.fulfillRequest" || a.status != 200 || string(a.body) != next[1].body {
+				t.Errorf("the new document's file, paused before its commit was reported, was answered %d %q", a.status, a.body)
+			}
+			if err := <-shown; err != nil {
+				t.Errorf("the put answered %v", err)
+			}
+		} else {
+			// The earlier document's request, paused while the next put's
+			// entry loads, and the show fails with no commit.
+			id := r.f.pause("S1", "GET", reservedOrigin+testRoot+"/first/app.js", "M1", true, "")
+			if err := <-shown; err == nil {
+				t.Error("a show whose entry never committed answered no error")
+			}
+			if a := r.f.answer(id); a.method != "Fetch.fulfillRequest" || a.status != 200 || string(a.body) != testSite[1].body {
+				t.Errorf("the earlier document's file, paused while a show that failed loaded, was answered %d %q", a.status, a.body)
+			}
+		}
+		cancel()
+		r.close()
+	}
+}
