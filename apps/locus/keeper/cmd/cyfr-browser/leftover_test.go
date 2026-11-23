@@ -7,9 +7,12 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func write(t *testing.T, path, text string) {
@@ -90,5 +93,67 @@ func TestAHomeWithNoLeftoversIsLeftAlone(t *testing.T) {
 	removeLeftovers(locked, &log)
 	if bytes.Count(log.Bytes(), []byte("\n")) != 1 || !exists(filepath.Join(locked, "cyfr-browser/checked")) {
 		t.Fatalf("a removal that failed was said %q", log.String())
+	}
+}
+
+// terminal opens a pseudo-terminal pair, as the backends service gives the
+// driver one: its controller and the terminal the driver runs on.
+func terminal(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	controller, err := os.OpenFile("/dev/ptmx", os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { controller.Close() })
+	if err := unix.IoctlSetPointerInt(int(controller.Fd()), unix.TIOCSPTLCK, 0); err != nil {
+		t.Fatal(err)
+	}
+	n, err := unix.IoctlGetInt(int(controller.Fd()), unix.TIOCGPTN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tty, err := os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tty.Close() })
+	return controller, tty
+}
+
+// A driver whose HOME names no folder by an absolute path removes nothing:
+// it says hello with the error and exits 1, and a cyfr-browser in the
+// folder it runs in, which a relative home would resolve the leftover's
+// name against, is left as it was.
+func TestAHomeThatNamesNoFolderRemovesNothing(t *testing.T) {
+	for name, home := range map[string]string{"unset": "", "relative": "home", "a file": "file"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			write(t, filepath.Join(dir, "cyfr-browser", "versions", "keep"), "the folder's own")
+			write(t, filepath.Join(dir, "file"), "a file")
+			if home == "file" {
+				home = filepath.Join(dir, "file")
+			}
+			t.Setenv("HOME", home)
+			controller, tty := terminal(t)
+			stdin, stdout := os.Stdin, os.Stdout
+			os.Stdin, os.Stdout = tty, tty
+			code := run(nil)
+			os.Stdin, os.Stdout = stdin, stdout
+			if code != 1 {
+				t.Fatalf("the driver exited %d, not 1", code)
+			}
+			if !exists(filepath.Join(dir, "cyfr-browser", "versions", "keep")) {
+				t.Fatal("the driver removed the folder's cyfr-browser")
+			}
+			said := make([]byte, 4096)
+			n, err := controller.Read(said)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(said[:n], []byte(`"error":"The browser could not start: HOME names no folder."`)) {
+				t.Fatalf("the driver said %q", said[:n])
+			}
+		})
 	}
 }

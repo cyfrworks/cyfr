@@ -74,6 +74,8 @@ container starts:
   home and leaves the profile as it was.
 - A cookie a page set three seconds before the browser's session ended
   is there when the browser starts again, a page of its origin reading it.
+- A driver asked to end before its hello, while its Chrome starts, says
+  hello once Chrome answers, then its bye, and exits 0.
   Every closed session reads to the driver's bye,
   its last message once its Chrome has exited, before anything Chrome
   wrote as it closed, a network log among them, is read.
@@ -163,8 +165,8 @@ OWNER = owner_of("browser")
 # profile lock is a socket in its temporary folder, and a home this long
 # leaves no room for it there unless the driver names that folder short.
 BROWSER_HOME = "mcp_01890000-0000-7000-8000-00000000b005"
-BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, TOOLS_HOME, FULL_HOME, COOKIE_HOME = (
-    f"mcp_browser-{name}" for name in ("broken", "other", "offline", "tools", "full", "cookie"))
+BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, TOOLS_HOME, FULL_HOME, COOKIE_HOME, TERM_HOME = (
+    f"mcp_browser-{name}" for name in ("broken", "other", "offline", "tools", "full", "cookie", "term"))
 # The bound Opus.Programs.Definition.browser/1 gives the browser's home.
 HOME_MAX_BYTES = 2 << 30
 BROWSER = {"name": "browser", "command": "cyfr-browser", "env": {}, "home": "kept", "memory_bytes": 1536 << 20,
@@ -1190,6 +1192,32 @@ def kept_cookie(stack, c):
     again.close()
 
 
+def ended_before_ready(stack, c):
+    """A driver asked to end before its hello, while its Chrome starts, ends as one asked later does: it says hello
+    once Chrome answers, then closes Chrome and says bye, and exits 0. Its end is taken before it announces it is
+    ready, so a TERM that comes then, or just after the hello, is never the default end. The TERM is sent from the
+    box, as the home's uid, the moment Chrome's first process runs: the driver then waits on Chrome's first answer,
+    which takes far longer, so the TERM lands before the hello."""
+    made = Host(stack, c, TERM_HOME)
+    expect("error" not in made.hello(), "a home for a driver asked to end early is made")
+    made.close()
+    uid = home_uid(stack, TERM_HOME)
+    home = f"{KEPT_ROOT}/{TERM_HOME}"
+    watcher = (f"until pgrep -u {uid} -f '^{CHROMIUM}' >/dev/null; do :; done\n"
+               f"kill -TERM $(pgrep -u {uid} -x cyfr-browser) && echo sent > {home}/term-sent\n")
+    as_home(stack, TERM_HOME, f"echo {base64.b64encode(watcher.encode()).decode()} | base64 -d > {home}/watch.sh",
+            "the watcher written")
+    stack.exec(f"timeout 60 sh {home}/watch.sh >/dev/null 2>&1 &", user=uid)
+    early = Host(stack, c, TERM_HOME)
+    hello = early.hello()
+    expect("error" not in hello, "a driver asked to end as Chrome starts still says hello once Chrome answers", hello)
+    expect(as_home(stack, TERM_HOME, f"cat {home}/term-sent", "the TERM sent").strip() == "sent",
+           "the TERM was sent to the driver as its Chrome started")
+    early.take(lambda m: m["t"] == "bye", "the bye of a driver asked to end before its hello")
+    eventually(lambda: (early.read(1_000), not early.running)[1], "the driver to end")
+    expect(early.exit_code == 0, "a driver asked to end before its hello exits 0", early.exit_code)
+
+
 def first_start(stack, c):
     """The browser's first start loads a public page."""
     b = Host(stack, c, BROWSER_HOME)
@@ -1227,6 +1255,7 @@ def main():
             return
 
         kept_cookie(stack, c)
+        ended_before_ready(stack, c)
 
         # ————— the first exchange —————
         b = Host(stack, c, BROWSER_HOME)

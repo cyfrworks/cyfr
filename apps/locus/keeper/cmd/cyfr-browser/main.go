@@ -90,6 +90,12 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "usage: cyfr-browser [--chrome PATH] [--net-log PATH] [--chunk 1-%d] [--keep-ms MS]\n", maxChunk)
 		return 2
 	}
+	// The end is taken before anything is announced: a TERM that comes
+	// while Chrome starts, or just after the hello, is held until the
+	// serve loop takes it, and Chrome is then closed and the bye said.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, unix.SIGTERM, unix.SIGHUP)
+	defer signal.Stop(stop)
 	if err := makeRaw(int(os.Stdin.Fd())); err != nil {
 		fmt.Fprintln(os.Stderr, "cyfr-browser: its terminal:", err)
 		return 1
@@ -97,12 +103,18 @@ func run(args []string) int {
 	s := newSlot(os.Stdout, *chunk, time.Duration(*keepMS)*time.Millisecond)
 	hello := helloMessage{T: "hello", V: 1, Chunk: *chunk, KeepMS: *keepMS}
 	b := newBrowser()
-	removeLeftovers(os.Getenv("HOME"), os.Stderr)
+	home, err := browserHome()
+	if err != nil {
+		hello.Error = "The browser could not start: " + err.Error() + "."
+		_ = s.write(hello)
+		return 1
+	}
+	removeLeftovers(home, os.Stderr)
 	var logging []string
 	if *netLog != "" {
 		logging = []string{"--log-net-log=" + *netLog, "--net-log-capture-mode=Default"}
 	}
-	running, err := startChrome(*chrome, b, logging)
+	running, err := startChrome(*chrome, home, b, logging)
 	if err != nil {
 		hello.Error = "The browser could not start: " + err.Error() + "."
 		_ = s.write(hello)
@@ -112,8 +124,6 @@ func run(args []string) int {
 		running.close()
 		return 1
 	}
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, unix.SIGTERM, unix.SIGHUP)
 	err = serve(os.Stdin, s, b, running.exited, stop)
 	// Chrome is gone before the driver says bye, so whatever it writes as
 	// it closes, the profile and a network log, is written by then.
@@ -185,14 +195,24 @@ var quiet = []string{
 	"--host-resolver-rules=MAP " + reservedHost + " ~NOTFOUND",
 }
 
-// startChrome starts Chrome on its debugging pipe with its profile in
-// $HOME/chrome, reaching nothing by itself (quiet), waits for its first
-// answer, and gives b its pipe; logging is added to its flags.
-func startChrome(path string, b *browser, logging []string) (*chromeProcess, error) {
+// browserHome is the folder the browser keeps its profile in, $HOME, which
+// must name a folder by an absolute path: under any other, nothing is
+// removed and Chrome is not started.
+func browserHome() (string, error) {
 	home := os.Getenv("HOME")
-	if home == "" {
-		return nil, errors.New("HOME names no folder")
+	if !filepath.IsAbs(home) {
+		return "", errors.New("HOME names no folder")
 	}
+	if info, err := os.Stat(home); err != nil || !info.IsDir() {
+		return "", errors.New("HOME names no folder")
+	}
+	return home, nil
+}
+
+// startChrome starts Chrome on its debugging pipe with its profile in
+// home's chrome folder, reaching nothing by itself (quiet), waits for its
+// first answer, and gives b its pipe; logging is added to its flags.
+func startChrome(path, home string, b *browser, logging []string) (*chromeProcess, error) {
 	profile := filepath.Join(home, "chrome")
 	// The host runs one session per person, so a singleton entry in the
 	// profile is a dead Chrome's, and Chrome refuses the profile while it
