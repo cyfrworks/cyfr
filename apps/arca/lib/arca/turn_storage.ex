@@ -2928,7 +2928,7 @@ defmodule Arca.TurnStorage do
 
   @doc """
   Forget the brain's session of the turn's thread, which its program
-  reported gone (`Aqua.Program`) or the turn's program row is no longer
+  reported gone (`Aqua.Harness.Program`) or the turn's program row is no longer
   the one it is stored with (`Aqua.Loop`):
   `brain_session` is cleared and `brain_generation` raised in one
   statement, as `Arca.ThreadStorage.forget_sessions/2` forgets a home's,
@@ -4397,7 +4397,7 @@ defmodule Arca.TurnStorage do
 
     # Every delivery it reports stays owed: a held post its answer; a
     # notice, held or not, and a post the transcript lacks end the turn
-    # (`Aqua.Program`), so until the turn is over a reconcile run again
+    # (`Aqua.Harness.Program`), so until the turn is over a reconcile run again
     # reports them again, and prompts nothing for them.
     progress =
       progress

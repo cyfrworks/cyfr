@@ -1259,8 +1259,10 @@ defmodule Aqua.Runner do
   defp handle_owned_info(%ThreadEvent{kind: :message, data: %{kind: "page_result"} = row}, state),
     do: {:noreply, answer(state, row)}
 
-  defp handle_owned_info(%ThreadEvent{kind: :message, data: row}, state),
-    do: {:noreply, %{state | partials: Aqua.Loop.Stream.landed(state.partials, row)}}
+  defp handle_owned_info(%ThreadEvent{kind: :message, data: row}, state) do
+    told(state)
+    {:noreply, %{state | partials: Aqua.Loop.Stream.landed(state.partials, row)}}
+  end
 
   defp handle_owned_info(%ThreadEvent{kind: :turn_finished}, state) do
     case ended_elsewhere(state) do
@@ -1910,9 +1912,7 @@ defmodule Aqua.Runner do
     with {:ok, %{status: "running"} = turn} <- Tape.turn(state.ctx, turn_id) do
       {pages, proposed?, state} = propose_all(state, %{turn | fence: fence}, state.pages, false)
 
-      with true <- proposed?,
-           pid when is_pid(pid) <- Aqua.Loop.holder(turn.id),
-           do: send(pid, {:page_call, turn.id})
+      if proposed?, do: moved(turn.id)
 
       %{state | pages: pages}
     else
@@ -1921,6 +1921,17 @@ defmodule Aqua.Runner do
   end
 
   defp propose(state), do: state
+
+  # The thread moved: the loop of the turn that runs or waits, held on this
+  # boot, is told, and says to its harness what it is owed (`Aqua.Loop`).
+  defp told(state) do
+    for %{turn_id: turn_id} <- [state.live, state.paused], do: moved(turn_id)
+    :ok
+  end
+
+  defp moved(turn_id) do
+    with pid when is_pid(pid) <- Aqua.Loop.holder(turn_id), do: send(pid, {:moved, turn_id})
+  end
 
   defp propose_all(state, _turn, [], proposed?), do: {[], proposed?, state}
 

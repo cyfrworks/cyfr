@@ -769,7 +769,8 @@ defmodule Cyfr.Boundaries do
           "proves the caller and holds the person's browser session, and stops it when " <>
           "the person's browser setting goes off. " <>
           "A program used as a brain is a session its holder (`Opus.Brain`) keeps, which " <>
-          "Aqua's attendant (`Aqua.Program`) opens, writes and reads, each write checked " <>
+          "Aqua's program harness (`Aqua.Harness.Program`) opens, writes and reads, each write " <>
+          "checked " <>
           "there against the work it is bound to; a thread's deletion closes at once the " <>
           "holders of the program sessions it owed their removal (`Opus.Brain.forgotten/2`). " <>
           "Boundary's exports are global, and `Opus` exports `Brain`, `Browser`, `Host.Children`, " <>
