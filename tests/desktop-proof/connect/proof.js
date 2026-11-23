@@ -383,7 +383,7 @@ async function connected(w) {
     if (atDevice(c.webContents.getURL())) return {next: "the device's pages"}
     if (!atBootstrap(c.webContents.getURL())) return null
     return js(c.webContents, `document.querySelector("#confirm").hidden ? null :
-      ({next: "asked", home: document.querySelector("#home").textContent, service: document.querySelector("#service").textContent})`)
+      ({next: "asked", home: document.querySelector("#named").textContent, service: document.querySelector("#service").textContent})`)
   }, "the device's pages or a question")
 }
 

@@ -538,7 +538,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 	s.engine = useFakeEngine(t)
 	saved := profiles
 	t.Cleanup(func() { profiles = saved })
-	profiles = strings.Join(composePrefixArgs(s.project, scenarioHead), " ") + " "
+	profiles = strings.Join(composePrefixArgs(access.ProjectName(s.project), scenarioHead), " ") + " "
 
 	environment := map[string]any{"CYFR_SECRET_KEY_BASE": keyBase, "CYFR_CRYPTO_KEYRING": keyring, "CYFR_HOST": "localhost"}
 	for k, v := range env {

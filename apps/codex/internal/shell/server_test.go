@@ -625,3 +625,20 @@ func TestServer_APlainReadShowsNoPasskeyRequest(t *testing.T) {
 		t.Fatalf("the request is no longer drawn for its own reference:\n%s", again)
 	}
 }
+
+// The device's pages, which the box's screen shows as its own, serve none
+// of the chooser's routes (internal/desktop's /bootstrap/): a setup's
+// start, an open, a pick or a Docker check is the chooser's alone, which
+// the screen has none of.
+func TestTheDevicesPagesServeNoneOfTheChoosersRoutes(t *testing.T) {
+	for path := range reads {
+		if strings.HasPrefix(path, "/bootstrap") {
+			t.Errorf("the device's pages read %s", path)
+		}
+	}
+	for path := range actions {
+		if strings.HasPrefix(path, "/bootstrap") {
+			t.Errorf("the device's pages act on %s", path)
+		}
+	}
+}

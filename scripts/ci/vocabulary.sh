@@ -214,7 +214,8 @@ assert_spelling docker-entrypoint.sh '/app/seed/aqua'
 assert_spelling apps/codex/cmd/lifecycle.go '"data"'
 assert_spelling apps/codex/cmd/lifecycle.go '"aqua"'
 assert_spelling scripts/scaffold-tarball.sh '-C seed aqua'
-# The prose surfaces (README.md, the six guides, the setup pages and
+# The prose surfaces (README.md, the six guides, the setup pages, the
+# CYFR app's chooser and
 # the access vector's words and refusal templates, which `cyfr`
 # prints) name the installation CYFR and the assistant Aqua, and
 # carry none of the concept words home, hub, cell, door or glass
@@ -265,7 +266,7 @@ def found(where, text, markdown=True):
     return bad
 files = ["README.md", "devices-guide.md", "identity-guide.md", "configuration-guide.md",
          "integration-guide.md", "component-guide.md", "tincture-guide.md"]
-files += subprocess.run(["git", "ls-files", "apps/codex/internal/setup/assets"],
+files += subprocess.run(["git", "ls-files", "apps/codex/internal/setup/assets", "apps/codex/internal/desktop/assets"],
                         capture_output=True, text=True, check=True).stdout.split()
 bad = False
 for path in files:

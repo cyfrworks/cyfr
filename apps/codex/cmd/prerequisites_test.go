@@ -482,8 +482,9 @@ func TestInitInstallFails(t *testing.T) {
 }
 
 // Where there is no sg, which is also newgrp, as on Ubuntu 26.04 without
-// util-linux-extra, init advises neither: it says what gives the account
-// the group, a new login.
+// util-linux-extra, init advises neither: where Docker's socket refused
+// this process it says what gives the account the group, a new login. A
+// daemon that is not there is no missing login: init says that instead.
 func TestInitSaysLogInAgainWhereThereIsNoNewgrp(t *testing.T) {
 	inGroup := func(s *standIn) { s.member = []string{dockerGroup} }
 	for name, c := range map[string]struct {
@@ -503,21 +504,30 @@ func TestInitSaysLogInAgainWhereThereIsNoNewgrp(t *testing.T) {
 		"installed by init":                  {func(*standIn) {}, false},
 		"added to its groups":                {func(s *standIn) { s.installed, s.running = dockerPackages, true }, false},
 	} {
-		t.Run(name, func(t *testing.T) {
-			s := standInMachine(t)
-			c.set(s)
-			sgProgram = filepath.Join(t.TempDir(), "sg")
-			t.Chdir(t.TempDir())
-			continued, _, err := prepare(t)
-			const want = "Docker does not answer this account until you log out and in again. Then run `cyfr init` again"
-			if !continued || err == nil || err.Error() != want {
-				t.Fatalf("continued %t, init said %v, want %q", continued, err, want)
-			}
-			if c.stale && (s.applied != nil || s.authenticated != 0) {
-				t.Fatalf("init installed %v, asked sudo %d times, before it said so", s.applied, s.authenticated)
-			}
-			nothingWritten(t)
-		})
+		for _, r := range []struct {
+			name, refused string
+			login         bool
+		}{{"socket refused", socketDenied, true}, {"no daemon", noDaemon, false}} {
+			t.Run(name+", "+r.name, func(t *testing.T) {
+				s := standInMachine(t)
+				s.refused = r.refused
+				c.set(s)
+				sgProgram = filepath.Join(t.TempDir(), "sg")
+				t.Chdir(t.TempDir())
+				continued, _, err := prepare(t)
+				const want = "Docker does not answer this account until you log out and in again. Then run `cyfr init` again"
+				if !r.login && err != nil && strings.Contains(err.Error(), loginAgain) {
+					t.Fatalf("with no daemon, init said %v", err)
+				}
+				if r.login && (!continued || err == nil || err.Error() != want) {
+					t.Fatalf("continued %t, init said %v, want %q", continued, err, want)
+				}
+				if r.login && c.stale && (s.applied != nil || s.authenticated != 0) {
+					t.Fatalf("init installed %v, asked sudo %d times, before it said so", s.applied, s.authenticated)
+				}
+				nothingWritten(t)
+			})
+		}
 	}
 }
 

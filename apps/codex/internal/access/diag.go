@@ -28,10 +28,8 @@ var diagnoses = []struct {
 	form *regexp.Regexp
 	say  func(k known, m []string) string
 }{
-	{regexp.MustCompile(`(?m)^(?:Cannot connect to the Docker daemon at .+\. Is the docker daemon running\?|failed to connect to the docker API at .+; check if the path is correct and if the daemon is running: .+)$`),
-		func(known, []string) string { return "the Docker daemon is not reachable" }},
-	{regexp.MustCompile(`(?m)^permission denied while trying to connect to the (?:Docker daemon socket|docker API) at .+$`),
-		func(known, []string) string { return "this user may not use the Docker daemon" }},
+	{unreachableForm, func(known, []string) string { return unreachableSaid }},
+	{deniedForm, func(known, []string) string { return deniedSaid }},
 	{regexp.MustCompile(`(?m)^failed to read .+$`), func(k known, m []string) string { return k.unreadable(m[0]) }},
 	{regexp.MustCompile(`(?m)^'services\[([A-Za-z0-9._-]+)\]((?:\.[A-Za-z0-9_-]+|\[[0-9]+\])*)' .+$`), func(k known, m []string) string {
 		if !k.services[m[1]] {
@@ -53,6 +51,55 @@ var diagnoses = []struct {
 		}
 		return "it has no service " + m[1]
 	}},
+}
+
+// The daemon's refusals of a call, as docker writes them, and their
+// words.
+var (
+	unreachableForm = regexp.MustCompile(`(?m)^(?:Cannot connect to the Docker daemon at .+\. Is the docker daemon running\?|failed to connect to the docker API at .+; check if the path is correct and if the daemon is running: .+)$`)
+	deniedForm      = regexp.MustCompile(`(?m)^permission denied while trying to connect to the (?:Docker daemon socket|docker API) at .+$`)
+	daemonForm      = regexp.MustCompile(`(?m)^Error response from daemon: (.+)$`)
+)
+
+const (
+	unreachableSaid = "the Docker daemon is not reachable"
+	deniedSaid      = "this user may not use the Docker daemon"
+)
+
+// DockerRefusal is the kind of refusal docker's stderr says a call met.
+type DockerRefusal int
+
+const (
+	// RefusalUnsaid is a stderr that says none of the kinds below.
+	RefusalUnsaid DockerRefusal = iota
+	// RefusalDenied is the daemon's socket or API refusing this user.
+	RefusalDenied
+	// RefusalUnreachable is no daemon answering where docker asked.
+	RefusalUnreachable
+	// RefusalDaemon is the daemon answering with an error of its own,
+	// a client's API version it does not take among them.
+	RefusalDaemon
+)
+
+// ReadDockerRefusal is the kind of refusal docker's stderr says and its
+// words: the fixed words above for a denial or no daemon, the daemon's
+// own for its error, and the first line said otherwise, or none.
+func ReadDockerRefusal(stderr []byte) (DockerRefusal, string) {
+	switch {
+	case deniedForm.Match(stderr):
+		return RefusalDenied, deniedSaid
+	case unreachableForm.Match(stderr):
+		return RefusalUnreachable, unreachableSaid
+	}
+	if m := daemonForm.FindSubmatch(stderr); m != nil {
+		return RefusalDaemon, strings.TrimSpace(string(m[1]))
+	}
+	for _, line := range strings.Split(string(stderr), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return RefusalUnsaid, line
+		}
+	}
+	return RefusalUnsaid, ""
 }
 
 // ipForm is an address as Docker writes it in a port binding, an IPv6

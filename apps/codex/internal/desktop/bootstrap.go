@@ -5,10 +5,13 @@ package desktop
 
 import (
 	"crypto/sha256"
+	_ "embed"
 	"encoding/base64"
+	"strings"
 )
 
-// The chooser's one style and one script, each allowed by its hash alone.
+// The chooser's one page, style and script, the style and the script each
+// allowed by its hash alone.
 // The script keeps the run token from the first address's fragment in
 // sessionStorage, private to this origin, and puts it back with each
 // answer, since main may clear that storage while a Connect waits; it
@@ -33,30 +36,20 @@ import (
 // it has nothing to tell (a notice main put in the address, or one
 // cyfr's answer names): with a notice it stays, as it does on the
 // passkey road, until the person takes a way on.
-const (
-	bootstrapStyle = `body{background:#0b1418;color:#e8f1f2;font:1.25rem system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:90vh}
-main{max-width:34rem;padding:1rem}label{display:block;margin:1rem 0}input{display:block;width:100%;font:inherit;padding:.5rem;margin-top:.25rem;box-sizing:border-box}
-button{font:inherit;padding:.5rem 1rem;margin:.5rem .5rem 0 0}.quiet{background:none;color:inherit;border:1px solid #567}.code{font-family:monospace;word-break:break-all}`
-	bootstrapScript = `const s=sessionStorage,f=new URLSearchParams(location.hash.slice(1)),$=i=>document.getElementById(i);
-const token=f.get("token")||s.getItem("token")||"",was=history.state||{},reloaded=(performance.getEntriesByType("navigation")[0]||{}).type==="reload";
-const main=f.get("token")?{road:f.get("road"),told:(f.get("notice")||"").split(",")}:{road:was.road,told:reloaded&&was.told||[]},passkey=main.road==="passkey";
-s.setItem("token",token);history.replaceState(main,"",location.pathname);
-const notices={company:"This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet.",unanswered:"The CYFR at {CYFR} did not answer.",unforgotten:"The app locked, and could not clear the sign-in it kept on this computer. To clear it, press Connect to another CYFR, which clears it first.",uncleared:"The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."};
-let asked=null;
-function say(t){$("notice").textContent=t||""}
-function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
-function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.next&&(passkey||told));$("confirm").hidden=!asked;$("choose").hidden=!!asked||stay;$("road").hidden=!stay;
-if(asked){$("home").textContent=a.home;$("service").textContent=a.confirm}
-if(stay){$("open").textContent=a.home;$("passkey").hidden=$("either").hidden=$("another").hidden=!passkey;$("again").hidden=!passkey||!main.told.includes("unanswered");$("passkey").onclick=()=>onward(a.home,a.home+"/login");$("again").onclick=()=>onward(a.home,"/bootstrap/again");$("words").onclick=()=>location.assign(a.next)}
-else if(a.next)location.replace(a.next)}
-function connected(a){if(!(passkey&&a.next))show(a,notices[a.notice])}
-function onward(home,to){say("Connecting\u2026");post("/bootstrap/connect",{address:home}).then(a=>a.next?location.assign(to):say(a.error))}
-function connect(address){say("Connecting\u2026");post("/bootstrap/connect",{address}).then(connected)}
-post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;const told=main.told.map(n=>notices[n]).filter(Boolean).join(" ").replace("{CYFR}",a.home||"");show(a,told);if(passkey&&a.resume&&!told)connect(a.resume)});
-$("connect").addEventListener("submit",e=>{e.preventDefault();connect($("address").value)});
-$("another").addEventListener("click",()=>location.assign("/bootstrap/another"));
-$("approve").addEventListener("click",()=>{say("Connecting\u2026");post("/bootstrap/approve",{home:asked.home,directory:asked.confirm}).then(connected)});
-$("decline").addEventListener("click",()=>{show({});say("Nothing was sent to that account service.")});`
+//
+// The page, its style and its script are files of their own (assets/),
+// embedded: the vocabulary check reads them as a person reads them. Each
+// file's last newline is the file's, not the page's.
+var (
+	//go:embed assets/chooser.css
+	chooserStyle string
+	//go:embed assets/chooser.js
+	chooserScript string
+	//go:embed assets/chooser.html
+	chooserMarkup string
+
+	bootstrapStyle  = strings.TrimSuffix(chooserStyle, "\n")
+	bootstrapScript = strings.TrimSuffix(chooserScript, "\n")
 )
 
 var bootstrapPolicy = "default-src 'none'; script-src " + hash(bootstrapScript) + "; style-src " + hash(bootstrapStyle) +
@@ -67,30 +60,7 @@ func hash(s string) string {
 	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 }
 
-const bootstrapPage = `<!doctype html>
+var bootstrapPage = `<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>CYFR</title><style>` + bootstrapStyle + `</style>
-<main>
-<section id="choose">
-<h1>Connect to a CYFR</h1>
-<form id="connect"><label>Its address<input id="address" autocomplete="url" placeholder="https://cyfr.example.com" autofocus required></label>
-<button>Connect</button></form>
-<p>Setting up CYFR on this computer comes in the next version of this app.</p>
-</section>
-<section id="road" hidden>
-<h1>Sign in to the CYFR at <span class="code" id="open"></span></h1>
-<button id="again" hidden>Try again</button>
-<button id="passkey">Sign in with your passkey</button>
-<p id="either">No passkey on this computer, or you would rather not use one? Use this computer's own key, opened with its PIN or six-word passphrase.</p>
-<button id="words" class="quiet">Use this computer's key</button>
-<button id="another" class="quiet" hidden>Connect to another CYFR</button>
-</section>
-<section id="confirm" hidden>
-<h1>Check the account service</h1>
-<p>The CYFR at <b class="code" id="home"></b> signs you in at the account service</p>
-<p class="code" id="service"></p>
-<p>That is not cyfr.run. Go on only if you expected this address.</p>
-<button id="approve">Go on</button><button id="decline" class="quiet">Cancel</button>
-</section>
-<p id="notice" role="status"></p>
-</main><script>` + bootstrapScript + `</script></html>`
+` + strings.TrimSuffix(chooserMarkup, "\n") + `<script>` + bootstrapScript + `</script></html>`

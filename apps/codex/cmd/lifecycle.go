@@ -447,6 +447,10 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .en
 type initOptions struct {
 	force, noPull bool
 	continuation  []string
+	// project is the compose project's name where the caller chose it,
+	// setup's work in a folder it entered; otherwise the working
+	// directory's name.
+	project string
 }
 
 // The steps a run of init begins, as initProject's step is told them.
@@ -556,8 +560,10 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	// folder Docker cannot name the project after, which every start would
 	// refuse, and a .env that does not say how its home is reached, whose
 	// cure is `cyfr access <mode>`.
-	if err := projectNamed("."); err != nil {
-		return err
+	if o.project == "" {
+		if err := projectNamed("."); err != nil {
+			return err
+		}
 	}
 	envExisted := fileExists(".env")
 	if envExisted {
@@ -969,6 +975,15 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 
 // runUp is `cyfr up` in the working directory.
 func runUp(ctx context.Context, out io.Writer) error {
+	e, err := openEngine(".")
+	if err != nil {
+		return engineFailure(err)
+	}
+	return upWith(ctx, e, out)
+}
+
+// upWith is cyfr up's start of the project e opened.
+func upWith(ctx context.Context, opened stackEngine, out io.Writer) error {
 	// Registry auth is per-user: the person mints and stores their push
 	// tokens on CYFR's Registry page. There are no static registry
 	// credentials to configure.
@@ -979,7 +994,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 	// hold while they stop the stack, so none of them runs inside a start,
 	// nor a start inside them. An interrupt is noted, not acted on: the
 	// start runs to its end under the lock, and the lock goes with it.
-	e, unlock, _, err := openLocked(ctx, "up", out)
+	e, unlock, _, err := lockedEngine(ctx, opened, "up", out)
 	if err != nil {
 		return err
 	}

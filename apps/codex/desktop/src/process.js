@@ -4,7 +4,9 @@
 // The private messages between this main process and the cyfr it starts
 // (tests/fixtures/desktop-process.json): one JSON object a line, each with
 // version 1, its type and exactly its type's fields: text, but for attempt,
-// the proposal's number, a whole one from 1.
+// the proposal's number, a whole one from 1, folder-picked's path, a
+// folder spelled from a root (absolute) or null, and its epoch and pick,
+// whole numbers from 0, the chooser's own as it asked for the pick.
 
 export const VERSION = 1
 
@@ -12,21 +14,27 @@ export const MAX_LINE = 64 * 1024
 
 const FIELDS = {
   ready: {required: ["url"]},
-  home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver"]},
+  home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver", "road"]},
   opened: {required: ["home"]},
   locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
   ending: {required: []},
-  "pick-folder": {required: ["id", "suggested"]},
   "home-ready": {required: ["home", "attempt"]},
   "home-failed": {required: ["home", "attempt"]},
   lock: {required: []},
   leave: {required: []},
   shutdown: {required: []},
-  "folder-picked": {required: ["id", "path"]}
+  "folder-picked": {required: ["path", "epoch", "pick"]}
 }
 
-const FROM_CYFR = ["ready", "home", "opened", "locked", "ending", "pick-folder"]
+const FROM_CYFR = ["ready", "home", "opened", "locked", "ending"]
 const FROM_MAIN = ["home-ready", "home-failed", "lock", "leave", "shutdown", "folder-picked"]
+
+/**
+ * Whether `path` is a folder spelled from a root on any system the app
+ * runs on: /, a drive's letter, colon and separator, or a share's two
+ * backslashes (process.go absolute).
+ */
+export const absolute = (path) => typeof path === "string" && /^(\/|\\\\|[A-Za-z]:[\\/])/.test(path)
 
 export class Refused extends Error {
   constructor(reason) {
@@ -62,6 +70,8 @@ export function readFromCyfr(line) {
   const named = together.filter((k) => Object.hasOwn(m, k)).length
   if (named !== 0 && named !== together.length) throw new Refused("fields")
   if (together.length && named === 0 && (Object.hasOwn(m, "proxy") || Object.hasOwn(m, "resolver"))) throw new Refused("fields")
+  // The one road a home names: the device's pages.
+  if (Object.hasOwn(m, "road") && m.road !== "device") throw new Refused("fields")
   return m
 }
 
@@ -72,6 +82,8 @@ export function toCyfr(type, fields = {}) {
   const m = {version: VERSION, type}
   for (const key of required) {
     if (!Object.hasOwn(fields, key)) throw new Error(`${type} needs ${key}`)
+    if (key === "path" && fields.path !== null && !absolute(fields.path)) throw new Error(`${type} names no absolute folder`)
+    if ((key === "epoch" || key === "pick") && !(Number.isSafeInteger(fields[key]) && fields[key] >= 0)) throw new Error(`${type} needs ${key} as a whole number`)
     m[key] = fields[key]
   }
   return JSON.stringify(m) + "\n"

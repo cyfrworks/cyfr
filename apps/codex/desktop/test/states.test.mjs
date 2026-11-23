@@ -7,7 +7,9 @@
 import assert from "node:assert/strict"
 import {test} from "node:test"
 
-import {ACTS, initial, step} from "../src/states.js"
+import {readFileSync} from "node:fs"
+
+import {ACTS, EXTERNAL, initial, step} from "../src/states.js"
 
 const READY = "http://127.0.0.1:7340/bootstrap/#token=dG9rZW4"
 const HOME = "https://cyfr.example.com"
@@ -224,6 +226,16 @@ test("main alone opens a CYFR committed at its root, on the passkey road, and th
   const told = run([...open, company, locked()], true)
   assert.deepEqual(told.s.notices, ["company"])
   assert.deepEqual(run([...open, company, locked(), home(), taken, {type: "opened", home: HOME}], true).s.notices, [])
+})
+
+test("a CYFR that opens at the device's pages loads none of its own on the passkey road, and the next home without that road does", () => {
+  const device = {type: "home", message: {...home().message, road: "device"}}
+  const opened = run([ready, device, taken, {type: "opened", home: HOME}], true)
+  assert.equal(opened.s.name, "open")
+  assert.ok(!opened.effects.some((e) => e.root), "no root loaded")
+  assert.equal(step(opened.s, given).allow, true, "the device's pages give the CYFR")
+  const again = run([ready, device, taken, {type: "opened", home: HOME}, locked(), forgot, home(), taken, {type: "opened", home: HOME}], true)
+  assert.deepEqual(again.effects.filter((e) => e.root), [{root: {home: HOME}}], "a home on the passkey road again")
 })
 
 const atWays = "http://127.0.0.1:7340/bootstrap/#road=passkey"
@@ -476,7 +488,17 @@ test("a second launch shows the content window, and nothing once ended", () => {
 const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"
 const AGAIN = CHOOSER_DOC + "again"
 const SIGN_IN = ACCOUNT + "/account/sign#x"
+// The chooser's Change…, naming the epoch it was shown in and the picks
+// answered before it.
+const PICK = CHOOSER_DOC + "pick?epoch=3&pick=2"
+const DOCKER_PAGE = "https://docs.docker.com/engine/install/"
 const PRESSES = {
+  external: [
+    {name: "Docker's page", event: navigate({url: DOCKER_PAGE, showing: atWays}),
+      acted: (r) => r.do.some((e) => e.external?.url === DOCKER_PAGE)}],
+  pick: [
+    {name: "Change…", event: navigate({url: PICK, showing: atWays}),
+      acted: (r) => r.do.some((e) => e.pick) && r.state.picking > 0}],
   again: [
     {name: "Try again", event: navigate({url: AGAIN, showing: atWays}),
       acted: (r) => r.do.some((e) => e.root?.home === HOME) && r.state.notices.length === 0}],
@@ -510,7 +532,7 @@ test("an act is no redirect, and is begun by the top frame's own document that o
     "the chooser's path at the CYFR": HOME + "/bootstrap/", "the chooser's path on another port": "http://127.0.0.1:7341/bootstrap/",
     "the CYFR's host on another port": HOME + ":9443/login", "the account's path on another port": ACCOUNT + ":9443/account/sign",
     none: ""}
-  const offers = {again: ["chooser", "the chooser with its road"], another: ["chooser", "the chooser with its road"], onward: ["chooser", "the chooser with its road"],
+  const offers = {external: ["chooser", "the chooser with its road"], pick: ["chooser", "the chooser with its road"], again: ["chooser", "the chooser with its road"], another: ["chooser", "the chooser with its road"], onward: ["chooser", "the chooser with its road"],
     hop: ["the CYFR's page", "the chooser's path at the CYFR"], answer: ["the account's page"]}
   for (const [act, rows] of Object.entries(PRESSES)) {
     for (const {name, event, acted} of rows) {
@@ -527,6 +549,107 @@ test("an act is no redirect, and is begun by the top frame's own document that o
         }
       }
     }
+  }
+})
+
+test("on the box's screen none of the chooser's acts is offered or accepted, from any page of it", () => {
+  const SCREEN_PAGE = "http://127.0.0.1:7340/"
+  const screen = (events) => {
+    let s = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr")
+    for (const e of [{type: "ready", url: SCREEN_PAGE}, ...events]) s = step(s, e).state
+    return s
+  }
+  const states = {"the shell's page": screen([]), "a CYFR open": screen([home(), taken, {type: "opened", home: HOME}])}
+  for (const [where, s] of Object.entries(states)) {
+    for (const act of ["pick", "external", "another", "again"]) {
+      for (const {name, event, acted} of PRESSES[act]) {
+        for (const by of [SCREEN_PAGE, CHOOSER_DOC, atWays]) {
+          const r = step(s, {...event, by, showing: by})
+          assert.ok(!acted(r), `${where}: ${name} from ${by} acted`)
+          assert.equal(r.allow, false, `${where}: ${name} from ${by} loaded`)
+          assert.ok(!r.do.some((e) => e.pick || e.external || e.root || e.forget), `${where}: ${name} from ${by}: ${JSON.stringify(r.do)}`)
+        }
+      }
+    }
+  }
+})
+
+// The chooser's Change…, pressed on the chooser with no CYFR open.
+const change = navigate({url: PICK, showing: CHOOSER_DOC, by: CHOOSER_DOC})
+const picked = (id, path) => ({type: "picked", id, path})
+const answers = (effects) => effects.filter((e) => e.send?.type === "folder-picked").map((e) => e.send.fields)
+// The answer to the pick PICK names.
+const of = (path, epoch = 3, pick = 2) => ({path, epoch, pick})
+
+test("Change… asks the system once, never loads, and cyfr hears the folder it gave, or none", () => {
+  for (const road of [false, true]) {
+    const asked = run([ready, change], road)
+    assert.deepEqual(asked.effects.at(-1), {pick: {id: 1}})
+    assert.equal(step(run([ready], road).s, change).allow, false, "its address never loads")
+    assert.deepEqual(answers(run([ready, change, picked(1, "/home/ada/elsewhere")], road).effects), [of("/home/ada/elsewhere")])
+    assert.deepEqual(answers(run([ready, change, picked(1, "C:\\Users\\ada\\cyfr")], road).effects), [of("C:\\Users\\ada\\cyfr")])
+    assert.deepEqual(answers(run([ready, change, picked(1, null)], road).effects), [of(null)], "cancelled")
+    assert.deepEqual(answers(run([ready, change, picked(1, "elsewhere")], road).effects), [of(null)], "a folder from no root is none")
+    const next = navigate({url: CHOOSER_DOC + "pick?epoch=3&pick=3", showing: CHOOSER_DOC, by: CHOOSER_DOC})
+    const twice = run([ready, change, picked(1, "/a"), next, picked(2, "/b")], road)
+    assert.deepEqual(answers(twice.effects), [of("/a"), of("/b", 3, 3)], "each pick is its own, with what the chooser named for it")
+    assert.deepEqual(twice.effects.filter((e) => e.pick), [{pick: {id: 1}}, {pick: {id: 2}}])
+  }
+})
+
+test("Change… is a pick only at the chooser's own address for it, naming its epoch and pick as whole numbers and nothing else", () => {
+  for (const tail of ["pick", "pick?epoch=3", "pick?pick=2", "pick?epoch=3&pick=2&x=1", "pick?epoch=-1&pick=2", "pick?epoch=3&pick=02",
+    "pick?epoch=3&pick=2.5", "pick?epoch=3&pick=9007199254740992", "pick?epoch=3&pick=2#x", "pick/?epoch=3&pick=2", "pick?epoch=3&epoch=4&pick=2"]) {
+    const r = step(run([ready]).s, navigate({url: CHOOSER_DOC + tail, showing: CHOOSER_DOC, by: CHOOSER_DOC}))
+    assert.ok(!r.do.some((e) => e.pick) && r.state.picking === 0, tail)
+    assert.equal(r.allow, false, `${tail} never loads`)
+  }
+})
+
+test("one pick at a time: Change… again while the dialog is open asks nothing, and a result for another pick is dropped", () => {
+  const again = run([ready, change, change])
+  assert.deepEqual(again.effects.filter((e) => e.pick), [{pick: {id: 1}}])
+  assert.deepEqual(answers(run([ready, change, change, picked(1, "/a"), picked(1, "/b")]).effects), [of("/a")], "answered once")
+  assert.deepEqual(answers(run([ready, change, picked(2, "/a")]).effects), [], "a result for no pick asked")
+  assert.deepEqual(answers(run([ready, picked(1, "/a")]).effects), [], "a result with nothing asked")
+})
+
+test("the chooser leaving, a lock, Connect to another CYFR and an end answer the pick with none, and the dialog's result after is dropped", () => {
+  const ends = {
+    "a document committing": [{type: "committed"}],
+    "a lost page shown again": [{type: "lost"}, {type: "committed"}],
+    "cyfr's lock": [locked()],
+    "a lock of the company page": [...open.slice(1), company],
+    "the window closing": [{type: "quit"}],
+    "cyfr gone": [{type: "gone", why: "it exited (1)"}]
+  }
+  for (const [name, events] of Object.entries(ends)) {
+    for (const road of [false, true]) {
+      const r = run([ready, change, ...events, picked(1, "/home/ada/elsewhere")], road)
+      assert.deepEqual(answers(r.effects), [of(null)], `${name}: answered with none, once`)
+      assert.equal(r.s.picking, 0, name)
+    }
+  }
+  const leaving = run([...open, change, another, picked(1, "/a")], true)
+  assert.deepEqual(answers(leaving.effects), [of(null)], "Connect to another CYFR")
+  const said = run([ready, change, locked()]).effects
+  assert.ok(said.findIndex((e) => e.send?.type === "folder-picked") < said.findIndex((e) => e.close), "answered before the content closes")
+  assert.deepEqual(answers(run([ready, change, {type: "landed", url: CHOOSER_DOC + "#x"}, {type: "started", url: HOME}]).effects), [],
+    "a fragment, or a navigation that has not committed, leaves the pick")
+})
+
+test("the chooser's links open in the person's browser: Docker's pages, as the vectors name them, and none other", () => {
+  const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
+  assert.deepEqual(EXTERNAL, vectors["external_pages"])
+  const s = run([ready]).s
+  for (const url of EXTERNAL) {
+    assert.deepEqual(step(s, navigate({url, showing: CHOOSER_DOC, by: CHOOSER_DOC})), {state: s, allow: false, do: [{external: {url}}]})
+  }
+  for (const url of ["https://www.docker.com/", "https://docs.docker.com/engine/install/ubuntu/", "https://evil.example/",
+    "http://docs.docker.com/engine/install/", DOCKER_PAGE + "#x"]) {
+    const r = step(s, navigate({url, showing: CHOOSER_DOC, by: CHOOSER_DOC}))
+    assert.equal(r.allow, false, url)
+    assert.deepEqual(r.do, [], url)
   }
 })
 
@@ -554,7 +677,12 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
     main: initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr"),
     shell: {ready: false, attempt: 0, answered: false, locks: 2, keyboard: 1, gone: false, ending: false, exited: false, endable},
     toMain: [],
-    toShell: [], pending: [], showing: "", lost: 1, trace: []
+    toShell: [], pending: [], showing: "", lost: 1, trace: [],
+    // The chooser's moves that reach main (the setup's answers are the
+    // page's and cyfr's, never main's, and main reads no folder-picked):
+    // Change… pressed on what the screen shows, and a dialog's result, each
+    // once, at any point, after main ended too.
+    presses: 1, results: 1
   })
   const clone = (w) => structuredClone(w)
   const propose = (w) => {
@@ -579,10 +707,23 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
       if ((effect.chooser || effect.root) && w.endingRead) w.openedForEnding = true
       if (effect.close) w.showing = ""
       if (effect.end || effect.quit) w.ended = JSON.stringify(effect)
+      if (effect.pick || effect.external || effect.send?.type === "folder-picked") w.picked = JSON.stringify(effect)
     }
+  }
+  const chooserMoves = (w, out) => {
+    if (w.presses > 0) {
+      out.push(["Change… is pressed", (x) => {
+        x.presses--
+        const shown = x.showing || LOOP
+        carry(x, step(x.main, {type: "navigate", window: "content", url: LOOP + "bootstrap/pick?epoch=0&pick=0", target: "top", asker: "top",
+          showing: shown, by: shown}))
+      }])
+    }
+    if (w.results > 0) out.push(["a dialog's result arrives", (x) => { x.results--; carry(x, step(x.main, {type: "picked", id: 1, path: "/home/a"})) }])
   }
   const moves = (w) => {
     const out = []
+    chooserMoves(w, out)
     if (w.ended || w.shell.gone) return out
     if (w.toMain.length) {
       out.push(["to main", (x) => {
@@ -635,6 +776,7 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
     const next = moves(w)
     if (next.length === 0) {
       ends++
+      assert.ok(!w.picked, `the screen asked for or answered a pick (${w.picked}) after ${w.trace.join(" > ")}`)
       if (w.shell.ending) {
         assert.ok(!w.openedForEnding, `a window opened once main read the shell's ending, after ${w.trace.join(" > ")}`)
         assert.ok(w.ended && w.showing === "", `it ended ${w.main.name} showing "${w.showing}" after ${w.trace.join(" > ")}`)

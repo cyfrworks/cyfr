@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
 )
@@ -61,9 +62,12 @@ type workMessage struct {
 	Type string `json:"type"`
 	Step string `json:"step,omitempty"`
 	// Ready is probe's answer, Sentence why it is not or why the work
-	// failed.
+	// failed, and Commands or Page what would make Docker answer here
+	// (dockerRemedy).
 	Ready    bool        `json:"ready,omitempty"`
 	Sentence string      `json:"sentence,omitempty"`
+	Commands []string    `json:"commands,omitempty"`
+	Page     string      `json:"page,omitempty"`
 	Look     *folderLook `json:"look,omitempty"`
 }
 
@@ -109,7 +113,11 @@ func runSetupWork(ctx context.Context, in io.Reader, out io.Writer, args []strin
 	var err error
 	switch args[0] {
 	case workProbe:
-		end.Ready, end.Sentence = dockerReady(ctx)
+		var fixable bool
+		end.Ready, end.Sentence, fixable = dockerReady(ctx)
+		if fixable {
+			end.Commands, end.Page = dockerRemedy()
+		}
 	case workLook:
 		end.Look, err = lookInFolder(ctx, args[1])
 	case workToken:
@@ -131,29 +139,60 @@ func runSetupWork(ctx context.Context, in io.Reader, out io.Writer, args []strin
 // only this computer's own Docker refusing work still older than the
 // docker group is cured by a new login, since that work had no sg to come
 // through (an optional package on Ubuntu 26.04). A cancel ends a docker
-// that hangs.
-func dockerReady(ctx context.Context) (bool, string) {
-	switch here, err := machine.dockerHere(ctx); {
-	case ctx.Err() != nil:
-		return false, "Docker was not waited for"
-	case err != nil:
-		return false, "Docker did not say where it runs containers"
-	case !here:
-		return false, "Docker here runs containers on another computer, so CYFR cannot be set up on this one with it"
+// that hangs. fixable is whether installing or starting Docker here, or
+// giving this account its group, is what is missing (dockerRemedy).
+func dockerReady(ctx context.Context) (ready bool, why string, fixable bool) {
+	why, fixable = dockerSentence(seeDocker(ctx, olderThanGroup(ctx)))
+	return why == "", why, fixable
+}
+
+// dockerRemedy is what makes Docker answer this account here, for a person
+// to do: on Ubuntu 26.04 the commands to run as root, as cyfr init runs
+// them (requirementCommands); on macOS and Windows Docker Desktop's page;
+// on any other Linux Docker's own page on installing it. The app shows
+// them and runs none.
+func dockerRemedy() (commands []string, page string) {
+	switch system := machine.system(); {
+	case system == "darwin" || system == "windows":
+		return nil, dockerDesktopPage
+	case machine.supported():
+		if account, err := user.Current(); err == nil {
+			return requirementCommands(account.Username), ""
+		}
+		return nil, ""
 	}
-	answers := machine.reachable(ctx)
+	return nil, dockerEnginePage
+}
+
+// setUpHere is the app's Set up and start: setup's work's run in folder
+// under work, which ends with it, each step it begins said to step.
+func setUpHere(ctx context.Context, work *shell.Work, folder string, step func(string)) error {
+	defer work.End()
+	_, err := setupWork(ctx, work, step, workRun, folder)
+	return err
+}
+
+// dockerCheck is the app's question of Docker, setup's work's probe under
+// work, which ends with the answer.
+func dockerCheck(ctx context.Context, work *shell.Work) desktop.DockerAnswer {
+	defer work.End()
+	m, err := setupWork(ctx, work, nil, workProbe)
 	switch {
-	case ctx.Err() != nil:
-		return false, "Docker was not waited for"
-	case !answers && olderThanGroup(ctx):
-		return false, loginAgain
-	case !answers:
-		return false, "Docker does not answer this account"
+	case err != nil && ctx.Err() != nil:
+		// Asked, and given up on before it answered.
+		return desktop.DockerAnswer{Sentence: "Docker did not answer before the check ended"}
+	case errors.Is(err, errWorkNotBegun):
+		return desktop.DockerAnswer{Sentence: "Docker was not asked (" + err.Error() + ")"}
+	case err != nil:
+		return desktop.DockerAnswer{Sentence: "The Docker check failed (" + err.Error() + ")"}
 	}
-	return true, ""
+	return desktop.DockerAnswer{Ready: m.Ready, Sentence: m.Sentence, Commands: m.Commands, Page: m.Page}
 }
 
 var errSetupCancelled = errors.New("Setup was stopped before CYFR was started")
+
+// errWorkNotBegun is setup's work that never began: nothing was asked.
+var errWorkNotBegun = errors.New("setup's work could not begin")
 
 // setupProject is the one setup action, for every folder: init's sequence
 // where dir holds no .env, then up's start. Asked again it mints nothing
@@ -168,7 +207,8 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 	if err := setupFolder(dir); err != nil {
 		return err
 	}
-	ready, why := dockerReady(ctx)
+	project := access.ProjectName(dir)
+	ready, why, _ := dockerReady(ctx)
 	if ctx.Err() != nil {
 		return errSetupCancelled
 	}
@@ -181,10 +221,16 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 	if err := os.Chdir(dir); err != nil {
 		return fmt.Errorf("CYFR cannot use the folder %s (%v). Nothing was changed", dir, err)
 	}
-	// The working directory keeps the name it was chosen by, through a
-	// link too (os.Getwd): compose names the project after it, and what
-	// opens the folder later looks for the project by that name.
-	if err := os.Setenv("PWD", dir); err != nil {
+	// The folder is the directory entered here, once: the refusal is
+	// decided on it, and from here on the only path anything is given is
+	// the one the system answers for it now (entered), never the name it
+	// was chosen by, which a link can lead elsewhere afterwards. The check
+	// above, by the name, only answered early.
+	entered, err := enteredPath()
+	if err != nil {
+		return fmt.Errorf("CYFR cannot use the folder %s (%v). Nothing was changed", dir, err)
+	}
+	if err := refuseOwnFolder(entered, dir); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(setupLockFile), 0o700); err != nil {
@@ -205,7 +251,7 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 		// init's printing is for a terminal, and its setup link for no
 		// pipe or log. What it warned is said if it wrote no .env.
 		var warned bytes.Buffer
-		err := initProject(ctx, initOptions{}, step, io.Discard, &warned)
+		err := initProject(ctx, initOptions{project: project}, step, io.Discard, &warned)
 		switch {
 		case err != nil && ctx.Err() != nil:
 			return errSetupCancelled
@@ -223,11 +269,40 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 		return errSetupCancelled
 	}
 	step(setupStepStart)
-	return runUp(context.WithoutCancel(ctx), io.Discard)
+	// Compose names the project after the folder as it was chosen, through
+	// a link too: what opens the folder later looks for it by that name.
+	e, err := openEngineAs(entered, project)
+	if err != nil {
+		return engineFailure(err)
+	}
+	return upWith(context.WithoutCancel(ctx), e, io.Discard)
+}
+
+// enteredPath is the working directory as the system names it now, with
+// no link in it, and the one every path of the process is from then: the
+// environment's PWD, which names it as chosen, is that path too.
+func enteredPath() (string, error) {
+	if err := os.Unsetenv("PWD"); err != nil {
+		return "", err
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return dir, os.Setenv("PWD", dir)
 }
 
 // setupFolder refuses a folder no CYFR is set up in, writing nothing.
 func setupFolder(dir string) error {
+	if err := refuseOwnFolder(dir, dir); err != nil {
+		return err
+	}
+	return projectNamed(dir)
+}
+
+// refuseOwnFolder refuses path, the folder named shown, where it is the
+// account's own folder, whose .cyfr is the account's.
+func refuseOwnFolder(path, shown string) error {
 	own, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("CYFR cannot tell which folder is your account's own (%v). Nothing was changed", err)
@@ -236,11 +311,11 @@ func setupFolder(dir string) error {
 	if err != nil {
 		return fmt.Errorf("CYFR cannot read your account's own folder %s (%v). Nothing was changed", own, err)
 	}
-	if info, err := os.Stat(dir); err == nil && os.SameFile(info, ownInfo) {
+	if info, err := os.Stat(path); err == nil && os.SameFile(info, ownInfo) {
 		return fmt.Errorf("CYFR cannot be set up in %s itself, because your account keeps its own CYFR files there, so choose a folder inside it, such as %s. Nothing was changed",
-			dir, filepath.Join(dir, "cyfr"))
+			shown, filepath.Join(own, "cyfr"))
 	}
-	return projectNamed(dir)
+	return nil
 }
 
 // workFailure is the work's own failed end, in its sentence.
@@ -414,7 +489,7 @@ func workBegunBy(ctx context.Context, begin func(context.Context, []string) (*wo
 			// Its Work ended, which its ctx hears a moment later.
 			return workMessage{}, l.err
 		}
-		return workMessage{}, fmt.Errorf("setup's work could not begin (%w)", l.err)
+		return workMessage{}, fmt.Errorf("%w (%w)", errWorkNotBegun, l.err)
 	}
 	if !reading {
 		e := <-ended

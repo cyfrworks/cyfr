@@ -33,7 +33,7 @@ func TestTheDeviceRoadMakesItsKeyOnTheChipWhereThereIsOne(t *testing.T) {
 		c.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }
 	}
 	a.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
-	done := a.connect(t, "/bootstrap/approve", map[string]string{"home": "https://cyfr.example.com", "directory": accounts.URL()})
+	done := a.connect(t, "/bootstrap/approve", map[string]string{"cyfr": "https://cyfr.example.com", "directory": accounts.URL()})
 	a.next(t)
 	a.ready("https://cyfr.example.com")
 	answered(t, done)
