@@ -169,7 +169,7 @@ func Main() int {
 	if err := os.Chdir(spec.Home); err != nil {
 		return fail("home: %v", err)
 	}
-	path, err := LookPath(spec.Argv[0])
+	path, err := spec.LookPath(spec.Argv[0])
 	if err != nil {
 		return fail("exec: %v", err)
 	}

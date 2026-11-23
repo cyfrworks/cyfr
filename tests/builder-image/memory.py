@@ -14,8 +14,17 @@ that asks for a bound.
 
 `keeper` drives a second cyfr-locus inside the running service, over its
 own uids, with a client that speaks the keeper's protocol
-(tests/fixtures/keeper_protocol.json):
+(tests/fixtures/keeper_protocol.json) and places every spawn before it
+sends it:
 
+- a real build of an athanor whose id holds an `@`, a tincture's `npm run
+  build` holding what it built from, is placed `build` of that athanor;
+  while it runs, once the keeper has read its group, every measure of its
+  place answers a reading above zero naming `build` and exactly that
+  athanor, and the reading taken after
+  the build holds its memory counts it; after its `release`, a measure sent
+  with it is still answered with a reading before `released`, and one after
+  `released` is `unmeasured`;
 - a spawn naming no bound, or a bound that is zero, not a number or above
   the maximum, is refused as a bad request and nothing is spawned, and a
   command runs under the least bound the protocol allows;
@@ -77,6 +86,36 @@ DEADLINE_MS = 60_000
 PROBE_FIRST, PROBE_LAST = POOL_LAST - 5, POOL_LAST
 # The bound the keeper cases ask for.
 BOUND = 256 * MIB
+# The measured build: a tincture's `npm run build`, the image's npm running
+# node, which builds dist/index.html from HELD bytes it touches once and keeps
+# until it is released, so its use is steady rather than a compiler's phases
+# rising and falling; it prints HOLDING once it holds them. The client
+# measures it every MEASURE poll_ms until a reading the keeper took margin_ms
+# after the client saw HOLDING, and releases it with no grace, as the builder
+# ends a build. Its athanor holds an `@`, as an athanor's id may on every
+# Locus wire (1 to 256 printable ASCII characters, no space), and every
+# reading names exactly it.
+ATHANOR = "family@example"
+HELD = 32 * MIB
+HOLDING = "holding what it built from"
+MEASURED_BUILD = """set -eu
+export npm_config_cache="$HOME/npm" npm_config_update_notifier=false
+mkdir -p "$HOME/src"
+cd "$HOME/src"
+cat > package.json <<'EOF'
+{"name": "measured", "private": true, "version": "0.0.1", "scripts": {"build": "node build.mjs"}}
+EOF
+cat > build.mjs <<'EOF'
+import fs from "node:fs";
+const held = Buffer.alloc(%d, 1);
+fs.mkdirSync("dist", { recursive: true });
+fs.writeFileSync("dist/index.html", "measured " + held[5]);
+console.log("%s");
+setInterval(() => held[5], 60000);
+EOF
+exec npm run build
+""" % (HELD, HOLDING)
+MEASURE = {"holding": HOLDING, "poll_ms": 200, "margin_ms": 100, "grace_ms": 0}
 # The least and the most the keeper's protocol lets a bound be.
 MIN_BOUND, MAX_BOUND = 16 * MIB, 1 << 40
 
@@ -150,8 +189,12 @@ impl Guest for Hostile {
 """
 
 # The keeper cases' client: cyfr-locus starts it as the release's user with
-# the channel on fd 3. It sends every spawn of the scenario, attaches their
-# relays, and prints what the keeper answered for each.
+# the channel on fd 3. It places every spawn of the scenario and sends each
+# spawn once its place is answered, attaches their relays, and prints what
+# the keeper answered for each. The spawn marked `measure` is measured until
+# a reading the keeper took after the build said it holds its memory, then
+# released with a measure in the same write, and measured once more after
+# its `released`.
 CLIENT = r"""
 import fs from "node:fs";
 import net from "node:net";
@@ -162,23 +205,67 @@ const scenario = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const dir = fs.mkdtempSync(path.join(process.env.RELEASE_TMP, "memory-"));
 const attach = path.join(dir, "attach.sock");
 const spawns = scenario.spawns.map((s, i) => ({
-  ...s, id: String(i + 1), token: crypto.randomBytes(32).toString("hex"), stdout: "", replies: [], done: false, drained: false,
+  ...s, id: String(i + 1), place: "p" + (i + 1), token: crypto.randomBytes(32).toString("hex"), stdout: "", replies: [],
+  measures: [], done: false, drained: false,
 }));
+// Each measure's spawn and its entry in that spawn's `measures`, by the measure's id.
+const measures = new Map();
 const started = Date.now();
+// The number of the keeper's last line, so the report says in what order every reply came.
+let seq = 0;
+let channel = null;
 
 function finish(timedOut) {
   if (!timedOut && !spawns.every((s) => s.done && (!s.spawn_id || s.drained))) return;
-  const report = spawns.map(({ name, uid, replies, stdout, done }) => ({ name, uid, replies, stdout: stdout.slice(-400), done }));
+  const report = spawns.map(({ name, place, uid, replies, measures, holding_ms, stdout, done }) => (
+    { name, place, uid, replies, measures, holding_ms, stdout: stdout.slice(-400), done }));
   process.stdout.write("<<<" + JSON.stringify({ timed_out: timedOut, spawns: report }) + ">>>\n", () => {
     fs.rmSync(dir, { recursive: true, force: true });
     process.exit(timedOut ? 1 : 0);
   });
 }
 
+function measure(spawn, phase, before = "") {
+  const id = "m" + (measures.size + 1);
+  const entry = { phase, id, sent_ms: Date.now() - started };
+  measures.set(id, { spawn, entry });
+  spawn.measures.push(entry);
+  channel.write(before + JSON.stringify({ v: 3, type: "measure", id, place: spawn.place }) + "\n");
+}
+
+function measured(spawn, entry, reply) {
+  Object.assign(entry, { reply, at_ms: Date.now() - started, seq });
+  if (entry.phase === "after") {
+    spawn.done = true;
+    return finish(false);
+  }
+  if (entry.phase !== "running" || spawn.replies.some((r) => r.type === "released")) return;
+  const readAt = reply.type === "measured" ? entry.at_ms - reply.age_ms : -Infinity;
+  if (spawn.holding_ms !== undefined && readAt > spawn.holding_ms + scenario.measure.margin_ms) {
+    const release = { v: 3, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
+    measure(spawn, "release", JSON.stringify(release) + "\n");
+  } else {
+    setTimeout(() => measure(spawn, "running"), scenario.measure.poll_ms);
+  }
+}
+
 function settle(spawn, reply) {
-  spawn.replies.push({ ...reply, at_ms: Date.now() - started });
-  if (reply.type === "spawned") { spawn.uid = reply.uid; spawn.spawn_id = reply.spawn_id; }
-  if (reply.type === "released" || (reply.type === "error" && reply.id)) spawn.done = true;
+  spawn.replies.push({ ...reply, at_ms: Date.now() - started, seq });
+  if (reply.type === "placed") {
+    const request = {
+      v: 3, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {}, cpu_quota: 100000,
+      attach: { path: attach, token: spawn.token },
+    };
+    if ("memory_bytes" in spawn) request.memory_bytes = spawn.memory_bytes;
+    channel.write(JSON.stringify(request) + "\n");
+  }
+  if (reply.type === "spawned") {
+    spawn.uid = reply.uid;
+    spawn.spawn_id = reply.spawn_id;
+    if (spawn.measure) measure(spawn, "running");
+  }
+  if (reply.type === "released" && spawn.measure) measure(spawn, "after");
+  else if (reply.type === "released" || (reply.type === "error" && reply.id)) spawn.done = true;
   finish(false);
 }
 
@@ -198,32 +285,41 @@ const server = net.createServer((conn) => {
         if (!spawn) return conn.destroy();
       } else if (stream === 1 && spawn) {
         spawn.stdout += payload.toString("utf8");
+        if (spawn.measure && spawn.holding_ms === undefined && spawn.stdout.includes(scenario.measure.holding)) {
+          spawn.holding_ms = Date.now() - started;
+        }
       }
     }
   });
 });
 
 server.listen(attach, () => {
-  const channel = new net.Socket({ fd: 3, readable: true, writable: true });
+  channel = new net.Socket({ fd: 3, readable: true, writable: true });
   let lines = "";
   channel.on("data", (chunk) => {
     lines += chunk.toString("utf8");
     for (let at = lines.indexOf("\n"); at >= 0; at = lines.indexOf("\n")) {
       const reply = JSON.parse(lines.slice(0, at));
       lines = lines.slice(at + 1);
+      seq += 1;
+      const asked = reply.id === undefined ? undefined : measures.get(reply.id);
+      if (asked) {
+        measured(asked.spawn, asked.entry, reply);
+        continue;
+      }
       // A request whose fields do not decode is refused without its id: the
       // scenario holds one such request, the bound that is not a number.
       const unnamed = reply.type === "error" && !reply.id && !reply.spawn_id;
       const spawn = unnamed
         ? spawns.find((s) => !s.done && "memory_bytes" in s && typeof s.memory_bytes !== "number")
-        : spawns.find((s) => s.id === reply.id || (reply.spawn_id && s.spawn_id === reply.spawn_id));
+        : spawns.find((s) => s.id === reply.id || s.place === reply.id || (reply.spawn_id && s.spawn_id === reply.spawn_id));
       if (spawn) settle(spawn, unnamed ? { ...reply, id: spawn.id } : reply);
     }
   });
   for (const s of spawns) {
-    const request = { v: 2, type: "spawn", id: s.id, pool: scenario.pool, argv: s.argv, env: {}, cpu_quota: 100000, attach: { path: attach, token: s.token } };
-    if ("memory_bytes" in s) request.memory_bytes = s.memory_bytes;
-    channel.write(JSON.stringify(request) + "\n");
+    const place = { v: 3, type: "place", id: s.place, kind: "build" };
+    if (s.athanor) place.athanor = s.athanor;
+    channel.write(JSON.stringify(place) + "\n");
   }
 });
 
@@ -248,7 +344,50 @@ def scenario():
         {"name": "process", "argv": shell(DAEMON + f"exec node -e '{NODE_ALLOCATOR}'"), "memory_bytes": BOUND},
         {"name": "tree", "argv": shell(holders), "memory_bytes": BOUND},
         {"name": "home", "argv": shell(FILL_HOME), "memory_bytes": BOUND},
+        {"name": "build", "athanor": ATHANOR, "measure": True, "argv": shell(MEASURED_BUILD) + ["measured-build"], "memory_bytes": BOUND},
     ]
+
+
+def reading(entry, athanor):
+    """Whether a measure's entry was answered with a reading above zero of a `build` of `athanor`, and nothing else."""
+    reply = entry.get("reply")
+    if not isinstance(reply, dict):
+        return False
+    owner = {"v": 3, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
+    return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
+            and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
+            and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
+
+
+def unmeasured(entry):
+    return entry.get("reply") == {"v": 3, "type": "error", "id": entry["id"], "code": "unmeasured"}
+
+
+def judge_build(spawn):
+    """The measured build's verdict, from what the client reported of it: its replies and its measures, each by phase."""
+    replies = spawn["replies"]
+    types = [reply["type"] for reply in replies]
+    expect(types[:2] == ["placed", "spawned"] and types[-1:] == ["released"] and set(types[2:-1]) <= {"exited"}
+           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")} == {"v": 3, "type": "placed", "id": spawn["place"]},
+           "the build's place is placed before its spawn names it, and the build is released", spawn)
+    released = replies[-1]["seq"]
+    phases = {phase: [entry for entry in spawn["measures"] if entry["phase"] == phase] for phase in ("running", "release", "after")}
+    running = phases["running"]
+    first = next((n for n, entry in enumerate(running) if entry.get("reply", {}).get("type") == "measured"), len(running))
+    expect(running[first:] and all(unmeasured(entry) for entry in running[:first]) and all(reading(entry, ATHANOR) for entry in running[first:]),
+           f"while the build runs, once the keeper has read its group, every measure of its place answers a reading above zero naming build "
+           f"and {ATHANOR} (before that, unmeasured)", running)
+    last = running[-1]
+    expect(spawn.get("holding_ms") is not None and last["at_ms"] - last["reply"]["age_ms"] > spawn["holding_ms"]
+           and last["reply"]["bytes"] >= HELD,
+           f"the reading the keeper took after the build said it holds {HELD // MIB} MiB counts them: "
+           f"{last['reply']['bytes'] / MIB:.0f} MiB", {"holding_ms": spawn.get("holding_ms"), "last": last})
+    release = (phases["release"] or [{"id": None}])[0]
+    expect(len(phases["release"]) == 1 and reading(release, ATHANOR) and release["seq"] < released,
+           "after its release, the build's place is still read above zero, answered before its released", [phases["release"], replies[-1]])
+    after = (phases["after"] or [{"id": None}])[0]
+    expect(len(phases["after"]) == 1 and unmeasured(after) and after["seq"] > released,
+           "after its released, the build's place is free: its measure is unmeasured", [phases["after"], replies[-1]])
 
 
 def hostile_sources(case):
@@ -396,7 +535,7 @@ def test_keeper(stack, limit, canary):
     with open(os.path.join(canary, "memory-client.mjs"), "w") as out:
         out.write(CLIENT)
     with open(os.path.join(canary, "memory-scenario.json"), "w") as out:
-        json.dump({"pool": "probe", "timeout_ms": 90_000, "spawns": scenario()}, out)
+        json.dump({"pool": "probe", "timeout_ms": 90_000, "measure": MEASURE, "spawns": scenario()}, out)
     # The container's user reads them, whatever the caller's umask.
     os.chmod(os.path.join(canary, "memory-client.mjs"), 0o644)
     os.chmod(os.path.join(canary, "memory-scenario.json"), 0o644)
@@ -430,6 +569,11 @@ def test_keeper(stack, limit, canary):
         peak = sampler.group_peaks.get(uid)
         measured = f"; uid {uid}, group peak {mib(peak) if peak else 'unseen'}, {mib(resident)} resident over {processes} processes" if uid else ""
         print(f"{name}: {end}{measured}")
+    for entry in spawns["build"]["measures"]:
+        answer = entry.get("reply") or {}
+        print(f"build: {entry['phase']} measure {entry['id']}: " + (
+            f"{answer['bytes'] / MIB:.0f} MiB of {answer.get('kind')} {answer.get('athanor')}, read {answer['age_ms']} ms before"
+            if answer.get("type") == "measured" else str(answer.get("code", "no answer"))))
     for line in result.stderr.splitlines():
         if "memory" in line:
             print("  keeper: " + line.split("] ", 1)[-1][:300])
@@ -444,7 +588,7 @@ def test_keeper(stack, limit, canary):
         expect(reply(name, "error") and reply(name, "error")["code"] == "bad_request" and not reply(name, "spawned"),
                f"{name} is refused as a bad request", spawns[name])
 
-    bounded = ("the least bound", "sibling", "process", "tree", "home")
+    bounded = ("the least bound", "sibling", "process", "tree", "home", "build")
     refused = [name for name in bounded if reply(name, "error")]
     if refused:
         expect(all(reply(name, "error")["code"] == "memory_unavailable" and not reply(name, "spawned") for name in bounded),
@@ -463,6 +607,7 @@ def test_keeper(stack, limit, canary):
         expect(exited and exited["signal"] == "SIGKILL" and exited["code"] is None and exited["memory"] == "cap",
                f"the hostile {name} is ended at its bound and reported so", spawns[name])
         expect(reply(name, "released"), f"the hostile {name}'s uid is reported retired", spawns[name])
+    judge_build(spawns["build"])
     # A hostile group lives for less than a second, so the sampler may miss
     # its last pages; that it reached its bound is the kernel's own count,
     # which `memory` `cap` reports. What was sampled never passed it.

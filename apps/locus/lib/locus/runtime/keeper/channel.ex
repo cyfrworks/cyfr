@@ -28,8 +28,10 @@ defmodule Locus.Runtime.Keeper.Channel do
   `release/2` asks it for the runner's retirement: a term signal to its
   process group, the grace to report what it holds, then the kill, and
   every process of the uid killed and everything it left removed before
-  another runner gets it. When the channel closes, `cyfr-locus` has
-  already retired every spawn and is exiting: every runner's owner hears
+  another runner gets it. A spawn `cyfr-locus` refuses after it made it
+  is heard as `{:refused, code, :release_follows}`, and its release
+  follows. When the channel closes, `cyfr-locus` is exiting: it kills this
+  node, then retires every spawn. Every runner's owner hears
   `{:error, :channel_lost}`, and the client stops, taking the runtime
   with it.
 
@@ -109,6 +111,28 @@ defmodule Locus.Runtime.Keeper.Channel do
        "not the socket it names)"}
   end
 
+  # The keeper options may name the adapter to use (`:server`), as a test
+  # does; the pool's runners use the registered one.
+  @impl Locus.Runtime.Keeper
+  def place(id, whose, opts) when is_list(opts) do
+    with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
+         :ok <- Locus.Keeper.place(client, id, whose, self()) do
+      :ok
+    else
+      {:error, reason} -> {:error, failure(reason)}
+    end
+  end
+
+  @impl Locus.Runtime.Keeper
+  def assign(place, whose, until, opts) when is_integer(until) and is_list(opts) do
+    with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
+         :ok <- Locus.Keeper.assign(client, place, whose, until) do
+      :ok
+    else
+      {:error, reason} -> {:error, failure(reason)}
+    end
+  end
+
   # A spec may name the adapter to use (`:server`), as a test does; the
   # pool's runners use the registered one.
   @impl Locus.Runtime.Keeper
@@ -116,6 +140,7 @@ defmodule Locus.Runtime.Keeper.Channel do
     adapter = Map.get(spec, :server, __MODULE__)
 
     request = %{
+      place: runner,
       argv: argv,
       env: env,
       pool: @pool,

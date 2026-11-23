@@ -3,38 +3,71 @@
 
 // Package protocol defines the messages between `cyfr-locus serve` and its
 // client over the inherited socket (fd 3): one JSON object per line, each
-// carrying `"v": 2` and a `type`.
+// carrying `"v": 3` and a `type`.
 //
 // Client to keeper:
 //
-//	{"v":2,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
-//	{"v":2,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
-//	{"v":2,"type":"resize","spawn_id":…,"rows":…,"cols":…}
-//	{"v":2,"type":"release","spawn_id":…,"grace_ms":…}
-//	{"v":2,"type":"measure","id":…,"spawn_id":…}
-//	{"v":2,"type":"pool","id":…,"pool":…}
-//	{"v":2,"type":"home_make","id":…,"path":…,"uid":…}
-//	{"v":2,"type":"home_measure","id":…,"path":…,"uid":…}
-//	{"v":2,"type":"home_retire","id":…,"path":…,"uid":…}
+//	{"v":3,"type":"place","id":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":3,"type":"drop","place":…}
+//	{"v":3,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":3,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
+//	{"v":3,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
+//	{"v":3,"type":"resize","spawn_id":…,"rows":…,"cols":…}
+//	{"v":3,"type":"release","spawn_id":…,"grace_ms":…}
+//	{"v":3,"type":"measure","id":…,"place":…}
+//	{"v":3,"type":"pool","id":…,"pool":…}
+//	{"v":3,"type":"home_make","id":…,"path":…,"uid":…}
+//	{"v":3,"type":"home_measure","id":…,"path":…,"uid":…}
+//	{"v":3,"type":"home_retire","id":…,"path":…,"uid":…}
 //
 // Keeper to client:
 //
-//	{"v":2,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
-//	{"v":2,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request)
-//	{"v":2,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
-//	{"v":2,"type":"measured","id":…,"bytes":…,"lesser":…}
-//	{"v":2,"type":"released","spawn_id":…}
-//	{"v":2,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
-//	{"v":2,"type":"home_made","id":…}
-//	{"v":2,"type":"home_measured","id":…,"bytes":…}
-//	{"v":2,"type":"home_retired","id":…}
+//	{"v":3,"type":"placed","id":…}
+//	{"v":3,"type":"assigned","id":…}
+//	{"v":3,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
+//	{"v":3,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
+//	{"v":3,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
+//	{"v":3,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
+//	{"v":3,"type":"released","spawn_id":…}
+//	{"v":3,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
+//	{"v":3,"type":"home_made","id":…}
+//	{"v":3,"type":"home_measured","id":…,"bytes":…}
+//	{"v":3,"type":"home_retired","id":…}
+//
+// A place follows one piece of work from before its preparation to its
+// release. The client names it with an `id` of its own minted before any
+// preparation, with its `kind` (Kinds) and, where it has them, the
+// `athanor` it is for, of the grammar every Locus wire gives an athanor's
+// id, and its `subject` (a program's or a terminal's row), of the id
+// grammar, and the keeper answers `placed`; a place of an id the keeper
+// already holds is refused as CodeBadRequest. A `drop` frees a place no
+// spawn has named, as when its preparation fails, its waiter cancels or
+// whom it was for dies; it is never answered, and a place the keeper no
+// longer holds leaves it with nothing to do. An `assign` has an `id` of its
+// own beside the `place` it names and gives that place another kind,
+// athanor and subject, as a runner given work or back at rest; it is
+// answered under that id alone, `assigned` once applied, or refused as
+// CodeBadRequest where the keeper holds no such place. A `spawn` names its
+// place, which no other spawn may name: one naming a place the keeper does
+// not hold, or one another spawn named, is refused as CodeBadRequest. Only
+// the keeper frees a place a spawn named: a spawn refused before the keeper
+// made anything of it is refused under its `id` alone and frees its place
+// before the refusal is sent, and every other place is free at its spawn's
+// `released`. A spawn refused after the keeper made it, as one whose
+// command could not be executed, is refused under its `id` and the
+// `spawn_id` the keeper gave it, and gets no `exited` and one `released`
+// under that `spawn_id` once its cleanup is done and its place freed. A
+// group that cannot be removed keeps its place, read and measured, and its
+// removal is retried once a second: only its success frees the place and
+// sends its `released`.
 //
 // `exited` is sent at most once and always before `released`: when a spawn's
 // leader process is reaped or, where retirement's bounded wait for that ran
 // out and the counters hold a kill for memory, then, with SIGKILL. A leader
 // retirement stopped waiting for with no such kill has none. `released` is
-// sent once, when the spawn's uid has been retired, whether retirement
-// followed a `release` or the leader's exit, and no exit follows it.
+// sent once, when the spawn's uid has been retired and its group removed,
+// whether retirement followed a `release`, the leader's exit or the spawn's
+// refusal, and no exit follows it.
 //
 // A spawn's `env` is the whole environment block its command receives
 // beside the variables the stage sets itself (PATH, HOME, USER, LOGNAME and
@@ -60,15 +93,18 @@
 // bound is enforced or the command does not run. Missing, null and zero
 // `memory_bytes` are refused as CodeBadRequest.
 //
-// A `measure` has an id of its own and names a spawn, and is answered under
-// that id alone, as a home request is: `measured` with the `bytes` of the
-// spawn's cgroup that cannot be given back, anon + shmem + kernel -
-// slab_reclaimable from one read of its memory.stat, so the tmpfs pages it
-// wrote count and the file cache it was charged does not. Where the kernel's
-// memory.stat has no `kernel` line (before 5.18) `lesser` is true and
-// `bytes` the lesser sum, of the parts of it that it names. A spawn the
-// keeper does not hold and a group it cannot read are refused as
-// CodeUnmeasured: no reading is ever answered as zero.
+// The keeper reads every spawn's group once a second, whatever its kind:
+// the `bytes` of its cgroup that cannot be given back, anon + shmem +
+// kernel - slab_reclaimable from one read of its memory.stat, so the tmpfs
+// pages it wrote count and the file cache it was charged does not. Where
+// the kernel's memory.stat has no `kernel` line (before 5.18) `lesser` is
+// true and `bytes` the lesser sum, of the parts of it that it names. A
+// `measure` has an id of its own and names a place, and is answered under
+// that id alone, as a home request is, from the last reading, never by a
+// read of its own: `measured` with the place's kind, athanor and subject of
+// the moment, the reading and its `age_ms`. A place the keeper does not
+// hold, and one with no reading yet, are refused as CodeUnmeasured: no
+// reading is ever answered as zero.
 //
 // A spawn's required `cpu_quota`, from MinCPUQuota to MaxCPUQuota, is the
 // microseconds of CPU time its group may use in every CPUPeriod (100000
@@ -163,7 +199,20 @@ import (
 )
 
 // Version is the protocol version every message carries as `v`.
-const Version = 2
+const Version = 3
+
+// A place's kinds: a runner at rest and one given a run, a build, and a
+// program's and a terminal's session.
+const (
+	KindWarm     = "warm"
+	KindRun      = "run"
+	KindBuild    = "build"
+	KindProgram  = "program"
+	KindTerminal = "terminal"
+)
+
+// Kinds are every kind a place may be.
+var Kinds = []string{KindWarm, KindRun, KindBuild, KindProgram, KindTerminal}
 
 // An `exited`'s `memory` values beside null.
 const (
@@ -197,6 +246,11 @@ const KeptHomesEnv = "KEEPER_KEPT_HOMES"
 
 // Message types.
 const (
+	TypePlace        = "place"
+	TypeDrop         = "drop"
+	TypeAssign       = "assign"
+	TypePlaced       = "placed"
+	TypeAssigned     = "assigned"
 	TypeSpawn        = "spawn"
 	TypeSignal       = "signal"
 	TypeResize       = "resize"
@@ -228,8 +282,8 @@ const (
 	// CodeMemoryUnavailable refuses a spawn whose memory and CPU bounds the
 	// keeper cannot enforce where it runs.
 	CodeMemoryUnavailable = "memory_unavailable"
-	// CodeUnmeasured refuses a measure of a spawn the keeper does not hold
-	// or whose cgroup it cannot read: what it uses is unknown.
+	// CodeUnmeasured refuses a measure of a place the keeper does not hold
+	// or that has no reading yet: what it uses is unknown.
 	CodeUnmeasured = "unmeasured"
 	// CodeHomeOverCap refuses a kept spawn whose home already holds its
 	// home_max_bytes.
@@ -309,6 +363,10 @@ var (
 	spawnIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	tokenPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	// athanorPattern is an athanor's id as every Locus wire gives it: 1 to
+	// 256 printable ASCII characters, no space. Prima.RunnerControl's @id
+	// holds the grammar.
+	athanorPattern = regexp.MustCompile(`^[\x21-\x7E]{1,256}$`)
 	// hostPattern is an exact hostname of the egress domain grammar
 	// (Prima.Destination's): lowercase labels of letters, digits, hyphens
 	// and underscores, neither starting nor ending with a hyphen, of at
@@ -468,9 +526,16 @@ type Request struct {
 	// empty for any other.
 	Isolation string  `json:"isolation,omitempty"`
 	Attach    *Attach `json:"attach,omitempty"`
-	SpawnID   string  `json:"spawn_id,omitempty"`
-	Sig       string  `json:"sig,omitempty"`
-	GraceMs   *int64  `json:"grace_ms,omitempty"`
+	// Place names a spawn's and a measure's place, and the place a drop or
+	// an assign acts on.
+	Place string `json:"place,omitempty"`
+	// Kind, Athanor and Subject are whose a place or an assign says it is.
+	Kind    string `json:"kind,omitempty"`
+	Athanor string `json:"athanor,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	SpawnID string `json:"spawn_id,omitempty"`
+	Sig     string `json:"sig,omitempty"`
+	GraceMs *int64 `json:"grace_ms,omitempty"`
 	// HomeMode is HomeScratch, HomeKept or empty (HomeScratch); HomePath,
 	// HomeUID and HomeMaxBytes are set only on a HomeKept spawn.
 	HomeMode     string  `json:"home_mode,omitempty"`
@@ -589,14 +654,44 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 			return nil, refuse(fmt.Sprintf("grace_ms must be within 0..%d", MaxGraceMs))
 		}
 	case TypeMeasure:
-		if !req.only("id", "spawn_id") {
-			return nil, refuse("measure carries only id and spawn_id")
+		if !req.only("id", "place") {
+			return nil, refuse("measure carries only id and place")
 		}
 		if !idPattern.MatchString(req.ID) {
 			return nil, refuse("id must match " + idPattern.String())
 		}
-		if !spawnIDPattern.MatchString(req.SpawnID) {
-			return nil, refuse("spawn_id must be 32 lowercase hex digits")
+		if !idPattern.MatchString(req.Place) {
+			return nil, refuse("place must match " + idPattern.String())
+		}
+	case TypePlace:
+		if !req.only("id", "kind", "athanor", "subject") {
+			return nil, refuse("place carries only id, kind, athanor and subject")
+		}
+		if !idPattern.MatchString(req.ID) {
+			return nil, refuse("id must match " + idPattern.String())
+		}
+		if err := validateWhose(&req); err != nil {
+			return nil, refuse(err.Error())
+		}
+	case TypeAssign:
+		if !req.only("id", "place", "kind", "athanor", "subject") {
+			return nil, refuse("assign carries only id, place, kind, athanor and subject")
+		}
+		if !idPattern.MatchString(req.ID) {
+			return nil, refuse("id must match " + idPattern.String())
+		}
+		if !idPattern.MatchString(req.Place) {
+			return nil, refuse("place must match " + idPattern.String())
+		}
+		if err := validateWhose(&req); err != nil {
+			return nil, refuse(err.Error())
+		}
+	case TypeDrop:
+		if !req.only("place") {
+			return nil, refuse("drop carries only place")
+		}
+		if !idPattern.MatchString(req.Place) {
+			return nil, refuse("place must match " + idPattern.String())
 		}
 	case TypePool:
 		if !req.only("id", "pool") {
@@ -627,12 +722,31 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 	return &req, nil
 }
 
+// validateWhose checks whose a place or an assign says it is: one of Kinds,
+// and an athanor of the athanor grammar and a subject of the id grammar,
+// each optional.
+func validateWhose(req *Request) error {
+	if !contains(Kinds, req.Kind) {
+		return errors.New("kind must be one of " + strings.Join(Kinds, ", "))
+	}
+	if req.present["athanor"] && !athanorPattern.MatchString(req.Athanor) {
+		return errors.New("athanor must match " + athanorPattern.String())
+	}
+	if req.present["subject"] && !idPattern.MatchString(req.Subject) {
+		return errors.New("subject must match " + idPattern.String())
+	}
+	return nil
+}
+
 func validateSpawn(req *Request) error {
-	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "isolation", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty", "hosts") {
-		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, isolation, attach, home_mode, home_path, home_uid, home_max_bytes, pty and hosts")
+	if !req.only("id", "place", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "isolation", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty", "hosts") {
+		return errors.New("spawn carries only id, place, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, isolation, attach, home_mode, home_path, home_uid, home_max_bytes, pty and hosts")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
+	}
+	if !idPattern.MatchString(req.Place) {
+		return errors.New("place must match " + idPattern.String())
 	}
 	if !poolPattern.MatchString(req.Pool) {
 		return errors.New("pool must match " + poolPattern.String())
@@ -855,8 +969,10 @@ func NewSpawned(id, spawnID string, uid, pid int) Spawned {
 	return Spawned{V: Version, Type: TypeSpawned, ID: id, SpawnID: spawnID, UID: uid, PID: pid}
 }
 
-// ErrorReply refuses the request named by ID (spawn, pool, home, measure) or
-// SpawnID (signal, resize, release).
+// ErrorReply refuses the request named by ID (place, assign, spawn, pool,
+// home, measure) or SpawnID (signal, resize, release). A spawn refused once
+// the keeper made it carries both: SpawnID is then the id its `released`
+// carries.
 type ErrorReply struct {
 	V       int    `json:"v"`
 	Type    string `json:"type"`
@@ -887,20 +1003,60 @@ func NewExited(spawnID string, code *int, signal, memory *string) Exited {
 	return Exited{V: Version, Type: TypeExited, SpawnID: spawnID, Code: code, Signal: signal, Memory: memory}
 }
 
-// Measured answers the `measure` named by ID with the bytes of its spawn's
-// cgroup that cannot be given back, and whether they are the lesser sum of a
-// kernel with no `kernel` count.
-type Measured struct {
-	V      int    `json:"v"`
-	Type   string `json:"type"`
-	ID     string `json:"id"`
+// Placed acknowledges a `place`.
+type Placed struct {
+	V    int    `json:"v"`
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// NewPlaced builds a `placed` reply.
+func NewPlaced(id string) Placed {
+	return Placed{V: Version, Type: TypePlaced, ID: id}
+}
+
+// Assigned acknowledges an `assign` once the keeper applied it.
+type Assigned struct {
+	V    int    `json:"v"`
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// NewAssigned builds an `assigned` reply.
+func NewAssigned(id string) Assigned {
+	return Assigned{V: Version, Type: TypeAssigned, ID: id}
+}
+
+// Whose is whose a place is: its kind, and its athanor and subject where it
+// has them.
+type Whose struct {
+	Kind    string `json:"kind"`
+	Athanor string `json:"athanor,omitempty"`
+	Subject string `json:"subject,omitempty"`
+}
+
+// Reading is one reading of a group: the bytes it uses that cannot be
+// given back, and whether they are the lesser sum of a kernel with no
+// `kernel` count.
+type Reading struct {
 	Bytes  uint64 `json:"bytes"`
 	Lesser bool   `json:"lesser"`
 }
 
+// Measured answers the `measure` named by ID: whose the place is, its last
+// reading and that reading's age in milliseconds.
+type Measured struct {
+	V    int    `json:"v"`
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Whose
+	Reading
+	AgeMs uint64 `json:"age_ms"`
+}
+
 // NewMeasured builds a `measured` reply.
-func NewMeasured(id string, bytes uint64, lesser bool) Measured {
-	return Measured{V: Version, Type: TypeMeasured, ID: id, Bytes: bytes, Lesser: lesser}
+func NewMeasured(id string, whose Whose, reading Reading, ageMs uint64) Measured {
+	return Measured{V: Version, Type: TypeMeasured, ID: id, Whose: whose, Reading: reading, AgeMs: ageMs}
 }
 
 // Released reports that a spawn's uid has been retired.

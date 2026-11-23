@@ -151,17 +151,19 @@ func Main(args []string) int {
 	}
 
 	s := &server{
-		cfg:      cfg,
-		log:      log,
-		self:     self,
-		client:   client,
-		accounts: accounts,
-		roots:    roots,
-		pools:    map[string]*pool.Pool{},
-		spawns:   map[string]*spawn{},
-		waiters:  map[int]*child{},
-		keptLive: map[int]int{},
-		keptOps:  map[int]*sync.Mutex{},
+		cfg:       cfg,
+		log:       log,
+		self:      self,
+		client:    client,
+		accounts:  accounts,
+		roots:     roots,
+		pools:     map[string]*pool.Pool{},
+		spawns:    map[string]*spawn{},
+		places:    map[string]*place{},
+		unremoved: map[*spawn]*removal{},
+		waiters:   map[int]*child{},
+		keptLive:  map[int]int{},
+		keptOps:   map[int]*sync.Mutex{},
 	}
 	for _, spec := range cfg.Pools {
 		s.pools[spec.Name] = pool.New(spec)
@@ -356,6 +358,14 @@ type spawn struct {
 	relay   *child
 	// group is the spawn's memory-bounded cgroup, nil until it is created.
 	group *cgroup.Group
+	// place is the id of the place the spawn was made in, set as it is
+	// made; its retirement frees the place in the step that follows its
+	// group's removal, so no measure answers a place whose spawn's group is
+	// gone, and no place goes while its group stays.
+	place string
+	// reading says a read of the spawn's group is out: no other starts
+	// until it returns.
+	reading atomic.Bool
 	// pty is the keeper's own descriptor of the master of the spawn's
 	// pseudo-terminal, which a `resize` sets the size through; nil for a
 	// spawn without one. s.mu guards it once the spawn is in spawns, and
@@ -365,7 +375,8 @@ type spawn struct {
 	// exitOnce settles the leader's one `exited`, sent or never to be:
 	// whichever of its watcher and the retirement comes first reads the
 	// cause and settles it, and the other waits for that. It is settled
-	// before `released`, so no exit follows one.
+	// before `released`, so no exit follows one, and at the refusal of a
+	// spawn refused once made, which was never spawned and is owed none.
 	exitOnce sync.Once
 	// retired closes when retirement has finished.
 	retired    chan struct{}
@@ -388,12 +399,19 @@ type server struct {
 	// (--guard); nil for a keeper without one, whose spawns name no hosts.
 	guard egressGuard
 
-	// mu guards pools, spawns and waiters, and is held across every fork,
-	// reap and signal, so a pid is never signalled after it was reaped.
-	mu      sync.Mutex
-	pools   map[string]*pool.Pool
-	spawns  map[string]*spawn
-	waiters map[int]*child
+	// mu guards pools, spawns, places, unremoved and waiters, and is held
+	// across every fork, reap and signal, so a pid is never signalled after
+	// it was reaped.
+	mu     sync.Mutex
+	pools  map[string]*pool.Pool
+	spawns map[string]*spawn
+	places map[string]*place
+	// unremoved holds every retired spawn whose group could not be removed,
+	// out of spawns, with what its retirement leaves to the retry that
+	// removes the group: until then its place stays, read as a live
+	// spawn's is, and a pooled uid stays out of its pool.
+	unremoved map[*spawn]*removal
+	waiters   map[int]*child
 	// keptLive counts the live spawns of each kept home's uid; keptOps
 	// holds each such uid's lock, which a spawn's start, the uid's full
 	// retirement and a home request take, so none of them interleaves
@@ -460,6 +478,9 @@ func (s *server) run() int {
 		close(lost)
 	}()
 	go s.sweeper()
+	reading := make(chan struct{})
+	defer close(reading)
+	go s.reader(reading)
 
 loop:
 	for {
@@ -594,7 +615,16 @@ func (s *server) serveChannel() {
 			s.send(rerr.Reply())
 			continue
 		}
-		go s.handle(req)
+		// A place, a drop and an assign are applied here, before the next
+		// line is read, in the order the client sent them: a spawn finds the
+		// place sent before it, and a drop or an assign what came before it.
+		// Every other request runs on a goroutine of its own.
+		switch req.Type {
+		case protocol.TypePlace, protocol.TypeDrop, protocol.TypeAssign:
+			s.handle(req)
+		default:
+			go s.handle(req)
+		}
 	}
 }
 
@@ -615,6 +645,12 @@ func (s *server) send(reply any) {
 
 func (s *server) handle(req *protocol.Request) {
 	switch req.Type {
+	case protocol.TypePlace:
+		s.handlePlace(req)
+	case protocol.TypeDrop:
+		s.handleDrop(req)
+	case protocol.TypeAssign:
+		s.handleAssign(req)
 	case protocol.TypeSpawn:
 		s.handleSpawn(req)
 	case protocol.TypeSignal:
@@ -645,28 +681,6 @@ func (s *server) handlePool(req *protocol.Request) {
 		return
 	}
 	s.send(protocol.NewPoolReply(req.ID, req.Pool, st.Size, st.Free, st.Quarantined))
-}
-
-// handleMeasure answers what a spawn's group uses. The reading is taken
-// under mu: a pooled spawn's group is named by its uid, which no other spawn
-// is given until mu has seen this one gone.
-func (s *server) handleMeasure(req *protocol.Request) {
-	var used cgroup.Use
-	var err error
-	s.mu.Lock()
-	sp := s.spawns[req.SpawnID]
-	if sp != nil {
-		used, err = sp.group.Used()
-	}
-	s.mu.Unlock()
-	if err != nil {
-		s.log.Error("measure %s: spawn %s: reading its memory use: %v", req.ID, req.SpawnID, err)
-	}
-	if sp == nil || err != nil {
-		s.send(protocol.NewError(req.ID, "", protocol.CodeUnmeasured))
-		return
-	}
-	s.send(protocol.NewMeasured(req.ID, used.Bytes, used.Lesser))
 }
 
 func (s *server) handleSignal(req *protocol.Request) {
@@ -748,10 +762,43 @@ func (s *server) poolSpec(name string) (pool.Spec, bool) {
 	return pool.Spec{}, false
 }
 
+// handleSpawn claims the place a spawn names before anything else is done,
+// and starts the spawn in it. One naming a place the keeper does not hold,
+// or one another spawn named, is refused. A spawn refused before the keeper
+// made it is refused under its request's id alone, its place freed before
+// the refusal is sent, so the client may place that id again. One refused
+// once made is refused under the spawn id the keeper gave it too, and is
+// retired after the refusal is sent, its exit settled first as none, since
+// it was never spawned: its retirement frees the place once the spawn's
+// group is removed, and then sends its `released`.
 func (s *server) handleSpawn(req *protocol.Request) {
 	if s.closing.Load() {
 		return
 	}
+	if s.claimPlace(req.Place) == nil {
+		s.log.Warn("spawn %s refused: the keeper holds no place %s, or another spawn named it", req.ID, req.Place)
+		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+		return
+	}
+	made, code := s.startSpawn(req)
+	switch {
+	case code == "":
+	case made == nil:
+		s.mu.Lock()
+		delete(s.places, req.Place)
+		s.mu.Unlock()
+		s.send(protocol.NewError(req.ID, "", code))
+	default:
+		s.send(protocol.NewError(req.ID, made.id, code))
+		made.exitOnce.Do(func() {})
+		s.retire(made, 0, true)
+	}
+}
+
+// startSpawn starts the spawn req asks for in the place it claimed. It
+// answers the code it is refused with, or "" once it is spawned, and the
+// spawn it made in the place, nil when it is refused before it made one.
+func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
 	// A spawn is isolated exactly when its pool is: a client never takes a
 	// command for isolated that is not, nor starts one unisolated from a
 	// pool that isolates every spawn.
@@ -761,30 +808,25 @@ func (s *server) handleSpawn(req *protocol.Request) {
 		} else {
 			s.log.Warn("spawn %s refused: it asks for isolation, which pool %s does not give", req.ID, req.Pool)
 		}
-		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
-		return
+		return nil, protocol.CodeBadRequest
 	}
 	// A kept home and a pseudo-terminal are a program's, whose pool shares
 	// the keeper's namespaces.
 	if req.Isolation != "" && (req.HomeMode == protocol.HomeKept || req.Pty != nil) {
 		s.log.Warn("spawn %s refused: an isolated spawn takes no kept home and no pty", req.ID)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
-		return
+		return nil, protocol.CodeBadRequest
 	}
 	if s.memory == nil {
 		s.log.Warn("spawn %s refused: its memory and CPU bounds are unavailable here", req.ID)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeMemoryUnavailable))
-		return
+		return nil, protocol.CodeMemoryUnavailable
 	}
 	reach, code, err := s.spawnEgress(req)
 	if err != nil {
 		s.log.Warn("spawn %s refused: %v", req.ID, err)
-		s.send(protocol.NewError(req.ID, "", code))
-		return
+		return nil, code
 	}
 	if req.HomeMode == protocol.HomeKept {
-		s.handleKeptSpawn(req, reach)
-		return
+		return s.startKeptSpawn(req, reach)
 	}
 	s.mu.Lock()
 	p := s.pools[req.Pool]
@@ -803,38 +845,27 @@ func (s *server) handleSpawn(req *protocol.Request) {
 	s.mu.Unlock()
 	switch {
 	case p == nil:
-		s.send(protocol.NewError(req.ID, "", protocol.CodeUnknownPool))
-		return
+		return nil, protocol.CodeUnknownPool
 	case !ok:
-		s.send(protocol.NewError(req.ID, "", protocol.CodeCapacity))
-		return
+		return nil, protocol.CodeCapacity
 	}
 
-	sp := &spawn{pool: p, account: s.accounts[uid], retired: make(chan struct{})}
-	if sp.id, err = randomHex(16); err == nil {
-		var name string
-		if name, err = home.NewName(uid); err == nil {
-			sp.home = filepath.Join(s.cfg.HomeRoot, name)
-		}
-	}
+	sp := &spawn{id: randomHex(16), pool: p, account: s.accounts[uid], retired: make(chan struct{})}
+	s.madeIn(req.Place, sp)
+	name, err := home.NewName(uid)
 	if err != nil {
 		s.log.Error("spawn %s: %v", req.ID, err)
-		s.retire(sp, 0, false)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
-		return
+		return sp, protocol.CodeInternal
 	}
+	sp.home = filepath.Join(s.cfg.HomeRoot, name)
 
 	if err := s.setEgress(uid, reach); err != nil {
 		s.log.Error("spawn %s on uid %d refused: its egress was not set at the guard: %v", req.ID, uid, err)
-		s.retire(sp, 0, false)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeGuardUnavailable))
-		return
+		return sp, protocol.CodeGuardUnavailable
 	}
 	if code, err := s.launch(sp, req); err != nil {
 		s.log.Error("spawn %s on uid %d: %v", req.ID, uid, err)
-		s.retire(sp, 0, false)
-		s.send(protocol.NewError(req.ID, "", code))
-		return
+		return sp, code
 	}
 
 	s.mu.Lock()
@@ -843,6 +874,7 @@ func (s *server) handleSpawn(req *protocol.Request) {
 	s.log.Info("spawn %s: uid %d, leader pid %d", sp.id, uid, sp.leader.pid)
 	s.send(protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
 	go s.watchLeader(sp)
+	return sp, ""
 }
 
 // launch starts the stage as the spawn's uid, waits until it has executed
@@ -1082,11 +1114,19 @@ func (s *server) watchLeader(sp *spawn) {
 }
 
 // reportExit settles the spawn's one `exited`, with what the counters say
-// killed it. A leader not reaped by then has SIGKILL's where they count a
-// kill for memory, which takes every process of the group, and none now or
-// later where they count none.
+// killed it, once its leader is reaped or clearTimeout has passed: a
+// retirement settles it before it removes the group, while the counters
+// stand, however late the watcher runs, and waits for the reaping only that
+// long, since a leader stuck in the kernel may never be reaped. A leader not
+// reaped by then has SIGKILL's where the counters count a kill for memory,
+// which takes every process of the group, and none now or later where they
+// count none.
 func (s *server) reportExit(sp *spawn) {
 	sp.exitOnce.Do(func() {
+		select {
+		case <-sp.leader.done:
+		case <-time.After(clearTimeout):
+		}
 		reaped := sp.leader.reaped()
 		memory := s.memoryEnd(sp)
 		if !reaped && memory == nil {
@@ -1111,19 +1151,6 @@ func (s *server) reportExit(sp *spawn) {
 		}
 		s.send(protocol.NewExited(sp.id, code, sig, memory))
 	})
-}
-
-// reportExitBeforeRemoval is a retirement's step before it removes the group
-// and reports the release: the exit is settled while the counters stand,
-// however late the watcher runs. The reaping is waited for clearTimeout at
-// most, since a leader stuck in the kernel may never be reaped, and the
-// counters alone decide the cause, whether it was or not.
-func (s *server) reportExitBeforeRemoval(sp *spawn) {
-	select {
-	case <-sp.leader.done:
-	case <-time.After(clearTimeout):
-	}
-	s.reportExit(sp)
 }
 
 // memoryEnd says what the kernel killed processes of the spawn for, as its
@@ -1160,7 +1187,7 @@ func (s *server) memoryEnd(sp *spawn) *string {
 // retire ends a spawn once: every process of its uid is terminated, what
 // the uid left behind is removed and the uid returned to its pool, or
 // quarantined if a process or anything it left survives. With notify,
-// `released` follows.
+// `released` follows, once the spawn's group is removed.
 func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 	if sp.kept {
 		s.retireKept(sp, grace, notify)
@@ -1183,43 +1210,74 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				}
 			}
 			if notify {
-				s.reportExitBeforeRemoval(sp)
+				s.reportExit(sp)
 			}
 			// A group is removable once it holds no process, which a clean
-			// scrub has established; the next spawn under the uid removes
-			// one that was not.
-			if sp.group != nil {
-				if err := sp.group.Remove(); err != nil {
-					s.log.Warn("spawn %s: removing the memory group of uid %d: %v", sp.id, uid, err)
-				}
-			}
+			// scrub has established. A clean uid whose group stays goes back
+			// to its pool only once the group is removed: the next spawn
+			// under the uid takes the group's name.
+			removed := s.removeSpawnGroup(sp)
 			// A clean uid's egress is cleared before the pool may give it to
 			// another spawn, whose own setting it would otherwise race; a
 			// quarantined one keeps its rules while anything of it remains.
-			if clean {
+			if clean && removed {
 				s.clearEgress(uid)
 			}
 
 			s.mu.Lock()
-			if clean {
-				_ = sp.pool.Release(uid)
-			} else {
+			switch {
+			case !clean:
 				_ = sp.pool.Quarantine(uid)
+			case removed:
+				_ = sp.pool.Release(uid)
 			}
-			delete(s.spawns, sp.id)
-			sp.closePty()
+			s.leave(sp, removed, removal{notify: notify, clean: clean})
 			s.mu.Unlock()
 
+			if !clean {
+				s.log.Warn("spawn %s: uid %d quarantined: a process or something it left outlived retirement", sp.id, uid)
+			}
+			if !removed {
+				return
+			}
 			if clean {
 				s.log.Info("spawn %s: uid %d retired", sp.id, uid)
-			} else {
-				s.log.Warn("spawn %s: uid %d quarantined: a process or something it left outlived retirement", sp.id, uid)
 			}
 			if notify {
 				s.send(protocol.NewReleased(sp.id))
 			}
 		}()
 	})
+}
+
+// removeSpawnGroup removes a retired spawn's group, where it has one, and
+// says whether none is left.
+func (s *server) removeSpawnGroup(sp *spawn) bool {
+	if sp.group == nil {
+		return true
+	}
+	if err := removeGroup(sp.group); err != nil {
+		s.log.Warn("spawn %s: its memory group of uid %d stays, its place and its release held until a retry removes it: %v", sp.id, sp.account.UID, err)
+		return false
+	}
+	return true
+}
+
+// leave is a retirement's last step, with s.mu held. A spawn whose group
+// was removed leaves spawns, its place with it, in this one step. One whose
+// group stays keeps its place, still read and measured, a started one stays
+// in spawns, and it waits in unremoved for the reader's retry of the
+// removal, which finishes what left says: until then a release of a started
+// one waits as its retirement's `released` does, and no `unknown_spawn`
+// answers it.
+func (s *server) leave(sp *spawn, removed bool, left removal) {
+	sp.closePty()
+	if !removed {
+		s.unremoved[sp] = &left
+		return
+	}
+	delete(s.spawns, sp.id)
+	delete(s.places, sp.place)
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends
@@ -1321,7 +1379,8 @@ func (s *server) sweeper() {
 }
 
 // sweep retries retirement of every quarantined uid, kept or pooled, and
-// returns each pooled one to its pool once nothing of it remains.
+// returns each pooled one to its pool once nothing of it remains, its group
+// included.
 func (s *server) sweep() {
 	type entry struct {
 		pool *pool.Pool
@@ -1338,6 +1397,21 @@ func (s *server) sweep() {
 	s.sweepKept()
 	for _, e := range todo {
 		if !s.scrub(s.accounts[e.uid], 0, nil, "") {
+			continue
+		}
+		// A uid whose group stays goes back to its pool only once the
+		// reader's retry removed the group, whose name the next spawn
+		// under the uid would take.
+		s.mu.Lock()
+		stays := false
+		for sp := range s.unremoved {
+			if sp.pool == e.pool && sp.account.UID == e.uid {
+				stays = true
+				break
+			}
+		}
+		s.mu.Unlock()
+		if stays {
 			continue
 		}
 		// Its rules stood while anything of it remained; it is cleared
@@ -1367,12 +1441,12 @@ func socketID(f *os.File) (string, error) {
 	return "socket:[" + strconv.FormatUint(st.Ino, 10) + "]", nil
 }
 
-func randomHex(n int) (string, error) {
+// randomHex is n random bytes in hex. crypto/rand.Read never returns an
+// error: it ends the process first.
+func randomHex(n int) string {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func lookPathIn(file, path string) (string, error) {

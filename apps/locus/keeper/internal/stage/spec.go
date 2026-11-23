@@ -25,8 +25,14 @@ import (
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
-// Path is the PATH every spawned process receives.
+// Path is the system's PATH: a build's and a pooled program's, the end of
+// a kept program's, and the keeper's own.
 const Path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// CyfrBin holds CYFR's drivers and the stub alone (Dockerfile.locus). It
+// is first on a kept program's PATH, so nothing a person installs is
+// found in their place.
+const CyfrBin = "/opt/cyfr/bin"
 
 // Spec is what the keeper hands a stage process over its spec pipe.
 type Spec struct {
@@ -89,36 +95,57 @@ func (s Spec) Validate() error {
 	return nil
 }
 
+// SearchPath is the spawn's PATH. A kept program's is CyfrBin, then the
+// home's .local/bin, where what the person installs goes, then Path; every
+// other spawn's is Path.
+func (s Spec) SearchPath() string {
+	if s.Kept {
+		return CyfrBin + ":" + filepath.Join(s.Home, ".local", "bin") + ":" + Path
+	}
+	return Path
+}
+
 // Environ is the complete environment of the spawned process: HOME, USER,
-// LOGNAME, TMPDIR (inside the home) and PATH, then the spec's own
-// variables, sorted by name. Nothing is inherited.
+// LOGNAME, TMPDIR (inside the home) and PATH (SearchPath), then the spec's
+// own variables, sorted by name. A kept program is also given npm's prefix
+// and XDG_BIN_HOME in the home's .local, so what it installs lands on its
+// PATH, unless its own variables name them. Nothing is inherited.
 func (s Spec) Environ() []string {
 	env := []string{
 		"HOME=" + s.Home,
 		"LOGNAME=" + s.User,
-		"PATH=" + Path,
+		"PATH=" + s.SearchPath(),
 		"TMPDIR=" + filepath.Join(s.Home, "tmp"),
 		"USER=" + s.User,
 	}
-	names := make([]string, 0, len(s.Env))
-	for name := range s.Env {
+	own := make(map[string]string, len(s.Env)+2)
+	if s.Kept {
+		own["NPM_CONFIG_PREFIX"] = filepath.Join(s.Home, ".local")
+		own["XDG_BIN_HOME"] = filepath.Join(s.Home, ".local", "bin")
+	}
+	for name, value := range s.Env {
+		own[name] = value
+	}
+	names := make([]string, 0, len(own))
+	for name := range own {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		env = append(env, name+"="+s.Env[name])
+		env = append(env, name+"="+own[name])
 	}
 	return env
 }
 
-// LookPath resolves a command name the way a shell would with Path: a name
-// containing a slash is used as given, otherwise the first executable
-// regular file named file in a Path directory.
-func LookPath(file string) (string, error) {
+// LookPath resolves the command's name the way a shell would with the
+// spawn's SearchPath: a name containing a slash is used as given,
+// otherwise the first executable regular file named file in one of its
+// directories.
+func (s Spec) LookPath(file string) (string, error) {
 	if strings.Contains(file, "/") {
 		return file, nil
 	}
-	for _, dir := range filepath.SplitList(Path) {
+	for _, dir := range filepath.SplitList(s.SearchPath()) {
 		candidate := filepath.Join(dir, file)
 		info, err := os.Stat(candidate)
 		if err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {

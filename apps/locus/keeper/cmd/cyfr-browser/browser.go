@@ -65,6 +65,9 @@ type browser struct {
 	windows map[string]*window
 	// pages carries the windows' calls, and their ends, to the serve loop.
 	pages chan pageEvent
+	// agent is how every target names itself (agent.go), set once Chrome
+	// has answered its version and before any window is made.
+	agent map[string]any
 }
 
 // window is one Chrome page target and its flattened session. Its name is
@@ -87,6 +90,9 @@ type window struct {
 	gen  int64
 	next *put
 	docs map[string]*put
+	// unnamed says a target attached to the window was refused its naming
+	// (agent.go) and was not let run, which the window's next action says.
+	unnamed bool
 }
 
 func newBrowser() *browser {
@@ -273,6 +279,12 @@ func (b *browser) in(ctx context.Context, name string, create bool, fn func(*win
 	w.op.Lock()
 	defer w.op.Unlock()
 	out, err := fn(w)
+	w.mu.Lock()
+	if w.unnamed {
+		out, err = nil, errUnnamed
+	}
+	w.unnamed = false
+	w.mu.Unlock()
 	if err != nil && made {
 		b.forget(ctx, name, w)
 	}
@@ -351,6 +363,9 @@ func (b *browser) attach(ctx context.Context, w *window, target string) error {
 	}
 	session := attached.SessionID
 	go b.serveSession(w, session, sessionPage, b.c.watch(session, intercepted))
+	if err := b.name(ctx, session, "page"); err != nil {
+		return err
+	}
 	if err := b.interceptOn(ctx, session); err != nil {
 		return err
 	}

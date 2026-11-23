@@ -162,17 +162,16 @@ defmodule Opus.Programs.Definition do
   @spec browser_command() :: String.t()
   def browser_command, do: @browser_command
 
-  # A Chrome, a second being fetched beside it, and the profile.
+  # The profile; the Chromium it runs is the image's.
   @browser_home_bytes 2 * 1024 * 1024 * 1024
 
   @doc """
   Aqua's browser as the config of the row a person adds once
   (`mcp_servers.create`, confirmed as any program's definition is), which
   the Programs page's form is filled from: the browser driver's command,
-  which fetches Chrome into the row's kept folder and starts it over its
-  debugging pipe inside the box, with no environment, driven, in that
-  folder, which holds Chrome and the profile, bounded at `memory_bytes`
-  and its folder at 2 GiB.
+  which starts the image's Chromium over its debugging pipe inside the
+  box, with no environment, driven, in the row's kept folder, which holds
+  its profile, bounded at `memory_bytes` and its folder at 2 GiB.
   """
   @spec browser(pos_integer()) :: map()
   def browser(memory_bytes) when is_integer(memory_bytes) do

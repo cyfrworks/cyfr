@@ -217,10 +217,45 @@ defmodule Locus.Builder do
   end
 
   @doc """
-  Run a prepared build.
+  The place a build of `request` runs in (`Locus.Executor`), made before it
+  is prepared, for the calling process: a `build` of the request's
+  athanor, under an id of its own. `{:error, refusal}` where no executor
+  can make one.
+  """
+  @spec place(%{required(:athanor_id) => String.t(), optional(atom()) => term()}) ::
+          {:ok, String.t()} | {:error, BuilderProtocol.refusal()}
+  def place(%{athanor_id: athanor_id}) do
+    place = "build-" <> Prima.Hex.short()
+
+    with {:ok, executor} <- executor() do
+      case executor.place(place, %{kind: "build", athanor: athanor_id}) do
+        :ok ->
+          {:ok, place}
+
+        {:error, reason} ->
+          Logger.error("[Locus.Builder] a build's place was not made: #{inspect(reason)}")
+
+          {:error,
+           {:unavailable, "cyfr-locus could not hold the build (#{spawn_failure(reason)})"}}
+      end
+    end
+  end
+
+  @doc "Free the place `place/1` made, unless the build's run named it."
+  @spec drop(String.t()) :: :ok
+  def drop(place) do
+    case Locus.Executor.executor() do
+      {:ok, executor} -> executor.drop(place)
+      {:error, :no_keeper} -> :ok
+    end
+  end
+
+  @doc """
+  Run a prepared build in its place.
 
   ## Options
 
+  - `:place` — the place `place/1` made for the build, which its run names.
   - `:timeout_ms` — the build's budget, `Locus.Config.timeout_ms/0` unless
     given. Past it every process the build started is killed and the
     answer is the `timeout` refusal naming it.
@@ -228,7 +263,7 @@ defmodule Locus.Builder do
 
   `{:error, :cancelled}` answers a run ended by `Locus.Executor.cancel/1`.
   """
-  @spec run(plan(), timeout_ms: pos_integer(), on_progress: on_progress()) ::
+  @spec run(plan(), place: String.t(), timeout_ms: pos_integer(), on_progress: on_progress()) ::
           {:ok, built()} | {:error, BuilderProtocol.refusal() | :cancelled}
   def run(%{language: language, target_type: target_type} = plan, opts \\ []) do
     timeout_ms = Keyword.get_lazy(opts, :timeout_ms, &Locus.Config.timeout_ms/0)
@@ -236,9 +271,11 @@ defmodule Locus.Builder do
 
     on_progress.(:preparing, "Preparing source files...")
 
+    place = Keyword.fetch!(opts, :place)
+
     with {:ok, executor} <- executor(),
          _ = on_progress.(:compiling, plan.announce),
-         {:ok, files} <- execute(executor, plan, timeout_ms, on_progress),
+         {:ok, files} <- execute(executor, plan, place, timeout_ms, on_progress),
          {:ok, outputs} <- outputs(plan, files, on_progress),
          :ok <- within_bounds(outputs, on_progress) do
       {:ok, %{language: language, target_type: target_type, outputs: outputs}}
@@ -446,10 +483,11 @@ defmodule Locus.Builder do
   # ============================================================================
 
   # Runs the build's script and reads its output archive.
-  defp execute(executor, plan, timeout_ms, on_progress) do
+  defp execute(executor, plan, place, timeout_ms, on_progress) do
     command = %{argv: plan.argv, env: toolchain_env(), stdin: plan.archive}
 
     opts = [
+      place: place,
       timeout_ms: timeout_ms,
       max_stdout_bytes: @max_output_archive_bytes,
       on_output: &on_progress.(:output, &1)

@@ -57,11 +57,12 @@ func (k *keeper) homeRequest(t *testing.T, typ, id, path string, uid int) map[st
 	return k.reply(t)
 }
 
-// keptRequest is the parsed request for a kept spawn of `/bin/sh -c script`.
+// keptRequest is the parsed request for a kept spawn of `/bin/sh -c script`,
+// in the place of its own id.
 func keptRequest(t *testing.T, attach, id, script, path string, uid int, maxBytes *uint64) *protocol.Request {
 	t.Helper()
 	message := map[string]any{
-		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "pool": "runner",
+		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "place": id, "pool": "runner",
 		"argv": []string{"/bin/sh", "-c", script}, "env": map[string]string{},
 		"memory_bytes": 64 << 20, "cpu_quota": protocol.CPUPeriod,
 		"attach":    map[string]string{"path": attach, "token": testToken},
@@ -84,7 +85,7 @@ func keptRequest(t *testing.T, attach, id, script, path string, uid int, maxByte
 // spawnKept starts a kept spawn and answers its spawn id and its relay.
 func (k *keeper) spawnKept(t *testing.T, id, script, path string, uid int) (string, *relayConn) {
 	t.Helper()
-	k.s.handleSpawn(keptRequest(t, k.attach, id, script, path, uid, nil))
+	k.handleSpawn(t, keptRequest(t, k.attach, id, script, path, uid, nil))
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned || spawned["id"] != id || int(spawned["uid"].(float64)) != uid {
 		t.Fatalf("kept spawn %s answered %v", id, spawned)
@@ -183,7 +184,7 @@ func TestAKeptHomeLivesUnderItsOwnUID(t *testing.T) {
 		t.Fatalf("home_measure: %v", measured)
 	}
 	over := uint64(bytes)
-	k.s.handleSpawn(keptRequest(t, k.attach, "k3", "true", path, uid, &over))
+	k.handleSpawn(t, keptRequest(t, k.attach, "k3", "true", path, uid, &over))
 	if refused := k.reply(t); refused["type"] != protocol.TypeError || refused["code"] != protocol.CodeHomeOverCap {
 		t.Fatalf("a spawn at its home's bound: %v", refused)
 	}
@@ -231,9 +232,13 @@ func TestAKeptSpawnOutsideItsRangeOrHomeIsRefused(t *testing.T) {
 		"a home below another":    keptRequest(t, k.attach, "2", "true", filepath.Join(root, "a", "b"), testKeptFirst, nil),
 		"a home not made":         keptRequest(t, k.attach, "3", "true", filepath.Join(root, "vlt_absent"), testKeptFirst, nil),
 	} {
-		k.s.handleSpawn(req)
+		k.handleSpawn(t, req)
 		if refused := k.reply(t); refused["type"] != protocol.TypeError || refused["code"] != protocol.CodeBadRequest {
 			t.Errorf("%s: %v", name, refused)
+		}
+		// The refusal freed the place the spawn named.
+		if placed := k.place(t, req.Place, protocol.KindProgram); placed["type"] != protocol.TypePlaced {
+			t.Errorf("%s: placing its place again answered %v", name, placed)
 		}
 	}
 }
@@ -250,7 +255,7 @@ func TestAPtySpawnRunsOnATerminal(t *testing.T) {
 	k := boundedKeeper(t)
 	req := spawnRequest(t, k.attach, "t1", `tty; [ -t 0 ] && [ -t 2 ] && echo isatty; stty size; IFS= read -r line; echo "got:$line"`, map[string]string{}, false, 64<<20)
 	req.Pty = ptySize(40, 120)
-	k.s.handleSpawn(req)
+	k.handleSpawn(t, req)
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned {
 		t.Fatalf("pty spawn: %v", spawned)
@@ -277,7 +282,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 	k := boundedKeeper(t)
 	req := spawnRequest(t, k.attach, "t2", `stty size; read x; stty size`, map[string]string{}, false, 64<<20)
 	req.Pty = ptySize(24, 80)
-	k.s.handleSpawn(req)
+	k.handleSpawn(t, req)
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned {
 		t.Fatalf("pty spawn: %v", spawned)
@@ -285,7 +290,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 	spawnID := spawned["spawn_id"].(string)
 	rc := k.accept(t)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "24 80") })
-	resize, rerr := protocol.ParseRequest([]byte(`{"v":2,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+	resize, rerr := protocol.ParseRequest([]byte(`{"v":3,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 	if rerr != nil {
 		t.Fatal(rerr.Detail)
 	}
@@ -425,7 +430,7 @@ func TestAKeptUIDWhoseRetirementCannotFinishIsQuarantined(t *testing.T) {
 	if busy := k.homeRequest(t, protocol.TypeHomeMake, "m2", filepath.Join(k.s.cfg.Kept.Root, "vlt_home-other"), uid); busy["code"] != protocol.CodeUIDBusy {
 		t.Fatalf("home_make on a quarantined uid: %v", busy)
 	}
-	k.s.handleSpawn(keptRequest(t, k.attach, "again", "true", path, uid, nil))
+	k.handleSpawn(t, keptRequest(t, k.attach, "again", "true", path, uid, nil))
 	if busy := k.reply(t); busy["code"] != protocol.CodeUIDBusy {
 		t.Fatalf("a spawn on a quarantined uid: %v", busy)
 	}

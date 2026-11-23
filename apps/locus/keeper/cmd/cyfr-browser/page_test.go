@@ -53,6 +53,9 @@ type pageChrome struct {
 	fails map[string]navFail
 	// historyError fails every read of a window's navigation history.
 	historyError bool
+	// refuseChildNaming refuses the naming of every target attached to a
+	// window's session (agent.go).
+	refuseChildNaming bool
 }
 
 type navigation struct {
@@ -316,6 +319,16 @@ func (f *pageChrome) serve(commands io.Reader) {
 			f.frame(session, "M"+strings.TrimPrefix(p.TargetID, "T"), "", "://")
 			reply(map[string]any{"sessionId": session})
 		case "Page.enable", "Page.setLifecycleEventsEnabled", "Network.enable", "Fetch.enable", "Target.setAutoAttach":
+			reply(map[string]any{})
+		case "Emulation.setUserAgentOverride", "Network.setUserAgentOverride":
+			f.mu.Lock()
+			refuse := f.refuseChildNaming && strings.HasPrefix(m.SessionID, "C")
+			f.mu.Unlock()
+			if refuse {
+				f.write(map[string]any{"id": m.ID, "sessionId": m.SessionID,
+					"error": map[string]any{"code": -32000, "message": "Not allowed"}})
+				continue
+			}
 			reply(map[string]any{})
 		case "Runtime.runIfWaitingForDebugger":
 			reply(map[string]any{})
@@ -1388,4 +1401,32 @@ func TestACallNamesThePutItsDocumentBelongsTo(t *testing.T) {
 	unanswered(2)
 	load(2, testRoot, second)
 	r.h.quiet(func(m map[string]any) bool { return m["t"] == "callend" }, "an answered call was ended")
+}
+
+// A frame of another process that Chrome refuses to name as the browser
+// it is never runs, and the window's next action says why; the window
+// itself is named before anything loads in it.
+func TestAFrameThatCannotBeNamedNeverRuns(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	r.b.agent = map[string]any{"userAgent": "Mozilla/5.0 Chrome/156.0.8078.79"}
+	r.f.mu.Lock()
+	r.f.refuseChildNaming = true
+	r.f.mu.Unlock()
+	if shown := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); shown["ok"] == nil {
+		t.Fatalf("the put answered %v", shown)
+	}
+	r.f.navigated()
+	frame := r.f.attach("S1", "iframe")
+	select {
+	case run := <-r.f.runs:
+		t.Fatalf("%s ran though the frame %s was not named", run, frame)
+	case <-time.After(300 * time.Millisecond):
+	}
+	r.h.send(map[string]any{"t": "req", "id": 2, "win": "thr_01", "op": "read", "args": map[string]any{}})
+	read := r.h.response(2)
+	failure, _ := read["error"].(map[string]any)
+	if failure["code"] != "unnamed" {
+		t.Fatalf("the window's next action answered %v", read)
+	}
 }

@@ -506,6 +506,28 @@ defmodule Prima.BuilderProtocolTest do
       assert {:error, {:invalid_field, "athanor_id"}} =
                BuilderProtocol.encode_request(%{request() | athanor_id: <<0xFF>>})
     end
+
+    test "a request's athanor_id is of the grammar every Locus wire gives an athanor's id" do
+      read = fn athanor_id ->
+        wire = Map.put(Jason.decode!(@vectors["request"]["body"]), "athanor_id", athanor_id)
+
+        {BuilderProtocol.encode_request(%{request() | athanor_id: athanor_id}),
+         BuilderProtocol.read_request(Jason.encode!(wire))}
+      end
+
+      for athanor_id <- ["family@example", String.duplicate("a", 256)] do
+        assert {{:ok, _body}, {:ok, %{athanor_id: ^athanor_id}}} = read.(athanor_id)
+        assert Regex.match?(Prima.RunnerControl.athanor_id_pattern(), athanor_id)
+      end
+
+      for athanor_id <- ["family of mine", "famille-é", String.duplicate("a", 257)] do
+        assert read.(athanor_id) ==
+                 {{:error, {:invalid_field, "athanor_id"}},
+                  {:error, {:invalid_field, "athanor_id"}}}
+
+        refute Regex.match?(Prima.RunnerControl.athanor_id_pattern(), athanor_id)
+      end
+    end
   end
 
   describe "refusals" do

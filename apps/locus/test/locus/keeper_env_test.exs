@@ -15,11 +15,16 @@ defmodule Locus.KeeperEnvTest do
   alias Locus.Keeper
   alias Locus.Test.FakeKeeper
 
+  # A run in a place made for it, as every spawn's is before it is asked for.
   defp run(name, script, opts \\ []) do
+    place = "pl-" <> Integer.to_string(System.unique_integer([:positive]))
+    :ok = Keeper.place(name, place, %{kind: "build"}, self())
+
     Keeper.run(
       name,
       %{argv: ["/bin/sh", "-c", script], env: %{}, stdin: ""},
-      [timeout_ms: 10_000, max_stdout_bytes: 1_000_000] ++ Keyword.take(opts, [:memory_bytes])
+      [place: place, timeout_ms: 10_000, max_stdout_bytes: 1_000_000] ++
+        Keyword.take(opts, [:memory_bytes])
     )
   end
 

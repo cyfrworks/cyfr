@@ -4,6 +4,8 @@
 package stage
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -75,16 +77,70 @@ func TestSpecValidationRefusals(t *testing.T) {
 	}
 }
 
-func TestLookPathUsesOnlyTheFixedPath(t *testing.T) {
-	if got, err := LookPath("./relative/tool"); err != nil || got != "./relative/tool" {
+// A kept program's PATH is CYFR's drivers, then what the person installs
+// in the home, then the system's, and npm installs and XDG_BIN_HOME land
+// on it; its own variables may name another prefix.
+func TestKeptEnvironPutsTheHomeAfterCyfrsDrivers(t *testing.T) {
+	kept := validSpec()
+	kept.Kept, kept.Home, kept.User = true, "/var/lib/locus/kept/vlt_01a-b", "40001"
+	got := kept.Environ()
+	want := []string{
+		"HOME=/var/lib/locus/kept/vlt_01a-b",
+		"LOGNAME=40001",
+		"PATH=/opt/cyfr/bin:/var/lib/locus/kept/vlt_01a-b/.local/bin:" + Path,
+		"TMPDIR=/var/lib/locus/kept/vlt_01a-b/tmp",
+		"USER=40001",
+		"API_KEY=k",
+		"NODE_ENV=production",
+		"NPM_CONFIG_PREFIX=/var/lib/locus/kept/vlt_01a-b/.local",
+		"XDG_BIN_HOME=/var/lib/locus/kept/vlt_01a-b/.local/bin",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("environ\n got %q\nwant %q", got, want)
+	}
+	kept.Env = map[string]string{"NPM_CONFIG_PREFIX": "/elsewhere"}
+	if got := kept.Environ(); !reflect.DeepEqual(got[len(got)-2:], []string{"NPM_CONFIG_PREFIX=/elsewhere",
+		"XDG_BIN_HOME=/var/lib/locus/kept/vlt_01a-b/.local/bin"}) {
+		t.Fatalf("a row's own prefix: %q", got)
+	}
+}
+
+func TestLookPathUsesTheSpawnsPath(t *testing.T) {
+	pooled := validSpec()
+	if got, err := pooled.LookPath("./relative/tool"); err != nil || got != "./relative/tool" {
 		t.Fatalf("a name with a slash was rewritten: %q %v", got, err)
 	}
-	got, err := LookPath("sh")
-	if err != nil || !strings.HasSuffix(got, "/sh") || !strings.HasPrefix(got, "/") {
-		t.Fatalf("sh resolved to %q %v", got, err)
+	system, err := pooled.LookPath("sh")
+	if err != nil || !strings.HasSuffix(system, "/sh") || !strings.HasPrefix(system, "/") {
+		t.Fatalf("sh resolved to %q %v", system, err)
 	}
-	if _, err := LookPath("cyfr-locus-no-such-command"); err == nil {
+	if _, err := pooled.LookPath("cyfr-locus-no-such-command"); err == nil {
 		t.Fatal("a missing command resolved")
+	}
+	// What a person installs in a kept home is found before the system's,
+	// and never for a pooled spawn.
+	kept := validSpec()
+	kept.Kept, kept.Home = true, t.TempDir()
+	bin := filepath.Join(kept.Home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sh", "their-tool"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, want := range map[string]string{"sh": filepath.Join(bin, "sh"), "their-tool": filepath.Join(bin, "their-tool")} {
+		if got, err := kept.LookPath(name); err != nil || got != want {
+			t.Errorf("a kept spawn's %s resolved to %q %v, want %q", name, got, err, want)
+		}
+	}
+	pooled.Home = kept.Home
+	if got, err := pooled.LookPath("sh"); err != nil || got != system {
+		t.Errorf("a pooled spawn's sh resolved to %q %v, want %q", got, err, system)
+	}
+	if _, err := pooled.LookPath("their-tool"); err == nil {
+		t.Error("a pooled spawn found a tool of the home's")
 	}
 }
 

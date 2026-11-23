@@ -140,17 +140,19 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # the layer refreshes once a day and is shared within it; a local build may
 # leave it.
 #
-# Aqua's browser fetches its Chrome into its kept home, as a program
-# fetches itself (cyfr-browser, below); the image holds no Chrome, only
-# the shared libraries Chrome links and a font for the pages it renders.
-# libgbm is linked but not used by a headless Chrome, which allocates no
-# GPU buffer: libgbm1 is installed as a package, which the image scans
-# list, and then what it alone pulled in for its Mesa drivers
-# (mesa-libgallium, LLVM, Z3 and theirs, about 194 MiB) is purged past the
-# dependency check, so none of it is present or listed. libgbm1's own
-# dependencies on everything else stay met. Its one unmet dependency is
-# mesa-libgallium: no later layer and nothing at run time calls apt, and
-# one that did would have to install mesa-libgallium first.
+# Aqua's browser is Debian's Chromium (cyfr-browser, below), its headless
+# shell, upgraded with the rest at each build, with a font for the pages
+# it renders. The shell is the browser engine alone: no sign-in, sync,
+# component updater or session restore, so it reaches nothing by itself.
+# It links libgbm, which a headless browser does not use: it allocates no
+# GPU buffer. So Mesa's gallium driver, which libgbm1 depends on, is
+# purged past the dependency check with what it alone pulled in (LLVM, Z3
+# and theirs, about 190 MiB), so none of it is present or listed: starting
+# from mesa-libgallium, a package the shell brought joins the purge when
+# only the purge's own packages depend on it. What depends on
+# mesa-libgallium keeps that one unmet dependency, and every other
+# dependency stays met. No later layer and nothing at run time calls apt,
+# and one that did would have to install mesa-libgallium first.
 ARG APT_REFRESH=0
 RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
@@ -162,40 +164,27 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     build-essential \
     iptables \
     procps \
-    && apt-get install -y --no-install-recommends \
-    fonts-liberation \
-    libasound2t64 \
-    libatk-bridge2.0-0t64 \
-    libatk1.0-0t64 \
-    libatspi2.0-0t64 \
-    libcairo2 \
-    libcups2t64 \
-    libdbus-1-3 \
-    libdrm2 \
-    libexpat1 \
-    libglib2.0-0t64 \
-    libnspr4 \
-    libnss3 \
-    libpango-1.0-0 \
-    libx11-6 \
-    libxcb1 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxkbcommon0 \
-    libxrandr2 \
-    && dpkg-query -W -f '${Package}\n' | sort > /tmp/before-libgbm \
-    && apt-get install -y --no-install-recommends libgbm1 \
-    && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/before-libgbm - > /tmp/libgbm-brought \
-    && dpkg-query -W -f '${Depends}' libgbm1 | tr ',' '\n' | sed 's/ *(.*//; s/^ *//' \
-       | grep -vx mesa-libgallium > /tmp/libgbm-needs \
-    && grep -vxF -e libgbm1 -f /tmp/libgbm-needs /tmp/libgbm-brought > /tmp/libgbm-purged \
-    && grep -qx mesa-libgallium /tmp/libgbm-purged \
-    && dpkg --purge --force-depends $(cat /tmp/libgbm-purged) \
-    && rm /tmp/before-libgbm /tmp/libgbm-brought /tmp/libgbm-needs /tmp/libgbm-purged \
+    && apt-get install -y --no-install-recommends fonts-liberation \
+    && dpkg-query -W -f '${Package}\n' | sort > /tmp/before-browser \
+    && apt-get install -y --no-install-recommends chromium-headless-shell \
+    && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/before-browser - > /tmp/browser-brought \
+    && depends() { dpkg-query -W -f '${Depends},${Pre-Depends}\n' "$@" | tr ',' '\n' \
+         | sed 's/ *(.*//; s/ *|.*//; s/^ *//; s/:any$//' | grep . | sort -u; } \
+    && echo mesa-libgallium > /tmp/purged \
+    && while :; do \
+         { cat /tmp/purged; depends $(cat /tmp/purged) | grep -xF -f /tmp/browser-brought; } | sort -u > /tmp/candidates; \
+         dpkg-query -W -f '${Package}\n' | grep -vxF -f /tmp/candidates > /tmp/outside; \
+         depends $(cat /tmp/outside) | grep -vx mesa-libgallium > /tmp/wanted; \
+         { echo mesa-libgallium; grep -vxF -f /tmp/wanted /tmp/candidates; } | sort -u > /tmp/next; \
+         cmp -s /tmp/next /tmp/purged && break; \
+         mv /tmp/next /tmp/purged; \
+       done \
+    && grep -q '^libllvm' /tmp/purged \
+    && dpkg --purge --force-depends $(cat /tmp/purged) \
+    && rm /tmp/before-browser /tmp/browser-brought /tmp/purged /tmp/candidates /tmp/outside /tmp/wanted /tmp/next \
     && ldconfig \
-    && ! ldd /usr/lib/*/libgbm.so.1 | grep -q 'not found' \
+    && ! ldd /usr/lib/chromium/chromium-headless-shell /usr/lib/*/libgbm.so.1 | grep -q 'not found' \
+    && ! apt-get check 2>&1 | grep 'Depends:' | grep -qv 'Depends: mesa-libgallium ' \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen
@@ -253,8 +242,9 @@ RUN ARCH=$(dpkg --print-architecture) \
 
 # The toolchains stay root-owned: a build or a backend reads them and
 # writes only its own home, so none can alter what the next one runs
-# with. Every spawn runs with cyfr-locus's fixed PATH, so the Rust
-# toolchain's commands are linked into /usr/local/bin.
+# with. Every spawn's PATH ends with the system's, which cyfr-locus fixes
+# (apps/locus/keeper/internal/stage/spec.go), so the Rust toolchain's
+# commands are linked into /usr/local/bin.
 RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 
 # The locus release's user, the runner pool, the build pool and the
@@ -295,25 +285,28 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 WORKDIR /app
 
 COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
+# CYFR's drivers and the stub, in /opt/cyfr/bin alone, which is first on a
+# kept program's PATH (apps/locus/keeper/internal/stage/spec.go), so a
+# command of the same name a person installs is never found in their place.
 # The MCP stdio server a harness the backends service runs reaches CYFR's
 # tools through (Claude Code, which its brain driver cyfr-claude-code sets
 # it up for): it answers each call from the answer CYFR puts in the call's
 # input, and holds nothing.
-COPY --from=keeper /out/cyfr-stub /usr/local/bin/cyfr-stub
+COPY --from=keeper /out/cyfr-stub /opt/cyfr/bin/cyfr-stub
 # Aqua's browser: the command of a person's browser row, which the backends
-# service runs on a terminal in the row's kept home. It fetches Chrome for
-# Testing into that home when the home holds none, starts it headless with
-# its profile there and drives it over Chrome's debugging pipe, which stays
-# inside the box: no debugging port is opened.
-COPY --from=keeper /out/cyfr-browser /usr/local/bin/cyfr-browser
+# service runs on a terminal in the row's kept home. It starts the image's
+# Chromium headless shell with its profile there and drives it over its
+# debugging pipe, which stays inside the box: no debugging port is opened.
+COPY --from=keeper /out/cyfr-browser /opt/cyfr/bin/cyfr-browser
 # Claude Code's driver, as a brain of CYFR's: the start of a brain row's
 # command, before the harness's own, which it starts and speaks the
 # harness's protocol to in the row's kept home; it speaks the brain wire to
-# its holder, and on a terminal runs the harness unchanged.
-COPY --from=keeper /out/cyfr-claude-code /usr/local/bin/cyfr-claude-code
+# its holder, and on a terminal runs the harness unchanged. The image
+# carries no Claude Code: the row's command fetches it.
+COPY --from=keeper /out/cyfr-claude-code /opt/cyfr/bin/cyfr-claude-code
 # OpenAI Codex's driver, as a brain of CYFR's, the same way: it starts the
 # harness's app-server in the row's kept home and speaks its protocol.
-COPY --from=keeper /out/cyfr-codex /usr/local/bin/cyfr-codex
+COPY --from=keeper /out/cyfr-codex /opt/cyfr/bin/cyfr-codex
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The egress guard the builds and backends islands run (docker-compose.yml's
 # locus-builds-guard and locus-backends-guard); iptables, installed above,

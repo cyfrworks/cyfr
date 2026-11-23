@@ -30,9 +30,13 @@ defmodule Locus.Backends.Backend do
   launcher tells the leader's exit: before `:vacated`, and after a close
   was asked as before one, so a close that answered at once loses no cause.
   Once nothing of its process is left (the launcher's `:released`, or
-  its refusal of the spawn), `:vacated`, after which it holds no uid. A
-  spawn the launcher did not answer (`launcher_unavailable`) is
-  `:unconfirmed` instead: it may yet run, and only the launcher can say.
+  its refusal of a spawn it made nothing of), `:vacated`, after which it
+  holds no uid. A spawn the launcher refused after making something of it
+  (`{:refused, code, handle}`) ends the session refused at once and is
+  vacated at the launcher's `:released` on that handle, as a started one
+  is: the refusal is not a release. A spawn the launcher did not answer
+  (`launcher_unavailable`) is `:unconfirmed` instead: it may yet run, and
+  only the launcher can say.
 
   `close/1`, `retire_if_idle/2` (no message within the idle period),
   `end_session/2` (its owners ending it: the cap of its home, its home's
@@ -43,12 +47,9 @@ defmodule Locus.Backends.Backend do
 
   ## Its use
 
-  `measure/1` answers what the session's process uses that cannot be
-  given back, as its launcher reads it, until nothing of it is left: its
-  `bytes`, and `lesser` where the kernel could count only part of its own
-  memory (`t:Prima.KeeperProtocol.reading/0`). With no process, a
-  reading that failed, or a session that is gone or goes while it is read,
-  its use is `:unknown`, never zero.
+  Its process runs in the place its spec names, which the owner table made
+  for it (`Locus.Backends.Owners`, "Places"): what it uses is read there,
+  by the keeper, and never asked of this process.
 
   ## Masking
 
@@ -172,14 +173,6 @@ defmodule Locus.Backends.Backend do
         }
   def status(server, timeout), do: GenServer.call(server, :status, timeout)
 
-  @doc "What the session's process uses, or `:unknown`: never a zero for a reading not made."
-  @spec measure(GenServer.server()) :: {:ok, Prima.KeeperProtocol.reading()} | :unknown
-  def measure(server) do
-    GenServer.call(server, :measure, @call_margin_ms)
-  catch
-    :exit, _reason -> :unknown
-  end
-
   @doc "End the session and answer once nothing of its process is left, or its bound passes."
   @spec stop(GenServer.server(), non_neg_integer()) :: :ok
   def stop(server, grace_ms),
@@ -293,16 +286,6 @@ defmodule Locus.Backends.Backend do
      }, state}
   end
 
-  def handle_call(:measure, _from, %{handle: nil} = state), do: {:reply, :unknown, state}
-
-  # A reading is no use of the session: its idle period runs on.
-  def handle_call(:measure, _from, state) do
-    case state.launcher.measure(state.launcher_server, state.handle) do
-      {:ok, _reading} = answer -> {:reply, answer, state}
-      {:error, _reason} -> {:reply, :unknown, state}
-    end
-  end
-
   def handle_call({:stop, grace_ms}, from, state) do
     state = finish(%{state | stop_grace_ms: grace_ms}, :stopped, nil)
 
@@ -335,6 +318,13 @@ defmodule Locus.Backends.Backend do
         state = ended(state, %{crash: true, error: "spawn refused: #{refusal(reason)}"})
         notify(state, :unconfirmed)
         {:noreply, reply_stoppers(state)}
+
+      # Refused after the launcher made something of it: that is the
+      # launcher's until it says it is gone, on the handle, as a started
+      # process's release is said.
+      {:error, {:refused, _code, handle} = reason} ->
+        refused = %{crash: true, error: "spawn refused: #{refusal(reason)}"}
+        {:noreply, ended(%{state | handle: handle}, refused)}
 
       {:error, reason} ->
         state = %{state | released: true}
@@ -464,6 +454,7 @@ defmodule Locus.Backends.Backend do
   defp spelled(value), do: to_string(value)
 
   defp refusal({:refused, code}) when is_binary(code), do: code
+  defp refusal({:refused, code, _handle}) when is_binary(code), do: code
   defp refusal({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
   defp refusal(kind) when is_atom(kind), do: Atom.to_string(kind)
   defp refusal(_reason), do: "spawn_failed"

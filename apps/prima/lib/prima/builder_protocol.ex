@@ -43,10 +43,12 @@ defmodule Prima.BuilderProtocol do
   ## The request (`encode_request/1`, `read_request/1`)
 
   `{version, athanor_id, language, target_type, resolve, deadline,
-  sources}`. `athanor_id` is the tenant the build is for, which the builder
-  keys its per-athanor slot on and keeps nothing else about. `language` is
-  `rust` or `javascript` and `target_type` a component type, paired as
-  `language_for/1` says. `resolve` asks a Rust build to resolve its crate
+  sources}`. `athanor_id` is the tenant the build is for, of the grammar
+  every Locus wire gives an athanor's id
+  (`Prima.RunnerControl.athanor_id_pattern/0`), which the builder keys its
+  per-athanor slot and the build's place on and keeps nothing else about.
+  `language` is `rust` or `javascript` and `target_type` a component type,
+  paired as `language_for/1` says. `resolve` asks a Rust build to resolve its crate
   graph afresh. `deadline` is the absolute instant, in Unix milliseconds,
   by which the build must have finished: the builder's budget is the time
   to it or its own ceiling, whichever is less, and a deadline already
@@ -116,7 +118,7 @@ defmodule Prima.BuilderProtocol do
   opened, and the client believes nothing in them it can check itself.
   """
 
-  alias Prima.MacEnvelope
+  alias Prima.{MacEnvelope, RunnerControl}
 
   @version 1
   @domain MacEnvelope.domain()
@@ -566,7 +568,7 @@ defmodule Prima.BuilderProtocol do
   defp read_request_wire(wire) do
     with :ok <- current_version(wire),
          :ok <- exact(wire, @request_fields, ""),
-         {:ok, athanor_id} <- text_field(wire, "athanor_id", @max_text_bytes),
+         {:ok, athanor_id} <- athanor_field(wire),
          {:ok, language, target_type} <- pairing(wire),
          {:ok, resolve} <- boolean_field(wire, "resolve"),
          {:ok, deadline} <- integer_field(wire, "deadline"),
@@ -1013,6 +1015,18 @@ defmodule Prima.BuilderProtocol do
     case wire[name] do
       value when is_integer(value) and value >= 0 -> {:ok, value}
       _ -> {:error, {:invalid_field, name}}
+    end
+  end
+
+  defp athanor_field(wire) do
+    case wire["athanor_id"] do
+      value when is_binary(value) ->
+        if Regex.match?(RunnerControl.athanor_id_pattern(), value),
+          do: {:ok, value},
+          else: {:error, {:invalid_field, "athanor_id"}}
+
+      _ ->
+        {:error, {:invalid_field, "athanor_id"}}
     end
   end
 
