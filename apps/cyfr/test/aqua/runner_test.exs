@@ -216,13 +216,29 @@ defmodule Aqua.RunnerTest do
     %{runner: runner, loop: loop, call: call}
   end
 
-  defp kill_and_await!(%{runner: runner} = pids) do
+  defp kill_and_await!(%{runner: runner, loop: loop} = pids) do
     refs = for {_name, pid} <- pids, into: %{}, do: {Process.monitor(pid), pid}
+    idle!(loop)
     Process.exit(runner, :kill)
     for {ref, _pid} <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
     # The supervisor has answered the runner's exit: restarted it or not.
     _ = :sys.get_state(Aqua.RunnerSupervisor)
     :ok
+  end
+
+  # A loop told that its thread moved reads its steps (`Aqua.Loop`): one
+  # killed in that read takes the test's one shared connection with it. It
+  # is killed only once it waits with nothing to read.
+  defp idle!(pid) do
+    wait_until(
+      fn ->
+        Process.info(pid, [:status, :message_queue_len]) in [
+          [status: :waiting, message_queue_len: 0],
+          nil
+        ]
+      end,
+      10_000
+    )
   end
 
   defp lose_ownership(loss) do
@@ -1556,6 +1572,36 @@ defmodule Aqua.RunnerTest do
     end
   end
 
+  test "a post joined to a turn another process on this boot holds tells that turn's loop",
+       %{ctx: ctx, thread: thread} do
+    script!([{:probe, self()}, reply("never resumed")])
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua held"},
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
+      })
+
+    holder = spawn(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+    assert_receive {:scripted_probe, _call, _}, 60_000
+    {:ok, runner} = Runner.ensure(thread.id, ctx.athanor_id)
+    turn_id = turn.id
+    assert %{held: %{^turn_id => %{pid: ^holder}}} = :sys.get_state(runner)
+
+    assert :erlang.trace(holder, true, [:receive]) == 1
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "and this"},
+        steer_turn_id: turn.id
+      })
+
+    assert_receive {:trace, ^holder, :receive, {:moved, ^turn_id}}, 5_000
+    assert :erlang.trace(holder, false, [:receive]) == 1
+    assert :ok = Runner.stop_turn(ctx, thread.id)
+    refute Process.alive?(holder)
+  end
+
   defp stop_held(ctx, thread, dying) do
     script!([{:probe, self()}, reply("never resumed"), reply("never queued")])
 
@@ -1578,6 +1624,7 @@ defmodule Aqua.RunnerTest do
 
     if dying do
       :ok = :sys.suspend(runner)
+      idle!(holder)
       tag = make_ref()
       send(runner, {:"$gen_call", {self(), tag}, {:stop, ctx}})
       ref = Process.monitor(holder)

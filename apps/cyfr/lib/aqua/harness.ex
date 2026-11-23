@@ -22,7 +22,9 @@ defmodule Aqua.Harness do
 
   `facts` are all the engine reads of a harness: a launch waits while
   `child_of_root?` holds and the harness works, and a post that arrives
-  skips the calls not yet started when `supersedes?` holds.
+  skips the calls not yet started when `supersedes?` holds. They belong to
+  the harness the turn pins, so they are known before `open/1`
+  (`facts/1`), and the engine reads no fact it was not given.
 
   `input/2` and `answer/2` say what the harness is owed, each item once by
   its `id`: a provider's call id repeats across rounds and is never an
@@ -101,6 +103,7 @@ defmodule Aqua.Harness do
   @callback input(handle(), [post()]) :: :ok
   @callback answer(handle(), [result()]) :: :ok
   @callback stop(handle()) :: :ok
+  @callback facts() :: facts()
 
   @doc """
   The harness of a turn, the one place that picks it from the turn's pin:
@@ -110,4 +113,17 @@ defmodule Aqua.Harness do
   @spec of(Turn.t()) :: module() | nil
   def of(%Turn{program: %{}}), do: Aqua.Harness.Program
   def of(%Turn{}), do: nil
+
+  @doc """
+  The facts of the turn's harness, from its pin, before anything is
+  opened. A turn whose rounds the loop still makes itself answers a
+  model's: its call is the root's child, and a newer post supersedes it.
+  """
+  @spec facts(Turn.t()) :: facts()
+  def facts(%Turn{} = spec) do
+    case of(spec) do
+      nil -> %{child_of_root?: true, supersedes?: true}
+      module -> module.facts()
+    end
+  end
 end

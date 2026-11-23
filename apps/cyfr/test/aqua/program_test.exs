@@ -1886,7 +1886,7 @@ defmodule Aqua.ProgramTest do
              }
 
       assert {denied.dispatch_state, denied.outcome, denied.error} ==
-               {"closed", "denied", "vault.list is not among the tools Aqua is offered"}
+               {"closed", "denied", "vault is not one of the tools this work has"}
 
       say(fake, row, accepted(told))
       say(fake, row, idle(turn, [input.id]))
@@ -3869,6 +3869,12 @@ defmodule Aqua.ProgramTest do
         "the post's acceptance to commit"
       )
 
+      # The attendant has done with that batch, its read of what waits
+      # among it, before the post below exists: it never reads the post as
+      # waiting, so only the test's carry hands it over.
+      attendant = attendant!(ctx, turn)
+      _ = :sys.get_state(attendant)
+
       # A post the attendant recorded as carried and then died before it
       # wrote: its row arrives with no event, so only the carry knows it.
       {:ok, %{message: cut}} =
@@ -3887,7 +3893,6 @@ defmodule Aqua.ProgramTest do
           silence_ms: Opus.Brain.silence_ms()
         })
 
-      attendant = attendant!(ctx, turn)
       _ = :sys.get_state(attendant)
       Process.exit(attendant, :kill)
       line = "#{@title} stopped before it finished."
@@ -4846,6 +4851,153 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  describe "the harness boundary" do
+    test "a granted outside tool the turn's list leaves out is refused to a program, as its " <>
+           "turn narrows it",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      grant_tool!(ctx, "github:search")
+      turn = accept!(ctx, thread, row, "search for it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      spec = spec!(ctx, turn)
+      assert Map.has_key?(spec.offered, "github:search")
+      refute "github__search" in Enum.map(spec.tools, & &1["name"])
+
+      say(fake, row, ask(turn, "ask-1", "github__search", %{"q" => "x"}))
+      _answer = sent()
+      denied = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-1"))
+
+      assert {denied.dispatch_state, denied.outcome, denied.error} ==
+               {"closed", "denied", "github__search is not one of the tools this work has"}
+
+      [_post, told] = inputs(ctx, turn)
+      say(fake, row, accepted(told))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a post written before the program's own start is decided skips nothing: the start " <>
+           "runs, and the post is handed over after the one that opened the turn",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+
+      {:ok, _} =
+        TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "and this"},
+          steer_turn_id: turn.id
+        })
+
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [first] = inputs(ctx, turn)
+      say(fake, row, accepted(first))
+      _steered = sent()
+      [_first, steered] = inputs(ctx, turn)
+      say(fake, row, accepted(steered))
+      say(fake, row, idle(turn, [first.id, steered.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert start_said(ctx, turn) == "#{@title} started"
+    end
+
+    test "a post written while a dead loop's turn waits skips none of the program's recorded " <>
+           "asks: the loop that takes the turn over runs them",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      %{loop: loop} = working!(ctx, thread, row, fake, turn)
+      true = :erlang.suspend_process(loop.pid)
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      committed!(ctx, thread, 5)
+      Task.shutdown(loop, :brutal_kill)
+      _steer = steer!(ctx, thread, turn, "and this")
+
+      assert {:ok, [{:adopt, _taken}]} =
+               Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
+
+      adopting =
+        Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt) end)
+
+      key = TurnStorage.brain_ask_key(turn.id, "ask-1")
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?(%{dispatch_state: "closed"}, step_by_key(ctx, turn, key)) end,
+        10_000,
+        "the recorded ask to settle"
+      )
+
+      assert %{outcome: "ok"} = step_by_key(ctx, turn, key)
+      {:ok, open} = Tape.turn(ctx, turn.id)
+      {:ok, _} = Aqua.Loop.abort(ctx, open, "stopped", waiting_out(adopting))
+    end
+
+    test "a harness opened with its admitted start says nothing to its driver before the " <>
+           "loop's first word",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      %{loop: loop, input: input} = working!(ctx, thread, row, fake, turn)
+      %{work: work} = :sys.get_state(attendant!(ctx, turn))
+
+      {:ok, other, _facts} = Aqua.Harness.Program.open(work)
+      refute_receive {:session, "open", _wire, _fields}, 1_000
+      :ok = Aqua.Harness.Program.stop(other)
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a start whose taking could not be written ends the loop unwritten, never completed",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      refuse_insert!("messages", "content", "#{@title} started")
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+
+      assert {:unwritten, _} = Task.await(loop, 30_000)
+      assert %{dispatch_state: "dispatched"} = start_step(ctx, turn)
+    end
+
+    test "a tool's answer goes before a post that waited behind an unacknowledged delivery",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [first] = inputs(ctx, turn)
+      attendant = attendant!(ctx, turn)
+
+      # A second post waits behind the first, which is not acknowledged.
+      assert :erlang.trace(attendant, true, [:receive]) == 1
+      steer = steer!(ctx, thread, turn, "and this")
+      steer_id = steer.id
+
+      assert_receive {:trace, ^attendant, :receive, {:"$gen_cast", {:input, [%{id: ^steer_id}]}}},
+                     10_000
+
+      assert :erlang.trace(attendant, false, [:receive]) == 1
+
+      # The program asks, and the ask's call answers while the loop is held:
+      # the test closes it as the loop's worker does, and the loop has said
+      # nothing of the answer.
+      true = :erlang.suspend_process(loop.pid)
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      committed!(ctx, thread, 4)
+      key = TurnStorage.brain_ask_key(turn.id, "ask-1")
+      {:ok, held} = Tape.turn(ctx, turn.id)
+      {:ok, dispatched} = Tape.mark_dispatched(ctx, held, step_by_key(ctx, turn, key))
+      {:ok, _} = Tape.close_step(ctx, held, dispatched, "ok", %{result: %{content: "listed"}})
+
+      say(fake, row, accepted(first))
+      assert %{"t" => "answer", "ask" => "ask-1"} = sent()
+      true = :erlang.resume_process(loop.pid)
+      {:ok, open} = Tape.turn(ctx, turn.id)
+      {:ok, _} = Aqua.Loop.abort(ctx, open, "stopped", waiting_out(loop))
+    end
+  end
+
   describe "an external tool's ask" do
     test "one no turn offers is decided denied and answered as an error, one with a null " <>
            "argument is refused before it runs, and the turn completes",
@@ -4875,7 +5027,7 @@ defmodule Aqua.ProgramTest do
 
       assert {denied.tool, denied.action, denied.dispatch_state, denied.outcome, denied.error} ==
                {"github:search", nil, "closed", "denied",
-                "github:search is not among the tools Aqua is offered"}
+                "github__search is not one of the tools this work has"}
 
       say(fake, row, accepted(told))
 
@@ -4903,6 +5055,38 @@ defmodule Aqua.ProgramTest do
 
   # ---------------------------------------------------------------------------
   # The brain's row, the turn and its decision
+
+  # `tool` granted to Aqua, as its setup grants it, and the consent given
+  # again for the shape that moved.
+  defp grant_tool!(ctx, tool) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "tools_add" => [tool]
+      })
+
+    consent_again!(ctx)
+  end
+
+  defp consent_again!(ctx) do
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    ref = Prima.AgentRef.soul_ref()
+    decisions = %{ref: ref, selections: []}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    :ok
+  end
 
   # Aqua seated on `member`, as the Aqua page seats it, and its consent
   # given again for the shape that moved, as the person gives it.

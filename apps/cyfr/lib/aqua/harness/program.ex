@@ -215,6 +215,10 @@ defmodule Aqua.Harness.Program do
     :exit, _ -> :ok
   end
 
+  @doc "What the engine reads of this harness (`Aqua.Harness.facts/1`)."
+  @impl Aqua.Harness
+  def facts, do: @facts
+
   @doc false
   def start_link(attending), do: GenServer.start_link(__MODULE__, attending)
 
@@ -341,7 +345,9 @@ defmodule Aqua.Harness.Program do
       loop: loop,
       brain: nil,
       boot: nil,
-      phase: :closed,
+      # Nothing is opened before the loop's first word, which comes once
+      # its handle is where Stop looks (`Aqua.Loop`).
+      phase: :unopened,
       outstanding: nil,
       fresh?: false,
       missed?: false,
@@ -349,23 +355,13 @@ defmodule Aqua.Harness.Program do
       how: :went_on,
       recovering?: false,
       pending: [],
-      # What the loop said is owed, in order, and what was handed already.
-      posts: [],
-      results: [],
-      handed: MapSet.new(),
       timer: nil,
       streams: %{},
       ordinal: 0
     }
 
-    # A start the program took already goes on with its native session.
-    {:ok, state,
-     {:continue, if(work.admitted.dispatch_state == "closed", do: :went_on, else: :open)}}
+    {:ok, state}
   end
-
-  @impl true
-  def handle_continue(:open, state), do: {:noreply, open_session(state)}
-  def handle_continue(:went_on, state), do: {:noreply, continued(state)}
 
   # The loop that closes it waits on it no more and is told nothing.
   @impl true
@@ -374,30 +370,22 @@ defmodule Aqua.Harness.Program do
     {:stop, :normal, :ok, shut(state)}
   end
 
-  # The loop says the results owed, then the posts (`Aqua.Loop`): only
-  # once both are said is nothing owed a sign that the work is done.
+  # The loop's word that something may be owed (`Aqua.Harness`). What is
+  # owed is what the rows say, read again each time (`deliver/1`): the
+  # lists name what the loop found and are no account of their own.
   @impl true
-  def handle_cast({:answer, results}, state),
-    do: {:noreply, state |> owed(:results, results) |> deliver()}
-
-  def handle_cast({:input, posts}, state),
-    do: {:noreply, state |> owed(:posts, posts) |> nudged()}
-
-  # What is owed, by its id, after what was owed before and never again
-  # once handed.
-  defp owed(state, key, items) do
-    queued = MapSet.new(Map.fetch!(state, key), & &1.id)
-
-    fresh =
-      Enum.reject(items, &(MapSet.member?(queued, &1.id) or MapSet.member?(state.handed, &1.id)))
-
-    Map.update!(state, key, &(&1 ++ fresh))
-  end
+  def handle_cast({:answer, _results}, state), do: {:noreply, nudged(state)}
+  def handle_cast({:input, _posts}, state), do: {:noreply, nudged(state)}
 
   # The loop says what is owed whenever the thread moved or it waits
-  # again: a session ready is written the next of it, and one that owes
-  # nothing more and is idle ends the turn; a start not yet made, its turn
-  # paused, is made now.
+  # again: its first word opens the session, a start the program took
+  # already going on with its native session; a session ready is written
+  # the next owed, and one that owes nothing more and is idle ends the
+  # turn; a start not yet made, its turn paused, is made now.
+  defp nudged(%{phase: :unopened, work: %{admitted: %{dispatch_state: "closed"}}} = state),
+    do: continued(state)
+
+  defp nudged(%{phase: :unopened} = state), do: open_session(state)
   defp nudged(%{phase: :over} = state), do: state
   defp nudged(%{phase: :ready} = state), do: state |> deliver() |> rested()
   defp nudged(%{phase: :closed, brain: nil} = state), do: continued(state)
@@ -1074,18 +1062,17 @@ defmodule Aqua.Harness.Program do
   # ---------------------------------------------------------------------------
   # Deliveries
 
-  # The next command owed, one at a time while the session is ready: a
-  # prompt a recovery owes, which its rows say, then a closed ask's result
-  # and then a post that waits, as the loop said them (`input/2`,
-  # `answer/2`). A read that did not answer is never nothing owed.
+  # The next command the rows say is owed, one at a time while the session
+  # is ready: a prompt a recovery owes, then a closed ask's result, then a
+  # post that waits. A read that did not answer is never nothing owed.
   defp deliver(%{phase: :ready, outstanding: nil, work: work} = state) do
-    case {Tape.brain_notices(work.guest, work.turn), state.results, state.posts} do
-      {{:ok, [%{context?: true, message_id: row_id} | _]}, _, _} -> notice(state, "fresh", row_id)
-      {{:ok, [%{action: kind, message_id: row_id} | _]}, _, _} -> notice(state, kind, row_id)
-      {{:ok, []}, [result | _], _} -> deliver_answer(state, result)
-      {{:ok, []}, [], [post | _]} -> deliver_post(state, post)
-      {{:ok, []}, [], []} -> state
-      {{:error, _unread}, _, _} -> unkept(state)
+    case next_owed(work) do
+      :none -> state
+      {:notice, %{context?: true, message_id: row_id}} -> notice(state, "fresh", row_id)
+      {:notice, %{action: kind, message_id: row_id}} -> notice(state, kind, row_id)
+      {:answer, result} -> deliver_answer(state, result)
+      {:post, row} -> deliver_post(state, row)
+      {:error, _unread} -> unkept(state)
     end
   end
 
@@ -1154,59 +1141,50 @@ defmodule Aqua.Harness.Program do
 
   defp at_work?(_step, _work), do: false
 
-  # A closed ask's result, as the loop said it: `id` its result row's,
-  # `ask` the program's id for the ask, `text` and `error?`.
-  defp deliver_answer(%{work: work} = state, result) do
-    case carry(work, "answer", result.id) do
+  # A closed ask's result, as the rows say it: its result row, the call
+  # row of its ask and its step.
+  defp deliver_answer(%{work: work} = state, %{row: row, call: call, step: ask}) do
+    case carry(work, "answer", row.id) do
       {:ok, %{step: step}} ->
         command = %{
           "t" => "answer",
           "id" => step.id,
-          "ask" => result.ask,
-          "content" => result.text || "",
-          "is_error" => result.error?
+          "ask" => call && Tape.payload(call)["tool_call_id"],
+          "content" => row.content || "",
+          "is_error" => ask.outcome != "ok"
         }
 
         case write(state, command) do
           :ok ->
-            state
-            |> handed(:results, result.id)
-            |> delivered(%{id: step.id, input?: true, deliver: "answer", row: result.id})
+            delivered(state, %{id: step.id, input?: true, deliver: "answer", row: row.id})
 
           # The resumed session no longer holds the ask: its answer goes as
           # one notice that names the call.
           {:error, :not_this_work} ->
             case Tape.uncarry(work.guest, work.turn, step.id) do
-              :ok -> state |> handed(:results, result.id) |> notice("answer", result.id)
+              :ok -> notice(state, "answer", row.id)
               {:error, _reason} -> unkept(state)
             end
 
           {:error, reason} ->
-            not_written(state, :results, result.id, step, reason)
+            not_written(state, step, reason)
         end
-
-      # Handed already, by this process or by one before it.
-      {:error, :carried} ->
-        state |> handed(:results, result.id) |> deliver()
 
       {:error, reason} ->
         undelivered(state, reason)
     end
   end
 
-  # A post of the turn, as the loop said it (`t:Aqua.Harness.post/0`), read
-  # as it is handed over with what goes before it: one no longer waiting
-  # owes nothing, and one the reading withholds went with its workspace
-  # thread as it was handed over, which the turn may wait on alone, and
-  # then would for good, so the turn ends saying so.
-  defp deliver_post(%{work: work} = state, post) do
-    with {:ok, waiting} <- Tape.brain_posts(work.guest, work.turn),
-         [row] <- waiting(Enum.filter(waiting, &(&1.id == post.id))),
-         {:ok, given} <- given(state),
+  # A post of the turn that waits, read as it is handed over with what
+  # goes before it (`work.history`): one the reading withholds went with
+  # its workspace thread as it was handed over, which the turn may wait on
+  # alone, and then would for good, so the turn ends saying so.
+  defp deliver_post(%{work: work} = state, row) do
+    with {:ok, given} <- given(state),
          {:ok, %{rows: rows, reading: reading}} <-
-           work.history.(&earlier?(state, given, post, &1), [row]),
-         {[handed], earlier} <- Enum.split_with(rows, &(&1.id == post.id)),
-         {:ok, %{step: step}} <- carry(work, "post", post.id) do
+           work.history.(&earlier?(state, given, row, &1), [row]),
+         {[handed], earlier} <- Enum.split_with(rows, &(&1.id == row.id)),
+         {:ok, %{step: step}} <- carry(work, "post", row.id) do
       {:said, text} = Reader.read(handed, %{reading | named?: false})
 
       earlier =
@@ -1225,46 +1203,24 @@ defmodule Aqua.Harness.Program do
           "context" => context
         }
         |> reject_nil()
-        |> with_files(work, post)
+        |> with_files(work, row)
 
       case write(state, command) do
         :ok ->
-          state
-          |> handed(:posts, post.id)
-          |> Map.merge(%{fresh?: false, missed?: false, facts?: false})
-          |> delivered(%{id: step.id, input?: true, deliver: "post"})
+          delivered(
+            %{state | fresh?: false, missed?: false, facts?: false},
+            %{id: step.id, input?: true, deliver: "post"}
+          )
 
         {:error, reason} ->
-          not_written(state, :posts, post.id, step, reason)
+          not_written(state, step, reason)
       end
     else
-      :not_waiting ->
-        state |> handed(:posts, post.id) |> deliver()
-
-      {[], _earlier} ->
-        fail(shut(state), refused(work, {:post_refused, :gone}))
-
-      {:error, :carried} ->
-        state |> handed(:posts, post.id) |> deliver()
-
-      {:error, :not_waiting} ->
-        fail(shut(state), refused(work, {:post_refused, :gone}))
-
-      {:error, reason} ->
-        undelivered(state, reason)
+      {[], _earlier} -> fail(shut(state), refused(work, {:post_refused, :gone}))
+      {:error, :not_waiting} -> fail(shut(state), refused(work, {:post_refused, :gone}))
+      {:error, reason} -> undelivered(state, reason)
     end
   end
-
-  # What the loop said is owed leaves its queue once it is handed, and is
-  # never handed again.
-  defp handed(state, key, id) do
-    state
-    |> Map.update!(key, &Enum.reject(&1, fn owed -> owed.id == id end))
-    |> Map.update!(:handed, &MapSet.put(&1, id))
-  end
-
-  defp waiting([]), do: :not_waiting
-  defp waiting(rows), do: rows
 
   # What a resumed session was given (`Arca.TurnStorage.brain_given/2`),
   # read only for one.
@@ -1331,8 +1287,9 @@ defmodule Aqua.Harness.Program do
   # the two: a notice never stands in for a smaller block, and the post's
   # line passes the bound only when its text and those smaller ones alone
   # do.
-  defp with_files(command, work, post) do
-    files = Aqua.Attachments.load(work.guest, work.turn.thread_id, post.files)
+  defp with_files(command, work, row) do
+    files =
+      Aqua.Attachments.load(work.guest, row.thread_id, Aqua.Attachments.attachments_of([row]))
 
     types = Opus.Brain.media_types()
     max = Opus.Brain.max_line_bytes()
@@ -1484,13 +1441,6 @@ defmodule Aqua.Harness.Program do
   # it with what the resumed transcript holds. One refused before it was
   # written is taken back. It is tried again only where an event will
   # follow, the holder's answer or its end; any other refusal ends the turn.
-  # An owed item whose write may have reached the driver counts as handed,
-  # never written again.
-  defp not_written(state, key, id, step, :uncertain),
-    do: state |> handed(key, id) |> not_written(step, :uncertain)
-
-  defp not_written(state, _key, _id, step, refused), do: not_written(state, step, refused)
-
   defp not_written(state, _step, :uncertain) do
     state = shut(state)
     if state.phase == :over, do: state, else: open_session(%{state | recovering?: true})

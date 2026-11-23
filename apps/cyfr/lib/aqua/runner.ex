@@ -1922,10 +1922,12 @@ defmodule Aqua.Runner do
 
   defp propose(state), do: state
 
-  # The thread moved: the loop of the turn that runs or waits, held on this
-  # boot, is told, and says to its harness what it is owed (`Aqua.Loop`).
+  # The thread moved: the loop of every turn this runner runs, waits on or
+  # finds held by another process on this boot is told, and says to its
+  # harness what it is owed (`Aqua.Loop`).
   defp told(state) do
     for %{turn_id: turn_id} <- [state.live, state.paused], is_binary(turn_id), do: moved(turn_id)
+    for {turn_id, _holder} <- state.held, do: moved(turn_id)
     :ok
   end
 

@@ -165,10 +165,13 @@ defmodule Aqua.Loop do
       # loop's monitor of it, from its open to the loop's return.
       harness: nil,
       watch: nil,
-      # What the engine reads of the harness: a turn whose rounds the loop
-      # makes itself, on a model, is a child of the root and is superseded
-      # by a newer post.
-      facts: %{child_of_root?: true, supersedes?: true}
+      # What the engine reads of the turn's harness, from its pin
+      # (`Aqua.Harness.facts/1`), set as the turn's spec is built.
+      facts: nil,
+      # A write on the turn's path failed while a call ran (`:unkept`), or
+      # was refused for a moved fence (`:taken`): the loop's next wait ends
+      # the turn unwritten, or cancelled.
+      unkept: nil
     ]
   end
 
@@ -351,6 +354,7 @@ defmodule Aqua.Loop do
         state = %State{
           spec: spec,
           program: spec.program,
+          facts: Aqua.Harness.facts(spec),
           claim: claim,
           turn: turn,
           generation: spec.thread.brain_generation,
@@ -616,6 +620,7 @@ defmodule Aqua.Loop do
          %State{
            model?: stands?,
            program: spec.program,
+           facts: Aqua.Harness.facts(spec),
            spec: spec,
            claim: claim,
            turn: spec.turn,
@@ -706,6 +711,13 @@ defmodule Aqua.Loop do
     case result do
       {:paused, _} ->
         unwatch(ended)
+        result
+
+      # A write on the turn's path that failed is never dropped: the runner
+      # settles the turn as a loop's that died (`Aqua.Runner`).
+      {:unwritten, _} ->
+        unwatch(ended)
+        release(ended)
         result
 
       _ ->
@@ -846,7 +858,11 @@ defmodule Aqua.Loop do
   defp harness_round(%State{} = state) do
     case start_step(state) do
       {:ok, %{dispatch_state: "closed", outcome: "ok"} = start} ->
-        state |> opened(start) |> harness_round_opened()
+        case opened(state, start) do
+          {:ok, state} -> harness_round(state)
+          {:end, state, finish} -> harness_end(state, finish)
+          {:error, reason} -> {:halt, {:failed, reason}, state}
+        end
 
       {:ok, %{dispatch_state: "closed", error: error}} when is_binary(error) ->
         harness_failed(state, error)
@@ -858,9 +874,6 @@ defmodule Aqua.Loop do
         harness_ended(state, harness_reason(state, :write_failed))
     end
   end
-
-  defp harness_round_opened({:ok, state}), do: harness_round(state)
-  defp harness_round_opened({:end, state, finish}), do: harness_end(state, finish)
 
   defp harness_reason(%State{} = state, kind), do: {:harness, title(state), kind}
 
@@ -885,13 +898,18 @@ defmodule Aqua.Loop do
 
     case start_step(state) do
       {:ok, %{dispatch_state: "dispatched"} = start} ->
-        _ = Tape.close_step(guest(state), state.turn, start, "error", %{error: sentence})
+        case Tape.close_step(guest(state), state.turn, start, "error", %{error: sentence}) do
+          {:ok, _} -> harness_failed(state, sentence)
+          {:error, taken} when taken in @taken -> {:halt, :cancelled, state}
+          _unkept -> {:halt, {:unwritten, {:failed, sentence}}, state}
+        end
 
-      _taken_or_unread ->
-        :ok
+      {:ok, _taken_or_none} ->
+        harness_failed(state, sentence)
+
+      {:error, _unread} ->
+        {:halt, {:unwritten, {:failed, sentence}}, state}
     end
-
-    harness_failed(state, sentence)
   end
 
   # The harness opened with its admitted start (`c:Aqua.Harness.open/1`):
@@ -900,33 +918,43 @@ defmodule Aqua.Loop do
   # One that ends, whenever it does, ends the turn's wait and is never
   # replaced, as the harness's job is over with it.
   defp opened(%State{} = state, start) do
-    case open_harness_with(Aqua.Harness.of(state.spec), work(state, start)) do
-      {:ok, module, handle, facts} ->
-        {_, _} =
-          Registry.update_value(@holders, {:turn, state.turn.id}, fn _ -> {module, handle} end)
-
-        {:ok, %{state | harness: {module, handle}, watch: Process.monitor(handle), facts: facts}}
-
-      {:end, finish} ->
-        {:end, state, finish}
+    case Aqua.Harness.of(state.spec) do
+      # A turn with no harness admits no harness's start (E3c gives every
+      # turn one, `Aqua.Harness.of/1`).
+      nil -> {:end, state, {:refused, harness_reason(state, :start_failed)}}
+      module -> take_open(state, module, module.open(work(state, start)))
     end
   end
 
-  # A turn with no harness admits no harness's start (E3c gives every turn
-  # one, `Aqua.Harness.of/1`).
-  defp open_harness_with(nil, work), do: {:end, {:refused, {:harness, work.title, :start_failed}}}
-
-  defp open_harness_with(module, work) do
-    case module.open(work) do
-      {:ok, handle, facts} -> {:ok, module, handle, facts}
-      {:end, finish} -> {:end, finish}
-    end
+  @doc false
+  # A harness's answer to its open (`c:Aqua.Harness.open/1`), every one
+  # 2.3 names: its handle, published in this loop's registration before the
+  # harness is said anything, so it holds nothing a Stop cannot find; its
+  # own start, proposed for the loop to decide; or its end.
+  @spec take_open(State.t(), module(), term()) ::
+          {:ok, State.t()} | {:end, State.t(), Aqua.Harness.finish()} | {:error, term()}
+  def take_open(%State{} = state, module, {:ok, handle, facts}) do
+    {_, _} = Registry.update_value(@holders, {:turn, state.turn.id}, fn _ -> {module, handle} end)
+    {:ok, %{state | harness: {module, handle}, watch: Process.monitor(handle), facts: facts}}
   end
+
+  def take_open(%State{} = state, _module, {:admit, proposal}) do
+    with {:ok, _step} <- Tape.propose_call(guest(state), state.turn, proposal),
+         do: {:ok, %{state | model?: false}}
+  end
+
+  def take_open(%State{} = state, _module, {:end, finish}), do: {:end, state, finish}
 
   # The one wait on the harness: what the thread's movement and the
   # harness say, until a page's or the harness's call is proposed, or its
   # work ends. What it tells of its own work is taken here and while a
   # call runs (`harness_event/2`).
+  # A moved fence wins: the loop is cancelled and says nothing.
+  defp harness_wait(%State{unkept: :taken} = state), do: {:halt, :cancelled, state}
+
+  defp harness_wait(%State{unkept: :unkept} = state),
+    do: {:halt, {:unwritten, {:failed, :write_failed}}, state}
+
   defp harness_wait(%State{watch: watch} = state) do
     turn_id = state.turn.id
 
@@ -955,16 +983,25 @@ defmodule Aqua.Loop do
 
   # What the harness tells of its work, whichever wait takes it: its start
   # taken, its usage, its own tools and its text, which committed already.
+  # A start's close that could not be written, or read, is never dropped:
+  # the turn's next wait ends it unwritten (`harness_wait/1`).
   defp harness_event(%State{} = state, {:took, taken}) do
     Enum.reduce(taken, state, fn {id, how}, state ->
       case start_step(state) do
         {:ok, %{id: ^id, dispatch_state: "dispatched"} = start} ->
           word = if how == :started, do: "started", else: "went on"
-          _ = close(state, start, nil, {:ok, "#{title(state)} #{word}"})
+
+          case close(state, start, nil, {:ok, "#{title(state)} #{word}"}) do
+            {:ok, _} -> state
+            {:error, taken} when taken in @taken -> %{state | unkept: :taken}
+            _unkept -> %{state | unkept: :unkept}
+          end
+
+        {:ok, _closed_or_none} ->
           state
 
-        _closed_or_unread ->
-          state
+        {:error, _unread} ->
+          %{state | unkept: :unkept}
       end
     end)
   end
@@ -1692,7 +1729,10 @@ defmodule Aqua.Loop do
   end
 
   defp decide_open(%{step: step, call: {:ok, %Call{} = call}} = item, {runnable, state, setup}) do
-    decision = Policy.decide(call, state.spec.offered, place(state, step))
+    decision =
+      if not_offered?(state, step, call),
+        do: {:deny, "#{call.model_name} is not one of the tools this work has"},
+        else: Policy.decide(call, state.spec.offered, place(state, step))
 
     case decision do
       :run ->
@@ -1795,9 +1835,17 @@ defmodule Aqua.Loop do
           {:ok, state} ->
             {:ok, activity(state, [item], :done)}
 
+          {:error, reason} ->
+            {:halt, {:failed, reason}, state}
+
           {:end, state, {_refused_or_lost, reason}} ->
-            _ = close(state, step, unwrap(item.call), {:error, Prima.Refusal.message(reason)})
-            {:ok, activity(state, [item], :done)}
+            sentence = Prima.Refusal.message(reason)
+
+            case close(state, step, unwrap(item.call), {:error, sentence}) do
+              {:ok, _} -> {:ok, activity(state, [item], :done)}
+              {:error, taken} when taken in @taken -> {:halt, :cancelled, state}
+              _unkept -> {:halt, {:unwritten, {:failed, sentence}}, state}
+            end
         end
 
       {:error, :not_proposed} ->
@@ -1927,6 +1975,17 @@ defmodule Aqua.Loop do
     do: key == Tape.brain_start_key(turn.id)
 
   defp host_start?(_state, _step), do: false
+
+  # An ask of a program brain names one of the tools the turn offers,
+  # whatever the native session was started with: checked each time it is
+  # decided, beside the policy. E3c makes it every harness's rule, the
+  # tools the engine handed it at its open (`work.tools`).
+  defp not_offered?(%State{program: %{}, spec: spec} = state, %{purpose: "brain"} = step, call) do
+    not host_start?(state, step) and
+      not Enum.any?(spec.tools, &(&1["name"] == call.model_name))
+  end
+
+  defp not_offered?(_state, _step, _call), do: false
 
   defp settle_denied(%State{} = state, step, %Call{} = call, message) do
     case close(state, step, call, {:error, {:denied, message}}) do
@@ -2518,16 +2577,11 @@ defmodule Aqua.Loop do
   defp open_harness(%State{spec: spec} = state) do
     case Aqua.Harness.of(spec) do
       nil -> {:ok, state}
-      module -> admission(state, module.open(work(state, nil)))
+      module -> state |> take_open(module, module.open(work(state, nil))) |> admission()
     end
   end
 
-  defp admission(%State{} = state, {:admit, proposal}) do
-    with {:ok, _step} <- Tape.propose_call(guest(state), state.turn, proposal),
-         do: {:ok, %{state | model?: false}}
-  end
-
-  defp admission(%State{} = state, {:end, {_refused_or_lost, reason}}) do
+  defp admission({:end, %State{} = state, {_refused_or_lost, reason}}) do
     sentence = Prima.Refusal.message(reason)
 
     case system_row(state, sentence) do
@@ -2535,6 +2589,8 @@ defmodule Aqua.Loop do
       _written_or_unkept -> {:error, sentence}
     end
   end
+
+  defp admission(opened_or_refused), do: opened_or_refused
 
   # Whether a recovered turn goes on to ask its model. A turn on a
   # catalyst brain asks it only when its row pins the brain's grant, which
