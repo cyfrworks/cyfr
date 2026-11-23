@@ -602,6 +602,52 @@ defmodule Locus.Runtime.HostClientTest do
       assert {:ok, 401, _refusal} = HostClient.post_call(host.url, :renew, header, "tampered")
       assert :error = HostClient.post_call("http://127.0.0.1:9", :renew, header, sealed)
     end
+
+    test "post_call/5 asks its room once for the whole answer before it keeps any, and no room is an answer that did not arrive",
+         %{host: host} do
+      attempt = ScriptedHost.attempt!(host)
+      json = Jason.encode!(Prima.WorkerWire.request_body(:renew, %{"attempts" => []}))
+      test = self()
+
+      posted = fn room ->
+        fields = call_fields(attempt)
+        {:ok, sealed} = Prima.WorkerAuth.seal_call(attempt.keys.seal, :body, fields, json)
+        {:ok, header} = Prima.WorkerAuth.host_call_header(attempt.keys.call, fields, sealed)
+        HostClient.post_call(host.url, :renew, header, sealed, room: room)
+      end
+
+      asking = fn answer ->
+        fn bytes ->
+          send(test, {:asked, bytes})
+          answer
+        end
+      end
+
+      # An answer read in many pieces asks once, for the length it declares.
+      answer = :binary.copy("0123456789abcdef", 65_536)
+      ScriptedHost.script(host, "renew", {:raw, 200, answer})
+      assert {:ok, 200, ^answer} = posted.(asking.(:ok))
+      assert asked() == [byte_size(answer)]
+
+      # No room: a 200 answer is no answer, and a refusal keeps its status
+      # with none of its body, as one past the answer bound does.
+      assert :error = posted.(asking.(:full))
+      assert asked() == [byte_size(answer)]
+
+      refusal = ~s({"v":1,"error":"unknown_version"})
+      ScriptedHost.script(host, "renew", {:raw, 401, refusal})
+      assert {:ok, 401, ""} = posted.(asking.(:full))
+      assert asked() == [byte_size(refusal)]
+    end
+  end
+
+  # What a room was asked, in order.
+  defp asked do
+    receive do
+      {:asked, bytes} -> [bytes | asked()]
+    after
+      0 -> []
+    end
   end
 
   defp stop_supervised_pid(pid) do
@@ -922,6 +968,18 @@ defmodule Locus.Runtime.HostClientTest do
 
       assert :halted = HostClient.attached_fetch(client, attached(), options(halting))
       assert [{:frame, <<?h, _::binary>>}, {:frame, <<?c, _::binary>>}] = events()
+    end
+
+    test "a sink that halts CYFR's refusal halts the answer", %{host: host, client: client} do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:error, {:guest_error, "destination_mismatch", "outside"}}
+      )
+
+      halting = sink(fn {:refusal, _header, _body} -> :halt end)
+      assert :halted = HostClient.attached_fetch(client, attached(), options(halting))
+      assert [{:refusal, _header, _body}] = events()
     end
 
     test "a length the frames' split refuses, or a body ending inside a frame, is bad_frame", %{

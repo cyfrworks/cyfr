@@ -91,6 +91,19 @@ scrubbed, the container's CPU flat).
   never granted is refused by the service's end of the relay; no process
   but the runner's own VM holds a runner's relay, so no shipped guest can
   send one, and `apps/locus/test/locus/runtime/relay_test.exs` covers it.
+- What the runtime service holds of its runners' answers and fetches is
+  held within its count (`service_bound`): a formula's six children, in its
+  runner, ask for their artifacts, which the plane holds until all six have
+  asked, then answers at once with a refusal of some 4.9 MB each, while a
+  sibling runner reads a page past one credit window: together several
+  times the count. The service's memory group, read from inside the
+  container as fast as a shell reads a file, holds at most SERVICE_BOUND,
+  and SERVICE_SLACK for the freed segments the VM's allocator keeps, more
+  after the release than at its most before it;
+  no out-of-memory event is counted in the group or the container, and
+  the release and container are untouched; each refusal reaches its
+  runner, which asks once more and is answered; every child, the formula
+  and the page's reader complete, the page read to its very end.
 
 Usage: tests/locus-runtime-image/runners.py IMAGE
 """
@@ -111,7 +124,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import memory  # noqa: E402
 import worker_auth as auth  # noqa: E402
-from control_plane import DROP, RESERVED_HEADERS, ZERO_AUTHORITY, ControlPlane  # noqa: E402
+from control_plane import DROP, RESERVED_HEADERS, ZERO_AUTHORITY, ControlPlane, Raw  # noqa: E402
 from stack import (  # noqa: E402
     KEEPER_CAPS, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, Stack, StatusSampler, expect, run, wait_until,
 )
@@ -200,6 +213,22 @@ SHIPPED_PATHS = {
 STUB_KEY = {"STUB_API_KEY": "sk-locus-runtime-image-test"}
 # A runner is a VM booting from nothing: its first attach takes seconds.
 BOOT_S = 60
+# The runtime service's count of what it holds of runners' answers and
+# fetches (`Locus.Output`'s runtime bound, 2.9's "What a service holds").
+SERVICE_BOUND = 16 * 1024 * 1024
+# What the service's group holds beside the count: chiefly the segments
+# the VM's allocator keeps cached once they are freed, for reuse, until a
+# later check returns them (`+MMmcs`, ten by default), each at most the
+# base64 of the largest answer's frame, which is the largest binary the
+# service makes for a runner (Prima.HostAPI.max_answer_bytes/0, 5 MiB).
+# Measured at 42 to 58 MiB more than idle with the count, and 116 to 124
+# MiB without it, under this burst.
+SERVICE_SLACK = 10 * 4 * -(-5 * 1024 * 1024 // 3)
+# The service-bound case's burst: the children of one formula, in its
+# runner, each answered at once for its artifact with REFUSAL_BYTES, most
+# of the largest a host call's answer may be (Prima.HostAPI.max_answer_bytes/0).
+BURST_CHILDREN = 6
+REFUSAL_BYTES = 4_900_000
 # cyfr-locus gives every spawn a second when its client dies (lostGrace).
 LOST_GRACE_S = 1.0
 
@@ -290,7 +319,8 @@ def since(stack, plane, execution_id, t):
 
 class Origin:
     """The harness's own HTTP listener, the one address a pin names: every
-    connection it accepts and every request it answers is recorded.
+    connection it accepts and every request it answers is recorded, and
+    each answer waits while `hold` is clear.
 
     A runner's pinned request reaches it from the container, so it binds
     `host`, the default bridge's gateway the control plane binds, and no
@@ -302,6 +332,8 @@ class Origin:
         self.lock = threading.Lock()
         self.connections = []
         self.requests = []
+        self.hold = threading.Event()
+        self.hold.set()
 
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -318,6 +350,7 @@ class Origin:
                 with origin.lock:
                     origin.requests.append({"path": self.path, "host": self.headers.get("host"),
                                             "authorization": self.headers.get("authorization")})
+                origin.hold.wait(60)
                 # A page past one relay window, its one link at its very end.
                 body = (b"<html><body>" + b"x" * (WINDOW_BYTES + 1_500_000) + b'<a href="/end">end</a></body></html>'
                         if self.path == "/window" else b"pinned")
@@ -736,6 +769,114 @@ def test_relay_window(stack, plane):
         origin.stop()
 
 
+def test_service_bound(stack, plane):
+    """Runners' host-call answers and a fetch asking at once for several times what the runtime service's count
+    holds (`Locus.Output`, 2.9's runtime bound) are each held within it: the service's group stays within its
+    idle use and the bound's worth, nothing is killed, every answer reaches its runner and the fetch completes."""
+    gateway = stack.host_gateway()
+    origin = Origin(plane.host)
+    origin.hold.clear()
+    plane.egress(EGRESS_HOSTS["fetch"], gateway)
+    release = threading.Event()
+    lock = threading.Lock()
+    children, held = [], []
+    # Athanors of their own, so each guest runs in a fresh runner, which
+    # fetches every artifact it runs.
+    athanor = f"ath_service_bound_{secrets.token_hex(4)}"
+
+    # Each child's first ask for its artifact is held until every child has
+    # asked, then answered with a refusal of REFUSAL_BYTES, plain, as fast
+    # as the plane writes it (a sealed answer that size takes this plane's
+    # own cipher longer than the call's timeout): an answer the runner's
+    # client reads as lost, and asks again for, and is answered.
+    def artifact(args, caller, entry):
+        with lock:
+            first = entry["execution_id"] not in held
+            held.append(entry["execution_id"])
+        if not first:
+            return plane.default("fetch_artifact", args, caller)
+        release.wait(60)
+        return Raw(503, os.urandom(REFUSAL_BYTES))
+
+    requests = [{"tool": "execution", "action": "run", "args": {"reference": memory.ECHO_REF.rsplit(":", 1)[0], "input": {"child": n}}}
+                for n in range(1, BURST_CHILDREN + 1)]
+    formula = plane.mint(stack.boot, "formula", memory.PROBE_REF, memory.wasm(memory.PROBE), {"op": "spawn_await_all", "requests": requests},
+                         athanor, 120_000, intercepted=("execution.run", "execution.run_stream"),
+                         authority=memory.bound_authority(memory.PROBE_REF, BURST_CHILDREN))
+
+    def admit(args, caller, entry):
+        child = plane.mint(stack.boot, "reagent", memory.ECHO_REF, memory.wasm(memory.ECHO), args.get("input") or {},
+                           formula["athanor_id"], 120_000, parent=formula)
+        plane.script("fetch_artifact", artifact, child["execution_id"])
+        with lock:
+            children.append(child)
+        return plane.child_answer(child)(args, caller, entry)
+
+    plane.script("admit_child", admit, formula["execution_id"])
+    url = f"http://{EGRESS_HOSTS['fetch']}:{origin.port}/window"
+    web = plane.mint(stack.boot, "catalyst", REFS["web"], WASM["web"], {"operation": "links", "params": {"url": url}},
+                     f"{athanor}_web", 60_000, authority=WINDOW_AUTHORITY)
+    settled = {}
+    wait_until(lambda: memory.fresh_runners_booted(stack, settled), BOOT_S, "the pool to settle", interval=0.25)
+    sampler = memory.GroupSampler(stack.container, memory.KEEPER_GROUP)
+    try:
+        container_before = memory.container_memory(stack)
+        release_before = memory.release_identity(stack)
+        restarts_before = stack.container_state()["restarts"]
+        sampler.start()
+        expect(stack.start(formula)[1] == {"v": 1, "ok": True},
+               f"a formula spawning {BURST_CHILDREN} children in its runner starts")
+        expect(stack.start(web)[1] == {"v": 1, "ok": True}, f"a guest reading the links of {url} starts in another runner")
+        wait_until(lambda: len(held) == BURST_CHILDREN and origin.seen()[1], BOOT_S,
+                   f"the {BURST_CHILDREN} children's artifacts and the page to be asked for and held", interval=0.1)
+        time.sleep(1.0)
+        released = time.time()
+        print(f"service bound: {BURST_CHILDREN} answers of {REFUSAL_BYTES} bytes and a page of {WINDOW_BYTES + 1_500_000} "
+              f"bytes released at once, at {plane.elapsed():.3f} s, against a count of {SERVICE_BOUND} bytes", flush=True)
+        release.set()
+        origin.hold.set()
+
+        closes = {c["execution_id"]: memory.terminal(plane, c["execution_id"], BOOT_S) for c in [formula, web] + children}
+        time.sleep(0.5)
+    finally:
+        release.set()
+        origin.hold.set()
+        sampler.stop()
+        origin.stop()
+
+    before = [s["current"] for s in sampler.samples if s["t"] < released and s["current"] is not None]
+    after = [s["current"] for s in sampler.samples if s["t"] >= released and s["current"] is not None]
+    expect(before and after, f"the service's group was read before the release ({len(before)} samples) and after it "
+           f"({len(after)})")
+    idle, peak = max(before), max(after)
+    print(f"service bound: the service's group held {memory.mib(idle)} ({idle} bytes) at its most before the release and "
+          f"{memory.mib(peak)} ({peak} bytes) at its most after it: {peak - idle} bytes more, of the "
+          f"{SERVICE_BOUND + SERVICE_SLACK} the bound and its slack allow", flush=True)
+    expect(all(closes[c["execution_id"]]["op"] == "complete" for c in [formula, web] + children),
+           "every child, the formula awaiting them all and the page's reader completed",
+           {k: [v["op"], str((v["args"].get("outcome") or {}).get("error"))[:300],
+                len(plane.seen("fetch_artifact", k))] for k, v in closes.items()})
+    asks = {c["execution_id"]: [r.get("answered") for r in plane.seen("fetch_artifact", c["execution_id"])] for c in children}
+    expect(all(answers == ["raw 503", "ok"] for answers in asks.values()),
+           "each child's refusal reached its runner, which asked once more, as the call's class says, and was answered: "
+           "no answer was lost waiting for the service's room", asks)
+    output = closes[web["execution_id"]]["args"]["outcome"]["output"]
+    links = (output.get("data") or {}).get("links", []) if isinstance(output, dict) else []
+    expect(output.get("status") == 200 and len(links) == 1 and "/end" in str(links[0]),
+           "the page's reader read it whole, to the link at its very end", output)
+    expect(peak - idle <= SERVICE_BOUND + SERVICE_SLACK,
+           f"the service's group stayed within its idle use and the bound's worth ({peak - idle} bytes more at its most, "
+           f"at most {SERVICE_BOUND} counted and {SERVICE_SLACK} of freed segments its allocator keeps)",
+           {"idle": idle, "peak": peak})
+    container_after = memory.container_memory(stack)
+    events = [s["events"] for s in sampler.samples if s["events"]]
+    expect(events and events[0] == events[-1] and container_after["events_local"] == container_before["events_local"],
+           "nothing was killed: neither the service's group nor the container counted an out-of-memory event",
+           {"group": [events[0], events[-1]] if events else [], "container": [container_before, container_after]})
+    expect(memory.release_identity(stack) == release_before and stack.container_state()["restarts"] == restarts_before,
+           "the service's release and its container were not touched")
+
+
 def test_spinning_guest_killed_at_bound(stack, plane):
     timeout_ms = 2_000
     attempt = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, "ath_spin", timeout_ms)
@@ -1071,6 +1212,7 @@ def main(image):
         test_attached_fetch(stack, plane)
         test_shipped_model_attached_request(stack, plane)
         test_relay_window(stack, plane)
+        test_service_bound(stack, plane)
         test_spinning_guest_killed_at_bound(stack, plane)
         test_sibling_survives(stack, plane)
         test_tainted_never_reassigned(stack, plane)
