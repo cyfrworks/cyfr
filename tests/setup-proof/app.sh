@@ -77,7 +77,27 @@ cleanup() {
   # it is stopped would otherwise never end for whoever reads that output.
   [ -z "${ANSWERER:-}" ] || kill "$ANSWERER" 2>/dev/null || true
   if [ -n "$CLIENT_ID" ]; then
-    timeout 30 docker exec "$CLIENT_ID" cat /tmp/docker-times >"$OUT/docker-calls.txt" 2>/dev/null || true
+    # A failed call's error text is kept but for a line carrying a value
+    # of a folder's .env, which is dropped: compose can quote what it read.
+    timeout 30 docker exec "$CLIENT_ID" cat /tmp/docker-times 2>/dev/null | python3 -I -c '
+import sys
+values = set()
+for f in sys.argv[1:]:
+    try:
+        lines = open(f).read().splitlines()
+    except OSError:
+        values = None
+        break
+    for line in lines:
+        v = line.partition("=")[2].strip().strip(chr(34) + chr(39))
+        if len(v) >= 8:
+            values.add(v)
+for line in sys.stdin:
+    if line.startswith("    ") and (values is None or any(v in line for v in values)):
+        print("    (a line carrying a value of .env, dropped)" if values is not None else "    (a .env unread: its error text dropped)")
+        continue
+    sys.stdout.write(line)
+' $(find "$W" -mindepth 2 -maxdepth 2 -name .env 2>/dev/null) >"$OUT/docker-calls.txt" 2>/dev/null || true
     timeout 60 docker rm -f "$CLIENT_ID" >/dev/null 2>&1 || left="$left the client container $CLIENT_ID;"
   fi
   for s in ${SCRUBS:-}; do kill "$s" 2>/dev/null || true; done
@@ -135,18 +155,33 @@ node "$ROOT/tests/desktop-proof/pack.mjs" "$ROOT/tests/setup-proof/app/proof.js"
 # asks for Docker. The docker the app finds holds a pull until released,
 # and a start until the proof releases it (its reshown row).
 cat >"$W/fixture/wrap-docker" <<'WRAP'
-#!/bin/sh
+#!/bin/bash
 # Each call is logged; a pull is held until /tmp/pull-go, and says so if it
 # is released rather than ended; a start is held until /tmp/up-go. Each
-# call is also timed in /tmp/docker-times, which the run keeps (its
-# arguments are paths and names alone).
+# call is also timed in /tmp/docker-times, which the run keeps, with its
+# exit status and, for a call that failed, the last 40 lines of its
+# standard error: its arguments are paths and names alone, and its
+# standard error names files, services, containers and variables, never
+# their values (a resolved compose file and the services' logs are
+# standard output, passed on and never kept). Docker runs as this
+# script's child, in the process group cyfr kills to end a call.
 echo "$*" >>/tmp/docker-calls
 echo "$(date -u +%H:%M:%S.%3N) $*" >>/tmp/docker-times
+ended() { printf '%s\n' "$(date -u +%H:%M:%S.%3N) exit $1 $2" >>/tmp/docker-times; }
 case " $* " in
-  *" pull "*) while [ ! -e /tmp/pull-go ]; do sleep 0.2; done; echo "released $*" >>/tmp/docker-calls; exit 1;;
+  *" pull "*) while [ ! -e /tmp/pull-go ]; do sleep 0.2; done; echo "released $*" >>/tmp/docker-calls; ended 1 "$*"; exit 1;;
   *" up "*) while [ ! -e /tmp/up-go ]; do sleep 0.2; done;;
 esac
-exec /usr/bin/docker "$@"
+err=$(mktemp /tmp/docker-err.XXXXXX)
+{ /usr/bin/docker "$@" 2>&1 1>&3 3>&- | tee "$err" >&2 3>&-; } 3>&1
+rc=${PIPESTATUS[0]}
+if [ "$rc" = 0 ]; then
+  ended 0 "$*"
+else
+  printf '%s\n%s\n' "$(date -u +%H:%M:%S.%3N) exit $rc $*" "$(tail -n 40 "$err" | sed 's/^/    /')" >>/tmp/docker-times
+fi
+rm -f "$err"
+exit "$rc"
 WRAP
 # --init: a process that ends in the client is reaped, so what is left of
 # setup's work is what still runs.
