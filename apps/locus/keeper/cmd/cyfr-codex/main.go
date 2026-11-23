@@ -6,7 +6,7 @@
 // Command cyfr-codex drives OpenAI Codex as a brain of CYFR's. It is the
 // start of a `driven` program row's command, before the harness's own:
 //
-//	cyfr-codex /opt/cyfr/programs/codex/bin/codex
+//	cyfr-codex npx -y @openai/codex@0.169.0
 //
 // On a terminal it runs the harness's command unchanged, in its place, so
 // the person signs in to Codex on the same row (`login --device-auth`).

@@ -1313,24 +1313,6 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert again.config_json == row.config_json
   end
 
-  # Codex is in CYFR's image, entered by its path, so its install fetches
-  # nothing; Claude Code is not, and its install fetches it at the version
-  # its driver was probed against.
-  test "Codex's install runs the image's Codex by its path, and Claude Code's fetches it at its version",
-       %{conn: conn, athanor: athanor} do
-    for {name, command} <- [
-          {"openai-codex", "cyfr-codex /opt/cyfr/programs/codex/bin/codex"},
-          {"claude-code", "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"}
-        ] do
-      query = URI.encode_query(%{"add" => name, "from" => "aqua"})
-      {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
-      render(view)
-
-      assert has_element?(view, ~s(form#add-program input[name="command"][value="#{command}"])),
-             name
-    end
-  end
-
   # Each program brain CYFR ships names its own row and its own command,
   # the driver first: its install prefills the form from its definition
   # alone, one path for every brain. A name CYFR ships no brain of opens

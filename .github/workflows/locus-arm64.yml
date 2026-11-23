@@ -4,10 +4,9 @@
 name: Locus image on arm64
 
 # The Locus image built and proved natively on arm64 in a pull request that
-# changes what the image carries: Dockerfile.locus, the pinned programs'
-# manifests (apps/locus/programs), the keeper and the drivers it builds
-# (apps/locus/keeper), the browser suite that proves them and this build's
-# own definition. test.yml builds and proves the image on amd64 in every
+# changes what the image carries: Dockerfile.locus, the keeper and the
+# drivers it builds (apps/locus/keeper), the browser suite that proves
+# them and this build's own definition. test.yml builds and proves the image on amd64 in every
 # run, and release.yml again on both architectures before it publishes;
 # this job publishes nothing and writes no cache.
 
@@ -15,7 +14,6 @@ on:
   pull_request:
     paths:
       - 'Dockerfile.locus'
-      - 'apps/locus/programs/**'
       - 'apps/locus/keeper/**'
       - 'tests/locus-backends-image/browser.py'
       - '.github/actions/image-build/**'
@@ -30,7 +28,7 @@ concurrency:
 
 jobs:
   pinned-programs:
-    name: The pinned programs on arm64
+    name: Aqua's browser on arm64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
@@ -40,11 +38,11 @@ jobs:
         with:
           image: locus
           write: 'false'
-      # browser.py --first-start: the image holds the headless shell and
-      # Codex built for arm64 and nothing of Codex's codex-resources, both
-      # start with no public host, a person's node and cyfr-stub never run
-      # in CYFR's place, and a public page loads at the browser's first start.
-      - name: The pinned programs run, and Aqua's browser loads a page
+      # browser.py --first-start: the image holds the headless shell built
+      # for arm64, which starts with no public host, a person's node and
+      # cyfr-stub never run in CYFR's place, and a public page loads at the
+      # browser's first start.
+      - name: Aqua's browser is in the image and loads a page
         run: python3 tests/locus-backends-image/browser.py --first-start cyfr-locus:ci
       # What the image holds on arm64, and the last release's image beside
       # it when the registry answers: read only, nothing is pushed.
@@ -55,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           held() { docker run --rm --entrypoint sh "$1" -c \
-            'echo "$(du -sxm / 2>/dev/null | cut -f1) MiB in all; $(du -sm /opt/cyfr/programs/codex 2>/dev/null | cut -f1) MiB of Codex; $(du -sm /usr/lib/chromium 2>/dev/null | cut -f1) MiB of /usr/lib/chromium"'; }
+            'echo "$(du -sxm / 2>/dev/null | cut -f1) MiB in all; $(du -sm /usr/lib/chromium 2>/dev/null | cut -f1) MiB of /usr/lib/chromium"'; }
           echo "this image: $(held cyfr-locus:ci)"
           release="$(gh api "repos/$REPOSITORY/releases?per_page=1" --jq '.[0].tag_name' 2>/dev/null || true)"
           if [ -n "$release" ] && docker pull -q --platform linux/arm64 "ghcr.io/cyfrworks/cyfr-locus:$release" >/dev/null 2>&1; then

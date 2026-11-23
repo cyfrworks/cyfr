@@ -208,8 +208,7 @@ defmodule Opus.Programs.Definition do
   # The program brains CYFR ships a driver for: the row's name, the title a
   # person reads, and the command its install form is prefilled with, the
   # driver first and the harness at the version its driver was probed
-  # against: Codex as the Locus image carries it, by its path, and Claude
-  # Code, which the image does not carry, fetched at that version. `Arca.McpServerStorage.driver/1` is the one list of driver
+  # against. `Arca.McpServerStorage.driver/1` is the one list of driver
   # words; a test holds each command to it.
   @brains [
     %{
@@ -220,7 +219,7 @@ defmodule Opus.Programs.Definition do
     %{
       name: "openai-codex",
       title: "OpenAI Codex",
-      command: "cyfr-codex /opt/cyfr/programs/codex/bin/codex"
+      command: "cyfr-codex npx -y @openai/codex@0.169.0"
     }
   ]
 

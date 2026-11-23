@@ -1,9 +1,0 @@
-#!/bin/sh
-# SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 CYFR Works Inc.
-#
-# OpenAI Codex as the Locus image installs it (Dockerfile.locus), from the
-# manifest and lockfile beside this folder: the package's own entry, run by
-# the image's Node by its absolute path, so a `node` a person puts first on
-# a program's PATH never runs it.
-exec /usr/local/bin/node /opt/cyfr/programs/codex/node_modules/@openai/codex/bin/codex.js "$@"

@@ -80,18 +80,14 @@ container starts:
 - A driver whose Chrome cannot start says hello with an error and exits 1.
 - Chrome reaches nothing by itself: its own network log over a start with
   nothing asked shows no URL requested, no host resolved and no connection.
-- The pinned programs are in the image, and a kept program fetches
-  neither: the image holds Debian's Chromium headless shell and Codex at
-  /opt/cyfr/programs/codex, each built for this machine, and nothing of
-  Codex's codex-resources folder (no bubblewrap, no voice host, no shared
-  library). Under rows whose hosts admit no public host (the stack's own
-  service name alone), the browser's driver says hello and its first
-  window shows a page, and Codex's driver, run as the shipped row runs it,
-  says hello and has Codex read the empty folder's account, which it
-  answers signed out. A `node` and a `cyfr-stub` put in the folder's
-  .local/bin, where a person's installs go: a shell there finds that
-  `node` first and CYFR's own stub; Codex's entry runs on without it.
-  The home holds the browser's profile well within its 2 GiB bound.
+- The browser is in the image and fetches nothing: the image holds
+  Debian's Chromium headless shell, built for this machine, and under a
+  row whose hosts admit no public host (the stack's own service name
+  alone) the browser's driver says hello and its first window shows a
+  page. A `node` and a `cyfr-stub` put in a kept folder's .local/bin,
+  where a person's installs go: a shell there finds that `node` first and
+  CYFR's own stub, and npm installs there. The home holds the browser's
+  profile well within its 2 GiB bound.
 
 It prints, without gating, Chrome's memory with one, three and six windows
 (the summed PSS of its processes and the session cgroup's memory.current),
@@ -104,8 +100,9 @@ cast's images a second on a page that changes every frame, their size, and
 the delay from a press to the first image that shows it.
 
 With --first-start it proves, for an image of another architecture, which
-the release workflow's arm64 job starts, that the pinned programs are in
-it as above, and that the browser's first start loads a public page.
+locus-arm64.yml and the release workflow's arm64 job start, that the
+browser is in it and a person's tools come first, as above, and that the
+browser's first start loads a public page.
 
 Prerequisites: harness.py's, and the public network, for the public pages
 (an open of one is skipped under CYFR_TEST_OFFLINE=1).
@@ -159,30 +156,22 @@ OWNER = owner_of("browser")
 # profile lock is a socket in its temporary folder, and a home this long
 # leaves no room for it there unless the driver names that folder short.
 BROWSER_HOME = "mcp_01890000-0000-7000-8000-00000000b005"
-BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, CODEX_HOME, FULL_HOME = (
-    f"mcp_browser-{name}" for name in ("broken", "other", "offline", "codex", "full"))
+BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, TOOLS_HOME, FULL_HOME = (
+    f"mcp_browser-{name}" for name in ("broken", "other", "offline", "tools", "full"))
 # The bound Opus.Programs.Definition.browser/1 gives the browser's home.
 HOME_MAX_BYTES = 2 << 30
 BROWSER = {"name": "browser", "command": "cyfr-browser", "env": {}, "home": "kept", "memory_bytes": 1536 << 20,
            "home_max_bytes": HOME_MAX_BYTES}
-# The image's Chromium headless shell, which the driver starts by its path, and Codex's folder.
+# The image's Chromium headless shell, which the driver starts by its path.
 CHROMIUM = "/usr/lib/chromium/chromium-headless-shell"
-CODEX = "/opt/cyfr/programs/codex"
-# Codex's row as Opus.Programs.Definition ships it: its driver and the image's Codex by its path, in a kept
-# folder at the service's default memory bound.
-CODEX_ROW = {"name": "codex", "command": f"cyfr-codex {CODEX}/bin/codex", "env": {}, "home": "kept"}
 # A row held to the stack's own service name, which the guard admits, reaches no public host: a program under it
 # that fetched anything would fail.
 NO_PUBLIC_HOST = {"hosts": [SERVICE]}
 PROGRAMS = [
     BROWSER,
     {**BROWSER, "name": "offline-browser", **NO_PUBLIC_HOST},
-    {**CODEX_ROW, **NO_PUBLIC_HOST},
     probe(home="kept"),
 ]
-# What Codex's driver says to a listing when Codex reads the folder's account as signed out
-# (apps/locus/keeper/cmd/cyfr-codex).
-SIGNED_OUT = "OpenAI Codex has no sign-in it can use; sign it in on the program's terminal, with your plan or a key."
 # How long a start with nothing asked is watched for traffic of Chrome's own.
 QUIET_S = 30
 SHORT_KEEP_MS = 3000
@@ -1118,37 +1107,12 @@ def elf_machine(stack, path):
     return imagesuite.read_output(stack.exec(f"od -An -tx1 -j18 -N2 {path}"), f"{path}'s ELF machine").replace(" ", "").strip()
 
 
-def codex_listing(c, key):
-    """Codex's driver, run as the shipped row runs it: its hello, then its answer to a listing, read to the end."""
-    status, opened = c.open(OWNER, CODEX_ROW["name"], key=key, argv=[], home_id=CODEX_HOME)
-    expect(status == 200 and opened["status"] == "running", "Codex's row opens as a run session", opened)
-    session, after, events = opened["session"], 0, []
-    status, answer = c.send(OWNER, session, [json.dumps({"t": "models", "id": "mdl_pinned"})])
-    expect(status == 200, "Codex's driver takes a listing", answer)
-    deadline = time.monotonic() + 90
-    while not [e for e in events if e.get("id") == "mdl_pinned"] and time.monotonic() < deadline:
-        keep_lease(c)
-        lines, after, running = c.lines_until(OWNER, session, lambda got: got, after, timeout_s=90)
-        events += [json.loads(line) for line in lines]
-        if not running:
-            break
-    c.close(OWNER, session)
-    return events
-
-
-def pinned(stack, c):
-    """The pinned programs are in the image, and a kept program held to no public host runs both, fetching nothing."""
+def in_image(stack, c):
+    """The browser is in the image and starts with no public host; what a person installs comes first on a kept
+    program's PATH, and never in place of CYFR's own executables."""
     machine = imagesuite.read_output(stack.exec("uname -m"), "the box's machine").strip()
     expect(elf_machine(stack, CHROMIUM) == ELF_MACHINE.get(machine),
            f"the image holds Debian's Chromium headless shell, built for this box's {machine}", CHROMIUM)
-    entry = imagesuite.read_output(stack.exec(
-        f"ls {CODEX}/node_modules/@openai/codex-linux-*/vendor/*/bin/codex"), "Codex's platform binary").split()
-    expect(len(entry) == 1 and elf_machine(stack, entry[0]) == ELF_MACHINE.get(machine),
-           f"the image holds one Codex, built for this box's {machine}", entry)
-    left = imagesuite.read_output(stack.exec(
-        f"find {CODEX} -name codex-resources -o -name bwrap -o -name codex-voice-host -o -name '*.so*'"),
-        "what is left of Codex's resources").split()
-    expect(left == [], "nothing of Codex's codex-resources folder is in the image", left)
 
     # The browser's first window, under a row that reaches no public host.
     started = time.monotonic()
@@ -1163,24 +1127,15 @@ def pinned(stack, c):
     eventually(lambda: not stack.under_uid(int(home_uid(stack, OFFLINE_HOME))),
                "the offline browser's processes to end with its session")
 
-    # Codex, with no public host, in a folder with no sign-in.
-    events = codex_listing(c, "first")
-    expect(events and events[0]["t"] == "hello" and events[0]["driver"] == "cyfr-codex", "Codex's driver says hello",
-           events)
-    expect(events[-1] == {"t": "refused", "id": "mdl_pinned", "reason": SIGNED_OUT, "account": "signed_out"},
-           "Codex starts with no public host and reads the empty folder's account as signed out", events)
-    uid = int(home_uid(stack, CODEX_HOME))
-    eventually(lambda: not stack.under_uid(uid), "Codex's processes to end with its session")
-
     # What a person installs in the folder comes first in a shell, and never in CYFR's place.
     # The probe starts first, on the image's node, and stays: what is put in the folder below is found after.
-    tool = c.mcp(OWNER, "probe", key="installs", home_id=CODEX_HOME)
+    tool = c.mcp(OWNER, "probe", key="installs", home_id=TOOLS_HOME)
     tool.list_tools()
-    home = f"{KEPT_ROOT}/{CODEX_HOME}"
-    as_home(stack, CODEX_HOME,
+    uid = int(home_uid(stack, TOOLS_HOME))
+    home = f"{KEPT_ROOT}/{TOOLS_HOME}"
+    as_home(stack, TOOLS_HOME,
             f"mkdir -p {home}/.local/bin && for t in node cyfr-stub; do "
-            f"printf '#!/bin/sh\\ntouch {home}/ran-$(basename $0)\\nexit 3\\n' > {home}/.local/bin/$t && "
-            f"chmod 0755 {home}/.local/bin/$t; done",
+            f"printf '#!/bin/sh\\nexit 3\\n' > {home}/.local/bin/$t && chmod 0755 {home}/.local/bin/$t; done",
             "a node and a cyfr-stub put in the folder's .local/bin")
     status, ran = tool.call("run", {"argv": ["sh", "-c", "command -v node; command -v cyfr-stub; "
                                                          "echo $NPM_CONFIG_PREFIX; echo $XDG_BIN_HOME"]})
@@ -1188,12 +1143,6 @@ def pinned(stack, c):
     expect(found == [f"{home}/.local/bin/node", "/opt/cyfr/bin/cyfr-stub", f"{home}/.local", f"{home}/.local/bin"],
            "a shell in the folder finds the person's node first and CYFR's own stub, and npm installs there",
            found)
-    events = codex_listing(c, "after")
-    expect(events and events[-1] == {"t": "refused", "id": "mdl_pinned", "reason": SIGNED_OUT,
-                                     "account": "signed_out"},
-           "Codex's entry runs on the image's Node, not the person's", events)
-    ran = as_home(stack, CODEX_HOME, f"ls {home} | grep '^ran-' || true", "what the planted tools left").split()
-    expect(ran == [], "neither the person's node nor their cyfr-stub ran", ran)
     c.close(OWNER, tool.session)
     eventually(lambda: not stack.under_uid(uid), "the folder's processes to end")
 
@@ -1225,8 +1174,8 @@ def main():
         status, answer, _ = c.sync(OWNER, PROGRAMS)
         expect(status == 200, "an owner of the browser and a probe, both kept, is synced", answer)
         _renewed[0] = time.monotonic()
-        # ————— the pinned programs, fetching nothing —————
-        pinned(stack, c)
+        # ————— the browser in the image, and a person's tools first —————
+        in_image(stack, c)
         if only_first_start:
             if os.environ.get("CYFR_TEST_OFFLINE") == "1":
                 print("skip: an open of a public page needs the public network (CYFR_TEST_OFFLINE=1)", flush=True)

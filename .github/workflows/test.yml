@@ -1606,11 +1606,11 @@ jobs:
       # acknowledged chunks, no output past an unacknowledged chunk, a forced
       # tail asked again and a short keep answered gone, each operation once,
       # a profile another kept uid cannot read and no TCP listener, and the
-      # home's bound. First the pinned programs: the shell and Codex in the
-      # image, nothing of Codex's codex-resources, the browser's first window
-      # and Codex's listing with no public host, and a person's node and
-      # cyfr-stub never in CYFR's place. It prints Chrome's memory with one,
-      # three and six windows and the first start's time.
+      # home's bound. First the shell in the image and its first window with
+      # no public host, and a person's node and cyfr-stub never in CYFR's
+      # place; later what a site reads of its kind, none of it Headless, and
+      # saved profiles that reopen nothing. It prints Chrome's memory with
+      # one, three and six windows and the first start's time.
       - name: Aqua's browser
         run: python3 tests/locus-backends-image/browser.py cyfr-locus:backends
 

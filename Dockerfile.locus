@@ -222,10 +222,10 @@ RUN ARCH=$(dpkg --print-architecture) \
     && rm -rf /usr/local/cargo/registry /usr/local/cargo/git \
     && mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
 
-# Node.js LTS for tincture builds (npm + Vite), for the stdio MCP servers
-# the backends service runs (`npx -y <package>`) and for Codex's entry.
-# Direct binary install, checksum-pinned against nodejs.org's
-# SHASUMS256.txt for this version.
+# Node.js LTS for tincture builds (npm + Vite) and for the stdio MCP
+# servers the backends service runs (`npx -y <package>`). Direct binary
+# install, checksum-pinned against nodejs.org's SHASUMS256.txt for this
+# version.
 ARG NODE_VERSION=24.22.1
 RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in \
@@ -239,33 +239,6 @@ RUN ARCH=$(dpkg --print-architecture) \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz \
     && node --version && npm --version
-
-# OpenAI Codex (Apache-2.0), at the version its driver cyfr-codex speaks
-# to, installed from apps/locus/programs/codex's manifest and lockfile,
-# root's, and entered at /opt/cyfr/programs/codex/bin/codex, which runs the
-# package's entry with this image's Node by its absolute path. The
-# package's own codex-resources folder, a bubblewrap and a voice host with
-# their LGPL libraries, is removed: the driver turns Codex's own sandbox
-# off and uses no voice, and the image carries no LGPL code of Codex's.
-# The folder's notices (notices/) are Codex's licence and NOTICE and
-# ripgrep's licence, the search tool the package carries, copied from
-# their release tags. The build fails unless exactly one platform package
-# is installed, its resources folder is the one removed and nothing of it
-# is left, and Codex answers its version, from a home thrown away after.
-COPY apps/locus/programs/codex/ /opt/cyfr/programs/codex/
-RUN cd /opt/cyfr/programs/codex \
-    && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache /tmp/npm-cache \
-    && rm -rf /tmp/npm-cache \
-    && set -- node_modules/@openai/codex-linux-*/vendor/*/codex-package.json \
-    && [ "$#" -eq 1 ] && [ -f "$1" ] \
-    && platform="$(dirname "$1")" \
-    && resources="$(sed -n 's/^ *"resourcesDir": *"\([a-z-]*\)",\{0,1\}$/\1/p' "$1")" \
-    && [ "$resources" = codex-resources ] && [ -d "$platform/$resources" ] \
-    && rm -rf "${platform:?}/$resources" \
-    && [ -z "$(find . -name codex-resources -o -name bwrap -o -name 'codex-voice-host' -o -name '*.so*')" ] \
-    && answered="$(mktemp -d)" \
-    && [ "$(HOME="$answered" bin/codex --version)" = "codex-cli $(node -p 'require("./package.json").dependencies["@openai/codex"]')" ] \
-    && rm -rf "$answered"
 
 # The toolchains stay root-owned: a build or a backend reads them and
 # writes only its own home, so none can alter what the next one runs
