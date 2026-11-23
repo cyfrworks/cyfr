@@ -177,20 +177,24 @@ answer() {
   done
 }
 answer & ANSWERER=$!
-# What is left of setup's work: the client's processes whose command line
-# names setup-project and that still run (not a zombie), counted from /proc;
-# the counting shell skips itself, since its own command line names what it
-# counts.
-work_left() { docker exec "$CLIENT_ID" sh -c 'n=0; for p in /proc/[0-9]*; do [ "${p#/proc/}" = "$$" ] && continue
+# What is left of setup's work, read within $1 seconds: the client's
+# processes whose command line names setup-project and that still run (not
+# a zombie), counted from /proc; the counting shell skips itself, since its
+# own command line names what it counts.
+work_left() { timeout "$1" docker exec "$CLIENT_ID" sh -c 'n=0; for p in /proc/[0-9]*; do [ "${p#/proc/}" = "$$" ] && continue
   read -r s <$p/stat 2>/dev/null || continue; s=${s##*) }; [ "${s%% *}" = Z ] && continue
   case "$(tr "\0" " " <$p/cmdline 2>/dev/null)" in *setup-project*) n=$((n+1));; esac; done; echo $n'; }
+# The stack's containers there, read within $1 seconds.
+stack_left() { (cd "$D" && timeout "$1" docker compose --project-name "$RUN" --project-directory "$D" -f docker-compose.yml -f docker-compose.override.yml ps -aq) | wc -l; }
 # One launch, one verdict: it failed if the app's exit status is not 0, past
 # its 600 s limit among them, if its output is still open 15 s after it
 # ended, if its log's scrub failed, or if it did not write that it passed,
 # whatever it printed first. The 15 s are counted once, from the app's
 # exit as observed here; for the first launch they are the quit row's, in
-# which setup's work must be gone too (LEFT, OPEN and RUNNING, read at that
-# deadline).
+# which setup's work and the stack must be gone too. An observation counts
+# only if it was finished before that deadline: OPEN, LEFT and RUNNING start
+# unread, each pass bounds its readings by the time left, and a pass that
+# ends past the deadline changes nothing.
 launch() {
   node "$ROOT/tests/desktop-proof/scrub-lines.mjs" <"$W/fixture/app-output" >"$OUT/app-$1.log" &
   local scrub=$! status=0
@@ -202,13 +206,23 @@ launch() {
   grep -E "^(PASS|FAIL)" "$W/fixture/out/setup.txt" 2>/dev/null | sed -n "$(( ${2:-0} + 1 )),\$p" || true
   [ "$status" = 0 ] || failed "$1: the app ended with status $status$( [ "$status" != 124 ] || echo ", at its 600 s limit")"
   # A process the app left running holds its output's write end.
-  while :; do
-    OPEN=0; kill -0 "$scrub" 2>/dev/null && OPEN=1
-    LEFT=0; [ "$1" != first ] || LEFT=$(work_left)
-    [ "$OPEN$LEFT" = 00 ] || [ "$(date +%s%N)" -ge "$deadline" ] && break
+  OPEN=unread LEFT=unread RUNNING=unread
+  local now bound o l r
+  while now=$(date +%s%N); [ "$now" -lt "$deadline" ]; do
+    # In ms, at least 1: timeout reads a bound of 0 as none.
+    bound=$(( (deadline - now) / 1000000 )); [ "$bound" -ge 1 ] || bound=1
+    bound=$(printf '%d.%03d' $(( bound / 1000 )) $(( bound % 1000 )))
+    o=0; kill -0 "$scrub" 2>/dev/null && o=1
+    l=0 r=0
+    if [ "$1" = first ]; then
+      l=$(work_left "$bound" 2>/dev/null) || l=
+      r=$(stack_left "$bound" 2>/dev/null) || r=
+    fi
+    [ "$(date +%s%N)" -lt "$deadline" ] || break
+    OPEN=$o; [ -z "$l" ] || LEFT=$l; [ -z "$r" ] || RUNNING=$r
+    [ "$OPEN$LEFT$RUNNING" = 000 ] && break
     sleep 0.2 # sleep-ok: polls up to the one deadline, 15 s from the app's exit
   done
-  RUNNING=$(compose ps -aq 2>/dev/null | wc -l)
   if [ "$OPEN" = 0 ]; then
     wait "$scrub" || failed "$1: the app's log could not be scrubbed clean (scrub-lines ended $?)"
   elif [ "$1" != first ]; then
@@ -219,7 +233,7 @@ launch() {
 launch first
 kill "$ANSWERER" 2>/dev/null || true
 [ "$LEFT" = 0 ] && [ "$OPEN" = 0 ] && [ "$RUNNING" = 0 ] && [ -f "$D/.env" ] ||
-  failed "quit: 15 s after the app's end, $LEFT processes of setup's work ran, its output was $( [ "$OPEN" = 0 ] && echo closed || echo "still held open"), $RUNNING containers of the stack were there, .env $( [ -f "$D/.env" ] && echo written || echo missing)"
+  failed "quit: 15 s after the app's end, as last read in time: setup's work's processes $LEFT, the app's output $(case $OPEN in 0) echo closed;; 1) echo "still held open";; *) echo unread;; esac), the stack's containers $RUNNING, .env $( [ -f "$D/.env" ] && echo written || echo missing) (unread: not read within the 15 s)"
 # The held pull released: the work, gone, takes nothing further.
 calls=$(docker exec "$CLIENT_ID" cat /tmp/docker-calls | wc -l)
 docker exec "$CLIENT_ID" touch /tmp/pull-go

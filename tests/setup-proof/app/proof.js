@@ -105,11 +105,13 @@ lib.run("setup", {
         const c = await contentAt(atBootstrap, "the chooser shown again")
         // The start is held (app.sh's docker): the page in the lost one's
         // place shows the run so far while the work is still pending.
+        // Both are waited for together: the page can show the start before
+        // the held docker has recorded it.
         const pending = await waitFor(async () => {
           const s = await shown(c).catch(() => null)
-          return s?.progress.join("|") === `Setting up CYFR in ${FOLDER}|Starting CYFR…` ? s : null
-        }, "the progress on the page shown again")
-        const held = readFileSync("/tmp/docker-calls", "utf8").split("\n").some((l) => / up( |$)/.test(l)) && !existsSync("/tmp/up-go")
+          const held = readFileSync("/tmp/docker-calls", "utf8").split("\n").some((l) => / up( |$)/.test(l)) && !existsSync("/tmp/up-go")
+          return held && s?.progress.join("|") === `Setting up CYFR in ${FOLDER}|Starting CYFR…` ? s : null
+        }, "the progress on the page shown again, with the start held")
         writeFileSync("/tmp/up-go", "")
         const done = await waitFor(async () => {
           const s = await shown(c)
@@ -117,7 +119,7 @@ lib.run("setup", {
         }, "the setup done", 300_000)
         await lib.sleep(2000) // sleep-ok: nothing should open by itself in this time
         const still = atBootstrap(lib.content()?.webContents.getURL() ?? "")
-        return [held && !pending.go && done.go && still && done.notice === `CYFR is set up in ${FOLDER} and started.`, {pending, held, done, still}]
+        return [!pending.go && done.go && still && done.notice === `CYFR is set up in ${FOLDER} and started.`, {pending, done, still}]
       })
     const c = lib.content()
     const s = await shown(c)
