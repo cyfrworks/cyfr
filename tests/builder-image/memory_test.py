@@ -1,10 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The builds memory suite's cgroup reads and keeper-client output collection.
+"""The builds memory suite's cgroup reads, keeper-client output collection and measured build.
 
 That no keeper cgroup is left is answered only by the word `absent` from a
 command that exits 0. A failed exec, and output that answers neither word, are
-no answer. A closed relay's output is read in full before the client reports.
+no answer. The client places each spawn before it sends it. A closed relay's
+output is read in full before the client reports. The measured build is read
+until a reading taken after it holds its memory, released with a measure, and
+measured after `released`; the verdict refuses a reading under another owner,
+one taken before the build held its memory, one answered only after
+`released` and a place read after it.
 
 Usage: python3 -I tests/builder-image/memory_test.py
 """
@@ -19,6 +24,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -216,6 +222,10 @@ class ReleaseUser(unittest.TestCase):
         self.assertEqual(memory.release_user(self.lookup(0, line)), "cyfr-release")
 
 
+def frame(stream, payload):
+    return bytes([stream]) + struct.pack(">I", len(payload)) + payload
+
+
 class ClientOutput(unittest.TestCase):
     def test_a_closed_relay_delivers_every_byte_before_the_client_reports(self):
         with tempfile.TemporaryDirectory(prefix="memory-client-") as directory:
@@ -227,9 +237,6 @@ class ClientOutput(unittest.TestCase):
                 json.dump({"pool": "probe", "timeout_ms": 5000, "spawns": [
                     {"name": "short", "argv": ["sh", "-c", "echo ran"], "memory_bytes": memory.MIN_BOUND},
                 ]}, out)
-
-            def frame(stream, payload):
-                return bytes([stream]) + struct.pack(">I", len(payload)) + payload
 
             for trial in range(32):
                 with self.subTest(trial=trial):
@@ -243,7 +250,11 @@ class ClientOutput(unittest.TestCase):
                     try:
                         parent.settimeout(5)
                         with parent.makefile("rb") as lines:
+                            place = json.loads(lines.readline())
+                            parent.sendall(json.dumps({"v": 3, "type": "placed", "id": place["id"]}).encode() + b"\n")
                             request = json.loads(lines.readline())
+                        self.assertEqual(place, {"v": 3, "type": "place", "id": "p1", "kind": "build"})
+                        self.assertEqual((request["v"], request["type"], request["place"]), (3, "spawn", "p1"))
                         os.kill(process.pid, signal.SIGSTOP)
                         _, status = os.waitpid(process.pid, os.WUNTRACED)
                         self.assertTrue(os.WIFSTOPPED(status))
@@ -258,9 +269,9 @@ class ClientOutput(unittest.TestCase):
                             relay.sendall(packet + frame(1, b"") + frame(2, b""))
                         spawn_id = "a" * 32
                         for reply in (
-                            {"v": 2, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
-                            {"v": 2, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
-                            {"v": 2, "type": "released", "spawn_id": spawn_id},
+                            {"v": 3, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
+                            {"v": 3, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
+                            {"v": 3, "type": "released", "spawn_id": spawn_id},
                         ):
                             parent.sendall(json.dumps(reply).encode() + b"\n")
                         os.kill(process.pid, signal.SIGCONT)
@@ -275,6 +286,133 @@ class ClientOutput(unittest.TestCase):
                             process.kill()
                         process.communicate()
                         parent.close()
+
+
+SPAWN_ID = "b" * 32
+
+
+def keeper(sock, requests):
+    """A keeper on the client's channel, answering as cyfr-locus does: a place `placed`; a spawn `spawned`, its relay
+    attached and the build's stdout sent, ending in the line it prints once it holds its memory; a measure `unmeasured`
+    until the place's first reading, which the first measure finds missing, then the reading, just taken, under the
+    place's owner; a measure sent with a release is answered before `exited` and `released`, and one after is
+    `unmeasured`. Every request is kept in `requests`."""
+
+    def send(reply):
+        sock.sendall(json.dumps(reply, separators=(",", ":")).encode() + b"\n")
+
+    owner, relay, measures, releasing, free = None, None, 0, False, False
+    for line in sock.makefile("rb"):
+        request = json.loads(line)
+        requests.append(request)
+        if request["type"] == "place":
+            owner = {key: request[key] for key in ("kind", "athanor") if key in request}
+            send({"v": 3, "type": "placed", "id": request["id"]})
+        elif request["type"] == "spawn":
+            send({"v": 3, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
+            relay = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            relay.connect(request["attach"]["path"])
+            relay.sendall(frame(3, request["attach"]["token"].encode())
+                          + frame(1, f"> measured@0.0.1 build\n> node build.mjs\n\n{memory.HOLDING}\n".encode()))
+        elif request["type"] == "release":
+            releasing = True
+        elif request["type"] == "measure":
+            measures += 1
+            if free or measures == 1:
+                send({"v": 3, "type": "error", "id": request["id"], "code": "unmeasured"})
+            else:
+                send({"v": 3, "type": "measured", "id": request["id"], **owner, "bytes": memory.HELD + (90 << 20), "lesser": False,
+                      "age_ms": 0})
+            if releasing:
+                send({"v": 3, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
+                relay.sendall(frame(1, b"") + frame(2, b""))
+                relay.close()
+                send({"v": 3, "type": "released", "spawn_id": SPAWN_ID})
+                releasing, free = False, True
+
+
+class MeasuredBuild(unittest.TestCase):
+    """The client's measured build against a keeper on its fd 3, and the verdict on what it reported."""
+
+    @classmethod
+    def setUpClass(cls):
+        directory = tempfile.mkdtemp(prefix="memory-measured-")
+        cls.addClassCleanup(shutil.rmtree, directory, True)
+        client_path = os.path.join(directory, "client.mjs")
+        scenario_path = os.path.join(directory, "scenario.json")
+        with open(client_path, "w") as out:
+            out.write(memory.CLIENT)
+        with open(scenario_path, "w") as out:
+            json.dump({"pool": "probe", "timeout_ms": 10_000, "measure": memory.MEASURE,
+                       "spawns": [spawn for spawn in memory.scenario() if spawn.get("measure")]}, out)
+        parent, child = socket.socketpair()
+        cls.addClassCleanup(parent.close)
+        process = subprocess.Popen(["/bin/sh", "-c", 'exec 3<&"$1"; exec node "$2" "$3"', "client", str(child.fileno()),
+                                    client_path, scenario_path],
+                                   pass_fds=(child.fileno(),), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   env={**os.environ, "RELEASE_TMP": directory})
+        child.close()
+        cls.requests = []
+        serving = threading.Thread(target=keeper, args=(parent, cls.requests), daemon=True)
+        serving.start()
+        try:
+            stdout, cls.stderr = process.communicate(timeout=20)
+        finally:
+            process.kill()
+            process.communicate()
+        serving.join(5)
+        cls.returncode = process.returncode
+        cls.report = json.loads(stdout.split(b"<<<", 1)[1].split(b">>>", 1)[0]) if b"<<<" in stdout else None
+
+    def spawn(self, edit=None):
+        """The build as the client reported it, a copy given by `edit` of it."""
+        spawn = json.loads(json.dumps(self.report["spawns"][0]))
+        if edit:
+            edit(spawn)
+        return spawn
+
+    def fails(self, spawn, check):
+        """The verdict on `spawn` fails at the check whose message holds `check`."""
+        with self.assertRaises(SystemExit) as failed:
+            memory.judge_build(spawn)
+        self.assertIn(check, str(failed.exception.code).splitlines()[0])
+
+    def test_the_client_places_the_build_reads_it_and_releases_it_with_a_measure(self):
+        self.assertEqual(self.returncode, 0, self.stderr.decode())
+        self.assertFalse(self.report["timed_out"])
+        types = [request["type"] for request in self.requests]
+        self.assertEqual(types[:2], ["place", "spawn"])
+        self.assertEqual(types[-3:], ["release", "measure", "measure"])
+        self.assertEqual(set(types[2:-3]), {"measure"})
+        self.assertEqual(self.requests[0], {"v": 3, "type": "place", "id": "p1", "kind": "build", "athanor": memory.ATHANOR})
+        self.assertEqual({key: self.requests[1][key] for key in ("v", "id", "place", "pool", "memory_bytes")},
+                         {"v": 3, "id": "1", "place": "p1", "pool": "probe", "memory_bytes": memory.BOUND})
+        self.assertEqual(self.requests[-3], {"v": 3, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0})
+        measures = [request for request in self.requests if request["type"] == "measure"]
+        self.assertEqual(measures, [{"v": 3, "type": "measure", "id": f"m{n}", "place": "p1"} for n in range(1, len(measures) + 1)])
+
+    def test_a_build_read_under_its_owner_and_free_only_after_released_passes(self):
+        memory.judge_build(self.spawn())
+
+    def test_a_reading_under_another_owner_fails(self):
+        def edit(spawn):
+            spawn["measures"][-3]["reply"]["athanor"] = "ath_other"
+        self.fails(self.spawn(edit), "while the build runs")
+
+    def test_a_reading_taken_before_the_build_held_its_memory_fails(self):
+        def edit(spawn):
+            spawn["holding_ms"] = spawn["measures"][-3]["at_ms"]
+        self.fails(self.spawn(edit), "counts them")
+
+    def test_a_reading_answered_only_after_released_fails(self):
+        def edit(spawn):
+            spawn["measures"][-2]["seq"] = spawn["replies"][-1]["seq"] + 1
+        self.fails(self.spawn(edit), "answered before its released")
+
+    def test_a_place_read_after_released_fails(self):
+        def edit(spawn):
+            spawn["measures"][-1]["reply"] = {**spawn["measures"][-2]["reply"], "id": spawn["measures"][-1]["id"]}
+        self.fails(self.spawn(edit), "the build's place is free")
 
 
 if __name__ == "__main__":
