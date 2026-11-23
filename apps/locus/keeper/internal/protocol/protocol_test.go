@@ -256,25 +256,25 @@ func TestHomeRequestBounds(t *testing.T) {
 		line string
 		ok   bool
 	}{
-		{`{"v":2,"type":"home_retire","id":"1",` + home + `,"uid":1}`, true},
-		{`{"v":2,"type":"home_retire","id":"1",` + home + `,"uid":4294967294}`, true},
-		{`{"v":2,"type":"home_retire","id":"1",` + home + `,"uid":4294967295}`, false},
-		{`{"v":2,"type":"home_retire","id":"1",` + home + `,"uid":1,"pool":"backends"}`, false},
-		{`{"v":2,"type":"home_retire","id":"1",` + home + `,"uid":1,"home_mode":"kept"}`, false},
-		{`{"v":2,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/../k","uid":1}`, false},
-		{`{"v":2,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/k/","uid":1}`, false},
-		{`{"v":2,"type":"home_retire","id":"1",` + longPath + `,"uid":1}`, false},
-		{`{"v":2,"type":"home_retire","id":"1","path":"/` + strings.Repeat("a", MaxHomePathBytes-1) + `","uid":1}`, true},
-		{`{"v":2,"type":"home_make",` + home + `,"uid":1}`, false},
-		{`{"v":2,"type":"pool","id":"1","pool":"backends",` + home + `}`, false},
-		{`{"v":2,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
+		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":1}`, true},
+		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":4294967294}`, true},
+		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":4294967295}`, false},
+		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":1,"pool":"backends"}`, false},
+		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":1,"home_mode":"kept"}`, false},
+		{`{"v":3,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/../k","uid":1}`, false},
+		{`{"v":3,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/k/","uid":1}`, false},
+		{`{"v":3,"type":"home_retire","id":"1",` + longPath + `,"uid":1}`, false},
+		{`{"v":3,"type":"home_retire","id":"1","path":"/` + strings.Repeat("a", MaxHomePathBytes-1) + `","uid":1}`, true},
+		{`{"v":3,"type":"home_make",` + home + `,"uid":1}`, false},
+		{`{"v":3,"type":"pool","id":"1","pool":"backends",` + home + `}`, false},
+		{`{"v":3,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
 	} {
 		req, err := ParseRequest([]byte(c.line))
 		if c.ok != (err == nil) {
 			t.Errorf("%s: request %+v, refusal %+v", c.line, req, err)
 		}
 	}
-	spawn := `{"v":2,"type":"spawn","id":"1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
+	spawn := `{"v":3,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
 	for _, c := range []struct {
 		fields string
 		ok     bool
@@ -328,8 +328,10 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewError("31", "", CodeHostsUnresolved),
 		NewError("31", "", CodeGuardUnavailable),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byMachine),
-		NewMeasured("25", 256<<20, false),
-		NewMeasured("25", 192<<20, true),
+		NewPlaced("pl-1"),
+		NewError("pl-1", "", CodeBadRequest),
+		NewMeasured("25", Whose{Kind: KindProgram, Athanor: "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", Subject: "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"}, Reading{Bytes: 256 << 20}, 412),
+		NewMeasured("25", Whose{Kind: KindWarm}, Reading{Bytes: 192 << 20, Lesser: true}, 0),
 		NewError("25", "", CodeUnmeasured),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byEither),
 	}
@@ -536,7 +538,7 @@ func TestSpawnRequiresMemoryBound(t *testing.T) {
 		} {
 			t.Run(pool+"/"+c.name, func(t *testing.T) {
 				message := map[string]any{
-					"v": Version, "type": TypeSpawn, "id": "memory-check", "pool": pool,
+					"v": Version, "type": TypeSpawn, "id": "memory-check", "place": "pl-1", "pool": pool,
 					"argv": []string{"true"}, "env": map[string]string{}, "cpu_quota": CPUPeriod,
 					"attach": Attach{Path: "/run/a.sock", Token: strings.Repeat("a", 64)},
 				}
@@ -617,7 +619,7 @@ func TestSpawnRequiresCPUQuota(t *testing.T) {
 		} {
 			t.Run(pool+"/"+c.name, func(t *testing.T) {
 				message := map[string]any{
-					"v": Version, "type": TypeSpawn, "id": "cpu-check", "pool": pool,
+					"v": Version, "type": TypeSpawn, "id": "cpu-check", "place": "pl-1", "pool": pool,
 					"argv": []string{"true"}, "env": map[string]string{}, "memory_bytes": MinMemoryBytes,
 					"attach": Attach{Path: "/run/a.sock", Token: strings.Repeat("a", 64)},
 				}
@@ -656,8 +658,8 @@ func TestSpawnRequiresCPUQuota(t *testing.T) {
 func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 	for _, line := range []string{
 		`not json`,
-		`{"v":2,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
-		`{"v":2,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
+		`{"v":3,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
+		`{"v":3,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
 		`[]`,
 		``,
 	} {
@@ -676,7 +678,7 @@ func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 }
 
 func TestEnvValueNeverAppearsInARefusal(t *testing.T) {
-	line := `{"v":2,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
+	line := `{"v":3,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
 	_, err := ParseRequest([]byte(line))
 	if err == nil {
 		t.Fatal("a NUL in an env value was accepted")

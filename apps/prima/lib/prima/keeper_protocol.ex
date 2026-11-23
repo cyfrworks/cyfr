@@ -13,11 +13,12 @@ defmodule Prima.KeeperProtocol do
   ## Lines
 
   A request or a reply is one JSON object on one line, ending in `\\n`,
-  carrying `"v": 2` and a `type`, at most `max_line_bytes/0` bytes before
-  its newline. A client sends `spawn`, `signal`, `resize`, `release`,
-  `measure`, `pool`, `home_make`, `home_measure` and `home_retire`; the
-  keeper answers `spawned`, `error`, `exited`, `released`, `measured`,
-  `pool`, `home_made`, `home_measured` and `home_retired`.
+  carrying `"v": 3` and a `type`, at most `max_line_bytes/0` bytes before
+  its newline. A client sends `place`, `drop`, `assign`, `spawn`,
+  `signal`, `resize`, `release`, `measure`, `pool`, `home_make`,
+  `home_measure` and `home_retire`; the keeper answers `placed`,
+  `spawned`, `error`, `exited`, `released`, `measured`, `pool`,
+  `home_made`, `home_measured` and `home_retired`.
 
   `encode/1` writes a request's members in name order, `v` and `type`
   among them, and refuses by raising `ArgumentError` what the keeper
@@ -49,23 +50,44 @@ defmodule Prima.KeeperProtocol do
   `"machine"` for a limit above it, the container's or the machine's,
   whatever its own bound counted before; `"either"` for a kill the
   counters cannot lay to one of the two, which is never called `"cap"`;
-  and null for no kill or for counters that could not be read. A `measure`
-  carries exactly `id` and `spawn_id` and is answered under that `id`
-  alone, as a home request is, so a reply settles only the request it
-  answers: `measured`, or an `error` `unmeasured` where the keeper holds no
-  such spawn or cannot read its group. A `measured`'s `bytes` are what the
-  spawn's group uses that cannot be given back, `anon + shmem + kernel -
-  slab_reclaimable` from one read of its `memory.stat`: file cache is none
-  of it and a tmpfs's pages are. Its `lesser` is true where that kernel's
-  `memory.stat` has no `kernel` line (before 5.18), and `bytes` then the
-  lesser sum, of the parts of it that it names. A reading not made is
-  unknown, and zero is no reading: a `measured` of no `bytes` is refused,
-  where a `home_measured` of none is an empty home.
+  and null for no kill or for counters that could not be read.
+
+  ## Places
+
+  A place follows one piece of work from before its preparation to its
+  release. The client mints its `id` and names its `kind` (`kinds/0`)
+  and, where it has them, the `athanor` it is for and its `subject` (a
+  program's or a terminal's row), each of the id grammar, and the keeper
+  answers `placed`, or refuses a place of an id it already holds
+  `bad_request`. A `drop` frees a place no spawn has named; an `assign`
+  gives one another kind, athanor and subject, as a runner given work or
+  back at rest. Neither is answered, and a place the keeper no longer holds
+  leaves either with nothing to do. Every `spawn` names its `place`, which
+  no other spawn may name: a spawn naming a place the keeper does not hold,
+  or one another spawn named, is refused `bad_request`, a refused spawn
+  frees the place it named, and a place a spawn named is free at that
+  spawn's `released`.
+
+  The keeper reads every spawn's group once a second, whatever its kind. A
+  `measure` carries exactly `id` and `place` and is answered under that
+  `id` alone, as a home request is, so a reply settles only the request it
+  answers, and from the last reading, never by a read of its own:
+  `measured` with the place's `kind`, `athanor` and `subject` of the
+  moment, the reading and its `age_ms`, or an `error` `unmeasured` where
+  the keeper holds no such place or has no reading of it yet. A reading's
+  `bytes` are what the spawn's group uses that cannot be given back, `anon
+  + shmem + kernel - slab_reclaimable` from one read of its `memory.stat`:
+  file cache is none of it and a tmpfs's pages are. Its `lesser` is true
+  where that kernel's `memory.stat` has no `kernel` line (before 5.18), and
+  `bytes` then the lesser sum, of the parts of it that it names. A reading
+  not made is unknown, and zero is no reading: a `measured` of no `bytes`
+  is refused, where a `home_measured` of none is an empty home.
 
   `decode_reply/1` answers the reply or the first refusal, in this order:
   `:oversize_line`; `:malformed` (not one JSON object); `:bad_version`;
   `:unknown_type`; `{:unknown_field, name}` (the first by name); then per
-  member, in the order the type lists them, `{:missing_field, name}`,
+  member, in the order the type lists them (an absent optional one read as
+  nil), `{:missing_field, name}`,
   `{:wrong_type, name}` or `{:invalid_field, name}`; and last, for an
   `exited`, `:ambiguous_exit` when it carries both a `code` and a
   `signal`, or neither. The `bytes` of a `measured` is a whole number from
@@ -145,7 +167,7 @@ defmodule Prima.KeeperProtocol do
   its control channel.
   """
 
-  @version 2
+  @version 3
   # The keeper spells these as frame.MaxPayload and protocol.MaxLineBytes;
   # the vectors' `bounds` pin both sides to the same numbers.
   @max_frame_bytes 65_536
@@ -178,6 +200,7 @@ defmodule Prima.KeeperProtocol do
   @max_hosts 32
   @max_pty_size 1000
   @home_modes ~w(scratch kept)
+  @kinds ~w(warm run build program terminal)
   @isolations ~w(netns)
   @signals ~w(SIGTERM SIGKILL SIGINT SIGHUP SIGQUIT SIGUSR1 SIGUSR2)
   @reserved_env ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD)
@@ -206,10 +229,15 @@ defmodule Prima.KeeperProtocol do
 
   # Every request type, its wire name and its members: required or not.
   @requests %{
+    place: {"place", [id: :required, kind: :required, athanor: :optional, subject: :optional]},
+    drop: {"drop", [place: :required]},
+    assign:
+      {"assign", [place: :required, kind: :required, athanor: :optional, subject: :optional]},
     spawn:
       {"spawn",
        [
          id: :required,
+         place: :required,
          pool: :required,
          argv: :required,
          env: :optional,
@@ -230,7 +258,7 @@ defmodule Prima.KeeperProtocol do
     resize: {"resize", [spawn_id: :required, rows: :required, cols: :required]},
     release: {"release", [spawn_id: :required, grace_ms: :required]},
     pool: {"pool", [id: :required, pool: :required]},
-    measure: {"measure", [id: :required, spawn_id: :required]},
+    measure: {"measure", [id: :required, place: :required]},
     home_make: {"home_make", [id: :required, path: :required, uid: :required]},
     home_measure: {"home_measure", [id: :required, path: :required, uid: :required]},
     home_retire: {"home_retire", [id: :required, path: :required, uid: :required]}
@@ -239,6 +267,7 @@ defmodule Prima.KeeperProtocol do
 
   # Every reply type and its members in the order they are read.
   @replies %{
+    "placed" => {:placed, [id: :id]},
     "spawned" => {:spawned, [id: :id, spawn_id: :spawn_id, uid: :count, pid: :count]},
     "error" => {:error, [id: {:nullable, :id}, spawn_id: {:nullable, :spawn_id}, code: :code]},
     "exited" =>
@@ -250,7 +279,17 @@ defmodule Prima.KeeperProtocol do
          memory: {:nullable, :memory_end}
        ]},
     "released" => {:released, [spawn_id: :spawn_id]},
-    "measured" => {:measured, [id: :id, bytes: :used_bytes, lesser: :boolean]},
+    "measured" =>
+      {:measured,
+       [
+         id: :id,
+         kind: :kind,
+         athanor: :id,
+         subject: :id,
+         bytes: :used_bytes,
+         lesser: :boolean,
+         age_ms: :measured_bytes
+       ]},
     "pool" => {:pool, [id: :id, pool: :pool, size: :count, free: :count, quarantined: :count]},
     "home_made" => {:home_made, [id: :id]},
     "home_measured" => {:home_measured, [id: :id, bytes: :measured_bytes]},
@@ -258,8 +297,9 @@ defmodule Prima.KeeperProtocol do
   }
 
   # An `error` names its request by `id` or `spawn_id`, and a request the
-  # keeper could not read by neither.
-  @optional_reply_members %{error: [:id, :spawn_id]}
+  # keeper could not read by neither; a place's athanor and subject are
+  # carried where it has them.
+  @optional_reply_members %{error: [:id, :spawn_id], measured: [:athanor, :subject]}
 
   @typedoc "A stream of an attach connection."
   @type stream :: :stdin | :stdout | :stderr | :attach | :control | :relay
@@ -269,7 +309,9 @@ defmodule Prima.KeeperProtocol do
 
   @typedoc """
   A request, as `encode/1` takes it: its `type` and its members, with atom
-  keys but for `env`'s names. `spawn` requires `id`, `pool`, `argv`,
+  keys but for `env`'s names. A `place` requires `id` and `kind` and may
+  carry `athanor` and `subject`; an `assign` the same with `place` for
+  `id`; a `drop` carries `place` alone. `spawn` requires `id`, `place`, `pool`, `argv`,
   `memory_bytes`, `cpu_quota` and `attach` (`%{path: path, token: token}`); `env`
   (names to values), `rlimits` (`nofile`, `nproc`, `core`, `fsize`),
   `control`, `isolation` (`"netns"`), `home_mode` (`"scratch"` or
@@ -280,29 +322,45 @@ defmodule Prima.KeeperProtocol do
   """
   @type request ::
           %{
-            required(:type) => :spawn,
+            required(:type) => :place,
             required(:id) => String.t(),
-            required(:pool) => String.t(),
-            required(:argv) => [String.t(), ...],
-            optional(:env) => %{optional(String.t()) => String.t()},
-            optional(:rlimits) => %{optional(atom()) => non_neg_integer()},
-            required(:memory_bytes) => pos_integer(),
-            required(:cpu_quota) => pos_integer(),
-            optional(:control) => boolean(),
-            optional(:isolation) => String.t(),
-            required(:attach) => %{path: String.t(), token: String.t()},
-            optional(:home_mode) => String.t(),
-            optional(:home_path) => String.t(),
-            optional(:home_uid) => pos_integer(),
-            optional(:home_max_bytes) => pos_integer(),
-            optional(:pty) => %{rows: pos_integer(), cols: pos_integer()},
-            optional(:hosts) => [String.t(), ...]
+            required(:kind) => kind(),
+            optional(:athanor) => String.t(),
+            optional(:subject) => String.t()
           }
+          | %{
+              required(:type) => :assign,
+              required(:place) => String.t(),
+              required(:kind) => kind(),
+              optional(:athanor) => String.t(),
+              optional(:subject) => String.t()
+            }
+          | %{type: :drop, place: String.t()}
+          | %{
+              required(:type) => :spawn,
+              required(:id) => String.t(),
+              required(:place) => String.t(),
+              required(:pool) => String.t(),
+              required(:argv) => [String.t(), ...],
+              optional(:env) => %{optional(String.t()) => String.t()},
+              optional(:rlimits) => %{optional(atom()) => non_neg_integer()},
+              required(:memory_bytes) => pos_integer(),
+              required(:cpu_quota) => pos_integer(),
+              optional(:control) => boolean(),
+              optional(:isolation) => String.t(),
+              required(:attach) => %{path: String.t(), token: String.t()},
+              optional(:home_mode) => String.t(),
+              optional(:home_path) => String.t(),
+              optional(:home_uid) => pos_integer(),
+              optional(:home_max_bytes) => pos_integer(),
+              optional(:pty) => %{rows: pos_integer(), cols: pos_integer()},
+              optional(:hosts) => [String.t(), ...]
+            }
           | %{type: :signal, spawn_id: String.t(), sig: signal()}
           | %{type: :resize, spawn_id: String.t(), rows: pos_integer(), cols: pos_integer()}
           | %{type: :release, spawn_id: String.t(), grace_ms: non_neg_integer()}
           | %{type: :pool, id: String.t(), pool: String.t()}
-          | %{type: :measure, id: String.t(), spawn_id: String.t()}
+          | %{type: :measure, id: String.t(), place: String.t()}
           | %{
               type: :home_make | :home_measure | :home_retire,
               id: String.t(),
@@ -320,11 +378,23 @@ defmodule Prima.KeeperProtocol do
   """
   @type memory_end :: :cap | :machine | :either | nil
 
+  @typedoc "A place's kind: a runner at rest or given a run, a build, a program's or a terminal's session."
+  @type kind :: String.t()
+
   @typedoc """
-  What a spawn uses that cannot be given back, and whether that is the
-  lesser sum of a kernel that counts no `kernel` memory.
+  A place's last reading: whose it is of the moment (its `kind`, and its
+  `athanor` and `subject` or nil), what its spawn uses that cannot be
+  given back, whether that is the lesser sum of a kernel that counts no
+  `kernel` memory, and how old the reading is.
   """
-  @type reading :: %{bytes: pos_integer(), lesser: boolean()}
+  @type reading :: %{
+          kind: kind(),
+          athanor: String.t() | nil,
+          subject: String.t() | nil,
+          bytes: pos_integer(),
+          lesser: boolean(),
+          age_ms: non_neg_integer()
+        }
 
   @typedoc """
   A reply. An `error` names the request it refuses by `id` (a spawn, a
@@ -332,8 +402,9 @@ defmodule Prima.KeeperProtocol do
   request the keeper could not read is named by neither.
   """
   @type reply ::
-          {:spawned, id :: String.t(), spawn_id :: String.t(), uid :: non_neg_integer(),
-           pid :: non_neg_integer()}
+          {:placed, id :: String.t()}
+          | {:spawned, id :: String.t(), spawn_id :: String.t(), uid :: non_neg_integer(),
+             pid :: non_neg_integer()}
           | {:error, id :: String.t() | nil, spawn_id :: String.t() | nil, code :: String.t()}
           | {:exited, spawn_id :: String.t(), exit_status(), memory_end()}
           | {:measured, id :: String.t(), reading()}
@@ -375,6 +446,10 @@ defmodule Prima.KeeperProtocol do
   @doc "The streams of an attach connection and their bytes, in byte order."
   @spec streams() :: [{stream(), 0..5}]
   def streams, do: @streams
+
+  @doc "The kinds a place may be."
+  @spec kinds() :: [kind()]
+  def kinds, do: @kinds
 
   @doc "The values a spawn's `isolation` may take."
   @spec isolations() :: [String.t()]
@@ -657,6 +732,17 @@ defmodule Prima.KeeperProtocol do
   defp write(_type, {:id, id}), do: {"id", matching!(@id, "id", id)}
   defp write(_type, {:pool, pool}), do: {"pool", matching!(@pool, "pool", pool)}
   defp write(_type, {:spawn_id, id}), do: {"spawn_id", matching!(@spawn_id, "spawn_id", id)}
+  defp write(_type, {:place, place}), do: {"place", matching!(@id, "place", place)}
+
+  defp write(type, {:kind, kind}) when type in [:place, :assign] and kind in @kinds,
+    do: {"kind", kind}
+
+  defp write(type, {:athanor, athanor}) when type in [:place, :assign],
+    do: {"athanor", matching!(@id, "athanor", athanor)}
+
+  defp write(type, {:subject, subject}) when type in [:place, :assign],
+    do: {"subject", matching!(@id, "subject", subject)}
+
   defp write(:spawn, {:argv, argv}), do: {"argv", argv!(argv)}
   defp write(:spawn, {:env, env}), do: {"env", env!(env)}
   defp write(:spawn, {:rlimits, rlimits}), do: {"rlimits", rlimits!(rlimits)}
@@ -903,6 +989,8 @@ defmodule Prima.KeeperProtocol do
   defp read(:used_bytes, name, value), do: read(:measured_bytes, name, value)
 
   defp read(:boolean, _name, value) when is_boolean(value), do: {:ok, value}
+  defp read(:kind, _name, value) when value in @kinds, do: {:ok, value}
+  defp read(:kind, name, value) when is_binary(value), do: {:error, {:invalid_field, name}}
 
   defp read(:memory_end, _name, value) when is_map_key(@memory_ends, value),
     do: {:ok, Map.fetch!(@memory_ends, value)}
@@ -932,8 +1020,10 @@ defmodule Prima.KeeperProtocol do
 
   defp reply(:released, %{spawn_id: spawn_id}), do: {:ok, {:released, spawn_id}}
 
-  defp reply(:measured, %{id: id, bytes: bytes, lesser: lesser}),
-    do: {:ok, {:measured, id, %{bytes: bytes, lesser: lesser}}}
+  defp reply(:placed, %{id: id}), do: {:ok, {:placed, id}}
+
+  defp reply(:measured, %{id: id} = read),
+    do: {:ok, {:measured, id, Map.delete(read, :id)}}
 
   defp reply(:pool, %{id: id, pool: pool, size: size, free: free, quarantined: quarantined}),
     do: {:ok, {:pool, id, pool, size, free, quarantined}}
