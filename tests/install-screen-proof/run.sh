@@ -11,8 +11,10 @@
 # port. Before that init, two of its refusals change nothing: a wrong
 # password at sudo's own prompt, and an account outside the sudo group. Before that `cyfr up`, the same terminal, older than the docker
 # group init joined, runs `cyfr setup`, whose pages set up and start a
-# second CYFR beside it, taken down again. After a reboot labwc and Chrome run on tty1 and show the screen's
-# own setup page (screen-setup.png): with the guest's isolated swtpm it asks
+# second CYFR beside it, taken down again. Before init, this tree's CYFR
+# app's package is installed, so init's `cyfr screen on` finds the app of
+# its release and fetches none. After a reboot labwc and the CYFR app run
+# on tty1 as the screen and show the screen's own setup page (screen-setup.png): with the guest's isolated swtpm it asks
 # for a six-digit PIN and seals the key in the chip; with --no-tpm it
 # shows its six-word passphrase on the screen alone, never to a local
 # read, refuses six digits and takes the passphrase drawn last.
@@ -26,14 +28,19 @@
 # and opens Prism with the box's hello under the setup token. A local
 # program naming the shell's Host and Origin gets no ticket. Then, reading
 # what the box holds over SSH: the lock after five minutes without input,
-# a wrong PIN, the unlock; Prism's Lock, and again with CYFR silent, the
-# screen hidden within 5 s of the press; an API key made in Prism, which
+# a wrong PIN, the unlock with the PIN tapped on the screen's keyboard
+# (digits read off the display); Prism's Lock, and again with CYFR silent,
+# the screen hidden within 5 s of the press; an API key made in Prism, which
 # asks a fresh confirmation, confirmed on this device after a Cancel and
 # a wrong PIN; the shell killed; its connection to CYFR severed past 60 s
-# while a Prism page stays open; and Chrome's profile, copied while
-# unlocked, put back before a reboot. After each lock, kill, cut and
-# reboot the session cookie Chrome held (read from its profile, never
-# kept in the evidence) is sent to sign in. After
+# while a Prism page stays open; and the session open on the screen, which
+# no file of the screen's account holds and a reboot ends. After each
+# lock, kill, cut and reboot the session cookie the screen last sent CYFR
+# (read from the request heads root observes on the guest's loopback,
+# box.py, never kept in the evidence) is sent to sign in, and at the end
+# no evidence file holds any cookie the screen sent. Every press and read
+# of the screen is a person's: the display read by tesseract on QEMU's
+# screendump and the guest's tablet pressed there (guest/screen.py). After
 # `cyfr down` and another reboot CYFR stays down, the screen says why
 # (screen-waiting.png), and Ctrl+Alt+F2 reaches a terminal:
 #
@@ -69,7 +76,8 @@
 #
 # Needs docker with the host's /dev/kvm, ssh, ssh-keygen, git, go, python3,
 # timeout, flock, getent, and the guest's network: Ubuntu's archive,
-# GitHub's releases, ghcr.io and Google's Chrome download. Stdout is framed
+# GitHub's releases and ghcr.io; and this tree's apps/codex/desktop
+# node_modules (npm ci --ignore-scripts there). Stdout is framed
 # `_START=<pid>` first and `_EXIT=<pid> <status>` last
 # (scripts/await-task.sh). Exits 0 when every check passed; 1 when one
 # failed or the run broke; 64 on usage or a refused prefix; 69 without a
@@ -430,8 +438,8 @@ box_install() {
 # reached the box's account service, then "I saved it", which makes the
 # account there with the box's key its first and the name its own, and
 # opens Prism; then each way the screen locks and what a lock leaves of
-# the session, a change confirmed on the screen, and Chrome's profile
-# copied. The account service is read
+# the session, a change confirmed on the screen, and the session kept on
+# no disk. The account service is read
 # as the screen reads it, from the guest.
 screen_signed_in() {
   local id
@@ -708,7 +716,7 @@ screen_killed() {
 }
 
 # The shell's connection to CYFR severed: its packets, on the ports of its
-# own connections alone, dropped both ways, while Prism's page in Chrome
+# own connections alone, dropped both ways, while Prism's page in the app
 # keeps its own. The session ends within 60 s; the shell, its ping
 # unanswered, locks the screen as unreachable at its next report, which
 # replaces the page held open, unless the home's end came first and sent
@@ -759,10 +767,10 @@ screen_severed() {
 
 # screen_stays_stopped STOP FILE: STOP run as root on the guest, then a
 # watch that kills nothing: the screen's processes have 20 seconds to end
-# by themselves, and then for five seconds in a row nothing may hold the
-# screen's Chrome profile and none of the account's labwc, the D-Bus
-# daemon dbus-run-session started, launcher, screen shell, keyboard, idle
-# watch or Chrome, its crash handler among them, may run. Every process
+# by themselves, and then for five seconds in a row none of the account's
+# labwc, the D-Bus daemon dbus-run-session started, launcher, screen
+# shell, keyboard, idle watch or CYFR app, any process of its own among
+# them, may run. Every process
 # it sees is kept in FILE with its parent: pid, parent pid, start time
 # and command line, so a process left over or come back names what
 # started it (the brackets keep each pattern from matching the shells
@@ -771,14 +779,13 @@ screen_severed() {
 screen_stays_stopped() {
   guest_root_out "$1; "'
     seen() {
-      { pgrep -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"
-        pgrep -u proof -x labwc
+      { pgrep -u proof -x labwc
         pgrep -u proof -f "^dbus-daemon --nofork --print-addres[s]"
         pgrep -u proof -f "/\.cyfr/screen/launcher\.s[h]"
         pgrep -u proof -f "cyfr screen shel[l]"
         pgrep -u proof -x wvkbd-mobintl
         pgrep -u proof -x swayidle
-        pgrep -u proof -f "/opt/google/chrom[e]/"
+        pgrep -u proof -f "^/opt/cyfr/CYF[R]"
       } | sort -un | paste -sd, -
     }
     record() {
@@ -853,6 +860,18 @@ screen_keeps_no_session() {
   check "after the reboot the screen boots locked" grep -q 'CYFR is locked' "$GUEST_DIR/shell-rebooted.html"
   check "screenshot screen-rebooted.png" guest_screenshot screen-rebooted.png
   check "the session it had open opens nothing" cookie_is out kept
+}
+
+# No evidence file holds a session cookie the screen sent: the evidence as
+# it stands, packed, is searched in the guest for every cookie the box
+# observed (box.py scrub), whose record never leaves it; the count and
+# any file holding one are in GUEST_DIR/scrub.txt.
+evidence_scrub() { guest_root_out "python3 -I /root/box.py scrub $OBSERVED /home/proof/evidence.tar" >"$GUEST_DIR/scrub.txt"; }
+evidence_scrubbed() {
+  tar -C "$OUT" -cf "$WORK/evidence.tar" . || fail "the evidence was not packed"
+  guest_copy_in "$WORK/evidence.tar" evidence.tar || fail "the evidence was not copied into the guest"
+  check "no evidence file holds a session cookie the screen sent ($GUEST_DIR/scrub.txt)" evidence_scrub
+  guest_ssh 'rm -f ~/evidence.tar' || true
 }
 
 clean_install() {
@@ -1038,6 +1057,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
   guest_journal
+  evidence_scrubbed
   proof_guest_stop "$GUEST" "$GUEST_DIR"
   part_verdict clean
 }
