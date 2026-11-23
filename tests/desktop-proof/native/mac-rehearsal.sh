@@ -113,8 +113,10 @@ profile() {
 import {readFileSync, writeFileSync} from "node:fs"
 import {createRequire} from "node:module"
 import path from "node:path"
+import {pathToFileURL} from "node:url"
 const [kind, der, team, out, desktop] = process.argv.slice(2)
 const plist = createRequire(path.join(desktop, "node_modules", "app-builder-lib", "package.json"))("plist")
+const {APP_ID} = await import(pathToFileURL(path.join(desktop, "scripts", "mac-sign.mjs")).href)
 const now = Date.now()
 writeFileSync(out, plist.build({
   AppIDName: "CYFR", ApplicationIdentifierPrefix: [team], CreationDate: new Date(now), Platform: ["OSX"],
@@ -122,9 +124,9 @@ writeFileSync(out, plist.build({
   ProvisionsAllDevices: true, TeamIdentifier: [team], TeamName: "CYFR Rehearsal", TimeToLive: 1,
   UUID: "00000000-0000-4000-8000-000000000000", Version: 1,
   Entitlements: {
-    "com.apple.application-identifier": `${team}.${kind === "app" ? "run.cyfr.other" : "run.cyfr.desktop"}`,
+    "com.apple.application-identifier": `${team}.${kind === "app" ? `${APP_ID}.other` : APP_ID}`,
     "com.apple.developer.team-identifier": team,
-    "keychain-access-groups": [kind === "group" ? `${team}.run.cyfr.desktop.other` : `${team}.*`]
+    "keychain-access-groups": [kind === "group" ? `${team}.${APP_ID}.other` : `${team}.*`]
   }
 }))
 EOF
@@ -159,7 +161,10 @@ refused() {
 }
 refused input "CYFR_REHEARSAL_PROVISIONING_PROFILE is not set" -CYFR_REHEARSAL_PROVISIONING_PROFILE
 refused mixed "a rehearsal takes no Apple input, and APPLE_API_KEY is set" APPLE_API_KEY=
-refused profile "the provisioning profile is not for run.cyfr.desktop" CYFR_REHEARSAL_PROVISIONING_PROFILE="$OTHER_APP"
+# The app's identifier, as the recipe defines it.
+APP_ID=$(cd "$DESKTOP" && node --input-type=module -e 'import {APP_ID} from "./scripts/mac-sign.mjs"; console.log(APP_ID)') ||
+  { echo "rehearsal: the app's identifier was not read" >&2; exit 1; }
+refused profile "the provisioning profile is not for $APP_ID" CYFR_REHEARSAL_PROVISIONING_PROFILE="$OTHER_APP"
 refused group "the provisioning profile does not authorise the app's WebAuthn group" CYFR_REHEARSAL_PROVISIONING_PROFILE="$OTHER_GROUP"
 
 DMG="$RUN/dist/cyfr-desktop_0.0.0-rehearsal_darwin_$ARCH.dmg"

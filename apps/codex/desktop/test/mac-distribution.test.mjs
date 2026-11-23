@@ -16,6 +16,7 @@ import {fileURLToPath} from "node:url"
 
 import {Refused, hide, redact} from "../scripts/check-package.mjs"
 import {distribute} from "../scripts/mac-distribution.mjs"
+import {APP_ID} from "../scripts/mac-sign.mjs"
 
 // The stand-ins are shell scripts and the bound perl's, a Mac's or Linux's.
 const test = (name, fn) => anyTest(name, {skip: process.platform === "win32"}, fn)
@@ -58,7 +59,7 @@ function rig(t, {failAt = "", worker = "ok", searchList = "/Users/runner/Library
   writeFileSync(log, "")
   writeFileSync(path.join(dir, "profile.plist"), plist.build({
     ProvisionsAllDevices: true, TeamIdentifier: [team], ExpirationDate: new Date(Date.now() + 86400000),
-    Entitlements: {"com.apple.application-identifier": `${team}.run.cyfr.desktop`, "com.apple.developer.team-identifier": team,
+    Entitlements: {"com.apple.application-identifier": `${team}.${APP_ID}`, "com.apple.developer.team-identifier": team,
       "keychain-access-groups": [`${team}.*`]}
   }))
   writeFileSync(path.join(dir, "secrets.json"), JSON.stringify(secrets))
@@ -80,37 +81,50 @@ exit 0
   writeFileSync(path.join(bin, "openssl"), `#!/bin/sh
 printf 'openssl %s\\n' "$*" >> ${log}
 ${echo}
-if [ "$2" = -export ]; then [ -f "$4" ] && [ "$(stat -c %a "$4" 2>/dev/null || stat -f %Lp "$4")" = 600 ] || exit 8; cp "$4" "$6"; else cat; fi
+out=""; prev=""; for a in "$@"; do [ "$prev" = -out ] && out="$a"; prev="$a"; done
+if [ "$2" = -export ]; then [ -f "$4" ] && [ "$(stat -c %a "$4" 2>/dev/null || stat -f %Lp "$4")" = 600 ] || exit 8; cp "$4" "$out"; else cat > "$out"; fi
 `)
   for (const f of ["security", "openssl"]) chmodSync(path.join(bin, f), 0o755)
   const workerScript = path.join(dir, "worker.mjs")
+  const marks = path.join(dir, "marks")
+  mkdirSync(marks)
+  const runModule = new URL("../scripts/run.mjs", import.meta.url).href
   writeFileSync(workerScript, `
 import {mkdirSync, readFileSync, writeFileSync} from "node:fs"
-import {spawn} from "node:child_process"
 import path from "node:path"
+import {run} from ${JSON.stringify(runModule)}
 const args = process.argv.slice(2)
 const out = args[args.indexOf("--out") + 1]
 const config = JSON.parse(readFileSync(args[args.indexOf("--worker") + 1], "utf8"))
-writeFileSync(${JSON.stringify(log)}, "worker " + args.join(" ") + "\\n", {flag: "a"})
+writeFileSync(${JSON.stringify(log)}, "worker " + config.phase + " " + args.join(" ") + "\\n", {flag: "a"})
 mkdirSync(out, {recursive: true})
 const image = path.join(out, "cyfr-desktop_1.0.0_darwin_arm64.dmg")
 const secrets = JSON.parse(readFileSync(${JSON.stringify(path.join(dir, "secrets.json"))}, "utf8"))
 for (const v of Object.values(secrets)) console.log("echo:", v, JSON.stringify(v), v.split(" ").join("\\\\ "))
 const mode = ${JSON.stringify(worker)}
-if (mode === "half") { writeFileSync(image, "half a DMG"); process.exit(1) }
-if (mode === "hang") {
-  const c = spawn("sleep", ["60"], {stdio: "ignore"})
-  writeFileSync(${JSON.stringify(path.join(dir, "grandchild"))}, String(c.pid))
-  setTimeout(() => {}, 60000)
+if (config.phase === "app") {
+  if (mode === "deep") {
+    // The packer starts a tool that starts a child, each marking it began
+    // and, later, that it finished.
+    const marks = ${JSON.stringify(marks)}
+    writeFileSync(path.join(marks, "packer.pid"), String(process.pid))
+    await run("/bin/sh", ["-c", "echo $$ > " + marks + "/tool.pid; (echo \\$\\$ > /dev/null; sh -c 'echo $$ > " + marks +
+      "/child.pid; sleep 6; echo late > " + marks + "/child.finished') & sleep 6; echo late > " + marks + "/tool.finished"],
+      {what: "the tool", seconds: 60})
+    writeFileSync(path.join(marks, "packer.finished"), "late")
+  }
+  const app = path.join(out, "mac-arm64", "CYFR.app")
+  mkdirSync(app, {recursive: true})
+  writeFileSync(config.result, JSON.stringify({helper: "ab".repeat(32), app}))
 } else {
+  if (mode === "half") { writeFileSync(image, "half a DMG"); process.exit(1) }
   writeFileSync(image, "a whole DMG")
-  writeFileSync(config.result, JSON.stringify({helper: "ab".repeat(32)}))
 }
 `)
   const out = path.join(dir, "out")
   mkdirSync(out)
   const dest = path.join(out, "cyfr-desktop_1.0.0_darwin_arm64.dmg")
-  return {dir, bin, log, out, dest, worker: {command: process.execPath, args: [workerScript], minutes: 0.05}}
+  return {dir, bin, log, out, dest, marks, worker: {command: process.execPath, args: [workerScript], minutes: 0.05}}
 }
 
 async function run(r, {env = inputs, check = async () => {}} = {}) {
@@ -143,7 +157,7 @@ test("a packer that writes half a DMG and fails leaves no DMG and no keychain", 
   const r = rig(t, {worker: "half"})
   writeFileSync(r.dest, "an earlier build's DMG")
   const {error} = await run(r)
-  assert.ok(error instanceof Refused && /packing and signing the app failed \(exit 1\)/.test(error.message), String(error))
+  assert.ok(error instanceof Refused && /^making and signing its DMG failed: exit 1$/.test(error.message), String(error))
   assert.equal(existsSync(r.dest), false)
   assert.deepEqual(leftovers(r), [])
   const calls = readFileSync(r.log, "utf8")
@@ -153,7 +167,12 @@ test("a packer that writes half a DMG and fails leaves no DMG and no keychain", 
 
 test("a DMG that fails the check is not published", async (t) => {
   const r = rig(t)
-  const {error} = await run(r, {check: async () => { throw new Refused("the image is refused") }})
+  let publishedWhileChecked = null
+  const {error} = await run(r, {check: async () => {
+    publishedWhileChecked = existsSync(r.dest)
+    throw new Refused("the image is refused")
+  }})
+  assert.equal(publishedWhileChecked, false, "the DMG stood at --out before its check")
   assert.ok(error instanceof Refused && /the image is refused/.test(error.message), String(error))
   assert.equal(existsSync(r.dest), false)
   assert.deepEqual(leftovers(r), [])
@@ -171,14 +190,20 @@ test("a failure after the key's import leaves no keychain", async (t) => {
   }
 })
 
-test("a packer that outlives its bound is stopped with all it started", async (t) => {
-  const r = rig(t, {worker: "hang"})
+test("a packer's bound stops the packer, the tool it started and the tool's child, before the refusal", async (t) => {
+  const r = rig(t, {worker: "deep"})
   const started = Date.now()
   const {error} = await run(r)
-  assert.ok(error instanceof Refused && /packing and signing the app did not finish in 0\.05 minutes/.test(error.message), String(error))
+  assert.ok(error instanceof Refused && /packing and signing the app failed: did not finish in 3 seconds/.test(error.message), String(error))
   assert.ok(Date.now() - started < 20000)
-  const grandchild = Number(readFileSync(path.join(r.dir, "grandchild"), "utf8"))
-  assert.ok(gone(grandchild), "the packer's own child was stopped with it")
+  // Gone as the refusal returns, each of the three.
+  for (const name of ["packer", "tool", "child"]) {
+    const pid = Number(readFileSync(path.join(r.marks, `${name}.pid`), "utf8"))
+    assert.ok(goneNow(pid), `the ${name} outlived the refusal`)
+  }
+  // And none of them finishes later.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 7000)
+  assert.deepEqual(readdirSync(r.marks).filter((n) => n.endsWith(".finished")), [])
   assert.equal(existsSync(r.dest), false)
   assert.deepEqual(leftovers(r), [])
 })
@@ -190,12 +215,13 @@ test("no secret reaches a command line, a printed line or a refusal, whole or in
   assert.equal(readFileSync(r.dest, "utf8"), "a whole DMG", "published by the rename")
   assert.deepEqual(leftovers(r), [])
   assert.match(printed, /echo: \*\*\*/, "the worker's echo was printed, hidden")
+  assert.match(printed, /^built cyfr-desktop_1\.0\.0_darwin_arm64\.dmg in /m, "the last line too goes through the one printing function")
   assert.deepEqual(printedAnywhere(printed), [], "printed")
   const calls = readFileSync(r.log, "utf8")
   assert.deepEqual(printedAnywhere(calls), [], "on a command line")
   // The tools' own words, which carry every secret, in a refusal.
   const refused = await run(rig(t, {failAt: "import"}))
-  assert.match(refused.error.message, /^the identity was not imported: /)
+  assert.equal(refused.error.message, "the identity was not imported: exit 9")
   assert.deepEqual(printedAnywhere(refused.error.message), [], "in a refusal")
 })
 
@@ -234,4 +260,15 @@ function gone(pid) {
     if (Date.now() > until) return false
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
   }
+}
+
+// Whether the process `pid` has ended (or lingers only to be collected).
+function goneNow(pid) {
+  try {
+    process.kill(pid, 0)
+  } catch (e) {
+    if (e.code === "ESRCH") return true
+    throw e
+  }
+  try { return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0] === "Z" } catch { return false }
 }

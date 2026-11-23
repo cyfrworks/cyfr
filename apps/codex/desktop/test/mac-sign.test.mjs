@@ -8,7 +8,8 @@ import path from "node:path"
 import {test} from "node:test"
 
 import {Refused} from "../scripts/check-package.mjs"
-import {APPLE, REHEARSAL, checkProfile, entitlements, ignoring, kindOf, signingInputs, tool, webauthnGroup} from "../scripts/mac-sign.mjs"
+import {APPLE, APP_ID, REHEARSAL, checkProfile, entitlements, ignoring, kindOf, signingInputs, webauthnGroup} from "../scripts/mac-sign.mjs"
+import {run} from "../scripts/run.mjs"
 
 const team = "AB12CD34EF"
 const der = Buffer.from([0x30, 0x82, 0x01, 0x00]).toString("base64")
@@ -31,7 +32,7 @@ test("a distribution build takes every Apple input, and its group from the team"
   const got = signingInputs(real)
   assert.equal(got.identity, `CYFR Works Inc. (${team})`)
   assert.equal(got.team, team)
-  assert.equal(got.group, `${team}.run.cyfr.desktop.webauthn`)
+  assert.equal(got.group, `${team}.${APP_ID}.webauthn`)
   assert.deepEqual(got.notary, {key: p8, keyId, issuer})
   assert.equal(got.rehearsed, false)
   assert.deepEqual(got.profile, Buffer.from(der, "base64"))
@@ -53,6 +54,12 @@ test("a distribution build refuses each missing Apple input, naming it and no va
   assert.throws(() => signingInputs({...real, APPLE_API_ISSUER: "not-a-uuid"}), refusal("APPLE_API_ISSUER"))
   // The Apple ID and its password are read by nothing.
   assert.deepEqual(signingInputs({...real, APPLE_ID: "someone@example.com", APPLE_PASSWORD: secret}).notary, {key: p8, keyId, issuer})
+})
+
+// The app's identifier is the company's, cyfrworks.com, for CYFR.
+test("the app's identifier is com.cyfrworks.cyfr, and its WebAuthn group the team's under it", () => {
+  assert.equal(APP_ID, "com.cyfrworks.cyfr")
+  assert.equal(webauthnGroup(team), `${team}.com.cyfrworks.cyfr.webauthn`)
 })
 
 // The Apple inputs, exactly: the notary's team key, and no Apple ID.
@@ -79,7 +86,7 @@ const group = webauthnGroup(team)
 const profile = (change = {}) => ({
   ProvisionsAllDevices: true, TeamIdentifier: [team], ExpirationDate: new Date("2027-11-23T00:00:00Z"),
   ...change,
-  Entitlements: {"com.apple.application-identifier": `${team}.run.cyfr.desktop`, "com.apple.developer.team-identifier": team,
+  Entitlements: {"com.apple.application-identifier": `${team}.${APP_ID}`, "com.apple.developer.team-identifier": team,
     "keychain-access-groups": [`${team}.*`], ...change.Entitlements}
 })
 const now = new Date("2026-11-23T00:00:00Z")
@@ -94,9 +101,9 @@ test("a wrong profile is refused", () => {
     "a development profile": profile({ProvisionsAllDevices: undefined, ProvisionedDevices: ["00008103-000A"]}),
     "another team's": profile({TeamIdentifier: ["ZZ99ZZ99ZZ"]}),
     "another team's entitlement": profile({Entitlements: {"com.apple.developer.team-identifier": "ZZ99ZZ99ZZ"}}),
-    "another app's": profile({Entitlements: {"com.apple.application-identifier": `${team}.run.cyfr.other`}}),
+    "another app's": profile({Entitlements: {"com.apple.application-identifier": `${team}.com.cyfrworks.other`}}),
     "no keychain groups": profile({Entitlements: {"keychain-access-groups": undefined}}),
-    "another group": profile({Entitlements: {"keychain-access-groups": [`${team}.run.cyfr.desktop.other`]}}),
+    "another group": profile({Entitlements: {"keychain-access-groups": [`${team}.${APP_ID}.other`]}}),
     "another team's wildcard": profile({Entitlements: {"keychain-access-groups": ["ZZ99ZZ99ZZ.*"]}}),
     "expired": profile({ExpirationDate: new Date("2026-11-22T23:59:59Z")}),
     "no expiry": profile({ExpirationDate: undefined})
@@ -107,7 +114,7 @@ test("a wrong profile is refused", () => {
 
 test("only the app holds the group; the helpers hold V8's JIT; nothing holds a device", () => {
   const want = entitlements(team, group)
-  assert.deepEqual(want.main, {"com.apple.security.cs.allow-jit": true, "com.apple.application-identifier": `${team}.run.cyfr.desktop`,
+  assert.deepEqual(want.main, {"com.apple.security.cs.allow-jit": true, "com.apple.application-identifier": `${team}.${APP_ID}`,
     "com.apple.developer.team-identifier": team, "keychain-access-groups": [group]})
   assert.deepEqual(want.helper, {"com.apple.security.cs.allow-jit": true})
   assert.deepEqual(want.none, {})
@@ -143,19 +150,28 @@ test("each signed file is the kind its place makes it", () => {
 
 // Each step that could wait on a person, or on Apple, ends in a sentence
 // within its bound, and what it started ends with it.
-test("a tool that outlives its bound is refused, and everything it started is stopped", {skip: process.platform === "win32"}, (t) => {
+test("a tool that outlives its bound is refused, and everything it started is stopped", {skip: process.platform === "win32"}, async (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), "cyfr-bound-"))
   t.after(() => rmSync(dir, {recursive: true, force: true}))
   const pid = path.join(dir, "pid")
   const started = Date.now()
-  assert.throws(() => tool("sh", ["-c", `sleep 30 & echo $! > ${pid}; wait`], 1),
-    (e) => e instanceof Refused && e.message === "sh -c did not answer in 1 seconds")
+  await assert.rejects(run("sh", ["-c", `sleep 30 & echo $! > ${pid}; wait`], {what: "the tool", seconds: 1}),
+    (e) => e instanceof Refused && e.message === "the tool: did not finish in 1 seconds")
   assert.ok(Date.now() - started < 10000, "the bound held")
-  const grandchild = Number(readFileSync(pid, "utf8"))
-  assert.ok(gone(grandchild), "the tool's own child was stopped with it")
-  assert.equal(tool("true", []).ok, true)
-  assert.deepEqual(tool("sh", ["-c", "echo said; exit 3"]), {ok: false, status: 3, out: "said\n", err: ""})
-  assert.throws(() => tool("cyfr-no-such-tool", []), (e) => e instanceof Refused && /could not be run/.test(e.message))
+  assert.ok(gone(Number(readFileSync(pid, "utf8"))), "the tool's own child was stopped with it")
+})
+
+// A failed call has no output: its refusal is the sentence and the exit,
+// and only an exit 0 gives anything back.
+test("a call gives its output back only from an exit 0, and a call handed a secret gives back only what is read", {skip: process.platform === "win32"}, async () => {
+  assert.deepEqual(await run("sh", ["-c", "echo said; echo told >&2"], {what: "x"}), {out: "said\n", err: "told\n"})
+  await assert.rejects(run("sh", ["-c", "echo the secret; exit 3"], {what: "the call failed"}),
+    (e) => e instanceof Refused && e.message === "the call failed: exit 3")
+  assert.equal(await run("sh", ["-c", "echo the secret"], {what: "x", secret: true}), undefined)
+  assert.equal(await run("sh", ["-c", "echo '{\"status\":\"ok\"}'"], {what: "x", secret: true, read: (out) => JSON.parse(out).status}), "ok")
+  await assert.rejects(run("sh", ["-c", "echo not json"], {what: "the answer", secret: true, read: (out) => JSON.parse(out)}),
+    (e) => e instanceof Refused && e.message === "the answer: its answer is not in the form it gives")
+  await assert.rejects(run("cyfr-no-such-tool", [], {what: "the missing tool"}), (e) => e instanceof Refused && /could not be run$/.test(e.message))
 })
 
 // Electron's signing skips the cyfr the recipe signed first, and what

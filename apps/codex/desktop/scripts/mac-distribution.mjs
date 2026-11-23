@@ -15,29 +15,33 @@
 //     restoring of the account's keychain search list, are registered
 //     before the keychain or the list changes, so no failure after either
 //     can leave them.
-//   - No value of a secret input reaches a command line or a sentence. The
-//     certificate is opened from standard input with its password in the
-//     environment (openssl's -passin env:, openssl-passphrase-options(1);
-//     LibreSSL's openssl(1), "Pass phrase arguments") and wrapped again under
-//     a password made for this run, which is the only one `security import
-//     -P` sees (security(1) takes the passphrase as an argument alone); the
-//     keychain's password is made for this run too. Every line the build
-//     and its tools print, and every refusal, passes through redact()
-//     (check-package.mjs), which knows every input's value. The identity's
-//     name and the team ID are in every signed app and are printed; the
-//     profile and the WebAuthn group are shipped inside the app.
-//   - The packing and signing run in a child process (build.mjs --worker)
-//     that leads a process group of its own; when its bound runs out the
-//     whole group is killed, and so is every tool's (mac-sign.mjs tool).
+//   - No value of a secret input reaches a command line. The certificate is
+//     opened from standard input with its password in openssl's
+//     environment (-passin env:, openssl-passphrase-options(1); LibreSSL's
+//     openssl(1), "Pass phrase arguments") into a mode-0600 file, and
+//     wrapped again under a password made for this run, which is the only
+//     one `security import -P` sees (security(1) takes a passphrase as an
+//     argument alone); the keychain's password is made for this run too.
+//     The notary's private key is a mode-0600 file for its one command.
+//   - A tool handed a secret never speaks: run() (run.mjs) gives back only
+//     what the recipe parses from it, and a failed call only its exit
+//     status. Everything printed goes through redact() as a second line.
+//     The identity's name and the team ID are in every signed app and are
+//     printed; the profile and the WebAuthn group are shipped inside the app.
+//   - The packing runs as a worker (build.mjs --worker) handed no secret,
+//     in two phases: the app, packed and signed; then, once this owner has
+//     notarised the app and stapled its ticket, its DMG, made and signed.
+//     Each phase's bound, like every tool's, stops it and everything
+//     beneath it (run.mjs stopTree).
 
-import {spawn} from "node:child_process"
 import {randomBytes} from "node:crypto"
 import {chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync} from "node:fs"
 import path from "node:path"
 import {fileURLToPath} from "node:url"
 
 import {Refused, hide, redact} from "./check-package.mjs"
-import {checkDmg, checkProfile, decodeProfile, must, notarize, signingInputs, tool} from "./mac-sign.mjs"
+import {checkDmg, checkProfile, decodeProfile, notarize, signingInputs} from "./mac-sign.mjs"
+import {run, say} from "./run.mjs"
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
@@ -55,161 +59,127 @@ export function searchList(printed) {
 }
 
 /**
- * Run `command` with `args` as a process group of its own, its output
- * printed line by line through redact() by `print`, within `minutes`:
- * its exit status, or Refused when the bound ran out and the group was
- * killed.
- */
-export function supervise(command, args, {env, minutes, print, what}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {env, detached: true, stdio: ["ignore", "pipe", "pipe"]})
-    // A group already gone is stopped; one that could not be signalled is
-    // not, and says so.
-    let unkilled = null
-    const kill = () => {
-      try { process.kill(-child.pid, "SIGKILL") } catch (e) { if (e.code !== "ESRCH") unkilled = e }
-    }
-    process.once("exit", kill)
-    const lines = (stream) => {
-      let held = ""
-      stream.setEncoding("utf8")
-      stream.on("data", (chunk) => {
-        held += chunk
-        const at = held.lastIndexOf("\n")
-        if (at < 0) return
-        print(redact(held.slice(0, at + 1)))
-        held = held.slice(at + 1)
-      })
-      stream.on("end", () => { if (held) print(redact(held + "\n")) })
-    }
-    lines(child.stdout)
-    lines(child.stderr)
-    let outran = false
-    const timer = setTimeout(() => { outran = true; kill() }, minutes * 60000)
-    child.on("error", (e) => { clearTimeout(timer); reject(new Refused(`${what} could not start: ${e.message}`)) })
-    child.on("close", (code, signal) => {
-      clearTimeout(timer)
-      process.removeListener("exit", kill)
-      // What the child left running in its group goes with it.
-      kill()
-      if (unkilled) reject(new Refused(`${what} could not be stopped: ${unkilled.code}`))
-      else if (outran) reject(new Refused(`${what} did not finish in ${minutes} minutes`))
-      else resolve(code ?? 128 + (signal ? 9 : 0))
-    })
-  })
-}
-
-/**
- * Build, sign, check and publish the Mac distribution's DMG at `dest`.
- * `env` holds the inputs (mac-sign.mjs signingInputs); `worker` is
- * {command, args, minutes}, the packing and signing, run with --out and
- * --worker CONFIG appended; `openssl` the tool that opens the certificate
- * (/usr/bin/openssl, LibreSSL); `notarise` and `check` the finished
- * image's notarisation and check (mac-sign.mjs notarize and checkDmg);
- * `print` where every line goes. Throws Refused, leaving no DMG at dest.
+ * Build, sign, notarise, check and publish the Mac distribution's DMG at
+ * `dest`. `env` holds the inputs (mac-sign.mjs signingInputs); `worker` is
+ * {command, args, minutes}, the packing, run with --out and --worker CONFIG
+ * appended and the owner's word in its environment; `openssl` the tool
+ * that opens the certificate (/usr/bin/openssl, LibreSSL); `notarise` and
+ * `check` the app's and image's notarisation and the image's check
+ * (mac-sign.mjs notarize and checkDmg); `print` where every line goes,
+ * through redact(). Throws Refused, leaving no DMG at dest.
  */
 export async function distribute({env, dest, rehearse = false, worker, openssl = "/usr/bin/openssl", check = checkDmg,
-  notarise = notarize, print = (text) => process.stdout.write(text)}) {
+  notarise = notarize, print = (text) => say(text)}) {
+  const tell = (text) => print(redact(text))
   rmSync(dest, {force: true})
   const inputs = signingInputs(env, {rehearse})
   const keychainPassword = randomBytes(24).toString("hex")
   const wrapPassword = randomBytes(24).toString("hex")
   hide([inputs.certificate, inputs.certificatePassword, env.APPLE_API_KEY, inputs.notary?.key, keychainPassword, wrapPassword])
-  checkProfile(decodeProfile(inputs.profile), inputs)
+  checkProfile(await decodeProfile(inputs.profile), inputs)
 
   const out = path.dirname(dest)
   mkdirSync(out, {recursive: true})
   const work = mkdtempSync(path.join(out, ".cyfr-signing-"))
   chmodSync(work, 0o700)
   const keychain = path.join(work, "signing.keychain-db")
-  const undo = [() => rmSync(work, {recursive: true, force: true})]
-  const cleanup = () => {
-    const failed = []
-    while (undo.length) {
-      try { undo.pop()() } catch (e) { failed.push(redact(e.message)) }
-    }
-    return failed
-  }
-  process.once("exit", cleanup)
+  const undo = [async () => rmSync(work, {recursive: true, force: true})]
+  // A crash still takes the folder; the keychain and the search list are
+  // undone, in order, on every other exit below.
+  const lastResort = () => rmSync(work, {recursive: true, force: true})
+  process.once("exit", lastResort)
   let failure = null
   try {
     // The keychain goes, if it came to be, before the folder holding it.
-    undo.push(() => {
+    undo.push(async () => {
       if (!existsSync(keychain)) return
-      const r = tool("security", ["delete-keychain", keychain], 60)
+      await run("security", ["delete-keychain", keychain], {what: "the signing keychain was not deleted", seconds: 60})
       rmSync(keychain, {force: true})
-      if (!r.ok) throw new Refused(`the signing keychain was not deleted: ${(r.err || r.out).trim()}`)
     })
-    const certificate = Buffer.from(inputs.certificate, "base64")
-    const pem = must(openssl, ["pkcs12", "-in", "/dev/stdin", "-passin", "env:CYFR_CERTIFICATE_PASSWORD", "-nodes"],
-      "the certificate does not open with its password", 60,
-      {input: certificate, env: {PATH: env.PATH ?? process.env.PATH, CYFR_CERTIFICATE_PASSWORD: inputs.certificatePassword}}).out
-    // LibreSSL's pkcs12 -export opens its input once for the key and again
-    // for the certificates, which a pipe cannot give twice (measured on
-    // GitHub's macOS runner): the opened identity is a file, mode 0600, in
-    // this build's own folder, for that one command.
     const opened = path.join(work, "identity.pem")
-    writeFileSync(opened, pem, {mode: 0o600})
     const wrapped = path.join(work, "identity.p12")
+    const pathOnly = env.PATH ?? process.env.PATH
     try {
-      must(openssl, ["pkcs12", "-export", "-in", opened, "-out", wrapped, "-passout", "env:CYFR_WRAP_PASSWORD",
+      await run(openssl, ["pkcs12", "-in", "/dev/stdin", "-passin", "env:CYFR_CERTIFICATE_PASSWORD", "-nodes", "-out", opened],
+        {what: "the certificate does not open with its password", seconds: 60, secret: true,
+          input: Buffer.from(inputs.certificate, "base64"), env: {PATH: pathOnly, CYFR_CERTIFICATE_PASSWORD: inputs.certificatePassword}})
+      chmodSync(opened, 0o600)
+      // LibreSSL's pkcs12 -export opens its input once for the key and again
+      // for the certificates, which a pipe cannot give twice (measured on
+      // GitHub's macOS runner): the opened identity is a file.
+      await run(openssl, ["pkcs12", "-export", "-in", opened, "-out", wrapped, "-passout", "env:CYFR_WRAP_PASSWORD",
         "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES", "-macalg", "sha1"],
-      "the certificate was not wrapped for the keychain", 60, {env: {PATH: env.PATH ?? process.env.PATH, CYFR_WRAP_PASSWORD: wrapPassword}})
+      {what: "the certificate was not wrapped for the keychain", seconds: 60, secret: true,
+        env: {PATH: pathOnly, CYFR_WRAP_PASSWORD: wrapPassword}})
     } finally {
       rmSync(opened, {force: true})
     }
     chmodSync(wrapped, 0o600)
-
-    must("security", ["create-keychain", "-p", keychainPassword, keychain], "the signing keychain was not made", 60)
-    must("security", ["unlock-keychain", "-p", keychainPassword, keychain], "the signing keychain was not unlocked", 60)
-    must("security", ["set-keychain-settings", keychain], "the signing keychain would lock itself", 60)
-    must("security", ["import", wrapped, "-k", keychain, "-P", wrapPassword, "-T", "/usr/bin/codesign"],
-      "the identity was not imported", 60)
+    const keychainCall = (args, what) => run("security", args, {what, seconds: 60, secret: true})
+    await keychainCall(["create-keychain", "-p", keychainPassword, keychain], "the signing keychain was not made")
+    await keychainCall(["unlock-keychain", "-p", keychainPassword, keychain], "the signing keychain was not unlocked")
+    await keychainCall(["set-keychain-settings", keychain], "the signing keychain would lock itself")
+    await keychainCall(["import", wrapped, "-k", keychain, "-P", wrapPassword, "-T", "/usr/bin/codesign"], "the identity was not imported")
     rmSync(wrapped, {force: true})
-    must("security", ["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", keychainPassword, keychain],
-      "the identity's key was not opened to codesign", 60)
-    const before = searchList(must("security", ["list-keychains", "-d", "user"], "the keychain search list was not read", 60).out)
+    await keychainCall(["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", keychainPassword, keychain],
+      "the identity's key was not opened to codesign")
+    const before = await run("security", ["list-keychains", "-d", "user"], {what: "the keychain search list was not read", seconds: 60,
+      read: searchList})
     // An account always has a search list; an empty answer restored would
     // empty it.
     if (before.length === 0) throw new Refused("the keychain search list read as empty")
     const roots = path.join(work, "root_certs.keychain")
     copyFileSync(ROOT_CERTS, roots)
-    undo.push(() => must("security", ["list-keychains", "-d", "user", "-s", ...before], "the keychain search list was not restored", 60))
-    must("security", ["list-keychains", "-d", "user", "-s", keychain, roots, ...before], "the signing keychain is not on the search list", 60)
+    undo.push(() => run("security", ["list-keychains", "-d", "user", "-s", ...before],
+      {what: "the keychain search list was not restored", seconds: 60}))
+    await run("security", ["list-keychains", "-d", "user", "-s", keychain, roots, ...before],
+      {what: "the signing keychain is not on the search list", seconds: 60})
 
     const profile = path.join(work, "embedded.provisionprofile")
     writeFileSync(profile, inputs.profile, {mode: 0o600})
-    const result = path.join(work, "result.json")
-    const config = path.join(work, "config.json")
-    writeFileSync(config, JSON.stringify({identity: inputs.identity, team: inputs.team, group: inputs.group, profile, keychain,
-      rehearsed: inputs.rehearsed, result, work,
-      notary: inputs.notary && {keyId: inputs.notary.keyId, issuer: inputs.notary.issuer}}), {mode: 0o600})
-    // The packing sees no input but the notary's key, in its environment,
-    // for notarising the app before its DMG is made; its keychain is
-    // unlocked already.
-    const workerEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(APPLE_|CYFR_REHEARSAL_|CSC_|CYFR_NOTARY_)/.test(name)))
-    if (inputs.notary) workerEnv.CYFR_NOTARY_KEY = inputs.notary.key
+    const owner = randomBytes(16).toString("hex")
     const built = path.join(work, "out")
-    const status = await supervise(worker.command, [...worker.args, "--out", built, "--worker", config],
-      {env: workerEnv, minutes: worker.minutes, print, what: "packing and signing the app"})
-    if (status !== 0) throw new Refused(`packing and signing the app failed (exit ${status})`)
-    let helper
-    try { ({helper} = JSON.parse(readFileSync(result, "utf8"))) } catch { throw new Refused("packing and signing the app left no result") }
+    const result = path.join(work, "result.json")
+    // The worker is handed no secret: its keychain is unlocked already.
+    const workerEnv = Object.fromEntries(Object.entries(process.env)
+      .filter(([name]) => !/^(APPLE_|CYFR_REHEARSAL_|CSC_|CYFR_BUILD_)/.test(name)))
+    workerEnv.CYFR_BUILD_OWNER = owner
+    const phase = async (name, extra = {}) => {
+      const config = path.join(work, `${name}.json`)
+      writeFileSync(config, JSON.stringify({phase: name, owner, ownerPid: process.pid, identity: inputs.identity, team: inputs.team,
+        group: inputs.group, profile, keychain, rehearsed: inputs.rehearsed, result, ...extra}), {mode: 0o600})
+      await run(worker.command, [...worker.args, "--out", built, "--worker", config],
+        {what: `${name === "app" ? "packing and signing the app" : "making and signing its DMG"} failed`, seconds: worker.minutes * 60,
+          env: workerEnv, stream: tell})
+    }
+    await phase("app")
+    let helper, app
+    try { ({helper, app} = JSON.parse(readFileSync(result, "utf8"))) } catch { throw new Refused("packing and signing the app left no result") }
+    if (typeof app !== "string" || !existsSync(app)) throw new Refused("packing and signing the app left no CYFR.app")
+    if (!inputs.rehearsed) await notarise(app, inputs.notary, work)
+    await phase("dmg", {app})
     const image = path.join(built, path.basename(dest))
-    if (!existsSync(image)) throw new Refused(`packing and signing the app left no ${path.basename(dest)}`)
+    if (!existsSync(image)) throw new Refused(`making the DMG left no ${path.basename(dest)}`)
     if (!inputs.rehearsed) await notarise(image, inputs.notary, work)
     await check(image, {...inputs, helper}, {rehearsed: inputs.rehearsed})
     renameSync(image, dest)
-    print(`the bundled cyfr is signed as sha256 ${helper}\n`)
+    tell(`the bundled cyfr is signed as sha256 ${helper}\n`)
+    tell(`built ${path.basename(dest)}${inputs.rehearsed ? " (rehearsed: not notarised, not for release)" : ""} in ${out}\n`)
   } catch (e) {
     failure = e
   }
-  process.removeListener("exit", cleanup)
-  const failed = cleanup()
+  process.removeListener("exit", lastResort)
+  const failed = []
+  while (undo.length) {
+    try { await undo.pop()() } catch (e) { failed.push(e instanceof Refused ? e.message : "a fault") }
+  }
   if (failed.length) {
     rmSync(dest, {force: true})
     const after = failure ? `, after ${failure instanceof Refused ? failure.message : "a fault"}` : ""
     throw new Refused(`the build did not leave things as it found them: ${failed.join("; ")}${after}`)
   }
-  if (failure) throw failure
+  if (failure) {
+    rmSync(dest, {force: true})
+    throw failure
+  }
 }
