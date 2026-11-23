@@ -747,7 +747,7 @@ func gone(pid int) bool {
 
 // A reading's work that hears no end of its stdin is ended within the
 // bound, with everything in its process group, once the reading's caller
-// went: a lock or the end of its folder (End).
+// went (a lock, or the screen's end), the work begun before or after.
 func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
 	for name, c := range map[string]struct {
 		end func(cancel func(), l desktop.Local)
@@ -755,7 +755,6 @@ func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
 		late bool
 	}{
 		"its caller went":     {end: func(cancel func(), _ desktop.Local) { cancel() }},
-		"its folder ended":    {end: func(_ func(), l desktop.Local) { l.End() }},
 		"its start came late": {end: func(cancel func(), _ desktop.Local) { cancel() }, late: true},
 	} {
 		t.Run(name, func(t *testing.T) {

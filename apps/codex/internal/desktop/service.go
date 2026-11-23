@@ -39,9 +39,6 @@ type Local struct {
 	// it is not opened, in a sentence for the person. Asking starts
 	// nothing.
 	Answers func(context.Context) error
-	// End ends that CYFR's readings, starting and running, once whatever
-	// opened it ends, and returns at once; none starts after it.
-	End func()
 }
 
 // Service is what the CYFR app's cyfr serves on the shell's listener: the

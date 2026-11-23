@@ -311,49 +311,6 @@ func TestAReadingIsNotWaitedForWhileItsWorkStarts(t *testing.T) {
 	}
 }
 
-// An ended folder ends its readings, starting ones too, at once: End waits
-// for no launcher, and a reading after it starts nothing and says why.
-func TestAnEndedFolderEndsItsReadingsAtOnce(t *testing.T) {
-	starting, given, _ := heldLauncher(t)
-	l, err := readLocal(setUpFolder(t), "the test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	read := make(chan error, 1)
-	go func() { read <- l.Answers(t.Context()) }()
-	<-starting
-	returns := make(chan struct{})
-	go func() {
-		l.End()
-		close(returns)
-	}()
-	select {
-	case <-returns:
-	case <-time.After(5 * time.Second):
-		t.Fatal("End waited for the launcher")
-	}
-	select {
-	case err = <-read:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the reading outlived its folder's end")
-	}
-	if !strings.Contains(err.Error(), "what opened this CYFR has ended") {
-		t.Fatalf("the reading in flight said %v", err)
-	}
-	if (<-given).Err() == nil {
-		t.Fatal("the launcher's ctx outlived the folder")
-	}
-	err = l.Answers(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "what opened this CYFR has ended") {
-		t.Fatalf("a reading after the end said %v", err)
-	}
-	select {
-	case <-starting:
-		t.Fatal("a reading after the end started work")
-	default:
-	}
-}
-
 // Setup's work gets which account, system and Docker it runs on and no
 // setting of a CYFR, and on macOS and Windows Docker Desktop's own docker
 // after PATH, which an app started from the desktop lacks.

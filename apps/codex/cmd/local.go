@@ -130,27 +130,6 @@ type localFolder struct {
 	// begin begins setup's work for a reading, as the program's settings
 	// were when the folder was opened (starter).
 	begin func(context.Context, []string) (*workProcess, error)
-	// life ends with whatever opened the folder (end): every reading of
-	// it, starting or running, ends with it.
-	life context.Context
-	end  context.CancelCauseFunc
-}
-
-// errFolderEnded is a reading of a folder whatever opened it has ended.
-var errFolderEnded = errors.New("what opened this CYFR has ended")
-
-// reading is ctx for one reading of the folder: it ends with ctx and with
-// the folder's life, and says which ended it.
-func (f *localFolder) reading(ctx context.Context) (context.Context, func()) {
-	ctx, cancel := context.WithCancelCause(ctx)
-	if f.life.Err() != nil {
-		cancel(context.Cause(f.life))
-	}
-	stop := context.AfterFunc(f.life, func() { cancel(context.Cause(f.life)) })
-	return ctx, func() {
-		stop()
-		cancel(nil)
-	}
 }
 
 // dialTCP makes a connection once a localFolder allows it. A test stands
@@ -176,10 +155,9 @@ func openFolder(dir, holder string) (*localFolder, localReading, error) {
 	if err != nil {
 		return nil, read, err
 	}
-	life, end := context.WithCancelCause(context.Background())
 	return &localFolder{dir: dir, holder: holder, opened: read.localBound,
 		name: hostPort(at), loopback: net.JoinHostPort("127.0.0.1", strconv.Itoa(read.Port)),
-		begin: starter(), life: life, end: end}, read, nil
+		begin: starter()}, read, nil
 }
 
 // readLocal is the CYFR set up in dir, as the screen and the CYFR app open
@@ -205,7 +183,6 @@ func readLocal(dir, holder string) (desktop.Local, error) {
 		SetupToken: f.setupToken,
 	}
 	l.Answers = func(ctx context.Context) error { return f.answers(ctx, client) }
-	l.End = func() { f.end(errFolderEnded) }
 	return l, nil
 }
 
@@ -311,12 +288,7 @@ func (f *localFolder) dial(ctx context.Context, named *access.Published) (net.Co
 // names the CYFR opened and Docker's word of it names the container
 // serving.
 func (f *localFolder) look(ctx context.Context, args ...string) (folderLook, error) {
-	ctx, done := f.reading(ctx)
-	defer done()
 	end, err := workBegunBy(ctx, f.begin, nil, args...)
-	if err != nil && ctx.Err() != nil {
-		err = context.Cause(ctx)
-	}
 	var failed workFailure
 	switch {
 	case errors.As(err, &failed):

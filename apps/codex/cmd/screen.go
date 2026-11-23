@@ -357,8 +357,6 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 	if err != nil {
 		return fmt.Errorf("The screen cannot read how CYFR is reached here (%v)", err)
 	}
-	// Last of all: a reading a page began outlives the shell.
-	defer local.End()
 	chromeArgs := []string{"--no-first-run", "--no-default-browser-check", "--disable-extensions",
 		"--ozone-platform=wayland", "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome"), "--app=" + shell.Origin + "/"}
 

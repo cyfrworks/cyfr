@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -337,5 +338,43 @@ func TestScreenShell_SaysToLogInAgainWhereThatIsWhatIsMissing(t *testing.T) {
 	resp.Body.Close()
 	if page := html.UnescapeString(string(raw)); strings.Contains(page, "CYFR is starting") {
 		t.Fatalf("the page says CYFR is starting:\n%s", page)
+	}
+}
+
+// A screen that ends while its context lives on, Chrome no longer
+// starting here, ends the reading it began too: the Docker call that holds
+// it is gone at once, not at the reading's own bound.
+func TestScreenShell_AScreenThatEndsEndsItsReadings(t *testing.T) {
+	h := startHungScreen(t)
+	pid := h.browserPID()
+	h.shows(watchedPage)
+	h.until("the page's reading reached Docker", func() bool { return h.timesAsked() > 0 })
+	chrome, err := exec.LookPath("google-chrome-stable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(chrome); err != nil {
+		t.Fatal(err)
+	}
+	// No Chrome of this computer's either.
+	t.Setenv("PATH", filepath.Dir(chrome))
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-h.ended:
+		if err == nil || !strings.Contains(err.Error(), "Chrome did not start") {
+			t.Fatalf("the screen ended with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the screen did not end")
+	}
+	ended := time.Now()
+	h.until("the Docker call the reading held to end", func() bool {
+		out, _ := exec.Command("/usr/bin/pgrep", "-f", "^/bin/sleep 100$").Output()
+		return len(strings.Fields(string(out))) == 0
+	})
+	if took := time.Since(ended); took > 3*time.Second {
+		t.Fatalf("the reading's Docker call ended %v after the screen", took)
 	}
 }
