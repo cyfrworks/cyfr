@@ -57,7 +57,8 @@ defmodule Locus.Test.FakeKeeper do
   places as cyfr-locus does (`Prima.KeeperProtocol`, "Places"; `places/1`
   lists them): a `place` of a new id is `placed` and of a held one
   refused `bad_request`, a `drop` frees one no spawn named, an `assign`
-  changes whose one is, a spawn naming no held place or one another spawn
+  changes whose one is and is `assigned`, or refused `bad_request` for a
+  place it does not hold, a spawn naming no held place or one another spawn
   named is refused `bad_request`, a refused spawn frees its place, and a
   `released` frees its spawn's. A `measure` is refused `unmeasured`
   outside its mode, since nothing here has a group. A
@@ -307,12 +308,14 @@ defmodule Locus.Test.FakeKeeper do
     end
   end
 
-  defp handle_request(%{"type" => "assign", "place" => id} = request, state) do
+  defp handle_request(%{"type" => "assign", "id" => id, "place" => place} = request, state) do
     case state.places do
-      %{^id => place} ->
-        %{state | places: Map.put(state.places, id, %{place | whose: whose(request)})}
+      %{^place => held} ->
+        send(self(), {:send, %{type: "assigned", id: id}})
+        %{state | places: Map.put(state.places, place, %{held | whose: whose(request)})}
 
       _gone ->
+        send(self(), {:send, %{type: "error", id: id, code: "bad_request"}})
         state
     end
   end

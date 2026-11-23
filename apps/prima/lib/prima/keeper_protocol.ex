@@ -17,7 +17,7 @@ defmodule Prima.KeeperProtocol do
   its newline. A client sends `place`, `drop`, `assign`, `spawn`,
   `signal`, `resize`, `release`, `measure`, `pool`, `home_make`,
   `home_measure` and `home_retire`; the keeper answers `placed`,
-  `spawned`, `error`, `exited`, `released`, `measured`, `pool`,
+  `assigned`, `spawned`, `error`, `exited`, `released`, `measured`, `pool`,
   `home_made`, `home_measured` and `home_retired`.
 
   `encode/1` writes a request's members in name order, `v` and `type`
@@ -56,13 +56,18 @@ defmodule Prima.KeeperProtocol do
 
   A place follows one piece of work from before its preparation to its
   release. The client mints its `id` and names its `kind` (`kinds/0`)
-  and, where it has them, the `athanor` it is for and its `subject` (a
-  program's or a terminal's row), each of the id grammar, and the keeper
+  and, where it has them, the `athanor` it is for, of the grammar every
+  Locus wire gives an athanor's id
+  (`Prima.RunnerControl.athanor_id_pattern/0`), and its `subject` (a
+  program's or a terminal's row), of the id grammar, and the keeper
   answers `placed`, or refuses a place of an id it already holds
-  `bad_request`. A `drop` frees a place no spawn has named; an `assign`
-  gives one another kind, athanor and subject, as a runner given work or
-  back at rest. Neither is answered, and a place the keeper no longer holds
-  leaves either with nothing to do. Every `spawn` names its `place`, which
+  `bad_request`. A `drop` frees a place no spawn has named and is not
+  answered: a place the keeper no longer holds leaves it nothing to do.
+  An `assign` carries an `id` of its own beside the `place` it names and
+  gives that place another kind, athanor and subject, as a runner given
+  work or back at rest; it is answered under that `id` alone, `assigned`
+  once the keeper applied it, or refused `bad_request` where the keeper
+  holds no such place. Every `spawn` names its `place`, which
   no other spawn may name: a spawn naming a place the keeper does not hold,
   or one another spawn named, is refused `bad_request`, a refused spawn
   frees the place it named, and a place a spawn named is free at that
@@ -167,6 +172,8 @@ defmodule Prima.KeeperProtocol do
   its control channel.
   """
 
+  alias Prima.RunnerControl
+
   @version 3
   # The keeper spells these as frame.MaxPayload and protocol.MaxLineBytes;
   # the vectors' `bounds` pin both sides to the same numbers.
@@ -232,7 +239,8 @@ defmodule Prima.KeeperProtocol do
     place: {"place", [id: :required, kind: :required, athanor: :optional, subject: :optional]},
     drop: {"drop", [place: :required]},
     assign:
-      {"assign", [place: :required, kind: :required, athanor: :optional, subject: :optional]},
+      {"assign",
+       [id: :required, place: :required, kind: :required, athanor: :optional, subject: :optional]},
     spawn:
       {"spawn",
        [
@@ -268,6 +276,7 @@ defmodule Prima.KeeperProtocol do
   # Every reply type and its members in the order they are read.
   @replies %{
     "placed" => {:placed, [id: :id]},
+    "assigned" => {:assigned, [id: :id]},
     "spawned" => {:spawned, [id: :id, spawn_id: :spawn_id, uid: :count, pid: :count]},
     "error" => {:error, [id: {:nullable, :id}, spawn_id: {:nullable, :spawn_id}, code: :code]},
     "exited" =>
@@ -284,7 +293,7 @@ defmodule Prima.KeeperProtocol do
        [
          id: :id,
          kind: :kind,
-         athanor: :id,
+         athanor: :athanor,
          subject: :id,
          bytes: :used_bytes,
          lesser: :boolean,
@@ -310,8 +319,8 @@ defmodule Prima.KeeperProtocol do
   @typedoc """
   A request, as `encode/1` takes it: its `type` and its members, with atom
   keys but for `env`'s names. A `place` requires `id` and `kind` and may
-  carry `athanor` and `subject`; an `assign` the same with `place` for
-  `id`; a `drop` carries `place` alone. `spawn` requires `id`, `place`, `pool`, `argv`,
+  carry `athanor` and `subject`; an `assign` the same and `place`; a
+  `drop` carries `place` alone. `spawn` requires `id`, `place`, `pool`, `argv`,
   `memory_bytes`, `cpu_quota` and `attach` (`%{path: path, token: token}`); `env`
   (names to values), `rlimits` (`nofile`, `nproc`, `core`, `fsize`),
   `control`, `isolation` (`"netns"`), `home_mode` (`"scratch"` or
@@ -330,6 +339,7 @@ defmodule Prima.KeeperProtocol do
           }
           | %{
               required(:type) => :assign,
+              required(:id) => String.t(),
               required(:place) => String.t(),
               required(:kind) => kind(),
               optional(:athanor) => String.t(),
@@ -397,12 +407,14 @@ defmodule Prima.KeeperProtocol do
         }
 
   @typedoc """
-  A reply. An `error` names the request it refuses by `id` (a spawn, a
-  pool, a home request or a measure) or `spawn_id` (a signal or a release); a
-  request the keeper could not read is named by neither.
+  A reply. An `error` names the request it refuses by `id` (a place, an
+  assign, a spawn, a pool, a home request or a measure) or `spawn_id` (a
+  signal or a release); a request the keeper could not read is named by
+  neither.
   """
   @type reply ::
           {:placed, id :: String.t()}
+          | {:assigned, id :: String.t()}
           | {:spawned, id :: String.t(), spawn_id :: String.t(), uid :: non_neg_integer(),
              pid :: non_neg_integer()}
           | {:error, id :: String.t() | nil, spawn_id :: String.t() | nil, code :: String.t()}
@@ -738,7 +750,7 @@ defmodule Prima.KeeperProtocol do
     do: {"kind", kind}
 
   defp write(type, {:athanor, athanor}) when type in [:place, :assign],
-    do: {"athanor", matching!(@id, "athanor", athanor)}
+    do: {"athanor", matching!(RunnerControl.athanor_id_pattern(), "athanor", athanor)}
 
   defp write(type, {:subject, subject}) when type in [:place, :assign],
     do: {"subject", matching!(@id, "subject", subject)}
@@ -966,6 +978,10 @@ defmodule Prima.KeeperProtocol do
   defp read({:nullable, _kind}, _name, nil), do: {:ok, nil}
   defp read({:nullable, kind}, name, value), do: read(kind, name, value)
   defp read(:id, name, value) when is_binary(value), do: reading(@id, name, value)
+
+  defp read(:athanor, name, value) when is_binary(value),
+    do: reading(RunnerControl.athanor_id_pattern(), name, value)
+
   defp read(:pool, name, value) when is_binary(value), do: reading(@pool, name, value)
   defp read(:spawn_id, name, value) when is_binary(value), do: reading(@spawn_id, name, value)
   defp read(:code, name, value) when is_binary(value), do: reading(@code, name, value)
@@ -1021,6 +1037,7 @@ defmodule Prima.KeeperProtocol do
   defp reply(:released, %{spawn_id: spawn_id}), do: {:ok, {:released, spawn_id}}
 
   defp reply(:placed, %{id: id}), do: {:ok, {:placed, id}}
+  defp reply(:assigned, %{id: id}), do: {:ok, {:assigned, id}}
 
   defp reply(:measured, %{id: id} = read),
     do: {:ok, {:measured, id, Map.delete(read, :id)}}

@@ -1190,6 +1190,39 @@ defmodule Locus.KeeperTest do
       assert FakeKeeper.places(fake) == %{}
     end
 
+    test "a place whose caller is killed with its call behind its owner's drop is dropped, though its owner lives",
+         %{name: name, fake: fake, client: client} do
+      # The owner drops the place of a preparation it cancelled before the
+      # preparation's own call is read, and the preparation is killed.
+      :ok = :sys.suspend(client)
+      :ok = Keeper.drop(name, "pl-1")
+      owner = self()
+      caller = spawn(fn -> Keeper.place(name, "pl-1", %{kind: "program"}, owner) end)
+
+      wait_until(
+        fn -> Process.info(client, :message_queue_len) == {:message_queue_len, 2} end,
+        5_000,
+        "the drop and the place to wait at the client"
+      )
+
+      Process.exit(caller, :kill)
+      :ok = :sys.resume(client)
+      wait_until(fn -> requests(fake, "drop") != [] end, 5_000, "the place to be dropped")
+
+      assert %{
+               requests: Enum.filter(FakeKeeper.requests(fake), &(&1["type"] in ~w(place drop))),
+               places: FakeKeeper.places(fake),
+               again: Keeper.place(name, "pl-1", %{kind: "program"}, self())
+             } == %{
+               requests: [
+                 %{"v" => 3, "type" => "place", "id" => "pl-1", "kind" => "program"},
+                 %{"v" => 3, "type" => "drop", "place" => "pl-1"}
+               ],
+               places: %{},
+               again: :ok
+             }
+    end
+
     test "a place whose call timed out is dropped, though its owner lives", %{
       name: name,
       fake: fake
@@ -1257,7 +1290,7 @@ defmodule Locus.KeeperTest do
       assert :ok = Keeper.place(name, drop["place"], %{kind: "build"}, self())
     end
 
-    test "assign changes whose the place is: a measure answers its new kind and athanor",
+    test "assign changes whose the place is, answered once the keeper applied it: a measure answers its new kind and athanor",
          %{name: name, fake: fake} do
       assign = Enum.find(vectors("assign"), &(&1["kind"] == "run"))
       place = assign["place"]
@@ -1266,7 +1299,7 @@ defmodule Locus.KeeperTest do
       :ok = FakeKeeper.mode(fake, {:measured, %{bytes: 1_048_576, lesser: false, age_ms: 7}})
       assert {:ok, %{kind: "warm", athanor: nil, subject: nil}} = Keeper.measure(name, place)
 
-      :ok = Keeper.assign(name, place, %{kind: "run", athanor: assign["athanor"]})
+      assert :ok = Keeper.assign(name, place, %{kind: "run", athanor: assign["athanor"]})
 
       assert Keeper.measure(name, place) ==
                {:ok,
@@ -1279,7 +1312,22 @@ defmodule Locus.KeeperTest do
                   age_ms: 7
                 }}
 
-      assert requests(fake, "assign") == [assign]
+      # The vectors' request, under an id of the client's own.
+      assert [%{"id" => "assign-" <> _} = sent] = requests(fake, "assign")
+      assert Map.delete(sent, "id") == Map.delete(assign, "id")
+    end
+
+    test "an assign of a place the keeper does not hold is its refusal, and one the codec refuses is never sent",
+         %{name: name, fake: fake} do
+      assert %{
+               unheld: Keeper.assign(name, "pl-9", %{kind: "run"}),
+               unwritten: Keeper.assign(name, "pl-9", %{kind: "run", athanor: "family of mine"})
+             } == %{
+               unheld: {:error, {:refused, "bad_request"}},
+               unwritten: {:error, :unencodable}
+             }
+
+      assert [%{"place" => "pl-9", "kind" => "run"}] = requests(fake, "assign")
     end
 
     test "a refused spawn frees its place", %{name: name, fake: fake} do

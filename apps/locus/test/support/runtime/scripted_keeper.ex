@@ -28,11 +28,15 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   It keeps places as cyfr-locus does (`Prima.KeeperProtocol`, "Places"),
   named by the keeper options' `:name` (options that name no keeper keep
   none, as a test that reads no places starts a runner with none):
-  `place/3` makes one for the calling process, `assign/3` changes whose it is, one whose owner dies
-  before a spawn named it is dropped, a refused spawn frees the place it
-  named, and a runner's release frees its place once the runner is gone.
-  `places/1` answers every place held, by its id: whose it is and whether
-  a spawn named it.
+  `place/3` makes one for the calling process, `assign/3` changes whose it
+  is and answers once it has, refused `bad_request` for a place it does
+  not hold, one whose owner dies before a spawn named it is dropped, a
+  refused spawn frees the place it named, and a runner's release frees its
+  place once the runner is gone. `places/1` answers every place held, by
+  its id: whose it is and whether a spawn named it. `assigning/2` holds
+  every assign from then on, unapplied and unanswered, until
+  `answer_assigns/1` applies and answers them, or refuses every one with
+  a reason, applying none; `held_assigns/1` lists those held.
 
   Each runner has a relay stream too: `read_relay/1` answers what the
   service wrote on it and `write_relay/2` makes the runner write on it;
@@ -82,11 +86,27 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
 
   @impl Locus.Runtime.Keeper
   def assign(place, %{kind: _kind} = whose, opts) do
-    with {:ok, keeper} <- Keyword.fetch(opts, :name),
-         do: GenServer.cast(keeper, {:assign, place, whose})
-
-    :ok
+    case Keyword.fetch(opts, :name) do
+      {:ok, keeper} -> GenServer.call(keeper, {:assign, place, whose})
+      :error -> :ok
+    end
   end
+
+  @doc """
+  How `keeper` answers every assign from now on: `:held`, applying and
+  answering none until `answer_assigns/1`; `{:refused, reason}`, applying
+  none and answering `{:error, reason}`; or `:answered`, as cyfr-locus does.
+  """
+  @spec assigning(atom(), :held | {:refused, term()} | :answered) :: :ok
+  def assigning(keeper, how), do: GenServer.call(keeper, {:assigning, how})
+
+  @doc "Every assign `keeper` holds, oldest first: `{place, whose}`."
+  @spec held_assigns(atom()) :: [{String.t(), map()}]
+  def held_assigns(keeper), do: GenServer.call(keeper, :held_assigns)
+
+  @doc "Apply and answer every assign `keeper` holds, and answer every later one at once."
+  @spec answer_assigns(atom()) :: :ok
+  def answer_assigns(keeper), do: GenServer.call(keeper, :answer_assigns)
 
   @doc "Every place `keeper` holds, by its id: `%{whose, spawned}`."
   @spec places(atom()) :: %{
@@ -302,8 +322,18 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   # ---------------------------------------------------------------------------
 
   @impl GenServer
-  def init(_opts),
-    do: {:ok, %{spawns: [], releases: [], refusing: nil, refused: 0, places: %{}}}
+  def init(_opts) do
+    {:ok,
+     %{
+       spawns: [],
+       releases: [],
+       refusing: nil,
+       refused: 0,
+       places: %{},
+       assigning: :answered,
+       held: []
+     }}
+  end
 
   @impl GenServer
   def handle_call({:place, id, _whose}, _from, state) when is_map_key(state.places, id),
@@ -315,6 +345,34 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   end
 
   def handle_call(:places, _from, state), do: {:reply, state.places, state}
+
+  def handle_call({:assign, place, whose}, from, %{assigning: :held} = state),
+    do: {:noreply, %{state | held: state.held ++ [{from, place, whose}]}}
+
+  def handle_call({:assign, _place, _whose}, _from, %{assigning: {:refused, reason}} = state),
+    do: {:reply, {:error, reason}, state}
+
+  def handle_call({:assign, place, whose}, _from, state) do
+    {answer, state} = assigned(state, place, whose)
+    {:reply, answer, state}
+  end
+
+  def handle_call({:assigning, how}, _from, state), do: {:reply, :ok, %{state | assigning: how}}
+
+  def handle_call(:held_assigns, _from, state),
+    do: {:reply, Enum.map(state.held, fn {_from, place, whose} -> {place, whose} end), state}
+
+  def handle_call(:answer_assigns, _from, state) do
+    state =
+      Enum.reduce(state.held, %{state | held: [], assigning: :answered}, fn {from, place, whose},
+                                                                            state ->
+        {answer, state} = assigned(state, place, whose)
+        GenServer.reply(from, answer)
+        state
+      end)
+
+    {:reply, :ok, state}
+  end
 
   def handle_call({:freed, ref}, _from, state) do
     case Enum.find(state.spawns, &(&1.ref == ref)) do
@@ -359,16 +417,6 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   end
 
   @impl GenServer
-  def handle_cast({:assign, place, whose}, state) do
-    case state.places do
-      %{^place => entry} ->
-        {:noreply, %{state | places: Map.put(state.places, place, %{entry | whose: whose})}}
-
-      _gone ->
-        {:noreply, state}
-    end
-  end
-
   def handle_cast({:release, ref, grace_ms}, state) do
     case Enum.find(state.spawns, &(&1.ref == ref)) do
       nil ->
@@ -388,6 +436,18 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       Map.reject(state.places, fn {_id, place} -> place.owner == monitor and not place.spawned end)
 
     {:noreply, %{state | places: places}}
+  end
+
+  # An assign of a place held changes whose it is; cyfr-locus refuses one
+  # of a place it does not hold.
+  defp assigned(state, place, whose) do
+    case state.places do
+      %{^place => entry} ->
+        {:ok, %{state | places: Map.put(state.places, place, %{entry | whose: whose})}}
+
+      _gone ->
+        {{:error, {:refused, "bad_request"}}, state}
+    end
   end
 
   defp named(places, place) do

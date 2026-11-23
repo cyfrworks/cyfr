@@ -72,9 +72,14 @@ defmodule Locus.Keeper do
   this server sends the keeper its kind, athanor and subject, and answers
   once the keeper has placed it. The place is its owner's, the process named for
   it: one that dies before a spawn names the place has the place dropped
-  here. `drop/2` frees a place no spawn named, `assign/3` gives one
-  another kind, athanor and subject, and a spawn naming a place takes it
-  from its owner: the keeper frees it when that spawn is released.
+  here. So does the process that asked for it where that is not its
+  owner, as a preparation asks for its owner's, when it ends for any
+  reason but `:normal` before a spawn names the place; one that ends
+  `:normal` has finished, and leaves the place to its owner. `drop/2`
+  frees a place no spawn named, `assign/3` gives one another kind, athanor
+  and subject and answers once the keeper has applied it, and a spawn
+  naming a place takes it from its owner: the keeper frees it when that
+  spawn is released.
   `measure/2` answers a place's last reading as the keeper read it, whose
   it is and how old the reading is, and never waits for a read: a reading
   not made is an error, never a zero. cyfr-locus applies a place, a drop
@@ -216,6 +221,10 @@ defmodule Locus.Keeper do
   @drain_timeout_ms 5_000
   @channel_send_timeout_ms 30_000
   @pool_timeout_ms 5_000
+  # The keeper applies an assign at once. A runner's process waits on it
+  # inside its own assign call (`Locus.Runtime.RunnerProcess`, 5 s), so the
+  # bound sits below that call's and the runner answers its caller first.
+  @assign_timeout_ms 3_000
   # A relay that stops reading must not hold this server: a write it has
   # not taken within the bound closes its connection.
   @relay_send_timeout_ms 5_000
@@ -516,9 +525,18 @@ defmodule Locus.Keeper do
   @impl Locus.Launcher
   def drop(server, place) when is_binary(place), do: GenServer.cast(server, {:drop, place})
 
+  @doc """
+  Give the place `place` `whose`'s kind, and its athanor and subject where
+  it names them: `:ok` once cyfr-locus has applied it, `{:error,
+  {:refused, "bad_request"}}` where it holds no such place ("Places"),
+  and `{:error, :unencodable}`, nothing sent, for one the codec refuses.
+  """
   @impl Locus.Launcher
-  def assign(server, place, whose) when is_binary(place) and is_map(whose),
-    do: GenServer.cast(server, {:assign, place, whose})
+  def assign(server, place, whose) when is_binary(place) and is_map(whose) do
+    GenServer.call(server, {:assign, place, whose}, @assign_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
 
   @doc """
   The last reading cyfr-locus took of `place` (`t:Prima.KeeperProtocol.reading/0`),
@@ -792,8 +810,12 @@ defmodule Locus.Keeper do
          homes: %{},
          # Each measure in flight by its id: its place and its caller.
          measures: %{},
+         # Each assign in flight by its id, `assign-N` beside every spawn's
+         # `N`, measure's and pool's id: its caller.
+         assigns: %{},
          # Each place no spawn has named yet, by its id: its owner, the
-         # owner's monitor, and its caller until cyfr-locus placed it.
+         # owner's monitor, the monitor of a caller that is not its owner,
+         # and its caller until cyfr-locus placed it.
          places: %{},
          # The heir tags fenced while no spawn of them was held: a spawn
          # naming one is refused, so none starts after the fence's answer.
@@ -1092,13 +1114,43 @@ defmodule Locus.Keeper do
   def handle_call({:place, id, _whose, _owner}, _from, state) when is_map_key(state.places, id),
     do: {:reply, {:error, {:refused, "bad_request"}}, state}
 
-  def handle_call({:place, id, whose, owner}, from, state) do
+  def handle_call({:place, id, whose, owner}, {caller, _tag} = from, state) do
     request = whose |> Map.take([:kind, :athanor, :subject]) |> Map.merge(%{type: :place, id: id})
 
     case send_request(state, request) do
       :ok ->
-        place = %{owner: owner, monitor: Process.monitor(owner), from: from}
+        place = %{
+          owner: owner,
+          monitor: Process.monitor(owner),
+          caller: caller_monitor(caller, owner),
+          from: from
+        }
+
         {:noreply, %{state | places: Map.put(state.places, id, place)}}
+
+      {:error, :unencodable} ->
+        {:reply, {:error, :unencodable}, state}
+
+      {:error, reason} ->
+        {:stop, {:shutdown, {:channel_lost, reason}},
+         {:error, {:launcher_unavailable, :channel_lost}}, state}
+    end
+  end
+
+  # An assign is the keeper's to apply, whichever process follows the
+  # place, and is answered once the keeper has applied it.
+  def handle_call({:assign, place, whose}, from, state) do
+    id = "assign-" <> Integer.to_string(state.next_id + 1)
+    state = %{state | next_id: state.next_id + 1}
+
+    request =
+      whose
+      |> Map.take([:kind, :athanor, :subject])
+      |> Map.merge(%{type: :assign, id: id, place: place})
+
+    case send_request(state, request) do
+      :ok ->
+        {:noreply, %{state | assigns: Map.put(state.assigns, id, from)}}
 
       {:error, :unencodable} ->
         {:reply, {:error, :unencodable}, state}
@@ -1149,18 +1201,6 @@ defmodule Locus.Keeper do
     case Map.pop(state.places, place) do
       {nil, _places} -> {:noreply, state}
       {entry, places} -> {:noreply, drop_place(%{state | places: places}, place, entry)}
-    end
-  end
-
-  # An assign is the keeper's to apply, whichever process follows the place.
-  def handle_cast({:assign, place, whose}, state) do
-    request =
-      whose |> Map.take([:kind, :athanor, :subject]) |> Map.merge(%{type: :assign, place: place})
-
-    case send_request(state, request) do
-      :ok -> {:noreply, state}
-      {:error, :unencodable} -> {:noreply, state}
-      {:error, reason} -> {:stop, {:shutdown, {:channel_lost, reason}}, state}
     end
   end
 
@@ -1244,6 +1284,9 @@ defmodule Locus.Keeper do
     for {_id, {_place, from}} <- state.measures,
         do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
 
+    for {_id, from} <- state.assigns,
+        do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
+
     for {_id, %{from: from}} <- state.places,
         from != nil,
         do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
@@ -1307,10 +1350,10 @@ defmodule Locus.Keeper do
     end
   end
 
-  def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
+  def handle_info({:DOWN, monitor, :process, _pid, reason}, state) do
     case Enum.find(state.requests, fn {_ref, entry} -> entry.monitor == monitor end) do
       {ref, entry} -> {:noreply, abandon(state, ref, entry)}
-      nil -> {:noreply, owner_gone(state, monitor)}
+      nil -> {:noreply, places_gone(state, monitor, reason)}
     end
   end
 
@@ -1755,7 +1798,7 @@ defmodule Locus.Keeper do
         state
 
       {entry, places} ->
-        Process.demonitor(entry.monitor, [:flush])
+        unfollow(entry)
         %{state | places: places}
     end
   end
@@ -1792,13 +1835,18 @@ defmodule Locus.Keeper do
   defp on_reply({:error, id, _spawn_id, code}, state) when is_map_key(state.measures, id),
     do: measured(state, id, {:error, {:refused, code}})
 
+  defp on_reply({:error, id, _spawn_id, code}, state) when is_map_key(state.assigns, id),
+    do: assigned(state, id, {:error, {:refused, code}})
+
   # A place refused is no place: its caller hears the code.
   defp on_reply({:error, id, _spawn_id, code}, state) when is_map_key(state.places, id) do
     {entry, places} = Map.pop(state.places, id)
-    Process.demonitor(entry.monitor, [:flush])
+    unfollow(entry)
     if entry.from, do: GenServer.reply(entry.from, {:error, {:refused, code}})
     %{state | places: places}
   end
+
+  defp on_reply({:assigned, id}, state), do: assigned(state, id, :ok)
 
   defp on_reply({:placed, id}, state) do
     case state.places[id] do
@@ -1914,17 +1962,58 @@ defmodule Locus.Keeper do
     end
   end
 
-  # Every place of an owner that died, no spawn having named it, is dropped.
-  defp owner_gone(state, monitor) do
-    {gone, places} = Map.split_with(state.places, fn {_id, entry} -> entry.monitor == monitor end)
+  # A reply settles the one assign it names; one whose caller stopped
+  # waiting reaches no one.
+  defp assigned(state, id, answer) do
+    case Map.pop(state.assigns, id) do
+      {nil, _assigns} ->
+        state
+
+      {from, assigns} ->
+        GenServer.reply(from, answer)
+        %{state | assigns: assigns}
+    end
+  end
+
+  # The caller of a place made for another owner, as a preparation makes
+  # its owner's, is followed from its call until a spawn names the place,
+  # the place is dropped or the caller ends. Its monitor is made as its
+  # call is handled: a caller already dead is DOWN `:noproc` at once, and
+  # one that dies later is DOWN with its reason, which cannot reach this
+  # server before the caller's call, since signals between one pair of
+  # processes are ordered. So a preparation killed with its call still
+  # unread, behind its owner's drop of the same place, which found nothing
+  # to drop, still has the place dropped, and none outlives it.
+  defp caller_monitor(owner, owner), do: nil
+  defp caller_monitor(caller, _owner), do: Process.monitor(caller)
+
+  # Every place no spawn has named yet is dropped when its owner dies, or
+  # when its caller ends for any reason but `:normal`; a caller that ended
+  # `:normal` finished, and leaves the place to its owner.
+  defp places_gone(state, monitor, reason) do
+    {gone, places} =
+      Map.split_with(state.places, fn {_id, entry} ->
+        entry.monitor == monitor or (entry.caller == monitor and reason != :normal)
+      end)
+
+    places =
+      Map.new(places, fn
+        {id, %{caller: ^monitor} = entry} -> {id, %{entry | caller: nil}}
+        other -> other
+      end)
 
     Enum.reduce(gone, %{state | places: places}, fn {id, entry}, state ->
       drop_place(state, id, entry)
     end)
   end
 
-  defp drop_place(state, id, entry) do
+  defp unfollow(entry) do
     Process.demonitor(entry.monitor, [:flush])
+    if entry.caller, do: Process.demonitor(entry.caller, [:flush])
+  end
+
+  defp drop_place(state, id, entry) do
+    unfollow(entry)
     if entry.from, do: GenServer.reply(entry.from, {:error, :dropped})
 
     case send_request(state, %{type: :drop, place: id}) do

@@ -114,7 +114,10 @@ defmodule Locus.Backends.Owners do
   session that never spawns, leave nothing of the place: whenever a
   session's reservation is released, the table drops its place, which
   frees one no spawn named, and cyfr-locus frees one a spawn named when
-  that spawn is released. A session whose place was not made is
+  that spawn is released. A preparation killed while its place is still
+  being made, its drop already sent, has the place dropped by the keeper's
+  client, which follows the preparation until a spawn names the place
+  (`Locus.Launcher`, "Places"). A session whose place was not made is
   `unavailable` and starts nothing.
 
   ## Admission by memory

@@ -33,11 +33,12 @@ defmodule Locus.Runtime.RunnerPool do
   ignores it.
 
   Every runner runs in a place of its keeper's named by the runner's id,
-  which the runner's process makes before it spawns
+  which the runner's process makes before it spawns and assigns itself
   (`Locus.Runtime.RunnerProcess`): `warm` and no athanor's while the runner
-  is fresh, `run` for the athanor from the take that gives it work, told
-  before the work is sent, and `warm`, still that athanor's, while it is
-  idle. The pool never waits on the keeper for a place.
+  is fresh, `run` for the work's athanor once the keeper has answered the
+  assign the work then follows, and `warm`, still that athanor's, from its
+  clean completion, before the pool hears it. The pool never waits on the
+  keeper for a place.
 
   A tainted runner leaves the pool once the keeper reports it retired
   or, failing that, at the retirement bound; its handle is stopped then.
@@ -183,7 +184,6 @@ defmodule Locus.Runtime.RunnerPool do
             idle_timer: nil
         }
 
-        place_as(pid, entry, "run")
         state = put_runner(state, pid, entry)
         {:reply, {:ok, pid, entry.id}, refill(state)}
 
@@ -194,7 +194,6 @@ defmodule Locus.Runtime.RunnerPool do
         case spawn_runner(state) do
           {:ok, pid, entry} ->
             entry = %{entry | state: :busy, athanor: athanor, execution_id: execution_id}
-            place_as(pid, entry, "run")
             {:reply, {:ok, pid, entry.id}, refill(put_runner(state, pid, entry))}
 
           {:error, reason} ->
@@ -346,7 +345,6 @@ defmodule Locus.Runtime.RunnerPool do
       message.clean ->
         timer = make_ref()
         Process.send_after(self(), {:idle_expired, pid, timer}, state.settings.idle_ttl_ms)
-        place_as(pid, entry, "warm")
         put_runner(state, pid, %{entry | state: :idle, idle_timer: timer})
 
       true ->
@@ -460,10 +458,6 @@ defmodule Locus.Runtime.RunnerPool do
       _none -> :none
     end
   end
-
-  # The runner's place, given work or back at rest for the athanor it ran for.
-  defp place_as(pid, entry, kind),
-    do: RunnerProcess.place_as(pid, %{kind: kind, athanor: entry.athanor})
 
   defp forget(state, pid), do: %{state | runners: Map.delete(state.runners, pid)}
 

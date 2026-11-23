@@ -301,16 +301,10 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
       {:ok, pid, runner} = RunnerPool.take(pool, "ath_memory", "exec_memory")
 
-      # The taken runner's place is told it runs for the athanor, and the
-      # pool refills behind the take: a second runner, in a place it makes,
-      # under the same bound. The two processes ask in either order.
-      {one, rest} = request(keeper)
-      {two, ""} = request(keeper, rest)
-
-      assert [%{"type" => "assign"}, %{"type" => "place", "id" => refill_place}] =
-               Enum.sort_by([one, two], & &1["type"])
-
-      reply(keeper, %{v: 3, type: "placed", id: refill_place})
+      # The pool refills behind the take: a second runner, in a place it
+      # makes, under the same bound. The taken runner's place is its
+      # athanor's only once it is assigned work, and none is here.
+      _refill_place = placed!(keeper)
       assert %{"memory_bytes" => 268_435_456, "id" => refill_id} = next_request(keeper)
       assert RunnerPool.status(pool).runners.busy == 1
 
@@ -421,11 +415,21 @@ defmodule Locus.Runtime.KeeperMemoryTest do
             pid: 4242
           })
 
-          # The assign is held by the runner's handle until it attaches.
+          # The assign is held by the runner's handle until it attaches,
+          # once the keeper has made the runner's place the athanor's run;
+          # the pool's refill places itself beside it, in either order.
           {:ok, pid, _runner} = RunnerPool.take(pool, "ath_plant", "exec_plant")
 
-          :ok =
-            RunnerProcess.assign(pid, attempt.assignment, "{}", keys, "http://127.0.0.1:9")
+          assigning =
+            Task.async(fn ->
+              RunnerProcess.assign(pid, attempt.assignment, "{}", keys, "http://127.0.0.1:9")
+            end)
+
+          {one, rest} = request(keeper)
+          {two, ""} = request(keeper, rest)
+          [%{"id" => assign_id}] = Enum.filter([one, two], &(&1["type"] == "assign"))
+          reply(keeper, %{v: 3, type: "assigned", id: assign_id})
+          :ok = Task.await(assigning)
 
           # The runner attaches while its handle is suspended, and the
           # client stops, its channel lost, before the handle hears it: the
