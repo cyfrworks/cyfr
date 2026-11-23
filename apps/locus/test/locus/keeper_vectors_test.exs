@@ -113,11 +113,18 @@ defmodule Locus.KeeperVectorsTest do
         place: "pl-1",
         timeout_ms: 10_000,
         max_stdout_bytes: 1_000_000,
+        on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
         on_output: fn line -> Agent.update(lines, &[line | &1]) end
       )
 
-    {result, Agent.get(lines, &Enum.reverse/1)}
+    {stdout(result), Agent.get(lines, &Enum.reverse/1)}
   end
+
+  # A run's stdout as the fold above took it, whole.
+  defp stdout({:ok, %{exit: exit, taken: taken}}),
+    do: {:ok, %{exit: exit, stdout: IO.iodata_to_binary(taken)}}
+
+  defp stdout(result), do: result
 
   # The vectors' place `pl-1`, which their spawns name, made for this
   # process before each spawn: the request is theirs, byte for byte, and
