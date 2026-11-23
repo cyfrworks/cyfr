@@ -16,11 +16,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
@@ -247,30 +249,37 @@ func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 // which waits for the group until the same deadline, never past it, and
 // kills within one poll of it. One level below the leader and no deeper: the
 // shell is the one layer CYFR puts in front of a program, and a program's
-// own tree is its own to end. The leader is signalled through signalChild,
-// which holds the reaper's lock, and each of its children through a pidfd
-// taken under that lock (leaderChildren), so no pid already reaped and given
-// to another process is ever signalled. It reports whether the group is
-// empty.
-func (s *server) endInOrder(group endable, leader *child, deadline time.Time) bool {
+// own tree is its own to end. Every step looks at the deadline before it
+// acts, and none is taken past it. The leader is signalled through
+// signalChild, which holds the reaper's lock, and each of its children
+// through a pidfd held from before the end (leaderChildren), so no pid
+// already reaped and given to another process is ever signalled. A child of
+// the leader that could not be held is said once on the log and is asked
+// with the rest of the group, the one end in which a program and its own
+// children are asked together. It reports whether the group is empty.
+func (s *server) endInOrder(spawnID string, group endable, leader *child, deadline time.Time) bool {
 	if leader != nil && time.Now().Before(deadline) {
-		children := s.leaderChildren(group, leader)
-		defer func() {
-			for _, fd := range children {
-				_ = unix.Close(fd)
-			}
-		}()
-		s.signalChild(leader, unix.SIGTERM)
-		timer := time.NewTimer(time.Until(deadline))
-		select {
-		case <-leader.done:
-			for _, fd := range children {
-				_ = unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0)
-			}
-			awaitExits(children, deadline)
-		case <-timer.C:
+		children, unheld := s.leaderChildren(group, leader, deadline)
+		defer releaseHeld(children)
+		if unheld > 0 {
+			s.log.Warn("spawn %s: %d of its leader's children could not be held, so they are asked to end with the rest of its group", spawnID, unheld)
 		}
-		timer.Stop()
+		if time.Now().Before(deadline) {
+			s.signalChild(leader, unix.SIGTERM)
+			timer := time.NewTimer(time.Until(deadline))
+			select {
+			case <-leader.done:
+				for _, fd := range children {
+					if !time.Now().Before(deadline) {
+						break
+					}
+					_ = unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0)
+				}
+				awaitExits(children, deadline)
+			case <-timer.C:
+			}
+			timer.Stop()
+		}
 	}
 	return group.KillBy(deadline)
 }
@@ -282,38 +291,86 @@ type endable interface {
 	KillBy(time.Time) bool
 }
 
-// leaderChildren holds, each by a pidfd, the processes of group whose parent
-// is the leader, as they stand now. It runs under the reaper's lock with the
-// leader not yet reaped, so the leader's pid is its own throughout; a pidfd
-// is kept only when, after it was taken, the process it names still runs
-// and its parent read from the kernel is the leader, so the pidfd names that
-// child and no process that took its pid since.
-func (s *server) leaderChildren(group endable, leader *child) []int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if leader.reaped() {
-		return nil
+// endHeld bounds the pidfds one end holds, and endsHeld those every end
+// holds at once, so that holding them never takes the keeper near its own
+// limit on open files (1048575 in the shipped box, and at least the 524287
+// that Docker's default hard limit leaves it, against 4096): the number of
+// ends at once is bounded by nothing here. A program's leader starts a few
+// children, far fewer than endHeld; the uid may run up to 1024 tasks
+// (protocol.Ceilings.Nproc). A child past either bound is not held and is
+// asked with the rest of the group.
+const (
+	endHeld  = 64
+	endsHeld = 4096
+)
+
+// held counts the pidfds every end holds at once (endsHeld).
+var held atomic.Int64
+
+// holdPidfd takes a place for one pidfd under endsHeld, and answers whether it did.
+func holdPidfd() bool {
+	if held.Add(1) > endsHeld {
+		held.Add(-1)
+		return false
 	}
+	return true
+}
+
+// releaseHeld closes the pidfds an end held and gives back their places.
+func releaseHeld(fds []int) {
+	for _, fd := range fds {
+		_ = unix.Close(fd)
+	}
+	held.Add(-int64(len(fds)))
+}
+
+// leaderChildren holds, each by a pidfd, the processes of group whose parent
+// is the leader, as they stand now, and counts those it could not hold. It
+// never holds the keeper's lock across its scan: it lists the group, opens a
+// pidfd for each process and reads its parent from the kernel with the lock
+// released, keeping a pidfd only when, after it was opened, the parent read
+// is the leader's pid and the process still runs, so the pidfd names that
+// process and no other that took its pid since. Then it takes the lock once
+// to ask whether the leader is still not reaped. Only the reaper frees the
+// leader's pid, and it does so under that lock, so a leader not reaped then
+// was not reaped at any moment of the scan: every parent read as its pid
+// was the leader, and what is held is the leader's children. A leader
+// reaped meanwhile, or a scan that ends past the deadline, keeps nothing.
+func (s *server) leaderChildren(group endable, leader *child, deadline time.Time) (fds []int, unheld int) {
 	pids, err := group.Procs()
 	if err != nil {
-		return nil
+		return nil, 0
 	}
-	var fds []int
 	for _, pid := range pids {
 		if pid == leader.pid {
 			continue
 		}
 		fd, err := unix.PidfdOpen(pid, 0)
 		if err != nil {
+			if !errors.Is(err, unix.ESRCH) && parentOf(pid) == leader.pid {
+				unheld++
+			}
 			continue
 		}
-		if parentOf(pid) == leader.pid && unix.PidfdSendSignal(fd, 0, nil, 0) == nil {
-			fds = append(fds, fd)
-		} else {
+		if parentOf(pid) != leader.pid || unix.PidfdSendSignal(fd, 0, nil, 0) != nil {
 			_ = unix.Close(fd)
+			continue
 		}
+		if len(fds) >= endHeld || !holdPidfd() {
+			_ = unix.Close(fd)
+			unheld++
+			continue
+		}
+		fds = append(fds, fd)
 	}
-	return fds
+	s.mu.Lock()
+	reaped := leader.reaped()
+	s.mu.Unlock()
+	if reaped || !time.Now().Before(deadline) {
+		releaseHeld(fds)
+		return nil, 0
+	}
+	return fds, unheld
 }
 
 // parentOf is the parent pid /proc gives pid, 0 when it is unreadable.
@@ -335,8 +392,17 @@ func parentOf(pid int) int {
 	return ppid
 }
 
-// awaitExits waits until every process the pidfds name has exited, which
-// each pidfd reports by turning readable, or until the deadline.
+// poll is unix.Poll; a test fails it.
+var poll = unix.Poll
+
+// probe answers whether the process a pidfd names is still there; a test
+// watches it.
+var probe = func(fd int) bool { return unix.PidfdSendSignal(fd, 0, nil, 0) == nil }
+
+// awaitExits waits until every process the pidfds name has exited, or until
+// the deadline. Each pidfd turns readable at its process's exit; a wait that
+// cannot poll waits all the same, asking each pidfd on KillBy's interval
+// whether its process is still there.
 func awaitExits(fds []int, deadline time.Time) {
 	waiting := make([]unix.PollFd, 0, len(fds))
 	for _, fd := range fds {
@@ -347,11 +413,12 @@ func awaitExits(fds []int, deadline time.Time) {
 		if left <= 0 {
 			return
 		}
-		n, err := unix.Poll(waiting, int(left.Milliseconds())+1)
+		n, err := poll(waiting, int(left.Milliseconds())+1)
 		if errors.Is(err, unix.EINTR) {
 			continue
 		}
 		if err != nil {
+			probeExits(waiting, deadline)
 			return
 		}
 		if n == 0 {
@@ -360,11 +427,27 @@ func awaitExits(fds []int, deadline time.Time) {
 		still := waiting[:0]
 		for _, p := range waiting {
 			if p.Revents == 0 {
-				p.Revents = 0
 				still = append(still, p)
 			}
 		}
 		waiting = still
+	}
+}
+
+// probeExits waits until no process the pidfds name is still there, asking
+// each with signal 0 on KillBy's interval, or until the deadline.
+func probeExits(waiting []unix.PollFd, deadline time.Time) {
+	for len(waiting) > 0 && time.Now().Before(deadline) {
+		still := waiting[:0]
+		for _, p := range waiting {
+			if probe(int(p.Fd)) {
+				still = append(still, p)
+			}
+		}
+		waiting = still
+		if len(waiting) > 0 {
+			time.Sleep(min(cgroup.PollInterval, time.Until(deadline)))
+		}
 	}
 }
 
@@ -391,7 +474,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 		s.mu.Unlock()
 		go func() {
 			defer close(sp.retired)
-			if sp.group != nil && !s.endInOrder(sp.group, sp.leader, deadline) {
+			if sp.group != nil && !s.endInOrder(sp.id, sp.group, sp.leader, deadline) {
 				s.log.Warn("spawn %s: processes of kept uid %d outlived their group's kill", sp.id, uid)
 			}
 			if sp.relay != nil {
