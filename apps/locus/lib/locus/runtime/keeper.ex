@@ -49,8 +49,9 @@ defmodule Locus.Runtime.Keeper do
   itself before its spawn (`c:place/3`): a fresh runner's is `warm` and no
   athanor's, it is assigned `run` for an athanor before the runner is
   given work and `warm` again, still that athanor's, when it completes
-  cleanly (`c:assign/3`), each by the runner's process, which goes on only
-  once the keeper has answered, and the keeper frees it when the runner is
+  cleanly (`c:assign/4`), each by the runner's process, which goes on only
+  once the keeper has answered, or gives up at the instant it waits until,
+  and the keeper frees it when the runner is
   released; one whose process dies before its spawn is dropped by the
   keeper's client.
 
@@ -101,8 +102,13 @@ defmodule Locus.Runtime.Keeper do
   @doc "A new place `id` of `whose` for the calling process, from the pool's keeper options."
   @callback place(String.t(), Locus.Launcher.whose(), keyword()) :: :ok | {:error, term()}
 
-  @doc "Give the place another kind, athanor and subject: `:ok` once the keeper has applied it."
-  @callback assign(String.t(), Locus.Launcher.whose(), keyword()) :: :ok | {:error, term()}
+  @doc """
+  Give the place another kind, athanor and subject: `:ok` once the keeper
+  has applied it, an error once `until` (monotonic milliseconds) passes
+  unanswered; from the pool's keeper options.
+  """
+  @callback assign(String.t(), Locus.Launcher.whose(), until :: integer(), keyword()) ::
+              :ok | {:error, term()}
 
   @doc "Start a runner for `spec` from the calling process, answering its channel and the events already known."
   @callback spawn(spec()) :: {:ok, channel(), [event()]} | {:error, term()}

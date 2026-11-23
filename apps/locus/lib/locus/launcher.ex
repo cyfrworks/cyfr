@@ -39,7 +39,11 @@ defmodule Locus.Launcher do
   A spec may name an `heir`, `{pid, tag}`: a process told
   `{launcher_module, {:heir, tag}, :released}` once nothing of the process
   is left, whoever owns it then, and once it is known that none was
-  started, as for a spawn refused. So a process the owner's death leaves
+  started, as for a spawn refused before the launcher made anything of it.
+  A spawn refused after it made something, `{:refused, code, handle}`, is
+  followed on that handle as a started process is: its owner hears
+  `:released`, and its heir is told, once nothing of it is left, and its
+  refusal is not a release. So a process the owner's death leaves
   to the launcher's own release is still followed to its end by another
   process: the owner's `:released` dies with the owner, the heir's does
   not. `c:fence/2` asks after a tag whose owner died: `:pending` while the
@@ -62,8 +66,10 @@ defmodule Locus.Launcher do
   it, as does the end, for any reason but `:normal`, of a caller that
   asked for it for another owner; `c:drop/2` frees one no spawn
   named, after a preparation that failed or a waiter that left;
-  `c:assign/3` gives one another kind, athanor and subject, answering once
-  the keeper has applied it. A spec names
+  `c:assign/4` gives one another kind, athanor and subject, answering once
+  the keeper has applied it, or `{:launcher_unavailable, :timeout}` once
+  the instant its caller waits until passes, after which its answer, however
+  late, is no one's and whose the place is cannot be known. A spec names
   its place, which its spawn takes: the place is free once nothing of
   the process is left. `c:measure/2` answers a place's last reading, whose
   the place is and how old the reading is, or an error where none is
@@ -177,11 +183,13 @@ defmodule Locus.Launcher do
 
   @typedoc """
   Why a spawn or a request did not happen: the launcher's refusal code,
-  a request it would refuse as malformed, the launcher unreachable, a
-  process it no longer follows.
+  with the handle its `:released` follows on where the launcher refused a
+  spawn after making something of it, a request it would refuse as
+  malformed, the launcher unreachable, a process it no longer follows.
   """
   @type error ::
           {:refused, String.t()}
+          | {:refused, String.t(), handle()}
           | {:spawn_failed, term()}
           | {:launcher_unavailable, term()}
           | :unknown_spawn
@@ -209,8 +217,11 @@ defmodule Locus.Launcher do
   @doc "Free the place no spawn named."
   @callback drop(GenServer.server() | keyword(), String.t()) :: :ok
 
-  @doc "Give the place another kind, athanor and subject: `:ok` once the keeper has applied it."
-  @callback assign(GenServer.server() | keyword(), String.t(), whose()) ::
+  @doc """
+  Give the place another kind, athanor and subject: `:ok` once the keeper
+  has applied it, an error once `until` (monotonic milliseconds) passes.
+  """
+  @callback assign(GenServer.server() | keyword(), String.t(), whose(), until :: integer()) ::
               :ok | {:error, error()}
 
   @doc "The place's last reading and whose it is; an error where none is known, never a zero."

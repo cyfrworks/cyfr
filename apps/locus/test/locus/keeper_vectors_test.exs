@@ -13,7 +13,9 @@ defmodule Locus.KeeperVectorsTest do
   request, byte for byte, and answered with their `placed`; a place the
   keeper refuses is its caller's refusal. An assign is the vectors'
   request naming its place under an id of its own, answered with their
-  `assigned` or the keeper's refusal. A measure is the vectors'
+  `assigned` or the keeper's refusal, and one the keeper leaves unanswered
+  is answered so at its caller's instant and forgotten, its late answer
+  reaching no one. A measure is the vectors'
   request naming its place, answered with the reading, whose the place is
   and its age; a reply settles only the measure it names, never a later
   caller's or one that stopped waiting, and the release of the place's
@@ -71,6 +73,7 @@ defmodule Locus.KeeperVectorsTest do
     {"error", "hosts_unresolved"},
     {"error", "guard_unavailable"},
     {"error", "unknown_spawn"},
+    {"error", :made},
     {"exited", :status},
     {"exited", :signal},
     {"exited", :cap},
@@ -97,6 +100,9 @@ defmodule Locus.KeeperVectorsTest do
 
     {:ok, v: @vectors, peer: peer, name: client, client: client}
   end
+
+  # An instant a test's assign waits until for an answer that comes at once.
+  defp soon, do: System.monotonic_time(:millisecond) + 5_000
 
   # A run of `command`, answered with the log lines it produced.
   defp run(name, command \\ %{argv: ["/bin/sh", "-c", "true"], env: %{}}) do
@@ -132,6 +138,7 @@ defmodule Locus.KeeperVectorsTest do
     categories =
       @vectors["replies"]
       |> Enum.map(fn
+        %{"type" => "error", "id" => _id, "spawn_id" => _spawn_id} -> {"error", :made}
         %{"type" => "error", "code" => code} -> {"error", code}
         %{"type" => "exited", "memory" => "cap"} -> {"exited", :cap}
         %{"type" => "exited", "memory" => "machine"} -> {"exited", :machine}
@@ -508,7 +515,7 @@ defmodule Locus.KeeperVectorsTest do
           {reply(v, "assigned"), :ok},
           {reply(v, "error", &(&1["code"] == "bad_request")), {:error, {:refused, "bad_request"}}}
         ] do
-      task = Task.async(fn -> Keeper.assign(name, vector["place"], whose) end)
+      task = Task.async(fn -> Keeper.assign(name, vector["place"], whose, soon()) end)
       asked = next_request(peer)
       assert asked == %{vector | "id" => asked["id"]}
       send_reply(peer, answering(asked, answer))
@@ -516,10 +523,22 @@ defmodule Locus.KeeperVectorsTest do
     end
   end
 
+  test "an assign its keeper does not answer by the end of its wait is answered so and forgotten, and its late answer is ignored",
+       %{v: v, peer: peer, name: name} do
+    until = System.monotonic_time(:millisecond) + 300
+    task = Task.async(fn -> Keeper.assign(name, "pl-1", %{kind: "run"}, until) end)
+    assert %{"type" => "assign", "place" => "pl-1"} = asked = next_request(peer)
+    assert Task.await(task, 10_000) == {:error, {:launcher_unavailable, :timeout}}
+    assert :sys.get_state(name).assigns == %{}
+
+    send_reply(peer, answering(asked, reply(v, "assigned")))
+    assert :sys.get_state(name).assigns == %{}
+  end
+
   test "an assign waiting when the channel is lost is answered so", %{peer: peer, name: name} do
     log =
       capture_log(fn ->
-        task = Task.async(fn -> Keeper.assign(name, "pl-1", %{kind: "run"}) end)
+        task = Task.async(fn -> Keeper.assign(name, "pl-1", %{kind: "run"}, soon()) end)
         assert %{"type" => "assign", "place" => "pl-1"} = next_request(peer)
         :ok = :socket.close(peer)
         assert Task.await(task, 5_000) == {:error, {:launcher_unavailable, :channel_lost}}
@@ -709,7 +728,7 @@ defmodule Locus.KeeperVectorsTest do
         # An assign's answer reaches the process that asked for it, and no
         # runner's owner.
         %{"type" => "assigned"} ->
-          task = Task.async(fn -> Keeper.assign(name, "pl-1", %{kind: "run"}) end)
+          task = Task.async(fn -> Keeper.assign(name, "pl-1", %{kind: "run"}, soon()) end)
           assert %{"type" => "assign", "place" => "pl-1"} = asked = next_request(peer)
           send_reply(peer, answering(asked, vector))
           assert Task.await(task, 5_000) == :ok
@@ -721,6 +740,15 @@ defmodule Locus.KeeperVectorsTest do
           send_reply(peer, %{reply(v, "released") | "spawn_id" => spawned["spawn_id"]})
           assert_receive {Keeper, ^ref, event}, 5_000
           assert event == :released
+
+        # A spawn refused after the keeper made it: its owner hears the
+        # refusal at once, and its release only at the keeper's word.
+        %{"type" => "error", "id" => _id, "spawn_id" => spawn_id, "code" => code} ->
+          %{ref: ref} = spawn_runner!(peer, name)
+          send_reply(peer, %{vector | "id" => next_request(peer)["id"]})
+          assert_receive {Keeper, ^ref, {:refused, ^code}}, 5_000
+          send_reply(peer, %{reply(v, "released") | "spawn_id" => spawn_id})
+          assert_receive {Keeper, ^ref, :released}, 5_000
 
         %{"type" => "error", "id" => _id, "code" => code} ->
           %{ref: ref} = spawn_runner!(peer, name)

@@ -8,7 +8,9 @@ defmodule Locus.Runtime.RunnerPoolTest do
   spawned ahead and refilled; an idle runner reused for its athanor only,
   a fresh one for another; an idle runner retired at its TTL; a clean
   completion to idle, an unclean one, an exit, a closed channel, a closed
-  relay and a kill to tainted, released and gone; a runner its keeper
+  relay and a kill to tainted, released and gone, and a clean completion
+  whose place the keeper did not make warm again to tainted as it is
+  heard, never handed to a take queued right after it; a runner its keeper
   never retires, busy or idle, dropped at the retirement bound and a
   retirement answered, one retired in time left alone by the bound's
   timer; every busy runner offered a
@@ -61,13 +63,16 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   defp counts(pool), do: RunnerPool.status(pool).runners
 
+  # A start's deadline far enough off for an answer that comes at once.
+  defp soon, do: System.monotonic_time(:millisecond) + 5_000
+
   # An assign as the service sends one, of an attempt of `athanor` a
   # scripted host minted, so the runner's relay binds to it: the handle's
   # answer and the assignment's token.
   defp assign(pid, athanor \\ "ath_test") do
     attempt = ScriptedHost.attempt!(ScriptedHost.start!(), athanor_id: athanor)
 
-    {RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @host_url),
+    {RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @host_url, soon()),
      attempt.assignment}
   end
 
@@ -277,6 +282,62 @@ defmodule Locus.Runtime.RunnerPoolTest do
     :ok
   end
 
+  test "a clean completion whose place the keeper does not make warm again ends its runner as the pool hears it: a take queued right after it never gets that runner",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 1)
+    serve!(pool)
+    {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    spawn = spawn_of(keeper, pid)
+    assert {:ok, _token} = assign(pid, "ath_a")
+    :ok = ScriptedKeeper.assigning(keeper, {:refused, :unknown_place})
+
+    # What the runner tells of its completion waits in the suspended pool,
+    # and a take is queued right behind the first of it.
+    :ok = :sys.suspend(pool)
+    complete(spawn, "exec_1", true)
+    _info = RunnerProcess.info(pid)
+    taking = Task.async(fn -> RunnerPool.take(pool, "ath_a", "exec_2") end)
+
+    wait_until(
+      fn ->
+        {:messages, messages} = Process.info(pool, :messages)
+        Enum.any?(messages, &match?({:"$gen_call", _from, {:take, "ath_a", "exec_2"}}, &1))
+      end,
+      5_000,
+      "the take queued at the pool"
+    )
+
+    :ok = take_right_after_first(pool, pid)
+    :ok = :sys.resume(pool)
+
+    assert_receive {RunnerPool, ^pid, {:complete, "exec_1", true}}, 5_000
+    assert {:ok, other, _other_id} = Task.await(taking)
+    refute other == pid
+  end
+
+  # The suspended pool's mailbox, from inside the pool: the first of what
+  # `runner` told it, then every other message (the take queued behind),
+  # then the rest of what `runner` told.
+  defp take_right_after_first(pool, runner) do
+    :sys.replace_state(pool, fn state ->
+      {[first | rest], others} =
+        Enum.split_with(mailbox([]), &match?({RunnerProcess, ^runner, _event}, &1))
+
+      Enum.each([first | others] ++ rest, &send(self(), &1))
+      state
+    end)
+
+    :ok
+  end
+
+  defp mailbox(messages) do
+    receive do
+      message -> mailbox([message | messages])
+    after
+      0 -> Enum.reverse(messages)
+    end
+  end
+
   test "a runner's work is written only once the keeper has answered the assign of its place",
        %{keeper: keeper} do
     pool = start_pool!(keeper, pool_size: 1)
@@ -289,7 +350,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     assigning =
       Task.async(fn ->
-        RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @host_url)
+        RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @host_url, soon())
       end)
 
     wait_until(

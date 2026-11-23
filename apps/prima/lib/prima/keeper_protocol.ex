@@ -69,9 +69,13 @@ defmodule Prima.KeeperProtocol do
   once the keeper applied it, or refused `bad_request` where the keeper
   holds no such place. Every `spawn` names its `place`, which
   no other spawn may name: a spawn naming a place the keeper does not hold,
-  or one another spawn named, is refused `bad_request`, a refused spawn
-  frees the place it named, and a place a spawn named is free at that
-  spawn's `released`.
+  or one another spawn named, is refused `bad_request`, and a place a spawn
+  named is free at that spawn's `released`, which is the keeper's word
+  alone. A spawn refused before the keeper made anything of it is refused
+  under its `id` alone and frees its place at once; one refused after the
+  keeper made it (its command could not be run, say) is refused under its
+  `id` and the `spawn_id` the keeper gave it, and gets one `released`
+  under that `spawn_id` once its cleanup is done and its place freed.
 
   The keeper reads every spawn's group once a second, whatever its kind. A
   `measure` carries exactly `id` and `place` and is answered under that
@@ -409,8 +413,8 @@ defmodule Prima.KeeperProtocol do
   @typedoc """
   A reply. An `error` names the request it refuses by `id` (a place, an
   assign, a spawn, a pool, a home request or a measure) or `spawn_id` (a
-  signal or a release); a request the keeper could not read is named by
-  neither.
+  signal or a release), and by both a spawn the keeper refused after it
+  made it; a request the keeper could not read is named by neither.
   """
   @type reply ::
           {:placed, id :: String.t()}

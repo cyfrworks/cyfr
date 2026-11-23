@@ -324,7 +324,8 @@ defmodule Locus.DirectLauncher do
   def drop(_opts, place) when is_binary(place), do: :ok
 
   @impl Locus.Launcher
-  def assign(_opts, place, %{kind: _kind}) when is_binary(place), do: :ok
+  def assign(_opts, place, %{kind: _kind}, until) when is_binary(place) and is_integer(until),
+    do: :ok
 
   @impl Locus.Launcher
   def measure(_opts, place) when is_binary(place), do: {:error, {:refused, "unmeasured"}}
@@ -1222,7 +1223,8 @@ defmodule Locus.DirectLauncher.Runner do
   def place(id, %{kind: _kind} = whose, _opts), do: DirectLauncher.place([], id, whose, self())
 
   @impl Locus.Runtime.Keeper
-  def assign(place, %{kind: _kind}, _opts) when is_binary(place), do: :ok
+  def assign(place, %{kind: _kind}, until, _opts) when is_binary(place) and is_integer(until),
+    do: :ok
 
   @impl Locus.Runtime.Keeper
   def spawn(%{argv: argv, env: env}) do

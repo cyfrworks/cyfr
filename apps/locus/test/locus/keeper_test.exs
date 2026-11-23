@@ -17,14 +17,16 @@ defmodule Locus.KeeperTest do
   stderr apart and its exit, then its release, the last; stdin goes as
   frames of the codec's bound; `signal`, `release` with a grace and
   `pool` are the vectors' requests, byte for byte but for their own ids;
+  a spawn refused after the keeper made it is refused at once, and its
+  heir and owner hear its release once, at the keeper's `released`;
   an owner that dies has its spawn released with no grace; a request the
   keeper would refuse is refused before it is sent. A place is the
   vectors' request, answered once the keeper placed it, and refused
   without a request while the client still follows its id; one whose
   owner dies before a spawn names it is dropped, while placing too, and
   one a spawn named is the spawn's until its release; a drop frees only a
-  place no spawn named, an assign changes whose a place is, and a refused
-  spawn frees its place. A measure names a place and answers the keeper's
+  place no spawn named, an assign changes whose a place is, and a spawn
+  refused before the keeper made it frees its place. A measure names a place and answers the keeper's
   reading with whose the place is and its age, or `unmeasured` for a
   place the keeper does not hold or has not read. No credential leaves
   the client: a runner's held assign, a frame not yet whole and every
@@ -61,6 +63,9 @@ defmodule Locus.KeeperTest do
     assert :ok = Keeper.place(name, id, %{kind: kind}, self())
     id
   end
+
+  # An instant a test's assign waits until for an answer that comes at once.
+  defp soon, do: System.monotonic_time(:millisecond) + 5_000
 
   defp run(name, script, opts \\ []) do
     lines = Agent.start_link(fn -> [] end) |> elem(1)
@@ -1075,6 +1080,50 @@ defmodule Locus.KeeperTest do
       assert {:error, {:refused, "capacity"}} = spawn_live(name, "true")
     end
 
+    test "a spawn refused after the keeper made it is refused at once, and its heir and owner hear its release once, at the keeper's word",
+         %{name: name, fake: fake} do
+      tag = %{
+        ledger: make_ref(),
+        session: {make_ref(), "ss_refused"},
+        athanor: "ath_refused",
+        memory_bytes: 268_435_456,
+        home_id: nil
+      }
+
+      :ok = FakeKeeper.mode(fake, {:exec_failed, self()})
+
+      refused =
+        Keeper.spawn(name, %{
+          argv: ["/bin/sh", "-c", "exec cat"],
+          env: %{},
+          place: place!(name),
+          pool: "backends",
+          memory_bytes: 268_435_456,
+          cpu_quota: 100_000,
+          heir: {self(), tag}
+        })
+
+      assert_receive {:exec_failed, spawn_id}, 5_000
+
+      # The refusal answers the spawn; what the keeper made of it is still
+      # the keeper's, so nobody is told it is gone.
+      fenced = Keeper.fence(name, tag)
+      refute_received {Keeper, {:heir, ^tag}, :released}
+      assert {:error, {:refused, "exec_failed", %{ref: ref, spawn_id: ^spawn_id}}} = refused
+      refute_received {Keeper, ^ref, :released}
+      assert fenced == :pending
+      assert [%{"type" => "spawn"}] = requests(fake, "spawn")
+      assert requests(fake, "release") == []
+
+      :ok = FakeKeeper.released(fake, spawn_id)
+      assert_receive {Keeper, {:heir, ^tag}, :released}, 5_000
+      assert_receive {Keeper, ^ref, :released}, 5_000
+      assert Keeper.fence(name, tag) == :none
+      refute_received {Keeper, {:heir, ^tag}, :released}
+      refute_received {Keeper, ^ref, :released}
+      assert FakeKeeper.places(fake) == %{}
+    end
+
     test "a keeper that is gone answers as unavailable" do
       assert {:error, {:launcher_unavailable, :noproc}} =
                Keeper.spawn(:no_such_keeper, %{
@@ -1299,7 +1348,7 @@ defmodule Locus.KeeperTest do
       :ok = FakeKeeper.mode(fake, {:measured, %{bytes: 1_048_576, lesser: false, age_ms: 7}})
       assert {:ok, %{kind: "warm", athanor: nil, subject: nil}} = Keeper.measure(name, place)
 
-      assert :ok = Keeper.assign(name, place, %{kind: "run", athanor: assign["athanor"]})
+      assert :ok = Keeper.assign(name, place, %{kind: "run", athanor: assign["athanor"]}, soon())
 
       assert Keeper.measure(name, place) ==
                {:ok,
@@ -1320,8 +1369,9 @@ defmodule Locus.KeeperTest do
     test "an assign of a place the keeper does not hold is its refusal, and one the codec refuses is never sent",
          %{name: name, fake: fake} do
       assert %{
-               unheld: Keeper.assign(name, "pl-9", %{kind: "run"}),
-               unwritten: Keeper.assign(name, "pl-9", %{kind: "run", athanor: "family of mine"})
+               unheld: Keeper.assign(name, "pl-9", %{kind: "run"}, soon()),
+               unwritten:
+                 Keeper.assign(name, "pl-9", %{kind: "run", athanor: "family of mine"}, soon())
              } == %{
                unheld: {:error, {:refused, "bad_request"}},
                unwritten: {:error, :unencodable}

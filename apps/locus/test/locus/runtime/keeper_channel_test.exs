@@ -210,7 +210,8 @@ defmodule Locus.Runtime.KeeperChannelTest do
           attempt.assignment,
           input,
           attempt.keys,
-          "http://127.0.0.1:9"
+          "http://127.0.0.1:9",
+          System.monotonic_time(:millisecond) + 5_000
         )
       end)
 
@@ -307,7 +308,14 @@ defmodule Locus.Runtime.KeeperChannelTest do
 
     assigning =
       Task.async(fn ->
-        RunnerProcess.assign(handle, assign.assignment, "{}", keys, "http://127.0.0.1:9")
+        RunnerProcess.assign(
+          handle,
+          assign.assignment,
+          "{}",
+          keys,
+          "http://127.0.0.1:9",
+          System.monotonic_time(:millisecond) + 5_000
+        )
       end)
 
     assigned!(keeper, "run", "ath_test")

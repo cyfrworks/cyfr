@@ -34,6 +34,11 @@ defmodule Locus.Test.FakeKeeper do
     the token, reads the stdin the client sends and drops it, and sends
     the command's output. In every other mode a build's relay dials first
     and the command reads the stdin the client sends.
+  - `{:exec_failed, test}` — every spawn is refused with `exec_failed` under
+    the spawn id the fake gave it, as cyfr-locus refuses one whose command
+    it could not run after it made the spawn: the spawn's place stays the
+    spawn's, `test` is told `{:exec_failed, spawn_id}`, and its `released`
+    is reported only by `released/2`
   - `:pool_refused` — every `pool` request is refused with `unknown_pool`
   - `:home_over_cap` — every spawn is refused with `home_over_cap`, as a
     keeper refuses a kept spawn whose home holds its bound
@@ -59,7 +64,8 @@ defmodule Locus.Test.FakeKeeper do
   refused `bad_request`, a `drop` frees one no spawn named, an `assign`
   changes whose one is and is `assigned`, or refused `bad_request` for a
   place it does not hold, a spawn naming no held place or one another spawn
-  named is refused `bad_request`, a refused spawn frees its place, and a
+  named is refused `bad_request`, a spawn refused under its id alone frees
+  its place and one refused under its spawn id keeps it, and a
   `released` frees its spawn's. A `measure` is refused `unmeasured`
   outside its mode, since nothing here has a group. A
   home request acts on its path as the test's own user: `home_make` makes
@@ -170,6 +176,10 @@ defmodule Locus.Test.FakeKeeper do
 
   @doc "The spawn ids whose command the fake runs or has run, as an OS process it can signal."
   def running(fake), do: GenServer.call(fake, :running)
+
+  @doc "Reports `spawn_id` released, as cyfr-locus does once nothing of it is left, which frees its place."
+  def released(fake, spawn_id),
+    do: GenServer.call(fake, {:send, %{type: "released", spawn_id: spawn_id}})
 
   @doc "Closes the channel, as cyfr-locus exiting would."
   def close(fake), do: GenServer.call(fake, :close)
@@ -434,6 +444,13 @@ defmodule Locus.Test.FakeKeeper do
             ] do
     send(self(), {:send, %{type: "error", id: id, code: Atom.to_string(mode)}})
     %{state | places: Map.delete(state.places, request["place"])}
+  end
+
+  defp spawn_in_place(%{"id" => id, "place" => place}, %{mode: {:exec_failed, test}} = state) do
+    spawn_id = 16 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)
+    send(self(), {:send, %{type: "error", id: id, spawn_id: spawn_id, code: "exec_failed"}})
+    send(test, {:exec_failed, spawn_id})
+    %{state | places: Map.update!(state.places, place, &%{&1 | spawn: spawn_id})}
   end
 
   defp spawn_in_place(request, state) do

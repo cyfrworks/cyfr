@@ -39,7 +39,9 @@ defmodule Locus.Keeper do
   caller, which reads its frames itself. When the command's leader exits,
   or on `release`, cyfr-locus kills every process of the uid and removes
   everything the uid left, then reports `released`; `run/2` answers only
-  after that report, so no process of a build outlives the call. A
+  after that report, so no process of a build outlives the call, but for
+  a spawn cyfr-locus refuses after it made it, whose refusal `run/2`
+  answers at once while cyfr-locus still retires what it made. A
   deadline passed, a stdout bound exceeded or a cancel
   (`Locus.Executor.cancel/1`) releases the spawn with no grace. A caller
   that dies has its spawn released at once.
@@ -49,7 +51,15 @@ defmodule Locus.Keeper do
   `spawn/2` (`Locus.Launcher`) asks for a spawn in the pool its spec names,
   under the spec's `memory_bytes` and `cpu_quota`, which every spec names,
   and answers its
-  handle once cyfr-locus reports it spawned, or the refusal. The caller
+  handle once cyfr-locus reports it spawned, or the refusal. A spawn
+  refused under its id alone was never made, and is gone. One refused
+  under the spawn id cyfr-locus gave it, after it made it, is answered
+  `{:refused, code, handle}` at once and followed by that spawn id until
+  its `released`, which frees its place and is cyfr-locus's word alone:
+  its owner and its heir hear of its end only then, as of a started
+  spawn's, and no release is asked of it. A run's caller hears its
+  refusal and nothing after it; a runner's owner hears `{:refused, code}`,
+  then `:released`. The caller
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, each
   stdout and stderr frame, the leader's exit and the uid's retirement,
@@ -76,8 +86,12 @@ defmodule Locus.Keeper do
   owner, as a preparation asks for its owner's, when it ends for any
   reason but `:normal` before a spawn names the place; one that ends
   `:normal` has finished, and leaves the place to its owner. `drop/2`
-  frees a place no spawn named, `assign/3` gives one another kind, athanor
-  and subject and answers once the keeper has applied it, and a spawn
+  frees a place no spawn named, `assign/4` gives one another kind, athanor
+  and subject and answers once the keeper has applied it, or at the
+  instant its caller waits until: an assign cyfr-locus has not answered
+  by then is answered `{:launcher_unavailable, :timeout}` and forgotten,
+  its late answer ignored, and one whose instant has passed is not sent.
+  A spawn
   naming a place takes it from its owner: the keeper frees it when that
   spawn is released.
   `measure/2` answers a place's last reading as the keeper read it, whose
@@ -221,10 +235,9 @@ defmodule Locus.Keeper do
   @drain_timeout_ms 5_000
   @channel_send_timeout_ms 30_000
   @pool_timeout_ms 5_000
-  # The keeper applies an assign at once. A runner's process waits on it
-  # inside its own assign call (`Locus.Runtime.RunnerProcess`, 5 s), so the
-  # bound sits below that call's and the runner answers its caller first.
-  @assign_timeout_ms 3_000
+  # This server answers an assign by the instant its caller names; the
+  # caller waits this much past it for that answer.
+  @assign_answer_ms 500
   # A relay that stops reading must not hold this server: a write it has
   # not taken within the bound closes its connection.
   @relay_send_timeout_ms 5_000
@@ -529,11 +542,15 @@ defmodule Locus.Keeper do
   Give the place `place` `whose`'s kind, and its athanor and subject where
   it names them: `:ok` once cyfr-locus has applied it, `{:error,
   {:refused, "bad_request"}}` where it holds no such place ("Places"),
-  and `{:error, :unencodable}`, nothing sent, for one the codec refuses.
+  `{:error, {:launcher_unavailable, :timeout}}` where it has not answered
+  by `until` (monotonic milliseconds), and `{:error, :unencodable}`,
+  nothing sent, for one the codec refuses.
   """
   @impl Locus.Launcher
-  def assign(server, place, whose) when is_binary(place) and is_map(whose) do
-    GenServer.call(server, {:assign, place, whose}, @assign_timeout_ms)
+  def assign(server, place, whose, until)
+      when is_binary(place) and is_map(whose) and is_integer(until) do
+    wait = max(until - now(), 0)
+    GenServer.call(server, {:assign, place, whose, until}, wait + @assign_answer_ms)
   catch
     :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
   end
@@ -1138,8 +1155,10 @@ defmodule Locus.Keeper do
   end
 
   # An assign is the keeper's to apply, whichever process follows the
-  # place, and is answered once the keeper has applied it.
-  def handle_call({:assign, place, whose}, from, state) do
+  # place, and is answered once the keeper has applied it, or at `until`,
+  # when it is forgotten: its answer, however late, then reaches no one.
+  # One whose `until` has passed is not sent.
+  def handle_call({:assign, place, whose, until}, from, state) do
     id = "assign-" <> Integer.to_string(state.next_id + 1)
     state = %{state | next_id: state.next_id + 1}
 
@@ -1148,9 +1167,15 @@ defmodule Locus.Keeper do
       |> Map.take([:kind, :athanor, :subject])
       |> Map.merge(%{type: :assign, id: id, place: place})
 
-    case send_request(state, request) do
+    sent = if until > now(), do: send_request(state, request), else: :passed
+
+    case sent do
       :ok ->
+        Process.send_after(self(), {:assign_unanswered, id}, max(until - now(), 0))
         {:noreply, %{state | assigns: Map.put(state.assigns, id, from)}}
+
+      :passed ->
+        {:reply, {:error, {:launcher_unavailable, :timeout}}, state}
 
       {:error, :unencodable} ->
         {:reply, {:error, :unencodable}, state}
@@ -1349,6 +1374,9 @@ defmodule Locus.Keeper do
       _ -> {:noreply, state}
     end
   end
+
+  def handle_info({:assign_unanswered, id}, state),
+    do: {:noreply, assigned(state, id, {:error, {:launcher_unavailable, :timeout}})}
 
   def handle_info({:DOWN, monitor, :process, _pid, reason}, state) do
     case Enum.find(state.requests, fn {_ref, entry} -> entry.monitor == monitor end) do
@@ -1863,12 +1891,15 @@ defmodule Locus.Keeper do
        when is_binary(id) and is_map_key(state.homes, id),
        do: home_reply(state, id, {:refused, code})
 
-  defp on_reply({:error, id, _spawn_id, code}, state) when is_binary(id) do
+  defp on_reply({:error, id, spawn_id, code}, state) when is_binary(id) do
     case Map.pop(state.pools, id) do
       {nil, _pools} ->
         with_request(state, state.ids[id], fn ref, entry ->
-          refused(entry, ref, code)
-          forget_request(state, ref)
+          refused(entry, ref, code, spawn_id && handle(ref, spawn_id, nil, nil))
+
+          if spawn_id,
+            do: made_refused(state, ref, entry, spawn_id),
+            else: forget_request(state, ref)
         end)
 
       {from, pools} ->
@@ -1932,14 +1963,32 @@ defmodule Locus.Keeper do
     entry
   end
 
-  defp refused(%{kind: :run} = entry, ref, code), do: notify(entry, ref, {:error, code})
+  # A long-lived spawn's caller is answered the handle its release follows
+  # on where cyfr-locus made the spawn before refusing it.
+  defp refused(%{kind: :run} = entry, ref, code, _made),
+    do: notify(entry, ref, {:error, code})
 
-  defp refused(%{kind: :handle, from: from}, _ref, code) when from != nil,
+  defp refused(%{kind: :handle, from: from}, _ref, code, nil) when from != nil,
     do: GenServer.reply(from, {:error, {:refused, code}})
 
-  defp refused(%{kind: :control} = entry, ref, code), do: notify(entry, ref, {:refused, code})
+  defp refused(%{kind: :handle, from: from}, _ref, code, made) when from != nil,
+    do: GenServer.reply(from, {:error, {:refused, code, made}})
 
-  defp refused(_entry, _ref, _code), do: :ok
+  defp refused(%{kind: :control} = entry, ref, code, _made),
+    do: notify(entry, ref, {:refused, code})
+
+  defp refused(_entry, _ref, _code, _made), do: :ok
+
+  # A spawn cyfr-locus refused after it made it is cyfr-locus's until its
+  # `released`: it is followed by its spawn id until then, with nothing
+  # asked of it, since cyfr-locus is retiring it already and an
+  # `unknown_spawn` answer to a request naming it reads as its release. A
+  # run's caller was done with it at the refusal.
+  defp made_refused(state, ref, entry, spawn_id) do
+    owner = if entry.kind == :run, do: nil, else: entry.owner
+    entry = %{entry | spawn_id: spawn_id, from: nil, owner: owner, release_sent: true}
+    %{put_entry(state, ref, entry) | spawns: Map.put(state.spawns, spawn_id, ref)}
+  end
 
   defp exited(%{kind: :run}, exit, memory), do: {:exited, exit, memory}
 
@@ -2288,7 +2337,8 @@ defmodule Locus.Keeper do
   defp tell_heir(_entry), do: :ok
 
   # An entry leaves for good only once nothing of its spawn is left (its
-  # retirement reported, or its spawn refused), so its heir hears so here.
+  # retirement reported, or its spawn refused before cyfr-locus made it),
+  # so its heir hears so here.
   defp forget_request(state, ref) do
     {entry, requests} = Map.pop(state.requests, ref)
     tell_heir(entry)

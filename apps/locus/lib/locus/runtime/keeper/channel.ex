@@ -122,9 +122,9 @@ defmodule Locus.Runtime.Keeper.Channel do
   end
 
   @impl Locus.Runtime.Keeper
-  def assign(place, whose, opts) when is_list(opts) do
+  def assign(place, whose, until, opts) when is_integer(until) and is_list(opts) do
     with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
-         :ok <- Locus.Keeper.assign(client, place, whose) do
+         :ok <- Locus.Keeper.assign(client, place, whose, until) do
       :ok
     else
       {:error, reason} -> {:error, failure(reason)}

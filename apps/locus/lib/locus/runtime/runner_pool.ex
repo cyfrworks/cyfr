@@ -26,7 +26,9 @@ defmodule Locus.Runtime.RunnerPool do
   `{:exit, runner_id, open}` or `{:gone, reason}` (its channel closed, its
   process exited or its keeper failed with the subtree still assigned).
   The pool moves the runner itself: a clean completion to idle, anything
-  else to tainted, released through the keeper at once; `taint/3` does
+  else to tainted, released through the keeper at once, a clean
+  completion whose place its keeper did not make warm again among them,
+  in the same move as its completion is heard; `taint/3` does
   the same for a kill, with the grace the runner is given to report.
   `cancel_child/3` sends one busy runner a `cancel_child`, and
   `cancel_child/2` every busy runner; one that does not run the child
@@ -350,6 +352,15 @@ defmodule Locus.Runtime.RunnerPool do
       true ->
         taint(state, pid, entry, 0)
     end
+  end
+
+  # A clean completion whose place its keeper did not make warm again: the
+  # completion is heard as it was, and the runner ends in the same move,
+  # never offered.
+  defp on_event({:message, %{type: :complete} = message, {:error, reason}}, pid, entry, state) do
+    Logger.warning("[Locus.Runtime.RunnerPool] runner #{entry.id}: #{inspect(reason)}")
+    state = told(state, pid, entry, {:complete, message.execution_id, message.clean})
+    gone(state, pid, state.runners[pid], reason)
   end
 
   # A child the runner started for the subtree it runs: its assignee

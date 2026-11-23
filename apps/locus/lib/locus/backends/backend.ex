@@ -30,9 +30,13 @@ defmodule Locus.Backends.Backend do
   launcher tells the leader's exit: before `:vacated`, and after a close
   was asked as before one, so a close that answered at once loses no cause.
   Once nothing of its process is left (the launcher's `:released`, or
-  its refusal of the spawn), `:vacated`, after which it holds no uid. A
-  spawn the launcher did not answer (`launcher_unavailable`) is
-  `:unconfirmed` instead: it may yet run, and only the launcher can say.
+  its refusal of a spawn it made nothing of), `:vacated`, after which it
+  holds no uid. A spawn the launcher refused after making something of it
+  (`{:refused, code, handle}`) ends the session refused at once and is
+  vacated at the launcher's `:released` on that handle, as a started one
+  is: the refusal is not a release. A spawn the launcher did not answer
+  (`launcher_unavailable`) is `:unconfirmed` instead: it may yet run, and
+  only the launcher can say.
 
   `close/1`, `retire_if_idle/2` (no message within the idle period),
   `end_session/2` (its owners ending it: the cap of its home, its home's
@@ -315,6 +319,13 @@ defmodule Locus.Backends.Backend do
         notify(state, :unconfirmed)
         {:noreply, reply_stoppers(state)}
 
+      # Refused after the launcher made something of it: that is the
+      # launcher's until it says it is gone, on the handle, as a started
+      # process's release is said.
+      {:error, {:refused, _code, handle} = reason} ->
+        refused = %{crash: true, error: "spawn refused: #{refusal(reason)}"}
+        {:noreply, ended(%{state | handle: handle}, refused)}
+
       {:error, reason} ->
         state = %{state | released: true}
         state = ended(state, %{crash: true, error: "spawn refused: #{refusal(reason)}"})
@@ -443,6 +454,7 @@ defmodule Locus.Backends.Backend do
   defp spelled(value), do: to_string(value)
 
   defp refusal({:refused, code}) when is_binary(code), do: code
+  defp refusal({:refused, code, _handle}) when is_binary(code), do: code
   defp refusal({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
   defp refusal(kind) when is_atom(kind), do: Atom.to_string(kind)
   defp refusal(_reason), do: "spawn_failed"

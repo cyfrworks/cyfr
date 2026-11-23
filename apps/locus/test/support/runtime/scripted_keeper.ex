@@ -28,7 +28,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   It keeps places as cyfr-locus does (`Prima.KeeperProtocol`, "Places"),
   named by the keeper options' `:name` (options that name no keeper keep
   none, as a test that reads no places starts a runner with none):
-  `place/3` makes one for the calling process, `assign/3` changes whose it
+  `place/3` makes one for the calling process, `assign/4` changes whose it
   is and answers once it has, refused `bad_request` for a place it does
   not hold, one whose owner dies before a spawn named it is dropped, a
   refused spawn frees the place it named, and a runner's release frees its
@@ -36,7 +36,10 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   its id: whose it is and whether a spawn named it. `assigning/2` holds
   every assign from then on, unapplied and unanswered, until
   `answer_assigns/1` applies and answers them, or refuses every one with
-  a reason, applying none; `held_assigns/1` lists those held.
+  a reason, applying none; `held_assigns/1` lists those held. A held
+  assign whose caller's `until` passes is answered `{:error,
+  {:keeper_unavailable, :timeout}}`, as the keeper's client answers one
+  cyfr-locus left unanswered, and is held no more.
 
   Each runner has a relay stream too: `read_relay/1` answers what the
   service wrote on it and `write_relay/2` makes the runner write on it;
@@ -85,9 +88,11 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   end
 
   @impl Locus.Runtime.Keeper
-  def assign(place, %{kind: _kind} = whose, opts) do
+  def assign(place, %{kind: _kind} = whose, until, opts) when is_integer(until) do
+    wait = max(until - System.monotonic_time(:millisecond), 0)
+
     case Keyword.fetch(opts, :name) do
-      {:ok, keeper} -> GenServer.call(keeper, {:assign, place, whose})
+      {:ok, keeper} -> GenServer.call(keeper, {:assign, place, whose, until}, wait + 5_000)
       :error -> :ok
     end
   end
@@ -346,13 +351,20 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
 
   def handle_call(:places, _from, state), do: {:reply, state.places, state}
 
-  def handle_call({:assign, place, whose}, from, %{assigning: :held} = state),
-    do: {:noreply, %{state | held: state.held ++ [{from, place, whose}]}}
+  def handle_call({:assign, place, whose, until}, from, %{assigning: :held} = state) do
+    wait = max(until - System.monotonic_time(:millisecond), 0)
+    Process.send_after(self(), {:unanswered, from}, wait)
+    {:noreply, %{state | held: state.held ++ [{from, place, whose}]}}
+  end
 
-  def handle_call({:assign, _place, _whose}, _from, %{assigning: {:refused, reason}} = state),
-    do: {:reply, {:error, reason}, state}
+  def handle_call(
+        {:assign, _place, _whose, _until},
+        _from,
+        %{assigning: {:refused, reason}} = state
+      ),
+      do: {:reply, {:error, reason}, state}
 
-  def handle_call({:assign, place, whose}, _from, state) do
+  def handle_call({:assign, place, whose, _until}, _from, state) do
     {answer, state} = assigned(state, place, whose)
     {:reply, answer, state}
   end
@@ -436,6 +448,20 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       Map.reject(state.places, fn {_id, place} -> place.owner == monitor and not place.spawned end)
 
     {:noreply, %{state | places: places}}
+  end
+
+  # A held assign whose wait has ended is answered so, as the keeper's
+  # client answers one cyfr-locus left unanswered, and is held no more:
+  # its answer, given later, reaches no one.
+  def handle_info({:unanswered, from}, state) do
+    case List.keytake(state.held, from, 0) do
+      {_held, held} ->
+        GenServer.reply(from, {:error, {:keeper_unavailable, :timeout}})
+        {:noreply, %{state | held: held}}
+
+      nil ->
+        {:noreply, state}
+    end
   end
 
   # An assign of a place held changes whose it is; cyfr-locus refuses one

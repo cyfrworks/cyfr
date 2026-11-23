@@ -1562,8 +1562,8 @@ defmodule Locus.Backends.Owners do
     if ended.crash, do: crashed(state, owner, session, ended.error), else: state
   end
 
-  # The launcher, through the session: its spawn refused, or nothing of its
-  # process left.
+  # The launcher, through the session: its spawn refused with nothing of
+  # it made, or nothing of its process left.
   defp session_event(state, owner, session_id, _session, :vacated),
     do: reservation(state, {owner.id, session_id}, :confirmed)
 

@@ -422,7 +422,14 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
           assigning =
             Task.async(fn ->
-              RunnerProcess.assign(pid, attempt.assignment, "{}", keys, "http://127.0.0.1:9")
+              RunnerProcess.assign(
+                pid,
+                attempt.assignment,
+                "{}",
+                keys,
+                "http://127.0.0.1:9",
+                System.monotonic_time(:millisecond) + 5_000
+              )
             end)
 
           {one, rest} = request(keeper)

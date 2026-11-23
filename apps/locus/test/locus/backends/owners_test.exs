@@ -12,7 +12,8 @@ defmodule Locus.Backends.OwnersTest do
   command's own; a crash's backoff and a program failed until a new
   version; the bound on sessions, the oldest ended one forgotten; the
   memory the box and each athanor admit, reserved before an open's
-  preparation and released once a session's process is gone; idleness
+  preparation and released once a session's process is gone, a spawn the
+  keeper refused after making it among them, at the keeper's release; idleness
   and leases through a driven sweep; kept homes shared by the sessions of
   one entry, held to their bound, reset and retired; renew, release,
   reconcile and status. Sessions run through the test environment's
@@ -1505,6 +1506,32 @@ defmodule Locus.Backends.OwnersTest do
 
       # The keeper's word, to the spawn's heir, frees it.
       wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
+    end
+
+    @tag timeout: 30_000
+    test "a session whose spawn is refused after the keeper made it keeps its reservation until the keeper's release",
+         ctx do
+      %{name: client, fake: fake} = Locus.Test.FakeKeeper.start_client!()
+
+      owners =
+        start_owners(ctx,
+          memory_budget: 268_435_456,
+          session_opts: [launcher: Locus.Keeper, launcher_server: client]
+        )
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      :ok = Locus.Test.FakeKeeper.mode(fake, {:exec_failed, self()})
+
+      # The refusal answers the open; what the keeper made is still its own.
+      assert {:error, :unavailable} = open(owners, "a", {1, 1}, "b1")
+      assert_receive {:exec_failed, spawn_id}, 5_000
+      assert held_bytes(owners) == 268_435_456
+      assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "two")
+
+      :ok = Locus.Test.FakeKeeper.mode(fake, :normal)
+      :ok = Locus.Test.FakeKeeper.released(fake, spawn_id)
+      wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
+      assert {:ok, _} = open(owners, "a", {1, 1}, "b1", key: "two")
     end
 
     test "a session's bound is released once its process is confirmed gone, not when it is asked to end",
