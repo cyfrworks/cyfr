@@ -15,7 +15,8 @@ defmodule Locus.Backends.ServiceTest do
   the body, a message of one mode to a session of the other refused, and,
   through the test environment's `Locus.DirectLauncher`, a
   session end to end: lines sent and received, the owner's secrets masked
-  in every line, a recv replayed by its `after`; and the close route: no
+  in every line, a recv replayed by its `after`, and the bytes an answer
+  carries held in the answering count until it is written; and the close route: no
   success before the release, whoever follows the session or owns its row
   by then, nothing of another version's, row's or athanor's ended, and a
   place kept held past the bound.
@@ -49,6 +50,9 @@ defmodule Locus.Backends.ServiceTest do
   # opens.
   @roomy_budget Jason.decode!(@vectors["hello"]["answer"])["memory"]["budget_bytes"]
   @owners Module.concat(__MODULE__, Table)
+  # The backends role's count, of this suite's own, for a test whose
+  # sessions name it.
+  @output Module.concat(__MODULE__, Output)
 
   defmodule Launcher do
     @moduledoc false
@@ -115,6 +119,7 @@ defmodule Locus.Backends.ServiceTest do
         id: :launcher
       )
 
+    start_supervised!({Locus.Output, name: @output, bounds: Locus.Output.bounds().backends})
     clock = start_supervised!({Agent, fn -> 1_000_000 end}, id: :clock)
     now = start_supervised!({Agent, fn -> @instant end}, id: :now)
     supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one}, id: :backends)
@@ -897,6 +902,37 @@ defmodule Locus.Backends.ServiceTest do
 
       sent = invoke(ctx, %{type: :send, session: session, lines: ["late"]})
       assert {:ok, %{status: :ended}} = LB.read_session_answer(:send, sent.body)
+    end
+
+    @tag launcher: :direct
+    @tag session_opts: [output: @output]
+    test "a recv's answer holds its bytes in the answering count until it is written, then gives them back",
+         ctx do
+      fetch_sync(ctx)
+      opened = invoke(ctx, open_message())
+      assert {:ok, %{session: session}} = LB.read_session_answer(:open, opened.body)
+      sent = invoke(ctx, %{type: :send, session: session, lines: ["hello"]})
+      assert {:ok, %{status: :running}} = LB.read_session_answer(:send, sent.body)
+
+      wait_until(
+        fn -> Locus.Output.held(@output).unread > 0 end,
+        5_000,
+        "the line to be buffered"
+      )
+
+      answer = invoke(ctx, %{type: :recv, session: session, after: 0, max_wait_ms: 0})
+      assert {:ok, %{lines: [%{text: "hello"}]}} = LB.read_session_answer(:recv, answer.body)
+      assert Locus.Output.held(@output).answering_peak == byte_size(~s("hello")) + 32
+
+      # The connection stays open, and with it the process that wrote the
+      # answer: only its return gives the bytes back.
+      wait_until(
+        fn -> Locus.Output.held(@output).answering == 0 end,
+        5_000,
+        "the written answer's grant to be returned"
+      )
+
+      :gen_tcp.close(answer.socket)
     end
 
     @tag launcher: :direct

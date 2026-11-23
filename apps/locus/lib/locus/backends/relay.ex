@@ -9,8 +9,10 @@ defmodule Locus.Backends.Relay do
   owner's.
 
   A relay of mode `:run` buffers lines. Stdout is split on newlines, a
-  line's trailing carriage return is dropped, and its bytes that are not
-  UTF-8 are replaced, so every line is text.
+  line's trailing carriage return is dropped, its bytes that are not
+  UTF-8 are replaced, so every line is text, and it is masked with the
+  relay's `:secrets` as `Prima.LocusBackends.mask/2` masks, so what is
+  buffered is what is answered.
   A line, or the part of one that has no newline yet, longer than
   `Prima.LocusBackends.max_line_bytes/0` is `:line_too_long`, and the
   session's process is killed for it. `flush/1` makes the part with no
@@ -23,13 +25,20 @@ defmodule Locus.Backends.Relay do
   Each line or chunk is numbered from 1. The buffer keeps one until
   `take/3` names an `after` at or above its number, and holds at most
   `Prima.LocusBackends.max_buffer_bytes/0` bytes of them, each charged its
-  bytes and `line_charge_bytes/0` of framing, and at most
+  bytes and `line_charge_bytes/0` of framing (`bytes`), and at most
   `max_buffer_lines/0` of them: past either the oldest are dropped and
-  counted, so empty lines cannot grow it without end. `take/3` answers
-  those past `after` that fit its byte budget (one at least) and how many
-  between `after` and the first it answers were dropped; asked twice with
-  the same `after`, it answers the same ones, so a lost answer is
-  replayed.
+  counted, so empty lines cannot grow it without end. `drop_to/2` drops
+  the oldest alike, counted, for a bound beyond the relay's own.
+
+  Each line or chunk also costs an answer what it is encoded as there: a
+  line its text as JSON escapes it, a chunk its bytes in base64, and 32
+  bytes for its number and the members around them, reckoned once, as it
+  is buffered. `cost/3` is what an answer past `after` within a budget
+  costs, the first counted whatever it costs, so that budget can be asked
+  for before anything is taken; `take/3` answers those past `after` that
+  fit its budget, never more, and how many between `after` and the first
+  past it were dropped. Asked twice with the same `after`, it answers the
+  same ones, so a lost answer is replayed.
 
   Stderr is never parsed: the last `Prima.LocusBackends.stderr_tail_bytes/0`
   bytes are what a status reports for a scratch program, and
@@ -43,6 +52,7 @@ defmodule Locus.Backends.Relay do
   # `lines` is made by `new/1`: a queue is opaque, so no struct literal
   # holds one.
   defstruct mode: :run,
+            secrets: [],
             partial: "",
             lines: nil,
             count: 0,
@@ -60,8 +70,9 @@ defmodule Locus.Backends.Relay do
 
   @type t :: %__MODULE__{
           mode: :run | :terminal,
+          secrets: [String.t()],
           partial: binary(),
-          lines: :queue.queue({pos_integer(), binary()}),
+          lines: :queue.queue({pos_integer(), binary(), pos_integer()}),
           count: non_neg_integer(),
           bytes: non_neg_integer(),
           next_seq: pos_integer(),
@@ -82,10 +93,10 @@ defmodule Locus.Backends.Relay do
 
   @doc """
   A relay with no bytes seen, of `:mode` `:run` (the default) or
-  `:terminal`. Other options, each defaulting to
-  `Prima.LocusBackends`' bound of the same name: `:max_line_bytes`,
-  `:max_buffer_bytes`, `:max_buffer_lines`, `:line_charge_bytes`,
-  `:stderr_tail_bytes`, `:stderr_tail_slack_bytes`.
+  `:terminal`, masking a run's lines with `:secrets` (none). Other
+  options, each defaulting to `Prima.LocusBackends`' bound of the same
+  name: `:max_line_bytes`, `:max_buffer_bytes`, `:max_buffer_lines`,
+  `:line_charge_bytes`, `:stderr_tail_bytes`, `:stderr_tail_slack_bytes`.
   """
   @spec new(keyword() | map()) :: t()
   def new(opts \\ []) do
@@ -93,6 +104,7 @@ defmodule Locus.Backends.Relay do
 
     %__MODULE__{
       mode: Map.get(opts, :mode, :run),
+      secrets: Map.get(opts, :secrets, []),
       lines: :queue.new(),
       max_line_bytes: Map.get(opts, :max_line_bytes, LocusBackends.max_line_bytes()),
       max_buffer_bytes: Map.get(opts, :max_buffer_bytes, LocusBackends.max_buffer_bytes()),
@@ -142,17 +154,24 @@ defmodule Locus.Backends.Relay do
     end
   end
 
-  defp push(relay, raw),
-    do: append(relay, raw |> String.trim_trailing("\r") |> String.replace_invalid())
+  defp push(relay, raw) do
+    text =
+      raw
+      |> String.trim_trailing("\r")
+      |> String.replace_invalid()
+      |> LocusBackends.mask(relay.secrets)
 
-  defp append(relay, text) do
+    append(relay, text)
+  end
+
+  defp append(relay, data) do
     seq = relay.next_seq
 
     %{
       relay
-      | lines: :queue.in({seq, text}, relay.lines),
+      | lines: :queue.in({seq, data, entry_cost(relay.mode, data)}, relay.lines),
         count: relay.count + 1,
-        bytes: relay.bytes + charge(relay, text),
+        bytes: relay.bytes + charge(relay, data),
         next_seq: seq + 1
     }
     |> bound()
@@ -166,16 +185,26 @@ defmodule Locus.Backends.Relay do
        when bytes <= relay.max_buffer_bytes and count <= relay.max_buffer_lines,
        do: relay
 
-  defp bound(relay) do
-    {{:value, {_seq, text}}, lines} = :queue.out(relay.lines)
+  defp bound(relay), do: relay |> drop_oldest() |> bound()
 
-    bound(%{
+  @doc """
+  The oldest lines or chunks dropped, each counted as the buffer's own
+  bound counts it, until the buffer holds at most `bytes`.
+  """
+  @spec drop_to(t(), non_neg_integer()) :: t()
+  def drop_to(%__MODULE__{bytes: held} = relay, bytes) when held <= bytes, do: relay
+  def drop_to(%__MODULE__{} = relay, bytes), do: relay |> drop_oldest() |> drop_to(bytes)
+
+  defp drop_oldest(relay) do
+    {{:value, {_seq, data, _cost}}, lines} = :queue.out(relay.lines)
+
+    %{
       relay
       | lines: lines,
         count: relay.count - 1,
-        bytes: relay.bytes - charge(relay, text),
+        bytes: relay.bytes - charge(relay, data),
         dropped: relay.dropped + 1
-    })
+    }
   end
 
   @doc "How many lines the buffer dropped for its bound."
@@ -186,25 +215,47 @@ defmodule Locus.Backends.Relay do
   @spec past?(t(), non_neg_integer()) :: boolean()
   def past?(%__MODULE__{} = relay, after_seq) do
     case :queue.peek_r(relay.lines) do
-      {:value, {seq, _text}} -> seq > after_seq
+      {:value, {seq, _data, _cost}} -> seq > after_seq
       :empty -> false
     end
   end
 
   @doc """
-  Every line or chunk at or below `after` let go, then those past it that
-  fit `budget` bytes of an answer (the first always), each `%{seq, text}`
-  of a run or `%{seq, bytes}` of a terminal, and how many between `after`
-  and the first of them were dropped.
+  What an answer of the lines or chunks past `after` costs: as many as
+  fit `budget`, the first whatever it costs, which `take/3` given that
+  cost answers exactly. 0 when none is past `after`. Nothing is taken,
+  let go or copied.
   """
-  @spec take(t(), non_neg_integer(), pos_integer()) ::
+  @spec cost(t(), non_neg_integer(), non_neg_integer()) :: non_neg_integer()
+  def cost(%__MODULE__{} = relay, after_seq, budget) do
+    relay.lines
+    |> :queue.to_list()
+    |> Enum.drop_while(fn {seq, _data, _cost} -> seq <= after_seq end)
+    |> fit(budget, 0)
+  end
+
+  defp fit([], _budget, total), do: total
+
+  defp fit([{_seq, _data, cost} | rest], budget, total) do
+    if total > 0 and total + cost > budget,
+      do: total,
+      else: fit(rest, budget, total + cost)
+  end
+
+  @doc """
+  Every line or chunk at or below `after` let go, then those past it whose
+  cost together fits `budget` bytes of an answer, none past it, each
+  `%{seq, text}` of a run or `%{seq, bytes}` of a terminal, and how many
+  between `after` and the first past it were dropped.
+  """
+  @spec take(t(), non_neg_integer(), non_neg_integer()) ::
           {[LocusBackends.line() | LocusBackends.chunk()], non_neg_integer(), t()}
   def take(%__MODULE__{} = relay, after_seq, budget) do
     relay = acknowledge(relay, after_seq)
 
     first =
       case :queue.peek(relay.lines) do
-        {:value, {seq, _text}} -> seq
+        {:value, {seq, _data, _cost}} -> seq
         :empty -> relay.next_seq
       end
 
@@ -214,12 +265,12 @@ defmodule Locus.Backends.Relay do
 
   defp acknowledge(relay, after_seq) do
     case :queue.peek(relay.lines) do
-      {:value, {seq, text}} when seq <= after_seq ->
+      {:value, {seq, data, _cost}} when seq <= after_seq ->
         relay
         |> Map.merge(%{
           lines: :queue.drop(relay.lines),
           count: relay.count - 1,
-          bytes: relay.bytes - charge(relay, text)
+          bytes: relay.bytes - charge(relay, data)
         })
         |> acknowledge(after_seq)
 
@@ -230,18 +281,27 @@ defmodule Locus.Backends.Relay do
 
   defp collect(_mode, [], _budget, taken), do: Enum.reverse(taken)
 
-  defp collect(mode, [{seq, data} | rest], budget, taken) do
-    cost = encoded_bytes(mode, data) + @line_overhead
-
-    if taken != [] and cost > budget,
+  defp collect(mode, [{seq, data, cost} | rest], budget, taken) do
+    if cost > budget,
       do: Enum.reverse(taken),
       else: collect(mode, rest, budget - cost, [entry(mode, seq, data) | taken])
   end
 
   # What an entry costs an answer: a line as JSON escapes it, a chunk in
-  # base64.
-  defp encoded_bytes(:run, text), do: byte_size(Jason.encode!(text))
-  defp encoded_bytes(:terminal, bytes), do: div(byte_size(bytes) + 2, 3) * 4
+  # base64, and its share beside them.
+  defp entry_cost(:run, text), do: json_bytes(text, 2) + @line_overhead
+  defp entry_cost(:terminal, bytes), do: div(byte_size(bytes) + 2, 3) * 4 + @line_overhead
+
+  # A string's bytes as JSON writes it, quoted (Jason's `escape: :json`):
+  # a quote, a backslash and the control bytes with a short escape take
+  # two, every other byte below 0x20 six (`\u00XX`), any other byte one.
+  # Read a byte at a time, so nothing of the text is copied.
+  defp json_bytes(<<byte, rest::binary>>, n) when byte in ~c"\"\\\b\t\n\f\r",
+    do: json_bytes(rest, n + 2)
+
+  defp json_bytes(<<byte, rest::binary>>, n) when byte < 0x20, do: json_bytes(rest, n + 6)
+  defp json_bytes(<<_byte, rest::binary>>, n), do: json_bytes(rest, n + 1)
+  defp json_bytes(<<>>, n), do: n
 
   defp entry(:run, seq, text), do: %{seq: seq, text: text}
   defp entry(:terminal, seq, bytes), do: %{seq: seq, bytes: bytes}

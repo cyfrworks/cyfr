@@ -7,10 +7,13 @@ defmodule Locus.Backends.RelayTest do
   the chunks, a trailing carriage return dropped and bytes that are not
   UTF-8 replaced; a line past its bound refused; a partial line flushed as
   a line of its own; a terminal's output buffered as chunks of its bytes
-  as they are, cut at the chunk bound; lines let go only once a take names an `after` at or
+  as they are, cut at the chunk bound; a run's lines masked as they are
+  buffered; lines let go only once a take names an `after` at or
   above them, so a take repeated answers the same lines; the buffer's
-  bound dropping the oldest lines and a take counting them; a take's byte
-  budget; the stderr tail masked and cut.
+  bound, and a drop to a holding, dropping the oldest lines and a take
+  counting them; a take's byte budget, never passed, and the cost of what
+  it would answer, which is what an answer encodes; the stderr tail masked
+  and cut.
   """
   use ExUnit.Case, async: true
 
@@ -105,12 +108,54 @@ defmodule Locus.Backends.RelayTest do
     assert by_bytes.bytes <= 32 * 100
   end
 
-  test "a take answers what fits its budget, and one line at least" do
+  test "a take answers what fits its budget and never more; the cost asked for counts one line at least" do
     {:ok, relay} = Relay.stdout(Relay.new(), "aaaa\nbbbb\n")
-    {one, 0, relay} = Relay.take(relay, 0, 1)
-    assert texts(one) == ["aaaa"]
+    one = Relay.cost(relay, 0, 1)
+    assert one == byte_size(Jason.encode!("aaaa")) + 32
+    assert {[], 0, relay} = Relay.take(relay, 0, one - 1)
+    {first, 0, relay} = Relay.take(relay, 0, one)
+    assert texts(first) == ["aaaa"]
     {both, 0, _relay} = Relay.take(relay, 0, 1_000)
     assert texts(both) == ["aaaa", "bbbb"]
+  end
+
+  test "the cost of what a take answers is what an answer encodes it as, past its after" do
+    written = [~s(quote " and \\ back), <<1, 2, 0x1F, ?\t, ?\r, ?\b, ?\f>>, "é€😀", "plain", ""]
+    {:ok, relay} = Relay.stdout(Relay.new(), Enum.map_join(written, &(&1 <> "\n")))
+    encoded = Enum.map(written, &(byte_size(Jason.encode!(&1)) + 32))
+
+    assert Relay.cost(relay, 0, 1_000_000) == Enum.sum(encoded)
+    assert Relay.cost(relay, 2, 1_000_000) == encoded |> Enum.drop(2) |> Enum.sum()
+    assert Relay.cost(relay, length(written), 1_000_000) == 0
+    assert {lines, 0, _relay} = Relay.take(relay, 0, Relay.cost(relay, 0, 1_000_000))
+    assert texts(lines) == written
+
+    chunk = <<0xFF, 0, ?a>> <> :binary.copy("b", 100)
+    terminal = Relay.output(Relay.new(mode: :terminal), chunk)
+    assert Relay.cost(terminal, 0, 1_000_000) == byte_size(Base.encode64(chunk)) + 32
+  end
+
+  test "a drop to a holding lets the oldest lines go until it holds at most that, counted as the bound counts them" do
+    {:ok, relay} = Relay.stdout(Relay.new(line_charge_bytes: 1), "aa\nbb\ncc\n")
+    assert relay.bytes == 9
+
+    relay = Relay.drop_to(relay, 7)
+    assert {relay.bytes, Relay.dropped(relay)} == {6, 1}
+    assert Relay.drop_to(relay, 6) == relay
+    {lines, dropped, _relay} = Relay.take(relay, 0, 1_000)
+    assert {texts(lines), dropped} == {["bb", "cc"], 1}
+
+    emptied = Relay.drop_to(relay, 0)
+    assert {emptied.bytes, Relay.dropped(emptied)} == {0, 3}
+    assert {[], 3, _relay} = Relay.take(emptied, 0, 1_000)
+    assert {[], 1, _relay} = Relay.take(emptied, 2, 1_000)
+  end
+
+  test "a run's lines are masked as they are buffered, and charged as masked" do
+    relay = Relay.new(secrets: ["secret-123456"], line_charge_bytes: 0)
+    {:ok, relay} = Relay.stdout(relay, "token secret-123456\n")
+    assert {[%{text: "token [REDACTED]"}], 0, relay} = Relay.take(relay, 0, 1_000)
+    assert relay.bytes == byte_size("token [REDACTED]")
   end
 
   test "every byte of stderr is counted, beyond the tail kept" do
