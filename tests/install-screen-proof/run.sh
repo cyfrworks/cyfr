@@ -913,8 +913,11 @@ screen_keeps_no_session() {
   screen_unlock
   check "the screen sends CYFR that unlock's session cookie" screen_cookie kept
   check "the home serves it" cookie_is in kept
-  check "no file of the screen's account holds that cookie" guest_ssh 'v=$(sed -n "s/^Cookie: [^=]*=//p" ~/proof-cookies/kept.header) &&
-    [ -n "$v" ] && [ -z "$(grep -rlsF -- "$v" ~/.config ~/.cache ~/.local ~/.cyfr ~/cyfr/.cyfr /tmp /var/tmp)" ]'
+  # Read each 5 s for 45 s: a store on disk may take a cookie some
+  # seconds after the page was sent it, as a browser's cookie store
+  # writes in batches.
+  check "no file of the screen's account holds that cookie, read for 45 s" guest_ssh 'v=$(sed -n "s/^Cookie: [^=]*=//p" ~/proof-cookies/kept.header) && [ -n "$v" ] &&
+    for n in $(seq 1 9); do [ -z "$(grep -rlsF -- "$v" ~/.config ~/.cache ~/.local ~/.cyfr ~/cyfr/.cyfr /tmp /var/tmp)" ] || exit 1; sleep 5; done'
   guest_reboot
   screen_back
   shell_page rebooted
