@@ -611,9 +611,11 @@ screen_confirms() {
   # search, which does.
   guest_chord ctrl shift k || fail "QMP did not send the keys"
   sleep 3
+  # Its search, typed into, lists the page first, and Enter opens it.
   printf 'API keys' | guest_keys || fail "QMP did not type"
   sleep 3
-  screen_press 'API Keys' || fail "the screen did not press API Keys ($GUEST_DIR/screen-press.txt)"
+  check "the search lists the API Keys page" screen_shows PAGE 10
+  printf '\n' | guest_keys || fail "QMP did not press Enter"
   sleep 8
   check "screenshot screen-api-keys.png" guest_screenshot screen-api-keys.png
   # Create Key opens the form; Tab reaches its name, and Enter there
