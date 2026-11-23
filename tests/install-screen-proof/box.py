@@ -48,6 +48,12 @@
 #       prints, as JSON, each athanor of CYFR's SQLite database DATABASE
 #       with how its fill ended: when it was provisioned, or the failure
 #       recorded on it
+#   box.py stored DIR
+#       prints how many rows of CYFR's session cookie (by its name, never
+#       its value) the cookie stores (files named Cookies) under DIR hold,
+#       each read from a copy, as its engine may hold it open: the engine
+#       keeps a cookie's value encrypted there, so no search for the value
+#       finds it
 import hashlib
 import json
 import os
@@ -237,6 +243,21 @@ def athanors(database):
     return [{"id": i, "provisioned_at": at, "provisioning_failure": failure} for i, at, failure in rows]
 
 
+def stored(folder):
+    import shutil
+    import tempfile
+    count = 0
+    for root, _, files in os.walk(folder):
+        if "Cookies" in files:
+            with tempfile.TemporaryDirectory() as d:
+                copy = os.path.join(d, "Cookies")
+                shutil.copyfile(os.path.join(root, "Cookies"), copy)
+                db = sqlite3.connect(copy)
+                count += db.execute("SELECT count(*) FROM cookies WHERE name = ?", (COOKIE,)).fetchone()[0]
+                db.close()
+    return count
+
+
 def main(argv):
     if len(argv) == 3 and argv[1] == "observe":
         observe(argv[2])
@@ -262,10 +283,12 @@ def main(argv):
         print(json.dumps(confirmation(argv[2], argv[3])))
     elif len(argv) == 3 and argv[1] == "athanors":
         print(json.dumps(athanors(argv[2])))
+    elif len(argv) == 3 and argv[1] == "stored":
+        print(stored(argv[2]))
     else:
         print("usage: box.py observe RECORD | header RECORD SINCE FILE | visits RECORD SINCE PORT TEXT | key RECORD FILE"
               " | canvas KEYFILE DIR | framed RECORD | scrub RECORD TAR"
-              " | confirmation DATABASE REF | athanors DATABASE", file=sys.stderr)
+              " | confirmation DATABASE REF | athanors DATABASE | stored DIR", file=sys.stderr)
         return 64
     return 0
 
