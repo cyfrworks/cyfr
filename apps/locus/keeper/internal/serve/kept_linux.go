@@ -233,8 +233,29 @@ func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 	go s.watchLeader(sp)
 }
 
+// endInOrder ends a kept spawn's group in dependency order within grace:
+// TERM to the leader alone, which has the grace to end what it started;
+// once the keeper has reaped it, TERM to whatever of the group is left, so
+// a child its leader did not tell is still asked, with the rest of the
+// grace; at the grace's end the group's kill (cgroup.Group.Kill), however
+// far it got. A leader already reaped is not signalled: its pid may be
+// another's. It reports whether the group is empty.
+func endInOrder(group interface{ Kill(time.Duration) bool }, leader *child, grace time.Duration) bool {
+	deadline := time.Now().Add(grace)
+	if leader != nil && grace > 0 && !leader.reaped() {
+		_ = unix.Kill(leader.pid, unix.SIGTERM)
+		timer := time.NewTimer(grace)
+		select {
+		case <-leader.done:
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	return group.Kill(max(time.Until(deadline), 0))
+}
+
 // retireKept ends a kept spawn once: the processes of its own group, which
-// are everything it started; then, when no other spawn holds its uid, the
+// are everything it started, its leader first (endInOrder); then, when no other spawn holds its uid, the
 // uid's full retirement, every process and IPC object of the uid and what it
 // left on the writable mounts but its home. The uid stays its home's.
 func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
@@ -256,7 +277,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 		s.mu.Unlock()
 		go func() {
 			defer close(sp.retired)
-			if sp.group != nil && !sp.group.Kill(grace) {
+			if sp.group != nil && !endInOrder(sp.group, sp.leader, grace) {
 				s.log.Warn("spawn %s: processes of kept uid %d outlived their group's kill", sp.id, uid)
 			}
 			if sp.relay != nil {
