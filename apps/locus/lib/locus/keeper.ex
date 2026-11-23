@@ -36,16 +36,25 @@ defmodule Locus.Keeper do
   carries stdin, stdout and stderr as frames: a stream byte (0 stdin, 1
   stdout, 2 stderr, 3 attach), a 4-byte big-endian length and the payload,
   a zero-length frame ending its stream. The connection goes to the
-  caller, which reads its frames itself. When the command's leader exits,
-  or on `release`, cyfr-locus kills every process of the uid and removes
-  everything the uid left, then reports `released`; `run/2` answers only
-  after that report, so no process of a build outlives the call. A spawn
-  cyfr-locus refuses after it made it never ran, and `run/2` answers its
-  refusal at that report too, asking for none: one not reported within
-  60 s is logged and still waited for, so the build's slot is held until
-  cyfr-locus has freed its place. A deadline passed, a stdout bound exceeded or a cancel
-  (`Locus.Executor.cancel/1`) releases the spawn with no grace. A caller
-  that dies has its spawn released at once.
+  caller, which reads its frames itself, one frame at a read
+  (`@read_bytes`, the socket's own buffer), and the next only once its
+  functions took what the last held (`Locus.Executor`): nothing of a
+  build's output is kept here, and a reader that does not take holds the
+  relay, the build's processes and everything behind them where they are.
+  When the command's leader exits, or on `release`, cyfr-locus kills every
+  process of the uid and removes everything the uid left, waits for the
+  relay to end, which is once its reader has taken the last byte or closed
+  its connection, then reports `released`; `run/2` answers only after that
+  report, however long it takes, so no process of a build outlives the
+  call. The reader closing its connection is what cuts the relay: a
+  deadline passed (the run's own, the reader's deadline), a stdout bound
+  exceeded, a cancel (`Locus.Executor.cancel/1`) or a function's refusal
+  closes it and releases the spawn with no grace, and a caller that dies
+  closes it by dying, its spawn released at once. A spawn cyfr-locus
+  refuses after it made it never ran, and `run/2` answers its refusal at
+  that report too, asking for none; a report not come within 60 s is
+  logged and still waited for, so the build's slot is held until
+  cyfr-locus has freed its place.
 
   ## A long-lived spawn
 
@@ -63,8 +72,10 @@ defmodule Locus.Keeper do
   spawn_id}`, then `:released`. The caller
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, each
-  stdout and stderr frame, the leader's exit and the uid's retirement,
-  the last; the streams and the exit arrive in no defined order, since
+  stdout and stderr frame as it arrives (this server reads every held
+  connection as it comes, so no relay of a long-lived spawn waits on its
+  reader), the leader's exit and the uid's retirement, the last; the
+  streams and the exit arrive in no defined order, since
   the exit comes on the channel and the frames on the relay's connection,
   whose last frames only the retirement waits for. `send/2` writes stdin
   frames through the connection, holding them until the relay attaches;
@@ -239,6 +250,9 @@ defmodule Locus.Keeper do
   # A relay has ended by the time `released` is sent; its last frames are
   # already on the socket.
   @drain_timeout_ms 5_000
+  # A run reads one frame at a time: its header and the largest payload.
+  @read_bytes IO.iodata_length(KeeperProtocol.end_frame(:stdout)) +
+                KeeperProtocol.max_frame_bytes()
   @channel_send_timeout_ms 30_000
   @pool_timeout_ms 5_000
   # This server answers an assign by the instant its caller names; the
@@ -371,6 +385,7 @@ defmodule Locus.Keeper do
             attach_by: now() + @start_timeout_ms + @attach_timeout_ms,
             released_by: nil,
             on_output: Keyword.get(opts, :on_output, fn _line -> :ok end),
+            taker: Keyword.get(opts, :on_stdout, {nil, fn _piece, acc -> {:ok, acc} end}),
             max_stdout: Keyword.fetch!(opts, :max_stdout_bytes),
             memory_bytes: memory_bytes,
             memory: nil,
@@ -378,7 +393,6 @@ defmodule Locus.Keeper do
             conn: nil,
             conn_open: false,
             frames: "",
-            stdout: [],
             stdout_bytes: 0,
             log: Log.new(),
             exit: nil,
@@ -663,6 +677,9 @@ defmodule Locus.Keeper do
   defp on_keeper(s, {:spawned, _uid, _pid}), do: s
 
   defp on_keeper(s, {:attached, conn}) do
+    # One frame a read: what the socket holds past it stays in the kernel,
+    # and the relay waits behind it.
+    _ = :inet.setopts(conn, buffer: @read_bytes)
     feed_stdin(conn, s.stdin)
     reactivate(%{s | conn: conn, conn_open: true})
   end
@@ -720,25 +737,44 @@ defmodule Locus.Keeper do
   defp on_frame(s, :stdout, ""), do: s
   defp on_frame(s, :stderr, ""), do: s
 
+  # A piece is handed on and taken before the next is read; past the
+  # reader's deadline, or once the run is stopping, nothing more is.
   defp on_frame(%{failure: nil} = s, :stdout, payload) do
     bytes = s.stdout_bytes + byte_size(payload)
+    {acc, take} = s.taker
 
-    if bytes > s.max_stdout,
-      do: stop(%{s | stdout: []}, {:output_too_large, s.max_stdout}),
-      else: %{s | stdout: [s.stdout, payload], stdout_bytes: bytes}
+    cond do
+      bytes > s.max_stdout ->
+        stop(s, {:output_too_large, s.max_stdout})
+
+      now() >= s.deadline ->
+        stop(s, :timeout)
+
+      true ->
+        case take.(payload, acc) do
+          {:ok, acc} -> %{s | stdout_bytes: bytes, taker: {acc, take}}
+          {:error, reason} -> stop(s, taker_failure(reason))
+        end
+    end
   end
 
-  defp on_frame(s, :stdout, _payload), do: s
+  defp on_frame(%{failure: nil} = s, :stderr, payload) do
+    case Log.add(s.log, payload, s.on_output) do
+      {:ok, log} -> %{s | log: log}
+      {:error, reason} -> stop(s, taker_failure(reason))
+    end
+  end
 
-  defp on_frame(s, :stderr, payload),
-    do: %{s | log: Log.add(s.log, payload, s.on_output)}
+  defp on_frame(s, stream, _payload) when stream in [:stdout, :stderr], do: s
 
   defp on_frame(s, _stream, _payload), do: {:fault, relay_fault(s)}
 
-  defp relay_fault(s) do
-    if s.conn, do: :gen_tcp.close(s.conn)
-    %{s | frames: "", conn_open: false} |> stop({:spawn_failed, :relay_protocol})
-  end
+  defp relay_fault(s), do: stop(s, {:spawn_failed, :relay_protocol})
+
+  # The run's own ends, a taker's word that it stopped, pass as they are;
+  # any other refusal of a taker is its own.
+  defp taker_failure(reason) when reason in [:timeout, :cancelled], do: reason
+  defp taker_failure(reason), do: {:taker, reason}
 
   defp reactivate(%{conn_open: true, conn: conn} = s) do
     case :inet.setopts(conn, active: :once) do
@@ -769,9 +805,21 @@ defmodule Locus.Keeper do
 
   defp advance(s), do: s
 
+  # The reader stops taking: it closes its connection, which is what cuts
+  # the relay, and asks for the spawn's release, which cyfr-locus reports
+  # once the relay and everything else of the spawn are gone.
   defp stop(%{failure: nil} = s, failure) do
+    if s.conn, do: :gen_tcp.close(s.conn)
     GenServer.cast(s.server, {:release, s.ref, 0})
-    %{s | failure: failure, phase: :releasing, released_by: now() + @release_timeout_ms}
+
+    %{
+      s
+      | failure: failure,
+        phase: :releasing,
+        frames: "",
+        conn_open: false,
+        released_by: now() + @release_timeout_ms
+    }
   end
 
   defp stop(s, _failure), do: s
@@ -781,6 +829,11 @@ defmodule Locus.Keeper do
     max(until - now(), 0)
   end
 
+  # Past the exit the reader still reads, until the stream ends or its own
+  # deadline, after which it takes no more.
+  defp wait_ms(%{phase: :releasing, conn_open: true, released: false} = s),
+    do: max(s.deadline - now(), 0)
+
   defp wait_ms(%{released_by: nil}), do: :infinity
   defp wait_ms(s), do: max(s.released_by - now(), 0)
 
@@ -789,6 +842,9 @@ defmodule Locus.Keeper do
       do: stop(s, {:spawn_failed, :attach_timeout}),
       else: stop(s, :timeout)
   end
+
+  defp on_wait_expired(%{phase: :releasing, conn_open: true, released: false} = s),
+    do: stop(s, :timeout)
 
   # The build's slot is freed only once cyfr-locus says what it made of the
   # refused spawn is gone, so the wait goes on past the bound.
@@ -801,20 +857,26 @@ defmodule Locus.Keeper do
     %{s | released_by: nil}
   end
 
-  defp on_wait_expired(s) do
-    unless s.released do
-      Logger.warning(
-        "[Locus.Keeper] a build's uid was not reported retired within #{@release_timeout_ms} ms"
-      )
-    end
+  # Only cyfr-locus's `released` says the build is gone: one not reported
+  # within the bound is logged once and still waited for. After the report
+  # the relay's connection is waited for only to its drain bound.
+  defp on_wait_expired(%{released: false} = s) do
+    Logger.error(
+      "[Locus.Keeper] a build's uid was not reported retired within " <>
+        "#{@release_timeout_ms} ms; the build waits for it"
+    )
 
-    %{s | phase: :done}
+    %{s | released_by: nil}
   end
+
+  defp on_wait_expired(s), do: %{s | phase: :done}
 
   defp finish(s) do
     if s.conn, do: :gen_tcp.close(s.conn)
     GenServer.cast(s.server, {:done, s.ref})
-    :ok = Log.finish(s.log, s.on_output)
+    # The log's last line, unended, is handed on however the run ended; a
+    # taker that has stopped answers at once.
+    _ = Log.finish(s.log, s.on_output)
 
     # The kernel's own report of how the build ended comes first: a build
     # ended for memory is that, whatever this side was doing when it heard.
@@ -823,7 +885,7 @@ defmodule Locus.Keeper do
       s.memory != nil -> {:error, {:memory, s.memory}}
       s.failure != nil -> {:error, s.failure}
       s.exit == nil -> {:error, {:spawn_failed, :no_exit_reported}}
-      true -> {:ok, %{exit: s.exit, stdout: IO.iodata_to_binary(s.stdout)}}
+      true -> {:ok, %{exit: s.exit, taken: elem(s.taker, 0)}}
     end
   end
 

@@ -8,14 +8,15 @@ defmodule Prima.BuilderProtocolTest do
   key derived over the service label, the request's canonical string, MAC
   and header, every line and refusal read to its fields and written back
   to its body, every invalid body refused with its error, and every
-  rejected header refused with its reason. Beyond the vectors: a request
-  is bounded on its declared size before any MAC work and on its encoded
-  sources before any decoding; every refusal class round-trips; a header
-  for another Locus service, or under its key, never verifies as builds;
-  and header-first verification refuses exactly what the one-step
-  verifier refuses; an output's path is bounded on its own bytes; a
-  terminal line carries encoded diagnostics as they are; and the answer's
-  bound is the vectors' number, derived term by term from the other bounds.
+  rejected header refused with its reason, and every stream of lines read
+  to the files and diagnostics a reader keeps, or refused with its error.
+  Beyond the vectors: a request is bounded on its declared size before any
+  MAC work and on its encoded sources before any decoding; every refusal
+  class round-trips; a header for another Locus service, or under its key,
+  never verifies as builds; and header-first verification refuses exactly
+  what the one-step verifier refuses; an output's path is bounded on its
+  own bytes; a running digest is the whole file's; and the lines' bounds
+  are the vectors' numbers, derived term by term from the other bounds.
   """
   use ExUnit.Case, async: true
 
@@ -55,8 +56,8 @@ defmodule Prima.BuilderProtocolTest do
     %{
       language: String.to_existing_atom(v["language"]),
       target_type: String.to_existing_atom(v["target_type"]),
-      outputs: files(v["outputs"]),
-      diagnostics: v["diagnostics"]
+      outputs:
+        Enum.map(v["outputs"], &%{path: &1["path"], size: &1["size"], digest: &1["digest"]})
     }
   end
 
@@ -81,18 +82,24 @@ defmodule Prima.BuilderProtocolTest do
   defp synthesized(%{"files" => count, "bytes" => bytes}, :request),
     do: request_wire(zero_files(count, bytes))
 
-  defp synthesized(%{"files" => count, "bytes" => bytes}, :line) do
-    zeros = :binary.copy(<<0>>, bytes)
-    digest = Prima.Digest.sha256(zeros)
+  defp synthesized(%{"files" => count} = synthesize, :line) do
+    size = Map.get(synthesize, "size", 0)
 
     @vectors["lines"]["tincture_result"]["body"]
     |> Jason.decode!()
     |> Map.put(
       "outputs",
-      Enum.map(zero_files(count, bytes), fn {path, b64} ->
-        %{"path" => path, "base64" => b64, "digest" => digest}
-      end)
+      for index <- 1..count do
+        %{"path" => "f/#{index}.bin", "size" => size, "digest" => Prima.Digest.sha256("")}
+      end
     )
+    |> Jason.encode!()
+  end
+
+  defp synthesized(%{"chunk_bytes" => bytes}, :line) do
+    @vectors["lines"]["output"]["body"]
+    |> Jason.decode!()
+    |> Map.put("bytes", Base.encode64(:binary.copy(<<0>>, bytes)))
     |> Jason.encode!()
   end
 
@@ -244,7 +251,9 @@ defmodule Prima.BuilderProtocolTest do
       assert {:error, {:version, nil}} = BuilderProtocol.read_health_request("{}")
 
       assert {:error, {:unknown_field, "op"}} =
-               BuilderProtocol.read_health_request(~s({"version":1,"op":"health"}))
+               BuilderProtocol.read_health_request(
+                 ~s({"version":#{BuilderProtocol.version()},"op":"health"})
+               )
     end
 
     test "every line reads to its fields and writes back to its body" do
@@ -256,6 +265,13 @@ defmodule Prima.BuilderProtocolTest do
       assert message == p["message"]
       assert {:ok, p["body"]} == BuilderProtocol.encode_progress(stage, message)
 
+      o = lines["output"]
+      bytes = Base.decode64!(o["bytes"])
+      chunk = %{path: o["path"], seq: o["seq"], bytes: bytes}
+      assert {:ok, {:output, ^chunk}} = BuilderProtocol.read_line(o["body"])
+      assert {:ok, o["body"]} == BuilderProtocol.encode_output(o["path"], o["seq"], bytes)
+      assert bytes == <<0, "asm", 0x0D, 0, 1, 0>>
+
       for name <- ["component_result", "tincture_result"] do
         result = result(name)
         assert {:ok, {:result, ^result}} = BuilderProtocol.read_line(lines[name]["body"])
@@ -263,8 +279,7 @@ defmodule Prima.BuilderProtocolTest do
       end
 
       component = result("component_result")
-      assert Map.keys(component.outputs) |> Enum.sort() == ["Cargo.lock", "component.wasm"]
-      assert component.outputs[BuilderProtocol.component_wasm()] == <<0, "asm", 0x0D, 0, 1, 0>>
+      assert Enum.map(component.outputs, & &1.path) == ["component.wasm", "Cargo.lock"]
 
       h = lines["health"]
 
@@ -282,13 +297,13 @@ defmodule Prima.BuilderProtocolTest do
     end
 
     test "every refusal reads to its class and reason, writes back, and is described" do
-      for %{"class" => class, "reason" => reason, "diagnostics" => diagnostics, "body" => body} =
-            v <-
+      for %{"class" => class, "reason" => reason, "body" => body} = v <-
             @vectors["lines"]["refusals"] do
-        assert {:ok, {:refusal, refusal, ^diagnostics}} = BuilderProtocol.read_line(body), class
+        assert {:ok, {:refusal, refusal}} = BuilderProtocol.read_line(body), class
         assert Atom.to_string(elem(refusal, 0)) == class
         assert Jason.decode!(body)["reason"] == reason
-        assert {:ok, ^body} = BuilderProtocol.encode_refusal(refusal, diagnostics)
+        refute Map.has_key?(Jason.decode!(body), "diagnostics")
+        assert {:ok, ^body} = BuilderProtocol.encode_refusal(refusal)
         assert BuilderProtocol.describe_refusal(refusal) == v["sentence"]
         assert BuilderProtocol.status(refusal) == @vectors["statuses"][class]
       end
@@ -335,6 +350,81 @@ defmodule Prima.BuilderProtocolTest do
         assert tag(err) == expected, "#{name}: #{inspect(err)}"
       end
     end
+
+    test "every stream reads to the files and log a reader keeps, or is refused with its error" do
+      for %{"name" => name} = v <- @vectors["lines"]["streams"] do
+        lines = v["lines"] || synthesized_stream(v["synthesize"])
+
+        case {read_stream(lines), v} do
+          {{:ok, files, log}, %{"outputs" => outputs, "diagnostics" => diagnostics}} ->
+            assert files == files(outputs), name
+            assert log == diagnostics, name
+
+          {{:refused, refusal, kept}, %{"refusal" => expected}} ->
+            assert Atom.to_string(elem(refusal, 0)) == expected["class"], name
+            assert Jason.decode!(List.last(lines))["reason"] == expected["reason"], name
+            assert kept == %{}, "#{name}: a refused stream keeps nothing"
+
+          {{:error, err}, %{"error" => error}} ->
+            assert tag(err) == String.to_existing_atom(error), "#{name}: #{inspect(err)}"
+
+          {read, _v} ->
+            flunk("#{name} read as #{inspect(read)}")
+        end
+      end
+    end
+  end
+
+  # A reader of an answer's lines, as the client reads them: the progress
+  # lines are its log, the output lines its files once a result names them.
+  defp read_stream(lines) do
+    Enum.reduce_while(lines, {BuilderProtocol.outputs(), []}, fn line, {outputs, log} ->
+      case BuilderProtocol.read_line(line) do
+        {:ok, {:progress, stage, message}} ->
+          {:cont, {outputs, [BuilderProtocol.diagnostic(stage, message) | log]}}
+
+        {:ok, {:output, chunk}} ->
+          case BuilderProtocol.output(outputs, chunk) do
+            {:ok, outputs} -> {:cont, {outputs, log}}
+            {:error, _} = error -> {:halt, error}
+          end
+
+        {:ok, {:result, result}} ->
+          case BuilderProtocol.outputs(outputs, result) do
+            {:ok, files} -> {:halt, {:ok, files, Enum.reverse(log)}}
+            {:error, _} = error -> {:halt, error}
+          end
+
+        {:ok, {:refusal, refusal}} ->
+          {:halt, {:refused, refusal, %{}}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp synthesized_stream(%{"files" => count}) do
+    for seq <- 1..count do
+      {:ok, line} = BuilderProtocol.encode_output("f/#{seq}.bin", seq, "")
+      line
+    end
+  end
+
+  defp synthesized_stream(%{"bytes" => bytes}) do
+    max = BuilderProtocol.max_chunk_bytes()
+    full = :binary.copy(<<0>>, max)
+
+    Stream.unfold({bytes, 1}, fn
+      {0, _seq} ->
+        nil
+
+      {left, seq} ->
+        chunk = if left >= max, do: full, else: :binary.copy(<<0>>, left)
+        {:ok, line} = BuilderProtocol.encode_output("big.bin", seq, chunk)
+        {line, {left - byte_size(chunk), seq + 1}}
+    end)
+    |> Enum.to_list()
   end
 
   describe "bounds" do
@@ -366,95 +456,130 @@ defmodule Prima.BuilderProtocolTest do
                BuilderProtocol.read_request(request_wire([{"big.bin", "!!!!"}]))
     end
 
-    test "a line, a log and a sentence are bounded" do
+    test "a line, a chunk and a sentence are bounded" do
       max_line = BuilderProtocol.max_line_bytes()
-      max_log = BuilderProtocol.max_log_bytes()
+      max_chunk = BuilderProtocol.max_chunk_bytes()
       long = String.duplicate("a", max_line + 1)
-      base = result("tincture_result")
 
       assert {:error, {:too_large, :line, _, ^max_line}} =
                BuilderProtocol.encode_progress(:output, long)
 
       assert {:ok, _} = BuilderProtocol.encode_progress(:output, String.duplicate("a", max_line))
 
-      assert {:error, {:too_large, :line, _, ^max_line}} =
-               BuilderProtocol.encode_result(%{base | diagnostics: [long]})
+      assert {:error, {:too_large, :chunk, _, ^max_chunk}} =
+               BuilderProtocol.encode_output("a.bin", 1, :binary.copy(<<0>>, max_chunk + 1))
 
-      # Each line counts with its newline, so a log of empty lines is bounded too.
-      lines = List.duplicate("", max_log)
-      assert {:ok, _} = BuilderProtocol.encode_result(%{base | diagnostics: lines})
+      # A chunk at its bound, under the longest path and the largest seq,
+      # is a line within its bound, read back whole.
+      # Segments of quotes, each escaping to two bytes, to the path's bound.
+      stem = Enum.map_join(1..4, "/", fn _ -> String.duplicate(~s("), 240) end) <> "/"
 
-      assert {:error, {:too_large, :diagnostics, _, ^max_log}} =
-               BuilderProtocol.encode_result(%{base | diagnostics: ["" | lines]})
+      path =
+        stem <> String.duplicate(~s("), BuilderProtocol.max_output_path_bytes() - byte_size(stem))
+
+      assert byte_size(path) == BuilderProtocol.max_output_path_bytes()
+      seq = BuilderProtocol.max_output_bytes() + BuilderProtocol.max_output_files()
+      chunk = :binary.copy(<<0xFF>>, max_chunk)
+      assert {:ok, line} = BuilderProtocol.encode_output(path, seq, chunk)
+      assert byte_size(line) + 1 <= BuilderProtocol.max_output_line_bytes()
+
+      assert {:ok, {:output, %{path: ^path, seq: ^seq, bytes: ^chunk}}} =
+               BuilderProtocol.read_line(line)
+
+      assert {:error, {:invalid_field, "seq"}} =
+               BuilderProtocol.encode_output("a.bin", seq + 1, "")
+
+      assert {:error, {:invalid_field, "seq"}} = BuilderProtocol.encode_output("a.bin", 0, "")
+
+      # A line past the largest any type may be is refused before it is parsed.
+      over = String.duplicate(" ", BuilderProtocol.max_line_size())
+      max_size = BuilderProtocol.max_line_size()
+      assert {:error, {:too_large, :line, _, ^max_size}} = BuilderProtocol.read_line(over)
 
       assert {:error, {:invalid_field, "reason"}} =
-               BuilderProtocol.encode_refusal({:unavailable, long}, [])
+               BuilderProtocol.encode_refusal({:unavailable, long})
 
       assert {:error, {:invalid_field, "reason"}} =
-               BuilderProtocol.encode_refusal({:malformed, ""}, [])
+               BuilderProtocol.encode_refusal({:malformed, ""})
     end
 
-    test "the answer's bound is derived, term by term, from the vectors' other bounds" do
+    test "the lines' bounds are derived, term by term, from the vectors' other bounds" do
       b = @vectors["bounds"]
+      escaped_path = 2 * b["max_output_path_bytes"]
+
+      # An output line with an empty path and no bytes at the largest seq,
+      # its newline and its path escaped at most twice over; the chunk is
+      # what base64 fits in the rest.
+      seq = b["max_output_bytes"] + b["max_output_files"]
+
+      output_envelope =
+        @vectors["lines"]["output"]["body"]
+        |> Jason.decode!()
+        |> Map.merge(%{"path" => "", "seq" => seq, "bytes" => ""})
+        |> Jason.encode!()
+        |> byte_size()
+        |> Kernel.+(1 + escaped_path)
+
+      assert 3 * div(b["max_output_line_bytes"] - output_envelope, 4) == b["max_chunk_bytes"]
+
+      # A result with no output at its longest pairing and newline, then
+      # each entry with its path escaped, the largest size, the digest and
+      # a comma.
       template = Jason.decode!(@vectors["lines"]["tincture_result"]["body"])
 
-      # The outputs as one file spells them in base64.
-      outputs = 4 * div(b["max_output_bytes"] + 2, 3)
-
-      # The progress lines, then the same lines as the terminal line's diagnostics.
-      log = 2 * b["max_log_bytes"]
-
-      # The terminal line with nothing in it, at its longest pairing, with its newline.
-      terminal =
+      envelope =
         @vectors["language_for"]
         |> Enum.map(fn {type, language} ->
           template
-          |> Map.merge(%{
-            "language" => language,
-            "target_type" => type,
-            "outputs" => [],
-            "diagnostics" => []
-          })
+          |> Map.merge(%{"language" => language, "target_type" => type, "outputs" => []})
           |> Jason.encode!()
           |> byte_size()
           |> Kernel.+(1)
         end)
         |> Enum.max()
 
-      # One output entry: keys, the digest, a comma; its path escaped at
-      # most twice over; one base64 quantum of padding.
       [first | _] = template["outputs"]
-      empty = %{first | "path" => "", "base64" => ""}
-      entry = byte_size(Jason.encode!(empty)) + 1 + 2 * b["max_output_path_bytes"] + 4
+      empty = %{first | "path" => "", "size" => b["max_output_bytes"]}
+      entry = byte_size(Jason.encode!(empty)) + 1 + escaped_path
       assert byte_size(first["digest"]) == byte_size("sha256:") + 64
 
-      assert outputs + log + terminal + b["max_output_files"] * entry == b["max_answer_bytes"]
-      assert BuilderProtocol.max_answer_bytes() == b["max_answer_bytes"]
+      assert envelope + b["max_output_files"] * entry == b["max_result_line_bytes"]
+      assert max(b["max_output_line_bytes"], b["max_result_line_bytes"]) == b["max_line_size"]
 
-      # A refusal carries no outputs: its sentence escaped six times over
-      # and its log stay below the result's bound.
-      {:ok, refusal} =
-        BuilderProtocol.encode_refusal({:failed, {:signal, String.duplicate("S", 256)}}, [])
-
-      assert byte_size(refusal) + 6 * b["max_line_bytes"] + log < b["max_answer_bytes"]
+      # A progress line's message and a refusal's sentence escape six times
+      # over at most, and stay within any line's bound.
+      {:ok, progress} = BuilderProtocol.encode_progress(:output, "")
+      assert byte_size(progress) + 6 * b["max_line_bytes"] + 1 < b["max_line_size"]
     end
 
     test "an output's path is bounded on its own bytes, and holds no control character" do
       max = BuilderProtocol.max_output_path_bytes()
       base = result("tincture_result")
-      outputs = fn path -> %{base | outputs: %{path => "x"}} end
+
+      named = fn path ->
+        %{base | outputs: [%{path: path, size: 1, digest: Prima.Digest.sha256("x")}]}
+      end
 
       # PathSafety counts no empty segment; the wire's bound counts every byte.
       at_bound = "a" <> String.duplicate("/", max - 2) <> "b"
       assert :ok = Prima.PathSafety.validate_relative_path(at_bound <> "/")
-      assert {:ok, _} = BuilderProtocol.encode_result(outputs.(at_bound))
+      assert {:ok, _} = BuilderProtocol.encode_result(named.(at_bound))
+      assert {:ok, _} = BuilderProtocol.encode_output(at_bound, 1, "x")
 
       assert {:error, {:invalid_field, "outputs[0].path"}} =
-               BuilderProtocol.encode_result(outputs.(at_bound <> "/"))
+               BuilderProtocol.encode_result(named.(at_bound <> "/"))
+
+      assert {:error, {:invalid_field, "path"}} =
+               BuilderProtocol.encode_output(at_bound <> "/", 1, "x")
 
       for byte <- Enum.concat(0x01..0x1F, [0x7F]) do
+        path = <<"dist/a", byte, "b.js">>
+
         assert {:error, {:invalid_field, "outputs[0].path"}} =
-                 BuilderProtocol.encode_result(outputs.(<<"dist/a", byte, "b.js">>)),
+                 BuilderProtocol.encode_result(named.(path)),
+               "byte #{byte}"
+
+        assert {:error, {:invalid_field, "path"}} = BuilderProtocol.encode_output(path, 1, "x"),
                "byte #{byte}"
       end
 
@@ -462,41 +587,38 @@ defmodule Prima.BuilderProtocolTest do
       # PathSafety refuses a backslash.
       escaped = Enum.map_join(1..4, "/", fn _ -> String.duplicate(~s("), 240) end)
 
-      assert {:ok, line} = BuilderProtocol.encode_result(outputs.(escaped))
-      assert {:ok, {:result, %{outputs: %{^escaped => "x"}}}} = BuilderProtocol.read_line(line)
+      assert {:ok, line} = BuilderProtocol.encode_result(named.(escaped))
+      assert {:ok, {:result, %{outputs: [%{path: ^escaped}]}}} = BuilderProtocol.read_line(line)
       assert byte_size(Jason.encode!(escaped)) - 2 <= 2 * max
     end
 
-    test "encoded diagnostics go out as they are, checked as the lines they spell" do
-      base = result("component_result")
-      encoded = Enum.map(base.diagnostics, &elem(BuilderProtocol.encode_diagnostic(&1), 1))
+    test "a running digest is the whole file's, as a result names it" do
+      bytes = :crypto.strong_rand_bytes(100_000)
 
-      assert {:ok, line} =
-               BuilderProtocol.encode_result(%{base | diagnostics: {:encoded, encoded}})
+      hash =
+        for <<chunk::binary-size(1_000) <- bytes>>, reduce: BuilderProtocol.digest_init() do
+          hash -> BuilderProtocol.digest_update(hash, chunk)
+        end
 
-      assert line == @vectors["lines"]["component_result"]["body"]
+      assert BuilderProtocol.digest_final(hash) == Prima.Digest.sha256(bytes)
 
-      assert {:ok, line} =
-               BuilderProtocol.encode_refusal({:failed, {:status, 1}}, {:encoded, encoded})
+      assert BuilderProtocol.digest_final(BuilderProtocol.digest_init()) ==
+               Prima.Digest.sha256("")
+    end
 
-      assert {:ok, {:refusal, _refusal, diagnostics}} = BuilderProtocol.read_line(line)
-      assert diagnostics == base.diagnostics
+    test "a log is its progress lines as a person reads them, in their order" do
+      assert BuilderProtocol.diagnostic(:compiling, "Compiling reagent (rust)...") ==
+               "compiling: Compiling reagent (rust)..."
 
-      max_line = BuilderProtocol.max_line_bytes()
-      max_log = BuilderProtocol.max_log_bytes()
+      %{"diagnostics" => diagnostics, "lines" => lines} =
+        Enum.find(@vectors["lines"]["streams"], &(&1["name"] == "component"))
 
-      assert {:error, {:too_large, :line, _, ^max_line}} =
-               BuilderProtocol.encode_diagnostic(String.duplicate("a", max_line + 1))
+      progress =
+        for line <- lines,
+            {:ok, {:progress, stage, message}} <- [BuilderProtocol.read_line(line)],
+            do: BuilderProtocol.diagnostic(stage, message)
 
-      empty = List.duplicate(~s(""), max_log + 1)
-
-      assert {:error, {:too_large, :diagnostics, _, ^max_log}} =
-               BuilderProtocol.encode_result(%{base | diagnostics: {:encoded, empty}})
-
-      for bad <- [["1"], ["not json"], [:line]] do
-        assert {:error, {:invalid_field, "diagnostics"}} =
-                 BuilderProtocol.encode_refusal({:failed, {:status, 1}}, {:encoded, bad})
-      end
+      assert progress == diagnostics
     end
 
     test "text fields must be UTF-8" do
@@ -554,8 +676,8 @@ defmodule Prima.BuilderProtocolTest do
       ]
 
       for refusal <- refusals do
-        assert {:ok, line} = BuilderProtocol.encode_refusal(refusal, ["a line"])
-        assert {:ok, {:refusal, ^refusal, ["a line"]}} = BuilderProtocol.read_line(line)
+        assert {:ok, line} = BuilderProtocol.encode_refusal(refusal)
+        assert {:ok, {:refusal, ^refusal}} = BuilderProtocol.read_line(line)
         assert is_binary(BuilderProtocol.describe_refusal(refusal))
         assert BuilderProtocol.status(refusal) in 400..599
       end
@@ -568,8 +690,7 @@ defmodule Prima.BuilderProtocolTest do
       vector = Enum.find(@vectors["lines"]["refusals"], &(&1["class"] == "memory"))
       limit = vector["reason"]["limit_bytes"]
 
-      assert {:ok, {:refusal, {:memory, ^limit}, _diagnostics}} =
-               BuilderProtocol.read_line(vector["body"])
+      assert {:ok, {:refusal, {:memory, ^limit}}} = BuilderProtocol.read_line(vector["body"])
 
       assert :memory in BuilderProtocol.classes()
       statuses = Map.new(BuilderProtocol.classes(), &{&1, BuilderProtocol.status(&1)})
@@ -578,13 +699,13 @@ defmodule Prima.BuilderProtocolTest do
 
       # The kill a bound ends a build with is a signal; without the class it
       # would read as this.
-      assert {:ok, killed} = BuilderProtocol.encode_refusal({:failed, {:signal, "SIGKILL"}}, [])
+      assert {:ok, killed} = BuilderProtocol.encode_refusal({:failed, {:signal, "SIGKILL"}})
 
-      assert {:ok, {:refusal, {:failed, {:signal, "SIGKILL"}}, []}} =
+      assert {:ok, {:refusal, {:failed, {:signal, "SIGKILL"}}}} =
                BuilderProtocol.read_line(killed)
 
-      assert {:ok, bounded} = BuilderProtocol.encode_refusal({:memory, limit}, [])
-      assert {:ok, {:refusal, {:memory, ^limit}, []}} = BuilderProtocol.read_line(bounded)
+      assert {:ok, bounded} = BuilderProtocol.encode_refusal({:memory, limit})
+      assert {:ok, {:refusal, {:memory, ^limit}}} = BuilderProtocol.read_line(bounded)
       refute Jason.decode!(bounded)["class"] == Jason.decode!(killed)["class"]
 
       assert BuilderProtocol.describe_refusal({:memory, limit}) =~
@@ -608,11 +729,10 @@ defmodule Prima.BuilderProtocolTest do
           ] do
         body =
           Jason.encode!(%{
-            "version" => 1,
+            "version" => BuilderProtocol.version(),
             "type" => "refusal",
             "class" => class,
-            "reason" => reason,
-            "diagnostics" => []
+            "reason" => reason
           })
 
         assert {:error, {:invalid_field, "reason"}} = BuilderProtocol.read_line(body),
@@ -621,10 +741,10 @@ defmodule Prima.BuilderProtocolTest do
     end
 
     test "a read error maps to a refusal: another version to protocol_mismatch, anything else to malformed" do
-      assert BuilderProtocol.refusal_for({:version, 2}) == {:protocol_mismatch, 1, 2}
-      assert BuilderProtocol.refusal_for({:version, nil}) == {:protocol_mismatch, 1, nil}
-      assert BuilderProtocol.refusal_for({:version, "1"}) == {:protocol_mismatch, 1, nil}
-      assert BuilderProtocol.refusal_for({:version, 0}) == {:protocol_mismatch, 1, nil}
+      assert BuilderProtocol.refusal_for({:version, 1}) == {:protocol_mismatch, 2, 1}
+      assert BuilderProtocol.refusal_for({:version, nil}) == {:protocol_mismatch, 2, nil}
+      assert BuilderProtocol.refusal_for({:version, "2"}) == {:protocol_mismatch, 2, nil}
+      assert BuilderProtocol.refusal_for({:version, 0}) == {:protocol_mismatch, 2, nil}
 
       for error <- [
             :not_json,
@@ -638,12 +758,18 @@ defmodule Prima.BuilderProtocolTest do
             {:too_many, :outputs, 2, 1},
             {:duplicate_path, "a"},
             {:unsafe_path, "../a"},
+            {:too_large, :chunk, 2, 1},
+            {:out_of_order, 3, 2},
+            {:path_revisited, "a"},
+            {:unsent, "a"},
+            {:unnamed, "a"},
+            {:size_mismatch, "a"},
             {:digest_mismatch, "a"}
           ] do
         assert {:malformed, sentence} = BuilderProtocol.refusal_for(error)
         assert sentence == BuilderProtocol.describe(error)
-        assert {:ok, line} = BuilderProtocol.encode_refusal({:malformed, sentence}, [])
-        assert {:ok, {:refusal, {:malformed, ^sentence}, []}} = BuilderProtocol.read_line(line)
+        assert {:ok, line} = BuilderProtocol.encode_refusal({:malformed, sentence})
+        assert {:ok, {:refusal, {:malformed, ^sentence}}} = BuilderProtocol.read_line(line)
       end
 
       assert BuilderProtocol.describe({:unpaired, :rust, :tincture}) ==

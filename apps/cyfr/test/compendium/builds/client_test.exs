@@ -56,8 +56,8 @@ defmodule Compendium.Builds.ClientTest do
 
   # Progress lines of quotes, each escaping to twice its bytes, charged as
   # a builder charges them until they fill the log to its last byte: the
-  # steps that stream them, the same lines as encoded diagnostics, and the
-  # bytes streamed.
+  # steps that stream them, the log a person reads of them, and the bytes
+  # streamed.
   defp full_log do
     max_log = BuilderProtocol.max_log_bytes()
     {:ok, empty} = BuilderProtocol.encode_progress(:output, "")
@@ -76,11 +76,7 @@ defmodule Compendium.Builds.ClientTest do
     streamed = Enum.reduce(lines, 0, &(byte_size(&1) + 1 + &2))
     assert streamed == max_log
 
-    diagnostics =
-      Enum.map(messages, fn message ->
-        {:ok, diagnostic} = BuilderProtocol.encode_diagnostic("output: " <> message)
-        diagnostic
-      end)
+    diagnostics = Enum.map(messages, &BuilderProtocol.diagnostic(:output, &1))
 
     {Enum.map(lines, &{:line, &1}), diagnostics, streamed}
   end
@@ -205,24 +201,69 @@ defmodule Compendium.Builds.ClientTest do
       assert built.target_type == "tincture"
     end
 
-    test "the vectors' result lines are read as the builds they spell" do
-      for {name, type} <- [{"component_result", :reagent}, {"tincture_result", :tincture}] do
-        vector = @fixture["lines"][name]
-        ScriptedBuilder.script([{:stream, [{:line, vector["body"]}]}])
+    test "the vectors' streams are read as the builds they spell, or refused with their error" do
+      for %{"name" => name} = vector <- @fixture["lines"]["streams"], vector["lines"] do
+        type =
+          if Enum.any?(vector["lines"], &(&1 =~ "component.wasm")), do: :reagent, else: :tincture
 
-        assert {:ok, built} = build(request(%{target_type: type}))
-        assert built.diagnostics == vector["diagnostics"]
-        outputs = Map.new(vector["outputs"], fn {path, b64} -> {path, Base.decode64!(b64)} end)
+        ScriptedBuilder.script([{:stream, Enum.map(vector["lines"], &{:line, &1})}])
+        answered = build(request(%{target_type: type}))
 
-        case type do
-          :reagent ->
-            assert built.wasm_bytes == outputs["component.wasm"]
-            assert built.lockfile == outputs["Cargo.lock"]
+        case vector do
+          %{"outputs" => outputs, "diagnostics" => diagnostics} ->
+            assert {:ok, built} = answered, name
+            assert built.diagnostics == diagnostics, name
+            outputs = Map.new(outputs, fn {path, b64} -> {path, Base.decode64!(b64)} end)
 
-          :tincture ->
-            assert built.output_files == outputs
+            case type do
+              :reagent ->
+                assert built.wasm_bytes == outputs["component.wasm"], name
+                assert built.lockfile == outputs["Cargo.lock"], name
+
+              :tincture ->
+                assert built.output_files == outputs, name
+            end
+
+          %{"refusal" => %{"class" => class}} ->
+            assert {:error, {:refused, refusal, []}} = answered, name
+            assert Atom.to_string(elem(refusal, 0)) == class
+
+          %{"error" => error} ->
+            assert {:error, {:malformed, reason}} = answered, name
+            assert Atom.to_string(elem(reason, 0)) == error, "#{name} ended as #{inspect(reason)}"
         end
       end
+    end
+
+    test "a person reads the build's log as its terminal line carried it before: its progress lines, in order" do
+      %{"lines" => lines} = Enum.find(@fixture["lines"]["streams"], &(&1["name"] == "component"))
+      ScriptedBuilder.script([{:stream, Enum.map(lines, &{:line, &1})}])
+
+      assert {:ok, built} = build()
+
+      assert built.diagnostics == [
+               "compiling: Compiling reagent (rust)...",
+               "output: Finished `release` profile [optimized] target(s) in 4.20s"
+             ]
+    end
+
+    test "chunks then a refusal save nothing, and nor does an answer that ends after its chunks" do
+      %{"lines" => lines} = Enum.find(@fixture["lines"]["streams"], &(&1["name"] == "tincture"))
+      chunks = lines |> Enum.drop(-1) |> Enum.map(&{:line, &1})
+
+      ScriptedBuilder.script([
+        {:stream, chunks ++ [{:refusal, {:failed, {:status, 2}}, ["output: tsc: error"]}]},
+        {:stream, chunks},
+        {:stream, chunks ++ [:drop]}
+      ])
+
+      request = request(%{target_type: :tincture})
+
+      assert {:error, {:refused, {:failed, {:status, 2}}, ["output: tsc: error"]}} =
+               build(request)
+
+      assert {:error, :disconnected} = build(request)
+      assert {:error, :disconnected} = build(request)
     end
 
     test "whose bytes are not a component is refused" do
@@ -250,14 +291,13 @@ defmodule Compendium.Builds.ClientTest do
       assert {:error, {:malformed, {:another_build, :rust, :catalyst}}} = build()
     end
 
-    test "whose digest is not its bytes', whose path escapes or whose outputs pass a bound is refused" do
+    test "whose path escapes, is named twice, or names other outputs, or whose outputs pass a bound, is refused" do
       vectors = Map.new(@fixture["invalid_lines"], &{&1["name"], &1})
 
       for {name, error} <- [
-            {"result_tampered_bytes", :digest_mismatch},
-            {"result_tampered_digest", :digest_mismatch},
             {"result_unsafe_path", :unsafe_path},
             {"result_duplicate_path", :duplicate_path},
+            {"output_unsafe_path", :unsafe_path},
             {"component_with_extra_output", :invalid_field}
           ] do
         ScriptedBuilder.script([{:stream, [{:line, vectors[name]["body"]}]}])
@@ -265,39 +305,18 @@ defmodule Compendium.Builds.ClientTest do
         assert elem(reason, 0) == error, "#{name} ended as #{inspect(reason)}"
       end
 
-      # One file more than a result may carry, and one byte more.
-      too_many = for n <- 1..(BuilderProtocol.max_output_files() + 1), do: {"f#{n}.txt", "x"}
-      ScriptedBuilder.script([{:stream, [{:line, result_line(too_many)}]}])
+      # One file more than a result may carry, as output lines.
+      too_many =
+        for seq <- 1..(BuilderProtocol.max_output_files() + 1) do
+          {:ok, line} = BuilderProtocol.encode_output("f#{seq}.txt", seq, "x")
+          {:line, line}
+        end
+
+      ScriptedBuilder.script([{:stream, too_many}])
 
       assert {:error, {:malformed, {:too_many, :outputs, _count, _max}}} =
                build(request(%{target_type: :tincture}))
-
-      too_large = [{"big.bin", :binary.copy("x", BuilderProtocol.max_output_bytes() + 1)}]
-      ScriptedBuilder.script([{:stream, [{:line, result_line(too_large)}]}])
-
-      assert {:error, {:malformed, {:too_large, :outputs, _bytes, _max}}} =
-               build(request(%{target_type: :tincture}))
     end
-  end
-
-  # A tincture result line written without the protocol's own checks, so a
-  # line its encoder would refuse can be answered.
-  defp result_line(files) do
-    Jason.encode!(%{
-      "version" => BuilderProtocol.version(),
-      "type" => "result",
-      "language" => "javascript",
-      "target_type" => "tincture",
-      "diagnostics" => [],
-      "outputs" =>
-        for {path, bytes} <- files do
-          %{
-            "path" => path,
-            "base64" => Base.encode64(bytes),
-            "digest" => Prima.Digest.sha256(bytes)
-          }
-        end
-    })
   end
 
   describe "a refusal" do
@@ -322,7 +341,10 @@ defmodule Compendium.Builds.ClientTest do
         ])
 
         assert {:error, {:refused, ^refusal, ^diagnostics}} = build()
-        assert {:error, {:refused, ^refusal, ^diagnostics}} = build()
+
+        # The log is the progress lines streamed before the refusal.
+        streamed = ["compiling: Compiling…" | diagnostics]
+        assert {:error, {:refused, ^refusal, ^streamed}} = build()
       end
     end
 
@@ -331,9 +353,8 @@ defmodule Compendium.Builds.ClientTest do
         status = @fixture["statuses"][vector["class"]]
         ScriptedBuilder.script([{:respond, status, vector["body"]}])
 
-        assert {:error, {:refused, refusal, diagnostics}} = build()
+        assert {:error, {:refused, refusal, []}} = build()
         assert Atom.to_string(elem(refusal, 0)) == vector["class"]
-        assert diagnostics == vector["diagnostics"]
         assert BuilderProtocol.describe_refusal(refusal) == vector["sentence"]
       end
     end
@@ -375,15 +396,16 @@ defmodule Compendium.Builds.ClientTest do
       [refused | _] =
         Enum.filter(@fixture["lines"]["refusals"], &(&1["class"] == "protocol_mismatch"))
 
-      progress = %{"version" => 2, "type" => "progress", "stage" => "compiling", "message" => "…"}
+      progress = %{"version" => 1, "type" => "progress", "stage" => "compiling", "message" => "…"}
+      %{"builder" => builder, "client" => client} = refused["reason"]
 
       ScriptedBuilder.script([
         {:respond, 409, refused["body"]},
         {:stream, [{:line, Jason.encode!(progress)}, {:result, component()}]}
       ])
 
+      assert {:error, {:protocol_mismatch, ^builder, ^client}} = build()
       assert {:error, {:protocol_mismatch, 1, 2}} = build()
-      assert {:error, {:protocol_mismatch, 2, 1}} = build()
     end
   end
 
@@ -431,7 +453,7 @@ defmodule Compendium.Builds.ClientTest do
 
       line =
         Jason.encode!(%{
-          "version" => 1,
+          "version" => BuilderProtocol.version(),
           "type" => "progress",
           "stage" => "output",
           "message" => message
@@ -442,44 +464,38 @@ defmodule Compendium.Builds.ClientTest do
       assert {:error, {:malformed, {:too_large, :line, _bytes, ^max}}} = build()
     end
 
-    test "an answer past the answer bound is ended there" do
+    test "a line past the bound of any line is ended there" do
       mebibyte = :binary.copy("x", 1_048_576)
-      times = div(BuilderProtocol.max_answer_bytes(), 1_048_576) + 2
+      times = div(BuilderProtocol.max_line_size(), 1_048_576) + 2
       ScriptedBuilder.script([{:stream, [{:repeat, mebibyte, times}, {:result, component()}]}])
 
-      max = BuilderProtocol.max_answer_bytes()
+      max = BuilderProtocol.max_line_size()
       assert {:error, {:malformed, {:response_too_large, seen, ^max}}} = build()
       assert seen > max
     end
 
-    test "the answer bound holds across lines, not for each" do
-      # Progress lines that each read, together past the bound.
-      message = String.duplicate("x", BuilderProtocol.max_line_bytes())
-      {:ok, line} = BuilderProtocol.encode_progress(:output, message)
-      times = div(BuilderProtocol.max_answer_bytes(), byte_size(line)) + 2
+    test "a log past the bound the builder charges is refused, and one at it is read" do
+      {progress, diagnostics, _streamed} = full_log()
+      {:ok, one_more} = BuilderProtocol.encode_progress(:output, "a")
 
       ScriptedBuilder.script([
-        {:stream, [{:repeat, line <> "\n", times}, {:result, component()}]}
+        {:stream, progress ++ [{:result, component()}]},
+        {:stream, progress ++ [{:line, one_more}, {:result, component()}]}
       ])
 
-      assert {:error, {:malformed, {:response_too_large, _seen, _max}}} = build()
+      assert {:ok, built} = build()
+      assert built.diagnostics == diagnostics
+
+      max = BuilderProtocol.max_log_bytes()
+      assert {:error, {:malformed, {:too_large, :log, _bytes, ^max}}} = build()
     end
 
     test "the largest answer the protocol allows is read whole" do
-      {progress, diagnostics, streamed} = full_log()
+      {progress, diagnostics, _streamed} = full_log()
       outputs = largest_outputs(BuilderProtocol.max_output_bytes())
 
-      result = %{
-        language: :javascript,
-        target_type: :tincture,
-        outputs: outputs,
-        diagnostics: {:encoded, diagnostics}
-      }
-
-      {:ok, terminal} = BuilderProtocol.encode_result(result)
-      assert streamed + byte_size(terminal) + 1 <= BuilderProtocol.max_answer_bytes()
-
-      ScriptedBuilder.script([{:stream, progress ++ [{:line, terminal}]}])
+      result = %{language: :javascript, target_type: :tincture, outputs: outputs}
+      ScriptedBuilder.script([{:stream, progress ++ [{:result, result}]}])
       test = self()
 
       assert {:ok, built} =
@@ -489,41 +505,28 @@ defmodule Compendium.Builds.ClientTest do
 
       assert built.output_files == outputs
       for _line <- progress, do: assert_received(:progress)
-      assert length(built.diagnostics) == length(diagnostics)
-      assert built.diagnostics == Enum.map(diagnostics, &Jason.decode!/1)
+      assert built.diagnostics == diagnostics
     end
 
     test "one byte of output past the bound is refused, bounded and typed" do
-      {progress, diagnostics, _streamed} = full_log()
       max = BuilderProtocol.max_output_bytes()
-      outputs = largest_outputs(max + 1)
+      chunk = :binary.copy(<<0>>, BuilderProtocol.max_chunk_bytes())
+      chunks = div(max, byte_size(chunk)) + 1
 
-      # No writer of the protocol makes this line; it is spelled here.
-      terminal =
-        Jason.encode!(%{
-          "version" => BuilderProtocol.version(),
-          "type" => "result",
-          "language" => "javascript",
-          "target_type" => "tincture",
-          "outputs" =>
-            outputs
-            |> Enum.sort()
-            |> Enum.map(fn {path, bytes} ->
-              %{
-                "path" => path,
-                "base64" => Base.encode64(bytes),
-                "digest" => Prima.Digest.sha256(bytes)
-              }
-            end),
-          "diagnostics" => Jason.Fragment.new([?[, Enum.intersperse(diagnostics, ?,), ?]])
-        })
+      # No writer of the protocol sends past the bound; the lines are
+      # spelled here, each within its own.
+      lines =
+        for seq <- 1..chunks do
+          {:ok, line} = BuilderProtocol.encode_output("big.bin", seq, chunk)
+          {:line, line}
+        end
 
-      ScriptedBuilder.script([{:stream, progress ++ [{:line, terminal}]}])
+      ScriptedBuilder.script([{:stream, lines}])
 
       assert {:error, {:malformed, {:too_large, :outputs, over, ^max}}} =
                build(request(%{target_type: :tincture, sources: %{"package.json" => "{}"}}))
 
-      assert over == max + 1
+      assert over > max
     end
   end
 
@@ -642,8 +645,8 @@ defmodule Compendium.Builds.ClientTest do
     test "a health line of another version is a mismatch; one that does not read is malformed" do
       health = Jason.decode!(@fixture["lines"]["health"]["body"])
 
-      ScriptedBuilder.health({:line, Jason.encode!(%{health | "version" => 2})})
-      assert {:error, {:protocol_mismatch, 2, 1}} = Client.toolchains()
+      ScriptedBuilder.health({:line, Jason.encode!(%{health | "version" => 1})})
+      assert {:error, {:protocol_mismatch, 1, 2}} = Client.toolchains()
 
       ScriptedBuilder.health({:line, Jason.encode!(Map.delete(health, "toolchains"))})
       assert {:error, {:malformed, {:missing_field, "toolchains"}}} = Client.toolchains()

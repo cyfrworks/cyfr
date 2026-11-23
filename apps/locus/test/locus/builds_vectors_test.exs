@@ -12,11 +12,13 @@ defmodule Locus.BuildsVectorsTest do
   refused `unauthorized` with its reason; every invalid body is refused
   with the class its error names, at the vectors' status; the health body
   is answered with a line of the vectors' shape; a refusal the service
-  makes is, byte for byte, the vectors' line for it; and the largest answer
-  the service can write — its log spent through `Locus.Diagnostics`, its
-  terminal line carrying those lines as they were charged beside outputs
-  at every bound — is within the vectors' `max_answer_bytes`, while one
-  byte of output more is no result at all.
+  makes is, byte for byte, the vectors' line for it; and the largest lines
+  the service can write — a progress line of its log spent through
+  `Locus.Diagnostics`, an output line of a whole relay frame under the
+  longest path, a result naming the most files under the longest paths —
+  are within the vectors' bounds for each, and within what a build is
+  granted to hold (`Locus.Builder.held_bytes/0`), while one byte of output
+  more is no result at all.
   """
 
   # Installs the vectors' key as the service's and replaces PATH.
@@ -132,7 +134,7 @@ defmodule Locus.BuildsVectorsTest do
       Agent.update(clock, fn _ -> vector["now"] end)
       forget_nonces()
 
-      assert {status, [{:refusal, {:unauthorized, reason}, []}]} =
+      assert {status, [{:refusal, {:unauthorized, reason}}]} =
                post(port, "build", vector["body"], vector["header"]),
              vector["name"]
 
@@ -145,7 +147,7 @@ defmodule Locus.BuildsVectorsTest do
     assert @vectors["invalid_requests"] != []
 
     for vector <- @vectors["invalid_requests"] do
-      {status, [{:refusal, refusal, []}]} = refuse_invalid(port, vector)
+      {status, [{:refusal, refusal}]} = refuse_invalid(port, vector)
       class = if vector["error"] == "version", do: :protocol_mismatch, else: :malformed
 
       assert elem(refusal, 0) == class, vector["name"]
@@ -171,39 +173,66 @@ defmodule Locus.BuildsVectorsTest do
     end
   end
 
-  describe "the largest answer" do
-    test "the service's largest answer is within the vectors' answer bound" do
+  describe "the largest lines" do
+    test "the service's largest lines are within the vectors' bounds and what a build is granted" do
       bounds = @vectors["bounds"]
-      {progress, diagnostics} = spent_log()
+      progress = spent_log()
 
       # The log is the vectors' to the last line that fits: what is left of
       # it holds no line of the builder's own.
       assert charged(progress) <= bounds["max_log_bytes"]
       assert bounds["max_log_bytes"] - charged(progress) < byte_size(List.last(progress)) + 1
+      largest_progress = progress |> Enum.map(&(byte_size(&1) + 1)) |> Enum.max()
+      assert largest_progress <= bounds["max_line_size"]
 
-      {:ok, terminal} =
+      # An output line of a whole relay frame under the longest path.
+      frame = :binary.copy(<<0xFF>>, Prima.KeeperProtocol.max_frame_bytes())
+      [path | _] = Map.keys(largest_outputs(bounds["max_output_files"]))
+      {:ok, output} = BuilderProtocol.encode_output(path, 1, frame)
+      assert byte_size(output) + 1 <= bounds["max_output_line_bytes"]
+
+      # A result naming the most files, each under the longest path, at the
+      # largest sizes.
+      named =
+        for {path, bytes} <- largest_outputs(bounds["max_output_files"]) do
+          %{
+            path: path,
+            size: div(bounds["max_output_bytes"], bounds["max_output_files"]),
+            digest: Prima.Digest.sha256(bytes)
+          }
+        end
+
+      {:ok, result} =
         BuilderProtocol.encode_result(%{
           language: :javascript,
           target_type: :tincture,
-          outputs: largest_outputs(bounds["max_output_bytes"]),
-          diagnostics: {:encoded, diagnostics}
+          outputs: named
         })
 
-      answer = charged(progress) + byte_size(terminal) + 1
-      assert answer <= bounds["max_answer_bytes"]
-      assert answer > bounds["max_answer_bytes"] - bounds["max_output_files"] * 1_100
+      assert byte_size(result) + 1 <= bounds["max_result_line_bytes"]
+
+      assert byte_size(result) + 1 >
+               bounds["max_result_line_bytes"] - bounds["max_output_files"] * 32
+
+      # What a build is granted to hold covers a read, a progress line, an
+      # output line and its result together, with room to spare.
+      assert 2 * (byte_size(frame) + 5) + 2 * largest_progress + byte_size(output) +
+               byte_size(result) < Locus.Builder.held_bytes()
     end
 
     test "one byte of output past the bound is no result the service can write" do
       bounds = @vectors["bounds"]
       max = bounds["max_output_bytes"]
+      half = div(max, 2) + 1
 
       assert {:error, {:too_large, :outputs, over, ^max}} =
                BuilderProtocol.encode_result(%{
                  language: :javascript,
                  target_type: :tincture,
-                 outputs: largest_outputs(max + 1),
-                 diagnostics: []
+                 outputs: [
+                   %{path: "a.bin", size: half, digest: Prima.Digest.sha256("")},
+                   %{path: "b.bin", size: max + 1 - half, digest: Prima.Digest.sha256("")}
+                 ]
                })
 
       assert over == max + 1
@@ -229,8 +258,7 @@ defmodule Locus.BuildsVectorsTest do
       |> Enum.take_while(&(&1 != []))
       |> Enum.concat()
 
-    admitted = build ++ builder
-    {Enum.map(admitted, &elem(&1, 0)), Enum.map(admitted, &elem(&1, 1))}
+    build ++ builder
   end
 
   defp charged(lines), do: Enum.reduce(lines, 0, &(byte_size(&1) + 1 + &2))

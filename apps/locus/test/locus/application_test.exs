@@ -23,6 +23,9 @@ defmodule Locus.ApplicationTest do
   @builds %{runtime: false, builds: true, backends: false}
   @backends %{runtime: false, builds: false, backends: true}
   @both %{runtime: false, builds: true, backends: true}
+  # Each role's count of the output it holds, before any role's children.
+  @outputs [{Locus.Output, :runtime}, {Locus.Output, :builds}, {Locus.Output, :backends}]
+
   @backends_children [
     Locus.Backends.Owners,
     DynamicSupervisor,
@@ -32,6 +35,7 @@ defmodule Locus.ApplicationTest do
 
   defp ids(children) do
     Enum.map(children, fn
+      {Locus.Output, role} -> {Locus.Output, role}
       {module, _opts} -> module
       %{id: id} -> id
       module when is_atom(module) -> module
@@ -79,11 +83,8 @@ defmodule Locus.ApplicationTest do
 
   test "a runtime node started by cyfr-locus starts the one client of it before the runtime's supervisor" do
     for launcher <- [Locus.Executor.direct_launcher(), @release_launcher] do
-      assert ids(App.children(@runtime, true, launcher)) == [
-               Prima.Slots,
-               Locus.Keeper,
-               Locus.Runtime.Supervisor
-             ]
+      assert ids(App.children(@runtime, true, launcher)) ==
+               [Prima.Slots, Locus.Keeper | @outputs] ++ [Locus.Runtime.Supervisor]
 
       # Its runners' relays attach where the runtime's settings say.
       assert {Locus.Keeper, opts} = Enum.at(App.children(@runtime, true, launcher), 1)
@@ -91,10 +92,8 @@ defmodule Locus.ApplicationTest do
 
       # A test boot holds no channel: its runtime runs on the direct keeper,
       # and no client starts.
-      assert ids(App.children(@runtime, false, launcher)) == [
-               Prima.Slots,
-               Locus.Runtime.Supervisor
-             ]
+      assert ids(App.children(@runtime, false, launcher)) ==
+               [Prima.Slots | @outputs] ++ [Locus.Runtime.Supervisor]
     end
 
     assert [
@@ -115,14 +114,15 @@ defmodule Locus.ApplicationTest do
 
   test "a node that serves under cyfr-locus starts the keeper's client before the services that depend on it" do
     for launcher <- [Locus.Executor.direct_launcher(), @release_launcher] do
-      assert ids(App.children(@builds, true, launcher)) == [Prima.Slots, Locus.Keeper, Bandit]
+      assert ids(App.children(@builds, true, launcher)) ==
+               [Prima.Slots, Locus.Keeper | @outputs] ++ [Bandit]
 
       assert ids(App.children(@backends, true, launcher)) ==
-               [Prima.Slots, Locus.Keeper | @backends_children]
+               [Prima.Slots, Locus.Keeper | @outputs] ++ @backends_children
 
       # Both services on one node: the backends' children after the builds'.
       assert ids(App.children(@both, true, launcher)) ==
-               [Prima.Slots, Locus.Keeper, Bandit | @backends_children]
+               [Prima.Slots, Locus.Keeper | @outputs] ++ [Bandit | @backends_children]
     end
   end
 
@@ -159,9 +159,11 @@ defmodule Locus.ApplicationTest do
 
     # The test build knows the launcher, and serves through it.
     assert Locus.Executor.direct_launcher() == Locus.DirectLauncher
-    assert ids(App.children(@builds, false)) == [Prima.Slots, Bandit]
-    assert ids(App.children(@backends, false)) == [Prima.Slots | @backends_children]
-    assert ids(App.children(@both, false)) == [Prima.Slots, Bandit | @backends_children]
+    assert ids(App.children(@builds, false)) == [Prima.Slots | @outputs] ++ [Bandit]
+    assert ids(App.children(@backends, false)) == [Prima.Slots | @outputs] ++ @backends_children
+
+    assert ids(App.children(@both, false)) ==
+             [Prima.Slots | @outputs] ++ [Bandit | @backends_children]
   end
 
   test "both services' nonce tables exist before the tree, owned by the application" do

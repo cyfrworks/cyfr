@@ -7,8 +7,10 @@ defmodule Locus.BuilderTest do
   own refusal, and nothing in between: what a request lacks is `malformed`
   before anything runs, a toolchain this machine lacks is `unavailable`, a
   build that exits non-zero is `failed` with its status, and output past a
-  bound is refused as `failed`, never cut to fit. The executor here is the
-  test environment's direct launcher.
+  bound is refused as `failed`, never cut to fit. Its files leave it as
+  output lines, each read back here through the wire's own rules and kept
+  only once its result names them. The executor here is the test
+  environment's direct launcher.
   """
 
   # Replaces PATH for the duration of one test.
@@ -19,14 +21,35 @@ defmodule Locus.BuilderTest do
 
   # A build as the service runs one: its place made, the request prepared,
   # then its plan run in the place, which is dropped however the build ends.
+  # Its output lines are read as a client reads them, and a result answers
+  # the files they carried.
   defp build(request, opts \\ []) do
     {:ok, place} = Builder.place(%{athanor_id: "ath_builder"})
+    {:ok, lines} = Agent.start_link(fn -> [] end)
+    on_line = fn line -> Agent.update(lines, &[line | &1]) end
 
     try do
-      with {:ok, plan} <- Builder.prepare(request), do: Builder.run(plan, [place: place] ++ opts)
+      with {:ok, plan} <- Builder.prepare(request),
+           {:ok, result} <- Builder.run(plan, opts ++ [place: place, on_line: on_line]) do
+        {:ok, %{result | outputs: received(Agent.get(lines, &Enum.reverse/1), result)}}
+      end
     after
       Builder.drop(place)
     end
+  end
+
+  defp received(lines, result) do
+    outputs =
+      Enum.reduce(lines, BuilderProtocol.outputs(), fn line, outputs ->
+        assert {:ok, {:output, chunk}} = BuilderProtocol.read_line(line)
+        assert {:ok, outputs} = BuilderProtocol.output(outputs, chunk)
+        outputs
+      end)
+
+    assert {:ok, line} = BuilderProtocol.encode_result(result)
+    assert {:ok, {:result, ^result}} = BuilderProtocol.read_line(line)
+    assert {:ok, files} = BuilderProtocol.outputs(outputs, result)
+    files
   end
 
   defp rust(sources, fields \\ %{}) do
@@ -216,11 +239,6 @@ defmodule Locus.BuilderTest do
       assert Enum.dedup(stages) == [:preparing, :compiling, :output]
       assert Enum.all?(stages, &(&1 in BuilderProtocol.stages()))
       assert {:output, "built"} in progress.()
-
-      # What the builder answers is a result the wire carries.
-      assert {:ok, line} = BuilderProtocol.encode_result(Map.put(built, :diagnostics, []))
-      assert {:ok, {:result, %{outputs: outputs}}} = BuilderProtocol.read_line(line)
-      assert outputs == built.outputs
     end
 
     test "that exits non-zero is failed with its status, its log delivered" do
@@ -270,16 +288,27 @@ defmodule Locus.BuilderTest do
     end
 
     @tag timeout: 120_000
-    test "whose archive passes what the executor collects is ended there" do
+    test "whose file is past the bound is refused at its header, before any of its bytes leave" do
       {on_progress, progress} = collecting()
-      past = BuilderProtocol.max_output_bytes() + 8 * 1024 * 1024
+      # Past the wire's bound and within what the executor counts, so the
+      # header is what refuses it.
+      past = BuilderProtocol.max_output_bytes() + 1_048_576
+      test = self()
 
-      script = "mkdir dist && head -c #{past} /dev/zero > dist/big"
+      script = "mkdir dist && echo small > dist/a && head -c #{past} /dev/zero > dist/big"
 
-      assert {:error, {:failed, _exit}} =
-               build(scripted(script), on_progress: on_progress)
+      assert {:error, {:failed, {:status, 0}}} =
+               build(scripted(script),
+                 on_progress: on_progress,
+                 on_line: &send(test, {:line, &1})
+               )
 
-      assert Enum.any?(progress.(), fn {_stage, message} -> message =~ "was refused" end)
+      assert Enum.any?(progress.(), fn {_stage, message} -> message =~ "outputs total" end)
+
+      # The small file left; nothing of the big one did.
+      assert_received {:line, line}
+      assert {:ok, {:output, %{path: "a"}}} = BuilderProtocol.read_line(line)
+      refute_received {:line, _}
     end
 
     test "past its budget is a timeout naming the budget" do

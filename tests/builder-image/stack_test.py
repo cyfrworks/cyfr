@@ -10,6 +10,8 @@ read from the call.
 Usage: python3 -I tests/builder-image/stack_test.py
 """
 
+import base64
+import hashlib
 import json
 import os
 import shlex
@@ -158,6 +160,53 @@ class GuardCounters(unittest.TestCase):
     def test_the_counters_that_were_read_are_the_control(self):
         self.assertEqual(self.guard((0, "[1:2] -A INPUT -j DROP\n"), (0, "[3:4] -A OUTPUT -j ACCEPT\n")).guard_counters(),
                          {"-A INPUT -j DROP": 1, "-A OUTPUT -j ACCEPT": 3})
+
+
+def output(path, seq, data):
+    return {"version": stack.VERSION, "type": "output", "path": path, "seq": seq,
+            "bytes": base64.b64encode(data).decode()}
+
+
+def result(files):
+    return {"version": stack.VERSION, "type": "result", "language": "javascript", "target_type": "tincture",
+            "outputs": [{"path": path, "size": len(data), "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
+                        for path, data in files.items()]}
+
+
+PROGRESS = {"version": stack.VERSION, "type": "progress", "stage": "output", "message": "bundling"}
+
+
+class ReadAnswer(unittest.TestCase):
+    """An answer's lines are read as a client reads them: its log, and its files only under a result naming them."""
+
+    def test_a_result_keeps_the_files_its_lines_carried_and_the_log(self):
+        progress, terminal = stack.read_answer([
+            PROGRESS, output("a.js", 1, b"one "), output("a.js", 2, b"two"), output("index.html", 3, b""),
+            result({"a.js": b"one two", "index.html": b""})])
+        self.assertEqual(progress, [PROGRESS])
+        self.assertEqual(terminal["files"], {"a.js": b"one two", "index.html": b""})
+        self.assertEqual(terminal["diagnostics"], ["output: bundling"])
+        self.assertEqual(stack.output_bytes(terminal, "a.js"), b"one two")
+
+    def test_a_refusal_keeps_nothing_of_the_lines_before_it(self):
+        refusal = {"version": stack.VERSION, "type": "refusal", "class": "failed", "reason": {"status": 2}}
+        _progress, terminal = stack.read_answer([output("a.js", 1, b"x"), refusal])
+        self.assertNotIn("files", terminal)
+        self.assertIsNone(stack.output_bytes(terminal, "a.js"))
+
+    def test_a_line_out_of_order_fails(self):
+        with self.assertRaises(SystemExit):
+            stack.read_answer([output("a.js", 2, b"x"), result({"a.js": b"x"})])
+
+    def test_a_path_come_back_to_fails(self):
+        with self.assertRaises(SystemExit):
+            stack.read_answer([output("a", 1, b"x"), output("b", 2, b"y"), output("a", 3, b"z"),
+                               result({"a": b"xz", "b": b"y"})])
+
+    def test_a_result_naming_other_files_or_digests_fails(self):
+        for named in ({"a": b"x", "b": b""}, {"a": b"y"}):
+            with self.assertRaises(SystemExit):
+                stack.read_answer([output("a", 1, b"x"), result(named)])
 
 
 if __name__ == "__main__":

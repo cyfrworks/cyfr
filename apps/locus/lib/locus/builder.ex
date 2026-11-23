@@ -27,10 +27,17 @@ defmodule Locus.Builder do
   stderr, which is the build log. Its products leave as a ustar archive
   (names of at most 255 bytes, no extended headers) on stdout: the
   component and the `Cargo.lock` it used, or a tincture's
-  `dist/`. That archive is untrusted: only its regular files are read, each
-  name must be a safe relative path, and its files and bytes are held to
-  the wire's output bounds; output past a bound is refused as `failed`,
-  never truncated.
+  `dist/`. That archive is untrusted and is read as it arrives
+  (`Locus.Archive`), a relay frame at a time: only its regular files are
+  read, each name must be a safe relative path, and its files and bytes
+  are held to the wire's output bounds, each file's name, the count and
+  the total checked from its header before any of its bytes leave. Each
+  piece of an output file leaves at once as an output line
+  (`Prima.BuilderProtocol.encode_output/3`), handed to `:on_line` and
+  taken before the next piece is read, with the file's running digest
+  kept; nothing of a file is held here. Output past a bound is refused as
+  `failed` after whatever lines went before it, which the client then
+  keeps nothing of, never truncated.
 
   Each build runs through cyfr-locus under a pooled uid of its own
   (`Locus.Keeper`): a 0700 home neither another build nor this node's user
@@ -59,9 +66,9 @@ defmodule Locus.Builder do
   step with the package manifest. Install scripts run, as the build
   itself does: under the build's uid, in its home, with the environment
   above, which carries no credential — the builds key and anything else
-  of this node's environment stay outside. The compiled WASM is validated
-  (`Prima.Wasm`) before it is answered; it executes only inside the
-  runtime's sandbox.
+  of this node's environment stay outside. The compiled WASM is the
+  client's to validate (`Compendium.Builds.Client`) once a result names
+  it; it executes only inside the runtime's sandbox.
 
   A tincture's bundle keeps the notices of what it ships:
   `dist/third-party-notices.json` lists every runtime package the
@@ -70,10 +77,12 @@ defmodule Locus.Builder do
 
   ## What a build answers
 
-  `{:ok, %{language, target_type, outputs}}`, where a component's outputs
-  are `Prima.BuilderProtocol.component_wasm/0` and, when the build left
-  one, `component_lockfile/0`, and a tincture's are the files of its
-  `dist/`; or `{:error, refusal}`, a `t:Prima.BuilderProtocol.refusal/0`:
+  `{:ok, %{language, target_type, outputs}}` once every output line was
+  taken, where `outputs` names each file sent with its size and digest,
+  in the order sent (a component's are
+  `Prima.BuilderProtocol.component_wasm/0` and, when the build left one,
+  `component_lockfile/0`, a tincture's the files of its `dist/`); or
+  `{:error, refusal}`, a `t:Prima.BuilderProtocol.refusal/0`:
 
   | Refusal | When |
   |---|---|
@@ -94,6 +103,23 @@ defmodule Locus.Builder do
 
   # The output archive adds headers, padding and a Cargo.lock to its files.
   @max_output_archive_bytes BuilderProtocol.max_output_bytes() + 4 * 1024 * 1024
+
+  # What a build holds of its output at most, beside the plan it runs (see
+  # `held_bytes/0`): a read of its relay and the frame it may end inside;
+  # the log's line not yet ended; the progress lines one log line makes,
+  # each piece's message escaped at most six times over; one output line,
+  # a frame's bytes in base64 under the longest path escaped; what it keeps
+  # of each file sent; and its result line.
+  @frame_bytes Prima.KeeperProtocol.max_frame_bytes()
+  @read_bytes 2 * (IO.iodata_length(Prima.KeeperProtocol.end_frame(:stdout)) + @frame_bytes)
+  @envelope_bytes 256
+  @progress_bytes 2 * (6 * BuilderProtocol.max_line_bytes() + @envelope_bytes)
+  @output_line_bytes 4 * div(@frame_bytes + 2, 3) + 2 * BuilderProtocol.max_output_path_bytes() +
+                       @envelope_bytes
+  @sent_bytes BuilderProtocol.max_output_files() *
+                (BuilderProtocol.max_output_path_bytes() + @envelope_bytes)
+  @held_bytes @read_bytes + BuilderProtocol.max_line_bytes() + @progress_bytes +
+                @output_line_bytes + @sent_bytes + BuilderProtocol.max_result_line_bytes()
 
   # The toolchain settings a build takes from this node's environment.
   @toolchain_env ~w(RUSTUP_HOME LANG LC_ALL LC_CTYPE HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy)
@@ -191,15 +217,18 @@ defmodule Locus.Builder do
             announce: String.t()
           }
 
-  @typedoc "A finished build: its output files by path."
-  @type built :: %{
-          language: BuilderProtocol.language(),
-          target_type: BuilderProtocol.target_type(),
-          outputs: %{String.t() => binary()}
-        }
+  @typedoc "A finished build: the files it sent, by path, size and digest, in the order sent."
+  @type built :: BuilderProtocol.result()
 
-  @typedoc "Called with each stage the build enters and each line of its log (`:output`)."
-  @type on_progress :: (BuilderProtocol.stage(), String.t() -> any())
+  @typedoc """
+  Called with each stage the build enters and each line of its log
+  (`:output`); `{:error, reason}` is the taker's word that it takes no
+  more, and ends the build.
+  """
+  @type on_progress :: (BuilderProtocol.stage(), String.t() -> Locus.Executor.taken())
+
+  @typedoc "Called with each output line, the next only once it returned; `{:error, reason}` ends the build."
+  @type on_line :: (binary() -> Locus.Executor.taken())
 
   @doc """
   Check `request` and pack it, running nothing: `{:ok, plan}` for `run/2`,
@@ -260,27 +289,45 @@ defmodule Locus.Builder do
     given. Past it every process the build started is killed and the
     answer is the `timeout` refusal naming it.
   - `:on_progress` — a `t:on_progress/0`.
+  - `:on_line` — a `t:on_line/0`, handed each output line.
 
-  `{:error, :cancelled}` answers a run ended by `Locus.Executor.cancel/1`.
+  `{:error, :cancelled}` answers a run ended by `Locus.Executor.cancel/1`,
+  or by a taker that takes no more.
   """
-  @spec run(plan(), place: String.t(), timeout_ms: pos_integer(), on_progress: on_progress()) ::
-          {:ok, built()} | {:error, BuilderProtocol.refusal() | :cancelled}
+  @spec run(plan(),
+          place: String.t(),
+          timeout_ms: pos_integer(),
+          on_progress: on_progress(),
+          on_line: on_line()
+        ) :: {:ok, built()} | {:error, BuilderProtocol.refusal() | :cancelled}
   def run(%{language: language, target_type: target_type} = plan, opts \\ []) do
     timeout_ms = Keyword.get_lazy(opts, :timeout_ms, &Locus.Config.timeout_ms/0)
     on_progress = Keyword.get(opts, :on_progress, fn _stage, _message -> :ok end)
-
-    on_progress.(:preparing, "Preparing source files...")
-
+    on_line = Keyword.get(opts, :on_line, fn _line -> :ok end)
     place = Keyword.fetch!(opts, :place)
 
-    with {:ok, executor} <- executor(),
-         _ = on_progress.(:compiling, plan.announce),
-         {:ok, files} <- execute(executor, plan, place, timeout_ms, on_progress),
-         {:ok, outputs} <- outputs(plan, files, on_progress),
-         :ok <- within_bounds(outputs, on_progress) do
+    with :ok <- said(on_progress.(:preparing, "Preparing source files...")),
+         {:ok, executor} <- executor(),
+         :ok <- said(on_progress.(:compiling, plan.announce)),
+         {:ok, stream} <- execute(executor, plan, place, timeout_ms, on_progress, on_line),
+         {:ok, outputs} <- outputs(plan, stream, on_progress) do
       {:ok, %{language: language, target_type: target_type, outputs: outputs}}
     end
   end
+
+  # A taker that takes no more ends the build as a cancel does.
+  defp said({:error, _reason}), do: {:error, :cancelled}
+  defp said(_taken), do: :ok
+
+  @doc """
+  The most a build holds of its output while it runs and answers, which
+  the builds role's count grants it whole (`Locus.Output`): a read of its
+  relay and the frame it may end inside, the log's line not yet ended, the
+  progress lines one log line makes, one output line, what it keeps of each
+  file sent, and its result line. Nothing of a file is held.
+  """
+  @spec held_bytes() :: pos_integer()
+  def held_bytes, do: @held_bytes
 
   @doc """
   Check if a compilation toolchain is available on the system.
@@ -482,20 +529,21 @@ defmodule Locus.Builder do
   # The run
   # ============================================================================
 
-  # Runs the build's script and reads its output archive.
-  defp execute(executor, plan, place, timeout_ms, on_progress) do
+  # Runs the build's script and reads its output archive as it arrives.
+  defp execute(executor, plan, place, timeout_ms, on_progress, on_line) do
     command = %{argv: plan.argv, env: toolchain_env(), stdin: plan.archive}
 
     opts = [
       place: place,
       timeout_ms: timeout_ms,
       max_stdout_bytes: @max_output_archive_bytes,
+      on_stdout: {stream(plan, on_progress, on_line), &take/2},
       on_output: &on_progress.(:output, &1)
     ]
 
     case executor.run(command, opts) do
-      {:ok, %{exit: {:status, 0}, stdout: stdout}} ->
-        output_archive(stdout, on_progress)
+      {:ok, %{exit: {:status, 0}, taken: stream}} ->
+        ended(stream, on_progress)
 
       {:ok, %{exit: exit}} ->
         {:error, {:failed, exit}}
@@ -519,8 +567,17 @@ defmodule Locus.Builder do
 
       # The executor ended the build where its stdout passed the bound.
       {:error, {:output_too_large, max}} ->
-        on_progress.(:compiling, "the build's output passed #{max} bytes and was refused")
-        {:error, {:failed, {:signal, "SIGKILL"}}}
+        refused_output(
+          on_progress,
+          :compiling,
+          "the build's output passed #{max} bytes and was refused"
+        )
+        |> killed()
+
+      # The archive was refused as it arrived: what it was is said, and the
+      # build was ended there.
+      {:error, {:taker, {:refused, stage, message}}} ->
+        refused_output(on_progress, stage, message)
 
       {:error, {:spawn_failed, reason}} ->
         Logger.error("[Locus.Builder] a build could not be run: #{inspect(reason)}")
@@ -528,31 +585,153 @@ defmodule Locus.Builder do
     end
   end
 
+  defp killed({:error, _refusal}), do: {:error, {:failed, {:signal, "SIGKILL"}}}
+
   defp spawn_failure(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp spawn_failure(reason) when is_binary(reason), do: reason
   defp spawn_failure({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
   defp spawn_failure(_reason), do: "spawn_failed"
 
-  defp output_archive(stdout, on_progress) do
-    case Locus.Archive.unpack(stdout, BuilderProtocol.max_output_files()) do
-      {:ok, files, skipped} ->
-        if skipped != [],
-          do:
-            Logger.warning(
-              "[Locus.Builder] skipped #{length(skipped)} non-regular entries in build output"
-            )
+  # ————— the output archive, as it arrives —————
 
-        {:ok, files}
+  # The archive's reader and what was sent of it: the file being sent, if
+  # it is an output, every file sent with its size and digest, the lines
+  # sent and the bytes.
+  defp stream(plan, on_progress, on_line) do
+    %{
+      plan: plan,
+      on_progress: on_progress,
+      on_line: on_line,
+      archive: Locus.Archive.reader(BuilderProtocol.max_output_files()),
+      started: false,
+      file: nil,
+      sent: [],
+      seq: 0,
+      bytes: 0,
+      skipped: 0
+    }
+  end
 
-      {:error, {:too_many_files, max}} ->
-        refused_output(on_progress, :compiling, "the build produced more than #{max} files")
-
-      {:error, {:unsafe_path, _name}} ->
-        refused_output(on_progress, :compiling, "the build's output names an unsafe path")
-
-      {:error, {:unreadable, _reason}} ->
-        refused_output(on_progress, :compiling, "the build's output archive is unreadable")
+  # One piece of stdout: its events, each output's bytes sent on before
+  # the next piece is read.
+  defp take(piece, stream) do
+    case Locus.Archive.read(stream.archive, piece) do
+      {:ok, events, archive} -> events(%{stream | archive: archive}, events)
+      {:error, refusal} -> {:error, {:refused, :compiling, archive_refusal(refusal)}}
     end
+  end
+
+  defp events(stream, []), do: {:ok, stream}
+
+  defp events(stream, [event | events]) do
+    case event(stream, event) do
+      {:ok, stream} -> events(stream, events)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  # The archive begins once the build is done compiling: the component's
+  # stage is said then.
+  defp event(%{started: false, plan: %{language: :rust}} = stream, event) do
+    case stream.on_progress.(:validating, "Validating WASM binary...") do
+      {:error, _reason} = error -> error
+      _taken -> event(%{stream | started: true}, event)
+    end
+  end
+
+  defp event(%{started: false} = stream, event), do: event(%{stream | started: true}, event)
+
+  defp event(stream, {:file, name, size}) do
+    case output_path(stream.plan, name) do
+      nil ->
+        {:ok, %{stream | file: nil}}
+
+      path ->
+        total = stream.bytes + size
+        max = BuilderProtocol.max_output_bytes()
+
+        if total > max,
+          do:
+            {:error,
+             {:refused, :validating,
+              "the build's outputs total #{total} bytes; at most #{max} are answered"}},
+          else:
+            {:ok,
+             %{
+               stream
+               | file: %{path: path, size: 0, hash: BuilderProtocol.digest_init(), lines: 0}
+             }}
+    end
+  end
+
+  defp event(%{file: nil} = stream, {:data, _bytes}), do: {:ok, stream}
+  defp event(stream, {:data, bytes}), do: send_chunk(stream, bytes)
+
+  # A file of no bytes is one line of none.
+  defp event(%{file: %{lines: 0}} = stream, :file_end) do
+    with {:ok, stream} <- send_chunk(stream, ""), do: event(stream, :file_end)
+  end
+
+  defp event(%{file: nil} = stream, :file_end), do: {:ok, stream}
+
+  defp event(%{file: file} = stream, :file_end) do
+    sent = %{path: file.path, size: file.size, digest: BuilderProtocol.digest_final(file.hash)}
+    {:ok, %{stream | file: nil, sent: [sent | stream.sent]}}
+  end
+
+  defp event(stream, {:skipped, _name}), do: {:ok, %{stream | skipped: stream.skipped + 1}}
+
+  defp send_chunk(%{file: file} = stream, bytes) do
+    seq = stream.seq + 1
+
+    with {:ok, line} <- encoded(BuilderProtocol.encode_output(file.path, seq, bytes)),
+         :ok <- taken(stream.on_line.(line)) do
+      file = %{
+        file
+        | size: file.size + byte_size(bytes),
+          hash: BuilderProtocol.digest_update(file.hash, bytes),
+          lines: file.lines + 1
+      }
+
+      {:ok, %{stream | file: file, seq: seq, bytes: stream.bytes + byte_size(bytes)}}
+    end
+  end
+
+  # An output whose path the wire does not carry: the archive's names were
+  # held to PathSafety, so this is its bound or a control character.
+  defp encoded({:ok, line}), do: {:ok, line}
+
+  defp encoded({:error, _error}),
+    do:
+      {:error, {:refused, :compiling, "the build's output names a path the wire does not carry"}}
+
+  defp taken({:error, reason}), do: {:error, reason}
+  defp taken(_taken), do: :ok
+
+  # The path an archive entry is sent under, or nil for one that is no
+  # output: a component's WASM and lockfile, a tincture's `dist/` files.
+  defp output_path(%{language: :rust, wasm: wasm}, wasm), do: BuilderProtocol.component_wasm()
+
+  defp output_path(%{language: :rust}, "Cargo.lock"), do: BuilderProtocol.component_lockfile()
+  defp output_path(%{language: :rust}, _name), do: nil
+  defp output_path(%{language: :javascript}, "dist/" <> rel) when rel != "", do: rel
+  defp output_path(%{language: :javascript}, _name), do: nil
+
+  defp archive_refusal({:too_many_files, max}), do: "the build produced more than #{max} files"
+  defp archive_refusal({:unsafe_path, _name}), do: "the build's output names an unsafe path"
+  defp archive_refusal({:unreadable, _reason}), do: "the build's output archive is unreadable"
+
+  # The archive must have ended whole; what it skipped is logged.
+  defp ended(stream, on_progress) do
+    if stream.skipped > 0,
+      do:
+        Logger.warning(
+          "[Locus.Builder] skipped #{stream.skipped} non-regular entries in build output"
+        )
+
+    if Locus.Archive.ended?(stream.archive),
+      do: {:ok, stream},
+      else: refused_output(on_progress, :compiling, archive_refusal({:unreadable, :truncated}))
   end
 
   # The command believed it succeeded; what it left is not an output this
@@ -562,69 +741,19 @@ defmodule Locus.Builder do
     {:error, {:failed, {:status, 0}}}
   end
 
-  defp outputs(%{language: :rust, wasm: wasm}, files, on_progress) do
-    with {:ok, wasm_bytes} <- component(files, wasm, on_progress),
-         _ = on_progress.(:validating, "Validating WASM binary..."),
-         :ok <- validate(wasm_bytes, on_progress) do
-      outputs = %{BuilderProtocol.component_wasm() => wasm_bytes}
+  defp outputs(%{language: :rust, wasm: wasm}, stream, on_progress) do
+    sent = Enum.reverse(stream.sent)
 
-      {:ok,
-       case Map.fetch(files, "Cargo.lock") do
-         {:ok, lockfile} -> Map.put(outputs, BuilderProtocol.component_lockfile(), lockfile)
-         :error -> outputs
-       end}
+    if Enum.any?(sent, &(&1.path == BuilderProtocol.component_wasm())),
+      do: {:ok, sent},
+      else: refused_output(on_progress, :compiling, "cargo exited 0 without producing #{wasm}")
+  end
+
+  defp outputs(%{language: :javascript}, stream, on_progress) do
+    case Enum.reverse(stream.sent) do
+      [] -> refused_output(on_progress, :compiling, "the build produced no output files in dist/")
+      sent -> {:ok, sent}
     end
-  end
-
-  defp outputs(%{language: :javascript}, files, on_progress) do
-    outputs = for {"dist/" <> rel, content} <- files, rel != "", into: %{}, do: {rel, content}
-
-    if map_size(outputs) == 0,
-      do: refused_output(on_progress, :compiling, "the build produced no output files in dist/"),
-      else: {:ok, outputs}
-  end
-
-  defp component(files, wasm, on_progress) do
-    case Map.fetch(files, wasm) do
-      {:ok, bytes} ->
-        {:ok, bytes}
-
-      :error ->
-        refused_output(on_progress, :compiling, "cargo exited 0 without producing #{wasm}")
-    end
-  end
-
-  defp validate(wasm_bytes, on_progress) do
-    case Prima.Wasm.validate(wasm_bytes) do
-      {:ok, _validation} ->
-        :ok
-
-      {:error, reason} ->
-        refused_output(
-          on_progress,
-          :validating,
-          "the component is not valid WASM (#{validation_failure(reason)})"
-        )
-    end
-  end
-
-  defp validation_failure(reason) when is_atom(reason), do: Atom.to_string(reason)
-
-  defp validation_failure(reason) when is_tuple(reason) and is_atom(elem(reason, 0)),
-    do: Atom.to_string(elem(reason, 0))
-
-  defp within_bounds(outputs, on_progress) do
-    total = outputs |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
-    max = BuilderProtocol.max_output_bytes()
-
-    if total > max,
-      do:
-        refused_output(
-          on_progress,
-          :validating,
-          "the build's outputs total #{total} bytes; at most #{max} are answered"
-        ),
-      else: :ok
   end
 
   defp toolchain_env do

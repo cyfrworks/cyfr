@@ -20,20 +20,26 @@ defmodule Compendium.Builds.Client do
 
   The answer is read as it arrives, a line at a time, whatever its HTTP
   status: each progress line is handed to `:on_progress` in the order the
-  builder wrote it, and the first result or refusal ends the answer — the
-  client stops reading there. The whole answer is held to
-  `Prima.BuilderProtocol.max_answer_bytes/0`, the largest answer the
-  protocol's bounds allow, while it streams
-  (`Prima.BoundedBody`), and every line is read strictly
+  builder wrote it and kept as the build's diagnostics, `stage: message`
+  (`Prima.BuilderProtocol.diagnostic/2`), at most
+  `Prima.BuilderProtocol.max_log_bytes/0` of them as the builder charged
+  them; each output line's chunk is kept under its path
+  (`Prima.BuilderProtocol.output/2`); and the first result or refusal ends
+  the answer — the client stops reading there. Each line is held to
+  `Prima.BuilderProtocol.max_line_size/0` while it streams
+  (`Prima.BoundedBody`) and read strictly
   (`Prima.BuilderProtocol.read_line/1`): the builder is another trust
   domain, so a line that does not read, a path that is not a safe relative
-  one, outputs past their bounds and a digest that is not its bytes' each
-  end the request as `:malformed`. A result is then verified here before
-  it is answered: it must be of the language and type asked for, a
-  component's bytes must validate (`Prima.Wasm`) and its
-  digest, size and exports are derived from that validation, never taken
-  from the builder; a tincture's digest is `Prima.Digest.file_set/1` of the
-  files read.
+  one, outputs past their bounds, lines out of their order, and a result
+  that names other files, sizes or digests than the lines carried
+  (`Prima.BuilderProtocol.outputs/2`) each end the request as
+  `:malformed`. What the output lines carried is kept only once a result
+  names it: a refusal, a malformed line or an answer that ends early
+  keeps nothing of them. A result is then verified here before it is
+  answered: it must be of the language and type asked for, a component's
+  bytes must validate (`Prima.Wasm`) and its digest, size and exports are
+  derived from that validation, never taken from the builder; a
+  tincture's digest is `Prima.Digest.file_set/1` of the files read.
 
   ## How a build ends
 
@@ -165,8 +171,8 @@ defmodule Compendium.Builds.Client do
           | {:error, outcome()}
   def toolchains do
     body = BuilderProtocol.encode_health_request()
-    # One line without outputs: a health line, or a refusal and its log.
-    max = BuilderProtocol.max_log_bytes()
+    # One line: a health line, or a refusal.
+    max = BuilderProtocol.max_line_size()
 
     with {:ok, service} <- service(),
          {:ok, header} <- sign(service, body) do
@@ -191,8 +197,7 @@ defmodule Compendium.Builds.Client do
 
   defp health({:ok, {:health, %{toolchains: toolchains}}}), do: {:ok, toolchains}
 
-  defp health({:ok, {:refusal, refusal, diagnostics}}),
-    do: {:error, refused(refusal, diagnostics)}
+  defp health({:ok, {:refusal, refusal}}), do: {:error, refused(refusal, [])}
 
   defp health({:ok, _other_line}), do: {:error, {:malformed, :unexpected_line}}
   defp health({:error, outcome}), do: {:error, outcome}
@@ -293,18 +298,29 @@ defmodule Compendium.Builds.Client do
   # The answer, a line at a time
   # ---------------------------------------------------------------------------
 
-  # The line being received is collected by `Prima.BoundedBody` against
-  # what is left of the answer's bound, so the bound holds over the whole
-  # answer without a second copy of it.
+  # The line being received is collected by `Prima.BoundedBody` against the
+  # bound of any line, so no line is held past it; what the lines carried
+  # is kept as they are read.
   defp reader(on_progress) do
     fn {:data, data}, {req, resp} ->
-      state = resp.private[@state] || %{line: new_line(), left: max_answer_bytes(), ended: nil}
+      state = resp.private[@state] || new_state()
 
       case read(data, state, resp.status, on_progress) do
         {:cont, state} -> {:cont, {req, put_state(resp, state)}}
         {:halt, state} -> {:halt, {req, put_state(resp, state)}}
       end
     end
+  end
+
+  defp new_state do
+    %{
+      line: new_line(),
+      left: max_line_size(),
+      outputs: BuilderProtocol.outputs(),
+      log: [],
+      log_bytes: 0,
+      ended: nil
+    }
   end
 
   defp read(data, state, status, on_progress) do
@@ -322,9 +338,6 @@ defmodule Compendium.Builds.Client do
 
   defp collect("", state), do: {:cont, state}
 
-  defp collect(part, %{left: left} = state) when left < 1,
-    do: {:halt, %{state | ended: {:error, too_large(byte_size(part) - left)}}}
-
   defp collect(part, %{line: line, left: left} = state) do
     case BoundedBody.collector(left).({:data, part}, {nil, line}) do
       {:cont, {nil, line}} ->
@@ -338,24 +351,53 @@ defmodule Compendium.Builds.Client do
 
   defp finish_line(%{line: line, left: left} = state, status, on_progress) do
     {:ok, text} = BoundedBody.read(line, left)
-    state = %{state | line: new_line(), left: left - byte_size(text) - 1}
+    state = %{state | line: new_line(), left: max_line_size()}
 
-    case read_line(text, status) do
-      {:ok, {:progress, stage, message}} ->
-        on_progress.(stage, message)
-        {:cont, state}
+    case line_ended(read_line(text, status), byte_size(text) + 1, state, on_progress) do
+      {:cont, state} -> {:cont, state}
+      {:halt, ended} -> {:halt, %{state | ended: ended, outputs: nil}}
+    end
+  end
 
-      {:ok, {:result, result}} ->
-        {:halt, %{state | ended: {:ok, result}}}
+  defp line_ended({:ok, {:progress, stage, message}}, bytes, state, on_progress) do
+    logged = state.log_bytes + bytes
+    max = BuilderProtocol.max_log_bytes()
 
-      {:ok, {:refusal, refusal, diagnostics}} ->
-        {:halt, %{state | ended: {:error, refused(refusal, diagnostics)}}}
+    if logged > max do
+      {:halt, {:error, {:malformed, {:too_large, :log, logged, max}}}}
+    else
+      on_progress.(stage, message)
+      diagnostic = BuilderProtocol.diagnostic(stage, message)
+      {:cont, %{state | log: [diagnostic | state.log], log_bytes: logged}}
+    end
+  end
 
-      {:ok, {:health, _health}} ->
-        {:halt, %{state | ended: {:error, {:malformed, :unexpected_line}}}}
+  defp line_ended({:ok, {:output, chunk}}, _bytes, state, _on_progress) do
+    case BuilderProtocol.output(state.outputs, chunk) do
+      {:ok, outputs} -> {:cont, %{state | outputs: outputs}}
+      {:error, error} -> {:halt, {:error, {:malformed, error}}}
+    end
+  end
 
-      {:error, outcome} ->
-        {:halt, %{state | ended: {:error, outcome}}}
+  defp line_ended({:ok, {:result, result}}, _bytes, state, _on_progress),
+    do: {:halt, result(result, state)}
+
+  defp line_ended({:ok, {:refusal, refusal}}, _bytes, state, _on_progress),
+    do: {:halt, {:error, refused(refusal, Enum.reverse(state.log))}}
+
+  defp line_ended({:ok, {:health, _health}}, _bytes, _state, _on_progress),
+    do: {:halt, {:error, {:malformed, :unexpected_line}}}
+
+  defp line_ended({:error, outcome}, _bytes, _state, _on_progress), do: {:halt, {:error, outcome}}
+
+  # The files the output lines carried, kept only as the result names them.
+  defp result(result, state) do
+    case BuilderProtocol.outputs(state.outputs, result) do
+      {:ok, files} ->
+        {:ok, %{result | outputs: files} |> Map.put(:diagnostics, Enum.reverse(state.log))}
+
+      {:error, error} ->
+        {:error, {:malformed, error}}
     end
   end
 
@@ -387,25 +429,26 @@ defmodule Compendium.Builds.Client do
       %{ended: {_, _} = ended} ->
         ended
 
-      %{line: line, left: left} ->
+      %{line: line, left: left} = state ->
         {:ok, text} = BoundedBody.read(line, left)
-        last_line(text, status)
+        last_line(text, status, state)
 
       nil ->
-        last_line("", status)
+        last_line("", status, new_state())
     end
   end
 
   defp answer({:error, exception}, deadline), do: {:error, transport(exception, deadline)}
 
-  defp last_line("", 200), do: {:error, :disconnected}
-  defp last_line("", status), do: {:error, {:malformed, {:status, status}}}
+  defp last_line("", 200, _state), do: {:error, :disconnected}
+  defp last_line("", status, _state), do: {:error, {:malformed, {:status, status}}}
 
-  defp last_line(text, status) do
+  defp last_line(text, status, state) do
     case read_line(text, status) do
-      {:ok, {:result, result}} -> {:ok, result}
-      {:ok, {:refusal, refusal, diagnostics}} -> {:error, refused(refusal, diagnostics)}
+      {:ok, {:result, result}} -> result(result, state)
+      {:ok, {:refusal, refusal}} -> {:error, refused(refusal, Enum.reverse(state.log))}
       {:ok, {:progress, _stage, _message}} -> {:error, :disconnected}
+      {:ok, {:output, _chunk}} -> {:error, :disconnected}
       {:ok, {:health, _health}} -> {:error, {:malformed, :unexpected_line}}
       {:error, outcome} -> {:error, outcome}
     end
@@ -440,12 +483,12 @@ defmodule Compendium.Builds.Client do
   end
 
   defp new_line, do: %{private: %{}}
-  defp max_answer_bytes, do: BuilderProtocol.max_answer_bytes()
+  defp max_line_size, do: BuilderProtocol.max_line_size()
   defp put_state(resp, state), do: %{resp | private: Map.put(resp.private, @state, state)}
 
-  # `over` is how far past the answer's bound the bytes seen had run.
+  # `over` is how far past a line's bound the bytes seen had run.
   defp too_large(over),
-    do: {:malformed, {:response_too_large, max_answer_bytes() + over, max_answer_bytes()}}
+    do: {:malformed, {:response_too_large, max_line_size() + over, max_line_size()}}
 
   # ---------------------------------------------------------------------------
   # The result, verified

@@ -24,7 +24,13 @@ fixes (its version, label, header, routes and statuses) is read from the
 wire's vector file, tests/fixtures/locus_builds.json, and the signing here
 must reproduce that file's request vector: `check_signing` runs when this
 module is loaded, before any container starts, and
-`python3 tests/builder-image/stack.py` runs it alone.
+`python3 tests/builder-image/stack.py` runs it alone. An answer is read as a
+client reads it (`read_answer`): its progress lines are the build's log,
+each `stage: message`; its output lines carry the files in order, held to
+the wire's rules (each line the next `seq`, a file's lines together, a path
+never come back to); and only a result that names exactly the files sent,
+each at the size and digest of its bytes, keeps them. A refusal keeps
+nothing of the lines before it.
 
 The command runner, the teardown on a signal and the part of the Stack that
 does not depend on the service come from tests/imagesuite.py.
@@ -316,7 +322,8 @@ class Stack(imagesuite.Stack):
         status, lines = self.post(ROUTES["build"], body, {AUTH_HEADER: header})
         if not lines or lines[-1].get("type") not in ("result", "refusal"):
             raise ConnectionError(f"HTTP {status}: the answer ended without a terminal line after {len(lines)} lines")
-        return status, lines[:-1], lines[-1]
+        progress, terminal = read_answer(lines)
+        return status, progress, terminal
 
     def build(self, *args, **kwargs):
         """A build's end as (status, terminal line), the terminal line deciding as the wire says it does.
@@ -391,16 +398,48 @@ def tincture(build_script, files=None):
     return sources
 
 
-def output_bytes(answer, name):
-    """One output of a result, its digest checked against its bytes; None where the result has none."""
-    for output in answer.get("outputs") or []:
-        if output["path"] == name:
-            data = base64.b64decode(output["base64"])
+def read_answer(lines):
+    """An answer's lines as a client keeps them: (its progress lines, its terminal line).
+
+    The terminal line is given the build's log as `diagnostics` and, for a
+    result, the files the output lines carried as `files`, once checked
+    against what the result names; a line out of the wire's order, or a
+    result naming other files, sizes or digests, fails the suite.
+    """
+    progress, files, order, seq = [], {}, [], 0
+    for line in lines[:-1]:
+        if line.get("type") == "progress":
+            progress.append(line)
+        elif line.get("type") == "output":
+            seq += 1
+            path = line["path"]
+            if line["seq"] != seq:
+                sys.exit(f"FAIL: output line {line['seq']} came where line {seq} was due")
+            if order and path != order[-1] and path in files:
+                sys.exit(f"FAIL: {path} was sent again after another file")
+            if not order or path != order[-1]:
+                order.append(path)
+                files[path] = bytearray()
+            files[path] += base64.b64decode(line["bytes"])
+        else:
+            sys.exit(f"FAIL: a {line.get('type')} line came before the terminal line")
+    terminal = dict(lines[-1])
+    terminal["diagnostics"] = [f"{line['stage']}: {line['message']}" for line in progress]
+    if terminal.get("type") == "result":
+        named = {output["path"]: output for output in terminal["outputs"]}
+        if set(named) != set(files):
+            sys.exit(f"FAIL: the result names {sorted(named)}, the output lines sent {sorted(files)}")
+        for path, data in files.items():
             digest = "sha256:" + hashlib.sha256(data).hexdigest()
-            if output["digest"] != digest:
-                sys.exit(f"FAIL: the result names {output['digest']} as the digest of {name}, whose bytes' is {digest}")
-            return data
-    return None
+            if named[path]["size"] != len(data) or named[path]["digest"] != digest:
+                sys.exit(f"FAIL: the result names {named[path]} for {path}, whose bytes are {len(data)} of {digest}")
+        terminal["files"] = {path: bytes(data) for path, data in files.items()}
+    return progress, terminal
+
+
+def output_bytes(answer, name):
+    """One file of a result, as its output lines carried it; None where the result has none."""
+    return (answer.get("files") or {}).get(name)
 
 
 def output_file(answer, name):
@@ -410,17 +449,18 @@ def output_file(answer, name):
 
 
 def diagnostics(answer):
-    """A terminal line's log lines as one text."""
+    """A build's log, its progress lines as a person reads them, as one text."""
     return "\n".join(answer.get("diagnostics") or [])
 
 
 def brief(answer):
-    """A terminal line to print: its outputs by path and size, its log cut to its end."""
+    """A terminal line to print: its files by path and size, its log cut to its end."""
     if not isinstance(answer, dict):
         return answer
     shown = dict(answer)
+    shown.pop("files", None)
     if "outputs" in shown:
-        shown["outputs"] = {output["path"]: f"{len(output['base64']) * 3 // 4} bytes" for output in shown["outputs"]}
+        shown["outputs"] = {output["path"]: f"{output['size']} bytes" for output in shown["outputs"]}
     shown["diagnostics"] = (shown.get("diagnostics") or [])[-40:]
     return shown
 

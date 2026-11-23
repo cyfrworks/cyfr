@@ -12,11 +12,15 @@ must hold LOCUS_BUILDS_MAX_CONCURRENT bounds and the most the service
 takes, or a build the kernel kills for the container's limit is lost
 without being over its own.
 
-The service takes the most when it answers the largest result the wire
-allows (`Prima.BuilderProtocol.max_output_bytes/0`): it holds the build's
-output archive, the files unpacked from it, their base64 and the line that
-carries them, all at once. This measures it, in one container, the kernel's
-own high-water marks read after each step:
+The service never holds a build's output whole: it reads the build's
+archive a relay frame at a time and sends each piece on as an output line
+before it reads the next, and what it holds of a build's output is
+counted to the builds role's bound (`Locus.Output`, 8 MiB). So the largest
+result the wire allows (`Prima.BuilderProtocol.max_output_bytes/0`)
+raises the service's memory by no more than that bound's worth, with its
+sockets' buffers and the allocator's slack beside it, while a reader
+takes it. This measures it, in one container, the kernel's own high-water
+marks read after each step:
 
 - idle, once the service answers health;
 - one build answering a largest result;
@@ -24,10 +28,11 @@ own high-water marks read after each step:
   its bound until it ends and each answering a largest result, together.
 
 It prints every figure and fails unless every build answered its result
-intact, each build's group stayed within its bound while coming close to
-it, the kernel killed nothing for the container's limit, and the `keeper`
-group's peak fits in what the container's limit leaves beside the
-concurrent builds' bounds. The limit, the bound and the concurrency are
+intact, one largest result raised the `keeper` group's peak over idle by
+less than SERVICE_RISE, each build's group stayed within its bound while
+coming close to it, the kernel killed nothing for the container's limit,
+and the `keeper` group's peak fits in what the container's limit leaves
+beside the concurrent builds' bounds. The limit, the bound and the concurrency are
 read from the running service, so the shipped defaults are what is judged;
 settings named after the image are judged in their place, the service's
 given to it as .env.locus gives them and the container's limits
@@ -56,6 +61,11 @@ MIB = 1 << 20
 LARGEST = WIRE["bounds"]["max_output_bytes"] - 4096
 # How close to its bound a holding build must have come for the pair to count.
 CLOSE = 0.85
+# The most one largest result may raise the service's group over idle: the
+# builds bound's 8 MiB of output, the reading and writing sockets' buffers
+# (a few MiB each at most) and the allocator's slack. A service that held
+# the result whole took several times the result itself.
+SERVICE_RISE = 48 * MIB
 # The settings docker-compose.yml interpolates, which the service never sees.
 COMPOSE_SETTINGS = {"LOCUS_BUILDS_MEMORY_LIMIT", "LOCUS_BUILDS_CPU_LIMIT"}
 
@@ -181,7 +191,10 @@ def main(image, settings):
         expect(status == 200 and len(output_bytes(answer, "blob.bin") or b"") == LARGEST,
                f"one build answers a largest result, {mib(LARGEST)}, intact", brief(answer))
         single = int(read(stack, "keeper/memory.peak"))
-        print(f"one largest result: the keeper group's peak {mib(single)}")
+        print(f"one largest result: the keeper group's peak {mib(single)}, {mib(single - idle)} over idle")
+        expect(single - idle < SERVICE_RISE,
+               f"one largest result raises the service's memory by less than {mib(SERVICE_RISE)}, "
+               "since the service never holds it whole", {"idle": idle, "peak": single})
 
         # What a holding build may hold beside its output, its home's pages
         # and the rest of its tree, and stay within its bound.

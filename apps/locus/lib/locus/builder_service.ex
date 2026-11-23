@@ -5,6 +5,8 @@ defmodule Locus.BuilderService do
   @max_health_bytes 4096
   @watch_ms 1_000
   @cancel_ms 15_000
+  # How long past the build's deadline its terminal line may take to write.
+  @terminal_ms 5_000
 
   @moduledoc """
   The builds service: the listener side of `Prima.BuilderProtocol`, and the
@@ -60,10 +62,28 @@ defmodule Locus.BuilderService do
   Every refusal so far is the one line of the answer, at its class's
   status, and nothing was spawned for it. With the slot held the answer
   opens as a `200` stream of lines: each progress line as the build makes
-  it, then one terminal line, the result or the refusal the build ended
-  with (`timeout`, `memory`, `failed`, `unavailable`, `capacity`), carrying
-  the lines streamed as its diagnostics, in the encoded form each was
-  charged to the log's budget as (`Locus.Diagnostics`).
+  it (`Locus.Diagnostics`), each output line as the build's files leave it
+  (`Locus.Builder`), then one terminal line, the result or the refusal the
+  build ended with (`timeout`, `memory`, `failed`, `unavailable`,
+  `capacity`). No terminal line carries the log: the progress lines are
+  the build's diagnostics, which the client keeps.
+
+  ## What a build holds
+
+  The build's process makes every line and hands it to the connection's
+  process, which writes it; the build makes its next line, and reads the
+  next frame of its output, only once the connection's process answers
+  that the socket took the last or that it could not, so a reader that
+  does not read holds the build where it is and nothing piles up here.
+  What the two hold of a build's output is counted in the builds role's
+  count (`Locus.Output`) as one grant a build, `Locus.Builder.held_bytes/0`,
+  taken before the build runs, waiting in arrival order within the build's
+  budget (a build given no room by then is answered `timeout`), and
+  returned only once the terminal line was taken or could not be, or when
+  the build's process dies. Each write is bounded by the time left to the
+  build's deadline, and the terminal line's by #{@terminal_ms} ms past it,
+  so the connection's process always answers, and the build, the reader
+  of its relay, takes nothing past its deadline.
 
   ## How a build ends, and what is given back
 
@@ -76,11 +96,12 @@ defmodule Locus.BuilderService do
     the slot released.
   - **The client gone**: the connection is asked every #{@watch_ms} ms
     whether its peer closed (Bandit leaves a request's socket passive, so a
-    close is seen only by asking), and a line that cannot be written says
-    the same. The build is cancelled (`Locus.Executor.cancel/1`), which
-    ends its processes with no grace; the service waits up to
-    #{@cancel_ms} ms for that, kills the build process if it has not
-    ended, and releases the slot. Nothing more is written.
+    close is seen only by asking), and a line that cannot be written, or
+    not within the time left, says the same. The build is cancelled
+    (`Locus.Executor.cancel/1`), which closes its relay and ends its
+    processes with no grace; the service waits up to #{@cancel_ms} ms for
+    that, kills the build process if it has not ended, and releases the
+    slot. Nothing more is written.
   - **The connection's process killed** (the listener stopping, a crash):
     the link ends the build process, whose executor's own watch ends the
     build (the keeper's client releases a dead caller's spawn, the direct
@@ -304,38 +325,110 @@ defmodule Locus.BuilderService do
 
     service = self()
     ref = make_ref()
-    budget = Diagnostics.budget()
-
-    on_progress = fn stage, message ->
-      for {progress, diagnostic} <- Diagnostics.admit(budget, stage, message),
-          do: send(service, {ref, :progress, progress, diagnostic})
-
-      :ok
-    end
+    deadline = now() + budget_ms
 
     build =
       spawn_link(fn ->
-        send(
-          service,
-          {ref, :done,
-           Locus.Builder.run(plan, place: place, timeout_ms: budget_ms, on_progress: on_progress)}
-        )
+        build(%{
+          service: service,
+          ref: ref,
+          plan: plan,
+          place: place,
+          budget_ms: budget_ms,
+          deadline: deadline
+        })
       end)
 
-    follow(conn, %{ref: ref, build: build, monitor: Process.monitor(build), lines: []})
+    :ok = write_bound(conn, :send_timeout_close)
+    follow(conn, %{ref: ref, build: build, monitor: Process.monitor(build), deadline: deadline})
+  end
+
+  # The build's own process: its grant, its run, and its terminal line,
+  # each line handed to the connection's process and taken before the next.
+  defp build(%{service: service, ref: ref} = b) do
+    {grant, result} =
+      case Locus.Output.reserve(
+             Locus.Output.server(:builds),
+             Locus.Builder.held_bytes(),
+             b.deadline
+           ) do
+        {:ok, grant} -> {grant, run(b)}
+        :full -> {nil, {:error, {:timeout, b.budget_ms}}}
+      end
+
+    with line when is_binary(line) <- terminal(result), do: hand(b, line, :terminal)
+
+    # Every line this build made was taken or dropped by now: what it held
+    # is gone.
+    if grant, do: Locus.Output.return(grant)
+    send(service, {ref, :done})
+  end
+
+  defp run(b) do
+    budget = Diagnostics.budget()
+
+    on_progress = fn stage, message ->
+      Enum.reduce_while(Diagnostics.admit(budget, stage, message), :ok, fn line, :ok ->
+        case hand(b, line, :running) do
+          :ok -> {:cont, :ok}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end)
+    end
+
+    Locus.Builder.run(b.plan,
+      place: b.place,
+      timeout_ms: b.budget_ms,
+      on_progress: on_progress,
+      on_line: &hand(b, &1, :running)
+    )
+  end
+
+  # A line is the connection's to write, and answered once the socket took
+  # it or could not take it; a cancel is the client gone, and nothing more
+  # is handed.
+  defp hand(%{service: service, ref: ref}, line, kind) do
+    line_ref = make_ref()
+    send(service, {ref, :line, line_ref, line, kind})
+
+    receive do
+      {^line_ref, :taken} -> :ok
+      {^line_ref, :dropped} -> {:error, :cancelled}
+      {Locus.Executor, :cancel} -> {:error, :cancelled}
+    end
+  end
+
+  # A cancelled build answers nothing: its client is gone. The builder held
+  # its outputs to the wire's bounds, so a result encodes.
+  defp terminal({:error, :cancelled}), do: nil
+
+  defp terminal({:ok, built}) do
+    {:ok, line} = BuilderProtocol.encode_result(built)
+    line
+  end
+
+  defp terminal({:error, refusal}) do
+    Logger.warning("[Locus.BuilderService] a build ended refused: #{elem(refusal, 0)}")
+    {:ok, line} = BuilderProtocol.encode_refusal(bounded(refusal))
+    line
   end
 
   defp follow(conn, %{ref: ref, monitor: monitor} = s) do
     receive do
-      {^ref, :progress, progress, diagnostic} ->
-        case chunk(conn, [progress, ?\n]) do
-          {:ok, conn} -> follow(conn, %{s | lines: [diagnostic | s.lines]})
-          {:error, _closed} -> abandon(conn, s)
+      {^ref, :line, line_ref, line, kind} ->
+        case write(conn, line, kind, s.deadline) do
+          {:ok, conn} ->
+            send(s.build, {line_ref, :taken})
+            follow(conn, s)
+
+          {:error, _closed} ->
+            send(s.build, {line_ref, :dropped})
+            abandon(conn, s)
         end
 
-      {^ref, :done, result} ->
+      {^ref, :done} ->
         settle(s)
-        finish(conn, s, result)
+        conn
 
       # The build process ended without its answer: a fault of this
       # builder's, not a refusal of the wire's. The stream ends without a
@@ -353,34 +446,13 @@ defmodule Locus.BuilderService do
     end
   end
 
-  defp finish(conn, _s, {:error, :cancelled}), do: conn
-
-  # The builder held its outputs to the wire's bounds and the lines were
-  # admitted within the log's, so the result encodes. The lines go out as
-  # they were charged, already encoded.
-  defp finish(conn, s, {:ok, built}) do
-    {:ok, line} =
-      BuilderProtocol.encode_result(
-        Map.put(built, :diagnostics, {:encoded, Enum.reverse(s.lines)})
-      )
-
-    terminal(conn, line)
-  end
-
-  defp finish(conn, s, {:error, refusal}),
-    do: refusal_line(conn, refusal, {:encoded, Enum.reverse(s.lines)})
-
-  defp refusal_line(conn, refusal, diagnostics) do
-    Logger.warning("[Locus.BuilderService] a build ended refused: #{elem(refusal, 0)}")
-    {:ok, line} = BuilderProtocol.encode_refusal(bounded(refusal), diagnostics)
-    terminal(conn, line)
-  end
-
-  defp terminal(conn, line) do
-    case chunk(conn, [line, ?\n]) do
-      {:ok, conn} -> conn
-      {:error, _closed} -> conn
-    end
+  # A line is written within the time left to the build's deadline, and
+  # its terminal line within a bound past it: a client that does not read
+  # by then is gone.
+  defp write(conn, line, kind, deadline) do
+    left = max(deadline - now(), 0)
+    :ok = write_bound(conn, if(kind == :terminal, do: left + @terminal_ms, else: left))
+    chunk(conn, [line, ?\n])
   end
 
   # The client is gone: end the build, and return only once it has ended,
@@ -415,8 +487,8 @@ defmodule Locus.BuilderService do
 
   defp flush(ref, build) do
     receive do
-      {^ref, _kind, _stage, _message} -> flush(ref, build)
-      {^ref, _kind, _result} -> flush(ref, build)
+      {^ref, :line, _line_ref, _line, _kind} -> flush(ref, build)
+      {^ref, :done} -> flush(ref, build)
       {:EXIT, ^build, _reason} -> flush(ref, build)
     after
       0 -> :ok
@@ -438,11 +510,35 @@ defmodule Locus.BuilderService do
 
   defp peer_closed?(_conn), do: false
 
+  # A write the socket has not taken within its bound closes the
+  # connection, which the build then hears as its client gone.
+  defp write_bound(
+         %Plug.Conn{
+           adapter: {Bandit.Adapter, %{transport: %{socket: %ThousandIsland.Socket{} = socket}}}
+         },
+         bound
+       ) do
+    opts =
+      case bound do
+        :send_timeout_close -> [send_timeout_close: true]
+        ms -> [send_timeout: ms]
+      end
+
+    case ThousandIsland.Socket.setopts(socket, opts) do
+      :ok -> :ok
+      {:error, _closed} -> :ok
+    end
+  end
+
+  defp write_bound(_conn, _bound), do: :ok
+
+  defp now, do: System.monotonic_time(:millisecond)
+
   # ————— answers —————
 
   defp refuse(conn, refusal) do
     Logger.warning("[Locus.BuilderService] #{conn.method} refused: #{elem(refusal, 0)}")
-    {:ok, line} = BuilderProtocol.encode_refusal(bounded(refusal), [])
+    {:ok, line} = BuilderProtocol.encode_refusal(bounded(refusal))
     answer(conn, BuilderProtocol.status(refusal), line)
   end
 

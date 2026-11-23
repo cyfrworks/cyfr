@@ -16,6 +16,15 @@ defmodule Locus.Test.FakeKeeper do
   - `:capacity` — every spawn is refused with `capacity`
   - `:memory_unavailable` — every spawn is refused with `memory_unavailable`,
     as a keeper whose cgroup is not writable refuses a bounded spawn
+  - `{:stdout, bytes, test}` — a build's command is never run: its relay
+    sends `bytes` as its stdout, a frame at a time, each with a write of
+    its own, telling `test` `{:fake_relay, :sending, sent}` before each
+    write and `{:fake_relay, :sent, sent}` after it, as a relay is held by
+    a reader that does not take; a write that fails tells `test`
+    `{:fake_relay, :cut, sent}`, as a reader that closed its connection
+    cuts a relay. The leader is reported exited 0 and released only once
+    the stream ended either way, as cyfr-locus reports `released` only
+    once the relay has ended.
   - `{:exit, exited}` — the command is never run: the relay writes one log
     line and the leader is reported ended as `exited` says (`:code`,
     `:signal`, `:memory`), killed at its bound or the container's among
@@ -563,6 +572,17 @@ defmodule Locus.Test.FakeKeeper do
       {:exit, exited} ->
         exit_as(fake, spawn_id, conn, exited)
 
+      {:stdout, bytes, test} ->
+        stream(conn, frames(@stream_stdout, bytes), 0, test)
+        :gen_tcp.close(conn)
+
+        send(
+          fake,
+          {:send, %{type: "exited", spawn_id: spawn_id, code: 0, signal: nil, memory: nil}}
+        )
+
+        send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+
       _mode ->
         {exited, stdout, ""} = run(fake, spawn_id, request, conn, {dir, input, output})
         finish(conn, [frames(@stream_stdout, stdout)])
@@ -575,6 +595,29 @@ defmodule Locus.Test.FakeKeeper do
     finish(conn, [frames(@stream_stderr, "the command's last words\n")])
     send(fake, {:send, Map.merge(%{type: "exited", spawn_id: spawn_id}, exited)})
     send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+  end
+
+  # One frame a write, each told to the test before and after, until the
+  # stream's end or the reader's close.
+  defp stream(conn, [], sent, test) do
+    case :gen_tcp.send(conn, [frame(@stream_stdout, ""), frame(@stream_stderr, "")]) do
+      :ok -> send(test, {:fake_relay, :ended, sent})
+      {:error, _closed} -> send(test, {:fake_relay, :cut, sent})
+    end
+  end
+
+  defp stream(conn, [frame | frames], sent, test) do
+    send(test, {:fake_relay, :sending, sent})
+
+    case :gen_tcp.send(conn, frame) do
+      :ok ->
+        sent = sent + IO.iodata_length(frame)
+        send(test, {:fake_relay, :sent, sent})
+        stream(conn, frames, sent, test)
+
+      {:error, _closed} ->
+        send(test, {:fake_relay, :cut, sent})
+    end
   end
 
   # The relay's last frames, then the end of both streams.

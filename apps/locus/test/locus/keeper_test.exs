@@ -85,12 +85,19 @@ defmodule Locus.KeeperTest do
           place: place!(name, "build"),
           timeout_ms: Keyword.get(opts, :timeout_ms, 10_000),
           max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
+          on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
           on_output: fn line -> Agent.update(lines, &[line | &1]) end
         ] ++ Keyword.take(opts, [:memory_bytes])
       )
 
-    {result, Agent.get(lines, &Enum.reverse/1)}
+    {stdout(result), Agent.get(lines, &Enum.reverse/1)}
   end
+
+  # A run's stdout as the fold above took it, whole.
+  defp stdout({:ok, %{exit: exit, taken: taken}}),
+    do: {:ok, %{exit: exit, stdout: IO.iodata_to_binary(taken)}}
+
+  defp stdout(result), do: result
 
   describe "against the fake keeper" do
     setup do
@@ -209,7 +216,7 @@ defmodule Locus.KeeperTest do
       assert {{:error, {:unavailable, sentence}}, []} = run(name, "true")
       assert sentence =~ "writable-cgroups=true"
       assert sentence =~ "Docker Engine 28"
-      assert {:ok, _} = Prima.BuilderProtocol.encode_refusal({:unavailable, sentence}, [])
+      assert {:ok, _} = Prima.BuilderProtocol.encode_refusal({:unavailable, sentence})
     end
 
     test "a cancelled run releases the spawn with no grace and answers cancelled", %{
@@ -259,6 +266,102 @@ defmodule Locus.KeeperTest do
 
       wait_until(fn -> releases(fake, 0) != [] end, 5_000)
       wait_until(fn -> FakeKeeper.exits(fake) != [] end, 5_000, "the released command to end")
+    end
+
+    test "a run reads its next frame only once its taker took the last, so the relay waits behind it",
+         %{name: name, fake: fake} do
+      test = self()
+      bytes = :crypto.strong_rand_bytes(16 * 1_048_576)
+      :ok = FakeKeeper.mode(fake, {:stdout, bytes, test})
+
+      # The first piece is held until the test says go; every later one is
+      # taken at once.
+      take = fn piece, taken ->
+        if taken == [] do
+          send(test, {:taking, self()})
+          receive do: (:go -> :ok)
+        end
+
+        {:ok, [taken, piece]}
+      end
+
+      runner =
+        Task.async(fn ->
+          Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+            place: place!(name, "build"),
+            timeout_ms: 60_000,
+            max_stdout_bytes: byte_size(bytes),
+            on_stdout: {[], take}
+          )
+        end)
+
+      assert_receive {:taking, taker}, 10_000
+
+      # While the taker holds the first piece the relay is held where it
+      # stands: what it could write is what the sockets hold and one read.
+      {kind, sent} = quiet()
+      assert kind == :sending, "the relay is blocked in a write"
+
+      assert sent <= 4 * 1_048_576,
+             "the relay wrote #{sent} bytes past a reader that took one frame"
+
+      send(taker, :go)
+      assert {:ok, %{exit: {:status, 0}, taken: taken}} = Task.await(runner, 30_000)
+      assert IO.iodata_to_binary(taken) == bytes
+      assert_received {:fake_relay, :ended, _sent}
+    end
+
+    test "a run whose taker is slower than its deadline closes its connection there, which cuts the relay",
+         %{name: name, fake: fake} do
+      test = self()
+      :ok = FakeKeeper.mode(fake, {:stdout, :binary.copy(<<1>>, 8 * 1_048_576), test})
+
+      take = fn piece, taken ->
+        # sleep-ok: a taker slower than the run's deadline is the case.
+        Process.sleep(1_500)
+        {:ok, [taken, piece]}
+      end
+
+      result =
+        Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+          place: place!(name, "build"),
+          timeout_ms: 1_000,
+          max_stdout_bytes: 16 * 1_048_576,
+          on_stdout: {[], take}
+        )
+
+      # The run answers only after cyfr-locus's word, which follows the
+      # relay's end, which the reader's close made.
+      assert result == {:error, :timeout}
+      assert_received {:fake_relay, :cut, _sent}
+      assert FakeKeeper.sent(fake) |> Enum.take(-1) == [:released]
+    end
+
+    test "a reader that dies closes its connection by dying, which cuts the relay",
+         %{name: name, fake: fake} do
+      test = self()
+      :ok = FakeKeeper.mode(fake, {:stdout, :binary.copy(<<1>>, 8 * 1_048_576), test})
+
+      reader =
+        spawn(fn ->
+          Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+            place: place!(name, "build"),
+            timeout_ms: 60_000,
+            max_stdout_bytes: 16 * 1_048_576,
+            on_stdout:
+              {[],
+               fn _piece, _taken ->
+                 send(test, :taking)
+                 receive do: (:never -> :ok)
+               end}
+          )
+        end)
+
+      assert_receive :taking, 10_000
+      Process.exit(reader, :kill)
+
+      assert_receive {:fake_relay, :cut, _sent}, 10_000
+      wait_until(fn -> releases(fake, 0) != [] end, 5_000, "the dead reader's spawn released")
     end
 
     test "a relay that dials once the client has read the exit and release reports still delivers its output",
@@ -1759,6 +1862,16 @@ defmodule Locus.KeeperTest do
 
       for text <- ["", "/k", "k:1-2", "/:1-2", "/k/:1-2", "/k:2-1", "/k:0-2", "/k:1-x", nil],
           do: assert(:error = Keeper.parse_kept_homes(text), inspect(text))
+    end
+  end
+
+  # The fake relay's last word once it says nothing more for a while: what
+  # it was doing, and the bytes it had written.
+  defp quiet(last \\ {:none, 0}) do
+    receive do
+      {:fake_relay, kind, sent} -> quiet({kind, sent})
+    after
+      500 -> last
     end
   end
 end

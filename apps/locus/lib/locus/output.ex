@@ -78,6 +78,7 @@ defmodule Locus.Output do
           unread: non_neg_integer(),
           answering: non_neg_integer(),
           owed: non_neg_integer(),
+          owing: non_neg_integer(),
           waiting: non_neg_integer(),
           unread_peak: non_neg_integer(),
           answering_peak: non_neg_integer()
@@ -96,11 +97,14 @@ defmodule Locus.Output do
     do: %{id: {__MODULE__, role}, start: {__MODULE__, :start_link, [role]}}
 
   def child_spec(opts) when is_list(opts),
-    do: %{id: {__MODULE__, Keyword.fetch!(opts, :name)}, start: {__MODULE__, :start_link, [opts]}}
+    do: %{
+      id: {__MODULE__, Keyword.get_lazy(opts, :name, &make_ref/0)},
+      start: {__MODULE__, :start_link, [opts]}
+    }
 
   @doc """
-  Start a role's count under its name, or, with options, a count named
-  `:name` with `:bounds` of its own (a suite's).
+  Start a role's count under its name, or, with options, a count with
+  `:bounds` of its own (a suite's), named `:name` where given.
   """
   @spec start_link(role() | keyword()) :: GenServer.on_start()
   def start_link(role) when is_map_key(@servers, role),
@@ -108,7 +112,7 @@ defmodule Locus.Output do
 
   def start_link(opts) when is_list(opts) do
     bounds = Map.merge(%{unread: nil}, Map.new(Keyword.fetch!(opts, :bounds)))
-    GenServer.start_link(__MODULE__, bounds, name: Keyword.fetch!(opts, :name))
+    GenServer.start_link(__MODULE__, bounds, Keyword.take(opts, [:name]))
   end
 
   # ————— unread —————
@@ -221,6 +225,7 @@ defmodule Locus.Output do
        unread: state.unread_total,
        answering: state.answering_total,
        owed: state.owed |> Map.values() |> Enum.sum(),
+       owing: map_size(state.owed),
        waiting: map_size(state.waiters),
        unread_peak: state.peaks.unread,
        answering_peak: state.peaks.answering

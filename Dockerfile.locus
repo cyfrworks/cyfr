@@ -356,7 +356,7 @@ EXPOSE ${LOCUS_RUNTIME_PORT} ${LOCUS_BUILDS_PORT} ${LOCUS_BACKENDS_PORT}
 # the worker listener's 401 to an unsigned status request), as
 # docker-compose.yml's locus-backends and locus-runtime services do.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl -fsS -X POST -H 'content-type: application/json' -d '{"version":1}' \
+    CMD curl -fsS -X POST -H 'content-type: application/json' -d '{"version":2}' \
         "http://localhost:${LOCUS_BUILDS_PORT:-4100}/locus/v1/builds/health" || exit 1
 
 # Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,

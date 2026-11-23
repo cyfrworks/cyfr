@@ -64,16 +64,28 @@ defmodule Locus.ExecutorTest do
     emit = fn line -> Agent.update(lines, &[line | &1]) end
 
     log = Executor.Log.new()
-    log = Executor.Log.add(log, "first\nsec", emit)
-    log = Executor.Log.add(log, "ond\n\nthi", emit)
+    assert {:ok, log} = Executor.Log.add(log, "first\nsec", emit)
+    assert {:ok, log} = Executor.Log.add(log, "ond\n\nthi", emit)
     assert Agent.get(lines, &Enum.reverse/1) == ["first", "second"]
 
-    log = Executor.Log.add(log, String.duplicate("x", 70_000), emit)
+    assert {:ok, log} = Executor.Log.add(log, String.duplicate("x", 70_000), emit)
     assert [long | _] = Agent.get(lines, & &1)
     assert byte_size(long) == 70_003
 
-    log = Executor.Log.add(log, "rd", emit)
+    assert {:ok, log} = Executor.Log.add(log, "rd", emit)
     assert :ok = Executor.Log.finish(log, emit)
     assert hd(Agent.get(lines, & &1)) == "rd"
+  end
+
+  test "a log taker's refusal stops the lines after it, and is answered" do
+    {:ok, lines} = Agent.start_link(fn -> [] end)
+
+    emit = fn
+      "stop" -> {:error, :cancelled}
+      line -> Agent.update(lines, &[line | &1])
+    end
+
+    assert {:error, :cancelled} = Executor.Log.add(Executor.Log.new(), "one\nstop\ntwo\n", emit)
+    assert Agent.get(lines, & &1) == ["one"]
   end
 end
