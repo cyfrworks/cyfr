@@ -159,7 +159,7 @@ defmodule Aqua.Loop.Turn do
         model: model,
         capabilities: capabilities,
         request_cap: request_cap(brain_authority, catalyst),
-        system: if(program, do: prompt.instructions, else: prompt.text),
+        system: prompt.instructions,
         facts: prompt.facts,
         tools:
           Request.tool_definitions(offered,

@@ -144,7 +144,7 @@ defmodule Aqua.Harness.Program do
   # All the engine reads of this harness (`Aqua.Harness`): its process is
   # not the root's child, so a launch need not wait for it, and a post
   # written while it works is delivered, never a reason to skip a call.
-  @facts %{child_of_root?: false, supersedes?: false}
+  @facts %{supersedes?: false}
   # The most bytes a fresh session's context takes on its post's line, as
   # the line's JSON measures them, escapes included: the newest posts that
   # fit. A post a sender writes is at most 32 KiB, at most six times that
@@ -793,32 +793,8 @@ defmodule Aqua.Harness.Program do
   # by the code that decides a model's call (`Aqua.Loop.recorded/2`), and
   # recorded once by the native ask's id. Its call row is a `tool_call`,
   # as a model's is.
-  defp ask(work, %{"ask" => ask, "name" => name, "arguments" => arguments}) do
-    call = Aqua.Loop.Binding.resolve(name, arguments, tool_call_id: ask)
-    recorded = Aqua.Loop.recorded(name, call)
-
-    %{
-      kind: recorded.step_kind,
-      tool: recorded.tool,
-      action: recorded.action,
-      recovery: recorded.recovery,
-      child_execution_id: recorded.child_execution_id,
-      idempotency_key: Tape.brain_ask_key(work.turn.id, ask),
-      call: %{
-        kind: "tool_call",
-        content: name,
-        payload:
-          reject_nil(%{
-            "tool_call_id" => ask,
-            "name" => name,
-            "tool" => recorded.tool,
-            "action" => recorded.action,
-            "arguments" => arguments,
-            "kind" => recorded.kind
-          })
-      }
-    }
-  end
+  defp ask(work, %{"ask" => ask, "name" => name, "arguments" => arguments}),
+    do: Aqua.Harness.ask(name, arguments, ask, Tape.brain_ask_key(work.turn.id, ask))
 
   # The open work's text, announced as it is written (`Aqua.Loop.Stream`),
   # each native message a step of its own, under the turn's fence as it

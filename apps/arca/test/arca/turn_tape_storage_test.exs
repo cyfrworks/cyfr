@@ -694,6 +694,34 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:ok, %{status: "running"}} = TurnStorage.get(actor, started.id)
     end
 
+    for {kind, purpose} <- [{"tool", "chat"}, {"launch", "chat"}, {"tool", "flush"}] do
+      @tag step: {kind, purpose}
+      test "a turn does not complete while a #{kind} step a #{purpose} round asked is still " <>
+             "proposed, whatever a harness said of its work",
+           %{actor: actor, thread: thread, step: {kind, purpose}} do
+        %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+        {started, _root} = start!(actor, turn)
+
+        {:ok, asked} =
+          TurnStorage.put_step(actor, started.id, %{
+            kind: kind,
+            purpose: purpose,
+            idempotency_key: "call:1",
+            fence: started.fence
+          })
+
+        completion = %{grant: :stored, verify: &Arca.Test.Actor.admits/1, fence: started.fence}
+
+        assert {:error, :call_pending} =
+                 TurnStorage.finish(actor, started.id, "completed", completion)
+
+        {:ok, _} = TurnStorage.close_step(actor, asked.id, "skipped", %{fence: started.fence})
+
+        assert {:ok, %{status: "completed"}} =
+                 TurnStorage.finish(actor, started.id, "completed", completion)
+      end
+    end
+
     test "a turn does not complete while a model's call of it runs: its loop waits on its " <>
            "harness's work",
          %{actor: actor, thread: thread} do

@@ -2149,10 +2149,10 @@ defmodule Arca.TurnStorage do
   over is answered `{:error, :already_finished}`; a turn with no root yet
   (still `accepted`) closes on its own. A turn with a steer no step
   carried refuses `completed` with `{:error, :steer_pending}`: its loop
-  goes on to answer the steer; one with a page's call the host proposed
-  in it and nobody dispatched yet, or a model's call still running,
-  refuses it with `{:error, :call_pending}`: its loop goes on to dispatch
-  the call, or to wait on its harness's work. A turn with a root attempt ends under its
+  goes on to answer the steer; one with anything else of it open, a step
+  proposed or dispatched of whatever kind or a delivery a program still
+  owes an answer for, refuses it with `{:error, :call_pending}`: its loop
+  goes on to dispatch the call, or to wait on its harness's work. A turn with a root attempt ends under its
   root's grant (the moduledoc's "The root's grant"), and a completion
   names one whatever the turn holds. Event `turn.<status>`.
   """
@@ -5809,20 +5809,17 @@ defmodule Arca.TurnStorage do
     )
   end
 
-  # A page's call or a program brain's ask the host proposed into the
-  # turn that is still to be dispatched, or a model's call that runs (the
-  # harness that said its work was done may have begun another round
-  # since); a delivery not yet taken, a post or notice written and not yet
-  # answered, or an ask's result whose answer is not yet taken. A turn on
-  # a model has none of the last three.
+  # Whether anything of the turn is still open, read in the transaction
+  # that would write its end: a step proposed or dispatched, of whatever
+  # kind (a page's call, an ask, a launch, a model's call, a delivery), or
+  # a delivery a program still owes an answer for. A harness that said its
+  # work was done asks for the end; this decides it.
   # arca:db-raise-ok inside the caller's transaction
   defp calls_pending?(athanor_id, %Turn{} = turn) do
     Arca.Repo.exists?(
       from(s in TurnStep,
         where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
-        where:
-          (s.purpose in ["page", "brain"] and s.dispatch_state == "proposed") or
-            (s.kind == "model" and s.dispatch_state == "dispatched")
+        where: s.dispatch_state in ["proposed", "dispatched"]
       )
     ) or brain_owed?(athanor_id, turn)
   end

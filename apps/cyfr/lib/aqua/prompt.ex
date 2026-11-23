@@ -131,8 +131,16 @@ defmodule Aqua.Prompt do
       |> IO.iodata_to_binary()
       |> String.replace_prefix(@section, "")
 
-    %{instructions: instructions, facts: facts, text: instructions <> @section <> facts}
+    %{instructions: instructions, facts: facts, text: system(instructions, facts)}
   end
+
+  @doc """
+  One system prompt of a turn's instructions and the facts that move by
+  themselves, as a model reads them in one request (`Aqua.Harness.Api`).
+  """
+  @spec system(String.t(), String.t()) :: String.t()
+  def system(instructions, facts) when is_binary(instructions) and is_binary(facts),
+    do: instructions <> @section <> facts
 
   # CYFR's part of every agent's prompt, Aqua's included: the standing
   # facts of working here, said once for all, and what a program's brain

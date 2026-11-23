@@ -81,7 +81,7 @@ defmodule Aqua.Loop do
 
   alias Aqua.Loop.Binding
   alias Aqua.Loop.Binding.Call
-  alias Aqua.Loop.{Policy, Turn}
+  alias Aqua.Loop.{Clock, Policy, Turn}
   alias Aqua.{Reader, Tape}
   alias Sanctum.Context
 
@@ -112,7 +112,7 @@ defmodule Aqua.Loop do
       :spec,
       :claim,
       :turn,
-      # The turn's active time, which its harness reads (`clock/1`).
+      # The turn's active time, which its harness reads (`Aqua.Loop.Clock`).
       :clock,
       activity: [],
       # The places in `activity` of a program brain's own tools still shown
@@ -312,7 +312,7 @@ defmodule Aqua.Loop do
           facts: Aqua.Harness.facts(spec),
           claim: claim,
           turn: turn,
-          clock: clock(turn.active_ms)
+          clock: Clock.new(turn.active_ms)
         }
 
         Aqua.Loop.Stream.announce_fence(spec.guest, turn)
@@ -575,7 +575,7 @@ defmodule Aqua.Loop do
            spec: spec,
            claim: claim,
            turn: spec.turn,
-           clock: clock(started.active_ms)
+           clock: Clock.new(started.active_ms)
          }}
       else
         {:error, reason} -> {:error, {:after_claim, claim, turn, reason}}
@@ -1050,7 +1050,7 @@ defmodule Aqua.Loop do
       system: spec.system,
       facts: spec.facts,
       tools: spec.tools,
-      active_ms: active_ms(state.clock),
+      active_ms: fn -> Clock.read(state.clock) end,
       history: history(spec.guest, state.turn)
     }
   end
@@ -1067,7 +1067,7 @@ defmodule Aqua.Loop do
   end
 
   defp title(%State{spec: spec}),
-    do: spec.agent["title"] || (spec.program && spec.program.name) || spec.agent["name"]
+    do: spec.agent["title"] || spec.agent["name"]
 
   # The whole configuration the harness runs with: the agent's model and
   # every option its file and the turn name, none dropped, so a narrowing
@@ -1487,16 +1487,21 @@ defmodule Aqua.Loop do
   defp not_offered?(%State{spec: spec} = state, %{purpose: purpose} = step, %Call{} = call)
        when purpose != "page" do
     not admission?(state, step) and
-      not Enum.any?(spec.tools, &(&1["name"] in [call.model_name, handed_as(call)]))
+      not Enum.any?(spec.tools, &(&1["name"] == asked_as(call.model_name)))
   end
 
   defp not_offered?(_state, _step, _call), do: false
 
-  # The name of the tool a call is one of, as a harness is handed it: an
-  # outside server's by its own name, every other by its tool, whose
-  # definition carries its actions (`Aqua.Loop.Request.tool_definitions/2`).
-  defp handed_as(%Call{kind: :external, tool: tool}), do: Binding.model_name(tool)
-  defp handed_as(%Call{tool: tool}), do: tool
+  # The tool an ask names, by the name the harness asked by and before any
+  # resolution: an outside server's by its whole name, every other by the
+  # tool before its action, whose definition carries its actions
+  # (`Aqua.Loop.Request.tool_definitions/2`). A name another resolves to is
+  # never one the harness was handed.
+  defp asked_as(name) when is_binary(name) do
+    if String.contains?(name, "__"), do: name, else: name |> String.split(".", parts: 2) |> hd()
+  end
+
+  defp asked_as(_name), do: nil
 
   # An ask of a note flush's step (`Aqua.Harness.Api`) runs `notes.keep`
   # alone, a note this large at most: a rule of the asking step's purpose.
@@ -1827,7 +1832,8 @@ defmodule Aqua.Loop do
         if moved[:aborted],
           do: announce(state, :message, moved.aborted)
 
-        {:ok, %{state | turn: paused, claim: nil, clock: paused!(state.clock, paused.active_ms)}}
+        {:ok,
+         %{state | turn: paused, claim: nil, clock: Clock.paused(state.clock, paused.active_ms)}}
 
       {:error, _} = error ->
         error
@@ -2022,7 +2028,8 @@ defmodule Aqua.Loop do
            launch_step_id: launch_step_id
          ) do
       {:ok, %{turn: paused}} ->
-        {:ok, %{state | turn: paused, claim: nil, clock: paused!(state.clock, paused.active_ms)}}
+        {:ok,
+         %{state | turn: paused, claim: nil, clock: Clock.paused(state.clock, paused.active_ms)}}
 
       {:error, _} = error ->
         error
@@ -2057,7 +2064,12 @@ defmodule Aqua.Loop do
          ) do
       {:ok, %{turn: resumed} = claim} ->
         {:ok,
-         %{state | turn: resumed, claim: claim, clock: running!(state.clock, resumed.active_ms)}}
+         %{
+           state
+           | turn: resumed,
+             claim: claim,
+             clock: Clock.running(state.clock, resumed.active_ms)
+         }}
 
       {:error, _reason} when tries < length(@resume_backoff_ms) ->
         Process.sleep(Enum.at(@resume_backoff_ms, tries))
@@ -2119,19 +2131,19 @@ defmodule Aqua.Loop do
   # The calls proposed in the turn are decided and run, and those proposed
   # while they ran after them, each once a round: a launch the rows
   # deferred waits for the next round (`launch_within/2`).
-  defp page_round(%State{} = state, taken \\ MapSet.new()) do
+  defp page_round(%State{} = state, taken \\ []) do
     drain_notices(state.turn.id)
 
     case proposed_calls(state) do
       {:ok, items} ->
-        case Enum.reject(items, &MapSet.member?(taken, &1.step.id)) do
+        case Enum.reject(items, &(&1.step.id in taken)) do
           [] ->
             {:continue, state}
 
           fresh ->
             case dispatch(state, fresh) do
               {:continue, %State{unkept: nil} = state} ->
-                page_round(state, MapSet.union(taken, MapSet.new(fresh, & &1.step.id)))
+                page_round(state, taken ++ Enum.map(fresh, & &1.step.id))
 
               continued_or_halt ->
                 continued_or_halt
@@ -2183,62 +2195,64 @@ defmodule Aqua.Loop do
     guest = guest(state)
 
     with {:ok, steps} <- Tape.steps(guest, state.turn) do
-      open =
-        Enum.reduce(steps, [], fn
+      {open, unkept} =
+        Enum.reduce(steps, {[], nil}, fn
+          # A write of the settling that was not kept settles no more.
+          _step, {_open, unkept} = acc when unkept != nil ->
+            acc
+
           # A delivery to a program brain is reconciled by its attendant
           # with what the resumed transcript holds (`Aqua.Harness.Program`), before
           # any of this, and never read as an uncertain call.
-          %{dispatch_state: "dispatched", kind: "input"}, open ->
-            open
+          %{dispatch_state: "dispatched", kind: "input"}, acc ->
+            acc
 
-          %{dispatch_state: "dispatched"} = step, open ->
+          %{dispatch_state: "dispatched"} = step, {open, nil} ->
             interrupted(state, step)
 
             case Prima.TurnStep.unresolved(step) do
               :unanswered ->
-                _ =
-                  Tape.close_step(guest, state.turn, step, "error", %{error: "not reproducible"})
-
-                open
+                guest
+                |> Tape.close_step(state.turn, step, "error", %{error: "not reproducible"})
+                |> settled(open)
 
               :replay ->
-                _ = Tape.next_generation(guest, state.turn, step, Prima.UUID7.execution_id())
-                open
+                guest
+                |> Tape.next_generation(state.turn, step, Prima.UUID7.execution_id())
+                |> settled(open)
 
               :unknown ->
-                _ =
-                  close(
-                    state,
-                    step,
-                    unwrap(recall(state, step)),
-                    {:unknown, "the turn was interrupted"}
-                  )
-
-                open
+                state
+                |> close(
+                  step,
+                  unwrap(recall(state, step)),
+                  {:unknown, "the turn was interrupted"}
+                )
+                |> settled(open)
 
               :uncertain ->
-                [step | open]
+                {[step | open], nil}
             end
 
-          %{dispatch_state: "proposed", purpose: "flush"} = step, open ->
-            _ =
-              close(
-                state,
-                step,
-                unwrap(recall(state, step)),
-                {:skipped, "the turn was interrupted"}
-              )
+          %{dispatch_state: "proposed", purpose: "flush"} = step, {open, nil} ->
+            state
+            |> close(step, unwrap(recall(state, step)), {:skipped, "the turn was interrupted"})
+            |> settled(open)
 
-            open
-
-          _step, open ->
-            open
+          _step, acc ->
+            acc
         end)
-        |> Enum.reverse()
+
+      open = Enum.reverse(open)
 
       state = %{state | restricted?: open != [] or Tape.restricted?(guest, state.turn)}
 
       cond do
+        # A write of the settling that was not kept is never dropped: the
+        # loop returns, and its return says so (`conclude/2`).
+        unkept != nil ->
+          {:halt, {:failed, :write_failed}, %{state | unkept: unkept}}
+
         open != [] ->
           [first | others] = open
           rest = Enum.map(others, &%{item: %{step: &1, call: recall(state, &1)}, task: nil})
@@ -2258,6 +2272,11 @@ defmodule Aqua.Loop do
       {:error, reason} -> {:halt, {:failed, reason}, state}
     end
   end
+
+  # A settling write, kept or not (`settle/1`).
+  defp settled({:ok, _written}, open), do: {open, nil}
+  defp settled({:error, taken}, open) when taken in @taken, do: {open, :taken}
+  defp settled({:error, _unkept}, open), do: {open, :unkept}
 
   # What an interrupted step started stops before the step is settled,
   # advanced or closed: its child execution, and the in-process handler
@@ -2534,32 +2553,6 @@ defmodule Aqua.Loop do
     if Arca.ControlPlane.held?(), do: :ok, else: {:error, :control_plane_lost}
   end
 
-  # The turn's active time as its harness reads it (`work.active_ms`): what
-  # its row counted to its last pause, and the time since it last ran,
-  # kept where this loop's pauses and resumes set it.
-  defp clock(active_ms), do: running!(:atomics.new(3, signed: true), active_ms)
-
-  defp running!(clock, active_ms) do
-    :ok = :atomics.put(clock, 2, now())
-    :ok = :atomics.put(clock, 3, active_ms)
-    :ok = :atomics.put(clock, 1, 1)
-    clock
-  end
-
-  defp paused!(clock, active_ms) do
-    :ok = :atomics.put(clock, 1, 0)
-    :ok = :atomics.put(clock, 3, active_ms)
-    clock
-  end
-
-  defp active_ms(clock) do
-    fn ->
-      running = if :atomics.get(clock, 1) == 1, do: now() - :atomics.get(clock, 2), else: 0
-      :atomics.get(clock, 3) + running
-    end
-  end
-
   defp guest(%State{spec: %Turn{guest: guest}}), do: guest
   defp ctx(%State{spec: %Turn{ctx: ctx}}), do: ctx
-  defp now, do: System.monotonic_time(:millisecond)
 end

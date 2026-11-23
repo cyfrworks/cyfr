@@ -55,7 +55,7 @@ defmodule Aqua.HarnessTest do
     end
 
     @impl true
-    def facts, do: %{child_of_root?: false, supersedes?: true}
+    def facts, do: %{supersedes?: true}
   end
 
   describe "the boundary's answers, said straight to it" do

@@ -23,13 +23,12 @@ defmodule Aqua.Harness do
   admission (`Aqua.Tape.admission_key/1`); a turn that goes on passes the
   step it already has. `{:end, finish}` ends the turn before it starts.
 
-  `facts` are all the engine reads of a harness: a harness whose work runs
-  as a child of the turn's root (`child_of_root?`) keeps a launch waiting
-  while that child runs, which the rows decide (`Arca.TurnStorage.pause/3`
-  refuses the launch's pause), and a post that arrives
-  skips the calls not yet started when `supersedes?` holds. They belong to
-  the harness the turn pins, so they are known before `open/1`
-  (`facts/1`), and the engine reads no fact it was not given.
+  `facts` are all the engine reads of a harness: a post that arrives skips
+  the calls not yet started when `supersedes?` holds. They belong to the
+  harness the turn pins, so they are known before `open/1` (`facts/1`), and
+  the engine reads no fact it was not given. A launch waits while any call
+  of the turn whose run is a child of its root runs, which the rows decide
+  (`Arca.TurnStorage.pause/3`).
 
   `moved/1` says only that the turn's rows moved, once for each time the
   loop is woken: what the harness is owed, a closed ask's result before a
@@ -53,7 +52,7 @@ defmodule Aqua.Harness do
   @type handle :: pid()
 
   @typedoc "All the engine reads of a harness."
-  @type facts :: %{child_of_root?: boolean(), supersedes?: boolean()}
+  @type facts :: %{supersedes?: boolean()}
 
   @typedoc """
   What the engine hands a harness of the turn: its contexts, the turn as
@@ -118,6 +117,42 @@ defmodule Aqua.Harness do
   end
 
   def of(%Turn{}), do: Aqua.Harness.Api
+
+  @doc """
+  An ask of a harness as the step the engine is proposed (`{:ask, steps}`,
+  `Arca.TurnStorage.commit_events/3`): the call `name` asks with
+  `arguments`, by the ask's own `id`, recorded once under `key`, with its
+  `tool_call` row, decided by the code that decides every call
+  (`Aqua.Loop.recorded/2`). `payload` adds what one harness's row carries
+  beside it (a model's provider data and the step that asked).
+  """
+  @spec ask(String.t(), map(), String.t(), String.t(), map()) :: map()
+  def ask(name, arguments, id, key, payload \\ %{}) do
+    call = Aqua.Loop.Binding.resolve(name, arguments, tool_call_id: id)
+    recorded = Aqua.Loop.recorded(name, call)
+
+    row =
+      %{
+        "tool_call_id" => id,
+        "name" => name,
+        "tool" => recorded.tool,
+        "action" => recorded.action,
+        "arguments" => arguments,
+        "kind" => recorded.kind
+      }
+      |> Map.merge(payload)
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    %{
+      kind: recorded.step_kind,
+      tool: recorded.tool,
+      action: recorded.action,
+      recovery: recorded.recovery,
+      child_execution_id: recorded.child_execution_id,
+      idempotency_key: key,
+      call: %{kind: "tool_call", content: name, payload: row}
+    }
+  end
 
   @doc "The facts of the turn's harness, from its pin, before anything is opened."
   @spec facts(Turn.t()) :: facts()

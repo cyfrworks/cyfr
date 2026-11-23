@@ -348,14 +348,17 @@ defmodule Aqua.LoopTest do
     for {turn, request, task} <- asked do
       {:ok, pinned} = Tape.turn(ctx, turn.id)
       {:ok, spec} = Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false)
+      # What moves by itself is handed apart, and the model reads it with
+      # the instructions in one system prompt (`Aqua.Harness.Api`).
+      prompt = Aqua.Prompt.system(spec.system, spec.facts)
 
-      assert spec.system =~ "## Open requests"
-      assert spec.system =~ "- #{request.id} to planner, asked by aqua"
-      assert spec.system =~ task
+      assert prompt =~ "## Open requests"
+      assert prompt =~ "- #{request.id} to planner, asked by aqua"
+      assert prompt =~ task
 
       for {_turn, other, other_task} <- asked, other.id != request.id do
-        refute spec.system =~ other.id
-        refute spec.system =~ other_task
+        refute prompt =~ other.id
+        refute prompt =~ other_task
       end
     end
   end
@@ -1181,6 +1184,32 @@ defmodule Aqua.LoopTest do
               "github__search: the argument limit is a decimal number; give a whole number, " <>
                 "or the number as text"}
            ]
+  end
+
+  test "an ask by a name its harness was not handed is refused, though the name resolves to a " <>
+         "tool it was handed",
+       %{ctx: ctx, thread: thread} do
+    # Aqua is handed storage and no files: a files read inside the storage
+    # boundary resolves to storage.read (`Aqua.Loop.Binding`).
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "tools_remove" =>
+          ~w(files.delete files.edit files.grep files.list files.read files.search files.tree
+             files.write)
+      })
+
+    consent!(ctx, "aqua")
+    turn = accept!(ctx, thread, "@aqua read it")
+    script!([calls([{"c1", "files.read", %{"path" => "data/storage/k.json"}}]), reply("done")])
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    [asked] = Enum.filter(steps, &(&1.kind == "tool"))
+
+    assert {asked.tool, asked.outcome, asked.error} ==
+             {"storage", "denied", "files.read is not one of the tools this work has"}
   end
 
   test "two rounds that reuse one call id are each answered by their own row",
