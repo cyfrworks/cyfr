@@ -151,11 +151,8 @@ WRAP
 # --init: a process that ends in the client is reaped, so what is left of
 # setup's work is what still runs.
 # The client is removed by the id its create returned: a create that failed,
-# a name taken by another among them, made nothing of this run's. Its
-# processes dump no core: where the host hands cores to systemd-coredump
-# (GitHub's runners do), the renderer reshown crashes stays until its dump
-# is taken, minutes on end, and the chooser is not shown again until then.
-CLIENT_ID=$(docker run -d --init --ulimit core=0 --name "$CLIENT" --network host --security-opt seccomp=unconfined -v "$W:$W" \
+# a name taken by another among them, made nothing of this run's.
+CLIENT_ID=$(docker run -d --init --name "$CLIENT" --network host --security-opt seccomp=unconfined -v "$W:$W" \
   -v "$DEB:/deb/app.deb:ro" -v /var/run/docker.sock:/hostrun/docker.sock ubuntu:26.04 sleep infinity) ||
   failed "the client $CLIENT could not be made (docker run failed): nothing of this run's was made in its name"
 docker exec "$CLIENT_ID" bash -c "set -e; export DEBIAN_FRONTEND=noninteractive
