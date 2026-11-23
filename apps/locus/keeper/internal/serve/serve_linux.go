@@ -1187,7 +1187,8 @@ func (s *server) memoryEnd(sp *spawn) *string {
 // retire ends a spawn once: every process of its uid is terminated, what
 // the uid left behind is removed and the uid returned to its pool, or
 // quarantined if a process or anything it left survives. With notify,
-// `released` follows, once the spawn's group is removed.
+// `released` follows, once the spawn's relay has ended and its group is
+// removed.
 func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 	if sp.kept {
 		s.retireKept(sp, grace, notify)
@@ -1202,12 +1203,13 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				paths = []string{sp.home}
 			}
 			clean := s.scrub(sp.account, grace, paths, "")
+			// The relay's end is its own and its reader's: it has handed the
+			// reader the end of every stream, which closes once the spawn's
+			// processes are gone, or the reader has closed its connection.
+			// Nothing here cuts it, so `released` follows the last byte the
+			// reader took.
 			if sp.relay != nil {
-				select {
-				case <-sp.relay.done:
-				case <-time.After(time.Second):
-					s.signalChild(sp.relay, unix.SIGKILL)
-				}
+				<-sp.relay.done
 			}
 			if notify {
 				s.reportExit(sp)
