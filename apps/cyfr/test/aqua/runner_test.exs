@@ -218,6 +218,9 @@ defmodule Aqua.RunnerTest do
 
   defp kill_and_await!(%{runner: runner, loop: loop} = pids) do
     refs = for {_name, pid} <- pids, into: %{}, do: {Process.monitor(pid), pid}
+    # The runner has told the loop all it will of what it had, and the loop
+    # has read what it was told.
+    _ = :sys.get_state(runner)
     idle!(loop)
     Process.exit(runner, :kill)
     for {ref, _pid} <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)

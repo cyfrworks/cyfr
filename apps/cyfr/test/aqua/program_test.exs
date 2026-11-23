@@ -90,6 +90,22 @@ defmodule Aqua.ProgramTest do
     {:ok, ctx: ctx, fake: fake, thread: thread, row: brain_row!(ctx), user: user}
   end
 
+  # A loop told that its thread moved reads its rows (`Aqua.Loop`): held or
+  # killed in that read, it would take the test's one shared connection
+  # with it, so it is held only once it waits with nothing to read.
+  defp quiet!(pid) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        Process.info(pid, [:status, :message_queue_len]) in [
+          [status: :waiting, message_queue_len: 0],
+          nil
+        ]
+      end,
+      10_000,
+      "the loop to wait with nothing to read"
+    )
+  end
+
   # The runner's word to a turn's loop that its thread moved (`Aqua.Runner`),
   # which a loop this test runs by itself has no runner to give: each post
   # of a turn tells that turn's loop on this boot.
@@ -4909,6 +4925,7 @@ defmodule Aqua.ProgramTest do
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "work on it")
       %{loop: loop} = working!(ctx, thread, row, fake, turn)
+      quiet!(loop.pid)
       true = :erlang.suspend_process(loop.pid)
       say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
       committed!(ctx, thread, 5)
@@ -4982,10 +4999,17 @@ defmodule Aqua.ProgramTest do
       # The program asks, and the ask's call answers while the loop is held:
       # the test closes it as the loop's worker does, and the loop has said
       # nothing of the answer.
+      quiet!(loop.pid)
       true = :erlang.suspend_process(loop.pid)
       say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
-      committed!(ctx, thread, 4)
       key = TurnStorage.brain_ask_key(turn.id, "ask-1")
+
+      Prima.Test.Wait.wait_until(
+        fn -> step_by_key(ctx, turn, key) != nil end,
+        10_000,
+        "the ask to be recorded"
+      )
+
       {:ok, held} = Tape.turn(ctx, turn.id)
       {:ok, dispatched} = Tape.mark_dispatched(ctx, held, step_by_key(ctx, turn, key))
       {:ok, _} = Tape.close_step(ctx, held, dispatched, "ok", %{result: %{content: "listed"}})
