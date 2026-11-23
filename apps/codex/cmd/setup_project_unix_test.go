@@ -742,7 +742,12 @@ func deafWork(dir string) int {
 		return 3
 	}
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGHUP)
-	select {}
+	// Not select {}: where nothing else of this process waits, as on macOS,
+	// Go ends that at once as a deadlock (exit status 2), and the work is
+	// no longer deaf.
+	for {
+		time.Sleep(time.Hour) // sleep-ok: the stand-in runs until its group is killed
+	}
 }
 
 // gone is whether pid is no running process: none, or one only its
