@@ -197,6 +197,9 @@ func TestWriterHelper(t *testing.T) {
 	// process first.
 	_, err := os.Stdout.Write([]byte("\n"))
 	fmt.Fprintf(os.Stderr, "written: %v\n", err)
+	// What the test binary reports after this test (its coverage, under
+	// -cover) goes where the parent reads, not to the pipe it closed.
+	os.Stdout = os.Stderr
 }
 
 // A write to a pipe main closed is an error the process lives on after,
