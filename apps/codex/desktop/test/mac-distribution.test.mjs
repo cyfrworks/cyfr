@@ -24,14 +24,19 @@ const desktop = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const plist = createRequire(path.join(desktop, "node_modules", "app-builder-lib", "package.json"))("plist")
 
 const team = "AB12CD34EF"
+const p8 = "-----BEGIN PRIVATE KEY-----\nTUlHVEFnRUFNQk1HQnlxR1NNNDlBZ0VHQ0NxR1NNNDlBd0VIQkhrd2R3SUJBUVFn\n-----END PRIVATE KEY-----\n"
+// The secret inputs, and the notary's key as its text, which the build
+// decodes.
 const secrets = {
   APPLE_CERTIFICATE: Buffer.concat([Buffer.from([0x30, 0x82]), Buffer.from("the certificate's own private bytes")]).toString("base64"),
   APPLE_CERTIFICATE_PASSWORD: "correct horse battery staple",
-  APPLE_ID: "someone.private@example.com",
-  APPLE_PASSWORD: "abcd-efgh-ijkl-mnop"
+  APPLE_API_KEY: Buffer.from(p8).toString("base64"),
+  p8
 }
 const profileBytes = Buffer.from([0x30, 0x82, 0x00, 0x10])
-const inputs = {...secrets, APPLE_SIGNING_IDENTITY: `Developer ID Application: CYFR Works Inc. (${team})`, APPLE_TEAM_ID: team,
+const inputs = {APPLE_CERTIFICATE: secrets.APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD: secrets.APPLE_CERTIFICATE_PASSWORD,
+  APPLE_API_KEY: secrets.APPLE_API_KEY, APPLE_API_KEY_ID: "2X9R4HXF34", APPLE_API_ISSUER: "57246542-96fe-1a63-e053-0824d011072a",
+  APPLE_SIGNING_IDENTITY: `Developer ID Application: CYFR Works Inc. (${team})`, APPLE_TEAM_ID: team,
   APPLE_PROVISIONING_PROFILE: profileBytes.toString("base64")}
 
 // Each secret as a careless tool or log could print it: whole, quoted,
@@ -173,7 +178,7 @@ test("a packer that outlives its bound is stopped with all it started", async (t
   assert.ok(error instanceof Refused && /packing and signing the app did not finish in 0\.05 minutes/.test(error.message), String(error))
   assert.ok(Date.now() - started < 20000)
   const grandchild = Number(readFileSync(path.join(r.dir, "grandchild"), "utf8"))
-  assert.throws(() => process.kill(grandchild, 0), {code: "ESRCH"}, "the packer's own child was stopped with it")
+  assert.ok(gone(grandchild), "the packer's own child was stopped with it")
   assert.equal(existsSync(r.dest), false)
   assert.deepEqual(leftovers(r), [])
 })
@@ -212,3 +217,21 @@ test("an empty keychain search list is a failure, not a list to restore", async 
   assert.match(calls, /^security delete-keychain /m)
   assert.deepEqual(leftovers(r), [])
 })
+
+// Whether the process `pid` has ended within five seconds: a killed child
+// lingers until whoever adopted it collects it, so this waits for that.
+function gone(pid) {
+  const until = Date.now() + 5000
+  for (;;) {
+    try {
+      process.kill(pid, 0)
+      const state = (() => { try { return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0] } catch { return null } })()
+      if (state === "Z") return true
+    } catch (e) {
+      if (e.code === "ESRCH") return true
+      throw e
+    }
+    if (Date.now() > until) return false
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
+  }
+}

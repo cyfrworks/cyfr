@@ -11,8 +11,8 @@
 // APPLE_SIGNING_IDENTITY names it, APPLE_TEAM_ID is its team), embeds
 // APPLE_PROVISIONING_PROFILE (a base64 Developer ID .provisionprofile),
 // which authorises the app's WebAuthn keychain group TEAM.run.cyfr.desktop.webauthn,
-// and is to notarise with APPLE_ID and its app-specific APPLE_PASSWORD
-// (notarize below, refused until that is settled). A
+// and notarises with the team's App Store Connect API key: APPLE_API_KEY
+// (the .p8, base64), APPLE_API_KEY_ID and APPLE_API_ISSUER. A
 // rehearsal (--rehearse) takes the same inputs under CYFR_REHEARSAL_*
 // names, for a self-made identity and profile, notarises nothing, and is
 // refused when any APPLE_* input is in its environment, so one build never
@@ -56,7 +56,7 @@ export const need = createRequire(path.join(root, "node_modules", "app-builder-l
 const plist = need("plist")
 
 export const APPLE = ["APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_SIGNING_IDENTITY", "APPLE_TEAM_ID",
-  "APPLE_ID", "APPLE_PASSWORD", "APPLE_PROVISIONING_PROFILE"]
+  "APPLE_PROVISIONING_PROFILE", "APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"]
 export const REHEARSAL = ["CYFR_REHEARSAL_CERTIFICATE", "CYFR_REHEARSAL_CERTIFICATE_PASSWORD", "CYFR_REHEARSAL_SIGNING_IDENTITY",
   "CYFR_REHEARSAL_TEAM_ID", "CYFR_REHEARSAL_PROVISIONING_PROFILE"]
 
@@ -65,8 +65,10 @@ export const webauthnGroup = (team) => `${team}.${APP_ID}.webauthn`
 
 /**
  * The signing inputs in env: {certificate, certificatePassword, identity,
- * team, group, profile (bytes), appleId, applePassword (null when
- * rehearsed), rehearsed}. Throws Refused naming the input, never its value.
+ * team, group, profile (bytes), rehearsed, notary}, notary being the App
+ * Store Connect team key the notary takes, {key (the .p8's text), keyId,
+ * issuer}, or null when rehearsed. Throws Refused naming the input, never
+ * its value.
  */
 export function signingInputs(env, {rehearse = false} = {}) {
   if (rehearse) {
@@ -75,18 +77,30 @@ export function signingInputs(env, {rehearse = false} = {}) {
   }
   const names = rehearse ? REHEARSAL : APPLE
   for (const name of names) if (!env[name]) throw new Refused(`${name} is not set`)
-  const [certificate, certificatePassword, identity, team, profile] = names.filter((n) => !/^APPLE_(ID|PASSWORD)$/.test(n))
+  const [certificate, certificatePassword, identity, team, profile] = names
   if (!/^[A-Z0-9]{10}$/.test(env[team])) throw new Refused(`${team} is not a team ID`)
   const p12 = Buffer.from(env[certificate], "base64")
   if (p12[0] !== 0x30) throw new Refused(`${certificate} is not a base64 .p12`)
   const bytes = Buffer.from(env[profile], "base64")
   if (bytes[0] !== 0x30) throw new Refused(`${profile} is not a base64 provisioning profile`)
+  let notary = null
+  if (!rehearse) {
+    const key = Buffer.from(env.APPLE_API_KEY, "base64").toString("utf8")
+    if (!/^-----BEGIN PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END PRIVATE KEY-----\s*$/.test(key)) {
+      throw new Refused("APPLE_API_KEY is not a base64 App Store Connect .p8 key")
+    }
+    if (!/^[A-Z0-9]{10}$/.test(env.APPLE_API_KEY_ID)) throw new Refused("APPLE_API_KEY_ID is not an App Store Connect key ID")
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(env.APPLE_API_ISSUER)) {
+      throw new Refused("APPLE_API_ISSUER is not an issuer ID")
+    }
+    notary = {key, keyId: env.APPLE_API_KEY_ID, issuer: env.APPLE_API_ISSUER}
+  }
   return {
     certificate: env[certificate], certificatePassword: env[certificatePassword],
     // electron-builder takes the identity's name without its kind.
     identity: env[identity].replace(/^Developer ID Application: /, ""),
     team: env[team], group: webauthnGroup(env[team]), profile: bytes,
-    appleId: rehearse ? null : env.APPLE_ID, applePassword: rehearse ? null : env.APPLE_PASSWORD, rehearsed: rehearse
+    rehearsed: rehearse, notary
   }
 }
 
@@ -419,13 +433,45 @@ export function checkDmg(file, expect, {rehearsed = false} = {}) {
 }
 
 /**
- * Notarise the signed app or DMG at `file` and staple its ticket. Refused
- * until the way Apple's notary takes the account's password without a
- * command line is settled: notarytool documents only --password and its
- * own prompt for it.
+ * Notarise the signed app or DMG at `file` with the team key `notary`
+ * ({key, keyId, issuer}) and staple its ticket, working in `dir`, a folder
+ * of the build's own. notarytool takes an App Store Connect key as the
+ * path of its private key, --key, with --key-id and --issuer, which are
+ * identifiers (notarytool(1)); Apple's notary takes team keys alone
+ * ("Individual keys aren't able to use ... notaryTool", Creating API Keys
+ * for App Store Connect API). The private key is a file, mode 0600, for
+ * the one command, and is removed after it whatever it answered. An app is
+ * sent as a zip of itself and its ticket stapled to the app. Anything but
+ * an accepted submission, a submission that did not end within its bound
+ * and a ticket that was not stapled refuse.
  */
-export function notarize(file) {
-  throw new Refused(`${path.basename(file)} was not notarised: how the notary takes the account's credentials is not settled`)
+export function notarize(file, notary, dir) {
+  const name = path.basename(file)
+  let sent = file
+  if (path.extname(file) === ".app") {
+    sent = path.join(dir, `${name}.zip`)
+    must("ditto", ["-c", "-k", "--keepParent", file, sent], `${name} was not zipped for the notary`, 600)
+  }
+  const key = path.join(dir, "notary-key.p8")
+  writeFileSync(key, notary.key, {mode: 0o600})
+  let answer
+  try {
+    const auth = ["--key", key, "--key-id", notary.keyId, "--issuer", notary.issuer]
+    const r = tool("xcrun", ["notarytool", "submit", sent, ...auth, "--wait", "--timeout", "25m", "--output-format", "json"], 27 * 60)
+    try { answer = JSON.parse(r.out) } catch { answer = null }
+    if (!answer || typeof answer.status !== "string") {
+      throw new Refused(`${name} was not notarised: the notary answered no status (exit ${r.status}): ${(r.err || r.out).trim()}`)
+    }
+    if (answer.status !== "Accepted") {
+      const log = answer.id ? tool("xcrun", ["notarytool", "log", answer.id, ...auth], 300) : null
+      throw new Refused(`${name} was not notarised: ${answer.status}${answer.message ? `, ${answer.message}` : ""}` +
+        (log?.ok ? `\n${log.out.trim()}` : ""))
+    }
+  } finally {
+    rmSync(key, {force: true})
+    if (sent !== file) rmSync(sent, {force: true})
+  }
+  must("xcrun", ["stapler", "staple", file], `${name}'s ticket was not stapled`, 300)
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -438,8 +484,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const names = values.rehearsed ? REHEARSAL : APPLE
     const team = process.env[names[3]]
-    const profile = Buffer.from(process.env[names[names.length - 1]] ?? "", "base64")
-    if (!team || !profile.length) throw new Refused(`${names[3]} and ${names[names.length - 1]} are needed`)
+    const profile = Buffer.from(process.env[names[4]] ?? "", "base64")
+    if (!team || !profile.length) throw new Refused(`${names[3]} and ${names[4]} are needed`)
     checkDmg(positionals[1], {helper: values["cyfr-sha256"], team, group: webauthnGroup(team), profile}, {rehearsed: values.rehearsed})
     console.log(`checked ${path.basename(positionals[1])}${values.rehearsed ? " (rehearsed)" : ""}`)
   } catch (e) {

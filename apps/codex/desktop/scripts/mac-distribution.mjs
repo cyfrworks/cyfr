@@ -114,7 +114,7 @@ export async function distribute({env, dest, rehearse = false, worker, openssl =
   const inputs = signingInputs(env, {rehearse})
   const keychainPassword = randomBytes(24).toString("hex")
   const wrapPassword = randomBytes(24).toString("hex")
-  hide([inputs.certificate, inputs.certificatePassword, inputs.appleId, inputs.applePassword, keychainPassword, wrapPassword])
+  hide([inputs.certificate, inputs.certificatePassword, env.APPLE_API_KEY, inputs.notary?.key, keychainPassword, wrapPassword])
   checkProfile(decodeProfile(inputs.profile), inputs)
 
   const out = path.dirname(dest)
@@ -182,9 +182,13 @@ export async function distribute({env, dest, rehearse = false, worker, openssl =
     const result = path.join(work, "result.json")
     const config = path.join(work, "config.json")
     writeFileSync(config, JSON.stringify({identity: inputs.identity, team: inputs.team, group: inputs.group, profile, keychain,
-      rehearsed: inputs.rehearsed, result}), {mode: 0o600})
-    // The packing sees no secret input: its keychain is unlocked already.
-    const workerEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(APPLE_|CYFR_REHEARSAL_|CSC_)/.test(name)))
+      rehearsed: inputs.rehearsed, result, work,
+      notary: inputs.notary && {keyId: inputs.notary.keyId, issuer: inputs.notary.issuer}}), {mode: 0o600})
+    // The packing sees no input but the notary's key, in its environment,
+    // for notarising the app before its DMG is made; its keychain is
+    // unlocked already.
+    const workerEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(APPLE_|CYFR_REHEARSAL_|CSC_|CYFR_NOTARY_)/.test(name)))
+    if (inputs.notary) workerEnv.CYFR_NOTARY_KEY = inputs.notary.key
     const built = path.join(work, "out")
     const status = await supervise(worker.command, [...worker.args, "--out", built, "--worker", config],
       {env: workerEnv, minutes: worker.minutes, print, what: "packing and signing the app"})
@@ -193,7 +197,7 @@ export async function distribute({env, dest, rehearse = false, worker, openssl =
     try { ({helper} = JSON.parse(readFileSync(result, "utf8"))) } catch { throw new Refused("packing and signing the app left no result") }
     const image = path.join(built, path.basename(dest))
     if (!existsSync(image)) throw new Refused(`packing and signing the app left no ${path.basename(dest)}`)
-    if (!inputs.rehearsed) await notarise(image, inputs)
+    if (!inputs.rehearsed) await notarise(image, inputs.notary, work)
     await check(image, {...inputs, helper}, {rehearsed: inputs.rehearsed})
     renameSync(image, dest)
     print(`the bundled cyfr is signed as sha256 ${helper}\n`)

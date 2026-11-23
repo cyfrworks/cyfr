@@ -134,7 +134,8 @@ EOF
 GOOD=$(profile good) && OTHER_APP=$(profile app) && OTHER_GROUP=$(profile group) || { echo "rehearsal: the profiles were not made" >&2; exit 1; }
 
 # Every rehearsal input, as the build reads them; none of Apple's.
-for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_ID APPLE_PASSWORD APPLE_PROVISIONING_PROFILE; do
+for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_PROVISIONING_PROFILE \
+  APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
   unset "$name"
 done
 export CYFR_REHEARSAL_CERTIFICATE CYFR_REHEARSAL_CERTIFICATE_PASSWORD="$PASSWORD" CYFR_REHEARSAL_SIGNING_IDENTITY="$NAME" \
@@ -157,7 +158,7 @@ refused() {
   else fail "$check" "exit $status, not the refusal '$why': $(tail -3 <<<"$out")"; fi
 }
 refused input "CYFR_REHEARSAL_PROVISIONING_PROFILE is not set" -CYFR_REHEARSAL_PROVISIONING_PROFILE
-refused mixed "a rehearsal takes no Apple input, and APPLE_ID is set" APPLE_ID=
+refused mixed "a rehearsal takes no Apple input, and APPLE_API_KEY is set" APPLE_API_KEY=
 refused profile "the provisioning profile is not for run.cyfr.desktop" CYFR_REHEARSAL_PROVISIONING_PROFILE="$OTHER_APP"
 refused group "the provisioning profile does not authorise the app's WebAuthn group" CYFR_REHEARSAL_PROVISIONING_PROFILE="$OTHER_GROUP"
 

@@ -79,7 +79,7 @@ if (values.distribution && os === "darwin" && !values.worker) {
   })
   try {
     await distribute({env: process.env, dest: path.join(path.resolve(values.out), built), rehearse: values.rehearse,
-      worker: {command: process.execPath, minutes: 40, args: [fileURLToPath(import.meta.url), "--cyfr", path.resolve(values.cyfr),
+      worker: {command: process.execPath, minutes: 50, args: [fileURLToPath(import.meta.url), "--cyfr", path.resolve(values.cyfr),
         "--version", values.version, "--arch", values.arch, "--distribution", ...(values.rehearse ? ["--rehearse"] : [])]}})
   } catch (e) {
     refuse(e)
@@ -185,7 +185,9 @@ await build({
       staged.distribution = filesOf(context.appOutDir)
     },
     afterSign: async (context) => {
-      if (signing && !signing.rehearsed) notarize(path.join(context.appOutDir, "CYFR.app"))
+      if (signing && !signing.rehearsed) {
+        notarize(path.join(context.appOutDir, "CYFR.app"), {key: process.env.CYFR_NOTARY_KEY, ...signing.notary}, signing.work)
+      }
     },
     afterPack: async (context) => {
       checkPackage(context.appOutDir, staged, os)

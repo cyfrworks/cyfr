@@ -13,8 +13,12 @@ import {APPLE, REHEARSAL, checkProfile, entitlements, ignoring, kindOf, signingI
 const team = "AB12CD34EF"
 const der = Buffer.from([0x30, 0x82, 0x01, 0x00]).toString("base64")
 const secret = "s3cret-value-never-printed"
+const p8 = "-----BEGIN PRIVATE KEY-----\nTUlHVEFnRUFNQk1HQnlxR1NNNDlBZ0VHQ0NxR1NNNDlBd0VIQkhrd2R3SUJBUVFn\n-----END PRIVATE KEY-----\n"
+const keyId = "2X9R4HXF34"
+const issuer = "57246542-96fe-1a63-e053-0824d011072a"
 const real = {APPLE_CERTIFICATE: der, APPLE_CERTIFICATE_PASSWORD: secret, APPLE_SIGNING_IDENTITY: `Developer ID Application: CYFR Works Inc. (${team})`,
-  APPLE_TEAM_ID: team, APPLE_ID: "someone@example.com", APPLE_PASSWORD: secret, APPLE_PROVISIONING_PROFILE: der}
+  APPLE_TEAM_ID: team, APPLE_PROVISIONING_PROFILE: der, APPLE_API_KEY: Buffer.from(p8).toString("base64"),
+  APPLE_API_KEY_ID: keyId, APPLE_API_ISSUER: issuer}
 const rehearsal = {CYFR_REHEARSAL_CERTIFICATE: der, CYFR_REHEARSAL_CERTIFICATE_PASSWORD: secret,
   CYFR_REHEARSAL_SIGNING_IDENTITY: `Developer ID Application: CYFR Rehearsal (${team})`, CYFR_REHEARSAL_TEAM_ID: team,
   CYFR_REHEARSAL_PROVISIONING_PROFILE: der}
@@ -28,8 +32,7 @@ test("a distribution build takes every Apple input, and its group from the team"
   assert.equal(got.identity, `CYFR Works Inc. (${team})`)
   assert.equal(got.team, team)
   assert.equal(got.group, `${team}.run.cyfr.desktop.webauthn`)
-  assert.equal(got.appleId, real.APPLE_ID)
-  assert.equal(got.applePassword, secret)
+  assert.deepEqual(got.notary, {key: p8, keyId, issuer})
   assert.equal(got.rehearsed, false)
   assert.deepEqual(got.profile, Buffer.from(der, "base64"))
 })
@@ -45,13 +48,23 @@ test("a distribution build refuses each missing Apple input, naming it and no va
   assert.throws(() => signingInputs({...real, APPLE_PROVISIONING_PROFILE: Buffer.from("<plist/>").toString("base64")}),
     refusal("APPLE_PROVISIONING_PROFILE"))
   assert.throws(() => signingInputs({...real, APPLE_CERTIFICATE: Buffer.from("PEM").toString("base64")}), refusal("APPLE_CERTIFICATE"))
+  assert.throws(() => signingInputs({...real, APPLE_API_KEY: Buffer.from("not a key").toString("base64")}), refusal("APPLE_API_KEY"))
+  assert.throws(() => signingInputs({...real, APPLE_API_KEY_ID: "short"}), refusal("APPLE_API_KEY_ID"))
+  assert.throws(() => signingInputs({...real, APPLE_API_ISSUER: "not-a-uuid"}), refusal("APPLE_API_ISSUER"))
+  // The Apple ID and its password are read by nothing.
+  assert.deepEqual(signingInputs({...real, APPLE_ID: "someone@example.com", APPLE_PASSWORD: secret}).notary, {key: p8, keyId, issuer})
+})
+
+// The Apple inputs, exactly: the notary's team key, and no Apple ID.
+test("the Apple inputs are the identity, the profile and the notary's team key", () => {
+  assert.deepEqual(APPLE, ["APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_SIGNING_IDENTITY", "APPLE_TEAM_ID",
+    "APPLE_PROVISIONING_PROFILE", "APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"])
 })
 
 test("a rehearsal takes its own inputs, refuses any Apple input beside them and notarises with nothing", () => {
   const got = signingInputs(rehearsal, {rehearse: true})
   assert.equal(got.rehearsed, true)
-  assert.equal(got.appleId, null)
-  assert.equal(got.applePassword, null)
+  assert.equal(got.notary, null)
   for (const name of REHEARSAL) assert.throws(() => signingInputs({...rehearsal, [name]: ""}, {rehearse: true}), refusal(name))
   for (const name of APPLE) {
     // Present at all, even empty, as a workflow sets a missing secret.
@@ -139,7 +152,7 @@ test("a tool that outlives its bound is refused, and everything it started is st
     (e) => e instanceof Refused && e.message === "sh -c did not answer in 1 seconds")
   assert.ok(Date.now() - started < 10000, "the bound held")
   const grandchild = Number(readFileSync(pid, "utf8"))
-  assert.throws(() => process.kill(grandchild, 0), {code: "ESRCH"}, "the tool's own child was stopped with it")
+  assert.ok(gone(grandchild), "the tool's own child was stopped with it")
   assert.equal(tool("true", []).ok, true)
   assert.deepEqual(tool("sh", ["-c", "echo said; exit 3"]), {ok: false, status: 3, out: "said\n", err: ""})
   assert.throws(() => tool("cyfr-no-such-tool", []), (e) => e instanceof Refused && /could not be run/.test(e.message))
@@ -164,3 +177,21 @@ test("Electron's signing skips the signed cyfr and what electron-builder skips",
   assert.equal(ignoring(undefined, "/out//mac-arm64/CYFR.app/Contents/Resources/cyfr")(helper), true)
   assert.equal(ignoring(undefined, helper)("/out/mac-arm64//CYFR.app/Contents/./Resources/cyfr"), true)
 })
+
+// Whether the process `pid` has ended within five seconds: a killed child
+// lingers until whoever adopted it collects it, so this waits for that.
+function gone(pid) {
+  const until = Date.now() + 5000
+  for (;;) {
+    try {
+      process.kill(pid, 0)
+      const state = (() => { try { return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0] } catch { return null } })()
+      if (state === "Z") return true
+    } catch (e) {
+      if (e.code === "ESRCH") return true
+      throw e
+    }
+    if (Date.now() > until) return false
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
+  }
+}

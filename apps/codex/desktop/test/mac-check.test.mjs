@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict"
 import {createHash} from "node:crypto"
-import {chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync} from "node:fs"
+import {chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync} from "node:fs"
 import {createRequire} from "node:module"
 import {tmpdir} from "node:os"
 import path from "node:path"
@@ -15,7 +15,7 @@ import {test as anyTest} from "node:test"
 import {fileURLToPath} from "node:url"
 
 import {Refused} from "../scripts/check-package.mjs"
-import {checkApp, entitlements, webauthnGroup} from "../scripts/mac-sign.mjs"
+import {checkApp, entitlements, notarize, webauthnGroup} from "../scripts/mac-sign.mjs"
 
 // The stand-ins are shell scripts and the bound perl's, a Mac's or Linux's.
 const test = (name, fn) => anyTest(name, {skip: process.platform === "win32"}, fn)
@@ -127,4 +127,69 @@ test("a file of no kind a signed app holds refuses it, and so does a link out of
   const dangling = rig(t)
   symlinkSync("nothing-here", path.join(dangling.app, "Contents", "gone"))
   assert.throws(() => dangling.check(), refused(/is a link to nothing$/))
+})
+
+// The notary (scripts/mac-sign.mjs notarize) against a stand-in xcrun and
+// ditto: the team key's private half is a file, mode 0600, only for the
+// one command, never on its command line; only an accepted submission with
+// its ticket stapled passes.
+function notaryRig(t, {status = "Accepted", staple = 0} = {}) {
+  const dir = mkdtempSync(path.join(tmpdir(), "cyfr-notary-"))
+  t.after(() => rmSync(dir, {recursive: true, force: true}))
+  const bin = path.join(dir, "bin")
+  const work = path.join(dir, "work")
+  mkdirSync(bin)
+  mkdirSync(work)
+  const log = path.join(dir, "log")
+  writeFileSync(log, "")
+  writeFileSync(path.join(bin, "xcrun"), `#!/bin/sh
+printf 'xcrun %s\\n' "$*" >> ${log}
+if [ "$1 $2" = "notarytool submit" ]; then
+  key=$(echo "$*" | sed -n 's/.* --key \\([^ ]*\\) .*/\\1/p')
+  mode=$(stat -c %a "$key" 2>/dev/null || stat -f %Lp "$key")
+  printf 'key %s %s\\n' "$mode" "$(cat "$key" | head -1)" >> ${log}
+  echo '{"id":"2efe2717-52ef-43a5-96dc-0797e4ca1041","status":"${status}","message":"Processing complete"}'
+  exit 0
+fi
+if [ "$1 $2" = "notarytool log" ]; then echo '{"issues":[{"message":"The binary is not signed."}]}'; exit 0; fi
+if [ "$1 $2" = "stapler staple" ]; then exit ${staple}; fi
+exit 1
+`)
+  writeFileSync(path.join(bin, "ditto"), `#!/bin/sh\nprintf 'ditto %s\\n' "$*" >> ${log}\n: > "$5"\n`)
+  for (const f of ["xcrun", "ditto"]) chmodSync(path.join(bin, f), 0o755)
+  const app = path.join(dir, "CYFR.app")
+  mkdirSync(app)
+  const run = (file = app) => {
+    const before = process.env.PATH
+    process.env.PATH = `${bin}:${before}`
+    try {
+      notarize(file, notary, work)
+    } finally {
+      process.env.PATH = before
+    }
+  }
+  return {run, log, work, dmg: path.join(dir, "cyfr.dmg")}
+}
+const notary = {key: "-----BEGIN PRIVATE KEY-----\nTUlHVEFnRUFNQk1H\n-----END PRIVATE KEY-----\n", keyId: "2X9R4HXF34",
+  issuer: "57246542-96fe-1a63-e053-0824d011072a"}
+
+test("the notary's key is a private file for the one command, and no command line carries it", (t) => {
+  const r = notaryRig(t)
+  r.run()
+  const calls = readFileSync(r.log, "utf8")
+  assert.match(calls, /^ditto -c -k --keepParent \S+CYFR\.app \S+CYFR\.app\.zip$/m, "an app goes as a zip of itself")
+  assert.match(calls, /^xcrun notarytool submit \S+CYFR\.app\.zip --key \S+notary-key\.p8 --key-id 2X9R4HXF34 --issuer 57246542-96fe-1a63-e053-0824d011072a --wait --timeout 25m --output-format json$/m)
+  assert.match(calls, /^key 600 -----BEGIN PRIVATE KEY-----$/m, "the key was there, mode 0600, during the command")
+  assert.match(calls, /^xcrun stapler staple \S+CYFR\.app$/m)
+  assert.doesNotMatch(calls.split("\n").filter((l) => !l.startsWith("key ")).join("\n"), /TUlHVEFnRUFNQk1H/, "the key on a command line")
+  assert.deepEqual(readdirSync(r.work), [], "the key and the zip are gone")
+})
+
+test("a submission that is not accepted, or a ticket not stapled, refuses, and the key goes either way", (t) => {
+  const invalid = notaryRig(t, {status: "Invalid"})
+  assert.throws(() => invalid.run(invalid.dmg), refused(/^cyfr\.dmg was not notarised: Invalid, Processing complete\n.*The binary is not signed/s))
+  assert.deepEqual(readdirSync(invalid.work), [])
+  const unstapled = notaryRig(t, {staple: 65})
+  assert.throws(() => unstapled.run(unstapled.dmg), refused(/^cyfr\.dmg's ticket was not stapled/))
+  assert.deepEqual(readdirSync(unstapled.work), [])
 })

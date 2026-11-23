@@ -33,8 +33,9 @@ on:
       APPLE_CERTIFICATE_PASSWORD: {required: true}
       APPLE_SIGNING_IDENTITY: {required: true}
       APPLE_TEAM_ID: {required: true}
-      APPLE_ID: {required: true}
-      APPLE_PASSWORD: {required: true}
+      APPLE_API_KEY: {required: true}
+      APPLE_API_KEY_ID: {required: true}
+      APPLE_API_ISSUER: {required: true}
       APPLE_PROVISIONING_PROFILE: {required: true}
 
 permissions:
@@ -46,9 +47,9 @@ jobs:
     runs-on: macos-latest
     # Electron's download, the build and Apple's notary, which answers in
     # minutes and sometimes in more: the build bounds the app's packing,
-    # signing and notarising at 40 minutes and the DMG's notarising at 30,
+    # signing and notarising at 50 minutes and the DMG's notarising at 27,
     # each ending with a sentence.
-    timeout-minutes: 90
+    timeout-minutes: 100
     defaults:
       run:
         shell: bash
@@ -83,8 +84,9 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
         run: |
           node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version "$VERSION" --arch arm64 --distribution
