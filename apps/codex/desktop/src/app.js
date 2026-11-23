@@ -329,7 +329,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       opening = null
       children.add(opened)
       opened.on("closed", () => children.delete(opened))
-      confine(opened.webContents, "child", () => opened.destroy(), first)
+      confine(opened.webContents, "child", () => {
+        opened.destroy()
+        on({type: "lost", window: "child"})
+      }, first)
     })
     const heard = (event) => {
       if (content === w) on(event)
@@ -423,7 +426,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     children.add(w)
     w.on("closed", () => children.delete(w))
-    confine(w.webContents, "child", () => w.destroy())
+    confine(w.webContents, "child", () => {
+      w.destroy()
+      on({type: "lost", window: "child"})
+    })
     w.loadURL(url)
   }
 

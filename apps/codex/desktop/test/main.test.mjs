@@ -1338,6 +1338,9 @@ test("started on a route main keeps that route's rules alone", async () => {
 // ---- the box's screen ----
 
 const SCREEN = "/home/ana/cyfr"
+// The screen road is Linux's alone (policy.js screenProject): on macOS and
+// Windows the switch is refused, which the last test of these shows there.
+const ON_LINUX = {skip: process.platform !== "linux" && "the box's screen runs on Linux alone"}
 const SHELL_PAGE = "http://127.0.0.1:7340/"
 
 // The app started as the box's screen for SCREEN (or `project`), on
@@ -1360,7 +1363,7 @@ async function screenStarted(project = SCREEN) {
   return said
 }
 
-test("as the box's screen the app runs the screen shell in that project, in one frameless maximized window with no menu", async () => {
+test("as the box's screen the app runs the screen shell in that project, in one frameless maximized window with no menu", ON_LINUX, async () => {
   await screenStarted()
   assert.deepEqual(world.spawned, [["screen", "shell", "--app"]])
   assert.deepEqual(world.spawnedIn, [SCREEN])
@@ -1373,7 +1376,7 @@ test("as the box's screen the app runs the screen shell in that project, in one 
   assert.ok(!world.sessions.has(CONTENT), "nothing kept on disk")
 })
 
-test("only an explicit project makes the app a screen; another switch value is refused", async () => {
+test("only an explicit project makes the app a screen; another switch value is refused", ON_LINUX, async () => {
   await started(true)
   assert.deepEqual(world.spawned, [["desktop-serve"]], "no switch, no screen")
   for (const value of ["", "cyfr", "/home/ana/../cyfr"]) {
@@ -1385,7 +1388,7 @@ test("only an explicit project makes the app a screen; another switch value is r
   world.exited = undefined
 })
 
-test("the screen's first page is the shell's own: a chooser there ends the app", async () => {
+test("the screen's first page is the shell's own: a chooser there ends the app", ON_LINUX, async () => {
   reset()
   world.screen = SCREEN
   startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: () => {}})
@@ -1399,7 +1402,7 @@ test("the screen's first page is the shell's own: a chooser there ends the app",
   assert.ok(child.heard.some((m) => m.type === "shutdown"), "cyfr is shut down")
 })
 
-test("a lock on the screen hides the page at once and shows the shell's page again, in a new session", async () => {
+test("a lock on the screen hides the page at once and shows the shell's page again, in a new session", ON_LINUX, async () => {
   await screenStarted()
   assert.ok(await opens())
   await give(content())
@@ -1414,7 +1417,7 @@ test("a lock on the screen hides the page at once and shows the shell's page aga
   assert.notEqual(after.webContents.session, session)
 })
 
-test("on the screen a lost page locks, a failed load shows the shell's page, and cyfr's end quits with no message", async () => {
+test("on the screen a lost page locks, a failed load shows the shell's page, and cyfr's end quits with no message", ON_LINUX, async () => {
   await screenStarted()
   assert.ok(await opens())
   await give(content())
@@ -1433,3 +1436,36 @@ test("on the screen a lost page locks, a failed load shows the shell's page, and
   assert.ok(world.quit, "the app quits, to be started again locked")
 })
 
+
+test("on the screen a failed load of the shell's own page locks, and so does a lost confirmation", ON_LINUX, async () => {
+  await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  let locks = child.heard.filter((m) => m.type === "lock").length
+  fails(content(), SHELL_PAGE, -102)
+  await settled()
+  assert.equal(child.heard.filter((m) => m.type === "lock").length, locks + 1, "a failed load of the shell's page locks")
+  child.say({type: "locked"})
+  await settled()
+  await settled()
+  assert.equal(content().webContents.url, SHELL_PAGE)
+  assert.ok(await opens())
+  await give(content())
+  const page = content()
+  page.webContents.opens({url: "http://127.0.0.1:7340/confirm?ref=cfm_1"})
+  const opened = new BrowserWindow({webPreferences: {session: page.webContents.session}})
+  page.webContents.emit("did-create-window", opened)
+  locks = child.heard.filter((m) => m.type === "lock").length
+  opened.webContents.emit("render-process-gone", {}, {reason: "killed"})
+  await settled()
+  assert.ok(opened.destroyed)
+  assert.equal(child.heard.filter((m) => m.type === "lock").length, locks + 1, "a lost confirmation locks")
+})
+
+test("on macOS and Windows the screen road is refused", {skip: process.platform === "linux" && "it runs there"}, async () => {
+  const said = await screenStarted()
+  assert.equal(world.exited, 2)
+  assert.deepEqual(world.spawned, [])
+  assert.ok(said.some((l) => l.startsWith("refused: --screen-project")))
+  world.exited = undefined
+})

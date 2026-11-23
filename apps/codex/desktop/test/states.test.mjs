@@ -502,3 +502,90 @@ test("an act is no redirect, and is begun by the top frame's own document that o
     }
   }
 })
+
+// The box's screen and its shell agree from any order of their messages
+// (cmd/screen_app.go is the shell's side, modelled here as it is written):
+// the shell says ready and proposes its CYFR as attempt 1, answers opened
+// to the current attempt's home-ready alone and once, and on every lock,
+// its own or main's, says locked naming no CYFR and proposes again as the
+// next attempt. Every order of delivering either side's messages, of the
+// takes and clears ending (in the order they were asked, as app.js chains
+// them), and of up to two locks of the shell's own and one lost page of
+// main's (every state they reach, each walked once), ends with main keeping to the CYFR on the device's own page:
+// never stranded keeping to none, never ended.
+test("the screen ends on its CYFR whatever the order of its messages", () => {
+  const LOOP = "http://127.0.0.1:7340/"
+  const CYFR = "http://localhost:4000"
+  const initialWorld = () => ({
+    main: initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr"),
+    shell: {attempt: 1, answered: false, locks: 2, gone: false},
+    toMain: [{type: "ready", url: LOOP}, {type: "home", message: {type: "home", home: CYFR, account: CYFR, attempt: 1}}],
+    toShell: [], pending: [], showing: "", lost: 1, trace: []
+  })
+  const clone = (w) => structuredClone(w)
+  const hide = (w) => {
+    w.shell.attempt++
+    w.shell.answered = false
+    w.toMain.push({type: "locked", message: {type: "locked"}},
+      {type: "home", message: {type: "home", home: CYFR, account: CYFR, attempt: w.shell.attempt}})
+  }
+  const carry = (w, next) => {
+    w.main = next.state
+    for (const effect of next.do) {
+      if (effect.send) w.toShell.push({type: effect.send.type, ...(effect.send.fields ?? {})})
+      if (effect.take) w.pending.push({type: "taken", taken: true})
+      if (effect.forget) w.pending.push({type: "forgot", cleared: true})
+      if (effect.chooser) w.showing = w.main.readyURL
+      if (effect.close) w.showing = ""
+      if (effect.end || effect.quit) w.ended = JSON.stringify(effect)
+    }
+  }
+  const moves = (w) => {
+    const out = []
+    if (w.ended || w.shell.gone) return out
+    if (w.toMain.length) {
+      out.push(["to main", (x) => {
+        const m = x.toMain.shift()
+        carry(x, step(x.main, m.type === "ready" ? m : m.type === "opened" ? m : {type: m.type, message: m.message}))
+      }])
+    }
+    if (w.toShell.length) {
+      out.push(["to the shell", (x) => {
+        const m = x.toShell.shift()
+        if (m.type === "home-ready" && m.attempt === x.shell.attempt && !x.shell.answered) {
+          x.shell.answered = true
+          x.toMain.push({type: "opened", home: CYFR})
+        }
+        if (m.type === "home-failed" && m.attempt === x.shell.attempt) x.shell.gone = true
+        if (m.type === "lock" || m.type === "leave") hide(x)
+      }])
+    }
+    if (w.pending.length) out.push(["a take or clear ends", (x) => carry(x, step(x.main, x.pending.shift()))])
+    if (w.shell.locks > 0) out.push(["the shell locks", (x) => { x.shell.locks--; hide(x) }])
+    if (w.lost > 0 && w.main.name !== "starting") out.push(["main's page is lost", (x) => { x.lost--; carry(x, step(x.main, {type: "lost"})) }])
+    return out
+  }
+  const seen = new Set()
+  let ends = 0
+  const walk = (w) => {
+    const key = JSON.stringify({...w, trace: undefined})
+    if (seen.has(key)) return
+    seen.add(key)
+    const next = moves(w)
+    if (next.length === 0) {
+      ends++
+      assert.ok(!w.ended && !w.shell.gone, `it ended (${w.ended ?? "the shell gone"}) after ${w.trace.join(" > ")}`)
+      assert.ok(w.main.name === "open" && w.main.home === CYFR && w.showing === LOOP,
+        `it ended ${w.main.name} keeping to "${w.main.home}" showing "${w.showing}" after ${w.trace.join(" > ")}`)
+      return
+    }
+    for (const [name, move] of next) {
+      const x = clone(w)
+      x.trace.push(name)
+      move(x)
+      walk(x)
+    }
+  }
+  walk(initialWorld())
+  assert.ok(ends > 0 && seen.size > 500, `only ${seen.size} states were walked`)
+})
