@@ -224,9 +224,20 @@ guest_copy_in() {
   guest_ssh_in "cat >$(printf '%q' "$2")" <"$1"
 }
 
-# guest_screenshot NAME: the guest's display as the PNG GUEST_DIR/NAME.
+# KEY_SHOWN is set from the API key's making until its card is seen gone
+# (run.sh, screen_confirms): while it is, nothing of the screen is
+# recorded, neither a picture (guest_screenshot refuses) nor the words a
+# missed press read (screen_press).
+KEY_SHOWN=""
+
+# guest_screenshot NAME: the guest's display as the PNG GUEST_DIR/NAME;
+# refused while the screen may show the API key (KEY_SHOWN).
 guest_screenshot() {
   local name=$1
+  if [ -n "$KEY_SHOWN" ]; then
+    echo "install-screen proof: no picture of the screen is taken while it may show the API key ($name)" >&2
+    return 1
+  fi
   guest_qmp screendump "{\"filename\": \"/case/$name\", \"format\": \"png\"}" >/dev/null &&
     docker cp "$GUEST:/case/$name" "$GUEST_DIR/$name" >/dev/null 2>&1 &&
     [ "$(od -An -N8 -tx1 "$GUEST_DIR/$name" | tr -d ' \n')" = 89504e470d0a1a0a ]
@@ -713,14 +724,18 @@ guest_root_out() {
 # a unit of its own recording each request head the guest's loopback
 # carries to CYFR and to the screen's shell in OBSERVED, root's alone,
 # from each boot on. The record holds the screen's session cookies and
-# never leaves the guest; the evidence holds their digests.
+# never leaves the guest; the evidence holds their digests. OBSERVING is
+# set from the first start on: the evidence is then kept only once the
+# scrub has searched it for what was observed (run.sh, evidence_close).
 OBSERVED=/root/proof-observe.jsonl
+OBSERVING=""
 box_helpers() {
   guest_copy_in "$HERE/box.py" box.py || fail "box.py was not copied into the guest"
   guest_root 'install -m 0700 /home/proof/box.py /root/box.py' || fail "box.py was not given to root ($GUEST_DIR/root.txt)"
   observe_start
 }
 observe_start() {
+  OBSERVING=1
   guest_root "systemctl reset-failed proof-observe 2>/dev/null; systemd-run --unit=proof-observe --collect python3 -I /root/box.py observe $OBSERVED" ||
     fail "the request heads are not observed ($GUEST_DIR/root.txt)"
 }
@@ -801,12 +816,17 @@ screen_read() { proof_fg timeout 180 docker exec "$GUEST" python3 /proof/screen.
 
 # screen_press TEXT [last]: TEXT pressed where the display shows it; each
 # press, and each miss with the words read then, is a line of
-# GUEST_DIR/screen-press.txt.
+# GUEST_DIR/screen-press.txt, a miss while the screen may show the API key
+# (KEY_SHOWN) without the words.
 screen_press() {
   local at
   if at=$(screen_read press "$@" 2>>"$GUEST_DIR/screen-press.txt"); then
     printf '%s pressed %s at %s\n' "$(date -u +%T)" "$1" "$at" >>"$GUEST_DIR/screen-press.txt"
     return 0
+  fi
+  if [ -n "$KEY_SHOWN" ]; then
+    printf '%s missed %s; the display is not read while it may show the API key\n' "$(date -u +%T)" "$1" >>"$GUEST_DIR/screen-press.txt"
+    return 1
   fi
   { printf '%s missed %s; the display read:\n' "$(date -u +%T)" "$1"; screen_read words; } >>"$GUEST_DIR/screen-press.txt" 2>&1
   return 1

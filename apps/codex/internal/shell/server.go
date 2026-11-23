@@ -557,8 +557,10 @@ func (srv *Server) page(w http.ResponseWriter, d pageData) {
 		}
 	}
 	d.Warn = warnings(v.Storage)
-	if srv.Shell.cfg.Warning != "" {
-		d.Warn = append(d.Warn, srv.Shell.cfg.Warning)
+	if srv.Shell.cfg.Warning != nil {
+		if warning := srv.Shell.cfg.Warning(); warning != "" {
+			d.Warn = append(d.Warn, warning)
+		}
 	}
 	qr := v.RecoveryCode
 	if v.Page == PageEnroll {

@@ -39,15 +39,17 @@
 # value proves nothing, and which a reboot ends. After each
 # lock, kill, cut and reboot the session cookie the screen last sent CYFR
 # (read from the request heads root observes on the guest's loopback,
-# box.py, never kept in the evidence) is sent to sign in, and at the end
-# no evidence file holds any cookie the screen sent. The video in the
+# box.py, never kept in the evidence) is sent to sign in, and at every
+# exit no evidence file holds any cookie the screen sent, or the evidence
+# is removed (evidence_close). The video in the
 # five minutes is a canvas written with the API key the screen made: the
 # proof reads that key off the loopback wire as root, as CYFR sent it to
 # the screen, since Prism shows a key once, to the person, and nothing else
 # hands it over; it stays in root's file on the guest, is used for that
 # canvas alone, and the evidence holds none (the scrub), as bytes or as
-# pixels: no screenshot is taken while Prism's card shows the key, which
-# the proof closes with its Done first. Every press and read
+# pixels: from the key's making until Prism's card that shows it is seen
+# closed by its Done, nothing of the screen is recorded, on a pass or a
+# failure. Every press and read
 # of the screen is a person's: the display read by tesseract on QEMU's
 # screendump and the guest's tablet pressed there (guest/screen.py). After
 # `cyfr down` and another reboot CYFR stays down, the screen says why
@@ -166,6 +168,14 @@ sed '$d' "$ROOT/scripts/install.sh" >"$WORK/install-functions.sh" || exit 1
 INSTALL_VERSION=$(sh -c '. "$1"; unset CYFR_VERSION; resolve_version' sh "$WORK/install-functions.sh") ||
   { echo "install proof: the release the install line takes could not be read from GitHub's listing" >&2; exit 69; }
 echo "install proof: the install line takes release $INSTALL_VERSION"
+
+# packages_left_none: whether no package file is left in the account's
+# home, the project's folder among it, or anywhere under /tmp, mktemp's
+# folders root stages in included, read as root into
+# GUEST_DIR/left-packages.txt.
+packages_left_none() {
+  guest_root_out "find /tmp /home/proof -name '*.deb'" >"$GUEST_DIR/left-packages.txt" && [ ! -s "$GUEST_DIR/left-packages.txt" ]
+}
 
 transcript_has() { grep -qE -- "$2" "$GUEST_DIR/transcript-$1.txt"; }
 
@@ -410,7 +420,7 @@ box_install() {
   check "it ends on the CYFR reached from this computer" transcript_has init '^CYFR is set up in this directory, reached from this computer at http://localhost:4000\.$'
   check "it gives the next step" transcript_has init '^Next: cyfr up, then sudo reboot\.$'
   check "nothing took the terminal: tty1's getty runs and the screen does not" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-active --quiet cyfr-screen'
-  check "no package is left behind, in the folder or in /tmp" guest_ssh '! ls ~/cyfr/.cyfr/screen/*.deb /tmp/*.deb'
+  check "no package is left behind, in the account's home or anywhere under /tmp, where root stages ($GUEST_DIR/left-packages.txt)" packages_left_none
   pane_step_end init
 
   step "this tree's server in the release's place, and the box its own account service in .env"
@@ -681,15 +691,20 @@ screen_confirms() {
     sh -c 'grep -q "That is not this device" "$1" && grep -q "Confirm on this device" "$1"' sh "$GUEST_DIR/shell-confirm-wrong.html"
   confirmation_state wrong "$ref"
   check "the home still holds it pending" json_is "$GUEST_DIR/confirmation-wrong.json" '{"state": "pending", "confirmed_client_id": null}'
+  # The PIN makes the key, which Prism shows once, in a card the person
+  # closes with its Done: from here until that card is seen gone nothing
+  # of the screen is recorded (KEY_SHOWN, lib.sh), and a press that misses
+  # or a card that stays ends the run with a sentence alone.
+  KEY_SHOWN=1
   printf '\t%s\n' "$SECRET" | guest_keys || fail "QMP did not type"
   sleep 8
   shell_page confirmed
   check "the screen confirmed it with the PIN again" grep -q 'Confirmed on this device' "$GUEST_DIR/shell-confirmed.html"
-  # Prism shows the key made, once, in a card the person closes with its
-  # Done: closed before the screen is looked at again (the header).
   check "Prism shows the key it made" screen_shows 'Copy this key now' 30
-  screen_press Done last || fail "the screen did not press the key's Done ($GUEST_DIR/screen-press.txt)"
-  check "the key's card is closed" screen_shows_not 'Copy this key now' 15
+  screen_press Done last || fail "the screen did not press the key's Done, so the run ends without a record of the screen"
+  screen_shows_not 'Copy this key now' 15 || fail "the key's card did not close after its Done, so the run ends without a record of the screen"
+  KEY_SHOWN=""
+  record PASS "the key's card is closed"
   check "screenshot screen-key-made.png" guest_screenshot screen-key-made.png
   confirmation_state confirmed "$ref"
   client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/.cyfr/device/client.json")
@@ -931,17 +946,38 @@ screen_keeps_no_session() {
   check "the session it had open opens nothing" cookie_is out kept
 }
 
-# No evidence file holds a session cookie the screen sent: the evidence as
-# it stands, packed, is searched in the guest for every cookie the box
-# observed (box.py scrub), whose record never leaves it; the count and
-# any file holding one are in GUEST_DIR/scrub.txt.
-evidence_scrub() { guest_root_out "python3 -I /root/box.py scrub $OBSERVED /home/proof/evidence.tar" >"$GUEST_DIR/scrub.txt"; }
-evidence_scrubbed() {
-  tar -C "$OUT" -cf "$WORK/evidence.tar" . || fail "the evidence was not packed"
-  guest_copy_in "$WORK/evidence.tar" evidence.tar || fail "the evidence was not copied into the guest"
-  check "no evidence file holds a session cookie the screen sent ($GUEST_DIR/scrub.txt)" evidence_scrub
-  guest_ssh 'rm -f ~/evidence.tar' || true
+# evidence_close is the run's one closing of its evidence, which every
+# exit runs before the teardown (PROOF_CLOSE, cleanup.sh), a pass or any
+# failure. Once the box has observed (OBSERVING), the evidence as it
+# stands, packed, is searched in the guest for every session cookie the
+# screen sent and every API key CYFR sent it (box.py scrub), whose record
+# never leaves the guest; the count and any file holding one are in
+# GUEST_DIR/scrub.txt. Evidence the scrub did not show free of them, one
+# that found something or could not run, is removed whole, and the run
+# fails. Then the part's verdict, once it reached its end (PART_ENDED),
+# and the results.
+PART_ENDED=""
+evidence_scrub() {
+  tar -C "$OUT" -cf "$WORK/evidence.tar" . &&
+    guest_copy_in "$WORK/evidence.tar" evidence.tar &&
+    guest_root_out "python3 -I /root/box.py scrub $OBSERVED /home/proof/evidence.tar" >"$GUEST_DIR/scrub.txt"
 }
+evidence_close() {
+  if [ -n "$OBSERVING" ]; then
+    if ! evidence_scrub; then
+      echo "::error::install-screen proof: the scrub did not show the evidence free of the cookies and keys the box observed ($(head -c 2000 "$GUEST_DIR/scrub.txt" 2>/dev/null | tr '\n' ' ')), so $OUT is removed" >&2
+      proof_evidence_drop "$OUT"
+      return 1
+    fi
+    record PASS "no evidence file holds a session cookie the screen sent or an API key CYFR sent it ($GUEST_DIR/scrub.txt)"
+    guest_ssh 'rm -f ~/evidence.tar' || true
+  fi
+  local status=0
+  [ -z "$PART_ENDED" ] || part_verdict "$PART_ENDED" || status=1
+  [ ! -f "$OUT/results.txt" ] || echo "install proof: $(tr '\n' ';' <"$OUT/results.txt") evidence in $OUT"
+  return "$status"
+}
+PROOF_CLOSE=evidence_close
 
 clean_install() {
   guest_boot clean 8192 40G
@@ -1129,9 +1165,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
   guest_journal
-  evidence_scrubbed
-  proof_guest_stop "$GUEST" "$GUEST_DIR"
-  part_verdict clean
+  PART_ENDED=clean
 }
 
 status=0
@@ -1143,6 +1177,4 @@ candidate_build
 candidate_app_build
 candidate_server_use
 clean_install || status=$?
-echo
-echo "install proof: $(tr '\n' ';' <"$OUT/results.txt" 2>/dev/null) evidence in $OUT"
 exit "$status"

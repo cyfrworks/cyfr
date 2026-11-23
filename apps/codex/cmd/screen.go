@@ -287,24 +287,19 @@ func (a fetchedApp) remove() {
 // the project, or "" where the machine has it. The package is the
 // account's file, so root copies it where the account cannot write, and
 // apt installs that copy only once root has checked it against app: a
-// package changed after the fetch is never installed.
+// package changed after the fetch is never installed. That copy is
+// stageApp's alone.
 func screenCommands(dir, account, app string) []string {
 	base := machine.installed("labwc") != "" && machine.installed("wvkbd") != "" && machine.installed("swayidle") != ""
 	var commands []string
 	if !base || app != "" {
 		commands = append(commands, "apt-get update")
 	}
+	if app != "" {
+		commands = append(commands, stageApp(filepath.Join(dir, screenAppFile), app))
+	}
 	if !base {
 		commands = append(commands, "apt-get install -y --no-install-recommends labwc wvkbd swayidle")
-	}
-	if app != "" {
-		commands = append(commands,
-			"d=$(mktemp -d)",
-			"chmod 0755 \"$d\"",
-			"install -m 0644 "+shellQuote([]string{filepath.Join(dir, screenAppFile)})+" \"$d/"+appPackage+".deb\"",
-			"echo '"+app+"  '\"$d/"+appPackage+".deb\" | sha256sum --check --strict --quiet",
-			"apt-get install -y \"$d/"+appPackage+".deb\"",
-			"rm -rf \"$d\"")
 	}
 	files := shellQuote([]string{filepath.Join(dir, screenDir)})
 	return append(commands,
@@ -315,6 +310,21 @@ func screenCommands(dir, account, app string) []string {
 		"systemctl daemon-reload",
 		"systemctl disable getty@tty1",
 		"systemctl enable cyfr-screen")
+}
+
+// stageApp is the one command that installs the CYFR app's package from
+// the account's file at path, whose sha256 is sum: root's copy in a folder
+// of its own, checked, handed to apt. The folder is that command's alone,
+// a subshell whose exit removes it on every way out, the copy, the check
+// or apt failing, an interrupt, or apt done, so nothing staged outlives
+// it; it runs before anything of the screen is installed, so a failure
+// leaves no part of the screen behind.
+func stageApp(path, sum string) string {
+	deb := "\"$d/" + appPackage + ".deb\""
+	return "( trap 'rm -rf \"$d\"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0755 \"$d\"" +
+		" && install -m 0644 " + shellQuote([]string{path}) + " " + deb +
+		" && echo '" + sum + "  '" + deb + " | sha256sum --check --strict --quiet" +
+		" && apt-get install -y " + deb + " )"
 }
 
 // screenOffCommands give this machine's screen back to its login prompt,
@@ -435,7 +445,10 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	// gives way to the one that says why (shell.Shell.Lock).
 	watches := newScreenWatches(screenIdle, nil)
 	cfg := local.Shell
-	cfg.DisplayName, cfg.Restart, cfg.Warning = host, browser.hide, releaseApart(dir, version.Version)
+	cfg.DisplayName, cfg.Restart = host, browser.hide
+	// Read as each page is drawn: a `cyfr update` of the folder at the same
+	// address leaves this shell running, and its next lock page says so.
+	cfg.Warning = func() string { return releaseApart(dir, version.Version) }
 	cfg.Record = filepath.Join(device, "holder.json")
 	cfg.Clients = shell.ClientFile(filepath.Join(device, "client.json"))
 	cfg.Unwatched = watches.Unwatched
@@ -508,26 +521,22 @@ func releaseApart(dir, ours string) string {
 	return fmt.Sprintf("This screen's CYFR app is release %s and the CYFR here runs release %s, so the screen may not work as it should. Run `cyfr screen on` in %s to bring the app to release %s.", ours, running, dir, running)
 }
 
-// folderRelease is the release the compose file in dir runs CYFR at: the
-// one tag its cyfr images share where it is a release version, else "".
+// folderRelease is the release the compose file in dir runs CYFR at
+// (sharedRelease), "" without one.
 func folderRelease(dir string) string {
 	for _, name := range access.ComposeMainFiles {
 		path := filepath.Join(dir, name)
 		if !fileExists(path) {
 			continue
 		}
-		found := ""
-		for _, image := range imagesFromCompose(path, []string{buildsProfile, access.ModePublic, access.ModeTailnet}) {
-			repository, tag, _ := splitImageReference(image)
-			if normalizeRepository(repository) != release.RepoCyfr {
-				continue
+		return sharedRelease(func(yield func(string, string) bool) {
+			for _, image := range imagesFromCompose(path, []string{buildsProfile, access.ModePublic, access.ModeTailnet}) {
+				repository, tag, _ := splitImageReference(image)
+				if !yield(repository, tag) {
+					return
+				}
 			}
-			if !release.IsVersion(tag) || found != "" && tag != found {
-				return ""
-			}
-			found = tag
-		}
-		return found
+		})
 	}
 	return ""
 }

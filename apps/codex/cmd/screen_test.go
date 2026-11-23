@@ -61,18 +61,14 @@ func screenCommandsIn(dir string, tail ...string) []string {
 	}, tail...)
 }
 
-// appCommands are the commands that install the CYFR app's package
-// fetched into dir, whose sha256 is sum: root's copy of it, checked, is
-// what apt installs.
-func appCommands(dir, sum string) []string {
-	return []string{
-		"d=$(mktemp -d)",
-		`chmod 0755 "$d"`,
-		"install -m 0644 " + shellQuote([]string{filepath.Join(dir, screenAppFile)}) + ` "$d/cyfr-desktop.deb"`,
-		"echo '" + sum + `  '"$d/cyfr-desktop.deb" | sha256sum --check --strict --quiet`,
-		`apt-get install -y "$d/cyfr-desktop.deb"`,
-		`rm -rf "$d"`,
-	}
+// appCommand is the command that installs the CYFR app's package fetched
+// into dir, whose sha256 is sum: root's copy of it, checked, is what apt
+// installs, in a folder the command's own exit removes.
+func appCommand(dir, sum string) string {
+	return `( trap 'rm -rf "$d"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0755 "$d"` +
+		" && install -m 0644 " + shellQuote([]string{filepath.Join(dir, screenAppFile)}) + ` "$d/cyfr-desktop.deb"` +
+		" && echo '" + sum + `  '"$d/cyfr-desktop.deb" | sha256sum --check --strict --quiet` +
+		` && apt-get install -y "$d/cyfr-desktop.deb" )`
 }
 
 // fetchesTheApp stands in for the release of version, its package for
@@ -114,10 +110,11 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	sum := sha256.Sum256([]byte("the app"))
-	want := append(append([]string{
+	want := append([]string{
 		"apt-get update",
+		appCommand(dir, hex.EncodeToString(sum[:])),
 		"apt-get install -y --no-install-recommends labwc wvkbd swayidle",
-	}, appCommands(dir, hex.EncodeToString(sum[:]))...), screenCommandsIn(dir)...)
+	}, screenCommandsIn(dir)...)
 	if len(s.applied) != 1 || !slices.Equal(s.applied[0], want) {
 		t.Fatalf("applied %q, want one %q", s.applied, want)
 	}

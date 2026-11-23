@@ -28,7 +28,11 @@
 # ignored stays ignored, since a shell cannot trap it: a non-interactive
 # shell starts every asynchronous command with INT and QUIT ignored, and
 # heavy-check's contain.sh starts its command so. heavy-check stops a run
-# with TERM, which such a run still traps. The teardown goes in
+# with TERM, which such a run still traps. Before the teardown, every exit
+# runs PROOF_CLOSE, the run's one closing of its evidence, once the run has
+# defined it: it answers 1 when the evidence was not kept, which fails a
+# run that had passed; proof_evidence_drop removes an evidence directory
+# so that the teardown copies nothing into it. The teardown goes in
 # dependency order and ignores further signals: the watchers stop; each
 # guest's shared SSH connection (PROOF_SSH_CONTROLS, a control socket)
 # ends; each guest stops (QEMU quits through QMP, then its container
@@ -188,10 +192,20 @@ proof_cleanup() {
   [ -z "$failed" ]
 }
 
+# proof_evidence_drop DIR: the evidence directory DIR removed, and no
+# guest's evidence copied by the teardown, there or anywhere.
+proof_evidence_drop() {
+  PROOF_EVIDENCE=()
+  rm -rf -- "$1"
+}
+
 proof_finish() {
   local status=$?
   trap - EXIT
   trap '' INT TERM HUP
+  if [ -n "${PROOF_CLOSE:-}" ] && ! "$PROOF_CLOSE" && [ "$status" -eq 0 ]; then
+    status=1
+  fi
   if ! proof_cleanup && [ "$status" -eq 0 ]; then
     status=1
   fi
