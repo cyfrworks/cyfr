@@ -26,16 +26,20 @@ defmodule Aqua.Harness do
   the harness the turn pins, so they are known before `open/1`
   (`facts/1`), and the engine reads no fact it was not given.
 
-  `input/2` and `answer/2` say what the harness is owed, each item once by
-  its `id`: a provider's call id repeats across rounds and is never an
-  identity, and the rows are the truth, so both are said again after a
-  restart. The loop says the results owed, then the posts, so a harness
-  that owes nothing once both are said and is idle has done its work.
+  `moved/1` says only that the turn's rows moved, once for each time the
+  loop is woken: what the harness is owed, a closed ask's result before a
+  post that waits, is what the rows say, read by the harness in one view
+  of them, each item once by its row's id. A provider's call id repeats
+  across rounds and is never an identity, and the rows are the truth, so
+  a restart reads them again. A harness that owes nothing once it read
+  them and is idle has done its work.
   What the harness says reaches the loop after its commit
   (`Aqua.Tape.commit_events/3`), as `{Aqua.Harness, turn_id, event}`.
   A harness passes a reason, never a sentence: the engine writes the
   sentence once (`Prima.Refusal`).
   """
+
+  require Prima.TestSeam
 
   alias Aqua.Loop.Turn
 
@@ -63,23 +67,6 @@ defmodule Aqua.Harness do
         }
 
   @typedoc """
-  A post the harness is owed: its row's id and seq and its files. It is
-  read as it is handed over, through `history`, which joins it then: one
-  gone before is owed no longer, and one the reading withholds as it is
-  handed over went with its workspace thread.
-  """
-  @type post :: %{id: String.t(), seq: integer(), files: [map()]}
-
-  @typedoc "A closed ask's result: its result row's id, its step, the ask's own id, its words."
-  @type result :: %{
-          id: String.t(),
-          step: String.t(),
-          ask: String.t() | nil,
-          text: String.t(),
-          error?: boolean()
-        }
-
-  @typedoc """
   How a turn's work ended: done; refused, turned away by CYFR or by the
   harness's own end; or lost, gone short of its end. The reason has a row
   in `Prima.Refusal`.
@@ -100,18 +87,24 @@ defmodule Aqua.Harness do
           | {:end, finish()}
 
   @callback open(work()) :: {:ok, handle(), facts()} | {:admit, map()} | {:end, finish()}
-  @callback input(handle(), [post()]) :: :ok
-  @callback answer(handle(), [result()]) :: :ok
+  @callback moved(handle()) :: :ok
   @callback stop(handle()) :: :ok
   @callback facts() :: facts()
 
   @doc """
   The harness of a turn, the one place that picks it from the turn's pin:
   a program row's turn is the program's; nil for a turn whose rounds the
-  loop still makes itself.
+  loop still makes itself. A test build may stand a harness of its own in
+  for the program's (`Prima.TestSeam.value/2`), to show that the engine
+  holds for a harness it does not know.
   """
   @spec of(Turn.t()) :: module() | nil
-  def of(%Turn{program: %{}}), do: Aqua.Harness.Program
+  def of(%Turn{program: %{}}) do
+    Prima.TestSeam.value(Aqua.Harness.Program, fn ->
+      Application.get_env(:cyfr, :program_harness, Aqua.Harness.Program)
+    end)
+  end
+
   def of(%Turn{}), do: nil
 
   @doc """

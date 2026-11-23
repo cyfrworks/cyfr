@@ -4248,45 +4248,78 @@ defmodule Arca.TurnStorage do
   def uncarry(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  The results a program turn owes its brain, in order: each ask of the
-  turn that closed with a result row no `input` step carried yet, as
-  `%{step: step, row: row, call: call_row}`.
+  What a program turn owes its brain next, chosen from one view of its
+  rows: the first recovery prompt it owes (`brain_notices/2`), else the
+  first result of its asks, else the first post that waits
+  (`brain_posts/2`), or `:none`. One read transaction holds the turn's row
+  against its writers, so a result and a post that commit around the read
+  are both seen or neither is: a post never overtakes a result that was
+  owed before it.
   """
-  @spec brain_results(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
-  def brain_results(%Prima.Actor{athanor_id: athanor_id}, turn_id)
+  @spec brain_owed(Prima.Actor.t(), String.t()) ::
+          {:ok, :none | {:notice | :answer | :post, map()}} | {:error, term()}
+  def brain_owed(%Prima.Actor{athanor_id: athanor_id}, turn_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.brain_results", fn ->
-      turn = turn!(athanor_id, turn_id)
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.brain_owed", fn ->
+      Arca.Repo.read_transaction(fn ->
+        turn = shared_turn!(athanor_id, turn_id)
+        progress = progress(thread!(athanor_id, turn.thread_id))
 
-      carried =
-        from(s in TurnStep,
-          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id and s.kind == "input",
-          select: s.message_id
-        )
-
-      results =
-        Arca.Repo.all(
-          from(s in TurnStep,
-            join: r in Message,
-            on: r.id == s.result_message_id and r.athanor_id == s.athanor_id,
-            left_join: c in Message,
-            on: c.id == s.message_id and c.athanor_id == s.athanor_id,
-            where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
-            where: s.purpose == "brain" and s.kind != "input",
-            where: s.idempotency_key != ^brain_start_key(turn.id),
-            where: s.dispatch_state == "closed",
-            where: s.result_message_id not in subquery(carried),
-            order_by: [asc: s.seq],
-            select: %{step: s, row: r, call: c}
-          )
-        )
-
-      {:ok, results}
+        with [] <- {:notice, owed_notices(athanor_id, turn, progress)} |> owed_first(),
+             [] <- {:answer, owed_results(athanor_id, turn)} |> owed_first(),
+             [] <- {:post, waiting_posts(athanor_id, turn)} |> owed_first() do
+          :none
+        end
+      end)
     end)
     |> Arca.Data.project()
   end
 
-  def brain_results(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
+  def brain_owed(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
+
+  defp owed_first({_owed, []}), do: []
+  defp owed_first({owed, [item | _]}), do: {owed, item}
+
+  # The turn's row, held against its writers to the read's end
+  # (`Arca.QueryHelpers.for_share/1`).
+  # arca:db-raise-ok inside the caller's transaction
+  defp shared_turn!(athanor_id, turn_id) do
+    from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+    |> Arca.QueryHelpers.for_share()
+    |> Arca.Repo.one()
+    |> case do
+      nil -> Arca.Repo.rollback(:turn_not_found)
+      turn -> turn
+    end
+  end
+
+  # The results a program turn owes its brain, in order: each ask of the
+  # turn that closed with a result row no `input` step carried yet, as
+  # `%{step: step, row: row, call: call_row}`.
+  # arca:db-raise-ok inside the caller's transaction
+  defp owed_results(athanor_id, %Turn{} = turn) do
+    carried =
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id and s.kind == "input",
+        select: s.message_id
+      )
+
+    Arca.Repo.all(
+      from(s in TurnStep,
+        join: r in Message,
+        on: r.id == s.result_message_id and r.athanor_id == s.athanor_id,
+        left_join: c in Message,
+        on: c.id == s.message_id and c.athanor_id == s.athanor_id,
+        where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+        where: s.purpose == "brain" and s.kind != "input",
+        where: s.idempotency_key != ^brain_start_key(turn.id),
+        where: s.dispatch_state == "closed",
+        where: s.result_message_id not in subquery(carried),
+        order_by: [asc: s.seq],
+        select: %{step: s, row: r, call: c}
+      )
+    )
+  end
 
   @doc """
   Reconcile a program turn's deliveries with what a resumed native

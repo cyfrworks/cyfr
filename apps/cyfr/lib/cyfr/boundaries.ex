@@ -2466,6 +2466,11 @@ defmodule Cyfr.Boundaries do
     # test build reads it (`Prima.TestSeam.value/2`), and a test sets it so
     # the real timer ends a session in it.
     program_idle_ms: :seam,
+    # The harness a program row's turn runs on (`Aqua.Harness.of/1`), the
+    # program's in every release; only a test build reads it
+    # (`Prima.TestSeam.value/2`), and a test stands a harness of its own
+    # in to show that the engine holds for one it does not know.
+    program_harness: :seam,
     # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
     # a hint no shipped preset holds and that preset's token endpoint, which
     # a code exchange and a refresh both reach, never replacing a shipped

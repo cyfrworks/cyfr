@@ -64,11 +64,11 @@ defmodule Aqua.Harness.Program do
   native turn's `idle` and the session's end are told the same way, and
   the loop settles what still shows running then, while a call runs too.
 
-  It writes a command when one is owed, one at a time: a recovery prompt
-  its rows owe, then a closed ask's result as its `answer` and then each
-  post of the open turn that waits, as the loop said them (`answer/2`,
-  `input/2`), each first recorded as an `input` step (`carry/3`) whose id the
-  command carries, so a delivery is attempted once whatever restarts
+  It writes a command when one is owed, one at a time, as one view of its
+  rows says each time the loop says they moved (`moved/1`): a recovery
+  prompt its rows owe, then a closed ask's result as its `answer` and then
+  each post of the open turn that waits, each first recorded as an `input`
+  step (`carry/3`) whose id the command carries, so a delivery is attempted once whatever restarts
   follow. A post and a fresh session's context are in the words
   `Aqua.Reader` gives an API request, and what they bring in joins the
   turn before it is read. A post carries its files after its text as the
@@ -194,15 +194,9 @@ defmodule Aqua.Harness.Program do
     end
   end
 
-  @doc "Posts of the turn the program is owed, each delivered once by its id."
+  @doc "The turn's rows moved: what the program is owed is read from them (`deliver/1`)."
   @impl Aqua.Harness
-  def input(attendant, posts) when is_pid(attendant) and is_list(posts),
-    do: GenServer.cast(attendant, {:input, posts})
-
-  @doc "Results of the program's asks, each delivered once by its result's id."
-  @impl Aqua.Harness
-  def answer(attendant, results) when is_pid(attendant) and is_list(results),
-    do: GenServer.cast(attendant, {:answer, results})
+  def moved(attendant) when is_pid(attendant), do: GenServer.cast(attendant, :moved)
 
   @doc """
   The turn is held no longer, or is stopped: its session is closed, its
@@ -370,14 +364,12 @@ defmodule Aqua.Harness.Program do
     {:stop, :normal, :ok, shut(state)}
   end
 
-  # The loop's word that something may be owed (`Aqua.Harness`). What is
-  # owed is what the rows say, read again each time (`deliver/1`): the
-  # lists name what the loop found and are no account of their own.
+  # The loop's word that the turn's rows moved (`Aqua.Harness`): what is
+  # owed is what the rows say, read again each time (`deliver/1`).
   @impl true
-  def handle_cast({:answer, _results}, state), do: {:noreply, nudged(state)}
-  def handle_cast({:input, _posts}, state), do: {:noreply, nudged(state)}
+  def handle_cast(:moved, state), do: {:noreply, nudged(state)}
 
-  # The loop says what is owed whenever the thread moved or it waits
+  # The loop says the rows moved whenever the thread moved or it waits
   # again: its first word opens the session, a start the program took
   # already going on with its native session; a session ready is written
   # the next owed, and one that owes nothing more and is idle ends the
@@ -1063,31 +1055,21 @@ defmodule Aqua.Harness.Program do
   # Deliveries
 
   # The next command the rows say is owed, one at a time while the session
-  # is ready: a prompt a recovery owes, then a closed ask's result, then a
-  # post that waits. A read that did not answer is never nothing owed.
+  # is ready, chosen from one view of them (`Arca.TurnStorage.brain_owed/2`):
+  # a prompt a recovery owes, then a closed ask's result, then a post that
+  # waits. A read that did not answer is never nothing owed.
   defp deliver(%{phase: :ready, outstanding: nil, work: work} = state) do
-    case next_owed(work) do
-      :none -> state
-      {:notice, %{context?: true, message_id: row_id}} -> notice(state, "fresh", row_id)
-      {:notice, %{action: kind, message_id: row_id}} -> notice(state, kind, row_id)
-      {:answer, result} -> deliver_answer(state, result)
-      {:post, row} -> deliver_post(state, row)
+    case Tape.brain_owed(work.guest, work.turn) do
+      {:ok, :none} -> state
+      {:ok, {:notice, %{context?: true, message_id: row_id}}} -> notice(state, "fresh", row_id)
+      {:ok, {:notice, %{action: kind, message_id: row_id}}} -> notice(state, kind, row_id)
+      {:ok, {:answer, result}} -> deliver_answer(state, result)
+      {:ok, {:post, row}} -> deliver_post(state, row)
       {:error, _unread} -> unkept(state)
     end
   end
 
   defp deliver(state), do: state
-
-  defp next_owed(%{guest: guest, turn: turn}) do
-    with {_, {:ok, []}} <- {:notice, Tape.brain_notices(guest, turn)},
-         {_, {:ok, []}} <- {:answer, Tape.brain_results(guest, turn)},
-         {_, {:ok, []}} <- {:post, Tape.brain_posts(guest, turn)} do
-      :none
-    else
-      {owed, {:ok, [first | _]}} -> {owed, first}
-      {_owed, {:error, _reason} = unread} -> unread
-    end
-  end
 
   # The loop waits again after it found something pending. When that was
   # deleted before it was handed over, nothing is owed either way and the
@@ -1119,7 +1101,7 @@ defmodule Aqua.Harness.Program do
   # unacknowledged or unanswered, the program idle. What another turn of
   # the thread left owed is none of this one's.
   defp answered(%{work: work} = state) do
-    with :none <- next_owed(work),
+    with {:ok, :none} <- Tape.brain_owed(work.guest, work.turn),
          {:ok, %{progress: progress}} <- Tape.brain(work.guest, state.thread_id),
          false <- Map.get(progress, "busy", true),
          {:ok, []} <- Tape.brain_pending(work.guest, work.turn),

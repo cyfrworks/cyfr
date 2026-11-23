@@ -168,9 +168,10 @@ defmodule Aqua.Loop do
       # What the engine reads of the turn's harness, from its pin
       # (`Aqua.Harness.facts/1`), set as the turn's spec is built.
       facts: nil,
-      # A write on the turn's path failed while a call ran (`:unkept`), or
-      # was refused for a moved fence (`:taken`): the loop's next wait ends
-      # the turn unwritten, or cancelled.
+      # A write on the turn's path failed (`:unkept`), or was refused for a
+      # moved fence (`:taken`): the loop returns, and its return is an end
+      # that could not be written, or cancelled, whatever it was
+      # (`conclude/2`).
       unkept: nil
     ]
   end
@@ -209,6 +210,7 @@ defmodule Aqua.Loop do
 
             case open_call(state) do
               {:ok, state} -> conclude(state, loop(state))
+              {:halt, result, state} -> conclude(state, {result, state})
               {:error, :superseded} -> conclude(state, {:cancelled, state})
               {:error, reason} -> conclude(state, {{:failed, reason}, state})
             end
@@ -706,21 +708,23 @@ defmodule Aqua.Loop do
   # process, which holds the slot. A paused turn already let it go. The
   # keeper is suspended before the write, so no renewal finds the root
   # ended and exits this process before the release stops it; a steer that
-  # keeps the turn going resumes it.
+  # keeps the turn going resumes it. Every return of the loop comes here,
+  # and here alone decides what a write on the turn's path that was not
+  # kept makes of it (`kept/2`).
   defp conclude(%State{} = state, {result, ended}) do
-    case result do
-      {:paused, _} ->
+    case kept(result, ended) do
+      {:paused, _} = result ->
         unwatch(ended)
         result
 
       # A write on the turn's path that failed is never dropped: the runner
       # settles the turn as a loop's that died (`Aqua.Runner`).
-      {:unwritten, _} ->
+      {:unwritten, _} = result ->
         unwatch(ended)
         release(ended)
         result
 
-      _ ->
+      result ->
         {status, error} = terminal(result)
         if status != "completed", do: skip_pages(ended)
         suspend_keeper(ended)
@@ -816,18 +820,30 @@ defmodule Aqua.Loop do
   # The loop
   # ---------------------------------------------------------------------------
 
+  # What the loop returns once a write on its turn's path was not kept,
+  # whichever way it returns, an end or a pause: a write refused for a
+  # moved fence leaves the turn to whoever took it, this loop cancelled,
+  # and any other is an end that could not be written, which the runner
+  # settles as a loop's that died (`Aqua.Runner`).
+  defp kept(result, %State{unkept: nil}), do: result
+  defp kept(_result, %State{unkept: :taken}), do: :cancelled
+  defp kept({:unwritten, _} = result, %State{unkept: :unkept}), do: result
+  defp kept(result, %State{unkept: :unkept}), do: {:unwritten, result}
+
   @doc false
   def loop(%State{} = state) do
     case step(state) do
-      {:continue, state} -> loop(state)
+      {:continue, %State{unkept: nil} = state} -> loop(state)
+      # A write on the turn's path was not kept: the loop goes no further.
+      {:continue, state} -> {{:failed, :write_failed}, state}
       {:halt, result, state} -> {result, state}
     end
   end
 
   defp step(%State{program: %{}} = state) do
     case page_round(state) do
-      {:continue, state} -> harness_round(state)
-      halt -> halt
+      {:continue, %State{unkept: nil} = state} -> harness_round(state)
+      continued_or_halt -> continued_or_halt
     end
   end
 
@@ -882,16 +898,35 @@ defmodule Aqua.Loop do
 
   # A moved fence wins: the sentence's own write presents the loop's, and
   # one refused so leaves the turn to whoever took it, this loop cancelled.
+  # The sentence is written before the turn's end, and one not kept is an
+  # end that could not be written: its end is then not written either.
   defp harness_failed(%State{} = state, sentence) do
     case system_row(state, sentence) do
+      {:ok, _row} -> {:halt, {:failed, sentence}, state}
       {:error, reason} when reason in @taken -> {:halt, :cancelled, state}
-      _written_or_unkept -> {:halt, {:failed, sentence}, state}
+      {:error, _unkept} -> {:halt, {:unwritten, {:failed, sentence}}, state}
     end
   end
 
-  # How the harness's work ended (`t:Aqua.Harness.finish/0`). A start not
-  # yet taken closes with the end's sentence.
-  defp harness_end(%State{} = state, :done), do: {:halt, :completed, state}
+  # How the harness's work ended (`t:Aqua.Harness.finish/0`), whenever it
+  # ends, at its open too. A start not yet taken closes with the end: as
+  # started for work done, with the end's sentence for any other.
+  defp harness_end(%State{} = state, :done) do
+    case start_step(state) do
+      {:ok, %{dispatch_state: "dispatched"} = start} ->
+        case close(state, start, nil, {:ok, "#{title(state)} started"}) do
+          {:ok, _} -> {:halt, :completed, state}
+          {:error, taken} when taken in @taken -> {:halt, :cancelled, state}
+          _unkept -> {:halt, {:unwritten, :completed}, state}
+        end
+
+      {:ok, _taken_or_none} ->
+        {:halt, :completed, state}
+
+      {:error, _unread} ->
+        {:halt, {:unwritten, :completed}, state}
+    end
+  end
 
   defp harness_end(%State{} = state, {_refused_or_lost, reason}) do
     sentence = Prima.Refusal.message(reason)
@@ -949,18 +984,15 @@ defmodule Aqua.Loop do
   # harness say, until a page's or the harness's call is proposed, or its
   # work ends. What it tells of its own work is taken here and while a
   # call runs (`harness_event/2`).
-  # A moved fence wins: the loop is cancelled and says nothing.
-  defp harness_wait(%State{unkept: :taken} = state), do: {:halt, :cancelled, state}
-
-  defp harness_wait(%State{unkept: :unkept} = state),
-    do: {:halt, {:unwritten, {:failed, :write_failed}}, state}
-
+  # The thread's movement goes round again, which says it to the harness
+  # once (`harness_round/1`), and an event whose write was not kept ends
+  # the wait (`loop/1`).
   defp harness_wait(%State{watch: watch} = state) do
     turn_id = state.turn.id
 
     receive do
       {:moved, ^turn_id} ->
-        {:continue, owe(state)}
+        {:continue, state}
 
       {Aqua.Harness, ^turn_id, {:ask, _steps}} ->
         {:continue, state}
@@ -969,7 +1001,10 @@ defmodule Aqua.Loop do
         harness_end(state, finish)
 
       {Aqua.Harness, ^turn_id, event} ->
-        state |> harness_event(event) |> harness_wait()
+        case harness_event(state, event) do
+          %State{unkept: nil} = state -> harness_wait(state)
+          unkept -> {:continue, unkept}
+        end
 
       # Stopped on purpose: Stop stops the harness before it stops the
       # turn, which says nothing more in the thread.
@@ -984,7 +1019,8 @@ defmodule Aqua.Loop do
   # What the harness tells of its work, whichever wait takes it: its start
   # taken, its usage, its own tools and its text, which committed already.
   # A start's close that could not be written, or read, is never dropped:
-  # the turn's next wait ends it unwritten (`harness_wait/1`).
+  # the loop returns at its next step, an end that could not be written
+  # (`conclude/2`).
   defp harness_event(%State{} = state, {:took, taken}) do
     Enum.reduce(taken, state, fn {id, how}, state ->
       case start_step(state) do
@@ -1014,55 +1050,15 @@ defmodule Aqua.Loop do
   defp harness_event(%State{} = state, {:activity, activity}), do: native(state, activity)
   defp harness_event(%State{} = state, _text_or_ask), do: state
 
-  # What the harness is owed, said again whenever the thread moved or the
-  # loop waits: the turn's posts that wait and the results of its asks
-  # that closed. Each is said by its own id, and the harness hands each
-  # once, reading a post as it hands it over (`t:Aqua.Harness.post/0`). A
-  # read that did not answer is never nothing owed: the turn ends saying
-  # so, as the harness tells it.
+  # The harness is told that the turn's rows moved, once for each time the
+  # loop is woken or waits again: it reads what it is owed from the rows
+  # itself (`c:Aqua.Harness.moved/1`).
   defp owe(%State{harness: {module, handle}} = state) do
-    with {:ok, posts} <- owed_posts(state),
-         {:ok, results} <- owed_results(state) do
-      :ok = module.answer(handle, results)
-      :ok = module.input(handle, posts)
-      state
-    else
-      {:error, _unread} ->
-        send(
-          self(),
-          {Aqua.Harness, state.turn.id, {:end, {:lost, harness_reason(state, :write_failed)}}}
-        )
-
-        state
-    end
+    :ok = module.moved(handle)
+    state
   end
 
   defp owe(%State{} = state), do: state
-
-  defp owed_posts(%State{} = state) do
-    with {:ok, rows} <- Tape.brain_posts(guest(state), state.turn) do
-      {:ok,
-       for(
-         row <- rows,
-         do: %{id: row.id, seq: row.seq, files: Aqua.Attachments.attachments_of([row])}
-       )}
-    end
-  end
-
-  defp owed_results(%State{} = state) do
-    with {:ok, owed} <- Tape.brain_results(guest(state), state.turn) do
-      {:ok,
-       for %{row: row, call: call, step: step} <- owed do
-         %{
-           id: row.id,
-           step: step.id,
-           ask: call && Tape.payload(call)["tool_call_id"],
-           text: row.content || "",
-           error?: step.outcome != "ok"
-         }
-       end}
-    end
-  end
 
   defp start_step(%State{} = state) do
     key = Tape.brain_start_key(state.turn.id)
@@ -1838,6 +1834,9 @@ defmodule Aqua.Loop do
           {:error, reason} ->
             {:halt, {:failed, reason}, state}
 
+          {:end, state, :done} ->
+            harness_end(state, :done)
+
           {:end, state, {_refused_or_lost, reason}} ->
             sentence = Prima.Refusal.message(reason)
 
@@ -2576,21 +2575,16 @@ defmodule Aqua.Loop do
   # to decide (`{:admit, call}`), or says why it ends before it starts.
   defp open_harness(%State{spec: spec} = state) do
     case Aqua.Harness.of(spec) do
-      nil -> {:ok, state}
-      module -> state |> take_open(module, module.open(work(state, nil))) |> admission()
+      nil ->
+        {:ok, state}
+
+      module ->
+        case take_open(state, module, module.open(work(state, nil))) do
+          {:end, state, finish} -> harness_end(state, finish)
+          opened_or_refused -> opened_or_refused
+        end
     end
   end
-
-  defp admission({:end, %State{} = state, {_refused_or_lost, reason}}) do
-    sentence = Prima.Refusal.message(reason)
-
-    case system_row(state, sentence) do
-      {:error, taken} when taken in @taken -> {:error, :superseded}
-      _written_or_unkept -> {:error, sentence}
-    end
-  end
-
-  defp admission(opened_or_refused), do: opened_or_refused
 
   # Whether a recovered turn goes on to ask its model. A turn on a
   # catalyst brain asks it only when its row pins the brain's grant, which
