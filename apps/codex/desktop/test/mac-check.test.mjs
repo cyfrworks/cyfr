@@ -127,6 +127,11 @@ test("a file of no kind a signed app holds refuses it, and so does a link out of
   const out = rig(t)
   symlinkSync("/etc/hosts", path.join(out.app, "Contents", "hosts"))
   assert.throws(() => out.check(), refused(/^CYFR\.app\/Contents\/hosts is a link out of the app$/))
+  // One refusal names every such file, not the first alone.
+  const many = rig(t)
+  many.put("Contents/Resources/one.sh", "#!/bin/sh\n")
+  many.put("Contents/Resources/two.py", "print()\n")
+  assert.throws(() => many.check(), refused(/^CYFR\.app\/Contents\/Resources\/one\.sh is of no kind a signed CYFR\.app holds; CYFR\.app\/Contents\/Resources\/two\.py is of no kind a signed CYFR\.app holds$/))
   const dangling = rig(t)
   symlinkSync("nothing-here", path.join(dangling.app, "Contents", "gone"))
   assert.throws(() => dangling.check(), refused(/is a link to nothing$/))

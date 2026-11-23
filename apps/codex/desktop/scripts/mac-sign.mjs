@@ -289,32 +289,35 @@ function head(file) {
 export function classify(app) {
   const root = realpathSync(app)
   const out = {code: [], data: [], links: []}
+  // Every file of no kind, so one refusal names them all.
+  const unknown = []
   const walk = (at) => {
-    for (const name of readdirSync(at)) {
+    for (const name of readdirSync(at).sort()) {
       const p = path.join(at, name)
       const st = lstatSync(p)
       const shown = path.relative(path.dirname(app), p)
       if (st.isSymbolicLink()) {
         let target
-        try { target = realpathSync(p) } catch { throw new Refused(`${shown} is a link to nothing`) }
+        try { target = realpathSync(p) } catch { unknown.push(`${shown} is a link to nothing`); continue }
         const inside = path.relative(root, target)
-        if (inside.startsWith("..") || path.isAbsolute(inside)) throw new Refused(`${shown} is a link out of the app`)
-        out.links.push(p)
+        if (inside.startsWith("..") || path.isAbsolute(inside)) unknown.push(`${shown} is a link out of the app`)
+        else out.links.push(p)
       } else if (st.isDirectory()) {
         walk(p)
         if (/\.(app|framework)$/.test(name)) out.code.push(p)
       } else if (!st.isFile()) {
-        throw new Refused(`${shown} is neither a file, a folder nor a link`)
+        unknown.push(`${shown} is neither a file, a folder nor a link`)
       } else if (MACHO.has(head(p))) {
         out.code.push(p)
       } else if (DATA.test(name) || DATA_NAMES.has(name) || (name === "CodeResources" && path.basename(at) === "_CodeSignature")) {
         out.data.push(p)
       } else {
-        throw new Refused(`${shown} is of no kind a signed CYFR.app holds`)
+        unknown.push(`${shown} is of no kind a signed CYFR.app holds`)
       }
     }
   }
   walk(app)
+  if (unknown.length) throw new Refused(unknown.join("; "))
   out.code.push(app)
   return out
 }
