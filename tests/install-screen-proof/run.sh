@@ -587,12 +587,15 @@ screen_video() {
   check "that key writes the canvas and puts it first among the person's canvases" \
     guest_root "python3 -I /root/box.py canvas /root/proof-key /root/proof-video >/root/proof-video/reference"
   # Prism's own way to a canvas: its search, which lists it below what
-  # was typed, as a desktop; a press of that result shows it.
+  # was typed, as a desktop; that result opens Choose your desktop, where
+  # a press of it makes it the one shown.
   guest_chord ctrl shift k || fail "QMP did not send the keys"
   sleep 3
   printf 'proof-video' | guest_keys || fail "QMP did not type"
   sleep 3
   screen_press proof-video last || fail "the screen did not press the canvas's result ($GUEST_DIR/screen-press.txt)"
+  check "Prism offers it among the desktops to choose" screen_shows 'Choose your desktop' 15
+  screen_press proof-video || fail "the screen did not choose the canvas ($GUEST_DIR/screen-press.txt)"
   sleep 8
   check "screenshot screen-video.png" guest_screenshot screen-video.png
   check "Prism shows the canvas, its Play to tap" screen_shows Play 30
