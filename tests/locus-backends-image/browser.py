@@ -70,6 +70,8 @@ container starts:
   network log records them. None says Headless: the shell names itself as
   the Chromium it is, its own brands without HeadlessChrome at its own
   version, and navigator.webdriver reads false.
+- A browser's start removes the Chrome the driver once fetched into its
+  home and leaves the profile as it was.
 - A saved profile that holds a known page does not reopen it, from the
   network or the cache: one the full Chrome made, whose session holds the
   page (a fixture below), and one the shell made, ended abruptly with a
@@ -1551,8 +1553,20 @@ def main():
         holds = as_home(stack, FULL_HOME, f"grep -a -l -r {FULL_CHROME_PAGE} {profile_dir}/Default/Sessions || true",
                         "the profile's sessions that hold the page").split()
         expect(holds, "the full Chrome's profile holds the page in its session", holds)
+        # Beside it, what the driver's fetch wrote before the image carried the browser: the fetched Chrome's
+        # folder, with a version, the last check, the lock and a partial download.
+        fetched = f"{KEPT_ROOT}/{FULL_HOME}/cyfr-browser"
+        as_home(stack, FULL_HOME, f"mkdir -p {fetched}/versions/131.0.6778.85 && head -c 1048576 /dev/zero > "
+                                  f"{fetched}/versions/131.0.6778.85/chrome && touch {fetched}/checked {fetched}/.lock "
+                                  f"{fetched}/.partial-132.0.6834.83.zip", "a fetched Chrome put in the home")
+        sessions = f"sha256sum {profile_dir}/Default/Sessions/*"
+        before = as_home(stack, FULL_HOME, sessions, "the profile's sessions")
         asked = reopened(FULL_HOME, FULL_CHROME_PAGE)
         expect(asked == [], "a start from the full Chrome's profile reopens none of its last session's pages", asked)
+        left = as_home(stack, FULL_HOME, f"[ -e {fetched} ] && echo present || echo absent", "the fetched Chrome").strip()
+        expect(left == "absent", "the start removed the Chrome the driver once fetched", left)
+        expect(as_home(stack, FULL_HOME, sessions, "the profile's sessions") == before,
+               "and left the profile's session as it was", [before])
 
         if os.environ.get("CYFR_TEST_OFFLINE") == "1":
             print("skip: a profile's last page needs a public page to hold (CYFR_TEST_OFFLINE=1)", flush=True)

@@ -97,6 +97,7 @@ func run(args []string) int {
 	s := newSlot(os.Stdout, *chunk, time.Duration(*keepMS)*time.Millisecond)
 	hello := helloMessage{T: "hello", V: 1, Chunk: *chunk, KeepMS: *keepMS}
 	b := newBrowser()
+	removeLeftovers(os.Getenv("HOME"), os.Stderr)
 	var logging []string
 	if *netLog != "" {
 		logging = []string{"--log-net-log=" + *netLog, "--net-log-capture-mode=Default"}
