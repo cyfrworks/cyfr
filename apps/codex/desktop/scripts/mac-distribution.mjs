@@ -23,6 +23,8 @@
 //     one `security import -P` sees (security(1) takes a passphrase as an
 //     argument alone); the keychain's password is made for this run too.
 //     The notary's private key is a mode-0600 file for its one command.
+//   - A tool is handed a secret only by a call that names it: run()'s
+//     default environment is this process's without the inputs.
 //   - A tool handed a secret never speaks: run() (run.mjs) gives back only
 //     what the recipe parses from it, and a failed call only its exit
 //     status. Everything printed goes through redact() as a second line.
@@ -41,7 +43,7 @@ import {fileURLToPath} from "node:url"
 
 import {Refused, hide, redact} from "./check-package.mjs"
 import {checkDmg, checkProfile, decodeProfile, notarize, signingInputs} from "./mac-sign.mjs"
-import {run, say} from "./run.mjs"
+import {run, say, withoutInputs} from "./run.mjs"
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
@@ -141,8 +143,7 @@ export async function distribute({env, dest, rehearse = false, worker, openssl =
     const built = path.join(work, "out")
     const result = path.join(work, "result.json")
     // The worker is handed no secret: its keychain is unlocked already.
-    const workerEnv = Object.fromEntries(Object.entries(process.env)
-      .filter(([name]) => !/^(APPLE_|CYFR_REHEARSAL_|CSC_|CYFR_BUILD_)/.test(name)))
+    const workerEnv = withoutInputs(process.env)
     workerEnv.CYFR_BUILD_OWNER = owner
     const phase = async (name, extra = {}) => {
       const config = path.join(work, `${name}.json`)

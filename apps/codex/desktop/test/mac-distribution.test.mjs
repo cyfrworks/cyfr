@@ -49,14 +49,18 @@ function spellings(value) {
 const printedAnywhere = (text) => Object.values(secrets).flatMap(spellings).filter((s) => text.includes(s))
 
 // A folder of stand-ins: `security` and `openssl` that log every command
-// line, the worker, and an --out folder.
-function rig(t, {failAt = "", worker = "ok", searchList = "/Users/runner/Library/Keychains/login.keychain-db"} = {}) {
+// line and the environment each was handed, the worker, a `ps` that fails
+// or hangs when `ps` asks for one, and an --out folder.
+function rig(t, {failAt = "", worker = "ok", ps = "", searchList = "/Users/runner/Library/Keychains/login.keychain-db"} = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "cyfr-distribution-"))
   t.after(() => rmSync(dir, {recursive: true, force: true}))
   const bin = path.join(dir, "bin")
   mkdirSync(bin)
   const log = path.join(dir, "log")
   writeFileSync(log, "")
+  const envs = path.join(dir, "envs")
+  writeFileSync(envs, "")
+  const handed = (tool) => `printf '=== ${tool}\\n' >> ${envs}; env >> ${envs}`
   writeFileSync(path.join(dir, "profile.plist"), plist.build({
     ProvisionsAllDevices: true, TeamIdentifier: [team], ExpirationDate: new Date(Date.now() + 86400000),
     Entitlements: {"com.apple.application-identifier": `${team}.${APP_ID}`, "com.apple.developer.team-identifier": team,
@@ -68,6 +72,7 @@ function rig(t, {failAt = "", worker = "ok", searchList = "/Users/runner/Library
   const echo = `node -e 'const s=require(process.argv[1]);for(const v of Object.values(s)){console.error(v,JSON.stringify(v),v.split(" ").join("\\\\ "))}' ${path.join(dir, "secrets.json")}`
   writeFileSync(path.join(bin, "security"), `#!/bin/sh
 printf 'security %s\\n' "$*" >> ${log}
+${handed("security")}
 ${echo}
 case "$1" in
   cms) cat ${path.join(dir, "profile.plist")} ;;
@@ -80,19 +85,23 @@ exit 0
 `)
   writeFileSync(path.join(bin, "openssl"), `#!/bin/sh
 printf 'openssl %s\\n' "$*" >> ${log}
+${handed("openssl")}
 ${echo}
 out=""; prev=""; for a in "$@"; do [ "$prev" = -out ] && out="$a"; prev="$a"; done
 if [ "$2" = -export ]; then [ -f "$4" ] && [ "$(stat -c %a "$4" 2>/dev/null || stat -f %Lp "$4")" = 600 ] || exit 8; cp "$4" "$out"; else cat > "$out"; fi
 `)
-  for (const f of ["security", "openssl"]) chmodSync(path.join(bin, f), 0o755)
+  if (ps) writeFileSync(path.join(bin, "ps"), ps === "hang" ? "#!/bin/sh\nexec sleep 60\n" : "#!/bin/sh\nexit 1\n")
+  for (const f of ["security", "openssl", ...(ps ? ["ps"] : [])]) chmodSync(path.join(bin, f), 0o755)
   const workerScript = path.join(dir, "worker.mjs")
   const marks = path.join(dir, "marks")
   mkdirSync(marks)
   const runModule = new URL("../scripts/run.mjs", import.meta.url).href
   writeFileSync(workerScript, `
+import {spawn} from "node:child_process"
 import {mkdirSync, readFileSync, writeFileSync} from "node:fs"
 import path from "node:path"
 import {run} from ${JSON.stringify(runModule)}
+writeFileSync(${JSON.stringify(envs)}, "=== worker\\n" + Object.entries(process.env).map(([k, v]) => k + "=" + v + "\\n").join(""), {flag: "a"})
 const args = process.argv.slice(2)
 const out = args[args.indexOf("--out") + 1]
 const config = JSON.parse(readFileSync(args[args.indexOf("--worker") + 1], "utf8"))
@@ -113,6 +122,13 @@ if (config.phase === "app") {
       {what: "the tool", seconds: 60})
     writeFileSync(path.join(marks, "packer.finished"), "late")
   }
+  if (mode === "hang") {
+    // A child that holds the packer's own output open, and outlives it
+    // when no process list says it is there.
+    const held = spawn("sleep", ["30"], {stdio: "inherit"})
+    writeFileSync(path.join(${JSON.stringify(marks)}, "held.pid"), String(held.pid))
+    await new Promise((resolve) => setTimeout(resolve, 60000))
+  }
   const app = path.join(out, "mac-arm64", "CYFR.app")
   mkdirSync(app, {recursive: true})
   writeFileSync(config.result, JSON.stringify({helper: "ab".repeat(32), app}))
@@ -124,12 +140,14 @@ if (config.phase === "app") {
   const out = path.join(dir, "out")
   mkdirSync(out)
   const dest = path.join(out, "cyfr-desktop_1.0.0_darwin_arm64.dmg")
-  return {dir, bin, log, out, dest, marks, worker: {command: process.execPath, args: [workerScript], minutes: 0.05}}
+  return {dir, bin, log, envs, out, dest, marks, worker: {command: process.execPath, args: [workerScript], minutes: 0.05}}
 }
 
+// The owner holds the inputs in its own environment, as build.mjs's does.
 async function run(r, {env = inputs, check = async () => {}} = {}) {
   const path0 = process.env.PATH
   process.env.PATH = `${r.bin}:${path0}`
+  for (const [name, value] of Object.entries(env)) process.env[name] = value
   const printed = []
   try {
     await distribute({env: {...env, PATH: process.env.PATH}, dest: r.dest, worker: r.worker, openssl: path.join(r.bin, "openssl"),
@@ -139,6 +157,7 @@ async function run(r, {env = inputs, check = async () => {}} = {}) {
     return {printed: printed.join(""), error: e}
   } finally {
     process.env.PATH = path0
+    for (const name of Object.keys(env)) delete process.env[name]
   }
 }
 
@@ -206,6 +225,44 @@ test("a packer's bound stops the packer, the tool it started and the tool's chil
   assert.deepEqual(readdirSync(r.marks).filter((n) => n.endsWith(".finished")), [])
   assert.equal(existsSync(r.dest), false)
   assert.deepEqual(leftovers(r), [])
+})
+
+test("a bound whose process list cannot be read still ends, says so, and undoes the keychain and the search list", async (t) => {
+  for (const ps of ["fail", "hang"]) {
+    const r = rig(t, {worker: "hang", ps})
+    t.after(() => { try { process.kill(Number(readFileSync(path.join(r.marks, "held.pid"), "utf8")), "SIGKILL") } catch {} })
+    const started = Date.now()
+    const {error} = await run(r)
+    assert.equal(error?.message, "packing and signing the app failed: did not finish in 3 seconds, and the process list could not " +
+      "be read, so what it started may still run", ps)
+    assert.ok(Date.now() - started < 30000, `${ps}: the call ended within its bounds`)
+    const calls = readFileSync(r.log, "utf8")
+    assert.match(calls, /^security delete-keychain \S+signing\.keychain-db$/m, `${ps}: the keychain was deleted`)
+    assert.match(calls, /^security list-keychains -d user -s \/Users\/runner\/Library\/Keychains\/login\.keychain-db$/m,
+      `${ps}: the search list restored`)
+    assert.equal(existsSync(r.dest), false)
+    assert.deepEqual(leftovers(r), [])
+  }
+})
+
+test("a tool is handed a secret only by a call that names it", async (t) => {
+  const r = rig(t)
+  const {error} = await run(r)
+  assert.equal(error, undefined)
+  const handed = readFileSync(r.envs, "utf8").split(/^=== /m).filter(Boolean).map((block) => {
+    const [tool, ...lines] = block.split("\n").filter(Boolean)
+    return {tool, lines, names: lines.map((l) => l.slice(0, l.indexOf("=")))}
+  })
+  assert.deepEqual([...new Set(handed.map((h) => h.tool))].sort(), ["openssl", "security", "worker"])
+  for (const {tool, names, lines} of handed) {
+    const inputsHanded = names.filter((n) => /^(APPLE_|CYFR_REHEARSAL_|CSC_|CYFR_BUILD_)/.test(n))
+    assert.deepEqual(inputsHanded, tool === "worker" ? ["CYFR_BUILD_OWNER"] : [], `${tool} was handed ${inputsHanded}`)
+    // openssl's one named secret is the only one any tool holds.
+    const named = names.filter((n) => /^CYFR_(CERTIFICATE|WRAP)_PASSWORD$/.test(n))
+    assert.equal(named.length, tool === "openssl" ? 1 : 0, tool)
+    const rest = lines.filter((l) => !named.some((n) => l.startsWith(`${n}=`))).join("\n")
+    assert.deepEqual(printedAnywhere(rest), [], `${tool} holds a secret its call did not name`)
+  }
 })
 
 test("no secret reaches a command line, a printed line or a refusal, whole or in parts", async (t) => {
