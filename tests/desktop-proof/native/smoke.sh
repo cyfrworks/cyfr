@@ -50,6 +50,8 @@
 # fresh HOME (on Windows a fresh USERPROFILE, APPDATA and LOCALAPPDATA too)
 # and stops every process it started on every exit.
 set -uo pipefail
+# shellcheck source=../sandbox.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../sandbox.sh"
 
 APP=${1:-}
 # Git Bash reads a Windows path too; the checks below want its own.
@@ -336,26 +338,14 @@ if ready first "$FIRST"; then
   fi
 
   if [ "$OS" = linux ]; then
-    app_ns=$(readlink "/proc/$FIRST_OS/ns/user") || app_ns=
     # The chooser answers on 7340 before its window's renderer need run.
     within 30 has_renderer "$FIRST_OS" || true
     list=$(renderers "$FIRST_OS") || list=
-    bad= n=0
-    for r in $list; do
-      n=$((n + 1))
-      seccomp=$(awk '$1 == "Seccomp:" { print $2 }' "/proc/$r/status" 2>/dev/null) || seccomp=
-      ns=$(readlink "/proc/$r/ns/user" 2>/dev/null) || ns=
-      [ "$seccomp" = 2 ] || bad+="renderer $r has seccomp mode '${seccomp:-unreadable}'; "
-      [ -n "$ns" ] && [ "$ns" != "$app_ns" ] || bad+="renderer $r is in user namespace '${ns:-unreadable}', the app's is '${app_ns:-unreadable}'; "
-    done
-    if [ "$n" = 0 ]; then
-      fail sandbox "no live renderer of the app could be listed"
-    elif [ -z "$app_ns" ]; then
-      fail sandbox "the app's own user namespace is unreadable"
-    elif [ -n "$bad" ]; then
-      fail sandbox "$bad"
+    # shellcheck disable=SC2086 # one process id a word
+    if held=$(renderers_sandboxed "$FIRST_OS" $list); then
+      pass sandbox "$held"
     else
-      pass sandbox "$n renderer(s), each under seccomp mode 2 in a user namespace other than the app's $app_ns"
+      fail sandbox "$held"
     fi
   fi
 

@@ -630,7 +630,7 @@ func TestServer_APlainReadShowsNoPasskeyRequest(t *testing.T) {
 // A device's warning (Config.Warning) is on its pages, the lock page
 // among them, beside the storage's, as it reads when each page is drawn.
 func TestTheDevicesWarningIsOnItsPages(t *testing.T) {
-	const warning = "This screen's CYFR app is release 0.6.0 and the CYFR here runs release 0.6.1."
+	const warning = "This screen's CYFR app is release 0.6.0 and the CYFR here is set to release 0.6.1."
 	var now atomic.Value
 	now.Store(warning)
 	home := newFakeHome(t)

@@ -42,9 +42,12 @@ type machineSeams struct {
 	// dockerHere is whether the Docker this process reaches runs its
 	// containers on this computer.
 	dockerHere func(ctx context.Context) (bool, error)
-	// installed is the version at which dpkg holds the package installed,
-	// "" when it does not.
-	installed func(pkg string) string
+	// installed is whether dpkg holds the package installed.
+	installed func(pkg string) bool
+	// appRelease is the release of the CYFR app this machine holds: dpkg
+	// holds its package installed for this machine's architecture, and the
+	// app's own cyfr answers its release; "" otherwise.
+	appRelease func() string
 	// running is whether the Docker service runs.
 	running func() bool
 	// groups lists the groups of account, or of this process when account
@@ -96,13 +99,26 @@ var machine = machineSeams{
 	dockerHere: func(ctx context.Context) (bool, error) {
 		return access.DockerIsHere(ctx, dockerProgram{})
 	},
-	installed: func(pkg string) string {
-		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status} ${Version}", pkg).Output()
-		status, at, _ := strings.Cut(string(out), " ")
-		if err != nil || status != "installed" {
+	installed: func(pkg string) bool {
+		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status}", pkg).Output()
+		return err == nil && string(out) == "installed"
+	},
+	appRelease: func() string {
+		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status} ${Architecture}", appPackage).Output()
+		if err != nil || string(out) != "installed "+runtime.GOARCH {
 			return ""
 		}
-		return at
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, appCyfr, "--version")
+		cmd.Env = append(os.Environ(), "CYFR_NO_UPDATE_CHECK=1")
+		said, err := cmd.Output()
+		first, _, _ := strings.Cut(string(said), "\n")
+		answered, ok := strings.CutPrefix(first, "cyfr version ")
+		if err != nil || !ok {
+			return ""
+		}
+		return answered
 	},
 	running: func() bool { return exec.Command("systemctl", "is-active", "--quiet", "docker").Run() == nil },
 	displayManager: func() bool {
@@ -254,7 +270,7 @@ func dockerAnswers(ctx context.Context) bool {
 // lacks of Docker, each only if needed.
 func requirementCommands(account string) []string {
 	var commands []string
-	missing := slices.DeleteFunc(slices.Clone(dockerPackages), func(pkg string) bool { return machine.installed(pkg) != "" })
+	missing := slices.DeleteFunc(slices.Clone(dockerPackages), func(pkg string) bool { return machine.installed(pkg) })
 	if len(missing) > 0 {
 		commands = append(commands, "apt-get update", "apt-get install -y --no-install-recommends "+strings.Join(missing, " "))
 	}

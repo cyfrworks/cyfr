@@ -10,12 +10,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -40,7 +42,7 @@ func screenProject(t *testing.T) *standIn {
 	t.Chdir(dir)
 	// The CYFR app of this cyfr's version is installed, unless a test
 	// says otherwise, so screen on fetches nothing.
-	s.installed = []string{appPackage + "=" + version.Version}
+	s.installed, s.app = []string{appPackage}, version.Version
 	for name, body := range map[string]string{"docker-compose.yml": "services: {}\n", ".env": "CYFR_ACCESS=local\nCYFR_PORT=4321\nCYFR_SETUP_TOKEN=the-token\n"} {
 		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -71,18 +73,27 @@ func appCommand(dir, sum string) string {
 		` && apt-get install -y "$d/cyfr-desktop.deb" )`
 }
 
-// fetchesTheApp stands in for the release of version, its package for
-// this machine being body; it answers how many fetches there were.
+// fetchesTheApp stands in for the release of version, its signed checksums
+// naming the sum of "the app" for this machine's package, and its package
+// being body, or err when downloaded; it answers how many downloads there
+// were.
 func fetchesTheApp(t *testing.T, release string, body []byte, err error) *int {
 	t.Helper()
-	savedVersion, savedFetch := version.Version, fetchAppPackage
-	t.Cleanup(func() { version.Version, fetchAppPackage = savedVersion, savedFetch })
+	savedVersion, savedSum, savedFetch := version.Version, appPackageSum, fetchAppPackage
+	t.Cleanup(func() { version.Version, appPackageSum, fetchAppPackage = savedVersion, savedSum, savedFetch })
 	version.Version = release
-	fetched := new(int)
-	fetchAppPackage = func(_ context.Context, v, arch string) ([]byte, error) {
-		*fetched++
+	named := sha256.Sum256([]byte("the app"))
+	appPackageSum = func(_ context.Context, v, arch string) (string, error) {
 		if v != release || arch != "amd64" {
-			t.Errorf("fetched the app of %s for %s", v, arch)
+			t.Errorf("read the sum of the app of %s for %s", v, arch)
+		}
+		return hex.EncodeToString(named[:]), nil
+	}
+	fetched := new(int)
+	fetchAppPackage = func(_ context.Context, v, arch, want string) ([]byte, error) {
+		*fetched++
+		if v != release || arch != "amd64" || want != hex.EncodeToString(named[:]) {
+			t.Errorf("fetched the app of %s for %s, its sum %s", v, arch, want)
 		}
 		return body, err
 	}
@@ -91,14 +102,14 @@ func fetchesTheApp(t *testing.T, release string, body []byte, err error) *int {
 
 // `cyfr screen on` shows the plain commands, asks once and runs them
 // through one sudo, starting nothing, then forgets the login and says what
-// is next. Where the machine lacks the CYFR app of this cyfr's release it
-// fetches its package first, checked against the release's signed
-// checksums, says so, and the commands install root's copy of it once
-// checked against that sum; the file is gone after. Packages it has are not
+// is next. Where the machine lacks the CYFR app of this cyfr's release the
+// commands install root's copy of its package, checked against the sum the
+// release's signed checksums name; after the yes it downloads that
+// package, says so, and the file is gone after. Packages it has are not
 // installed again, and with none to install it reads no package lists.
 func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	s := screenProject(t)
-	s.installed = []string{appPackage + "=0.5.0"}
+	s.installed, s.app = []string{appPackage}, "0.5.0"
 	fetched := fetchesTheApp(t, "0.6.0", []byte("the app"), nil)
 	askInput = strings.NewReader("yes\n")
 	dir, _ := os.Getwd()
@@ -118,7 +129,7 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	if len(s.applied) != 1 || !slices.Equal(s.applied[0], want) {
 		t.Fatalf("applied %q, want one %q", s.applied, want)
 	}
-	if *fetched != 1 || !strings.HasPrefix(out.String(), "Downloading the CYFR app, release 0.6.0 for amd64, and checking it against the release's signed checksums.\n") {
+	if *fetched != 1 || !strings.Contains(out.String(), "(yes/no) [no]: Downloading the CYFR app, release 0.6.0 for amd64, and checking it against the release's signed checksums.\n") {
 		t.Errorf("fetched %d times, saying:\n%s", *fetched, out.String())
 	}
 	if fileExists(screenAppFile) {
@@ -137,7 +148,7 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 
 	s.applied = nil
-	s.installed = []string{"labwc", "wvkbd", "swayidle", appPackage + "=0.6.0"}
+	s.installed, s.app = []string{"labwc", "wvkbd", "swayidle", appPackage}, "0.6.0"
 	askInput = strings.NewReader("yes\n")
 	if err := screenOn(context.Background(), true, &out); err != nil {
 		t.Fatal(err)
@@ -147,12 +158,12 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 }
 
-// A pre-release's app installed already, at the version its package
-// spells (0.6.0~alpha.15 for 0.6.0-alpha.15), is not fetched again.
-func TestScreenOnTakesAPreReleaseAppInstalledAsItsPackageSpellsIt(t *testing.T) {
+// An app whose own cyfr answers this release, a pre-release with two
+// hyphens among them, is not fetched again.
+func TestScreenOnTakesTheAppThatAnswersThisRelease(t *testing.T) {
 	s := screenProject(t)
-	s.installed = []string{"labwc", "wvkbd", "swayidle", appPackage + "=0.6.0~alpha.15"}
-	fetched := fetchesTheApp(t, "0.6.0-alpha.15", []byte("the app"), nil)
+	s.installed, s.app = []string{"labwc", "wvkbd", "swayidle", appPackage}, "0.6.0-alpha-test.15"
+	fetched := fetchesTheApp(t, "0.6.0-alpha-test.15", []byte("the app"), nil)
 	askInput = strings.NewReader("yes\n")
 	var out bytes.Buffer
 	if err := screenOn(context.Background(), true, &out); err != nil {
@@ -163,24 +174,31 @@ func TestScreenOnTakesAPreReleaseAppInstalledAsItsPackageSpellsIt(t *testing.T) 
 	}
 }
 
-// The app's package is fetched only from a release: one that fails its
-// check is refused before anything is asked, written or installed, and
-// leaves the project as it was; a development build with no app installed
-// at it is refused before anything is fetched.
+// The app's package is fetched only from a release: signed checksums that
+// cannot be read, and a development build with no app installed at it, are
+// refused before anything is asked, downloaded or written; a package that
+// fails its check after the yes is refused before anything is installed,
+// and leaves the project as it was.
 func TestScreenOnInstallsOnlyAVerifiedApp(t *testing.T) {
 	for name, c := range map[string]struct {
-		release string
-		err     error
-		want    string
+		release       string
+		sumErr, err   error
+		asks, fetches bool
+		want          string
 	}{
-		"a package that fails its check": {"0.6.0", fmt.Errorf("%w: cyfr-desktop_0.6.0_linux_amd64.deb does not match the release's signed checksums.txt", release.ErrUnverified),
+		"checksums that do not verify": {"0.6.0", fmt.Errorf("%w: checksums.txt for 0.6.0: no signature", release.ErrUnverified), nil, false, false,
+			"The signed checksums of release 0.6.0 could not be read for the CYFR app, so nothing was installed"},
+		"a package that fails its check": {"0.6.0", nil, fmt.Errorf("%w: cyfr-desktop_0.6.0_linux_amd64.deb does not match the release's signed checksums.txt", release.ErrUnverified), true, true,
 			"The CYFR app could not be downloaded, so nothing was installed"},
-		"a development build": {"dev", nil, "This cyfr is a development build (dev), so there is no release of the CYFR app to download for it"},
+		"a development build": {"dev", nil, nil, false, false, "This cyfr is a development build (dev), so there is no release of the CYFR app to download for it"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := screenProject(t)
-			s.installed = nil
+			s.installed, s.app = nil, ""
 			fetched := fetchesTheApp(t, c.release, []byte("the app"), c.err)
+			if c.sumErr != nil {
+				appPackageSum = func(context.Context, string, string) (string, error) { return "", c.sumErr }
+			}
 			askInput = strings.NewReader("yes\n")
 			before := listing(t, ".")
 			var out bytes.Buffer
@@ -191,11 +209,74 @@ func TestScreenOnInstallsOnlyAVerifiedApp(t *testing.T) {
 			if after := listing(t, "."); !maps.Equal(before, after) {
 				t.Errorf("the project changed:\nbefore %v\nafter  %v", before, after)
 			}
-			if c.release == "dev" && *fetched != 0 {
-				t.Error("a development build fetched a release's app")
+			if (*fetched != 0) != c.fetches {
+				t.Errorf("downloaded the app %d times", *fetched)
 			}
-			if strings.Contains(out.String(), "(yes/no)") {
-				t.Errorf("it asked before refusing:\n%s", out.String())
+			if strings.Contains(out.String(), "(yes/no)") != c.asks {
+				t.Errorf("asked %v, want %v:\n%s", !c.asks, c.asks, out.String())
+			}
+		})
+	}
+}
+
+// Before the person answers yes nothing is downloaded and nothing is
+// written: the commands shown, which install the package the release's
+// signed checksums name, are the ones a yes runs, and a no has fetched no
+// package and left no file.
+func TestScreenOnDownloadsNothingBeforeTheYes(t *testing.T) {
+	s := screenProject(t)
+	s.installed, s.app = []string{"labwc", "wvkbd", "swayidle"}, ""
+	fetched := fetchesTheApp(t, "0.6.0", []byte("the app"), nil)
+	askInput = strings.NewReader("no\n")
+	dir, _ := os.Getwd()
+	before := listing(t, ".")
+	var out bytes.Buffer
+	if err := screenOn(context.Background(), true, &out); !errors.Is(err, errDeclined) {
+		t.Fatalf("screen on answered %v:\n%s", err, out.String())
+	}
+	if *fetched != 0 || strings.Contains(out.String(), "Downloading") || s.applied != nil {
+		t.Errorf("a no downloaded the app %d times, applied %q:\n%s", *fetched, s.applied, out.String())
+	}
+	if after := listing(t, "."); !maps.Equal(before, after) {
+		t.Errorf("a no changed the project:\nbefore %v\nafter  %v", before, after)
+	}
+	sum := sha256.Sum256([]byte("the app"))
+	if !strings.Contains(out.String(), "\n  "+appCommand(dir, hex.EncodeToString(sum[:]))+"\n") {
+		t.Errorf("the commands shown do not install the package the checksums name:\n%s", out.String())
+	}
+}
+
+// The machine holds the CYFR app of a release when dpkg holds its package
+// installed for this machine's architecture and the app's own cyfr answers
+// that release, as it spells it: a tag with two hyphens is answered as it
+// is; a package of another architecture, an app that cannot run, one that
+// answers no version and a package not installed hold none.
+func TestTheMachineHoldsTheAppItsOwnCyfrAnswers(t *testing.T) {
+	other := map[string]string{"amd64": "arm64"}[runtime.GOARCH]
+	if other == "" {
+		other = "amd64"
+	}
+	for _, c := range []struct{ name, dpkg, app, want string }{
+		{"a tag with two hyphens", "printf 'installed " + runtime.GOARCH + "'", "echo 'cyfr version 0.6.0-alpha-test.15'", "0.6.0-alpha-test.15"},
+		{"a package of another architecture", "printf 'installed " + other + "'", "echo 'cyfr version 0.6.0'", ""},
+		{"an app that cannot run", "printf 'installed " + runtime.GOARCH + "'", "exit 126", ""},
+		{"an app that answers no version", "printf 'installed " + runtime.GOARCH + "'", "echo 'not cyfr'", ""},
+		{"a package not installed", "echo 'dpkg-query: no packages found matching cyfr-desktop' >&2; exit 1", "echo 'cyfr version 0.6.0'", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			t.Setenv("PATH", bin)
+			if err := os.WriteFile(filepath.Join(bin, "dpkg-query"), []byte("#!/bin/sh\n"+c.dpkg+"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			saved := appCyfr
+			t.Cleanup(func() { appCyfr = saved })
+			appCyfr = filepath.Join(t.TempDir(), "cyfr")
+			if err := os.WriteFile(appCyfr, []byte("#!/bin/sh\n"+c.app+"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if got := realMachine.appRelease(); got != c.want {
+				t.Errorf("appRelease = %q, want %q", got, c.want)
 			}
 		})
 	}
@@ -673,9 +754,10 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 }
 
 // The screen's page says where the app's cyfr, which runs the shell, is
-// another release than the CYFR the folder runs, naming the command that
-// brings the app to it; it says nothing where they agree or where either
-// is no release.
+// another release than the one the folder is set to, with the instruction
+// `cyfr update` gives a package's own cyfr (installPackage), which brings
+// the app there whichever cyfr is on PATH; it says nothing where they
+// agree or where either is no release.
 func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 	dir := t.TempDir()
 	compose := func(tag string) {
@@ -686,7 +768,7 @@ func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 	}
 	for _, c := range []struct{ folder, ours, want string }{
 		{"0.6.0@sha256:" + strings.Repeat("a", 64), "0.6.0", ""},
-		{"0.6.1@sha256:" + strings.Repeat("a", 64), "0.6.0", "This screen's CYFR app is release 0.6.0 and the CYFR here runs release 0.6.1, so the screen may not work as it should. Run `cyfr screen on` in " + dir + " to bring the app to release 0.6.1."},
+		{"0.6.1@sha256:" + strings.Repeat("a", 64), "0.6.0", "This screen's CYFR app is release 0.6.0 and the CYFR in " + dir + " is set to release 0.6.1, so the screen may not work as it should. To bring the app to release 0.6.1, install the package cyfr-desktop of release 0.6.1 from " + releasesPage + "/tag/0.6.1."},
 		{"latest", "0.6.0", ""},
 		{"0.6.1", "dev", ""},
 	} {

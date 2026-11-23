@@ -6,9 +6,7 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"embed"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -45,9 +43,17 @@ const (
 	screenAppFile = screenDir + "/" + appPackage + ".deb"
 )
 
-// fetchAppPackage is release.FetchPackage, a variable so tests stand in
-// for the release.
-var fetchAppPackage = release.FetchPackage
+// appCyfr is the cyfr inside the CYFR app's package, the one that runs the
+// screen's shell (desktop/scripts/build.mjs); a variable so tests stand in
+// for it.
+var appCyfr = "/opt/cyfr/resources/cyfr"
+
+// appPackageSum and fetchAppPackage are release.PackageChecksum and
+// release.FetchPackage, variables so tests stand in for the release.
+var (
+	appPackageSum   = release.PackageChecksum
+	fetchAppPackage = release.FetchPackage
+)
 
 // screenPath is a project path the service's unit can hold as it is.
 var screenPath = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
@@ -55,7 +61,7 @@ var screenPath = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
 var screenCmd = &cobra.Command{
 	Use:   "screen",
 	Short: "Show CYFR on this machine's own screen, or stop showing it",
-	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without input, whatever is playing on it, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR. The CYFR app is what shows it: `cyfr screen on` installs the app's package of this cyfr's release, downloaded and checked against the release's signed checksums before anything is asked, where the machine has no other.",
+	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without input, whatever is playing on it, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR. The CYFR app is what shows it: `cyfr screen on` installs the app's package of this cyfr's release where the app's own cyfr answers no such release: the commands it shows install the package the release's signed checksums name, downloaded only after the yes.",
 }
 
 var screenOnCmd = &cobra.Command{
@@ -149,12 +155,11 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	if err := screenAdministrator("cyfr screen on"); err != nil {
 		return err
 	}
-	app, err := screenFetchApp(ctx, out)
-	defer app.remove()
+	sum, err := screenAppSum(ctx)
 	if err != nil {
 		return err
 	}
-	commands := screenCommands(dir, account, app.sum)
+	commands := screenCommands(dir, account, sum)
 	fmt.Fprintln(out, "These commands show CYFR on this machine's own screen, as root:")
 	for _, c := range commands {
 		fmt.Fprintf(out, "  %s\n", c)
@@ -169,8 +174,18 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 			return errDeclined
 		}
 	}
-	// The files the commands install are written once sudo has the login,
-	// so a refusal leaves the project as it was.
+	// Nothing is downloaded or written before the yes. The package is
+	// fetched before sudo asks, so a slow download outlasts no login, and
+	// removed as the command ends; the files the commands install are
+	// written once sudo has the login, so a refusal leaves the project as
+	// it was.
+	if sum != "" {
+		app, err := screenFetchApp(ctx, out, sum)
+		defer app.remove()
+		if err != nil {
+			return err
+		}
+	}
 	defer machine.forget()
 	if err := unlockSudo(out, "cyfr screen on"); err != nil {
 		return err
@@ -221,30 +236,40 @@ func screenSite() (string, string, error) {
 	return dir, account.Username, nil
 }
 
+// screenAppSum is the sha256 the signed checksums of this cyfr's release
+// name for the CYFR app's package for this machine, read before anything is
+// asked, downloaded or written, or "" where the machine holds the app of
+// this release already (machine.appRelease). A development build, with no
+// release to read, is refused.
+func screenAppSum(ctx context.Context) (string, error) {
+	if machine.appRelease() == version.Version {
+		return "", nil
+	}
+	if !release.IsVersion(version.Version) {
+		return "", fmt.Errorf("This cyfr is a development build (%s), so there is no release of the CYFR app to download for it, and this machine has none installed at it. Install the CYFR app's package built with this cyfr, then run `cyfr screen on` again", version.Version)
+	}
+	sum, err := appPackageSum(ctx, version.Version, machine.arch())
+	if err != nil {
+		return "", fmt.Errorf("The signed checksums of release %s could not be read for the CYFR app, so nothing was installed (%v). Run `cyfr screen on` again", version.Version, err)
+	}
+	return sum, nil
+}
+
 // fetchedApp is the CYFR app's package `cyfr screen on` fetched into
-// screenAppFile, sum its sha256 as the release's signed checksums name it;
-// the zero fetchedApp is none, the machine holding the app of this release.
+// screenAppFile, once the person said yes; the zero fetchedApp is none.
 type fetchedApp struct {
-	sum string
+	fetched bool
 	// made are the folders the fetch made, removed with the file when the
 	// command ends, so the project is left as it was unless the screen's
 	// files were written into them since.
 	made []string
 }
 
-// screenFetchApp fetches the CYFR app's package of this cyfr's release
-// for this machine into screenAppFile, mode 0600, unless dpkg holds it
-// installed at that release already: release.FetchPackage answers its
-// bytes only once they match the release's signed checksums. A
-// development build, with no release to fetch from, is refused.
-func screenFetchApp(ctx context.Context, out io.Writer) (fetchedApp, error) {
-	if machine.installed(appPackage) == appDebVersion(version.Version) {
-		return fetchedApp{}, nil
-	}
-	if !release.IsVersion(version.Version) {
-		return fetchedApp{}, fmt.Errorf("This cyfr is a development build (%s), so there is no release of the CYFR app to download for it, and this machine has none installed at it. Install the CYFR app's package built with this cyfr, then run `cyfr screen on` again", version.Version)
-	}
-	var app fetchedApp
+// screenFetchApp downloads the CYFR app's package of this cyfr's release
+// for this machine into screenAppFile, mode 0600, its bytes kept only once
+// their sha256 is sum, the one screenAppSum read.
+func screenFetchApp(ctx context.Context, out io.Writer, sum string) (fetchedApp, error) {
+	app := fetchedApp{fetched: true}
 	for _, d := range []string{filepath.Dir(screenDir), screenDir} {
 		if !fileExists(d) {
 			if err := os.Mkdir(d, 0o700); err != nil {
@@ -254,27 +279,20 @@ func screenFetchApp(ctx context.Context, out io.Writer) (fetchedApp, error) {
 		}
 	}
 	fmt.Fprintf(out, "Downloading the CYFR app, release %s for %s, and checking it against the release's signed checksums.\n", version.Version, machine.arch())
-	data, err := fetchAppPackage(ctx, version.Version, machine.arch())
+	data, err := fetchAppPackage(ctx, version.Version, machine.arch(), sum)
 	if err != nil {
 		return app, fmt.Errorf("The CYFR app could not be downloaded, so nothing was installed (%v). Run `cyfr screen on` again", err)
 	}
 	if err := writeFileAtomic(screenAppFile, data, 0o600); err != nil {
 		return app, fmt.Errorf("cyfr screen could not keep the CYFR app's package in %s (%v)", screenAppFile, err)
 	}
-	sum := sha256.Sum256(data)
-	app.sum = hex.EncodeToString(sum[:])
 	return app, nil
 }
-
-// appDebVersion is the version dpkg holds the CYFR app's package of
-// release v at: its packager (desktop/scripts/build.mjs, electron-builder)
-// spells a pre-release's "-" as "~", so that it sorts before the release.
-func appDebVersion(v string) string { return strings.Replace(v, "-", "~", 1) }
 
 // remove removes the fetched package, and the folders the fetch made that
 // nothing else was written into since.
 func (a fetchedApp) remove() {
-	if a.sum != "" || len(a.made) > 0 {
+	if a.fetched {
 		_ = os.Remove(screenAppFile)
 	}
 	for _, d := range a.made {
@@ -290,7 +308,7 @@ func (a fetchedApp) remove() {
 // package changed after the fetch is never installed. That copy is
 // stageApp's alone.
 func screenCommands(dir, account, app string) []string {
-	base := machine.installed("labwc") != "" && machine.installed("wvkbd") != "" && machine.installed("swayidle") != ""
+	base := machine.installed("labwc") && machine.installed("wvkbd") && machine.installed("swayidle")
 	var commands []string
 	if !base || app != "" {
 		commands = append(commands, "apt-get update")
@@ -509,16 +527,19 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 }
 
 // releaseApart is what the screen's page says where the app's cyfr, which
-// runs this shell (release ours), is another release than the CYFR the
-// folder runs: `cyfr update` moves the folder and the program that ran it,
-// and the app only as `cyfr screen on` installs it again. "" where they
-// agree, or where either is no release.
+// runs this shell (release ours), is another release than the one the
+// folder's compose file is set to, read there and not from a container:
+// `cyfr update` moves the folder and the program that ran it, never the
+// app. The instruction is the one installPackage gives, which brings the
+// app to the folder's release whether the cyfr on PATH is the package's
+// own, whose `cyfr screen on` finds its own release installed, or one of
+// its own. "" where they agree, or where either is no release.
 func releaseApart(dir, ours string) string {
-	running := folderRelease(dir)
-	if !release.IsVersion(ours) || running == "" || running == ours {
+	set := folderRelease(dir)
+	if !release.IsVersion(ours) || set == "" || set == ours {
 		return ""
 	}
-	return fmt.Sprintf("This screen's CYFR app is release %s and the CYFR here runs release %s, so the screen may not work as it should. Run `cyfr screen on` in %s to bring the app to release %s.", ours, running, dir, running)
+	return fmt.Sprintf("This screen's CYFR app is release %s and the CYFR in %s is set to release %s, so the screen may not work as it should. To bring the app to release %s, %s.", ours, dir, set, set, installPackage(appPackage, set))
 }
 
 // folderRelease is the release the compose file in dir runs CYFR at
