@@ -191,6 +191,8 @@ func packageOf(path string) (string, error) {
 	defer cancel()
 	var stderr strings.Builder
 	query := exec.CommandContext(ctx, tool, "--search", "--", real)
+	// The words read below are dpkg's untranslated ones.
+	query.Env = append(os.Environ(), "LC_ALL=C")
 	query.Stderr = &stderr
 	out, err := query.Output()
 	var exit *exec.ExitError

@@ -413,22 +413,29 @@ func fakeBrew(t *testing.T, installed, upgradeTo string) string {
 // installed; brew left on another release hands nothing over. A --version
 // other than the tap's release, the newest one, is refused before brew
 // standInDpkg puts a dpkg-query in the stand-in machine's one PATH
-// folder: it names owned's package for each of its paths, says no package
-// installed any other, or, failing, fails as a damaged database does.
+// folder, on a system whose language is German: it names owned's package
+// for each of its paths, says no package installed any other, or,
+// failing, fails as a damaged database does. As dpkg does, it says its
+// words in German, a diversion's line and "no path found" among them,
+// unless LC_ALL is C; a package's line is the same in every language.
 func standInDpkg(t *testing.T, owned map[string]string, failing bool) {
 	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("the package records are asked on Linux alone")
 	}
-	script := "#!/bin/sh\n[ \"$1\" = --search ] && [ \"$2\" = -- ] || exit 9\n"
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	script := "#!/bin/sh\n[ \"$1\" = --search ] && [ \"$2\" = -- ] || exit 9\n" +
+		"if [ \"$LC_ALL\" = C ]; then diverted='diversion by other from'; none='no path found matching pattern'\n" +
+		"else diverted='Umleitung durch other von'; none='kein Pfad gefunden, der auf Muster passt:'; fi\n"
 	if failing {
 		script += "echo 'dpkg-query: error: parsing file /var/lib/dpkg/status' >&2\nexit 2\n"
 	} else {
 		script += "case \"$3\" in\n"
 		for path, pkg := range owned {
-			script += fmt.Sprintf("'%s') echo 'diversion by other from: %s'; echo '%s: %s' ;;\n", path, path, pkg, path)
+			script += fmt.Sprintf("'%s') echo \"$diverted: %s\"; echo '%s: %s' ;;\n", path, path, pkg, path)
 		}
-		script += "*) echo \"dpkg-query: no path found matching pattern $3\" >&2; exit 1 ;;\nesac\n"
+		script += "*) echo \"dpkg-query: $none $3\" >&2; exit 1 ;;\nesac\n"
 	}
 	if err := os.WriteFile(filepath.Join(os.Getenv("PATH"), "dpkg-query"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
