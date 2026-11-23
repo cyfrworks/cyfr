@@ -206,10 +206,10 @@ func (s *server) read() (wait func()) {
 // remove, each on a goroutine of its own and one retry at a time per group,
 // so that a removal however slow (it waits up to two seconds for the
 // group's last process) delays no read. The retry that removes a group
-// finishes its retirement: the place goes, a clean pooled uid goes back to
-// its pool, its egress cleared first, and the `released` is sent. It
-// answers a wait for the retries it started, which the reader does not
-// wait for.
+// finishes its retirement: the spawn leaves spawns with its place, a clean
+// pooled uid goes back to its pool, its egress cleared first, and the
+// `released` is sent. It answers a wait for the retries it started, which
+// the reader does not wait for.
 func (s *server) retryRemovals() (wait func()) {
 	remove := removeGroup
 	s.mu.Lock()
@@ -250,6 +250,7 @@ func (s *server) retryRemoval(sp *spawn, remove func(*cgroup.Group) error) {
 	if r.clean {
 		_ = sp.pool.Release(sp.account.UID)
 	}
+	delete(s.spawns, sp.id)
 	delete(s.places, sp.place)
 	delete(s.unremoved, sp)
 	s.mu.Unlock()

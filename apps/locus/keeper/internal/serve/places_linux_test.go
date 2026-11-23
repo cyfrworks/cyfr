@@ -523,9 +523,12 @@ func TestASpawnWhoseGroupStaysKeepsItsPlaceUntilARetryRemovesIt(t *testing.T) {
 			if !kept && (st.Free != st.Size-1 || st.Quarantined != 0) {
 				t.Fatalf("pool %+v while the group stays; want its uid lent to no other spawn", st)
 			}
+			// The spawn is still held: a release of it waits for the
+			// retirement's own `released`, and nothing answers it now.
+			k.release(t, spawnID)
 			k.s.retryRemovals()()
 			if told := k.toldSoFar(t); len(told) != 0 {
-				t.Fatalf("a retry that failed told %v; want nothing", told)
+				t.Fatalf("a release, then a retry that failed, told %v; want nothing", told)
 			}
 
 			allow()

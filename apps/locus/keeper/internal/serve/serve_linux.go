@@ -1266,18 +1266,20 @@ func (s *server) removeSpawnGroup(sp *spawn) bool {
 	return true
 }
 
-// leave is a retirement's last step, with s.mu held: the spawn leaves
-// spawns, and its place goes with it when its group was removed. One whose
-// group stays waits in unremoved, its place still read and measured, for
-// the reader's retry of the removal, which finishes what left says.
+// leave is a retirement's last step, with s.mu held. A spawn whose group
+// was removed leaves spawns, its place with it, in this one step. One whose
+// group stays is held in spawns, its place still read and measured, and
+// waits in unremoved for the reader's retry of the removal, which finishes
+// what left says: until then a release of it waits as its retirement's
+// `released` does, and no `unknown_spawn` answers it.
 func (s *server) leave(sp *spawn, removed bool, left removal) {
-	delete(s.spawns, sp.id)
 	sp.closePty()
-	if removed {
-		delete(s.places, sp.place)
+	if !removed {
+		s.unremoved[sp] = &left
 		return
 	}
-	s.unremoved[sp] = &left
+	delete(s.spawns, sp.id)
+	delete(s.places, sp.place)
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends
