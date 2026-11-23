@@ -14,7 +14,8 @@
 #   built      the rehearsed build finishes, its DMG passing the recipe's
 #              own check: every signature the identity's, hardened and
 #              timestamped, with its kind's entitlements, the profile
-#              embedded and the bundled cyfr the verified one
+#              embedded and the bundled cyfr the one it signed after
+#              checking it as the verified one
 #   helper     the app with another program as its cyfr, signed again
 #              with the same identity, is refused
 #   release    the rehearsed DMG is refused by a release's check, which
@@ -154,6 +155,7 @@ DMG="$RUN/dist/cyfr-desktop_0.0.0-rehearsal_darwin_$ARCH.dmg"
 build 1800 2>&1 | tee "$RUN/build.log"
 if [ "${PIPESTATUS[0]}" = 0 ] && [ -f "$DMG" ]; then
   pass built "$(tail -1 "$RUN/build.log")"
+  HELPER=$(sed -n 's/^the bundled cyfr is signed as sha256 \([0-9a-f]\{64\}\)$/\1/p' "$RUN/build.log")
 else
   fail built "$(grep '^refused\|did not finish' "$RUN/build.log" || tail -3 "$RUN/build.log")"
   exit 1
@@ -165,7 +167,7 @@ for file in "$BUILT" "$BUILT/Contents/Frameworks/CYFR Helper (Renderer).app" "$B
   bounded 60 "reading ${file##*/}'s signature" codesign -d --verbose=2 --entitlements - --xml "$file" 2>&1 | grep -E '^(Identifier|Authority|TeamIdentifier|Timestamp|CodeDirectory)=?|plist' | sed 's/^/   /'
 done
 
-check() { (cd "$DESKTOP" && bounded 900 "checking ${1##*/}" node scripts/mac-sign.mjs check "$@" --cyfr "$CYFR"); }
+check() { (cd "$DESKTOP" && bounded 900 "checking ${1##*/}" node scripts/mac-sign.mjs check "$@" --cyfr-sha256 "$HELPER"); }
 
 # The same app with another program as its cyfr, signed again inside out
 # with the same identity, so its signature verifies and only the program
@@ -191,7 +193,7 @@ cp /usr/bin/true "$APP/Contents/Resources/cyfr" &&
   fail helper "the substituted app was not signed again"
 if ! bounded 120 "verifying the substituted app" codesign --verify --deep --strict "$APP"; then fail helper "the substituted app's signature does not verify, so it shows nothing"
 elif out=$(check "$APP" --rehearsed 2>&1); then fail helper "the substituted app passed: $out"
-elif grep -qF "refused: CYFR.app/Contents/Resources/cyfr is not the verified cyfr" <<<"$out"; then pass helper "$out"
+elif grep -qF "refused: CYFR.app/Contents/Resources/cyfr is not the cyfr the build signed" <<<"$out"; then pass helper "$out"
 else fail helper "refused for another reason: $out"; fi
 
 # A release's check asks for what only Apple gives.

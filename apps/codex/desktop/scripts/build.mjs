@@ -112,6 +112,7 @@ const staged = {
 
 // A distribution's profile and entitlements, beside the staged app.
 let mac = {identity: null, category: "public.app-category.productivity"}
+const signed = {}
 if (signing) {
   const profile = path.join(stage, "embedded.provisionprofile")
   writeFileSync(profile, signing.profile)
@@ -128,7 +129,7 @@ if (signing) {
     Object.assign(process.env, {APPLE_APP_SPECIFIC_PASSWORD: signing.applePassword})
   }
   mac = {...mac, identity: signing.identity, type: "distribution", hardenedRuntime: true, provisioningProfile: profile,
-    sign: signer(writeEntitlements(stage, signing.team, signing.group)), notarize: !signing.rehearsed}
+    sign: signer(writeEntitlements(stage, signing.team, signing.group), staged.helper.sha256, signed), notarize: !signing.rehearsed}
 }
 
 // The Linux package's install script is electron-builder's own, which
@@ -209,7 +210,8 @@ if (signing) {
   const dmg = path.join(values.out, built)
   try {
     if (!signing.rehearsed) await within(notarizeDmg(dmg, signing), 30, "notarising the DMG")
-    checkDmg(dmg, {cyfr: values.cyfr, ...signing}, {rehearsed: signing.rehearsed})
+    checkDmg(dmg, {...signing, helper: signed.helper}, {rehearsed: signing.rehearsed})
+    console.log(`the bundled cyfr is signed as sha256 ${signed.helper}`)
   } catch (e) {
     rmSync(dmg, {force: true})
     refuse(e)

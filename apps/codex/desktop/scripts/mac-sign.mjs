@@ -18,23 +18,26 @@
 // mixes the two. No message names an input's value.
 //
 // Each Mach-O file and bundle is signed with the hardened runtime and a
-// secure timestamp. CYFR.app gets the main entitlements (V8's JIT, the
+// secure timestamp, the bundled cyfr first: checked again as the verified
+// one, signed, and its signed bytes' SHA-256 kept, which the finished app
+// must hold. CYFR.app gets the main entitlements (V8's JIT, the
 // application and team identifiers and the WebAuthn group, which the
 // profile must authorise); the four helper apps get the JIT alone;
 // everything else, the bundled cyfr among it, gets none. No file gets a
 // camera, microphone or other device entitlement.
 //
-//   node scripts/mac-sign.mjs check DMG|APP --cyfr PATH [--rehearsed]
+//   node scripts/mac-sign.mjs check DMG|APP --cyfr-sha256 HEX [--rehearsed]
 //
-// checks a built DMG, or an app, against the same inputs (a rehearsal's names with
-// --rehearsed): every signature, its entitlements, the embedded profile and
-// the bundled cyfr; without --rehearsed also Apple's notarisation, stapled
+// checks a built DMG, or an app, against the same inputs (a rehearsal's
+// names with --rehearsed): every signature, its entitlements, the embedded
+// profile and the bundled cyfr, whose signed SHA-256 the build printed;
+// without --rehearsed also Apple's notarisation, stapled
 // to the DMG and to the app, and Gatekeeper's assessment of both, which no
 // rehearsed DMG passes.
 
 import {spawnSync} from "node:child_process"
 import {createHash} from "node:crypto"
-import {copyFileSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, closeSync, readdirSync, rmSync, writeFileSync} from "node:fs"
+import {lstatSync, mkdtempSync, openSync, readFileSync, readSync, closeSync, readdirSync, rmSync, writeFileSync} from "node:fs"
 import {createRequire} from "node:module"
 import {tmpdir} from "node:os"
 import path from "node:path"
@@ -148,14 +151,23 @@ export function writeEntitlements(dir, team, group) {
 }
 
 /**
- * electron-builder's mac.sign for a distribution build: Electron's own
- * signing, inside out, every file with the hardened runtime, a timestamp
- * and the entitlements of its kind, the profile embedded.
+ * electron-builder's mac.sign for a distribution build, given the
+ * entitlement files, the verified cyfr's SHA-256 and `signed`, where the
+ * signed cyfr's SHA-256 is kept as signed.helper. The bundled cyfr is
+ * checked again, then signed with the hardened runtime, a timestamp and no
+ * entitlements; then Electron's own signing signs every other file inside
+ * out, with the entitlements of its kind, and embeds the profile.
  */
-export function signer(files) {
+export function signer(files, verified, signed) {
   return async (opts) => {
+    const helper = path.join(opts.app, "Contents", "Resources", "cyfr")
+    if (sha256(helper) !== verified) throw new Refused("CYFR.app/Contents/Resources/cyfr is not the verified cyfr")
+    must("codesign", ["--sign", opts.identity, "--force", ...(opts.keychain ? ["--keychain", opts.keychain] : []),
+      "--timestamp", "--options", "runtime", helper], "the bundled cyfr was not signed")
+    signed.helper = sha256(helper)
     const {signAsync} = need("@electron/osx-sign")
     await signAsync({...opts, preAutoEntitlements: false, preEmbedProvisioningProfile: true,
+      ignore: [...[opts.ignore ?? []].flat(), (file) => file === helper],
       optionsForFile: (file) => ({hardenedRuntime: true, entitlements: files[kindOf(opts.app, file)]})})
   }
 }
@@ -234,27 +246,19 @@ export function signedCode(app) {
 }
 
 const codesign = (args) => tool("codesign", args)
-
 const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex")
 
-// A Mach-O file's bytes without its signature, to compare code signed by
-// different identities: Go's linker signs cyfr ad hoc on arm64.
-function unsigned(file, dir, name) {
-  const copy = path.join(dir, name)
-  copyFileSync(file, copy)
-  if (codesign(["-d", copy]).ok) must("codesign", ["--remove-signature", copy], `${name}'s signature was not removed`)
-  return sha256(copy)
-}
 
 /**
  * Check a signed CYFR.app at `app`: it embeds the supplied profile, which
  * checkProfile passes for the team and group and which lists the app's
  * signing certificate; each signature verifies strictly, is by that
  * certificate, hardened and timestamped, with exactly its kind's
- * entitlements; the bundled cyfr is the verified one at `cyfr`.
+ * entitlements; the bundled cyfr is the one the build signed, whose
+ * SHA-256 is `helper`.
  * Throws Refused naming the first difference.
  */
-export function checkApp(app, {cyfr, team, group, profile}) {
+export function checkApp(app, {helper, team, group, profile}) {
   must("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], "CYFR.app's signature does not verify")
   const embedded = path.join(app, "Contents", "embedded.provisionprofile")
   let bytes
@@ -277,9 +281,9 @@ export function checkApp(app, {cyfr, team, group, profile}) {
       throw new Refused("the provisioning profile does not list CYFR.app's signing certificate")
     }
     for (const file of signedCode(app)) checkSignature(app, file, leaf, signer, want)
-    const helper = path.join(app, "Contents", "Resources", "cyfr")
-    if (unsigned(helper, dir, "packaged") !== unsigned(cyfr, dir, "verified")) {
-      throw new Refused("CYFR.app/Contents/Resources/cyfr is not the verified cyfr")
+    if (!helper) throw new Refused("the build did not sign the bundled cyfr")
+    if (sha256(path.join(app, "Contents", "Resources", "cyfr")) !== helper) {
+      throw new Refused("CYFR.app/Contents/Resources/cyfr is not the cyfr the build signed")
     }
   } finally {
     rmSync(dir, {recursive: true, force: true})
@@ -345,9 +349,9 @@ export async function notarizeDmg(dmg, inputs) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const {values, positionals} = parseArgs({allowPositionals: true,
-    options: {cyfr: {type: "string"}, rehearsed: {type: "boolean", default: false}}})
-  if (positionals[0] !== "check" || !positionals[1] || !values.cyfr) {
-    console.error("usage: node scripts/mac-sign.mjs check DMG|APP --cyfr PATH [--rehearsed]")
+    options: {"cyfr-sha256": {type: "string"}, rehearsed: {type: "boolean", default: false}}})
+  if (positionals[0] !== "check" || !positionals[1] || !/^[0-9a-f]{64}$/.test(values["cyfr-sha256"] ?? "")) {
+    console.error("usage: node scripts/mac-sign.mjs check DMG|APP --cyfr-sha256 HEX [--rehearsed]")
     process.exit(64)
   }
   try {
@@ -355,7 +359,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const team = process.env[names[3]]
     const profile = Buffer.from(process.env[names[names.length - 1]] ?? "", "base64")
     if (!team || !profile.length) throw new Refused(`${names[3]} and ${names[names.length - 1]} are needed`)
-    checkDmg(positionals[1], {cyfr: values.cyfr, team, group: webauthnGroup(team), profile}, {rehearsed: values.rehearsed})
+    checkDmg(positionals[1], {helper: values["cyfr-sha256"], team, group: webauthnGroup(team), profile}, {rehearsed: values.rehearsed})
     console.log(`checked ${path.basename(positionals[1])}${values.rehearsed ? " (rehearsed)" : ""}`)
   } catch (e) {
     if (!(e instanceof Refused)) throw e
