@@ -1130,6 +1130,51 @@ defmodule Aqua.LoopTest do
                 "or the number as text"}
   end
 
+  test "each call a response records runs as its own row says, though two calls share an id: " <>
+         "the second of the same id is not recorded and runs nothing",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua search twice")
+
+    script!([
+      calls([
+        {"a", "github__search", %{"q" => "x"}},
+        {"a", "github__search", %{"q" => nil}},
+        {"b", "github__search", %{"q" => "x", "limit" => 1.5}}
+      ]),
+      reply("not searched")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert Enum.map(Enum.filter(steps, &(&1.kind == "tool")), &{&1.outcome, &1.error}) == [
+             {"denied", "github:search is not among the tools Aqua is offered"},
+             {"denied",
+              "github__search: the argument limit is a decimal number; give a whole number, " <>
+                "or the number as text"}
+           ]
+  end
+
+  test "a turn's usage names the model the catalyst says answered, and a count it did not " <>
+         "tell leaves the accounting partial, never a zero",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua count")
+
+    script!([
+      %{
+        "model" => "resolved-model",
+        "content" => [%{"type" => "text", "text" => "counted"}],
+        "stop_reason" => "end_turn",
+        "usage" => %{"input_tokens" => 10}
+      }
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    assert Tape.usage(ctx, thread.id) ==
+             %{input: 10, output: 0, models: ["resolved-model"], accounting: :partial}
+  end
+
   test "an outside server's tool the soul is offered runs, through the gate under the " <>
          "turn's authority",
        %{ctx: ctx, thread: thread} do

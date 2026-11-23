@@ -12,8 +12,11 @@ defmodule Locus.Runtime.WasiCapabilitiesTest do
   """
   use ExUnit.Case, async: true
 
-  alias Locus.Runtime.ComponentType
+  alias Locus.Runtime.{ComponentType, Engine}
+  alias Locus.Runtime.Test.ScriptedHost
   alias Wasmex.Wasi.WasiP2Options
+
+  @hostile Path.expand("../../support/runtime/test_wasm/hostile", __DIR__)
 
   describe "WASI capability mappings" do
     test "catalyst gets WASI with HTTP via host function (not native)" do
@@ -94,6 +97,27 @@ defmodule Locus.Runtime.WasiCapabilitiesTest do
       assert catalyst_opts.allow_http == false
       assert reagent_opts.allow_http == false
       assert formula_opts.allow_http == false
+    end
+  end
+
+  describe "a guest's own network" do
+    # `socket_probe` answers what the host said when it opened a TCP and a
+    # UDP socket through WASI: "01" is `wasi:sockets/network`'s
+    # access-denied, "ok" a socket made.
+    test "a guest that opens a TCP and a UDP socket through WASI is refused both" do
+      bytes = File.read!(Path.join(@hostile, "socket_probe.wasm"))
+
+      for type <- [:catalyst, :reagent, :formula] do
+        opts = [
+          component_type: type,
+          authority: Prima.Authority.zero(),
+          limits: Prima.Authority.zero_limits(),
+          host: ScriptedHost.attempt!(ScriptedHost.start!()).client
+        ]
+
+        answer = Engine.execute_component(bytes, %{}, opts)
+        assert answer == {:ok, %{"tcp" => "01", "udp" => "01"}}, "#{type}: #{inspect(answer)}"
+      end
     end
   end
 

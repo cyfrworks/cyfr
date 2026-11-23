@@ -662,6 +662,63 @@ defmodule Emissary.External.ProviderTest do
                Provider.handle("mcp_servers", ctx, %{"action" => "reset_home", "name" => "nobody"})
     end
 
+    test "a reset beside a start says the program is starting, a dead service that the " <>
+           "reset is unavailable",
+         %{ctx: ctx} do
+      # The control plane the controller takes is put back however the test
+      # ends, registered before it is taken.
+      on_exit(fn ->
+        :persistent_term.erase({Arca.ControlPlane, :generation})
+        Arca.ControlPlane.record(:unclaimed)
+      end)
+
+      root = :crypto.strong_rand_bytes(32)
+      fake = Cyfr.Test.ScriptedBackends.start(self(), root)
+
+      Cyfr.Test.ScriptedBackends.supervise_controller(
+        url: fake.url,
+        root: root,
+        tick_ms: 3_600_000
+      )
+
+      assert_receive {:control, "reconcile", _reconcile, _fields}, 2_000
+
+      {:ok, %{id: home}} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "claude",
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          home: "kept",
+          config_json: Jason.encode!(%{"command" => "npx -y @anthropic-ai/claude", "env" => %{}})
+        })
+
+      reset = fn ->
+        with {:error, reason} <-
+               Provider.handle("mcp_servers", ctx, %{"action" => "reset_home", "name" => "claude"}),
+             do: {:error, Sanctum.Refusals.render(reason)}
+      end
+
+      # Locus answers `conflict` for a home an open is still preparing.
+      Cyfr.Test.ScriptedBackends.refuse_once(fake, "home", "conflict")
+      beside_start = reset.()
+      assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^home}, _fields}, 2_000
+      after_start = reset.()
+      Cyfr.Test.ScriptedBackends.down(fake)
+      service_down = reset.()
+
+      assert %{beside_start: beside_start, after_start: after_start, service_down: service_down} ==
+               %{
+                 beside_start:
+                   {:error,
+                    "The program is starting or its folder is being changed. " <>
+                      "Try again when that has finished."},
+                 after_start: {:ok, %{reset: "claude"}},
+                 service_down: {:error, "The folder reset is unavailable — retry shortly"}
+               }
+    end
+
     test "restart is for an enabled program only", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,

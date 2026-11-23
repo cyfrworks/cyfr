@@ -49,11 +49,6 @@ updates:
     groups:
       mix:
         update-types: [minor, patch]
-    # wasmex 0.16.0 pins Wasmtime =51.0.0-rc.1, a release candidate, and
-    # the component runtime takes only a stable Wasmtime.
-    ignore:
-      - dependency-name: wasmex
-        versions: ["0.16.0"]
 
   - package-ecosystem: gomod
     directories:

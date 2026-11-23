@@ -3,8 +3,8 @@
 
 # The one workflow a release tag starts. It verifies the tagged commit once,
 # with every check a change to main runs, and publishes nothing unless all
-# six pass: the CLI release and its provenance, and the cyfr and cyfr-locus
-# images.
+# six pass: the CLI release and its provenance, the CYFR app's Linux
+# package beside it, and the cyfr and cyfr-locus images.
 name: Release
 # A release tag is MAJOR.MINOR.PATCH, or the same with a SemVer
 # pre-release (0.6.0-alpha.1). GitHub's filter patterns admit more than
@@ -234,11 +234,88 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The CYFR app's Linux package, built on each architecture's own runner
+  # around a cyfr that GoReleaser builds as it builds the archives' (the
+  # same ldflags and binary check), installed there as a person installs
+  # it, and smoked. The merge and the CLI release both need it, so no
+  # version and no :latest moves without both packages. No cache, read or
+  # written: a published package is built from its sources and their pins.
+  linux-package:
+    needs: [version, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    if: github.repository == 'cyfrworks/cyfr'
+    # Codex CI's job for the same package is bounded at 30.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-24.04}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    env:
+      ARCH: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # GoReleaser reads the version from the tag, which needs the history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # GoReleaser copies the binary only into a folder that exists.
+      - name: Make the folder cyfr is built into
+        run: mkdir -p "$RUNNER_TEMP/cyfr"
+
+      - name: Build cyfr as the release builds it
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: 'v2.18.3'
+          args: build --single-target --clean --output ${{ runner.temp }}/cyfr/cyfr
+          workdir: apps/codex
+
+      # The package guard (scripts/check-package.mjs) runs inside the build.
+      - name: Build the package
+        run: |
+          set -euo pipefail
+          cd apps/codex/desktop
+          npm ci --ignore-scripts --no-audit --no-fund
+          node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version "$GITHUB_REF_NAME" --arch "$ARCH" --out "$RUNNER_TEMP/package"
+
+      - name: Install and smoke the package
+        run: bash tests/desktop-proof/native/linux.sh "$RUNNER_TEMP/package/cyfr-desktop_${GITHUB_REF_NAME}_linux_${ARCH}.deb"
+
+      - name: The installed cyfr is the tag's
+        run: |
+          set -euo pipefail
+          installed=$(/usr/bin/cyfr --version)
+          if [ "${installed%%$'\n'*}" != "cyfr version $GITHUB_REF_NAME" ]; then
+            echo "::error::the package's cyfr says [$installed], not cyfr version $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: Upload the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cyfr-desktop-linux-${{ matrix.arch }}
+          path: ${{ runner.temp }}/package/cyfr-desktop_${{ github.ref_name }}_linux_${{ matrix.arch }}.deb
+          if-no-files-found: error
+          retention-days: 1
+
   # Each image's multi-arch manifest, made from this run's scanned digests
   # alone, and attested by the digest of the manifest the version tag names.
   # A release that is not a pre-release also moves :latest to it.
   merge:
-    needs: images
+    needs: [images, linux-package]
     if: github.repository == 'cyfrworks/cyfr'
     timeout-minutes: 5
     permissions:
@@ -314,7 +391,7 @@ jobs:
   # images' digests go into the scaffold's compose, the scaffold is built
   # and hashed, and only then is the manifest written, checked and signed.
   release:
-    needs: [version, merge, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    needs: [version, merge, linux-package, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
     if: github.repository == 'cyfrworks/cyfr'
     timeout-minutes: 10
     permissions:
@@ -351,6 +428,19 @@ jobs:
         with:
           name: merged-cyfr-locus
           path: ${{ runner.temp }}/merged/cyfr-locus
+
+      # By exact name, into the one folder .goreleaser.yml reads them from.
+      - name: Download the amd64 Linux package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cyfr-desktop-linux-amd64
+          path: ${{ runner.temp }}/packages
+
+      - name: Download the arm64 Linux package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cyfr-desktop-linux-arm64
+          path: ${{ runner.temp }}/packages
 
       # The scaffold's compose names each image as <version>@<digest>; the
       # script refuses a malformed digest and an image line left unpinned.
@@ -417,6 +507,8 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           # Where .goreleaser.yml's release finds release.json and its bundle.
           RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release
+          # Where it finds the CYFR app's Linux packages, to sum and attach.
+          RELEASE_PACKAGES_DIR: ${{ runner.temp }}/packages
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

@@ -179,9 +179,45 @@ async function passkeyPhase() {
     "the device's Prism and its own window show the same code, and with the passphrase the passkey is added to the account's log",
     {listed, shownThere, before: listedBefore.includes(waiting), added})
 
+  // lock_forgets: locked while a request of the page's, which outlives
+  // it, is held until the lock is over: once the engine has received that
+  // very request's 200 and ended it, no cookie is left, and the chooser
+  // tells of no failure. How the engine ends a request whose page is gone
+  // (completed, or aborted after its 200, as a loaded runner shows) is not
+  // the row's claim; an end with no 200 received fails it. What a closing
+  // page's scripts write is the app's own tests' (main.test): here those
+  // writes end before the engine's clear does.
+  await judged("lock_forgets", "a lock forgets all of the content's storage, and the closing page's request, answered afterwards, puts nothing back", async () => {
+    const ses = w.webContents.session
+    const held = HOME + "/login?held"
+    let send = null
+    let id = null
+    let ended = null
+    ses.webRequest.onBeforeRequest({urls: [held]}, (details, callback) => {
+      id = details.id
+      send = () => callback({})
+    })
+    const end = (how) => (details) => { if (details.id === id) ended = {how, status: details.statusCode ?? null, error: details.error ?? null} }
+    ses.webRequest.onCompleted({urls: [held]}, end("completed"))
+    ses.webRequest.onErrorOccurred({urls: [held]}, end("failed"))
+    try {
+      await js(w.webContents, `fetch(${literal(held)}, {keepalive: true}).catch(() => {}); 1`)
+      await waitFor(() => send, "the page's request held")
+      const locked = await lockDevice(w)
+      send()
+      send = null
+      const answered = await waitFor(() => ended, "the engine's end of that request", 20_000)
+      const left = (await ses.cookies.get({})).map((c) => `${c.name} at ${c.domain}`)
+      return [signedOutToWays(locked) && answered.status === 200 && left.length === 0,
+        {left, answered, chooser: locked.chooser}]
+    } finally {
+      send?.()
+      for (const hook of ["onBeforeRequest", "onCompleted", "onErrorOccurred"]) ses.webRequest[hook](null)
+    }
+  })
+
   // passkey_sign_in: locked, then signed in again with the new passkey
   // alone: the account window's assertion returns and Prism opens.
-  await lockDevice(w)
   answerWith(() => 0)
   w = await toSignIn()
   a = await startSignIn(w)

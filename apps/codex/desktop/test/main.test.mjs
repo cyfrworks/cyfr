@@ -64,6 +64,7 @@ class Contents extends EventEmitter {
     this.mainFrame = {processId: 1, routingId: win.id, get url() { return win.webContents.url }}
   }
   getURL() { return this.url }
+  isDestroyed() { return !!world.windows.find((w) => w.webContents === this)?.destroyed }
   async executeJavaScript(script) { world.scripted.push(script) }
   reload() {
     this.reloaded = [...(this.reloaded ?? []), this.url]
@@ -133,7 +134,7 @@ function fromPartition(partition) {
     const ses = new EventEmitter()
     Object.assign(ses, {
       partition,
-      webRequest: {onHeadersReceived() {}},
+      webRequest: {onHeadersReceived(handler) { ses.received = handler }},
       setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDevicePermissionHandler() {},
       setDisplayMediaRequestHandler() {},
       jar: [...(world.disk.get(partition) ?? [])],
@@ -741,6 +742,65 @@ test("the engine's pending address is not the document that began a navigation",
   await settled()
   assert.ok(event.prevented && !page.destroyed)
   assert.deepEqual(world.cleared, [], "the CYFR's document pressed nothing of the chooser's")
+})
+
+// cyfr's locked over the CYFR open at PORT_A, and the forgetting ended.
+async function locksAndForgets() {
+  const said = await started(true)
+  await signsIn(PORT_A, "ada at A")
+  return async () => {
+    await saysLocked({home: PORT_A, account: ACCOUNT})
+    for (let i = 0; i < 12; i++) await settled()
+    return said
+  }
+}
+
+test("what a closing page writes after the lock's clear began is cleared with the rest", async () => {
+  const lock = await locksAndForgets()
+  const ses = content().webContents.session
+  let writes = 1
+  world.step = (at) => {
+    if (at === "cleared" && writes-- > 0) ses.jar = [{name: "__phoenix_flash__", domain: "cyfr.example.com", value: "late"}]
+  }
+  const said = await lock()
+  assert.deepEqual(ses.jar, [])
+  assert.deepEqual(cookiesOnDisk(), [], "written out")
+  assert.ok(!said.some((line) => line.startsWith("not cleared")), said.join("; "))
+  assert.doesNotMatch(content().webContents.url, /notice=/)
+})
+
+test("a lock's clear that truly fails says which cookie was left or which call threw, and nothing it was handed", async () => {
+  const handed = () => Promise.reject(new Error("cookie=a-secret at /private/file"))
+  for (const [fail, why] of [
+    [(ses) => { world.unclearable = true; ses.jar = [{name: "_cyfr_key", domain: "cyfr.example.com", value: "a-secret"}] },
+      /^not cleared: left _cyfr_key at cyfr\.example\.com$/],
+    [() => { world.clearing = handed }, /^not cleared: clearStorageData threw$/],
+    [() => { world.step = (at) => { if (at === "cache cleared") throw new Error("cookie=a-secret at /private/file") } }, /^not cleared: clearCache threw$/],
+    [() => { world.step = (at) => { if (at === "flushed") throw new Error("cookie=a-secret at /private/file") } }, /^not cleared: flushStore threw$/],
+    [() => { world.step = (at) => { if (at === "read") throw new Error("cookie=a-secret at /private/file") } }, /^not cleared: cookies.get threw$/]]) {
+    const lock = await locksAndForgets()
+    fail(content().webContents.session)
+    const said = await lock()
+    assert.ok(said.some((line) => why.test(line)), `${why}: ${said.join("; ")}`)
+    assert.ok(!said.some((line) => /a-secret|private/.test(line)), said.join("; "))
+    assert.match(content().webContents.url, /notice=unforgotten$/)
+  }
+})
+
+test("a response to a page the lock closed sets no cookie, and the next page's own does", async () => {
+  const lock = await locksAndForgets()
+  const page = content()
+  await lock()
+  const answered = (webContents) => {
+    let out
+    page.webContents.session.received({webContents, resourceType: "xhr", responseHeaders: {"set-cookie": ["a=1"]}},
+      (r) => { out = r.responseHeaders })
+    return out
+  }
+  assert.ok(page.destroyed)
+  assert.equal(answered(page.webContents)["set-cookie"], undefined, "the closed page's")
+  assert.equal(answered(undefined)["set-cookie"], undefined, "no page's")
+  assert.deepEqual(answered(content().webContents)["set-cookie"], ["a=1"], "the page showing")
 })
 
 test("Connect to another CYFR does not advance past a failed clear", async () => {

@@ -30,7 +30,9 @@ defmodule Emissary.External.Provider do
   server owns for the person (`Opus.Programs.start/3`), every later act on
   which reaches `Opus.Programs` directly under the same person's
   standing; `reset_home` empties a kept program's home under the same
-  uid. Each is a person's act: interactive, admin.
+  uid, and is refused `conflict` while the program starts in it or an
+  earlier change of it has not finished. Each is a person's act:
+  interactive, admin.
 
   Both carry the tool patterns the server is allowed to offer at all. Every
   action but `list` is `permission: :admin`, because it reads or changes
@@ -1233,14 +1235,25 @@ defmodule Emissary.External.Provider do
   defp open_refusal(reason, name), do: programs_refusal(reason, "Opening #{name}")
 
   # Every session in the row's home ends and it is made again empty, under
-  # the same uid.
+  # the same uid. A home the service is still making, for a program's start
+  # or an earlier change, is `conflict`: busy, told apart from a service
+  # that does not answer.
   defp handle_reset_home(ctx, args) do
     with {:ok, name} <- name_arg(args),
          {:ok, server} <- program_row(ctx, name),
          :ok <- kept(server) do
       case Opus.Programs.home(ctx.athanor_id, server.id, :reset) do
-        :ok -> {:ok, %{reset: name}}
-        {:error, reason} -> {:error, programs_refusal(reason, "The folder reset")}
+        :ok ->
+          {:ok, %{reset: name}}
+
+        {:error, :conflict} ->
+          {:error,
+           {:conflict,
+            "The program is starting or its folder is being changed. " <>
+              "Try again when that has finished."}}
+
+        {:error, reason} ->
+          {:error, programs_refusal(reason, "The folder reset")}
       end
     end
   end

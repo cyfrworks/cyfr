@@ -84,7 +84,7 @@ HOG = os.path.join(HERE, "hog.wasm")
 HOG_REF = "catalyst:local.hog:0.1.0"
 HOG_DIGESTS = {
     "hog.wat": "sha256:e7f4dda000179ab7870ee732f5eb82a986134b945e9296bdf0009979f616abc4",
-    "hog.wasm": "sha256:e9a19a011f286b940a0430987d9251222f3f2b9b08c4abab236fa103da66b23f",
+    "hog.wasm": "sha256:da93712793bd4ae639d3c8d15fcffe160f1a4ba2ab3f5dd0a7a363b6fc3d1a03",
 }
 # What one child holds once every page is touched: all the linear memory
 # the engine lets one run have under the zero authority it runs under.

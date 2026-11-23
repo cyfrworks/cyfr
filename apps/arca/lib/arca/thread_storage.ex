@@ -624,9 +624,9 @@ defmodule Arca.ThreadStorage do
   actor's athanor that a reset or a retirement of the kept home of the
   program row `row_id` reaches, so each one's next request opens a new
   session, and raise its `brain_generation` in the same statement, so a
-  turn begun before it keeps no session it answers with afterwards
-  (`Arca.TurnStorage.record_response/4`) and a program's batch that would
-  keep one is refused (`Arca.TurnStorage.commit_brain/3`). The threads are
+  turn begun before it keeps no session it answers with afterwards: a
+  program's batch that would keep one is refused
+  (`Arca.TurnStorage.commit_events/3`). The threads are
   those the row's identity is stored on: a session stored with the row
   (`brain_progress`'s `row`), and an open turn pinned to the row
   (`turns.program`), whose first start may not have committed a session
@@ -1178,7 +1178,7 @@ defmodule Arca.ThreadStorage do
   # sessions a program's transcript backs, so the record commits with its
   # clearing or not at all. `threads` are rows the caller holds
   # (`lock_threads!/2`, or a turn's own thread), so a session a batch
-  # keeps meanwhile (`Arca.TurnStorage.commit_brain/3`) is either read
+  # keeps meanwhile (`Arca.TurnStorage.commit_events/3`) is either read
   # here or kept under a generation the caller then raises past. A session
   # backs a transcript in the folder of the row it is stored with
   # (`session_rows/1`); a session with no stored row owes nothing. Answers
@@ -1221,7 +1221,7 @@ defmodule Arca.ThreadStorage do
 
   # The program row each thread's brain session is stored with: the
   # `row` of its `brain_progress`, written in the one write that keeps a
-  # session a `started` names (`Arca.TurnStorage.commit_brain/3`) and
+  # session a `started` names (`Arca.TurnStorage.commit_events/3`) and
   # left by everything else, so a forget still reads it until the next
   # `started`. It is the session's folder, which neither the row its
   # driver runs on now (`driver`, which a new driver's hello moves) nor a

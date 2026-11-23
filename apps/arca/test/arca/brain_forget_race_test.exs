@@ -76,16 +76,20 @@ defmodule Arca.BrainForgetRaceTest do
             running!(actor, thread, new)
 
             {:ok, %{seen: false}} =
-              TurnStorage.commit_brain(actor, thread.id, %{
-                agent: "aqua",
-                generation: 0,
-                boot: "successor",
-                hello: true,
-                seq: 1,
-                row_id: new.id,
-                epoch: new.epoch,
-                silence_ms: 1_800_000,
-                session: "6f1e2d3c-0000-4968-8776-000000000002"
+              TurnStorage.commit_events(actor, %{thread: thread.id, agent: "aqua", turn: nil}, %{
+                events: [],
+                position:
+                  {:session,
+                   %{
+                     generation: 0,
+                     boot: "successor",
+                     hello: true,
+                     seq: 1,
+                     row_id: new.id,
+                     epoch: new.epoch,
+                     silence_ms: 1_800_000,
+                     session: "6f1e2d3c-0000-4968-8776-000000000002"
+                   }}
               })
 
             {:ok, row} = Threads.get(actor, thread.id)

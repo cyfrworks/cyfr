@@ -23,6 +23,7 @@ const HOME = "https://cyfr.example.com"
 const COMPANY = "This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet."
 const PASSKEY = HOME + "/login"
 const UNCLEARED = "The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."
+const UNFORGOTTEN = "The app locked, and could not clear the sign-in it kept on this computer. To clear it, press Connect to another CYFR, which clears it first."
 const OPEN = {home: HOME, next: "/"}
 // The passkey road, as main says it in the chooser's address.
 const ROAD = "#token=t&road=passkey"
@@ -275,6 +276,7 @@ const locked = {type: "locked", message: {type: "locked", home: HOME, account: A
 const NOTICES = {
   company: {words: COMPANY, observed: [at(HOME + "/company-login", HOME + "/login"), locked]},
   uncleared: {words: UNCLEARED, observed: [at(CHOOSER + "another", CHOOSER), {type: "forgot", cleared: false}, locked]},
+  unforgotten: {words: UNFORGOTTEN, observed: [locked, {type: "forgot", cleared: false}]},
   unanswered: {words: UNANSWERED, observed: [{type: "load-failed", code: -106, url: HOME + "/threads"}]}
 }
 
