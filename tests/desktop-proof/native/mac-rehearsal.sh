@@ -53,7 +53,7 @@ ARCH=${2:-}
 CYFR=$(cd "$(dirname "$CYFR")" && pwd)/$(basename "$CYFR")
 DESKTOP=$(cd "$(dirname "$0")/../../../apps/codex/desktop" && pwd)
 
-RUN=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-mac-rehearsal.XXXXXX") || exit 1
+RUN=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-mac-rehearsal.XXXXXX") || exit 1
 TEAM=RHRSL00001
 NAME="Developer ID Application: CYFR Rehearsal ($TEAM)"
 PASSWORD=$(openssl rand -hex 16)

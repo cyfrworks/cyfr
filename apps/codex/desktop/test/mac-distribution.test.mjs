@@ -44,7 +44,7 @@ const inputs = {APPLE_CERTIFICATE: secrets.APPLE_CERTIFICATE, APPLE_CERTIFICATE_
 // escaped for a shell, and cut into its words.
 function spellings(value) {
   const words = value.split(/[^A-Za-z0-9+/]+/).filter((w) => w.length >= 4)
-  return [value, `"${value}"`, `'${value}'`, value.replace(/ /g, "\\ "), ...words]
+  return [value, `"${value}"`, `'${value}'`, value.replace(/\\/g, "\\\\").replace(/ /g, "\\ "), ...words]
 }
 const printedAnywhere = (text) => Object.values(secrets).flatMap(spellings).filter((s) => text.includes(s))
 
