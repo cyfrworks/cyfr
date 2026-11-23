@@ -68,7 +68,12 @@ container starts:
   and navigator.webdriver on a put page, and the User-Agent and Sec-CH-UA
   headers of a public request (unless CYFR_TEST_OFFLINE=1) as Chrome's own
   network log records them. None says Headless: the shell names itself as
-  the Chromium it is, at its own version.
+  the Chromium it is, its own brands without HeadlessChrome at its own
+  version, and navigator.webdriver reads false.
+- A saved profile that holds a known page does not reopen it, from the
+  network or the cache: one the full Chrome made, whose session holds the
+  page (a fixture below), and one the shell made, ended abruptly with a
+  public page open, whose cache holds it (unless CYFR_TEST_OFFLINE=1).
 - Another program in another kept home, under another uid, cannot read the
   browser's profile, nothing of the browser's uid listens on a TCP port,
   and Chrome runs on its debugging pipe with no debugging port.
@@ -154,8 +159,8 @@ OWNER = owner_of("browser")
 # profile lock is a socket in its temporary folder, and a home this long
 # leaves no room for it there unless the driver names that folder short.
 BROWSER_HOME = "mcp_01890000-0000-7000-8000-00000000b005"
-BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, CODEX_HOME = (
-    f"mcp_browser-{name}" for name in ("broken", "other", "offline", "codex"))
+BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, CODEX_HOME, FULL_HOME = (
+    f"mcp_browser-{name}" for name in ("broken", "other", "offline", "codex", "full"))
 # The bound Opus.Programs.Definition.browser/1 gives the browser's home.
 HOME_MAX_BYTES = 2 << 30
 BROWSER = {"name": "browser", "command": "cyfr-browser", "env": {}, "home": "kept", "memory_bytes": 1536 << 20,
@@ -835,6 +840,25 @@ def net_log_of_pages(text):
     return sorted(left), sorted(urls), sorted(asked), sorted(udp)
 
 
+# A profile the full Chrome made (Chrome for Testing 158.0.8127.36, --headless, set to continue where it left off) that
+# holds https://example.com/?cyfr-restore-fixture in its session, killed with the page open: its Sessions file as that
+# Chrome wrote it, and Preferences reduced to that one setting. Given back on a debugging port, that Chrome reopens
+# the page from it; a .tar.gz, in base64.
+FULL_CHROME_PROFILE = (
+    "H4sIAAAAAAAAA+2VT2vUQBTAX3fpthHFiooKguviQcE0k2ySTfZSD0UQQQp70ktMspN2Id0sSVZbStFjDx568K7fxKtfwoN40Ivi"
+    "N6hvskndpn9WSqtI3y/Mvn8z895MZjaLPHCHYaosxTzgMe/7PIGThiEmY5lk+yVjugGq0WSsxdTMrza1lgF1duKVHMAwSd24Xoc4"
+    "itKj+k2K/6dsNBKeJL2o32hvNGKepFHMnajviF1Jh4NGW93cPPeviyROjcX8/ndGpyBRTiGHuOKto+4/6nvvv9ZSTagbp1DLPs74"
+    "/d/3/nPFUZt607ZM27ZsnemWph0/x4T/f00ztdL7NzWd0f//36DzpNOpopRAqnx691C4LsDFWRS/zVt7zWvjpgT1QjWgwfLITZQv"
+    "eJz2fDd0UtfDz0ncGzh+FIbuIOHdaYwHbphwlDY09HzYnYOHDfu7A52XvW66IgoWJ0SC89XdOiqFehtuFOphSKN8opsKl++jp5qn"
+    "V13TMpnpO5ZndR2d+6bj6brtcGYzy/A4D3RPgtlizZfgapFr5mnwdvODAtNwRUQlmCkij6q1xeoohTDvYVtJ00HSVhS+5q4OQj7v"
+    "R6vKgr8exHL+DZaD3lo6jHle8JsKwFZFrA3gNcrruX+uJGdzuY2thm2rtPBvJfvnmF4bi39///nx1+c1+JHLu1Mj/4OpveOt3N4u"
+    "+cuU63sG+T5Ais8AEmiDgg+HNXBhFT0h6vPgQ4SWAguorUMAMcjYOPZPMSI0Gb09HJXCMLMPzleWFjZRMhuz/4S5CXZ9wvgif7m+"
+    "JWzi+DXBhBZeiQB0lCauTsN75eLqZfQY0MVHxmoZeGiLqJc9Oo7UMKZiTMVxh83vYzTAXxP7Wtn8Ns5l4gxifpHLQM3DfVRxRhkz"
+    "B9gzyKqycFyAfvxYZ2elAI/jsc70qy/L2YURfATYnXPnEERsCnYm7DBBEARBEARBEARBEARBEARBEARBnGF+AduFKJYAKAAA"
+)
+FULL_CHROME_PAGE = "cyfr-restore-fixture"
+
+
 # A page that reads what a site reads of the browser's kind and titles itself with it.
 KIND_PAGE = ("<title>reading</title><script>(async () => { const d = navigator.userAgentData;"
              " const high = d ? await d.getHighEntropyValues(['fullVersionList']) : null;"
@@ -866,7 +890,7 @@ def browser_kind(stack, c, uid):
     """What a site reads to tell a browser's kind, in a first window and a later one: the page's navigator.userAgent,
     userAgentData's brands and full versions and navigator.webdriver, and a public request's User-Agent and Sec-CH-UA
     headers as Chrome's own network log records them. None says Headless: the headless shell names itself as the
-    Chromium it is, its own version."""
+    Chromium it is, its own brands without HeadlessChrome at its own version, and navigator.webdriver reads false."""
     log = f"{KEPT_ROOT}/{BROWSER_HOME}/kind-netlog.json"
     k = Host(stack, c, BROWSER_HOME, ["--net-log", log])
     expect("error" not in k.hello(), "a session that logs Chrome's network says hello")
@@ -887,11 +911,18 @@ def browser_kind(stack, c, uid):
     if offline:
         print("skip: a public request's headers need the public network (CYFR_TEST_OFFLINE=1)", flush=True)
     for win, seen_by_page in read.items():
-        expect("Chrome/" in seen_by_page["ua"] and [b["brand"] for b in seen_by_page["brands"]] == ["Chromium"]
-               and seen_by_page["ua"].split("Chrome/")[1].split(" ")[0]
-               == seen_by_page["fullVersionList"][0]["version"],
-               f"the page in {win} reads the Chromium the browser is, at its own version", seen_by_page)
+        names = [b["brand"] for b in seen_by_page["brands"]]
+        full = dict((b["brand"], b["version"]) for b in seen_by_page["fullVersionList"])
+        expect("Chrome/" in seen_by_page["ua"] and len(names) == 2 and names[1] == "Chromium"
+               and names == [b["brand"] for b in seen_by_page["fullVersionList"]]
+               and seen_by_page["ua"].split("Chrome/")[1].split(" ")[0] == full["Chromium"],
+               f"the page in {win} reads the shell's own brands, its own GREASE and Chromium at its own version, "
+               "without HeadlessChrome", seen_by_page)
+        expect(seen_by_page["webdriver"] is False, f"the page in {win} reads navigator.webdriver false", seen_by_page)
         expect(offline or sent[win], f"the public request from {win} is in Chrome's network log", sent)
+        expect(offline or all(names[0] in request.get("sec-ch-ua", "") and '"Chromium"' in request["sec-ch-ua"]
+                              for request in sent[win]),
+               f"the public request from {win} carries the same brands in Sec-CH-UA", sent)
     expect("headless" not in json.dumps([read, sent]).lower(),
            "no page or request reads Headless in the User-Agent, the client hints or userAgentData, in the first "
            "window or a later one", [read, sent])
@@ -1544,8 +1575,36 @@ def main():
         eventually(lambda: not stack.under_uid(uid), "the short keep's processes to end with its session")
 
         # ————— a profile with open pages starts empty —————
-        # A Chrome that ends abruptly with a page open, as a crash or its memory bound leaves a profile: a later
-        # start, logging Chrome's network, asks nothing of that page, so no session of the profile is restored.
+        # A saved profile that holds a known page, as a crash or its memory bound leaves one: a later start, logging
+        # Chrome's network, asks nothing of that page, from the network or its cache, so nothing of the profile's last
+        # session is reopened. First a profile the full Chrome made, which main's browser kept, whose session holds
+        # the page; then one the shell made, ended abruptly with a public page open, whose cache holds it.
+        def reopened(home, page):
+            """What a start in `home` asks of `page`, read from Chrome's network log over its first seconds."""
+            home_owner = int(home_uid(stack, home))
+            restore_log = f"{KEPT_ROOT}/{home}/restore-netlog.json"
+            again = Host(stack, c, home, ["--net-log", restore_log])
+            expect("error" not in again.hello(), f"the profile in {home} that holds a page starts")
+            time.sleep(5)  # sleep-ok: a reopened page would load within these seconds of the start
+            again.close()
+            eventually(lambda: not stack.under_uid(home_owner), "the later session's processes to end")
+            log_text = as_home(stack, home, f"cat {restore_log}", "the later start's network log")
+            as_home(stack, home, f"rm {restore_log}", "the network log removed")
+            return [entry for entry in net_log_leaving(log_text) if page in entry[1]]
+
+        made = Host(stack, c, FULL_HOME)
+        expect("error" not in made.hello(), "a home for the full Chrome's profile is made")
+        made.close()
+        eventually(lambda: not stack.under_uid(int(home_uid(stack, FULL_HOME))), "its first session's processes to end")
+        profile_dir = f"{KEPT_ROOT}/{FULL_HOME}/chrome"
+        as_home(stack, FULL_HOME, f"rm -rf {profile_dir} && mkdir {profile_dir} && echo {FULL_CHROME_PROFILE} | "
+                                  f"base64 -d | tar xzf - -C {profile_dir}", "the full Chrome's profile put in its home")
+        holds = as_home(stack, FULL_HOME, f"grep -a -l -r {FULL_CHROME_PAGE} {profile_dir}/Default/Sessions || true",
+                        "the profile's sessions that hold the page").split()
+        expect(holds, "the full Chrome's profile holds the page in its session", holds)
+        asked = reopened(FULL_HOME, FULL_CHROME_PAGE)
+        expect(asked == [], "a start from the full Chrome's profile reopens none of its last session's pages", asked)
+
         if os.environ.get("CYFR_TEST_OFFLINE") == "1":
             print("skip: a profile's last page needs a public page to hold (CYFR_TEST_OFFLINE=1)", flush=True)
         else:
@@ -1557,16 +1616,11 @@ def main():
             as_home(stack, BROWSER_HOME, f"kill -9 {' '.join(map(str, main_pids))}", "Chrome ended abruptly")
             eventually(lambda: (r.read(1_000), not r.running)[1], "the driver to end with its Chrome")
             eventually(lambda: not stack.under_uid(uid), "that session's processes to end")
-            restore_log = f"{KEPT_ROOT}/{BROWSER_HOME}/restore-netlog.json"
-            again = Host(stack, c, BROWSER_HOME, ["--net-log", restore_log])
-            expect("error" not in again.hello(), "the profile with an open page starts")
-            time.sleep(5)  # sleep-ok: a restored page would load within these seconds of the start
-            again.close()
-            eventually(lambda: not stack.under_uid(uid), "the later session's processes to end")
-            asked = [entry for entry in net_log_leaving(as_home(stack, BROWSER_HOME, f"cat {restore_log}",
-                                                                "the later start's network log")) if token in entry[1]]
-            expect(asked == [], "a later start reopens none of the last session's pages", asked)
-            as_home(stack, BROWSER_HOME, f"rm {restore_log}", "the network log removed")
+            cached = as_home(stack, BROWSER_HOME, f"grep -a -l -r {token} {KEPT_ROOT}/{BROWSER_HOME}/chrome || true",
+                             "the profile's files that hold the page").split()
+            expect(any("/Cache" in path for path in cached), "the shell's profile holds the page in its cache", cached)
+            asked = reopened(BROWSER_HOME, token)
+            expect(asked == [], "a later start reopens none of the last session's pages, from its cache neither", asked)
 
         # ————— it reaches nothing by itself —————
         # Chrome's own network log over a start with nothing asked of it: no request leaves.

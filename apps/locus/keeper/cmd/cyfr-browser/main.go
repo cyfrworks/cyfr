@@ -51,7 +51,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -209,8 +208,13 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 	// options (no new privileges, and a seccomp profile that denies making
 	// a namespace), so Chrome runs without it, held by the home's uid, the
 	// egress guard, the read-only root and its memory bound.
+	// The debugging pipe makes Chrome tell its pages navigator.webdriver is
+	// true; AutomationControlled, the one feature behind it, is turned off
+	// so it reads false as a person's browser does. Nothing else a page
+	// reads changes with it.
 	args := append([]string{"--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
-		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900"}, quiet...)
+		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900",
+		"--disable-blink-features=AutomationControlled"}, quiet...)
 	cmd := exec.Command(path, append(args, logging...)...)
 	// Chrome runs in its home with its temporary folder named relative to
 	// it (chromeTemp), so the socket that locks its profile has a short path
@@ -256,7 +260,10 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 			return nil, fmt.Errorf("Chrome ended (%s)", p.cmd.ProcessState)
 		}
 	}
-	b.agent = agentOf(v, runtime.GOARCH)
+	if b.agent, err = ownAgent(ctx, b.c, v.UserAgent); err != nil {
+		p.kill()
+		return nil, fmt.Errorf("Chrome did not say how it names itself (%v)", err)
+	}
 	return p, nil
 }
 

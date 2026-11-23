@@ -90,6 +90,9 @@ type window struct {
 	gen  int64
 	next *put
 	docs map[string]*put
+	// unnamed says a target attached to the window was refused its naming
+	// (agent.go) and was not let run, which the window's next action says.
+	unnamed bool
 }
 
 func newBrowser() *browser {
@@ -276,6 +279,12 @@ func (b *browser) in(ctx context.Context, name string, create bool, fn func(*win
 	w.op.Lock()
 	defer w.op.Unlock()
 	out, err := fn(w)
+	w.mu.Lock()
+	if w.unnamed {
+		out, err = nil, errUnnamed
+	}
+	w.unnamed = false
+	w.mu.Unlock()
 	if err != nil && made {
 		b.forget(ctx, name, w)
 	}

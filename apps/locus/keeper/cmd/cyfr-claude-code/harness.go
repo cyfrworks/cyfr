@@ -43,7 +43,10 @@ var baseArgv = []string{
 const (
 	stubServer = "cyfr"
 	toolPrefix = "mcp__cyfr__"
-	stubBinary = "cyfr-stub"
+	// stubBinary is CYFR's stub by its absolute path in the image
+	// (Dockerfile.locus), never by name: npx puts a project's own package
+	// binaries ahead of the PATH it inherits, so a name could run another.
+	stubBinary = "/opt/cyfr/bin/cyfr-stub"
 	initID     = "cyfr-initialize"
 	toolsID    = "cyfr-tools"
 	// maxToolArgBytes bounds one tool as the stub's argument: the kernel's

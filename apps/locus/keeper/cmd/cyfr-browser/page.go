@@ -421,9 +421,16 @@ func (b *browser) attachChild(w *window, session, kind string) {
 	ctx, cancel := context.WithTimeout(context.Background(), opWait)
 	defer cancel()
 	// A service worker answers its network's commands only once it runs,
-	// so it is named after it is let run; every other target before.
+	// so it is named after it is let run, and one that cannot be named
+	// then, as one that has ended cannot, runs as the shell names it: the
+	// one limit. Every other target is named before it runs, and one
+	// Chrome refuses to name is not let run: a window it opened is closed,
+	// and the window's next action says so.
 	if kind != "service_worker" {
-		_ = b.name(ctx, session, kind)
+		if err := b.name(ctx, session, kind); err != nil {
+			b.refused(ctx, w, session, kind)
+			return
+		}
 	}
 	switch kind {
 	case "worker":
@@ -437,6 +444,28 @@ func (b *browser) attachChild(w *window, session, kind string) {
 	_ = b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil)
 	if kind == "service_worker" {
 		_ = b.name(ctx, session, kind)
+	}
+}
+
+// errUnnamed answers the action of a window one of whose targets Chrome
+// refused to name as the browser it is.
+var errUnnamed = &failure{"unnamed", "The browser could not name a frame, worker or window of this page as the browser it is, so it did not let it run."}
+
+// refused marks w unnamed for a target Chrome refused to name, and closes
+// it when it is a window, which can be closed apart from its opener.
+func (b *browser) refused(ctx context.Context, w *window, session, kind string) {
+	w.mu.Lock()
+	w.unnamed = true
+	w.mu.Unlock()
+	if kind == "page" {
+		var info struct {
+			TargetInfo struct {
+				TargetID string `json:"targetId"`
+			} `json:"targetInfo"`
+		}
+		if b.c.call(ctx, session, "Target.getTargetInfo", nil, &info) == nil && info.TargetInfo.TargetID != "" {
+			_ = b.c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": info.TargetInfo.TargetID}, nil)
+		}
 	}
 }
 
