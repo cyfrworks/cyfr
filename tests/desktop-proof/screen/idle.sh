@@ -28,6 +28,12 @@
 # registered, exited or cannot fire fails the row, as does a page that held
 # nothing.
 #
+# The player is the screen's browser: Chrome, while the box's screen is
+# Chrome. The change that makes the CYFR app the box's screen makes the
+# app's own engine the player here, from the package Codex CI builds; the
+# real five minutes with a video playing are the installed box's
+# (tests/install-screen-proof), on the engine the box runs.
+#
 # The length is three seconds in place of five minutes, which
 # apps/codex/cmd's tests hold to five. The taps are a virtual pointer's
 # (tap.py), real input to labwc: Chrome takes no inhibitor for playback
