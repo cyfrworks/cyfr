@@ -11,7 +11,7 @@ import (
 )
 
 func init() {
-	internalCmd.AddCommand(dockerRunCmd)
+	internalCmd.AddCommand(dockerRunCmd, setupProjectCmd)
 	rootCmd.AddCommand(internalCmd)
 }
 

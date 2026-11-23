@@ -45,6 +45,8 @@ func screenPrograms(t *testing.T, scripts map[string]string) {
 		}
 	}
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	// The folder's readings are setup's work's, and reach this docker too.
+	workSeesDocker(t, t.TempDir())
 }
 
 // swayidleSays begins a stand-in swayidle: said speaks as swayidle 1.9

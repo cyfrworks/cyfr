@@ -39,6 +39,18 @@ type Local struct {
 	// it is not opened, in a sentence for the person. Asking starts
 	// nothing.
 	Answers func(context.Context) error
+	// Work is everything begun for that CYFR here: the service ends it as
+	// it lets go of the reading (end), when the CYFR is left or the
+	// reading is not the one selected. A Local that begins nothing has
+	// none.
+	Work *shell.Work
+}
+
+// end ends what was begun for l.
+func (l *Local) end() {
+	if l != nil && l.Work != nil {
+		l.Work.End()
+	}
 }
 
 // Service is what the CYFR app's cyfr serves on the shell's listener: the
@@ -312,6 +324,7 @@ func (s *Service) state(context.Context, uint64, request) answer {
 			a.Error = fmt.Sprintf("The app cannot read the CYFR in %s (%v).", c.Project, err)
 		} else {
 			a.Home = l.Shell.Address
+			l.end()
 		}
 	}
 	return a
@@ -347,6 +360,7 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	if remembered && l.Shell.Address == home {
 		return s.openLocal(run, epoch, project, l)
 	}
+	l.end()
 	if !ok {
 		if remembered && home != "" {
 			// The folder's address changed since the chooser showed it, or
@@ -460,6 +474,7 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 			"or a plain http one only at a CYFR's own address on this computer.", project, l.Shell.Directory)}
 	}
 	if err := l.Answers(run); err != nil {
+		l.end()
 		if !s.live(epoch) {
 			return answer{Error: lockedSentence}
 		}
@@ -467,14 +482,17 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 	}
 	sel, err := s.Clients.SelectLocal(project)
 	if err != nil {
+		l.end()
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
-	a := s.selectHome(run, epoch, sel, l.Shell,
+	a := s.selectHome(run, epoch, sel, l.Shell, l.Work,
 		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver})
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.pages != nil {
 		s.here = &l
+	} else {
+		l.end()
 	}
 	return a
 }
@@ -486,16 +504,17 @@ func (s *Service) selectRemote(run context.Context, epoch uint64, home string, f
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
-	return s.selectHome(run, epoch, sel, shell.Config{Address: home, Client: s.Client, Directory: found.Directory, Detect: remoteDisks},
+	return s.selectHome(run, epoch, sel, shell.Config{Address: home, Client: s.Client, Directory: found.Directory, Detect: remoteDisks}, nil,
 		Message{Type: TypeHome, Home: home, Account: found.Origin})
 }
 
 // selectHome makes the device's shell at the CYFR cfg reaches, over the
 // selection (shell.Selection), and sends main proposal, its home; once
 // main answers home-ready for it, the selection is remembered and the
-// device's pages are served. Each step that publishes does so under s.mu while the epoch it
+// device's pages are served, under work where the CYFR is a folder's on
+// this computer. Each step that publishes does so under s.mu while the epoch it
 // arrived in still runs, so a lock ends it unopened.
-func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selection, cfg shell.Config, proposal Message) answer {
+func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selection, cfg shell.Config, work *shell.Work, proposal Message) answer {
 	home := proposal.Home
 	cfg.DisplayName, cfg.Record, cfg.Clients, cfg.Restart = s.DisplayName, s.Record, sel, s.sayLocked
 	if s.Shell != nil {
@@ -543,7 +562,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	if err := s.Send(Message{Type: TypeOpened, Home: home}); err != nil {
 		return answer{Error: "The app did not take the CYFR (" + err.Error() + ")."}
 	}
-	s.sh, s.pages = sh, &shell.Server{Shell: sh}
+	s.sh, s.pages = sh, &shell.Server{Shell: sh, Work: work}
 	s.committed = proposal
 	return s.opened(home)
 }
@@ -597,7 +616,11 @@ func (s *Service) End() {
 // opened (shell.Selection).
 func (s *Service) lock(why string, leave bool) {
 	s.mu.Lock()
-	sh := s.sh
+	sh, here := s.sh, s.here
+	if leave || s.ended {
+		// Everything begun for the CYFR here ends as the app lets go of it.
+		here.end()
+	}
 	if leave {
 		s.sh, s.pages, s.here, s.committed = nil, nil, nil, Message{}
 	}

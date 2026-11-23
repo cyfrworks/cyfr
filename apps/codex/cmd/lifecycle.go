@@ -553,8 +553,12 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	releaseBuild := version.Version != "dev" && version.Version != ""
 
 	// What init cannot complete is refused before anything is written: a
-	// .env that does not say how its home is reached, whose cure is
-	// `cyfr access <mode>`.
+	// folder Docker cannot name the project after, which every start would
+	// refuse, and a .env that does not say how its home is reached, whose
+	// cure is `cyfr access <mode>`.
+	if err := projectNamed("."); err != nil {
+		return err
+	}
 	envExisted := fileExists(".env")
 	if envExisted {
 		if _, err := existingAccess(".env"); err != nil {
@@ -625,6 +629,11 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	// user where to get it.
 	sel := existingSelection(".env")
 	if !envExisted && fileExists(".env.example") {
+		// The download takes no interrupt. One that came during it is
+		// heeded here, before any key is minted.
+		if ctx.Err() != nil {
+			return interruption{errors.New("Interrupted before .env was written. Run it again to go on.")}
+		}
 		begin(initStepSettings)
 		text, _, d, err := newEnv(".env.example")
 		if err != nil {
@@ -669,10 +678,16 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		}
 		for _, img := range images {
 			fmt.Fprintf(out, "Pulling %s ...\n", img)
-			pull := exec.Command("docker", "pull", "--quiet", img)
+			pull := exec.CommandContext(ctx, "docker", "pull", "--quiet", img)
+			pull.WaitDelay = dockerWaitDelay
 			pull.Stdout = io.Discard
 			pull.Stderr = errOut
-			if err := pull.Run(); err != nil {
+			err := pull.Run()
+			if ctx.Err() != nil {
+				// Interrupted: cyfr up pulls what is missing.
+				break
+			}
+			if err != nil {
 				fmt.Fprintf(errOut, "Warning: failed to pull %s: %v (continuing anyway)\n", img, err)
 			}
 		}
@@ -707,6 +722,18 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		fmt.Fprintln(out, "   the checkout itself as CONTRIBUTING.md's \"Running from source\" says.")
 	}
 	return nil
+}
+
+// projectNamed refuses a folder whose name leaves docker compose none for
+// the project (access.ProjectName).
+func projectNamed(dir string) error {
+	if access.ProjectName(dir) != "" {
+		return nil
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return fmt.Errorf("CYFR cannot be set up in %s: Docker names it after the folder, whose name needs a letter a to z or a digit. Nothing was changed. Use a folder with another name", dir)
 }
 
 // setupLink is the link that sets up the first person of the CYFR at
@@ -933,7 +960,7 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 		if !access.HasComposeFile(".") {
 			return fmt.Errorf("There is no CYFR in this directory, so nothing was started: it holds no compose file (%s). Run 'cyfr up' in CYFR's directory, the one that holds its docker-compose.yml, or 'cyfr init' here to make one", strings.Join(access.ComposeMainFiles, ", "))
 		}
-		if continued, err := withDockerGroup("up", continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
+		if continued, err := withDockerGroup(ctx, "up", continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
 			return err
 		}
 		return runUp(ctx, cmd.OutOrStdout())

@@ -1452,3 +1452,51 @@ func TestHomeFailedEndsItsAttemptAloneAndIsNoLock(t *testing.T) {
 		t.Fatalf("the next Connect answered %+v", got)
 	}
 }
+
+// Everything begun for a folder's CYFR ends as the app lets go of it: a
+// reading the app made and did not select at once, the CYFR selected as
+// the app leaves it (main's leave) or ends, and none before.
+func TestTheAppEndsWhatAFolderBeganAsItLetsGo(t *testing.T) {
+	for name, letGo := range map[string]func(a *app){
+		"left":  func(a *app) { a.lock("", true) },
+		"ended": func(a *app) { a.End() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var running atomic.Bool
+			running.Store(true)
+			a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+			var works []*shell.Work
+			var mu sync.Mutex
+			read := a.Local
+			a.Local = func(project string) (Local, error) {
+				l, err := read(project)
+				l.Work = shell.NewWork(t.Context())
+				mu.Lock()
+				works = append(works, l.Work)
+				mu.Unlock()
+				return l, err
+			}
+			a.post(t, "/bootstrap/state", map[string]string{})
+			a.openedFolder(t)
+			mu.Lock()
+			unselected, selected := works[:len(works)-1], works[len(works)-1]
+			mu.Unlock()
+			if len(unselected) == 0 {
+				t.Fatal("the app read the folder only to select it")
+			}
+			for _, w := range unselected {
+				if w.Context().Err() == nil {
+					t.Fatal("a reading the app did not select was not ended")
+				}
+			}
+			a.lock("Locked.", false)
+			if selected.Context().Err() != nil {
+				t.Fatal("the CYFR selected was ended while the app held it")
+			}
+			letGo(a)
+			if selected.Context().Err() == nil {
+				t.Fatal("the CYFR the app let go of was not ended")
+			}
+		})
+	}
+}
