@@ -113,8 +113,9 @@
 //   take                     make the kept storage the CYFR's that is
 //                            wanted when the take ends; answers a taken
 //                            event, saying whether it is
-//   root {home}              load that CYFR's root into the content window,
-//                            the kept storage being its own
+//   root {home, setup}       load that CYFR's root into the content window,
+//                            the kept storage being its own, or with setup
+//                            its setup page, the token in the fragment alone
 //   send {type, fields}      a message to cyfr
 //   chooser {notices}        open the content window at the chooser
 //   back {notices}           show the chooser in the content window as it
@@ -316,7 +317,7 @@ export function step(s, e) {
         return ending(s, {end: "it named a CYFR this app does not open"})
       }
       if (rerouted(s, m)) return ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
-      return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, device: m.road === "device", returning: null},
+      return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, setup: m.setup ?? "", returning: null},
         do: [{say: `home: ${m.home}`}, ...(s.name === "taking" ? [] : [{take: true}])]}
     }
     case "taken": {
@@ -329,9 +330,13 @@ export function step(s, e) {
     case "opened":
       if (s.name === "locking") return same(s) // from before the lock
       if (s.name !== "proposed" || e.home !== s.home) return ending(s, {end: "it opened a CYFR this app was not keeping to"})
-      // A CYFR that opens at the device's pages (home's road) loads none
-      // of its own: the chooser goes to those pages, on either road.
-      return s.accountRoad && !s.device ? same({...s, name: "open", notices: []}, [{root: {home: s.home}}]) : same({...s, name: "open"})
+      // On the passkey road main loads the CYFR's own page: its setup page
+      // while no one is set up there (home's setup token, held until here
+      // and no longer), else its root. On the six-word road the chooser
+      // goes to the device's pages.
+      return s.accountRoad
+        ? same({...s, name: "open", setup: "", notices: []}, [{root: {home: s.home, ...(s.setup ? {setup: s.setup} : {})}}])
+        : same({...s, name: "open", setup: ""})
     case "locked": {
       const m = e.message
       if (s.name === "starting") return same(s)

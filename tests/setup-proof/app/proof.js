@@ -13,10 +13,22 @@ import {existsSync, readFileSync, writeFileSync} from "node:fs"
 import path from "node:path"
 
 import * as lib from "../../desktop-proof/lib.js"
+import {accountAt, accountWindow, armWindow} from "../../desktop-proof/account.js"
 
 const {FIXTURE, inputs, row, judged, waitFor, js, submit, contentAt, atBootstrap, atDevice, atHome} = lib
 const FOLDER = inputs.folder
 electron.dialog.showOpenDialog = async () => ({canceled: false, filePaths: [FOLDER]})
+
+// The passkey launch records the network service's events from its start
+// (each session's record is the service's whole), for app.sh to read what
+// was sent: no request line or header, a referrer among them, carries the
+// setup token. The record keeps each request's address as the engine holds
+// it, fragment and all, so it stays in the fixture and is not uploaded.
+const PARTITIONS = ["persist:cyfr-content", "persist:cyfr-account"]
+const sessions = () => [electron.session.defaultSession, ...PARTITIONS.map((p) => electron.session.fromPartition(p))]
+if (lib.PHASE === "passkey") {
+  electron.app.whenReady().then(() => Promise.all(sessions().map((ses, i) => ses.netLog.startLogging(path.join(FIXTURE, `netlog-${i}.json`)))))
+}
 
 // A word with app.sh, which acts on the host: the proof asks, app.sh does
 // it and answers.
@@ -184,4 +196,52 @@ lib.run("setup", {
       return [offered && await prism(), {offered}]
     })
   },
-})
+  // The passkey road, as on macOS and Windows, on a second folder: its
+  // CYFR opens at its own setup page, whose Create your account makes the
+  // account with a passkey in the app's account window (a virtual
+  // authenticator stands in for the computer's), and that account is its
+  // first person.
+  async passkey() {
+    const w = await contentAt(atBootstrap, "the chooser")
+    await waitFor(async () => (await shown(w)).folder || null, "the folder shown")
+    await press(w, "here")
+    await answered(w)
+    await pick(w)
+    await press(w, "start")
+    const token = await waitFor(() => existsSync(path.join(FOLDER, ".env")) &&
+      /^CYFR_SETUP_TOKEN=([0-9a-f]{64})$/m.exec(readFileSync(path.join(FOLDER, ".env"), "utf8"))?.[1], "the folder's setup token")
+    writeFileSync(path.join(FIXTURE, "setup-token"), token)
+    // The row is app.sh's, decided once the app has quit: this launch's
+    // part of it (what the person sees) is written for it here.
+    const part = await (async () => {
+      // A whole setup first, files, settings, download and start.
+      const setup = await waitFor(() => {
+        const c = lib.content()
+        return c && !c.webContents.isLoading() && c.webContents.getURL().startsWith(lib.HOME + "/setup") ? c : null
+      }, "the CYFR's setup page", 300_000)
+      const opened = setup.webContents.getURL() === `${lib.HOME}/setup#${token}`
+      await waitFor(() => js(setup.webContents, `!!document.querySelector('[data-test="setup-create"]') && !!document.querySelector(".phx-connected")`),
+        "Create your account")
+      await js(setup.webContents, `document.querySelector('[data-test="setup-create"]').click(); 1`)
+      const a = await waitFor(() => accountWindow(), "the app's account window")
+      await armWindow(a)
+      await lib.section(a.webContents, ["choose"])
+      const at = new URL(a.webContents.getURL()).pathname
+      await js(a.webContents, `document.querySelector("#name").value = "desk-first";
+        document.querySelector("#name").dispatchEvent(new Event("input", {bubbles: true}));
+        const ok = document.querySelector("#acceptance:not([hidden]) #accept"); if (ok) ok.click();
+        document.querySelector("#create").click(); 1`)
+      await lib.section(a.webContents, ["show-code"])
+      await js(a.webContents, `document.querySelector("#saved").click(); 1`)
+      await lib.section(a.webContents, ["done-return"])
+      await armWindow(a)
+      await js(a.webContents, `document.querySelector("#continue").click(); 1`)
+      const live = await prism()
+      const said = lib.said.filter((l) => l.includes(token))
+      return {ok: opened && at === "/account/new" && !!live && !accountWindow() && said.length === 0, detail: {opened, at, said: said.length}}
+    })().catch((e) => ({ok: false, threw: String(e?.message ?? e)}))
+    writeFileSync(path.join(FIXTURE, "first-passkey.json"), JSON.stringify(part))
+    await Promise.all(sessions().map((ses) => ses.netLog.stopLogging()))
+    return "quit"
+  },
+}, {accountRoad: lib.PHASE === "passkey"})

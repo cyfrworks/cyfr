@@ -97,10 +97,13 @@ export function keptStorage(ses, file, say) {
     answer(taken)
   }
 
-  /** Load the root of the CYFR at `home` into window `w`, only as the owner's. */
-  function loadRoot(w, home) {
+  /**
+   * Load the root of the CYFR at `home` into window `w`, only as the
+   * owner's, or with `setup` its setup page, the token in the fragment.
+   */
+  function loadRoot(w, home, setup = "") {
     if (!holds(home)) return false
-    Promise.resolve(w.loadURL(`${home}/`)).catch(() => {})
+    Promise.resolve(w.loadURL(setup ? `${home}/setup#${setup}` : `${home}/`)).catch(() => {})
     return true
   }
 

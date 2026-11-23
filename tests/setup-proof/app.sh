@@ -9,7 +9,7 @@
 # real sg), sets CYFR up in a folder seeded as a release's download would
 # leave it, with the loaded app image, and opens it. app/proof.js drives
 # the app from inside its main process; this script does what the host
-# does between its steps. Two launches:
+# does between its steps. Three launches:
 #
 #   first   missing_to_ready  with no Docker socket the setup screen says
 #                             Docker does not answer and shows the commands;
@@ -42,6 +42,16 @@
 #                             was
 #           first_person      Open CYFR opens the device's pages, and the
 #                             first person's setup ends in Prism, live
+#   passkey first_passkey     on the passkey road, as on macOS and Windows,
+#                             in a second folder (the first CYFR taken
+#                             down): the CYFR set up opens at its setup
+#                             page, whose Create your account makes the
+#                             account with a passkey in the account window,
+#                             and that account is its first person, in
+#                             Prism, live. The setup token spends itself
+#                             when the first person is made; until then it
+#                             is in no request, printed line or file of the
+#                             app's (read once the app has quit)
 #
 # No lock is a row: on a desktop nothing locks while no CYFR is open, so a
 # lock during a setup is held by the app's Go and JS tests, and the chooser
@@ -68,7 +78,12 @@ W=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-desktop-proof-setup-XXX
 OUT=${SETUP_PROOF_OUT:-$W/out}
 RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-app-$$"; D="$W/$RUN"; CLIENT="$RUN-client"
 mkdir -p "$W/fixture/out" "$D" "$OUT"
-compose() { (cd "$D" && timeout 300 docker compose --project-name "$RUN" --project-directory "$D" -f docker-compose.yml -f docker-compose.override.yml "$@"); }
+# compose_in NAME DIR ARGS: the Compose project NAME in DIR, bounded.
+compose_in() { (cd "$2" && timeout 300 docker compose --project-name "$1" --project-directory "$2" -f docker-compose.yml -f docker-compose.override.yml "${@:3}"); }
+compose() { compose_in "$RUN" "$D" "$@"; }
+# The run's Compose projects, NAME:DIR each, the passkey launch's second
+# among them once it is made.
+PROJECTS="$RUN:$D"
 CLIENT_ID=
 cleanup() {
   code=$?; trap - EXIT
@@ -81,9 +96,11 @@ cleanup() {
     timeout 60 docker rm -f "$CLIENT_ID" >/dev/null 2>&1 || left="$left the client container $CLIENT_ID;"
   fi
   for s in ${SCRUBS:-}; do kill "$s" 2>/dev/null || true; done
-  if [ -f "$D/.env" ]; then
-    compose down -v --remove-orphans >/dev/null 2>&1 || left="$left the Compose project $RUN, whose files are in $D;"
-  fi
+  local p
+  for p in $PROJECTS; do
+    [ ! -f "${p#*:}/.env" ] || compose_in "${p%%:*}" "${p#*:}" down -v --remove-orphans >/dev/null 2>&1 ||
+      left="$left the Compose project ${p%%:*}, whose files are in ${p#*:};"
+  done
   cp "$W"/fixture/out/* "$OUT/" 2>/dev/null || true
   # The stack's own files are root's: they are removed as root.
   if [ -z "$left" ]; then
@@ -103,10 +120,12 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 failed() { echo "FAIL $1"; exit 1; }
 
-# The folder as a release's download leaves it, but for the loaded image
-# and no Locus: the candidate is a dev build, which downloads nothing.
-PORT=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-ADDR="http://localhost:$PORT"
+# seed DIR PORT: the folder as a release's download leaves it, but for the
+# loaded image and no Locus (the candidate is a dev build, which downloads
+# nothing), for a CYFR at PORT serving its own accounts.
+free_port() { python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
+seed() {
+local D=$1 PORT=$2 ADDR="http://localhost:$2"
 cp "$ROOT/docker-compose.yml" "$ROOT/Caddyfile" "$D/"
 cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$D/keeper.seccomp.json"
 cat >"$D/docker-compose.override.yml" <<Y
@@ -126,9 +145,13 @@ sed -e "s|^CYFR_PORT=.*|CYFR_PORT=$PORT|" -e 's|^CYFR_LOCUS_BUILDS_URL=.*|CYFR_L
   -e '/^CYFR_DIRECTORY_SERVE=/d;/^CYFR_DIRECTORY_URL=/d;/^CYFR_REGISTRY_URL=/d;/^CYFR_PRIVATE_EGRESS_TARGETS=/d' "$ROOT/.env.example" >"$D/.env.example"
 printf '%s\n' "" CYFR_AUTO_MIGRATE=on CYFR_DIRECTORY_SERVE=writer "CYFR_DIRECTORY_URL=$ADDR" "CYFR_REGISTRY_URL=localhost:$PORT" \
   CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1 >>"$D/.env.example"
-
+}
+# The proof's inputs for a launch: the CYFR at ADDR in folder DIR.
+inputs() { printf '{"home": "%s", "directory": "%s", "fronts": {}, "folder": "%s", "docker_gid": %s}\n' "$1" "$1" "$2" "$GID" >"$W/fixture/inputs.json"; }
+PORT=$(free_port); ADDR="http://localhost:$PORT"
+seed "$D" "$PORT"
 GID=$(stat -c %g /var/run/docker.sock)
-printf '{"home": "%s", "directory": "%s", "fronts": {}, "folder": "%s", "docker_gid": %s}\n' "$ADDR" "$ADDR" "$D" "$GID" >"$W/fixture/inputs.json"
+inputs "$ADDR" "$D"
 node "$ROOT/tests/desktop-proof/pack.mjs" "$ROOT/tests/setup-proof/app/proof.js" "$W/fixture/proof.asar"
 
 # The socket is mounted beside its place, which is empty until the proof
@@ -137,13 +160,15 @@ node "$ROOT/tests/desktop-proof/pack.mjs" "$ROOT/tests/setup-proof/app/proof.js"
 cat >"$W/fixture/wrap-docker" <<'WRAP'
 #!/bin/sh
 # Each call is logged; a pull is held until /tmp/pull-go, and says so if it
-# is released rather than ended; a start is held until /tmp/up-go. Each
-# call is also timed in /tmp/docker-times, which the run keeps (its
-# arguments are paths and names alone).
+# is released rather than ended, or once /tmp/pull-done is there ends at
+# once; a start is held until /tmp/up-go. Each call is also timed in
+# /tmp/docker-times, which the run keeps (its arguments are paths and names
+# alone).
 echo "$*" >>/tmp/docker-calls
 echo "$(date -u +%H:%M:%S.%3N) $*" >>/tmp/docker-times
 case " $* " in
-  *" pull "*) while [ ! -e /tmp/pull-go ]; do sleep 0.2; done; echo "released $*" >>/tmp/docker-calls; exit 1;;
+  *" pull "*) [ ! -e /tmp/pull-done ] || exit 0 # the passkey launch's: every image is here, from the first folder's start
+    while [ ! -e /tmp/pull-go ]; do sleep 0.2; done; echo "released $*" >>/tmp/docker-calls; exit 1;;
   *" up "*) while [ ! -e /tmp/up-go ]; do sleep 0.2; done;;
 esac
 exec /usr/bin/docker "$@"
@@ -254,3 +279,48 @@ case "$last" in *" pull "*|"pull "*) ;; *) failed "quit: setup's last docker cal
   failed "quit: once the held pull was released, $after docker calls followed and $running containers of the stack were there"
 echo "PASS quit: the person quit during the download: 15 s after the app's end nothing of setup's work runs and nothing of the stack, .env is written, and the held pull, released, is taken by nothing"
 launch again "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"
+# The passkey road, as on macOS and Windows, on a second folder seeded as
+# the first: the first CYFR taken down, its own port and Compose project.
+compose down -v --remove-orphans >/dev/null 2>&1 || failed "first_passkey: the first folder's CYFR could not be taken down"
+PORT2=$(free_port); ADDR2="http://localhost:$PORT2"; RUN2="$RUN-2"; D2="$W/$RUN2"
+mkdir -p "$D2"; PROJECTS="$PROJECTS $RUN2:$D2"
+seed "$D2" "$PORT2"
+inputs "$ADDR2" "$D2"
+docker exec "$CLIENT_ID" touch /tmp/pull-done
+launch passkey "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"
+# first_passkey, once the app has quit: what the person saw (the launch's
+# part), then the setup token nowhere it must not be. It spends itself when
+# the first person is made; until then it is in the folder's .env and the
+# setup page's own address alone (the engine's own record of a request
+# keeps that address too): in no request line or header the app sent, a
+# referrer among them (the record names the setup page's own request),
+# no line the app or the proof printed, and no file of the app's account
+# here, its profile included, nor of /tmp.
+TOKEN=$(cat "$W/fixture/setup-token" 2>/dev/null) || failed "first_passkey: the passkey launch read no setup token"
+part=$(cat "$W/fixture/first-passkey.json" 2>/dev/null || echo '{"ok": false, "threw": "no part written"}')
+# What the engine sent: each request line and its headers, as the network
+# service's record has them; the setup page's own request among them.
+read -r requests recorded < <(python3 -I - "$TOKEN" "$W"/fixture/netlog-*.json <<'PY' || echo "unread unread"
+import json, sys
+token, carrying, setup = sys.argv[1], 0, 0
+for f in sys.argv[2:]:
+    d = json.load(open(f))
+    types = {v: k for k, v in d["constants"]["logEventTypes"].items()}
+    for ev in d["events"]:
+        t = types.get(ev["type"], "")
+        if "SEND" in t and "HEADERS" in t:
+            sent = json.dumps(ev.get("params", {}))
+            carrying += token in sent
+            setup += '"GET /setup HTTP/1.1' in sent
+print(carrying, setup)
+PY
+)
+printed=$(cat "$OUT/app-passkey.log" "$W/fixture/out/setup.log" 2>/dev/null | grep -cF "$TOKEN" || true)
+files=$(timeout 120 docker exec "$CLIENT_ID" sh -c "grep -rlaF -- '$TOKEN' /home/proof /tmp 2>/dev/null; true")
+profile=$(timeout 60 docker exec "$CLIENT_ID" sh -c 'find /home/proof/.config -mindepth 1 2>/dev/null | wc -l')
+if python3 -I -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("ok") is True else 1)' "$part" &&
+  [ "$requests" = 0 ] && [ "$recorded" -gt 0 ] && [ "$printed" = 0 ] && [ -z "$files" ] && [ "$profile" -gt 0 ]; then
+  echo "PASS first_passkey: on the passkey road the CYFR set up opens at its setup page, whose Create your account makes the account with a passkey in the account window, and that account is its first person, in Prism, live; its setup token is in no request, printed line or file of the app's"
+else
+  failed "first_passkey: $part; requests sent carrying the token $requests (of them, $recorded the setup page's own), printed lines $printed, files of the app's account or /tmp: ${files:-none} (its profile holds $profile entries)"
+fi

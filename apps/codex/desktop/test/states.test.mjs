@@ -228,14 +228,18 @@ test("main alone opens a CYFR committed at its root, on the passkey road, and th
   assert.deepEqual(run([...open, company, locked(), home(), taken, {type: "opened", home: HOME}], true).s.notices, [])
 })
 
-test("a CYFR that opens at the device's pages loads none of its own on the passkey road, and the next home without that road does", () => {
-  const device = {type: "home", message: {...home().message, road: "device"}}
-  const opened = run([ready, device, taken, {type: "opened", home: HOME}], true)
+test("a CYFR no one is set up at opens at its setup page on the passkey road, the token held no longer, and the next home without one at its root", () => {
+  const first = {type: "home", message: {...home().message, setup: "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}
+  const opened = run([ready, first, taken, {type: "opened", home: HOME}], true)
   assert.equal(opened.s.name, "open")
-  assert.ok(!opened.effects.some((e) => e.root), "no root loaded")
-  assert.equal(step(opened.s, given).allow, true, "the device's pages give the CYFR")
-  const again = run([ready, device, taken, {type: "opened", home: HOME}, locked(), forgot, home(), taken, {type: "opened", home: HOME}], true)
-  assert.deepEqual(again.effects.filter((e) => e.root), [{root: {home: HOME}}], "a home on the passkey road again")
+  assert.deepEqual(opened.effects.filter((e) => e.root), [{root: {home: HOME, setup: "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}], "its setup page")
+  assert.equal(opened.s.setup, "", "main holds the token until it is used, and no longer")
+  assert.ok(!opened.effects.some((e) => e.say?.includes("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")), "nothing said carries it")
+  const again = run([ready, first, taken, {type: "opened", home: HOME}, locked(), forgot, home(), taken, {type: "opened", home: HOME}], true)
+  assert.deepEqual(again.effects.filter((e) => e.root).at(-1), {root: {home: HOME}}, "a home with no token: its root")
+  const sixWords = run([ready, first, taken, {type: "opened", home: HOME}], false)
+  assert.ok(!sixWords.effects.some((e) => e.root), "on the six-word road main loads none: the device's pages make the first person")
+  assert.equal(step(sixWords.s, given).allow, true, "the device's pages give the CYFR")
 })
 
 const atWays = "http://127.0.0.1:7340/bootstrap/#road=passkey"

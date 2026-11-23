@@ -1452,7 +1452,9 @@ test("Docker's page, linked from the chooser, opens in the person's browser and 
   assert.deepEqual(world.opened, [], "any other page, or a redirect, opens nothing")
 })
 
-test("on macOS and Windows a CYFR just set up opens at the device's pages: main loads none of its own", async () => {
+const TOKEN = "cd".repeat(32)
+
+test("on macOS and Windows a CYFR no one is set up at opens at its setup page, the token in the fragment alone", async () => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform"), argv = process.argv
   for (const system of ["darwin", "win32"]) {
     Object.defineProperty(process, "platform", {...platform, value: system})
@@ -1462,22 +1464,21 @@ test("on macOS and Windows a CYFR just set up opens at the device's pages: main 
     try {
       reset()
       // The road is the system's, as the app is started on it.
-      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: () => {}})
+      const said = []
+      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: (line) => said.push(line)})
       await settled()
       child.say({type: "ready", url: READY})
       await settled()
       assert.equal(content().webContents.url, READY + "&road=passkey", system)
-      const attempt = child.proposes(HOME, {road: "device"})
+      const attempt = child.proposes(HOME, {setup: TOKEN})
       await settled()
       await settled()
       assert.ok(child.heard.some((m) => m.type === "home-ready" && m.attempt === attempt), system)
       child.say({type: "opened", home: HOME})
       await settled()
       await settled()
-      assert.deepEqual(world.loads, [], `${system}: main loaded no page of the CYFR's`)
-      assert.ok(!navigate(content(), "http://127.0.0.1:7340/").prevented, `${system}: the chooser goes on to the device's pages`)
-      await give(content())
-      assert.equal(content().webContents.url, HOME + "/", `${system}: where the device's pages give the CYFR`)
+      assert.deepEqual(world.loads.map((l) => l.url), [`${HOME}/setup#${TOKEN}`], `${system}: the CYFR's setup page`)
+      assert.ok(!said.some((line) => line.includes(TOKEN)), `${system}: no line the app printed carries the token`)
     } finally {
       Object.defineProperty(process, "platform", platform)
       process.argv = argv

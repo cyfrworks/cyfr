@@ -2016,7 +2016,7 @@ func TestALockEndsTheWaitForASetupsStep(t *testing.T) {
 
 // The CYFR set up opens on Open, or on the chooser that pressed Set up and
 // start as it ends, as a folder's CYFR opens: main told home, then opened,
-// at the device's pages while no one is set up there. Nothing opens while
+// with its setup token while no one is set up there. Nothing opens while
 // no CYFR is set up in the folder, or while its setup runs.
 func TestTheCYFRSetUpOpensOnceDone(t *testing.T) {
 	a := newApp(t, t.TempDir(), offline())
@@ -2039,8 +2039,8 @@ func TestTheCYFRSetUpOpensOnceDone(t *testing.T) {
 		t.Fatalf("the setup ended %+v", s)
 	}
 	done := a.connect(t, "/bootstrap/open", map[string]string{"run": "1"})
-	if m := a.next(t); m.Type != TypeHome || m.Home != localAddress || m.Road != RoadDevice {
-		t.Fatalf("main heard %+v, not the CYFR set up at the device's pages", m)
+	if m := a.next(t); m.Type != TypeHome || m.Home != localAddress || m.Setup != "a-setup-token" {
+		t.Fatalf("main heard %+v, not the CYFR set up with its setup token", m)
 	}
 	a.ready(localAddress)
 	if got := answered(t, done); got.Next != "/" || got.Home != localAddress {
@@ -2049,13 +2049,13 @@ func TestTheCYFRSetUpOpensOnceDone(t *testing.T) {
 	a.opened(t, localAddress)
 }
 
-// The road follows the CYFR's state, not the press: after a relaunch,
-// Connect to the folder just set up opens at the device's pages while no
-// one is set up there, and on the road main offers once someone is.
-func TestAFolderOpensAtTheDevicesPagesWhileNoOneIsSetUpThere(t *testing.T) {
+// The setup token follows the CYFR's state, not the press: after a
+// relaunch, Connect to the folder just set up carries it while no one is
+// set up there, and none once someone is.
+func TestAFolderCarriesItsSetupTokenWhileNoOneIsSetUpThere(t *testing.T) {
 	for _, c := range []struct {
-		name, token, road string
-	}{{"no one set up", "a-setup-token", RoadDevice}, {"its first person set up", "", ""}} {
+		name, token string
+	}{{"no one set up", "a-setup-token"}, {"its first person set up", ""}} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			setUp := new(atomic.Bool)
@@ -2075,8 +2075,8 @@ func TestAFolderOpensAtTheDevicesPagesWhileNoOneIsSetUpThere(t *testing.T) {
 			m := next.next(t)
 			next.ready(localAddress)
 			answered(t, done)
-			if m.Type != TypeHome || m.Road != c.road {
-				t.Fatalf("Connect after the relaunch proposed %+v, want road %q", m, c.road)
+			if m.Type != TypeHome || m.Setup != c.token {
+				t.Fatalf("Connect after the relaunch proposed %+v, want setup %q", m, c.token)
 			}
 		})
 	}

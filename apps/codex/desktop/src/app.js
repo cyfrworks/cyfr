@@ -168,7 +168,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     }
     if (effect.root) {
       soon((w) => {
-        if (!storage.loadRoot(w, effect.root.home)) on({type: "gone", why: "the sign-in it keeps is another CYFR's"})
+        if (!storage.loadRoot(w, effect.root.home, effect.root.setup)) on({type: "gone", why: "the sign-in it keeps is another CYFR's"})
       })
     }
     if (effect.chooser) openContent(chooserAddress(effect.chooser))
