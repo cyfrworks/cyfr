@@ -1486,8 +1486,13 @@ defmodule Locus.Backends.OwnersTest do
         end
       end)
 
-      :sys.suspend(fake)
+      # The keeper is held once the session's place is made, as its pool is
+      # read, so the spawn is the call that waits.
+      set_pool(ctx, {:held, self(), pool(4)})
       opening = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      assert_receive {:pool_read, reader}, 5_000
+      :sys.suspend(fake)
+      send(reader, :answer)
       wait_until(fn -> map_size(:sys.get_state(client).requests) == 1 end, 5_000)
       _result = Task.await(opening, 20_000)
       ledger = :sys.get_state(owners).ledger
@@ -1706,7 +1711,8 @@ defmodule Locus.Backends.OwnersTest do
     test "a close that cancels a preparation leaves no place", ctx do
       owners = start_owners(ctx, session_opts: placing(ctx))
       assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
-      Agent.update(ctx.stub, &Map.put(&1, :before_ensure, self()))
+      test = self()
+      Agent.update(ctx.stub, &Map.put(&1, :before_ensure, test))
       lifetime = lifetime()
 
       opening =

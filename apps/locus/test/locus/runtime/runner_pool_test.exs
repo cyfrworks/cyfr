@@ -168,7 +168,8 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     serve!(pool)
     wait_until(fn -> counts(pool).fresh == 3 end)
-    assert length(spawns(keeper)) == 3
+    # A runner counts fresh while it spawns: it places itself first.
+    wait_until(fn -> length(spawns(keeper)) == 3 end)
 
     for spawn <- spawns(keeper) do
       assert %{
@@ -233,7 +234,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
        %{keeper: keeper} do
     pool = start_pool!(keeper, pool_size: 1)
     serve!(pool)
-    wait_until(fn -> counts(pool).fresh == 1 end)
+    wait_until(fn -> length(spawns(keeper)) == 1 end)
     [fresh] = spawns(keeper)
     fresh_place = whose(keeper)[fresh.spec.runner]
 
@@ -263,19 +264,14 @@ defmodule Locus.Runtime.RunnerPoolTest do
            }
   end
 
-  test "a runner refused, or whose process dies before it spawns, leaves no place",
+  test "a runner whose process dies before it spawns, or that is refused, leaves no place",
        %{keeper: keeper} do
-    :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
     pool = start_pool!(keeper, pool_size: 0)
     serve!(pool)
-    {:ok, refused, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    assert_receive {RunnerPool, ^refused, {:gone, {:refused, :memory_unavailable}}}
-    after_refusal = ScriptedKeeper.places(keeper)
-    :ok = ScriptedKeeper.refuse(keeper, nil)
 
     # Held at the keeper as it places itself, the runner's process dies.
     :ok = :sys.suspend(keeper)
-    {:ok, dying, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
+    {:ok, dying, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
 
     wait_until(fn ->
       {:message_queue_len, waiting} = Process.info(Process.whereis(keeper), :message_queue_len)
@@ -287,8 +283,12 @@ defmodule Locus.Runtime.RunnerPoolTest do
     :ok = :sys.resume(keeper)
     wait_until(fn -> ScriptedKeeper.places(keeper) == %{} end)
 
-    assert %{after_refusal: after_refusal, spawned: Enum.count(spawns(keeper))} == %{
-             after_refusal: %{},
+    :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
+    {:ok, refused, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
+    assert_receive {RunnerPool, ^refused, {:gone, {:refused, :memory_unavailable}}}
+
+    assert %{places: ScriptedKeeper.places(keeper), spawned: Enum.count(spawns(keeper))} == %{
+             places: %{},
              spawned: 0
            }
   end

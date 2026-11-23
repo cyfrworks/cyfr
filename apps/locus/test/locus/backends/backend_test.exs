@@ -99,13 +99,6 @@ defmodule Locus.Backends.BackendTest do
     end
   end
 
-  # What a call answered, or that it exited in its caller.
-  defp answer(call) do
-    call.()
-  catch
-    :exit, _reason -> :exited
-  end
-
   # What a session tells its owners from here to its settlement, in order.
   defp until_vacated(session, events \\ []) do
     receive do
