@@ -166,6 +166,29 @@ func TestScreenOnTakesAPreReleaseAppInstalledAsItsPackageSpellsIt(t *testing.T) 
 	}
 }
 
+// On arm64 `screen on` runs as on amd64, fetching the app's package for
+// arm64, which a release carries beside amd64's.
+func TestScreenOnRunsOnArm64(t *testing.T) {
+	s := screenProject(t)
+	s.arch, s.installed = "arm64", nil
+	savedVersion, savedFetch := version.Version, fetchAppPackage
+	t.Cleanup(func() { version.Version, fetchAppPackage = savedVersion, savedFetch })
+	version.Version = "0.6.0"
+	var asked []string
+	fetchAppPackage = func(_ context.Context, v, arch string) ([]byte, error) {
+		asked = append(asked, v+" "+arch)
+		return []byte("the app"), nil
+	}
+	askInput = strings.NewReader("yes\n")
+	var out bytes.Buffer
+	if err := screenOn(context.Background(), true, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !slices.Equal(asked, []string{"0.6.0 arm64"}) || len(s.applied) != 1 {
+		t.Fatalf("fetched %q, applied %q:\n%s", asked, s.applied, out.String())
+	}
+}
+
 // The app's package is fetched only from a release: one that fails its
 // check is refused before anything is asked, written or installed, and
 // leaves the project as it was; a development build with no app installed
@@ -212,7 +235,7 @@ func TestScreenOnRefuses(t *testing.T) {
 	}{
 		"no terminal":     {func(*standIn) { askTerminal = func() bool { return false } }, "`cyfr screen` runs at a terminal"},
 		"another system":  {func(s *standIn) { s.supported = false }, "`cyfr screen` runs at a terminal"},
-		"arm64":           {func(s *standIn) { s.arch = "arm64" }, "`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS on amd64"},
+		"riscv64":         {func(s *standIn) { s.arch = "riscv64" }, "`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS on amd64 or arm64"},
 		"a desktop":       {func(s *standIn) { s.displayManager = true }, "This machine's display manager has the screen."},
 		"no project here": {func(*standIn) { _ = os.Remove("docker-compose.yml") }, "There is no CYFR in this directory."},
 		"no .env":         {func(*standIn) { _ = os.Remove(".env") }, "There is no CYFR in this directory."},

@@ -55,7 +55,7 @@ var screenPath = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
 var screenCmd = &cobra.Command{
 	Use:   "screen",
 	Short: "Show CYFR on this machine's own screen, or stop showing it",
-	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without input, whatever is playing on it, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR. The CYFR app is what shows it: `cyfr screen on` installs the app's package of this cyfr's release, downloaded and checked against the release's signed checksums before anything is asked, where the machine has no other.",
+	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64 or arm64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without input, whatever is playing on it, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR. The CYFR app is what shows it: `cyfr screen on` installs the app's package of this cyfr's release, downloaded and checked against the release's signed checksums before anything is asked, where the machine has no other.",
 }
 
 var screenOnCmd = &cobra.Command{
@@ -104,9 +104,11 @@ func init() {
 	rootCmd.AddCommand(screenCmd)
 }
 
-// screenPossible is a machine `cyfr screen on` runs on.
+// screenPossible is a machine `cyfr screen on` runs on: one the CYFR app
+// is released for.
 func screenPossible() bool {
-	return askTerminal() && machine.supported() && machine.arch() == "amd64"
+	arch := machine.arch()
+	return askTerminal() && machine.supported() && (arch == "amd64" || arch == "arm64")
 }
 
 // askScreen is init's question, for a new project on a machine that can
@@ -136,7 +138,7 @@ func askScreen(ctx context.Context, out io.Writer) (bool, error) {
 func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	switch {
 	case !screenPossible():
-		return errors.New("`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS on amd64, as your own account")
+		return errors.New("`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS on amd64 or arm64, as your own account")
 	case machine.displayManager():
 		return errors.New("This machine's display manager has the screen. Stop it, then run `cyfr screen on` again")
 	case !access.HasComposeFile(".") || !fileExists(".env"):
