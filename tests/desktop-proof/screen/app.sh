@@ -36,7 +36,7 @@ if [ "${1:-}" = --inside ]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get -o Acquire::Retries=3 update -qq
   apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
-    /fixture/app.deb labwc wvkbd swayidle wlrctl grim dbus procps python3 python3-gi gir1.2-glib-2.0 fonts-dejavu-core >/dev/null
+    /fixture/app.deb labwc wvkbd swayidle wlrctl wlr-randr grim dbus procps python3 python3-gi gir1.2-glib-2.0 fonts-dejavu-core >/dev/null
   useradd -m proof
   install -d -o proof -m 700 /home/proof/cyfr
   printf 'services: {}\n' >/home/proof/cyfr/docker-compose.yml
@@ -95,6 +95,8 @@ import sys
 data = open(sys.argv[1], "rb").read()
 head, rest = data.split(b"\n", 3)[:3], data.split(b"\n", 3)[3]
 w, h = map(int, head[1].split())
+if (w, h) != (1600, 900):
+    sys.exit(1)
 px = lambda x, y: tuple(rest[(y * w + x) * 3:(y * w + x) * 3 + 3])
 page = (11, 20, 24)
 corners = px(4, 4) == page and px(w - 5, 4) == page
@@ -102,6 +104,11 @@ colours = {px(x, y) for y in range(0, h // 2, 7) for x in range(0, w, 7)}
 sys.exit(0 if corners and len(colours) > 2 else 1)
 PY
   }
+
+  # An output larger than the app's own window (1280x860), so only a
+  # window made to cover it does.
+  wlr-randr --output HEADLESS-1 --custom-mode 1600x900 >>"$OUT/randr.log" 2>&1 ||
+    { verdict FAIL "the output's size was not set: $(tr '\n' ' ' <"$OUT/randr.log")"; finish; }
 
   # The stand-in for the screen's launcher: the app again whenever it ends.
   (while [ ! -e "$OUT/stop" ]; do
