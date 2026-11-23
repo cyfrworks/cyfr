@@ -90,16 +90,22 @@ defmodule Aqua.ProgramTest do
     {:ok, ctx: ctx, fake: fake, thread: thread, row: brain_row!(ctx), user: user}
   end
 
+  # The loop's own waits, which read nothing (`Aqua.Loop`).
+  @quiet [:harness_wait, :awaiting, :collect, :model_wait]
+
   # A loop told that its thread moved reads its rows (`Aqua.Loop`): held or
   # killed in that read, it would take the test's one shared connection
-  # with it, so it is held only once it waits with nothing to read.
+  # with it, so it is held only once it sits in one of its own waits, which
+  # read nothing, with nothing to read. A process waiting on the store's
+  # answer waits too, so its status alone says nothing.
   defp quiet!(pid) do
     Prima.Test.Wait.wait_until(
       fn ->
-        Process.info(pid, [:status, :message_queue_len]) in [
-          [status: :waiting, message_queue_len: 0],
-          nil
-        ]
+        case Process.info(pid, [:current_function, :message_queue_len]) do
+          nil -> true
+          [current_function: {Aqua.Loop, wait, _}, message_queue_len: 0] -> wait in @quiet
+          _reading -> false
+        end
       end,
       10_000,
       "the loop to wait with nothing to read"

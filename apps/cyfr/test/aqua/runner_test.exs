@@ -229,16 +229,22 @@ defmodule Aqua.RunnerTest do
     :ok
   end
 
+  # The loop's own waits, which read nothing (`Aqua.Loop`).
+  @quiet [:harness_wait, :awaiting, :collect, :model_wait]
+
   # A loop told that its thread moved reads its steps (`Aqua.Loop`): one
   # killed in that read takes the test's one shared connection with it. It
-  # is killed only once it waits with nothing to read.
+  # is killed only once it sits in one of its own waits, which read
+  # nothing, with nothing to read: a process waiting on the store's answer
+  # waits too, so its status alone says nothing.
   defp idle!(pid) do
     wait_until(
       fn ->
-        Process.info(pid, [:status, :message_queue_len]) in [
-          [status: :waiting, message_queue_len: 0],
-          nil
-        ]
+        case Process.info(pid, [:current_function, :message_queue_len]) do
+          nil -> true
+          [current_function: {Aqua.Loop, wait, _}, message_queue_len: 0] -> wait in @quiet
+          _reading -> false
+        end
       end,
       10_000
     )
