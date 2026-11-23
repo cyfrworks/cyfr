@@ -507,8 +507,7 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
 screen_hides_first() {
   local ports old pressed gone took
   step "Prism's Lock with CYFR silent: the screen is hidden first"
-  screen_unlock
-  check "Chrome holds the next unlock's session cookie" screen_cookie silent
+  # Prism is open on the session the step before unlocked (relocked).
   ports=$(guest_root_out "ss -tnpH state established '( dport = :4000 )' | grep '\"cyfr\",' | awk '{print \$3}' | sed 's/.*://'" | tr '\n' ' ')
   check "the shell holds its connection to CYFR (local ports $ports)" test -n "${ports// /}"
   old=$(guest_ssh 'ps -u proof -o pid=,args= | grep -- "-[-]app=http://127.0.0.1:7340/" | grep -v -- "--type=" | awk "{print \$1}"')
@@ -531,10 +530,12 @@ screen_hides_first() {
     done; done; done" || fail "the silence was not undone ($GUEST_DIR/root.txt)"
   shell_page_until lock-silent 'CYFR is locked' 30
   check "the silent CYFR's lock page says it locked" grep -q 'Locked\.' "$GUEST_DIR/shell-lock-silent.html"
-  took=$(cookie_out_within silent 150)
+  took=$(cookie_out_within relocked 150)
   check "that session ended at the home within 60 s, a poll's 5 s aside (in ${took:-more than 150} s)" \
     sh -c '[ -n "$1" ] && [ "$1" -le 65 ]' sh "$took"
-  screen_ready
+  screen_unlock
+  check "Chrome holds the next unlock's session cookie" screen_cookie unsilenced
+  check "the home serves it" cookie_is in unsilenced
 }
 
 # A sensitive change confirmed on this screen: an API key made in Prism,
