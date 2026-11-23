@@ -41,7 +41,7 @@ defmodule Locus.DirectLauncherTest do
       stdin: opts[:stdin] || ""
     }
     |> DirectLauncher.run(
-      timeout_ms: Keyword.get(opts, :timeout_ms, 30_000),
+      deadline: System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout_ms, 30_000),
       max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
       on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
       on_output: Keyword.get(opts, :on_output, fn _line -> :ok end)

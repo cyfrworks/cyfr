@@ -50,11 +50,12 @@ defmodule Locus.Keeper do
   deadline passed (the run's own, the reader's deadline), a stdout bound
   exceeded, a cancel (`Locus.Executor.cancel/1`) or a function's refusal
   closes it and releases the spawn with no grace, and a caller that dies
-  closes it by dying, its spawn released at once. A spawn cyfr-locus
-  refuses after it made it never ran, and `run/2` answers its refusal at
-  that report too, asking for none; a report not come within 60 s is
-  logged and still waited for, so the build's slot is held until
-  cyfr-locus has freed its place.
+  closes it by dying, its spawn released at once; a relay that attaches
+  once its reader has stopped has its connection closed as it attaches,
+  unread. A spawn cyfr-locus refuses after it made it never ran, and
+  `run/2` answers its refusal at that report too, asking for none; a
+  report not come within 60 s is logged and still waited for, so the
+  build's slot is held until cyfr-locus has freed its place.
 
   ## A long-lived spawn
 
@@ -381,7 +382,7 @@ defmodule Locus.Keeper do
             server: server,
             ref: ref,
             monitor: monitor,
-            deadline: now() + Keyword.fetch!(opts, :timeout_ms),
+            deadline: Keyword.fetch!(opts, :deadline),
             attach_by: now() + @start_timeout_ms + @attach_timeout_ms,
             released_by: nil,
             on_output: Keyword.get(opts, :on_output, fn _line -> :ok end),
@@ -675,6 +676,13 @@ defmodule Locus.Keeper do
   end
 
   defp on_keeper(s, {:spawned, _uid, _pid}), do: s
+
+  # The reader has stopped: a relay that attaches now is cut as it comes,
+  # and the run ends at the spawn's release as any stopped run does.
+  defp on_keeper(%{failure: failure} = s, {:attached, conn}) when failure != nil do
+    :gen_tcp.close(conn)
+    %{s | conn: conn, conn_open: false}
+  end
 
   defp on_keeper(s, {:attached, conn}) do
     # One frame a read: what the socket holds past it stays in the kernel,

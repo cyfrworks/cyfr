@@ -236,7 +236,10 @@ defmodule Locus.Backends.Relay do
 
   defp fit([], _budget, total), do: total
 
-  defp fit([{_seq, _data, cost} | rest], budget, total) do
+  # Integers by construction: what the opaque queue holds is unknown to
+  # Dialyzer, and a sum of unknowns may be a float.
+  defp fit([{_seq, _data, cost} | rest], budget, total)
+       when is_integer(cost) and is_integer(budget) do
     if total > 0 and total + cost > budget,
       do: total,
       else: fit(rest, budget, total + cost)

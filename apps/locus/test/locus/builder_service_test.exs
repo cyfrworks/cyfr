@@ -16,7 +16,9 @@ defmodule Locus.BuilderServiceTest do
   refusal the build ended with, its diagnostics bounded. A deadline reached
   mid-build ends the build's process group; a client that leaves ends its
   build within a bound and its slot goes back; the keeper's memory answers
-  are the wire's `memory` and `unavailable`.
+  are the wire's `memory` and `unavailable`. A build that waits for room
+  in the builds count ends by the deadline its request set, and one whose
+  client leaves while it waits ends at once.
   """
 
   # Serves on the application's build slots and, in places, as its keeper.
@@ -681,10 +683,78 @@ defmodule Locus.BuilderServiceTest do
       wait_until(fn -> builds_held() == 0 end, 20_000, "the build's grant returned")
       wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
     end
+
+    test "a build that waited for room ends at the deadline its request set, its wait spent from its budget",
+         %{port: port} do
+      holder = hold_builds(Locus.Output.bounds().builds.answering)
+      deadline = System.system_time(:millisecond) + 6_000
+      request = Wire.request("sleep 60", %{deadline: deadline})
+      task = Task.async(fn -> Wire.build(port, request) end)
+      wait_until(fn -> builds_waiting() == 1 end, 5_000, "the build waits for room")
+
+      # sleep-ok: the count is held until shortly before the build's deadline, which is the case.
+      Process.sleep(max(deadline - 1_000 - System.system_time(:millisecond), 0))
+      send(holder, :give_back)
+
+      assert {200, lines} = Task.await(task, 30_000)
+      answered = System.system_time(:millisecond)
+      assert {{:refusal, {:timeout, budget_ms}}, _log, nil} = ended(lines)
+      assert budget_ms in 5_000..6_000
+      assert answered < deadline + 2_000, "answered #{answered - deadline} ms past its deadline"
+      wait_until(fn -> builds_held() == 0 end, 10_000, "the build's grant returned")
+    end
+
+    test "a build waiting for room whose client leaves ends at once, and its slot goes back", %{
+      port: port
+    } do
+      _holder = hold_builds(Locus.Output.bounds().builds.answering)
+      body = Wire.body(Wire.request("true"))
+
+      conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
+      assert {200, conn} = Wire.status(conn)
+      wait_until(fn -> builds_waiting() == 1 end, 5_000, "the build waits for room")
+
+      left = System.monotonic_time(:millisecond)
+      Wire.close(conn)
+
+      wait_until(
+        fn ->
+          builds_waiting() == 0 and match?(%{active: 0, holders: []}, Slots.status(@slots))
+        end,
+        20_000,
+        "the build's process gone and its slot back"
+      )
+
+      gone = System.monotonic_time(:millisecond) - left
+      assert gone < 3_000, "the build's process was gone #{gone} ms after its client left"
+    end
   end
 
-  # What the builds role's count holds now.
+  # What the builds role's count holds now, and how many ask it for room.
   defp builds_held, do: Locus.Output.held(Locus.Output.server(:builds)).answering
+  defp builds_waiting, do: Locus.Output.held(Locus.Output.server(:builds)).waiting
+
+  # A process holding `bytes` of the builds role's count until it is sent
+  # `:give_back`, or the test ends.
+  defp hold_builds(bytes) do
+    test = self()
+
+    holder =
+      spawn(fn ->
+        Process.monitor(test)
+        by = System.monotonic_time(:millisecond) + 10_000
+        {:ok, grant} = Locus.Output.reserve(Locus.Output.server(:builds), bytes, by)
+        send(test, {:holding, self()})
+
+        receive do
+          :give_back -> Locus.Output.return(grant)
+          {:DOWN, _ref, :process, ^test, _reason} -> :ok
+        end
+      end)
+
+    assert_receive {:holding, ^holder}, 10_000
+    holder
+  end
 
   # Every binary the node's processes but this test's hold once each has
   # collected its garbage, each counted once.

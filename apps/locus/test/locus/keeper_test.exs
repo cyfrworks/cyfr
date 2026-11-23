@@ -9,11 +9,12 @@ defmodule Locus.KeeperTest do
   reported released; the deadline, a stdout bound, a cancel and the
   caller's death release the spawn with no grace; a relay connection
   that arrives after the client has read the exit and release reports
-  still delivers its output; a spawn refused before the keeper made it
-  and a lost channel answer at once, one refused after the keeper made it
-  once the keeper reports it released; a spawn ended at its bound is the
-  wire's `memory` refusal and a bound that cannot be enforced its
-  `unavailable`, naming the option the deployment lacks. A long-lived spawn (`Locus.Launcher`) answers
+  still delivers its output, and one that arrives after a cancel is closed
+  as it attaches, the run ending at the release; a spawn refused before
+  the keeper made it and a lost channel answer at once, one refused after
+  the keeper made it once the keeper reports it released; a spawn ended
+  at its bound is the wire's `memory` refusal and a bound that cannot be
+  enforced its `unavailable`, naming the option the deployment lacks. A long-lived spawn (`Locus.Launcher`) answers
   its handle, and its owner hears the relay attached, its stdout and
   stderr apart and its exit, then its release, the last; stdin goes as
   frames of the codec's bound; `signal`, `release` with a grace and
@@ -70,6 +71,9 @@ defmodule Locus.KeeperTest do
   # An instant a test's assign waits until for an answer that comes at once.
   defp soon, do: System.monotonic_time(:millisecond) + 5_000
 
+  # A run's deadline, `ms` from now.
+  defp within(ms), do: System.monotonic_time(:millisecond) + ms
+
   defp run(name, script, opts \\ []) do
     lines = Agent.start_link(fn -> [] end) |> elem(1)
 
@@ -83,7 +87,7 @@ defmodule Locus.KeeperTest do
         },
         [
           place: place!(name, "build"),
-          timeout_ms: Keyword.get(opts, :timeout_ms, 10_000),
+          deadline: within(Keyword.get(opts, :timeout_ms, 10_000)),
           max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
           on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
           on_output: fn line -> Agent.update(lines, &[line | &1]) end
@@ -234,6 +238,24 @@ defmodule Locus.KeeperTest do
       wait_until(fn -> FakeKeeper.exits(fake) != [] end, 5_000, "the released command to end")
     end
 
+    test "a run cancelled before its relay attaches closes the relay's connection as it attaches, and ends at the release",
+         %{name: name, fake: fake} do
+      test = self()
+      :ok = FakeKeeper.mode(fake, {:dial_after_release, test})
+      runner = spawn_link(fn -> send(test, {:answer, run(name, "exec sleep 30")}) end)
+      wait_until(fn -> requests(fake, "spawn") != [] end, 5_000, "the spawn to be asked for")
+
+      :ok = Locus.Executor.cancel(runner)
+
+      assert_receive {:fake_relay, ended, open_ms}, 10_000
+
+      assert {ended, open_ms < 1_000} == {:closed, true},
+             "the late relay's connection was #{ended} after #{open_ms} ms"
+
+      assert_receive {:answer, {{:error, :cancelled}, _lines}}, 10_000
+      assert FakeKeeper.sent(fake) == [:dial, :exited, :released]
+    end
+
     test "a run past its deadline releases the spawn with no grace", %{name: name, fake: fake} do
       started = System.monotonic_time(:millisecond)
       # The fake kills the command's PID; exec avoids a shell-owned child.
@@ -289,7 +311,7 @@ defmodule Locus.KeeperTest do
         Task.async(fn ->
           Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
             place: place!(name, "build"),
-            timeout_ms: 60_000,
+            deadline: within(60_000),
             max_stdout_bytes: byte_size(bytes),
             on_stdout: {[], take}
           )
@@ -325,7 +347,7 @@ defmodule Locus.KeeperTest do
       result =
         Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
           place: place!(name, "build"),
-          timeout_ms: 1_000,
+          deadline: within(1_000),
           max_stdout_bytes: 16 * 1_048_576,
           on_stdout: {[], take}
         )
@@ -346,7 +368,7 @@ defmodule Locus.KeeperTest do
         spawn(fn ->
           Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
             place: place!(name, "build"),
-            timeout_ms: 60_000,
+            deadline: within(60_000),
             max_stdout_bytes: 16 * 1_048_576,
             on_stdout:
               {[],
@@ -682,7 +704,7 @@ defmodule Locus.KeeperTest do
           :no_such_keeper_client,
           %{argv: ["/bin/true"], env: p.env, stdin: p.assign},
           place: "pl-gone",
-          timeout_ms: 1_000,
+          deadline: within(1_000),
           max_stdout_bytes: 1_000
         )
 
@@ -715,7 +737,7 @@ defmodule Locus.KeeperTest do
         Task.async(fn ->
           Keeper.run(c.name, %{argv: ["/bin/true"], env: p.env, stdin: p.assign},
             place: "pl-crash",
-            timeout_ms: 10_000,
+            deadline: within(10_000),
             max_stdout_bytes: 1_000
           )
         end)

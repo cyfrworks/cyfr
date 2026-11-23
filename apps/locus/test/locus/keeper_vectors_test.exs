@@ -111,7 +111,7 @@ defmodule Locus.KeeperVectorsTest do
     result =
       Keeper.run(name, Map.put(command, :stdin, ""),
         place: "pl-1",
-        timeout_ms: 10_000,
+        deadline: System.monotonic_time(:millisecond) + 10_000,
         max_stdout_bytes: 1_000_000,
         on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
         on_output: fn line -> Agent.update(lines, &[line | &1]) end
