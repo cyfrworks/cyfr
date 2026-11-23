@@ -724,18 +724,14 @@ guest_root_out() {
 # a unit of its own recording each request head the guest's loopback
 # carries to CYFR and to the screen's shell in OBSERVED, root's alone,
 # from each boot on. The record holds the screen's session cookies and
-# never leaves the guest; the evidence holds their digests. OBSERVING is
-# set from the first start on: the evidence is then kept only once the
-# scrub has searched it for what was observed (run.sh, evidence_close).
+# never leaves the guest; the evidence holds their digests.
 OBSERVED=/root/proof-observe.jsonl
-OBSERVING=""
 box_helpers() {
   guest_copy_in "$HERE/box.py" box.py || fail "box.py was not copied into the guest"
   guest_root 'install -m 0700 /home/proof/box.py /root/box.py' || fail "box.py was not given to root ($GUEST_DIR/root.txt)"
   observe_start
 }
 observe_start() {
-  OBSERVING=1
   guest_root "systemctl reset-failed proof-observe 2>/dev/null; systemd-run --unit=proof-observe --collect python3 -I /root/box.py observe $OBSERVED" ||
     fail "the request heads are not observed ($GUEST_DIR/root.txt)"
 }

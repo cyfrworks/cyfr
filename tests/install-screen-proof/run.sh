@@ -478,6 +478,8 @@ handle, holder = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
 sys.exit(0 if handle["errors"][0]["code"] == "HANDLE_NOT_FOUND" and not holder.get("identifier") else 1)' \
     "$GUEST_DIR/handle-shown.json" "$GUEST_DIR/holder-shown.json"
   check "screenshot screen-recovery.png" guest_screenshot screen-recovery.png
+  # I saved it opens Prism, and the screen holds a session from here on.
+  SCRUB_DUE=1
   printf '\n' | guest_keys || fail "QMP did not press I saved it"
   sleep 15
   check "screenshot screen-prism.png" guest_screenshot screen-prism.png
@@ -948,22 +950,23 @@ screen_keeps_no_session() {
 
 # evidence_close is the run's one closing of its evidence, which every
 # exit runs before the teardown (PROOF_CLOSE, cleanup.sh), a pass or any
-# failure. Once the box has observed (OBSERVING), the evidence as it
+# failure. Once the screen may hold a session (SCRUB_DUE, from the press
+# that opens Prism; before it no cookie or key exists), the evidence as it
 # stands, packed, is searched in the guest for every session cookie the
 # screen sent and every API key CYFR sent it (box.py scrub), whose record
 # never leaves the guest; the count and any file holding one are in
 # GUEST_DIR/scrub.txt. Evidence the scrub did not show free of them, one
-# that found something or could not run, is removed whole, and the run
-# fails. Then the part's verdict, once it reached its end (PART_ENDED),
+# that found something, looked for nothing or could not run, is removed
+# whole, and the run fails. Then the part's verdict, once it reached its end (PART_ENDED),
 # and the results.
-PART_ENDED=""
+PART_ENDED="" SCRUB_DUE=""
 evidence_scrub() {
   tar -C "$OUT" -cf "$WORK/evidence.tar" . &&
     guest_copy_in "$WORK/evidence.tar" evidence.tar &&
     guest_root_out "python3 -I /root/box.py scrub $OBSERVED /home/proof/evidence.tar" >"$GUEST_DIR/scrub.txt"
 }
 evidence_close() {
-  if [ -n "$OBSERVING" ]; then
+  if [ -n "$SCRUB_DUE" ]; then
     if ! evidence_scrub; then
       echo "::error::install-screen proof: the scrub did not show the evidence free of the cookies and keys the box observed ($(head -c 2000 "$GUEST_DIR/scrub.txt" 2>/dev/null | tr '\n' ' ')), so $OUT is removed" >&2
       proof_evidence_drop "$OUT"
