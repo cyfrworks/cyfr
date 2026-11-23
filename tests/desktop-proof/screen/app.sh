@@ -13,10 +13,11 @@
 #
 #   the app runs the screen shell in that folder and shows its page,
 #   with the keyboard up as the window appears; the page is painted, and
-#   the window has no frame and covers the output; a watch lost hides the
+#   the window covers the output; a watch lost hides the
 #   page and shows the shell's page again (the app sits under the shell's
 #   watches); cyfr killed ends the app, and the launcher's next start is
-#   locked again; the app killed ends its cyfr, and the next start is too,
+#   locked again; the app killed ends its cyfr within 5 s, and the next
+#   start is locked too,
 #   with one screen shell running; a --screen-project that names no
 #   project explicitly is refused.
 #
@@ -84,8 +85,10 @@ if [ "${1:-}" = --session ]; then
   keyboard() { pgrep -u proof -x wvkbd-mobintl >/dev/null; }
   shells() { pgrep -u proof -c -f -- '^/opt/cyfr/resources/cyfr screen shell --app$'; }
   # The output's picture: the page's background (#0b1418) at both top
-  # corners, so no frame and the whole width, and more than one colour
-  # above the keyboard, so the page is painted.
+  # corners, so the window covers the output's whole width, and more than
+  # one colour above the keyboard, so the page is painted. Whether the
+  # window has a frame the screen's labwc does not show (no decorations):
+  # the app's tests hold it.
   painted() {
     grim -t ppm "$OUT/screen.ppm" 2>/dev/null && python3 -I - "$OUT/screen.ppm" <<'PY'
 import sys
@@ -115,9 +118,9 @@ PY
   fi
   if keyboard; then verdict PASS "the keyboard is up as the window appears"; else verdict FAIL "no keyboard as the window appeared"; fi
   if within 30 painted; then
-    verdict PASS "the page is painted, and the window has no frame and covers the output"
+    verdict PASS "the page is painted, and the window covers the output"
   else
-    verdict FAIL "the page is not painted, or has a frame, or does not cover the output"
+    verdict FAIL "the page is not painted, or the window does not cover the output"
   fi
 
   # A watch lost: the shell hides what is on the screen, and the app shows
@@ -137,11 +140,12 @@ PY
     verdict FAIL "cyfr killed did not end the app, or it did not start again: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
   fi
 
+  shell=$(pgrep -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell --app$')
   pkill -KILL -u proof -o -f -- '^/opt/cyfr/CYFR --screen-project='
-  if within 60 started 3 && within 30 window && within 30 sh -c '[ "$(pgrep -u proof -c -f -- "^/opt/cyfr/resources/cyfr screen shell --app\$")" = 1 ]'; then
-    verdict PASS "the app killed ends its cyfr, and the next start is locked, with one screen shell"
+  if within 5 sh -c "! kill -0 $shell 2>/dev/null" && within 60 started 3 && within 30 window && within 30 sh -c '[ "$(pgrep -u proof -c -f -- "^/opt/cyfr/resources/cyfr screen shell --app\$")" = 1 ]'; then
+    verdict PASS "the app killed ends its cyfr within 5 s, and the next start is locked, with one screen shell"
   else
-    verdict FAIL "after the app was killed: $(shells) screen shells, $(starts) starts"
+    verdict FAIL "after the app was killed: its cyfr $(kill -0 "$shell" 2>/dev/null && echo 'still runs' || echo ended), $(shells) screen shells, $(starts) starts"
   fi
 
   touch "$OUT/stop"
