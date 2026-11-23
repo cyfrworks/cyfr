@@ -52,9 +52,16 @@ defmodule Opus.Programs.Box do
   Control messages are POSTed to the service's control route one at a time,
   each encoded at the protocol version and signed with the control key under
   a sequence number that only grows. Every answer is read strictly at the
-  same version. Lease maintenance — `renew`, `release` and `home`, with
-  `hello` and `reconcile` ahead of them — is sent before any `sync` or
-  `status` still waiting:
+  same version. A `home` and a `homes`, whose work on the service may take
+  minutes, are the exception: each is sent once nothing else is out, and
+  then waits beside the one call, one at a time for each home, so a slow
+  removal holds no renewal. A message sent after one of them may reach the
+  service first, which then refuses it `stale_control`, applying nothing:
+  it is sent again under a new sequence. Its answer settles its own caller
+  alone, and tells the box of the service's boot only while the box still
+  speaks to the boot it was sent to. Lease maintenance — `renew`,
+  `release` and `home`, with `hello` and `reconcile` ahead of them — is
+  sent before any `sync` or `status` still waiting:
 
     * `hello` at start, and whenever the service's boot id or this boot's
       generation changes; then `reconcile`, which releases every owner the
@@ -76,7 +83,9 @@ defmodule Opus.Programs.Box do
     * `release` on every stop path, retried on every tick until the
       service acknowledges it or a later sync supersedes it;
     * `home`, resetting or retiring one kept home (`home/4`); a retire that
-      does not land is retried on every tick until it does;
+      does not land is retried on every tick until it does. A reset of a
+      home whose earlier change is not yet answered is refused `:conflict`
+      at once, and a retire joins it;
     * `status` for `mcp_servers.get`, naming one owner, refused as
       `{:error, :too_many_owners}` or `{:error, :status_too_large}` past the
       wire's bounds, never cut.
@@ -291,7 +300,10 @@ defmodule Opus.Programs.Box do
       closed: %{},
       # Lease maintenance, sent first; then syncs and status reads.
       urgent: :queue.new(),
-      queue: :queue.new()
+      queue: :queue.new(),
+      # The `home` and `homes` calls out beside the one in flight
+      # ("Messages"): task ref => {job, spec}.
+      beside: %{}
     ]
   end
 
@@ -560,14 +572,22 @@ defmodule Opus.Programs.Box do
     else
       hkey = {athanor, home_id}
 
-      homes =
-        Map.update(state.homes, hkey, %{op: op, waiters: [from]}, fn pending ->
-          # A retire covers a reset still waiting; a reset never undoes a retire.
-          op = if pending.op == :retire, do: :retire, else: op
-          %{pending | op: op, waiters: [from | pending.waiters]}
-        end)
+      case {op, state.homes[hkey]} do
+        # The home is being changed: the person asks again once that has
+        # finished.
+        {:reset, %{}} ->
+          {:reply, {:error, :conflict}, state}
 
-      {:noreply, %{state | homes: homes} |> enqueue({:home, hkey}) |> dispatch()}
+        # A retire covers a change still waiting; a reset never undoes it.
+        {:retire, pending} ->
+          pending = pending || %{waiters: []}
+          homes = Map.put(state.homes, hkey, %{op: :retire, waiters: [from | pending.waiters]})
+          {:noreply, %{state | homes: homes} |> enqueue({:home, hkey}) |> dispatch()}
+
+        {:reset, nil} ->
+          homes = Map.put(state.homes, hkey, %{op: :reset, waiters: [from]})
+          {:noreply, %{state | homes: homes} |> enqueue({:home, hkey}) |> dispatch()}
+      end
     end
   end
 
@@ -651,6 +671,19 @@ defmodule Opus.Programs.Box do
     if reason == :normal or not Map.has_key?(state.opens, ref),
       do: {:noreply, state},
       else: {:noreply, session_opened(state, ref, {:error, :backends_unavailable})}
+  end
+
+  def handle_info({ref, result}, state) when is_map_key(state.beside, ref) do
+    Process.demonitor(ref, [:flush])
+    {{job, spec}, beside} = Map.pop(state.beside, ref)
+    {:noreply, %{state | beside: beside} |> settle_beside(job, spec, result) |> dispatch()}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state)
+      when is_map_key(state.beside, ref) do
+    {{job, spec}, beside} = Map.pop(state.beside, ref)
+    result = {:error, {:crashed, reason}}
+    {:noreply, %{state | beside: beside} |> settle_beside(job, spec, result) |> dispatch()}
   end
 
   def handle_info({ref, result}, %State{inflight: {ref, job, spec}} = state) do
@@ -1033,6 +1066,11 @@ defmodule Opus.Programs.Box do
           job != {:hello} and state.boot == nil ->
             state |> enqueue_front(job) |> enqueue_front({:hello}) |> dispatch()
 
+          # One home's change, or one list, out at a time; a later ask
+          # for it is answered with it.
+          beside?(job) and out_beside?(state, job) ->
+            dispatch(state)
+
           true ->
             {:ok, speaking} = generation
 
@@ -1044,13 +1082,22 @@ defmodule Opus.Programs.Box do
                 # The keys reach the task through its closure only.
                 keys = %{control: state.control_key, seal: state.seal_key}
                 task = Task.async(fn -> perform(spec, keys) end)
-                %{state | inflight: {task.ref, job, spec}}
+
+                if beside?(job),
+                  do: dispatch(%{state | beside: Map.put(state.beside, task.ref, {job, spec})}),
+                  else: %{state | inflight: {task.ref, job, spec}}
             end
         end
     end
   end
 
   defp dispatch(state), do: state
+
+  # The calls whose work on the service may take minutes, sent beside the
+  # one call the box waits on ("Messages").
+  defp beside?(job), do: elem(job, 0) in [:home, :homes]
+
+  defp out_beside?(state, job), do: Enum.any?(state.beside, &match?({_ref, {^job, _spec}}, &1))
 
   defp refuse(state, {:sync, key}, reason) do
     case state.owners[key] do
@@ -1577,6 +1624,21 @@ defmodule Opus.Programs.Box do
     if resent?(job, spec, boot, result),
       do: enqueue_front(state, job),
       else: settle_job(state, job, spec, result)
+  end
+
+  # A home or homes answer tells the box a boot only while the box still
+  # speaks to the boot it was sent to: one held past a restart the box has
+  # since greeted settles its caller alone. One overtaken by a later
+  # message was applied nowhere, and is sent again under a new sequence.
+  defp settle_beside(state, job, spec, result) do
+    boot = answer_boot(result)
+    state = if state.boot == spec.boot, do: observe_boot(state, boot), else: state
+
+    cond do
+      resent?(job, spec, boot, result) -> enqueue_front(state, job)
+      refusal(result) == :stale_control -> enqueue_front(state, job)
+      true -> settle_job(state, job, spec, result)
+    end
   end
 
   # A home, homes or status call the service refused for a boot it no
