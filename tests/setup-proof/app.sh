@@ -50,8 +50,13 @@
 #                             and that account is its first person, in
 #                             Prism, live. The setup token spends itself
 #                             when the first person is made; until then it
-#                             is in no request, printed line or file of the
-#                             app's (read once the app has quit)
+#                             is in no address the app sent, no header, no
+#                             line it or the proof printed, nothing the run
+#                             keeps and no file of the app's after it quit.
+#                             The setup page hands it to its own CYFR over
+#                             that CYFR's socket, which is what it is for:
+#                             a message to another origin is the policy's
+#                             to refuse (its tests), not this row's to read
 #
 # No lock is a row: on a desktop nothing locks while no CYFR is open, so a
 # lock during a setup is held by the app's Go and JS tests, and the chooser
@@ -228,12 +233,12 @@ stack_left() { (cd "$D" && timeout "$1" docker compose --project-name "$RUN" --p
 # unread, each pass bounds its readings by the time left, and a pass that
 # ends past the deadline changes nothing.
 launch() {
-  node "$ROOT/tests/desktop-proof/scrub-lines.mjs" <"$W/fixture/app-output" >"$OUT/app-$1.log" &
+  CYFR_PROOF_WITHHELD="$W/fixture/setup-token" node "$ROOT/tests/desktop-proof/scrub-lines.mjs" <"$W/fixture/app-output" >"$OUT/app-$1.log" &
   local scrub=$! status=0
   SCRUBS="${SCRUBS:-} $scrub"
   timeout 600 docker exec -u "$(id -u):$PG" -w /home/proof -e HOME=/home/proof "$CLIENT_ID" bash -c "
     exec 9>$W/fixture/app-output
-    dbus-run-session -- xvfb-run -a -s '-screen 0 1400x1000x24' bash -c 'exec env -i HOME=/home/proof USER=proof LOGNAME=proof PATH=/opt/wrap:/usr/bin:/bin LANG=C.UTF-8 DISPLAY=\$DISPLAY XAUTHORITY=\$XAUTHORITY DBUS_SESSION_BUS_ADDRESS=\$DBUS_SESSION_BUS_ADDRESS CYFR_DESKTOP_PROOF_FIXTURE=$W/fixture CYFR_DESKTOP_PROOF_PHASE=$1 /opt/cyfr/CYFR' >&9 2>&1" || status=$?
+    dbus-run-session -- xvfb-run -a -s '-screen 0 1400x1000x24' bash -c 'exec env -i HOME=/home/proof USER=proof LOGNAME=proof PATH=/opt/wrap:/usr/bin:/bin LANG=C.UTF-8 DISPLAY=\$DISPLAY XAUTHORITY=\$XAUTHORITY DBUS_SESSION_BUS_ADDRESS=\$DBUS_SESSION_BUS_ADDRESS CYFR_DESKTOP_PROOF_FIXTURE=$W/fixture CYFR_DESKTOP_PROOF_PHASE=$1 CYFR_PROOF_WITHHELD=$W/fixture/setup-token /opt/cyfr/CYFR' >&9 2>&1" || status=$?
   local deadline=$(( $(date +%s%N) + 15000000000 ))
   grep -E "^(PASS|FAIL)" "$W/fixture/out/setup.txt" 2>/dev/null | sed -n "$(( ${2:-0} + 1 )),\$p" || true
   [ "$status" = 0 ] || failed "$1: the app ended with status $status$( [ "$status" != 124 ] || echo ", at its 600 s limit")"
@@ -290,12 +295,14 @@ docker exec "$CLIENT_ID" touch /tmp/pull-done
 launch passkey "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"
 # first_passkey, once the app has quit: what the person saw (the launch's
 # part), then the setup token nowhere it must not be. It spends itself when
-# the first person is made; until then it is in the folder's .env and the
-# setup page's own address alone (the engine's own record of a request
-# keeps that address too): in no request line or header the app sent, a
-# referrer among them (the record names the setup page's own request),
-# no line the app or the proof printed, and no file of the app's account
-# here, its profile included, nor of /tmp.
+# the first person is made; until then it is in the folder's .env, the
+# setup page's own address (the engine's own record of a request keeps
+# that address too) and the message that page sends its own CYFR over its
+# socket: in no request line or header the app sent, a referrer among them
+# (the record names the setup page's own request), no line the app or the
+# proof printed (the part's), nothing the run keeps for upload (the one
+# scrub withholds it), and no file of the app's account here, its profile
+# included, nor of /tmp but this run's own scratch, wherever TMPDIR puts it.
 TOKEN=$(cat "$W/fixture/setup-token" 2>/dev/null) || failed "first_passkey: the passkey launch read no setup token"
 part=$(cat "$W/fixture/first-passkey.json" 2>/dev/null || echo '{"ok": false, "threw": "no part written"}')
 # What the engine sent: each request line and its headers, as the network
@@ -315,12 +322,13 @@ for f in sys.argv[2:]:
 print(carrying, setup)
 PY
 )
-printed=$(cat "$OUT/app-passkey.log" "$W/fixture/out/setup.log" 2>/dev/null | grep -cF "$TOKEN" || true)
-files=$(timeout 120 docker exec "$CLIENT_ID" sh -c "grep -rlaF -- '$TOKEN' /home/proof /tmp 2>/dev/null; true")
+kept=$(grep -rlaF -- "$TOKEN" "$OUT" "$W/fixture/out" 2>/dev/null | wc -l)
+files=$(timeout 120 docker exec "$CLIENT_ID" sh -c "find /home/proof /tmp -path '$W' -prune -o -type f -print0 2>/dev/null |
+  xargs -0 -r grep -laF -- '$TOKEN' 2>/dev/null; true")
 profile=$(timeout 60 docker exec "$CLIENT_ID" sh -c 'find /home/proof/.config -mindepth 1 2>/dev/null | wc -l')
 if python3 -I -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("ok") is True else 1)' "$part" &&
-  [ "$requests" = 0 ] && [ "$recorded" -gt 0 ] && [ "$printed" = 0 ] && [ -z "$files" ] && [ "$profile" -gt 0 ]; then
-  echo "PASS first_passkey: on the passkey road the CYFR set up opens at its setup page, whose Create your account makes the account with a passkey in the account window, and that account is its first person, in Prism, live; its setup token is in no request, printed line or file of the app's"
+  [ "$requests" = 0 ] && [ "$recorded" -gt 0 ] && [ "$kept" = 0 ] && [ -z "$files" ] && [ "$profile" -gt 0 ]; then
+  echo "PASS first_passkey: on the passkey road the CYFR set up opens at its setup page, whose Create your account makes the account with a passkey in the account window, and that account is its first person, in Prism, live; its setup token is in no address or header sent, no printed line, nothing the run keeps and no file of the app's"
 else
-  failed "first_passkey: $part; requests sent carrying the token $requests (of them, $recorded the setup page's own), printed lines $printed, files of the app's account or /tmp: ${files:-none} (its profile holds $profile entries)"
+  failed "first_passkey: $part; requests sent carrying the token $requests (of them, $recorded the setup page's own), files the run keeps carrying it $kept, files of the app's account or /tmp: ${files:-none} (its profile holds $profile entries)"
 fi
