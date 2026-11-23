@@ -71,7 +71,8 @@ defmodule Aqua.ReaderTest do
         "[Report from the workspace thread \"Moon\" (thr_w): error, Aqua could not run it]\nhi"}},
       {row(kind: "turn_aborted", author: @system),
        {:said,
-        "[The server restarted while the assistant was working; tools may have partially executed. hi]"}}
+        "[The assistant's work here was interrupted before it finished; tools may have partially " <>
+          "executed. hi]"}}
     ]
 
     for {row, read} <- table, do: assert(Reader.read(row, reading()) == read)

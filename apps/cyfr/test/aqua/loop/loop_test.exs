@@ -1436,8 +1436,8 @@ defmodule Aqua.LoopTest do
     skipped = "a newer message arrived"
 
     restarted =
-      "[The server restarted while the assistant was working; tools may have partially " <>
-        "executed. the server restarted while the assistant was working]"
+      "[The assistant's work here was interrupted before it finished; tools may have " <>
+        "partially executed. the server restarted while the assistant was working]"
 
     assert [_first, second] = chat_messages()
 
@@ -3025,7 +3025,7 @@ defmodule Aqua.LoopTest do
 
       proposal = Aqua.PageCalls.proposal(running, Aqua.PageCalls.row(call))
       {:ok, step} = Tape.propose_call(ctx, running, proposal)
-      if notify, do: send(Aqua.Loop.holder(turn.id), {:page_call, turn.id})
+      if notify, do: send(Aqua.Loop.holder(turn.id), {:moved, turn.id})
       step
     end
 

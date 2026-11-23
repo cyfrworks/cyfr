@@ -1,41 +1,45 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Aqua.Program do
+defmodule Aqua.Harness.Program do
   @moduledoc """
-  The attendant of a turn on a program: the one process that takes what
-  the turn's session (`Opus.Brain`) says and writes what Aqua owes it,
-  through tool runs and launch waits, keyed by its turn.
+  The harness of a turn on a program (`Aqua.Harness`): the turn's
+  attendant, the one process that takes what the turn's session
+  (`Opus.Brain`) says and writes what Aqua owes it. The loop holds its
+  pid as the handle and knows nothing else of it.
 
   ## One lifetime
 
   It lives while a loop holds the turn. When the loop returns, at an end
-  or at a pause, it closes the session and waits for the answer
-  (`close/2`, `Opus.Brain.close/1`): ok is the place back, and what is
-  unanswered Opus still owes. A start carries no word of a place: it opens
-  at once and is admitted or refused on what is true then. A loop that
-  dies has the session closed by this
-  process, and Stop closes it once the turn's fence moved and before the
-  work stops. The native session stays in the program's folder, and the
-  next turn's process, or a paused turn's next loop, resumes it.
+  or at a pause, the loop stops it (`stop/1`): it closes the session and
+  waits for the answer (`Opus.Brain.close/1`), ok being the place back,
+  and what is unanswered Opus still owes. A start carries no word of a
+  place: it opens at once and is admitted or refused on what is true
+  then. A loop that dies has the session closed by this process, which
+  watches it, and Stop stops it once the turn's fence moved and before
+  the work stops. A later turn's open of the thread's session ends this
+  one's first (`Opus.Brain`), so no two drivers run one native session.
+  The native session stays in the program's folder, and the next turn's
+  process, or a paused turn's next loop, resumes it.
 
   A turn whose agent names a program row opens with the host's
-  `program.start` of that row (`Aqua.Loop`), decided as a model's
-  `program.start` is; its dispatch is `attend/2`, which opens a session,
-  starts or resumes the harness with the turn's instructions and
-  configuration and sets the turn's work (`work`, with the turn's tools).
-  A start that opens a new native session names the turn's tools too, which
-  a harness that keeps its session's tools for the session's life (Codex)
-  takes there alone: a tool a later turn adds is not one it can call, and
-  one a later turn lacks is still refused at CYFR's gate. A start the
-  program says is signed out is given no post, and no new native session
-  of it is kept. The first post a process is written carries the turn's
-  facts (`Aqua.Prompt`), since its instructions hold nothing that moves by
-  itself. The
-  turn's loop then decides and runs the steps this process proposes with
-  its own code and never reads the session itself. Every write of this
-  process presents the fence the loop acquired, never one read again from
-  the turn's row.
+  `program.start` of that row, which `open/1` answers for the loop to
+  decide as a model's `program.start` is decided. Opened again with that
+  step admitted, it starts this process, which opens a session, starts
+  or resumes the harness with the turn's instructions and configuration
+  and sets the turn's work (`work`, with the turn's tools); the loop is
+  told when the work is taken (`{:took, ...}`). A start that opens a new
+  native session names the turn's tools too, which a harness that keeps
+  its session's tools for the session's life (Codex) takes there alone: a
+  tool a later turn adds is not one it can call, and one a later turn
+  lacks is still refused at CYFR's gate. A start the program says is
+  signed out is given no post, and no new native session of it is kept.
+  The first post a process is written carries the turn's facts
+  (`Aqua.Prompt`), since its instructions hold nothing that moves by
+  itself. The turn's loop decides and runs the steps this process
+  proposes with its own code and never reads the session itself. Every
+  write of this process presents the fence the loop acquired, never one
+  read again from the turn's row.
 
   The holder hands this process the driver's lines a batch at a time.
   Their effects (the posts the program said in the open turn's work, the
@@ -60,10 +64,11 @@ defmodule Aqua.Program do
   native turn's `idle` and the session's end are told the same way, and
   the loop settles what still shows running then, while a call runs too.
 
-  It writes a command when a row says one is owed, one at a time: a closed
-  ask's result as its `answer`, then each post of the open turn that
-  waits, each first recorded as an `input` step (`carry/3`) whose id the
-  command carries, so a delivery is attempted once whatever restarts
+  It writes a command when one is owed, one at a time, as one view of its
+  rows says each time the loop says they moved (`moved/1`): a recovery
+  prompt its rows owe, then a closed ask's result as its `answer` and then
+  each post of the open turn that waits, each first recorded as an `input`
+  step (`carry/3`) whose id the command carries, so a delivery is attempted once whatever restarts
   follow. A post and a fresh session's context are in the words
   `Aqua.Reader` gives an API request, and what they bring in joins the
   turn before it is read. A post carries its files after its text as the
@@ -101,10 +106,11 @@ defmodule Aqua.Program do
   ## A post deleted before it was handed over
 
   A post goes with the workspace thread it names. One that opened the
-  turn, or that went as it was handed over, ends the turn saying so.
-  One that went before the attendant read it as waiting
-  owes nothing: when the program was already idle, the waiting loop is
-  told so again and the turn completes, so no turn waits for good.
+  turn, or that went as the loop read it, which hands it over withheld,
+  ends the turn saying so. One that went before the loop read it, or
+  after and before its delivery was recorded, owes nothing: when the
+  program was already idle, the turn completes, so no turn waits for
+  good.
 
   ## Its end
 
@@ -128,13 +134,17 @@ defmodule Aqua.Program do
 
   use GenServer, restart: :temporary
 
+  @behaviour Aqua.Harness
+
   require Logger
 
   alias Aqua.{Reader, Tape}
-  alias Sanctum.Context
 
-  @registry Aqua.Program.Registry
-  @sessions Aqua.Program.Sessions
+  @sessions Aqua.Harness.Sessions
+  # All the engine reads of this harness (`Aqua.Harness`): its process is
+  # not the root's child, so a launch need not wait for it, and a post
+  # written while it works is delivered, never a reason to skip a call.
+  @facts %{child_of_root?: false, supersedes?: false}
   # The most bytes a fresh session's context takes on its post's line, as
   # the line's JSON measures them, escapes included: the newest posts that
   # fit. A post a sender writes is at most 32 KiB, at most six times that
@@ -158,109 +168,161 @@ defmodule Aqua.Program do
   # A holder's refusals of a write after which it ends: its end follows.
   @ending [:ended, :not_written, :unavailable]
 
-  @typedoc "What a turn's dispatch of its `program.start` hands the attendant."
-  @type work :: %{
-          ctx: Context.t(),
-          guest: Context.t(),
-          turn: map(),
-          start: String.t(),
-          program: %{row: String.t(), epoch: pos_integer(), name: String.t()},
-          agent: String.t(),
-          title: String.t(),
-          generation: non_neg_integer(),
-          config: map(),
-          system: String.t(),
-          facts: String.t(),
-          tools: [map()]
-        }
-
-  @typedoc """
-  How a turn's work on its program ended: done; refused, turned away by
-  CYFR or by the program; or lost, gone short of its end. The reason has a
-  row in `Prima.Refusal`.
-  """
-  @type finish :: :done | {:refused, reason :: term()} | {:lost, reason :: term()}
-
   # ===========================================================================
-  # Entry points
+  # The boundary (`Aqua.Harness`)
   # ===========================================================================
 
   @doc """
-  Of `rows` (a turn's projection), those a fresh session's context may
-  carry before the post at `seq`: the thread's posts before it, of which
-  the first post's context keeps the newest that fit. The loop joins
-  their read threads before the turn's start is decided.
+  Open the turn's program. With no admitted step it answers the host's
+  `program.start` of the turn's row at its epoch, for the loop to decide
+  (`{:admit, call}`), once what the program is first given joined the
+  turn and a session stored with another row was forgotten; or why the
+  turn ends before it starts. With the admitted step it starts this
+  turn's attendant, watching the loop that called, and answers at once:
+  a start that was taken already goes on with its native session, and
+  one not yet taken opens it.
   """
-  @spec context_rows([map()], integer()) :: [map()]
-  def context_rows(rows, seq) when is_list(rows), do: Enum.filter(rows, &context_row?(&1, seq))
+  @impl Aqua.Harness
+  def open(%{admitted: nil} = work), do: admit(work)
 
-  defp context_row?(row, seq), do: row.kind in @context_kinds and row.seq < seq
+  def open(%{admitted: %{} = start} = work) do
+    work = Map.put(work, :start, start.id)
 
-  @doc """
-  Attend `work`'s turn, for the loop `loop` that holds it: open a session,
-  start the harness or resume its native session, and set the turn's work.
-  Answers once the driver took the work: `{:ok, :started}` when the driver
-  started a new native session for it, `{:ok, :went_on}` when it resumed
-  the thread's; or `{:error, reason}`, the reason the turn ends.
-  """
-  @spec attend(work(), pid()) :: {:ok, :started | :went_on} | {:error, term()}
-  def attend(%{} = work, loop) when is_pid(loop) do
-    with {:ok, pid} <- attendant(work, loop),
-         do: GenServer.call(pid, {:attend, work}, :infinity)
-  catch
-    :exit, _ -> {:error, {:harness, work.title, {:start_failed, :died}}}
-  end
-
-  @doc """
-  The attendant of `work`'s turn for the loop `loop` that holds it,
-  started if none is. The loop watches it from its first wait on: one
-  that ends ends nothing else, and the turn waits on it no longer.
-  """
-  @spec attendant(work(), pid()) :: {:ok, pid()} | {:error, term()}
-  def attendant(%{} = work, loop) when is_pid(loop) do
-    case DynamicSupervisor.start_child(@sessions, {__MODULE__, {work, loop}}) do
-      {:ok, pid} -> {:ok, pid}
-      {:error, {:already_started, pid}} -> {:ok, pid}
-      {:error, _reason} -> {:error, {:harness, work.title, :start_failed}}
+    case DynamicSupervisor.start_child(@sessions, {__MODULE__, {work, self()}}) do
+      {:ok, pid} -> {:ok, pid, @facts}
+      {:error, _reason} -> {:end, refused(work, :start_failed)}
     end
   end
 
-  @doc """
-  The loop of an attended turn says that it waits again, with `turn` as it
-  holds it: the status it left it in and the fence it acquired. A running
-  turn whose process ended is started again, resuming, unless its program
-  had answered all it was given.
-  """
-  @spec watch(pid(), Tape.turn()) :: :ok
-  def watch(attendant, %{} = turn) when is_pid(attendant),
-    do: GenServer.cast(attendant, {:watch, turn})
+  @doc "The turn's rows moved: what the program is owed is read from them (`deliver/1`)."
+  @impl Aqua.Harness
+  def moved(attendant) when is_pid(attendant), do: GenServer.cast(attendant, :moved)
 
   @doc """
-  The turn `turn_id` is held no longer, or is stopped: its session is
-  closed, its writes first, and this answers once Opus answered the close.
+  The turn is held no longer, or is stopped: its session is closed, its
+  writes first, and this answers once Opus answered the close.
   """
-  @spec close(String.t(), String.t()) :: :ok
-  def close(athanor_id, turn_id) do
-    case whereis({athanor_id, turn_id}) do
-      nil -> :ok
-      pid -> GenServer.call(pid, :close, :infinity)
-    end
+  @impl Aqua.Harness
+  def stop(attendant) when is_pid(attendant) do
+    GenServer.call(attendant, :close, :infinity)
   catch
     :exit, _ -> :ok
   end
 
-  defp whereis(key) do
-    case Registry.lookup(@registry, key) do
-      [{pid, _}] -> pid
-      [] -> nil
+  @doc "What the engine reads of this harness (`Aqua.Harness.facts/1`)."
+  @impl Aqua.Harness
+  def facts, do: @facts
+
+  @doc false
+  def start_link(attending), do: GenServer.start_link(__MODULE__, attending)
+
+  # ===========================================================================
+  # The admission
+  # ===========================================================================
+
+  # The host's `program.start` of the turn's program row at its epoch,
+  # recorded with its call's `tool_call` row as a model's is (`Opus.Brain`
+  # reads the admitting call there).
+  defp admit(%{program: %{row: row, epoch: epoch}} = work) do
+    args = %{"action" => "start", "program" => row, "epoch" => epoch}
+    call = Aqua.Loop.Binding.resolve("program", args, tool_call_id: "start")
+    recorded = Aqua.Loop.recorded("program", call)
+
+    # Replay safe: opening again starts a session that resumes the
+    # thread's, and sets the work and the configuration it runs with; it
+    # never replays an input or a tool's effect, and each write is checked
+    # again against the admission (`Opus.Brain`). Before a session's
+    # identity is committed, another start may make a fresh session.
+    proposal = %{
+      kind: recorded.step_kind,
+      purpose: "brain",
+      tool: "program",
+      action: "start",
+      recovery: "replay_safe",
+      idempotency_key: Tape.brain_start_key(work.turn.id),
+      call: %{
+        kind: "tool_call",
+        content: "program",
+        payload: %{
+          "tool_call_id" => "start",
+          "name" => "program",
+          "tool" => "program",
+          "action" => "start",
+          "arguments" => args,
+          "kind" => recorded.kind
+        }
+      }
+    }
+
+    with {:ok, work} <- moved_over(work),
+         :ok <- join_startup(work),
+         do: {:admit, proposal}
+  end
+
+  # A turn whose program is another row than the one the thread's native
+  # session is stored with, its member's program moved since: the session
+  # is forgotten, the stored row's transcript owed its removal first
+  # (`Arca.TurnStorage.forget_session/3`), and the program starts over
+  # from the thread's posts, which the thread is told. A moved fence ends
+  # nothing here: the loop's own write of the end is refused for it.
+  defp moved_over(%{program: %{row: row}} = work) do
+    with {:ok, kept} <- Tape.brain(work.guest, work.turn.thread_id),
+         %{session: session, generation: generation, progress: %{"row" => stored}}
+         when is_binary(session) and stored != row <- kept,
+         {:ok, raised} <- Tape.forget_session(work.guest, work.turn, generation),
+         {:ok, _row} <-
+           Tape.append_line(
+             work.guest,
+             work.turn,
+             "#{work.title} runs on another program now, so it starts over from the " <>
+               "thread's posts."
+           ) do
+      {:ok, %{work | generation: raised}}
+    else
+      {:error, :superseded} -> {:end, lost(work, :ended)}
+      {:error, _unread_or_unkept} -> {:end, refused(work, {:start_failed, :session})}
+      _same_row_or_no_session -> {:ok, work}
     end
   end
 
-  @doc false
-  def start_link({work, _loop} = attending) do
-    key = {work.ctx.athanor_id, work.turn.id}
-    GenServer.start_link(__MODULE__, attending, name: {:via, Registry, {@registry, key}})
+  # What the program is given before its first answer joins the turn's
+  # read threads before its start is decided, as a request's rows join
+  # before they are read (`Aqua.Reader.join/5`), so a thread's deletion
+  # finds the turn: the turn's posts, and for a thread with no native
+  # session the thread so far a fresh session's first post carries. The
+  # post that opened the turn is one of those posts until it is handed
+  # over. One that is not handed over was deleted with its workspace
+  # thread, and a program started without it would wait on it for good:
+  # the turn ends saying so.
+  defp join_startup(%{turn: turn} = work) do
+    with {:ok, posts} <- Tape.brain_posts(work.guest, turn),
+         {:ok, context} <- startup_context(work, posts),
+         {:ok, %{rows: handed}} <- Reader.join(work.guest, turn, posts ++ context) do
+      if Enum.any?(handed, &(&1.id == turn.message_id)),
+        do: :ok,
+        else: {:end, refused(work, {:post_refused, :gone})}
+    else
+      {:error, _unread} -> {:end, refused(work, {:start_failed, :session})}
+    end
   end
+
+  defp startup_context(work, [first | _]) do
+    case Tape.brain(work.guest, work.turn.thread_id) do
+      {:ok, %{session: nil}} ->
+        with {:ok, rows} <- Tape.projection(work.guest, work.turn),
+             do: {:ok, Enum.filter(rows, &context_row?(&1, first.seq))}
+
+      {:ok, _resumed} ->
+        {:ok, []}
+
+      {:error, _} = unread ->
+        unread
+    end
+  end
+
+  defp startup_context(_work, []), do: {:ok, []}
+
+  defp context_row?(row, seq), do: row.kind in @context_kinds and row.seq < seq
 
   # ===========================================================================
   # The attendant
@@ -268,61 +330,58 @@ defmodule Aqua.Program do
 
   @impl true
   def init({work, loop}) do
-    actor = Context.actor(work.ctx)
-    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, work.turn.thread_id))
     Process.monitor(loop)
 
-    {:ok,
-     %{
-       thread_id: work.turn.thread_id,
-       agent: work.agent,
-       work: work,
-       loop: loop,
-       brain: nil,
-       boot: nil,
-       phase: :closed,
-       waiting: nil,
-       outstanding: nil,
-       fresh?: false,
-       missed?: false,
-       facts?: false,
-       how: :went_on,
-       recovering?: false,
-       pending: [],
-       timer: nil,
-       streams: %{},
-       ordinal: 0
-     }}
+    state = %{
+      thread_id: work.turn.thread_id,
+      agent: work.agent,
+      work: work,
+      loop: loop,
+      brain: nil,
+      boot: nil,
+      # Nothing is opened before the loop's first word, which comes once
+      # its handle is where Stop looks (`Aqua.Loop`).
+      phase: :unopened,
+      outstanding: nil,
+      fresh?: false,
+      missed?: false,
+      facts?: false,
+      how: :went_on,
+      recovering?: false,
+      pending: [],
+      timer: nil,
+      streams: %{},
+      ordinal: 0
+    }
+
+    {:ok, state}
   end
 
-  @impl true
-  def handle_call({:attend, work}, from, state),
-    do: {:noreply, open(%{state | work: work, waiting: from})}
-
   # The loop that closes it waits on it no more and is told nothing.
+  @impl true
   def handle_call(:close, {caller, _tag}, state) do
     state = if caller == state.loop, do: %{state | loop: nil}, else: state
     {:stop, :normal, :ok, shut(state)}
   end
 
+  # The loop's word that the turn's rows moved (`Aqua.Harness`): what is
+  # owed is what the rows say, read again each time (`deliver/1`).
   @impl true
-  def handle_cast({:watch, _turn}, %{phase: :over} = state), do: {:noreply, state}
+  def handle_cast(:moved, state), do: {:noreply, nudged(state)}
 
-  # Only the turn as the loop holds it: its fence is the one it acquired.
-  def handle_cast({:watch, turn}, state) do
-    state = %{state | work: %{state.work | turn: turn}}
+  # The loop says the rows moved whenever the thread moved or it waits
+  # again: its first word opens the session, a start the program took
+  # already going on with its native session; a session ready is written
+  # the next owed, and one that owes nothing more and is idle ends the
+  # turn; a start not yet made, its turn paused, is made now.
+  defp nudged(%{phase: :unopened, work: %{admitted: %{dispatch_state: "closed"}}} = state),
+    do: continued(state)
 
-    cond do
-      state.phase == :closed and turn.status == "running" ->
-        {:noreply, continued(state)}
-
-      state.phase == :ready ->
-        {:noreply, state |> deliver() |> rested()}
-
-      true ->
-        {:noreply, state}
-    end
-  end
+  defp nudged(%{phase: :unopened} = state), do: open_session(state)
+  defp nudged(%{phase: :over} = state), do: state
+  defp nudged(%{phase: :ready} = state), do: state |> deliver() |> rested()
+  defp nudged(%{phase: :closed, brain: nil} = state), do: continued(state)
+  defp nudged(state), do: state
 
   @impl true
   def handle_info({Opus.Brain, ref, {:lines, boot, lines}}, %{brain: {_pid, ref}} = state),
@@ -338,9 +397,6 @@ defmodule Aqua.Program do
 
   # A timer cancelled or replaced since its message was sent.
   def handle_info({:timeout, _stale, :silence}, state), do: {:noreply, state}
-
-  # A post or a result may now be owed: the thread moved.
-  def handle_info(%Cyfr.Bus.ThreadEvent{}, state), do: {:noreply, deliver(state)}
 
   # The loop that held the turn died: nothing holds it.
   def handle_info({:DOWN, _monitor, :process, pid, _reason}, %{loop: pid} = state),
@@ -383,7 +439,7 @@ defmodule Aqua.Program do
 
   # A start arms its clock and opens at once: an open that answers after
   # the clock ended finds that message waiting, ahead of any line.
-  defp open(%{work: work} = state) do
+  defp open_session(%{work: work} = state) do
     if state.timer, do: Process.cancel_timer(state.timer)
     timer = :erlang.start_timer(Opus.Brain.silence_ms(), self(), :silence)
     state = %{state | timer: timer}
@@ -394,7 +450,7 @@ defmodule Aqua.Program do
         %{state | brain: brain, phase: :opening}
 
       # A paused turn starts nothing: its loop says when it goes on.
-      {:error, {:not_admitted, :paused}} when state.waiting == nil ->
+      {:error, {:not_admitted, :paused}} ->
         %{state | phase: :closed}
 
       {:error, reason} ->
@@ -535,23 +591,16 @@ defmodule Aqua.Program do
 
   # The session ended: none of the turn's own tools runs any more, which
   # the loop settles in its list (`Aqua.Loop`).
-  defp session_ended(%{work: work} = state),
-    do: tell(state, {__MODULE__, work.turn.id, {:native, :session_ended}})
+  defp session_ended(state),
+    do: tell(state, {:activity, :session_ended})
 
   # ---------------------------------------------------------------------------
   # Lines
 
-  # What the open turn has used, as its start step stores it once the
-  # batch's usage is committed, told to the thread as the API path tells
-  # its own (`:usage`, `Aqua.Tape.usage/2`): the models the program ran
-  # and their tokens, and whether the accounting is partial or
-  # unavailable, which is unknown and never zero.
+  # What the open turn has used, once the batch's usage is committed: the
+  # loop tells the thread as the rows count it (`Aqua.Tape.usage/2`).
   defp tell_usage(state, []), do: state
-
-  defp tell_usage(%{work: work} = state, _usage) do
-    Tape.announce(work.guest, state.thread_id, :usage, Tape.usage(work.guest, state.thread_id))
-    state
-  end
+  defp tell_usage(state, usage), do: tell(state, {:usage, usage})
 
   defp batch(%{work: work} = state, boot, lines) do
     {last, _event} = List.last(lines)
@@ -585,7 +634,12 @@ defmodule Aqua.Program do
       {:ok, committed} ->
         Opus.Brain.read_on(state.brain, boot, last)
         state = %{state | boot: boot}
-        if committed.asks != [], do: tell(state, {:page_call, turn.id})
+        state = Enum.reduce(committed.said, state, &tell(&2, {:text, &1}))
+
+        state =
+          if committed.asks != [],
+            do: tell(state, {:ask, Enum.map(committed.asks, & &1.step)}),
+            else: state
 
         if effects.foreign?,
           do: foreign(state),
@@ -608,7 +662,10 @@ defmodule Aqua.Program do
         fail(shut(state), lost(work, :ended))
 
       {:error, reason} ->
-        Logger.warning("[Aqua.Program] a batch could not be committed: #{inspect(reason)}")
+        Logger.warning(
+          "[Aqua.Harness.Program] a batch could not be committed: #{inspect(reason)}"
+        )
+
         unkept(state)
     end
   end
@@ -812,7 +869,7 @@ defmodule Aqua.Program do
   # of them is stored.
   defp own(state, owns) do
     Enum.reduce(owns, state, fn {_seq, %{"name" => name, "phase" => phase}}, state ->
-      tell(state, {__MODULE__, state.work.turn.id, {:native, {:own, own_name(name), phase}}})
+      tell(state, {:activity, {:own, own_name(name), phase}})
     end)
   end
 
@@ -903,7 +960,7 @@ defmodule Aqua.Program do
     Enum.reduce(ids, state, fn id, state ->
       cond do
         state.phase == :working and id == work.start ->
-          reply_waiting(%{state | phase: :ready, recovering?: false}, {:ok, state.how})
+          tell(%{state | phase: :ready, recovering?: false}, {:took, [{work.start, state.how}]})
 
         match?(%{id: ^id}, state.outstanding) ->
           %{state | outstanding: nil}
@@ -926,11 +983,11 @@ defmodule Aqua.Program do
   # its end: a resumed harness may send one of none first.
   defp on_idle(%{work: %{turn: %{id: id}} = work} = state, %{idle: %{"work" => id} = idle}) do
     state = withdraw(state)
-    state = tell(state, {__MODULE__, id, {:native, :idle}})
+    state = tell(state, {:activity, :idle})
 
     cond do
       state.phase == :over -> state
-      idle["stop"] == "end_turn" -> tell(state, {__MODULE__, id, {:end, :done}})
+      idle["stop"] == "end_turn" -> tell(state, {:end, :done})
       true -> fail(state, lost(work, {:ended, idle["stop"]}))
     end
   end
@@ -997,32 +1054,22 @@ defmodule Aqua.Program do
   # ---------------------------------------------------------------------------
   # Deliveries
 
-  # The next command a row says is owed, one at a time while the session
-  # is ready: a prompt a recovery owes, then a closed ask's result, then a
-  # post that waits. A read that did not answer is never nothing owed.
+  # The next command the rows say is owed, one at a time while the session
+  # is ready, chosen from one view of them (`Arca.TurnStorage.brain_owed/2`):
+  # a prompt a recovery owes, then a closed ask's result, then a post that
+  # waits. A read that did not answer is never nothing owed.
   defp deliver(%{phase: :ready, outstanding: nil, work: work} = state) do
-    case next_owed(work) do
-      :none -> state
-      {:notice, %{context?: true, message_id: row_id}} -> notice(state, "fresh", row_id)
-      {:notice, %{action: kind, message_id: row_id}} -> notice(state, kind, row_id)
-      {:answer, result} -> answer(state, result)
-      {:post, row} -> post(state, row)
+    case Tape.brain_owed(work.guest, work.turn) do
+      {:ok, :none} -> state
+      {:ok, {:notice, %{context?: true, message_id: row_id}}} -> notice(state, "fresh", row_id)
+      {:ok, {:notice, %{action: kind, message_id: row_id}}} -> notice(state, kind, row_id)
+      {:ok, {:answer, result}} -> deliver_answer(state, result)
+      {:ok, {:post, row}} -> deliver_post(state, row)
       {:error, _unread} -> unkept(state)
     end
   end
 
   defp deliver(state), do: state
-
-  defp next_owed(%{guest: guest, turn: turn}) do
-    with {_, {:ok, []}} <- {:notice, Tape.brain_notices(guest, turn)},
-         {_, {:ok, []}} <- {:answer, Tape.brain_results(guest, turn)},
-         {_, {:ok, []}} <- {:post, Tape.brain_posts(guest, turn)} do
-      :none
-    else
-      {owed, {:ok, [first | _]}} -> {owed, first}
-      {_owed, {:error, _reason} = unread} -> unread
-    end
-  end
 
   # The loop waits again after it found something pending. When that was
   # deleted before it was handed over, nothing is owed either way and the
@@ -1043,69 +1090,90 @@ defmodule Aqua.Program do
   defp continued(state) do
     case answered(state) do
       {:ok, true} -> done(state)
-      {:ok, false} -> open(%{state | recovering?: true})
+      {:ok, false} -> open_session(%{state | recovering?: true})
       {:error, _unread} -> unkept(state)
     end
   end
 
-  defp done(%{work: work} = state),
-    do: tell(state, {__MODULE__, work.turn.id, {:end, :done}})
+  defp done(state), do: tell(state, {:end, :done})
 
   # Whether nothing is owed either way: nothing to deliver, no delivery
   # unacknowledged or unanswered, the program idle. What another turn of
   # the thread left owed is none of this one's.
   defp answered(%{work: work} = state) do
-    with :none <- next_owed(work),
+    with {:ok, :none} <- Tape.brain_owed(work.guest, work.turn),
          {:ok, %{progress: progress}} <- Tape.brain(work.guest, state.thread_id),
          false <- Map.get(progress, "busy", true),
          {:ok, []} <- Tape.brain_pending(work.guest, work.turn),
          {:ok, steps} <- Tape.steps(work.guest, work.turn) do
-      {:ok, not Enum.any?(steps, &(&1.kind == "input" and &1.dispatch_state == "dispatched"))}
+      {:ok, not Enum.any?(steps, &at_work?(&1, work))}
     else
       {:error, _reason} = unread -> unread
       _owed_or_at_work -> {:ok, false}
     end
   end
 
-  defp answer(%{work: work} = state, %{row: row, call: call} = result) do
-    with {:ok, %{step: step}} <- carry(work, "answer", row.id) do
-      payload = if call, do: Tape.payload(call), else: %{}
+  # A delivery not yet answered, or an ask of the program the loop has not
+  # settled: the work goes on while either does.
+  defp at_work?(%{kind: "input", dispatch_state: "dispatched"}, _work), do: true
 
-      command = %{
-        "t" => "answer",
-        "id" => step.id,
-        "ask" => payload["tool_call_id"],
-        "content" => row.content || "",
-        "is_error" => result.step.outcome != "ok"
-      }
+  defp at_work?(%{purpose: "brain", dispatch_state: state} = step, work)
+       when state in ["proposed", "dispatched"],
+       do: step.id != work.start
 
-      case write(state, command) do
-        :ok ->
-          delivered(state, %{id: step.id, input?: true, deliver: "answer", row: row.id})
+  defp at_work?(_step, _work), do: false
 
-        # The resumed session no longer holds the ask: its answer goes as
-        # one notice that names the call.
-        {:error, :not_this_work} ->
-          case Tape.uncarry(work.guest, work.turn, step.id) do
-            :ok -> notice(state, "answer", row.id)
-            {:error, _reason} -> unkept(state)
-          end
+  # A closed ask's result, as the rows say it: its result row, the call
+  # row of its ask and its step.
+  defp deliver_answer(%{work: work} = state, %{row: row, call: call, step: ask}) do
+    case carry(work, "answer", row.id) do
+      {:ok, %{step: step}} ->
+        command = %{
+          "t" => "answer",
+          "id" => step.id,
+          "ask" => call && Tape.payload(call)["tool_call_id"],
+          "content" => row.content || "",
+          "is_error" => ask.outcome != "ok"
+        }
 
-        {:error, reason} ->
-          not_written(state, step, reason)
-      end
-    else
-      {:error, reason} -> undelivered(state, reason)
+        case write(state, command) do
+          :ok ->
+            delivered(state, %{id: step.id, input?: true, deliver: "answer", row: row.id})
+
+          # The resumed session no longer holds the ask: its answer goes as
+          # one notice that names the call.
+          {:error, :not_this_work} ->
+            case Tape.uncarry(work.guest, work.turn, step.id) do
+              :ok -> notice(state, "answer", row.id)
+              {:error, _reason} -> unkept(state)
+            end
+
+          {:error, reason} ->
+            not_written(state, step, reason)
+        end
+
+      {:error, reason} ->
+        undelivered(state, reason)
     end
   end
 
-  defp post(%{work: work} = state, row) do
-    with {:ok, earlier} <- earlier(state, row),
+  # A post of the turn that waits, read as it is handed over with what
+  # goes before it (`work.history`): one the reading withholds went with
+  # its workspace thread as it was handed over, which the turn may wait on
+  # alone, and then would for good, so the turn ends saying so.
+  defp deliver_post(%{work: work} = state, row) do
+    with {:ok, given} <- given(state),
          {:ok, %{rows: rows, reading: reading}} <-
-           Reader.join(work.guest, work.turn, [row | earlier]),
-         {[post], earlier} <- Enum.split_with(rows, &(&1.id == row.id)),
+           work.history.(&earlier?(state, given, row, &1), [row]),
+         {[handed], earlier} <- Enum.split_with(rows, &(&1.id == row.id)),
          {:ok, %{step: step}} <- carry(work, "post", row.id) do
-      {:said, text} = Reader.read(post, %{reading | named?: false})
+      {:said, text} = Reader.read(handed, %{reading | named?: false})
+
+      earlier =
+        if state.missed?,
+          do: Enum.filter(earlier, &said?(&1, %{reading | me: work.agent})),
+          else: earlier
+
       context = opened_with(state, context(work, earlier, reading, opening(state)))
 
       command =
@@ -1117,7 +1185,7 @@ defmodule Aqua.Program do
           "context" => context
         }
         |> reject_nil()
-        |> with_files(work, post)
+        |> with_files(work, row)
 
       case write(state, command) do
         :ok ->
@@ -1130,23 +1198,25 @@ defmodule Aqua.Program do
           not_written(state, step, reason)
       end
     else
-      # The post went with its workspace thread after it was read as
-      # waiting. The turn may wait on it alone, and then would for good.
-      {[], _earlier} ->
-        fail(shut(state), refused(work, {:post_refused, :gone}))
-
-      {:error, :not_waiting} ->
-        fail(shut(state), refused(work, {:post_refused, :gone}))
-
-      {:error, reason} ->
-        undelivered(state, reason)
+      {[], _earlier} -> fail(shut(state), refused(work, {:post_refused, :gone}))
+      {:error, :not_waiting} -> fail(shut(state), refused(work, {:post_refused, :gone}))
+      {:error, reason} -> undelivered(state, reason)
     end
   end
 
-  defp earlier(%{fresh?: true, work: work}, row), do: thread_rows(work, {:before, row.seq})
+  # What a resumed session was given (`Arca.TurnStorage.brain_given/2`),
+  # read only for one.
+  defp given(%{missed?: true, work: work}), do: Tape.brain_given(work.guest, work.turn.thread_id)
+  defp given(_state), do: {:ok, nil}
 
-  defp earlier(%{missed?: true} = state, row), do: missed(state, &(&1.seq < row.seq))
-  defp earlier(_state, _row), do: {:ok, []}
+  # What goes before a post: for a fresh session the thread before it, for
+  # a resumed one what it missed before it, and nothing otherwise.
+  defp earlier?(%{fresh?: true}, _given, post, row), do: context_row?(row, post.seq)
+
+  defp earlier?(%{missed?: true, work: work}, given, post, row),
+    do: missed?(row, given, work) and row.seq < post.seq
+
+  defp earlier?(_state, _given, _post, _row), do: false
 
   # What a resumed process missed, which the first post it is written
   # carries, a recovery prompt's or the person's: what the thread said
@@ -1156,10 +1226,9 @@ defmodule Aqua.Program do
   # among them, as context only; one still waiting to be handed is not.
   defp missed(%{work: work}, before?) do
     with {:ok, given} <- Tape.brain_given(work.guest, work.turn.thread_id),
-         {:ok, rows} <- Tape.projection(work.guest, work.turn),
-         rows = Enum.filter(rows, &(missed?(&1, given, work) and before?.(&1))),
-         {:ok, %{reading: reading}} <- Reader.join(work.guest, work.turn, rows) do
-      {:ok, Enum.filter(rows, &said?(&1, %{reading | me: work.agent}))}
+         {:ok, %{rows: rows, reading: reading}} <-
+           work.history.(&(missed?(&1, given, work) and before?.(&1)), []) do
+      {:ok, %{rows: Enum.filter(rows, &said?(&1, %{reading | me: work.agent})), reading: reading}}
     end
   end
 
@@ -1308,15 +1377,13 @@ defmodule Aqua.Program do
 
   defp prompt_context(%{work: work}, "fresh") do
     with {:ok, answers} <- answers(work),
-         {:ok, rows} <- thread_rows(work, {:all, answers}),
-         {:ok, joined} <- Reader.join(work.guest, work.turn, rows),
+         {:ok, joined} <- work.history.(&in_context?(&1, answers), []),
          do: {:ok, context(work, joined.rows, joined.reading, @context_opening)}
   end
 
   defp prompt_context(%{missed?: true, work: work} = state, _kind) do
-    with {:ok, rows} <- missed(state, fn _row -> true end),
-         {:ok, joined} <- Reader.join(work.guest, work.turn, rows),
-         do: {:ok, context(work, joined.rows, joined.reading, @missed_opening)}
+    with {:ok, missed} <- missed(state, fn _row -> true end),
+         do: {:ok, context(work, missed.rows, missed.reading, @missed_opening)}
   end
 
   defp prompt_context(_state, _kind), do: {:ok, nil}
@@ -1358,7 +1425,7 @@ defmodule Aqua.Program do
   # follow, the holder's answer or its end; any other refusal ends the turn.
   defp not_written(state, _step, :uncertain) do
     state = shut(state)
-    if state.phase == :over, do: state, else: open(%{state | recovering?: true})
+    if state.phase == :over, do: state, else: open_session(%{state | recovering?: true})
   end
 
   defp not_written(%{work: work} = state, step, refused) do
@@ -1381,15 +1448,6 @@ defmodule Aqua.Program do
 
   defp refused_write(%{work: work} = state, _refused),
     do: fail(shut(state), refused(work, :work_refused))
-
-  # The rows a fresh session's context may carry: the thread's posts
-  # before a post (`{:before, seq}`), or every post and the result rows of
-  # the open work's asks (`{:all, ids}`), for one started anew in the
-  # middle of it.
-  defp thread_rows(work, bound) do
-    with {:ok, rows} <- Tape.projection(work.guest, work.turn),
-         do: {:ok, Enum.filter(rows, &in_context?(&1, bound))}
-  end
 
   # The thread so far for a fresh session, the newest of `rows` that fit
   # beside the turn's facts.
@@ -1426,9 +1484,9 @@ defmodule Aqua.Program do
   defp left_out(1), do: "[1 earlier post of the thread is not shown here.]"
   defp left_out(n), do: "[#{n} earlier posts of the thread are not shown here.]"
 
-  defp in_context?(row, {:before, seq}), do: context_row?(row, seq)
-
-  defp in_context?(row, {:all, answers}),
+  # For a session started anew in the middle of the work: every post and
+  # the result rows of the open work's asks.
+  defp in_context?(row, answers),
     do: row.kind in @context_kinds or (row.kind == "tool_result" and row.id in answers)
 
   # The result rows of the open work's asks that closed, never its start's.
@@ -1482,7 +1540,7 @@ defmodule Aqua.Program do
     do: fail(state, refused(work, :start_failed))
 
   # One that dies at work is resumed, once for each death.
-  defp ended(state, _reason), do: open(%{state | phase: :closed, recovering?: true})
+  defp ended(state, _reason), do: open_session(%{state | phase: :closed, recovering?: true})
 
   # The clock ran out: over a start that was not taken, or over the
   # program's silence at work, by the database's clock.
@@ -1527,28 +1585,17 @@ defmodule Aqua.Program do
   # ---------------------------------------------------------------------------
   # Telling the loop
 
-  defp tell(%{loop: nil} = state, _message), do: state
+  # What the loop is told, after its commit (`Aqua.Harness`).
+  defp tell(%{loop: nil} = state, _event), do: state
 
-  defp tell(%{loop: loop} = state, message) do
-    send(loop, message)
+  defp tell(%{loop: loop, work: work} = state, event) do
+    send(loop, {Aqua.Harness, work.turn.id, event})
     state
   end
 
   # The turn's work ends once, as `finish` says, which the loop words.
-  # Whoever waits on the work's start is answered its reason.
   defp fail(%{phase: :over} = state, _finish), do: state
-
-  defp fail(%{work: work} = state, {_how, reason} = finish) do
-    state = reply_waiting(%{state | phase: :over}, {:error, reason})
-    tell(state, {__MODULE__, work.turn.id, {:end, finish}})
-  end
-
-  defp reply_waiting(%{waiting: nil} = state, _answer), do: state
-
-  defp reply_waiting(%{waiting: waiting} = state, answer) do
-    GenServer.reply(waiting, answer)
-    %{state | waiting: nil}
-  end
+  defp fail(state, finish), do: tell(%{state | phase: :over}, {:end, finish})
 
   defp reject_nil(map), do: map |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
 end

@@ -44,7 +44,7 @@ defmodule Aqua.Prompt do
   themselves: the open requests, whose ages move, then the time. The whole
   prompt is the two in that order, which keeps its prefix reusable. A
   program is handed the instructions alone at its start, and the facts
-  with the first post of its process (`Aqua.Program`): a program handed
+  with the first post of its process (`Aqua.Harness.Program`): a program handed
   changed instructions rewrites its cache or keeps another copy of them. A
   room excerpt is part of neither: the request carries it as a
   transient block (`Aqua.Loop.Request`).
