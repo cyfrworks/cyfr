@@ -75,7 +75,7 @@ exit 0
   writeFileSync(path.join(bin, "openssl"), `#!/bin/sh
 printf 'openssl %s\\n' "$*" >> ${log}
 ${echo}
-if [ "$2" = -export ]; then cat > "$6"; else cat; fi
+if [ "$2" = -export ]; then [ -f "$4" ] && [ "$(stat -c %a "$4" 2>/dev/null || stat -f %Lp "$4")" = 600 ] || exit 8; cp "$4" "$6"; else cat; fi
 `)
   for (const f of ["security", "openssl"]) chmodSync(path.join(bin, f), 0o755)
   const workerScript = path.join(dir, "worker.mjs")

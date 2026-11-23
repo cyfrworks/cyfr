@@ -144,10 +144,20 @@ export async function distribute({env, dest, rehearse = false, worker, openssl =
     const pem = must(openssl, ["pkcs12", "-in", "/dev/stdin", "-passin", "env:CYFR_CERTIFICATE_PASSWORD", "-nodes"],
       "the certificate does not open with its password", 60,
       {input: certificate, env: {PATH: env.PATH ?? process.env.PATH, CYFR_CERTIFICATE_PASSWORD: inputs.certificatePassword}}).out
+    // LibreSSL's pkcs12 -export opens its input once for the key and again
+    // for the certificates, which a pipe cannot give twice (measured on
+    // GitHub's macOS runner): the opened identity is a file, mode 0600, in
+    // this build's own folder, for that one command.
+    const opened = path.join(work, "identity.pem")
+    writeFileSync(opened, pem, {mode: 0o600})
     const wrapped = path.join(work, "identity.p12")
-    must(openssl, ["pkcs12", "-export", "-in", "/dev/stdin", "-out", wrapped, "-passout", "env:CYFR_WRAP_PASSWORD",
-      "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES", "-macalg", "sha1"],
-    "the certificate was not wrapped for the keychain", 60, {input: pem, env: {PATH: env.PATH ?? process.env.PATH, CYFR_WRAP_PASSWORD: wrapPassword}})
+    try {
+      must(openssl, ["pkcs12", "-export", "-in", opened, "-out", wrapped, "-passout", "env:CYFR_WRAP_PASSWORD",
+        "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES", "-macalg", "sha1"],
+      "the certificate was not wrapped for the keychain", 60, {env: {PATH: env.PATH ?? process.env.PATH, CYFR_WRAP_PASSWORD: wrapPassword}})
+    } finally {
+      rmSync(opened, {force: true})
+    }
     chmodSync(wrapped, 0o600)
 
     must("security", ["create-keychain", "-p", keychainPassword, keychain], "the signing keychain was not made", 60)
