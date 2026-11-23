@@ -105,24 +105,47 @@ defmodule Arca.TurnTransitionContractTest do
 
   defp call_step!(actor, turn, call \\ %{}) do
     model = model_step!(actor, turn)
+    {id, call} = Map.pop(call, :tool_call_id, "c1")
 
-    {:ok, %{calls: [%{step: step}]}} =
-      TurnStorage.record_response(actor, turn.id, model.id, %{
-        fence: turn.fence,
-        tool_calls: [
-          Map.merge(
-            %{tool_call_id: "c1", name: "files.write", tool: "files", action: "write"},
-            call
-          )
-        ]
-      })
+    {:ok, %{asks: [%{step: step}]}} =
+      respond(actor, turn, model.id, [Map.merge(ask(turn, model, id, "write"), call)])
 
     step
   end
 
+  # A call to `files` as the step proposed for it, with its `tool_call` row.
+  defp ask(turn, model, id, action) do
+    %{
+      kind: "tool",
+      tool: "files",
+      action: action,
+      idempotency_key: "call:#{turn.id}:#{model.id}:#{id}",
+      call: %{
+        kind: "tool_call",
+        content: "files.#{action}",
+        payload: %{
+          "tool_call_id" => id,
+          "name" => "files.#{action}",
+          "tool" => "files",
+          "action" => action,
+          "step_id" => model.id
+        }
+      }
+    }
+  end
+
+  # A model's response of `asks`, which answers the step `step_id`.
+  defp respond(actor, turn, step_id, asks),
+    do:
+      TurnStorage.commit_events(
+        actor,
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{events: Enum.map(asks, &{:ask, &1}), position: {:step, step_id}}
+      )
+
   # The turn paused around a launch it handed to a person.
   defp launch_paused!(actor, turn) do
-    launch = call_step!(actor, turn, %{tool_call_id: "l1", step_kind: "launch"})
+    launch = call_step!(actor, turn, %{tool_call_id: "l1", kind: "launch"})
 
     {:ok, paused} =
       TurnStorage.pause(actor, turn.id, %{
@@ -478,7 +501,7 @@ defmodule Arca.TurnTransitionContractTest do
       assert {:error, :illegal_transition} =
                TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
 
-      launch = call_step!(actor, turn, %{tool_call_id: "l1", step_kind: "launch"})
+      launch = call_step!(actor, turn, %{tool_call_id: "l1", kind: "launch"})
 
       assert {:ok, %{status: "paused", paused_reason: "launch", launch_step_id: launch_id}} =
                TurnStorage.pause(actor, turn.id, %{
@@ -493,7 +516,7 @@ defmodule Arca.TurnTransitionContractTest do
     test "a root attempt that is not the running owner refuses the pause",
          %{actor: actor, thread: thread} do
       {turn, root} = started!(actor, thread)
-      launch = call_step!(actor, turn, %{tool_call_id: "l1", step_kind: "launch"})
+      launch = call_step!(actor, turn, %{tool_call_id: "l1", kind: "launch"})
 
       {1, _} =
         Arca.Repo.update_all(
@@ -545,7 +568,7 @@ defmodule Arca.TurnTransitionContractTest do
     test "a turn paused around a launch records no step until it runs again",
          %{actor: actor, thread: thread} do
       {turn, _root} = started!(actor, thread)
-      launch = call_step!(actor, turn, %{tool_call_id: "l1", step_kind: "launch"})
+      launch = call_step!(actor, turn, %{tool_call_id: "l1", kind: "launch"})
 
       assert {:ok, %{status: "paused"}} =
                TurnStorage.pause(actor, turn.id, %{
@@ -580,27 +603,17 @@ defmodule Arca.TurnTransitionContractTest do
       model = model_step!(actor, turn)
       tool = call_step!(actor, turn)
 
-      calls = [%{tool_call_id: "c9", name: "files.read", tool: "files", action: "read"}]
+      call = ask(turn, model, "c9", "read")
 
-      assert {:error, :step_not_found} =
-               TurnStorage.record_response(actor, turn.id, tool.id, %{
-                 fence: turn.fence,
-                 tool_calls: calls
-               })
+      assert {:error, :step_not_found} = respond(actor, turn, tool.id, [call])
 
       assert {:error, :illegal_transition} =
-               TurnStorage.record_response(actor, turn.id, model.id, %{
-                 fence: turn.fence,
-                 tool_calls: [Map.put(hd(calls), :recovery, "always")]
-               })
+               respond(actor, turn, model.id, [Map.put(call, :recovery, "always")])
 
       assert %{dispatch_state: "proposed"} = step_row(model.id)
 
-      assert {:ok, %{calls: [%{step: %{recovery: "replay_safe"}}]}} =
-               TurnStorage.record_response(actor, turn.id, model.id, %{
-                 fence: turn.fence,
-                 tool_calls: [Map.put(hd(calls), :recovery, "replay_safe")]
-               })
+      assert {:ok, %{asks: [%{step: %{recovery: "replay_safe"}}]}} =
+               respond(actor, turn, model.id, [Map.put(call, :recovery, "replay_safe")])
     end
 
     test "a step is opened again only when it was dispatched and its row calls a replay",

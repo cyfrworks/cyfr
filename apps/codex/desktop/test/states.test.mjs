@@ -268,8 +268,8 @@ test("only the chooser's own button on the passkey road leaves a CYFR", () => {
   }
 })
 
-test("a forgetting that failed is said on the chooser", () => {
-  assert.deepEqual(run([...open, locked(HOME), notForgot], true).effects.at(-1), {chooser: ["uncleared"]})
+test("a lock's forgetting that failed says that, and never another CYFR's words", () => {
+  assert.deepEqual(run([...open, locked(HOME), notForgot], true).effects.at(-1), {chooser: ["unforgotten"]})
 })
 
 test("a lost page is shown again and locks nothing", () => {

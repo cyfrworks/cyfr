@@ -136,19 +136,37 @@ defmodule Opus.BrainTest do
     args =
       Keyword.get(opts, :args, %{"action" => "start", "program" => row.id, "epoch" => row.epoch})
 
-    {:ok, %{calls: [%{step: step}]}} =
-      TurnStorage.record_response(actor, turn.id, model.id, %{
-        fence: turn.fence,
-        tool_calls: [
-          %{
-            tool_call_id: "call_#{System.unique_integer([:positive])}",
-            name: "program",
-            tool: "program",
-            action: "start",
-            arguments: args
-          }
-        ]
-      })
+    call_id = "call_#{System.unique_integer([:positive])}"
+
+    {:ok, %{asks: [%{step: step}]}} =
+      TurnStorage.commit_events(
+        actor,
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{
+          events: [
+            {:ask,
+             %{
+               kind: "tool",
+               tool: "program",
+               action: "start",
+               idempotency_key: "call:#{turn.id}:#{model.id}:#{call_id}",
+               call: %{
+                 kind: "tool_call",
+                 content: "program",
+                 payload: %{
+                   "tool_call_id" => call_id,
+                   "name" => "program",
+                   "tool" => "program",
+                   "action" => "start",
+                   "arguments" => args,
+                   "step_id" => model.id
+                 }
+               }
+             }}
+          ],
+          position: {:step, model.id}
+        }
+      )
 
     {:ok, step} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
     step
@@ -246,17 +264,6 @@ defmodule Opus.BrainTest do
 
   defp hello(boot \\ "boot-one"),
     do: %{"t" => "hello", "v" => Wire.version(), "driver" => "cyfr-claude-code", "boot" => boot}
-
-  # Whether the holder waits on the service's answer to a send.
-  defp sending?(pid) do
-    case Process.info(pid, :current_stacktrace) do
-      {:current_stacktrace, frames} ->
-        Enum.any?(frames, &match?({Opus.Programs.Session, :send, _, _}, &1))
-
-      nil ->
-        false
-    end
-  end
 
   # The next batch handed to this attendant.
   defp batch({_pid, ref}) do
@@ -1086,20 +1093,20 @@ defmodule Opus.BrainTest do
 
     test "a write whose holder died with the answer is uncertain",
          %{fake: fake, binding: binding, brain: {pid, _ref} = brain, answer: answer} do
+      killer =
+        Task.async(fn ->
+          assert_receive {:held, "send", service}, 5_000
+          Process.exit(pid, :kill)
+          service
+        end)
+
+      # The attendant is blocked in the write when the service reports the hold.
+      Scripted.set(fake, :test, killer.pid)
       Scripted.hold(fake, "send", 30_000)
-      test = self()
 
-      # Only the attendant writes, so the kill comes from beside it.
-      spawn_link(fn ->
-        wait_until(fn -> sending?(pid) end, 5_000)
-        Process.exit(pid, :kill)
-        send(test, :killed)
-      end)
-
-      assert Brain.write(brain, binding, answer) == {:error, :uncertain}
-      assert_receive :killed, 5_000
-      assert_receive {:held, "send", service}, 5_000
-      send(service, :go)
+      result = Brain.write(brain, binding, answer)
+      send(Task.await(killer), :go)
+      assert result == {:error, :uncertain}
     end
 
     test "a write whose answer outlasts the caller's wait is uncertain, never refused",
@@ -2533,19 +2540,23 @@ defmodule Opus.BrainTest do
     end
 
     # The session kept as the attendant keeps a driver's `started`, with
-    # the row it is stored with (`TurnStorage.commit_brain/3`).
+    # the row it is stored with (`TurnStorage.commit_events/3`).
     defp keep_session!(actor, thread, row, agent, session) do
       {:ok, %{seen: false}} =
-        TurnStorage.commit_brain(actor, thread.id, %{
-          agent: agent,
-          generation: 0,
-          boot: "boot-one",
-          hello: true,
-          seq: 1,
-          row_id: row.id,
-          epoch: row.epoch,
-          silence_ms: Opus.Brain.silence_ms(),
-          session: session
+        TurnStorage.commit_events(actor, %{thread: thread.id, agent: agent, turn: nil}, %{
+          events: [],
+          position:
+            {:session,
+             %{
+               generation: 0,
+               boot: "boot-one",
+               hello: true,
+               seq: 1,
+               row_id: row.id,
+               epoch: row.epoch,
+               silence_ms: Opus.Brain.silence_ms(),
+               session: session
+             }}
         })
     end
 

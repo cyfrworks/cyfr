@@ -42,9 +42,11 @@
 // Only the first and the fourth forget, and no end does: on the passkey
 // road the sign-in is the CYFR's ordinary browser session, kept across
 // quitting and starting again and ended by signing out in Prism or by
-// that CYFR. A clear that fails says so on the chooser (`uncleared`): as
-// the Connect's answer where it was for a proposal (home-failed), which
-// is no lock and touches no other attempt.
+// that CYFR. A clear that fails says so on the chooser. Where it was for
+// another CYFR it is `uncleared`: as the Connect's answer where it was for
+// a proposal (home-failed), which is no lock and touches no other attempt,
+// or after Connect to another CYFR. Where a lock forgot it is
+// `unforgotten`, which speaks of no other CYFR.
 //
 // A CYFR's page whose load failed, as the engine reports it, is no lock:
 // the content window shows the chooser saying so (`unanswered`), and
@@ -269,7 +271,7 @@ export function step(s, e) {
     // ---- the system, the windows, the person ----
     case "forgot": {
       if (s.name !== "locking") return same(s)
-      const notices = e.cleared ? s.notices : adding(s.notices, "uncleared")
+      const notices = e.cleared ? s.notices : adding(s.notices, s.leaving ? "uncleared" : "unforgotten")
       if (!s.leaving) return settle({...s, forgotten: true, notices})
       // cyfr answers what it is sent now with a locked of its own.
       return same({...s, leaving: false, forgotten: true, notices: e.cleared ? [] : notices},

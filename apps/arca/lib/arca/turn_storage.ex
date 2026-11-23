@@ -16,7 +16,7 @@ defmodule Arca.TurnStorage do
   refused `{:error, :fence_required}`. A host transition that takes a turn
   over compares the fence it read and raises it by one in the same write,
   so fences only grow.
-  A step is proposed before its effect (`record_response/4`), flipped to
+  A step is proposed before its effect (`commit_events/3`), flipped to
   `dispatched` in its own commit (`dispatch_step/3`), and closed with its
   result row, outcome and event together (`close_step/4`). Pause and
   resume flip the turn, its root attempt and its root execution in one
@@ -2841,159 +2841,25 @@ defmodule Arca.TurnStorage do
   # The row a step's call is carried in, when the step brings its own.
   # arca:db-raise-ok inside the caller's transaction
   defp carried!(actor, athanor_id, %Turn{} = turn, %{call: %{} = call} = attrs) do
-    row =
-      Arca.ThreadStorage.insert_message!(actor, thread!(athanor_id, turn.thread_id), %{
-        author: Message.agent_author(),
-        sent_by: turn.agent,
-        kind: Map.fetch!(call, :kind),
-        content: Map.get(call, :content, ""),
-        payload: Map.get(call, :payload),
-        client_id: Map.get(call, :client_id),
-        turn_id: turn.id,
-        execution_id: turn.root_execution_id
-      })
-
+    row = call_row!(actor, athanor_id, turn, call)
     attrs |> Map.delete(:call) |> Map.put(:message_id, row.id)
   end
 
   defp carried!(_actor, _athanor_id, _turn, attrs), do: attrs
 
-  @doc """
-  Persist a model response before any of its calls run: the model step
-  closes with its usage, the reply and every tool call become message
-  rows, every call becomes a `proposed` step, and one event records it.
-  `response`: `:text`, `:usage`, `:stop_reason`, `:tool_calls` — each
-  `%{tool_call_id, name, tool, action, arguments, provider_data, kind,
-  recovery, child_execution_id}`; `:fence`. The model step must be a
-  `model` step of this turn (`{:error, :step_not_found}` otherwise), and
-  a call's `recovery` is none or one of `Prima.TurnState.recoveries/0`
-  (`{:error, :illegal_transition}` otherwise): it is stored with the
-  step, and the step's stored value alone later decides a replay
-  (`next_generation/3`). Answers
-  `{:ok, %{text: row | nil, calls: [%{message: row, step: step}]}}`.
-  """
-  @spec record_response(Prima.Actor.t(), String.t(), String.t(), map()) ::
-          {:ok, %{text: map() | nil, calls: [map()]}} | {:error, term()}
-  def record_response(
-        %Prima.Actor{athanor_id: athanor_id} = actor,
-        turn_id,
-        model_step_id,
-        response
-      )
-      when is_binary(athanor_id) and athanor_id != "" and is_map(response) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.record_response", fn ->
-      with_seq_retry(fn ->
-        Arca.Repo.locking_transaction(fn ->
-          turn = own!(athanor_id, turn_id, response)
-          model_step = step!(athanor_id, model_step_id)
-
-          if model_step.turn_id != turn.id or model_step.kind != "model",
-            do: Arca.Repo.rollback(:step_not_found)
-
-          calls = Map.get(response, :tool_calls, [])
-
-          if Enum.any?(
-               calls,
-               &(Map.get(&1, :recovery) not in [nil | Prima.TurnState.recoveries()])
-             ),
-             do: Arca.Repo.rollback(:illegal_transition)
-
-          thread = thread!(athanor_id, turn.thread_id)
-          now = DateTime.utc_now()
-
-          text =
-            case Map.get(response, :text) do
-              nil ->
-                nil
-
-              "" ->
-                nil
-
-              content ->
-                Arca.ThreadStorage.insert_message!(actor, thread, %{
-                  author: Message.agent_author(),
-                  sent_by: turn.agent,
-                  kind: "text",
-                  content: content,
-                  payload: %{"step_id" => model_step_id},
-                  turn_id: turn_id,
-                  execution_id: turn.root_execution_id
-                })
-            end
-
-          {1, _} =
-            from(s in TurnStep,
-              where: s.athanor_id == ^athanor_id and s.id == ^model_step_id,
-              where: s.turn_id == ^turn_id and s.dispatch_state in ["proposed", "dispatched"]
-            )
-            |> Arca.Repo.update_all(
-              set: [
-                dispatch_state: "closed",
-                outcome: "ok",
-                usage: encode(Map.get(response, :usage)),
-                result_message_id: text && text.id,
-                ended_at: now
-              ]
-            )
-
-          # A call serves what the request that proposed it served.
-          purpose = model_step.purpose
-
-          calls =
-            Enum.map(calls, fn call ->
-              row =
-                Arca.ThreadStorage.insert_message!(actor, thread, %{
-                  author: Message.agent_author(),
-                  sent_by: turn.agent,
-                  kind: "tool_call",
-                  content: Map.get(call, :name, ""),
-                  payload:
-                    %{
-                      "tool_call_id" => Map.get(call, :tool_call_id),
-                      "name" => Map.get(call, :name),
-                      "tool" => Map.get(call, :tool),
-                      "action" => Map.get(call, :action),
-                      "arguments" => Map.get(call, :arguments),
-                      "provider_data" => Map.get(call, :provider_data),
-                      "kind" => Map.get(call, :kind),
-                      "step_id" => model_step_id
-                    }
-                    |> reject_nil(),
-                  turn_id: turn_id,
-                  execution_id: turn.root_execution_id
-                })
-
-              step =
-                insert_step!(athanor_id, turn, %{
-                  kind: Map.get(call, :step_kind, "tool"),
-                  purpose: purpose,
-                  tool: Map.get(call, :tool),
-                  action: Map.get(call, :action),
-                  idempotency_key: Map.get(call, :idempotency_key),
-                  recovery: Map.get(call, :recovery),
-                  message_id: row.id,
-                  child_execution_id: Map.get(call, :child_execution_id),
-                  authority_digest: Map.get(call, :authority_digest)
-                })
-
-              %{message: row, step: step}
-            end)
-
-          event!(athanor_id, turn, "model.completed", model_step_id, %{
-            "usage" => Map.get(response, :usage),
-            "stop_reason" => Map.get(response, :stop_reason),
-            "calls" => length(calls)
-          })
-
-          %{text: text, calls: calls}
-        end)
-      end)
-    end)
-    |> Arca.Data.project()
+  # arca:db-raise-ok inside the caller's transaction
+  defp call_row!(actor, athanor_id, %Turn{} = turn, call) do
+    Arca.ThreadStorage.insert_message!(actor, thread!(athanor_id, turn.thread_id), %{
+      author: Message.agent_author(),
+      sent_by: turn.agent,
+      kind: Map.fetch!(call, :kind),
+      content: Map.get(call, :content, ""),
+      payload: Map.get(call, :payload),
+      client_id: Map.get(call, :client_id),
+      turn_id: turn.id,
+      execution_id: turn.root_execution_id
+    })
   end
-
-  def record_response(%Prima.Actor{}, _turn_id, _model_step_id, _response),
-    do: {:error, :no_athanor}
 
   @doc """
   Flip a proposed step to `dispatched` in its own commit. Answers the
@@ -4192,6 +4058,69 @@ defmodule Arca.TurnStorage do
   def brain(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
 
   @doc """
+  What the thread's native session was given, derived from its deliveries
+  in the session's generation, whatever each carried (a post, a recovery
+  prompt or an answer): `seq`, the seq of the row of the first delivery the
+  program took (an `input` step closed `ok`) in the newest turn that has
+  one, or nil for none, since that delivery carried the thread before it;
+  and `taken`, the rows after it the program took. Nothing else counts as
+  given: a delivery refused, uncertain or never sent leaves both where
+  they were.
+  """
+  @spec brain_given(Prima.Actor.t(), String.t()) ::
+          {:ok, %{seq: integer() | nil, taken: [String.t()]}} | {:error, term()}
+  def brain_given(%Prima.Actor{athanor_id: athanor_id}, thread_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.brain_given", fn ->
+      case Arca.Repo.get_by(Thread, id: thread_id, athanor_id: athanor_id) do
+        nil -> {:error, :thread_not_found}
+        thread -> {:ok, given(athanor_id, thread)}
+      end
+    end)
+  end
+
+  def brain_given(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
+
+  defp given(athanor_id, %Thread{} = thread) do
+    taken =
+      from(s in TurnStep,
+        join: t in Turn,
+        on: t.id == s.turn_id and t.athanor_id == s.athanor_id,
+        join: m in Message,
+        on: m.id == s.message_id and m.athanor_id == s.athanor_id,
+        where: s.athanor_id == ^athanor_id and t.thread_id == ^thread.id,
+        # A delivery's key names the generation it was carried in (`carry/3`).
+        where: s.kind == "input" and like(s.idempotency_key, ^"#{thread.brain_generation}:%"),
+        where: s.dispatch_state == "closed" and s.outcome == "ok",
+        select: %{turn: t.id, accepted_at: t.accepted_at, seq: m.seq, row: m.id}
+      )
+      |> Arca.Repo.all()
+
+    case taken do
+      [] ->
+        %{seq: nil, taken: []}
+
+      taken ->
+        # The newest turn, as a thread orders its turns (`latest/2`).
+        newest = Enum.max_by(taken, &{&1.accepted_at, &1.turn}, &newer?/2).turn
+        seq = taken |> Enum.filter(&(&1.turn == newest)) |> Enum.map(& &1.seq) |> Enum.min()
+
+        %{
+          seq: seq,
+          taken: taken |> Enum.filter(&(&1.seq > seq)) |> Enum.map(& &1.row) |> Enum.uniq()
+        }
+    end
+  end
+
+  defp newer?({at, id}, {other_at, other_id}) do
+    case DateTime.compare(at, other_at) do
+      :gt -> true
+      :lt -> false
+      :eq -> id >= other_id
+    end
+  end
+
+  @doc """
   Record one delivery to a program brain before its command is written:
   an `input` step, `dispatched`, whose id the command carries, so a
   delivery is attempted once whatever restarts follow. In one transaction
@@ -4216,7 +4145,7 @@ defmodule Arca.TurnStorage do
   answer, and the silence clock runs over the delivery's acknowledgement,
   which the program owes (`brain_progress`). A notice leaves the recovery obligation it answers
   (`reconcile_brain/3`) where it stands until the driver answers for its
-  write (`commit_brain/3`) or a reconcile settles it; until then its step
+  write (`commit_events/3`) or a reconcile settles it; until then its step
   alone keeps another notice of its row from being offered
   (`brain_notices/2`).
   Answers `%{step: step, row: row}`.
@@ -4373,7 +4302,7 @@ defmodule Arca.TurnStorage do
 
   A held post and an uncertain answer each owe one recovery prompt
   (`brain_notices/2`), and the obligation stays recorded until the
-  driver answers for that prompt's write (`commit_brain/3`) or a
+  driver answers for that prompt's write (`commit_events/3`) or a
   reconcile finds the prompt's step recorded, as it may have been
   written: either settles it, and it is never prompted again. Until then
   a held post stays owed an answer, and a reconcile run again answers
@@ -4707,81 +4636,156 @@ defmodule Arca.TurnStorage do
   end
 
   @doc """
-  Commit what a batch of a program brain's lines did, and the position
-  after it, in one transaction: held to the turn's fence when a turn is
-  open (`:turn`, `%{id, fence}`), so a batch with none can still be
-  committed and read past, and always to the thread's lock, its session
-  generation (`:generation_moved`), and the session's owner, the program
-  row at an epoch no older than the last committed batch's
-  (`:row_changed`). The driver process `:boot` becomes the session's only
-  once the batch holds its `hello` (`:hello`); any other batch of a boot
-  that is not the committed one is `:superseded`. A batch whose last line
-  `:seq` is at or before the committed position of the same boot commits
-  nothing and answers `seen: true`.
+  Commit what a harness said, with its position, in one transaction: the
+  one writer of a turn's text, its asks, the deliveries a program took and
+  every usage. It always locks the scope's thread (`:thread`); with a turn
+  (`:turn`, `%{id, fence}`) it is held to that turn's fence and the turn
+  is open, and with none it takes only usage and deliveries.
 
-  `attrs` names what the lines did, each already judged by the attendant
-  (`Aqua.Program`):
+  `events`, in order:
 
-    * `:session` (with the generation), the native session `started`
-      named, kept as `brain_session`, and the batch's `:row_id` and
-      `:epoch` as the row it is stored with, in the same write: no other
-      batch moves that row;
-    * `:said`, `%{message, text}` the program said in the open turn's
-      work, each a post of its agent there;
-    * `:asks`, the open turn's asks, each a step proposal with its
-      `tool_call` row (`put_step/3`'s attrs), recorded once by its key on
-      a running or a paused turn and never dispatched by being recorded;
-    * `:accepted` and `:refused`, the `input` steps the driver answered:
-      taken closes one `ok`, refused closes it `error`, and neither is an
-      answer; a notice among them takes over the recovery obligation it
-      answers (`reconcile_brain/3`);
-    * `:answered`, the post and notice steps a native `idle` named: they
-      leave the posts owed an answer, and a nudge among them is answered;
-    * `:usage`, the `usage` events: each counted once, by its result's
-      identity or against its native thread's last usable total, against
-      the work it names (the open turn's, or one of this thread and agent
-      that is over, which reopens nothing), else kept as the session's
-      unattributed usage, never charged to later work;
-    * `:busy`, whether the program owes output after the batch (`true`
-      once a delivery was taken, `false` after an `idle`), and `:native`,
-      whether a line of the program's own came, which restarts the
-      silence clock's interval (`:silence_ms`), as a `:hello` does: a
-      process's interval is whole, whatever the last one spent.
+    * `{:text, %{text: text, message: id | nil}}`, a post of the scope's
+      agent in the turn;
+    * `{:ask, proposal}`, an ask: a step proposal with its `tool_call` row
+      (`put_step/3`'s attrs: `:kind`, `:tool`, `:action`, `:recovery`,
+      `:child_execution_id`, `:idempotency_key`, `:call`), recorded once by
+      its key as a `proposed` step and never dispatched by being recorded.
+      A `recovery` is none or one of `Prima.TurnState.recoveries/0`
+      (`{:error, :illegal_transition}` otherwise), and the step's stored
+      value alone later decides a replay (`next_generation/3`);
+    * `{:took, step_id}` and `{:refused, step_id}`, `input` steps a
+      program answered: taken closes one `ok`, refused closes it `error`,
+      and neither is an answer; a notice among them takes over the
+      recovery obligation it answers (`reconcile_brain/3`);
+    * `{:usage, usage}`, what a model ran and its counts
+      (`%{"models" => [%{"model", "counts"}], "accounting"}`), counted once
+      onto the step it is of: a model step's own, or the `program.start`
+      step of the work a session's usage names (`"work"`), each by its
+      result's identity (`"result"`) or against its native thread's last
+      usable total (`"total"`); a session's usage of no such work is kept
+      as the session's, unattributed, never charged to later work;
+    * `{:stop, reason}`, why a model's response ended.
 
-  Answers `%{seen: boolean, asks: [step], said: [row], progress: map}`.
+  `position` is where the harness stands after them:
+
+    * `{:step, id}`, a `model` step of the turn (`:step_not_found`
+      otherwise), dispatched: it closes `ok` with its text row and its
+      usage, and one event records it. A text row names the step;
+    * `{:session, progress}`, a program's session: every member the
+      thread's `brain_progress` checks or stores. `:generation`, the
+      thread's session generation (`:generation_moved`); `:row_id` and
+      `:epoch`, the session's owner, the program row at an epoch no older
+      than the last committed batch's (`:row_changed`); `:boot` and
+      `:seq`, the driver process and its last line: the boot becomes the
+      session's only once the batch holds its `hello` (`:hello`), any
+      other batch of a boot that is not the committed one is
+      `:superseded`, and one at or before the committed position of the
+      same boot commits nothing and answers `seen: true`; `:session`, the
+      native session `started` named, kept with `:row_id` and `:epoch` as
+      the row it is stored with; `:answered`, the post and notice steps a
+      native `idle` named, which leave the posts owed an answer (a nudge
+      among them is answered); `:busy`, whether the program owes output
+      after the batch; `:native` and `:hello`, which restart the silence
+      clock's interval (`:silence_ms`). A text row names its native
+      message.
+
+  The rows it writes, a text's and an ask's call, are written in the order
+  the events are given. Answers `%{seen: boolean, said: [row], asks:
+  [%{message: row, step: step}], rows: [row]}`, `rows` being every row
+  written in that order. Each ask answered is the step its own proposal
+  made, with that proposal's call row; an ask whose key was already
+  recorded makes none and is not answered.
   """
-  @spec commit_brain(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def commit_brain(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, attrs)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.commit_brain", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        turn =
-          case Map.get(attrs, :turn) do
-            nil -> nil
-            %{id: id} = held -> open!(own!(athanor_id, id, held))
-          end
+  @spec commit_events(Prima.Actor.t(), map(), map()) :: {:ok, map()} | {:error, term()}
+  def commit_events(
+        %Prima.Actor{athanor_id: athanor_id} = actor,
+        %{thread: thread_id} = scope,
+        %{events: events, position: position}
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+             is_list(events) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.commit_events", fn ->
+      with_seq_retry(fn ->
+        Arca.Repo.locking_transaction(fn ->
+          turn =
+            case Map.get(scope, :turn) do
+              nil -> nil
+              %{id: id} = held -> open!(own!(athanor_id, id, held))
+            end
 
-        thread = locked_thread!(athanor_id, thread_id)
-        if turn && turn.thread_id != thread.id, do: Arca.Repo.rollback(:wrong_turn)
-        # Strict, so a generation of another type (0.0 for 0) is refused
-        # here: the session's write after it holds to no generation of its
-        # own (`keep_session!/3`).
-        generation = Map.fetch!(attrs, :generation)
-        if thread.brain_generation !== generation, do: Arca.Repo.rollback(:generation_moved)
-        progress = progress(thread)
-        owner!(progress, attrs)
-
-        if seen?(progress, attrs) do
-          %{seen: true, asks: [], said: [], progress: progress}
-        else
-          committed!(actor, athanor_id, thread, turn, progress, attrs)
-        end
+          thread = locked_thread!(athanor_id, thread_id)
+          if turn && turn.thread_id != thread.id, do: Arca.Repo.rollback(:wrong_turn)
+          committed!(actor, athanor_id, thread, turn, scope, events, position)
+        end)
       end)
     end)
     |> Arca.Data.project()
   end
 
-  def commit_brain(%Prima.Actor{}, _thread_id, _attrs), do: {:error, :no_athanor}
+  def commit_events(%Prima.Actor{}, _scope, _commit), do: {:error, :no_athanor}
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp committed!(actor, athanor_id, thread, turn, _scope, events, {:step, step_id}) do
+    if is_nil(turn), do: Arca.Repo.rollback(:step_not_found)
+    step = step!(athanor_id, step_id)
+    if step.turn_id != turn.id or step.kind != "model", do: Arca.Repo.rollback(:step_not_found)
+    illegal_recovery!(events)
+
+    written = written!(actor, athanor_id, thread, turn, step, events)
+    said = for {:text, row} <- written, do: row
+    asks = for {:ask, ask} <- written, do: ask
+
+    usage =
+      for({:usage, usage} <- events, reduce: nil, do: (acc -> add_usage(acc, counts(usage))))
+
+    {1, _} =
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.id == ^step_id,
+        where: s.turn_id == ^turn.id and s.dispatch_state in ["proposed", "dispatched"]
+      )
+      |> Arca.Repo.update_all(
+        set: [
+          dispatch_state: "closed",
+          outcome: "ok",
+          usage: encode(usage),
+          result_message_id: List.first(Enum.map(said, & &1.id)),
+          ended_at: DateTime.utc_now()
+        ]
+      )
+
+    event!(athanor_id, turn, "model.completed", step_id, %{
+      "usage" => usage,
+      "stop_reason" => List.last(for {:stop, reason} <- events, do: reason),
+      "calls" => length(asks)
+    })
+
+    %{seen: false, said: said, asks: asks, rows: rows(written)}
+  end
+
+  defp committed!(actor, athanor_id, thread, turn, scope, events, {:session, progress_attrs}) do
+    # Strict, so a generation of another type (0.0 for 0) is refused
+    # here: the session's write after it holds to no generation of its
+    # own (`keep_session!/3`).
+    generation = Map.fetch!(progress_attrs, :generation)
+    if thread.brain_generation !== generation, do: Arca.Repo.rollback(:generation_moved)
+    progress = progress(thread)
+    owner!(progress, progress_attrs)
+
+    if seen?(progress, progress_attrs) do
+      %{seen: true, said: [], asks: [], rows: []}
+    else
+      illegal_recovery!(events)
+      session!(actor, athanor_id, thread, turn, scope, events, progress, progress_attrs)
+    end
+  end
+
+  defp illegal_recovery!(events) do
+    if Enum.any?(events, fn
+         {:ask, ask} -> Map.get(ask, :recovery) not in [nil | Prima.TurnState.recoveries()]
+         _other -> false
+       end),
+       do: Arca.Repo.rollback(:illegal_transition)
+  end
 
   # The session's owner: the program row the last committed batch ran on
   # (`driver`), at an epoch no older than that batch's, and the driver
@@ -4810,28 +4814,27 @@ defmodule Arca.TurnStorage do
     do: progress["boot"] == attrs.boot and (progress["seq"] || 0) >= Map.fetch!(attrs, :seq)
 
   # arca:db-raise-ok inside the caller's transaction
-  defp committed!(actor, athanor_id, thread, turn, progress, attrs) do
+  defp session!(actor, athanor_id, thread, turn, scope, events, progress, attrs) do
     session = Map.get(attrs, :session)
     keep_session!(athanor_id, thread, session)
 
-    said =
-      if turn, do: Enum.map(Map.get(attrs, :said, []), &said!(actor, thread, turn, &1)), else: []
+    written = if turn, do: written!(actor, athanor_id, thread, turn, nil, events), else: []
+    said = for {:text, row} <- written, do: row
+    asks = for {:ask, ask} <- written, do: ask
 
-    asks =
-      if turn,
-        do: Enum.flat_map(Map.get(attrs, :asks, []), &ask!(actor, athanor_id, turn, &1)),
-        else: []
-
-    :ok = inputs_closed!(athanor_id, thread, Map.get(attrs, :accepted, []), "ok")
-    :ok = inputs_closed!(athanor_id, thread, Map.get(attrs, :refused, []), "error")
+    took = for {:took, id} <- events, do: id
+    refused = for {:refused, id} <- events, do: id
+    :ok = inputs_closed!(athanor_id, thread, took, "ok")
+    :ok = inputs_closed!(athanor_id, thread, refused, "error")
     answered = Map.get(attrs, :answered, [])
     :ok = nudges_answered!(athanor_id, thread, answered)
+    usages = for {:usage, usage} <- events, do: usage
 
     progress =
       progress
-      |> taken_over(athanor_id, Map.get(attrs, :accepted, []) ++ Map.get(attrs, :refused, []))
+      |> taken_over(athanor_id, took ++ refused)
       |> Map.update("owed", [], &(&1 -- answered))
-      |> counted!(athanor_id, thread, turn, attrs.agent, Map.get(attrs, :usage, []))
+      |> counted!(athanor_id, thread, turn, Map.fetch!(scope, :agent), usages)
       |> then(fn p ->
         case Map.get(attrs, :busy) do
           nil -> p
@@ -4850,18 +4853,47 @@ defmodule Arca.TurnStorage do
       |> Map.merge(if session, do: %{"row" => attrs.row_id, "epoch" => attrs.epoch}, else: %{})
 
     :ok = put_progress!(athanor_id, thread.id, progress)
-    %{seen: false, asks: asks, said: said, progress: progress}
+    %{seen: false, said: said, asks: asks, rows: rows(written)}
   end
 
-  # What the program said in the open turn's work: a post of its agent.
+  # The rows the events write, a text's and an ask's call, in the order
+  # the events were given, which is the order of their seq.
   # arca:db-raise-ok inside the caller's transaction
-  defp said!(actor, thread, %Turn{} = turn, %{message: message, text: text}) do
+  defp written!(actor, athanor_id, thread, turn, step, events) do
+    Enum.flat_map(events, fn
+      {:text, text} ->
+        [{:text, said!(actor, thread, turn, text, step && step.id)}]
+
+      {:ask, ask} ->
+        for asked <- ask!(actor, athanor_id, turn, step, ask), do: {:ask, asked}
+
+      _other ->
+        []
+    end)
+  end
+
+  defp rows(written) do
+    Enum.map(written, fn
+      {:text, row} -> row
+      {:ask, %{message: row}} -> row
+    end)
+  end
+
+  # What the harness said in the open turn: a post of its agent, naming
+  # the model step it is of or the native message.
+  # arca:db-raise-ok inside the caller's transaction
+  defp said!(actor, thread, %Turn{} = turn, %{text: text} = said, step_id) do
+    payload =
+      if step_id,
+        do: %{"step_id" => step_id},
+        else: %{"brain_message" => Map.get(said, :message)}
+
     Arca.ThreadStorage.insert_message!(actor, thread, %{
       author: Message.agent_author(),
       sent_by: turn.agent,
       kind: "text",
       content: text,
-      payload: %{"brain_message" => message},
+      payload: payload,
       turn_id: turn.id,
       execution_id: turn.root_execution_id
     })
@@ -4869,9 +4901,10 @@ defmodule Arca.TurnStorage do
 
   # An ask of the open turn, recorded once by its key with the row of its
   # call, on a running or a paused turn: being recorded dispatches
-  # nothing, and the turn's loop decides it when the turn goes on.
+  # nothing, and the turn's loop decides it. An ask serves what the model
+  # step that made it served; a program's serves the program.
   # arca:db-raise-ok inside the caller's transaction
-  defp ask!(actor, athanor_id, %Turn{} = turn, %{idempotency_key: key} = attrs) do
+  defp ask!(actor, athanor_id, %Turn{} = turn, step, %{idempotency_key: key} = attrs) do
     if Arca.Repo.exists?(
          from(s in TurnStep,
            where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
@@ -4880,8 +4913,11 @@ defmodule Arca.TurnStorage do
        ) do
       []
     else
-      attrs = Map.merge(attrs, %{purpose: "brain", dispatch_state: "proposed"})
-      [insert_step!(athanor_id, turn, carried!(actor, athanor_id, turn, attrs))]
+      purpose = if step, do: step.purpose, else: "brain"
+      attrs = Map.merge(attrs, %{purpose: purpose, dispatch_state: "proposed"})
+      row = call_row!(actor, athanor_id, turn, Map.fetch!(attrs, :call))
+      attrs = attrs |> Map.delete(:call) |> Map.put(:message_id, row.id)
+      [%{message: row, step: insert_step!(athanor_id, turn, attrs)}]
     end
   end
 
@@ -5732,10 +5768,9 @@ defmodule Arca.TurnStorage do
   end
 
   # A page's call or a program brain's ask the host proposed into the
-  # turn that is still to be dispatched; and, of a turn on a program
-  # brain, a delivery not yet taken, a
-  # post or notice written and not yet answered, or an ask's result whose
-  # answer is not yet taken.
+  # turn that is still to be dispatched; a delivery not yet taken, a post
+  # or notice written and not yet answered, or an ask's result whose
+  # answer is not yet taken. A turn on a model has none of the last three.
   # arca:db-raise-ok inside the caller's transaction
   defp calls_pending?(athanor_id, %Turn{} = turn) do
     Arca.Repo.exists?(
@@ -5743,7 +5778,7 @@ defmodule Arca.TurnStorage do
         where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
         where: s.purpose in ["page", "brain"] and s.dispatch_state == "proposed"
       )
-    ) or (is_binary(turn.program) and brain_owed?(athanor_id, turn))
+    ) or brain_owed?(athanor_id, turn)
   end
 
   # arca:db-raise-ok inside the caller's transaction
@@ -6293,7 +6328,7 @@ defmodule Arca.TurnStorage do
   end
 
   # The program's native session a batch's `started` names, kept on the
-  # thread for its next start. `commit_brain/3` holds the thread's lock and
+  # thread for its next start. `commit_events/3` holds the thread's lock and
   # has refused a batch whose generation moved, so a forget committed since
   # the turn read the thread (`Arca.ThreadStorage.forget_sessions/2`,
   # `forget_session/3`) refused the batch before this write.

@@ -1275,7 +1275,7 @@ defmodule Locus.KeeperTest do
                  again: again,
                  folder: File.exists?(Path.join(root, "vlt_a"))
                } == %{
-                 beside: {:error, {:refused, "unavailable"}},
+                 beside: {:error, {:refused, "conflict"}},
                  another_home: :ok,
                  landed: true,
                  again: :ok,
@@ -1308,8 +1308,8 @@ defmodule Locus.KeeperTest do
                beside_make: beside_make,
                made_again: made_again
              } == %{
-               beside_retirement: {:ok, {:error, {:refused, "unavailable"}}},
-               beside_make: {:error, {:refused, "unavailable"}},
+               beside_retirement: {:ok, {:error, {:refused, "conflict"}}},
+               beside_make: {:error, {:refused, "conflict"}},
                made_again: true
              }
 

@@ -33,13 +33,17 @@ const (
 	// the binary it holds, each far above what a release ships.
 	maxArchiveSize = 256 << 20
 	maxBinarySize  = 512 << 20
+	// maxPackageSize bounds the CYFR app's package, which carries its
+	// engine, as downloaded.
+	maxPackageSize = 512 << 20
 )
 
-// checksumsURLTemplate and binaryURLTemplate are the URLs FetchBinary
-// reads, variables so tests can point them at an httptest server.
+// checksumsURLTemplate and downloadURLTemplate are the URLs FetchBinary and
+// FetchPackage read, variables so tests can point them at an httptest
+// server.
 var (
 	checksumsURLTemplate = ChecksumsURLTemplate
-	binaryURLTemplate    = assetURLTemplate
+	downloadURLTemplate  = assetURLTemplate
 )
 
 // VerifiedChecksum reads the checksums.txt at checksumsURL and its bundle,
@@ -89,6 +93,12 @@ func ArchiveName(version, goos, goarch string) string {
 	return fmt.Sprintf("cyfr_%s_%s_%s.%s", version, goos, goarch, ext)
 }
 
+// PackageName is the CYFR app's Linux package the release ships for an
+// architecture, as .goreleaser.yml's extra files name it.
+func PackageName(version, goarch string) string {
+	return fmt.Sprintf("cyfr-desktop_%s_linux_%s.deb", version, goarch)
+}
+
 // BinaryName is the CLI's file name in its archive on goos.
 func BinaryName(goos string) string {
 	if goos == "windows" {
@@ -98,34 +108,51 @@ func BinaryName(goos string) string {
 }
 
 // FetchBinary downloads release version's CLI archive for goos/goarch and
-// answers the binary it holds. The archive's sha256 is compared with the
-// line of the release's checksums.txt that VerifiedChecksum answers, so
-// nothing of the archive is read before checksums.txt verifies as the
-// release workflow's signature for version and the archive is the file it
-// names. Every integrity failure wraps ErrUnverified; a download that
-// fails is a transport error.
+// answers the binary it holds, nothing of the archive read before it is
+// verified (fetchVerified).
 func FetchBinary(ctx context.Context, version, goos, goarch string) ([]byte, error) {
-	if !IsVersion(version) {
-		return nil, fmt.Errorf("%w: %q is not a release version (MAJOR.MINOR.PATCH, or with a pre-release)", ErrUnverified, version)
-	}
-	client := &http.Client{}
 	archive := ArchiveName(version, goos, goarch)
-	want, err := VerifiedChecksum(ctx, client, fmt.Sprintf(checksumsURLTemplate, version), version, archive)
+	data, err := fetchVerified(ctx, version, archive, maxArchiveSize)
 	if err != nil {
 		return nil, err
-	}
-	data, err := FetchBounded(ctx, client, fmt.Sprintf(binaryURLTemplate, version, archive), maxArchiveSize)
-	if err != nil {
-		return nil, err
-	}
-	if got := sha256.Sum256(data); hex.EncodeToString(got[:]) != want {
-		return nil, fmt.Errorf("%w: %s does not match the release's signed checksums.txt", ErrUnverified, archive)
 	}
 	binary, err := extractBinary(data, goos)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", ErrUnverified, archive, err)
 	}
 	return binary, nil
+}
+
+// FetchPackage downloads release version's CYFR app package for Linux on
+// goarch and answers its bytes, verified (fetchVerified). A release with no
+// package for goarch refuses with ErrUnverified.
+func FetchPackage(ctx context.Context, version, goarch string) ([]byte, error) {
+	return fetchVerified(ctx, version, PackageName(version, goarch), maxPackageSize)
+}
+
+// fetchVerified answers release version's asset, at most limit bytes: its
+// sha256 is compared with the line of the release's checksums.txt that
+// VerifiedChecksum answers, so nothing is answered before checksums.txt
+// verifies as the release workflow's signature for version and the asset
+// is the file it names. Every integrity failure wraps ErrUnverified; a
+// download that fails is a transport error.
+func fetchVerified(ctx context.Context, version, asset string, limit int64) ([]byte, error) {
+	if !IsVersion(version) {
+		return nil, fmt.Errorf("%w: %q is not a release version (MAJOR.MINOR.PATCH, or with a pre-release)", ErrUnverified, version)
+	}
+	client := &http.Client{}
+	want, err := VerifiedChecksum(ctx, client, fmt.Sprintf(checksumsURLTemplate, version), version, asset)
+	if err != nil {
+		return nil, err
+	}
+	data, err := FetchBounded(ctx, client, fmt.Sprintf(downloadURLTemplate, version, asset), limit)
+	if err != nil {
+		return nil, err
+	}
+	if got := sha256.Sum256(data); hex.EncodeToString(got[:]) != want {
+		return nil, fmt.Errorf("%w: %s does not match the release's signed checksums.txt", ErrUnverified, asset)
+	}
+	return data, nil
 }
 
 // extractBinary answers the regular file named BinaryName(goos) at the top

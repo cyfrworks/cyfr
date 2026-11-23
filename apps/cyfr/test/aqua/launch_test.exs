@@ -146,22 +146,37 @@ defmodule Aqua.LaunchTest do
   defp launch_step!(ctx, turn, args, root_id \\ nil) do
     {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
 
-    {:ok, %{calls: [%{step: step}]}} =
-      Tape.record_response(ctx, turn, model_step, %{
-        text: nil,
-        tool_calls: [
-          %{
-            tool_call_id: "c1",
-            name: "execution.run",
-            tool: "execution",
-            action: "run",
-            arguments: args,
-            kind: "execute",
-            step_kind: "launch",
-            child_execution_id: root_id
-          }
-        ]
-      })
+    {:ok, %{asks: [%{step: step}]}} =
+      Tape.commit_events(
+        ctx,
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{
+          events: [
+            {:ask,
+             %{
+               kind: "launch",
+               tool: "execution",
+               action: "run",
+               child_execution_id: root_id,
+               idempotency_key: "call:#{turn.id}:#{model_step.id}:c1",
+               call: %{
+                 kind: "tool_call",
+                 content: "execution.run",
+                 payload: %{
+                   "tool_call_id" => "c1",
+                   "name" => "execution.run",
+                   "tool" => "execution",
+                   "action" => "run",
+                   "arguments" => args,
+                   "kind" => "execute",
+                   "step_id" => model_step.id
+                 }
+               }
+             }}
+          ],
+          position: {:step, model_step.id}
+        }
+      )
 
     step
   end

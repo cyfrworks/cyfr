@@ -199,13 +199,19 @@ defmodule Arca.CrewStorageTest do
       step = model_step!(actor, turn, "model:1")
 
       {:ok, _} =
-        TurnStorage.record_response(actor, turn.id, step.id, %{
-          fence: turn.fence,
-          text: "Both done.",
-          usage: %{},
-          stop_reason: "end_turn",
-          tool_calls: []
-        })
+        TurnStorage.commit_events(
+          actor,
+          %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+          %{
+            events: [
+              {:text, %{text: "Both done."}},
+              {:usage,
+               %{"models" => [%{"model" => "m", "counts" => %{}}], "accounting" => "complete"}},
+              {:stop, "end_turn"}
+            ],
+            position: {:step, step.id}
+          }
+        )
 
       assert replies(actor) == []
 

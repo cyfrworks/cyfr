@@ -79,7 +79,7 @@ defmodule Locus.Keeper do
   `home_reset/2` (a retirement, then a make under the same uid) and
   `home_retire/2` ask cyfr-locus, which acts as the home's uid. A reset or
   a retirement of a home that a request in flight will still make (a make,
-  or a reset) is refused `unavailable`, whether its caller still waits or
+  or a reset) is refused `conflict`, whether its caller still waits or
   not, never taken for absent: it is asked again once that has landed. A spec
   naming a made kept `home` spawns there under the home's uid, with its
   `home_max_bytes`; one naming a home not made is refused `home_absent`
@@ -1508,7 +1508,7 @@ defmodule Locus.Keeper do
         entry.path == path and elem(entry.pending, 0) in [:ensure, :reset, :made]
       end)
 
-    if making?, do: {:error, "unavailable"}, else: :ok
+    if making?, do: {:error, "conflict"}, else: :ok
   end
 
   # Asks cyfr-locus for `type` on the home at `path` of `uid`, answered when

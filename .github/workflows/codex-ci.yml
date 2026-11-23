@@ -341,16 +341,10 @@ jobs:
         working-directory: apps/codex/desktop
         run: node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr${{ matrix.exe }}" --version 0.0.0-ci --arch ${{ matrix.arch }}
 
-      # The DEB installs at /opt/cyfr and loads its sandbox's AppArmor
-      # profile; Xvfb and a session bus give the app a display and a bus,
-      # and the smoke sees the app's window with xdotool.
-      - name: Install the app (Linux)
+      # The script release.yml runs on the package it publishes.
+      - name: Install and smoke the app (Linux)
         if: runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends "$PWD"/apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb xvfb xauth dbus-x11 xdotool
-          echo "APP=/opt/cyfr/CYFR" >> "$GITHUB_ENV"
+        run: bash tests/desktop-proof/native/linux.sh apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb
 
       - name: Install the app (macOS)
         if: runner.os == 'macOS'
@@ -376,10 +370,6 @@ jobs:
           $found = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs") -Recurse -Filter CYFR.exe -ErrorAction SilentlyContinue | Where-Object { $_.Name -ceq "CYFR.exe" })
           if ($found.Count -ne 1) { throw "the MSI installed $($found.Count) CYFR.exe under $env:LOCALAPPDATA\Programs" }
           "APP=$($found[0].FullName)" >> $env:GITHUB_ENV
-
-      - name: Smoke the installed app (Linux)
-        if: runner.os == 'Linux'
-        run: dbus-run-session -- xvfb-run -a bash tests/desktop-proof/native/smoke.sh "$APP"
 
       - name: Smoke the installed app
         if: runner.os != 'Linux'

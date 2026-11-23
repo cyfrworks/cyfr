@@ -297,11 +297,8 @@ defmodule Aqua.Loop.FlushTest do
 
       a = model_step!(ctx, turn, "flush")
 
-      {:ok, %{calls: [%{step: n1}, %{step: n2}]}} =
-        Tape.record_response(ctx, turn, a, %{
-          text: nil,
-          tool_calls: [call_attrs(turn, a, "n1", "plan"), call_attrs(turn, a, "n2", "later")]
-        })
+      {:ok, %{asks: [%{step: n1}, %{step: n2}]}} =
+        respond(ctx, turn, a, [ask(turn, a, "n1", "plan"), ask(turn, a, "n2", "later")])
 
       {:ok, _} = Tape.mark_dispatched(ctx, turn, n1)
       # The note landed; the process died before its outcome was written.
@@ -325,21 +322,15 @@ defmodule Aqua.Loop.FlushTest do
 
       flush = model_step!(ctx, turn, "flush")
 
-      {:ok, %{calls: [%{step: note}]}} =
-        Tape.record_response(ctx, turn, flush, %{
-          text: nil,
-          tool_calls: [call_attrs(turn, flush, "n1", "plan")]
-        })
+      {:ok, %{asks: [%{step: note}]}} =
+        respond(ctx, turn, flush, [ask(turn, flush, "n1", "plan")])
 
       {:ok, _} = Tape.mark_dispatched(ctx, turn, note)
 
       chat = model_step!(ctx, turn, "chat")
 
-      {:ok, %{calls: [%{step: write}]}} =
-        Tape.record_response(ctx, turn, chat, %{
-          text: nil,
-          tool_calls: [call_attrs(turn, chat, "w1", "draft")]
-        })
+      {:ok, %{asks: [%{step: write}]}} =
+        respond(ctx, turn, chat, [ask(turn, chat, "w1", "draft")])
 
       {:ok, _} = Tape.mark_dispatched(ctx, turn, write)
 
@@ -506,18 +497,37 @@ defmodule Aqua.Loop.FlushTest do
     step
   end
 
-  defp call_attrs(turn, model_step, id, name) do
+  # A model's response of `asks`, which closes `model_step`.
+  defp respond(ctx, turn, model_step, asks),
+    do:
+      Tape.commit_events(
+        ctx,
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{events: Enum.map(asks, &{:ask, &1}), position: {:step, model_step.id}}
+      )
+
+  # A `notes.keep` call as the step proposed for it, with its `tool_call` row.
+  defp ask(turn, model_step, id, name) do
     args = %{"action" => "keep", "name" => name, "content" => "the #{name}"}
 
     %{
-      tool_call_id: id,
-      name: "notes",
+      kind: "tool",
       tool: "notes",
       action: "keep",
-      arguments: args,
-      kind: "write",
       idempotency_key: "call:#{turn.id}:#{model_step.id}:#{id}",
-      step_kind: "tool"
+      call: %{
+        kind: "tool_call",
+        content: "notes",
+        payload: %{
+          "tool_call_id" => id,
+          "name" => "notes",
+          "tool" => "notes",
+          "action" => "keep",
+          "arguments" => args,
+          "kind" => "write",
+          "step_id" => model_step.id
+        }
+      }
     }
   end
 

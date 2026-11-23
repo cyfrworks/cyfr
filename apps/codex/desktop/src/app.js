@@ -242,7 +242,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   function guard(ses, kind) {
     ses.webRequest.onHeadersReceived((details, callback) => {
-      callback({responseHeaders: documentHeaders(kind, details.resourceType, details.responseHeaders ?? {})})
+      const page = details.webContents
+      callback({responseHeaders: documentHeaders(kind, details.resourceType, details.responseHeaders ?? {},
+        {pageGone: !page || page.isDestroyed()})})
     })
     ses.setPermissionRequestHandler((_wc, permission, callback) => callback(grants(permission)))
     ses.setPermissionCheckHandler((_wc, permission) => grants(permission))
@@ -521,7 +523,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       // The engine writes cookies within half a minute, which an app that is
       // killed does not have.
       const ses = session.fromPartition(CONTENT_PARTITION)
-      storage = keptStorage(ses, path.join(app.getPath("userData"), "content-owner"))
+      storage = keptStorage(ses, path.join(app.getPath("userData"), "content-owner"), say)
       const {cookies} = ses
       cookies.on("changed", () => cookies.flushStore().catch(() => {}))
     }

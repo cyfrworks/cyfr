@@ -1480,20 +1480,36 @@ defmodule Aqua.TurnReadThreadsTest do
   defp read_step!(ctx, turn) do
     {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
 
-    {:ok, %{calls: [%{step: step}]}} =
-      Tape.record_response(ctx, turn, model_step, %{
-        text: nil,
-        tool_calls: [
-          %{
-            tool_call_id: "r1",
-            name: "thread",
-            tool: "thread",
-            action: "search",
-            arguments: %{"action" => "search", "q" => "secret"},
-            kind: "read"
-          }
-        ]
-      })
+    {:ok, %{asks: [%{step: step}]}} =
+      Tape.commit_events(
+        ctx,
+        %{thread: turn.thread_id, agent: turn.agent, turn: %{id: turn.id, fence: turn.fence}},
+        %{
+          events: [
+            {:ask,
+             %{
+               kind: "tool",
+               tool: "thread",
+               action: "search",
+               idempotency_key: "call:#{turn.id}:#{model_step.id}:r1",
+               call: %{
+                 kind: "tool_call",
+                 content: "thread",
+                 payload: %{
+                   "tool_call_id" => "r1",
+                   "name" => "thread",
+                   "tool" => "thread",
+                   "action" => "search",
+                   "arguments" => %{"action" => "search", "q" => "secret"},
+                   "kind" => "read",
+                   "step_id" => model_step.id
+                 }
+               }
+             }}
+          ],
+          position: {:step, model_step.id}
+        }
+      )
 
     {:ok, step} = Tape.mark_dispatched(ctx, turn, step)
     step
