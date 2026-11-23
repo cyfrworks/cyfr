@@ -140,16 +140,25 @@ def keys(img):
     return out
 
 
-def press(qmp, img, x, y):
-    """A press and release of the tablet's left button at (x, y)."""
+def point(qmp, img, x, y):
     W, H = img.size
     qmp.call("input-send-event", {"events": [
         {"type": "abs", "data": {"axis": "x", "value": round(x * 32767 / (W - 1))}},
         {"type": "abs", "data": {"axis": "y", "value": round(y * 32767 / (H - 1))}}]})
+
+
+def press(qmp, img, x, y):
+    """A press and release of the tablet's left button at (x, y), then the
+    pointer moved to the display's bottom right corner, where its arrow is
+    drawn off the display, as a finger lifts: left where it pressed, it
+    covers the words the next read looks for."""
+    point(qmp, img, x, y)
     time.sleep(0.05)
     qmp.call("input-send-event", {"events": [{"type": "btn", "data": {"down": True, "button": "left"}}]})
     time.sleep(0.08)
     qmp.call("input-send-event", {"events": [{"type": "btn", "data": {"down": False, "button": "left"}}]})
+    time.sleep(0.05)
+    point(qmp, img, img.width - 1, img.height - 1)
 
 
 def middle(box):
