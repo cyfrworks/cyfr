@@ -685,9 +685,10 @@ func TestLock_RetiresEachSessionAndUnlockNeedsTheSecretAgain(t *testing.T) {
 	if !strings.Contains(b.page(), "CYFR is locked") {
 		t.Fatal("no lock page")
 	}
+	// A second lock tells the CYFR nothing more, and hides once more.
 	b.post("/lock", nil)
-	if len(home.locked) != 2 || b.restarts.Load() != 1 {
-		t.Fatal("a second lock did more")
+	if len(home.locked) != 2 || b.restarts.Load() != 2 {
+		t.Fatalf("a second lock did more, or did not hide: locked %v, %d hides", home.locked, b.restarts.Load())
 	}
 
 	ops := len(home.opsSeen())
@@ -781,6 +782,8 @@ func TestChannel_AStandingEndedUnannouncedEndsAtTheNextReport(t *testing.T) {
 	if b.shell.Unlocked() || !strings.Contains(b.page(), "it was removed, CYFR does not admit your account") {
 		t.Fatal("a standing ended unannounced did not lock the box at its next report")
 	}
+	// The record is written once the screen is hidden, as the lock ends.
+	b.shell.Lock("")
 	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
 		t.Fatalf("the client kept %+v", c)
 	}

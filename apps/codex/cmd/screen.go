@@ -518,7 +518,7 @@ func (c *screenChrome) run(ctx context.Context) error {
 
 // show runs Chrome on the shell's pages, again a second after each exit,
 // which locks: the proof its page held is gone with it.
-func (c *screenChrome) show(ctx context.Context, lock func(string) bool) error {
+func (c *screenChrome) show(ctx context.Context, lock func(string)) error {
 	for ctx.Err() == nil {
 		if err := c.run(ctx); err != nil {
 			return fmt.Errorf("Chrome did not start (%v)", err)

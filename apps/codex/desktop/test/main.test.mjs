@@ -1127,17 +1127,41 @@ test("the engine's logging switch in the environment is dropped as the app start
   assert.equal(process.env.ELECTRON_ENABLE_LOGGING, undefined)
 })
 
-test("a lost confirmation window closes alone", async () => {
-  await signedIn()
-  const page = content()
+// A confirmation window the engine made for a page, opened.
+function confirmationOpened(page) {
   page.webContents.opens({url: "http://127.0.0.1:7340/confirm?ref=cfm_1"})
   const opened = new BrowserWindow({webPreferences: {session: page.webContents.session}})
   page.webContents.emit("did-create-window", opened)
-  opened.webContents.emit("render-process-gone", {}, {reason: "killed"})
+  return opened
+}
+
+// Its two ends: its page lost, and a load of its top frame that failed.
+const CONFIRMATION_ENDS = {
+  lost: (w) => w.webContents.emit("render-process-gone", {}, {reason: "killed"}),
+  failed: (w) => fails(w, "http://127.0.0.1:7340/confirm?ref=cfm_1")
+}
+
+test("a confirmation window whose page is lost or failed to load closes alone, the person back on the CYFR's page", async () => {
+  for (const [end, made] of Object.entries(CONFIRMATION_ENDS)) {
+    await signedIn()
+    const page = content()
+    const opened = confirmationOpened(page)
+    made(opened)
+    await settled()
+    assert.ok(opened.destroyed, `${end}: it closed`)
+    assert.ok(!page.destroyed, end)
+    assert.equal(page.webContents.reloaded, undefined, end)
+    assert.ok(!child.heard.some((m) => m.type === "lock"), `${end}: nothing locked`)
+  }
+})
+
+test("a confirmation window's load given up, or a frame's that failed, leaves it open", async () => {
+  await signedIn()
+  const opened = confirmationOpened(content())
+  fails(opened, "http://127.0.0.1:7340/confirm?ref=cfm_1", -3)
+  fails(opened, "http://127.0.0.1:7340/frame", -106, false)
   await settled()
-  assert.ok(opened.destroyed)
-  assert.ok(!page.destroyed)
-  assert.equal(page.webContents.reloaded, undefined)
+  assert.ok(!opened.destroyed)
 })
 
 test("opened and cyfr's locked read in one go leave cyfr running and the chooser ready", async () => {
@@ -1238,6 +1262,20 @@ function fragmentTo(page, url) {
   page.webContents.url = url
   page.webContents.emit("did-navigate-in-page", {}, url, true)
 }
+
+test("an account window whose page is lost or failed to load ends the ceremony, the person back on the CYFR's sign-in page", async () => {
+  for (const [end, made] of Object.entries({
+    lost: (w) => w.webContents.emit("render-process-gone", {}, {reason: "killed"}),
+    failed: (w) => fails(w, ACCOUNT + "/account/sign")
+  })) {
+    const {page} = await hopped()
+    const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+    made(account)
+    await settled()
+    assert.ok(account.destroyed, `${end}: the ceremony ended`)
+    assert.ok(!page.destroyed && page.webContents.url === HOME + "/login", end)
+  }
+})
 
 test("a redirect in the account window is no answer of a sign-in's", async () => {
   const {page} = await hopped()
@@ -1437,7 +1475,7 @@ test("on the screen a lost page locks, a failed load shows the shell's page, and
 })
 
 
-test("on the screen a failed load of the shell's own page locks, and so does a lost confirmation", ON_LINUX, async () => {
+test("on the screen a failed load of the shell's own page locks, and so does a confirmation lost or failed", ON_LINUX, async () => {
   await screenStarted()
   assert.ok(await opens())
   await give(content())
@@ -1451,15 +1489,19 @@ test("on the screen a failed load of the shell's own page locks, and so does a l
   assert.equal(content().webContents.url, SHELL_PAGE)
   assert.ok(await opens())
   await give(content())
-  const page = content()
-  page.webContents.opens({url: "http://127.0.0.1:7340/confirm?ref=cfm_1"})
-  const opened = new BrowserWindow({webPreferences: {session: page.webContents.session}})
-  page.webContents.emit("did-create-window", opened)
-  locks = child.heard.filter((m) => m.type === "lock").length
-  opened.webContents.emit("render-process-gone", {}, {reason: "killed"})
-  await settled()
-  assert.ok(opened.destroyed)
-  assert.equal(child.heard.filter((m) => m.type === "lock").length, locks + 1, "a lost confirmation locks")
+  for (const [end, made] of Object.entries(CONFIRMATION_ENDS)) {
+    const opened = confirmationOpened(content())
+    locks = child.heard.filter((m) => m.type === "lock").length
+    made(opened)
+    await settled()
+    assert.ok(opened.destroyed, end)
+    assert.equal(child.heard.filter((m) => m.type === "lock").length, locks + 1, `a confirmation ${end} locks`)
+    child.say({type: "locked"})
+    await settled()
+    await settled()
+    assert.ok(await opens(), end)
+    await give(content())
+  }
 })
 
 test("on macOS and Windows the screen road is refused", {skip: process.platform === "linux" && "it runs there"}, async () => {

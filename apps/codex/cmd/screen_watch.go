@@ -47,7 +47,10 @@ const (
 // idle.AnswerWithin, in which the shell itself watched nothing. A sleep
 // locks on the first tick after waking and starts the watches again.
 // Losing either watch locks at once; the page then says which, and the
-// watches are started again for as long as the screen runs.
+// watches are started again for as long as the screen runs. A try that
+// fails as the last one did locks nothing: the screen is locked and says
+// so already, and nothing unlocked it meanwhile, so a box that cannot be
+// watched is not hidden again each second.
 type screenWatches struct {
 	after time.Duration
 	lock  func(why string)
@@ -77,15 +80,17 @@ func (w *screenWatches) Unwatched() string {
 // Settled is closed once the watches first worked or first failed.
 func (w *screenWatches) Settled() <-chan struct{} { return w.settled }
 
-func (w *screenWatches) set(why string) {
+// set sets Unwatched to why, and answers whether that changed it.
+func (w *screenWatches) set(why string) (changed bool) {
 	w.mu.Lock()
-	changed := w.why != why
+	changed = w.why != why
 	w.why = why
 	w.mu.Unlock()
 	w.settle.Do(func() { close(w.settled) })
 	if changed && w.changed != nil {
 		w.changed(why)
 	}
+	return changed
 }
 
 // unwatched is a watch lost: what the page says, and the cause.
@@ -125,8 +130,9 @@ func (w *screenWatches) keep(ctx context.Context) {
 		if !errors.As(err, &lost) {
 			lost = unwatched{idleUnwatched, err}
 		}
-		w.set(lost.page)
-		w.lock("")
+		if w.set(lost.page) {
+			w.lock("")
+		}
 		if said := lost.Error(); said != told {
 			told = said
 			fmt.Fprintln(os.Stderr, "cyfr screen: "+said)

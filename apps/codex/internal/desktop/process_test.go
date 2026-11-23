@@ -63,11 +63,15 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 			attempt, _ := o["attempt"].(float64)
 			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
 				Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), ID: str(o, "id"), Suggested: str(o, "suggested")}
-			var out bytes.Buffer
-			if err := NewWriter(&out).Send(m); err != nil {
+			read, write := io.Pipe()
+			t.Cleanup(func() { read.Close() })
+			if err := NewWriter(write).Queue(m); err != nil {
 				t.Fatal(err)
 			}
-			line := out.String()
+			line, err := bufio.NewReader(read).ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
 			if strings.Count(line, "\n") != 1 || !strings.HasSuffix(line, "\n") {
 				t.Fatalf("not one line: %q", line)
 			}
@@ -133,24 +137,23 @@ func TestCyfrRefusesEachRefusedLine(t *testing.T) {
 // cyfr sends only its own messages, each whole.
 func TestCyfrSendsNothingMainSends(t *testing.T) {
 	for _, typ := range append([]string{"unlock"}, fromMain...) {
-		if err := NewWriter(&bytes.Buffer{}).Send(Message{Type: typ, Home: "https://x"}); err == nil {
+		if err := NewWriter(io.Discard).Queue(Message{Type: typ, Home: "https://x"}); err == nil {
 			t.Errorf("sent %s", typ)
 		}
 	}
-	if err := NewWriter(&bytes.Buffer{}).Send(Message{Type: TypeHome, Home: "https://x", Account: "https://y"}); err == nil {
+	if err := NewWriter(io.Discard).Queue(Message{Type: TypeHome, Home: "https://x", Account: "https://y"}); err == nil {
 		t.Error("sent home without its attempt")
 	}
-	if err := NewWriter(&bytes.Buffer{}).Send(Message{Type: TypeHome, Home: "https://x", Attempt: 1}); err == nil {
+	if err := NewWriter(io.Discard).Queue(Message{Type: TypeHome, Home: "https://x", Attempt: 1}); err == nil {
 		t.Error("sent home without its account service")
 	}
 }
 
-// The writer keeps the order its lines were given in, Queue's and Send's
-// alike, and Queue returns while main reads nothing.
+// The writer keeps the order its lines were given in, and Queue returns
+// while main reads nothing.
 func TestWriter_QueueWaitsOnNoPeerAndKeepsTheOrder(t *testing.T) {
 	read, write := io.Pipe()
 	to := NewWriter(write)
-	sent := make(chan error, 1)
 	// The writer holds this line, which main does not read.
 	_ = to.Queue(Message{Type: TypeReady, URL: "http://127.0.0.1:7340/"})
 	queued := make(chan struct{})
@@ -165,7 +168,7 @@ func TestWriter_QueueWaitsOnNoPeerAndKeepsTheOrder(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Queue waited for main to read")
 	}
-	go func() { sent <- to.Send(Message{Type: TypeOpened, Home: "https://x.example"}) }()
+	_ = to.Queue(Message{Type: TypeOpened, Home: "https://x.example"})
 	lines := bufio.NewScanner(read)
 	var types []string
 	for len(types) < 5 && lines.Scan() {
@@ -177,9 +180,6 @@ func TestWriter_QueueWaitsOnNoPeerAndKeepsTheOrder(t *testing.T) {
 	}
 	if strings.Join(types, " ") != "ready locked locked locked opened" {
 		t.Fatalf("main read %v", types)
-	}
-	if err := <-sent; err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -193,7 +193,9 @@ func TestWriterHelper(t *testing.T) {
 	// sleep-ok: the parent closes its end of the pipe meanwhile
 	time.Sleep(500 * time.Millisecond)
 	_ = to.Queue(Message{Type: TypeLocked})
-	err := to.Send(Message{Type: TypeReady, URL: "http://127.0.0.1:7340/"})
+	// The write fails on the closed pipe; with SIGPIPE taken it ends this
+	// process first.
+	_, err := os.Stdout.Write([]byte("\n"))
 	fmt.Fprintf(os.Stderr, "written: %v\n", err)
 }
 

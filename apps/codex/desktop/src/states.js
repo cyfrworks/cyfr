@@ -150,7 +150,7 @@ const ANOTHER = LOOPBACK + "/bootstrap/another"
 // Its Try again, the same way: the CYFR open, at its root.
 const AGAIN = LOOPBACK + "/bootstrap/again"
 // The engine's code for a load given up: replaced, stopped or refused.
-const ABORTED = -3
+export const ABORTED = -3
 
 /**
  * Every decision main takes from a navigation as the person pressing

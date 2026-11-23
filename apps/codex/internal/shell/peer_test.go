@@ -28,7 +28,7 @@ func TestLock_WaitsOnNoPeer(t *testing.T) {
 			to := desktop.NewWriter(write)
 			sh, told := shell.OpenForTest(t, func() { _ = to.Queue(desktop.Message{Type: desktop.TypeLocked}) })
 			// A message main has not taken holds the writer.
-			go func() { _ = to.Send(desktop.Message{Type: desktop.TypeReady, URL: "http://127.0.0.1:7340/"}) }()
+			_ = to.Queue(desktop.Message{Type: desktop.TypeReady, URL: "http://127.0.0.1:7340/"})
 			locked := make(chan struct{})
 			began := time.Now()
 			go func() {

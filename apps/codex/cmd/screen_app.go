@@ -23,8 +23,8 @@ type screenBrowser interface {
 	// ended for good, locking the shell through lock (shell.Shell.Lock)
 	// where the browser asks it to or ended: an error where it could not
 	// show them.
-	show(ctx context.Context, lock func(why string) (hid bool)) error
-	// hide hides what is on the screen and shows the lock page
+	show(ctx context.Context, lock func(why string)) error
+	// hide hides what is on the screen and shows a fresh lock page
 	// (shell.Config.Restart). It returns at once, waiting on nothing.
 	hide()
 }
@@ -32,12 +32,16 @@ type screenBrowser interface {
 // screenApp is the CYFR app as the screen's browser: its main process
 // started `cyfr screen shell --app` in the screen's folder and talks to it
 // over its stdin and stdout, in the messages of internal/desktop. The
-// shell says ready with its own pages' address once the keyboard and the
-// watches are up, then proposes home, the CYFR in the folder and the route
-// to it, as attempt 1; main answers home-ready for it, and the shell says
-// opened. A lock says locked, naming no CYFR, on which main hides the
-// content and shows the shell's page again, and proposes home again as the
-// next attempt: whatever main had of the last one, it takes the CYFR anew.
+// shell's first message, on every start, is ready with its own pages'
+// address, once the watches have first worked or failed; then it proposes
+// home, the CYFR in the folder and the route to it, as attempt 1; main
+// answers home-ready for it, and the shell says opened. Nothing is said
+// before ready: what the shell has to say by then (a lock, a missing
+// keyboard, a watch not yet known to work) is said by the page ready
+// names, which the shell draws locked and saying why. A lock after ready
+// says locked, naming no CYFR, on which main hides the content and shows
+// a fresh shell's page, and proposes home again as the next attempt:
+// whatever main had of the last one, it takes the CYFR anew.
 // Only the current attempt is answered: a home-ready for another, or one
 // already answered, and a home-failed for another, change nothing. main's
 // lock and leave, its shutdown and the end of its pipe are a lock of the
@@ -50,8 +54,9 @@ type screenApp struct {
 	home desktop.Message
 
 	mu sync.Mutex
-	// attempt is the current proposal's, and answered whether main's
-	// home-ready for it was answered opened.
+	// ready is whether ready was said; attempt is the current proposal's,
+	// and answered whether main's home-ready for it was answered opened.
+	ready    bool
 	attempt  uint64
 	answered bool
 }
@@ -78,12 +83,16 @@ func (a *screenApp) propose() {
 	_ = a.to.Queue(home)
 }
 
-// hide hides what is on the screen and shows the lock page
+// hide hides what is on the screen and shows a fresh lock page
 // (shell.Config.Restart): it tells main locked, then proposes home again,
-// and returns at once, waiting on nothing.
+// and returns at once, waiting on nothing. Before ready main shows nothing
+// of the shell's yet, and the page ready names is the lock page.
 func (a *screenApp) hide() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if !a.ready {
+		return
+	}
 	_ = a.to.Queue(desktop.Message{Type: desktop.TypeLocked})
 	a.propose()
 }
@@ -93,9 +102,10 @@ func (a *screenApp) hide() {
 // locking the shell through lock (shell.Shell.Lock) where main asks it
 // to: an error where main could not keep to the CYFR or said what is not
 // a message.
-func (a *screenApp) show(_ context.Context, lock func(why string) (hid bool)) error {
+func (a *screenApp) show(_ context.Context, lock func(why string)) error {
 	a.mu.Lock()
 	_ = a.to.Queue(desktop.Message{Type: desktop.TypeReady, URL: shell.Origin + "/"})
+	a.ready = true
 	a.propose()
 	a.mu.Unlock()
 	lines := bufio.NewScanner(a.in)
@@ -121,11 +131,8 @@ func (a *screenApp) show(_ context.Context, lock func(why string) (hid bool)) er
 				return errors.New("the app could not keep to the CYFR here")
 			}
 		case desktop.TypeLock, desktop.TypeLeave:
-			// main waits for locked; a lock with nothing to hide says it
-			// here, as no hide does.
-			if !lock("Locked.") {
-				a.hide()
-			}
+			// main waits for locked, which the lock's hide says.
+			lock("Locked.")
 		case desktop.TypeShutdown:
 			return nil
 		}

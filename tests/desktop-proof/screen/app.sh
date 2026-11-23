@@ -67,9 +67,14 @@ fi
 if [ "${1:-}" = --session ]; then
   PROJECT=/home/proof/cyfr
   verdict() { echo "$1 $2" >>"$OUT/verdict"; }
+  # The app is ended at its main process alone, which ends its helpers:
+  # signalled with them (pkill -f of the program's path), main outlives its
+  # GPU and zygote helpers and ends on Electron's own "GPU process isn't
+  # usable", a trap (exit 133), which is the smoke's doing and no fault.
+  app=^/opt/cyfr/CYFR\ --screen-project=
   finish() {
     touch "$OUT/stop"
-    pkill -f -- '^/opt/cyfr/CYFR' 2>/dev/null
+    pkill -f -- "$app" 2>/dev/null
     echo DONE >>"$OUT/verdict"
     pkill -x labwc
     exit 0
@@ -92,14 +97,18 @@ if [ "${1:-}" = --session ]; then
   closed() { [ -n "$(closedAt "$1")" ]; }
   newer() { awk -v h="$1" '$1 == "open" && $2 > h { found = 1 } END { exit !found }' "$OUT/toplevels"; }
   lines() { grep -c "$1" "$OUT/app.log" 2>/dev/null || echo 0; }
-  # A lock the shell made: the window shown closes, timed from SINCE (this
-  # machine's clock), and a newer window shows the shell's page, painted.
+  # A lock the shell made: the window shown closes within HIDE_MS of SINCE
+  # (this machine's clock), and a newer window shows the shell's page,
+  # painted. The hide waits on nothing (shell.Shell.Lock): measured, 6 to
+  # 727 ms from the cause; a hide that waits on telling a silent CYFR takes
+  # 10 s (the installed box's hide row), past the bound.
+  HIDE_MS=2000
   hidden() {
     local was=$1 since=$2 at
     within 20 closed "$was" || return 1
     at=$(closedAt "$was")
     python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$at" "$since" >"$OUT/took"
-    within 30 newer "$was" && within 30 painted
+    [ "$(cat "$OUT/took")" -lt "$HIDE_MS" ] && within 30 newer "$was" && within 30 painted
   }
   # The output's picture: the page's background (#0b1418) at both top
   # corners, so the window covers the output's whole width, and more than
@@ -173,7 +182,7 @@ PY
     verdict PASS "a watch lost closes the window shown $(cat "$OUT/took") ms after the loss, and a new one shows the shell's page"
     echo "watch lost to window closed: $(cat "$OUT/took") ms" >>"$OUT/timing"
   else
-    verdict FAIL "a watch lost did not close the window shown (${was:-none}): $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
+    verdict FAIL "a watch lost did not close the window shown (${was:-none}) within $HIDE_MS ms (it took $(cat "$OUT/took" 2>/dev/null || echo more)): $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
   fi
 
   # The keyboard killed: watched as the watches are, it locks the screen in
@@ -185,7 +194,7 @@ PY
   if [ -n "$was" ] && hidden "$was" "$since" && within 30 keyboard; then
     verdict PASS "the keyboard killed closes the window shown $(cat "$OUT/took") ms after, and the keyboard is shown again"
   else
-    verdict FAIL "the keyboard killed: the window shown (${was:-none}) $(closed "${was:-none}" && echo closed || echo 'did not close'), the keyboard $(keyboard && echo shown || echo 'not shown'), $(pgrep -c -u proof -x wvkbd-mobintl) running: $(grep -a 'keyboard' "$OUT/app.log" | tail -n 3 | tr '\n' ' ')"
+    verdict FAIL "the keyboard killed: the window shown (${was:-none}) $(closed "${was:-none}" && echo "closed after $(cat "$OUT/took") ms, the bound $HIDE_MS" || echo 'did not close'), the keyboard $(keyboard && echo shown || echo 'not shown'), $(pgrep -c -u proof -x wvkbd-mobintl) running: $(grep -a 'keyboard' "$OUT/app.log" | tail -n 3 | tr '\n' ' ')"
   fi
 
   pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell --app$'
@@ -205,7 +214,7 @@ PY
   fi
 
   touch "$OUT/stop"
-  pkill -f -- '^/opt/cyfr/CYFR' 2>/dev/null
+  pkill -f -- "$app" 2>/dev/null
   within 30 sh -c '! pgrep -u proof -f -- "^/opt/cyfr/CYFR" >/dev/null'
   /opt/cyfr/CYFR --screen-project=cyfr >"$OUT/refused.log" 2>&1
   refused=$?

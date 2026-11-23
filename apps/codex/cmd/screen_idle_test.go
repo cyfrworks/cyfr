@@ -214,6 +214,37 @@ func TestScreenWatch_RunningWithNoSubscriptionPermitsNoUnlock(t *testing.T) {
 	}
 }
 
+// A try that fails as the last one did locks nothing: the screen is
+// locked and says why already, and every lock hides it (shell.Shell.Lock),
+// so a box that cannot be watched would be hidden again each second.
+// Across three tries a watch that cannot start, and a keyboard that ends
+// each time it starts, lock once.
+func TestScreenWatch_ATryThatFailsAsTheLastLocksNothing(t *testing.T) {
+	for name, c := range map[string]struct {
+		swayidle, keyboard, want string
+	}{
+		"swayidle exiting":     {"exit 42", "", sleepUnwatched},
+		"a keyboard that ends": {swayidleHears, "exit 3", keyboardGone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			screenCompositor(t, idletest.Options{})
+			programs := quietScreen()
+			programs["swayidle"] = c.swayidle
+			if c.keyboard != "" {
+				programs["wvkbd-mobintl"] = c.keyboard
+			}
+			screenPrograms(t, programs)
+			w := startWatches(t, time.Hour)
+			w.becomes(t, c.want)
+			lockedWith(t, w.locks, "")
+			time.Sleep(3*watchesAgain + 500*time.Millisecond) // sleep-ok: three of the shell's own waits before it tries again
+			if n := len(w.locks); n != 0 {
+				t.Fatalf("three more tries that failed alike locked %d more times", n)
+			}
+		})
+	}
+}
+
 // A watch that stops showing that it works is lost, which locks: a
 // compositor that stops answering, and a swayidle that runs on saying
 // nothing.
@@ -268,10 +299,14 @@ said "Got sleep lock: 13"`,
 			w.becomes(t, "")
 			w.becomes(t, sleepUnwatched)
 			lockedWith(t, w.locks, suspendLocked)
-			lockedWith(t, w.locks, "") // the question's deadline
+			// The question's deadline finds the screen locked for it and
+			// saying so already: it locks, and so hides, nothing more.
+			time.Sleep(idle.AnswerWithin + time.Second) // sleep-ok: past the question's own deadline
 			select {
 			case why := <-w.changes:
 				t.Fatalf("it became %q on a lock got and no answer", why)
+			case why := <-w.locks:
+				t.Fatalf("the deadline locked again (%q), the screen locked for it already", why)
 			default:
 			}
 		})

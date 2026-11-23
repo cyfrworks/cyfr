@@ -505,25 +505,35 @@ test("an act is no redirect, and is begun by the top frame's own document that o
 
 // The box's screen and its shell agree from any order of their messages
 // (cmd/screen_app.go is the shell's side, modelled here as it is written):
-// the shell says ready and proposes its CYFR as attempt 1, answers opened
-// to the current attempt's home-ready alone and once, and on every lock,
-// its own or main's, says locked naming no CYFR and proposes again as the
-// next attempt. Every order of delivering either side's messages, of the
-// takes and clears ending (in the order they were asked, as app.js chains
-// them), and of up to two locks of the shell's own and one lost page of
-// main's (every state they reach, each walked once), ends with main keeping to the CYFR on the device's own page:
-// never stranded keeping to none, never ended.
+// from nothing said, the shell's first message is ready, with its proposal
+// of its CYFR as attempt 1 in the same step (one hold of its mutex); it
+// answers opened to the current attempt's home-ready alone and once, and
+// on every lock after ready, its own or main's, says locked naming no CYFR
+// and proposes again as the next attempt, while a lock before ready says
+// nothing (the page ready names says it). Every order of the shell's
+// ready, of delivering either side's messages, of the takes and clears
+// ending (in the order they were asked, as app.js chains them), and of up
+// to two locks of the shell's own, a keyboard that ends (before ready or
+// after it) and one lost page of main's (every state they reach, each
+// walked once), ends with main keeping to the CYFR on the device's own
+// page: never stranded keeping to none, never ended.
 test("the screen ends on its CYFR whatever the order of its messages", () => {
   const LOOP = "http://127.0.0.1:7340/"
   const CYFR = "http://localhost:4000"
   const initialWorld = () => ({
     main: initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr"),
-    shell: {attempt: 1, answered: false, locks: 2, gone: false},
-    toMain: [{type: "ready", url: LOOP}, {type: "home", message: {type: "home", home: CYFR, account: CYFR, attempt: 1}}],
+    shell: {ready: false, attempt: 0, answered: false, locks: 2, keyboard: 1, gone: false},
+    toMain: [],
     toShell: [], pending: [], showing: "", lost: 1, trace: []
   })
   const clone = (w) => structuredClone(w)
+  const propose = (w) => {
+    w.shell.attempt++
+    w.shell.answered = false
+    w.toMain.push({type: "home", message: {type: "home", home: CYFR, account: CYFR, attempt: w.shell.attempt}})
+  }
   const hide = (w) => {
+    if (!w.shell.ready) return
     w.shell.attempt++
     w.shell.answered = false
     w.toMain.push({type: "locked", message: {type: "locked"}},
@@ -561,7 +571,15 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
       }])
     }
     if (w.pending.length) out.push(["a take or clear ends", (x) => carry(x, step(x.main, x.pending.shift()))])
+    if (!w.shell.ready) {
+      out.push(["the shell says ready", (x) => {
+        x.shell.ready = true
+        x.toMain.push({type: "ready", url: LOOP})
+        propose(x)
+      }])
+    }
     if (w.shell.locks > 0) out.push(["the shell locks", (x) => { x.shell.locks--; hide(x) }])
+    if (w.shell.keyboard > 0) out.push(["the keyboard ends", (x) => { x.shell.keyboard--; hide(x) }])
     if (w.lost > 0 && w.main.name !== "starting") out.push(["main's page is lost", (x) => { x.lost--; carry(x, step(x.main, {type: "lost"})) }])
     return out
   }

@@ -132,6 +132,25 @@ func (l *lineSink) said(t *testing.T, n int) []string {
 	}
 }
 
+// Nothing is said to main before ready, and ready is always first: locks
+// before it (a keyboard that did not start, a watch not yet known to work)
+// say nothing, since the page ready names is the lock page saying why,
+// and ready comes with its proposal as attempt 1.
+func TestScreenApp_ReadyIsTheFirstMessage(t *testing.T) {
+	sink := &lineSink{}
+	a := &screenApp{in: strings.NewReader(""), to: desktop.NewWriter(sink),
+		home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
+	a.hide()
+	a.hide()
+	if err := a.show(context.Background(), func(string) { a.hide() }); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{desktop.TypeReady, "home 1"}
+	if said := sink.said(t, len(want)+1); strings.Join(said, ", ") != strings.Join(want, ", ") {
+		t.Fatalf("the shell said %v, want %v", said, want)
+	}
+}
+
 // What main says, and what the shell says back: ready and home as attempt
 // 1; opened for the current attempt's home-ready alone, once; a lock's
 // locked naming no CYFR, then home again as the next attempt; a stale
@@ -173,7 +192,8 @@ func TestScreenApp_WhatMainSays(t *testing.T) {
 			a := &screenApp{in: strings.NewReader(strings.Join(c.lines, "\n")), to: desktop.NewWriter(sink),
 				home: desktop.Message{Type: desktop.TypeHome, Home: home, Account: "https://cyfr.run"}}
 			var locks []string
-			err := a.show(context.Background(), func(why string) bool { locks = append(locks, why); return false })
+			// The shell's lock hides, every time, through the app (Restart).
+			err := a.show(context.Background(), func(why string) { locks = append(locks, why); a.hide() })
 			if (err != nil) != c.refused || strings.Join(locks, "|") != strings.Join(c.locks, "|") {
 				t.Fatalf("show answered %v, locking %q", err, locks)
 			}

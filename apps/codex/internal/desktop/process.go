@@ -194,22 +194,17 @@ func (m Message) object() (map[string]any, error) {
 }
 
 // Writer sends cyfr's messages to main, one line each, whole, in the
-// order they were given, by one writer of its own: Send waits for its
-// line to be written, Queue does not. Once a write fails (main has gone,
-// or its pipe ended), every later line fails with that error.
+// order they were given, by one writer of its own: Queue gives it a line
+// and returns at once, so nothing that tells main waits on main reading
+// its pipe. Once a write fails (main has gone, or its pipe ended), every
+// later line is dropped: main's end is heard on its own pipe to cyfr.
 type Writer struct {
 	w io.Writer
 
 	mu     sync.Mutex
-	queue  []queued
-	failed error
+	queue  [][]byte
+	failed bool
 	wake   chan struct{}
-}
-
-// queued is a line to write, and where its result goes (nil for none).
-type queued struct {
-	line []byte
-	done chan error
 }
 
 // NewWriter writes to w, main's end of the private pipe. A write to a pipe
@@ -223,38 +218,21 @@ func NewWriter(w io.Writer) *Writer {
 	return wr
 }
 
-// Send writes m as one line, after every line given before it, and
-// answers whether it was written.
-func (w *Writer) Send(m Message) error {
-	line, err := encode(m)
-	if err != nil {
-		return err
-	}
-	done := make(chan error, 1)
-	w.give(queued{line, done})
-	return <-done
-}
-
 // Queue gives m to be written after every line given before it and
-// returns at once: a lock tells main through it, so no lock waits on main
-// reading its pipe.
+// returns at once; it refuses what is not one of cyfr's messages.
 func (w *Writer) Queue(m Message) error {
 	line, err := encode(m)
 	if err != nil {
 		return err
 	}
-	w.give(queued{line: line})
-	return nil
-}
-
-func (w *Writer) give(q queued) {
 	w.mu.Lock()
-	w.queue = append(w.queue, q)
+	w.queue = append(w.queue, line)
 	w.mu.Unlock()
 	select {
 	case w.wake <- struct{}{}:
 	default:
 	}
+	return nil
 }
 
 // write writes what was given, in order, for as long as the process runs.
@@ -264,15 +242,10 @@ func (w *Writer) write() {
 		lines := w.queue
 		w.queue = nil
 		w.mu.Unlock()
-		for _, q := range lines {
-			err := w.failed
-			if err == nil {
-				if _, err = w.w.Write(append(q.line, '\n')); err != nil {
-					w.failed = err
-				}
-			}
-			if q.done != nil {
-				q.done <- err
+		for _, line := range lines {
+			if !w.failed {
+				_, err := w.w.Write(append(line, '\n'))
+				w.failed = err != nil
 			}
 		}
 	}

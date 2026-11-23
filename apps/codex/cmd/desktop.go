@@ -55,7 +55,7 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 		return fmt.Errorf("another program holds %s: close the app using port 7340, then open CYFR again (%v)", shell.Listen, err)
 	}
 	to := desktop.NewWriter(out)
-	svc := newDesktopService(dir, to.Send, func(m desktop.Message) { _ = to.Queue(m) })
+	svc := newDesktopService(dir, func(m desktop.Message) { _ = to.Queue(m) })
 	hs := &http.Server{Handler: svc, ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- hs.Serve(ln) }()
@@ -64,7 +64,7 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 		defer cancel()
 		_ = hs.Shutdown(sctx)
 	}()
-	if err := to.Send(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
+	if err := to.Queue(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
 		return err
 	}
 	ran := make(chan error, 1)
@@ -85,9 +85,8 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 }
 
 // newDesktopService is what desktop-serve serves over this user's device
-// folder, saying to main through send and, where it may wait on nothing,
-// tell.
-func newDesktopService(device string, send func(desktop.Message) error, tell func(desktop.Message)) *desktop.Service {
+// folder, saying to main through tell, which waits on nothing.
+func newDesktopService(device string, tell func(desktop.Message)) *desktop.Service {
 	host, _ := os.Hostname()
 	return &desktop.Service{
 		Token:       desktop.NewToken(),
@@ -95,7 +94,6 @@ func newDesktopService(device string, send func(desktop.Message) error, tell fun
 		Record:      filepath.Join(device, "holder.json"),
 		Client:      &http.Client{},
 		DisplayName: host,
-		Send:        send,
 		Tell:        tell,
 		Local: func(project string) (desktop.Local, error) {
 			l, err := readLocal(project, "the CYFR app")

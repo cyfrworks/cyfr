@@ -34,8 +34,8 @@ func heldNow(b *box) heldAt {
 // are locked and the hide: at the hide the shell says locked, and nothing
 // it held is erased, no session is told and no record is written yet. Only
 // then are the sessions told, the key and every secret erased, and a
-// revoked channel's record written. A lock with nothing on the screen to
-// hide hides nothing.
+// revoked channel's record written. Every lock hides, whatever the screen
+// showed: the lock page's form may hold what a person typed there.
 func TestLock_EveryRoadIsLockedThenHiddenBeforeAnythingElse(t *testing.T) {
 	open := func(t *testing.T) *box {
 		home := newFakeHome(t)
@@ -64,26 +64,26 @@ func TestLock_EveryRoadIsLockedThenHiddenBeforeAnythingElse(t *testing.T) {
 	}
 	lock := func(why string) func(*box) { return func(b *box) { b.shell.Lock(why) } }
 	for _, c := range []struct {
-		name  string
-		made  func(*testing.T) *box
-		lock  func(*box)
-		hides bool
+		name string
+		made func(*testing.T) *box
+		lock func(*box)
 		// tells is whether the CYFR still hears the channel, so it is told
 		// each session's lock.
 		tells bool
 	}{
-		{"Prism's Lock", open, func(b *box) { b.do(http.MethodPost, "/lock", b.home.address(), nil) }, true, true},
-		{"five minutes without input", open, lock("Locked after five minutes without use."), true, true},
-		{"a suspend", open, lock(suspendedHere), true, true},
-		{"a watch lost", open, lock(""), true, true},
-		{"the browser's or the app's end", open, lock("Locked because the browser closed."), true, true},
-		{"the shell's own end", open, lock(""), true, true},
-		{"a dropped channel", open, func(b *box) { b.home.closeChannels(1011) }, true, false},
-		{"a revoked channel", open, func(b *box) { b.home.revoke() }, true, false},
-		{"setup's passphrase on the screen", drawn, lock(""), true, false},
-		{"a recovery code on the screen", recovery, lock(""), true, false},
-		{"a watch lost, the screen locked", unwatched, lock(""), true, false},
-		{"a lock of a locked screen", locked, lock(""), false, false},
+		{"Prism's Lock", open, func(b *box) { b.do(http.MethodPost, "/lock", b.home.address(), nil) }, true},
+		{"five minutes without input", open, lock("Locked after five minutes without use."), true},
+		{"a suspend", open, lock(suspendedHere), true},
+		{"a watch lost", open, lock(""), true},
+		{"the browser's or the app's end", open, lock("Locked because the browser closed."), true},
+		{"the shell's own end", open, lock(""), true},
+		{"a dropped channel", open, func(b *box) { b.home.closeChannels(1011) }, false},
+		{"a revoked channel", open, func(b *box) { b.home.revoke() }, false},
+		{"setup's passphrase on the screen", drawn, lock(""), false},
+		{"a recovery code on the screen", recovery, lock(""), false},
+		{"a watch lost, the screen locked", unwatched, lock(""), false},
+		// The lock page's form may hold what a person typed there.
+		{"five minutes without input on the lock page", locked, lock("Locked after five minutes without use."), false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			b := c.made(t)
@@ -101,17 +101,7 @@ func TestLock_EveryRoadIsLockedThenHiddenBeforeAnythingElse(t *testing.T) {
 			select {
 			case <-hid:
 			case <-time.After(10 * time.Second):
-				if c.hides {
-					t.Fatal("the lock never hid the screen")
-				}
-			}
-			if !c.hides {
-				select {
-				case <-hid:
-					t.Fatal("a lock with nothing on the screen hid it")
-				default:
-				}
-				return
+				t.Fatal("the lock never hid the screen")
 			}
 			// The lock runs on to its end before anything is read after it.
 			b.shell.Lock("")

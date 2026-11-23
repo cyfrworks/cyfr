@@ -80,10 +80,10 @@ type Service struct {
 	Client *http.Client
 	// DisplayName is the name a CYFR lists this device by.
 	DisplayName string
-	// Send writes a message to main, and answers whether it was written.
-	Send func(Message) error
-	// Tell gives main a message and returns at once, waiting on main for
-	// nothing: a lock tells main through it (Writer.Queue).
+	// Tell gives main a message after every one given before it and
+	// returns at once, waiting on main for nothing (Writer.Queue): it is
+	// the one way to talk to main. Giving one under mu, where its order
+	// against the state matters, writes nothing there.
 	Tell func(Message)
 	// Discover reads a CYFR's directory; account.Discover unless a test
 	// replaces it.
@@ -494,10 +494,13 @@ func (s *Service) selectRemote(run context.Context, epoch uint64, home string, f
 }
 
 // selectHome makes the device's shell at the CYFR cfg reaches, over the
-// selection (shell.Selection), and sends main proposal, its home; once
-// main answers home-ready for it, the selection is remembered and the
-// device's pages are served. Each step that publishes does so under s.mu while the epoch it
-// arrived in still runs, so a lock ends it unopened.
+// selection (shell.Selection), and tells main proposal, its home; once
+// main answers home-ready for it, the selection is remembered, main is
+// told opened and the device's pages are served. Each step that publishes
+// does so under s.mu while the epoch it arrived in still runs, so a lock
+// ends it unopened, and gives main its message there, to the queue
+// (Tell): a lock's locked, given after it moved the epoch on, follows
+// it, and nothing waits on main under s.mu.
 func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selection, cfg shell.Config, proposal Message) answer {
 	home := proposal.Home
 	cfg.DisplayName, cfg.Record, cfg.Clients, cfg.Restart = s.DisplayName, s.Record, sel, s.sayLocked
@@ -517,11 +520,8 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	s.attempts++
 	proposal.Attempt = s.attempts
 	s.ready, s.selecting, s.current = ready, home, s.attempts
-	err = s.Send(proposal)
+	s.Tell(proposal)
 	s.mu.Unlock()
-	if err != nil {
-		return answer{Error: "The app did not take the CYFR (" + err.Error() + ")."}
-	}
 	select {
 	case ok := <-ready:
 		if !ok {
@@ -541,11 +541,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	if err := sel.Commit(); err != nil {
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
-	// The device's pages are served only once main was told home opened:
-	// a write that failed opens nothing.
-	if err := s.Send(Message{Type: TypeOpened, Home: home}); err != nil {
-		return answer{Error: "The app did not take the CYFR (" + err.Error() + ")."}
-	}
+	s.Tell(Message{Type: TypeOpened, Home: home})
 	s.sh, s.pages = sh, &shell.Server{Shell: sh}
 	s.committed = proposal
 	return s.opened(home)
@@ -613,8 +609,10 @@ func (s *Service) lock(why string, leave bool) {
 		s.ready, s.selecting, s.current = nil, "", 0
 	}
 	s.mu.Unlock()
-	if sh != nil && sh.Lock(why) {
-		// The shell said locked as it hid the screen.
+	if sh != nil {
+		// The shell says locked as it hides the screen (sayLocked), which
+		// every lock does.
+		sh.Lock(why)
 		return
 	}
 	s.sayLocked()

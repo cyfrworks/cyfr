@@ -61,7 +61,7 @@ type localApp struct {
 func newLocalApp(t *testing.T, project string) *localApp {
 	t.Helper()
 	a := &localApp{t: t, sent: make(chan desktop.Message, 16)}
-	a.Service = newDesktopService(t.TempDir(), func(m desktop.Message) error { a.sent <- m; return nil }, func(m desktop.Message) { a.sent <- m })
+	a.Service = newDesktopService(t.TempDir(), func(m desktop.Message) { a.sent <- m })
 	a.Shell = func(c *shell.Config) {
 		c.Chip = func() bool { return false }
 		c.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }

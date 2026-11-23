@@ -47,14 +47,12 @@ func newApp(t *testing.T, dir string, client *http.Client) *app {
 		Record:      filepath.Join(dir, "holder.json"),
 		Client:      client,
 		DisplayName: "laptop",
-		Send: func(m Message) error {
+		Tell: func(m Message) {
 			if m.Type == TypeHome {
 				a.proposed.Store(m.Attempt)
 			}
 			a.sent <- m
-			return nil
 		},
-		Tell: func(m Message) { a.sent <- m },
 		Discover: func(_ context.Context, _ *http.Client, home string) (account.Discovered, error) {
 			a.discovered.Add(1)
 			d := a.directory.Load().(string)
@@ -764,37 +762,6 @@ func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
 	}
 }
 
-// The device's pages are served only once main was told the CYFR opened:
-// a write of opened that failed opens nothing, and the next Connect goes
-// on as if this one never ran.
-func TestAFailedWriteOfOpenedServesNoDevicePage(t *testing.T) {
-	a := newApp(t, t.TempDir(), offline())
-	send := a.Send
-	a.Send = func(m Message) error {
-		if m.Type == TypeOpened {
-			return errors.New("main's pipe is gone")
-		}
-		return send(m)
-	}
-	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
-	a.next(t)
-	a.ready("https://cyfr.example.com")
-	if got := answered(t, done); got.Next != "" || got.Error == "" {
-		t.Fatalf("a Connect whose opened was not written answered %+v", got)
-	}
-	if w := a.get("/"); w.Code != http.StatusSeeOther {
-		t.Fatal("the device's pages were served though main was never told")
-	}
-	a.Send = send
-	again := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
-	a.next(t)
-	a.ready("https://cyfr.example.com")
-	if got := answered(t, again); got.Next != "/" {
-		t.Fatalf("the next Connect answered %+v", got)
-	}
-	a.opened(t, "https://cyfr.example.com")
-}
-
 // Every locked names the CYFR cyfr holds committed, as home named it, and
 // none before one is committed: main keeps to what it names.
 func TestLockedNamesTheCommittedCYFR(t *testing.T) {
@@ -1454,11 +1421,54 @@ func TestHomeFailedEndsItsAttemptAloneAndIsNoLock(t *testing.T) {
 	}
 }
 
+// Nothing is written to main while holding what a lock needs: with main's
+// pipe never read, and every message given to it through the writer's
+// queue, as desktop-serve gives them (cmd's runDesktopServe), a lock
+// returns within its bound while a Connect's proposal waits for main, and
+// once main was told the CYFR opened.
+func TestALockWaitsOnNoProposalOrOpenedMainHasNotRead(t *testing.T) {
+	for _, at := range []string{"the proposal", "opened"} {
+		t.Run(at, func(t *testing.T) {
+			a := newApp(t, t.TempDir(), offline())
+			read, write := io.Pipe()
+			t.Cleanup(func() { read.Close() })
+			to := NewWriter(write)
+			heard := a.Tell
+			a.Tell = func(m Message) {
+				heard(m)
+				_ = to.Queue(m)
+			}
+			done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+			if m := a.next(t); m.Type != TypeHome {
+				t.Fatalf("main was proposed %+v", m)
+			}
+			if at == "opened" {
+				// Main's answer waits on nothing of the test's: a write held
+				// under the service's mutex shows as no answer to the Connect.
+				go a.ready("https://cyfr.example.com")
+				if got := answered(t, done); got.Next != "/" {
+					t.Fatalf("Connect answered %+v", got)
+				}
+				a.opened(t, "https://cyfr.example.com")
+			}
+			locked := make(chan struct{})
+			go func() {
+				defer close(locked)
+				a.Lock("Locked.")
+			}()
+			select {
+			case <-locked:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the lock waited on main")
+			}
+		})
+	}
+}
+
 // A lock tells main locked without waiting for main to take it: with main
 // reading nothing, the lock returns all the same.
 func TestALockTellsMainWithoutWaiting(t *testing.T) {
 	a := newApp(t, t.TempDir(), offline())
-	a.Send = func(Message) error { select {} }
 	told := make(chan Message, 1)
 	a.Tell = func(m Message) { told <- m }
 	locked := make(chan struct{})
