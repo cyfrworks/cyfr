@@ -1026,7 +1026,7 @@ clean_install() {
 active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "screenshot screen-terminal.png" guest_screenshot screen-terminal.png
 
-  step "cyfr uninstall --yes stops CYFR as cyfr down does and removes nothing else from the folder: the folder, the volumes, the settings and the device key as cyfr down left them"
+  step "cyfr uninstall --yes stops CYFR as cyfr down does, removes the CYFR app, and removes nothing else from the folder: the folder, the volumes, the settings and the device key as cyfr down left them"
   # Read as root after cyfr down and again after the uninstall, and
   # compared whole: the folder, each volume's files and the account's
   # ~/.cyfr (its settings and device key), each entry's kind, size, mode,
@@ -1104,6 +1104,8 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
   check "it names no volume of another project" volume_command_names_no_other_project
   check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
+  check "it names the CYFR app among what it removes, and says it removed it" \
+    sh -c 'grep -qx "  the CYFR app, the package cyfr-desktop" "$1" && grep -qx "Removed the CYFR app." "$1"' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
   screen_stop_watched "after the uninstall" : screen-holders-uninstall.txt
   screen_session_record after-the-uninstall
@@ -1115,6 +1117,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
   check "the program and its link onto PATH are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr 2>/dev/null'
   check "the screen is given back to tty1's login prompt" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-enabled --quiet cyfr-screen && [ ! -e /etc/systemd/system/cyfr-screen.service ]'
+  check "the CYFR app's package is removed, its program with it" guest_ssh '[ "$(dpkg-query -W -f "\${db:Status-Status}" cyfr-desktop 2>/dev/null)" != installed ] && [ ! -e /opt/cyfr/CYFR ]'
   check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
   guest_journal
