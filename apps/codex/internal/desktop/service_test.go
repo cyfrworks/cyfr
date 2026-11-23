@@ -486,7 +486,7 @@ func TestEveryEndOfMainsMessagesLocksAndSaysNoLock(t *testing.T) {
 		{"shutdown, unread after", `{"version":1,"type":"shutdown"}` + "\n" + `{"version":1,"type":"lock"}` + "\n", 0, false},
 		{"a line that is not main's", `{"type":"lock"}` + "\n", 0, true},
 		{"a line past the bound", strings.Repeat("x", MaxLine+2) + "\n", 0, true},
-		{"a reply to no folder asked for", `{"version":1,"type":"folder-picked","id":"f1","path":null}` + "\n", 0, false},
+		{"a pick's answer", `{"version":1,"type":"folder-picked","path":null}` + "\n", 0, false},
 		{"the pipe's end alone", "", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -522,8 +522,8 @@ func TestTheChooserPageRunsOnlyItsOwnScript(t *testing.T) {
 		!strings.Contains(w.Body.String(), "<script>"+bootstrapScript+"</script>") {
 		t.Fatalf("served %d under %q", w.Code, policy)
 	}
-	if !strings.Contains(w.Body.String(), "Setting up CYFR on this computer comes in the next version of this app.") {
-		t.Fatal("the chooser does not say where local setup is")
+	if !strings.Contains(w.Body.String(), "Or set up CYFR on this computer") || !strings.Contains(w.Body.String(), `id="change"`) {
+		t.Fatal("the chooser does not offer to set up CYFR on this computer")
 	}
 }
 
@@ -1515,5 +1515,170 @@ func TestTheAppEndsWhatAFolderBeganAsItLetsGo(t *testing.T) {
 				t.Fatal("the CYFR the app let go of was not ended")
 			}
 		})
+	}
+}
+
+// awaitFolder is the chooser's wait for main's answer to a pick, after
+// the picks it has seen answered, its request edited by edit.
+func (a *app) awaitFolder(ctx context.Context, picks uint64, edit func(*http.Request)) <-chan *httptest.ResponseRecorder {
+	out := make(chan *httptest.ResponseRecorder, 1)
+	raw, _ := json.Marshal(map[string]any{"token": a.Token, "picks": picks})
+	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://"+shell.Listen+"/bootstrap/folder", strings.NewReader(string(raw)))
+	r.Host = shell.Listen
+	r.Header.Set("Origin", shell.Origin)
+	r.Header.Set("Content-Type", "application/json")
+	if edit != nil {
+		edit(r)
+	}
+	go func() {
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, r)
+		out <- w
+	}()
+	return out
+}
+
+func folderAnswer(t *testing.T, ch <-chan *httptest.ResponseRecorder) answer {
+	t.Helper()
+	select {
+	case w := <-ch:
+		var got answer
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+			t.Fatalf("the wait answered %d %s", w.Code, w.Body)
+		}
+		return got
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait for the pick did not answer")
+	}
+	return answer{}
+}
+
+// waiting is whether ch has not answered within a moment.
+func waiting(ch <-chan *httptest.ResponseRecorder) bool {
+	select {
+	case <-ch:
+		return false
+	case <-time.After(100 * time.Millisecond):
+		return true
+	}
+}
+
+func folderPicked(t *testing.T, a *app, line string) {
+	t.Helper()
+	m, err := ReadFromMain([]byte(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.FolderPicked(m.Path)
+}
+
+// The chooser shows the folder main's answer names, and only that: a pick
+// cancelled leaves the folder as it was, and the wait answers each.
+func TestTheChooserShowsTheFolderMainsAnswerNames(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	a.Folder = "/home/ada/cyfr"
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Folder != "/home/ada/cyfr" || got.Picks != 0 {
+		t.Fatalf("the chooser was shown %+v", got)
+	}
+	wait := a.awaitFolder(context.Background(), 0, nil)
+	if !waiting(wait) {
+		t.Fatal("the wait answered before main did")
+	}
+	folderPicked(t, a, `{"version":1,"type":"folder-picked","path":"/home/ada/elsewhere"}`)
+	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
+		t.Fatalf("the pick answered %+v", got)
+	}
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
+		t.Fatalf("the chooser was shown %+v after the pick", got)
+	}
+	wait = a.awaitFolder(context.Background(), 1, nil)
+	folderPicked(t, a, `{"version":1,"type":"folder-picked","path":null}`)
+	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" || got.Picks != 2 {
+		t.Fatalf("a cancelled pick answered %+v", got)
+	}
+	a.quiet(t)
+}
+
+// The chooser asks before main does, but an answer that came first is
+// never missed: a wait behind main's answers answers at once.
+func TestAWaitBehindMainsAnswerAnswersAtOnce(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	a.Folder = "/home/ada/cyfr"
+	folderPicked(t, a, `{"version":1,"type":"folder-picked","path":"/home/ada/elsewhere"}`)
+	if got := folderAnswer(t, a.awaitFolder(context.Background(), 0, nil)); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
+		t.Fatalf("answered %+v", got)
+	}
+}
+
+// A lock ends the wait, and a wait begun before the lock answers locked.
+func TestALockEndsTheWaitForAPick(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	wait := a.awaitFolder(context.Background(), 0, nil)
+	if !waiting(wait) {
+		t.Fatal("the wait answered before anything happened")
+	}
+	a.Lock("Locked.")
+	if got := folderAnswer(t, wait); got.Error != lockedSentence {
+		t.Fatalf("a lock left the wait %+v", got)
+	}
+	if m := a.next(t); m.Type != TypeLocked {
+		t.Fatalf("main heard %+v", m)
+	}
+}
+
+// The person may keep the system's dialog open past the bound every other
+// chooser request has: the wait outlives it, and a page that left ends it.
+func TestAPickWaitsOnThePersonUnbounded(t *testing.T) {
+	bound := chooserBound
+	chooserBound = 20 * time.Millisecond
+	t.Cleanup(func() { chooserBound = bound })
+	a := newApp(t, t.TempDir(), nil)
+	a.Folder = "/home/ada/cyfr"
+	wait := a.awaitFolder(context.Background(), 0, nil)
+	if !waiting(wait) {
+		t.Fatal("the wait ended at the bound")
+	}
+	folderPicked(t, a, `{"version":1,"type":"folder-picked","path":"/home/ada/elsewhere"}`)
+	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" {
+		t.Fatalf("answered %+v", got)
+	}
+	ctx, leave := context.WithCancel(context.Background())
+	gone := a.awaitFolder(ctx, 1, nil)
+	leave()
+	if got := folderAnswer(t, gone); got.Error == "" {
+		t.Fatalf("a page that left was answered %+v", got)
+	}
+}
+
+// The wait is the chooser's own page's alone, as every chooser request is.
+func TestOnlyTheChoosersPageWaitsForAPick(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	for name, edit := range map[string]func(*http.Request){
+		"another origin": func(r *http.Request) { r.Header.Set("Origin", "https://evil.example") },
+		"another token":  func(r *http.Request) { r.Body = io.NopCloser(strings.NewReader(`{"token":"a-guess","picks":0}`)) },
+		"a folder named": func(r *http.Request) {
+			r.Body = io.NopCloser(strings.NewReader(`{"token":"the-run-token","folder":"/x"}`))
+		},
+	} {
+		select {
+		case w := <-a.awaitFolder(context.Background(), 0, edit):
+			if w.Code == http.StatusOK {
+				t.Errorf("%s: the wait was taken: %s", name, w.Body)
+			}
+		case <-time.After(time.Second):
+			t.Errorf("%s: the wait was taken, and waits", name)
+		}
+	}
+}
+
+// Main's folder-picked, as Run reads it from main's pipe, names the folder.
+func TestMainsFolderPickedNamesTheFolder(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	a.Folder = "/home/ada/cyfr"
+	if err := a.Run(strings.NewReader(`{"version":1,"type":"folder-picked","path":"/home/ada/elsewhere"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
+		t.Fatalf("the chooser was shown %+v", got)
 	}
 }

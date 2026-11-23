@@ -57,7 +57,7 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 			o := c.Message
 			attempt, _ := o["attempt"].(float64)
 			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
-				Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), ID: str(o, "id"), Suggested: str(o, "suggested")}
+				Proxy: str(o, "proxy"), Resolver: str(o, "resolver")}
 			var out bytes.Buffer
 			if err := NewWriter(&out).Send(m); err != nil {
 				t.Fatal(err)
@@ -88,7 +88,7 @@ func TestCyfrReadsEachMessageFromMain(t *testing.T) {
 			var o map[string]any
 			_ = json.Unmarshal(c.Message, &o)
 			attempt, _ := o["attempt"].(float64)
-			if m.Type != o["type"] || m.Home != str(o, "home") || m.ID != str(o, "id") || m.Attempt != uint64(attempt) {
+			if m.Type != o["type"] || m.Home != str(o, "home") || m.Attempt != uint64(attempt) {
 				t.Fatalf("read %+v from %s", m, c.Message)
 			}
 			path, has := o["path"]

@@ -4,7 +4,8 @@
 // The private messages between this main process and the cyfr it starts
 // (tests/fixtures/desktop-process.json): one JSON object a line, each with
 // version 1, its type and exactly its type's fields: text, but for attempt,
-// the proposal's number, a whole one from 1.
+// the proposal's number, a whole one from 1, and folder-picked's path, a
+// folder spelled from a root (absolute) or null.
 
 export const VERSION = 1
 
@@ -15,17 +16,23 @@ const FIELDS = {
   home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver"]},
   opened: {required: ["home"]},
   locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
-  "pick-folder": {required: ["id", "suggested"]},
   "home-ready": {required: ["home", "attempt"]},
   "home-failed": {required: ["home", "attempt"]},
   lock: {required: []},
   leave: {required: []},
   shutdown: {required: []},
-  "folder-picked": {required: ["id", "path"]}
+  "folder-picked": {required: ["path"]}
 }
 
-const FROM_CYFR = ["ready", "home", "opened", "locked", "pick-folder"]
+const FROM_CYFR = ["ready", "home", "opened", "locked"]
 const FROM_MAIN = ["home-ready", "home-failed", "lock", "leave", "shutdown", "folder-picked"]
+
+/**
+ * Whether `path` is a folder spelled from a root on any system the app
+ * runs on: /, a drive's letter, colon and separator, or a share's two
+ * backslashes (process.go absolute).
+ */
+export const absolute = (path) => typeof path === "string" && /^(\/|\\\\|[A-Za-z]:[\\/])/.test(path)
 
 export class Refused extends Error {
   constructor(reason) {
@@ -71,6 +78,7 @@ export function toCyfr(type, fields = {}) {
   const m = {version: VERSION, type}
   for (const key of required) {
     if (!Object.hasOwn(fields, key)) throw new Error(`${type} needs ${key}`)
+    if (key === "path" && fields.path !== null && !absolute(fields.path)) throw new Error(`${type} names no absolute folder`)
     m[key] = fields[key]
   }
   return JSON.stringify(m) + "\n"

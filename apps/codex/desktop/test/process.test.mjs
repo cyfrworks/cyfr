@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import {test} from "node:test"
 
-import {MAX_LINE, Refused, VERSION, lines, readFromCyfr, toCyfr} from "../src/process.js"
+import {MAX_LINE, Refused, VERSION, absolute, lines, readFromCyfr, toCyfr} from "../src/process.js"
 
 const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
 
@@ -42,6 +42,21 @@ test("main sends nothing cyfr sends", () => {
   for (const type of ["ready", "home", "opened", "locked", "pick-folder", "unlock"]) {
     assert.throws(() => toCyfr(type, {}))
   }
+})
+
+// The folders cyfr refuses in a folder-picked, which main writes none of.
+test("main names no folder cyfr refuses, and every folder cyfr reads", () => {
+  const object = (line) => { try { return JSON.parse(line) } catch { return null } }
+  const refused = vectors["refused"].filter((r) => r.to === "go").map((r) => object(r.line))
+    .filter((m) => m?.type === "folder-picked" && Object.keys(m).length === 3 && Object.hasOwn(m, "path"))
+  assert.ok(refused.length >= 5)
+  for (const {path} of refused) {
+    assert.equal(absolute(path), false, JSON.stringify(path))
+    assert.throws(() => toCyfr("folder-picked", {path}), JSON.stringify(path))
+  }
+  const read = vectors["main_to_go"].filter(({message}) => message.type === "folder-picked" && message.path !== null)
+  assert.ok(read.length >= 3)
+  for (const {message: {path}} of read) assert.equal(absolute(path), true, path)
 })
 
 test("lines are whole lines, however the stream cuts them", () => {

@@ -51,6 +51,7 @@ function reset({relaunch = false} = {}) {
   world.relaunched = null
   world.wholeDocument = false
   world.refuseLoad = false
+  world.dialogs = []
   world.app.removeAllListeners()
   world.powerMonitor.removeAllListeners()
   world.quit = false
@@ -214,7 +215,9 @@ function request({url}) {
 }
 
 mock.module("electron", {exports: {
-  BrowserWindow, app: world.app, dialog: {showMessageBox: async () => ({response: 0})},
+  BrowserWindow, app: world.app, dialog: {showMessageBox: async () => ({response: 0}),
+    // The system's folder dialog, open until the test answers it.
+    showOpenDialog: (parent, options) => new Promise((answer) => world.dialogs.push({parent, options, answer}))},
   powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request}
 }})
 let child = null
@@ -1324,5 +1327,61 @@ test("started on a route main keeps that route's rules alone", async () => {
     assert.deepEqual(world.switches, [])
   } finally {
     world.app.commandLine.getSwitchValue = bare
+  }
+})
+
+// ---- the folder CYFR is set up in on this computer ----
+
+const PICK = "http://127.0.0.1:7340/bootstrap/pick"
+const folders = () => child.heard.filter((m) => m.type === "folder-picked")
+
+test("Change… opens the system's folder dialog over the content window, never loads, and cyfr hears the folder once", async () => {
+  for (const road of [false, true]) {
+    await started(road)
+    const w = content()
+    assert.ok(navigate(w, PICK).prevented, "its address never loads")
+    assert.equal(world.dialogs.length, 1)
+    const [{parent, options}] = world.dialogs
+    assert.equal(parent, w, "over the content window")
+    assert.deepEqual(options.properties, ["openDirectory", "createDirectory"])
+    assert.ok(navigate(w, PICK).prevented)
+    assert.equal(world.dialogs.length, 1, "one pick at a time")
+    world.dialogs[0].answer({canceled: false, filePaths: ["/home/ada/elsewhere"]})
+    await settled()
+    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: "/home/ada/elsewhere"}])
+    navigate(w, PICK)
+    world.dialogs[1].answer({canceled: true, filePaths: []})
+    await settled()
+    assert.deepEqual(folders().at(-1), {version: 1, type: "folder-picked", path: null}, "cancelled")
+    assert.equal(content(), w, "the chooser stands")
+    assert.deepEqual(world.fetched, [])
+  }
+})
+
+test("a redirect, or a page other than the chooser, opens no dialog", async () => {
+  await started(false)
+  const w = content()
+  assert.ok(redirected(w, PICK).prevented)
+  assert.ok(await opens())
+  await give(w)
+  assert.ok(navigate(w, PICK).prevented)
+  assert.equal(world.dialogs.length, 0)
+  assert.deepEqual(folders(), [])
+})
+
+test("a lock, or the chooser leaving, answers the pick with none at once, and the dialog's folder after is dropped", async () => {
+  const ends = {
+    "cyfr's lock": async () => saysLocked({}),
+    "the chooser loading again": async (w) => { w.webContents.reload(); await settled() },
+    "a dialog that failed": async () => { world.dialogs[0].answer(Promise.reject(new Error("no portal"))); await settled() }
+  }
+  for (const [name, end] of Object.entries(ends)) {
+    await started(false)
+    navigate(content(), PICK)
+    await end(content())
+    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null}], name)
+    world.dialogs[0].answer({canceled: false, filePaths: ["/home/ada/elsewhere"]})
+    await settled()
+    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null}], `${name}: the late folder is dropped`)
   }
 })

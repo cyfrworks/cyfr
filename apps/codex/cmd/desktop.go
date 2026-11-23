@@ -88,6 +88,7 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 // folder until ctx ends, saying to main through send.
 func newDesktopService(ctx context.Context, device string, send func(desktop.Message) error) *desktop.Service {
 	host, _ := os.Hostname()
+	home, _ := os.UserHomeDir()
 	return &desktop.Service{
 		Token:       desktop.NewToken(),
 		Clients:     shell.ClientFile(filepath.Join(device, "client.json")),
@@ -95,6 +96,7 @@ func newDesktopService(ctx context.Context, device string, send func(desktop.Mes
 		Client:      &http.Client{},
 		DisplayName: host,
 		Send:        send,
+		Folder:      filepath.Join(home, "cyfr"),
 		Local: func(project string) (desktop.Local, error) {
 			work := shell.NewWork(ctx)
 			l, err := readLocal(work, project, "the CYFR app")

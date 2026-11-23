@@ -449,7 +449,11 @@ test("a second launch shows the content window, and nothing once ended", () => {
 const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"
 const AGAIN = CHOOSER_DOC + "again"
 const SIGN_IN = ACCOUNT + "/account/sign#x"
+const PICK = CHOOSER_DOC + "pick"
 const PRESSES = {
+  pick: [
+    {name: "Change…", event: navigate({url: PICK, showing: atWays}),
+      acted: (r) => r.do.some((e) => e.pick) && r.state.picking > 0}],
   again: [
     {name: "Try again", event: navigate({url: AGAIN, showing: atWays}),
       acted: (r) => r.do.some((e) => e.root?.home === HOME) && r.state.notices.length === 0}],
@@ -483,7 +487,7 @@ test("an act is no redirect, and is begun by the top frame's own document that o
     "the chooser's path at the CYFR": HOME + "/bootstrap/", "the chooser's path on another port": "http://127.0.0.1:7341/bootstrap/",
     "the CYFR's host on another port": HOME + ":9443/login", "the account's path on another port": ACCOUNT + ":9443/account/sign",
     none: ""}
-  const offers = {again: ["chooser", "the chooser with its road"], another: ["chooser", "the chooser with its road"], onward: ["chooser", "the chooser with its road"],
+  const offers = {pick: ["chooser", "the chooser with its road"], again: ["chooser", "the chooser with its road"], another: ["chooser", "the chooser with its road"], onward: ["chooser", "the chooser with its road"],
     hop: ["the CYFR's page", "the chooser's path at the CYFR"], answer: ["the account's page"]}
   for (const [act, rows] of Object.entries(PRESSES)) {
     for (const {name, event, acted} of rows) {
@@ -501,4 +505,56 @@ test("an act is no redirect, and is begun by the top frame's own document that o
       }
     }
   }
+})
+
+// The chooser's Change…, pressed on the chooser with no CYFR open.
+const change = navigate({url: PICK, showing: CHOOSER_DOC, by: CHOOSER_DOC})
+const picked = (id, path) => ({type: "picked", id, path})
+const answers = (effects) => effects.filter((e) => e.send?.type === "folder-picked").map((e) => e.send.fields)
+
+test("Change… asks the system once, never loads, and cyfr hears the folder it gave, or none", () => {
+  for (const road of [false, true]) {
+    const asked = run([ready, change], road)
+    assert.deepEqual(asked.effects.at(-1), {pick: {id: 1}})
+    assert.equal(step(run([ready], road).s, change).allow, false, "its address never loads")
+    assert.deepEqual(answers(run([ready, change, picked(1, "/home/ada/elsewhere")], road).effects), [{path: "/home/ada/elsewhere"}])
+    assert.deepEqual(answers(run([ready, change, picked(1, "C:\\Users\\ada\\cyfr")], road).effects), [{path: "C:\\Users\\ada\\cyfr"}])
+    assert.deepEqual(answers(run([ready, change, picked(1, null)], road).effects), [{path: null}], "cancelled")
+    assert.deepEqual(answers(run([ready, change, picked(1, "elsewhere")], road).effects), [{path: null}], "a folder from no root is none")
+    const twice = run([ready, change, picked(1, "/a"), change, picked(2, "/b")], road)
+    assert.deepEqual(answers(twice.effects), [{path: "/a"}, {path: "/b"}], "each pick is its own")
+    assert.deepEqual(twice.effects.filter((e) => e.pick), [{pick: {id: 1}}, {pick: {id: 2}}])
+  }
+})
+
+test("one pick at a time: Change… again while the dialog is open asks nothing, and a result for another pick is dropped", () => {
+  const again = run([ready, change, change])
+  assert.deepEqual(again.effects.filter((e) => e.pick), [{pick: {id: 1}}])
+  assert.deepEqual(answers(run([ready, change, change, picked(1, "/a"), picked(1, "/b")]).effects), [{path: "/a"}], "answered once")
+  assert.deepEqual(answers(run([ready, change, picked(2, "/a")]).effects), [], "a result for no pick asked")
+  assert.deepEqual(answers(run([ready, picked(1, "/a")]).effects), [], "a result with nothing asked")
+})
+
+test("the chooser leaving, a lock, Connect to another CYFR and an end answer the pick with none, and the dialog's result after is dropped", () => {
+  const ends = {
+    "a document committing": [{type: "committed"}],
+    "a lost page shown again": [{type: "lost"}, {type: "committed"}],
+    "cyfr's lock": [locked()],
+    "a lock of the company page": [...open.slice(1), company],
+    "the window closing": [{type: "quit"}],
+    "cyfr gone": [{type: "gone", why: "it exited (1)"}]
+  }
+  for (const [name, events] of Object.entries(ends)) {
+    for (const road of [false, true]) {
+      const r = run([ready, change, ...events, picked(1, "/home/ada/elsewhere")], road)
+      assert.deepEqual(answers(r.effects), [{path: null}], `${name}: answered with none, once`)
+      assert.equal(r.s.picking, 0, name)
+    }
+  }
+  const leaving = run([...open, change, another, picked(1, "/a")], true)
+  assert.deepEqual(answers(leaving.effects), [{path: null}], "Connect to another CYFR")
+  const said = run([ready, change, locked()]).effects
+  assert.ok(said.findIndex((e) => e.send?.type === "folder-picked") < said.findIndex((e) => e.close), "answered before the content closes")
+  assert.deepEqual(answers(run([ready, change, {type: "landed", url: CHOOSER_DOC + "#x"}, {type: "started", url: HOME}]).effects), [],
+    "a fragment, or a navigation that has not committed, leaves the pick")
 })

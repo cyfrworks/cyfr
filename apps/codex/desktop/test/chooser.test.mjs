@@ -34,7 +34,7 @@ const ROAD = "#token=t&road=passkey"
 // holds `saved`; the tab holds the run token, as it does once main's first
 // load ran, and cyfr refuses any other.
 async function chooser(notice, state, connected = OPEN, hash = "#token=t" + (notice ? `&notice=${notice}` : ""),
-  {type = "navigate", saved = null} = {}) {
+  {type = "navigate", saved = null, picked = {}} = {}) {
   const elements = new Map()
   for (const [tag, id] of page.matchAll(/<[a-z0-9]+\b[^>]*\bid="([a-z]+)"[^>]*>/g)) {
     const listeners = {}
@@ -59,7 +59,7 @@ async function chooser(notice, state, connected = OPEN, hash = "#token=t" + (not
       if (path !== "/bootstrap/state") went.asked.push([path, body])
       went.tokens = [...(went.tokens ?? []), token]
       if (path !== "/bootstrap/state") stored.clear() // main cleared the storage while it waited
-      return {ok: true, json: async () => (path === "/bootstrap/state" ? state : connected)}
+      return {ok: true, json: async () => (path === "/bootstrap/state" ? state : path === "/bootstrap/folder" ? picked : connected)}
     }
   })
   await settled()
@@ -354,4 +354,31 @@ test("every notice against every way a load of the chooser can begin: main's alo
     assert.equal((await reload(back.went)).$("notice").textContent, "", `${notice}: a reload after the history brought it back`)
     assert.equal((await reload(mains.went)).$("notice").textContent, words, `${notice}: main's load, reloaded`)
   }
+})
+
+// Setting up CYFR on this computer: the folder is cyfr's word, and Change…
+// asks main, never naming one.
+test("the chooser shows the folder cyfr names, and Change… asks main, then shows the folder cyfr answers", async () => {
+  for (const [seen, state] of [[0, {folder: "/home/ada/cyfr"}], [3, {folder: "/home/ada/there", picks: 3}]]) {
+    const {$, went} = await chooser("", state, OPEN, "#token=t", {picked: {folder: "/home/ada/elsewhere", picks: seen + 1}})
+    assert.equal($("choose").hidden, false)
+    assert.equal($("folder").textContent, state.folder)
+    $("change").fire("click")
+    assert.deepEqual(went.pressed, ["/bootstrap/pick"], "main is asked by its own address")
+    assert.deepEqual(went.asked, [["/bootstrap/folder", {picks: seen}]], "cyfr is asked for the answer after the picks seen")
+    await settled()
+    assert.equal($("folder").textContent, "/home/ada/elsewhere")
+    $("change").fire("click")
+    await settled()
+    assert.deepEqual(went.asked.at(-1), ["/bootstrap/folder", {picks: seen + 1}], "the next waits for the next answer")
+  }
+})
+
+test("the chooser never names a folder, and says why a pick went unanswered", async () => {
+  const {$, went} = await chooser("", {folder: "/home/ada/cyfr"}, OPEN, "#token=t", {picked: {error: "CYFR locked. Connect again."}})
+  $("change").fire("click")
+  await settled()
+  assert.equal($("folder").textContent, "/home/ada/cyfr")
+  assert.equal($("notice").textContent, "CYFR locked. Connect again.")
+  for (const [, body] of went.asked) assert.ok(!JSON.stringify(body).includes("/home/ada"), JSON.stringify(body))
 })

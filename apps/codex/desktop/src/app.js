@@ -17,6 +17,7 @@
 // returns only to the content session that hopped.
 
 import {spawn} from "node:child_process"
+import os from "node:os"
 import path from "node:path"
 
 import {BrowserWindow, app, dialog, session} from "electron"
@@ -198,10 +199,22 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     }
     if (effect.reload && content) content.webContents.reload()
     if (effect.confirmation && content) openConfirmation(effect.confirmation.url)
+    if (effect.pick) pickFolder(effect.pick.id)
     if (effect.show && content && !content.isDestroyed()) {
       if (content.isMinimized()) content.restore()
       content.focus()
     }
+  }
+
+  // The system's folder dialog over the content window, for pick `id`:
+  // whatever it gives, or a failure, is the answer, which step drops once
+  // the pick is no longer the one outstanding.
+  function pickFolder(id) {
+    const answer = (path) => on({type: "picked", id, path})
+    if (!content || content.isDestroyed()) return setImmediate(() => answer(null))
+    dialog.showOpenDialog(content, {title: "Set up CYFR in", defaultPath: os.homedir(), buttonLabel: "Choose",
+      properties: ["openDirectory", "createDirectory"]})
+      .then(({canceled, filePaths}) => answer(canceled ? null : filePaths?.[0] ?? null), () => answer(null))
   }
 
   // A load main makes in the content window that stands, a turn later: the
@@ -467,7 +480,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         return on({type: "gone", why: `it sent ${e.reason === "size" ? "a line too long" : "something that is not its message"}`})
       }
       if (m.type === "ready") clearTimeout(readiness)
-      on({type: m.type, url: m.url, home: m.home, id: m.id, message: m})
+      on({type: m.type, url: m.url, home: m.home, message: m})
     })
     child.stdout.on("data", (chunk) => {
       try {

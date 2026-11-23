@@ -102,6 +102,9 @@ type Service struct {
 	Local func(project string) (Local, error)
 	// Shell adapts a selected CYFR's shell configuration; nil leaves it.
 	Shell func(*shell.Config)
+	// Folder is where CYFR is set up on this computer until the person
+	// picks another (FolderPicked): ~/cyfr.
+	Folder string
 
 	mu sync.Mutex
 	// epoch counts locks. A chooser request belongs to the epoch it
@@ -136,6 +139,12 @@ type Service struct {
 	// ended is whether cyfr is ending, which main hears as its end and
 	// never as a lock.
 	ended bool
+	// folder is the folder main's last folder-picked named, picks counts
+	// main's answers, and picked is closed and replaced at each answer and
+	// each lock, which a chooser waiting for an answer wakes on.
+	folder string
+	picks  uint64
+	picked chan struct{}
 }
 
 type selection struct {
@@ -200,6 +209,7 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		"/bootstrap/state":   s.state,
 		"/bootstrap/connect": s.connect,
 		"/bootstrap/approve": s.approve,
+		"/bootstrap/folder":  s.awaitFolder,
 	}[r.URL.Path]
 	if !ok || r.Method != http.MethodPost {
 		http.NotFound(w, r)
@@ -225,11 +235,19 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not this app's page", http.StatusForbidden)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	// A pick waits on the person at the system's dialog, unbounded; every
+	// other request is bounded.
+	ctx, cancel := r.Context(), context.CancelFunc(func() {})
+	if r.URL.Path != "/bootstrap/folder" {
+		ctx, cancel = context.WithTimeout(ctx, chooserBound)
+	}
 	defer cancel()
 	h.Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(act(ctx, epoch, req))
 }
+
+// chooserBound bounds each chooser request but a pick's wait.
+var chooserBound = 60 * time.Second
 
 const (
 	// noticeUncleared is the chooser's sentence for a clear that failed.
@@ -269,13 +287,14 @@ func (s *Service) finish() {
 	}
 }
 
-// request is a chooser's request: the token, and the address typed or the
-// directory approved.
+// request is a chooser's request: the token, and the address typed, the
+// directory approved, or the picks it has seen answered.
 type request struct {
 	Token     string `json:"token"`
 	Address   string `json:"address,omitempty"`
 	Home      string `json:"cyfr,omitempty"`
 	Directory string `json:"directory,omitempty"`
+	Picks     uint64 `json:"picks,omitempty"`
 }
 
 // answer is what the chooser does next: show a sentence, ask to approve a
@@ -285,8 +304,11 @@ type request struct {
 // Connect of this run, is the remembered CYFR elsewhere, which a chooser
 // on the passkey road connects by itself; a folder's is never Resume.
 // Notice names a sentence of the chooser's own, the one main's notices
-// name.
+// name. Folder is where CYFR would be set up on this computer, after
+// Picks of main's answers to a pick.
 type answer struct {
+	Folder  string `json:"folder,omitempty"`
+	Picks   uint64 `json:"picks,omitempty"`
 	Home    string `json:"cyfr,omitempty"`
 	Confirm string `json:"confirm,omitempty"`
 	Next    string `json:"next,omitempty"`
@@ -307,13 +329,14 @@ func (s *Service) state(context.Context, uint64, request) answer {
 	}
 	s.mu.Lock()
 	open, began, home := s.pages != nil, s.began, s.committed.Home
+	folder, picks := s.folderNow()
 	s.mu.Unlock()
 	if open {
 		// The CYFR open, which the record may not name: it keeps another's
 		// client, or a folder, until this CYFR admitted the device.
 		return s.opened(home)
 	}
-	a := answer{Home: c.Home}
+	a := answer{Home: c.Home, Folder: folder, Picks: picks}
 	if !began {
 		a.Resume = c.Home
 	}
@@ -575,6 +598,62 @@ func remoteDisks(string) disk.Report {
 	return r
 }
 
+// folderNow is the folder and the picks answered, under s.mu.
+func (s *Service) folderNow() (string, uint64) {
+	if s.folder == "" {
+		return s.Folder, s.picks
+	}
+	return s.folder, s.picks
+}
+
+// wake ends every wait for a pick's answer, under s.mu.
+func (s *Service) wake() {
+	if s.picked != nil {
+		close(s.picked)
+	}
+	s.picked = make(chan struct{})
+}
+
+// awaitFolder answers the folder once main answered more picks than the
+// chooser has seen: its Change… asks here before main is asked, so the
+// answer is never missed. A lock ends the wait.
+func (s *Service) awaitFolder(ctx context.Context, epoch uint64, req request) answer {
+	for {
+		s.mu.Lock()
+		if s.epoch != epoch {
+			s.mu.Unlock()
+			return answer{Error: lockedSentence}
+		}
+		folder, picks := s.folderNow()
+		if picks != req.Picks {
+			s.mu.Unlock()
+			return answer{Folder: folder, Picks: picks}
+		}
+		if s.picked == nil {
+			s.picked = make(chan struct{})
+		}
+		woken := s.picked
+		s.mu.Unlock()
+		select {
+		case <-woken:
+		case <-ctx.Done():
+			return answer{Error: "The app's connection stopped. Quit it and open it again."}
+		}
+	}
+}
+
+// FolderPicked is main's folder-picked: the folder the person picked, or
+// nil for none, which leaves the folder as it was.
+func (s *Service) FolderPicked(path *string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if path != nil {
+		s.folder = *path
+	}
+	s.picks++
+	s.wake()
+}
+
 // HomeReady is main's home-ready for an attempt at home: the one waiting,
 // or nothing.
 func (s *Service) HomeReady(home string, attempt uint64) { s.answered(home, attempt, true) }
@@ -632,6 +711,7 @@ func (s *Service) lock(why string, leave bool) {
 	if s.pages == nil {
 		s.ready, s.selecting, s.current = nil, "", 0
 	}
+	s.wake()
 	s.mu.Unlock()
 	if sh != nil && sh.Lock(why) {
 		// The shell said locked as it restarted the pages.
@@ -677,7 +757,7 @@ func (s *Service) Run(in io.Reader) error {
 			s.End()
 			return nil
 		case TypeFolderPicked:
-			// No folder is asked for yet; an answer to none is ignored.
+			s.FolderPicked(m.Path)
 		}
 	}
 	s.End()
