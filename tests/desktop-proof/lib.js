@@ -311,7 +311,7 @@ export async function submitConnect(wc) {
 
 // The chooser's question about an account service, once shown.
 export const question = (wc) => waitFor(() => js(wc, `document.querySelector("#confirm").hidden ? null :
-  ({home: document.querySelector("#home").textContent, service: document.querySelector("#service").textContent})`),
+  ({home: document.querySelector("#named").textContent, service: document.querySelector("#service").textContent})`),
 "the account service to be asked about")
 
 export async function chooserWindow() {

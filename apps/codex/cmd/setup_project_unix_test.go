@@ -8,9 +8,11 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -31,6 +33,7 @@ import (
 // It logs each call, keeps the environment its info was asked in, waits
 // for <key>.release where <key>.block is, and answers <key>.out and
 // <key>.exit: key is the subcommand, up for a compose up and cyfrps for ps.
+// A compose config is held at config.block, and answered as compose.
 const workDocker = `#!/bin/sh
 d="$FAKE_DOCKER_DIR"
 printf '%s\n' "$*" >>"$d/log"
@@ -38,11 +41,18 @@ k="$1"
 case " $* " in " compose "*" up "*) k=up ;; esac
 [ "$k" = ps ] && k=cyfrps
 [ "$k" = info ] && env >"$d/environ"
-if [ -f "$d/$k.block" ]; then
-  printf '%s\n' "$$" >"$d/$k.pid"
-  while [ ! -f "$d/$k.release" ]; do sleep 0.02; done
-  : >"$d/$k.ended"
+printf '%s %s\n' "$1" "$(pwd -P)" >>"$d/cwd"
+h=$k
+case " $* " in " compose "*" config "*) h=config ;; esac
+if [ -f "$d/$h.block" ]; then
+  printf '%s\n' "$$" >"$d/$h.pid"
+  while [ ! -f "$d/$h.release" ]; do sleep 0.02; done
+  : >"$d/$h.ended"
 fi
+# The stack's containers, where stack.out says them.
+case " $* " in *"label=com.docker.compose.project="*) [ -f "$d/stack.out" ] && exec cat "$d/stack.out" ;; esac
+# Under the real engine, the real Compose resolves the configuration.
+[ "$h" = config ] && [ -n "$CYFR_CMD_TEST_REAL_DOCKER" ] && exec "$CYFR_CMD_TEST_REAL_DOCKER" "$@"
 [ -f "$d/$k.out" ] && cat "$d/$k.out"
 [ -f "$d/$k.exit" ] && exit "$(cat "$d/$k.exit")"
 exit 0
@@ -318,6 +328,209 @@ func TestSetupsWorkNamesTheProjectAsTheFolderWasChosen(t *testing.T) {
 	}
 	if p.count("compose -p "+access.ProjectName(chosen)+" ") == 0 {
 		t.Fatalf("compose was not given the chosen name: %v", p.log())
+	}
+}
+
+// The folder set up is the one the work entered, once: a link repointed
+// to the account's own folder while Docker is asked is refused there, with
+// nothing written in it; one repointed during the run leaves the setup in
+// the folder entered; one that still leads where it led sets up there.
+func TestSetupsWorkWritesOnlyInTheFolderItEntered(t *testing.T) {
+	for _, c := range []struct {
+		name, during string
+		refused      bool
+	}{
+		{"repointed during the Docker check", "context", true},
+		{"repointed during the run", "pull", false},
+		{"left as it is", "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := newWorkProject(t)
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			chosen := filepath.Join(t.TempDir(), "chosen")
+			if err := os.Symlink(p.project, chosen); err != nil {
+				t.Fatal(err)
+			}
+			if c.during != "" {
+				p.answer(c.during+".block", "")
+			}
+			ended := make(chan error, 1)
+			go func() {
+				_, err := p.run(t.Context(), chosen)
+				ended <- err
+			}()
+			if c.during != "" {
+				p.blocked(c.during)
+				next := chosen + ".next"
+				if err := os.Symlink(home, next); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(next, chosen); err != nil {
+					t.Fatal(err)
+				}
+				p.answer(c.during+".release", "")
+			}
+			var err error
+			select {
+			case err = <-ended:
+			case <-time.After(20 * time.Second):
+				t.Fatal("setup did not end")
+			}
+			// The account's own CLI settings are init's to write there;
+			// nothing of the folder's is.
+			var written []string
+			walkErr := filepath.WalkDir(home, func(path string, _ os.DirEntry, err error) error {
+				if rel, _ := filepath.Rel(home, path); rel != "." && rel != ".cyfr" && rel != filepath.Join(".cyfr", "config.json") {
+					written = append(written, rel)
+				}
+				return err
+			})
+			if walkErr != nil || len(written) != 0 {
+				t.Fatalf("setup wrote %v in the account's own folder (%v); it answered %v", written, walkErr, err)
+			}
+			if c.refused {
+				if err == nil || !strings.Contains(err.Error(), "choose a folder inside it") || p.starts() != 0 || p.count("pull ") != 0 {
+					t.Fatalf("it answered %v after %v", err, p.log())
+				}
+				if _, statErr := os.Stat(filepath.Join(p.project, ".env")); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("it wrote .env in the folder the link left (%v)", statErr)
+				}
+				return
+			}
+			if err != nil || p.starts() != 1 {
+				t.Fatalf("it answered %v after %d starts", err, p.starts())
+			}
+			if token, _ := parseEnvFile(readEnv(t, p.project)).value(setupTokenVar); len(token) != 64 {
+				t.Fatal("the folder entered has no setup token")
+			}
+		})
+	}
+}
+
+// The run's start, through the real engine and the real Compose, is in
+// the folder the work entered: a link repointed once Compose began to
+// read the configuration leads nothing there, and the project keeps the
+// name it was chosen by.
+func TestSetupsStartRunsInTheFolderItEnteredThroughTheRealEngine(t *testing.T) {
+	requireCompose(t)
+	real, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("no docker")
+	}
+	p := newWorkProject(t)
+	t.Setenv(workRealEngine, real)
+	other := t.TempDir()
+	chosen := filepath.Join(t.TempDir(), "chosen")
+	if err := os.Symlink(p.project, chosen); err != nil {
+		t.Fatal(err)
+	}
+	var stack strings.Builder
+	for _, service := range []string{"cyfr", "locus-backends", "locus-backends-guard", "locus-builds", "locus-builds-guard", "locus-runtime"} {
+		fmt.Fprintf(&stack, `{"name":"chosen-%s-1","service":%q,"state":"running"}`+"\n", service, service)
+	}
+	p.answer("stack.out", stack.String())
+	p.answer("inspect.out", `{"Status":"running","ExitCode":0,"Health":{"Status":"healthy"}}`)
+	p.answer("config.block", "")
+	ended := make(chan error, 1)
+	go func() {
+		_, err := p.run(t.Context(), chosen)
+		ended <- err
+	}()
+	p.blocked("config")
+	next := chosen + ".next"
+	if err := os.Symlink(other, next); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, chosen); err != nil {
+		t.Fatal(err)
+	}
+	p.answer("config.release", "")
+	select {
+	case err = <-ended:
+	case <-time.After(60 * time.Second):
+		t.Fatalf("setup did not end: %q", p.log())
+	}
+	if entries, readErr := os.ReadDir(other); readErr != nil || len(entries) != 0 {
+		t.Fatalf("the start wrote %v where the link led afterwards (%v); it answered %v", entries, readErr, err)
+	}
+	if err != nil || p.count("compose -p chosen ") == 0 {
+		t.Fatalf("the start answered %v, its calls %q", err, p.log())
+	}
+	// Every call from the folder's entry on, the check of Docker before
+	// it aside, ran in the folder entered.
+	raw, _ := os.ReadFile(filepath.Join(p.fake, "cwd"))
+	real, _ = filepath.EvalSymlinks(p.project)
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if call, dir, _ := strings.Cut(line, " "); call != "context" && call != "info" && dir != real {
+			t.Fatalf("docker %s ran in %s, not the folder entered %s", call, dir, real)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(p.project, ".cyfr")); statErr != nil {
+		t.Fatalf("nothing of the start is in the folder entered (%v)", statErr)
+	}
+}
+
+// A daemon's own error, its client's API version refused, is said in its
+// words through the machine's real asking, and offers no installation.
+func TestADaemonsOwnErrorOffersNoInstallation(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nprintf '%s\\n' 'Error response from daemon: client API version is too new' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	saved := machine
+	t.Cleanup(func() { machine = saved })
+	machine.reachable, machine.refusal = realMachine.reachable, realMachine.refusal
+	if ready, why, fixable := dockerReady(t.Context()); ready || fixable || why != "Docker's daemon refused this account: client API version is too new" {
+		t.Fatalf("ready %v, %q, offers a remedy %v", ready, why, fixable)
+	}
+}
+
+// With no sg, a stale group over a Docker whose endpoint is another
+// computer's, refused there, is no missing login.
+func TestNoSgOverAnotherComputersDockerIsNoMissingLogin(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nprintf '%s\\n' 'permission denied while trying to connect to the docker API at tcp://192.0.2.1:2375' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	saved, savedSg := machine, sgProgram
+	t.Cleanup(func() { machine, sgProgram = saved, savedSg })
+	sgProgram = filepath.Join(t.TempDir(), "no-sg")
+	machine.reachable, machine.refusal = realMachine.reachable, realMachine.refusal
+	machine.dockerHere = func(context.Context) (bool, error) { return false, nil }
+	machine.groups = func(_ context.Context, account string) []string {
+		if account != "" {
+			return []string{dockerGroup}
+		}
+		return nil
+	}
+	_, err := continueWithGroup(t.Context(), "init", nil, "ada", io.Discard, io.Discard)
+	if err == nil || strings.Contains(err.Error(), loginAgain) || !strings.Contains(err.Error(), "another computer") {
+		t.Fatalf("continuing with the group said %v", err)
+	}
+}
+
+// A Docker check given up on once Docker was asked says so: Docker did not
+// answer in time, not that it was never asked.
+func TestADockerCheckEndedOnceDockerWasAskedSaysSo(t *testing.T) {
+	p := newWorkProject(t)
+	p.answer("info.block", "")
+	t.Cleanup(func() { p.answer("info.release", "") })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	checked := make(chan desktop.DockerAnswer, 1)
+	go func() { checked <- dockerCheck(ctx, shell.NewWork(ctx)) }()
+	p.blocked("info")
+	cancel()
+	select {
+	case got := <-checked:
+		if got.Sentence != "Docker did not answer before the check ended" || got.Ready {
+			t.Fatalf("the check ended once Docker was asked answered %+v", got)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the check given up on did not answer")
 	}
 }
 
@@ -924,5 +1137,88 @@ func TestAWorkThatClosedItsStdoutAndLivesOnIsKilledAtTheBound(t *testing.T) {
 	}
 	if took < workEndsWithin-500*time.Millisecond || took > workEndsWithin+5*time.Second {
 		t.Fatalf("its work ended after %v, not at the bound", took)
+	}
+}
+
+// appSetup is the app's chooser over the folder the person picked: its
+// Set up and start pressed, and the setup it began read to its end.
+type appSetup struct {
+	Folder string   `json:"folder"`
+	Steps  []string `json:"steps"`
+	Done   bool     `json:"done"`
+	Error  string   `json:"error"`
+	Seq    uint64   `json:"seq"`
+}
+
+func setUpFromTheApp(t *testing.T, svc *desktop.Service, folder string) appSetup {
+	t.Helper()
+	// The press says what the page shows: the time since the last lock,
+	// the pick and the setup there, as the state answered them; main
+	// answers the pick the page asked for.
+	raw, _ := json.Marshal(map[string]any{"token": svc.Token})
+	var shown struct {
+		Epoch, Picks uint64
+		Folder       string
+		Setup        *struct{ Run uint64 }
+	}
+	read := func() {
+		t.Helper()
+		if w := pressed(svc, "/bootstrap/state", "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &shown) != nil {
+			t.Fatalf("/bootstrap/state answered %d %s", w.Code, w.Body)
+		}
+	}
+	read()
+	svc.FolderPicked(desktop.Message{Type: desktop.TypeFolderPicked, Path: &folder, Epoch: shown.Epoch, Pick: shown.Picks})
+	if read(); shown.Folder != folder {
+		t.Fatalf("the chooser shows %s, not the folder picked %s", shown.Folder, folder)
+	}
+	press := map[string]any{"token": svc.Token, "epoch": shown.Epoch, "picks": shown.Picks}
+	if shown.Setup != nil {
+		press["run"] = shown.Setup.Run
+	}
+	ask := func(path string, body map[string]any) appSetup {
+		raw, _ := json.Marshal(body)
+		var got struct {
+			Setup *appSetup
+			Error string
+		}
+		if w := pressed(svc, path, "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Setup == nil {
+			t.Fatalf("%s answered %d %s", path, w.Code, w.Body)
+		}
+		return *got.Setup
+	}
+	s := ask("/bootstrap/start", press)
+	if s.Folder != folder {
+		t.Fatalf("Set up and start set up %q, not the folder picked %q", s.Folder, folder)
+	}
+	for !s.Done && s.Error == "" {
+		s = ask("/bootstrap/setup", map[string]any{"token": svc.Token, "seen": s.Seq})
+	}
+	return s
+}
+
+// The app's Set up and start sets CYFR up in the folder the person picked
+// and starts it, its steps said as they begin; the account's own folder is
+// refused at the start, in setup's sentence, with nothing written, and
+// Try again then sets up the next folder picked.
+func TestTheAppsSetUpAndStartSetsUpTheFolderPicked(t *testing.T) {
+	p := newWorkProject(t)
+	svc := newDesktopService(t.Context(), t.TempDir(), func(desktop.Message) {})
+	t.Cleanup(svc.End)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	refused := setUpFromTheApp(t, svc, home)
+	if !strings.Contains(refused.Error, "choose a folder inside it") || refused.Done {
+		t.Fatalf("the account's own folder was set up: %+v", refused)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 || p.starts() != 0 {
+		t.Fatalf("the refusal wrote %d entries and made %d starts", len(entries), p.starts())
+	}
+	s := setUpFromTheApp(t, svc, p.project)
+	if !s.Done || !slices.Equal(s.Steps, []string{"files", "settings", "images", "start"}) || p.starts() != 1 {
+		t.Fatalf("Try again answered %+v after %d starts", s, p.starts())
+	}
+	if _, err := os.Stat(filepath.Join(p.project, ".env")); err != nil {
+		t.Fatalf("no .env in the folder picked: %v", err)
 	}
 }

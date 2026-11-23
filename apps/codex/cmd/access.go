@@ -60,6 +60,17 @@ var openEngine = func(dir string) (stackEngine, error) {
 	return e, nil
 }
 
+// openEngineAs opens the engine of the project named project in dir, an
+// absolute path given once (access.OpenAs): setup's work, in the folder it
+// entered. A variable so a test stands in a fake engine.
+var openEngineAs = func(dir, project string) (stackEngine, error) {
+	e, err := access.OpenAs(dir, project, nil)
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
 // refusalError is a refusal as a command's failure: Execute prints its
 // sentence, and the command exits non-zero.
 type refusalError struct{ r *access.Refusal }
@@ -129,14 +140,19 @@ func receiptFailure(rec access.Receipt) error {
 }
 
 // openLocked opens the project's engine in the working directory, takes
-// its lock for command and runs recovery, printing each receipt recovery
-// wrote. It answers the engine, the function that releases the lock, and
-// those receipts.
+// its lock for command and runs recovery (lockedEngine).
 func openLocked(ctx context.Context, command string, out io.Writer) (stackEngine, func(), []access.Receipt, error) {
 	e, err := openEngine(".")
 	if err != nil {
 		return nil, nil, nil, engineFailure(err)
 	}
+	return lockedEngine(ctx, e, command, out)
+}
+
+// lockedEngine takes e's lock for command and runs recovery, printing each
+// receipt recovery wrote. It answers the engine, the function that
+// releases the lock, and those receipts.
+func lockedEngine(ctx context.Context, e stackEngine, command string, out io.Writer) (stackEngine, func(), []access.Receipt, error) {
 	unlock, err := e.Lock(command)
 	if err != nil {
 		return nil, nil, nil, engineFailure(err)

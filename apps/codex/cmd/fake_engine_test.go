@@ -76,8 +76,10 @@ type fakeStack struct {
 // terminal init and reach ask on for none.
 func useFakeEngine(t *testing.T) *fakeStack {
 	t.Helper()
-	savedOpen, savedTerminal, savedInput := openEngine, askTerminal, askInput
-	t.Cleanup(func() { openEngine, askTerminal, askInput = savedOpen, savedTerminal, savedInput })
+	savedOpen, savedOpenAs, savedTerminal, savedInput := openEngine, openEngineAs, askTerminal, askInput
+	t.Cleanup(func() {
+		openEngine, openEngineAs, askTerminal, askInput = savedOpen, savedOpenAs, savedTerminal, savedInput
+	})
 	return installFakeEngine(t)
 }
 
@@ -95,6 +97,12 @@ func installFakeEngine(t *testing.T) *fakeStack {
 			return nil, err
 		}
 		return &fakeEngine{s: s, dir: abs}, nil
+	}
+	openEngineAs = func(dir, project string) (stackEngine, error) {
+		if err := s.openErr; err != nil {
+			return nil, err
+		}
+		return &fakeEngine{s: s, dir: dir, project: project}, nil
 	}
 	askTerminal = func() bool { return false }
 	askInput = strings.NewReader("")
@@ -182,6 +190,9 @@ func (s *fakeStack) held() string {
 type fakeEngine struct {
 	s   *fakeStack
 	dir string
+	// project is compose's project where it was opened by name
+	// (openEngineAs); otherwise dir's.
+	project string
 	// locked is whether this engine holds the lock, which ComposeArgs
 	// needs.
 	locked bool
@@ -265,14 +276,22 @@ func (e *fakeEngine) ComposeArgs(ctx context.Context, h access.Head, args ...str
 	if !locked {
 		return nil, errors.New("access: ComposeArgs without the lock")
 	}
-	return append(composePrefixArgs(e.dir, h), args...), nil
+	return append(composePrefixArgs(e.name(), h), args...), nil
 }
 
-// composePrefixArgs is the engine's compose selection for head h in the
-// project dir.
-func composePrefixArgs(dir string, h access.Head) []string {
+// name is compose's project of the engine.
+func (e *fakeEngine) name() string {
+	if e.project != "" {
+		return e.project
+	}
+	return access.ProjectName(e.dir)
+}
+
+// composePrefixArgs is the engine's compose selection for head h of the
+// compose project named project.
+func composePrefixArgs(project string, h access.Head) []string {
 	digest := strings.TrimPrefix(h.Digest(), "sha256:")
-	full := []string{"compose", "-p", access.ProjectName(dir), "-f", ".cyfr/compose.resolved." + digest + ".yml", "--project-directory", "."}
+	full := []string{"compose", "-p", project, "-f", ".cyfr/compose.resolved." + digest + ".yml", "--project-directory", "."}
 	for _, p := range h.Profiles {
 		full = append(full, "--profile", p)
 	}
@@ -491,7 +510,7 @@ func (e *fakeEngine) StartWithin(ctx context.Context, cause string, health time.
 		return access.Receipt{}, s.startErr
 	}
 	if h, err := e.Head(); err == nil && os.Getenv("FAKE_DOCKER_DIR") != "" {
-		res, err := fakeRunner{}.Run(ctx, access.Call{Args: append(composePrefixArgs(e.dir, h), "up", "-d"), Stdout: io.Discard, Stderr: io.Discard})
+		res, err := fakeRunner{}.Run(ctx, access.Call{Args: append(composePrefixArgs(e.name(), h), "up", "-d"), Stdout: io.Discard, Stderr: io.Discard})
 		if err := callFailure(e.Redactor(), res, err); err != nil {
 			return access.Receipt{Op: "start", State: "completed", Outcome: "failed"}, fmt.Errorf("cyfr did not become healthy (docker compose up: %v)", err)
 		}

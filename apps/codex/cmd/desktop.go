@@ -94,6 +94,7 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 // folder until ctx ends, saying to main through tell, which waits on nothing.
 func newDesktopService(ctx context.Context, device string, tell func(desktop.Message)) *desktop.Service {
 	host, _ := os.Hostname()
+	home, _ := os.UserHomeDir()
 	return &desktop.Service{
 		Token:       desktop.NewToken(),
 		Clients:     shell.ClientFile(filepath.Join(device, "client.json")),
@@ -101,6 +102,14 @@ func newDesktopService(ctx context.Context, device string, tell func(desktop.Mes
 		Client:      &http.Client{},
 		DisplayName: host,
 		Tell:        tell,
+		Folder:      filepath.Join(home, "cyfr"),
+		Docker: func(ctx context.Context) desktop.DockerAnswer {
+			return dockerCheck(ctx, shell.NewWork(ctx))
+		},
+		// A setup runs until cyfr ends, whatever the chooser does.
+		Setup: func(_ context.Context, folder string, step func(string)) error {
+			return setUpHere(ctx, shell.NewWork(ctx), folder, step)
+		},
 		Local: func(project string) (desktop.Local, error) {
 			// The reading holds work from here: its caller once it is
 			// returned, and this function until then, a panic too.

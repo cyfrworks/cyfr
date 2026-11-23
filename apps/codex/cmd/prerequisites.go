@@ -34,6 +34,11 @@ type machineSeams struct {
 	arch func() string
 	// reachable is whether Docker answers this process before ctx ends.
 	reachable func(ctx context.Context) bool
+	// refusal is what asking Docker's info showed where it does not
+	// answer this process: the kind of refusal its stderr says and its
+	// words (access.ReadDockerRefusal), or that there is no docker program
+	// to ask.
+	refusal func(ctx context.Context) (kind access.DockerRefusal, said string, absent bool)
 	// dockerHere is whether the Docker this process reaches runs its
 	// containers on this computer.
 	dockerHere func(ctx context.Context) (bool, error)
@@ -76,6 +81,18 @@ var machine = machineSeams{
 	},
 	arch:      func() string { return runtime.GOARCH },
 	reachable: dockerAnswers,
+	refusal: func(ctx context.Context) (access.DockerRefusal, string, bool) {
+		_, err := askDocker(ctx, access.Call{Args: []string{"info"}})
+		if errors.Is(err, exec.ErrNotFound) {
+			return access.RefusalUnsaid, "", true
+		}
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			return access.RefusalUnsaid, "", false
+		}
+		kind, said := access.ReadDockerRefusal(exit.Stderr)
+		return kind, said, false
+	},
 	dockerHere: func(ctx context.Context) (bool, error) {
 		return access.DockerIsHere(ctx, dockerProgram{})
 	},
@@ -318,6 +335,9 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 // macOS and Windows.
 const dockerDesktopPage = "https://www.docker.com/products/docker-desktop/"
 
+// dockerEnginePage is Docker's own page on installing it on Linux.
+const dockerEnginePage = "https://docs.docker.com/engine/install/"
+
 // dockerDesktop is where Docker Desktop is installed on system, and the
 // folder of the docker program it carries. A test stands in for it.
 var dockerDesktop = func(system string) (app, bin string) {
@@ -406,10 +426,77 @@ func withDockerGroup(ctx context.Context, subcommand string, args []string, out,
 // package's on Ubuntu 26.04.
 const loginAgain = "Docker does not answer this account until you log out and in again"
 
+// dockerSeen is what asking Docker showed this process: all the Docker
+// sentence is written from (dockerSentence).
+type dockerSeen struct {
+	// cancelled is the asking ended before Docker was heard.
+	cancelled bool
+	// hereErr is where Docker runs its containers left unread; here is
+	// that its endpoint is this computer's own socket or pipe.
+	hereErr error
+	here    bool
+	answers bool
+	// absent is there being no docker program to ask; refusal and said
+	// what docker's stderr said where it did not answer.
+	absent  bool
+	refusal access.DockerRefusal
+	said    string
+	// stale is the account's docker group being newer than this process,
+	// which has no way into it but a new login.
+	stale bool
+}
+
+// seeDocker asks Docker where it runs its containers, whether it answers
+// this process, and where it does not, what it said; stale is the
+// membership the caller observed.
+func seeDocker(ctx context.Context, stale bool) dockerSeen {
+	s := dockerSeen{stale: stale}
+	s.here, s.hereErr = machine.dockerHere(ctx)
+	if s.hereErr == nil && s.here {
+		s.answers = machine.reachable(ctx)
+	}
+	if !s.answers && (s.hereErr != nil || s.here) {
+		s.refusal, s.said, s.absent = machine.refusal(ctx)
+	}
+	s.cancelled = ctx.Err() != nil
+	return s
+}
+
+// dockerSentence is the one sentence of why Docker does not answer this
+// account, none where it does, and whether installing or starting Docker
+// here, or giving the account its group, is what is missing
+// (dockerRemedy). It names a cause only where s saw it: a new login only
+// for this computer's own socket refusing a process older than the
+// account's group, the daemon's own error in its words.
+func dockerSentence(s dockerSeen) (why string, fixable bool) {
+	switch {
+	case s.cancelled:
+		return "Docker was not waited for", false
+	case s.absent:
+		return "Docker is not installed here", true
+	case s.hereErr != nil:
+		return "Docker did not say where it runs containers", true
+	case !s.here:
+		return "Docker here runs containers on another computer, so CYFR cannot be set up on this one with it", false
+	case s.answers:
+		return "", false
+	case s.refusal == access.RefusalDenied && s.stale:
+		return loginAgain, false
+	case s.refusal == access.RefusalDaemon:
+		return "Docker's daemon refused this account: " + s.said, false
+	case s.refusal == access.RefusalUnsaid && s.said != "":
+		return "Docker does not answer this account: " + s.said, false
+	case s.said != "":
+		return "Docker does not answer this account: " + s.said, true
+	}
+	return "Docker does not answer this account", true
+}
+
 // loginIsMissing is whether only a new login lets this process reach
 // Docker: this computer's own Docker does not answer it, /etc/group lists
-// its account in the docker group, the process is older than that, and
-// there is no sg to reach the group with.
+// its account in the docker group, the process is older than that, there
+// is no sg to reach the group with, and Docker's socket refused this
+// process when asked: a daemon's own refusal is no missing login.
 func loginIsMissing(ctx context.Context) bool {
 	if machine.system() != "linux" {
 		return false
@@ -421,8 +508,8 @@ func loginIsMissing(ctx context.Context) bool {
 	if err != nil || !staleGroup(ctx, account.Username) {
 		return false
 	}
-	here, err := machine.dockerHere(ctx)
-	return err == nil && here && !machine.reachable(ctx)
+	why, _ := dockerSentence(seeDocker(ctx, true))
+	return why == loginAgain
 }
 
 // sgProgram runs a command with a group the account's processes do not
@@ -441,13 +528,18 @@ func staleGroup(ctx context.Context, account string) bool {
 // environment and directory. It answers false, having run nothing, when
 // /etc/group does not list the account in the group, and when this process
 // already has it: sg would give it nothing, and its child would land here
-// again. With no sg it runs nothing and says to log in again (loginAgain).
+// again. With no sg it runs nothing and says why Docker does not answer:
+// to log in again (loginAgain) only where its socket refused this process.
 func continueWithGroup(ctx context.Context, subcommand string, args []string, account string, out, errOut io.Writer) (bool, error) {
 	if !staleGroup(ctx, account) {
 		return false, nil
 	}
 	if _, err := os.Stat(sgProgram); err != nil {
-		return true, fmt.Errorf("%s. Then run `cyfr %s` again", loginAgain, subcommand)
+		why, _ := dockerSentence(seeDocker(ctx, true))
+		if why == "" {
+			return false, nil
+		}
+		return true, fmt.Errorf("%s. Then run `cyfr %s` again", why, subcommand)
 	}
 	self, err := os.Executable()
 	if err != nil {

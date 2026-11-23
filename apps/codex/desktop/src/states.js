@@ -79,6 +79,14 @@
 // What main takes for the person pressing something is in ACTS, and
 // nowhere else.
 //
+// `picking` is the pick of a folder main has asked the system for (the
+// chooser's Change…), numbered, or 0: one at a time, and each answered to
+// cyfr once with folder-picked, the folder the dialog gave or none where
+// the person cancelled, with the chooser's epoch and pick its address
+// named (`pickFor`). A document committing in the content window, a lock
+// and an end answer it at once with none, and a dialog's result for any
+// other pick than the one outstanding is dropped.
+//
 // `notices` is what main has to tell and the person has not yet gone on
 // from: every lock adds to it and carries it, and the chooser shows it and
 // stays. Only a way on taken from the chooser, its top frame leaving it,
@@ -123,14 +131,18 @@
 //   confirmation {url}       open a confirmation's answer in a window of
 //                            the content's session
 //   show                     bring the content window forward
+//   external {url}           open url in the person's browser
+//   pick {id}                ask the system for a folder in a dialog of
+//                            the content window; answers picked with id
 //   say {line}
 
 import {LOOPBACK, accountLoad, contentNavigation, contentOpen, homeMessage, parse} from "./policy.js"
+import {absolute} from "./process.js"
 
 /** The state main starts in. */
 export function initial(accountRoad, route = {proxy: "", resolver: ""}, screen = "") {
   return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", route, returning: null,
-    notices: []}
+    notices: [], picks: 0, picking: 0, pickFor: null}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
@@ -138,8 +150,17 @@ export const kept = (s) => s.name === "open"
   ? {home: s.home, account: s.account, accountRoad: s.accountRoad}
   : {home: "", account: "", accountRoad: s.accountRoad}
 
+// The pick outstanding, if any, answered with none: the state without it
+// and the answer.
+const unpicked = (s) => s.picking
+  ? [{...s, picking: 0, pickFor: null}, [{send: {type: "folder-picked", fields: {path: null, ...s.pickFor}}}]]
+  : [s, []]
+
 // Into ended, the way every end goes: close, then `last`.
-const ending = (s, last) => ({state: {...s, name: "ended", returning: null}, do: [{close: true}, last]})
+function ending(s, last) {
+  const [t, answer] = unpicked(s)
+  return {state: {...t, name: "ended", returning: null}, do: [...answer, {close: true}, last]}
+}
 const same = (s, effects = []) => ({state: s, do: effects})
 const withdrawn = (s, effects = []) => same(s.returning ? {...s, returning: null} : s, effects)
 const adding = (notices, notice) => !notice || notices.includes(notice) ? notices : [...notices, notice]
@@ -152,6 +173,23 @@ const atChooser = (url) => {
 const ANOTHER = LOOPBACK + "/bootstrap/another"
 // Its Try again, the same way: the CYFR open, at its root.
 const AGAIN = LOOPBACK + "/bootstrap/again"
+// Its Change…, the same way: a folder of the system's dialog, for the
+// pick the chooser shows, named in its address as the epoch it was shown
+// in and the picks answered before it, which the answer carries back.
+function pickAsked(url) {
+  const u = parse(url)
+  if (!u || u.origin !== LOOPBACK || u.pathname !== "/bootstrap/pick" || u.hash) return null
+  const q = u.searchParams, whole = (v) => /^(0|[1-9][0-9]{0,15})$/.test(v ?? "") && Number(v) <= Number.MAX_SAFE_INTEGER
+  if ([...q.keys()].length !== 2 || !whole(q.get("epoch")) || !whole(q.get("pick"))) return null
+  return {epoch: Number(q.get("epoch")), pick: Number(q.get("pick"))}
+}
+
+/**
+ * The pages the chooser may link to, Docker's own on installing it, each
+ * opened in the person's browser and never in the app's window
+ * (tests/fixtures/desktop-process.json external_pages).
+ */
+export const EXTERNAL = ["https://www.docker.com/products/docker-desktop/", "https://docs.docker.com/engine/install/"]
 // The engine's code for a load given up: replaced, stopped or refused.
 export const ABORTED = -3
 
@@ -171,6 +209,17 @@ export const ACTS = {
   again: {window: "content", by: (_, url) => atChooser(url),
     to: (s, e) => s.accountRoad && s.name === "open" && e.url === AGAIN,
     then: (s) => ({state: {...s, notices: []}, allow: false, do: [{root: {home: s.home}}]})},
+  // Change…, the folder CYFR is set up in on this computer, on the
+  // chooser: the system's dialog, one at a time. The box's screen has no
+  // chooser, and none of its acts.
+  pick: {window: "content", by: (_, url) => atChooser(url),
+    to: (s, e) => !s.screen && pickAsked(e.url) !== null,
+    then: (s, e) => s.picking ? {state: s, allow: false, do: []}
+      : {state: {...s, picks: s.picks + 1, picking: s.picks + 1, pickFor: pickAsked(e.url)}, allow: false, do: [{pick: {id: s.picks + 1}}]}},
+  // Docker's page on installing it, linked from the chooser.
+  external: {window: "content", by: (_, url) => atChooser(url),
+    to: (s, e) => !s.screen && EXTERNAL.includes(e.url),
+    then: (s, e) => ({state: s, allow: false, do: [{external: {url: e.url}}]})},
   // A way on from the chooser: the passkey's, or this computer's key's.
   onward: {window: "content", by: (_, url) => atChooser(url),
     to: (s, e) => contentNavigation(e, kept(s)) === "allow",
@@ -214,17 +263,19 @@ const rerouted = (s, m) => (m.proxy ?? "") !== s.route.proxy || (m.resolver ?? "
 // it said locked itself (`heard`, its message): that is then the barrier
 // passed and the device's session ended, which is forgotten.
 function lock(s, why, notice, heard = null) {
-  const next = {...s, name: "locking", before: kept(s), notices: adding(s.notices, notice), barrier: heard !== null,
+  const [t, answer] = unpicked(s)
+  const next = {...t, name: "locking", before: kept(s), notices: adding(s.notices, notice), barrier: heard !== null,
     keep: heard, forgotten: heard === null, returning: null}
-  return {state: next, do: [{say: `locked: ${why}`}, {close: true}, heard ? {forget: true} : {send: {type: "lock"}}]}
+  return {state: next, do: [{say: `locked: ${why}`}, ...answer, {close: true}, heard ? {forget: true} : {send: {type: "lock"}}]}
 }
 
 // Connect to another CYFR: the content closes and its storage is cleared
 // before cyfr is told anything (the forgot event tells it).
 function leave(s) {
-  const next = {...s, name: "locking", before: kept(s), barrier: false, keep: null, forgotten: false, leaving: true,
+  const [t, answer] = unpicked(s)
+  const next = {...t, name: "locking", before: kept(s), barrier: false, keep: null, forgotten: false, leaving: true,
     returning: null}
-  return {state: next, do: [{say: "locked: the person left this CYFR"}, {close: true}, {forget: true}]}
+  return {state: next, do: [{say: "locked: the person left this CYFR"}, ...answer, {close: true}, {forget: true}]}
 }
 
 // A lock past its barrier that has forgotten what it forgets: main keeps to the
@@ -236,7 +287,8 @@ function settle(s) {
   const m = s.keep
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
-    home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices}
+    home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices,
+    picks: s.picks, picking: 0, pickFor: null}
   if (!s.wanted) return {state: next, do: [{chooser: s.notices}]}
   const taken = step(next, {type: "home", message: s.wanted})
   return {state: taken.state, do: [{chooser: s.notices}, ...taken.do]}
@@ -264,7 +316,7 @@ export function step(s, e) {
         return ending(s, {end: "it named a CYFR this app does not open"})
       }
       if (rerouted(s, m)) return ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
-      return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, returning: null},
+      return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, device: m.road === "device", returning: null},
         do: [{say: `home: ${m.home}`}, ...(s.name === "taking" ? [] : [{take: true}])]}
     }
     case "taken": {
@@ -277,15 +329,15 @@ export function step(s, e) {
     case "opened":
       if (s.name === "locking") return same(s) // from before the lock
       if (s.name !== "proposed" || e.home !== s.home) return ending(s, {end: "it opened a CYFR this app was not keeping to"})
-      return s.accountRoad ? same({...s, name: "open", notices: []}, [{root: {home: s.home}}]) : same({...s, name: "open"})
+      // A CYFR that opens at the device's pages (home's road) loads none
+      // of its own: the chooser goes to those pages, on either road.
+      return s.accountRoad && !s.device ? same({...s, name: "open", notices: []}, [{root: {home: s.home}}]) : same({...s, name: "open"})
     case "locked": {
       const m = e.message
       if (s.name === "starting") return same(s)
       if (s.name === "locking") return settle({...s, barrier: true, keep: m})
       return lock(s, "the device locked", "", m)
     }
-    case "pick-folder":
-      return same(s, [{send: {type: "folder-picked", fields: {id: e.id, path: null}}}])
     case "ending":
       return step(s, {type: "gone", why: "the screen shell is ending"})
     case "gone":
@@ -308,6 +360,11 @@ export function step(s, e) {
       return ending(s, {quit: true})
     case "second-instance":
       return same(s, [{show: true}])
+    // The system's dialog answered pick `id`: the folder, or null.
+    case "picked":
+      if (!s.picking || e.id !== s.picking) return same(s)
+      return same({...s, picking: 0, pickFor: null},
+        [{send: {type: "folder-picked", fields: {path: absolute(e.path) ? e.path : null, ...s.pickFor}}}])
 
     // The content window's top frame, as the engine reports it, read for
     // the answer on its way there (`returning`) alone.
@@ -318,8 +375,10 @@ export function step(s, e) {
       return s.returning?.at === "landing" ? same(s) : withdrawn(s)
     case "landed":
       return withdrawn(s, s.returning?.at === "landing" && e.url === s.returning.url ? [{reload: true}] : [])
-    case "committed":
-      return withdrawn(s)
+    case "committed": {
+      const [t, answer] = unpicked(s)
+      return withdrawn(t, answer)
+    }
     case "load-failed":
       if (s.screen && e.code !== ABORTED && parse(e.url)?.origin === LOOPBACK && !["starting", "locking"].includes(s.name)) {
         return lock(s, `the device's own page did not load (${e.code})`, "")

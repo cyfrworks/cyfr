@@ -55,13 +55,18 @@ type localApp struct {
 	*desktop.Service
 	t    *testing.T
 	sent chan desktop.Message
-	// proposed counts the attempts open heard.
+	// proposed counts the attempts open heard; road is the road the next
+	// open's home names: the device's pages while the folder's reading
+	// offers its setup token at the press, no one set up there.
 	proposed uint64
+	road     string
 }
 
 func newLocalApp(t *testing.T, project string) *localApp {
 	t.Helper()
-	a := &localApp{t: t, sent: make(chan desktop.Message, 16)}
+	// A folder's stand-in says no one is set up there until a test says
+	// otherwise: its CYFR opens at the device's pages.
+	a := &localApp{t: t, sent: make(chan desktop.Message, 16), road: desktop.RoadDevice}
 	a.Service = newDesktopService(t.Context(), t.TempDir(), func(m desktop.Message) { a.sent <- m })
 	a.Shell = func(c *shell.Config) {
 		c.Chip = func() bool { return false }
@@ -98,7 +103,10 @@ func (a *localApp) page() string {
 	return w.Body.String()
 }
 
-type chooserAnswer struct{ Home, Next, Error string }
+type chooserAnswer struct {
+	Home        string `json:"cyfr"`
+	Next, Error string
+}
 
 func (a *localApp) chooser(path string, fields map[string]string) chooserAnswer {
 	a.t.Helper()
@@ -123,7 +131,7 @@ func (a *localApp) form(path string, fields url.Values) string {
 func (a *localApp) open(typed, home string, route ...string) {
 	a.t.Helper()
 	a.proposed++
-	want := desktop.Message{Type: desktop.TypeHome, Home: home, Account: home, Attempt: a.proposed}
+	want := desktop.Message{Type: desktop.TypeHome, Home: home, Account: home, Attempt: a.proposed, Road: a.road}
 	if len(route) == 2 {
 		want.Proxy, want.Resolver = route[0], route[1]
 	}
@@ -545,12 +553,15 @@ func TestTheAppOpensTheRememberedFoldersCYFR(t *testing.T) {
 		name, log, exit string
 		busy            bool
 		carries         bool
+		// road is the home's: the device's pages where the press read no
+		// one set up; the lock is taken after the press.
+		road string
 	}{
-		{"no one set up", "booting\n" + logNotSetUp, "0", false, true},
-		{"someone set up", logNotSetUp + logSetUp, "0", false, false},
-		{"set up at the boot", "booting\n", "0", false, false},
-		{"a log unread", logNotSetUp, "1", false, false},
-		{"another command holds the lock", logNotSetUp, "0", true, false},
+		{"no one set up", "booting\n" + logNotSetUp, "0", false, true, desktop.RoadDevice},
+		{"someone set up", logNotSetUp + logSetUp, "0", false, false, ""},
+		{"set up at the boot", "booting\n", "0", false, false, ""},
+		{"a log unread", logNotSetUp, "1", false, false, ""},
+		{"another command holds the lock", logNotSetUp, "0", true, false, desktop.RoadDevice},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newLocalStack(t)
@@ -571,6 +582,7 @@ func TestTheAppOpensTheRememberedFoldersCYFR(t *testing.T) {
 			if s.engine.locks != 0 || len(s.engine.calls) != 0 {
 				t.Fatalf("showing the folder took the lock %d times or called docker %v", s.engine.locks, s.engine.calls)
 			}
+			a.road = c.road
 			a.open(home, home)
 			if c.busy {
 				e, err := openEngine(s.project)
@@ -1286,29 +1298,42 @@ func TestALockWaitsForNoWorkStarting(t *testing.T) {
 }
 
 // Where only a new login gives this process the docker group, a reading
-// of a folder that is set up says so, as a cause waiting does not cure.
+// of a folder that is set up says so, as a cause waiting does not cure:
+// where Docker's socket refused this process. A daemon that is not there
+// is no missing login, whatever the membership.
 func TestAReadingOfAFolderSaysToLogInAgain(t *testing.T) {
-	s := newLocalStack(t)
-	s.env(4321)
-	s.answer("cyfrps.exit", "1")
-	savedMachine, savedSg := machine, sgProgram
-	t.Cleanup(func() { machine, sgProgram = savedMachine, savedSg })
-	machine.system = func() string { return "linux" }
-	machine.groups = func(_ context.Context, account string) []string {
-		if account != "" {
-			return []string{dockerGroup}
-		}
-		return nil
-	}
-	sgProgram = filepath.Join(t.TempDir(), "no-sg")
-	l, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = l.Answers(t.Context())
-	var unbound *shell.Unbound
-	want := loginAgain + ". Nothing was sent to the CYFR in " + s.project + "."
-	if !errors.As(err, &unbound) || unbound.Sentence != want || !unbound.Lasting {
-		t.Fatalf("the folder's reading said %#v, want %q, lasting", err, want)
+	for _, c := range []struct {
+		name, refused string
+		login         bool
+	}{{"socket refused", socketDenied, true}, {"no daemon", noDaemon, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newLocalStack(t)
+			s.env(4321)
+			s.answer("cyfrps.exit", "1")
+			savedMachine, savedSg := machine, sgProgram
+			t.Cleanup(func() { machine, sgProgram = savedMachine, savedSg })
+			machine.system = func() string { return "linux" }
+			machine.groups = func(_ context.Context, account string) []string {
+				if account != "" {
+					return []string{dockerGroup}
+				}
+				return nil
+			}
+			machine.refusal = refusedWith(c.refused)
+			sgProgram = filepath.Join(t.TempDir(), "no-sg")
+			l, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = l.Answers(t.Context())
+			var unbound *shell.Unbound
+			want := loginAgain + ". Nothing was sent to the CYFR in " + s.project + "."
+			if c.login && (!errors.As(err, &unbound) || unbound.Sentence != want || !unbound.Lasting) {
+				t.Fatalf("the folder's reading said %#v, want %q, lasting", err, want)
+			}
+			if !c.login && (err == nil || strings.Contains(err.Error(), loginAgain) || errors.As(err, &unbound) && strings.Contains(unbound.Sentence, loginAgain)) {
+				t.Fatalf("with no daemon, the folder's reading said %#v", err)
+			}
+		})
 	}
 }

@@ -55,6 +55,7 @@ func testMachine(system string) machineSeams {
 		supported:      func() bool { return false },
 		arch:           func() string { return "amd64" },
 		reachable:      func(context.Context) bool { return true },
+		refusal:        realMachine.refusal, // asks the docker the test puts on PATH
 		dockerHere:     func(context.Context) (bool, error) { return true, nil },
 		installed:      func(string) string { return "" },
 		running:        func() bool { return false },

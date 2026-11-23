@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os/signal"
+	"regexp"
 	"slices"
 	"sync"
 	"syscall"
@@ -46,8 +47,6 @@ const (
 	// in place of locked, and the shell says nothing after it. main closes
 	// its windows at once and ends, opening nothing more for it.
 	TypeEnding = "ending"
-	// PickFolder asks main for a folder (reserved: nothing sends it yet).
-	TypePickFolder = "pick-folder"
 )
 
 // The messages the app's main process sends cyfr.
@@ -59,8 +58,14 @@ const (
 	TypeLock       = "lock"
 	// Leave locks and lets go of the CYFR committed: main sends it once it
 	// cleared what it kept of that CYFR, and cyfr's locked then names none.
-	TypeLeave        = "leave"
-	TypeShutdown     = "shutdown"
+	TypeLeave    = "leave"
+	TypeShutdown = "shutdown"
+	// FolderPicked is main's answer to the person's pick of a folder (the
+	// chooser's Change…): the folder, absolute, or none where the person
+	// cancelled or the pick ended unanswered, with the epoch and the pick
+	// the chooser asked it for, as its address named them. Main sends one
+	// for each pick and none otherwise; the page that asked never names a
+	// folder.
 	TypeFolderPicked = "folder-picked"
 )
 
@@ -68,36 +73,53 @@ const (
 // be absent marked optional.
 var fields = map[string]struct{ required, optional []string }{
 	TypeReady:        {required: []string{"url"}},
-	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver"}},
+	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "road"}},
 	TypeOpened:       {required: []string{"home"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
 	TypeEnding:       {},
-	TypePickFolder:   {required: []string{"id", "suggested"}},
 	TypeHomeReady:    {required: []string{"home", "attempt"}},
 	TypeHomeFailed:   {required: []string{"home", "attempt"}},
 	TypeLock:         {},
 	TypeLeave:        {},
 	TypeShutdown:     {},
-	TypeFolderPicked: {required: []string{"id", "path"}},
+	TypeFolderPicked: {required: []string{"path", "epoch", "pick"}},
 }
 
 var fromMain = []string{TypeHomeReady, TypeHomeFailed, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked}
 
 // Message is one message in either direction. Path is a folder-picked
-// answer's folder, nil when the person cancelled. Attempt is a proposal's
+// answer's folder, nil when none was picked. Attempt is a proposal's
 // number, from 1.
 type Message struct {
-	Type      string
-	URL       string
-	Home      string
-	Account   string
-	Attempt   uint64
-	Proxy     string
-	Resolver  string
-	ID        string
-	Suggested string
-	Path      *string
+	Type     string
+	URL      string
+	Home     string
+	Account  string
+	Attempt  uint64
+	Proxy    string
+	Resolver string
+	// Road is RoadDevice where the CYFR opens at the device's pages on
+	// either road: one just set up, whose first person is made there.
+	Road string
+	Path *string
+	// Epoch and Pick are what the chooser showed as it asked for the pick
+	// a folder-picked answers: the time since a lock, and the picks
+	// answered before it. cyfr takes only the answer to the pick asked
+	// for now.
+	Epoch, Pick uint64
 }
+
+// maxWhole is the largest whole number both sides read exactly, a
+// JavaScript number's.
+const maxWhole = 1<<53 - 1
+
+// RoadDevice is home's road for a CYFR that opens at the device's pages.
+const RoadDevice = "device"
+
+// absolute is whether a folder-picked folder is spelled from a root, on
+// any system the app runs on: /, a drive's letter, colon and separator, or
+// a share's two backslashes (process.js absolute).
+var absolute = regexp.MustCompile(`^(/|\\\\|[A-Za-z]:[\\/])`).MatchString
 
 // Refusal is why a line is not a message this side reads.
 type Refusal struct{ Reason string }
@@ -147,20 +169,29 @@ func ReadFromMain(line []byte) (Message, error) {
 			continue
 		}
 		if f == "attempt" {
-			if json.Unmarshal(raw, &msg.Attempt) != nil || msg.Attempt == 0 {
+			if string(raw) == "null" || json.Unmarshal(raw, &msg.Attempt) != nil || msg.Attempt == 0 || msg.Attempt > maxWhole {
+				return Message{}, refuse("fields")
+			}
+			continue
+		}
+		if f == "epoch" || f == "pick" {
+			n := &msg.Epoch
+			if f == "pick" {
+				n = &msg.Pick
+			}
+			// null is no number: JSON leaves a number it decodes as it was.
+			if string(raw) == "null" || json.Unmarshal(raw, n) != nil || *n > maxWhole {
 				return Message{}, refuse("fields")
 			}
 			continue
 		}
 		var s string
-		if json.Unmarshal(raw, &s) != nil || s == "" {
+		if json.Unmarshal(raw, &s) != nil || s == "" || f == "path" && !absolute(s) {
 			return Message{}, refuse("fields")
 		}
 		switch f {
 		case "home":
 			msg.Home = s
-		case "id":
-			msg.ID = s
 		case "path":
 			msg.Path = &s
 		}
@@ -175,7 +206,7 @@ func (m Message) object() (map[string]any, error) {
 		return nil, fmt.Errorf("cyfr does not send %q", m.Type)
 	}
 	values := map[string]string{"url": m.URL, "home": m.Home, "account": m.Account, "proxy": m.Proxy,
-		"resolver": m.Resolver, "id": m.ID, "suggested": m.Suggested}
+		"resolver": m.Resolver, "road": m.Road}
 	o := map[string]any{"version": Version, "type": m.Type}
 	for _, f := range want.required {
 		if f == "attempt" {

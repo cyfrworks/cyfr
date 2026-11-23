@@ -458,8 +458,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(kinds narrowable_kinds preview refusals version)}
     ],
     "desktop-process.json" => [
+      {"apps/codex/cmd/setup_project_test.go", ~w(external_pages)},
       {"apps/codex/desktop/test/policy.test.mjs", ~w(account_services)},
       {"apps/codex/desktop/test/process.test.mjs", ~w(version go_to_main main_to_go refused)},
+      {"apps/codex/desktop/test/states.test.mjs", ~w(external_pages)},
       {"apps/codex/internal/account/discover_test.go", ~w(account_services)},
       {"apps/codex/internal/desktop/process_test.go", ~w(version go_to_main main_to_go refused)}
     ],

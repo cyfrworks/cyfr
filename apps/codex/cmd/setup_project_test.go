@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,7 +46,13 @@ func workStandIn() int {
 		}
 		sgProgram = filepath.Join(os.TempDir(), "no-sg-here")
 	}
+	real := openEngineAs
 	installFakeEngine(nil)
+	if os.Getenv(workRealEngine) != "" {
+		// The run's start through the real engine, over the docker on
+		// PATH.
+		openEngineAs = real
+	}
 	if os.Getenv("FAKE_DOCKER_DIR") == "" {
 		os.Setenv("PATH", "")
 		machine.reachable = func(context.Context) bool { return false }
@@ -58,6 +65,10 @@ func workStandIn() int {
 const (
 	workDeaf       = "CYFR_CMD_TEST_DEAF_WORK"
 	workStaleGroup = "CYFR_CMD_TEST_STALE_GROUP"
+	// workRealEngine names the real docker whose Compose resolves the
+	// folder's configuration, for a run whose start goes through the real
+	// engine (workDocker hands it compose config).
+	workRealEngine = "CYFR_CMD_TEST_REAL_DOCKER"
 )
 
 // workSeesDocker has setup's work, a process of its own, reach the docker
@@ -204,6 +215,36 @@ func TestAReadingThatNeverCameBackBlamesNoDocker(t *testing.T) {
 			want := "The CYFR in " + dir + " could not be read here (" + c.why + "), so nothing was sent to it. Try again."
 			if err == nil || err.Error() != want {
 				t.Fatalf("said %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+// A Docker check whose work never answered says what happened to the
+// work, and that Docker was not asked only where the work never began.
+func TestADockerCheckThatNeverCameBackSaysWhatHappened(t *testing.T) {
+	for name, c := range map[string]struct {
+		start func() (*workProcess, error)
+		said  string
+	}{
+		"not begun": {
+			start: func() (*workProcess, error) { return nil, errors.New("sg is gone") },
+			said:  "Docker was not asked (setup's work could not begin (sg is gone))",
+		},
+		"ended with no answer": {
+			start: func() (*workProcess, error) {
+				_, in := io.Pipe()
+				return &workProcess{in: in, out: strings.NewReader("not a message\n"), wait: func() error { return nil }, kill: func() {}}, nil
+			},
+			said: "The Docker check failed (setup's work ended before it finished)",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			saved := startWork
+			t.Cleanup(func() { startWork = saved })
+			startWork = func(context.Context, []string) (workBegin, error) { return c.start, nil }
+			if got := dockerCheck(t.Context(), shell.NewWork(t.Context())); got.Sentence != c.said || got.Ready {
+				t.Fatalf("the check answered %+v, want %q", got, c.said)
 			}
 		})
 	}
@@ -382,7 +423,8 @@ func TestInitHeedsAnInterruptBeforeItMintsKeys(t *testing.T) {
 }
 
 // Work that came through no sg, where the account's membership is newer
-// than it, says what gives it the group: a new login.
+// than it and Docker's socket refused it, says what gives it the group: a
+// new login. A daemon that is not there says so, whatever the membership.
 func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 	saved := machine
 	t.Cleanup(func() { machine = saved })
@@ -391,16 +433,19 @@ func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 	for _, c := range []struct {
 		system        string
 		account, mine []string
-		login         bool
+		// refused is what docker wrote where it did not answer.
+		refused string
+		login   bool
 		// elsewhere is a Docker whose endpoint is another computer's,
 		// which no login cures.
 		elsewhere bool
 	}{
-		{"linux", member, nil, true, false},
-		{"linux", member, member, false, false},
-		{"linux", nil, nil, false, false},
-		{"darwin", member, nil, false, false},
-		{"linux", member, nil, false, true},
+		{"linux", member, nil, socketDenied, true, false},
+		{"linux", member, nil, noDaemon, false, false},
+		{"linux", member, member, socketDenied, false, false},
+		{"linux", nil, nil, socketDenied, false, false},
+		{"darwin", member, nil, socketDenied, false, false},
+		{"linux", member, nil, socketDenied, false, true},
 	} {
 		machine.dockerHere = func(context.Context) (bool, error) { return !c.elsewhere, nil }
 		machine.system = func() string { return c.system }
@@ -410,9 +455,128 @@ func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 			}
 			return c.account
 		}
-		ready, why := dockerReady(t.Context())
+		machine.refusal = refusedWith(c.refused)
+		ready, why, fixable := dockerReady(t.Context())
 		if ready || strings.Contains(why, "log out and in again") != c.login || strings.Contains(why, "another computer") != c.elsewhere {
 			t.Errorf("%+v: ready %v, %q", c, ready, why)
+		}
+		if c.refused == noDaemon && why != "Docker does not answer this account: the Docker daemon is not reachable" {
+			t.Errorf("%+v: no daemon is said as %q", c, why)
+		}
+		if fixable != (!c.login && !c.elsewhere) {
+			t.Errorf("%+v: %q offers a remedy: %v", c, why, fixable)
+		}
+	}
+}
+
+// The one Docker sentence names the cause asking Docker saw, and offers
+// what installs, starts or joins Docker only where that is what is
+// missing: a new login only for this computer's own socket refusing a
+// process older than the account's group.
+func TestTheDockerSentenceNamesOnlyWhatWasSeen(t *testing.T) {
+	denied := func(text string) dockerSeen {
+		kind, said := access.ReadDockerRefusal([]byte(text))
+		return dockerSeen{here: true, refusal: kind, said: said}
+	}
+	stale := func(s dockerSeen) dockerSeen { s.stale = true; return s }
+	elsewhere := func(s dockerSeen) dockerSeen { s.here = false; return s }
+	const tcpDenied = "permission denied while trying to connect to the docker API at tcp://192.0.2.1:2375\n"
+	for _, c := range []struct {
+		name    string
+		seen    dockerSeen
+		why     string
+		fixable bool
+	}{
+		{"socket refused, the group newer than the process", stale(denied(socketDenied)), loginAgain, false},
+		{"socket refused, the group the process's own", denied(socketDenied),
+			"Docker does not answer this account: this user may not use the Docker daemon", true},
+		{"refused over TCP, the group newer than the process", elsewhere(stale(denied(tcpDenied))),
+			"Docker here runs containers on another computer, so CYFR cannot be set up on this one with it", false},
+		{"no daemon, the group newer than the process", stale(denied(noDaemon)),
+			"Docker does not answer this account: the Docker daemon is not reachable", true},
+		{"the client's API version refused", stale(denied("Error response from daemon: client version 1.52 is too new. Maximum supported API version is 1.47\n")),
+			"Docker's daemon refused this account: client version 1.52 is too new. Maximum supported API version is 1.47", false},
+		{"Docker absent", dockerSeen{hereErr: errors.New("exec: docker: not found"), absent: true}, "Docker is not installed here", true},
+		{"any other words", denied("context \"gone\" does not exist\n"), "Docker does not answer this account: context \"gone\" does not exist", false},
+		{"nothing said", denied(""), "Docker does not answer this account", true},
+		{"where it runs unread", dockerSeen{hereErr: errors.New("exit status 1")}, "Docker did not say where it runs containers", true},
+		{"given up on", dockerSeen{cancelled: true, here: true}, "Docker was not waited for", false},
+		{"answering", dockerSeen{here: true, answers: true}, "", false},
+	} {
+		if why, fixable := dockerSentence(c.seen); why != c.why || fixable != c.fixable {
+			t.Errorf("%s: said %q, offers a remedy %v; want %q, %v", c.name, why, fixable, c.why, c.fixable)
+		}
+	}
+}
+
+// The probe's answer names what makes Docker answer here, only where
+// installing, starting or joining is what is missing: the commands on
+// Ubuntu 26.04, Docker Desktop's page on macOS and Windows, Docker's own
+// page on any other Linux; none for a Docker elsewhere, a login missing,
+// or a Docker that answers.
+func TestTheProbeNamesWhatMakesDockerAnswerHere(t *testing.T) {
+	saved := machine
+	t.Cleanup(func() { machine = saved })
+	machine.installed = func(string) string { return "" }
+	machine.running = func() bool { return false }
+	machine.groups = func(context.Context, string) []string { return nil }
+	machine.refusal = refusedWith(noDaemon)
+	for _, c := range []struct {
+		name, system  string
+		supported     bool
+		here, answers bool
+		hereErr       error
+		commands      bool
+		page          string
+	}{
+		{"Ubuntu 26.04 without Docker", "linux", true, true, false, nil, true, ""},
+		{"Ubuntu 26.04, Docker not installed", "linux", true, false, false, errors.New("no docker"), true, ""},
+		{"another Linux", "linux", false, true, false, nil, false, dockerEnginePage},
+		{"macOS", "darwin", false, true, false, nil, false, dockerDesktopPage},
+		{"Windows", "windows", false, false, false, errors.New("no docker"), false, dockerDesktopPage},
+		{"a Docker elsewhere", "darwin", false, false, false, nil, false, ""},
+		{"a Docker that answers", "linux", true, true, true, nil, false, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			machine.system = func() string { return c.system }
+			machine.supported = func() bool { return c.supported }
+			machine.dockerHere = func(context.Context) (bool, error) { return c.here, c.hereErr }
+			machine.reachable = func(context.Context) bool { return c.answers }
+			var out bytes.Buffer
+			// The end of its stdin is the work's cancel: held open.
+			in, held := io.Pipe()
+			defer held.Close()
+			_ = runSetupWork(t.Context(), in, &out, []string{workProbe})
+			var m workMessage
+			if err := json.Unmarshal(out.Bytes(), &m); err != nil {
+				t.Fatalf("the probe said %q", out.String())
+			}
+			if m.Type != workDone || m.Ready != c.answers || (len(m.Commands) > 0) != c.commands || m.Page != c.page {
+				t.Fatalf("the probe answered %+v", m)
+			}
+			if c.commands && !slices.Contains(m.Commands, "systemctl enable --now docker") {
+				t.Fatalf("the commands are %q", m.Commands)
+			}
+		})
+	}
+}
+
+// Every page the probe can name is one main opens in the person's
+// browser (tests/fixtures/desktop-process.json external_pages).
+func TestEveryPageTheProbeNamesIsOneMainOpens(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "desktop-process.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Pages []string `json:"external_pages"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range []string{dockerDesktopPage, dockerEnginePage} {
+		if !slices.Contains(v.Pages, page) {
+			t.Errorf("main does not open %s", page)
 		}
 	}
 }

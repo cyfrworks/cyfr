@@ -241,11 +241,13 @@ func (s *Selection) Update(change func(*ClientRecord) bool) error {
 // project: the CYFR opened last is then the one remembered, so a person
 // who signs in with a passkey alone can move to another. It writes the account
 // service's address only when this selection approved it; one it took
-// from the record stays as the record holds it now, ended or not.
-func (s *Selection) Commit() error {
+// from the record stays as the record holds it now, ended or not. It
+// answers whether the record is this selection's now: a record that keeps
+// another CYFR is left as it is.
+func (s *Selection) Commit() (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.file.Update(func(c *ClientRecord) bool {
+	err := s.file.Update(func(c *ClientRecord) bool {
 		switch {
 		case s.owns:
 			if !s.approved || c.Directory == s.rec.Directory {
@@ -259,6 +261,7 @@ func (s *Selection) Commit() error {
 		}
 		return false
 	})
+	return s.owns && err == nil, err
 }
 
 // EndApproval forgets the account service approved for home unless it is

@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import {test} from "node:test"
 
-import {MAX_LINE, Refused, VERSION, lines, readFromCyfr, toCyfr} from "../src/process.js"
+import {MAX_LINE, Refused, VERSION, absolute, lines, readFromCyfr, toCyfr} from "../src/process.js"
 
 const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
 
@@ -42,6 +42,28 @@ test("main sends nothing cyfr sends", () => {
   for (const type of ["ready", "home", "opened", "locked", "pick-folder", "unlock"]) {
     assert.throws(() => toCyfr(type, {}))
   }
+})
+
+// The folders cyfr refuses in a folder-picked, which main writes none of.
+test("main names no folder or pick cyfr refuses, and every folder cyfr reads", () => {
+  const object = (line) => { try { return JSON.parse(line) } catch { return null } }
+  const whole = (n) => Number.isSafeInteger(n) && n >= 0
+  const picks = vectors["refused"].filter((r) => r.to === "go").map((r) => object(r.line))
+    .filter((m) => m?.type === "folder-picked" && Object.keys(m).length === 5 && ["path", "epoch", "pick"].every((k) => Object.hasOwn(m, k)))
+  const refused = picks.filter((m) => whole(m.epoch) && whole(m.pick))
+  assert.ok(refused.length >= 5)
+  for (const {path, epoch, pick} of refused) {
+    assert.equal(absolute(path), false, JSON.stringify(path))
+    assert.throws(() => toCyfr("folder-picked", {path, epoch, pick}), JSON.stringify(path))
+  }
+  const misnumbered = picks.filter((m) => !whole(m.epoch) || !whole(m.pick))
+  assert.ok(misnumbered.length >= 3)
+  for (const {path, epoch, pick} of misnumbered) {
+    assert.throws(() => toCyfr("folder-picked", {path, epoch, pick}), JSON.stringify({epoch, pick}))
+  }
+  const read = vectors["main_to_go"].filter(({message}) => message.type === "folder-picked" && message.path !== null)
+  assert.ok(read.length >= 3)
+  for (const {message: {path}} of read) assert.equal(absolute(path), true, path)
 })
 
 test("lines are whole lines, however the stream cuts them", () => {

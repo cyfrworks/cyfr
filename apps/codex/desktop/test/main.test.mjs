@@ -51,6 +51,8 @@ function reset({relaunch = false} = {}) {
   world.relaunched = null
   world.wholeDocument = false
   world.refuseLoad = false
+  world.dialogs = []
+  world.opened = []
   world.app.removeAllListeners()
   world.powerMonitor.removeAllListeners()
   world.quit = false
@@ -220,9 +222,12 @@ function request({url}) {
 }
 
 mock.module("electron", {exports: {
-  BrowserWindow, app: world.app, dialog: {showMessageBox: async () => ({response: 0})},
+  BrowserWindow, app: world.app, dialog: {showMessageBox: async () => ({response: 0}),
+    // The system's folder dialog, open until the test answers it.
+    showOpenDialog: (parent, options) => new Promise((answer) => world.dialogs.push({parent, options, answer}))},
   Menu: {setApplicationMenu: (menu) => world.menus.push(menu)},
-  powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request}
+  powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request},
+  shell: {openExternal: async (url) => { world.opened.push(url) }}
 }})
 let child = null
 mock.module("node:child_process", {exports: {spawn: (_program, args, options) => {
@@ -1370,6 +1375,113 @@ test("started on a route main keeps that route's rules alone", async () => {
     assert.deepEqual(world.switches, [])
   } finally {
     world.app.commandLine.getSwitchValue = bare
+  }
+})
+
+// ---- the folder CYFR is set up in on this computer ----
+
+// Change…, as the chooser shown in epoch 1 asks for its pick 0.
+const PICK = "http://127.0.0.1:7340/bootstrap/pick?epoch=1&pick=0"
+const folders = () => child.heard.filter((m) => m.type === "folder-picked")
+
+test("Change… opens the system's folder dialog over the content window, never loads, and cyfr hears the folder once", async () => {
+  for (const road of [false, true]) {
+    await started(road)
+    const w = content()
+    assert.ok(navigate(w, PICK).prevented, "its address never loads")
+    assert.equal(world.dialogs.length, 1)
+    const [{parent, options}] = world.dialogs
+    assert.equal(parent, w, "over the content window")
+    assert.deepEqual(options.properties, ["openDirectory", "createDirectory"])
+    assert.ok(navigate(w, PICK).prevented)
+    assert.equal(world.dialogs.length, 1, "one pick at a time")
+    world.dialogs[0].answer({canceled: false, filePaths: ["/home/ada/elsewhere"]})
+    await settled()
+    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: "/home/ada/elsewhere", epoch: 1, pick: 0}])
+    navigate(w, PICK)
+    world.dialogs[1].answer({canceled: true, filePaths: []})
+    await settled()
+    assert.deepEqual(folders().at(-1), {version: 1, type: "folder-picked", path: null, epoch: 1, pick: 0}, "cancelled")
+    assert.equal(content(), w, "the chooser stands")
+    assert.deepEqual(world.fetched, [])
+  }
+})
+
+test("a redirect, or a page other than the chooser, opens no dialog", async () => {
+  await started(false)
+  const w = content()
+  assert.ok(redirected(w, PICK).prevented)
+  assert.ok(await opens())
+  await give(w)
+  assert.ok(navigate(w, PICK).prevented)
+  assert.equal(world.dialogs.length, 0)
+  assert.deepEqual(folders(), [])
+})
+
+test("a lock, or the chooser leaving, answers the pick with none at once, and the dialog's folder after is dropped", async () => {
+  const ends = {
+    "cyfr's lock": async () => saysLocked({}),
+    "the chooser loading again": async (w) => { w.webContents.reload(); await settled() },
+    "a dialog that failed": async () => { world.dialogs[0].answer(Promise.reject(new Error("no portal"))); await settled() }
+  }
+  for (const [name, end] of Object.entries(ends)) {
+    await started(false)
+    navigate(content(), PICK)
+    await end(content())
+    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null, epoch: 1, pick: 0}], name)
+    world.dialogs[0].answer({canceled: false, filePaths: ["/home/ada/elsewhere"]})
+    await settled()
+    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null, epoch: 1, pick: 0}], `${name}: the late folder is dropped`)
+  }
+})
+
+test("Docker's page, linked from the chooser, opens in the person's browser and never in the app's window", async () => {
+  for (const page of ["https://www.docker.com/products/docker-desktop/", "https://docs.docker.com/engine/install/"]) {
+    await started(false)
+    const w = content()
+    assert.ok(navigate(w, page).prevented, "the window does not go there")
+    await settled()
+    assert.deepEqual(world.opened, [page])
+    assert.equal(content(), w)
+    assert.deepEqual(world.loads, [], "nothing of it loads in the app")
+  }
+  await started(false)
+  assert.ok(navigate(content(), "https://www.docker.com/").prevented)
+  assert.ok(redirected(content(), "https://docs.docker.com/engine/install/").prevented)
+  await settled()
+  assert.deepEqual(world.opened, [], "any other page, or a redirect, opens nothing")
+})
+
+test("on macOS and Windows a CYFR just set up opens at the device's pages: main loads none of its own", async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform"), argv = process.argv
+  for (const system of ["darwin", "win32"]) {
+    Object.defineProperty(process, "platform", {...platform, value: system})
+    // The app as a person starts it, with no switch: this test's path
+    // reads as one on Windows.
+    process.argv = argv.slice(0, 1)
+    try {
+      reset()
+      // The road is the system's, as the app is started on it.
+      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: () => {}})
+      await settled()
+      child.say({type: "ready", url: READY})
+      await settled()
+      assert.equal(content().webContents.url, READY + "&road=passkey", system)
+      const attempt = child.proposes(HOME, {road: "device"})
+      await settled()
+      await settled()
+      assert.ok(child.heard.some((m) => m.type === "home-ready" && m.attempt === attempt), system)
+      child.say({type: "opened", home: HOME})
+      await settled()
+      await settled()
+      assert.deepEqual(world.loads, [], `${system}: main loaded no page of the CYFR's`)
+      assert.ok(!navigate(content(), "http://127.0.0.1:7340/").prevented, `${system}: the chooser goes on to the device's pages`)
+      await give(content())
+      assert.equal(content().webContents.url, HOME + "/", `${system}: where the device's pages give the CYFR`)
+    } finally {
+      Object.defineProperty(process, "platform", platform)
+      process.argv = argv
+    }
   }
 })
 

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/version"
 )
 
@@ -36,6 +37,23 @@ type standIn struct {
 	applyErr, authErr                  error
 	authenticated, forgotten           int
 	prompt                             func()
+	// refused is what docker writes where it does not answer.
+	refused string
+}
+
+// The daemon's two refusals of a call, as docker writes them: its socket
+// refusing this process, and no daemon at the socket.
+const (
+	socketDenied = "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock\n"
+	noDaemon     = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n"
+)
+
+// refusedWith is the machine's refusal seam where docker wrote stderr.
+func refusedWith(stderr string) func(context.Context) (access.DockerRefusal, string, bool) {
+	return func(context.Context) (access.DockerRefusal, string, bool) {
+		kind, said := access.ReadDockerRefusal([]byte(stderr))
+		return kind, said, false
+	}
 }
 
 // standInMachine stands s in for the machine until t ends. It fails at
@@ -62,6 +80,12 @@ func standInMachine(t *testing.T) *standIn {
 	machine.supported = func() bool { return s.supported }
 	machine.arch = func() string { return s.arch }
 	machine.reachable = func(context.Context) bool { return s.reachable }
+	machine.refusal = func(ctx context.Context) (access.DockerRefusal, string, bool) {
+		if s.reachable {
+			return access.RefusalUnsaid, "", false
+		}
+		return refusedWith(s.refused)(ctx)
+	}
 	machine.dockerHere = func(context.Context) (bool, error) { return true, nil }
 	// An entry pkg=version holds pkg at that version, and pkg alone at 1.
 	machine.installed = func(pkg string) string {

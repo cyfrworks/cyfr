@@ -266,8 +266,8 @@ func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 	if c, _ := sel.Load(); c.Project != "" || c.ClientID != "" || c.Home != "https://cyfr.example.com" {
 		t.Fatalf("the selection reads as %+v", c)
 	}
-	if err := sel.Commit(); err != nil {
-		t.Fatal(err)
+	if recorded, err := sel.Commit(); err != nil || recorded {
+		t.Fatalf("the commit over a working record answered recorded %v, %v", recorded, err)
 	}
 	if c, _ := f.Load(); !sameRecord(c, working) {
 		t.Fatalf("an opened selection replaced a working record before its CYFR admitted this device: %+v", c)
@@ -290,8 +290,8 @@ func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 	if c, _ := again.Load(); c.ClientID != "pcl_1" || c.Directory != "https://accounts.example.com" {
 		t.Fatalf("a new directory for the same CYFR dropped its client: %+v", c)
 	}
-	if err := again.Commit(); err != nil {
-		t.Fatal(err)
+	if recorded, err := again.Commit(); err != nil || !recorded {
+		t.Fatalf("the commit of the CYFR recorded answered recorded %v, %v", recorded, err)
 	}
 	if c, _ := f.Load(); c.ClientID != "pcl_1" || c.Directory != "https://accounts.example.com" {
 		t.Fatalf("committed %+v", c)
@@ -305,7 +305,7 @@ func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 
 	empty := ClientFile(filepath.Join(t.TempDir(), "client.json"))
 	first, _ := empty.Select("https://cyfr.example.com", "https://cyfr.run", true)
-	if err := first.Commit(); err != nil {
+	if _, err := first.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := empty.Load(); c.Home != "https://cyfr.example.com" || c.Directory != "https://cyfr.run" {
@@ -315,7 +315,7 @@ func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 	// The CYFR chosen last is remembered where the record holds no
 	// device's client: what a person signed in by passkey alone has.
 	next, _ := empty.Select("https://bob.example.com", "https://cyfr.run", true)
-	if err := next.Commit(); err != nil {
+	if _, err := next.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := empty.Load(); c.Home != "https://bob.example.com" {
@@ -328,7 +328,7 @@ func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 		t.Fatal(err)
 	}
 	chosen, _ := device.Select("https://bob.example.com", "https://cyfr.run", true)
-	if err := chosen.Commit(); err != nil {
+	if _, err := chosen.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := device.Load(); !sameRecord(c, admittedAtA) {
@@ -343,7 +343,7 @@ func TestTheClientRecordSelectsOneCYFR(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote, _ := screen.Select("https://cyfr.example.com", "https://cyfr.run", true)
-	if err := remote.Commit(); err != nil {
+	if _, err := remote.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := screen.Load(); c.Project != "/home/ada/cyfr" || c.Home != "" {
@@ -382,8 +382,8 @@ func TestALocalSelectionReplacesTheRecordOnceItAdmitsTheDevice(t *testing.T) {
 	if err := sel.Update(func(c *ClientRecord) bool { c.Certificate = nil; return true }); err != nil {
 		t.Fatal(err)
 	}
-	if err := sel.Commit(); err != nil {
-		t.Fatal(err)
+	if recorded, err := sel.Commit(); err != nil || recorded {
+		t.Fatalf("the commit over a working record answered recorded %v, %v", recorded, err)
 	}
 	if c, _ := f.Load(); !sameRecord(c, working) {
 		t.Fatalf("a local selection replaced a working record before its CYFR admitted this device: %+v", c)
@@ -414,7 +414,7 @@ func TestALocalSelectionReplacesTheRecordOnceItAdmitsTheDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.Commit(); err != nil {
+	if _, err := first.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := empty.Load(); !sameRecord(c, ClientRecord{Project: "/home/ada/cyfr"}) {
