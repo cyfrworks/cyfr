@@ -301,6 +301,14 @@ same worktree refuses, naming the run that holds it.
   The Go tests do not: each gives the commands that serve it a port of its
   own.
 
+  The same job then runs `tests/setup-proof/app.sh` (its header names the
+  rows): the DEB in a client of Ubuntu 26.04 with the runner's Docker
+  behind it, whose app process lacks the docker group its account has,
+  sets CYFR up in a folder from the setup screen, quits during the
+  download, sets it up again and makes its first person. It too binds
+  127.0.0.1:7340 on the host's network, so here it runs inside
+  `flock /var/tmp/cyfr/port-7340.lock`, one at a time.
+
   Past `handoff`, the pull request's run on GitHub is the check, and it
   runs every check in parallel; a CI job is reproduced here by running
   that job's own commands. Whoever merges reads the push runs on main
