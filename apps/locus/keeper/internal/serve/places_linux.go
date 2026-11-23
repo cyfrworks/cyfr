@@ -163,8 +163,13 @@ func (s *server) reader(stop <-chan struct{}) {
 // the place still names that spawn: a pooled spawn's group is named by its
 // uid, which another spawn may take once this one's group is gone, and the
 // place goes in the step the group does. A read that fails leaves the last
-// reading as it was. It answers a wait for the reads it started, which the
-// reader does not wait for.
+// reading as it was. A read of a group the kernel serves returns at once,
+// and ends with an error once its group is removed, whether the removal
+// came before its open of memory.stat or between its open and its read: a
+// goroutine is left behind its spawn only by a read that never returns,
+// which the kernel's cgroup files do not do, so only a test's gate that
+// stays closed leaves one. It answers a wait for the reads it started,
+// which the reader does not wait for.
 func (s *server) read() (wait func()) {
 	// The seams are read here, on the caller's goroutine, which a test that
 	// sets them joins before it puts them back.

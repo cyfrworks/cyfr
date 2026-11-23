@@ -9,8 +9,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -452,6 +454,86 @@ func TestAHeldReadDelaysNoOtherSpawnsReading(t *testing.T) {
 	}
 }
 
+// A read of a group the kernel serves ends, with an error once the group is
+// removed, wherever the removal falls: memory.stat opened before it reads an
+// error from the kernel, and a read begun after it finds no group. The
+// reader's pass over a spawn whose group went ends so and stores nothing.
+func TestAReadOfARemovedGroupEndsWithAnError(t *testing.T) {
+	k := boundedKeeper(t)
+	group, err := k.s.memory.Create(cgroup.SpawnName(randomHex(16)), 64<<20, protocol.CPUPeriod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = group.Remove() })
+	// The tmpfs pages stay charged to the group once their writer has
+	// exited, so the group reads as in use until it is removed.
+	file, err := os.CreateTemp("/dev/shm", "cyfr-read-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	t.Cleanup(func() { _ = os.Remove(file.Name()) })
+	writer, dir := k.runIn(t, group, "head -c 4194304 /dev/zero > "+file.Name())
+	k.awaitExit(t, writer)
+	if used, err := group.Used(); err != nil || used.Bytes < 4<<20 {
+		t.Fatalf("the group before its removal read %+v, %v; want at least 4 MiB", used, err)
+	}
+	stat, err := os.Open(filepath.Join(dir, "memory.stat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stat.Close()
+	if placed := k.place(t, "p", protocol.KindRun); placed["type"] != protocol.TypePlaced {
+		t.Fatalf("place answered %v", placed)
+	}
+	sp := &spawn{id: randomHex(16), group: group}
+	k.spawnedIn(t, "p", sp)
+	// It leaves as a retirement's last step has it leave, before the
+	// keeper's cleanup, which retires every spawn held, finds it.
+	t.Cleanup(func() {
+		k.s.mu.Lock()
+		delete(k.s.spawns, sp.id)
+		delete(k.s.places, sp.place)
+		k.s.mu.Unlock()
+	})
+	if err := group.Remove(); err != nil {
+		t.Fatal(err)
+	}
+
+	ends := func(what string, read func() error) {
+		t.Helper()
+		ended := make(chan error, 1)
+		go func() { ended <- read() }()
+		select {
+		case err := <-ended:
+			if err == nil {
+				t.Fatalf("%s read no error", what)
+			}
+			t.Logf("%s: %v", what, err)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s did not return within 10 s", what)
+		}
+	}
+	ends("a read of memory.stat opened before its group's removal", func() error {
+		_, err := io.ReadAll(stat)
+		return err
+	})
+	ends("Used of a removed group", func() error {
+		_, err := group.Used()
+		return err
+	})
+	passed := make(chan struct{})
+	go func() { k.s.read()(); close(passed) }()
+	select {
+	case <-passed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the reader's pass over a spawn whose group was removed did not end within 10 s")
+	}
+	if m := k.measure(t, "p"); m["type"] != protocol.TypeError || m["code"] != protocol.CodeUnmeasured {
+		t.Fatalf("the place of a spawn whose group was removed answered %v; want it unmeasured", m)
+	}
+}
+
 // removalRefused makes every removal of a group fail busy, as one a process
 // still holds fails, until the function it answers is called.
 func removalRefused(t *testing.T) (allow func()) {
@@ -549,46 +631,99 @@ func TestASpawnWhoseGroupStaysKeepsItsPlaceUntilARetryRemovesIt(t *testing.T) {
 	}
 }
 
-// A spawn refused once the keeper began making it frees its place only once
-// its retirement removed its group: while the group stays the place is held,
-// after the retirement ended too, and nothing of the spawn is told but its
-// refusal.
-func TestARefusedLaunchKeepsItsPlaceUntilItsGroupIsRemoved(t *testing.T) {
-	k := boundedKeeper(t)
-	allow := removalRefused(t)
-	req := spawnRequest(t, k.attach, "r", "true", map[string]string{}, false, 64<<20)
-	req.Argv = []string{"/nonexistent/cyfr-command"}
-	k.handleSpawn(t, req)
-	if refused := k.reply(t); refused["type"] != protocol.TypeError || refused["id"] != "r" || refused["code"] != protocol.CodeExecFailed {
-		t.Fatalf("a spawn of a command that cannot run answered %v", refused)
+// wire is reply as the client reads it.
+func wire(t *testing.T, reply any) map[string]any {
+	t.Helper()
+	line, err := json.Marshal(reply)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if again := k.place(t, "r", protocol.KindRun); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
-		t.Fatalf("a place of the refused spawn's id answered %v while its group stays; want it refused, the place still held", again)
+	var m map[string]any
+	if err := json.Unmarshal(line, &m); err != nil {
+		t.Fatal(err)
 	}
-	k.s.mu.Lock()
-	var made *spawn
-	if p := k.s.places["r"]; p != nil {
-		made = p.spawn
-	}
-	k.s.mu.Unlock()
-	if made == nil {
-		t.Fatal("the refused spawn's place names no spawn made in it")
-	}
-	awaitRetired(t, made)
-	if again := k.place(t, "r", protocol.KindRun); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
-		t.Fatalf("a place of the refused spawn's id answered %v once its retirement left the group; want it refused, the place still held", again)
-	}
+	return m
+}
 
-	allow()
-	k.s.retryRemovals()()
-	if again := k.place(t, "r", protocol.KindRun); again["type"] != protocol.TypePlaced {
-		t.Fatalf("a place of the refused spawn's id answered %v once its group went; want it placed", again)
+// refusedMade reads, whole, the refusal of the spawn request id asked for,
+// refused once the keeper made it: under that id and the spawn id the keeper
+// gave it, which it answers.
+func (k *keeper) refusedMade(t *testing.T, id, code string) string {
+	t.Helper()
+	refused := k.reply(t)
+	spawnID, _ := refused["spawn_id"].(string)
+	if spawnID == "" || !reflect.DeepEqual(refused, wire(t, protocol.NewError(id, spawnID, code))) {
+		t.Fatalf("spawn %s answered %v; want its refusal %s under its id and the spawn id the keeper gave it", id, refused, code)
 	}
-	if told := k.toldSoFar(t); len(told) != 0 {
-		t.Fatalf("a refused spawn was told %v after its refusal; want nothing", told)
+	return spawnID
+}
+
+// A spawn refused once the keeper made it is refused under its spawn id and
+// later released under it, once its retirement removed its group: while the
+// group stays its place is held and nothing more of it is told, after the
+// retirement ended too, and the retry that removes the group frees the place
+// and sends its one `released`, with no `exited` before it. A spawn refused
+// before the keeper made anything of it is refused under its id alone, its
+// place freed at once, and is told nothing more.
+func TestARefusedLaunchIsReleasedOnceItsGroupIsRemoved(t *testing.T) {
+	for _, kept := range []bool{false, true} {
+		t.Run(fmt.Sprintf("kept %t", kept), func(t *testing.T) {
+			var k *keeper
+			var req *protocol.Request
+			if kept {
+				k = keptKeeper(t)
+				path := filepath.Join(k.s.cfg.Kept.Root, "vlt_refused")
+				if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, testKeptFirst); made["type"] != protocol.TypeHomeMade {
+					t.Fatalf("home_make: %v", made)
+				}
+				req = keptRequest(t, k.attach, "r", "true", path, testKeptFirst, nil)
+			} else {
+				k = boundedKeeper(t)
+				req = spawnRequest(t, k.attach, "r", "true", map[string]string{}, false, 64<<20)
+			}
+			allow := removalRefused(t)
+			req.Argv = []string{"/nonexistent/cyfr-command"}
+			k.handleSpawn(t, req)
+			spawnID := k.refusedMade(t, "r", protocol.CodeExecFailed)
+			k.s.mu.Lock()
+			var made *spawn
+			if p := k.s.places["r"]; p != nil {
+				made = p.spawn
+			}
+			k.s.mu.Unlock()
+			if made == nil || made.id != spawnID {
+				t.Fatalf("the refused spawn's place names %+v; want the spawn %s made in it", made, spawnID)
+			}
+
+			early := spawnRequest(t, k.attach, "e", "true", map[string]string{}, false, 64<<20)
+			early.Pool = "absent"
+			k.handleSpawn(t, early)
+			k.expect(t, protocol.NewError("e", "", protocol.CodeUnknownPool))
+			if again := k.place(t, "e", protocol.KindRun); again["type"] != protocol.TypePlaced {
+				t.Fatalf("a place of the early refusal's id answered %v; want it placed, the place freed at once", again)
+			}
+
+			awaitRetired(t, made)
+			if told := k.toldSoFar(t); len(told) != 0 {
+				t.Fatalf("while the refused spawn's group stays the keeper told %v; want nothing", told)
+			}
+			if again := k.place(t, "r", protocol.KindRun); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
+				t.Fatalf("a place of the refused spawn's id answered %v once its retirement left the group; want it refused, the place still held", again)
+			}
+
+			allow()
+			k.s.retryRemovals()()
+			if told := k.toldSoFar(t); !reflect.DeepEqual(told, []map[string]any{wire(t, protocol.NewReleased(spawnID))}) {
+				t.Fatalf("the retry that removed the refused spawn's group told %v; want its one release", told)
+			}
+			if again := k.place(t, "r", protocol.KindRun); again["type"] != protocol.TypePlaced {
+				t.Fatalf("a place of the refused spawn's id answered %v once it was released; want it placed", again)
+			}
+			if !kept {
+				assertRetired(t, k, testPoolFirst)
+			}
+		})
 	}
-	k.s.handle(parsed(t, `{"v":3,"type":"drop","place":"r"}`))
-	assertRetired(t, k, testPoolFirst)
 }
 
 // A pooled uid quarantined while its group stays goes back to its pool only
