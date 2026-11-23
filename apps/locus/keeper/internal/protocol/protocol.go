@@ -9,7 +9,7 @@
 //
 //	{"v":3,"type":"place","id":…,"kind":…,"athanor":…,"subject":…}
 //	{"v":3,"type":"drop","place":…}
-//	{"v":3,"type":"assign","place":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":3,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
 //	{"v":3,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
 //	{"v":3,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
 //	{"v":3,"type":"resize","spawn_id":…,"rows":…,"cols":…}
@@ -23,6 +23,7 @@
 // Keeper to client:
 //
 //	{"v":3,"type":"placed","id":…}
+//	{"v":3,"type":"assigned","id":…}
 //	{"v":3,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
 //	{"v":3,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request)
 //	{"v":3,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
@@ -36,24 +37,34 @@
 // A place follows one piece of work from before its preparation to its
 // release. The client names it with an `id` of its own minted before any
 // preparation, with its `kind` (Kinds) and, where it has them, the
-// `athanor` it is for and its `subject` (a program's or a terminal's row),
-// and the keeper answers `placed`; a place of an id the keeper already
-// holds is refused as CodeBadRequest. A `drop` frees a place no spawn has
-// named, as when its preparation fails, its waiter cancels or whom it was
-// for dies; an `assign` gives a place another kind, athanor and subject,
-// as a runner given work or back at rest. Neither is ever answered, and a
-// place the keeper no longer holds leaves either with nothing to do. A
-// `spawn` names its place, which no other spawn may name: one naming a
-// place the keeper does not hold, or one another spawn named, is refused
-// as CodeBadRequest, and a refused spawn frees the place it named. A
-// place a spawn named is free when that spawn is: at its `released`.
+// `athanor` it is for, of the grammar every Locus wire gives an athanor's
+// id, and its `subject` (a program's or a terminal's row), of the id
+// grammar, and the keeper answers `placed`; a place of an id the keeper
+// already holds is refused as CodeBadRequest. A `drop` frees a place no
+// spawn has named, as when its preparation fails, its waiter cancels or
+// whom it was for dies; it is never answered, and a place the keeper no
+// longer holds leaves it with nothing to do. An `assign` has an `id` of its
+// own beside the `place` it names and gives that place another kind,
+// athanor and subject, as a runner given work or back at rest; it is
+// answered under that id alone, `assigned` once applied, or refused as
+// CodeBadRequest where the keeper holds no such place. A `spawn` names its
+// place, which no other spawn may name: one naming a place the keeper does
+// not hold, or one another spawn named, is refused as CodeBadRequest. A
+// spawn refused before the keeper began making it frees its place before
+// the refusal is sent; one refused after, as one whose command could not
+// be executed, frees it when its retirement has removed its group, as a
+// spawn that started frees it at its `released`. A group that cannot be
+// removed keeps its place, read and measured, and its removal is retried
+// once a second: only its success frees the place and, for a spawn that
+// started, sends its `released`.
 //
 // `exited` is sent at most once and always before `released`: when a spawn's
 // leader process is reaped or, where retirement's bounded wait for that ran
 // out and the counters hold a kill for memory, then, with SIGKILL. A leader
 // retirement stopped waiting for with no such kill has none. `released` is
-// sent once, when the spawn's uid has been retired, whether retirement
-// followed a `release` or the leader's exit, and no exit follows it.
+// sent once, when the spawn's uid has been retired and its group removed,
+// whether retirement followed a `release` or the leader's exit, and no exit
+// follows it.
 //
 // A spawn's `env` is the whole environment block its command receives
 // beside the variables the stage sets itself (PATH, HOME, USER, LOGNAME and
@@ -236,6 +247,7 @@ const (
 	TypeDrop         = "drop"
 	TypeAssign       = "assign"
 	TypePlaced       = "placed"
+	TypeAssigned     = "assigned"
 	TypeSpawn        = "spawn"
 	TypeSignal       = "signal"
 	TypeResize       = "resize"
@@ -348,6 +360,10 @@ var (
 	spawnIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	tokenPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	// athanorPattern is an athanor's id as every Locus wire gives it: 1 to
+	// 256 printable ASCII characters, no space. Prima.RunnerControl's @id
+	// holds the grammar.
+	athanorPattern = regexp.MustCompile(`^[\x21-\x7E]{1,256}$`)
 	// hostPattern is an exact hostname of the egress domain grammar
 	// (Prima.Destination's): lowercase labels of letters, digits, hyphens
 	// and underscores, neither starting nor ending with a hyphen, of at
@@ -515,8 +531,8 @@ type Request struct {
 	Athanor string `json:"athanor,omitempty"`
 	Subject string `json:"subject,omitempty"`
 	SpawnID string `json:"spawn_id,omitempty"`
-	Sig       string  `json:"sig,omitempty"`
-	GraceMs   *int64  `json:"grace_ms,omitempty"`
+	Sig     string `json:"sig,omitempty"`
+	GraceMs *int64 `json:"grace_ms,omitempty"`
 	// HomeMode is HomeScratch, HomeKept or empty (HomeScratch); HomePath,
 	// HomeUID and HomeMaxBytes are set only on a HomeKept spawn.
 	HomeMode     string  `json:"home_mode,omitempty"`
@@ -655,8 +671,11 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 			return nil, refuse(err.Error())
 		}
 	case TypeAssign:
-		if !req.only("place", "kind", "athanor", "subject") {
-			return nil, refuse("assign carries only place, kind, athanor and subject")
+		if !req.only("id", "place", "kind", "athanor", "subject") {
+			return nil, refuse("assign carries only id, place, kind, athanor and subject")
+		}
+		if !idPattern.MatchString(req.ID) {
+			return nil, refuse("id must match " + idPattern.String())
 		}
 		if !idPattern.MatchString(req.Place) {
 			return nil, refuse("place must match " + idPattern.String())
@@ -701,13 +720,14 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 }
 
 // validateWhose checks whose a place or an assign says it is: one of Kinds,
-// and an athanor and a subject, each optional, of the id grammar.
+// and an athanor of the athanor grammar and a subject of the id grammar,
+// each optional.
 func validateWhose(req *Request) error {
 	if !contains(Kinds, req.Kind) {
 		return errors.New("kind must be one of " + strings.Join(Kinds, ", "))
 	}
-	if req.present["athanor"] && !idPattern.MatchString(req.Athanor) {
-		return errors.New("athanor must match " + idPattern.String())
+	if req.present["athanor"] && !athanorPattern.MatchString(req.Athanor) {
+		return errors.New("athanor must match " + athanorPattern.String())
 	}
 	if req.present["subject"] && !idPattern.MatchString(req.Subject) {
 		return errors.New("subject must match " + idPattern.String())
@@ -946,8 +966,8 @@ func NewSpawned(id, spawnID string, uid, pid int) Spawned {
 	return Spawned{V: Version, Type: TypeSpawned, ID: id, SpawnID: spawnID, UID: uid, PID: pid}
 }
 
-// ErrorReply refuses the request named by ID (place, spawn, pool, home, measure) or
-// SpawnID (signal, resize, release).
+// ErrorReply refuses the request named by ID (place, assign, spawn, pool,
+// home, measure) or SpawnID (signal, resize, release).
 type ErrorReply struct {
 	V       int    `json:"v"`
 	Type    string `json:"type"`
@@ -988,6 +1008,18 @@ type Placed struct {
 // NewPlaced builds a `placed` reply.
 func NewPlaced(id string) Placed {
 	return Placed{V: Version, Type: TypePlaced, ID: id}
+}
+
+// Assigned acknowledges an `assign` once the keeper applied it.
+type Assigned struct {
+	V    int    `json:"v"`
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// NewAssigned builds an `assigned` reply.
+func NewAssigned(id string) Assigned {
+	return Assigned{V: Version, Type: TypeAssigned, ID: id}
 }
 
 // Whose is whose a place is: its kind, and its athanor and subject where it

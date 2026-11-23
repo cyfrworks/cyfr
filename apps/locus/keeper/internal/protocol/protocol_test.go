@@ -329,6 +329,8 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewError("31", "", CodeGuardUnavailable),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byMachine),
 		NewPlaced("pl-1"),
+		NewAssigned("as-1"),
+		NewMeasured("26", Whose{Kind: KindBuild, Athanor: "family@example"}, Reading{Bytes: 1 << 20}, 3),
 		NewError("pl-1", "", CodeBadRequest),
 		NewMeasured("25", Whose{Kind: KindProgram, Athanor: "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", Subject: "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"}, Reading{Bytes: 256 << 20}, 412),
 		NewMeasured("25", Whose{Kind: KindWarm}, Reading{Bytes: 192 << 20, Lesser: true}, 0),
