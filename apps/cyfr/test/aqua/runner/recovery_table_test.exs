@@ -98,22 +98,26 @@ defmodule Aqua.Runner.RecoveryTableTest do
         }
       )
 
-    launch =
-      if dispatch? do
-        {:ok, dispatched} = Tape.mark_dispatched(ctx, turn, proposed)
-        dispatched
-      else
-        proposed
-      end
-
+    # The pause dispatches the launch in its own write
+    # (`Arca.TurnStorage.pause/3`); one that is not left dispatched closed
+    # before its turn was taken back.
     {:ok, %{status: "paused", paused_reason: "launch"}} =
       Arca.TurnStorage.pause(Sanctum.Context.actor(ctx), turn.id, %{
         fence: turn.fence,
         reason: "launch",
-        launch_step_id: launch.id
+        launch_step_id: proposed.id
       })
 
-    launch
+    {:ok, dispatched} = Tape.step(ctx, proposed.id)
+
+    if dispatch? do
+      dispatched
+    else
+      {:ok, %{step: closed}} =
+        Tape.close_step(ctx, turn, dispatched, "ok", %{result: %{content: "launched"}})
+
+      closed
+    end
   end
 
   defp aborted(ctx, turn),
@@ -168,7 +172,7 @@ defmodule Aqua.Runner.RecoveryTableTest do
              Tape.step(ctx, launch.id)
   end
 
-  test "a launch never dispatched leaves the turn to continue", %{ctx: ctx} do
+  test "a launch that closed leaves the turn to continue", %{ctx: ctx} do
     turn = started!(ctx)
     launch = paused_on_launch!(ctx, turn, false)
     turn_id = turn.id
@@ -176,7 +180,7 @@ defmodule Aqua.Runner.RecoveryTableTest do
     assert {:ok, [{:continue, %{id: ^turn_id, paused_reason: "launch"}}]} =
              RecoveryTable.plan(ctx, turn.thread_id)
 
-    assert {:ok, %{dispatch_state: "proposed"}} = Tape.step(ctx, launch.id)
+    assert {:ok, %{dispatch_state: "closed"}} = Tape.step(ctx, launch.id)
     assert aborted(ctx, turn) == []
   end
 

@@ -652,6 +652,90 @@ defmodule Arca.TurnTapeStorageTest do
   end
 
   describe "pause, resume, finish, takeover" do
+    test "a launch's pause dispatches its step in the same write", %{actor: actor, thread: thread} do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {started, _root} = start!(actor, turn)
+      paused = launch_paused!(actor, started)
+
+      assert {:ok, %{dispatch_state: "dispatched", started_at: %DateTime{}}} =
+               TurnStorage.step(actor, paused.launch_step_id)
+    end
+
+    test "a launch's pause is refused while a model's call, a child of the root, runs: the " <>
+           "launch stays proposed and the turn running",
+         %{actor: actor, thread: thread} do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {started, _root} = start!(actor, turn)
+
+      {:ok, _model} =
+        TurnStorage.put_step(actor, started.id, %{
+          kind: "model",
+          idempotency_key: "model:1",
+          child_execution_id: Prima.UUID7.execution_id(),
+          dispatch_state: "dispatched",
+          fence: started.fence
+        })
+
+      {:ok, launch} =
+        TurnStorage.put_step(actor, started.id, %{
+          kind: "launch",
+          idempotency_key: "launch:1",
+          fence: started.fence
+        })
+
+      assert {:error, :child_running} =
+               TurnStorage.pause(actor, started.id, %{
+                 fence: started.fence,
+                 reason: "launch",
+                 launch_step_id: launch.id
+               })
+
+      assert {:ok, %{dispatch_state: "proposed"}} = TurnStorage.step(actor, launch.id)
+      assert {:ok, %{status: "running"}} = TurnStorage.get(actor, started.id)
+    end
+
+    test "a turn does not complete while a model's call of it runs: its loop waits on its " <>
+           "harness's work",
+         %{actor: actor, thread: thread} do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {started, _root} = start!(actor, turn)
+
+      {:ok, model} =
+        TurnStorage.put_step(actor, started.id, %{
+          kind: "model",
+          idempotency_key: "model:1",
+          child_execution_id: Prima.UUID7.execution_id(),
+          dispatch_state: "dispatched",
+          fence: started.fence
+        })
+
+      completion = %{grant: :stored, verify: &Arca.Test.Actor.admits/1, fence: started.fence}
+
+      assert {:error, :call_pending} =
+               TurnStorage.finish(actor, started.id, "completed", completion)
+
+      {:ok, _} = TurnStorage.close_step(actor, model.id, "ok", %{fence: started.fence})
+
+      assert {:ok, %{status: "completed"}} =
+               TurnStorage.finish(actor, started.id, "completed", completion)
+    end
+
+    test "no model step opens while the turn is paused around a launch",
+         %{actor: actor, thread: thread} do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {started, _root} = start!(actor, turn)
+      paused = launch_paused!(actor, started)
+
+      assert {:error, :illegal_transition} =
+               TurnStorage.put_step(actor, paused.id, %{
+                 kind: "model",
+                 idempotency_key: "model:1",
+                 child_execution_id: Prima.UUID7.execution_id(),
+                 dispatch_state: "dispatched",
+                 fence: paused.fence
+               })
+    end
+
     test "pausing takes the turn, its attempt and its root out of running together, and resume brings them back",
          %{actor: actor, thread: thread} do
       %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
@@ -1121,7 +1205,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       # A compaction's model step carries nothing; a post written after the
       # round read the thread waits for the step after.
-      {:ok, _} =
+      {:ok, compaction} =
         TurnStorage.put_step(actor, turn.id, %{
           kind: "model",
           purpose: "compaction",
@@ -1129,6 +1213,9 @@ defmodule Arca.TurnTapeStorageTest do
           dispatch_state: "dispatched",
           fence: turn.fence
         })
+
+      # A compaction's call ends before the round's own (`Aqua.Harness.Api`).
+      {:ok, _} = TurnStorage.close_step(actor, compaction.id, "ok", %{fence: turn.fence})
 
       assert carried_by(moon) == nil
       stars = post!(actor, thread, turn, "and the stars")

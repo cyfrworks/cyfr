@@ -94,7 +94,7 @@ defmodule Arca.TurnInputsStorageTest do
         purpose: "brain",
         tool: "program",
         action: "start",
-        idempotency_key: TurnStorage.brain_start_key(turn.id),
+        idempotency_key: TurnStorage.admission_key(turn.id),
         dispatch_state: state,
         fence: turn.fence,
         call: %{

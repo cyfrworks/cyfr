@@ -23,6 +23,33 @@ end
 # round has drained the post and not yet opened its model step. The test
 # sets the term through `Prima.Test.Env`, which restores it; `once` lets
 # the round's later listings of the same files through.
+defmodule Aqua.LoopTest.Outside do
+  @moduledoc false
+  # An outside server's tool whose definition the catalog knows, so a turn
+  # offered it hands it to its model (`Aqua.Loop.Turn`).
+  @behaviour Prima.Provider
+
+  alias Prima.{Arg, Operation}
+
+  @impl true
+  def service, do: "ghserver"
+
+  @impl true
+  def tools do
+    [
+      Operation.tool([
+        Operation.new("ghserver:issues.list", "list", "List the issues", [Arg.new("q", :string)],
+          kind: :read,
+          planes: [:external, :in_chain]
+        )
+      ])
+    ]
+  end
+
+  @impl true
+  def handle(_name, _ctx, args), do: {:ok, args}
+end
+
 defmodule Aqua.LoopTest.DrainGapStore do
   use Arca.Storage.TestDouble
 
@@ -71,6 +98,7 @@ defmodule Aqua.LoopTest do
 
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
+  @step_cap "Aqua stopped: it reached the most steps one turn may take. Send a message to go on."
 
   setup do
     Arca.Cache.init()
@@ -1118,7 +1146,7 @@ defmodule Aqua.LoopTest do
 
     assert {search.tool, search.action, search.dispatch_state, search.outcome, search.error} ==
              {"github:search", nil, "closed", "denied",
-              "github:search is not among the tools Aqua is offered"}
+              "github__search is not one of the tools this work has"}
 
     assert {null.dispatch_state, null.outcome, null.error} ==
              {"closed", "denied",
@@ -1148,11 +1176,43 @@ defmodule Aqua.LoopTest do
     {:ok, steps} = Tape.steps(ctx, turn)
 
     assert Enum.map(Enum.filter(steps, &(&1.kind == "tool")), &{&1.outcome, &1.error}) == [
-             {"denied", "github:search is not among the tools Aqua is offered"},
+             {"denied", "github__search is not one of the tools this work has"},
              {"denied",
               "github__search: the argument limit is a decimal number; give a whole number, " <>
                 "or the number as text"}
            ]
+  end
+
+  test "two rounds that reuse one call id are each answered by their own row",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua close it twice")
+    close = %{"kind" => "ui.overlay.close"}
+    script!([calls([{"a", "ui", close}]), calls([{"a", "ui", close}]), reply("closed")])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    [first, second] = Enum.filter(steps, &(&1.kind == "ui"))
+
+    # Two steps, each its round's, each closed with a result row of its own
+    # that names its own call.
+    assert first.idempotency_key != second.idempotency_key
+    assert {first.outcome, second.outcome} == {"ok", "ok"}
+    assert first.result_message_id != second.result_message_id
+
+    assert length(Enum.filter(steps, &(&1.kind == "model"))) == 3
+
+    # The last round's request answers each call with its own result,
+    # though both carry the provider's one id.
+    [_first, _second, last] =
+      for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+          do: params
+
+    answered =
+      for %{"content" => blocks} when is_list(blocks) <- last["messages"],
+          %{"type" => "tool_result", "tool_call_id" => "a"} <- blocks,
+          do: :answered
+
+    assert answered == [:answered, :answered]
   end
 
   test "a turn's usage names the model the catalyst says answered, and a count it did not " <>
@@ -1190,7 +1250,12 @@ defmodule Aqua.LoopTest do
     consent!(ctx, "aqua")
     turn = accept!(ctx, thread, "@aqua list the issues")
     script!([calls([{"c1", "ghserver__issues.list", %{"q" => "x"}}]), reply("done")])
-    assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    # The tool's definition is known, so the request hands it to the model.
+    assert :completed =
+             Sanctum.Catalog.with_providers([Aqua.LoopTest.Outside], fn ->
+               Task.await(run(ctx, turn), 60_000)
+             end)
 
     {:ok, steps} = Tape.steps(ctx, turn)
     listed = Enum.find(steps, &(&1.tool == tool))
@@ -1199,6 +1264,32 @@ defmodule Aqua.LoopTest do
     assert listed.dispatch_state == "closed"
     refute listed.error =~ "among the tools"
     assert {:ok, [_ | _]} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: tool)
+  end
+
+  test "an outside server's tool the soul is offered but no definition names is refused: the " <>
+         "model was never handed it",
+       %{ctx: ctx, thread: thread} do
+    tool = "ghserver:issues.list"
+
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "tools_add" => [tool]
+      })
+
+    consent!(ctx, "aqua")
+    turn = accept!(ctx, thread, "@aqua list the issues")
+    script!([calls([{"c1", "ghserver__issues.list", %{"q" => "x"}}]), reply("done")])
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    listed = Enum.find(steps, &(&1.tool == tool))
+
+    assert {listed.dispatch_state, listed.outcome, listed.error} ==
+             {"closed", "denied", "ghserver__issues.list is not one of the tools this work has"}
+
+    assert {:ok, []} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: tool)
   end
 
   # A call that runs is still the chain's to admit (§5.4): it goes through
@@ -1961,7 +2052,7 @@ defmodule Aqua.LoopTest do
       )
     )
 
-    assert {:failed, :step_cap} =
+    assert {:failed, @step_cap} =
              Task.await(
                Task.async(fn ->
                  Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
@@ -2054,7 +2145,8 @@ defmodule Aqua.LoopTest do
     unbound = accept!(ctx, thread, "@aqua once more")
     ScriptedWorker.script([{:refuse, %{"type" => "secret_denied", "message" => "no key"}}])
     unready = {:crew_unready, "claude", :no_key}
-    assert {:failed, ^unready} = Task.await(run(ctx, unbound), 60_000)
+    unready_line = Prima.Refusal.message(unready)
+    assert {:failed, ^unready_line} = Task.await(run(ctx, unbound), 60_000)
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, unbound.id)
     sentence = Prima.Refusal.message(unready)
 
@@ -2336,8 +2428,16 @@ defmodule Aqua.LoopTest do
   test "the step cap ends a turn that never stops calling", %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua loop forever")
     script!(List.duplicate(calls([{"u", "ui", %{"kind" => "ui.overlay.close"}}]), 40))
-    assert {:failed, :step_cap} = Task.await(run(ctx, turn), 120_000)
-    assert {:ok, %{status: "failed"}} = Tape.turn(ctx, turn.id)
+    assert {:failed, @step_cap} = Task.await(run(ctx, turn), 120_000)
+    assert {:ok, %{status: "failed", error: @step_cap}} = Tape.turn(ctx, turn.id)
+
+    # The person is told why the turn stopped, as for every other end.
+    assert [%{kind: "system", content: @step_cap}] =
+             for(
+               %{turn_id: id, kind: "system"} = row <- lines(ctx, thread.id),
+               id == turn.id,
+               do: row
+             )
 
     assert_receive %ThreadEvent{
                      kind: :intents,

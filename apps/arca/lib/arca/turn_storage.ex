@@ -1998,9 +1998,15 @@ defmodule Arca.TurnStorage do
   leave `running` together. `attrs`: `:fence`, `:reason`
   (`Prima.TurnState.pause_reasons/0`, required), and
   `:launch_step_id` — a `launch` step of this turn, named for a launch
-  pause and for no other. A root attempt that is not the running owner
-  refuses the pause (`{:error, :attempt_not_owner}`). The running
-  interval is added to `active_ms`. Event `turn.paused`.
+  pause and for no other. A launch's pause dispatches its step in the
+  same write, from `proposed` (`{:error, :not_proposed}` otherwise), and
+  is refused while another step of the turn whose run is a child of its
+  root is dispatched (`{:error, :child_running}`), a model's call among
+  them: the root is never let go under a child's run, and the launch
+  stays proposed for the turn to run once that child's step closes. A
+  root attempt that is not the running owner refuses the pause
+  (`{:error, :attempt_not_owner}`). The running interval is added to
+  `active_ms`. Event `turn.paused`.
   """
   @spec pause(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def pause(actor, turn_id, attrs \\ %{})
@@ -2014,6 +2020,7 @@ defmodule Arca.TurnStorage do
         lock_root!(athanor_id, turn)
         reason = Map.get(attrs, :reason)
         launch_step_id = launch_step!(athanor_id, turn, reason, Map.get(attrs, :launch_step_id))
+        if launch_step_id, do: launch_dispatched!(athanor_id, turn, launch_step_id)
         ran = pause_owner!(athanor_id, turn)
         execution_status!(athanor_id, turn.root_execution_id, "running", "paused")
         now = DateTime.utc_now()
@@ -2143,8 +2150,9 @@ defmodule Arca.TurnStorage do
   (still `accepted`) closes on its own. A turn with a steer no step
   carried refuses `completed` with `{:error, :steer_pending}`: its loop
   goes on to answer the steer; one with a page's call the host proposed
-  in it and nobody dispatched yet refuses it with
-  `{:error, :call_pending}`: its loop goes on to dispatch the call. A turn with a root attempt ends under its
+  in it and nobody dispatched yet, or a model's call still running,
+  refuses it with `{:error, :call_pending}`: its loop goes on to dispatch
+  the call, or to wait on its harness's work. A turn with a root attempt ends under its
   root's grant (the moduledoc's "The root's grant"), and a completion
   names one whatever the turn holds. Event `turn.<status>`.
   """
@@ -4017,13 +4025,14 @@ defmodule Arca.TurnStorage do
   @counted_results 64
 
   @doc """
-  The idempotency key of the step that opens a turn on a program brain:
-  the host's `program.start` of the brain's row (`Aqua.Loop`). An ask of
-  the program for CYFR's own `program` tool is keyed apart
-  (`brain_ask_key/2`), so the two are never confused.
+  The idempotency key of the step that admits a turn's harness: the
+  engine gives it to the start a harness proposes (`Aqua.Loop`), a
+  program's `program.start` of its row among them. An ask of a program
+  for CYFR's own `program` tool is keyed apart (`brain_ask_key/2`), so
+  the two are never confused.
   """
-  @spec brain_start_key(String.t()) :: String.t()
-  def brain_start_key(turn_id) when is_binary(turn_id), do: "brain:#{turn_id}:start"
+  @spec admission_key(String.t()) :: String.t()
+  def admission_key(turn_id) when is_binary(turn_id), do: "brain:#{turn_id}:start"
 
   @doc "The idempotency key of the step an ask `ask` of a program brain is recorded as."
   @spec brain_ask_key(String.t(), String.t()) :: String.t()
@@ -4129,7 +4138,7 @@ defmodule Arca.TurnStorage do
 
     * the turn is running, or paused for a `post` or an `answer` of its
       own work (a paused turn's proof is narrow), else `:not_running`;
-    * its `program.start` step (`brain_start_key/1`) was decided allow and
+    * its `program.start` step (`admission_key/1`) was decided allow and
       is not asked to stop (`:not_admitted`), and the thread is at
       `:generation` (`:generation_moved`);
     * nothing was recorded under the delivery's key, the generation, what
@@ -4312,7 +4321,7 @@ defmodule Arca.TurnStorage do
         on: c.id == s.message_id and c.athanor_id == s.athanor_id,
         where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
         where: s.purpose == "brain" and s.kind != "input",
-        where: s.idempotency_key != ^brain_start_key(turn.id),
+        where: s.idempotency_key != ^admission_key(turn.id),
         where: s.dispatch_state == "closed",
         where: s.result_message_id not in subquery(carried),
         order_by: [asc: s.seq],
@@ -4582,7 +4591,7 @@ defmodule Arca.TurnStorage do
   # as it ran, and not asked to stop.
   # arca:db-raise-ok inside the caller's transaction
   defp admitted_start!(athanor_id, %Turn{} = turn) do
-    key = brain_start_key(turn.id)
+    key = admission_key(turn.id)
 
     from(s in TurnStep,
       where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
@@ -4661,7 +4670,7 @@ defmodule Arca.TurnStorage do
       from(s in TurnStep,
         where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
         where: s.purpose == "brain" and s.kind != "input",
-        where: s.idempotency_key != ^brain_start_key(turn.id),
+        where: s.idempotency_key != ^admission_key(turn.id),
         where: s.dispatch_state == "closed" and not is_nil(s.result_message_id),
         select: s.result_message_id
       )
@@ -5121,7 +5130,7 @@ defmodule Arca.TurnStorage do
       join: t in Turn,
       on: t.id == s.turn_id and t.athanor_id == s.athanor_id,
       where: s.athanor_id == ^athanor_id and s.turn_id == ^work,
-      where: s.idempotency_key == ^brain_start_key(work),
+      where: s.idempotency_key == ^admission_key(work),
       where: t.thread_id == ^thread.id and t.agent == ^agent,
       where: t.id == ^open or t.status in ^@terminal
     )
@@ -5199,7 +5208,7 @@ defmodule Arca.TurnStorage do
   defp answer_owed?(_athanor_id, _turn, _progress), do: false
 
   defp owed_to_program?(athanor_id, %Turn{} = turn) do
-    start = brain_start_key(turn.id)
+    start = admission_key(turn.id)
 
     asks_open =
       from(s in TurnStep,
@@ -5801,15 +5810,19 @@ defmodule Arca.TurnStorage do
   end
 
   # A page's call or a program brain's ask the host proposed into the
-  # turn that is still to be dispatched; a delivery not yet taken, a post
-  # or notice written and not yet answered, or an ask's result whose
-  # answer is not yet taken. A turn on a model has none of the last three.
+  # turn that is still to be dispatched, or a model's call that runs (the
+  # harness that said its work was done may have begun another round
+  # since); a delivery not yet taken, a post or notice written and not yet
+  # answered, or an ask's result whose answer is not yet taken. A turn on
+  # a model has none of the last three.
   # arca:db-raise-ok inside the caller's transaction
   defp calls_pending?(athanor_id, %Turn{} = turn) do
     Arca.Repo.exists?(
       from(s in TurnStep,
         where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
-        where: s.purpose in ["page", "brain"] and s.dispatch_state == "proposed"
+        where:
+          (s.purpose in ["page", "brain"] and s.dispatch_state == "proposed") or
+            (s.kind == "model" and s.dispatch_state == "dispatched")
       )
     ) or brain_owed?(athanor_id, turn)
   end
@@ -6246,6 +6259,30 @@ defmodule Arca.TurnStorage do
 
   defp launch_step!(_athanor_id, %Turn{}, _reason, _step_id),
     do: Arca.Repo.rollback(:illegal_transition)
+
+  # A launch lets its turn's root go: not while another step whose run is a
+  # child of that root is dispatched, and its own step is dispatched in the
+  # pause's write.
+  # arca:db-raise-ok inside the caller's transaction
+  defp launch_dispatched!(athanor_id, %Turn{id: turn_id}, step_id) do
+    running =
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id and s.id != ^step_id,
+        where: s.dispatch_state == "dispatched" and not is_nil(s.child_execution_id)
+      )
+
+    if Arca.Repo.exists?(running), do: Arca.Repo.rollback(:child_running)
+
+    {count, _} =
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.id == ^step_id,
+        where: s.dispatch_state == "proposed" and is_nil(s.cancel_requested_at)
+      )
+      |> Arca.Repo.update_all(set: [dispatch_state: "dispatched", started_at: DateTime.utc_now()])
+
+    if count != 1, do: Arca.Repo.rollback(:not_proposed)
+    :ok
+  end
 
   # A running turn's root attempt leaves `running` with it; an attempt
   # that is not the running owner refuses the pause. A rootless turn has

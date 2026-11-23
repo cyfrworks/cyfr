@@ -230,7 +230,7 @@ defmodule Aqua.RunnerTest do
   end
 
   # The loop's own waits, which read nothing (`Aqua.Loop`).
-  @quiet [:harness_wait, :awaiting, :collect, :model_wait]
+  @quiet [:harness_wait, :awaiting, :collect]
 
   # A loop told that its thread moved reads its steps (`Aqua.Loop`): one
   # killed in that read takes the test's one shared connection with it. It

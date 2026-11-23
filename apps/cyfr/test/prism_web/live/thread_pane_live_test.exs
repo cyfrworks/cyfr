@@ -637,7 +637,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           purpose: "brain",
           tool: "program",
           action: "start",
-          idempotency_key: Arca.TurnStorage.brain_start_key(turn.id),
+          idempotency_key: Arca.TurnStorage.admission_key(turn.id),
           fence: turn.fence
         })
 

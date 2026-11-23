@@ -756,6 +756,17 @@ defmodule Prima.Refusal do
   # kind is a name, and carries what its sentence names.
   defp row({:harness, member, kind}) when is_binary(member), do: harness(member, kind)
 
+  # What the model's catalyst answered for a turn (`Aqua.Harness.Api`):
+  # the key it refused, or no answer at all; its own refusal is the
+  # harness's (`{:harness, member, {:provider, type, text}}`).
+  defp row({:model_key_refused, message}) when is_binary(message),
+    do: {:unauthenticated, "The model refused its key: #{message}"}
+
+  defp row({:model_key_refused, _none}), do: {:unauthenticated, "The model refused its key."}
+
+  defp row({:model_unreached, text}) when is_binary(text),
+    do: {:unavailable, "The model could not be reached: #{text}"}
+
   defp row({:crew_unready, member, :consent_damaged}) when is_binary(member),
     do: {:corrupt, "#{member}'s brain's own grant is damaged — revoke it and grant it again"}
 
@@ -1808,6 +1819,15 @@ defmodule Prima.Refusal do
 
   defp harness(member, {:provider, type, text}) when is_binary(type) and is_binary(text),
     do: {:unavailable, "#{member} could not answer: #{text}"}
+
+  # A turn's own limits, the model's harness's (`Aqua.Harness.Api`).
+  defp harness(member, :step_cap),
+    do:
+      {:conflict,
+       "#{member} stopped: it reached the most steps one turn may take. Send a message to go on."}
+
+  defp harness(member, :deadline),
+    do: {:timeout, "#{member} stopped: the turn ran out of time. Send a message to go on."}
 
   defp harness(_member, _unknown), do: nil
 end

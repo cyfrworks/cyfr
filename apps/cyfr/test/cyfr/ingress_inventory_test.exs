@@ -40,6 +40,8 @@ defmodule Cyfr.IngressInventoryTest do
     # The agent loop: the turn's root is claimed without a guest, and every
     # call it dispatches is a child of that root.
     "apps/cyfr/lib/aqua/loop.ex" => :in_chain,
+    # The model's harness: each model call is a child of the turn's root.
+    "apps/cyfr/lib/aqua/harness/api.ex" => :in_chain,
     "apps/cyfr/lib/aqua/loop/binding.ex" => :in_chain,
     "apps/cyfr/lib/aqua/loop/turn.ex" => :in_chain
   }
