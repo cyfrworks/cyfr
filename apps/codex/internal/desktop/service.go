@@ -216,16 +216,7 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, bootstrapPage)
 		return
 	}
-	act, ok := map[string]func(context.Context, uint64, request) answer{
-		"/bootstrap/state":   s.state,
-		"/bootstrap/connect": s.connect,
-		"/bootstrap/approve": s.approve,
-		"/bootstrap/folder":  s.awaitFolder,
-		"/bootstrap/docker":  s.docker,
-		"/bootstrap/start":   s.start,
-		"/bootstrap/setup":   s.awaitSetup,
-		"/bootstrap/open":    s.openSetUp,
-	}[r.URL.Path]
+	route, ok := chooserRoutes[r.URL.Path]
 	if !ok || r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
@@ -250,6 +241,12 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not this app's page", http.StatusForbidden)
 		return
 	}
+	if route.acts {
+		// A request that acts belongs to the time since the last lock that
+		// the page was shown in, which it says: one from before a lock,
+		// however late it arrives, acts in none.
+		epoch = req.Epoch
+	}
 	// A pick waits on the person at the system's dialog, and a setup's
 	// step on Docker, unbounded; every other request is bounded.
 	ctx, cancel := r.Context(), context.CancelFunc(func() {})
@@ -258,7 +255,25 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cancel()
 	h.Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(act(ctx, epoch, req))
+	_ = json.NewEncoder(w).Encode(route.act(s, ctx, epoch, req))
+}
+
+// chooserRoutes is every request of the chooser's: what answers it, and
+// whether it acts, changing what the app holds or does. One that acts
+// carries the epoch the page was shown in, and acts only while that epoch
+// runs.
+var chooserRoutes = map[string]struct {
+	act  func(*Service, context.Context, uint64, request) answer
+	acts bool
+}{
+	"/bootstrap/state":   {(*Service).state, false},
+	"/bootstrap/connect": {(*Service).connect, true},
+	"/bootstrap/approve": {(*Service).approve, true},
+	"/bootstrap/folder":  {(*Service).awaitFolder, false},
+	"/bootstrap/docker":  {(*Service).docker, false},
+	"/bootstrap/start":   {(*Service).start, true},
+	"/bootstrap/setup":   {(*Service).awaitSetup, false},
+	"/bootstrap/open":    {(*Service).openSetUp, true},
 }
 
 // chooserBound bounds each chooser request but a pick's wait.
@@ -303,9 +318,14 @@ func (s *Service) finish() {
 }
 
 // request is a chooser's request: the token, and the address typed, the
-// directory approved, or the picks it has seen answered.
+// directory approved, or the picks it has seen answered. Epoch is the time
+// since a lock the page was shown in, Picks the pick its folder is, and Run
+// the setup it shows (none 0): a request that acts says what the page
+// showed, and is refused where that is no longer so.
 type request struct {
 	Token     string `json:"token"`
+	Epoch     uint64 `json:"epoch,omitempty"`
+	Run       uint64 `json:"run,omitempty"`
 	Address   string `json:"address,omitempty"`
 	Home      string `json:"cyfr,omitempty"`
 	Directory string `json:"directory,omitempty"`
@@ -324,6 +344,7 @@ type request struct {
 // Picks of main's answers to a pick, and Docker whether Docker answers
 // there.
 type answer struct {
+	Epoch   uint64        `json:"epoch,omitempty"`
 	Docker  *DockerAnswer `json:"docker,omitempty"`
 	Setup   *SetupState   `json:"setup,omitempty"`
 	Folder  string        `json:"folder,omitempty"`
@@ -365,7 +386,14 @@ func (s *Service) opened(home string) answer {
 	return answer{Home: home, Next: "/"}
 }
 
-func (s *Service) state(context.Context, uint64, request) answer {
+func (s *Service) state(_ context.Context, epoch uint64, _ request) answer {
+	a := s.shown()
+	a.Epoch = epoch
+	return a
+}
+
+// shown is what the chooser shows now.
+func (s *Service) shown() answer {
 	c, err := s.Clients.Load()
 	if err != nil {
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
@@ -425,7 +453,7 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	}
 	project, l, remembered := s.remembered()
 	if remembered && l.Shell.Address == home {
-		return s.openLocal(run, epoch, project, l)
+		return s.openLocal(run, epoch, project, l, "")
 	}
 	l.end()
 	if !ok {
@@ -532,8 +560,8 @@ func (s *Service) remembered() (string, Local, bool) {
 }
 
 // openLocal selects the CYFR l, set up in project on this computer, with
-// the account service its own settings name.
-func (s *Service) openLocal(run context.Context, epoch uint64, project string, l Local) answer {
+// the account service its own settings name, on road (home's).
+func (s *Service) openLocal(run context.Context, epoch uint64, project string, l Local, road string) answer {
 	home := l.Shell.Address
 	found, ok := account.ServiceOf(home, l.Shell.Directory)
 	if !ok {
@@ -553,7 +581,7 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
 	}
 	a := s.selectHome(run, epoch, sel, l.Shell, l.Work,
-		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver})
+		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver, Road: road})
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.pages != nil {
@@ -704,9 +732,10 @@ func (s *Service) FolderPicked(path *string) {
 }
 
 // SetupState is the setup on this computer begun in this run: its folder,
-// the steps it began, and its end, Done or the Error sentence. Seq counts
-// its changes.
+// the steps it began, and its end, Done or the Error sentence. Run numbers
+// the setups of this run from 1, and Seq counts the changes of them all.
 type SetupState struct {
+	Run    uint64   `json:"run"`
 	Folder string   `json:"folder"`
 	Steps  []string `json:"steps"`
 	Done   bool     `json:"done,omitempty"`
@@ -724,45 +753,62 @@ func (s *Service) settingNow() *SetupState {
 	return &c
 }
 
-// start begins setting CYFR up in the folder shown, the person's press of
-// Set up and start: one at a time, again after one failed. It runs to its
-// end whatever the chooser or a lock does, and opens nothing (openSetUp).
-func (s *Service) start(_ context.Context, epoch uint64, _ request) answer {
+// start begins setting CYFR up in the folder the page shows, the person's
+// press of Set up and start: one at a time, again after one failed, and
+// only while the page shows the folder main picked last and the setup
+// there is now; otherwise it answers what is now. It runs to its end
+// whatever the chooser or a lock does, remembers the folder as it ends,
+// and opens nothing (openSetUp).
+func (s *Service) start(_ context.Context, epoch uint64, req request) answer {
 	if s.Setup == nil {
 		return answer{Error: "This app cannot set CYFR up on this computer."}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	folder, picks := s.folderNow()
+	var run uint64
+	if s.setting != nil {
+		run = s.setting.Run
+	}
 	switch {
 	case s.epoch != epoch:
 		return answer{Error: lockedSentence}
-	case s.setting != nil && s.setting.Error == "" && !s.setting.Done:
-		return answer{Setup: s.settingNow()}
+	case req.Picks != picks:
+		return answer{Folder: folder, Picks: picks, Setup: s.settingNow(),
+			Error: "The folder changed to " + folder + ". Check it, then press Set up and start again."}
+	case req.Run != run || s.setting != nil && s.setting.Error == "":
+		// Pressed for a setup that is not the one now, or again for one
+		// running or done: nothing more to do.
+		return answer{Folder: folder, Picks: picks, Setup: s.settingNow()}
 	}
-	folder, _ := s.folderNow()
 	seq := uint64(1)
 	if s.setting != nil {
 		seq = s.setting.Seq + 1
 	}
-	s.setting = &SetupState{Folder: folder, Steps: []string{}, Seq: seq}
-	run := s.setting
+	s.setting = &SetupState{Run: run + 1, Folder: folder, Steps: []string{}, Seq: seq}
+	cur := s.setting
 	s.wake()
 	go func() {
 		err := s.Setup(context.Background(), folder, func(step string) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			run.Steps = append(run.Steps, step)
-			run.Seq++
+			cur.Steps = append(cur.Steps, step)
+			cur.Seq++
 			s.wake()
 		})
+		// The folder set up is remembered as the setup ends, before
+		// anything can start the app again: the chooser then offers it.
+		if err == nil {
+			err = s.remember(folder)
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if err != nil {
-			run.Error = err.Error()
+			cur.Error = err.Error()
 		} else {
-			run.Done = true
+			cur.Done = true
 		}
-		run.Seq++
+		cur.Seq++
 		s.wake()
 	}()
 	return answer{Setup: s.settingNow()}
@@ -792,10 +838,23 @@ func (s *Service) awaitSetup(ctx context.Context, epoch uint64, req request) ans
 	}
 }
 
-// openSetUp opens the CYFR the setup begun set up, once it is done: the
-// person's press, or the chooser that pressed Set up and start, on its
-// end.
-func (s *Service) openSetUp(ctx context.Context, epoch uint64, _ request) answer {
+// remember makes folder the CYFR the client record selects, as opening it
+// does (shell.Selection).
+func (s *Service) remember(folder string) error {
+	sel, err := s.Clients.SelectLocal(folder)
+	if err == nil {
+		err = sel.Commit()
+	}
+	if err != nil {
+		return fmt.Errorf("CYFR is set up in %s, but this computer could not remember it (%v)", folder, err)
+	}
+	return nil
+}
+
+// openSetUp opens the CYFR the setup the page shows set up, once it is
+// done: the person's press, or the chooser that pressed Set up and start,
+// on its end.
+func (s *Service) openSetUp(ctx context.Context, epoch uint64, req request) answer {
 	run, refused := s.begin(ctx, epoch, "")
 	if refused != nil {
 		return *refused
@@ -804,14 +863,16 @@ func (s *Service) openSetUp(ctx context.Context, epoch uint64, _ request) answer
 	s.mu.Lock()
 	setting := s.settingNow()
 	s.mu.Unlock()
-	if setting == nil || !setting.Done || s.Local == nil {
-		return answer{Error: "CYFR is not set up on this computer yet."}
+	if setting == nil || !setting.Done || setting.Run != req.Run || s.Local == nil {
+		return answer{Setup: setting, Error: "CYFR is not set up on this computer yet."}
 	}
 	l, err := s.Local(setting.Folder)
 	if err != nil {
 		return answer{Error: fmt.Sprintf("The app cannot read the CYFR in %s (%v).", setting.Folder, err)}
 	}
-	return s.openLocal(run, epoch, setting.Folder, l)
+	// Its first person is made at the device's pages, on either road,
+	// until the passkey's way makes one.
+	return s.openLocal(run, epoch, setting.Folder, l, RoadDevice)
 }
 
 // HomeReady is main's home-ready for an attempt at home: the one waiting,

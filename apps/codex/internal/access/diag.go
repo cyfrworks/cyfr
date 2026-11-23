@@ -28,10 +28,8 @@ var diagnoses = []struct {
 	form *regexp.Regexp
 	say  func(k known, m []string) string
 }{
-	{regexp.MustCompile(`(?m)^(?:Cannot connect to the Docker daemon at .+\. Is the docker daemon running\?|failed to connect to the docker API at .+; check if the path is correct and if the daemon is running: .+)$`),
-		func(known, []string) string { return "the Docker daemon is not reachable" }},
-	{regexp.MustCompile(`(?m)^permission denied while trying to connect to the (?:Docker daemon socket|docker API) at .+$`),
-		func(known, []string) string { return "this user may not use the Docker daemon" }},
+	{unreachableForm, func(known, []string) string { return unreachableSaid }},
+	{deniedForm, func(known, []string) string { return deniedSaid }},
 	{regexp.MustCompile(`(?m)^failed to read .+$`), func(k known, m []string) string { return k.unreadable(m[0]) }},
 	{regexp.MustCompile(`(?m)^'services\[([A-Za-z0-9._-]+)\]((?:\.[A-Za-z0-9_-]+|\[[0-9]+\])*)' .+$`), func(k known, m []string) string {
 		if !k.services[m[1]] {
@@ -53,6 +51,31 @@ var diagnoses = []struct {
 		}
 		return "it has no service " + m[1]
 	}},
+}
+
+// The daemon's two refusals of a call, as docker writes them, and their
+// words.
+var (
+	unreachableForm = regexp.MustCompile(`(?m)^(?:Cannot connect to the Docker daemon at .+\. Is the docker daemon running\?|failed to connect to the docker API at .+; check if the path is correct and if the daemon is running: .+)$`)
+	deniedForm      = regexp.MustCompile(`(?m)^permission denied while trying to connect to the (?:Docker daemon socket|docker API) at .+$`)
+)
+
+const (
+	unreachableSaid = "the Docker daemon is not reachable"
+	deniedSaid      = "this user may not use the Docker daemon"
+)
+
+// DaemonRefusal is what docker's stderr says of the daemon, in the fixed
+// words above, and whether it is the daemon's socket refusing this user;
+// nothing where it says neither.
+func DaemonRefusal(stderr []byte) (said string, denied bool) {
+	switch {
+	case deniedForm.Match(stderr):
+		return deniedSaid, true
+	case unreachableForm.Match(stderr):
+		return unreachableSaid, false
+	}
+	return "", false
 }
 
 // ipForm is an address as Docker writes it in a port binding, an IPv6

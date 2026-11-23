@@ -459,7 +459,11 @@ func servingIn(ctx context.Context, dir string, port int) (access.Published, err
 // without sg.
 func refusedHere(ctx context.Context, err error) bool {
 	var failed *access.DockerFailed
-	return errors.As(err, &failed) && ctx.Err() == nil && olderThanGroup(ctx)
+	if !errors.As(err, &failed) || ctx.Err() != nil || !olderThanGroup(ctx) {
+		return false
+	}
+	_, denied := machine.refusal(ctx)
+	return denied
 }
 
 // answers is nil once the folder's CYFR answers on this computer over a

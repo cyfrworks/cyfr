@@ -1404,3 +1404,36 @@ test("Docker's page, linked from the chooser, opens in the person's browser and 
   await settled()
   assert.deepEqual(world.opened, [], "any other page, or a redirect, opens nothing")
 })
+
+test("on macOS and Windows a CYFR just set up opens at the device's pages: main loads none of its own", async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform"), argv = process.argv
+  for (const system of ["darwin", "win32"]) {
+    Object.defineProperty(process, "platform", {...platform, value: system})
+    // The app as a person starts it, with no switch: this test's path
+    // reads as one on Windows.
+    process.argv = argv.slice(0, 1)
+    try {
+      reset()
+      // The road is the system's, as the app is started on it.
+      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: () => {}})
+      await settled()
+      child.say({type: "ready", url: READY})
+      await settled()
+      assert.equal(content().webContents.url, READY + "&road=passkey", system)
+      const attempt = child.proposes(HOME, {road: "device"})
+      await settled()
+      await settled()
+      assert.ok(child.heard.some((m) => m.type === "home-ready" && m.attempt === attempt), system)
+      child.say({type: "opened", home: HOME})
+      await settled()
+      await settled()
+      assert.deepEqual(world.loads, [], `${system}: main loaded no page of the CYFR's`)
+      assert.ok(!navigate(content(), "http://127.0.0.1:7340/").prevented, `${system}: the chooser goes on to the device's pages`)
+      await give(content())
+      assert.equal(content().webContents.url, HOME + "/", `${system}: where the device's pages give the CYFR`)
+    } finally {
+      Object.defineProperty(process, "platform", platform)
+      process.argv = argv
+    }
+  }
+})

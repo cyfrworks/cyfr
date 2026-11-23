@@ -34,6 +34,10 @@ type machineSeams struct {
 	arch func() string
 	// reachable is whether Docker answers this process before ctx ends.
 	reachable func(ctx context.Context) bool
+	// refusal is what Docker's info says of the daemon where it does not
+	// answer this process, and whether its socket refused this process
+	// (access.DaemonRefusal), as observed by asking.
+	refusal func(ctx context.Context) (said string, denied bool)
 	// dockerHere is whether the Docker this process reaches runs its
 	// containers on this computer.
 	dockerHere func(ctx context.Context) (bool, error)
@@ -75,6 +79,14 @@ var machine = machineSeams{
 	},
 	arch:      func() string { return runtime.GOARCH },
 	reachable: dockerAnswers,
+	refusal: func(ctx context.Context) (string, bool) {
+		_, err := askDocker(ctx, access.Call{Args: []string{"info"}})
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			return "", false
+		}
+		return access.DaemonRefusal(exit.Stderr)
+	},
 	dockerHere: func(ctx context.Context) (bool, error) {
 		return access.DockerIsHere(ctx, dockerProgram{})
 	},
@@ -406,8 +418,9 @@ const loginAgain = "Docker does not answer this account until you log out and in
 
 // loginIsMissing is whether only a new login lets this process reach
 // Docker: this computer's own Docker does not answer it, /etc/group lists
-// its account in the docker group, the process is older than that, and
-// there is no sg to reach the group with.
+// its account in the docker group, the process is older than that, there
+// is no sg to reach the group with, and Docker's socket refused this
+// process when asked: a daemon's own refusal is no missing login.
 func loginIsMissing(ctx context.Context) bool {
 	if machine.system() != "linux" {
 		return false
@@ -420,7 +433,11 @@ func loginIsMissing(ctx context.Context) bool {
 		return false
 	}
 	here, err := machine.dockerHere(ctx)
-	return err == nil && here && !machine.reachable(ctx)
+	if err != nil || !here || machine.reachable(ctx) {
+		return false
+	}
+	_, denied := machine.refusal(ctx)
+	return denied
 }
 
 // sgProgram runs a command with a group the account's processes do not
@@ -439,13 +456,20 @@ func staleGroup(ctx context.Context, account string) bool {
 // environment and directory. It answers false, having run nothing, when
 // /etc/group does not list the account in the group, and when this process
 // already has it: sg would give it nothing, and its child would land here
-// again. With no sg it runs nothing and says to log in again (loginAgain).
+// again. With no sg it runs nothing and says why Docker does not answer:
+// to log in again (loginAgain) only where its socket refused this process.
 func continueWithGroup(ctx context.Context, subcommand string, args []string, account string, out, errOut io.Writer) (bool, error) {
 	if !staleGroup(ctx, account) {
 		return false, nil
 	}
 	if _, err := os.Stat(sgProgram); err != nil {
-		return true, fmt.Errorf("%s. Then run `cyfr %s` again", loginAgain, subcommand)
+		switch said, denied := machine.refusal(ctx); {
+		case denied:
+			return true, fmt.Errorf("%s. Then run `cyfr %s` again", loginAgain, subcommand)
+		case said != "":
+			return true, fmt.Errorf("Docker does not answer this account: %s. Then run `cyfr %s` again", said, subcommand)
+		}
+		return true, fmt.Errorf("Docker does not answer this account. Then run `cyfr %s` again", subcommand)
 	}
 	self, err := os.Executable()
 	if err != nil {

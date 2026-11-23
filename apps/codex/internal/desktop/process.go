@@ -65,7 +65,7 @@ const (
 // be absent marked optional.
 var fields = map[string]struct{ required, optional []string }{
 	TypeReady:        {required: []string{"url"}},
-	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver"}},
+	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "road"}},
 	TypeOpened:       {required: []string{"home"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
 	TypeHomeReady:    {required: []string{"home", "attempt"}},
@@ -89,8 +89,14 @@ type Message struct {
 	Attempt  uint64
 	Proxy    string
 	Resolver string
-	Path     *string
+	// Road is RoadDevice where the CYFR opens at the device's pages on
+	// either road: one just set up, whose first person is made there.
+	Road string
+	Path *string
 }
+
+// RoadDevice is home's road for a CYFR that opens at the device's pages.
+const RoadDevice = "device"
 
 // absolute is whether a folder-picked folder is spelled from a root, on
 // any system the app runs on: /, a drive's letter, colon and separator, or
@@ -171,7 +177,7 @@ func (m Message) object() (map[string]any, error) {
 		return nil, fmt.Errorf("cyfr does not send %q", m.Type)
 	}
 	values := map[string]string{"url": m.URL, "home": m.Home, "account": m.Account, "proxy": m.Proxy,
-		"resolver": m.Resolver}
+		"resolver": m.Resolver, "road": m.Road}
 	o := map[string]any{"version": Version, "type": m.Type}
 	for _, f := range want.required {
 		if f == "attempt" {

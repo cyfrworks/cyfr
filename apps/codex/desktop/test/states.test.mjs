@@ -228,6 +228,16 @@ test("main alone opens a CYFR committed at its root, on the passkey road, and th
   assert.deepEqual(run([...open, company, locked(), home(), taken, {type: "opened", home: HOME}], true).s.notices, [])
 })
 
+test("a CYFR that opens at the device's pages loads none of its own on the passkey road, and the next home without that road does", () => {
+  const device = {type: "home", message: {...home().message, road: "device"}}
+  const opened = run([ready, device, taken, {type: "opened", home: HOME}], true)
+  assert.equal(opened.s.name, "open")
+  assert.ok(!opened.effects.some((e) => e.root), "no root loaded")
+  assert.equal(step(opened.s, given).allow, true, "the device's pages give the CYFR")
+  const again = run([ready, device, taken, {type: "opened", home: HOME}, locked(), forgot, home(), taken, {type: "opened", home: HOME}], true)
+  assert.deepEqual(again.effects.filter((e) => e.root), [{root: {home: HOME}}], "a home on the passkey road again")
+})
+
 const atWays = "http://127.0.0.1:7340/bootstrap/#road=passkey"
 const another = navigate({url: "http://127.0.0.1:7340/bootstrap/another", showing: atWays})
 

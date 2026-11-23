@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,12 +70,25 @@ func newApp(t *testing.T, dir string, client *http.Client) *app {
 	return a
 }
 
-// request is a request as the chooser's page sends it, changed by edit.
+// request is a request as the chooser's page sends it, changed by edit:
+// in the epoch now unless body names one, its numbers as numbers.
 func (a *app) request(ctx context.Context, path string, body map[string]string, edit func(*http.Request)) *httptest.ResponseRecorder {
 	if _, ok := body["token"]; !ok {
 		body["token"] = a.Token
 	}
-	raw, _ := json.Marshal(body)
+	sent := map[string]any{}
+	for k, v := range body {
+		sent[k] = v
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil && (k == "epoch" || k == "picks" || k == "run") {
+			sent[k] = n
+		}
+	}
+	if _, ok := body["epoch"]; !ok {
+		a.mu.Lock()
+		sent["epoch"] = a.epoch
+		a.mu.Unlock()
+	}
+	raw, _ := json.Marshal(sent)
 	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://"+shell.Listen+path, strings.NewReader(string(raw)))
 	r.Host = shell.Listen
 	r.Header.Set("Origin", shell.Origin)
@@ -699,6 +713,7 @@ func TestAnOpenCYFRAnswersEveryChooserAlike(t *testing.T) {
 	a.opened(t, "https://cyfr.example.com")
 	a.Lock("")
 	a.next(t)
+	want.Epoch = 1 // the time since that lock, which the page's requests that act carry
 	if got := a.post(t, "/bootstrap/state", map[string]string{}); got != want {
 		t.Fatalf("the chooser after a lock shows %+v", got)
 	}
@@ -1173,7 +1188,7 @@ func TestThePasskeyWayOnNeedsTheFoldersCYFRStillAnswering(t *testing.T) {
 	a.openedFolder(t)
 	a.Lock("Locked.")
 	a.next(t)
-	open := answer{Home: localAddress, Next: "/"}
+	open := answer{Home: localAddress, Next: "/", Epoch: 1} // shown since the lock above
 	running.Store(false)
 	asked.Store(0)
 	if got := a.post(t, "/bootstrap/state", map[string]string{}); got != open || asked.Load() != 0 {
@@ -1185,7 +1200,7 @@ func TestThePasskeyWayOnNeedsTheFoldersCYFRStillAnswering(t *testing.T) {
 	}
 	a.quiet(t)
 	running.Store(true)
-	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": localAddress}); got != open {
+	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": localAddress}); got != (answer{Home: localAddress, Next: "/"}) {
 		t.Fatalf("with it back the press answered %+v", got)
 	}
 	a.quiet(t)
@@ -1797,7 +1812,7 @@ func TestSetUpAndStartRunsOneSetupAtATime(t *testing.T) {
 	if got := a.post(t, "/bootstrap/open", map[string]string{}); got.Next != "" || got.Error == "" {
 		t.Fatalf("a failed setup opened: %+v", got)
 	}
-	retry := a.post(t, "/bootstrap/start", map[string]string{})
+	retry := a.post(t, "/bootstrap/start", map[string]string{"run": strconv.FormatUint(failed.Run, 10)})
 	<-d.ctxs
 	if retry.Setup == nil || retry.Setup.Error != "" || len(retry.Setup.Steps) != 0 || retry.Setup.Seq <= failed.Seq || d.runs.Load() != 2 {
 		t.Fatalf("Try again answered %+v after %d runs", retry, d.runs.Load())
@@ -1881,7 +1896,7 @@ func TestTheCYFRSetUpOpensOnceDone(t *testing.T) {
 	}
 	a.post(t, "/bootstrap/start", map[string]string{})
 	<-d.ctxs
-	if got := a.post(t, "/bootstrap/open", map[string]string{}); got.Error == "" {
+	if got := a.post(t, "/bootstrap/open", map[string]string{"run": "1"}); got.Error == "" {
 		t.Fatalf("a setup still running opened: %+v", got)
 	}
 	seen := a.setupAfter(t, 0).Seq
@@ -1889,9 +1904,9 @@ func TestTheCYFRSetUpOpensOnceDone(t *testing.T) {
 	if s := a.setupAfter(t, seen); !s.Done {
 		t.Fatalf("the setup ended %+v", s)
 	}
-	done := a.connect(t, "/bootstrap/open", map[string]string{})
-	if m := a.next(t); m.Type != TypeHome || m.Home != localAddress {
-		t.Fatalf("main heard %+v", m)
+	done := a.connect(t, "/bootstrap/open", map[string]string{"run": "1"})
+	if m := a.next(t); m.Type != TypeHome || m.Home != localAddress || m.Road != RoadDevice {
+		t.Fatalf("main heard %+v, not the CYFR set up at the device's pages", m)
 	}
 	a.ready(localAddress)
 	if got := answered(t, done); got.Next != "/" || got.Home != localAddress {
@@ -1923,4 +1938,151 @@ func TestASetupsStepIsWaitedForUnbounded(t *testing.T) {
 		t.Fatal("the wait did not answer the step")
 	}
 	d.ends <- nil
+}
+
+// A setup's Start acts on the folder the page shows: with main's next pick
+// not yet shown, it runs nothing and answers that folder with why.
+func TestStartActsOnTheFolderThePageShows(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	a.Folder = "/home/ada/cyfr"
+	ran := make(chan string, 2)
+	a.Setup = func(_ context.Context, folder string, _ func(string)) error { ran <- folder; return nil }
+	shown := a.post(t, "/bootstrap/state", map[string]string{})
+	picked := "/home/ada/other"
+	a.FolderPicked(&picked) // main's answer, not yet shown by the page
+	got := a.post(t, "/bootstrap/start", map[string]string{"picks": strconv.FormatUint(shown.Picks, 10)})
+	if got.Error == "" || got.Folder != picked || got.Picks != 1 || len(ran) != 0 {
+		t.Fatalf("Start for the folder shown before the pick answered %+v, ran %d", got, len(ran))
+	}
+	if got := a.post(t, "/bootstrap/start", map[string]string{"picks": "1"}); got.Setup == nil || got.Setup.Folder != picked {
+		t.Fatalf("Start for the folder shown now answered %+v", got)
+	}
+	if folder := <-ran; folder != picked {
+		t.Fatalf("setup ran in %s", folder)
+	}
+}
+
+// A Start that arrives again, late, for a setup already begun does
+// nothing: the setup done stays done, and none runs again.
+func TestADuplicateStartDoesNothing(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	var runs atomic.Int32
+	a.Setup = func(context.Context, string, func(string)) error { runs.Add(1); return nil }
+	started := a.post(t, "/bootstrap/start", map[string]string{})
+	if s := a.setupAfter(t, started.Setup.Seq); !s.Done {
+		t.Fatal("the setup did not finish")
+	}
+	again := a.post(t, "/bootstrap/start", map[string]string{})
+	if again.Setup == nil || !again.Setup.Done || again.Setup.Run != 1 || runs.Load() != 1 {
+		t.Fatalf("a duplicate Start answered %+v after %d runs", again, runs.Load())
+	}
+}
+
+// The chooser that pressed Set up and start opens its CYFR as the setup
+// ends: from before a lock, however late it arrives, it opens nothing.
+func TestAnOpenFromBeforeALockOpensNothing(t *testing.T) {
+	var running atomic.Bool
+	running.Store(true)
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	a.Folder = localFolder
+	a.Setup = func(context.Context, string, func(string)) error { return nil }
+	before := a.post(t, "/bootstrap/state", map[string]string{}).Epoch
+	started := a.post(t, "/bootstrap/start", map[string]string{})
+	if s := a.setupAfter(t, started.Setup.Seq); !s.Done {
+		t.Fatal("the setup did not finish")
+	}
+	a.Lock("Locked.")
+	if m := a.next(t); m.Type != TypeLocked {
+		t.Fatalf("main heard %+v", m)
+	}
+	got := a.post(t, "/bootstrap/open", map[string]string{"run": "1", "epoch": strconv.FormatUint(before, 10)})
+	if got.Error != lockedSentence || got.Next != "" {
+		t.Fatalf("an open from before the lock answered %+v", got)
+	}
+	a.quiet(t)
+}
+
+// What a person set up is remembered as the setup ends: the app started
+// again, by a route's relaunch or otherwise, offers it, its address in the
+// field, one press, and opens nothing by itself.
+func TestTheFolderSetUpIsOfferedAfterTheAppStartsAgain(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(t, dir, nil)
+	a.Folder = localFolder
+	a.Setup = func(context.Context, string, func(string)) error { return nil }
+	local := func(string) (Local, error) {
+		return Local{Shell: shell.Config{Address: "http://box.example.test:4000", Directory: account.DefaultDirectory},
+			Proxy: "socks5://127.0.0.1:1055", Resolver: "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+			Answers: func(context.Context) error { return nil }}, nil
+	}
+	a.Local = local
+	started := a.post(t, "/bootstrap/start", map[string]string{})
+	if s := a.setupAfter(t, started.Setup.Seq); !s.Done {
+		t.Fatalf("the setup ended %+v", s)
+	}
+	// Open proposes it on its route, which main starts again on before
+	// any home-ready, ending this cyfr.
+	opening := a.connect(t, "/bootstrap/open", map[string]string{"run": "1"})
+	if m := a.next(t); m.Type != TypeHome || m.Proxy == "" {
+		t.Fatalf("Open proposed %+v", m)
+	}
+	a.End()
+	answered(t, opening)
+	next := newApp(t, dir, nil)
+	next.Local = local
+	if shown := next.post(t, "/bootstrap/state", map[string]string{}); shown.Home != "http://box.example.test:4000" || shown.Resume != "" {
+		t.Fatalf("the app started again shows %+v", shown)
+	}
+	next.quiet(t)
+}
+
+// Every chooser request that acts says what the page showed, and is
+// refused when that is no longer so: the epoch (a lock ends it) for each,
+// the pick and the setup for Start, the setup for Open. A route added that
+// acts and is not in this table fails here by being absent.
+func TestEveryRequestThatActsIsRefusedWhenWhatThePageShowedIsStale(t *testing.T) {
+	stale := map[string][]string{
+		"/bootstrap/connect": {"epoch"},
+		"/bootstrap/approve": {"epoch"},
+		"/bootstrap/start":   {"epoch", "picks", "run"},
+		"/bootstrap/open":    {"epoch", "run"},
+	}
+	for path, route := range chooserRoutes {
+		if _, listed := stale[path]; listed != route.acts {
+			t.Errorf("%s acts %v, and the table lists it %v", path, route.acts, listed)
+		}
+	}
+	for path, fields := range stale {
+		for _, field := range fields {
+			t.Run(path+" "+field, func(t *testing.T) {
+				var running atomic.Bool
+				running.Store(true)
+				a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+				a.Folder = localFolder
+				var runs atomic.Int32
+				a.Setup = func(context.Context, string, func(string)) error { runs.Add(1); return nil }
+				// A setup done (run 1), a pick answered (picks 1), and a lock
+				// (epoch 1): the page shows each of them now.
+				started := a.post(t, "/bootstrap/start", map[string]string{})
+				a.setupAfter(t, started.Setup.Seq)
+				a.FolderPicked(new(string))
+				a.Lock("Locked.")
+				a.next(t)
+				now := map[string]string{"epoch": "1", "picks": "1", "run": "1", "address": localAddress}
+				body := map[string]string{}
+				for k, v := range now {
+					body[k] = v
+				}
+				body[field] = "0"
+				got := a.post(t, path, body)
+				if got.Next != "" || got.Confirm != "" || runs.Load() != 1 {
+					t.Fatalf("with a stale %s, %s answered %+v after %d runs", field, path, got, runs.Load())
+				}
+				if field == "epoch" && got.Error != lockedSentence {
+					t.Fatalf("with a stale epoch, %s answered %+v", path, got)
+				}
+				a.quiet(t)
+			})
+		}
+	}
 }

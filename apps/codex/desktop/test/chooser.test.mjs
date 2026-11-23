@@ -54,8 +54,10 @@ async function chooser(notice, state, connected = OPEN, hash = "#token=t" + (not
     location: {pathname: "/bootstrap/", hash,
       replace: (to) => went.byItself.push(to), assign: (to) => went.pressed.push(to)},
     fetch: async (path, init) => {
-      const {token, ...body} = JSON.parse(init.body)
+      const {token, epoch, ...body} = JSON.parse(init.body)
       if (token !== "t") return {ok: false}
+      // The epoch the page was shown in, which every request carries.
+      went.epochs = [...(went.epochs ?? []), epoch]
       if (path !== "/bootstrap/state") went.asked.push([path, body])
       went.tokens = [...(went.tokens ?? []), token]
       if (path !== "/bootstrap/state") stored.clear() // main cleared the storage while it waited
@@ -436,14 +438,14 @@ test("where Docker is to be installed from its page, the chooser links to it; a 
 // Try again; and after a lock, its progress again with nothing opened by
 // itself.
 const SETUP_WORDS = ["Getting CYFR's files", "Writing its settings", "Downloading CYFR", "Starting CYFR"]
-const running = (steps, seq) => ({setup: {folder: "/home/ada/cyfr", steps, seq}})
+const running = (steps, seq) => ({setup: {run: 1, folder: "/home/ada/cyfr", steps, seq}})
 const progressOf = ($) => $("progress").textContent.split("\n")
 
 test("Set up and start shows its steps as they begin, then opens the CYFR set up as Connect does", async () => {
   const setup = {
     "/bootstrap/start": [running([], 1)],
     "/bootstrap/setup": [running(["files"], 2), running(["files", "settings", "images", "start"], 5),
-      {setup: {folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}],
+      {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}],
     "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]
   }
   const {$, went} = await chooser("", {folder: "/home/ada/cyfr"}, {}, "#token=t", {docker: [{docker: {ready: true}}], setup})
@@ -456,7 +458,7 @@ test("Set up and start shows its steps as they begin, then opens the CYFR set up
     "/bootstrap/setup", "/bootstrap/open"])
   assert.deepEqual(went.asked.filter(([p]) => p === "/bootstrap/setup").map(([, b]) => b), [{seen: 1}, {seen: 2}, {seen: 5}],
     "each wait is for the step after the one shown")
-  assert.deepEqual(went.asked.find(([p]) => p === "/bootstrap/start")[1], {}, "the page names no folder")
+  assert.deepEqual(went.asked.find(([p]) => p === "/bootstrap/start")[1], {picks: 0, run: 0}, "the page names no folder: the pick and the setup it shows")
   assert.deepEqual(progressOf($), ["Setting up CYFR in /home/ada/cyfr", ...SETUP_WORDS])
   assert.deepEqual(went.byItself, ["/"], "then the first person's page")
 })
@@ -479,7 +481,7 @@ test("a setup that failed says why and offers Try again, which starts it again",
 })
 
 test("after a lock the chooser shows the setup's progress again, and once it is done opens nothing by itself", async () => {
-  const done = {setup: {folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}
+  const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}
   const setup = {"/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}
   for (const road of ["#token=t", ROAD]) {
     const {$, went} = await chooser("", {folder: "/home/ada/cyfr", ...running(["files", "settings"], 3), resume: HOME}, {}, road,
@@ -493,7 +495,50 @@ test("after a lock the chooser shows the setup's progress again, and once it is 
     assert.deepEqual(went.byItself, [])
     $("go").fire("click")
     await settled()
-    assert.deepEqual(went.asked.at(-1), ["/bootstrap/open", {}], "Open CYFR is the press")
+    assert.deepEqual(went.asked.at(-1), ["/bootstrap/open", {run: 1}], "Open CYFR is the press, for the setup shown")
+  }
+})
+
+test("on the passkey road too the CYFR set up opens at the device's pages, and every request says the time its page was shown in", async () => {
+  const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 2}}
+  const setup = {"/bootstrap/start": [running([], 1)], "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}
+  const {$, went} = await chooser("", {folder: "/home/ada/cyfr", picks: 1, epoch: 4}, {}, ROAD, {docker: [{docker: {ready: true}}], setup})
+  $("here").fire("click")
+  await settled()
+  $("start").fire("click")
+  await settled()
+  assert.deepEqual(went.asked.find(([p]) => p === "/bootstrap/start")[1], {picks: 1, run: 0})
+  assert.deepEqual(went.asked.at(-1), ["/bootstrap/open", {run: 1}])
+  assert.deepEqual(went.byItself, ["/"], "the device's pages, where the first person is made")
+  assert.deepEqual(went.epochs, [0, 4, 4, 4, 4], "the state asked first, then each request in the time it answered")
+})
+
+test("a Start refused because the folder changed shows the folder now and its sentence, and the next press is for it", async () => {
+  const changed = "The folder changed to /home/ada/other. Check it, then press Set up and start again."
+  const setup = {"/bootstrap/start": [{folder: "/home/ada/other", picks: 2, error: changed}, running([], 1)]}
+  const {$, went} = await chooser("", {folder: "/home/ada/cyfr", picks: 1}, {}, "#token=t", {docker: [{docker: {ready: true}}], setup})
+  $("here").fire("click")
+  await settled()
+  $("start").fire("click")
+  await settled()
+  assert.equal($("folder").textContent, "/home/ada/other")
+  assert.equal($("notice").textContent, changed)
+  assert.equal($("start").hidden, false, "Set up and start is still offered")
+  $("start").fire("click")
+  await settled()
+  assert.deepEqual(went.asked.filter(([p]) => p === "/bootstrap/start").map(([, b]) => b), [{picks: 1, run: 0}, {picks: 2, run: 0}])
+})
+
+test("a refused Open of the CYFR set up says why, the clear that failed included", async () => {
+  const done = {folder: "/home/ada/cyfr", setup: {run: 1, folder: "/home/ada/cyfr", steps: [], done: true, seq: 2}}
+  for (const [answered, words] of [[{cyfr: "http://localhost:4000", notice: "uncleared"}, UNCLEARED],
+    [{error: "CYFR locked. Connect again."}, "CYFR locked. Connect again."], [{}, "CYFR did not open."]]) {
+    const {$, went} = await chooser("", done, {}, ROAD, {setup: {"/bootstrap/open": [answered]}})
+    $("go").fire("click")
+    await settled()
+    assert.equal($("notice").textContent, words)
+    assert.equal($("go").hidden, false, "Open CYFR is offered again")
+    assert.deepEqual(went.byItself, [])
   }
 })
 

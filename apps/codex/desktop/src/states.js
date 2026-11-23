@@ -285,7 +285,7 @@ export function step(s, e) {
         return ending(s, {end: "it named a CYFR this app does not open"})
       }
       if (rerouted(s, m)) return ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
-      return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, returning: null},
+      return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, device: m.road === "device", returning: null},
         do: [{say: `home: ${m.home}`}, ...(s.name === "taking" ? [] : [{take: true}])]}
     }
     case "taken": {
@@ -298,7 +298,9 @@ export function step(s, e) {
     case "opened":
       if (s.name === "locking") return same(s) // from before the lock
       if (s.name !== "proposed" || e.home !== s.home) return ending(s, {end: "it opened a CYFR this app was not keeping to"})
-      return s.accountRoad ? same({...s, name: "open", notices: []}, [{root: {home: s.home}}]) : same({...s, name: "open"})
+      // A CYFR that opens at the device's pages (home's road) loads none
+      // of its own: the chooser goes to those pages, on either road.
+      return s.accountRoad && !s.device ? same({...s, name: "open", notices: []}, [{root: {home: s.home}}]) : same({...s, name: "open"})
     case "locked": {
       const m = e.message
       if (s.name === "starting") return same(s)

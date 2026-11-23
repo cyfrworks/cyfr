@@ -57,7 +57,7 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 			o := c.Message
 			attempt, _ := o["attempt"].(float64)
 			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
-				Proxy: str(o, "proxy"), Resolver: str(o, "resolver")}
+				Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), Road: str(o, "road")}
 			var out bytes.Buffer
 			if err := NewWriter(&out).Send(m); err != nil {
 				t.Fatal(err)

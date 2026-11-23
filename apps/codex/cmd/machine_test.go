@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/codex/internal/access"
 )
 
 // standIn is a machine for prepareMachine, a fresh Ubuntu 26.04 unless a
@@ -34,7 +36,16 @@ type standIn struct {
 	applyErr, authErr                  error
 	authenticated, forgotten           int
 	prompt                             func()
+	// refused is what docker writes where it does not answer.
+	refused string
 }
+
+// The daemon's two refusals of a call, as docker writes them: its socket
+// refusing this process, and no daemon at the socket.
+const (
+	socketDenied = "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock\n"
+	noDaemon     = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n"
+)
 
 // standInMachine stands s in for the machine until t ends. It fails at
 // once unless no sh, rm, sudo or docker can be found: PATH is one empty
@@ -57,6 +68,12 @@ func standInMachine(t *testing.T) *standIn {
 	machine.supported = func() bool { return s.supported }
 	machine.arch = func() string { return s.arch }
 	machine.reachable = func(context.Context) bool { return s.reachable }
+	machine.refusal = func(context.Context) (string, bool) {
+		if s.reachable {
+			return "", false
+		}
+		return access.DaemonRefusal([]byte(s.refused))
+	}
 	machine.dockerHere = func(context.Context) (bool, error) { return true, nil }
 	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }
 	machine.running = func() bool { return s.running }

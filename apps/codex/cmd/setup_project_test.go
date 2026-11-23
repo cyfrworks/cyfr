@@ -210,6 +210,36 @@ func TestAReadingThatNeverCameBackBlamesNoDocker(t *testing.T) {
 	}
 }
 
+// A Docker check whose work never answered says what happened to the
+// work, and that Docker was not asked only where the work never began.
+func TestADockerCheckThatNeverCameBackSaysWhatHappened(t *testing.T) {
+	for name, c := range map[string]struct {
+		start func() (*workProcess, error)
+		said  string
+	}{
+		"not begun": {
+			start: func() (*workProcess, error) { return nil, errors.New("sg is gone") },
+			said:  "Docker was not asked (setup's work could not begin (sg is gone))",
+		},
+		"ended with no answer": {
+			start: func() (*workProcess, error) {
+				_, in := io.Pipe()
+				return &workProcess{in: in, out: strings.NewReader("not a message\n"), wait: func() error { return nil }, kill: func() {}}, nil
+			},
+			said: "The Docker check failed (setup's work ended before it finished)",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			saved := startWork
+			t.Cleanup(func() { startWork = saved })
+			startWork = func(context.Context, []string) (workBegin, error) { return c.start, nil }
+			if got := dockerCheck(t.Context(), shell.NewWork(t.Context())); got.Sentence != c.said || got.Ready {
+				t.Fatalf("the check answered %+v, want %q", got, c.said)
+			}
+		})
+	}
+}
+
 // begins is a stand-in's begin of w.
 func begins(w *workProcess) workBegin { return func() (*workProcess, error) { return w, nil } }
 
@@ -383,7 +413,8 @@ func TestInitHeedsAnInterruptBeforeItMintsKeys(t *testing.T) {
 }
 
 // Work that came through no sg, where the account's membership is newer
-// than it, says what gives it the group: a new login.
+// than it and Docker's socket refused it, says what gives it the group: a
+// new login. A daemon that is not there says so, whatever the membership.
 func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 	saved := machine
 	t.Cleanup(func() { machine = saved })
@@ -392,16 +423,19 @@ func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 	for _, c := range []struct {
 		system        string
 		account, mine []string
-		login         bool
+		// refused is what docker wrote where it did not answer.
+		refused string
+		login   bool
 		// elsewhere is a Docker whose endpoint is another computer's,
 		// which no login cures.
 		elsewhere bool
 	}{
-		{"linux", member, nil, true, false},
-		{"linux", member, member, false, false},
-		{"linux", nil, nil, false, false},
-		{"darwin", member, nil, false, false},
-		{"linux", member, nil, false, true},
+		{"linux", member, nil, socketDenied, true, false},
+		{"linux", member, nil, noDaemon, false, false},
+		{"linux", member, member, socketDenied, false, false},
+		{"linux", nil, nil, socketDenied, false, false},
+		{"darwin", member, nil, socketDenied, false, false},
+		{"linux", member, nil, socketDenied, false, true},
 	} {
 		machine.dockerHere = func(context.Context) (bool, error) { return !c.elsewhere, nil }
 		machine.system = func() string { return c.system }
@@ -411,9 +445,13 @@ func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 			}
 			return c.account
 		}
+		machine.refusal = func(context.Context) (string, bool) { return access.DaemonRefusal([]byte(c.refused)) }
 		ready, why, fixable := dockerReady(t.Context())
 		if ready || strings.Contains(why, "log out and in again") != c.login || strings.Contains(why, "another computer") != c.elsewhere {
 			t.Errorf("%+v: ready %v, %q", c, ready, why)
+		}
+		if c.refused == noDaemon && why != "Docker does not answer this account: the Docker daemon is not reachable" {
+			t.Errorf("%+v: no daemon is said as %q", c, why)
 		}
 		if fixable != (!c.login && !c.elsewhere) {
 			t.Errorf("%+v: %q offers a remedy: %v", c, why, fixable)
@@ -432,6 +470,7 @@ func TestTheProbeNamesWhatMakesDockerAnswerHere(t *testing.T) {
 	machine.installed = func(string) bool { return false }
 	machine.running = func() bool { return false }
 	machine.groups = func(context.Context, string) []string { return nil }
+	machine.refusal = func(context.Context) (string, bool) { return access.DaemonRefusal([]byte(noDaemon)) }
 	for _, c := range []struct {
 		name, system  string
 		supported     bool

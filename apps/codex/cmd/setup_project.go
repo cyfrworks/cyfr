@@ -150,16 +150,22 @@ func dockerReady(ctx context.Context) (ready bool, why string, fixable bool) {
 	case !here:
 		return false, "Docker here runs containers on another computer, so CYFR cannot be set up on this one with it", false
 	}
-	answers := machine.reachable(ctx)
+	if machine.reachable(ctx) {
+		return true, "", false
+	}
+	// Only the socket itself refusing this process, observed, with a
+	// membership newer than the process, is cured by a new login; the
+	// daemon's own refusal says itself.
+	said, denied := machine.refusal(ctx)
 	switch {
 	case ctx.Err() != nil:
 		return false, "Docker was not waited for", false
-	case !answers && olderThanGroup(ctx):
+	case denied && olderThanGroup(ctx):
 		return false, loginAgain, false
-	case !answers:
-		return false, "Docker does not answer this account", true
+	case said != "":
+		return false, "Docker does not answer this account: " + said, true
 	}
-	return true, "", false
+	return false, "Docker does not answer this account", true
 }
 
 // dockerRemedy is what makes Docker answer this account here, for a person
@@ -193,13 +199,22 @@ func setUpHere(ctx context.Context, work *shell.Work, folder string, step func(s
 func dockerCheck(ctx context.Context, work *shell.Work) desktop.DockerAnswer {
 	defer work.End()
 	m, err := setupWork(ctx, work, nil, workProbe)
-	if err != nil {
+	switch {
+	case err != nil && ctx.Err() != nil:
+		// Asked, and given up on before it answered.
+		return desktop.DockerAnswer{Sentence: "Docker did not answer before the check ended"}
+	case errors.Is(err, errWorkNotBegun):
 		return desktop.DockerAnswer{Sentence: "Docker was not asked (" + err.Error() + ")"}
+	case err != nil:
+		return desktop.DockerAnswer{Sentence: "The Docker check failed (" + err.Error() + ")"}
 	}
 	return desktop.DockerAnswer{Ready: m.Ready, Sentence: m.Sentence, Commands: m.Commands, Page: m.Page}
 }
 
 var errSetupCancelled = errors.New("Setup was stopped before CYFR was started")
+
+// errWorkNotBegun is setup's work that never began: nothing was asked.
+var errWorkNotBegun = errors.New("setup's work could not begin")
 
 // setupProject is the one setup action, for every folder: init's sequence
 // where dir holds no .env, then up's start. Asked again it mints nothing
@@ -226,6 +241,13 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 	}
 	if err := os.Chdir(dir); err != nil {
 		return fmt.Errorf("CYFR cannot use the folder %s (%v). Nothing was changed", dir, err)
+	}
+	// The folder is the directory entered here, once: the refusal is
+	// decided on it, and every write goes to it by the working directory,
+	// whatever its name leads to afterwards. The check above, by the name,
+	// only answered early.
+	if err := refuseOwnFolder(".", dir); err != nil {
+		return err
 	}
 	// The working directory keeps the name it was chosen by, through a
 	// link too (os.Getwd): compose names the project after it, and what
@@ -274,6 +296,15 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 
 // setupFolder refuses a folder no CYFR is set up in, writing nothing.
 func setupFolder(dir string) error {
+	if err := refuseOwnFolder(dir, dir); err != nil {
+		return err
+	}
+	return projectNamed(dir)
+}
+
+// refuseOwnFolder refuses path, the folder named shown, where it is the
+// account's own folder, whose .cyfr is the account's.
+func refuseOwnFolder(path, shown string) error {
 	own, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("CYFR cannot tell which folder is your account's own (%v). Nothing was changed", err)
@@ -282,11 +313,11 @@ func setupFolder(dir string) error {
 	if err != nil {
 		return fmt.Errorf("CYFR cannot read your account's own folder %s (%v). Nothing was changed", own, err)
 	}
-	if info, err := os.Stat(dir); err == nil && os.SameFile(info, ownInfo) {
+	if info, err := os.Stat(path); err == nil && os.SameFile(info, ownInfo) {
 		return fmt.Errorf("CYFR cannot be set up in %s itself, because your account keeps its own CYFR files there, so choose a folder inside it, such as %s. Nothing was changed",
-			dir, filepath.Join(dir, "cyfr"))
+			shown, filepath.Join(own, "cyfr"))
 	}
-	return projectNamed(dir)
+	return nil
 }
 
 // workFailure is the work's own failed end, in its sentence.
@@ -460,7 +491,7 @@ func workBegunBy(ctx context.Context, begin func(context.Context, []string) (*wo
 			// Its Work ended, which its ctx hears a moment later.
 			return workMessage{}, l.err
 		}
-		return workMessage{}, fmt.Errorf("setup's work could not begin (%w)", l.err)
+		return workMessage{}, fmt.Errorf("%w (%w)", errWorkNotBegun, l.err)
 	}
 	if !reading {
 		e := <-ended

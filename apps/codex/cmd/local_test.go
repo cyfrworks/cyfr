@@ -1289,29 +1289,42 @@ func TestALockWaitsForNoWorkStarting(t *testing.T) {
 }
 
 // Where only a new login gives this process the docker group, a reading
-// of a folder that is set up says so, as a cause waiting does not cure.
+// of a folder that is set up says so, as a cause waiting does not cure:
+// where Docker's socket refused this process. A daemon that is not there
+// is no missing login, whatever the membership.
 func TestAReadingOfAFolderSaysToLogInAgain(t *testing.T) {
-	s := newLocalStack(t)
-	s.env(4321)
-	s.answer("cyfrps.exit", "1")
-	savedMachine, savedSg := machine, sgProgram
-	t.Cleanup(func() { machine, sgProgram = savedMachine, savedSg })
-	machine.system = func() string { return "linux" }
-	machine.groups = func(_ context.Context, account string) []string {
-		if account != "" {
-			return []string{dockerGroup}
-		}
-		return nil
-	}
-	sgProgram = filepath.Join(t.TempDir(), "no-sg")
-	l, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = l.Answers(t.Context())
-	var unbound *shell.Unbound
-	want := loginAgain + ". Nothing was sent to the CYFR in " + s.project + "."
-	if !errors.As(err, &unbound) || unbound.Sentence != want || !unbound.Lasting {
-		t.Fatalf("the folder's reading said %#v, want %q, lasting", err, want)
+	for _, c := range []struct {
+		name, refused string
+		login         bool
+	}{{"socket refused", socketDenied, true}, {"no daemon", noDaemon, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newLocalStack(t)
+			s.env(4321)
+			s.answer("cyfrps.exit", "1")
+			savedMachine, savedSg := machine, sgProgram
+			t.Cleanup(func() { machine, sgProgram = savedMachine, savedSg })
+			machine.system = func() string { return "linux" }
+			machine.groups = func(_ context.Context, account string) []string {
+				if account != "" {
+					return []string{dockerGroup}
+				}
+				return nil
+			}
+			machine.refusal = func(context.Context) (string, bool) { return access.DaemonRefusal([]byte(c.refused)) }
+			sgProgram = filepath.Join(t.TempDir(), "no-sg")
+			l, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = l.Answers(t.Context())
+			var unbound *shell.Unbound
+			want := loginAgain + ". Nothing was sent to the CYFR in " + s.project + "."
+			if c.login && (!errors.As(err, &unbound) || unbound.Sentence != want || !unbound.Lasting) {
+				t.Fatalf("the folder's reading said %#v, want %q, lasting", err, want)
+			}
+			if !c.login && (err == nil || strings.Contains(err.Error(), loginAgain) || errors.As(err, &unbound) && strings.Contains(unbound.Sentence, loginAgain)) {
+				t.Fatalf("with no daemon, the folder's reading said %#v", err)
+			}
+		})
 	}
 }
