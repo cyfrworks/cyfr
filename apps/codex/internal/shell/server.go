@@ -88,8 +88,13 @@ type Server struct {
 	// set for a box's screen. It is part of what the shell knows, so no
 	// page waits for it: each shows what the last reading of it said,
 	// "starting" until one said yes, or the sentence of a refusal waiting
-	// does not cure (Unbound.Lasting), and starts the next (read).
-	Reachable func() error
+	// does not cure (Unbound.Lasting), and starts the next (read) under
+	// Work, whose end ends it.
+	Reachable func(context.Context) error
+	// Work is everything the pages begin for the CYFR of a folder on this
+	// computer: each request's context ends with it, and each reading
+	// begins under it. ServeOn makes one from its ctx where it is nil.
+	Work *Work
 
 	lastMu sync.Mutex
 	// answered is what the last finished reading said, lasting its
@@ -105,24 +110,29 @@ type Server struct {
 func (srv *Server) read(page Page) (answered bool, lasting string) {
 	srv.lastMu.Lock()
 	defer srv.lastMu.Unlock()
-	if !srv.reading {
+	if srv.reading {
+		return srv.answered, srv.lasting
+	}
+	work := srv.Work.Context()
+	reading := func() {
+		if page == PageSetup || page == PageEnroll {
+			ctx, cancel := context.WithTimeout(work, termsWithin)
+			srv.Shell.readTerms(ctx)
+			cancel()
+		}
+		err := srv.Reachable(work)
+		var unbound *Unbound
+		why := ""
+		if errors.As(err, &unbound) && unbound.Lasting {
+			why = unbound.Sentence
+		}
+		srv.lastMu.Lock()
+		srv.answered, srv.lasting, srv.reading = err == nil, why, false
+		srv.lastMu.Unlock()
+	}
+	// After the Work ended no reading begins, and the pages show the last.
+	if srv.Work.Start(work, func() error { go reading(); return nil }) == nil {
 		srv.reading = true
-		go func() {
-			if page == PageSetup || page == PageEnroll {
-				ctx, cancel := context.WithTimeout(context.Background(), termsWithin)
-				srv.Shell.readTerms(ctx)
-				cancel()
-			}
-			err := srv.Reachable()
-			var unbound *Unbound
-			why := ""
-			if errors.As(err, &unbound) && unbound.Lasting {
-				why = unbound.Sentence
-			}
-			srv.lastMu.Lock()
-			srv.answered, srv.lasting, srv.reading = err == nil, why, false
-			srv.lastMu.Unlock()
-		}()
 	}
 	return srv.answered, srv.lasting
 }
@@ -163,6 +173,11 @@ func (srv *Server) homeOrigin() string {
 // ServeHTTP admits a request by its Host, method and Origin, then serves
 // its page.
 func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if srv.Work != nil {
+		ctx, stop := srv.Work.Join(r.Context())
+		defer stop()
+		r = r.WithContext(ctx)
+	}
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	// same-origin, not no-referrer: under no-referrer Chrome sends the
@@ -697,11 +712,17 @@ func ListenAt(address string) (net.Listener, error) {
 	return (&net.ListenConfig{Control: exclusiveAddress}).Listen(context.Background(), "tcp4", address)
 }
 
-// ServeOn serves the pages on ln, the shell's listener, until ctx ends.
+// ServeOn serves the pages on ln, the shell's listener, until ctx ends,
+// which ends their Work (one of its own where Work is nil) before the
+// listener closes.
 func (srv *Server) ServeOn(ctx context.Context, ln net.Listener) error {
+	if srv.Work == nil {
+		srv.Work = NewWork(ctx)
+	}
 	hs := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
+		srv.Work.End()
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = hs.Shutdown(sctx)

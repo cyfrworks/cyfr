@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/shell"
 	"github.com/cyfr/codex/internal/version"
 )
 
@@ -569,7 +570,7 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		local, err := readLocal(dir, "screen")
+		local, err := readLocal(shell.NewWork(t.Context()), dir, "screen")
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -521,6 +521,21 @@ func TestInitSaysLogInAgainWhereThereIsNoNewgrp(t *testing.T) {
 	}
 }
 
+// A Docker whose endpoint is another computer's is no missing login,
+// though this process lacks the docker group its account is in: init does
+// not say to log in again.
+func TestInitSaysNoLoginForADockerElsewhere(t *testing.T) {
+	s := standInMachine(t)
+	s.member, s.installed, s.running = []string{dockerGroup}, dockerPackages, true
+	machine.dockerHere = func(context.Context) (bool, error) { return false, nil }
+	askTerminal = func() bool { return false }
+	sgProgram = filepath.Join(t.TempDir(), "sg")
+	t.Chdir(t.TempDir())
+	if _, _, err := prepare(t); err != nil && strings.Contains(err.Error(), loginAgain) {
+		t.Fatalf("init said %v", err)
+	}
+}
+
 // A continued init's status is init's.
 func TestInitAnswersTheContinuationsStatus(t *testing.T) {
 	s := standInMachine(t)

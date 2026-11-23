@@ -20,6 +20,7 @@ import (
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/prompt"
+	"github.com/cyfr/codex/internal/shell"
 )
 
 // workStandIn is this test binary begun as setup's work (TestMain): that
@@ -83,10 +84,17 @@ func workHere(t *testing.T) {
 	t.Helper()
 	saved := startWork
 	t.Cleanup(func() { startWork = saved })
-	startWork = func(_ context.Context, args []string) (*workProcess, error) {
+	startWork = func(_ context.Context, args []string) (workBegin, error) {
 		if args[0] == workRun {
 			return nil, errors.New("a run takes a process of its own")
 		}
+		return func() (*workProcess, error) { return workInThisProcess(args), nil }, nil
+	}
+}
+
+// workInThisProcess is setup's work args done in this process.
+func workInThisProcess(args []string) *workProcess {
+	{
 		in, toWork := io.Pipe()
 		fromWork, out := io.Pipe()
 		ended := make(chan error, 1)
@@ -98,7 +106,7 @@ func workHere(t *testing.T) {
 		}()
 		// Work in this process cannot be killed: its pipes are cut instead.
 		kill := func() { toWork.Close(); fromWork.Close() }
-		return &workProcess{in: toWork, out: fromWork, wait: func() error { return <-ended }, kill: kill}, nil
+		return &workProcess{in: toWork, out: fromWork, wait: func() error { return <-ended }, kill: kill}
 	}
 }
 
@@ -121,16 +129,16 @@ func TestALookNamingNoContainerSendsNothing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			saved, savedDial := startWork, dialTCP
 			t.Cleanup(func() { startWork, dialTCP = saved, savedDial })
-			startWork = func(context.Context, []string) (*workProcess, error) {
+			startWork = func(context.Context, []string) (workBegin, error) {
 				raw, err := json.Marshal(workMessage{Type: workDone, Look: look})
 				_, in := io.Pipe()
-				return &workProcess{in: in, out: strings.NewReader(string(raw) + "\n"), wait: func() error { return nil }, kill: func() {}}, err
+				return begins(&workProcess{in: in, out: strings.NewReader(string(raw) + "\n"), wait: func() error { return nil }, kill: func() {}}), err
 			}
 			dialTCP = func(context.Context, string, string) (net.Conn, error) {
 				t.Error("a connection was made")
 				return nil, errors.New("the test makes no connection")
 			}
-			l, err := readLocal(dir, "the test")
+			l, err := readLocal(shell.NewWork(t.Context()), dir, "the test")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -176,10 +184,10 @@ func TestAReadingThatNeverCameBackBlamesNoDocker(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			saved := startWork
 			t.Cleanup(func() { startWork = saved })
-			startWork = func(context.Context, []string) (*workProcess, error) { return c.start() }
+			startWork = func(context.Context, []string) (workBegin, error) { return c.start, nil }
 			ctx, end := context.WithTimeout(t.Context(), 200*time.Millisecond)
 			defer end()
-			f, _, err := openFolder(dir, "the test")
+			f, _, err := openFolder(shell.NewWork(t.Context()), dir, "the test")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -200,6 +208,9 @@ func TestAReadingThatNeverCameBackBlamesNoDocker(t *testing.T) {
 		})
 	}
 }
+
+// begins is a stand-in's begin of w.
+func begins(w *workProcess) workBegin { return func() (*workProcess, error) { return w, nil } }
 
 // setUpFolder is a folder a CYFR is set up in, read and opened alone.
 func setUpFolder(t *testing.T) string {
@@ -222,7 +233,7 @@ func heldLauncher(t *testing.T) (starting chan struct{}, given chan context.Cont
 	released := make(chan struct{})
 	release = sync.OnceFunc(func() { close(released) })
 	t.Cleanup(release)
-	startWork = func(ctx context.Context, _ []string) (*workProcess, error) {
+	startWork = func(ctx context.Context, _ []string) (workBegin, error) {
 		given <- ctx
 		starting <- struct{}{}
 		<-released
@@ -286,7 +297,7 @@ func TestARunIsWaitedForThoughItsCallerWentAsItStarted(t *testing.T) {
 // goes at its ctx's end, and the launcher's ctx ends with it.
 func TestAReadingIsNotWaitedForWhileItsWorkStarts(t *testing.T) {
 	starting, given, _ := heldLauncher(t)
-	f, _, err := openFolder(setUpFolder(t), "the test")
+	f, _, err := openFolder(shell.NewWork(t.Context()), setUpFolder(t), "the test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,12 +392,17 @@ func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 		system        string
 		account, mine []string
 		login         bool
+		// elsewhere is a Docker whose endpoint is another computer's,
+		// which no login cures.
+		elsewhere bool
 	}{
-		{"linux", member, nil, true},
-		{"linux", member, member, false},
-		{"linux", nil, nil, false},
-		{"darwin", member, nil, false},
+		{"linux", member, nil, true, false},
+		{"linux", member, member, false, false},
+		{"linux", nil, nil, false, false},
+		{"darwin", member, nil, false, false},
+		{"linux", member, nil, false, true},
 	} {
+		machine.dockerHere = func(context.Context) (bool, error) { return !c.elsewhere, nil }
 		machine.system = func() string { return c.system }
 		machine.groups = func(_ context.Context, account string) []string {
 			if account == "" {
@@ -394,7 +410,8 @@ func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 			}
 			return c.account
 		}
-		if ready, why := dockerReady(t.Context()); ready || strings.Contains(why, "log out and in again") != c.login {
+		ready, why := dockerReady(t.Context())
+		if ready || strings.Contains(why, "log out and in again") != c.login || strings.Contains(why, "another computer") != c.elsewhere {
 			t.Errorf("%+v: ready %v, %q", c, ready, why)
 		}
 	}

@@ -62,7 +62,7 @@ type localApp struct {
 func newLocalApp(t *testing.T, project string) *localApp {
 	t.Helper()
 	a := &localApp{t: t, sent: make(chan desktop.Message, 16)}
-	a.Service = newDesktopService(t.TempDir(), func(m desktop.Message) error { a.sent <- m; return nil })
+	a.Service = newDesktopService(t.Context(), t.TempDir(), func(m desktop.Message) error { a.sent <- m; return nil })
 	a.Shell = func(c *shell.Config) {
 		c.Chip = func() bool { return false }
 		c.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }
@@ -737,7 +737,7 @@ func TestTheSetupTokenIsOnlyForTheAddressRead(t *testing.T) {
 	s := newLocalStack(t)
 	s.env(4100)
 	s.runs("c0ffee", s.project, nil, 4100, 4200)
-	l, err := readLocal(s.project, "the test")
+	l, err := readLocal(shell.NewWork(t.Context()), s.project, "the test")
 	if err != nil || l.Shell.Address != "http://localhost:4100" {
 		t.Fatalf("read %+v, %v", l.Shell.Address, err)
 	}
@@ -922,7 +922,7 @@ func TestAFirstPersonIsAdmittedAtABoxInTailnetAccess(t *testing.T) {
 	here := "127.0.0.1:" + strconv.Itoa(cyfr.port)
 	onlyOnThisComputer(t, here, nil)
 
-	local, err := readLocal(s.project, "screen")
+	local, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -987,7 +987,7 @@ func TestTheFoldersClientReachesThatCYFRAlone(t *testing.T) {
 	s.env(cyfr.port)
 	s.runs("c0ffee", s.project, nil, cyfr.port)
 	dialled := standInDial(t, "", nil, nil)
-	l, err := readLocal(s.project, "the test")
+	l, err := readLocal(shell.NewWork(t.Context()), s.project, "the test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1026,7 +1026,7 @@ func TestAFoldersOwnAddressTakesNoProxy(t *testing.T) {
 			s.runs("c0ffee", s.project, nil, cyfr.port)
 			here := "127.0.0.1:" + strconv.Itoa(cyfr.port)
 			dialled, proxied := onlyOnThisComputer(t, here, &url.URL{Scheme: "http", Host: "proxy.example:3128"})
-			l, err := readLocal(s.project, "the test")
+			l, err := readLocal(shell.NewWork(t.Context()), s.project, "the test")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1058,7 +1058,7 @@ func TestNoAnswerSaysNoMoreThanThat(t *testing.T) {
 	port := silent.Addr().(*net.TCPAddr).Port
 	s.env(port)
 	s.runs("c0ffee", s.project, nil, port)
-	local, err := readLocal(s.project, "screen")
+	local, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1075,7 +1075,7 @@ func TestNoAnswerSaysNoMoreThanThat(t *testing.T) {
 func TestAFolderThatCannotBeOpenedBlamesNoDocker(t *testing.T) {
 	s := newLocalStack(t)
 	s.env(4321)
-	local, err := readLocal(s.project, "screen")
+	local, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1229,7 +1229,7 @@ func TestALockWaitsForNoWorkStarting(t *testing.T) {
 	letGo := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(letGo)
 	normal := startWork
-	startWork = func(ctx context.Context, args []string) (*workProcess, error) {
+	startWork = func(ctx context.Context, args []string) (workBegin, error) {
 		if args[0] == workToken {
 			close(started)
 			<-release
@@ -1237,7 +1237,7 @@ func TestALockWaitsForNoWorkStarting(t *testing.T) {
 		}
 		return normal(ctx, args)
 	}
-	l, err := readLocal(s.project, "screen")
+	l, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1301,7 +1301,7 @@ func TestAReadingOfAFolderSaysToLogInAgain(t *testing.T) {
 		return nil
 	}
 	sgProgram = filepath.Join(t.TempDir(), "no-sg")
-	l, err := readLocal(s.project, "screen")
+	l, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
 	if err != nil {
 		t.Fatal(err)
 	}

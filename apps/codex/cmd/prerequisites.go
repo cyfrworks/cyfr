@@ -402,9 +402,9 @@ func withDockerGroup(ctx context.Context, subcommand string, args []string, out,
 const loginAgain = "Docker does not answer this account until you log out and in again"
 
 // loginIsMissing is whether only a new login lets this process reach
-// Docker: Docker does not answer it, /etc/group lists its account in the
-// docker group, the process is older than that, and there is no sg to
-// reach the group with.
+// Docker: this computer's own Docker does not answer it, /etc/group lists
+// its account in the docker group, the process is older than that, and
+// there is no sg to reach the group with.
 func loginIsMissing(ctx context.Context) bool {
 	if machine.system() != "linux" {
 		return false
@@ -413,7 +413,11 @@ func loginIsMissing(ctx context.Context) bool {
 		return false
 	}
 	account, err := user.Current()
-	return err == nil && staleGroup(ctx, account.Username) && !machine.reachable(ctx)
+	if err != nil || !staleGroup(ctx, account.Username) {
+		return false
+	}
+	here, err := machine.dockerHere(ctx)
+	return err == nil && here && !machine.reachable(ctx)
 }
 
 // sgProgram runs a command with a group the account's processes do not

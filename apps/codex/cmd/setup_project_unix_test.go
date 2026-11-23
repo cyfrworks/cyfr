@@ -24,6 +24,7 @@ import (
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/desktop"
+	"github.com/cyfr/codex/internal/shell"
 )
 
 // workDocker stands in for docker for setup's work, a process of its own.
@@ -97,7 +98,7 @@ func newWorkProject(t *testing.T) workProject {
 // reported.
 func (p workProject) run(ctx context.Context, dir string) ([]string, error) {
 	var steps []string
-	_, err := setupWork(ctx, func(s string) { steps = append(steps, s) }, workRun, dir)
+	_, err := setupWork(ctx, shell.NewWork(ctx), func(s string) { steps = append(steps, s) }, workRun, dir)
 	return steps, err
 }
 
@@ -159,13 +160,19 @@ func recordWorksStdout(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	said, saved := &bytes.Buffer{}, startWork
 	t.Cleanup(func() { startWork = saved })
-	launch := starter()
-	startWork = func(ctx context.Context, args []string) (*workProcess, error) {
-		w, err := launch(ctx, args)
-		if err == nil {
-			w.out = io.TeeReader(w.out, said)
+	prepare := preparer()
+	startWork = func(ctx context.Context, args []string) (workBegin, error) {
+		begin, err := prepare(ctx, args)
+		if err != nil {
+			return nil, err
 		}
-		return w, err
+		return func() (*workProcess, error) {
+			w, err := begin()
+			if err == nil {
+				w.out = io.TeeReader(w.out, said)
+			}
+			return w, err
+		}, nil
 	}
 	return said
 }
@@ -409,7 +416,7 @@ func TestSetupsWorkIsNotWaitedForPastItsCaller(t *testing.T) {
 			defer cancel()
 			ended := make(chan error, 1)
 			go func() {
-				_, err := setupWork(ctx, nil, args...)
+				_, err := setupWork(ctx, shell.NewWork(t.Context()), nil, args...)
 				ended <- err
 			}()
 			pid := p.blocked(key)
@@ -442,7 +449,11 @@ func TestSetupsWorkOutlivesWhoAskedDuringAStart(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			p := newWorkProject(t)
 			p.answer(c.during+".block", "")
-			work, err := starter()(t.Context(), []string{workRun, p.project})
+			begin, err := preparer()(t.Context(), []string{workRun, p.project})
+			if err != nil {
+				t.Fatal(err)
+			}
+			work, err := begin()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -747,15 +758,18 @@ func gone(pid int) bool {
 
 // A reading's work that hears no end of its stdin is ended within the
 // bound, with everything in its process group, once the reading's caller
-// went (a lock, or the screen's end), the work begun before or after.
+// went (a lock) or the CYFR was let go of (the screen's end, the app
+// leaving it), the work begun before that, or as it came.
 func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
 	for name, c := range map[string]struct {
 		end func(cancel func(), l desktop.Local)
-		// late is whether the work starts only once its caller went.
+		// late is whether the end comes as the work begins, under the
+		// Work's lock.
 		late bool
 	}{
-		"its caller went":     {end: func(cancel func(), _ desktop.Local) { cancel() }},
-		"its start came late": {end: func(cancel func(), _ desktop.Local) { cancel() }, late: true},
+		"its caller went":             {end: func(cancel func(), _ desktop.Local) { cancel() }},
+		"the CYFR was let go of":      {end: func(_ func(), l desktop.Local) { l.Work.End() }},
+		"its caller went as it began": {end: func(cancel func(), _ desktop.Local) { cancel() }, late: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			deaf := t.TempDir()
@@ -765,14 +779,20 @@ func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
 			startWork = nil
 			entered := make(chan struct{}, 1)
 			if c.late {
-				launch := starter()
-				startWork = func(ctx context.Context, args []string) (*workProcess, error) {
-					entered <- struct{}{}
-					<-ctx.Done()
-					return launch(context.WithoutCancel(ctx), args)
+				prepare := preparer()
+				startWork = func(ctx context.Context, args []string) (workBegin, error) {
+					begin, err := prepare(ctx, args)
+					if err != nil {
+						return nil, err
+					}
+					return func() (*workProcess, error) {
+						w, err := begin()
+						entered <- struct{}{}
+						return w, err
+					}, nil
 				}
 			}
-			l, err := readLocal(setUpFolder(t), "the test")
+			l, err := readLocal(shell.NewWork(t.Context()), setUpFolder(t), "the test")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -819,5 +839,85 @@ func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
 				t.Fatalf("the work was ended after %v, before its bound", took)
 			}
 		})
+	}
+}
+
+// A process group is signalled only while its leader is unreaped, so its
+// number is still the work's: a kill after wait has reaped the leader
+// reaches nothing, though the group's other member lives on; a kill while
+// the leader has exited, unreaped, reaches that member.
+func TestAGroupIsSignalledOnlyWhileItsLeaderIsUnreaped(t *testing.T) {
+	for name, reap := range map[string]bool{"reaped": true, "exited, unreaped": false} {
+		t.Run(name, func(t *testing.T) {
+			cmd := exec.Command("/bin/sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!")
+			out, err := cmd.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wait, kill, err := workGroup(cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := io.ReadAll(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			member, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = syscall.Kill(member, syscall.SIGKILL) })
+			if reap {
+				if err := wait(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				exited(cmd.Process.Pid)
+				defer func() { _ = wait() }()
+			}
+			kill()
+			// A member killed is gone once its reaper sees it: wait for
+			// that, or look long enough to have seen it.
+			for deadline := time.Now().Add(time.Second); !gone(member) && time.Now().Before(deadline); {
+				time.Sleep(20 * time.Millisecond) // sleep-ok: polls an observable condition
+			}
+			if gone(member) == reap {
+				t.Fatalf("leader %s: the group's member gone %t after the kill", name, gone(member))
+			}
+		})
+	}
+}
+
+// A work that closed its stdout and lives on is killed with its group at
+// the bound: the leader's exit is not taken for its end.
+func TestAWorkThatClosedItsStdoutAndLivesOnIsKilledAtTheBound(t *testing.T) {
+	saved := startWork
+	t.Cleanup(func() { startWork = saved })
+	startWork = func(context.Context, []string) (workBegin, error) {
+		cmd := exec.Command("/bin/sh", "-c", "exec >&-; sleep 60")
+		return func() (*workProcess, error) {
+			in, err := cmd.StdinPipe()
+			if err != nil {
+				return nil, err
+			}
+			out, err := cmd.StdoutPipe()
+			if err != nil {
+				return nil, err
+			}
+			wait, kill, err := workGroup(cmd)
+			if err != nil {
+				return nil, err
+			}
+			return &workProcess{in: in, out: out, wait: wait, kill: kill}, nil
+		}, nil
+	}
+	began := time.Now()
+	_, err := setupWork(t.Context(), shell.NewWork(t.Context()), nil, workProbe)
+	took := time.Since(began)
+	if err == nil || !strings.Contains(err.Error(), "ended before it finished") {
+		t.Fatalf("it answered %v", err)
+	}
+	if took < workEndsWithin-500*time.Millisecond || took > workEndsWithin+5*time.Second {
+		t.Fatalf("its work ended after %v, not at the bound", took)
 	}
 }

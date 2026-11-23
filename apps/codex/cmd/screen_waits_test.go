@@ -76,7 +76,7 @@ func startHungScreen(t *testing.T, edit ...func(*holder.Record)) *hungScreen {
 	h.compositor = screenCompositor(t, idletest.Options{})
 	programs := quietScreen()
 	// sleep-ok: stand-ins that run until what started them ends them
-	programs["docker"] = "echo asked >>" + h.asked + "\nexec /bin/sleep 100"
+	programs["docker"] = "echo asked $$ >>" + h.asked + "\nexec /bin/sleep 100"
 	// sleep-ok: a stand-in child that runs until the shell ends it
 	programs["google-chrome-stable"] = "echo $$ >>" + h.browser + "\nexec /bin/sleep 100"
 	screenPrograms(t, programs)
@@ -327,7 +327,13 @@ func TestScreenShell_SaysToLogInAgainWhereThatIsWhatIsMissing(t *testing.T) {
 	screenProject(t)
 	t.Setenv(workStaleGroup, "1")
 	_ = screenCompositor(t, idletest.Options{})
-	screenPrograms(t, quietScreen())
+	programs := quietScreen()
+	// This computer's own Docker, whose socket refuses a process without
+	// the docker group.
+	programs["docker"] = `[ "$1" = context ] && echo unix:///var/run/docker.sock && exit 0
+echo "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock" >&2
+exit 1`
+	screenPrograms(t, programs)
 	s := startScreen(t)
 	s.shows(loginAgain)
 	resp, err := s.ask(http.MethodGet, "/", nil)
@@ -370,9 +376,18 @@ func TestScreenShell_AScreenThatEndsEndsItsReadings(t *testing.T) {
 		t.Fatal("the screen did not end")
 	}
 	ended := time.Now()
+	// The Docker calls this screen's readings made, by pid, and no other
+	// program's on this computer.
 	h.until("the Docker call the reading held to end", func() bool {
-		out, _ := exec.Command("/usr/bin/pgrep", "-f", "^/bin/sleep 100$").Output()
-		return len(strings.Fields(string(out))) == 0
+		raw, _ := os.ReadFile(h.asked)
+		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			if f := strings.Fields(line); len(f) == 2 {
+				if pid, err := strconv.Atoi(f[1]); err == nil && !gone(pid) {
+					return false
+				}
+			}
+		}
+		return true
 	})
 	if took := time.Since(ended); took > 3*time.Second {
 		t.Fatalf("the reading's Docker call ended %v after the screen", took)

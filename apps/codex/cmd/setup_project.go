@@ -18,10 +18,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
 )
 
@@ -124,11 +126,21 @@ func runSetupWork(ctx context.Context, in io.Reader, out io.Writer, args []strin
 }
 
 // dockerReady is whether a Docker that runs containers on this computer
-// answers this process, and the sentence why not. Work still older than
-// the docker group had no sg to come through (an optional package on
-// Ubuntu 26.04), and only a new login gives it the group. A cancel ends a
-// docker that hangs.
+// answers this process, and the sentence why not. Where it runs them is
+// asked first, of Docker's own settings: a Docker elsewhere says so, and
+// only this computer's own Docker refusing work still older than the
+// docker group is cured by a new login, since that work had no sg to come
+// through (an optional package on Ubuntu 26.04). A cancel ends a docker
+// that hangs.
 func dockerReady(ctx context.Context) (bool, string) {
+	switch here, err := machine.dockerHere(ctx); {
+	case ctx.Err() != nil:
+		return false, "Docker was not waited for"
+	case err != nil:
+		return false, "Docker did not say where it runs containers"
+	case !here:
+		return false, "Docker here runs containers on another computer, so CYFR cannot be set up on this one with it"
+	}
 	answers := machine.reachable(ctx)
 	switch {
 	case ctx.Err() != nil:
@@ -137,12 +149,6 @@ func dockerReady(ctx context.Context) (bool, string) {
 		return false, loginAgain
 	case !answers:
 		return false, "Docker does not answer this account"
-	}
-	switch here, err := machine.dockerHere(ctx); {
-	case err != nil:
-		return false, "Docker did not say where it runs containers"
-	case !here:
-		return false, "Docker here runs containers on another computer, so CYFR cannot be set up on this one with it"
 	}
 	return true, ""
 }
@@ -243,22 +249,36 @@ type workFailure struct{ sentence string }
 func (f workFailure) Error() string { return f.sentence }
 
 // workProcess is setup's work begun: its stdin, its stdout, its end, and
-// kill, which ends it and everything it started in its process group.
+// kill, which ends it and everything it started in its process group
+// while it has not been reaped (workGroup).
 type workProcess struct {
 	in   io.WriteCloser
 	out  io.Reader
 	wait func() error
 	kill func()
+
+	mu sync.Mutex
+	// told is whether the work was told to stop, waited whether wait has
+	// returned, and backstop the kill armed when a reading's work was told.
+	told, waited bool
+	backstop     *time.Timer
 }
 
-// workEndsWithin bounds how long a reading's work may run on after its
-// stdin closed: then it is killed with its process group. A run, setup a
-// person started, is never ended so.
+// workEndsWithin bounds how long a reading's work may run on after it was
+// told to stop: then it is killed with its process group. A reading's
+// work ends by itself within its calls to Docker, each bounded by its own
+// deadline: 30 s for each probe (context, ps, inspect), two minutes for
+// the token's docker logs. A run, setup a person started, is never ended
+// so.
 const workEndsWithin = 5 * time.Second
 
-// startWork stands in for the launcher (workLauncher) in a test; nil is
-// the launcher.
-var startWork func(ctx context.Context, args []string) (*workProcess, error)
+// startWork stands in for the launcher (workLauncher.prepare) in a test;
+// nil is the launcher.
+var startWork func(ctx context.Context, args []string) (workBegin, error)
+
+// workBegin begins setup's work made ready to begin. It is called under
+// the Work's lock (shell.Work.Start), so it does no more than start it.
+type workBegin func() (*workProcess, error)
 
 // workLauncher begins setup's work as a process of its own. It holds what
 // it reads of this program's settings from when it was made: a reading in
@@ -276,22 +296,23 @@ func newWorkLauncher() *workLauncher {
 	return &workLauncher{system: machine.system(), groups: machine.groups, sg: sgProgram, keeps: workKeeps, desktop: dockerDesktop}
 }
 
-// starter is what begins setup's work now: a test's stand-in, or a
-// launcher made now.
-func starter() func(context.Context, []string) (*workProcess, error) {
+// preparer is what makes setup's work ready to begin now: a test's
+// stand-in, or a launcher made now.
+func preparer() func(context.Context, []string) (workBegin, error) {
 	if startWork != nil {
 		return startWork
 	}
-	return newWorkLauncher().start
+	return newWorkLauncher().prepare
 }
 
-// start begins setup's work as a process of its own, in a process group of
-// its own: through sg with the docker group where this one is older than
-// it (throughGroup), and with no environment but what keeps keeps, since
-// the work runs init and up in a folder and compose would put this
-// process's environment over that folder's .env. What it asks of this
-// computer first ends with ctx.
-func (l *workLauncher) start(ctx context.Context, args []string) (*workProcess, error) {
+// prepare makes setup's work ready to begin as a process of its own, in a
+// process group of its own: through sg with the docker group where this
+// one is older than it (throughGroup), and with no environment but what
+// keeps keeps, since the work runs init and up in a folder and compose
+// would put this process's environment over that folder's .env. What it
+// asks of this computer ends with ctx. The begin it answers makes the
+// pipes and starts the process, and nothing else.
+func (l *workLauncher) prepare(ctx context.Context, args []string) (workBegin, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("cyfr could not find its own program (%w)", err)
@@ -301,143 +322,178 @@ func (l *workLauncher) start(ctx context.Context, args []string) (*workProcess, 
 	if l.throughGroup(ctx) {
 		cmd = exec.Command(l.sg, dockerGroup, "-c", "exec "+shellQuote(argv))
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	cmd.Env = l.environment(os.Environ())
-	workGroup(cmd)
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	return &workProcess{in: in, out: out, wait: cmd.Wait, kill: func() { killWorkGroup(cmd) }}, nil
+	return func() (*workProcess, error) {
+		in, err := cmd.StdinPipe()
+		if err != nil {
+			return nil, err
+		}
+		out, err := cmd.StdoutPipe()
+		if err != nil {
+			in.Close()
+			return nil, err
+		}
+		wait, kill, err := workGroup(cmd)
+		if err != nil {
+			return nil, err
+		}
+		return &workProcess{in: in, out: out, wait: wait, kill: kill}, nil
+	}, nil
 }
 
-// setupWork asks setup's work args and answers its end, reporting each
-// step it begins to step (workBegunBy).
-func setupWork(ctx context.Context, step func(string), args ...string) (workMessage, error) {
-	return workBegunBy(ctx, starter(), step, args...)
+// setupWork asks setup's work args under work and answers its end,
+// reporting each step it begins to step (workBegunBy).
+func setupWork(ctx context.Context, work *shell.Work, step func(string), args ...string) (workMessage, error) {
+	ctx, stop := work.Join(ctx)
+	defer stop()
+	return workBegunBy(ctx, beginUnder(work, preparer()), step, args...)
+}
+
+// beginUnder is prepare's work begun under work: made ready outside its
+// lock, begun under it, and so refused once work or ctx has ended.
+func beginUnder(work *shell.Work, prepare func(context.Context, []string) (workBegin, error)) func(context.Context, []string) (*workProcess, error) {
+	return func(ctx context.Context, args []string) (*workProcess, error) {
+		begin, err := prepare(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		var w *workProcess
+		err = work.Start(ctx, func() error {
+			var err error
+			w, err = begin()
+			return err
+		})
+		return w, err
+	}
 }
 
 // workBegunBy is setupWork with the work begun by begin. A caller whose
-// ctx has ended starts nothing, and its starting and its work end with
-// ctx: what begin asks first takes ctx, and the caller does not wait for
-// begin past it. ctx's end closes the work's stdin, the work's one cancel:
-// sg is the work's parent on some systems, so a kill of what was started
-// alone would leave the work running. A run, setup a person started, is
-// waited for to its end, since a start must finish under its lock.
-// Anything else is not waited for past ctx, and its work, begun or still
-// beginning, is ended with its process group if it has not ended
-// workEndsWithin after its stdin closed.
+// ctx has ended starts nothing, and its work ends with ctx: what begin
+// asks first takes ctx, and the caller does not wait for begin past it.
+// The work is told to stop (stop) when ctx ends and when its stdout ends,
+// whichever comes first: its stdin closes, its one cancel, since sg is the
+// work's parent on some systems, so a kill of what was started alone
+// would leave the work running. A run, setup a person started, is waited
+// for to its end, since a start must finish under its lock. A reading is
+// not waited for past ctx.
 func workBegunBy(ctx context.Context, begin func(context.Context, []string) (*workProcess, error), step func(string), args ...string) (workMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return workMessage{}, err
 	}
-	run := args[0] == workRun
+	reading := args[0] != workRun
 	type launch struct {
 		work *workProcess
 		err  error
 	}
 	launched := make(chan launch, 1)
+	ended := make(chan workEnding, 1)
 	go func() {
 		work, err := begin(ctx, args)
 		launched <- launch{work, err}
+		if err != nil {
+			return
+		}
+		unhook := context.AfterFunc(ctx, func() { work.stop(reading) })
+		ended <- work.watch(step, reading)
+		unhook()
 	}()
 	var l launch
 	select {
 	case l = <-launched:
 	case <-ctx.Done():
-		if !run {
-			go func() {
-				if l := <-launched; l.err == nil {
-					l.work.abandon()
-				}
-			}()
+		if reading {
 			return workMessage{}, ctx.Err()
 		}
 		l = <-launched
 	}
 	if l.err != nil {
-		if ctx.Err() != nil && !run {
+		switch {
+		case reading && ctx.Err() != nil:
 			return workMessage{}, ctx.Err()
+		case errors.Is(l.err, shell.ErrEnded):
+			// Its Work ended, which its ctx hears a moment later.
+			return workMessage{}, l.err
 		}
 		return workMessage{}, fmt.Errorf("setup's work could not begin (%w)", l.err)
 	}
-	work := l.work
-	type ending struct {
-		m   workMessage
-		err error
+	if !reading {
+		e := <-ended
+		return e.m, e.err
 	}
-	ended := make(chan ending, 1)
-	go func() {
-		var end *workMessage
-		lines := bufio.NewScanner(work.out)
-		lines.Buffer(nil, maxWorkLine)
-		for lines.Scan() {
-			var m workMessage
-			if json.Unmarshal(lines.Bytes(), &m) != nil {
-				continue
-			}
-			switch m.Type {
-			case workStep:
-				if step != nil {
-					step(m.Step)
-				}
-			case workDone, workFailed:
-				end = &m
-			}
-		}
-		work.in.Close()
-		_, _ = io.Copy(io.Discard, work.out)
-		err := work.wait()
-		switch {
-		case end == nil:
-			why := "setup's work ended before it finished"
-			if err != nil {
-				why += fmt.Sprintf(" (%v)", err)
-			}
-			ended <- ending{err: errors.New(why)}
-		case end.Type == workFailed:
-			ended <- ending{err: workFailure{end.Sentence}}
-		default:
-			ended <- ending{m: *end}
-		}
-	}()
 	select {
 	case e := <-ended:
 		return e.m, e.err
 	case <-ctx.Done():
-		if !run {
-			work.in.Close()
-			// Ended at the bound unless its end came first.
-			kill := time.AfterFunc(workEndsWithin, work.kill)
-			go func() {
-				<-ended
-				kill.Stop()
-			}()
-			return workMessage{}, ctx.Err()
-		}
-		work.in.Close()
-		e := <-ended
-		return e.m, e.err
+		return workMessage{}, ctx.Err()
 	}
 }
 
-// abandon ends work nobody waits for: its stdin closed, it is killed with
-// its process group if it has not ended within workEndsWithin, and reaped.
-func (w *workProcess) abandon() {
-	w.in.Close()
-	kill := time.AfterFunc(workEndsWithin, w.kill)
+// workEnding is the work's end as its caller reads it.
+type workEnding struct {
+	m   workMessage
+	err error
+}
+
+// watch reads the work's messages to the end of its stdout, reporting each
+// step to step, tells it to stop there, and waits for it. Its end is the
+// one it said and how it exited: a done that exited otherwise is a
+// failure.
+func (w *workProcess) watch(step func(string), reading bool) workEnding {
+	var end *workMessage
+	lines := bufio.NewScanner(w.out)
+	lines.Buffer(nil, maxWorkLine)
+	for lines.Scan() {
+		var m workMessage
+		if json.Unmarshal(lines.Bytes(), &m) != nil {
+			continue
+		}
+		switch m.Type {
+		case workStep:
+			if step != nil {
+				step(m.Step)
+			}
+		case workDone, workFailed:
+			end = &m
+		}
+	}
+	w.stop(reading)
 	_, _ = io.Copy(io.Discard, w.out)
-	_ = w.wait()
-	kill.Stop()
+	err := w.wait()
+	w.mu.Lock()
+	w.waited = true
+	if w.backstop != nil {
+		w.backstop.Stop()
+	}
+	w.mu.Unlock()
+	switch {
+	case end == nil:
+		why := "setup's work ended before it finished"
+		if err != nil {
+			why += fmt.Sprintf(" (%v)", err)
+		}
+		return workEnding{err: errors.New(why)}
+	case end.Type == workFailed:
+		return workEnding{err: workFailure{end.Sentence}}
+	case err != nil:
+		return workEnding{m: *end, err: fmt.Errorf("setup's work said it was done, then ended so: %v", err)}
+	}
+	return workEnding{m: *end}
+}
+
+// stop tells the work to stop, the one place it is told, whichever of its
+// pipes closed first: its stdin closes, and a reading's work is killed
+// with its process group if wait has not returned workEndsWithin later.
+func (w *workProcess) stop(reading bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.told {
+		return
+	}
+	w.told = true
+	w.in.Close()
+	if reading && !w.waited {
+		w.backstop = time.AfterFunc(workEndsWithin, w.kill)
+	}
 }
 
 // throughGroup is whether setup's work needs sg to reach Docker: on
