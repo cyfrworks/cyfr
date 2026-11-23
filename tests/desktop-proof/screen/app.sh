@@ -17,7 +17,7 @@
 #   lost closes the window that was shown, timed from the loss, and a new
 #   one shows the shell's page (the app sits under the shell's watches);
 #   the keyboard killed locks the screen in the same way and is shown
-#   again; cyfr killed ends the app, which says why, and the launcher's
+#   again; cyfr killed ends the app, exit 0, saying why, and the launcher's
 #   next start is locked again; the app killed ends its cyfr within 5 s,
 #   and the next start is locked too, with one screen shell running; a
 #   --screen-project that names no project explicitly is refused.
@@ -200,7 +200,12 @@ PY
   pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell --app$'
   if within 30 grep -q '^ended' "$OUT/launches" && within 60 started 2 && within 30 window; then
     why=$(grep -m 1 '^CYFR: cyfr ended: ' "$OUT/app.log" | cut -c 7-)
-    verdict PASS "cyfr killed ends the app ($(head -n 1 "$OUT/launches"); it said: ${why:-nothing}), and the next start shows the locked screen again"
+    first=$(grep -m 1 '^ended' "$OUT/launches")
+    if [ "$first" = "ended 0" ] && [ -n "$why" ]; then
+      verdict PASS "cyfr killed ends the app ($first; it said: $why), and the next start shows the locked screen again"
+    else
+      verdict FAIL "cyfr killed ended the app as $first, saying ${why:-nothing}: it must end 0 saying cyfr ended: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
+    fi
   else
     verdict FAIL "cyfr killed did not end the app, or it did not start again: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
   fi

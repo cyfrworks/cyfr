@@ -446,6 +446,8 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 	case err := <-moved:
 		ended = fmt.Errorf("The screen starts again on this folder's settings (%v)", err)
 	}
+	// The last lock hides as the screen's end, after which nothing shows.
+	browser.end()
 	sh.Lock("")
 	stopBrowsing()
 	return ended
@@ -537,6 +539,10 @@ func (c *screenChrome) show(ctx context.Context, lock func(string)) error {
 	}
 	return nil
 }
+
+// end changes nothing: Chrome's loop ends with the show's context, and
+// the last hide ends Chrome.
+func (c *screenChrome) end() {}
 
 // hide ends Chrome, whose loop starts it again on the lock page.
 func (c *screenChrome) hide() {

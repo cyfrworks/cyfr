@@ -60,7 +60,10 @@
 // every lock (cmd/screen_app.go), and its locked there names none: a
 // proposal heard while a lock runs is `wanted`, taken once the lock has
 // settled, so whatever order the messages and the takes and clears come
-// in, main ends keeping to that CYFR on the device's page.
+// in, main ends keeping to that CYFR on the device's page. Its last lock,
+// at its end, says ending in place of locked: main closes at once and
+// ends as at cyfr's end, settling no lock, so whatever is still to arrive
+// (a forget answered, the exit), no window opens for a cyfr that is going.
 //
 // A CYFR's page whose load failed, as the engine reports it, is no lock:
 // the content window shows the chooser saying so (`unanswered`), and
@@ -283,6 +286,8 @@ export function step(s, e) {
     }
     case "pick-folder":
       return same(s, [{send: {type: "folder-picked", fields: {id: e.id, path: null}}}])
+    case "ending":
+      return step(s, {type: "gone", why: "the screen shell is ending"})
     case "gone":
       return ending(s, s.screen ? {say: `cyfr ended: ${e.why}`, quit: true} : {end: e.why})
 

@@ -829,7 +829,7 @@ func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
 // watches are up it says ready with its own pages' address, then home with
 // the CYFR in its folder; main's home-ready is answered opened; a lock says
 // locked, naming no CYFR, and proposes that one again as the next attempt;
-// the end of main's pipe ends the shell.
+// the end of main's pipe ends the shell, whose last lock says ending.
 func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
 	screenProject(t)
 	compositor := screenCompositor(t, idletest.Options{})
@@ -868,4 +868,5 @@ func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the end of main's pipe did not end the shell")
 	}
+	app.next("ending")
 }

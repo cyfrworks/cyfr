@@ -42,6 +42,10 @@ const (
 	// if any, as home names one: main's lock waits for it, and main keeps
 	// to that CYFR, or none, from then on.
 	TypeLocked = "locked"
+	// Ending says the box's screen shell is ending: its last lock says it
+	// in place of locked, and the shell says nothing after it. main closes
+	// its windows at once and ends, opening nothing more for it.
+	TypeEnding = "ending"
 	// PickFolder asks main for a folder (reserved: nothing sends it yet).
 	TypePickFolder = "pick-folder"
 )
@@ -67,6 +71,7 @@ var fields = map[string]struct{ required, optional []string }{
 	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver"}},
 	TypeOpened:       {required: []string{"home"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
+	TypeEnding:       {},
 	TypePickFolder:   {required: []string{"id", "suggested"}},
 	TypeHomeReady:    {required: []string{"home", "attempt"}},
 	TypeHomeFailed:   {required: []string{"home", "attempt"}},

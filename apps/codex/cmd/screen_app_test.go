@@ -228,3 +228,42 @@ func TestScreenApp_WhatMainSays(t *testing.T) {
 		})
 	}
 }
+
+// The shell's end: its last lock says ending in place of locked and
+// proposes nothing, and the shell says nothing after it, neither a second
+// ending nor an opened for an answer still on its way; a shell ending
+// before it showed anything says nothing at all.
+func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
+	home := desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}
+	in, answer := io.Pipe()
+	sink := &lineSink{}
+	a := &screenApp{in: in, to: desktop.NewWriter(sink, nil), home: home}
+	shown := make(chan error, 1)
+	go func() { shown <- a.show(context.Background(), func(string) { a.hide() }) }()
+	sink.said(t, 2)
+	a.end()
+	a.hide()
+	a.hide()
+	if _, err := io.WriteString(answer, `{"version":1,"type":"home-ready","home":"http://localhost:4000","attempt":1}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	answer.Close()
+	if err := <-shown; err != nil {
+		t.Fatal(err)
+	}
+	want := []string{desktop.TypeReady, "home 1", desktop.TypeEnding}
+	if said := sink.said(t, len(want)+1); strings.Join(said, ", ") != strings.Join(want, ", ") {
+		t.Fatalf("the shell said %v, want %v", said, want)
+	}
+
+	early := &lineSink{}
+	b := &screenApp{in: strings.NewReader(""), to: desktop.NewWriter(early, nil), home: home}
+	b.end()
+	b.hide()
+	if err := b.show(context.Background(), func(string) { b.hide() }); err != nil {
+		t.Fatal(err)
+	}
+	if said := early.said(t, 1); len(said) != 0 {
+		t.Fatalf("a shell ending before it showed anything said %v", said)
+	}
+}

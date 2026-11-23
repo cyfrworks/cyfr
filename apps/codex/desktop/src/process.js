@@ -15,6 +15,7 @@ const FIELDS = {
   home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver"]},
   opened: {required: ["home"]},
   locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
+  ending: {required: []},
   "pick-folder": {required: ["id", "suggested"]},
   "home-ready": {required: ["home", "attempt"]},
   "home-failed": {required: ["home", "attempt"]},
@@ -24,7 +25,7 @@ const FIELDS = {
   "folder-picked": {required: ["id", "path"]}
 }
 
-const FROM_CYFR = ["ready", "home", "opened", "locked", "pick-folder"]
+const FROM_CYFR = ["ready", "home", "opened", "locked", "ending", "pick-folder"]
 const FROM_MAIN = ["home-ready", "home-failed", "lock", "leave", "shutdown", "folder-picked"]
 
 export class Refused extends Error {

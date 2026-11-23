@@ -28,6 +28,9 @@ type screenBrowser interface {
 	// hide hides what is on the screen and shows a fresh lock page
 	// (shell.Config.Restart). It returns at once, waiting on nothing.
 	hide()
+	// end says the screen is ending: the next hide is its last, and
+	// nothing shows after it.
+	end()
 }
 
 // screenApp is the CYFR app as the screen's browser: its main process
@@ -48,7 +51,10 @@ type screenBrowser interface {
 // lock and leave, its shutdown and the end of its pipe are a lock of the
 // shell; the last two end it as well. Every message goes through the
 // writer's queue (desktop.Writer.Queue), so nothing the shell does waits
-// on main reading it.
+// on main reading it. The shell's last lock, at its end (end), says
+// ending in place of locked and proposes nothing, and the shell says
+// nothing after it: main closes at once and ends, opening no window for
+// a shell that is going.
 type screenApp struct {
 	in   io.Reader
 	to   *desktop.Writer
@@ -64,6 +70,9 @@ type screenApp struct {
 	ready    bool
 	attempt  uint64
 	answered bool
+	// last is whether the shell is ending (end), and over whether it said
+	// so: after that it says nothing.
+	last, over bool
 }
 
 // newScreenApp is the app as the browser of the CYFR l, set up in the
@@ -92,15 +101,28 @@ func (a *screenApp) propose() {
 // hide hides what is on the screen and shows a fresh lock page
 // (shell.Config.Restart): it tells main locked, then proposes home again,
 // and returns at once, waiting on nothing. Before ready main shows nothing
-// of the shell's yet, and the page ready names is the lock page.
+// of the shell's yet, and the page ready names is the lock page. Once the
+// shell is ending it tells main ending instead, once, and nothing more.
 func (a *screenApp) hide() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.ready {
+	if !a.ready || a.over {
+		return
+	}
+	if a.last {
+		a.over = true
+		_ = a.to.Queue(desktop.Message{Type: desktop.TypeEnding})
 		return
 	}
 	_ = a.to.Queue(desktop.Message{Type: desktop.TypeLocked})
 	a.propose()
+}
+
+// end makes the next hide the shell's last.
+func (a *screenApp) end() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.last = true
 }
 
 // show tells main the shell's pages and proposes the CYFR, then reads
@@ -110,6 +132,11 @@ func (a *screenApp) hide() {
 // keep to the CYFR, has gone, or said what is not a message.
 func (a *screenApp) show(_ context.Context, lock func(why string)) error {
 	a.mu.Lock()
+	if a.last {
+		// Ending before it showed anything: there is nothing to tell.
+		a.mu.Unlock()
+		return nil
+	}
 	_ = a.to.Queue(desktop.Message{Type: desktop.TypeReady, URL: shell.Origin + "/"})
 	a.ready = true
 	a.propose()
@@ -144,7 +171,7 @@ func (a *screenApp) show(_ context.Context, lock func(why string)) error {
 		switch m.Type {
 		case desktop.TypeHomeReady:
 			a.mu.Lock()
-			if m.Home == a.home.Home && m.Attempt == a.attempt && !a.answered {
+			if m.Home == a.home.Home && m.Attempt == a.attempt && !a.answered && !a.over {
 				a.answered = true
 				_ = a.to.Queue(desktop.Message{Type: desktop.TypeOpened, Home: a.home.Home})
 			}
