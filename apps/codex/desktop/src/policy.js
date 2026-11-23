@@ -144,16 +144,19 @@ export function readHop(address, state, kind, now = Date.now()) {
 }
 
 /**
- * Where the account window's top-frame load of `address` goes: "allow"
- * (the account service's sign-in page, its page that makes an account or
- * the sign-in's recovery continuation),
- * "return" (the selected CYFR's /login, which carries the answer back to
- * the session that hopped) or "block".
+ * Where the account window's top-frame load of `address`, in a ceremony
+ * of `kind` ("sign-in", "confirmation", or none), goes: "allow" (the
+ * account service's sign-in page or its page that makes an account,
+ * carrying a request readHop reads for that kind, or the sign-in's
+ * recovery continuation), "return" (the selected CYFR's /login, which
+ * carries the answer back to the session that hopped) or "block". A page
+ * that takes a request is decided by readHop alone, at every load.
  */
-export function accountLoad(address, state) {
+export function accountLoad(address, state, kind = null, now = Date.now()) {
   const u = parse(address)
   if (!u) return "block"
-  if (u.origin === state.account && ACCOUNT_PAGES.includes(u.pathname)) return "allow"
+  if (u.origin === state.account && Object.hasOwn(HOPS, u.pathname)) return readHop(address, state, kind, now) ? "allow" : "block"
+  if (u.origin === state.account && u.pathname === "/account/recover") return "allow"
   if (u.origin === state.home && u.pathname === "/login" && u.search === "") return "return"
   return "block"
 }

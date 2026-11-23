@@ -492,7 +492,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const top = (f) => accountWindow && !accountWindow.isDestroyed() && f &&
       f.processId === accountWindow.webContents.mainFrame.processId &&
       f.routingId === accountWindow.webContents.mainFrame.routingId &&
-      accountLoad(f.url, kept(state)) === "allow"
+      accountLoad(f.url, kept(state), hop?.kind) === "allow"
     const current = hop && top(frame) && details.relyingPartyId === relyingParty(kept(state).account) &&
       details.accounts.length > 0
     if (!current) return answer(null)

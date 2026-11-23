@@ -152,19 +152,37 @@ test("a hop to the page that makes an account carries a current sign-in the sele
   assert.ok(read > 0)
 })
 
-test("the account window loads the sign-in page, the page that makes an account and the sign-in's recovery continuation, and returns only to the CYFR's /login", () => {
-  assert.equal(accountLoad(account + "/account/sign#x", ready), "allow")
-  assert.equal(accountLoad(account + "/account/new#x", ready), "allow")
+test("the account window loads the sign-in page and the page that makes an account with a request the one reader reads for its ceremony, the recovery continuation, and returns only to the CYFR's /login", () => {
+  const now = 1790000000000
+  const signing = {...signIn["requests"]["sign_in"].request, return: home + "/login"}
+  const confirming = {...signIn["requests"]["confirm"].request, return: home + "/login"}
+  assert.equal(accountLoad(hop(signing), ready, "sign-in", now), "allow")
+  assert.equal(accountLoad(made(signing), ready, "sign-in", now), "allow")
+  assert.equal(accountLoad(hop(confirming), ready, "confirmation", now), "allow")
+  // A page that takes a request, at any load of the window, whatever
+  // ceremony it shows: with no request, an expired one or another CYFR's.
+  for (const kind of ["sign-in", "confirmation", null]) {
+    for (const [address, why] of [[account + "/account/new", "no request"], [account + "/account/sign", "no request"],
+      [account + "/account/new#x", "no request read"], [made(signing).replace("/account/new", "/account/sign"), "not its page's fragment"],
+      [made(signing), "expired", signing.expires_at], [hop(signing), "expired", signing.expires_at],
+      [made({...signing, audience: "https://bob.example", return: "https://bob.example/login"}), "another CYFR's"],
+      [hop({...confirming, audience: "https://bob.example", return: "https://bob.example/login"}), "another CYFR's"]]) {
+      const at = why === "expired" ? signing.expires_at : now
+      assert.equal(accountLoad(address, ready, kind, at), "block", `${kind}: ${why}: ${address.split("#")[0]}`)
+    }
+  }
+  assert.equal(accountLoad(made(signing), ready, "confirmation", now), "block", "a confirmation makes no account")
+  assert.equal(accountLoad(made(signing), ready, null, now), "block", "no ceremony")
+  assert.equal(accountLoad(hop(signing), ready, "confirmation", now), "block", "a sign-in's request in a confirmation")
   assert.equal(accountLoad(account + "/account/recover", ready), "allow")
   assert.equal(accountLoad(home + "/login#answer", ready), "return")
   assert.equal(accountLoad(home + "/login?next=/x#answer", ready), "block")
   for (const elsewhere of [home + "/", home + "/threads", account + "/account/devices", account + "/account/add", account + "/", "https://idp.example/authorize"]) {
-    assert.equal(accountLoad(elsewhere, ready), "block", elsewhere)
+    assert.equal(accountLoad(elsewhere, ready, "sign-in", now), "block", elsewhere)
   }
   const same = {home: account, account, accountRoad: true}
   assert.equal(accountLoad(account + "/login#a", same), "return", "a CYFR that is its own account service")
   assert.equal(accountLoad(account + "/", same), "block")
-
 })
 
 test("no page is granted a device, a capture or a credential", () => {
@@ -292,7 +310,10 @@ test("a local CYFR serving its own accounts hops to its sign-in route and the pa
   assert.equal(top(origin + "/account/sign#x", local, origin + "/login"), "hop")
   assert.equal(top(origin + "/account/new#x", local, origin + "/setup"), "hop", "Create your account, from its setup page")
   assert.equal(top(origin + "/account/new#x", {...local, account: "https://cyfr.run"}, origin + "/login"), "allow", "the CYFR's own page")
-  assert.equal(accountLoad(origin + "/account/sign", local), "allow")
+  const now = 1790000000000
+  const signing = {...signIn["requests"]["sign_in"].request, audience: origin, return: origin + "/login"}
+  assert.equal(accountLoad(`${origin}/account/sign#${fragment(signing)}`, local, "sign-in", now), "allow")
+  assert.equal(accountLoad(origin + "/account/sign", local, "sign-in", now), "block", "a sign-in page with no request")
   assert.equal(accountLoad(origin + "/login#answer=x", local), "return")
   assert.equal(accountLoad(origin + "/threads", local), "block")
   for (const elsewhere of ["http://localhost:4100/", "http://127.0.0.1:4000/", "http://localhost:4100/account/sign"]) {

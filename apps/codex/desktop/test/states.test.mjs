@@ -9,6 +9,7 @@ import {test} from "node:test"
 
 import {readFileSync} from "node:fs"
 
+import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 import {ACTS, EXTERNAL, initial, step} from "../src/states.js"
 
 const READY = "http://127.0.0.1:7340/bootstrap/#token=dG9rZW4"
@@ -33,9 +34,16 @@ const ready = {type: "ready", url: READY}
 // Begun by the document showing, unless `over` says another began it.
 const navigate = (over) => ({type: "navigate", window: "content", url: HOME + "/", target: "top", asker: "top", showing: READY,
   by: over.showing ?? READY, ...over})
-// The account window's top-frame load, begun by the account's own page.
+// A request HOME issued for its own /login, current for an hour: a
+// sign-in's or a confirmation's, at the account page that takes it.
+const REQUESTS = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_in.json", import.meta.url)))["requests"]
+const requestFor = (kind, over = {}) => ({...REQUESTS[kind === "confirmation" ? "confirm" : "sign_in"].request,
+  audience: HOME, return: HOME + "/login", expires_at: Date.now() + 3_600_000, ...over})
+const signed = (kind, over) => `${ACCOUNT}/account/sign#${fragment(requestFor(kind, over))}`
+// The account window's top-frame load, begun by the account's own page,
+// which shows the ceremony's request.
 const accountNavigate = (over) => ({type: "account-navigate", window: "account", target: "top", asker: "top",
-  by: ACCOUNT + "/account/sign#x", ...over})
+  by: signed(over.kind ?? "sign-in"), ...over})
 // The content window's top frame given HOME, as the device's pages open it.
 const given = navigate({})
 // What main locks for: the company page, on either road, and being sent to
@@ -491,7 +499,7 @@ test("a second launch shows the content window, and nothing once ended", () => {
 // follows only a press. An act with no row fails.
 const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"
 const AGAIN = CHOOSER_DOC + "again"
-const SIGN_IN = ACCOUNT + "/account/sign#x"
+const SIGN_IN = signed("sign-in")
 // The chooser's Change…, naming the epoch it was shown in and the picks
 // answered before it.
 const PICK = CHOOSER_DOC + "pick?epoch=3&pick=2"
@@ -545,7 +553,8 @@ test("an act is no redirect, and is begun by the top frame's own document that o
           for (const [whose, by] of Object.entries(documents)) {
             // The engine's shape of a redirect: the first document's frame is
             // still the initiator, and the window still shows it.
-            const r = step(s, {...event, redirect, asker, by})
+            // The account's page shows the request of its ceremony.
+            const r = step(s, {...event, redirect, asker, by: whose === "the account's page" ? signed(event.kind ?? "sign-in") : by})
             const press = !redirect && asker === "top" && offers[act].includes(whose)
             assert.equal(acted(r), press, `${name}: redirect ${redirect}, by ${asker} of ${whose}`)
             if (!press && act !== "onward") assert.equal(r.allow, false, `${name}, refused: ${redirect} ${asker} ${whose}`)
@@ -803,4 +812,57 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
   assert.ok(ends > 0 && endings === 0 && seen.size > 500, `only ${seen.size} states were walked`)
   walk(initialWorld(true))
   assert.ok(endings > 0, "no walk ended with the shell's end")
+})
+
+test("every load of a page that takes a request, at any load of the account window, is the one reader's: none with no request, an expired one or another CYFR's", () => {
+  const s = run(open, true).s
+  for (const kind of ["sign-in", "confirmation"]) {
+    const ok = kind === "sign-in" ? `${ACCOUNT}/account/new#name=&request=${fragment(requestFor(kind))}` : signed(kind)
+    assert.deepEqual(step(s, accountNavigate({url: ok, kind})), {state: s, allow: true, do: []}, `${kind}: its own request`)
+    for (const [url, why] of [[ACCOUNT + "/account/new", "no request"], [ACCOUNT + "/account/sign", "no request"],
+      [`${ACCOUNT}/account/new#name=&request=${fragment(requestFor("sign-in", {expires_at: Date.now() - 1}))}`, "expired"],
+      [signed(kind, {expires_at: Date.now() - 1}), "expired"],
+      [`${ACCOUNT}/account/new#name=&request=${fragment(requestFor("sign-in", {audience: "https://bob.example", return: "https://bob.example/login"}))}`, "another CYFR's"],
+      [signed(kind, {audience: "https://bob.example", return: "https://bob.example/login"}), "another CYFR's"]]) {
+      assert.deepEqual(step(s, accountNavigate({url, kind})), {state: s, allow: false, do: [{unhop: true}]}, `${kind}: ${why}: ${url.split("#")[0]}`)
+    }
+  }
+  assert.deepEqual(step(s, accountNavigate({url: signed("sign-in"), kind: null})), {state: s, allow: false, do: [{unhop: true}]},
+    "no ceremony the content window now showing began")
+})
+
+const TOKEN = "ab".repeat(32)
+const withSetup = (attempt = 1, setup = TOKEN) => ({type: "home", message: {...home(HOME, attempt).message, setup}})
+
+test("main holds a setup token for its attempt alone, however that attempt ends", () => {
+  const holding = [ready, withSetup()]
+  assert.equal(run(holding, true).s.setup, TOKEN, "while it is taken")
+  assert.equal(run([...holding, taken], true).s.setup, TOKEN, "while it is proposed")
+  const ends = {
+    opened: [...holding, taken, {type: "opened", home: HOME}],
+    "a failed take": [...holding, {type: "taken", taken: false}],
+    "a lock while taken": [...holding, locked()],
+    "a lock while proposed": [...holding, taken, locked()],
+    "cyfr gone": [...holding, taken, {type: "gone", why: "it ended"}],
+    "the screen shell ending": [...holding, {type: "ending"}],
+    "a quit while taken": [...holding, {type: "quit"}],
+    "a quit while proposed": [...holding, taken, {type: "quit"}],
+    "a quit once ended": [...holding, taken, {type: "gone", why: "it ended"}, {type: "quit"}],
+  }
+  for (const [end, events] of Object.entries(ends)) {
+    const {s} = run(events, true)
+    assert.ok(!s.setup, `${end}: no token held (${s.name})`)
+    assert.ok(!JSON.stringify(s).includes(TOKEN), `${end}: nowhere in main's state`)
+  }
+  assert.equal(run([...holding, withSetup(2, "cd".repeat(32))], true).s.setup, "cd".repeat(32), "a newer proposal's replaces it")
+  assert.equal(run([...holding, home(HOME, 2)], true).s.setup, "", "a newer proposal with none ends it")
+})
+
+test("an older proposal never replaces a newer one", () => {
+  for (const at of [[], [taken]]) {
+    const newer = run([ready, withSetup(2), ...at], true).s
+    for (const older of [withSetup(1, "cd".repeat(32)), home(HOME, 1), withSetup(2, "cd".repeat(32))]) {
+      assert.deepEqual(step(newer, older), {state: newer, do: []}, `${newer.name}: attempt ${older.message.attempt}`)
+    }
+  }
 })

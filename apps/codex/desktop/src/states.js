@@ -230,8 +230,8 @@ export const ACTS = {
     to: (s, e) => contentNavigation(e, kept(s)) === "hop",
     then: (s, e) => ({state: s, allow: false, do: [{hop: {url: e.url, kind: "sign-in"}}]})},
   // A ceremony's answer, from the account service's page.
-  answer: {window: "account", by: (s, url) => accountLoad(url, kept(s)) === "allow",
-    to: (s, e) => !!e.kind && accountLoad(e.url, kept(s)) === "return",
+  answer: {window: "account", by: (s, url, e) => accountLoad(url, kept(s), e.kind) === "allow",
+    to: (s, e) => !!e.kind && accountLoad(e.url, kept(s), e.kind) === "return",
     then: (s, e) => e.kind === "confirmation"
       ? {state: s, allow: false, do: [{unhop: true}, {confirmation: {url: e.url}}]}
       : {state: {...s, returning: {url: e.url, at: "sent"}}, allow: false, do: [{unhop: true}, {deliver: {url: e.url}}]}}
@@ -243,7 +243,7 @@ export const ACTS = {
 // initiator alone proves no press.
 function pressed(s, e) {
   if (e.redirect || e.target !== "top" || e.asker !== "top") return undefined
-  return Object.values(ACTS).find((act) => act.window === e.window && act.by(s, e.by) && act.to(s, e))
+  return Object.values(ACTS).find((act) => act.window === e.window && act.by(s, e.by, e) && act.to(s, e))
 }
 
 // Whether a load main allows is the CYFR sending the content's top frame
@@ -297,9 +297,17 @@ function settle(s) {
 
 /**
  * The state after event `e` in state `s`, and the effects that carry it
- * out: {state, do: [effect]}.
+ * out: {state, do: [effect]}. A home's setup token lives for its attempt
+ * alone: from that home message while it is taken and proposed, and no
+ * longer, however the attempt ends (opened, a failed take, a lock, an end
+ * or a quit); it travels on only in the root effect of its opening.
  */
 export function step(s, e) {
+  const next = advance(s, e)
+  return next.state.setup && !["taking", "proposed"].includes(next.state.name) ? {...next, state: {...next.state, setup: ""}} : next
+}
+
+function advance(s, e) {
   // Once ended, only quitting does anything: the app goes.
   if (s.name === "ended") return same(s, e.type === "quit" ? [{quit: true}] : [])
   switch (e.type) {
@@ -316,6 +324,8 @@ export function step(s, e) {
       if (!["chooser", "taking", "proposed"].includes(s.name) || !homeMessage(m)) {
         return ending(s, {end: "it named a CYFR this app does not open"})
       }
+      // An older proposal never replaces a newer one.
+      if (["taking", "proposed"].includes(s.name) && m.attempt <= s.attempt) return same(s)
       if (rerouted(s, m)) return ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
       return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, setup: m.setup ?? "", returning: null},
         do: [{say: `home: ${m.home}`}, ...(s.name === "taking" ? [] : [{take: true}])]}
@@ -424,7 +434,7 @@ export function step(s, e) {
     case "account-navigate": {
       if (e.target !== "top") return {state: s, allow: false, do: []}
       if (["starting", "locking"].includes(s.name)) return {state: s, allow: false, do: [{unhop: true}]}
-      if (accountLoad(e.url, kept(s)) === "allow") return {state: s, allow: true, do: []}
+      if (accountLoad(e.url, kept(s), e.kind) === "allow") return {state: s, allow: true, do: []}
       const act = pressed(s, e)
       return act ? act.then(s, e) : {state: s, allow: false, do: [{unhop: true}]}
     }
