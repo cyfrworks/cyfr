@@ -77,12 +77,13 @@ lib.run("setup", {
       {after, groups, docker_gid: inputs.docker_gid})
     await pick(w)
     await press(w, "start")
-    await judged("downloading", "Set up and start shows its steps as they begin, up to the download", async () => {
+    await judged("downloading", "Set up and start shows each of its steps as it begins, in order, up to the download", async () => {
       const s = await waitFor(async () => {
         const t = await shown(w)
         return t.progress.at(-1) === "Downloading CYFR…" ? t : null
       }, "the download")
-      return [s.progress[0] === `Setting up CYFR in ${FOLDER}`, {progress: s.progress}]
+      const steps = [`Setting up CYFR in ${FOLDER}`, "Getting CYFR's files", "Writing its settings", "Downloading CYFR…"]
+      return [s.progress.join("|") === steps.join("|"), {progress: s.progress}]
     })
     // The person quits while CYFR downloads: app.sh then holds the `quit` row.
     return "quit"
@@ -99,16 +100,24 @@ lib.run("setup", {
     // The renderer lost mid-run: on a desktop nothing locks with no CYFR
     // open, so this is the one way a chooser is shown anew during a run.
     w.webContents.forcefullyCrashRenderer()
-    await judged("reshown", "the chooser shown again mid-run shows the setup's progress, and once it is done offers Open CYFR, opening nothing by itself",
+    await judged("reshown", "the chooser shown again mid-run shows the setup's progress while its start is held, and once it is released and done offers Open CYFR, opening nothing by itself",
       async () => {
         const c = await contentAt(atBootstrap, "the chooser shown again")
+        // The start is held (app.sh's docker): the page in the lost one's
+        // place shows the run so far while the work is still pending.
+        const pending = await waitFor(async () => {
+          const s = await shown(c).catch(() => null)
+          return s?.progress.join("|") === `Setting up CYFR in ${FOLDER}|Starting CYFR…` ? s : null
+        }, "the progress on the page shown again")
+        const held = readFileSync("/tmp/docker-calls", "utf8").split("\n").some((l) => / up( |$)/.test(l)) && !existsSync("/tmp/up-go")
+        writeFileSync("/tmp/up-go", "")
         const done = await waitFor(async () => {
           const s = await shown(c)
           return s.notice.startsWith("CYFR is set up in") ? s : null
         }, "the setup done", 300_000)
         await lib.sleep(2000) // sleep-ok: nothing should open by itself in this time
         const still = atBootstrap(lib.content()?.webContents.getURL() ?? "")
-        return [done.go && still && done.notice === `CYFR is set up in ${FOLDER} and started.`, {done, still}]
+        return [held && !pending.go && done.go && still && done.notice === `CYFR is set up in ${FOLDER} and started.`, {pending, held, done, still}]
       })
     const c = lib.content()
     const s = await shown(c)
