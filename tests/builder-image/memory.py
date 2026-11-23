@@ -341,7 +341,7 @@ def scenario():
         {"name": "process", "argv": shell(DAEMON + f"exec node -e '{NODE_ALLOCATOR}'"), "memory_bytes": BOUND},
         {"name": "tree", "argv": shell(holders), "memory_bytes": BOUND},
         {"name": "home", "argv": shell(FILL_HOME), "memory_bytes": BOUND},
-        {"name": "build", "athanor": ATHANOR, "measure": True, "argv": shell(MEASURED_BUILD) + ["locus-build"], "memory_bytes": BOUND},
+        {"name": "build", "athanor": ATHANOR, "measure": True, "argv": shell(MEASURED_BUILD) + ["measured-build"], "memory_bytes": BOUND},
     ]
 
 
