@@ -39,16 +39,19 @@ defmodule Aqua.Loop.Clock do
 
   The time is taken before the slot is read: a pause made between the
   two can only make the read count less than the turn ran, never more.
+  The time source answers whole milliseconds, which the read takes alone.
   """
   @spec read(t(), (-> integer())) :: non_neg_integer()
   def read(clock, now \\ &now/0) do
-    at = now.()
+    at = whole!(now.())
     value = :atomics.get(clock, 1)
 
     if Integer.mod(value, 2) == 1,
       do: at - div(value - 1, 2),
       else: div(value, 2)
   end
+
+  defp whole!(at) when is_integer(at), do: at
 
   defp now, do: System.monotonic_time(:millisecond)
 end
