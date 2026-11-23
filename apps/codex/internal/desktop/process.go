@@ -13,8 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/signal"
 	"slices"
 	"sync"
+	"syscall"
 )
 
 // Version is the one version of the messages: every message carries it,
@@ -191,27 +193,96 @@ func (m Message) object() (map[string]any, error) {
 	return o, nil
 }
 
-// Writer sends cyfr's messages to main, one line each, whole.
+// Writer sends cyfr's messages to main, one line each, whole, in the
+// order they were given, by one writer of its own: Send waits for its
+// line to be written, Queue does not. Once a write fails (main has gone,
+// or its pipe ended), every later line fails with that error.
 type Writer struct {
-	mu sync.Mutex
-	w  io.Writer
+	w io.Writer
+
+	mu     sync.Mutex
+	queue  []queued
+	failed error
+	wake   chan struct{}
 }
 
-// NewWriter writes to w, main's end of the private pipe.
-func NewWriter(w io.Writer) *Writer { return &Writer{w: w} }
+// queued is a line to write, and where its result goes (nil for none).
+type queued struct {
+	line []byte
+	done chan error
+}
 
-// Send writes m as one line.
+// NewWriter writes to w, main's end of the private pipe. A write to a pipe
+// main closed is an error then, not the end of this process: SIGPIPE is
+// ignored, so a lock goes on to end its sessions at the CYFR when main
+// has gone.
+func NewWriter(w io.Writer) *Writer {
+	signal.Ignore(syscall.SIGPIPE)
+	wr := &Writer{w: w, wake: make(chan struct{}, 1)}
+	go wr.write()
+	return wr
+}
+
+// Send writes m as one line, after every line given before it, and
+// answers whether it was written.
 func (w *Writer) Send(m Message) error {
+	line, err := encode(m)
+	if err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	w.give(queued{line, done})
+	return <-done
+}
+
+// Queue gives m to be written after every line given before it and
+// returns at once: a lock tells main through it, so no lock waits on main
+// reading its pipe.
+func (w *Writer) Queue(m Message) error {
+	line, err := encode(m)
+	if err != nil {
+		return err
+	}
+	w.give(queued{line: line})
+	return nil
+}
+
+func (w *Writer) give(q queued) {
+	w.mu.Lock()
+	w.queue = append(w.queue, q)
+	w.mu.Unlock()
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+// write writes what was given, in order, for as long as the process runs.
+func (w *Writer) write() {
+	for range w.wake {
+		w.mu.Lock()
+		lines := w.queue
+		w.queue = nil
+		w.mu.Unlock()
+		for _, q := range lines {
+			err := w.failed
+			if err == nil {
+				if _, err = w.w.Write(append(q.line, '\n')); err != nil {
+					w.failed = err
+				}
+			}
+			if q.done != nil {
+				q.done <- err
+			}
+		}
+	}
+}
+
+// encode is m as one line, refused where it is not one of cyfr's messages.
+func encode(m Message) ([]byte, error) {
 	o, err := m.object()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	line, err := json.Marshal(o)
-	if err != nil {
-		return err
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	_, err = w.w.Write(append(line, '\n'))
-	return err
+	return json.Marshal(o)
 }

@@ -54,6 +54,7 @@ func newApp(t *testing.T, dir string, client *http.Client) *app {
 			a.sent <- m
 			return nil
 		},
+		Tell: func(m Message) { a.sent <- m },
 		Discover: func(_ context.Context, _ *http.Client, home string) (account.Discovered, error) {
 			a.discovered.Add(1)
 			d := a.directory.Load().(string)

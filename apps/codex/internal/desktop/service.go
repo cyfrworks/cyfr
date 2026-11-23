@@ -80,8 +80,11 @@ type Service struct {
 	Client *http.Client
 	// DisplayName is the name a CYFR lists this device by.
 	DisplayName string
-	// Send writes a message to main.
+	// Send writes a message to main, and answers whether it was written.
 	Send func(Message) error
+	// Tell gives main a message and returns at once, waiting on main for
+	// nothing: a lock tells main through it (Writer.Queue).
+	Tell func(Message)
 	// Discover reads a CYFR's directory; account.Discover unless a test
 	// replaces it.
 	Discover func(ctx context.Context, client *http.Client, home string) (account.Discovered, error)
@@ -611,7 +614,7 @@ func (s *Service) lock(why string, leave bool) {
 	}
 	s.mu.Unlock()
 	if sh != nil && sh.Lock(why) {
-		// The shell said locked as it restarted the pages.
+		// The shell said locked as it hid the screen.
 		return
 	}
 	s.sayLocked()
@@ -626,7 +629,7 @@ func (s *Service) sayLocked() {
 		return
 	}
 	m.Type = TypeLocked
-	_ = s.Send(m)
+	s.Tell(m)
 }
 
 // Run reads main's messages from in until shutdown or the end of in,
