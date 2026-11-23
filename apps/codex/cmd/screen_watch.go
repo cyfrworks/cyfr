@@ -105,7 +105,12 @@ func (w *screenWatches) keep(ctx context.Context) {
 	defer func() { keyboard.stop() }()
 	for {
 		var err error
-		if keyboard == nil || !keyboard.running() {
+		switch {
+		case keyboard != nil && !keyboard.running():
+			// It ended between two watches: as much a loss as one it ended
+			// in, and it is started again at the next try.
+			keyboard, err = nil, unwatched{keyboardGone, errors.New("the on-screen keyboard ended")}
+		case keyboard == nil:
 			if keyboard, err = startKeyboard(); err != nil {
 				err = unwatched{keyboardGone, err}
 			}

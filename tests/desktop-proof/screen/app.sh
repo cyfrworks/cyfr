@@ -185,7 +185,7 @@ PY
   if [ -n "$was" ] && hidden "$was" "$since" && within 30 keyboard; then
     verdict PASS "the keyboard killed closes the window shown $(cat "$OUT/took") ms after, and the keyboard is shown again"
   else
-    verdict FAIL "the keyboard killed did not lock the screen, or it was not shown again (${was:-none})"
+    verdict FAIL "the keyboard killed: the window shown (${was:-none}) $(closed "${was:-none}" && echo closed || echo 'did not close'), the keyboard $(keyboard && echo shown || echo 'not shown'), $(pgrep -c -u proof -x wvkbd-mobintl) running: $(grep -a 'keyboard' "$OUT/app.log" | tail -n 3 | tr '\n' ' ')"
   fi
 
   pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell --app$'

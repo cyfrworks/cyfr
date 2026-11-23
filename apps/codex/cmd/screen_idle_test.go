@@ -593,6 +593,81 @@ func TestScreenShell_AWatchLostLeavesTheKeyboardRunning(t *testing.T) {
 	}
 }
 
+// A keyboard killed after a watch was lost and found again locks the
+// screen all the same, whose page says so, and is started again.
+func TestScreenShell_AKeyboardKilledAfterAWatchLostLocks(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	seen := t.TempDir()
+	mended, started := filepath.Join(seen, "mended"), filepath.Join(seen, "started")
+	programs["swayidle"] = "[ -e " + mended + " ] || exit 1\n" + swayidleHears
+	// sleep-ok: a stand-in child that runs until the shell ends it
+	programs["wvkbd-mobintl"] = "echo $$ >>" + started + "\nexec /bin/sleep 600"
+	screenPrograms(t, programs)
+	s := startScreen(t)
+	s.staysLockedSaying(sleepUnwatched)
+	if err := os.WriteFile(mended, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.shows(watchedPage)
+	raw, _ := os.ReadFile(started)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("the keyboard's pid %q", raw)
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	s.staysLockedSaying(keyboardGone)
+	s.shows(watchedPage)
+}
+
+// A keyboard that ends while the screen cannot be watched, between two
+// tries of its watches, is a loss all the same: the screen says so, and
+// the keyboard is started again.
+func TestScreenShell_AKeyboardEndedBetweenWatchesIsALoss(t *testing.T) {
+	said, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = said
+	t.Cleanup(func() {
+		os.Stderr = stderr
+		said.Close()
+	})
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	started := filepath.Join(t.TempDir(), "started")
+	programs["swayidle"] = "exit 1"
+	// sleep-ok: a stand-in child that runs until the shell ends it
+	programs["wvkbd-mobintl"] = "echo $$ >>" + started + "\nexec /bin/sleep 600"
+	screenPrograms(t, programs)
+	s := startScreen(t)
+	s.staysLockedSaying(sleepUnwatched)
+	raw, _ := os.ReadFile(started)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("the keyboard's pid %q", raw)
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		told, _ := os.ReadFile(said.Name())
+		again, _ := os.ReadFile(started)
+		if strings.Contains(string(told), keyboardGone+" (the on-screen keyboard ended)") && strings.Count(string(again), "\n") == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the keyboard's end was not a loss, or it was not started again:\n%s", told)
+		}
+		time.Sleep(50 * time.Millisecond) // sleep-ok: polls the shell's own account of its watches
+	}
+}
+
 // TestScreenShellHelper runs the screen's shell as a process of its own
 // for TestScreenShell_AKilledShellLeavesNoChildBehind.
 func TestScreenShellHelper(t *testing.T) {
