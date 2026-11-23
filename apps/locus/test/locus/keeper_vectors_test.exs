@@ -9,6 +9,14 @@ defmodule Locus.KeeperVectorsTest do
   replying with the vectors' own lines and dialling as a spawn's relay
   with the vectors' frames.
 
+  Every spawn names the vectors' place, made before it with their `place`
+  request, byte for byte, and answered with their `placed`; a place the
+  keeper refuses is its caller's refusal. A measure is the vectors'
+  request naming its place, answered with the reading, whose the place is
+  and its age; a reply settles only the measure it names, never a later
+  caller's or one that stopped waiting, and the release of the place's
+  spawn settles none.
+
   A build's run: the spawn this client writes is the vectors' bounded
   build spawn, byte for byte but for its own id and attach target; every
   reply category the vectors hold is understood as they say, an
@@ -52,6 +60,8 @@ defmodule Locus.KeeperVectorsTest do
   # The reply categories this module's tests exercise: a category the
   # vectors gain fails here until a test hears it.
   @reply_categories [
+    {"placed", nil},
+    {"error", "bad_request"},
     {"spawned", nil},
     {"error", "capacity"},
     {"error", "memory_unavailable"},
@@ -91,12 +101,28 @@ defmodule Locus.KeeperVectorsTest do
 
     result =
       Keeper.run(name, Map.put(command, :stdin, ""),
+        place: "pl-1",
         timeout_ms: 10_000,
         max_stdout_bytes: 1_000_000,
         on_output: fn line -> Agent.update(lines, &[line | &1]) end
       )
 
     {result, Agent.get(lines, &Enum.reverse/1)}
+  end
+
+  # The vectors' place `pl-1`, which their spawns name, made for this
+  # process before each spawn: the request is theirs, byte for byte, and
+  # answered with their `placed`.
+  defp place!(peer, name) do
+    vector =
+      Enum.find(@vectors["valid_requests"], &(&1["type"] == "place" and &1["id"] == "pl-1"))
+
+    whose = %{kind: vector["kind"], athanor: vector["athanor"], subject: vector["subject"]}
+    owner = self()
+    task = Task.async(fn -> Keeper.place(name, vector["id"], whose, owner) end)
+    assert next_line(peer) == Jason.encode!(vector) <> "\n"
+    send_reply(peer, reply(@vectors, "placed"))
+    assert :ok = Task.await(task, 5_000)
   end
 
   test "every reply category the vectors hold is one this module hears" do
@@ -125,6 +151,7 @@ defmodule Locus.KeeperVectorsTest do
       ) || flunk("no build spawn at the builder's bound among the vectors")
 
     refute Map.has_key?(vector, "control")
+    place!(peer, name)
     task = Task.async(fn -> run(name, %{argv: vector["argv"], env: vector["env"]}) end)
     line = next_line(peer)
     sent = Jason.decode!(line)
@@ -132,7 +159,7 @@ defmodule Locus.KeeperVectorsTest do
     assert line ==
              Jason.encode!(%{vector | "id" => sent["id"], "attach" => sent["attach"]}) <> "\n"
 
-    send_reply(peer, %{v: 2, type: "error", id: sent["id"], code: "capacity"})
+    send_reply(peer, %{v: 3, type: "error", id: sent["id"], code: "capacity"})
     assert {{:error, :capacity}, []} = Task.await(task, 10_000)
   end
 
@@ -142,6 +169,7 @@ defmodule Locus.KeeperVectorsTest do
     name: name,
     client: client
   } do
+    place!(peer, name)
     task = Task.async(fn -> run(name) end)
     request = next_request(peer)
     assert %{"type" => "spawn", "pool" => "build"} = request
@@ -173,6 +201,7 @@ defmodule Locus.KeeperVectorsTest do
     name: name,
     client: client
   } do
+    place!(peer, name)
     task = Task.async(fn -> run(name) end)
     request = next_request(peer)
     send_reply(peer, v |> reply("spawned") |> Map.put("id", request["id"]))
@@ -198,6 +227,7 @@ defmodule Locus.KeeperVectorsTest do
              &(&1["type"] != "exited" or &1["memory"] in [nil, "cap", "machine", "either"])
            )
 
+    place!(peer, name)
     task = Task.async(fn -> run(name) end)
     request = next_request(peer)
     assert request["memory_bytes"] == Locus.Config.memory_bytes()
@@ -217,6 +247,7 @@ defmodule Locus.KeeperVectorsTest do
 
   test "the refusal of a bound that cannot be enforced answers the run as the wire's unavailable",
        %{v: v, peer: peer, name: name} do
+    place!(peer, name)
     task = Task.async(fn -> run(name) end)
     request = next_request(peer)
 
@@ -230,6 +261,7 @@ defmodule Locus.KeeperVectorsTest do
   end
 
   test "the capacity refusal answers the run as capacity", %{v: v, peer: peer, name: name} do
+    place!(peer, name)
     task = Task.async(fn -> run(name) end)
     request = next_request(peer)
     refusal = v |> reply("error", &(&1["code"] == "capacity")) |> Map.put("id", request["id"])
@@ -244,6 +276,7 @@ defmodule Locus.KeeperVectorsTest do
     name: name,
     client: client
   } do
+    place!(peer, name)
     task = Task.async(fn -> run(name) end)
     request = next_request(peer)
     spawned = v |> reply("spawned") |> Map.put("id", request["id"])
@@ -264,6 +297,7 @@ defmodule Locus.KeeperVectorsTest do
     name: name,
     client: client
   } do
+    place!(peer, name)
     task = Task.async(fn -> run(name) end)
     request = next_request(peer)
     send_reply(peer, v |> reply("spawned") |> Map.put("id", request["id"]))
@@ -298,6 +332,7 @@ defmodule Locus.KeeperVectorsTest do
         [<<5, 0::32>>, <<1, KeeperProtocol.max_frame_bytes() + 1::32>>, <<6, 0::32>>]
 
     for bytes <- faults do
+      place!(peer, name)
       task = Task.async(fn -> run(name) end)
       request = next_request(peer)
       spawned = v |> reply("spawned") |> Map.put("id", request["id"])
@@ -330,6 +365,8 @@ defmodule Locus.KeeperVectorsTest do
   test "a long-lived spawn's relay that sends a control or relay frame is at fault and released",
        %{v: v, peer: peer, name: name, client: client} do
     for bytes <- [encoded(hd(v["control_frames"])), <<5, 0::32>>] do
+      place!(peer, name)
+
       # The keeper's side answers the spawn while this process, the
       # spawn's owner, waits for its handle.
       keeper =
@@ -344,6 +381,7 @@ defmodule Locus.KeeperVectorsTest do
                Keeper.spawn(name, %{
                  argv: ["/bin/true"],
                  env: %{},
+                 place: "pl-1",
                  pool: "backends",
                  memory_bytes: 268_435_456,
                  cpu_quota: 100_000
@@ -364,68 +402,110 @@ defmodule Locus.KeeperVectorsTest do
     end
   end
 
-  test "a measure is the vectors' request, its reply the reading, and no reading is never a zero",
+  test "a measure is the vectors' request naming its place, its reply the reading with whose the place is and its age, and no reading is never a zero",
        %{v: v, peer: peer, name: name} do
-    %{ref: ref} = handle = long_lived!(v, peer, name)
     vector = Enum.find(v["valid_requests"], &(&1["type"] == "measure"))
-    measured = reply(v, "measured")
 
     for {answer, read} <- [
-          {measured, {:ok, %{bytes: measured["bytes"], lesser: false}}},
-          {reply(v, "measured", & &1["lesser"]), {:ok, %{bytes: 201_326_592, lesser: true}}},
-          {reply(v, "error", &(&1["code"] == "unmeasured")), {:error, {:refused, "unmeasured"}}},
-          # A spawn retired while it is asked after has no reading.
-          {reply(v, "released"), {:error, :unknown_spawn}}
+          {reply(v, "measured", &(&1["kind"] == "program")),
+           {:ok,
+            %{
+              kind: "program",
+              athanor: "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              subject: "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c",
+              bytes: 268_435_456,
+              lesser: false,
+              age_ms: 412
+            }}},
+          # A place of no athanor or subject is read as having none.
+          {reply(v, "measured", &(&1["kind"] == "warm")),
+           {:ok,
+            %{
+              kind: "warm",
+              athanor: nil,
+              subject: nil,
+              bytes: 201_326_592,
+              lesser: true,
+              age_ms: 0
+            }}},
+          {reply(v, "error", &(&1["code"] == "unmeasured")), {:error, {:refused, "unmeasured"}}}
         ] do
-      task = Task.async(fn -> Keeper.measure(name, handle) end)
+      task = Task.async(fn -> Keeper.measure(name, vector["place"]) end)
       asked = next_request(peer)
       assert asked == %{vector | "id" => asked["id"]}
       send_reply(peer, answering(asked, answer))
       assert Task.await(task, 5_000) == read
     end
-
-    # A refused reading released nothing: the one release is the last reply's.
-    assert_receive {Keeper, ^ref, :released}, 5_000
-    refute_received {Keeper, ^ref, :released}
   end
 
   test "a reply settles only the measurement it answers, however late or out of order it comes",
        %{v: v, peer: peer, name: name} do
-    handle = long_lived!(v, peer, name)
     reading = reply(v, "measured")
 
-    # The first caller is gone before its reading is in, as one whose call
-    # timed out is.
-    gone = spawn(fn -> Keeper.measure(name, handle) end)
-    late = next_request(peer)
-    Process.exit(gone, :kill)
+    read =
+      %{kind: "program", athanor: reading["athanor"], subject: reading["subject"]}
+      |> Map.merge(%{lesser: false, age_ms: reading["age_ms"]})
 
-    second = Task.async(fn -> Keeper.measure(name, handle) end)
+    # The first caller stops waiting before its reading is in, and lives on.
+    test = self()
+
+    waiter =
+      spawn_link(fn ->
+        {:timeout, _call} = catch_exit(GenServer.call(name, {:measure, "pl-1"}, 100))
+        send(test, :stopped_waiting)
+
+        receive do
+          :report -> send(test, {:mailbox, Process.info(self(), :messages)})
+        end
+      end)
+
+    late = next_request(peer)
+    assert_receive :stopped_waiting, 5_000
+
+    second = Task.async(fn -> Keeper.measure(name, "pl-1") end)
     asked = next_request(peer)
     send_reply(peer, %{answering(late, reading) | "bytes" => 4_096})
     send_reply(peer, %{answering(asked, reading) | "bytes" => 8_192})
-    assert Task.await(second, 5_000) == {:ok, %{bytes: 8_192, lesser: false}}
+    assert Task.await(second, 5_000) == {:ok, Map.put(read, :bytes, 8_192)}
+
+    # The late reply reached no one: neither the second caller nor the
+    # first, which stopped waiting for it.
+    send(waiter, :report)
+    assert_receive {:mailbox, {:messages, []}}, 5_000
 
     # Two waiting at once, answered in the other order.
-    third = Task.async(fn -> Keeper.measure(name, handle) end)
+    third = Task.async(fn -> Keeper.measure(name, "pl-1") end)
     third_asked = next_request(peer)
-    fourth = Task.async(fn -> Keeper.measure(name, handle) end)
+    fourth = Task.async(fn -> Keeper.measure(name, "pl-1") end)
     fourth_asked = next_request(peer)
     send_reply(peer, %{answering(fourth_asked, reading) | "bytes" => 16_384})
     send_reply(peer, %{answering(third_asked, reading) | "bytes" => 12_288})
 
     assert {Task.await(third, 5_000), Task.await(fourth, 5_000)} ==
-             {{:ok, %{bytes: 12_288, lesser: false}}, {:ok, %{bytes: 16_384, lesser: false}}}
+             {{:ok, Map.put(read, :bytes, 12_288)}, {:ok, Map.put(read, :bytes, 16_384)}}
+  end
+
+  test "a measure is settled by its own reply alone: the release of the place's spawn settles none",
+       %{v: v, peer: peer, name: name} do
+    %{ref: ref} = long_lived!(v, peer, name)
+    task = Task.async(fn -> Keeper.measure(name, "pl-1") end)
+    asked = next_request(peer)
+
+    send_reply(peer, reply(v, "released"))
+    assert_receive {Keeper, ^ref, :released}, 5_000
+    assert Task.yield(task, 200) == nil
+
+    send_reply(peer, answering(asked, reply(v, "error", &(&1["code"] == "unmeasured"))))
+    assert Task.await(task, 5_000) == {:error, {:refused, "unmeasured"}}
   end
 
   test "a measured of no bytes is refused as no reading, and settles no measurement",
        %{v: v, peer: peer, name: name} do
-    handle = long_lived!(v, peer, name)
     reading = reply(v, "measured")
 
     log =
       capture_log(fn ->
-        task = Task.async(fn -> Keeper.measure(name, handle) end)
+        task = Task.async(fn -> Keeper.measure(name, "pl-1") end)
         asked = next_request(peer)
         send_reply(peer, %{answering(asked, reading) | "bytes" => 0})
         send_reply(peer, answering(asked, reply(v, "error", &(&1["code"] == "unmeasured"))))
@@ -437,6 +517,8 @@ defmodule Locus.KeeperVectorsTest do
 
   # A long-lived spawn the vectors' `spawned` answered, its owner this test.
   defp long_lived!(v, peer, name) do
+    place!(peer, name)
+
     keeper =
       Task.async(fn ->
         request = next_request(peer)
@@ -447,6 +529,7 @@ defmodule Locus.KeeperVectorsTest do
              Keeper.spawn(name, %{
                argv: ["/bin/true"],
                env: %{},
+               place: "pl-1",
                pool: "backends",
                memory_bytes: 268_435_456,
                cpu_quota: 100_000
@@ -470,11 +553,14 @@ defmodule Locus.KeeperVectorsTest do
 
   # Asks for a runner as the runtime's adapter does; the test process owns
   # the spawn and hears its events.
-  defp spawn_runner!(name, argv \\ ["/app/bin/locus", "start"]) do
+  defp spawn_runner!(peer, name, argv \\ ["/app/bin/locus", "start"]) do
+    place!(peer, name)
+
     assert {:ok, %{spawn_id: nil, uid: nil, pid: nil} = handle} =
              Keeper.spawn(name, %{
                argv: argv,
                env: %{"RUNTIME_ROLE" => "runner"},
+               place: "pl-1",
                pool: "runner",
                memory_bytes: @runner_spawn["memory_bytes"],
                cpu_quota: @runner_spawn["cpu_quota"],
@@ -488,7 +574,7 @@ defmodule Locus.KeeperVectorsTest do
   # A runner spawned with the vectors' `spawned` reply, its spawn id
   # `spawn_id` where named, and its request.
   defp spawned_runner!(v, peer, name, spawn_id \\ nil) do
-    %{ref: ref} = handle = spawn_runner!(name)
+    %{ref: ref} = handle = spawn_runner!(peer, name)
     request = next_request(peer)
     spawned = v |> reply("spawned") |> Map.put("id", request["id"])
     spawned = if spawn_id, do: %{spawned | "spawn_id" => spawn_id}, else: spawned
@@ -529,11 +615,14 @@ defmodule Locus.KeeperVectorsTest do
        %{peer: peer, name: name} do
     assert %{"control" => true, "memory_bytes" => _bound, "isolation" => "netns"} = @runner_spawn
 
+    place!(peer, name)
+
     # A runner is answered as soon as it is asked for, before it is staged.
     assert {:ok, %{spawn_id: nil, uid: nil, pid: nil}} =
              Keeper.spawn(name, %{
                argv: @runner_spawn["argv"],
                env: @runner_spawn["env"],
+               place: @runner_spawn["place"],
                pool: @runner_spawn["pool"],
                memory_bytes: @runner_spawn["memory_bytes"],
                cpu_quota: @runner_spawn["cpu_quota"],
@@ -557,8 +646,19 @@ defmodule Locus.KeeperVectorsTest do
       {peer, name} = fresh_client!()
 
       case vector do
+        # A place's answer reaches the process that asked for it, and no
+        # runner's owner: `placed` is `place!/2`'s, and a refusal its code.
+        %{"type" => "placed"} ->
+          place!(peer, name)
+
+        %{"type" => "error", "id" => "pl-1", "code" => code} ->
+          task = Task.async(fn -> Keeper.place(name, "pl-1", %{kind: "warm"}, self()) end)
+          assert %{"type" => "place", "id" => "pl-1"} = next_request(peer)
+          send_reply(peer, vector)
+          assert Task.await(task, 5_000) == {:error, {:refused, code}}
+
         %{"type" => "spawned", "spawn_id" => spawn_id, "uid" => uid, "pid" => pid} ->
-          %{ref: ref} = spawn_runner!(name)
+          %{ref: ref} = spawn_runner!(peer, name)
           send_reply(peer, %{vector | "id" => next_request(peer)["id"]})
           assert_receive {Keeper, ^ref, {:spawned, ^spawn_id, ^uid, ^pid} = event}, 5_000
           assert Locus.Runtime.Keeper.event(event) == {:spawned, pid}
@@ -572,7 +672,7 @@ defmodule Locus.KeeperVectorsTest do
           assert event == :released
 
         %{"type" => "error", "id" => _id, "code" => code} ->
-          %{ref: ref} = spawn_runner!(name)
+          %{ref: ref} = spawn_runner!(peer, name)
           send_reply(peer, %{vector | "id" => next_request(peer)["id"]})
           assert_receive {Keeper, ^ref, {:refused, ^code} = event}, 5_000
           read = if code == "memory_unavailable", do: :memory_unavailable, else: code
