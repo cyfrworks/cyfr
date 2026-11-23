@@ -151,6 +151,18 @@ export function writeEntitlements(dir, team, group) {
 }
 
 /**
+ * What Electron's signing skips: what electron-builder's `ignore` skips,
+ * and the cyfr at `helper`, which is signed already. One function, as
+ * @electron/osx-sign 1.3.3 drops an `ignore` given as an array
+ * (validateOptsIgnore in its sign.js) and would sign cyfr a second time.
+ */
+export function ignoring(ignore, helper) {
+  const skipped = [ignore ?? []].flat()
+  return (file) => file === helper ||
+    skipped.some((it) => (typeof it === "function" ? it(file) : file.match(it) !== null))
+}
+
+/**
  * electron-builder's mac.sign for a distribution build, given the
  * entitlement files, the verified cyfr's SHA-256 and `signed`, where the
  * signed cyfr's SHA-256 is kept as signed.helper. The bundled cyfr is
@@ -167,7 +179,7 @@ export function signer(files, verified, signed) {
     signed.helper = sha256(helper)
     const {signAsync} = need("@electron/osx-sign")
     await signAsync({...opts, preAutoEntitlements: false, preEmbedProvisioningProfile: true,
-      ignore: [...[opts.ignore ?? []].flat(), (file) => file === helper],
+      ignore: ignoring(opts.ignore, helper),
       optionsForFile: (file) => ({hardenedRuntime: true, entitlements: files[kindOf(opts.app, file)]})})
   }
 }

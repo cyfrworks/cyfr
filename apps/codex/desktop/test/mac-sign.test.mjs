@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import {test} from "node:test"
 
 import {Refused} from "../scripts/check-package.mjs"
-import {APPLE, REHEARSAL, checkProfile, entitlements, kindOf, signingInputs, tool, webauthnGroup, within} from "../scripts/mac-sign.mjs"
+import {APPLE, REHEARSAL, checkProfile, entitlements, ignoring, kindOf, signingInputs, tool, webauthnGroup, within} from "../scripts/mac-sign.mjs"
 
 const team = "AB12CD34EF"
 const der = Buffer.from([0x30, 0x82, 0x01, 0x00]).toString("base64")
@@ -126,4 +126,21 @@ test("a tool or a build that does not answer in its bound is refused, saying so"
   assert.equal(tool("true", []).ok, true)
   await assert.rejects(within(new Promise(() => {}), 0.001, "the notary"), (e) => e instanceof Refused && e.message === "the notary did not finish in 0.001 minutes")
   assert.equal(await within(Promise.resolve("done"), 1, "the build"), "done")
+})
+
+// Electron's signing skips the cyfr the recipe signed first, and what
+// electron-builder skips, through one function: an array would be dropped.
+test("Electron's signing skips the signed cyfr and what electron-builder skips", () => {
+  const app = "/out/mac-arm64/CYFR.app"
+  const helper = `${app}/Contents/Resources/cyfr`
+  const builders = (file) => file.endsWith(".kext")
+  for (const given of [builders, [builders], undefined]) {
+    const skip = ignoring(given, helper)
+    assert.equal(typeof skip, "function")
+    assert.equal(skip(helper), true)
+    assert.equal(skip(`${app}/Contents/MacOS/CYFR`), false)
+    assert.equal(skip(`${app}/Contents/Resources/cyfr.other`), false)
+    if (given) assert.equal(skip(`${app}/Contents/Library/x.kext`), true)
+  }
+  assert.equal(ignoring(/\.kext$/, helper)(`${app}/a.kext`), true)
 })
