@@ -63,7 +63,11 @@ defmodule Locus.Backends.Service do
      (`unknown_session` for one they do not hold) when it is of that
      session's mode (`bad_request` otherwise:
      `Prima.LocusBackends.mode_types/1`), so a `recv` or an `output` that
-     waits holds its session and nothing else.
+     waits holds its session and nothing else. The bytes a `recv` or an
+     `output` answers are granted by the backends role's answering count
+     (`Locus.Backends.Backend`, "Recv"), and the request returns the grant
+     once its answer is written or did not encode; a request that dies
+     frees it by dying.
 
   ## A close, in order
 
@@ -299,17 +303,28 @@ defmodule Locus.Backends.Service do
          {:ok, message} <- readable(conn, LocusBackends.read_session(body)),
          :ok <- named(conn, message, invoke),
          {:ok, answer} <- served(conn, invoke, message) do
-      case LocusBackends.encode_session_answer(message.type, answer) do
-        {:ok, text} ->
-          answer(conn, 200, text)
-
-        {:error, _unencodable} ->
-          Logger.error("[Locus.Backends.Service] a #{message.type} answer did not encode")
-          refuse(conn, :internal)
-      end
+      {grant, answer} = Map.pop(answer, :grant)
+      written(conn, message.type, answer, grant)
     else
       {:refused, conn, refusal} -> refuse(conn, refusal)
     end
+  end
+
+  # A recv's or an output's grant of the answering count (`Locus.Output`)
+  # is this request's while its answer is encoded and written: once the
+  # write has returned, or the answer did not encode, its bytes are gone
+  # and the grant goes back.
+  defp written(conn, type, answer, grant) do
+    case LocusBackends.encode_session_answer(type, answer) do
+      {:ok, text} ->
+        answer(conn, 200, text)
+
+      {:error, _unencodable} ->
+        Logger.error("[Locus.Backends.Service] a #{type} answer did not encode")
+        refuse(conn, :internal)
+    end
+  after
+    if grant, do: Locus.Output.return(grant)
   end
 
   defp owner(conn, invoke) do

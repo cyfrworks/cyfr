@@ -54,19 +54,38 @@ defmodule Locus.Backends.Backend do
   ## Masking
 
   Everything a session answers is masked with its owner's secret values:
-  a run's lines and the stderr tail of its status through
-  `Prima.LocusBackends.mask/2`, a terminal's bytes as they arrive through
-  one `Prima.LocusBackends.masker/1`, so a value split between two of its
-  writes is masked whole; what the masker holds when the process is gone
-  is buffered as `Prima.LocusBackends.mask_end/1` answers it. Nothing of a
-  process's stdout or stderr is logged.
+  a run's lines as they are buffered and the stderr tail of its status
+  through `Prima.LocusBackends.mask/2`, a terminal's bytes as they arrive
+  through one `Prima.LocusBackends.masker/1`, so a value split between two
+  of its writes is masked whole; what the masker holds when the process is
+  gone is buffered as `Prima.LocusBackends.mask_end/1` answers it. So what
+  is buffered is what is answered, and an answer's cost is known before
+  it is taken. Nothing of a process's stdout or stderr is logged.
+
+  ## Unread
+
+  What its relay buffers is held in the backends role's one count of
+  unread output (`Locus.Output`, the `:output` option): the session names
+  its relay's `bytes` after every change of them, a write buffered, a part
+  line flushed, lines let go by a later `after` and lines dropped. Told
+  to drop, in the answer to its own hold or by `{Locus.Output, :over}`,
+  it drops its oldest, counted in `dropped` as its own bound drops them,
+  and holds again. It waits on no other session.
 
   ## Recv
 
-  `recv/3` answers at once when a line or a chunk past `after` is
-  buffered or the session has ended, and otherwise waits up to `max_wait_ms` for either;
-  the session holds the wait, so nothing else does. A wait counts as a use
-  when it is asked, not while it waits.
+  `recv/3` is ready to be answered at once when a line or a chunk past
+  `after` is buffered, the session has ended or `max_wait_ms` is 0, and
+  otherwise once either comes within `max_wait_ms`; the session holds the
+  wait, so nothing else does. A ready recv with nothing to take is
+  answered then. One with lines or chunks to take asks the role's
+  answering count (`Locus.Output.ask/3`) for what `Locus.Backends.Relay.cost/3`
+  says they cost, by the instant its wait ends. Granted, it takes within
+  the grant, never more, gives the grant to the caller and answers it as
+  `grant`, which the caller returns once the answer's bytes are gone, or
+  frees by dying; found `:full`, it answers no lines or chunks, and the
+  same `after` reads them later. A wait counts as a use when it is asked,
+  not while it waits.
   """
 
   use GenServer, restart: :temporary
@@ -88,19 +107,24 @@ defmodule Locus.Backends.Backend do
   @typedoc "How a session ended: a crash or not, and why."
   @type ended :: %{crash: boolean(), error: String.t() | nil}
 
-  @typedoc "What `recv/3` answers: lines of a run, chunks of a terminal."
+  @typedoc """
+  What `recv/3` answers: lines of a run, chunks of a terminal, and the
+  grant of the answering count their bytes hold when there are any.
+  """
   @type received ::
           %{
-            lines: [LocusBackends.line()],
-            dropped: non_neg_integer(),
-            running: boolean(),
-            exit_code: 0..255 | nil
+            required(:lines) => [LocusBackends.line()],
+            required(:dropped) => non_neg_integer(),
+            required(:running) => boolean(),
+            required(:exit_code) => 0..255 | nil,
+            optional(:grant) => Locus.Output.grant()
           }
           | %{
-              chunks: [LocusBackends.chunk()],
-              dropped: non_neg_integer(),
-              running: boolean(),
-              exit_code: 0..255 | nil
+              required(:chunks) => [LocusBackends.chunk()],
+              required(:dropped) => non_neg_integer(),
+              required(:running) => boolean(),
+              required(:exit_code) => 0..255 | nil,
+              optional(:grant) => Locus.Output.grant()
             }
 
   @doc """
@@ -115,6 +139,8 @@ defmodule Locus.Backends.Backend do
     * `:launcher` and `:launcher_server`;
     * `:notify`, the process told of `:started`, `{:ended, end}`,
       `{:memory, cause}` and `:vacated`;
+    * `:output`, the count of unread and answered output it holds in
+      (`Locus.Output.server(:backends)`);
     * `:delay_ms`, the wait before the spawn (0);
     * `:stop_grace_ms` (2 s), `:release_timeout_ms`;
     * `:bounds`, overriding `Prima.LocusBackends.bounds/0` by name
@@ -139,7 +165,11 @@ defmodule Locus.Backends.Backend do
   def resize(server, rows, cols) when is_integer(rows) and is_integer(cols),
     do: GenServer.call(server, {:resize, rows, cols}, @call_margin_ms)
 
-  @doc "The lines or chunks past `after`, waiting up to `max_wait_ms` for one or the session's end."
+  @doc """
+  The lines or chunks past `after`, waiting up to `max_wait_ms` for one or
+  the session's end, and for room to answer them. An answer with any
+  carries their `grant`, which is the caller's to return.
+  """
   @spec recv(GenServer.server(), non_neg_integer(), non_neg_integer()) :: received()
   def recv(server, after_seq, max_wait_ms),
     do: GenServer.call(server, {:recv, after_seq, max_wait_ms}, max_wait_ms + @call_margin_ms)
@@ -200,6 +230,9 @@ defmodule Locus.Backends.Backend do
         launcher: launcher,
         launcher_server: Keyword.get(opts, :launcher_server, launcher),
         notify: Keyword.get(opts, :notify),
+        output: Keyword.get(opts, :output, Locus.Output.server(:backends)),
+        # The bytes last held in the count.
+        held: 0,
         stop_grace_ms: Keyword.get(opts, :stop_grace_ms, 2_000),
         release_timeout_ms: Keyword.get(opts, :release_timeout_ms, @release_timeout_ms),
         budget: bounds.max_session_bytes - @answer_margin_bytes,
@@ -214,14 +247,17 @@ defmodule Locus.Backends.Backend do
             :line_charge_bytes,
             :stderr_tail_bytes
           ])
-          |> Map.put(:mode, mode)
+          |> Map.merge(%{mode: mode, secrets: secrets})
           |> Relay.new(),
         status: :starting,
         handle: nil,
         released: false,
         ending: nil,
         ended: nil,
+        # Recvs waiting for a line or the end, and ready ones asking the
+        # count for room, by the ask's reference.
         waiters: [],
+        asking: %{},
         stoppers: []
       }
 
@@ -260,13 +296,13 @@ defmodule Locus.Backends.Backend do
 
   def handle_call({:recv, after_seq, max_wait_ms}, from, state) do
     state = used(state)
+    deadline = System.monotonic_time(:millisecond) + max_wait_ms
 
     if state.status == :ended or max_wait_ms == 0 or Relay.past?(state.relay, after_seq) do
-      {answer, state} = answer(state, after_seq)
-      {:reply, answer, state}
+      {:noreply, ready(state, from, after_seq, deadline)}
     else
       timer = Process.send_after(self(), {:recv_timeout, from}, max_wait_ms)
-      {:noreply, %{state | waiters: [{from, after_seq, timer} | state.waiters]}}
+      {:noreply, %{state | waiters: [{from, after_seq, deadline, timer} | state.waiters]}}
     end
   end
 
@@ -346,15 +382,27 @@ defmodule Locus.Backends.Backend do
 
   def handle_info({:recv_timeout, from}, state) do
     case List.keytake(state.waiters, from, 0) do
-      {{^from, after_seq, _timer}, waiters} ->
-        {answer, state} = answer(%{state | waiters: waiters}, after_seq)
-        GenServer.reply(from, answer)
-        {:noreply, state}
+      {{^from, after_seq, deadline, _timer}, waiters} ->
+        {:noreply, ready(%{state | waiters: waiters}, from, after_seq, deadline)}
 
       nil ->
         {:noreply, state}
     end
   end
+
+  def handle_info({Locus.Output, ref, answer}, %{asking: asking} = state)
+      when is_map_key(asking, ref) do
+    {{from, after_seq, cost}, asking} = Map.pop!(asking, ref)
+    state = %{state | asking: asking}
+
+    case answer do
+      {:ok, grant} -> {:noreply, reply(state, from, after_seq, cost, grant)}
+      :full -> {:noreply, reply(state, from, after_seq, 0, nil)}
+    end
+  end
+
+  # Told to drop: holding again is how the count is answered.
+  def handle_info({Locus.Output, :over}, state), do: {:noreply, hold(state)}
 
   # A release the launcher has not reported within its bound ends the
   # stoppers' wait and the session, never what it holds: that is gone only
@@ -413,12 +461,15 @@ defmodule Locus.Backends.Backend do
   defp on_event(%{mode: :terminal} = state, {:stdout, bytes})
        when state.status == :running or state.ending != nil do
     {released, masker} = LocusBackends.mask_chunk(state.masker, bytes)
-    wake(%{state | masker: masker, relay: Relay.output(state.relay, released)})
+
+    %{state | masker: masker, relay: Relay.output(state.relay, released)}
+    |> unread()
+    |> wake()
   end
 
   defp on_event(state, {:stdout, bytes}) when state.status == :running or state.ending != nil do
     case Relay.stdout(state.relay, bytes) do
-      {:ok, relay} -> wake(%{state | relay: relay})
+      {:ok, relay} -> %{state | relay: relay} |> unread() |> wake()
       {:error, :line_too_long} -> overflow(state)
     end
   end
@@ -476,7 +527,7 @@ defmodule Locus.Backends.Backend do
   defp released(%{released: true} = state), do: state
 
   defp released(state) do
-    state = %{state | released: true, relay: rest(state)}
+    state = unread(%{state | released: true, relay: rest(state)})
     # Released with no exit heard: the launcher let every spawn go.
     state = ended(state, state.ending || %{crash: true, error: "exited code=null signal=null"})
     notify(state, :vacated)
@@ -544,41 +595,74 @@ defmodule Locus.Backends.Backend do
     end
   end
 
-  # Every wait a new line or the end answers.
+  # The relay's bytes named to the count after every change of them, and
+  # named again after each drop it is told to make, until it is taken.
+  defp unread(%{relay: %{bytes: bytes}, held: bytes} = state), do: state
+  defp unread(state), do: hold(state)
+
+  defp hold(state) do
+    bytes = state.relay.bytes
+
+    case Locus.Output.hold(state.output, bytes) do
+      :ok -> %{state | held: bytes}
+      {:drop_to, most} -> hold(%{state | relay: Relay.drop_to(state.relay, most)})
+    end
+  end
+
+  # Every wait a new line or the end makes ready.
   defp wake(state) do
     {ready, waiting} =
-      Enum.split_with(state.waiters, fn {_from, after_seq, _timer} ->
+      Enum.split_with(state.waiters, fn {_from, after_seq, _deadline, _timer} ->
         state.status == :ended or Relay.past?(state.relay, after_seq)
       end)
 
-    Enum.reduce(ready, %{state | waiters: waiting}, fn {from, after_seq, timer}, state ->
+    Enum.reduce(ready, %{state | waiters: waiting}, fn waiter, state ->
+      {from, after_seq, deadline, timer} = waiter
       Process.cancel_timer(timer)
-      {answer, state} = answer(state, after_seq)
-      GenServer.reply(from, answer)
-      state
+      ready(state, from, after_seq, deadline)
     end)
   end
 
-  defp answer(state, after_seq) do
-    {taken, dropped, relay} = Relay.take(state.relay, after_seq, state.budget)
-    running = state.status != :ended
-    exit_code = if running, do: nil, else: Map.get(state.ending || %{}, :exit_code)
-    answer = %{dropped: dropped, running: running, exit_code: exit_code}
+  # A recv ready to be answered: with nothing to take it is answered now;
+  # otherwise the count is asked for what its answer costs, by the instant
+  # its own wait ends, and it is answered when the count answers.
+  defp ready(state, from, after_seq, deadline) do
+    case Relay.cost(state.relay, after_seq, state.budget) do
+      0 ->
+        reply(state, from, after_seq, 0, nil)
+
+      cost ->
+        ref = Locus.Output.ask(state.output, cost, deadline)
+        %{state | asking: Map.put(state.asking, ref, {from, after_seq, cost})}
+    end
+  end
+
+  # What fits `budget` is taken, and its grant, when there is one, is the
+  # caller's before the answer reaches it.
+  defp reply(state, from, after_seq, budget, grant) do
+    {answer, state} = answer(state, after_seq, budget)
 
     answer =
-      case state.mode do
-        # A terminal's chunks were masked as they arrived.
-        :terminal ->
-          Map.put(answer, :chunks, taken)
+      case grant do
+        nil ->
+          answer
 
-        :run ->
-          Map.put(
-            answer,
-            :lines,
-            Enum.map(taken, &%{&1 | text: LocusBackends.mask(&1.text, state.secrets)})
-          )
+        grant ->
+          {pid, _tag} = from
+          :ok = Locus.Output.give(grant, pid)
+          Map.put(answer, :grant, grant)
       end
 
+    GenServer.reply(from, answer)
+    unread(state)
+  end
+
+  defp answer(state, after_seq, budget) do
+    {taken, dropped, relay} = Relay.take(state.relay, after_seq, budget)
+    running = state.status != :ended
+    exit_code = if running, do: nil, else: Map.get(state.ending || %{}, :exit_code)
+    taken_as = if state.mode == :terminal, do: :chunks, else: :lines
+    answer = Map.put(%{dropped: dropped, running: running, exit_code: exit_code}, taken_as, taken)
     {answer, %{state | relay: relay}}
   end
 
