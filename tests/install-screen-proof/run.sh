@@ -26,7 +26,8 @@
 # and opens Prism with the box's hello under the setup token. A local
 # program naming the shell's Host and Origin gets no ticket. Then, reading
 # what the box holds over SSH: the lock after five minutes without input,
-# a wrong PIN, the unlock; Prism's Lock; an API key made in Prism, which
+# a wrong PIN, the unlock; Prism's Lock, and again with CYFR silent, the
+# screen hidden within 5 s of the press; an API key made in Prism, which
 # asks a fresh confirmation, confirmed on this device after a Cancel and
 # a wrong PIN; the shell killed; its connection to CYFR severed past 60 s
 # while a Prism page stays open; and Chrome's profile, copied while
@@ -490,10 +491,50 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   check "Chrome holds the next unlock's session cookie" screen_cookie relocked
   check "the home serves it" cookie_is in relocked
 
+  screen_hides_first
   screen_confirms
   screen_killed
   screen_severed
   screen_copied_profile
+}
+
+# Prism's Lock while CYFR accepts and answers nothing (the shell's
+# connection silenced, as screen_severed silences it): the screen is
+# hidden first, Chrome ended within 5 s of the press, though telling CYFR
+# and closing the connection take 10 s; the session still ends, within a
+# minute, at the home. Timed from the press, on this machine's clock,
+# polling the guest's Chrome over SSH (a poll's time aside).
+screen_hides_first() {
+  local ports old pressed gone took
+  step "Prism's Lock with CYFR silent: the screen is hidden first"
+  screen_unlock
+  check "Chrome holds the next unlock's session cookie" screen_cookie silent
+  ports=$(guest_root_out "ss -tnpH state established '( dport = :4000 )' | grep '\"cyfr\",' | awk '{print \$3}' | sed 's/.*://'" | tr '\n' ' ')
+  check "the shell holds its connection to CYFR (local ports $ports)" test -n "${ports// /}"
+  old=$(guest_ssh 'ps -u proof -o pid=,args= | grep -- "-[-]app=http://127.0.0.1:7340/" | grep -v -- "--type=" | awk "{print \$1}"')
+  guest_root "for p in $ports; do for c in INPUT OUTPUT; do for d in sport dport; do
+      iptables -w -I \$c -p tcp --\$d \$p -m comment --comment cyfr-proof-silent -j DROP || exit 1
+    done; done; done" || fail "the shell's connection was not silenced ($GUEST_DIR/root.txt)"
+  screen_find lock || fail "QMP did not find Prism's Lock"
+  pressed=$(date +%s%3N)
+  printf '\n' | guest_keys || fail "QMP did not press Prism's Lock"
+  gone=""
+  while [ -z "$gone" ] && [ $(($(date +%s%3N) - pressed)) -lt 30000 ]; do
+    guest_ssh "kill -0 $old 2>/dev/null" || gone=$(date +%s%3N)
+  done
+  took=$((${gone:-$(date +%s%3N)} - pressed))
+  echo "the Chrome screen hid $took ms after the press, CYFR silent" >>"$GUEST_DIR/timing.txt"
+  check "with CYFR silent, Prism's Lock hid the screen $took ms after the press, within 5 s" \
+    sh -c '[ -n "$1" ] && [ "$2" -lt 5000 ]' sh "$gone" "$took"
+  guest_root "for p in $ports; do for c in INPUT OUTPUT; do for d in sport dport; do
+      iptables -w -D \$c -p tcp --\$d \$p -m comment --comment cyfr-proof-silent -j DROP
+    done; done; done" || fail "the silence was not undone ($GUEST_DIR/root.txt)"
+  shell_page_until lock-silent 'CYFR is locked' 30
+  check "the silent CYFR's lock page says it locked" grep -q 'Locked\.' "$GUEST_DIR/shell-lock-silent.html"
+  took=$(cookie_out_within silent 150)
+  check "that session ended at the home within 60 s, a poll's 5 s aside (in ${took:-more than 150} s)" \
+    sh -c '[ -n "$1" ] && [ "$1" -le 65 ]' sh "$took"
+  screen_ready
 }
 
 # A sensitive change confirmed on this screen: an API key made in Prism,
