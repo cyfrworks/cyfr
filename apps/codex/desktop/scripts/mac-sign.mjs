@@ -127,16 +127,17 @@ export function entitlements(team, group) {
   }
 }
 
-const HELPER = /\/Contents\/Frameworks\/CYFR Helper( \((GPU|Plugin|Renderer)\))?\.app(\/Contents\/MacOS\/[^/]+)?$/
+const HELPER = /^Contents\/Frameworks\/CYFR Helper( \((GPU|Plugin|Renderer)\))?\.app(\/Contents\/MacOS\/[^/]+)?$/
 
 /**
  * Which entitlements the file at `file` (an absolute path) inside the app
  * at `app` gets: "main" for the app and its executable, "helper" for a
- * helper app and its executable, "none" for every other.
+ * helper app and its executable, "none" for every other. Either path may
+ * be spelled unnormalised, as a temporary folder ending in "/" makes it.
  */
 export function kindOf(app, file) {
-  const inside = file.slice(app.length).replaceAll("\\", "/")
-  if (inside === "" || inside === "/Contents/MacOS/CYFR") return "main"
+  const inside = path.relative(app, file).replaceAll("\\", "/")
+  if (inside === "" || inside === "Contents/MacOS/CYFR") return "main"
   return HELPER.test(inside) ? "helper" : "none"
 }
 

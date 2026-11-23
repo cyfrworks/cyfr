@@ -117,6 +117,12 @@ test("each signed file is the kind its place makes it", () => {
     [`${app}/Contents/Frameworks/CYFR Helper (Evil).app`]: "none"
   }
   for (const [file, kind] of Object.entries(kinds)) assert.equal(kindOf(app, file), kind, file)
+  // The app as a temporary folder spelled with "//" names it, its files
+  // as a walk joins them.
+  for (const [file, kind] of Object.entries(kinds)) {
+    assert.equal(kindOf("/out//mac-arm64/CYFR.app", file), kind, `${file} under an unnormalised app`)
+    assert.equal(kindOf(app, file.replace("/out/", "/out//")), kind, `${file} unnormalised`)
+  }
 })
 
 // Each step that could wait on a person, or on Apple, ends in a sentence
