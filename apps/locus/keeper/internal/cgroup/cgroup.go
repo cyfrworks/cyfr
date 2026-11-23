@@ -85,6 +85,9 @@ const (
 	removeInterval = 20 * time.Millisecond
 )
 
+// PollInterval is how often KillBy looks again at a group it waits for.
+const PollInterval = removeInterval
+
 var namePattern = regexp.MustCompile(`^keeper-([1-9][0-9]{0,9}|s-[0-9a-f]{32})$`)
 
 // pause waits between two passes over the namespace root and between two
