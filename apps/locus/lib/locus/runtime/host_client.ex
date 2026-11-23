@@ -37,6 +37,12 @@ defmodule Locus.Runtime.HostClient do
   direction, read up to `Prima.HostAPI.max_answer_bytes/0` and read as an
   answer of this wire's version (`Prima.WorkerWire.read_answer/1`); an
   answer without `v`, or at another version, is no answer and is lost.
+  A call the worker service posts itself reads its answer under the
+  runtime's count (`Locus.Output.server(:runtime)`): room for twice the
+  length the answer declares, or twice the answer bound, the answer and
+  its opening, is asked for as its reading begins, by the call's own
+  timeout, and given back once the answer is read and decoded; an answer
+  no room came for by then is one that did not arrive.
   Any other status is the listener's refusal, and is lost, except two
   that are final: a `413`, whatever its body, says the call's body is past
   the host's bound (`Prima.HostAPI.max_body_bytes/0`), refused before the
@@ -163,6 +169,13 @@ defmodule Locus.Runtime.HostClient do
   @pin_refusals Map.new(PinnedTarget.refusals(), &{Atom.to_string(&1), &1})
 
   @uncertain "The call's answer was lost and its effect is unknown"
+
+  # The count every answer the worker service reads is held under: its own
+  # calls' here, its runners' in their relays (`Locus.Runtime.Relay`).
+  @count Locus.Output.server(:runtime)
+  # Where a call the service posts itself keeps its answer's grant while it
+  # reads and decodes the answer.
+  @held {__MODULE__, :held}
 
   @doc """
   A client for the attempt `keys` name (`t:Prima.WorkerAuth.attempt_keys/0`),
@@ -665,6 +678,46 @@ defmodule Locus.Runtime.HostClient do
       {:refused, _status, raw} -> refused(raw, op)
       _ -> :lost
     end
+  after
+    let_go()
+  end
+
+  # A call the service posts itself: its answer is asked for under the
+  # runtime's count as its reading begins, whole, for the answer and its
+  # opening, by the call's own timeout (`post_call/5`). The pieces it was
+  # read in are collected before it is opened, so it is held at most
+  # twice over until it is decoded (`post/3`).
+  defp own_call(host_url, op, header, body) do
+    by = System.monotonic_time(:millisecond) + HostAPI.request_timeout_ms(op)
+
+    room = fn bytes ->
+      case Locus.Output.reserve(@count, 2 * bytes, by) do
+        {:ok, grant} ->
+          Process.put(@held, grant)
+          :ok
+
+        :full ->
+          :full
+      end
+    end
+
+    sent = post_call(host_url, op, header, body, room: room)
+    :erlang.garbage_collect()
+    sent
+  end
+
+  # The answer of a call the service posted itself is gone once it is
+  # read and decoded: what is left of it is collected, then its grant goes
+  # back.
+  defp let_go do
+    case Process.delete(@held) do
+      nil ->
+        :ok
+
+      grant ->
+        :erlang.garbage_collect()
+        Locus.Output.return(grant)
+    end
   end
 
   # A body past the host's bound is never sent: the host would refuse it
@@ -716,7 +769,7 @@ defmodule Locus.Runtime.HostClient do
     sent =
       case via do
         {:http, host_url} ->
-          post_call(host_url, op, header, body)
+          own_call(host_url, op, header, body)
 
         {:relay, relay, attempt} ->
           Locus.Runtime.Relay.Runner.call(
@@ -757,7 +810,12 @@ defmodule Locus.Runtime.HostClient do
   reads on, and `:halt` stops and closes the connection. Any other `200`
   answer is CYFR's refusal, read whole within
   `Prima.HostAPI.max_answer_bytes/0` and handed over once, and a `sink`
-  that halts it halts the answer as it halts a frame. The chunk
+  that halts it halts the answer as it halts a frame. The refusal's room,
+  `:room` (a function of the bytes it may hold, as `post_call/5`'s), is
+  asked once, as its first piece is read and before it is kept, for the
+  whole refusal: the length it declares, or the answer bound when it
+  declares none or more. `:ok` keeps it; `:full` halts the answer. With no
+  `:room`, nothing is asked. The chunk
   frames' body bytes (`Prima.WorkerAuth.frame_body_bytes/1`) are bounded
   by `max_response_size`, and every wait by `deadline`, in milliseconds
   since the epoch.
@@ -772,14 +830,15 @@ defmodule Locus.Runtime.HostClient do
   is opened here and no body is logged.
   """
   @spec attached_fetch(t(), AttachedRequest.t(), %{
-          sink: (attached_event() -> :ok | :halt),
-          max_response_size: pos_integer(),
-          deadline: integer()
+          required(:sink) => (attached_event() -> :ok | :halt),
+          required(:max_response_size) => pos_integer(),
+          required(:deadline) => integer(),
+          optional(:room) => (pos_integer() -> :ok | :full)
         }) :: :ok | :halted | {:error, String.t()}
   def attached_fetch(
         %__MODULE__{relay: nil} = client,
         %AttachedRequest{} = request,
-        %{sink: sink, max_response_size: max, deadline: deadline}
+        %{sink: sink, max_response_size: max, deadline: deadline} = options
       )
       when is_function(sink, 1) and is_integer(max) and max > 0 and is_integer(deadline) do
     json =
@@ -804,6 +863,7 @@ defmodule Locus.Runtime.HostClient do
         reader: reader,
         ref: ref,
         sink: sink,
+        room: Map.get(options, :room),
         header: header,
         max: max,
         deadline: deadline,
@@ -823,14 +883,18 @@ defmodule Locus.Runtime.HostClient do
     end
   end
 
-  # Each piece of the answer is told to the caller, and the next is read
-  # only once the caller asks for it; a caller that stops reading kills
-  # this process, which closes the connection.
+  # Each piece of the answer is told to the caller, with the length the
+  # answer declares, and the next is read only once the caller asks for
+  # it; a caller that stops reading kills this process, which closes the
+  # connection. The connection is made under the host calls' own connect
+  # options (`post_call/5`'s), whatever the deadline: the HTTP client keeps
+  # a pool for each set of them it is given.
   defp read_attached(caller, ref, host_url, header, body, deadline) do
     timeout = max(deadline - System.system_time(:millisecond), 1)
 
     into = fn {:data, data}, {req, resp} ->
-      send(caller, {ref, :data, resp.status, frames?(resp), data})
+      declared = declared(resp, HostAPI.max_answer_bytes())
+      send(caller, {ref, :data, resp.status, frames?(resp), declared, data})
 
       receive do
         {^ref, :more} -> {:cont, {req, resp}}
@@ -844,7 +908,10 @@ defmodule Locus.Runtime.HostClient do
         headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
         body: body,
         receive_timeout: timeout,
-        connect_options: [timeout: timeout],
+        connect_options: [
+          timeout: HostAPI.request_timeout_ms(:attached_fetch),
+          transport_opts: Locus.Runtime.Egress.transport_opts()
+        ],
         retry: false,
         redirect: false,
         compressed: false,
@@ -873,8 +940,8 @@ defmodule Locus.Runtime.HostClient do
 
   defp attached_answer(%{ref: ref} = state) do
     receive do
-      {^ref, :data, status, frames?, data} ->
-        on_attached_data(%{state | status: status, frames?: frames?}, data)
+      {^ref, :data, status, frames?, declared, data} ->
+        on_attached_data(%{state | status: status, frames?: frames?}, declared, data)
 
       {^ref, :done, ended} ->
         on_attached_done(state, ended)
@@ -888,7 +955,7 @@ defmodule Locus.Runtime.HostClient do
   defp past_deadline(%{status: nil}), do: {:error, "uncertain"}
   defp past_deadline(_state), do: {:error, "timeout"}
 
-  defp on_attached_data(%{status: 200, frames?: true} = state, data) do
+  defp on_attached_data(%{status: 200, frames?: true} = state, _declared, data) do
     if System.system_time(:millisecond) >= state.deadline do
       {:error, "timeout"}
     else
@@ -899,15 +966,32 @@ defmodule Locus.Runtime.HostClient do
     end
   end
 
-  defp on_attached_data(%{status: 200} = state, data) do
-    buffer = state.buffer <> data
+  # CYFR's refusal: its room is asked with its first piece in hand, before
+  # any of it is kept, for the whole of it; no room halts the answer.
+  defp on_attached_data(%{status: 200} = state, declared, data) do
+    case roomed(state, declared) do
+      {:ok, state} ->
+        buffer = state.buffer <> data
 
-    if byte_size(buffer) > HostAPI.max_answer_bytes(),
-      do: {:error, "uncertain"},
-      else: read_on(%{state | buffer: buffer})
+        if byte_size(buffer) > HostAPI.max_answer_bytes(),
+          do: {:error, "uncertain"},
+          else: read_on(%{state | buffer: buffer})
+
+      :full ->
+        :halted
+    end
   end
 
-  defp on_attached_data(_state, _data), do: {:error, "lost"}
+  defp on_attached_data(_state, _declared, _data), do: {:error, "lost"}
+
+  defp roomed(%{room: room} = state, declared) when is_function(room, 1) do
+    case room.(declared) do
+      :ok -> {:ok, %{state | room: nil}}
+      :full -> :full
+    end
+  end
+
+  defp roomed(state, _declared), do: {:ok, state}
 
   defp hand_frames(state, []), do: read_on(state)
 
@@ -956,7 +1040,7 @@ defmodule Locus.Runtime.HostClient do
 
   defp flush(ref, reader) do
     receive do
-      {^ref, :data, _status, _frames?, _data} -> flush(ref, reader)
+      {^ref, :data, _status, _frames?, _declared, _data} -> flush(ref, reader)
       {^ref, :done, _ended} -> flush(ref, reader)
       {:EXIT, ^reader, _reason} -> flush(ref, reader)
     after
@@ -994,7 +1078,10 @@ defmodule Locus.Runtime.HostClient do
       headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
       body: body,
       receive_timeout: HostAPI.request_timeout_ms(op),
-      connect_options: [timeout: HostAPI.request_timeout_ms(op)],
+      connect_options: [
+        timeout: HostAPI.request_timeout_ms(op),
+        transport_opts: Locus.Runtime.Egress.transport_opts()
+      ],
       retry: false,
       redirect: false,
       compressed: false,
@@ -1051,13 +1138,14 @@ defmodule Locus.Runtime.HostClient do
   # The most an answer may hold: the length it declares, or the answer
   # bound, past which nothing of it is kept.
   defp declared(resp, max) do
-    with [length] <- Req.Response.get_header(resp, "content-length"),
-         {bytes, ""} when bytes in 1..max//1 <- Integer.parse(length) do
-      bytes
-    else
-      _ -> max
+    case Req.Response.get_header(resp, "content-length") do
+      [length] -> declared_within(Integer.parse(length), max)
+      _none_or_more -> max
     end
   end
+
+  defp declared_within({bytes, ""}, max) when bytes in 1..max//1, do: bytes
+  defp declared_within(_unread, max), do: max
 
   defp call_fields(client) do
     %{

@@ -97,9 +97,11 @@ scrubbed, the container's CPU flat).
   asked, then answers at once with a refusal of some 4.9 MB each, while a
   sibling runner reads a page past one credit window: together several
   times the count. The service's memory group, read from inside the
-  container as fast as a shell reads a file, holds at most SERVICE_BOUND,
-  and SERVICE_SLACK for the freed segments the VM's allocator keeps, more
-  after the release than at its most before it;
+  container as fast as a shell reads a file, holds at most
+  `service_allowance/0` more after the release than at its most before it,
+  computed from the role table as stack.py reads it (`Prima.LocusRoles`,
+  `Locus.Output`'s table) and printed beside what it held whether it holds
+  or not;
   no out-of-memory event is counted in the group or the container, and
   the release and container are untouched; each refusal reaches its
   runner, which asks once more and is answered; every child, the formula
@@ -126,7 +128,8 @@ import memory  # noqa: E402
 import worker_auth as auth  # noqa: E402
 from control_plane import DROP, RESERVED_HEADERS, ZERO_AUTHORITY, ControlPlane, Raw  # noqa: E402
 from stack import (  # noqa: E402
-    KEEPER_CAPS, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, Stack, StatusSampler, expect, run, wait_until,
+    KEEPER_CAPS, POOL_FIRST, POOL_LAST, RELEASE, ROLE, ROOT, SERVICE, SERVICE_UID, Stack, StatusSampler, expect, run,
+    wait_until,
 )
 from imagesuite import run_name  # noqa: E402
 
@@ -213,19 +216,18 @@ SHIPPED_PATHS = {
 STUB_KEY = {"STUB_API_KEY": "sk-locus-runtime-image-test"}
 # A runner is a VM booting from nothing: its first attach takes seconds.
 BOOT_S = 60
-# The runtime service's count of what it holds of runners' answers and
-# fetches (`Locus.Output`'s runtime bound, 2.9's "What a service holds").
-SERVICE_BOUND = 16 * 1024 * 1024
-# What the service's group holds beside the count: chiefly the segments
-# the VM's allocator keeps cached once they are freed, for reuse, until a
-# later check returns them (`+MMmcs`, ten by default), each at most the
-# base64 of the largest answer's frame, which is the largest binary the
-# service makes for a runner (Prima.HostAPI.max_answer_bytes/0, 5 MiB).
-# That is ten segments of 6,990,508 bytes, 69,905,080 bytes or 66.7 MiB.
-# Measured at 42 to 58 MiB more than idle with the count, and 116 to 124
-# MiB without it, under this burst. Holding the group closer to the count
-# needs the release's VM flags, a later slice.
-SERVICE_SLACK = 10 * 4 * -(-5 * 1024 * 1024 // 3)
+# The runtime role's own memory and the release's shared figures
+# (Prima.LocusRoles): the count of what the service holds of its runners'
+# answers and fetches, and what it holds beside it.
+MEMORY, SHARED = ROLE["memory"], RELEASE["memory"]
+SERVICE_BOUND = MEMORY["answering"]
+# The segments the VM's allocator keeps cached once they are freed, for
+# reuse, until a later check returns them (`+MMmcs`, ten by default), each
+# at most the base64 of the largest answer's frame, the largest binary the
+# service makes for a runner. The factor's share of the held bytes does
+# not cover them: under this burst the group rose 42 to 58 MiB, then 63
+# MiB, over idle with the count, more than that share.
+SERVICE_SLACK = MEMORY["freed_segments_bytes"]
 # The service-bound case's burst: the children of one formula, in its
 # runner, each answered at once for its artifact with REFUSAL_BYTES, most
 # of the largest a host call's answer may be (Prima.HostAPI.max_answer_bytes/0).
@@ -235,6 +237,24 @@ REFUSAL_BYTES = 4_900_000
 LOST_GRACE_S = 1.0
 
 WASM = {}
+
+
+def service_allowance():
+    """What the service-bound case may raise the service's group by, over its most before the release.
+
+    The factor of resident bytes to a byte held times what the service
+    counts, the keeper read each of the pool's runners holds at most its
+    copies at once, the piece each of the children's posters and the page's
+    fetch reads ahead of the count, and the page's head as the HTTP client
+    read it; beside them the kernel's queue of each runner's relay and the
+    freed segments the VM keeps. The runners' own frames, their calls and
+    credit, are small: the case fills no frame's assembly or keeper write
+    past a few KiB.
+    """
+    runners = POOL_LAST - POOL_FIRST + 1
+    held = (SERVICE_BOUND + runners * SHARED["keeper_read_bytes"] * SHARED["keeper_read_copies"]
+            + (BURST_CHILDREN + 1) * MEMORY["fetch_read_bytes"] + MEMORY["fetch_head_bytes"])
+    return int(SHARED["byte_cost"] * held) + runners * SHARED["relay_queue_bytes"] + SERVICE_SLACK
 
 
 def prerequisites(image):
@@ -851,9 +871,11 @@ def test_service_bound(stack, plane):
     expect(before and after, f"the service's group was read before the release ({len(before)} samples) and after it "
            f"({len(after)})")
     idle, peak = max(before), max(after)
+    allowed = service_allowance()
     print(f"service bound: the service's group held {memory.mib(idle)} ({idle} bytes) at its most before the release and "
-          f"{memory.mib(peak)} ({peak} bytes) at its most after it: {peak - idle} bytes more, of the "
-          f"{SERVICE_BOUND + SERVICE_SLACK} the bound and its slack allow", flush=True)
+          f"{memory.mib(peak)} ({peak} bytes) at its most after it: {peak - idle} bytes more, of the {allowed} allowed "
+          f"({SHARED['byte_cost']} x what it counts and holds beside the count, the relays' queues and "
+          f"{SERVICE_SLACK} of freed segments)", flush=True)
     expect(all(closes[c["execution_id"]]["op"] == "complete" for c in [formula, web] + children),
            "every child, the formula awaiting them all and the page's reader completed",
            {k: [v["op"], str((v["args"].get("outcome") or {}).get("error"))[:300],
@@ -866,10 +888,10 @@ def test_service_bound(stack, plane):
     links = (output.get("data") or {}).get("links", []) if isinstance(output, dict) else []
     expect(output.get("status") == 200 and len(links) == 1 and "/end" in str(links[0]),
            "the page's reader read it whole, to the link at its very end", output)
-    expect(peak - idle <= SERVICE_BOUND + SERVICE_SLACK,
-           f"the service's group stayed within its idle use and the bound's worth ({peak - idle} bytes more at its most, "
-           f"at most {SERVICE_BOUND} counted and {SERVICE_SLACK} of freed segments its allocator keeps)",
-           {"idle": idle, "peak": peak})
+    expect(peak - idle <= allowed,
+           f"the service's group stayed within its idle use and its allowance ({peak - idle} bytes more at its most, "
+           f"of the {allowed} allowed)",
+           {"idle": idle, "peak": peak, "allowance": allowed})
     container_after = memory.container_memory(stack)
     events = [s["events"] for s in sampler.samples if s["events"]]
     expect(events and events[0] == events[-1] and container_after["events_local"] == container_before["events_local"],

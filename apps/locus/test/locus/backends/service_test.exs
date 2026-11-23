@@ -6,8 +6,9 @@ defmodule Locus.Backends.ServiceTest do
   The backends service over a loopback port, met with the shared vectors
   (`tests/fixtures/locus_backends.json`) at their own instant and boot:
   every route and the lifetime every answer names; each control type's
-  round trip through the vectors; every invalid body refused with its
-  refusal; header-first refusals that close the connection with the body
+  round trip through the vectors, a status's answer held in the answering
+  count from before it is collected until it is written; every invalid
+  body refused with its refusal; header-first refusals that close the connection with the body
   unread; the body bounds and the hash check; every fence vector
   (`fence_rejected`) replayed against a fresh service, a held message's
   body sent only once the messages after it are answered; the session
@@ -157,7 +158,9 @@ defmodule Locus.Backends.ServiceTest do
     server =
       start_supervised!(
         Locus.Backends.listener(
-          plug: {Service, owners: @owners, key: @key, now: fn -> Agent.get(now, & &1) end},
+          plug:
+            {Service,
+             owners: @owners, key: @key, output: @output, now: fn -> Agent.get(now, & &1) end},
           ip: {127, 0, 0, 1},
           port: 0,
           startup_log: false
@@ -590,6 +593,26 @@ defmodule Locus.Backends.ServiceTest do
         post(ctx.port, route("control"), body, [{"x-cyfr-auth", header}]),
         "stale_control"
       )
+    end
+
+    test "a status asks the answering count for its whole bound before any of it is collected, and gives it back once written",
+         ctx do
+      bound = Locus.Output.bounds().backends.answering
+
+      assert {:ok, full} =
+               Locus.Output.reserve(@output, bound, System.monotonic_time(:millisecond) + 5_000)
+
+      status = Task.async(fn -> control(ctx, %{type: :status, owners: []}) end)
+      wait_until(fn -> Locus.Output.held(@output).waiting == 1 end)
+      Locus.Output.return(full)
+      assert %{status: 200} = Task.await(status, 10_000)
+
+      wait_until(fn ->
+        Locus.Output.held(@output) |> Map.take([:answering, :waiting]) == %{
+          answering: 0,
+          waiting: 0
+        }
+      end)
     end
 
     test "a hello names no lifetime, and answers this one", ctx do

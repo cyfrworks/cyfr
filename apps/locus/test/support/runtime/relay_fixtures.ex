@@ -9,7 +9,8 @@ defmodule Locus.Runtime.Test.RelayFixtures do
   `attempt!/2` mints an attempt of `component_ref/0` on a
   `Locus.Runtime.Test.ScriptedHost` under an edge and limits of the test's
   choosing. `upstream!/0` and `big_upstream!/1` serve a loopback upstream
-  for the calling test. `attached/2` and `attached_fetch/2` build and send
+  for the calling test; the first answers `/wide-head` with a head of
+  64 headers of 2,000 bytes. `attached/2` and `attached_fetch/2` build and send
   an attached fetch as a runner's handler does. `events/4`, `body_of/1`
   and `read_granting/3` read a fetch's events to its end at the runner's
   end, granting credit back as a runner's handlers do. Each is called from
@@ -27,7 +28,8 @@ defmodule Locus.Runtime.Test.RelayFixtures do
 
   defmodule Upstream do
     @moduledoc false
-    # A loopback upstream answering each path with its name.
+    # A loopback upstream answering each path with its name; `/wide-head`
+    # with `wide_head/0`'s headers too.
     @behaviour Plug
 
     @impl true
@@ -36,8 +38,18 @@ defmodule Locus.Runtime.Test.RelayFixtures do
     @impl true
     def call(conn, test) do
       send(test, {:upstream, conn.method, conn.request_path, conn.req_headers})
+
+      conn =
+        if conn.request_path == "/wide-head",
+          do: Plug.Conn.merge_resp_headers(conn, wide_head()),
+          else: conn
+
       Plug.Conn.send_resp(conn, 200, "reached " <> conn.request_path)
     end
+
+    # 64 headers of 2,000 bytes: a head many times a frame's envelope, and
+    # well within what the HTTP client reads of one.
+    def wide_head, do: for(n <- 1..64, do: {"x-wide-#{n}", String.duplicate("w", 2_000)})
   end
 
   @spec component_ref() :: String.t()
