@@ -43,11 +43,23 @@ import (
 // made with any origin but the reserved one, by its Origin header, which
 // Chrome sets as the caller acts (a sandboxed frame's is null) and no
 // script can set; one whose document is no longer its frame's document;
-// and one whose document belongs to a put that is not the window's. A call
-// of the document being shown, made before its commit is taken, waits for
-// that commit and then goes up once, with the generation the commit began
-// (calls.take); if the show ends with no commit, the call is refused: its
-// fetch fails as a network error, and the host never hears of it.
+// and one whose document belongs to a put that is not the window's.
+//
+// A call is decided when its report is taken, not its pause. Chrome sends
+// a document's report from the page's process after that document's
+// commit, on the same session, and each session's events are taken in the
+// order Chrome sent them, a main frame's commit (committed) and a frame's
+// (frameCommitted) as they come: so the commit of a call's document has
+// always been taken when the call is decided, whether the document is of
+// another put or of the same put the window shows. (The image's Chromium
+// 156 showed it over 900 navigations within one put, by link, reload and
+// form, each new document and its frame calling as they started.) The wait
+// for a shown put's commit, below, is for an order Chrome does not send: a
+// report taken before its document's commit is held for that commit, so
+// it never goes up for the earlier put, and then goes up once, with the
+// generation the commit began (calls.take); if the show ends with no
+// commit, the call is refused: its fetch fails as a network error, and the
+// host never hears of it.
 //
 // A request waits only for what names it: its loader's report, its
 // frame's attachment, or a show's commit or end. A report is kept until its
