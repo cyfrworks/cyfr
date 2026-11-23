@@ -18,7 +18,15 @@ defmodule Locus.KeeperTest do
   frames of the codec's bound; `signal`, `release` with a grace and
   `pool` are the vectors' requests, byte for byte but for their own ids;
   an owner that dies has its spawn released with no grace; a request the
-  keeper would refuse is refused before it is sent. No credential leaves
+  keeper would refuse is refused before it is sent. A place is the
+  vectors' request, answered once the keeper placed it, and refused
+  without a request while the client still follows its id; one whose
+  owner dies before a spawn names it is dropped, while placing too, and
+  one a spawn named is the spawn's until its release; a drop frees only a
+  place no spawn named, an assign changes whose a place is, and a refused
+  spawn frees its place. A measure names a place and answers the keeper's
+  reading with whose the place is and its age, or `unmeasured` for a
+  place the keeper does not hold or has not read. No credential leaves
   the client: a runner's held assign, a frame not yet whole and every
   message carrying a payload show no key or environment value in a
   status or a crash report, a crash report names the reason the client
@@ -46,6 +54,14 @@ defmodule Locus.KeeperTest do
            |> File.read!()
            |> Jason.decode!()
 
+  # A place made for the calling process against the fake keeper, under an
+  # id new to the run, as every spawn's is before it is asked for.
+  defp place!(name, kind \\ "program") do
+    id = "pl-" <> Integer.to_string(System.unique_integer([:positive]))
+    assert :ok = Keeper.place(name, id, %{kind: kind}, self())
+    id
+  end
+
   defp run(name, script, opts \\ []) do
     lines = Agent.start_link(fn -> [] end) |> elem(1)
 
@@ -58,6 +74,7 @@ defmodule Locus.KeeperTest do
           stdin: Keyword.get(opts, :stdin, "")
         },
         [
+          place: place!(name, "build"),
           timeout_ms: Keyword.get(opts, :timeout_ms, 10_000),
           max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
           on_output: fn line -> Agent.update(lines, &[line | &1]) end
@@ -84,6 +101,7 @@ defmodule Locus.KeeperTest do
       spec = %{
         argv: ["/bin/sh", "-c", "exec cat"],
         env: %{},
+        place: place!(name),
         pool: "backends",
         memory_bytes: 268_435_456,
         cpu_quota: 100_000,
@@ -416,6 +434,16 @@ defmodule Locus.KeeperTest do
       end
     end
 
+    # The place `id` made for this process on a client whose channel's far
+    # end the test holds, answered as cyfr-locus answers it.
+    defp placed!(c, id) do
+      owner = self()
+      task = Task.async(fn -> Keeper.place(c.name, id, %{kind: "warm"}, owner) end)
+      assert %{"type" => "place", "id" => ^id} = request(c.peer)
+      :ok = :socket.send(c.peer, [Jason.encode!(%{v: 3, type: "placed", id: id}), ?\n])
+      assert :ok = Task.await(task)
+    end
+
     test "(a) a runner's held assign, its partial frames and every payload message show no key or environment value" do
       p = plant()
       c = plain_client!()
@@ -435,13 +463,14 @@ defmodule Locus.KeeperTest do
         server: adapter
       }
 
+      placed!(c, "runner_plant")
       assert {:ok, channel, []} = Locus.Runtime.Keeper.Channel.spawn(spec)
       %{"id" => id, "attach" => %{"token" => token}} = request(c.peer)
       spawn_id = String.duplicate("ab", 16)
 
       :ok =
         :socket.send(c.peer, [
-          Jason.encode!(%{v: 2, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}),
+          Jason.encode!(%{v: 3, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}),
           ?\n
         ])
 
@@ -526,6 +555,7 @@ defmodule Locus.KeeperTest do
         Keeper.run(
           :no_such_keeper_client,
           %{argv: ["/bin/true"], env: p.env, stdin: p.assign},
+          place: "pl-gone",
           timeout_ms: 1_000,
           max_stdout_bytes: 1_000
         )
@@ -534,6 +564,7 @@ defmodule Locus.KeeperTest do
         Keeper.spawn(:no_such_keeper_client, %{
           argv: ["/bin/true"],
           env: p.env,
+          place: "pl-gone",
           pool: "runner",
           memory_bytes: 268_435_456,
           cpu_quota: 100_000
@@ -552,10 +583,12 @@ defmodule Locus.KeeperTest do
     test "(b) a run whose client crashes answers the crash by its kind alone" do
       p = plant()
       c = plain_client!()
+      placed!(c, "pl-crash")
 
       task =
         Task.async(fn ->
           Keeper.run(c.name, %{argv: ["/bin/true"], env: p.env, stdin: p.assign},
+            place: "pl-crash",
             timeout_ms: 10_000,
             max_stdout_bytes: 1_000
           )
@@ -605,10 +638,13 @@ defmodule Locus.KeeperTest do
     # A runner spawned and attached on a client whose channel's far end the
     # test holds, its relay's opening frame read: its handle and the relay.
     defp attached_runner!(c) do
+      placed!(c, "runner_attached")
+
       assert {:ok, %{ref: ref} = handle} =
                Keeper.spawn(c.name, %{
                  argv: ["/app/bin/locus", "start"],
                  env: %{},
+                 place: "runner_attached",
                  pool: "runner",
                  memory_bytes: 268_435_456,
                  cpu_quota: 100_000,
@@ -619,7 +655,7 @@ defmodule Locus.KeeperTest do
       %{"id" => id, "attach" => %{"token" => token}} = request(c.peer)
       spawn_id = String.duplicate("cd", 16)
 
-      spawned = %{v: 2, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}
+      spawned = %{v: 3, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}
       :ok = :socket.send(c.peer, [Jason.encode!(spawned), ?\n])
       assert_receive {Keeper, ^ref, {:spawned, ^spawn_id, 1, 1}}, 5_000
 
@@ -735,10 +771,12 @@ defmodule Locus.KeeperTest do
       {:ok, FakeKeeper.start_client!()}
     end
 
-    defp spawn_live(name, script, env \\ %{}) do
+    # A spawn of `script` in `place`, or in a place made for it.
+    defp spawn_live(name, script, env \\ %{}, place \\ nil) do
       Keeper.spawn(name, %{
         argv: ["/bin/sh", "-c", script],
         env: env,
+        place: place || place!(name),
         pool: "backends",
         memory_bytes: 268_435_456,
         cpu_quota: 100_000
@@ -829,6 +867,7 @@ defmodule Locus.KeeperTest do
             %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456},
             %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456, cpu_quota: 0}
           ] do
+        spec = Map.put(spec, :place, "pl-1")
         assert_raise FunctionClauseError, fn -> Keeper.spawn(name, spec) end
       end
 
@@ -942,26 +981,56 @@ defmodule Locus.KeeperTest do
       end
     end
 
-    test "measure answers what a spawn uses with the vectors' request, and a reading not made as none",
+    test "a measure of a place is the vectors' request, answered with the keeper's reading, whose the place is and its age",
          %{name: name, fake: fake} do
-      assert {:ok, handle} = spawn_live(name, "exec cat")
-      assert {:error, {:refused, "unmeasured"}} = Keeper.measure(name, handle)
-
-      reading = %{bytes: 268_435_456, lesser: true}
-      :ok = FakeKeeper.mode(fake, {:measured, reading})
-      assert {:ok, ^reading} = Keeper.measure(name, handle)
-
       vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "measure"))
-      sent = %{vector | "spawn_id" => handle.spawn_id}
+      place = vector["place"]
+      whose = %{kind: "program", athanor: "ath_measured", subject: "mcp_measured"}
+      assert :ok = Keeper.place(name, place, whose, self())
+      assert {:ok, _handle} = spawn_live(name, "exec cat", %{}, place)
+
+      # A place the keeper has not read yet has no reading, never a zero.
+      assert {:error, {:refused, "unmeasured"}} = Keeper.measure(name, place)
+
+      :ok = FakeKeeper.mode(fake, {:measured, %{bytes: 268_435_456, lesser: true, age_ms: 1_250}})
+
+      assert Keeper.measure(name, place) ==
+               {:ok,
+                %{
+                  kind: "program",
+                  athanor: "ath_measured",
+                  subject: "mcp_measured",
+                  bytes: 268_435_456,
+                  lesser: true,
+                  age_ms: 1_250
+                }}
+
       assert [first, second] = requests(fake, "measure")
       assert first["id"] != second["id"]
-      assert [%{first | "id" => sent["id"]}, %{second | "id" => sent["id"]}] == [sent, sent]
 
-      :ok = FakeKeeper.mode(fake, :normal)
-      Keeper.release(name, handle, 0)
+      assert [%{first | "id" => vector["id"]}, %{second | "id" => vector["id"]}] == [
+               vector,
+               vector
+             ]
+    end
+
+    test "a place the keeper does not hold, one dropped and one whose spawn was released are unmeasured",
+         %{name: name, fake: fake} do
+      :ok = FakeKeeper.mode(fake, {:measured, %{bytes: 1_048_576, lesser: false, age_ms: 0}})
+      assert {:error, {:refused, "unmeasured"}} = Keeper.measure(name, "pl-never")
+
+      dropped = place!(name)
+      :ok = Keeper.drop(name, dropped)
+      assert {:error, {:refused, "unmeasured"}} = Keeper.measure(name, dropped)
+      refute Map.has_key?(FakeKeeper.places(fake), dropped)
+
+      released = place!(name)
+      assert {:ok, handle} = spawn_live(name, "exec cat", %{}, released)
+      assert {:ok, %{kind: "program", bytes: 1_048_576}} = Keeper.measure(name, released)
+      :ok = Keeper.release(name, handle, 0)
       assert List.last(events_until_released(handle)) == :released
-      assert {:error, :unknown_spawn} = Keeper.measure(name, handle)
-      assert {:error, :unknown_spawn} = Keeper.measure(name, %{handle | ref: make_ref()})
+      assert {:error, {:refused, "unmeasured"}} = Keeper.measure(name, released)
+      assert FakeKeeper.places(fake) == %{}
     end
 
     test "pool_stats reads a pool with the vectors' request, and a refusal is the keeper's code",
@@ -1011,6 +1080,7 @@ defmodule Locus.KeeperTest do
                Keeper.spawn(:no_such_keeper, %{
                  argv: ["true"],
                  env: %{},
+                 place: "pl-1",
                  pool: "backends",
                  memory_bytes: 268_435_456,
                  cpu_quota: 100_000
@@ -1030,6 +1100,170 @@ defmodule Locus.KeeperTest do
 
       :ok = FakeKeeper.close(fake)
       assert_receive {Keeper, ^ref, :released}, 5_000
+    end
+  end
+
+  describe "places against the fake keeper" do
+    setup do
+      {:ok, FakeKeeper.start_client!()}
+    end
+
+    defp vectors(type), do: Enum.filter(@vectors["valid_requests"], &(&1["type"] == type))
+
+    test "a place is the vectors' request with its kind, athanor and subject, answered once the keeper holds it",
+         %{name: name, fake: fake} do
+      for vector <- vectors("place") do
+        whose =
+          for {key, value} <- vector,
+              key in ~w(kind athanor subject),
+              into: %{},
+              do: {String.to_existing_atom(key), value}
+
+        assert :ok = Keeper.place(name, vector["id"], whose, self())
+        assert %{whose: held, spawn: nil} = FakeKeeper.places(fake)[vector["id"]]
+        assert held == Map.take(vector, ~w(kind athanor subject))
+      end
+
+      assert requests(fake, "place") == vectors("place")
+    end
+
+    test "a place of an id the client follows is refused unasked, and one the keeper holds is the keeper's refusal",
+         %{name: name, fake: fake} do
+      assert :ok = Keeper.place(name, "pl-1", %{kind: "warm"}, self())
+
+      assert {:error, {:refused, "bad_request"}} =
+               Keeper.place(name, "pl-1", %{kind: "run"}, self())
+
+      assert length(requests(fake, "place")) == 1
+
+      # A spawn named it: the client follows it no more, and the keeper,
+      # which holds it until the spawn's release, refuses it.
+      assert {:ok, %{spawn_id: spawn_id}} = spawn_live(name, "exec cat", %{}, "pl-1")
+
+      assert {:error, {:refused, "bad_request"}} =
+               Keeper.place(name, "pl-1", %{kind: "run"}, self())
+
+      assert length(requests(fake, "place")) == 2
+
+      assert FakeKeeper.places(fake) == %{
+               "pl-1" => %{whose: %{"kind" => "warm"}, spawn: spawn_id}
+             }
+    end
+
+    test "a place whose owner dies before a spawn names it is dropped", %{name: name, fake: fake} do
+      [drop] = vectors("drop")
+      owner = spawn(fn -> Process.sleep(:infinity) end)
+      assert :ok = Keeper.place(name, drop["place"], %{kind: "build"}, owner)
+      Process.exit(owner, :kill)
+
+      wait_until(fn -> requests(fake, "drop") != [] end, 5_000, "the place to be dropped")
+      assert requests(fake, "drop") == [drop]
+      assert FakeKeeper.places(fake) == %{}
+
+      # The client follows it no more: its id is free to place again.
+      assert :ok = Keeper.place(name, drop["place"], %{kind: "build"}, self())
+    end
+
+    test "a place whose owner dies while it is being placed is dropped, and its caller hears so",
+         %{name: name, fake: fake, client: client} do
+      owner = spawn(fn -> Process.sleep(:infinity) end)
+
+      # The keeper reads nothing until the owner is gone.
+      :ok = :sys.suspend(fake)
+      placing = Task.async(fn -> Keeper.place(name, "pl-1", %{kind: "warm"}, owner) end)
+
+      wait_until(
+        fn -> Map.has_key?(:sys.get_state(client).places, "pl-1") end,
+        5_000,
+        "the place to be asked for"
+      )
+
+      Process.exit(owner, :kill)
+      assert Task.await(placing, 5_000) == {:error, :dropped}
+      :ok = :sys.resume(fake)
+
+      wait_until(fn -> requests(fake, "drop") != [] end, 5_000, "the drop to reach the keeper")
+
+      assert [%{"type" => "place", "id" => "pl-1"}, %{"type" => "drop", "place" => "pl-1"}] =
+               Enum.filter(FakeKeeper.requests(fake), &(&1["type"] in ~w(place drop)))
+
+      assert FakeKeeper.places(fake) == %{}
+    end
+
+    test "a place a spawn named is the spawn's: its owner's death drops nothing, and the spawn's release frees it",
+         %{name: name, fake: fake} do
+      owner = spawn(fn -> Process.sleep(:infinity) end)
+      monitor = Process.monitor(owner)
+      assert :ok = Keeper.place(name, "pl-1", %{kind: "program"}, owner)
+      assert {:ok, %{spawn_id: spawn_id} = handle} = spawn_live(name, "exec cat", %{}, "pl-1")
+
+      Process.exit(owner, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^owner, :killed}, 5_000
+
+      # A request asked after the owner died reaches the keeper after any
+      # the death sent.
+      assert {:ok, _stats} = Keeper.pool_stats(name, "backends")
+      assert requests(fake, "drop") == []
+      assert %{"pl-1" => %{spawn: ^spawn_id}} = FakeKeeper.places(fake)
+
+      :ok = Keeper.release(name, handle, 0)
+      assert List.last(events_until_released(handle)) == :released
+      assert FakeKeeper.places(fake) == %{}
+    end
+
+    test "drop frees a place no spawn named, and leaves one a spawn named",
+         %{name: name, fake: fake} do
+      [drop] = vectors("drop")
+      assert :ok = Keeper.place(name, drop["place"], %{kind: "build"}, self())
+      assert :ok = Keeper.place(name, "pl-1", %{kind: "program"}, self())
+      assert {:ok, _handle} = spawn_live(name, "exec cat", %{}, "pl-1")
+
+      :ok = Keeper.drop(name, drop["place"])
+      :ok = Keeper.drop(name, "pl-1")
+
+      # Asked after both drops, so answered after the keeper read them.
+      assert {:ok, _stats} = Keeper.pool_stats(name, "backends")
+      assert requests(fake, "drop") == [drop]
+      assert Map.keys(FakeKeeper.places(fake)) == ["pl-1"]
+
+      # The dropped id is free to place again.
+      assert :ok = Keeper.place(name, drop["place"], %{kind: "build"}, self())
+    end
+
+    test "assign changes whose the place is: a measure answers its new kind and athanor",
+         %{name: name, fake: fake} do
+      assign = Enum.find(vectors("assign"), &(&1["kind"] == "run"))
+      place = assign["place"]
+      assert :ok = Keeper.place(name, place, %{kind: "warm"}, self())
+      assert {:ok, _handle} = spawn_live(name, "exec cat", %{}, place)
+      :ok = FakeKeeper.mode(fake, {:measured, %{bytes: 1_048_576, lesser: false, age_ms: 7}})
+      assert {:ok, %{kind: "warm", athanor: nil, subject: nil}} = Keeper.measure(name, place)
+
+      :ok = Keeper.assign(name, place, %{kind: "run", athanor: assign["athanor"]})
+
+      assert Keeper.measure(name, place) ==
+               {:ok,
+                %{
+                  kind: "run",
+                  athanor: assign["athanor"],
+                  subject: nil,
+                  bytes: 1_048_576,
+                  lesser: false,
+                  age_ms: 7
+                }}
+
+      assert requests(fake, "assign") == [assign]
+    end
+
+    test "a refused spawn frees its place", %{name: name, fake: fake} do
+      assert :ok = Keeper.place(name, "pl-1", %{kind: "program"}, self())
+      :ok = FakeKeeper.mode(fake, :capacity)
+      assert {:error, {:refused, "capacity"}} = spawn_live(name, "true", %{}, "pl-1")
+      assert FakeKeeper.places(fake) == %{}
+
+      # The client follows it no more: its id is free to place again.
+      :ok = FakeKeeper.mode(fake, :normal)
+      assert :ok = Keeper.place(name, "pl-1", %{kind: "program"}, self())
     end
   end
 
@@ -1058,7 +1292,7 @@ defmodule Locus.KeeperTest do
 
       assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
 
-      assert [%{"type" => "home_make", "path" => path, "uid" => ^uid, "v" => 2}] =
+      assert [%{"type" => "home_make", "path" => path, "uid" => ^uid, "v" => 3}] =
                home_requests(fake)
 
       assert path == Path.join(root, "vlt_a")
@@ -1191,7 +1425,7 @@ defmodule Locus.KeeperTest do
       }
 
       assert {:error, {:refused, "home_absent"}} =
-               Keeper.spawn(name, Map.put(spec, :home, "vlt_a"))
+               Keeper.spawn(name, Map.merge(spec, %{home: "vlt_a", place: place!(name)}))
 
       assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
 
@@ -1201,7 +1435,8 @@ defmodule Locus.KeeperTest do
                  Map.merge(spec, %{
                    home: "vlt_a",
                    home_max_bytes: 1_048_576,
-                   pty: %{rows: 40, cols: 120}
+                   pty: %{rows: 40, cols: 120},
+                   place: place!(name)
                  })
                )
 
@@ -1218,7 +1453,7 @@ defmodule Locus.KeeperTest do
       :ok = FakeKeeper.mode(fake, :home_over_cap)
 
       assert {:error, {:refused, "home_over_cap"}} =
-               Keeper.spawn(name, Map.put(spec, :home, "vlt_a"))
+               Keeper.spawn(name, Map.merge(spec, %{home: "vlt_a", place: place!(name)}))
     end
 
     test "a spawn's hosts go with it, and a spawn refused for them is the keeper's code" do
@@ -1235,10 +1470,13 @@ defmodule Locus.KeeperTest do
       assert {:ok, _handle} =
                Keeper.spawn(
                  name,
-                 Map.put(spec, :hosts, ["api.example.com", "registry.npmjs.org"])
+                 Map.merge(spec, %{
+                   hosts: ["api.example.com", "registry.npmjs.org"],
+                   place: place!(name)
+                 })
                )
 
-      assert {:ok, _handle} = Keeper.spawn(name, spec)
+      assert {:ok, _handle} = Keeper.spawn(name, Map.put(spec, :place, place!(name)))
 
       assert [listed, open] = for(%{"type" => "spawn"} = r <- FakeKeeper.requests(fake), do: r)
       assert listed["hosts"] == ["api.example.com", "registry.npmjs.org"]
@@ -1248,7 +1486,10 @@ defmodule Locus.KeeperTest do
         :ok = FakeKeeper.mode(fake, String.to_existing_atom(code))
 
         assert {:error, {:refused, ^code}} =
-                 Keeper.spawn(name, Map.put(spec, :hosts, ["api.example.com"]))
+                 Keeper.spawn(
+                   name,
+                   Map.merge(spec, %{hosts: ["api.example.com"], place: place!(name)})
+                 )
       end
     end
 
@@ -1338,6 +1579,7 @@ defmodule Locus.KeeperTest do
                Keeper.spawn(name, %{
                  argv: ["true"],
                  env: %{},
+                 place: "pl-1",
                  pool: "backends",
                  memory_bytes: 268_435_456,
                  cpu_quota: 100_000,

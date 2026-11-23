@@ -15,9 +15,16 @@ defmodule Locus.BuilderEnvTest do
 
   alias Locus.Builder
 
-  # A build as the service runs one: the request prepared, then its plan run.
+  # A build as the service runs one: its place made, the request prepared,
+  # then its plan run in the place, which is dropped however the build ends.
   defp build(request, opts \\ []) do
-    with {:ok, plan} <- Builder.prepare(request), do: Builder.run(plan, opts)
+    {:ok, place} = Builder.place(%{athanor_id: "ath_builder"})
+
+    try do
+      with {:ok, plan} <- Builder.prepare(request), do: Builder.run(plan, [place: place] ++ opts)
+    after
+      Builder.drop(place)
+    end
   end
 
   defp tincture(package) do
