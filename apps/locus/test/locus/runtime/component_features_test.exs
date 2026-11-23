@@ -9,7 +9,8 @@ defmodule Locus.Runtime.ComponentFeaturesTest do
   answers, and nothing compiled of it is cached; one that uses none runs.
   Each refused guest is valid WebAssembly with every feature on and uses
   one feature, so its refusal is that feature's, which the log line names;
-  `sync_lift` is `async_lift` without its async lift and is admitted. The
+  `sync_lift` is `async_lift` without its async lift and is admitted, and
+  so is `wide_arithmetic`, which runs on the feature it is named for. The
   guests are `test_wasm/hostile/`, each held to the digest its README
   records by `Locus.Runtime.StoreLimitsTest`.
   """
@@ -64,6 +65,14 @@ defmodule Locus.Runtime.ComponentFeaturesTest do
 
     assert Prima.ComponentFeatures.check(guest("sync_lift")) == :ok
     assert Prima.ComponentFeatures.check(guest("trapper")) == :ok
+  end
+
+  test "wide arithmetic is admitted, compiles and computes" do
+    # Admitted since the engine's Wasmtime 51.0.0, which turns it on.
+    bytes = guest("wide_arithmetic")
+
+    assert Prima.ComponentFeatures.check(bytes) == :ok
+    assert Engine.execute_component(bytes, %{}, run_opts()) == {:ok, %{"carried" => true}}
   end
 
   test "a component the validator refuses with every feature on is invalid, not a feature's" do

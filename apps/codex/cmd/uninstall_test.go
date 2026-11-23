@@ -646,6 +646,76 @@ func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T)
 	}
 }
 
+// A cyfr the package records name as a package's never removes itself,
+// reached by its own path or by a link, the app beside it whole or not:
+// the uninstall removes what it owns, the link in /usr/local/bin among it,
+// and leaves the program, naming the package's tool. Where the records
+// cannot answer it stays too, saying why; a file named like the app's
+// code beside a cyfr no package installed decides nothing.
+func TestUninstallLeavesAPackagesProgramToThePackage(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		byLink  bool
+		dpkg    string // "owns", "says no" or "fails"
+		appAsar bool
+	}{
+		{"the package's, by its own path, the app's code gone", false, "owns", false},
+		{"the package's, by a link", true, "owns", true},
+		{"records that fail", false, "fails", false},
+		{"an install script's, an app.asar beside it", false, "says no", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUninstallScenario(t)
+			switch c.dpkg {
+			case "owns":
+				standInDpkg(t, map[string]string{s.self: "cyfr-desktop"}, false)
+			case "says no":
+				standInDpkg(t, nil, false)
+			case "fails":
+				standInDpkg(t, nil, true)
+			}
+			code := filepath.Join(filepath.Dir(s.self), "app.asar")
+			if c.appAsar {
+				s.write(code, "the app")
+			}
+			runs := s.self
+			if c.byLink {
+				runs = filepath.Join(t.TempDir(), "cyfr")
+				if err := os.Symlink(s.self, runs); err != nil {
+					t.Fatal(err)
+				}
+				selfExecutable = func() (string, error) { return runs, nil }
+			}
+			out, err := s.run(true)
+			if err != nil {
+				t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+			}
+			var lines []string
+			switch c.dpkg {
+			case "owns":
+				lines = []string{
+					"  this program, " + runs + ", which the package cyfr-desktop installed: remove it with the system's package tool ('sudo apt remove cyfr-desktop')\n",
+					"  this program's link " + s.link + "\n",
+					"  this program, " + runs + ", with the package cyfr-desktop\n",
+				}
+			case "fails":
+				lines = []string{"  this program, " + runs + ", since this system's package records could not tell whether a package installed it (dpkg-query --search " + s.self + ": exit status 2)\n"}
+			}
+			for _, line := range lines {
+				if !strings.Contains(out, line) {
+					t.Errorf("the output lacks %q:\n%s", line, out)
+				}
+			}
+			if stays := c.dpkg != "says no"; exists(s.self) != stays || (c.appAsar && !exists(code)) || !exists(runs) && stays {
+				t.Errorf("the program stays %v (want %v), its app.asar or its link were removed", exists(s.self), stays)
+			}
+			if _, err := os.Lstat(s.link); err == nil {
+				t.Error("the link cyfr owns stays")
+			}
+		})
+	}
+}
+
 // The account's device folder, its key and the CYFR it connects to, is
 // outside the project folder: the uninstall leaves it and names it, as it
 // names every other thing it leaves.

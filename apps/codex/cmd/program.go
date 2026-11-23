@@ -138,7 +138,7 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 		}
 		path = p
 	} else {
-		p, err := replaceSelf(ctx, out, target)
+		p, err := replaceSelf(ctx, out, target, o.version != "")
 		if err != nil {
 			return false, err
 		}
@@ -165,16 +165,78 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 	return true, nil
 }
 
+// packageOf is the package of this system's that installed the program at
+// path, its links resolved, as the system's package records say (dpkg's,
+// on Linux), or "" when none did. Such a program never rewrites or removes
+// itself: the package's tool does both. When the records cannot answer,
+// it is an error, and the caller changes nothing. Where there are no dpkg
+// records (a system without dpkg, macOS, Windows), no package of CYFR's
+// installed it.
+func packageOf(path string) (string, error) {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	if runtime.GOOS != "linux" {
+		return "", nil
+	}
+	tool, err := exec.LookPath("dpkg-query")
+	switch {
+	case errors.Is(err, exec.ErrNotFound):
+		return "", nil
+	case err != nil:
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var stderr strings.Builder
+	query := exec.CommandContext(ctx, tool, "--search", "--", real)
+	// The words read below are dpkg's untranslated ones.
+	query.Env = append(os.Environ(), "LC_ALL=C")
+	query.Stderr = &stderr
+	out, err := query.Output()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && strings.Contains(stderr.String(), "no path found matching pattern") {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("dpkg-query --search %s: %v", real, err)
+	}
+	// Each line is "package[, package]: path"; a diversion's lines are not
+	// an owner.
+	for _, line := range strings.Split(string(out), "\n") {
+		if owners, ok := strings.CutSuffix(line, ": "+real); ok && owners != "" && !strings.HasPrefix(line, "diversion by ") {
+			return owners, nil
+		}
+	}
+	return "", fmt.Errorf("dpkg-query --search %s named no package for it", real)
+}
+
 // replaceSelf downloads and verifies release target's binary for this
 // platform and installs it over this program's file, answering the file's
-// path with its links resolved.
-func replaceSelf(ctx context.Context, out io.Writer, target string) (string, error) {
+// path with its links resolved. A cyfr a package installed (packageOf),
+// the one inside the CYFR app's package among them, is refused before any
+// download, and so is one whose package the records cannot tell: replaced
+// alone, the app and its cyfr would be two releases. The refusal names the
+// second command exactly: that program by its own path, and --version as
+// it was asked.
+func replaceSelf(ctx context.Context, out io.Writer, target string, exact bool) (string, error) {
 	self, err := selfExecutable()
 	if err == nil {
 		self, err = filepath.EvalSymlinks(self)
 	}
 	if err != nil {
 		return "", fmt.Errorf("cyfr update could not find its own program file (%v); nothing was changed", err)
+	}
+	switch owner, err := packageOf(self); {
+	case err != nil:
+		return "", fmt.Errorf("cyfr update could not ask this system's package records whether a package installed %s (%v); nothing was changed", self, err)
+	case owner != "":
+		again := self + " update"
+		if exact {
+			again += " --version " + target
+		}
+		return "", fmt.Errorf("This cyfr, %s, belongs to the package %s, so nothing was changed: install the package of release %s from %s/tag/%s, then run '%s' to update CYFR here", self, owner, target, releasesPage, target, again)
 	}
 	fmt.Fprintf(out, "Downloading and verifying release %s for %s/%s...\n", target, runtime.GOOS, runtime.GOARCH)
 	fetch, cancel := context.WithTimeout(ctx, fetchBinaryTimeout)
