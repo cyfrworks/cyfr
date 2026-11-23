@@ -287,7 +287,10 @@ jobs:
     # ships for: its unit tests, then its package built for this runner
     # from the tree's cyfr, installed as a person installs it, and the
     # home-free smoke (tests/desktop-proof/native/smoke.sh) run against the
-    # installed app with no CYFR server and no signing credentials.
+    # installed app with no CYFR server and no signing credentials; on
+    # macOS the distribution's signing rehearsed with a self-made identity
+    # (tests/desktop-proof/native/mac-rehearsal.sh), on Windows the MSI's
+    # cyfr on the person's PATH and off it again after the uninstall.
     name: CYFR app (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     # Electron's download and the package's build take most of it.
@@ -377,7 +380,27 @@ jobs:
           $found = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs") -Recurse -Filter CYFR.exe -ErrorAction SilentlyContinue | Where-Object { $_.Name -ceq "CYFR.exe" })
           if ($found.Count -ne 1) { throw "the MSI installed $($found.Count) CYFR.exe under $env:LOCALAPPDATA\Programs" }
           "APP=$($found[0].FullName)" >> $env:GITHUB_ENV
+          pwsh -NoProfile -File tests/desktop-proof/native/windows-path.ps1 installed $found[0].DirectoryName
+          if ($LASTEXITCODE -ne 0) { throw "the MSI's cyfr is not on PATH" }
 
       - name: Smoke the installed app
         if: runner.os != 'Linux'
         run: bash tests/desktop-proof/native/smoke.sh "$APP"
+
+      - name: Uninstall the app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = (Resolve-Path "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi").Path
+          $log = Join-Path $env:RUNNER_TEMP "cyfr-msi-remove.log"
+          $remove = Start-Process msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
+          if ($remove.ExitCode -ne 0) { Get-Content $log -Tail 50; throw "msiexec /x exited $($remove.ExitCode)" }
+          pwsh -NoProfile -File tests/desktop-proof/native/windows-path.ps1 removed (Split-Path $env:APP)
+          if ($LASTEXITCODE -ne 0) { throw "the MSI's cyfr stayed on PATH" }
+
+      # A second build, signed for distribution with an identity and
+      # profile of the rehearsal's own making: no Apple input is in a pull
+      # request's run.
+      - name: Rehearse the Mac distribution
+        if: runner.os == 'macOS'
+        run: bash tests/desktop-proof/native/mac-rehearsal.sh "$RUNNER_TEMP/cyfr/cyfr" ${{ matrix.arch }}

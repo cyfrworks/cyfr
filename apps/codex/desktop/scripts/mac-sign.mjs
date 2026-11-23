@@ -1,0 +1,329 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+// The Mac app's distribution signing: what a distribution build of the
+// app (build.mjs --distribution) takes from its environment, the
+// entitlements each signed file gets, the provisioning profile's check,
+// and the check of the finished DMG.
+//
+// A distribution build signs with the Developer ID identity in
+// APPLE_CERTIFICATE (a base64 .p12, opened by APPLE_CERTIFICATE_PASSWORD;
+// APPLE_SIGNING_IDENTITY names it, APPLE_TEAM_ID is its team), embeds
+// APPLE_PROVISIONING_PROFILE (a base64 Developer ID .provisionprofile),
+// which authorises the app's WebAuthn keychain group TEAM.run.cyfr.desktop.webauthn,
+// and notarises with APPLE_ID and its app-specific APPLE_PASSWORD. A
+// rehearsal (--rehearse) takes the same inputs under CYFR_REHEARSAL_*
+// names, for a self-made identity and profile, notarises nothing, and is
+// refused when any APPLE_* input is in its environment, so one build never
+// mixes the two. No message names an input's value.
+//
+// Each Mach-O file and bundle is signed with the hardened runtime and a
+// secure timestamp. CYFR.app gets the main entitlements (V8's JIT, the
+// application and team identifiers and the WebAuthn group, which the
+// profile must authorise); the four helper apps get the JIT alone;
+// everything else, the bundled cyfr among it, gets none. No file gets a
+// camera, microphone or other device entitlement.
+//
+//   node scripts/mac-sign.mjs check DMG|APP --cyfr PATH [--rehearsed]
+//
+// checks a built DMG, or an app, against the same inputs (a rehearsal's names with
+// --rehearsed): every signature, its entitlements, the embedded profile and
+// the bundled cyfr; without --rehearsed also Apple's notarisation, stapled
+// to the DMG and to the app, and Gatekeeper's assessment of both, which no
+// rehearsed DMG passes.
+
+import {execFileSync, spawnSync} from "node:child_process"
+import {createHash} from "node:crypto"
+import {copyFileSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, closeSync, readdirSync, rmSync, writeFileSync} from "node:fs"
+import {createRequire} from "node:module"
+import {tmpdir} from "node:os"
+import path from "node:path"
+import {fileURLToPath} from "node:url"
+import {parseArgs} from "node:util"
+
+import {Refused} from "./check-package.mjs"
+
+export const APP_ID = "run.cyfr.desktop"
+
+// electron-builder's own copies of the property list reader and of
+// Electron's signing and notarising, the versions package-lock.json pins.
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+export const need = createRequire(path.join(root, "node_modules", "app-builder-lib", "package.json"))
+const plist = need("plist")
+
+export const APPLE = ["APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_SIGNING_IDENTITY", "APPLE_TEAM_ID",
+  "APPLE_ID", "APPLE_PASSWORD", "APPLE_PROVISIONING_PROFILE"]
+export const REHEARSAL = ["CYFR_REHEARSAL_CERTIFICATE", "CYFR_REHEARSAL_CERTIFICATE_PASSWORD", "CYFR_REHEARSAL_SIGNING_IDENTITY",
+  "CYFR_REHEARSAL_TEAM_ID", "CYFR_REHEARSAL_PROVISIONING_PROFILE"]
+
+/** The WebAuthn keychain group the app's passkeys live in, for team. */
+export const webauthnGroup = (team) => `${team}.${APP_ID}.webauthn`
+
+/**
+ * The signing inputs in env: {certificate, certificatePassword, identity,
+ * team, group, profile (bytes), appleId, applePassword (null when
+ * rehearsed), rehearsed}. Throws Refused naming the input, never its value.
+ */
+export function signingInputs(env, {rehearse = false} = {}) {
+  if (rehearse) {
+    const real = APPLE.filter((name) => env[name] !== undefined)
+    if (real.length) throw new Refused(`a rehearsal takes no Apple input, and ${real.join(", ")} is set`)
+  }
+  const names = rehearse ? REHEARSAL : APPLE
+  for (const name of names) if (!env[name]) throw new Refused(`${name} is not set`)
+  const [certificate, certificatePassword, identity, team, profile] = names.filter((n) => !/^APPLE_(ID|PASSWORD)$/.test(n))
+  if (!/^[A-Z0-9]{10}$/.test(env[team])) throw new Refused(`${team} is not a team ID`)
+  const p12 = Buffer.from(env[certificate], "base64")
+  if (p12[0] !== 0x30) throw new Refused(`${certificate} is not a base64 .p12`)
+  const bytes = Buffer.from(env[profile], "base64")
+  if (bytes[0] !== 0x30) throw new Refused(`${profile} is not a base64 provisioning profile`)
+  return {
+    certificate: env[certificate], certificatePassword: env[certificatePassword],
+    // electron-builder takes the identity's name without its kind.
+    identity: env[identity].replace(/^Developer ID Application: /, ""),
+    team: env[team], group: webauthnGroup(env[team]), profile: bytes,
+    appleId: rehearse ? null : env.APPLE_ID, applePassword: rehearse ? null : env.APPLE_PASSWORD, rehearsed: rehearse
+  }
+}
+
+/**
+ * Check a decoded provisioning profile (its property list, as plist reads
+ * it) against the team and group: a Developer ID profile of that team, for
+ * this app, authorising the group, not expired. Throws Refused.
+ */
+export function checkProfile(profile, {team, group, now = new Date()}) {
+  const entitlements = profile?.Entitlements ?? {}
+  if (profile?.ProvisionsAllDevices !== true) throw new Refused("the provisioning profile is not a Developer ID profile")
+  if (!Array.isArray(profile.TeamIdentifier) || !profile.TeamIdentifier.includes(team)) {
+    throw new Refused("the provisioning profile is for another team")
+  }
+  if (entitlements["com.apple.developer.team-identifier"] !== team) throw new Refused("the provisioning profile is for another team")
+  if (entitlements["com.apple.application-identifier"] !== `${team}.${APP_ID}`) {
+    throw new Refused(`the provisioning profile is not for ${APP_ID}`)
+  }
+  const groups = entitlements["keychain-access-groups"]
+  if (!Array.isArray(groups) || !groups.some((g) => g === group || g === `${team}.*`)) {
+    throw new Refused("the provisioning profile does not authorise the app's WebAuthn group")
+  }
+  if (!(profile.ExpirationDate instanceof Date) || profile.ExpirationDate <= now) {
+    throw new Refused("the provisioning profile has expired")
+  }
+}
+
+/** The entitlements of each kind of signed file, for team and group. */
+export function entitlements(team, group) {
+  return {
+    main: {
+      "com.apple.security.cs.allow-jit": true,
+      "com.apple.application-identifier": `${team}.${APP_ID}`,
+      "com.apple.developer.team-identifier": team,
+      "keychain-access-groups": [group]
+    },
+    helper: {"com.apple.security.cs.allow-jit": true},
+    none: {}
+  }
+}
+
+const HELPER = /\/Contents\/Frameworks\/CYFR Helper( \((GPU|Plugin|Renderer)\))?\.app(\/Contents\/MacOS\/[^/]+)?$/
+
+/**
+ * Which entitlements the file at `file` (an absolute path) inside the app
+ * at `app` gets: "main" for the app and its executable, "helper" for a
+ * helper app and its executable, "none" for every other.
+ */
+export function kindOf(app, file) {
+  const inside = file.slice(app.length).replaceAll("\\", "/")
+  if (inside === "" || inside === "/Contents/MacOS/CYFR") return "main"
+  return HELPER.test(inside) ? "helper" : "none"
+}
+
+/** The three entitlement files, written in dir: {main, helper, none} paths. */
+export function writeEntitlements(dir, team, group) {
+  const out = {}
+  for (const [kind, dict] of Object.entries(entitlements(team, group))) {
+    out[kind] = path.join(dir, `entitlements.${kind}.plist`)
+    writeFileSync(out[kind], plist.build(dict))
+  }
+  return out
+}
+
+/**
+ * electron-builder's mac.sign for a distribution build: Electron's own
+ * signing, inside out, every file with the hardened runtime, a timestamp
+ * and the entitlements of its kind, the profile embedded.
+ */
+export function signer(files) {
+  return async (opts) => {
+    const {signAsync} = need("@electron/osx-sign")
+    await signAsync({...opts, preAutoEntitlements: false, preEmbedProvisioningProfile: true,
+      optionsForFile: (file) => ({hardenedRuntime: true, entitlements: files[kindOf(opts.app, file)]})})
+  }
+}
+
+/** The decoded property list of a provisioning profile's bytes (macOS). */
+export function decodeProfile(bytes) {
+  const dir = mkdtempSync(path.join(tmpdir(), "cyfr-profile-"))
+  try {
+    writeFileSync(path.join(dir, "p"), bytes)
+    return plist.parse(execFileSync("security", ["cms", "-D", "-i", path.join(dir, "p")], {encoding: "utf8"}))
+  } finally {
+    rmSync(dir, {recursive: true, force: true})
+  }
+}
+
+const MACHO = new Set(["feedface", "feedfacf", "cefaedfe", "cffaedfe", "cafebabe", "bebafeca"])
+function isMachO(file) {
+  const fd = openSync(file, "r")
+  try {
+    const head = Buffer.alloc(4)
+    return readSync(fd, head, 0, 4, 0) === 4 && MACHO.has(head.toString("hex"))
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** The app, its nested bundles and Mach-O files, inner first; no link is followed. */
+export function signedCode(app) {
+  const out = []
+  const walk = (at) => {
+    for (const name of readdirSync(at)) {
+      const p = path.join(at, name)
+      const st = lstatSync(p)
+      if (st.isSymbolicLink()) continue
+      if (st.isDirectory()) {
+        walk(p)
+        if (/\.(app|framework)$/.test(name)) out.push(p)
+      } else if (isMachO(p)) out.push(p)
+    }
+  }
+  walk(app)
+  out.push(app)
+  return out
+}
+
+function codesign(args) {
+  const r = spawnSync("codesign", args, {encoding: "utf8"})
+  return {ok: r.status === 0, out: r.stdout, err: r.stderr}
+}
+
+const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex")
+
+// A Mach-O file's bytes without its signature, to compare code signed by
+// different identities: Go's linker signs cyfr ad hoc on arm64.
+function unsigned(file, dir, name) {
+  const copy = path.join(dir, name)
+  copyFileSync(file, copy)
+  if (codesign(["-d", copy]).ok) execFileSync("codesign", ["--remove-signature", copy])
+  return sha256(copy)
+}
+
+/**
+ * Check a signed CYFR.app at `app`: each signature verifies strictly, is
+ * the team's, hardened and timestamped, with exactly its kind's
+ * entitlements; the embedded profile is the supplied one and lists the
+ * app's signing certificate; the bundled cyfr is the verified one at
+ * `cyfr`. Throws Refused naming the first difference.
+ */
+export function checkApp(app, {cyfr, team, group, profile}) {
+  const verify = codesign(["--verify", "--deep", "--strict", "--verbose=2", app])
+  if (!verify.ok) throw new Refused(`CYFR.app's signature does not verify: ${verify.err.trim()}`)
+  const want = entitlements(team, group)
+  for (const file of signedCode(app)) {
+    const name = path.relative(path.dirname(app), file)
+    const shown = codesign(["-d", "--verbose=2", file])
+    if (!shown.ok) throw new Refused(`${name} is not signed`)
+    if (!/^TeamIdentifier=(.*)$/m.test(shown.err) || shown.err.match(/^TeamIdentifier=(.*)$/m)[1] !== team) {
+      throw new Refused(`${name} is not signed by the team`)
+    }
+    if (!/^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime[^)]*\)/m.test(shown.err)) throw new Refused(`${name} lacks the hardened runtime`)
+    if (!/^Timestamp=/m.test(shown.err)) throw new Refused(`${name} has no secure timestamp`)
+    const listed = codesign(["-d", "--entitlements", "-", "--xml", file])
+    const got = listed.out.trim() ? plist.parse(listed.out) : {}
+    if (JSON.stringify(sorted(got)) !== JSON.stringify(sorted(want[kindOf(app, file)]))) {
+      throw new Refused(`${name} has entitlements other than its own`)
+    }
+  }
+  const embedded = path.join(app, "Contents", "embedded.provisionprofile")
+  let bytes
+  try { bytes = readFileSync(embedded) } catch { throw new Refused("CYFR.app embeds no provisioning profile") }
+  if (!bytes.equals(profile)) throw new Refused("CYFR.app embeds another provisioning profile")
+  const dir = mkdtempSync(path.join(tmpdir(), "cyfr-signed-"))
+  try {
+    execFileSync("codesign", ["-d", `--extract-certificates=${path.join(dir, "cert")}`, app], {stdio: "ignore"})
+    const leaf = readFileSync(path.join(dir, "cert0"))
+    const certificates = decodeProfile(profile).DeveloperCertificates ?? []
+    if (!certificates.some((c) => Buffer.from(c).equals(leaf))) throw new Refused("the provisioning profile does not list CYFR.app's signing certificate")
+    const helper = path.join(app, "Contents", "Resources", "cyfr")
+    if (unsigned(helper, dir, "packaged") !== unsigned(cyfr, dir, "verified")) {
+      throw new Refused("CYFR.app/Contents/Resources/cyfr is not the verified cyfr")
+    }
+  } finally {
+    rmSync(dir, {recursive: true, force: true})
+  }
+}
+
+function sorted(value) {
+  if (Array.isArray(value)) return value.map(sorted)
+  if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map((k) => [k, sorted(value[k])]))
+  return value
+}
+
+function run(cmd, args, what) {
+  const r = spawnSync(cmd, args, {encoding: "utf8"})
+  if (r.status !== 0) throw new Refused(`${what}: ${(r.stderr || r.stdout).trim()}`)
+}
+
+/**
+ * Check the built DMG (or the app) at `file`: signed, and its CYFR.app as
+ * checkApp checks it; unless `rehearsed`, both notarised with the ticket
+ * stapled and accepted by Gatekeeper. Throws Refused.
+ */
+export function checkDmg(file, expect, {rehearsed = false} = {}) {
+  const release = (app) => {
+    checkApp(app, expect)
+    if (rehearsed) return
+    run("xcrun", ["stapler", "validate", app], "CYFR.app has no stapled notarisation")
+    run("spctl", ["--assess", "--type", "execute", app], "Gatekeeper refuses CYFR.app")
+  }
+  if (file.endsWith(".app")) return release(file)
+  run("codesign", ["--verify", "--strict", file], "the DMG's signature does not verify")
+  if (!rehearsed) {
+    run("xcrun", ["stapler", "validate", file], "the DMG has no stapled notarisation")
+    run("spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", file], "Gatekeeper refuses the DMG")
+  }
+  const mount = mkdtempSync(path.join(tmpdir(), "cyfr-dmg-"))
+  execFileSync("hdiutil", ["attach", "-nobrowse", "-readonly", "-mountpoint", mount, file], {stdio: "ignore"})
+  try {
+    release(path.join(mount, "CYFR.app"))
+  } finally {
+    spawnSync("hdiutil", ["detach", mount], {stdio: "ignore"})
+    rmSync(mount, {recursive: true, force: true})
+  }
+}
+
+/** Notarise the signed DMG at `dmg` and staple its ticket. */
+export async function notarizeDmg(dmg, inputs) {
+  const {notarize} = need("@electron/notarize")
+  await notarize({appPath: dmg, appleId: inputs.appleId, appleIdPassword: inputs.applePassword, teamId: inputs.team})
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const {values, positionals} = parseArgs({allowPositionals: true,
+    options: {cyfr: {type: "string"}, rehearsed: {type: "boolean", default: false}}})
+  if (positionals[0] !== "check" || !positionals[1] || !values.cyfr) {
+    console.error("usage: node scripts/mac-sign.mjs check DMG|APP --cyfr PATH [--rehearsed]")
+    process.exit(64)
+  }
+  try {
+    const names = values.rehearsed ? REHEARSAL : APPLE
+    const team = process.env[names[3]]
+    const profile = Buffer.from(process.env[names[names.length - 1]] ?? "", "base64")
+    if (!team || !profile.length) throw new Refused(`${names[3]} and ${names[names.length - 1]} are needed`)
+    checkDmg(positionals[1], {cyfr: values.cyfr, team, group: webauthnGroup(team), profile}, {rehearsed: values.rehearsed})
+    console.log(`checked ${path.basename(positionals[1])}${values.rehearsed ? " (rehearsed)" : ""}`)
+  } catch (e) {
+    if (!(e instanceof Refused)) throw e
+    console.error(`refused: ${e.message}`)
+    process.exit(1)
+  }
+}
