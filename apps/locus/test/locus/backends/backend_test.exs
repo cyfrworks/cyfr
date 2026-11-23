@@ -55,7 +55,7 @@ defmodule Locus.Backends.BackendTest do
     @moduledoc false
     # A launcher that starts nothing. The test writes the session's stdout
     # as the keeper's events, on the ref the spawn tells it, and a write to
-    # its stdin holds the session inside that call until the test lets it
+    # its stdin holds its caller inside that call until the test lets it
     # go. Its release is never reported.
     import Kernel, except: [send: 2]
 
@@ -73,6 +73,7 @@ defmodule Locus.Backends.BackendTest do
       end
     end
 
+    def taken(_handle), do: :ok
     def signal(_handle, _sig), do: :ok
     def resize(_handle, _rows, _cols), do: :ok
     def release(_test, _handle, _grace_ms), do: :ok
@@ -461,7 +462,7 @@ defmodule Locus.Backends.BackendTest do
     end
   end
 
-  test "a session told to drop while held in a call owes one increment until it holds again, and its neighbours drop in its place",
+  test "a session told to drop while it reads nothing owes one increment until it holds again, and its neighbours drop in its place",
        %{supervisor: supervisor} do
     # One frame of 64 lines of 1,023 bytes is charged 64 * (1,023 + 32).
     increment = 64 * 1_055
@@ -473,9 +474,8 @@ defmodule Locus.Backends.BackendTest do
     frames(held, 3)
     assert %{unread: ^bound, owed: 0} = Locus.Output.held(output)
 
-    # Held inside a write, it cannot read what the count tells it.
-    writing = Task.async(fn -> Backend.send_lines(holder, ["held"]) end)
-    assert_receive {Scripted, :writing, ^holder}, 5_000
+    # Held, it cannot read what the count tells it.
+    :ok = :sys.suspend(holder)
 
     # The hold that passes the bound tells the one holding most: the held
     # session, which owes the excess, one increment.
@@ -498,14 +498,32 @@ defmodule Locus.Backends.BackendTest do
 
     # Let go, it holds again, drops what it owed, and the count is back
     # within its bound.
-    send(holder, {Scripted, :let_go})
-    assert Task.await(writing) == :running
+    :ok = :sys.resume(holder)
     Backend.status(holder, 5_000)
     assert %{owed: 0, unread: unread} = Locus.Output.held(output)
     assert unread <= bound
 
     %{dropped: 64, grant: grant} = Backend.recv(holder, 0, 0)
     :ok = Locus.Output.return(grant)
+  end
+
+  test "a process that stops reading its input holds its caller, never its session, which goes on taking its output",
+       %{supervisor: supervisor} do
+    output = output(%{unread: 8 * 1_048_576, answering: 26 * 1_048_576})
+    {session, _ref} = scripted = scripted(supervisor, output)
+
+    # The write waits inside the launcher, in its caller's process.
+    writing = Task.async(fn -> Backend.send_lines(session, ["held"]) end)
+    assert_receive {Scripted, :writing, writer}, 5_000
+    assert writer == writing.pid
+
+    # The session still takes what its process writes, and answers.
+    assert %{running: true} = frames(scripted, 3)
+    assert %{unread: unread} = Locus.Output.held(output)
+    assert unread == 3 * 64 * 1_055
+
+    send(writer, {Scripted, :let_go})
+    assert Task.await(writing) == :running
   end
 
   test "an answer the answering count has no room for answers no lines by its deadline, and the same after reads them later",
@@ -670,6 +688,89 @@ defmodule Locus.Backends.BackendTest do
         ended = %{crash: true, error: "exited code=null signal=SIGKILL", exit_code: nil}
         assert until_vacated(session) == told ++ [{:ended, ended}, :vacated]
       end
+    end
+
+    # The stdout bytes waiting in `session`'s mailbox.
+    defp mailbox_bytes(session) do
+      {:messages, messages} = Process.info(session, :messages)
+
+      for {Locus.Keeper, _ref, {:stdout, bytes}} <- messages, reduce: 0 do
+        acc -> acc + byte_size(bytes)
+      end
+    end
+
+    @tag timeout: 60_000
+    test "a session kept from its mailbox holds at most one read of its process's output there",
+         %{supervisor: supervisor, keeper: keeper} do
+      # 8 MiB of lines once told to go, then the process waits.
+      command = ~s[read go && yes "$(printf '%01023d' 0)" | head -n 8192; exec sleep 30]
+
+      session =
+        start_session(supervisor, command, launcher: Locus.Keeper, launcher_server: keeper)
+
+      assert :running = Backend.send_lines(session, ["go"])
+      :ok = :sys.suspend(session)
+
+      # However long it is kept, what waits for it is one read of the
+      # relay's connection, at most: the rest waits outside this node.
+      wait_until(fn -> mailbox_bytes(session) > 0 end, 10_000, "the first read to arrive")
+      deadline = System.monotonic_time(:millisecond) + 1_500
+
+      Stream.repeatedly(fn -> mailbox_bytes(session) end)
+      |> Enum.find(fn bytes ->
+        assert bytes <= Prima.KeeperProtocol.max_frame_bytes() + 5
+        # sleep-ok: a window in which the mailbox must not grow, sampled.
+        Process.sleep(50)
+        System.monotonic_time(:millisecond) > deadline
+      end)
+
+      # Let go, it takes all of it, its oldest dropped and counted.
+      :ok = :sys.resume(session)
+
+      wait_until(
+        fn ->
+          answer = Backend.recv(session, 8_191, 0)
+          if grant = answer[:grant], do: :ok = Locus.Output.return(grant)
+          match?(%{lines: [%{seq: 8_192}]}, answer)
+        end,
+        20_000,
+        "the last line taken"
+      )
+
+      assert %{dropped: dropped} = answer = Backend.recv(session, 0, 0)
+      if grant = answer[:grant], do: :ok = Locus.Output.return(grant)
+      assert dropped > 0
+
+      assert :ok = Backend.stop(session, 0)
+    end
+
+    @tag timeout: 60_000
+    test "a reader that never reads stalls nothing: the process writes to its end, its oldest dropped and counted",
+         %{supervisor: supervisor, keeper: keeper} do
+      bound = 256 * 1_024
+      output = output(%{unread: bound, answering: 26 * 1_048_576})
+
+      # 2 MiB of lines, eight times the bound, then a word on stderr.
+      command = ~s[yes "$(printf '%01023d' 0)" | head -n 2048; echo done >&2; exec sleep 30]
+
+      session =
+        start_session(supervisor, command,
+          launcher: Locus.Keeper,
+          launcher_server: keeper,
+          output: output
+        )
+
+      wait_until(
+        fn -> Backend.status(session, 5_000).stderr_tail =~ "done" end,
+        20_000,
+        "the process to write to its end"
+      )
+
+      wait_until(fn -> Locus.Output.held(output).unread <= bound end, 5_000)
+      %{dropped: dropped} = answer = Backend.recv(session, 0, 0)
+      if grant = answer[:grant], do: :ok = Locus.Output.return(grant)
+      assert dropped > 0
+      assert :ok = Backend.stop(session, 0)
     end
 
     test "a measure the keeper holds delays none of the session's traffic",

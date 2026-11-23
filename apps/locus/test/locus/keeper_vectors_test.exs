@@ -861,9 +861,13 @@ defmodule Locus.KeeperVectorsTest do
 
     stdout_payload = payload(stdout)
     control_payload = payload(control_line)
+    # The owner takes each piece, as a runner's process does, and the
+    # client reads the next only then.
     assert_receive {Keeper, ^ref, {:stdout, ^stdout_payload} = event}, 5_000
+    :ok = Keeper.taken(handle)
     assert Locus.Runtime.Keeper.event(event) == {:log, stdout_payload}
     assert_receive {Keeper, ^ref, {:control, ^control_payload}}, 5_000
+    :ok = Keeper.taken(handle)
     assert_receive {Keeper, ^ref, :control_closed}, 5_000
     :gen_tcp.close(conn)
   end
@@ -886,6 +890,7 @@ defmodule Locus.KeeperVectorsTest do
     :ok = :gen_tcp.send(conn, encoded(carried))
     carried_payload = payload(carried)
     assert_receive {Keeper, ^ref, {:relay, ^carried_payload}}, 5_000
+    :ok = Keeper.taken(handle)
 
     # What the service writes is framed on stream 5, from any process; no
     # bytes write nothing.

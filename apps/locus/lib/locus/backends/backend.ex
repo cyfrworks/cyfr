@@ -72,6 +72,15 @@ defmodule Locus.Backends.Backend do
   it drops its oldest, counted in `dropped` as its own bound drops them,
   and holds again. It waits on no other session.
 
+  Each piece of the process's output is taken (`c:Locus.Launcher.taken/1`)
+  once it is buffered, and the launcher tells the session no more before:
+  what the process writes past that waits outside this node's memory,
+  and the process's own writes wait behind it, as a pipe's do. A reader
+  that never reads stalls nothing, since the session takes and drops,
+  counted. A write to the process is its caller's (`send_lines/2`,
+  `input/2`), answered once written, so a process that stops reading its
+  input holds its callers and never its session.
+
   ## Recv
 
   `recv/3` is ready to be answered at once when a line or a chunk past
@@ -153,12 +162,28 @@ defmodule Locus.Backends.Backend do
   @doc "Write `lines` to the session's process, each with a newline: `:running` or `:ended`."
   @spec send_lines(GenServer.server(), [String.t()]) :: :running | :ended
   def send_lines(server, lines) when is_list(lines),
-    do: GenServer.call(server, {:send, lines}, @call_margin_ms)
+    do: write(server, {:send, Enum.map(lines, &[&1, ?\n])})
 
   @doc "Write `bytes` to a terminal session's process as they are: `:running` or `:ended`."
   @spec input(GenServer.server(), binary()) :: :running | :ended
-  def input(server, bytes) when is_binary(bytes),
-    do: GenServer.call(server, {:input, bytes}, @call_margin_ms)
+  def input(server, bytes) when is_binary(bytes), do: write(server, {:input, bytes})
+
+  # The session names how the bytes reach its process, and the caller
+  # writes them, answered once they are written (`c:Locus.Launcher.send/2`):
+  # a process that does not read its input holds its caller, never its
+  # session, which goes on taking the process's output.
+  defp write(server, request) do
+    case GenServer.call(server, request, @call_margin_ms) do
+      {:write, launcher, handle, data} ->
+        case launcher.send(handle, data) do
+          :ok -> :running
+          {:error, _reason} -> :ended
+        end
+
+      :ended ->
+        :ended
+    end
+  end
 
   @doc "Set a terminal session's size: `:running` or `:ended`."
   @spec resize(GenServer.server(), pos_integer(), pos_integer()) :: :running | :ended
@@ -278,10 +303,8 @@ defmodule Locus.Backends.Backend do
       when kind in [:send, :input] and status != :running,
       do: {:reply, :ended, used(state)}
 
-  def handle_call({:send, lines}, _from, state),
-    do: write(state, Enum.map(lines, &[&1, ?\n]))
-
-  def handle_call({:input, bytes}, _from, state), do: write(state, bytes)
+  def handle_call({kind, data}, _from, state) when kind in [:send, :input],
+    do: {:reply, {:write, state.launcher, state.handle, data}, used(state)}
 
   def handle_call({:resize, _rows, _cols}, _from, %{status: status} = state)
       when status != :running,
@@ -375,6 +398,19 @@ defmodule Locus.Backends.Backend do
     state = ended(%{state | released: true}, state.ending)
     notify(state, :vacated)
     {:noreply, reply_stoppers(state)}
+  end
+
+  # Bytes of the process are taken once handled: the launcher tells the
+  # next only then, so what the process writes waits behind this session
+  # rather than in its mailbox.
+  def handle_info(
+        {launcher, ref, {stream, _bytes} = event},
+        %{launcher: launcher, handle: %{ref: ref}} = state
+      )
+      when stream in [:stdout, :stderr] do
+    state = on_event(state, event)
+    :ok = launcher.taken(state.handle)
+    {:noreply, state}
   end
 
   def handle_info({launcher, ref, event}, %{launcher: launcher, handle: %{ref: ref}} = state),
@@ -587,13 +623,6 @@ defmodule Locus.Backends.Backend do
     do: Relay.output(state.relay, LocusBackends.mask_end(state.masker))
 
   defp rest(state), do: Relay.flush(state.relay)
-
-  defp write(state, data) do
-    case state.launcher.send(state.handle, data) do
-      :ok -> {:reply, :running, used(state)}
-      {:error, _reason} -> {:reply, :ended, used(state)}
-    end
-  end
 
   # The relay's bytes named to the count after every change of them, and
   # named again after each drop it is told to make, until it is taken.

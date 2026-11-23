@@ -118,6 +118,7 @@ defmodule Locus.ListenerTest do
     def pool_stats(_server, "backends"), do: {:ok, %{size: 64, free: 64, quarantined: 0}}
     def spawn(_server, _spec), do: {:ok, %{ref: make_ref(), spawn_id: nil, uid: nil, pid: nil}}
     def send(_handle, _data), do: :ok
+    def taken(_handle), do: :ok
     def signal(_handle, _sig), do: :ok
     def release(_server, _handle, _grace_ms), do: :ok
     def fence(_server, _tag), do: :pending

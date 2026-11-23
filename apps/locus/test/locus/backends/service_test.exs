@@ -81,6 +81,7 @@ defmodule Locus.Backends.ServiceTest do
     end
 
     def send(_handle, _data), do: :ok
+    def taken(_handle), do: :ok
     def signal(_handle, _sig), do: :ok
     def resize(_handle, _rows, _cols), do: :ok
     def release(_agent, _handle, _grace_ms), do: :ok

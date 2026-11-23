@@ -311,6 +311,11 @@ defmodule Locus.DirectLauncher do
   @impl Locus.Launcher
   def send(%{server: child}, data), do: call(child, {:stdin, IO.iodata_to_binary(data)})
 
+  # A process's output reaches its owner through a port, which this
+  # launcher cannot pause: the owner's word is heard and nothing waits on it.
+  @impl Locus.Launcher
+  def taken(_handle), do: :ok
+
   @impl Locus.Launcher
   def send_control(%{server: child}, data),
     do: call(child, {:control, IO.iodata_to_binary(data)})
@@ -1281,6 +1286,9 @@ defmodule Locus.DirectLauncher.Runner do
 
   @impl Locus.Runtime.Keeper
   def send_relay(channel, data), do: DirectLauncher.send_relay(channel, data)
+
+  @impl Locus.Runtime.Keeper
+  def taken(channel), do: DirectLauncher.taken(channel)
 
   @impl Locus.Runtime.Keeper
   def close_relay(channel), do: DirectLauncher.close_relay(channel)

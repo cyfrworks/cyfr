@@ -211,7 +211,10 @@ defmodule Locus.Runtime.Relay do
   Start the service's end of a runner's relay. Options: `:runner`, the
   runner's id every header must name; `:write`, how bytes reach the
   runner (`iodata -> :ok | {:error, term}`); `:close`, how the stream is
-  ended once this process closes the channel (default: nothing).
+  ended once this process closes the channel (default: nothing); `:taken`,
+  the word that the bytes of a delivery were taken, said as each one is
+  read, so the keeper reads the runner's next only then (default:
+  nothing).
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -265,6 +268,7 @@ defmodule Locus.Runtime.Relay do
        runner: Keyword.fetch!(opts, :runner),
        write: Keyword.fetch!(opts, :write),
        close: Keyword.get(opts, :close, fn -> :ok end),
+       taken: Keyword.get(opts, :taken, fn -> :ok end),
        channel: nil,
        root: nil,
        buffer: "",
@@ -325,32 +329,11 @@ defmodule Locus.Runtime.Relay do
 
   defp tell(state, pid, message), do: %{state | words: [{pid, message} | state.words]}
 
-  defp info({:relay_in, _data}, %{channel: nil} = state) do
-    # Nothing is assigned: a runner that speaks first is not one the
-    # service is running.
-    Logger.warning("[Locus.Runtime.Relay] runner #{state.runner} wrote before its assignment")
-    {:stop, {:shutdown, {:closed, :unbound}}, state}
-  end
-
+  # A delivery is taken as it is read: what follows it waits in the keeper's
+  # socket, and this process's buffer holds at most one frame unread.
   defp info({:relay_in, data}, state) do
-    case RunnerRelay.decode(state.channel, state.buffer <> data) do
-      {:ok, frames, rest, channel} ->
-        frames
-        |> Enum.reduce_while({:ok, %{state | channel: channel, buffer: rest}}, fn frame,
-                                                                                  {:ok, state} ->
-          case on_frame(state, frame) do
-            {:ok, state} -> {:cont, {:ok, state}}
-            {:stop, _reason, _state} = stop -> {:halt, stop}
-          end
-        end)
-        |> case do
-          {:ok, state} -> {:noreply, state}
-          {:stop, reason, state} -> {:stop, reason, state}
-        end
-
-      {:error, reason} ->
-        close(state, reason)
-    end
+    :ok = state.taken.()
+    read_in(data, state)
   end
 
   defp info(:relay_ended, state), do: {:stop, {:shutdown, :relay_ended}, state}
@@ -409,6 +392,34 @@ defmodule Locus.Runtime.Relay do
   defp info(msg, state) do
     Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
+  end
+
+  defp read_in(_data, %{channel: nil} = state) do
+    # Nothing is assigned: a runner that speaks first is not one the
+    # service is running.
+    Logger.warning("[Locus.Runtime.Relay] runner #{state.runner} wrote before its assignment")
+    {:stop, {:shutdown, {:closed, :unbound}}, state}
+  end
+
+  defp read_in(data, state) do
+    case RunnerRelay.decode(state.channel, state.buffer <> data) do
+      {:ok, frames, rest, channel} ->
+        frames
+        |> Enum.reduce_while({:ok, %{state | channel: channel, buffer: rest}}, fn frame,
+                                                                                  {:ok, state} ->
+          case on_frame(state, frame) do
+            {:ok, state} -> {:cont, {:ok, state}}
+            {:stop, _reason, _state} = stop -> {:halt, stop}
+          end
+        end)
+        |> case do
+          {:ok, state} -> {:noreply, state}
+          {:stop, reason, state} -> {:stop, reason, state}
+        end
+
+      {:error, reason} ->
+        close(state, reason)
+    end
   end
 
   # The attempts' keys, the frames held and the bodies in flight are no

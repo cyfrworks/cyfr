@@ -22,6 +22,28 @@ import (
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
+// frameWriter writes whole frames to the client's connection, one at a
+// time across the relay's pumps, each encoded into a buffer its caller
+// owns: a frame allocates nothing, so a relay's memory stays what its
+// buffers are however much it carries.
+type frameWriter struct {
+	mu   sync.Mutex
+	conn io.Writer
+}
+
+// send writes one frame of stream and payload, encoded into out, a buffer
+// with room for the whole frame.
+func (w *frameWriter) send(out []byte, stream byte, payload []byte) error {
+	buf, err := frame.Append(out[:0], stream, payload)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, err = w.conn.Write(buf)
+	return err
+}
+
 // Spec is what the keeper hands a relay over its spec pipe: the attach
 // target, whether the spawn has a control channel on ControlFD, and
 // whether it has a relay on RelayFD, as every spawn of an isolated pool
@@ -117,29 +139,25 @@ func Run(spec Spec, stdin io.WriteCloser, stdout, stderr io.ReadCloser, control,
 	defer conn.Close()
 	defer closeAll()
 
-	var writeMu sync.Mutex
-	send := func(stream byte, payload []byte) error {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		return frame.Write(conn, stream, payload)
-	}
-	if err := send(frame.StreamAttach, []byte(spec.Token)); err != nil {
+	w := &frameWriter{conn: conn}
+	if err := w.send(make([]byte, 0, frame.HeaderSize+len(spec.Token)), frame.StreamAttach, []byte(spec.Token)); err != nil {
 		return err
 	}
 
 	outputs := make(chan error, 4)
 	pump := func(r io.Reader, stream byte) {
 		buf := make([]byte, frame.MaxPayload)
+		out := make([]byte, 0, frame.HeaderSize+frame.MaxPayload)
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
-				if werr := send(stream, buf[:n]); werr != nil {
+				if werr := w.send(out, stream, buf[:n]); werr != nil {
 					outputs <- werr
 					return
 				}
 			}
 			if err != nil {
-				outputs <- send(stream, nil)
+				outputs <- w.send(out, stream, nil)
 				return
 			}
 		}
