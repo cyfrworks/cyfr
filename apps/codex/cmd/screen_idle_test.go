@@ -568,6 +568,31 @@ func TestScreenShell_AKeyboardThatEndsLocksAndStartsAgain(t *testing.T) {
 	s.shows(watchedPage)
 }
 
+// A watch lost and found again leaves the keyboard as it ran: it is
+// started once, and again only when it ends itself.
+func TestScreenShell_AWatchLostLeavesTheKeyboardRunning(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	seen := t.TempDir()
+	mended, started := filepath.Join(seen, "mended"), filepath.Join(seen, "started")
+	programs["swayidle"] = "[ -e " + mended + " ] || exit 1\n" + swayidleHears
+	// sleep-ok: a stand-in child that runs until the shell ends it
+	programs["wvkbd-mobintl"] = "echo $$ >>" + started + "\nexec /bin/sleep 600"
+	screenPrograms(t, programs)
+	s := startScreen(t)
+	s.staysLockedSaying(sleepUnwatched)
+	// sleep-ok: two more tries of the watches, each a loss
+	time.Sleep(2*watchesAgain + 200*time.Millisecond)
+	if err := os.WriteFile(mended, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.shows(watchedPage)
+	if raw, _ := os.ReadFile(started); strings.Count(string(raw), "\n") != 1 {
+		t.Fatalf("the keyboard was started %d times", strings.Count(string(raw), "\n"))
+	}
+}
+
 // TestScreenShellHelper runs the screen's shell as a process of its own
 // for TestScreenShell_AKilledShellLeavesNoChildBehind.
 func TestScreenShellHelper(t *testing.T) {

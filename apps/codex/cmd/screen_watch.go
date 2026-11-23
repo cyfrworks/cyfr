@@ -101,8 +101,18 @@ func (u unwatched) Unwrap() error { return u.cause }
 // an unlock either saw it or is ended by that lock.
 func (w *screenWatches) keep(ctx context.Context) {
 	told := ""
+	var keyboard *screenKeyboard
+	defer func() { keyboard.stop() }()
 	for {
-		err := w.watch(ctx)
+		var err error
+		if keyboard == nil || !keyboard.running() {
+			if keyboard, err = startKeyboard(); err != nil {
+				err = unwatched{keyboardGone, err}
+			}
+		}
+		if err == nil {
+			err = w.watch(ctx, keyboard.ended)
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -130,21 +140,47 @@ func (w *screenWatches) suspended() {
 	w.lock(suspendLocked)
 }
 
-// watch runs the on-screen keyboard, first, and both watches until one of
-// the three is not known to work, and says which. The keyboard is watched
-// as they are: one that does not start or that ends locks the screen,
-// whose page says so, and it is started again with them.
-func (w *screenWatches) watch(ctx context.Context) error {
-	keyboard := screenChild(exec.Command("wvkbd-mobintl"))
-	if err := keyboard.Start(); err != nil {
-		return unwatched{keyboardGone, fmt.Errorf("the on-screen keyboard did not start: %w", err)}
+// screenKeyboard is the on-screen keyboard, which the watches keep running:
+// ended is closed once it has ended.
+type screenKeyboard struct {
+	cmd   *exec.Cmd
+	ended chan struct{}
+}
+
+func startKeyboard() (*screenKeyboard, error) {
+	k := &screenKeyboard{cmd: screenChild(exec.Command("wvkbd-mobintl")), ended: make(chan struct{})}
+	if err := k.cmd.Start(); err != nil {
+		return nil, fmt.Errorf("the on-screen keyboard did not start: %w", err)
 	}
-	keyboardEnded := make(chan error, 1)
-	go func() { keyboardEnded <- keyboard.Wait() }()
-	defer func() {
-		_ = keyboard.Process.Kill()
-		<-keyboardEnded
+	go func() {
+		_ = k.cmd.Wait()
+		close(k.ended)
 	}()
+	return k, nil
+}
+
+func (k *screenKeyboard) running() bool {
+	select {
+	case <-k.ended:
+		return false
+	default:
+		return true
+	}
+}
+
+// stop ends a keyboard that runs, and waits for its end.
+func (k *screenKeyboard) stop() {
+	if k != nil {
+		_ = k.cmd.Process.Kill()
+		<-k.ended
+	}
+}
+
+// watch runs both watches until one is not known to work, or the keyboard
+// (keyboardEnded) ends, and says which. The keyboard is watched as they
+// are: one that does not start or that ends locks the screen, whose page
+// says so, and keep starts it again; a watch lost leaves it running.
+func (w *screenWatches) watch(ctx context.Context, keyboardEnded <-chan struct{}) error {
 	socket, err := idle.Socket()
 	if err != nil {
 		return unwatched{idleUnwatched, err}
@@ -193,9 +229,8 @@ func (w *screenWatches) watch(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-inputEnded:
 			return unwatched{idleUnwatched, err}
-		case err := <-keyboardEnded:
-			keyboardEnded <- err
-			return unwatched{keyboardGone, fmt.Errorf("the on-screen keyboard ended (%v)", err)}
+		case <-keyboardEnded:
+			return unwatched{keyboardGone, errors.New("the on-screen keyboard ended")}
 		case <-sleep.exited:
 			return unwatched{sleepUnwatched, sleep.failure("swayidle stopped")}
 		case <-suspending:
