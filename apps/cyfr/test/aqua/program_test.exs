@@ -795,6 +795,7 @@ defmodule Aqua.ProgramTest do
         # suspension ends with this test's process. The attendant takes the
         # idle, tells it and reads that nothing waits, and only then is held.
         attendant = waited_on!(ctx, turn, loop)
+        quiet!(loop.pid)
         true = :erlang.suspend_process(loop.pid)
         say(fake, row, idle(turn, [input.id]))
         committed!(ctx, thread, 5)
@@ -3568,6 +3569,7 @@ defmodule Aqua.ProgramTest do
       committed!(ctx, thread, 4)
 
       # The loop is held while it waits, holding no connection, and dies there.
+      quiet!(loop.pid)
       :erlang.suspend_process(loop.pid)
       on_exit(fn -> Process.exit(loop.pid, :kill) end)
       Task.shutdown(loop, :brutal_kill)
@@ -4299,6 +4301,7 @@ defmodule Aqua.ProgramTest do
       turn = accept!(ctx, thread, row, "work on it")
       %{loop: loop} = working!(ctx, thread, row, fake, turn)
       attendant = waited_on!(ctx, turn, loop)
+      quiet!(loop.pid)
       true = :erlang.suspend_process(loop.pid)
       say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
       committed!(ctx, thread, 5)
@@ -4349,6 +4352,7 @@ defmodule Aqua.ProgramTest do
           "the loop to wait again"
         )
 
+        quiet!(loop.pid)
         true = :erlang.suspend_process(loop.pid)
 
         error = %{
@@ -4484,6 +4488,7 @@ defmodule Aqua.ProgramTest do
       turn = accept!(ctx, thread, row, "work on it")
       %{loop: loop, input: input} = working!(ctx, thread, row, fake, turn)
       Scripted.hold(fake, "close", 30_000)
+      quiet!(loop.pid)
       :erlang.suspend_process(loop.pid)
       Task.shutdown(loop, :brutal_kill)
       assert_receive {:held, "close", service}, 10_000
@@ -4577,6 +4582,7 @@ defmodule Aqua.ProgramTest do
       # The loop is held where it waits on its harness, which takes the
       # work and tells it so; the fence moves before the loop hears it.
       loop_waits!(loop)
+      quiet!(loop.pid)
       true = :erlang.suspend_process(loop.pid)
       say(fake, row, %{"t" => "accepted", "id" => work["id"]})
       committed!(ctx, thread, 3)
