@@ -59,6 +59,7 @@ defmodule Cyfr.TestSeamsTest do
       :database_checks_enabled,
       :brain_cleanup_enabled,
       :egress_resolver,
+      :program_harness,
       :program_idle_ms,
       :execution_archive_watch_enabled,
       :execution_sweeper_enabled,

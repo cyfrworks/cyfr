@@ -32,7 +32,7 @@ defmodule Aqua.Loop.Stream do
   or retried request, or an answer of tool calls alone.
 
   A program used as a brain streams through its attendant
-  (`Aqua.Program`), which announces each `text` event of the open work as
+  (`Aqua.Harness.Program`), which announces each `text` event of the open work as
   a delta (`announce/4`) whose step is the program's native message: its
   `said` row, whose payload names that message as `brain_message`, settles
   it as a step's text row does, and the attendant abandons a message that

@@ -1088,10 +1088,12 @@ const CompanySignIn = "This CYFR requires company sign-in. Open its address in a
 // Unbound is a Config.Client's refusal to connect where what it is bound
 // to no longer holds: nothing was sent, and the person reads Sentence.
 // Moved is the CYFR now named at another address or account service than
-// this shell's, which a shell made afresh would follow.
+// this shell's, which a shell made afresh would follow. Lasting is a cause
+// waiting does not cure, which the person has to act on.
 type Unbound struct {
 	Sentence string
 	Moved    bool
+	Lasting  bool
 }
 
 func (u *Unbound) Error() string { return u.Sentence }
