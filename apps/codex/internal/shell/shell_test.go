@@ -42,7 +42,9 @@ type box struct {
 	dir      string
 	record   string
 	restarts atomic.Int32
-	now      atomic.Int64
+	// hidden hears each Restart, the hide a lock begins with.
+	hidden chan struct{}
+	now    atomic.Int64
 	// proof is what the page's script keeps: the proof the last answer
 	// that handed one over carried.
 	proof string
@@ -96,7 +98,7 @@ func newBox(t *testing.T, home *fakeHome, dir string) *box {
 // configuration changed by each of edit.
 func newBoxAt(t *testing.T, home *fakeHome, dir, directory string, edit ...func(*Config)) *box {
 	t.Helper()
-	b := &box{t: t, home: home, dir: dir, record: filepath.Join(dir, "holder.json")}
+	b := &box{t: t, home: home, dir: dir, record: filepath.Join(dir, "holder.json"), hidden: make(chan struct{}, 1)}
 	b.now.Store(time.Now().UnixNano())
 	cfg := Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
@@ -107,10 +109,16 @@ func newBoxAt(t *testing.T, home *fakeHome, dir, directory string, edit ...func(
 			}
 			return "", nil
 		},
-		Restart: func() { b.restarts.Add(1) },
-		Detect:  func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
-		Now:     func() time.Time { return time.Unix(0, b.now.Load()) },
-		Chip:    func() bool { return false },
+		Restart: func() {
+			b.restarts.Add(1)
+			select {
+			case b.hidden <- struct{}{}:
+			default:
+			}
+		},
+		Detect: func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
+		Now:    func() time.Time { return time.Unix(0, b.now.Load()) },
+		Chip:   func() bool { return false },
 	}
 	for _, e := range edit {
 		e(&cfg)
@@ -827,7 +835,8 @@ func TestChannel_ACertificateForAnotherAddressIsDroppedForAHello(t *testing.T) {
 // A connection the network silently drops, the home still standing, locks
 // the box at the next report: the shell's ping goes unanswered within its
 // bound, the channel ends as unreachable, and the lock page says so, not
-// that the screen idled.
+// that the screen idled. From the hide the lock begins with, the box is
+// locked, though the silent CYFR is still being told.
 func TestChannel_ASilentlyDroppedConnectionLocksTheBox(t *testing.T) {
 	oldEvery, oldWithin := reportEvery.Get(), heardWithin.Get()
 	reportEvery.Set(200 * time.Millisecond)
@@ -837,13 +846,15 @@ func TestChannel_ASilentlyDroppedConnectionLocksTheBox(t *testing.T) {
 	b := newBox(t, home, t.TempDir())
 	setUpAndOpen(t, home, b)
 	home.stall(t)
-	deadline := time.Now().Add(5 * time.Second)
-	for b.shell.Unlocked() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-b.hidden:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a dropped connection never locked the box")
 	}
+	unlocked := b.shell.Unlocked()
 	page := b.page()
-	if b.shell.Unlocked() || !strings.Contains(page, "could not be reached") || strings.Contains(page, "five minutes") {
-		t.Fatalf("a dropped connection did not lock the box as unreachable (unlocked=%v):\n%s", b.shell.Unlocked(), page)
+	if unlocked || !strings.Contains(page, "could not be reached") || strings.Contains(page, "five minutes") {
+		t.Fatalf("a dropped connection did not lock the box as unreachable (unlocked=%v at the hide):\n%s", unlocked, page)
 	}
 }
 

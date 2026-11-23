@@ -2106,8 +2106,7 @@ func (s *Shell) reserve(ctx context.Context) (string, error) {
 // anything. What takes no context is finished first: a key made or opened
 // under a passphrase (Argon2id, two of them in a setup) or by the chip.
 // closed is whether this lock closed a channel, and so restarted the
-// pages. Unlocked cannot say it: it is still true while another lock
-// restarts them.
+// pages. Unlocked cannot say it: another lock may have closed it.
 func (s *Shell) Lock(why string) (closed bool) {
 	locked, _ := s.end(nil)
 	s.mu.Lock()
@@ -2210,8 +2209,10 @@ func (s *Shell) lock(why string) {
 	}
 	ch := s.ch
 	if ch != nil {
-		// A page drawn while the CYFR is told is the lock page already.
+		// A page drawn while the CYFR is told is the lock page already,
+		// and the shell says locked from here.
 		s.ch, s.confirm, s.passkey = nil, nil, nil
+		s.open.Store(false)
 		if why != "" {
 			s.notice = why
 		}
@@ -2232,13 +2233,11 @@ func (s *Shell) lock(why string) {
 	}
 	clear(s.proof)
 	s.key, s.locks, s.making, s.confirm, s.passkey, s.passphrase, s.proof = nil, nil, nil, nil, nil, "", nil
-	if ch != nil {
-		s.open.Store(false)
-	}
 }
 
-// Unlocked is whether the channel stands, until the lock that closes it
-// is done. It waits for nothing.
+// Unlocked is whether the channel stands: false from the moment a lock
+// takes the shell to close it, before the screen is hidden. It waits for
+// nothing.
 func (s *Shell) Unlocked() bool { return s.open.Load() }
 
 // unwatchedError refuses an unlock, saying what the page says.

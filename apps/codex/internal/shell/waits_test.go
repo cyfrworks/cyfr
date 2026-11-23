@@ -676,7 +676,7 @@ func TestLock_APageBesideItsTellingIsTheLockPage(t *testing.T) {
 
 // A lock hides what is on the screen before it tells the CYFR: while the
 // CYFR has not answered the lock of a session, the browser was already
-// restarted on the lock page.
+// restarted on the lock page, and the shell says it is locked.
 func TestLock_HidesTheScreenBeforeItTellsTheCYFR(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
@@ -696,8 +696,8 @@ func TestLock_HidesTheScreenBeforeItTellsTheCYFR(t *testing.T) {
 		b.shell.Lock(suspendedHere)
 	}()
 	g.reached(t)
-	if n := b.restarts.Load(); n != 1 {
-		t.Fatalf("while the CYFR is told, the screen was hidden %d times", n)
+	if n := b.restarts.Load(); n != 1 || b.shell.Unlocked() {
+		t.Fatalf("while the CYFR is told, the screen was hidden %d times, unlocked %v", n, b.shell.Unlocked())
 	}
 	g.open()
 	<-locked
