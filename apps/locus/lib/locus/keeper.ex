@@ -39,10 +39,11 @@ defmodule Locus.Keeper do
   caller, which reads its frames itself. When the command's leader exits,
   or on `release`, cyfr-locus kills every process of the uid and removes
   everything the uid left, then reports `released`; `run/2` answers only
-  after that report, so no process of a build outlives the call, but for
-  a spawn cyfr-locus refuses after it made it, whose refusal `run/2`
-  answers at once while cyfr-locus still retires what it made. A
-  deadline passed, a stdout bound exceeded or a cancel
+  after that report, so no process of a build outlives the call. A spawn
+  cyfr-locus refuses after it made it never ran, and `run/2` answers its
+  refusal at that report too, asking for none: one not reported within
+  60 s is logged and still waited for, so the build's slot is held until
+  cyfr-locus has freed its place. A deadline passed, a stdout bound exceeded or a cancel
   (`Locus.Executor.cancel/1`) releases the spawn with no grace. A caller
   that dies has its spawn released at once.
 
@@ -57,9 +58,9 @@ defmodule Locus.Keeper do
   `{:refused, code, handle}` at once and followed by that spawn id until
   its `released`, which frees its place and is cyfr-locus's word alone:
   its owner and its heir hear of its end only then, as of a started
-  spawn's, and no release is asked of it. A run's caller hears its
-  refusal and nothing after it; a runner's owner hears `{:refused, code}`,
-  then `:released`. The caller
+  spawn's, and no release is asked of it. A run answers its refusal at
+  that `released` ("A run"); a runner's owner hears `{:refused, code,
+  spawn_id}`, then `:released`. The caller
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, each
   stdout and stderr frame, the leader's exit and the uid's retirement,
@@ -72,8 +73,10 @@ defmodule Locus.Keeper do
   not attached within 10 s, or that sends a frame the codec refuses or on a stream
   other than stdout and stderr, has its spawn released with no grace,
   and an owner that dies has its spawn released at once. When the
-  channel closes every spawn is already retired, and every owner hears
-  `:released`.
+  channel closes every owner hears `{:error, :channel_lost}` and no heir
+  hears anything: only cyfr-locus's `released` says a spawn is gone, and
+  what this node followed is settled at the next boot of cyfr-locus,
+  which starts holding none.
 
   ## Places
 
@@ -133,7 +136,9 @@ defmodule Locus.Keeper do
   It is answered `{:ok, handle}` as soon as its request is written, with
   no spawn id, uid or pid yet, since a runner is handed out while it is
   still being staged. Its owner then hears `{:spawned, spawn_id, uid,
-  pid}` or `{:refused, code}`, `:attached`, `{:control, bytes}` and
+  pid}`, or `{:refused, code}` for one cyfr-locus made nothing of, or
+  `{:refused, code, spawn_id}` for one it refused after it made it, whose
+  `:released` follows, then `:attached`, `{:control, bytes}` and
   `:control_closed` (once), `{:relay, bytes}` and `:relay_closed` (once),
   `{:stdout, bytes}` and `{:stderr, bytes}`, `{:exited, exit,
   memory}`, `{:error, :relay_protocol}`, `{:error, :channel_lost}`
@@ -192,8 +197,9 @@ defmodule Locus.Keeper do
   its kind alone: the reason an exit carries holds the request, and a
   spawn's request holds its environment.
 
-  When the channel closes, cyfr-locus has already retired every spawn and
-  is exiting; this server stops, and every role it serves with it.
+  When the channel closes, cyfr-locus is exiting: it kills this node, then
+  retires every spawn; this server stops, and every role it serves with
+  it.
   """
 
   use GenServer
@@ -672,6 +678,15 @@ defmodule Locus.Keeper do
 
   defp on_keeper(s, {:error, reason}), do: %{s | phase: :done, failure: {:spawn_failed, reason}}
 
+  # Refused after cyfr-locus made it: nothing of it ran, and what was made
+  # is cyfr-locus's until its `released`, which no request asks for.
+  defp on_keeper(s, {:error, code, :release_follows}),
+    do: %{
+      on_keeper(s, {:error, code})
+      | phase: :refused,
+        released_by: now() + @release_timeout_ms
+    }
+
   # Stdin is written from a process of its own, so a command slow to read
   # it never stops this one reading its output.
   defp feed_stdin(conn, stdin) do
@@ -741,6 +756,9 @@ defmodule Locus.Keeper do
   # until the drain bound a missing connection is waited for.
   defp advance(%{phase: :done} = s), do: s
 
+  # A refused spawn never ran, so no relay of it connects.
+  defp advance(%{phase: :refused, released: true} = s), do: %{s | phase: :done}
+
   defp advance(%{released: true, conn: conn, conn_open: false} = s) when conn != nil,
     do: %{s | phase: :done}
 
@@ -763,12 +781,24 @@ defmodule Locus.Keeper do
     max(until - now(), 0)
   end
 
+  defp wait_ms(%{released_by: nil}), do: :infinity
   defp wait_ms(s), do: max(s.released_by - now(), 0)
 
   defp on_wait_expired(%{phase: :running} = s) do
     if s.conn == nil and now() >= s.attach_by and now() < s.deadline,
       do: stop(s, {:spawn_failed, :attach_timeout}),
       else: stop(s, :timeout)
+  end
+
+  # The build's slot is freed only once cyfr-locus says what it made of the
+  # refused spawn is gone, so the wait goes on past the bound.
+  defp on_wait_expired(%{phase: :refused} = s) do
+    Logger.error(
+      "[Locus.Keeper] a refused build's spawn was not reported released within " <>
+        "#{@release_timeout_ms} ms; the build waits for it"
+    )
+
+    %{s | released_by: nil}
   end
 
   defp on_wait_expired(s) do
@@ -1280,9 +1310,10 @@ defmodule Locus.Keeper do
     end
   end
 
-  # cyfr-locus retires every spawn before its channel closes: a run's
-  # caller and a control spawn's owner hear the channel lost, a long-lived
-  # spawn's owner its release.
+  # cyfr-locus closes its channel as it exits, then kills this node and
+  # retires every spawn: none is gone until it says so, and it will say
+  # nothing more here. Every caller and every owner hears the channel lost,
+  # and no heir is told.
   def handle_info({:channel_closed, reason}, state) do
     Logger.error(
       "[Locus.Keeper] FATAL: the keeper channel closed (#{inspect(reason)}); " <>
@@ -1294,11 +1325,7 @@ defmodule Locus.Keeper do
         %{kind: :handle, from: from} when from != nil ->
           GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
 
-        %{kind: :handle} ->
-          notify(entry, ref, :released)
-          tell_heir(entry)
-
-        _run_or_control ->
+        _followed ->
           notify(entry, ref, {:error, :channel_lost})
       end
     end
@@ -1963,10 +1990,13 @@ defmodule Locus.Keeper do
     entry
   end
 
-  # A long-lived spawn's caller is answered the handle its release follows
-  # on where cyfr-locus made the spawn before refusing it.
+  # Where cyfr-locus made the spawn before refusing it, its owner is told
+  # its release follows: a long-lived spawn's caller is answered the handle
+  # it follows on, a run's caller and a runner's owner hear so.
+  defp refused(%{kind: :run} = entry, ref, code, nil), do: notify(entry, ref, {:error, code})
+
   defp refused(%{kind: :run} = entry, ref, code, _made),
-    do: notify(entry, ref, {:error, code})
+    do: notify(entry, ref, {:error, code, :release_follows})
 
   defp refused(%{kind: :handle, from: from}, _ref, code, nil) when from != nil,
     do: GenServer.reply(from, {:error, {:refused, code}})
@@ -1974,19 +2004,20 @@ defmodule Locus.Keeper do
   defp refused(%{kind: :handle, from: from}, _ref, code, made) when from != nil,
     do: GenServer.reply(from, {:error, {:refused, code, made}})
 
-  defp refused(%{kind: :control} = entry, ref, code, _made),
+  defp refused(%{kind: :control} = entry, ref, code, nil),
     do: notify(entry, ref, {:refused, code})
+
+  defp refused(%{kind: :control} = entry, ref, code, made),
+    do: notify(entry, ref, {:refused, code, made.spawn_id})
 
   defp refused(_entry, _ref, _code, _made), do: :ok
 
   # A spawn cyfr-locus refused after it made it is cyfr-locus's until its
   # `released`: it is followed by its spawn id until then, with nothing
   # asked of it, since cyfr-locus is retiring it already and an
-  # `unknown_spawn` answer to a request naming it reads as its release. A
-  # run's caller was done with it at the refusal.
+  # `unknown_spawn` answer to a request naming it reads as its release.
   defp made_refused(state, ref, entry, spawn_id) do
-    owner = if entry.kind == :run, do: nil, else: entry.owner
-    entry = %{entry | spawn_id: spawn_id, from: nil, owner: owner, release_sent: true}
+    entry = %{entry | spawn_id: spawn_id, from: nil, release_sent: true}
     %{put_entry(state, ref, entry) | spawns: Map.put(state.spawns, spawn_id, ref)}
   end
 

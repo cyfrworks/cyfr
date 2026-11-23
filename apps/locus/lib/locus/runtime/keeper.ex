@@ -33,7 +33,10 @@ defmodule Locus.Runtime.Keeper do
   the caller's to split), the relay's end, the runner's log output, the
   channel closed, the
   process exited, its uid or process group retired, the spawn refused
-  (no process of it ever ran, as when `c:spawn/1` refuses), or a failure.
+  (no process of it ever ran, as when `c:spawn/1` refuses; where the
+  keeper made something of it first, the refusal says its release
+  follows, and the runner's place is freed only at that release), or a
+  failure.
   Both keepers spawn through a `Locus.Launcher` that tells a runner's
   owner its events in its own words (`t:Locus.Launcher.control_event/0`),
   and both read them through `event/1`.
@@ -83,6 +86,7 @@ defmodule Locus.Runtime.Keeper do
           | {:exited, exit()}
           | :released
           | {:refused, term()}
+          | {:refused, term(), :release_follows}
           | {:error, term()}
 
   @doc """
@@ -179,14 +183,16 @@ defmodule Locus.Runtime.Keeper do
   The runtime's event for `event`, an event a runner's launcher told its
   owner (`t:Locus.Launcher.control_event/0`): the OS pid once spawned, a
   refusal at the memory bound as `:memory_unavailable` and any other as
-  its code, stdout and stderr as the runner's log, an exit without its
-  memory report (the keeper logs an end at the bound itself), and every
-  other event as it is.
+  its code, one the keeper made something of first with
+  `:release_follows` in place of its spawn id, stdout and stderr as the
+  runner's log, an exit without its memory report (the keeper logs an end
+  at the bound itself), and every other event as it is.
   """
   @spec event(Locus.Launcher.control_event()) :: event()
   def event({:spawned, _spawn_id, _uid, pid}), do: {:spawned, pid}
   def event({:refused, "memory_unavailable"}), do: {:refused, :memory_unavailable}
   def event({:refused, code}), do: {:refused, code}
+  def event({:refused, code, _spawn_id}), do: {:refused, code, :release_follows}
   def event({:stdout, bytes}), do: {:log, bytes}
   def event({:stderr, bytes}), do: {:log, bytes}
   def event({:exited, exit, _memory}), do: {:exited, exit}

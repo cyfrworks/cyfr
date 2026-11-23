@@ -17,8 +17,9 @@ defmodule Locus.Runtime.RunnerPoolTest do
   `cancel_child`; a frame from a runner already ended ignored; a keeper
   that refuses runners leaving none in the pool, tainted or otherwise,
   with the pool backing off, refusing a take with the keeper's account
-  and filling again once a runner starts; and the keeper's loss ending
-  every runner.
+  and filling again once a runner starts, and a runner it refused after
+  making it held in its place among those ahead until its release; and
+  the keeper's loss ending every runner.
   """
 
   use ExUnit.Case, async: true
@@ -797,6 +798,50 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
       assert {:error, {:refused, %{reason: "memory_unavailable"}}} =
                RunnerPool.take(pool, "ath_a", "exec_2")
+    end
+
+    test "a runner refused after the keeper made it keeps its place among the runners ahead until the keeper's release: none is started in its stead, and a take goes to another",
+         %{keeper: keeper} do
+      pool = start_pool!(keeper, pool_size: 1)
+      serve!(pool)
+      # Attached, not still spawning, so the keeper's refusals below are
+      # never ended by its start.
+      wait_until(fn -> match?([%{state: :fresh}], Runners.runners(pool)) end)
+
+      # The runner spawned behind the one taken is refused once the keeper
+      # made it, its place still the keeper's.
+      :ok = ScriptedKeeper.refuse(keeper, {:made, :exec_failed})
+      {:ok, first, first_id} = RunnerPool.take(pool, "ath_a", "exec_1")
+      wait_until(fn -> RunnerPool.status(pool).refusal != nil end)
+      [held_id] = Map.keys(ScriptedKeeper.places(keeper)) -- [first_id]
+
+      # The keeper would start a runner now, and the pool's wait after the
+      # refusal runs out: the held runner's place is not the pool's to fill.
+      :ok = ScriptedKeeper.refuse(keeper, nil)
+
+      wait_until(
+        fn -> not :sys.get_state(pool).refill_scheduled end,
+        5_000,
+        "the pool's wait after the refusal to run out"
+      )
+
+      assert %{
+               runners: Enum.sort(for r <- Runners.runners(pool), do: {r.id, r.state}),
+               spawned: length(spawns(keeper))
+             } == %{runners: Enum.sort([{first_id, :busy}, {held_id, :refused}]), spawned: 1}
+
+      complete(spawn_of(keeper, first), "exec_1", true)
+      assert_receive {RunnerPool, ^first, {:complete, "exec_1", true}}
+      assert {:ok, ^first, ^first_id} = RunnerPool.take(pool, "ath_a", "exec_2")
+
+      assert {:error, {:refused, %{reason: "exec_failed"}}} =
+               RunnerPool.take(pool, "ath_b", "exec_3")
+
+      # The keeper's release frees the place, and the pool fills it.
+      :ok = ScriptedKeeper.release_made(keeper)
+      wait_until(fn -> counts(pool).fresh == 1 end, 5_000)
+      refute Enum.any?(Runners.runners(pool), &(&1.id == held_id))
+      assert %{refusal: nil} = RunnerPool.status(pool)
     end
   end
 

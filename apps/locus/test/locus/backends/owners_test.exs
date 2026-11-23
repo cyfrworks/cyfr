@@ -13,7 +13,8 @@ defmodule Locus.Backends.OwnersTest do
   version; the bound on sessions, the oldest ended one forgotten; the
   memory the box and each athanor admit, reserved before an open's
   preparation and released once a session's process is gone, a spawn the
-  keeper refused after making it among them, at the keeper's release; idleness
+  keeper refused after making it among them, at the keeper's release, and
+  held through the loss of the keeper's channel; idleness
   and leases through a driven sweep; kept homes shared by the sessions of
   one entry, held to their bound, reset and retired; renew, release,
   reconcile and status. Sessions run through the test environment's
@@ -1532,6 +1533,32 @@ defmodule Locus.Backends.OwnersTest do
       :ok = Locus.Test.FakeKeeper.released(fake, spawn_id)
       wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
       assert {:ok, _} = open(owners, "a", {1, 1}, "b1", key: "two")
+    end
+
+    @tag timeout: 30_000
+    test "a session keeps its reservation when the keeper's channel is lost: nobody but the keeper says its process is gone",
+         ctx do
+      %{name: client, fake: fake} = Locus.Test.FakeKeeper.start_client!()
+
+      owners =
+        start_owners(ctx,
+          memory_budget: 268_435_456,
+          session_opts: [launcher: Locus.Keeper, launcher_server: client]
+        )
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      assert {:ok, _} = open(owners, "a", {1, 1}, "b1")
+      assert held_bytes(owners) == 268_435_456
+      [session] = Map.keys(:sys.get_state(owners).pids)
+      client_down = Process.monitor(client)
+
+      :ok = Locus.Test.FakeKeeper.close(fake)
+      assert_receive {:DOWN, ^client_down, :process, ^client, {:shutdown, :channel_lost}}, 5_000
+
+      # What the client told before it stopped has reached the session, and
+      # what the session told has reached the table.
+      _ = :sys.get_state(session)
+      assert held_bytes(owners) == 268_435_456
     end
 
     test "a session's bound is released once its process is confirmed gone, not when it is asked to end",

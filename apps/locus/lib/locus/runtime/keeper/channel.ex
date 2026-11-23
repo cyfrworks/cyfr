@@ -28,8 +28,10 @@ defmodule Locus.Runtime.Keeper.Channel do
   `release/2` asks it for the runner's retirement: a term signal to its
   process group, the grace to report what it holds, then the kill, and
   every process of the uid killed and everything it left removed before
-  another runner gets it. When the channel closes, `cyfr-locus` has
-  already retired every spawn and is exiting: every runner's owner hears
+  another runner gets it. A spawn `cyfr-locus` refuses after it made it
+  is heard as `{:refused, code, :release_follows}`, and its release
+  follows. When the channel closes, `cyfr-locus` is exiting: it kills this
+  node, then retires every spawn. Every runner's owner hears
   `{:error, :channel_lost}`, and the client stops, taking the runtime
   with it.
 

@@ -9,16 +9,19 @@ defmodule Locus.KeeperTest do
   reported released; the deadline, a stdout bound, a cancel and the
   caller's death release the spawn with no grace; a relay connection
   that arrives after the client has read the exit and release reports
-  still delivers its output; a refused spawn and a lost channel answer
-  at once; a spawn ended at its bound is the wire's `memory` refusal and
-  a bound that cannot be enforced its `unavailable`, naming the option
-  the deployment lacks. A long-lived spawn (`Locus.Launcher`) answers
+  still delivers its output; a spawn refused before the keeper made it
+  and a lost channel answer at once, one refused after the keeper made it
+  once the keeper reports it released; a spawn ended at its bound is the
+  wire's `memory` refusal and a bound that cannot be enforced its
+  `unavailable`, naming the option the deployment lacks. A long-lived spawn (`Locus.Launcher`) answers
   its handle, and its owner hears the relay attached, its stdout and
   stderr apart and its exit, then its release, the last; stdin goes as
   frames of the codec's bound; `signal`, `release` with a grace and
   `pool` are the vectors' requests, byte for byte but for their own ids;
   a spawn refused after the keeper made it is refused at once, and its
-  heir and owner hear its release once, at the keeper's `released`;
+  heir and owner hear its release once, at the keeper's `released`; a
+  lost channel tells its owner so, and neither it nor its heir that it is
+  released;
   an owner that dies has its spawn released with no grace; a request the
   keeper would refuse is refused before it is sent. A place is the
   vectors' request, answered once the keeper placed it, and refused
@@ -324,6 +327,21 @@ defmodule Locus.KeeperTest do
     test "a spawn the pool cannot hold is refused as capacity", %{name: name, fake: fake} do
       :ok = FakeKeeper.mode(fake, :capacity)
       assert {{:error, :capacity}, []} = run(name, "true")
+    end
+
+    test "a run whose spawn the keeper refused after making it answers its refusal only once the keeper reports it released",
+         %{name: name, fake: fake, client: client} do
+      :ok = FakeKeeper.mode(fake, {:exec_failed, self()})
+      task = Task.async(fn -> run(name, "true") end)
+      assert_receive {:exec_failed, spawn_id}, 5_000
+
+      # The client has heard the refusal, and the run's caller with it.
+      wait_until(fn -> Map.has_key?(:sys.get_state(client).spawns, spawn_id) end, 5_000)
+      assert Task.yield(task, 500) == nil
+
+      :ok = FakeKeeper.released(fake, spawn_id)
+      assert {{:error, {:spawn_failed, "exec_failed"}}, []} = Task.await(task, 5_000)
+      assert requests(fake, "release") == []
     end
 
     test "losing the channel ends the client and answers a waiting run", %{
@@ -1139,16 +1157,35 @@ defmodule Locus.KeeperTest do
                Keeper.pool_stats(:no_such_keeper, "backends")
     end
 
-    test "losing the channel reports every long-lived spawn released", %{
-      name: name,
-      fake: fake
-    } do
-      assert {:ok, handle} = spawn_live(name, "exec sleep 30")
-      assert_receive {Keeper, _ref, :attached}, 10_000
-      ref = handle.ref
+    test "losing the channel tells a long-lived spawn's owner so, and neither it nor its heir that the spawn is released",
+         %{name: name, fake: fake, client: client} do
+      tag = %{
+        ledger: make_ref(),
+        session: {make_ref(), "ss_lost"},
+        athanor: "ath_lost",
+        memory_bytes: 268_435_456,
+        home_id: nil
+      }
+
+      assert {:ok, %{ref: ref}} =
+               Keeper.spawn(name, %{
+                 argv: ["/bin/sh", "-c", "exec sleep 30"],
+                 env: %{},
+                 place: place!(name),
+                 pool: "backends",
+                 memory_bytes: 268_435_456,
+                 cpu_quota: 100_000,
+                 heir: {self(), tag}
+               })
+
+      assert_receive {Keeper, ^ref, :attached}, 10_000
+      down = Process.monitor(client)
 
       :ok = FakeKeeper.close(fake)
-      assert_receive {Keeper, ^ref, :released}, 5_000
+      assert_receive {Keeper, ^ref, {:error, :channel_lost}}, 5_000
+      assert_receive {:DOWN, ^down, :process, ^client, {:shutdown, :channel_lost}}, 5_000
+      refute_received {Keeper, ^ref, :released}
+      refute_received {Keeper, {:heir, ^tag}, :released}
     end
   end
 

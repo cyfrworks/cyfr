@@ -25,7 +25,7 @@ defmodule Locus.Runtime.Test.Runners do
   @type runner :: %{
           pid: pid(),
           id: String.t(),
-          state: :spawning | :fresh | :idle | :busy | :tainted | :retiring,
+          state: :spawning | :fresh | :idle | :busy | :tainted | :retiring | :refused,
           athanor: String.t() | nil,
           execution_id: String.t() | nil
         }

@@ -21,7 +21,10 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   `releases/1`. `kill!/1` ends the keeper as a lost channel would: every
   runner's owner hears `{:error, :channel_lost}`. `refuse/2` makes it
   refuse every spawn after the request, as `cyfr-locus` refuses one it
-  cannot bound, until it is told to start runners again, and `refused/1`
+  cannot bound, until it is told to start runners again, or, given
+  `{:made, reason}`, refuse each after making it, as `cyfr-locus` refuses
+  one whose command it could not run: its place stays the spawn's and its
+  owner hears its release only once `release_made/1` frees it. `refused/1`
   counts the spawns it refused. It holds a runner to the `:memory_bytes`
   of the pool's keeper options, or to none.
 
@@ -31,9 +34,10 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   `place/3` makes one for the calling process, `assign/4` changes whose it
   is and answers once it has, refused `bad_request` for a place it does
   not hold, one whose owner dies before a spawn named it is dropped, a
-  refused spawn frees the place it named, and a runner's release frees its
-  place once the runner is gone. `places/1` answers every place held, by
-  its id: whose it is and whether a spawn named it. `assigning/2` holds
+  spawn refused before it was made frees the place it named, and a
+  runner's release frees its place once the runner is gone. `places/1`
+  answers every place held, by its id: whose it is and whether a spawn
+  named it. `assigning/2` holds
   every assign from then on, unapplied and unanswered, until
   `answer_assigns/1` applies and answers them, or refuses every one with
   a reason, applying none; `held_assigns/1` lists those held. A held
@@ -132,6 +136,12 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       {:refused, ref, reason} ->
         Kernel.send(self(), {__MODULE__, ref, {:refused, reason}})
         {:ok, %{ref: ref, keeper: keeper, runner: nil}, []}
+
+      # Refused once it was made, as cyfr-locus answers one whose command it
+      # could not run: its release follows.
+      {:refused_made, ref, reason} ->
+        Kernel.send(self(), {__MODULE__, ref, {:refused, reason, :release_follows}})
+        {:ok, %{ref: ref, keeper: keeper, runner: nil}, []}
     end
   end
 
@@ -142,9 +152,16 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def refusal(reason),
     do: %{reason: to_string(reason), message: "the scripted keeper refuses (#{reason})"}
 
-  @doc "Refuse every spawn from now on with `reason`, or start runners again with nil."
-  @spec refuse(atom(), atom() | nil) :: :ok
+  @doc """
+  Refuse every spawn from now on with `reason`, or with `reason` once it is
+  made for `{:made, reason}`, or start runners again with nil.
+  """
+  @spec refuse(atom(), atom() | {:made, atom()} | nil) :: :ok
   def refuse(keeper, reason), do: GenServer.call(keeper, {:refuse, reason})
+
+  @doc "Free every spawn refused once it was made: its place, then its owner told `:released`."
+  @spec release_made(atom()) :: :ok
+  def release_made(keeper), do: GenServer.call(keeper, :release_made)
 
   @doc "How many spawns `keeper` refused."
   @spec refused(atom()) :: non_neg_integer()
@@ -336,7 +353,10 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
        refused: 0,
        places: %{},
        assigning: :answered,
-       held: []
+       held: [],
+       # Each spawn refused once it was made, until it is freed: its ref,
+       # its owner and its place.
+       made: []
      }}
   end
 
@@ -396,7 +416,22 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     end
   end
 
-  # A refused spawn frees the place it named.
+  # A spawn refused once it was made keeps the place it named until it is
+  # freed.
+  def handle_call({:spawn, spec, owner}, _from, %{refusing: {:made, reason}} = state) do
+    ref = make_ref()
+    made = %{ref: ref, owner: owner, place: spec.runner}
+
+    {:reply, {:refused_made, ref, reason},
+     %{
+       state
+       | refused: state.refused + 1,
+         made: [made | state.made],
+         places: named(state.places, spec.runner)
+     }}
+  end
+
+  # A spawn refused before it was made frees the place it named.
   def handle_call({:spawn, spec, _owner}, _from, %{refusing: reason} = state)
       when reason != nil do
     state = %{state | refused: state.refused + 1, places: Map.delete(state.places, spec.runner)}
@@ -421,8 +456,18 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def handle_call(:spawns, _from, state), do: {:reply, state.spawns, state}
   def handle_call(:releases, _from, state), do: {:reply, Enum.reverse(state.releases), state}
 
+  def handle_call(:release_made, _from, state) do
+    places =
+      Enum.reduce(state.made, state.places, fn made, places ->
+        Kernel.send(made.owner, {__MODULE__, made.ref, :released})
+        Map.delete(places, made.place)
+      end)
+
+    {:reply, :ok, %{state | made: [], places: places}}
+  end
+
   def handle_call(:channel_lost, _from, state) do
-    for %{owner: owner, ref: ref} <- state.spawns,
+    for %{owner: owner, ref: ref} <- state.spawns ++ state.made,
         do: Kernel.send(owner, {__MODULE__, ref, {:error, :channel_lost}})
 
     {:stop, {:shutdown, :channel_lost}, :ok, state}

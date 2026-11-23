@@ -33,8 +33,9 @@ defmodule Locus.Launcher do
   and a spawn naming a home, `{:refused, "unavailable"}`. The process that called it is the process's
   owner: every event of the process reaches it as
   `{launcher_module, handle.ref, event}` (`t:event/0`), in order, until
-  `:released`, the last. An owner that dies has its process released with
-  no grace.
+  `:released`, the last, or until `{:error, :channel_lost}`, after which
+  the launcher says nothing more of it and nothing here knows it gone. An
+  owner that dies has its process released with no grace.
 
   A spec may name an `heir`, `{pid, tag}`: a process told
   `{launcher_module, {:heir, tag}, :released}` once nothing of the process
@@ -138,7 +139,8 @@ defmodule Locus.Launcher do
   What an owner hears of its process: its stdio attached, bytes of its
   stdout and stderr as they arrive, its leader's end (a status or the name
   of the signal that ended it, and what memory limit killed it:
-  `t:Prima.KeeperProtocol.memory_end/0`), and its release, the last event;
+  `t:Prima.KeeperProtocol.memory_end/0`), and its release, the last event,
+  or the launcher's channel lost, which releases nothing;
   its stdout, its stderr and its leader's end arrive in no defined order.
   """
   @type event ::
@@ -146,12 +148,15 @@ defmodule Locus.Launcher do
           | {:stdout, binary()}
           | {:stderr, binary()}
           | {:exited, integer() | nil, String.t() | nil, Prima.KeeperProtocol.memory_end()}
+          | {:error, :channel_lost}
           | :released
 
   @typedoc """
   What the owner of a process with a control channel hears of it: its
   spawn id, uid and pid (nil where the launcher gives none), or the
-  launcher's refusal, no process of it having run; its relay attached;
+  launcher's refusal, no process of it having run, with the spawn id its
+  `:released` follows under where the launcher made something of it
+  first; its relay attached;
   bytes of its control channel, of its relay and of its stdout and
   stderr as they arrive; the control channel's and the relay's end, each
   once; its leader's end and what memory limit killed it; a
@@ -162,6 +167,7 @@ defmodule Locus.Launcher do
   @type control_event ::
           {:spawned, String.t() | nil, non_neg_integer() | nil, non_neg_integer() | nil}
           | {:refused, String.t()}
+          | {:refused, String.t(), String.t()}
           | :attached
           | {:control, binary()}
           | :control_closed

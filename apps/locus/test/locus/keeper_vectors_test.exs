@@ -742,11 +742,13 @@ defmodule Locus.KeeperVectorsTest do
           assert event == :released
 
         # A spawn refused after the keeper made it: its owner hears the
-        # refusal at once, and its release only at the keeper's word.
+        # refusal at once, its release to follow, and that release only at
+        # the keeper's word.
         %{"type" => "error", "id" => _id, "spawn_id" => spawn_id, "code" => code} ->
           %{ref: ref} = spawn_runner!(peer, name)
           send_reply(peer, %{vector | "id" => next_request(peer)["id"]})
-          assert_receive {Keeper, ^ref, {:refused, ^code}}, 5_000
+          assert_receive {Keeper, ^ref, {:refused, ^code, ^spawn_id} = event}, 5_000
+          assert Locus.Runtime.Keeper.event(event) == {:refused, code, :release_follows}
           send_reply(peer, %{reply(v, "released") | "spawn_id" => spawn_id})
           assert_receive {Keeper, ^ref, :released}, 5_000
 

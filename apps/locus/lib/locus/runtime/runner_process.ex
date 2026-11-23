@@ -20,11 +20,14 @@ defmodule Locus.Runtime.RunnerProcess do
   process ended and, for an attached runner, after its channel closed or
   a bound passed, `:released` once the keeper has retired it,
   `{:refused, reason}` when the keeper refused the spawn, so no process of
-  the runner ever ran and nothing is left to release, and
-  `{:error, reason}` for a later failure of the keeper's. A message the service
-  sends (`send_message/2`) is written at once, or held until the channel
-  attaches. `release/2` asks the keeper to end the runner; when this
-  process itself is stopped, the runner is released with no grace.
+  the runner ever ran and nothing is left to release,
+  `{:refused, reason, :release_follows}` when it refused it after making
+  something of it, which it frees by itself, unasked, its `:released`
+  following, and `{:error, reason}` for a later failure of the keeper's.
+  A message the service sends (`send_message/2`) is written at once, or
+  held until the channel attaches. `release/2` asks the keeper to end the
+  runner; when this process itself is stopped, the runner is released
+  with no grace.
 
   When the runner attaches, this process starts the service's end of its
   relay (`Locus.Runtime.Relay`), linked, and hands it every relay byte the keeper
@@ -371,6 +374,13 @@ defmodule Locus.Runtime.RunnerProcess do
   defp on_event({:refused, reason}, state) do
     notify(state, {:refused, reason})
     state
+  end
+
+  # The keeper frees what it made of a spawn it refused without being
+  # asked: nothing of it is released from here.
+  defp on_event({:refused, reason, :release_follows}, state) do
+    notify(state, {:refused, reason, :release_follows})
+    %{state | released: true}
   end
 
   defp on_event({:error, reason}, state) do
