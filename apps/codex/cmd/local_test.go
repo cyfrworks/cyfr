@@ -98,7 +98,10 @@ func (a *localApp) page() string {
 	return w.Body.String()
 }
 
-type chooserAnswer struct{ Home, Next, Error string }
+type chooserAnswer struct {
+	Home        string `json:"cyfr"`
+	Next, Error string
+}
 
 func (a *localApp) chooser(path string, fields map[string]string) chooserAnswer {
 	a.t.Helper()
