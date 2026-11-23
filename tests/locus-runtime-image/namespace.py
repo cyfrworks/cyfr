@@ -43,7 +43,8 @@ runner's own uid, outside that namespace, may not):
   its place is `warm` and no athanor's; once the keeper has read its
   group, a measure answers a reading above zero under that owner; assigned
   `run` for an athanor, `warm` for that athanor and `run` again for another
-  run, each measure answers above zero under the owner of the moment;
+  run, each assign answered `assigned` under its own id before the next
+  request, each measure answers above zero under the owner of the moment;
   after its `release`, a measure sent with it is still answered with a
   reading before `released`, and one after `released` is `unmeasured`.
 - `spawn`: the shipped service fills its pool; every runner runs under a
@@ -429,8 +430,8 @@ RUNNER_ENV = {"RELEASE_DISTRIBUTION": "none", "RUNTIME_ROLE": "runner", "RUNTIME
 RUNNER_MEMORY_BYTES = 384 << 20
 RELEASE_GRACE_MS = 2_000
 ATHANOR = "ath_measured"
-# The runner's owners, one step each, read once the keeper has read its group: the place's own, then what each
-# `assign` sent before the step makes it.
+# The runner's owners, one step each, read once the keeper has read its group: the place's own, then the owner an
+# `assign` sent before the step gives it where the step before's was another (`assigns`).
 OWNERS = (
     ("fresh", "warm", None, "fresh"),
     ("assigned", "run", ATHANOR, f"assigned a run of {ATHANOR}"),
@@ -439,9 +440,10 @@ OWNERS = (
 )
 
 # The measure step's client, after the variables places_client sets. `ask` sends one measure of the place and
-# reads up to its answer; `poll` asks until a reading answers it, the keeper reading each group once a second.
-# Every reply read is printed as `read:<step>:<reply>`. The release and a measure go in one write, and the replies
-# are read up to `released`; then one more measure.
+# reads up to its answer; `poll` asks until a reading answers it, the keeper reading each group once a second;
+# `assign` sends an assign and reads up to its answer. Every reply read is printed as `read:<step>:<reply>`, an
+# assign's as `read:<step>.assign:<reply>`. The release and a measure go in one write, and the replies are read up
+# to `released`; then one more measure.
 PLACES_CLIENT = r"""
 ask() {
   n=$((n + 1))
@@ -459,6 +461,14 @@ poll() {
     case "$line" in *'"type":"measured"'*) return 0 ;; esac
     tries=$((tries + 1))
     sleep 0.2
+  done
+  return 1
+}
+assign() {
+  printf '%s\n' "$3" >&3
+  while read -r line <&3; do
+    echo "read:$1.assign:$line"
+    case "$line" in *"\"id\":\"$2\""[,}]*) return 0 ;; esac
   done
   return 1
 }
@@ -486,6 +496,17 @@ def runner_env(image):
     return {**{name: image_env[name] for name in SHARED_ENVIRONMENT if name in image_env}, **RUNNER_ENV}
 
 
+def assigns():
+    """The assign sent before each step whose owner is not the step before's, by step, with ids `as1`, `as2` and on:
+    none is a measure's (`m<n>`), the spawn's (`1`) or the place's."""
+    sent, before = {}, OWNERS[0][1:3]
+    for step, kind, athanor, _ in OWNERS[1:]:
+        if (kind, athanor) != before:
+            sent[step] = {"v": 3, "type": "assign", "id": f"as{len(sent) + 1}", "place": RUNNER, "kind": kind, "athanor": athanor}
+        before = (kind, athanor)
+    return sent
+
+
 def places_client(env):
     """The measure step's client: the runner placed warm, spawned with `env` in its place, read under each owner, released and read again."""
     variables = {
@@ -495,10 +516,9 @@ def places_client(env):
         "spawning": spawn_line("1", RUNNER_ARGV, env=env, control=True, attach=f"{Attach.MOUNT}/a.sock", place=RUNNER,
                                memory_bytes=RUNNER_MEMORY_BYTES),
     }
-    assigns = {step: json.dumps({"v": 3, "type": "assign", "place": RUNNER, "kind": kind, "athanor": athanor})
-               for step, kind, athanor, _ in OWNERS if athanor}
-    assert "'" not in "".join(variables.values()) + "".join(assigns.values())
-    owners = "".join((f"printf '%s\\n' '{assigns[step]}' >&3\n" if step in assigns else "") + f"poll {step} || exit 1\n"
+    sent = {step: (request["id"], json.dumps(request)) for step, request in assigns().items()}
+    assert "'" not in "".join(variables.values()) + "".join(line for _, line in sent.values())
+    owners = "".join((f"assign {step} {sent[step][0]} '{sent[step][1]}' || exit 1\n" if step in sent else "") + f"poll {step} || exit 1\n"
                      for step, *_ in OWNERS)
     return "".join(f"{name}='{value}'\n" for name, value in variables.items()) + PLACES_CLIENT.replace("@OWNERS@\n", owners)
 
@@ -544,10 +564,16 @@ def judge_places(read, detail):
            and type(spawned.get("uid")) is int and POOL_FIRST <= spawned["uid"] <= POOL_LAST
            and type(spawned.get("pid")) is int and spawned["pid"] > 0,
            "measure: the runner is spawned in its place, under a uid of the isolated pool", detail)
-    ids = [reply.get("id") for _, reply in read if isinstance(reply, dict) and reply.get("type") in ("measured", "error")]
+    ids = [reply.get("id") for step, reply in read
+           if not step.endswith(".assign") and isinstance(reply, dict) and reply.get("type") in ("measured", "error")]
     expect(ids == [f"m{n}" for n in range(1, len(ids) + 1)], "measure: every measure was answered once, under its own id, in the order sent",
            detail)
+    sent = assigns()
     for step, kind, athanor, what in OWNERS:
+        if step in sent:
+            expect(steps.get(f"{step}.assign") == [{"v": 3, "type": "assigned", "id": sent[step]["id"]}],
+                   f"measure: before {step}, the keeper applied the assign of {kind} for {athanor} and answered it under its id, "
+                   "and nothing else came before that answer", detail)
         got = steps.get(step, [])
         # Only the first reading is waited for: until the keeper has read the group, its place is unmeasured.
         expect(got and (step == OWNERS[0][0] or len(got) == 1) and all(unmeasured(reply) for reply in got[:-1])

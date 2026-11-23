@@ -5,9 +5,9 @@
 A runner's keeper group counts as removed only on a probe whose successful
 exec says so. A failed exec is no answer, whatever its status, and it fails
 the kill. The measure step's client speaks keeper protocol 3 to a keeper
-that answers as cyfr-locus does, and its verdict refuses a place read under
-another owner, a reading answered only after `released`, and a reading of a
-place after `released`.
+that answers as cyfr-locus does, and its verdict refuses a refused assign,
+a place read under another owner, a reading answered only after
+`released`, and a reading of a place after `released`.
 
 Usage: python3 -I tests/locus-runtime-image/namespace_test.py
 """
@@ -120,7 +120,7 @@ SPAWN_ID = "ab" * 16
 
 def keeper(sock, requests):
     """A keeper on the client's channel, answering as cyfr-locus does: a place `placed`, a spawn `spawned`, an assign
-    nothing; a measure `unmeasured` until the place's first reading, which the first measure finds missing, then the
+    `assigned` under its id; a measure `unmeasured` until the place's first reading, which the first measure finds missing, then the
     reading under the place's owner of the moment; a measure sent with a release is answered before `exited` and
     `released`, and one after is `unmeasured`. Every request is kept in `requests`."""
 
@@ -138,6 +138,7 @@ def keeper(sock, requests):
             send({"v": 3, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": UID, "pid": 4242})
         elif request["type"] == "assign":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
+            send({"v": 3, "type": "assigned", "id": request["id"]})
         elif request["type"] == "release":
             releasing = True
         elif request["type"] == "measure":
@@ -202,15 +203,21 @@ class PlacesClient(unittest.TestCase):
                           "env": {"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, "memory_bytes": namespace.RUNNER_MEMORY_BYTES,
                           "control": True, "isolation": stack.ROLE["isolation"]})
         self.assertEqual([r for r in self.requests if r["type"] == "assign"],
-                         [{**assign, "kind": "run"}, {**assign, "kind": "warm"}, {**assign, "kind": "run"}])
+                         [{**assign, "id": "as1", "kind": "run"}, {**assign, "id": "as2", "kind": "warm"},
+                          {**assign, "id": "as3", "kind": "run"}])
         self.assertEqual(self.requests[10], {"v": 3, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": namespace.RELEASE_GRACE_MS})
         self.assertEqual([r["id"] for r in self.requests if r["type"] == "measure"], [f"m{n}" for n in range(1, 8)])
         self.assertTrue(all(r["place"] == place for r in self.requests if r["type"] == "measure"))
 
     def test_a_runner_read_under_each_owner_and_free_only_after_released_passes(self):
         self.assertEqual([step for step, _ in self.read],
-                         ["placed", "spawned", "fresh", "fresh", "assigned", "warm", "reused", "release", "release", "release", "after"])
+                         ["placed", "spawned", "fresh", "fresh", "assigned.assign", "assigned", "warm.assign", "warm", "reused.assign",
+                          "reused", "release", "release", "release", "after"])
         self.judge(self.read)
+
+    def test_a_refused_assign_fails(self):
+        self.fails(self.edited("warm.assign", lambda got: [{"v": 3, "type": "error", "id": got[0]["id"], "code": "bad_request"}]),
+                   "before warm, the keeper applied the assign")
 
     def test_a_reading_under_another_owner_fails(self):
         self.fails(self.edited("assigned", lambda got: [{**reply, "athanor": "ath_other"} for reply in got]),

@@ -17,10 +17,11 @@ own uids, with a client that speaks the keeper's protocol
 (tests/fixtures/keeper_protocol.json) and places every spawn before it
 sends it:
 
-- a real build of an athanor, a tincture's `npm run build` holding what it
-  built from, is placed `build` of that athanor; while it runs, once the
-  keeper has read its group, every measure of its place answers a reading
-  above zero naming `build` and that athanor, and the reading taken after
+- a real build of an athanor whose id holds an `@`, a tincture's `npm run
+  build` holding what it built from, is placed `build` of that athanor;
+  while it runs, once the keeper has read its group, every measure of its
+  place answers a reading above zero naming `build` and exactly that
+  athanor, and the reading taken after
   the build holds its memory counts it; after its `release`, a measure sent
   with it is still answered with a reading before `released`, and one after
   `released` is `unmeasured`;
@@ -91,8 +92,10 @@ BOUND = 256 * MIB
 # rising and falling; it prints HOLDING once it holds them. The client
 # measures it every MEASURE poll_ms until a reading the keeper took margin_ms
 # after the client saw HOLDING, and releases it with no grace, as the builder
-# ends a build.
-ATHANOR = "ath_measured_build"
+# ends a build. Its athanor holds an `@`, as an athanor's id may on every
+# Locus wire (1 to 256 printable ASCII characters, no space), and every
+# reading names exactly it.
+ATHANOR = "family@example"
 HELD = 32 * MIB
 HOLDING = "holding what it built from"
 MEASURED_BUILD = """set -eu
