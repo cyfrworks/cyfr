@@ -227,19 +227,20 @@ func newKeeperOf(t *testing.T, isolated bool) *keeper {
 		accounts[uid] = Account{UID: uid, GID: uid, Name: strconv.Itoa(uid)}
 	}
 	s := &server{
-		cfg:      Config{Pools: []pool.Spec{spec}, HomeRoot: homes},
-		log:      logx.NewWriter(os.Stderr, "cyfr-locus", false),
-		self:     binary,
-		client:   Account{UID: 65534, GID: 65534, Name: "nobody", Home: "/"},
-		accounts: accounts,
-		roots:    residue.Roots{Dirs: []string{base}},
-		pools:    map[string]*pool.Pool{spec.Name: pool.New(spec)},
-		spawns:   map[string]*spawn{},
-		places:   map[string]*place{},
-		waiters:  map[int]*child{},
-		keptLive: map[int]int{},
-		keptOps:  map[int]*sync.Mutex{},
-		channel:  os.NewFile(uintptr(fds[0]), "channel"),
+		cfg:       Config{Pools: []pool.Spec{spec}, HomeRoot: homes},
+		log:       logx.NewWriter(os.Stderr, "cyfr-locus", false),
+		self:      binary,
+		client:    Account{UID: 65534, GID: 65534, Name: "nobody", Home: "/"},
+		accounts:  accounts,
+		roots:     residue.Roots{Dirs: []string{base}},
+		pools:     map[string]*pool.Pool{spec.Name: pool.New(spec)},
+		spawns:    map[string]*spawn{},
+		places:    map[string]*place{},
+		unremoved: map[*spawn]*removal{},
+		waiters:   map[int]*child{},
+		keptLive:  map[int]int{},
+		keptOps:   map[int]*sync.Mutex{},
+		channel:   os.NewFile(uintptr(fds[0]), "channel"),
 	}
 	k := &keeper{s: s, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{}), isolated: isolated}
 

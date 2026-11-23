@@ -6,35 +6,53 @@
 package serve
 
 import (
+	"sync"
 	"time"
 
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
-// readEvery is how often the reader reads every live spawn's group.
+// readEvery is how often the reader reads every live spawn's group and
+// retries the removal of every group a retirement could not remove.
 var readEvery = time.Second
 
-// readUse is the reader's one read of a group, and now the clock its
-// readings and their ages are told by.
+// readUse is the reader's one read of a group, removeGroup a retirement's
+// removal of one, and now the clock readings and their ages are told by.
 var (
-	readUse = (*cgroup.Group).Used
-	now     = time.Now
+	readUse     = (*cgroup.Group).Used
+	removeGroup = (*cgroup.Group).Remove
+	now         = time.Now
 )
 
 // place is one piece of work the keeper follows from before its preparation
 // to its release (the protocol's package doc says how): whose it is, whether
-// a spawn has named it, and that spawn's last reading.
+// a spawn has named it, the spawn made in it and that spawn's last reading.
 type place struct {
 	whose protocol.Whose
 	// named says a spawn has claimed the place: no drop frees it and no
-	// other spawn may name it. That spawn's refusal frees it, and so does
-	// the retirement of a spawn that started, at its `released`.
+	// other spawn may name it.
 	named bool
+	// spawn is the spawn made in the place, nil while its claim has made
+	// none: a refusal before then frees the place, and from then only that
+	// spawn's retirement does, in the step its group is removed, whether
+	// the spawn started or was refused.
+	spawn *spawn
 	// reading is the last reading of its spawn's group, taken at readAt; a
 	// zero readAt is no reading yet.
 	reading protocol.Reading
 	readAt  time.Time
+}
+
+// removal is what a retirement whose group could not be removed leaves to
+// the reader's retry: whether to send `released` once the group is gone,
+// and whether a pooled spawn's uid was found clean, to go back to its pool
+// then. A kept spawn's is never clean: its uid is no pool's.
+type removal struct {
+	notify bool
+	clean  bool
+	// trying says a retry of the removal is out.
+	trying bool
 }
 
 func whoseOf(req *protocol.Request) protocol.Whose {
@@ -69,26 +87,44 @@ func (s *server) handleDrop(req *protocol.Request) {
 }
 
 // handleAssign makes a place whose the request says, an athanor or a subject
-// it does not name cleared. It answers nothing.
+// it does not name cleared, answered `assigned`; an assign of a place the
+// keeper does not hold is refused.
 func (s *server) handleAssign(req *protocol.Request) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if p := s.places[req.Place]; p != nil {
+	p := s.places[req.Place]
+	if p != nil {
 		p.whose = whoseOf(req)
 	}
+	s.mu.Unlock()
+	if p == nil {
+		s.log.Warn("assign %s refused: the keeper holds no place %s", req.ID, req.Place)
+		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+		return
+	}
+	s.send(protocol.NewAssigned(req.ID))
 }
 
-// claimPlace has a starting spawn name its place: a place the keeper does not
-// hold, or one another spawn named, cannot be.
-func (s *server) claimPlace(id string) bool {
+// claimPlace has a starting spawn name its place, and answers the place: a
+// place the keeper does not hold, or one another spawn named, cannot be,
+// and answers nil.
+func (s *server) claimPlace(id string) *place {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.places[id]
 	if p == nil || p.named {
-		return false
+		return nil
 	}
 	p.named = true
-	return true
+	return p
+}
+
+// madeIn makes sp the spawn made in the place id it claimed: from here its
+// retirement frees the place, and no refusal does.
+func (s *server) madeIn(id string, sp *spawn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sp.place = id
+	s.places[id].spawn = sp
 }
 
 // handleMeasure answers whose a place is, its last reading and that
@@ -103,7 +139,8 @@ func (s *server) handleMeasure(req *protocol.Request) {
 	s.send(reply)
 }
 
-// reader reads every live spawn's group each readEvery until stop closes.
+// reader reads every live spawn's group, and retries the removal of every
+// group a retirement could not remove, each readEvery until stop closes.
 func (s *server) reader(stop <-chan struct{}) {
 	tick := time.NewTicker(readEvery)
 	defer tick.Stop()
@@ -113,34 +150,111 @@ func (s *server) reader(stop <-chan struct{}) {
 			return
 		case <-tick.C:
 			s.read()
+			s.retryRemovals()
 		}
 	}
 }
 
-// read reads every live spawn's group once, outside mu, so that a read
-// however slow holds back no request, and stores each reading in its
-// spawn's place only while that spawn is still held: a pooled spawn's group
-// is named by its uid, which another spawn may take once this one is gone,
-// and the place goes in the step its spawn leaves spawns. A read that fails
-// leaves the last reading as it was.
-func (s *server) read() {
+// read starts a read of the group of every live spawn, and of every one a
+// retirement could not remove, each on a goroutine of its own, outside mu:
+// no read however slow holds back a request or another group's read. A
+// group whose read is still out is not read again until it returns, its
+// place keeping the last reading meanwhile. A reading is stored only while
+// the place still names that spawn: a pooled spawn's group is named by its
+// uid, which another spawn may take once this one's group is gone, and the
+// place goes in the step the group does. A read that fails leaves the last
+// reading as it was. It answers a wait for the reads it started, which the
+// reader does not wait for.
+func (s *server) read() (wait func()) {
+	// The seams are read here, on the caller's goroutine, which a test that
+	// sets them joins before it puts them back.
+	use, clock := readUse, now
 	s.mu.Lock()
-	live := make([]*spawn, 0, len(s.spawns))
+	due := make([]*spawn, 0, len(s.spawns)+len(s.unremoved))
 	for _, sp := range s.spawns {
-		live = append(live, sp)
+		due = append(due, sp)
+	}
+	for sp := range s.unremoved {
+		due = append(due, sp)
 	}
 	s.mu.Unlock()
-	for _, sp := range live {
-		use, err := readUse(sp.group)
-		if err != nil {
+	var reads sync.WaitGroup
+	for _, sp := range due {
+		if !sp.reading.CompareAndSwap(false, true) {
 			continue
 		}
-		at := now()
-		s.mu.Lock()
-		if s.spawns[sp.id] == sp {
-			p := s.places[sp.place]
-			p.reading, p.readAt = protocol.Reading{Bytes: use.Bytes, Lesser: use.Lesser}, at
+		reads.Add(1)
+		go func() {
+			defer reads.Done()
+			defer sp.reading.Store(false)
+			got, err := use(sp.group)
+			if err != nil {
+				return
+			}
+			at := clock()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if p := s.places[sp.place]; p != nil && p.spawn == sp {
+				p.reading, p.readAt = protocol.Reading{Bytes: got.Bytes, Lesser: got.Lesser}, at
+			}
+		}()
+	}
+	return reads.Wait
+}
+
+// retryRemovals retries the removal of every group a retirement could not
+// remove, each on a goroutine of its own and one retry at a time per group,
+// so that a removal however slow (it waits up to two seconds for the
+// group's last process) delays no read. The retry that removes a group
+// finishes its retirement: the place goes, a clean pooled uid goes back to
+// its pool, its egress cleared first, and the `released` is sent. It
+// answers a wait for the retries it started, which the reader does not
+// wait for.
+func (s *server) retryRemovals() (wait func()) {
+	remove := removeGroup
+	s.mu.Lock()
+	var due []*spawn
+	for sp, r := range s.unremoved {
+		if !r.trying {
+			r.trying = true
+			due = append(due, sp)
 		}
-		s.mu.Unlock()
+	}
+	s.mu.Unlock()
+	var retries sync.WaitGroup
+	for _, sp := range due {
+		retries.Add(1)
+		go func() {
+			defer retries.Done()
+			s.retryRemoval(sp, remove)
+		}()
+	}
+	return retries.Wait
+}
+
+func (s *server) retryRemoval(sp *spawn, remove func(*cgroup.Group) error) {
+	err := remove(sp.group)
+	s.mu.Lock()
+	r := s.unremoved[sp]
+	if err != nil {
+		r.trying = false
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return
+	}
+	if r.clean {
+		s.clearEgress(sp.account.UID)
+	}
+	s.mu.Lock()
+	if r.clean {
+		_ = sp.pool.Release(sp.account.UID)
+	}
+	delete(s.places, sp.place)
+	delete(s.unremoved, sp)
+	s.mu.Unlock()
+	s.log.Info("spawn %s: its memory group of uid %d removed on a retry; retired", sp.id, sp.account.UID)
+	if r.notify {
+		s.send(protocol.NewReleased(sp.id))
 	}
 }

@@ -216,7 +216,7 @@ func (k *keeper) measure(t *testing.T, place string) map[string]any {
 func (k *keeper) measuredAtLeast(t *testing.T, place string, least float64) map[string]any {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		k.s.read()
+		k.s.read()()
 		m := k.measure(t, place)
 		if bytes, ok := m["bytes"].(float64); ok && m["type"] == protocol.TypeMeasured && bytes >= least {
 			return m
@@ -236,7 +236,7 @@ func TestAPlaceWithoutAReadingIsUnmeasured(t *testing.T) {
 		t.Fatalf("place: %v", placed)
 	}
 	k.spawnedIn(t, "unread", &spawn{id: strings.Repeat("a", 32), group: &cgroup.Group{}})
-	k.s.read()
+	k.s.read()()
 	for _, id := range []string{"unread", "absent"} {
 		m := k.measure(t, id)
 		if _, zero := m["bytes"]; zero || m["type"] != protocol.TypeError || m["code"] != protocol.CodeUnmeasured {
@@ -362,7 +362,7 @@ func TestAFileReaderIsNotChargedItsCacheAndATmpfsWriterIsChargedItsPages(t *test
 		}
 		// Time to be taken as hot by a reclaim that ages what is mapped.
 		time.Sleep(time.Second)
-		k.s.read()
+		k.s.read()()
 		m := k.measure(t, id)
 		bytes, ok := m["bytes"].(float64)
 		if !ok {
