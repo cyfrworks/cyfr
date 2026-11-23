@@ -32,6 +32,7 @@ import (
 	"github.com/cyfr/codex/internal/account/accounttest"
 	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/disk"
+	"github.com/cyfr/codex/internal/idle"
 	"github.com/cyfr/codex/internal/shell"
 )
 
@@ -1204,5 +1205,110 @@ func TestALeaveDuringTheShellsOwnLockLeavesMainOnNone(t *testing.T) {
 	}
 	if m := a.heard(); m.Type != desktop.TypeLocked || m.Home != "" {
 		t.Fatalf("main heard %+v, not a lock naming none", m)
+	}
+}
+
+// A lock waits for no work still starting: the first hello's reading of
+// the setup token holds the shell while it reads, and the launcher holds
+// that reading's start, deaf to its end.
+func TestALockWaitsForNoWorkStarting(t *testing.T) {
+	s := newLocalStack(t)
+	accounts := accounttest.New(t)
+	raw, err := url.Parse(accounts.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cyfr := newListening(t, httputil.NewSingleHostReverseProxy(raw))
+	home := s.envReached(access.ModeTailnet, cyfr.port)
+	accounts.ServedAt(home)
+	cyfr.admitting = home
+	s.runs("c0ffee", s.project, nil, cyfr.port)
+	onlyOnThisComputer(t, "127.0.0.1:"+strconv.Itoa(cyfr.port), nil)
+
+	started, release := make(chan struct{}), make(chan struct{})
+	letGo := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(letGo)
+	normal := startWork
+	startWork = func(ctx context.Context, args []string) (*workProcess, error) {
+		if args[0] == workToken {
+			close(started)
+			<-release
+			return nil, errors.New("the test's launcher let go")
+		}
+		return normal(ctx, args)
+	}
+	l, err := readLocal(s.project, "screen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := l.Shell
+	cfg.Chip = func() bool { return false }
+	cfg.Record = filepath.Join(t.TempDir(), "holder.json")
+	sh, err := shell.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &shell.Server{Shell: sh}
+	post := func(path string, fields url.Values) string {
+		return pressed(h, path, "application/x-www-form-urlencoded", fields.Encode()).Body.String()
+	}
+	drawn := pageCode.FindStringSubmatch(post("/passphrase", nil))
+	if drawn == nil {
+		t.Fatal("no passphrase was drawn")
+	}
+	proof := pageProof.FindStringSubmatch(post("/setup", url.Values{"name": {"alice"}, "secret": {drawn[1]}, "again": {drawn[1]}}))
+	if proof == nil {
+		t.Fatal("setup reached no recovery code")
+	}
+	saved := make(chan struct{})
+	go func() {
+		defer close(saved)
+		post("/saved", url.Values{"proof": {proof[1]}})
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the setup token's work never started")
+	}
+	locked := make(chan struct{})
+	go func() {
+		sh.Lock("")
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(idle.AnswerWithin):
+		letGo()
+		t.Fatal("the lock waited for the work to start")
+	}
+	letGo()
+	<-saved
+}
+
+// Where only a new login gives this process the docker group, a reading
+// of a folder that is set up says so, as a cause waiting does not cure.
+func TestAReadingOfAFolderSaysToLogInAgain(t *testing.T) {
+	s := newLocalStack(t)
+	s.env(4321)
+	s.answer("cyfrps.exit", "1")
+	savedMachine, savedSg := machine, sgProgram
+	t.Cleanup(func() { machine, sgProgram = savedMachine, savedSg })
+	machine.system = func() string { return "linux" }
+	machine.groups = func(_ context.Context, account string) []string {
+		if account != "" {
+			return []string{dockerGroup}
+		}
+		return nil
+	}
+	sgProgram = filepath.Join(t.TempDir(), "no-sg")
+	l, err := readLocal(s.project, "screen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = l.Answers(t.Context())
+	var unbound *shell.Unbound
+	want := loginAgain + ". Nothing was sent to the CYFR in " + s.project + "."
+	if !errors.As(err, &unbound) || unbound.Sentence != want || !unbound.Lasting {
+		t.Fatalf("the folder's reading said %#v, want %q, lasting", err, want)
 	}
 }

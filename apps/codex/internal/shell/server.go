@@ -84,22 +84,25 @@ const Origin = "http://" + Listen
 // recovery code's POST.
 type Server struct {
 	Shell *Shell
-	// Reachable is whether the home answers now, set for a box's screen.
-	// It is part of what the shell knows, so no page waits for it: each
-	// shows what the last reading of it said,
-	// "starting" until one said yes, and starts the next (read).
-	Reachable func() bool
+	// Reachable is nil once the home answers now, and otherwise why not,
+	// set for a box's screen. It is part of what the shell knows, so no
+	// page waits for it: each shows what the last reading of it said,
+	// "starting" until one said yes, or the sentence of a refusal waiting
+	// does not cure (Unbound.Lasting), and starts the next (read).
+	Reachable func() error
 
 	lastMu sync.Mutex
-	// answered is what the last finished reading said, and reading
-	// whether one is in flight, the one at a time.
+	// answered is what the last finished reading said, lasting its
+	// lasting refusal's sentence, and reading whether one is in flight,
+	// the one at a time.
 	answered, reading bool
+	lasting           string
 }
 
 // read starts the next reading, unless one is in flight, and answers what
 // the last one said. A page that makes an account has the account
 // service's terms read in it first, so that a first form shows them.
-func (srv *Server) read(page Page) (answered bool) {
+func (srv *Server) read(page Page) (answered bool, lasting string) {
 	srv.lastMu.Lock()
 	defer srv.lastMu.Unlock()
 	if !srv.reading {
@@ -110,13 +113,18 @@ func (srv *Server) read(page Page) (answered bool) {
 				srv.Shell.readTerms(ctx)
 				cancel()
 			}
-			now := srv.Reachable()
+			err := srv.Reachable()
+			var unbound *Unbound
+			why := ""
+			if errors.As(err, &unbound) && unbound.Lasting {
+				why = unbound.Sentence
+			}
 			srv.lastMu.Lock()
-			srv.answered, srv.reading = now, false
+			srv.answered, srv.lasting, srv.reading = err == nil, why, false
 			srv.lastMu.Unlock()
 		}()
 	}
-	return srv.answered
+	return srv.answered, srv.lasting
 }
 
 // termsWithin bounds one reading of the account service's terms.
@@ -500,6 +508,9 @@ func (srv *Server) pageLocked(w http.ResponseWriter, why string) {
 type pageData struct {
 	View
 	Waiting bool
+	// Lasting is why the home cannot answer until the person acts, said
+	// in place of "starting".
+	Lasting string
 	// Unwatched is why the device may not be unlocked now.
 	Unwatched string
 	Answer    string
@@ -524,7 +535,11 @@ func (srv *Server) page(w http.ResponseWriter, d pageData) {
 	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && !v.Drawn)
 	d.Unwatched = srv.Shell.cfg.Unwatched()
 	if srv.Reachable != nil && (v.Page == PageSetup || v.Page == PageEnroll || v.Page == PageLocked) {
-		d.Waiting = !srv.read(v.Page) && v.Page != PageEnroll
+		answered, lasting := srv.read(v.Page)
+		d.Waiting = !answered && v.Page != PageEnroll
+		if d.Waiting {
+			d.Lasting = lasting
+		}
 	}
 	d.Warn = warnings(v.Storage)
 	qr := v.RecoveryCode

@@ -485,20 +485,36 @@ func TestInitInstallFails(t *testing.T) {
 // util-linux-extra, init advises neither: it says what gives the account
 // the group, a new login.
 func TestInitSaysLogInAgainWhereThereIsNoNewgrp(t *testing.T) {
-	for name, set := range map[string]func(*standIn){
-		"installed before":    func(s *standIn) { s.installed, s.running, s.member = dockerPackages, true, []string{dockerGroup} },
-		"installed by init":   func(*standIn) {},
-		"added to its groups": func(s *standIn) { s.installed, s.running = dockerPackages, true },
+	inGroup := func(s *standIn) { s.member = []string{dockerGroup} }
+	for name, c := range map[string]struct {
+		set func(*standIn)
+		// stale is whether the account was in the docker group before
+		// init: then nothing is installed, with a terminal or without.
+		stale bool
+	}{
+		"installed before": {func(s *standIn) { inGroup(s); s.installed, s.running = dockerPackages, true }, true},
+		"installed before, with no terminal": {func(s *standIn) {
+			inGroup(s)
+			s.installed, s.running = dockerPackages, true
+			askTerminal = func() bool { return false }
+		}, true},
+		"in the group, Docker not installed": {inGroup, true},
+		"in the group, with no terminal":     {func(s *standIn) { inGroup(s); askTerminal = func() bool { return false } }, true},
+		"installed by init":                  {func(*standIn) {}, false},
+		"added to its groups":                {func(s *standIn) { s.installed, s.running = dockerPackages, true }, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := standInMachine(t)
-			set(s)
+			c.set(s)
 			sgProgram = filepath.Join(t.TempDir(), "sg")
 			t.Chdir(t.TempDir())
 			continued, _, err := prepare(t)
 			const want = "Docker does not answer this account until you log out and in again. Then run `cyfr init` again"
 			if !continued || err == nil || err.Error() != want {
 				t.Fatalf("continued %t, init said %v, want %q", continued, err, want)
+			}
+			if c.stale && (s.applied != nil || s.authenticated != 0) {
+				t.Fatalf("init installed %v, asked sudo %d times, before it said so", s.applied, s.authenticated)
 			}
 			nothingWritten(t)
 		})

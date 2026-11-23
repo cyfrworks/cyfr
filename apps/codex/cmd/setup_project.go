@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/spf13/cobra"
@@ -132,7 +133,7 @@ func dockerReady(ctx context.Context) (bool, string) {
 	switch {
 	case ctx.Err() != nil:
 		return false, "Docker was not waited for"
-	case !answers && olderThanGroup():
+	case !answers && olderThanGroup(ctx):
 		return false, loginAgain
 	case !answers:
 		return false, "Docker does not answer this account"
@@ -241,32 +242,70 @@ type workFailure struct{ sentence string }
 
 func (f workFailure) Error() string { return f.sentence }
 
-// workProcess is setup's work begun: its stdin, its stdout and its end.
+// workProcess is setup's work begun: its stdin, its stdout, its end, and
+// kill, which ends it and everything it started in its process group.
 type workProcess struct {
 	in   io.WriteCloser
 	out  io.Reader
 	wait func() error
+	kill func()
 }
 
-// startWork begins setup's work. A test stands in for it.
-var startWork = startWorkProcess
+// workEndsWithin bounds how long a reading's work may run on after its
+// stdin closed: then it is killed with its process group. A run, setup a
+// person started, is never ended so.
+const workEndsWithin = 5 * time.Second
 
-// startWorkProcess begins setup's work as a process of its own: through sg
-// with the docker group where this one is older than it (throughGroup),
-// and with no environment but workKeeps', since the work runs init and up
-// in a folder and compose would put this process's environment over that
-// folder's .env.
-func startWorkProcess(args []string) (*workProcess, error) {
+// startWork stands in for the launcher (workLauncher) in a test; nil is
+// the launcher.
+var startWork func(ctx context.Context, args []string) (*workProcess, error)
+
+// workLauncher begins setup's work as a process of its own. It holds what
+// it reads of this program's settings from when it was made: a reading in
+// flight can outlive whatever opened its folder, and reads nothing of the
+// program's after that.
+type workLauncher struct {
+	system  string
+	groups  func(context.Context, string) []string
+	sg      string
+	keeps   func(string) bool
+	desktop func(string) (string, string)
+}
+
+func newWorkLauncher() *workLauncher {
+	return &workLauncher{system: machine.system(), groups: machine.groups, sg: sgProgram, keeps: workKeeps, desktop: dockerDesktop}
+}
+
+// starter is what begins setup's work now: a test's stand-in, or a
+// launcher made now.
+func starter() func(context.Context, []string) (*workProcess, error) {
+	if startWork != nil {
+		return startWork
+	}
+	return newWorkLauncher().start
+}
+
+// start begins setup's work as a process of its own, in a process group of
+// its own: through sg with the docker group where this one is older than
+// it (throughGroup), and with no environment but what keeps keeps, since
+// the work runs init and up in a folder and compose would put this
+// process's environment over that folder's .env. What it asks of this
+// computer first ends with ctx.
+func (l *workLauncher) start(ctx context.Context, args []string) (*workProcess, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("cyfr could not find its own program (%w)", err)
 	}
 	argv := append([]string{self, internalCmd.Name(), setupProjectCmd.Name()}, args...)
 	cmd := exec.Command(argv[0], argv[1:]...)
-	if throughGroup() {
-		cmd = exec.Command(sgProgram, dockerGroup, "-c", "exec "+shellQuote(argv))
+	if l.throughGroup(ctx) {
+		cmd = exec.Command(l.sg, dockerGroup, "-c", "exec "+shellQuote(argv))
 	}
-	cmd.Env = workEnvironment(os.Environ())
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cmd.Env = l.environment(os.Environ())
+	workGroup(cmd)
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -278,25 +317,60 @@ func startWorkProcess(args []string) (*workProcess, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &workProcess{in: in, out: out, wait: cmd.Wait}, nil
+	return &workProcess{in: in, out: out, wait: cmd.Wait, kill: func() { killWorkGroup(cmd) }}, nil
 }
 
 // setupWork asks setup's work args and answers its end, reporting each
-// step it begins to step. ctx's end closes the work's stdin and kills
-// nothing: sg is the work's parent on some systems, so killing what was
-// started would leave the work running, and a start must finish under its
-// lock. A run is waited for to its end. Anything else is not waited for
-// past ctx.
+// step it begins to step (workBegunBy).
 func setupWork(ctx context.Context, step func(string), args ...string) (workMessage, error) {
-	return workBegunBy(ctx, startWork, step, args...)
+	return workBegunBy(ctx, starter(), step, args...)
 }
 
-// workBegunBy is setupWork with the work begun by begin.
-func workBegunBy(ctx context.Context, begin func([]string) (*workProcess, error), step func(string), args ...string) (workMessage, error) {
-	work, err := begin(args)
-	if err != nil {
-		return workMessage{}, fmt.Errorf("setup's work could not begin (%w)", err)
+// workBegunBy is setupWork with the work begun by begin. A caller whose
+// ctx has ended starts nothing, and its starting and its work end with
+// ctx: what begin asks first takes ctx, and the caller does not wait for
+// begin past it. ctx's end closes the work's stdin, the work's one cancel:
+// sg is the work's parent on some systems, so a kill of what was started
+// alone would leave the work running. A run, setup a person started, is
+// waited for to its end, since a start must finish under its lock.
+// Anything else is not waited for past ctx, and its work, begun or still
+// beginning, is ended with its process group if it has not ended
+// workEndsWithin after its stdin closed.
+func workBegunBy(ctx context.Context, begin func(context.Context, []string) (*workProcess, error), step func(string), args ...string) (workMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return workMessage{}, err
 	}
+	run := args[0] == workRun
+	type launch struct {
+		work *workProcess
+		err  error
+	}
+	launched := make(chan launch, 1)
+	go func() {
+		work, err := begin(ctx, args)
+		launched <- launch{work, err}
+	}()
+	var l launch
+	select {
+	case l = <-launched:
+	case <-ctx.Done():
+		if !run {
+			go func() {
+				if l := <-launched; l.err == nil {
+					l.work.abandon()
+				}
+			}()
+			return workMessage{}, ctx.Err()
+		}
+		l = <-launched
+	}
+	if l.err != nil {
+		if ctx.Err() != nil && !run {
+			return workMessage{}, ctx.Err()
+		}
+		return workMessage{}, fmt.Errorf("setup's work could not begin (%w)", l.err)
+	}
+	work := l.work
 	type ending struct {
 		m   workMessage
 		err error
@@ -340,34 +414,54 @@ func workBegunBy(ctx context.Context, begin func([]string) (*workProcess, error)
 	case e := <-ended:
 		return e.m, e.err
 	case <-ctx.Done():
-		work.in.Close()
-		if args[0] != workRun {
+		if !run {
+			work.in.Close()
+			// Ended at the bound unless its end came first.
+			kill := time.AfterFunc(workEndsWithin, work.kill)
+			go func() {
+				<-ended
+				kill.Stop()
+			}()
 			return workMessage{}, ctx.Err()
 		}
+		work.in.Close()
 		e := <-ended
 		return e.m, e.err
 	}
 }
 
+// abandon ends work nobody waits for: its stdin closed, it is killed with
+// its process group if it has not ended within workEndsWithin, and reaped.
+func (w *workProcess) abandon() {
+	w.in.Close()
+	kill := time.AfterFunc(workEndsWithin, w.kill)
+	_, _ = io.Copy(io.Discard, w.out)
+	_ = w.wait()
+	kill.Stop()
+}
+
 // throughGroup is whether setup's work needs sg to reach Docker: on
 // Linux, an account in the docker group from a process older than that.
 // Which Linux it is makes no difference here.
-func throughGroup() bool {
-	if _, err := os.Stat(sgProgram); err != nil {
+func (l *workLauncher) throughGroup(ctx context.Context) bool {
+	if _, err := os.Stat(l.sg); err != nil {
 		return false
 	}
-	return olderThanGroup()
+	return l.olderThanGroup(ctx)
 }
 
 // olderThanGroup is whether this process lacks the docker group its
 // account is in, on the one system that has that group.
-func olderThanGroup() bool {
-	if machine.system() != "linux" {
+func (l *workLauncher) olderThanGroup(ctx context.Context) bool {
+	if l.system != "linux" {
 		return false
 	}
 	account, err := user.Current()
-	return err == nil && staleGroup(account.Username)
+	return err == nil && slices.Contains(l.groups(ctx, account.Username), dockerGroup) && !slices.Contains(l.groups(ctx, ""), dockerGroup)
 }
+
+// olderThanGroup is the launcher's, as this program's settings are now.
+func olderThanGroup(ctx context.Context) bool { return newWorkLauncher().olderThanGroup(ctx) }
 
 // workKept are the names setup's work keeps of this process's environment:
 // which account and system it runs on and that system's way to the
@@ -390,15 +484,18 @@ var workKeeps = func(name string) bool {
 	return slices.Contains(workKept, upper) || strings.HasPrefix(upper, "LC_") || strings.HasPrefix(upper, "DOCKER_")
 }
 
-// workEnvironment is environ as setup's work gets it: what workKeeps
-// keeps, and on macOS and Windows Docker Desktop's own docker after PATH.
-func workEnvironment(environ []string) []string {
-	system := machine.system()
+// workEnvironment is environ as setup's work gets it now (environment).
+func workEnvironment(environ []string) []string { return newWorkLauncher().environment(environ) }
+
+// environment is environ as setup's work gets it: what keeps keeps, and on
+// macOS and Windows Docker Desktop's own docker after PATH.
+func (l *workLauncher) environment(environ []string) []string {
+	system := l.system
 	desktop := system == "darwin" || system == "windows"
 	kept, path := []string{}, ""
 	for _, entry := range environ {
 		name, value, _ := strings.Cut(entry, "=")
-		if !workKeeps(name) {
+		if !l.keeps(name) {
 			continue
 		}
 		if desktop && strings.EqualFold(name, "PATH") {
@@ -408,7 +505,8 @@ func workEnvironment(environ []string) []string {
 		kept = append(kept, entry)
 	}
 	if desktop {
-		kept = append(kept, "PATH="+withDockerDesktop(path, system))
+		_, bin := l.desktop(system)
+		kept = append(kept, "PATH="+path+string(os.PathListSeparator)+bin)
 	}
 	return kept
 }

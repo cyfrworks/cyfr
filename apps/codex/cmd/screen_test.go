@@ -294,11 +294,11 @@ func TestInitScreenRefusals(t *testing.T) {
 		stubLauncher(t, true, nil)
 		// In the sudo group at the question, out of it by the screen step.
 		groups := machine.groups
-		machine.groups = func(account string) []string {
+		machine.groups = func(ctx context.Context, account string) []string {
 			if account != "" && fileExists(".env") {
 				return s.member
 			}
-			return groups(account)
+			return groups(ctx, account)
 		}
 		askInput = strings.NewReader("1\n")
 		var out bytes.Buffer

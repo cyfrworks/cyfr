@@ -9,9 +9,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -21,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/desktop"
 )
 
 // workDocker stands in for docker for setup's work, a process of its own.
@@ -156,8 +159,9 @@ func recordWorksStdout(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	said, saved := &bytes.Buffer{}, startWork
 	t.Cleanup(func() { startWork = saved })
-	startWork = func(args []string) (*workProcess, error) {
-		w, err := saved(args)
+	launch := starter()
+	startWork = func(ctx context.Context, args []string) (*workProcess, error) {
+		w, err := launch(ctx, args)
 		if err == nil {
 			w.out = io.TeeReader(w.out, said)
 		}
@@ -438,7 +442,7 @@ func TestSetupsWorkOutlivesWhoAskedDuringAStart(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			p := newWorkProject(t)
 			p.answer(c.during+".block", "")
-			work, err := startWork([]string{workRun, p.project})
+			work, err := starter()(t.Context(), []string{workRun, p.project})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -529,7 +533,7 @@ func TestSetupsWorkReachesTheDockerGroup(t *testing.T) {
 			p := newWorkProject(t)
 			machine.system = func() string { return c.system }
 			machine.supported = func() bool { return false }
-			machine.groups = func(account string) []string {
+			machine.groups = func(_ context.Context, account string) []string {
 				if account == "" {
 					return c.mine
 				}
@@ -556,7 +560,7 @@ func TestSetupsWorkReachesTheDockerGroup(t *testing.T) {
 // stdin, since killing what was started would leave that work running.
 func TestSetupsWorkCancelledThroughSg(t *testing.T) {
 	p := newWorkProject(t)
-	machine.groups = func(account string) []string {
+	machine.groups = func(_ context.Context, account string) []string {
 		if account == "" {
 			return nil
 		}
@@ -588,7 +592,7 @@ func TestSetupsWorkCancelledThroughSg(t *testing.T) {
 // Work that dies without its end is a failure, never taken for done.
 func TestSetupsWorkThatDiesIsAFailure(t *testing.T) {
 	p := newWorkProject(t)
-	machine.groups = func(account string) []string {
+	machine.groups = func(_ context.Context, account string) []string {
 		if account == "" {
 			return nil
 		}
@@ -608,7 +612,7 @@ func TestSetupsWorkThatDiesIsAFailure(t *testing.T) {
 func TestAFirstPersonWhereOnlySetupsWorkReachesDocker(t *testing.T) {
 	for name, only := range map[string]func(p workProject){
 		"older than the docker group": func(p workProject) {
-			machine.groups = func(account string) []string {
+			machine.groups = func(_ context.Context, account string) []string {
 				if account == "" {
 					return nil
 				}
@@ -679,5 +683,90 @@ func TestInitsPullsEndAtAnInterrupt(t *testing.T) {
 	}
 	if strings.Count(out.String(), "Pulling ") != 1 || strings.Contains(warned.String(), "failed to pull") {
 		t.Fatalf("after the interrupt init said:\n%s%s", out.String(), warned.String())
+	}
+}
+
+// deafWork is setup's work that hears nothing: it starts a child in its
+// process group, writes both pids to dir, and runs until it is killed.
+func deafWork(dir string) int {
+	// sleep-ok: a stand-in child that runs until its group is killed
+	child := exec.Command("/bin/sleep", "300")
+	if err := child.Start(); err != nil {
+		return 3
+	}
+	pids := fmt.Sprintf("%d %d\n", os.Getpid(), child.Process.Pid)
+	if err := os.WriteFile(filepath.Join(dir, "pids"), []byte(pids), 0o600); err != nil {
+		return 3
+	}
+	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGHUP)
+	select {}
+}
+
+// gone is whether pid is no running process: none, or one only its
+// parent has yet to reap.
+func gone(pid int) bool {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return syscall.Kill(pid, 0) != nil
+	}
+	_, after, _ := strings.Cut(string(stat), ") ")
+	return strings.HasPrefix(after, "Z")
+}
+
+// A reading's work that hears no end of its stdin is ended within the
+// bound, with everything in its process group, once the reading's caller
+// went: a lock or the end of its folder (End).
+func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
+	for name, end := range map[string]func(cancel func(), l desktop.Local){
+		"its caller went":  func(cancel func(), _ desktop.Local) { cancel() },
+		"its folder ended": func(_ func(), l desktop.Local) { l.End() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			deaf := t.TempDir()
+			t.Setenv(workDeaf, deaf)
+			saved := startWork
+			t.Cleanup(func() { startWork = saved })
+			startWork = nil
+			l, err := readLocal(setUpFolder(t), "the test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			read := make(chan error, 1)
+			go func() { read <- l.Answers(ctx) }()
+			var pids []int
+			for deadline := time.Now().Add(10 * time.Second); len(pids) < 2; {
+				if time.Now().After(deadline) {
+					t.Fatal("the deaf work never started")
+				}
+				raw, _ := os.ReadFile(filepath.Join(deaf, "pids"))
+				pids = nil
+				for _, f := range strings.Fields(string(raw)) {
+					if pid, err := strconv.Atoi(f); err == nil {
+						pids = append(pids, pid)
+					}
+				}
+				time.Sleep(20 * time.Millisecond) // sleep-ok: polls an observable condition
+			}
+			ended := time.Now()
+			end(cancel, l)
+			select {
+			case <-read:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the reading waited for its work")
+			}
+			for _, pid := range pids {
+				for !gone(pid) {
+					if time.Since(ended) > workEndsWithin+5*time.Second {
+						t.Fatalf("process %d of the work outlived the bound", pid)
+					}
+					time.Sleep(50 * time.Millisecond) // sleep-ok: polls an observable condition
+				}
+			}
+			if took := time.Since(ended); took < workEndsWithin-time.Second {
+				t.Fatalf("the work was ended after %v, before its bound", took)
+			}
+		})
 	}
 }

@@ -43,7 +43,7 @@ type machineSeams struct {
 	running func() bool
 	// groups lists the groups of account, or of this process when account
 	// is empty.
-	groups func(account string) []string
+	groups func(ctx context.Context, account string) []string
 	// displayManager is whether a display manager has the screen.
 	displayManager func() bool
 	// screenService is whether the cyfr-screen service is enabled, and
@@ -90,12 +90,12 @@ var machine = machineSeams{
 		return exec.Command("systemctl", "is-enabled", "--quiet", "cyfr-screen").Run() == nil,
 			exec.Command("systemctl", "is-active", "--quiet", "cyfr-screen").Run() == nil
 	},
-	groups: func(account string) []string {
+	groups: func(ctx context.Context, account string) []string {
 		args := []string{"-nG"}
 		if account != "" {
 			args = append(args, account)
 		}
-		out, _ := exec.Command("id", args...).Output()
+		out, _ := exec.CommandContext(ctx, "id", args...).Output()
 		return strings.Fields(string(out))
 	},
 	system: func() string { return runtime.GOOS },
@@ -140,7 +140,7 @@ func administrator() (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	return account.Username, slices.ContainsFunc(machine.groups(account.Username), func(g string) bool { return slices.Contains(administrators, g) }), nil
+	return account.Username, slices.ContainsFunc(machine.groups(context.Background(), account.Username), func(g string) bool { return slices.Contains(administrators, g) }), nil
 }
 
 // mayAdminister refuses, before anything asks, runs or is written, an
@@ -239,20 +239,27 @@ func requirementCommands(account string) []string {
 	if !machine.running() {
 		commands = append(commands, "systemctl enable --now docker")
 	}
-	if !slices.Contains(machine.groups(account), dockerGroup) {
+	if !slices.Contains(machine.groups(context.Background(), account), dockerGroup) {
 		commands = append(commands, "usermod -aG docker "+account)
 	}
 	return commands
 }
 
-// prepareMachine is cyfr init's first step at a terminal when this
-// account cannot reach Docker. On Ubuntu 26.04 it shows what is missing,
+// prepareMachine is cyfr init's first step. Where only a new login gives
+// this process the docker group (loginIsMissing) it says so and ends init,
+// at a terminal or not. Otherwise, at a terminal when this account cannot
+// reach Docker: on Ubuntu 26.04 it shows what is missing,
 // asks, and installs it through one sudo (mayAdminister, unlockSudo); on macOS and Windows it
 // waits for Docker Desktop (awaitDockerDesktop). It answers true when init
 // ends here, the rest of it run in a process carrying the docker group or
 // the installation declined, false when this process goes on to prepare
 // the project. Running init again is the retry.
 func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (bool, error) {
+	// Only a new login cures this, with a terminal or without, so it is
+	// said before anything is installed or written.
+	if loginIsMissing(ctx) {
+		return true, fmt.Errorf("%s. Then run `cyfr init` again", loginAgain)
+	}
 	if !askTerminal() {
 		return false, nil
 	}
@@ -299,7 +306,7 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 			return false, nil
 		}
 	}
-	return continueWithGroup("init", args, account.Username, out, errOut)
+	return continueWithGroup(ctx, "init", args, account.Username, out, errOut)
 }
 
 // dockerDesktopPage is where Docker offers Docker Desktop's installer for
@@ -323,13 +330,6 @@ var dockerDesktopPrompts = map[string]string{
 	"windows": `While Docker Desktop installs, Windows asks "Do you want to allow this app to make changes to your device?": answer Yes.`,
 }
 
-// withDockerDesktop is path with the folder of Docker Desktop's own
-// docker program after it.
-func withDockerDesktop(path, system string) string {
-	_, bin := dockerDesktop(system)
-	return path + string(os.PathListSeparator) + bin
-}
-
 // dockerPoll is how often init asks whether Docker answers yet.
 var dockerPoll = 2 * time.Second
 
@@ -341,7 +341,7 @@ var dockerPoll = 2 * time.Second
 // process's PATH, since a terminal opened before the install lacks it; an
 // interrupt ends init there.
 func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool, error) {
-	app, _ := dockerDesktop(system)
+	app, bin := dockerDesktop(system)
 	if _, err := os.Stat(app); err != nil {
 		fmt.Fprintln(out, "CYFR needs Docker Desktop on this machine.")
 		answer, err := ask(ctx, bufio.NewReader(askInput), out, "Open Docker's installer page? (yes/no)", "yes")
@@ -360,7 +360,7 @@ func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool
 		fmt.Fprintln(out, "Docker Desktop is installed and does not answer yet: start it.")
 	}
 	fmt.Fprintln(out, "CYFR goes on when Docker answers. Nothing is written until then; Ctrl+C stops here.")
-	if err := os.Setenv("PATH", withDockerDesktop(os.Getenv("PATH"), system)); err != nil {
+	if err := os.Setenv("PATH", os.Getenv("PATH")+string(os.PathListSeparator)+bin); err != nil {
 		return false, err
 	}
 	tick := time.NewTicker(dockerPoll)
@@ -393,13 +393,28 @@ func withDockerGroup(ctx context.Context, subcommand string, args []string, out,
 	if err != nil {
 		return false, err
 	}
-	return continueWithGroup(subcommand, args, account.Username, out, errOut)
+	return continueWithGroup(ctx, subcommand, args, account.Username, out, errOut)
 }
 
 // loginAgain is said where only a new login gives this account the docker
 // group: there is no sg, which is also newgrp, both of them an optional
 // package's on Ubuntu 26.04.
 const loginAgain = "Docker does not answer this account until you log out and in again"
+
+// loginIsMissing is whether only a new login lets this process reach
+// Docker: Docker does not answer it, /etc/group lists its account in the
+// docker group, the process is older than that, and there is no sg to
+// reach the group with.
+func loginIsMissing(ctx context.Context) bool {
+	if machine.system() != "linux" {
+		return false
+	}
+	if _, err := os.Stat(sgProgram); err == nil {
+		return false
+	}
+	account, err := user.Current()
+	return err == nil && staleGroup(ctx, account.Username) && !machine.reachable(ctx)
+}
 
 // sgProgram runs a command with a group the account's processes do not
 // carry yet, without a password when /etc/group lists the account in it;
@@ -408,8 +423,8 @@ var sgProgram = "/usr/bin/sg"
 
 // staleGroup is whether /etc/group lists account in the docker group and
 // this process lacks it, being older than that.
-func staleGroup(account string) bool {
-	return slices.Contains(machine.groups(account), dockerGroup) && !slices.Contains(machine.groups(""), dockerGroup)
+func staleGroup(ctx context.Context, account string) bool {
+	return slices.Contains(machine.groups(ctx, account), dockerGroup) && !slices.Contains(machine.groups(ctx, ""), dockerGroup)
 }
 
 // continueWithGroup runs cyfr subcommand again, with the flags the person
@@ -418,8 +433,8 @@ func staleGroup(account string) bool {
 // /etc/group does not list the account in the group, and when this process
 // already has it: sg would give it nothing, and its child would land here
 // again. With no sg it runs nothing and says to log in again (loginAgain).
-func continueWithGroup(subcommand string, args []string, account string, out, errOut io.Writer) (bool, error) {
-	if !staleGroup(account) {
+func continueWithGroup(ctx context.Context, subcommand string, args []string, account string, out, errOut io.Writer) (bool, error) {
+	if !staleGroup(ctx, account) {
 		return false, nil
 	}
 	if _, err := os.Stat(sgProgram); err != nil {

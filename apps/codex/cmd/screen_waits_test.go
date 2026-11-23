@@ -318,3 +318,24 @@ func (h *hungScreen) browserPID() int {
 	})
 	return pid
 }
+
+// Where only a new login gives the screen's setup's work the docker group,
+// the screen's page says so in place of "CYFR is starting", which is for a
+// CYFR that may yet answer.
+func TestScreenShell_SaysToLogInAgainWhereThatIsWhatIsMissing(t *testing.T) {
+	screenProject(t)
+	t.Setenv(workStaleGroup, "1")
+	_ = screenCompositor(t, idletest.Options{})
+	screenPrograms(t, quietScreen())
+	s := startScreen(t)
+	s.shows(loginAgain)
+	resp, err := s.ask(http.MethodGet, "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if page := html.UnescapeString(string(raw)); strings.Contains(page, "CYFR is starting") {
+		t.Fatalf("the page says CYFR is starting:\n%s", page)
+	}
+}

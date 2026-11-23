@@ -403,7 +403,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 	// A folder naming another CYFR than the one this shell opened ends it:
 	// the launcher starts it again on the reading made then.
 	moved := make(chan error, 1)
-	srv := &shell.Server{Shell: sh, Reachable: func() bool {
+	srv := &shell.Server{Shell: sh, Reachable: func() error {
 		err := local.Answers(ctx)
 		var unbound *shell.Unbound
 		if errors.As(err, &unbound) && unbound.Moved {
@@ -412,7 +412,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 			default:
 			}
 		}
-		return err == nil
+		return err
 	}}
 	served := make(chan error, 1)
 	go func() { served <- srv.ServeOn(ctx, ln) }()

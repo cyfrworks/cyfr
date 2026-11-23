@@ -62,7 +62,7 @@ func standInMachine(t *testing.T) *standIn {
 	machine.running = func() bool { return s.running }
 	machine.displayManager = func() bool { return s.displayManager }
 	machine.system = func() string { return s.system }
-	machine.groups = func(account string) []string {
+	machine.groups = func(_ context.Context, account string) []string {
 		if account == "" {
 			return s.process
 		}

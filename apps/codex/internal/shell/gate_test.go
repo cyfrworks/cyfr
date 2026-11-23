@@ -272,7 +272,7 @@ func handlerCases() []handlerCase {
 	return []handlerCase{
 		{"GET /", "a screen's", aPage, func(t *testing.T, e func(*Config)) scene {
 			home, b := aBox(t, e)
-			b.srv.Reachable = func() bool { return true }
+			b.srv.Reachable = func() error { return nil }
 			b.srv.reading = true
 			return scene{b: b, home: home}
 		}},
