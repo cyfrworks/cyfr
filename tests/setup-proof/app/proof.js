@@ -45,6 +45,24 @@ setInterval(() => {
   if (now - beat > 1500) lib.log(`main's loop was held ${now - beat} ms`)
   beat = now
 }, 1000).unref()
+// The crashed renderer's process until it is gone, within 60 s: each
+// state it passes through (/proc/PID/stat), so a slow end shows what held it.
+function watchEnd(pid) {
+  let last = ""
+  const until = Date.now() + 60_000
+  const look = () => {
+    let now
+    try {
+      now = readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].split(" ")[0]
+    } catch {
+      now = "gone"
+    }
+    if (now !== last) lib.log(`renderer ${pid}: ${now}`)
+    last = now
+    if (now !== "gone" && Date.now() < until) setTimeout(look, 250).unref()
+  }
+  look()
+}
 const read = (w) => js(w.webContents, `(() => {
   const $ = (i) => document.querySelector("#" + i)
   return {docker: $("docker").textContent, commands: $("commands").hidden ? "" : $("commands").textContent,
@@ -125,6 +143,7 @@ lib.run("setup", {
     // The renderer lost mid-run: on a desktop nothing locks with no CYFR
     // open, so this is the one way a chooser is shown anew during a run.
     step("the renderer crashed")
+    watchEnd(w.webContents.getOSProcessId())
     w.webContents.forcefullyCrashRenderer()
     await judged("reshown", "the chooser shown again mid-run shows the setup's progress while its start is held, and once it is released and done offers Open CYFR, opening nothing by itself",
       async () => {
