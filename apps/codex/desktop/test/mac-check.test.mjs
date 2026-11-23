@@ -49,6 +49,9 @@ function rig(t, {ent = {}, bare = ""} = {}) {
   put("Contents/PkgInfo", "APPL????")
   put("Contents/embedded.provisionprofile", profile)
   put("Contents/_CodeSignature/CodeResources", "<plist/>")
+  // The licences electron-builder moves in beside the app's resources.
+  put("Contents/Resources/LICENSE.electron.txt", "MIT")
+  put("Contents/Resources/LICENSES.chromium.html", "<html/>")
   const bin = path.join(dir, "bin")
   mkdirSync(bin)
   writeFileSync(path.join(dir, "main.xml"), plist.build(entitlements(team, group).main))

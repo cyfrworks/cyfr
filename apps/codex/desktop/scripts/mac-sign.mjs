@@ -262,10 +262,12 @@ export function decodeProfile(bytes) {
 // each in both byte orders.
 const MACHO = new Set(["feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"])
 // The data a signed Electron app holds, by kind: Electron's resources
-// (.pak, .dat, .bin, .asar, .icns, .json, .nib, .plist, PkgInfo), and a
-// signature's own files.
+// (.pak, .dat, .bin, .asar, .icns, .json, .nib, .plist, PkgInfo), the two
+// licences electron-builder moves into Contents/Resources from beside
+// Electron.app (retainElectronLicenseFiles in its ElectronFramework.js),
+// the embedded profile, and a signature's own files.
 const DATA = /\.(pak|dat|bin|asar|icns|json|nib|plist)$/
-const DATA_NAMES = new Set(["PkgInfo", "embedded.provisionprofile"])
+const DATA_NAMES = new Set(["PkgInfo", "embedded.provisionprofile", "LICENSE.electron.txt", "LICENSES.chromium.html"])
 
 function head(file) {
   const fd = openSync(file, "r")
