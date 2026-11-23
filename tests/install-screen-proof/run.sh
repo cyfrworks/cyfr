@@ -38,7 +38,12 @@
 # lock, kill, cut and reboot the session cookie the screen last sent CYFR
 # (read from the request heads root observes on the guest's loopback,
 # box.py, never kept in the evidence) is sent to sign in, and at the end
-# no evidence file holds any cookie the screen sent. Every press and read
+# no evidence file holds any cookie the screen sent. The video in the
+# five minutes is a canvas written with the API key the screen made: the
+# proof reads that key off the loopback wire as root, as CYFR sent it to
+# the screen, since Prism shows a key once, to the person, and nothing else
+# hands it over; it stays in root's file on the guest, is used for that
+# canvas alone, and the evidence holds none (the scrub). Every press and read
 # of the screen is a person's: the display read by tesseract on QEMU's
 # screendump and the guest's tablet pressed there (guest/screen.py). After
 # `cyfr down` and another reboot CYFR stays down, the screen says why
@@ -487,10 +492,15 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/open" >"$GUEST_DIR/open-forged.txt" 2>&1
   check "a local program naming the shell's Host and Origin is sent back to the page, with no ticket" grep -qx '303 http://127.0.0.1:7340/' "$GUEST_DIR/open-forged.txt"
 
-  step "five minutes without input lock the screen"
-  sleep 320
+  screen_confirms
+  screen_video
+
+  step "five minutes without input lock the screen, a video started by a tap playing"
+  sleep 280
+  check "the video still plays 280 s after its tap" screen_shows Playing 15
+  sleep 40
   shell_page idle
-  check "the screen locked itself after five minutes without input" grep -q 'CYFR is locked' "$GUEST_DIR/shell-idle.html"
+  check "the screen locked itself after five minutes without input, the video playing" grep -q 'CYFR is locked' "$GUEST_DIR/shell-idle.html"
   check "screenshot screen-locked.png" guest_screenshot screen-locked.png
   check "after the idle lock the home sends that unlock's cookie to sign in" cookie_is out prism
   if [ "$GUEST_TPM" = swtpm ]; then
@@ -516,7 +526,6 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   check "the home serves it" cookie_is in relocked
 
   screen_hides_first
-  screen_confirms
   screen_killed
   screen_severed
   screen_keeps_no_session
@@ -554,6 +563,39 @@ screen_hides_first() {
   screen_unlock
   check "the screen sends CYFR the next unlock's session cookie" screen_cookie unsilenced
   check "the home serves it" cookie_is in unsilenced
+}
+
+# A video in the five minutes: the API key the screen just made, read as
+# root off the loopback wire as CYFR sent it to the screen (box.py), since
+# Prism shows a key once, to the person, writes the canvas proof-video
+# (video/) and puts it first among the person's canvases, and is used for
+# nothing else; Prism shows it, and a tap of its Play starts a video made
+# on the page, which takes the engine's idle notification as playback
+# does. The five minutes that follow lock the screen all the same.
+screen_video() {
+  local framed
+  step "a video canvas written with that key, started by a tap"
+  framed=$(guest_root_out "python3 -I /root/box.py framed $OBSERVED")
+  check "CYFR's WebSocket frames to the screen are plain, so its key is read on the wire (${framed:-unread})" test "$framed" = plain
+  check "the key CYFR sent the screen is read off the wire, into root's file alone" \
+    guest_root "python3 -I /root/box.py key $OBSERVED /root/proof-key >/dev/null"
+  guest_copy_in "$HERE/video/index.html" video-index.html && guest_copy_in "$HERE/video/app.js" video-app.js ||
+    fail "the video canvas's files were not copied into the guest"
+  guest_root 'install -d -m 700 /root/proof-video && install -m 600 /home/proof/video-index.html /root/proof-video/index.html &&
+    install -m 600 /home/proof/video-app.js /root/proof-video/app.js && rm /home/proof/video-index.html /home/proof/video-app.js' ||
+    fail "the video canvas's files were not given to root ($GUEST_DIR/root.txt)"
+  check "that key writes the canvas and puts it first among the person's canvases" \
+    guest_root "python3 -I /root/box.py canvas /root/proof-key /root/proof-video >/root/proof-video/reference"
+  # Prism's own way to a canvas: its search, which names it.
+  guest_chord ctrl shift k || fail "QMP did not send the keys"
+  sleep 3
+  printf 'proof-video\n' | guest_keys || fail "QMP did not type"
+  sleep 8
+  check "screenshot screen-video.png" guest_screenshot screen-video.png
+  check "Prism shows the canvas, its Play to tap" screen_shows Play 30
+  screen_press Play || fail "the screen did not press Play ($GUEST_DIR/screen-press.txt)"
+  check "the tap started the video" screen_shows Playing 15
+  check "screenshot screen-video-playing.png" guest_screenshot screen-video-playing.png
 }
 
 # A sensitive change confirmed on this screen: an API key made in Prism,
