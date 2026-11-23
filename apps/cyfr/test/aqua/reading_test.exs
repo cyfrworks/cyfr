@@ -80,6 +80,47 @@ defmodule Aqua.ReadingTest do
     assert prefs(user.id)["locale"] == "en-GB"
   end
 
+  test "a report that differs in one value writes both of its values, so another device's write between its read and its own leaves this report's pair",
+       %{user: user} do
+    assert :ok = Aqua.put_reading(user.id, %{"time_zone" => "Asia/Tokyo", "locale" => "en-GB"})
+    test = self()
+    handler = "reading-between-#{System.unique_integer([:positive])}"
+
+    # Device B's whole report lands just after device A's report has read
+    # the stored pair, before A writes: A's read still shows its own zone.
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measures, %{query: query, params: params}, _config ->
+          if self() == test and query =~ ~r/\ASELECT\b.*\busers\b/s and user.id in params and
+               Process.get(:between) == nil do
+            Process.put(:between, true)
+
+            Task.async(fn ->
+              Aqua.put_reading(user.id, %{"time_zone" => "Europe/Lisbon", "locale" => "pt-PT"})
+            end)
+            |> Task.await()
+          end
+        end,
+        nil
+      )
+
+    try do
+      assert :ok = Aqua.put_reading(user.id, %{"time_zone" => "Asia/Tokyo", "locale" => "ja-JP"})
+    after
+      :telemetry.detach(handler)
+    end
+
+    assert Process.get(:between),
+           "device B's report did not land between device A's read and its write"
+
+    assert Map.take(prefs(user.id), ["time_zone", "locale"]) == %{
+             "time_zone" => "Asia/Tokyo",
+             "locale" => "ja-JP"
+           }
+  end
+
   test "two devices reporting at once leave one device's pair, never a mix", %{user: user} do
     pairs = [
       %{"time_zone" => "Asia/Tokyo", "locale" => "ja-JP"},

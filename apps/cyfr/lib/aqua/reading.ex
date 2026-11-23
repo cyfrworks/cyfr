@@ -7,11 +7,13 @@ defmodule Aqua.Reading do
   reports them when the shell connects (`PrismWeb.ShellLive`), stored as
   `time_zone` and `locale` in their preferences. A report is one write:
   each value kept when it reads as CYFR's one definition of a zone or a
-  language (`Opus.Browser.zone?/1`, `language?/1`) and differs from the
-  stored one, both in one patch (`Sanctum.Tenancy.Users.put_prefs/2`), so
-  nothing reads one without the other, and two devices that report at once
-  leave one device's pair. The preferences are read fresh and only the
-  report's own keys are patched, so the person's other preferences stand.
+  language (`Opus.Browser.zone?/1`, `language?/1`), and when any kept value
+  differs from the stored one, every kept value written in one patch
+  (`Sanctum.Tenancy.Users.put_prefs/2`), so nothing reads one without the
+  other, and two devices that report at once leave one device's pair: a
+  write is always a whole report's. The preferences are read fresh and
+  only the report's own keys are patched, so the person's other
+  preferences stand.
 
   The zone reads the person's day (`Aqua.Day`), and both the pages Aqua's
   browser shows (`Aqua.BrowserSetting.start/1`), exactly as reported:
@@ -28,9 +30,10 @@ defmodule Aqua.Reading do
 
   @doc """
   Keep the browser's report, a map that may hold `"time_zone"` and
-  `"locale"`, as the person's, in one write of the values that read and
-  differ from the stored ones: `:ok` when the store holds every value that
-  reads, `{:error, :invalid}` when the report holds none that does.
+  `"locale"`, as the person's: the values that read, all of them in one
+  write when any differs from the stored one, none when none does. `:ok`
+  when the store holds every value that reads, `{:error, :invalid}` when
+  the report holds none that does.
   """
   @spec put(String.t(), map()) :: :ok | {:error, term()}
   def put(user_id, report) when is_binary(user_id) and is_map(report) do
@@ -42,11 +45,10 @@ defmodule Aqua.Reading do
   defp keep(user_id, kept) do
     with {:ok, user} <- Users.get(user_id) do
       stored = Users.prefs(user)
-      patch = for {key, value} <- kept, stored[key] != value, into: %{}, do: {key, value}
 
-      if patch == %{},
+      if Enum.all?(kept, fn {key, value} -> stored[key] == value end),
         do: :ok,
-        else: with({:ok, _user} <- Users.put_prefs(user, patch), do: :ok)
+        else: with({:ok, _user} <- Users.put_prefs(user, kept), do: :ok)
     end
   end
 
