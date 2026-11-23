@@ -19,3 +19,6 @@ addEventListener("click", async () => {
     last = video.currentTime
   }, 1000)
 })
+// The page has drawn its Play: a canvas version that does not say so within
+// 10 s of its trial is never shown (Prism.CanvasValidation).
+cyfr.ready()
