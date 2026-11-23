@@ -123,3 +123,21 @@ func TestLock_EveryRoadIsLockedThenHiddenBeforeAnythingElse(t *testing.T) {
 		})
 	}
 }
+
+// A lock after the pages' Work ended still hides and still tells the CYFR:
+// a signal or the parent's end can end the Work before the screen's last
+// lock runs, and the channel the pages opened under it outlives it, so
+// each session is locked over it.
+func TestLock_AfterThePagesWorkEndedStillHidesAndTellsTheCYFR(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	setUpAndOpen(t, home, b)
+	b.srv.Work.End()
+	b.shell.Lock("")
+	home.mu.Lock()
+	told := len(home.locked)
+	home.mu.Unlock()
+	if b.restarts.Load() != 1 || told != 1 || b.shell.Unlocked() {
+		t.Fatalf("after the Work ended the lock hid %d times and told the CYFR of %d sessions", b.restarts.Load(), told)
+	}
+}

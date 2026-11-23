@@ -1589,3 +1589,89 @@ func TestALockTellsMainWithoutWaiting(t *testing.T) {
 		t.Fatalf("main was told %+v", m)
 	}
 }
+
+// folderWork is the app with the folder remembered, every reading of it
+// under the one Work returned.
+func folderWork(t *testing.T) (*app, *shell.Work) {
+	t.Helper()
+	var running atomic.Bool
+	running.Store(true)
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	work := shell.NewWork(t.Context())
+	read := a.Local
+	a.Local = func(project string) (Local, error) {
+		l, err := read(project)
+		l.Work = work
+		return l, err
+	}
+	return a, work
+}
+
+// A folder's Work has its holder with no gap: the service holds it by the
+// time main is told opened, under the same hold of its mutex that
+// publishes the pages, so the End a failed write of opened makes ends it,
+// and nothing attaches it after that End.
+func TestAFailedOpenedWriteEndsTheFolderWork(t *testing.T) {
+	a, work := folderWork(t)
+	r, w := io.Pipe()
+	t.Cleanup(func() { r.Close(); w.Close() })
+	ended := make(chan struct{})
+	to := NewWriter(w, func() {
+		a.End()
+		close(ended)
+	})
+	var heldAtOpened atomic.Bool
+	tell := a.Tell
+	a.Tell = func(m Message) {
+		tell(m)
+		if m.Type == TypeOpened {
+			// Told under the service's mutex, which guards here.
+			heldAtOpened.Store(a.here != nil && a.here.Work == work)
+		}
+		if err := to.Queue(m); err != nil {
+			t.Error(err)
+		}
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": localAddress})
+	if _, err := bufio.NewReader(r).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	a.next(t)
+	r.Close()
+	a.ready(localAddress)
+	answered(t, done)
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the failed write of opened did not end the service")
+	}
+	if !heldAtOpened.Load() {
+		t.Fatal("main was told opened before the service held the folder's Work")
+	}
+	if work.Context().Err() == nil {
+		t.Fatal("the failed write's End left the folder's Work alive")
+	}
+}
+
+// A lock that lets go of the folder ends its Work on every way out: a hide
+// that panics still ends it.
+func TestLeavingEndsTheFolderWorkThoughTheHidePanics(t *testing.T) {
+	a, work := folderWork(t)
+	adapt := a.Shell
+	a.Shell = func(c *shell.Config) {
+		adapt(c)
+		c.Restart = func() { panic("hide interrupted") }
+	}
+	a.openedFolder(t)
+	func() {
+		defer func() {
+			if recover() != "hide interrupted" {
+				t.Error("the hide did not panic")
+			}
+		}()
+		a.lock("", true)
+	}()
+	if work.Context().Err() == nil {
+		t.Fatal("the folder's Work outlived the panicking lock that let go of it")
+	}
+}

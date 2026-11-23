@@ -102,12 +102,20 @@ func newDesktopService(ctx context.Context, device string, tell func(desktop.Mes
 		DisplayName: host,
 		Tell:        tell,
 		Local: func(project string) (desktop.Local, error) {
+			// The reading holds work from here: its caller once it is
+			// returned, and this function until then, a panic too.
 			work := shell.NewWork(ctx)
+			returned := false
+			defer func() {
+				if !returned {
+					work.End()
+				}
+			}()
 			l, err := readLocal(work, project, "the CYFR app")
 			if err != nil {
-				work.End()
 				return desktop.Local{}, engineFailure(err)
 			}
+			returned = true
 			return l, nil
 		},
 	}
