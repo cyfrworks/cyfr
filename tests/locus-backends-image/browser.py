@@ -72,6 +72,11 @@ container starts:
   version, and navigator.webdriver reads false.
 - A browser's start removes the Chrome the driver once fetched into its
   home and leaves the profile as it was.
+- A cookie a page set three seconds before the browser's session ended
+  is there when the browser starts again, a page of its origin reading it.
+  Every closed session reads to the driver's bye,
+  its last message once its Chrome has exited, before anything Chrome
+  wrote as it closed, a network log among them, is read.
 - A saved profile that holds a known page does not reopen it, from the
   network or the cache: one the full Chrome made, whose session holds the
   page (a fixture below), and one the shell made, ended abruptly with a
@@ -158,8 +163,8 @@ OWNER = owner_of("browser")
 # profile lock is a socket in its temporary folder, and a home this long
 # leaves no room for it there unless the driver names that folder short.
 BROWSER_HOME = "mcp_01890000-0000-7000-8000-00000000b005"
-BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, TOOLS_HOME, FULL_HOME = (
-    f"mcp_browser-{name}" for name in ("broken", "other", "offline", "tools", "full"))
+BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, TOOLS_HOME, FULL_HOME, COOKIE_HOME = (
+    f"mcp_browser-{name}" for name in ("broken", "other", "offline", "tools", "full", "cookie"))
 # The bound Opus.Programs.Definition.browser/1 gives the browser's home.
 HOME_MAX_BYTES = 2 << 30
 BROWSER = {"name": "browser", "command": "cyfr-browser", "env": {}, "home": "kept", "memory_bytes": 1536 << 20,
@@ -416,8 +421,16 @@ class Host:
         return self.put(id, win, [("index.html", "text/html", html.encode())], root_of(name))
 
     def close(self):
+        """Closes the session and reads it to its end, the driver's bye: its Chrome has exited, so what Chrome
+        writes as it closes, its profile and a network log, is written."""
         status, closed = self.c.close(OWNER, self.session)
         expect(status == 200, "the browser's session is closed", closed)
+        while not any(m["t"] == "bye" for m in self.inbox):
+            after = self.after
+            self.read()
+            if not self.running and self.after == after and not any(m["t"] == "bye" for m in self.inbox):
+                sys.exit(f"FAIL: the closed session ended without the driver's bye: the driver was ended before "
+                         f"its Chrome: {self.inbox[-5:]}")
 
 
 def ok(answer, what):
@@ -1149,6 +1162,34 @@ def in_image(stack, c):
     eventually(lambda: not stack.under_uid(uid), "the folder's processes to end")
 
 
+# A page that sets a cookie that lasts a day, as a site's sign-in does, and one that titles itself with the cookies
+# its origin holds. The guard holds a kept uid off the box's own addresses and every private one, so no site of the
+# suite's own can stand in the stack: the pages are put, under the reserved origin.
+SET_COOKIE_PAGE = ("<title>setting</title><script>document.cookie = 'cyfr=kept; Max-Age=86400; Path=/; Secure';"
+                   " document.title = 'cookie ' + document.cookie</script>")
+COOKIE_PAGE = "<title>reading</title><script>document.title = 'cookie ' + (document.cookie || 'none')</script>"
+
+
+def kept_cookie(stack, c):
+    """A cookie a page set three seconds before the browser's session ended is there when the browser starts again,
+    as a sign-in made just before the end is kept: the end lets the driver close Chrome, which writes the cookie to
+    its profile, where Chrome by itself writes it only within about 30 s. A close, the idle close and a row's change
+    end a kept session through one path at the keeper, its leader first, so this close stands for all three."""
+    first = Host(stack, c, COOKIE_HOME)
+    expect("error" not in first.hello(), "a browser in a home of its own says hello")
+    shown = ok(first.put_html(1, "thr_cookie", SET_COOKIE_PAGE, "sign-in"), "a page that sets a cookie is shown")
+    expect(shown["title"] == "cookie cyfr=kept", "the page set its cookie", shown)
+    time.sleep(3)  # sleep-ok: the session ends seconds after the cookie is set, before Chrome writes it by itself
+    first.close()
+    again = Host(stack, c, COOKIE_HOME)
+    expect("error" not in again.hello(), "the browser starts again in the same home")
+    shown = ok(again.put_html(1, "thr_cookie", COOKIE_PAGE, "signed-in"), "a page of the same origin is shown")
+    expect(shown["title"] == "cookie cyfr=kept",
+           "the browser started again holds the cookie a page set three seconds before the last session ended",
+           shown)
+    again.close()
+
+
 def first_start(stack, c):
     """The browser's first start loads a public page."""
     b = Host(stack, c, BROWSER_HOME)
@@ -1184,6 +1225,8 @@ def main():
             else:
                 first_start(stack, c)
             return
+
+        kept_cookie(stack, c)
 
         # ————— the first exchange —————
         b = Host(stack, c, BROWSER_HOME)

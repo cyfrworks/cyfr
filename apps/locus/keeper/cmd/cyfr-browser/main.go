@@ -108,19 +108,29 @@ func run(args []string) int {
 		_ = s.write(hello)
 		return 1
 	}
-	defer running.close()
 	if err := s.write(hello); err != nil {
+		running.close()
 		return 1
 	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, unix.SIGTERM, unix.SIGHUP)
-	if err := serve(os.Stdin, s, b, running.exited, stop); err != nil {
+	err = serve(os.Stdin, s, b, running.exited, stop)
+	// Chrome is gone before the driver says bye, so whatever it writes as
+	// it closes, the profile and a network log, is written by then.
+	running.close()
+	_ = s.write(byeMessage{T: "bye"})
+	if err != nil {
 		if !errors.Is(err, errChromeExited) {
 			fmt.Fprintln(os.Stderr, "cyfr-browser:", err)
 		}
 		return 1
 	}
 	return 0
+}
+
+// byeMessage is the driver's last message, once its Chrome has exited.
+type byeMessage struct {
+	T string `json:"t"`
 }
 
 // makeRaw sets the terminal on fd as cfmakeraw(3) does: no echo, no line
