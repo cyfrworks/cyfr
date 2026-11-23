@@ -9,6 +9,8 @@ defmodule Locus.OutputTest do
   """
   use ExUnit.Case, async: true
 
+  import Prima.Test.Wait
+
   alias Locus.Output
 
   @kib 1024
@@ -231,10 +233,13 @@ defmodule Locus.OutputTest do
       send(a, {:reserve, 70 * @kib, later(5_000)})
       assert_receive {^a, :reserved, {:ok, grant_a}}
 
-      # 50 does not fit beside 70; 10 would, but waits behind it.
+      # 50 does not fit beside 70; 10 would, but, asked after it, waits
+      # behind it.
       send(b, {:reserve, 50 * @kib, later(5_000)})
+      wait_until(fn -> Output.held(output).waiting == 1 end, 5_000, "the first ask queued")
       send(c, {:reserve, 10 * @kib, later(5_000)})
-      refute_receive {_, :reserved, _}, 200
+      wait_until(fn -> Output.held(output).waiting == 2 end, 5_000, "the second ask queued")
+      refute_received {_, :reserved, _}
       assert_held(output, answering: 70 * @kib, waiting: 2)
 
       send(a, {:return, grant_a})
