@@ -108,10 +108,17 @@ defmodule Prima.LocusBackends do
   draws its uid, from the kept-home range its keeper is given, when the
   home is first made, at the first `open` that names it. A home that work
   in flight will still make, an `open` being prepared in it or an earlier
-  make or reset of it, is refused `conflict`: it is busy, not gone, and its
-  caller may send the message again once that has finished. The box sends
-  a refused `retire` again by itself, and answers a refused `reset` to its
-  caller as refused and forgets it.
+  make or reset of it, or a change of it still running, is refused
+  `conflict`: it is busy, not gone, and its caller may send the message
+  again once that has finished. The box sends a refused `retire` again by
+  itself, and answers a refused `reset` to its caller as refused and
+  forgets it.
+
+  A `home` and a `homes` are applied in the order of their sequence like
+  every control message, but their work runs beside the messages after
+  them and each is answered when it is done, so a removal that takes
+  minutes holds no renewal. A message overtaken on its way is refused
+  `stale_control` and nothing of it is applied.
 
   An owner's `athanor` and `server` are signed field text
   (`Prima.MacEnvelope`); a generation `g` and an epoch `e` are positive

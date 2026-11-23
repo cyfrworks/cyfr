@@ -88,7 +88,9 @@ defmodule Opus.ProgramsTest do
   end
 
   defp idle?(state),
-    do: state.inflight == nil and :queue.is_empty(state.urgent) and :queue.is_empty(state.queue)
+    do:
+      state.inflight == nil and state.beside == %{} and :queue.is_empty(state.urgent) and
+        :queue.is_empty(state.queue)
 
   # Until the controller has no message in flight and none queued.
   defp await_idle(controller, deadline \\ System.monotonic_time(:millisecond) + 3_000) do
