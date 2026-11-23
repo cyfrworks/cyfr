@@ -249,6 +249,39 @@ func TestACancelledReadingStartsNothing(t *testing.T) {
 	}
 }
 
+// A run, setup a person started, whose caller goes while it is still
+// starting is waited for to its end all the same.
+func TestARunIsWaitedForThoughItsCallerWentAsItStarted(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	entered, release := make(chan struct{}), make(chan struct{})
+	answered := make(chan error, 1)
+	go func() {
+		_, err := workBegunBy(ctx, func(context.Context, []string) (*workProcess, error) {
+			close(entered)
+			<-release
+			_, in := io.Pipe()
+			return &workProcess{in: in, out: strings.NewReader(`{"type":"done"}` + "\n"), wait: func() error { return nil }, kill: func() {}}, nil
+		}, nil, workRun, t.TempDir())
+		answered <- err
+	}()
+	<-entered
+	cancel()
+	select {
+	case err := <-answered:
+		t.Fatalf("the run answered %v before it started", err)
+	case <-time.After(100 * time.Millisecond): // sleep-ok: a bounded look for an answer that must not come yet
+	}
+	close(release)
+	select {
+	case err := <-answered:
+		if err != nil {
+			t.Fatalf("the run answered %v, not its end", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run never answered")
+	}
+}
+
 // A reading is not waited for while its work is still starting: its caller
 // goes at its ctx's end, and the launcher's ctx ends with it.
 func TestAReadingIsNotWaitedForWhileItsWorkStarts(t *testing.T) {
