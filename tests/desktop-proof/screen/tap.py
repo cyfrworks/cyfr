@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 """One tap at X Y of a 1280x720 output, by a virtual pointer of labwc's
-(zwlr_virtual_pointer_v1): input as a person's is, which Chrome asks of
+(zwlr_virtual_pointer_v1): input as a person's is, which the engine asks of
 playback before it holds the screen awake. The pointer stays until the tap
 is taken, which wlrctl's does not."""
 

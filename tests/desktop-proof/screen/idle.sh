@@ -4,9 +4,9 @@
 #
 # The screen's watches against the engine and the programs they rest on:
 # this tree's (apps/codex/cmd screenWatches, as TestScreenWatchHelper keeps
-# them) under Ubuntu 26.04's own labwc and swayidle, beside the screen's
-# Chrome with the screen's flags, in a container with a headless output and
-# a stand-in logind on its system bus (login1.py). Five cases, each in a
+# them) under Ubuntu 26.04's own labwc and swayidle, beside the CYFR app's
+# engine, natively on Wayland, in a container with a headless output and a
+# stand-in logind on its system bus (login1.py). Five cases, each in a
 # compositor of its own:
 #
 #   still    the page plays nothing: the watch locks, and the control fires
@@ -21,29 +21,31 @@
 #            the screen is never watched and says why
 #
 # The control is swayidle's ordinary timeout of the watch's own length.
-# With a video: it starts once Chrome asked the compositor for an idle
+# With a video: it starts once the engine asked the compositor for an idle
 # inhibitor (its Wayland requests, WAYLAND_DEBUG), is seen registered,
 # stays silent and alive while the watch locks, and the same process must
 # fire once a second tap has ended the playback. A control that never
 # registered, exited or cannot fire fails the row, as does a page that held
 # nothing.
 #
-# The player is the screen's browser: Chrome, while the box's screen is
-# Chrome. The change that makes the CYFR app the box's screen makes the
-# app's own engine the player here, from the package Codex CI builds; the
-# real five minutes with a video playing are the installed box's
-# (tests/install-screen-proof), on the engine the box runs.
+# The player is the app's engine: Electron at the version the CYFR app's
+# package pins (apps/codex/desktop/package.json), from Electron's own
+# release for this machine's architecture, checked against that release's
+# SHASUMS256.txt, opening the page in one window (player.cjs). The app
+# itself opens only the screen shell's pages and its CYFR's; the real five
+# minutes with a video playing in the app are the installed box's
+# (tests/install-screen-proof).
 #
 # The length is three seconds in place of five minutes, which
 # apps/codex/cmd's tests hold to five. The taps are a virtual pointer's
-# (tap.py), real input to labwc: Chrome takes no inhibitor for playback
+# (tap.py), real input to labwc: the engine takes no inhibitor for playback
 # that no input started. The stand-in is no logind: that a real sleep
 # reaches swayidle is logind's and the kernel's, and that one it did not
 # report locks at the waking is apps/codex/cmd's tests', on stand-in clocks.
 #
 # Usage: bash tests/desktop-proof/screen/idle.sh
-# It needs Docker, Go, linux/amd64 (Chrome's package), Ubuntu's archive and
-# Google's Chrome download. It binds no port of this machine. Each check
+# It needs Docker, Go, Linux on amd64 or arm64, Ubuntu's archive and
+# Electron's release on GitHub. It binds no port of this machine. Each check
 # prints one PASS or FAIL line and one FAIL fails the run.
 set -uo pipefail
 
@@ -55,10 +57,15 @@ if [ "${1:-}" = --inside ]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get -o Acquire::Retries=3 update -qq
   apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
-    labwc swayidle wvkbd wlrctl dbus procps python3 python3-gi gir1.2-glib-2.0 curl ca-certificates fonts-dejavu-core >/dev/null
-  curl -fsSL --retry 5 --retry-all-errors -o /tmp/chrome.deb \
-    https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-  apt-get -o Acquire::Retries=3 install -y -qq /tmp/chrome.deb >/dev/null
+    labwc swayidle wvkbd wlrctl dbus procps python3 python3-gi gir1.2-glib-2.0 curl ca-certificates fonts-dejavu-core unzip \
+    libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libxss1 libxtst6 >/dev/null
+  read -r version arch </fixture/engine
+  zip=electron-v$version-linux-$arch.zip
+  release=https://github.com/electron/electron/releases/download/v$version
+  curl -fsSL --retry 5 --retry-all-errors -o "/tmp/$zip" "$release/$zip"
+  curl -fsSL --retry 5 --retry-all-errors -o /tmp/SHASUMS256.txt "$release/SHASUMS256.txt"
+  (cd /tmp && grep " \*$zip\$" SHASUMS256.txt | sed 's/ \*/  /' | sha256sum --check --strict --quiet)
+  unzip -q "/tmp/$zip" -d /opt/engine
   useradd -m proof
   install -m 0644 /fixture/login1.conf /etc/dbus-1/system.d/cyfr-proof-login1.conf
   mkdir -p /run/dbus
@@ -138,20 +145,19 @@ if [ "${1:-}" = --session ]; then
   python3 -I "$OUT/site/site.py" >"$OUT/address" 2>"$OUT/site.log" &
   within 10 test -s "$OUT/address" || { verdict FAIL "the pages were never served"; finish; }
   address=$(cat "$OUT/address")
-  WAYLAND_DEBUG=client google-chrome-stable --no-first-run --no-default-browser-check --disable-extensions \
-    --ozone-platform=wayland --user-data-dir="$OUT/chrome" \
-    --app="$address/$CASE" >"$OUT/chrome.log" 2>&1 &
+  WAYLAND_DEBUG=client /opt/engine/electron --ozone-platform=wayland --user-data-dir="$OUT/engine" \
+    /fixture/player.cjs "$address/$CASE" >"$OUT/engine.log" 2>&1 &
   stands() { wlrctl toplevel find "title:cyfr-proof-$CASE-$1"; }
   tap() { python3 -I "$OUT/site/tap.py" 320 180 >>"$OUT/tap.log" 2>&1; }
-  within 60 stands waiting || { verdict FAIL "the page never loaded"; finish; }
+  within 60 stands waiting || { verdict FAIL "the page never loaded: $(grep -av '^\[' "$OUT/engine.log" | tail -n 5 | tr '\n' ' ')"; finish; }
   for _ in 1 2 3 4 5; do
     tap
     stands waiting || break
   done
   within 30 stands started || { verdict FAIL "the tap started nothing"; finish; }
-  inhibited() { grep -qa 'zwp_idle_inhibit_manager_v1.*create_inhibitor' "$OUT/chrome.log"; }
+  inhibited() { grep -qa 'zwp_idle_inhibit_manager_v1.*create_inhibitor' "$OUT/engine.log"; }
   if [ "$CASE" != still ]; then
-    within 30 inhibited || { verdict FAIL "Chrome took no idle inhibitor, so the row shows nothing"; finish; }
+    within 30 inhibited || { verdict FAIL "the engine took no idle inhibitor, so the row shows nothing"; finish; }
   fi
 
   swayidle -d -w -C /dev/null timeout "$AFTER" "touch $OUT/control" >"$OUT/control.log" 2>&1 &
@@ -212,18 +218,26 @@ trap 'exit 143' TERM
 mkdir "$WORK/fixture" || exit 1
 (cd "$ROOT/apps/codex" && CGO_ENABLED=0 go test -c -o "$WORK/fixture/cmd.test" ./cmd) ||
   { echo "FAIL build: the screen's watches did not build"; exit 1; }
-cp "$HERE/idle.sh" "$HERE/site.py" "$HERE/tap.py" "$HERE/login1.py" "$HERE/login1.conf" "$ROOT/apps/codex/cmd/screen/rc.xml" "$ROOT/apps/codex/cmd/screen/menu.xml" "$WORK/fixture/" || exit 1
+case $(uname -m) in
+  x86_64) arch=x64 ;;
+  aarch64) arch=arm64 ;;
+  *) echo "idle: Linux on amd64 or arm64 is needed" >&2; exit 69 ;;
+esac
+version=$(sed -n 's/^ *"electron": "\([0-9.]*\)",*$/\1/p' "$ROOT/apps/codex/desktop/package.json")
+[ -n "$version" ] || { echo "FAIL build: the app's package pins no Electron"; exit 1; }
+echo "$version $arch" >"$WORK/fixture/engine"
+cp "$HERE/idle.sh" "$HERE/player.cjs" "$HERE/site.py" "$HERE/tap.py" "$HERE/login1.py" "$HERE/login1.conf" "$ROOT/apps/codex/cmd/screen/rc.xml" "$ROOT/apps/codex/cmd/screen/menu.xml" "$WORK/fixture/" || exit 1
 chmod 755 "$WORK" "$WORK/fixture" "$WORK/fixture/cmd.test"
-chmod 644 "$WORK/fixture/login1.py" "$WORK/fixture/login1.conf" "$WORK/fixture/idle.sh" "$WORK/fixture/site.py" "$WORK/fixture/tap.py" "$WORK/fixture/rc.xml" "$WORK/fixture/menu.xml"
+chmod 644 "$WORK/fixture/engine" "$WORK/fixture/player.cjs" "$WORK/fixture/login1.py" "$WORK/fixture/login1.conf" "$WORK/fixture/idle.sh" "$WORK/fixture/site.py" "$WORK/fixture/tap.py" "$WORK/fixture/rc.xml" "$WORK/fixture/menu.xml"
 
-# Chrome's sandbox makes namespaces of its own inside the container, as in
+# The engine's sandbox makes namespaces of its own inside the container, as in
 # tests/desktop-proof/home.sh's client.
 docker run -d --init --name "$BOX" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} \
   --security-opt seccomp=unconfined --shm-size 512m \
   -v "$WORK/fixture:/fixture:ro" "$IMAGE" sleep infinity >/dev/null || exit 1
 docker exec "$BOX" bash /fixture/idle.sh --inside >"$WORK/prepare.log" 2>&1 ||
-  { tail -n 30 "$WORK/prepare.log"; echo "FAIL prepare: labwc, swayidle or Chrome was not installed"; exit 1; }
-docker exec "$BOX" sh -c 'google-chrome-stable --version; dpkg-query -W labwc swayidle'
+  { tail -n 30 "$WORK/prepare.log"; echo "FAIL prepare: labwc, swayidle or the engine was not installed"; exit 1; }
+docker exec "$BOX" sh -c 'cat /opt/engine/version; echo; dpkg-query -W labwc swayidle'
 
 # -s keeps the account's own modules out; -I would hide Ubuntu's gi.
 docker exec -d -u proof "$BOX" python3 -s /fixture/login1.py || exit 1
