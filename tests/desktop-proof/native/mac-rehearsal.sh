@@ -71,7 +71,9 @@ bounded() {
   return "$status"
 }
 
+SEARCH=() # the account's keychain search list before the rehearsal's joined it
 cleanup() {
+  [ "${#SEARCH[@]}" = 0 ] || bounded 60 "restoring the keychain search list" security list-keychains -d user -s "${SEARCH[@]}"
   [ ! -e "$KEYCHAIN" ] || bounded 60 "deleting the keychain" security delete-keychain "$KEYCHAIN"
   rm -rf "$RUN"
 }
@@ -182,25 +184,36 @@ check() { (cd "$DESKTOP" && bounded 900 "checking ${1##*/}" node scripts/mac-sig
 # with the same identity, so its signature verifies and only the program
 # differs.
 # A keychain codesign may use with no prompt: unlocked, never locking
-# again, its key open to Apple's tools.
+# again, its key open to Apple's tools, and on the account's search list,
+# where alone codesign finds an identity (measured: with --keychain alone
+# it finds none).
 bounded 60 "making the keychain" security create-keychain -p "$PASSWORD" "$KEYCHAIN" &&
   bounded 60 "unlocking the keychain" security unlock-keychain -p "$PASSWORD" "$KEYCHAIN" &&
   bounded 60 "keeping the keychain unlocked" security set-keychain-settings "$KEYCHAIN" &&
   bounded 60 "importing the identity" security import "$RUN/id.p12" -k "$KEYCHAIN" -P "$PASSWORD" -T /usr/bin/codesign >/dev/null &&
-  bounded 60 "opening the key to codesign" security set-key-partition-list -S apple-tool:,apple: -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null ||
+  bounded 60 "opening the key to codesign" security set-key-partition-list -S apple-tool:,apple: -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null &&
+  listed=$(bounded 60 "reading the keychain search list" security list-keychains -d user) ||
   { echo "rehearsal: no keychain" >&2; exit 1; }
+while IFS= read -r line; do
+  line=${line#"${line%%[![:space:]]*}"}
+  line=${line#\"}
+  [ -z "$line" ] || SEARCH+=("${line%\"}")
+done <<<"$listed"
+bounded 60 "putting the keychain on the search list" security list-keychains -d user -s "$KEYCHAIN" "${SEARCH[@]}" ||
+  { echo "rehearsal: the keychain is not on the search list" >&2; exit 1; }
 MOUNT="$RUN/mount"
 mkdir "$MOUNT" && bounded 300 "mounting the DMG" hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null &&
   bounded 300 "copying the app" ditto "$MOUNT/CYFR.app" "$RUN/tampered/CYFR.app"
 bounded 120 "unmounting the DMG" hdiutil detach "$MOUNT" >/dev/null
 APP="$RUN/tampered/CYFR.app"
-cp /usr/bin/true "$APP/Contents/Resources/cyfr" &&
+if ! { cp /usr/bin/true "$APP/Contents/Resources/cyfr" &&
   bounded 120 "signing the substitute" codesign --force --sign "$NAME" --keychain "$KEYCHAIN" --options runtime --timestamp \
     "$APP/Contents/Resources/cyfr" &&
   bounded 120 "signing the app again" codesign --force --sign "$NAME" --keychain "$KEYCHAIN" --options runtime --timestamp \
-    --preserve-metadata=entitlements "$APP" ||
-  fail helper "the substituted app was not signed again"
-if ! bounded 120 "verifying the substituted app" codesign --verify --deep --strict "$APP"; then fail helper "the substituted app's signature does not verify, so it shows nothing"
+    --preserve-metadata=entitlements "$APP"; }; then
+  fail helper "the substituted app was not signed again, so it shows nothing"
+elif ! bounded 120 "verifying the substituted app" codesign --verify --deep --strict "$APP"; then
+  fail helper "the substituted app's signature does not verify, so it shows nothing"
 elif out=$(check "$APP" --rehearsed 2>&1); then fail helper "the substituted app passed: $out"
 elif grep -qF "refused: CYFR.app/Contents/Resources/cyfr is not the cyfr the build signed" <<<"$out"; then pass helper "$out"
 else fail helper "refused for another reason: $out"; fi
