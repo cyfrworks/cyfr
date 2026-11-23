@@ -4551,7 +4551,6 @@ defmodule Aqua.ProgramTest do
       [worker] = MapSet.to_list(:sys.get_state(Aqua.Loop.Worker).children[loop.pid])
       Process.exit(worker, :kill)
       assert {:paused, :uncertain} = Task.await(loop, 30_000)
-      send(opening, :go)
 
       Prima.Test.Wait.wait_until(
         fn -> running_sessions(fake, row) == [] end,
@@ -4559,6 +4558,7 @@ defmodule Aqua.ProgramTest do
         "the paused turn's sessions to close"
       )
 
+      send(opening, :go)
       steer = steer!(ctx, thread, turn, "go on")
 
       resuming =
@@ -6111,11 +6111,16 @@ defmodule Aqua.ProgramTest do
   # The driver's session opens and says hello once it stands: the open is
   # told before its session does.
   defp opened!(fake, row, boot) do
-    assert_receive {:session, "open", %{"mode" => "run", "home_id" => home}, _fields}, 10_000
+    assert_receive {:session, "open", %{"mode" => "run"} = open, _fields}, 10_000
+    assert %{"home_id" => home, "lifetime" => lifetime} = open
     assert home == row.id
 
     Prima.Test.Wait.wait_until(
-      fn -> running_sessions(fake, row) != [] end,
+      fn ->
+        Enum.any?(running_sessions(fake, row), fn {_id, session} ->
+          session.named.lifetime == lifetime
+        end)
+      end,
       10_000,
       "the driver's session to stand"
     )

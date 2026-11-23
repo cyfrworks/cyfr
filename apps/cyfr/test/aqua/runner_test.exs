@@ -1996,9 +1996,11 @@ defmodule Aqua.RunnerTest do
     # both turns for a runner admitted on the owning boot.
     before = tape_snapshot(ctx, thread.id, [turn.id, second])
     runner_ref = Process.monitor(runner)
+    _ = :sys.get_state(runner)
     lose_ownership(:lost)
 
     refs = for pid <- [holder, call], do: Process.monitor(pid)
+    idle!(holder)
     Process.exit(holder, :kill)
     for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
     await_retired(runner, runner_ref)
