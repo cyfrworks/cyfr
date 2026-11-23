@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"io"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,6 +70,8 @@ type browser struct {
 	// agent is how every target names itself (agent.go), set once Chrome
 	// has answered its version and before any window is made.
 	agent map[string]any
+	// log is the driver's log.
+	log io.Writer
 }
 
 // window is one Chrome page target and its flattened session. Its name is
@@ -82,23 +86,22 @@ type window struct {
 	op sync.Mutex
 	// mu guards the window's put, the files its document is answered from;
 	// gen, which moves on whenever its main frame commits another document
-	// or it closes; next, the put a show is loading; docs, by the network
-	// id of each main-frame navigation a put answered since the last
-	// commit, that put; and waiting, the requests for files held until
-	// that commit is taken or the show ends (page.go).
-	mu      sync.Mutex
-	put     *put
-	gen     int64
-	next    *put
-	docs    map[string]*put
-	waiting []fileRequest
+	// or it closes; next, the put a show is loading, and landed, the put of
+	// a show that ended before its commit was taken (page.go); and docs,
+	// which put each of its documents belongs to (docs.go).
+	mu     sync.Mutex
+	put    *put
+	gen    int64
+	next   *put
+	landed *put
+	docs   documents
 	// unnamed says a target attached to the window was refused its naming
 	// (agent.go) and was not let run, which the window's next action says.
 	unnamed bool
 }
 
 func newBrowser() *browser {
-	return &browser{windows: map[string]*window{}, pages: make(chan pageEvent, 64)}
+	return &browser{windows: map[string]*window{}, pages: make(chan pageEvent, 64), log: os.Stderr}
 }
 
 // onTarget forgets a window whose target Chrome reports gone, with its put

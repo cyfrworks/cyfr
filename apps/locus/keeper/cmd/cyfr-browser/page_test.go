@@ -56,6 +56,9 @@ type pageChrome struct {
 	// refuseChildNaming refuses the naming of every target attached to a
 	// window's session (agent.go).
 	refuseChildNaming bool
+	// loaders holds each frame's document's loader, which a request it
+	// makes is reported with.
+	loaders map[string]string
 }
 
 type navigation struct {
@@ -90,7 +93,7 @@ type pageAnswer struct {
 func newPageChrome(t *testing.T, commands io.Reader, answers io.Writer) *pageChrome {
 	f := &pageChrome{t: t, w: answers, origins: map[string]map[string][2]string{}, address: map[string]string{},
 		navs: map[string]navigation{}, open: map[string]bool{}, answers: make(chan pageAnswer, 64), runs: make(chan string, 16),
-		left: map[string]string{}, fails: map[string]navFail{}}
+		left: map[string]string{}, fails: map[string]navFail{}, loaders: map[string]string{}}
 	go f.serve(commands)
 	return f
 }
@@ -110,8 +113,20 @@ func (f *pageChrome) pause(session, method, address, frame string, network bool,
 
 // pauseAs pauses a request of resourceType on session, of the frame it
 // names: the frame whose document made it, or for a navigation the frame
-// it loads into.
+// it loads into. One with a network id is reported first, as made by its
+// frame's document.
 func (f *pageChrome) pauseAs(session, resourceType, method, address, frame string, network bool, body string) string {
+	f.mu.Lock()
+	loader := f.loaders[frame]
+	f.mu.Unlock()
+	return f.pauseFrom(session, resourceType, method, address, frame, network, body, loader, true)
+}
+
+// pauseFrom pauses a request as pauseAs does, made by the document of
+// loader: reported before its pause when before is set, else when the
+// test reports it.
+func (f *pageChrome) pauseFrom(session, resourceType, method, address, frame string, network bool, body, loader string,
+	before bool) string {
 	f.mu.Lock()
 	f.paused++
 	id := fmt.Sprintf("interception-%d", f.paused)
@@ -126,9 +141,34 @@ func (f *pageChrome) pauseAs(session, resourceType, method, address, frame strin
 	params := map[string]any{"requestId": id, "request": request, "frameId": frame, "resourceType": resourceType}
 	if network {
 		params["networkId"] = "net-" + id
+		if before {
+			f.report(session, id, method, address, loader)
+		}
 	}
 	f.write(map[string]any{"method": "Fetch.requestPaused", "sessionId": session, "params": params})
 	return id
+}
+
+// report reports paused request id as made by the document of loader, as
+// Network.requestWillBeSent does.
+func (f *pageChrome) report(session, id, method, address, loader string) {
+	f.event(session, "Network.requestWillBeSent", map[string]any{"requestId": "net-" + id, "loaderId": loader,
+		"type": "Fetch", "request": map[string]any{"url": address, "method": method}})
+}
+
+// frameDocument attaches frame to parent, reported on parentSession, and
+// commits a document of its own in it on session, as the page's process
+// reports them; it answers the document's loader.
+func (f *pageChrome) frameDocument(parentSession, session, frame, parent string) string {
+	f.mu.Lock()
+	f.paused++
+	loader := fmt.Sprintf("Lframe-%d", f.paused)
+	f.loaders[frame] = loader
+	f.mu.Unlock()
+	f.event(parentSession, "Page.frameAttached", map[string]any{"frameId": frame, "parentFrameId": parent})
+	f.event(session, "Page.frameNavigated", map[string]any{"frame": map[string]any{
+		"id": frame, "parentId": parent, "loaderId": loader, "url": reservedOrigin + "/"}, "type": "Navigation"})
+	return loader
 }
 
 // pauseLeavingOut pauses a POST whose body the pause leaves out, as Chrome
@@ -180,14 +220,19 @@ func (f *pageChrome) fail(address string, how navFail) {
 	f.fails[address] = how
 }
 
-// frame sets a frame of session, with its parent and origin.
+// frame sets a frame of session, with its parent and origin; a frame new
+// inside its parent is reported attached, as the page's process does.
 func (f *pageChrome) frame(session, id, parent, origin string) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.origins[session] == nil {
 		f.origins[session] = map[string][2]string{}
 	}
+	_, known := f.origins[session][id]
 	f.origins[session][id] = [2]string{parent, origin}
+	f.mu.Unlock()
+	if parent != "" && !known {
+		f.event(session, "Page.frameAttached", map[string]any{"frameId": id, "parentFrameId": parent})
+	}
 }
 
 // attach attaches a target of kind to session, waiting for its debugger,
@@ -475,6 +520,7 @@ func (f *pageChrome) commitOnly(session, address, loader string) {
 	f.mu.Lock()
 	f.address[session] = address
 	f.origins[session] = map[string][2]string{main: {"", origin}}
+	f.loaders[main] = loader
 	f.mu.Unlock()
 	f.event(session, "Page.frameNavigated", map[string]any{"frame": map[string]any{
 		"id": main, "loaderId": loader, "url": address, "securityOrigin": origin}, "type": "Navigation"})
@@ -955,6 +1001,7 @@ func TestCallsArePassedUpOnlyFromThePutsDocuments(t *testing.T) {
 	if a := r.f.answer(r.f.pause(frame, "POST", reservedOrigin+"/_f/v1/invoke", "O1", true, `{"x":1}`)); a.method != "Fetch.failRequest" {
 		t.Fatalf("a frame of another site in another process was answered %+v", a)
 	}
+	r.f.frameDocument("S1", frame, "O1", "M1")
 	if a := r.f.answer(r.f.pause(frame, "GET", reservedOrigin+testRoot+"/app.js", "O1", true, "")); a.status != 200 {
 		t.Fatalf("a frame of another process was answered %+v for a file of its window's put", a)
 	}
@@ -1431,58 +1478,178 @@ func TestAFrameThatCannotBeNamedNeverRuns(t *testing.T) {
 	}
 }
 
-// A page's file is answered from the put its document belongs to however
-// Chrome orders the request and the report of its document's commit: a
-// request that comes after the next put's entry was answered and before
-// its commit is reported waits, and is answered from the put that stands
-// once the commit is taken, or from the earlier put when the show fails
-// with no commit. Chrome reports the commit from the page's process and
-// pauses the new document's requests from its own, so either may come
-// first.
-func TestAFileIsAnsweredFromItsPutHoweverItsCommitIsOrdered(t *testing.T) {
-	next := []siteFile{{"index.html", "text/html", "<title>Put</title><script>fetch('big.bin')</script>"},
-		{"big.bin", "application/octet-stream", "the next put's bytes"}}
-	for _, commits := range []bool{true, false} {
-		r := newPageRig(t)
-		if got := r.h.put(1, "thr_01", testRoot+"/first", "index.html", testSite, 64); got["ok"] == nil {
-			t.Fatal(got)
+// twoPuts shows put A at testRoot, then starts a show of put B at the
+// same root whose entry is answered at once and commits only when the test
+// says; A and B hold different bytes at one path, same.txt. It answers the
+// rig, the loaders of A's and B's documents, and the show's end, which
+// fails once timeout passes with no commit.
+func twoPuts(t *testing.T, timeout time.Duration) (r *pageRig, a, b string, shown chan error) {
+	t.Helper()
+	r = newPageRig(t)
+	files := []siteFile{{"index.html", "text/html", "<title>A</title>"}, {"same.txt", "text/plain", "A's bytes"}}
+	if got := r.h.put(1, "thr_01", testRoot, "index.html", files, 64); got["ok"] == nil {
+		t.Fatal(got)
+	}
+	a = "L" + r.f.navigated().request
+	r.f.fail(reservedOrigin+testRoot, navFail{hangs: true, late: true})
+	p := &put{id: 2, root: testRoot, entry: "index.html", files: map[string]putFile{
+		"index.html": {typ: "text/html", data: []byte("<title>B</title>")},
+		"same.txt":   {typ: "text/plain", data: []byte("B's bytes")}}}
+	shown = make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		_, err := r.b.run(ctx, request{Win: "thr_01", Op: "page", put: p})
+		shown <- err
+	}()
+	b = "L" + r.f.navigated().request
+	return r, a, b, shown
+}
+
+const sameFile = reservedOrigin + testRoot + "/same.txt"
+
+// A page's file is answered from the put of the document that made it, as
+// Chrome names that document, however its request, the request's report
+// and the commit of the next put's entry are ordered; a document of
+// neither put is answered nothing.
+func TestAFileIsAnsweredFromThePutOfTheDocumentThatMadeIt(t *testing.T) {
+	bytesOf := func(a pageAnswer) string {
+		if a.method != "Fetch.fulfillRequest" {
+			return "nothing"
 		}
-		r.f.navigated()
-		r.f.fail(reservedOrigin+testRoot, navFail{hangs: true, late: true})
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		p := &put{id: 2, root: testRoot, entry: "index.html", files: map[string]putFile{}}
-		for _, f := range next {
-			p.files[f.path] = putFile{typ: f.typ, data: []byte(f.body)}
-		}
-		shown := make(chan error, 1)
-		go func() {
-			_, err := r.b.run(ctx, request{Win: "thr_01", Op: "page", put: p})
-			shown <- err
-		}()
-		nav := r.f.navigated()
-		if commits {
-			// The new document's request is paused before its commit is
-			// reported.
-			id := r.f.pauseAs("S1", "Fetch", "GET", reservedOrigin+testRoot+"/big.bin", "M1", true, "")
-			r.f.commit("S1", reservedOrigin+testRoot, "L"+nav.request)
-			if a := r.f.answer(id); a.method != "Fetch.fulfillRequest" || a.status != 200 || string(a.body) != next[1].body {
-				t.Errorf("the new document's file, paused before its commit was reported, was answered %d %q", a.status, a.body)
-			}
-			if err := <-shown; err != nil {
-				t.Errorf("the put answered %v", err)
-			}
-		} else {
-			// The earlier document's request, paused while the next put's
-			// entry loads, and the show fails with no commit.
-			id := r.f.pause("S1", "GET", reservedOrigin+testRoot+"/first/app.js", "M1", true, "")
+		return fmt.Sprintf("%d %s", a.status, a.body)
+	}
+	get := func(r *pageRig, loader string, before bool) string {
+		return r.f.pauseFrom("S1", "Fetch", "GET", sameFile, "M1", true, "", loader, before)
+	}
+	for _, c := range []struct {
+		what string
+		run  func(r *pageRig, a, b string, shown chan error) pageAnswer
+		want string
+	}{
+		{"the new document's request, paused before its commit is reported", func(r *pageRig, a, b string, shown chan error) pageAnswer {
+			id := get(r, b, true)
+			r.f.commit("S1", reservedOrigin+testRoot, b)
+			return r.f.answer(id)
+		}, "200 B's bytes"},
+		{"the new document's request, reported after its pause and before its commit", func(r *pageRig, a, b string, shown chan error) pageAnswer {
+			id := get(r, b, false)
+			r.f.none("a request whose document is not yet named")
+			r.f.report("S1", id, "GET", sameFile, b)
+			return r.f.answer(id)
+		}, "200 B's bytes"},
+		{"the earlier document's request, paused after the next entry was answered and live across its commit", func(r *pageRig, a, b string, shown chan error) pageAnswer {
+			id := get(r, a, true)
+			r.f.commit("S1", reservedOrigin+testRoot, b)
+			return r.f.answer(id)
+		}, "200 A's bytes"},
+		{"the new document's request, its show ending with no commit", func(r *pageRig, a, b string, shown chan error) pageAnswer {
+			id := get(r, b, true)
 			if err := <-shown; err == nil {
 				t.Error("a show whose entry never committed answered no error")
 			}
-			if a := r.f.answer(id); a.method != "Fetch.fulfillRequest" || a.status != 200 || string(a.body) != testSite[1].body {
-				t.Errorf("the earlier document's file, paused while a show that failed loaded, was answered %d %q", a.status, a.body)
+			return r.f.answer(id)
+		}, "200 B's bytes"},
+		{"the earlier document's request, reported only after the next put's commit", func(r *pageRig, a, b string, shown chan error) pageAnswer {
+			id := get(r, a, false)
+			r.f.commit("S1", reservedOrigin+testRoot, b)
+			if err := <-shown; err != nil {
+				t.Errorf("the put answered %v", err)
 			}
+			r.f.report("S1", id, "GET", sameFile, a)
+			return r.f.answer(id)
+		}, "nothing"},
+		{"the new document's request, its show ending on a load reported before its commit", func(r *pageRig, a, b string, shown chan error) pageAnswer {
+			r.f.event("S1", "Page.lifecycleEvent", map[string]any{"frameId": "M1", "loaderId": b, "name": "load"})
+			if err := <-shown; err != nil {
+				t.Errorf("the put answered %v", err)
+			}
+			r.f.commitOnly("S1", reservedOrigin+testRoot, b)
+			return r.f.answer(get(r, b, true))
+		}, "200 B's bytes"},
+		{"a request of a document of neither put", func(r *pageRig, a, b string, shown chan error) pageAnswer {
+			return r.f.answer(get(r, "Lnobody", true))
+		}, "nothing"},
+	} {
+		r, a, b, shown := twoPuts(t, time.Second)
+		if got := bytesOf(c.run(r, a, b, shown)); got != c.want {
+			t.Errorf("%s was answered %s, want %s", c.what, got, c.want)
 		}
-		cancel()
 		r.close()
+	}
+}
+
+// A request whose document Chrome names nowhere, as a dedicated worker's
+// is, is answered while the window has one put it can belong to, and waits
+// while a show's entry is answered and its commit not taken, for the put
+// that stands after.
+func TestARequestNoDocumentNamesWaitsForTheShow(t *testing.T) {
+	for _, commits := range []bool{true, false} {
+		r, _, b, shown := twoPuts(t, time.Second)
+		id := r.f.pause("S1", "GET", sameFile, "M1", false, "")
+		r.f.none("a worker's request while a show loads")
+		want := "A's bytes"
+		if commits {
+			r.f.commit("S1", reservedOrigin+testRoot, b)
+			want = "B's bytes"
+		}
+		err := <-shown
+		if a := r.f.answer(id); a.status != 200 || string(a.body) != want {
+			t.Errorf("a worker's request across a show that committed %v (%v) was answered %d %q, want %q",
+				commits, err, a.status, a.body, want)
+		}
+		if a := r.f.answer(r.f.pause("S1", "GET", sameFile, "M1", false, "")); a.status != 200 || string(a.body) != want {
+			t.Errorf("a worker's request with no show loading was answered %d %q, want %q", a.status, a.body, want)
+		}
+		r.close()
+	}
+}
+
+// lockedLog is a driver's log a test reads.
+type lockedLog struct {
+	mu   sync.Mutex
+	text bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.text.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.text.String()
+}
+
+// At most maxWaiting requests wait in a window: one past that is refused
+// at once, which the driver's log says once, and those that waited are
+// answered when what they wait for comes.
+func TestWaitingRequestsAreBounded(t *testing.T) {
+	r, _, b, shown := twoPuts(t, 5*time.Second)
+	defer r.close()
+	log := &lockedLog{}
+	r.b.log = log
+	var waited []string
+	for range maxWaiting {
+		waited = append(waited, r.f.pause("S1", "GET", sameFile, "M1", false, ""))
+	}
+	for range 2 {
+		if a := r.f.answer(r.f.pause("S1", "GET", sameFile, "M1", false, "")); a.method != "Fetch.failRequest" {
+			t.Fatalf("a request past the bound was answered %+v", a)
+		}
+	}
+	if lines := strings.Count(log.String(), "\n"); lines != 1 || !strings.Contains(log.String(), "window thr_01") {
+		t.Errorf("the driver's log said %q of the bound, want one line naming the window", log.String())
+	}
+	r.f.commit("S1", reservedOrigin+testRoot, b)
+	for _, id := range waited {
+		if a := r.f.answer(id); a.status != 200 || string(a.body) != "B's bytes" {
+			t.Fatalf("a request that waited was answered %d %q", a.status, a.body)
+		}
+	}
+	if err := <-shown; err != nil {
+		t.Errorf("the put answered %v", err)
 	}
 }
