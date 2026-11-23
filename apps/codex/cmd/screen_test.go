@@ -150,6 +150,22 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 }
 
+// A pre-release's app installed already, at the version its package
+// spells (0.6.0~alpha.15 for 0.6.0-alpha.15), is not fetched again.
+func TestScreenOnTakesAPreReleaseAppInstalledAsItsPackageSpellsIt(t *testing.T) {
+	s := screenProject(t)
+	s.installed = []string{"labwc", "wvkbd", "swayidle", appPackage + "=0.6.0~alpha.15"}
+	fetched := fetchesTheApp(t, "0.6.0-alpha.15", []byte("the app"), nil)
+	askInput = strings.NewReader("yes\n")
+	var out bytes.Buffer
+	if err := screenOn(context.Background(), true, &out); err != nil {
+		t.Fatal(err)
+	}
+	if *fetched != 0 || strings.Contains(out.String(), "Downloading") {
+		t.Fatalf("fetched the app %d times, saying:\n%s", *fetched, out.String())
+	}
+}
+
 // The app's package is fetched only from a release: one that fails its
 // check is refused before anything is asked, written or installed, and
 // leaves the project as it was; a development build with no app installed

@@ -238,7 +238,7 @@ type fetchedApp struct {
 // bytes only once they match the release's signed checksums. A
 // development build, with no release to fetch from, is refused.
 func screenFetchApp(ctx context.Context, out io.Writer) (fetchedApp, error) {
-	if machine.installed(appPackage) == version.Version {
+	if machine.installed(appPackage) == appDebVersion(version.Version) {
 		return fetchedApp{}, nil
 	}
 	if !release.IsVersion(version.Version) {
@@ -265,6 +265,11 @@ func screenFetchApp(ctx context.Context, out io.Writer) (fetchedApp, error) {
 	app.sum = hex.EncodeToString(sum[:])
 	return app, nil
 }
+
+// appDebVersion is the version dpkg holds the CYFR app's package of
+// release v at: its packager (desktop/scripts/build.mjs, electron-builder)
+// spells a pre-release's "-" as "~", so that it sorts before the release.
+func appDebVersion(v string) string { return strings.Replace(v, "-", "~", 1) }
 
 // remove removes the fetched package, and the folders the fetch made that
 // nothing else was written into since.
