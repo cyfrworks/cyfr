@@ -6,6 +6,7 @@
 package serve
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/protocol"
@@ -337,4 +340,145 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	}
 	zero := int64(0)
 	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: newcomer, GraceMs: &zero})
+}
+
+// A shell-like leader, as the backends service's /bin/sh -c in front of a
+// program is, that exits at once on TERM, around a program that ends its
+// own child when asked: once the leader has exited the program alone is
+// asked, and its child has no TERM pending while the program holds its
+// TERM; the child ends as the program told it. On TERM to the rest of the
+// group at once after the leader, the child's TERM is pending while the
+// program is held, so the test cannot pass there in any order.
+func TestTheProgramTheLeaderStartedIsAskedBeforeItsOwnChildren(t *testing.T) {
+	k := boundedKeeper(t)
+	program := filepath.Join(t.TempDir(), "program.sh")
+	if err := os.WriteFile(program, []byte(`L="$1"; `+blockingChild("0")+` &
+		 child=$!
+		 trap 'echo program-got-term >> "$L"; while [ ! -e "$L.go" ]; do sleep 0.01; done; touch "$L.stop"; wait $child; echo program-exits >> "$L"; exit 0' TERM
+		 echo program-ready >> "$L"
+		 while :; do sleep 0.05; done
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	leader, group, log := endingGroup(t, k, testPoolFirst, `sh `+program+` "$L" &
+		 trap 'echo leader-exits >> "$L"; exit 0' TERM
+		 echo leader-ready >> "$L"
+		 while :; do sleep 0.05; done`)
+	child := childPID(t, logged(t, log, "child-ready", "program-ready", "leader-ready"))
+	ended := ending(k, group, leader)
+	logged(t, log, "leader-exits", "program-got-term")
+	if termReached(t, log, child) {
+		t.Fatal("TERM reached the program's child while the program was still ending")
+	}
+	if err := os.WriteFile(log+".go", nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if !<-ended {
+		t.Fatal("the group outlived its end")
+	}
+	if got := names(logged(t, log, "child-clean", "program-exits")); strings.Contains(got, "child-asked") {
+		t.Fatalf("the program's child was asked to end, not told by the program: %q", got)
+	}
+}
+
+// A program its shell-like leader started that ignores TERM is killed with
+// its group at the grace's end: the wait for the leader's children ends at
+// the one deadline, the group is empty when the end returns, and it did not
+// return before the grace's end. The ceiling here is loose, so as not to
+// fail under load.
+func TestAProgramThatIgnoresTheEndIsKilledAtTheGracesEnd(t *testing.T) {
+	k := boundedKeeper(t)
+	leader, group, log := endingGroup(t, k, testPoolFirst,
+		`perl -e '$SIG{TERM} = "IGNORE"; open my $f, ">>", $ARGV[0]; print $f "program-ready\n"; close $f; sleep 600' "$L" &
+		 trap 'exit 0' TERM
+		 echo leader-ready >> "$L"
+		 while :; do sleep 0.05; done`)
+	logged(t, log, "program-ready", "leader-ready")
+	started := time.Now()
+	if !k.s.endInOrder(group, leader, started.Add(endGrace)) {
+		t.Fatal("the group outlived its end")
+	}
+	if took := time.Since(started); took < endGrace || took > endGrace+time.Second {
+		t.Fatalf("the group was killed after %s, not at its grace's end, %s", took, endGrace)
+	}
+	if pids, err := group.Procs(); err != nil || len(pids) != 0 {
+		t.Fatalf("the group holds %v after its end (%v)", pids, err)
+	}
+	k.awaitExit(t, leader)
+}
+
+// withStranger is a group that also lists a process no leader of it
+// started, as a pid of the leader's child reused by another process before
+// the end took it would be listed.
+type withStranger struct {
+	*cgroup.Group
+	stranger int
+}
+
+func (g withStranger) Procs() ([]int, error) {
+	pids, err := g.Group.Procs()
+	return append(pids, g.stranger), err
+}
+
+// A pid the leader's child no longer holds is never signalled. A pid the
+// group lists that is not the leader's child when its pidfd is taken, as a
+// child's pid another process took would be, is not held, and gets no TERM
+// from the end: here a stranger outside the group that blocks TERM, whose
+// pending signals the kernel shows. And a held pidfd names its child alone:
+// once the child has exited and been reaped, a signal through it reaches
+// no process, whichever takes the pid next.
+func TestAPidTheLeadersChildNoLongerHoldsIsNeverSignalled(t *testing.T) {
+	k := boundedKeeper(t)
+	strangerLog := filepath.Join(t.TempDir(), "stranger")
+	if err := os.WriteFile(strangerLog, nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	stranger, err := k.s.start("/usr/bin/perl", []string{"perl", "-MPOSIX", "-e",
+		`POSIX::sigprocmask(POSIX::SIG_BLOCK(), POSIX::SigSet->new(POSIX::SIGTERM())) or die;
+		 open my $f, ">>", $ARGV[0] or die; print $f "stranger-ready\n"; close $f; sleep 600`, strangerLog},
+		nil, []uintptr{0, 2, 2}, 0, 0, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		k.s.signalChild(stranger, syscall.SIGKILL)
+		<-stranger.done
+	})
+	logged(t, strangerLog, "stranger-ready")
+	leader, group, log := endingGroup(t, k, testPoolFirst, `sleep 600 &
+		 trap 'exit 0' TERM
+		 echo leader-ready >> "$L"
+		 while :; do sleep 0.05; done`)
+	logged(t, log, "leader-ready")
+	if !k.s.endInOrder(withStranger{group, stranger.pid}, leader, time.Now().Add(endGrace)) {
+		t.Fatal("the group outlived its end")
+	}
+	if termReached(t, strangerLog, stranger.pid) {
+		t.Fatal("the end sent TERM to a pid the group listed that was not the leader's child")
+	}
+
+	leader, group, log = endingGroup(t, k, testPoolFirst, `sleep 600 &
+		 echo leader-ready >> "$L"
+		 while :; do wait; sleep 0.05; done`)
+	logged(t, log, "leader-ready")
+	held := k.s.leaderChildren(group, leader)
+	if len(held) != 1 {
+		t.Fatalf("the leader's one child is held by %d pidfds", len(held))
+	}
+	defer syscall.Close(held[0])
+	if err := unix.PidfdSendSignal(held[0], unix.SIGKILL, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Its leader reaps it in its wait; a signal to a process not yet reaped
+	// still succeeds, so the condition is the reaping.
+	for deadline := time.Now().Add(20 * time.Second); unix.PidfdSendSignal(held[0], 0, nil, 0) == nil; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the leader's child was never reaped")
+		}
+	}
+	if err := unix.PidfdSendSignal(held[0], unix.SIGTERM, nil, 0); !errors.Is(err, unix.ESRCH) {
+		t.Fatalf("a signal through the pidfd of a child reaped answered %v, not ESRCH", err)
+	}
+	k.s.signalChild(leader, syscall.SIGKILL)
+	k.awaitExit(t, leader)
 }

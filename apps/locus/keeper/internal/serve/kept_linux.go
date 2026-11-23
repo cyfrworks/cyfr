@@ -6,6 +6,7 @@
 package serve
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -236,26 +237,135 @@ func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 	go s.watchLeader(sp)
 }
 
-// endInOrder ends a kept spawn's group in dependency order by deadline:
-// TERM to the leader alone, which has until then to end what it started;
-// once the keeper has reaped it, TERM to whatever of the group is left, so
-// a child its leader did not tell is still asked; at the deadline the
-// group's kill (cgroup.Group.KillBy), which waits for the group until the
-// same deadline, never past it, and kills within one poll of it. The
-// leader is signalled through signalChild, which holds the reaper's lock,
-// so a pid already reaped and given to another process is never signalled.
-// It reports whether the group is empty.
-func (s *server) endInOrder(group interface{ KillBy(time.Time) bool }, leader *child, deadline time.Time) bool {
+// endInOrder ends a kept spawn's group by levels, by deadline: TERM to the
+// leader alone, which has until then to end what it started; once the keeper
+// has reaped it, TERM to the processes the leader had started when the end
+// began, so a program the session's own shell runs is asked as a leader is
+// and closes what it started before the rest is asked; once those have
+// exited, TERM to whatever of the group is left, so a process neither level
+// told is still asked; at the deadline the group's kill (cgroup.Group.KillBy),
+// which waits for the group until the same deadline, never past it, and
+// kills within one poll of it. One level below the leader and no deeper: the
+// shell is the one layer CYFR puts in front of a program, and a program's
+// own tree is its own to end. The leader is signalled through signalChild,
+// which holds the reaper's lock, and each of its children through a pidfd
+// taken under that lock (leaderChildren), so no pid already reaped and given
+// to another process is ever signalled. It reports whether the group is
+// empty.
+func (s *server) endInOrder(group endable, leader *child, deadline time.Time) bool {
 	if leader != nil && time.Now().Before(deadline) {
+		children := s.leaderChildren(group, leader)
+		defer func() {
+			for _, fd := range children {
+				_ = unix.Close(fd)
+			}
+		}()
 		s.signalChild(leader, unix.SIGTERM)
 		timer := time.NewTimer(time.Until(deadline))
 		select {
 		case <-leader.done:
+			for _, fd := range children {
+				_ = unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0)
+			}
+			awaitExits(children, deadline)
 		case <-timer.C:
 		}
 		timer.Stop()
 	}
 	return group.KillBy(deadline)
+}
+
+// endable is what endInOrder needs of a spawn's group: its processes
+// and its kill by a deadline (*cgroup.Group).
+type endable interface {
+	Procs() ([]int, error)
+	KillBy(time.Time) bool
+}
+
+// leaderChildren holds, each by a pidfd, the processes of group whose parent
+// is the leader, as they stand now. It runs under the reaper's lock with the
+// leader not yet reaped, so the leader's pid is its own throughout; a pidfd
+// is kept only when, after it was taken, the process it names still runs
+// and its parent read from the kernel is the leader, so the pidfd names that
+// child and no process that took its pid since.
+func (s *server) leaderChildren(group endable, leader *child) []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if leader.reaped() {
+		return nil
+	}
+	pids, err := group.Procs()
+	if err != nil {
+		return nil
+	}
+	var fds []int
+	for _, pid := range pids {
+		if pid == leader.pid {
+			continue
+		}
+		fd, err := unix.PidfdOpen(pid, 0)
+		if err != nil {
+			continue
+		}
+		if parentOf(pid) == leader.pid && unix.PidfdSendSignal(fd, 0, nil, 0) == nil {
+			fds = append(fds, fd)
+		} else {
+			_ = unix.Close(fd)
+		}
+	}
+	return fds
+}
+
+// parentOf is the parent pid /proc gives pid, 0 when it is unreadable.
+func parentOf(pid int) int {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0
+	}
+	// The command name may hold spaces and parentheses; the fields after
+	// the last ')' are the state and then the parent's pid.
+	fields := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
+	if len(fields) < 2 {
+		return 0
+	}
+	ppid, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return 0
+	}
+	return ppid
+}
+
+// awaitExits waits until every process the pidfds name has exited, which
+// each pidfd reports by turning readable, or until the deadline.
+func awaitExits(fds []int, deadline time.Time) {
+	waiting := make([]unix.PollFd, 0, len(fds))
+	for _, fd := range fds {
+		waiting = append(waiting, unix.PollFd{Fd: int32(fd), Events: unix.POLLIN})
+	}
+	for len(waiting) > 0 {
+		left := time.Until(deadline)
+		if left <= 0 {
+			return
+		}
+		n, err := unix.Poll(waiting, int(left.Milliseconds())+1)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		if n == 0 {
+			continue
+		}
+		still := waiting[:0]
+		for _, p := range waiting {
+			if p.Revents == 0 {
+				p.Revents = 0
+				still = append(still, p)
+			}
+		}
+		waiting = still
+	}
 }
 
 // retireKept ends a kept spawn once: the processes of its own group, which
