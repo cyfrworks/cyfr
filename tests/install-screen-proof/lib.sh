@@ -523,6 +523,25 @@ candidate_build() {
   ok "built the candidate, $(sed -n 's/^sha256: //p' "$OUT/candidate.txt")"
 }
 
+# candidate_app_build: the CYFR app's package around that cyfr, built from
+# this tree and stamped $INSTALL_VERSION, which clean_install puts in the
+# guest beside it, so `cyfr screen on` finds the app of its release
+# installed and fetches none; candidate.txt says so. It needs this tree's
+# apps/codex/desktop/node_modules (npm ci --ignore-scripts there).
+CANDIDATE_DEB=""
+candidate_app_build() {
+  [ -z "$CANDIDATE_DEB" ] || return 0
+  step "this tree's CYFR app around that cyfr, stamped $INSTALL_VERSION (stand-in for a signed candidate)"
+  proof_fg timeout 600 env TMPDIR="$WORK" node "$ROOT/apps/codex/desktop/scripts/build.mjs" --cyfr "$CANDIDATE_BIN" \
+    --version "$INSTALL_VERSION" --arch amd64 --out "$WORK/app" >"$OUT/candidate-app.log" 2>&1 ||
+    fail "the candidate app did not build within 600 s ($OUT/candidate-app.log)"
+  CANDIDATE_DEB="$WORK/app/cyfr-desktop_${INSTALL_VERSION}_linux_amd64.deb"
+  [ -f "$CANDIDATE_DEB" ] || fail "the candidate app's package is not at $CANDIDATE_DEB ($OUT/candidate-app.log)"
+  STAND_IN="$STAND_IN; the CYFR app's package is this tree's, around that cyfr, installed before cyfr init"
+  echo "stand-in: the CYFR app's package is this tree's, sha256 $(sha256sum <"$CANDIDATE_DEB" | cut -d ' ' -f 1), installed in the guest before cyfr init" >>"$OUT/candidate.txt"
+  ok "built the candidate app"
+}
+
 # This tree's server image for the guests, which scripts/image.sh --undated
 # app builds outside the queue before the run, its use by this run recorded
 # so the janitor keeps it while the run lives; without it the run exits
