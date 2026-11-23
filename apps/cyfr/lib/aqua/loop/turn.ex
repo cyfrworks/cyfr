@@ -14,9 +14,9 @@ defmodule Aqua.Loop.Turn do
   and the request size its consent caps it at (`request_cap`), the brain
   options — the agent file's own, over which a crew request's
   (`options["brain_options"]`) set theirs — the system prompt (the
-  soul's prompt or a crew member's opening, then CYFR's part for its
-  kind of brain, `Aqua.Prompt.briefing/2`; the soul's brain is its
-  member's), the tool
+  soul's prompt or a crew member's opening, then CYFR's part, the
+  briefing its pinned harness says its work needs, `Aqua.Prompt.briefing/2`;
+  the soul's brain is its member's), the tool
   surface (with the accounts its launches may name,
   read once here for every request the spec makes,
   `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
@@ -132,17 +132,6 @@ defmodule Aqua.Loop.Turn do
              asked(asks?, ctx, brain_authority, catalyst, model, turn)
            ),
          :ok <- if(asks?, do: brain_options(brain_options, capabilities), else: :ok) do
-      prompt =
-        Aqua.Prompt.compose(ctx,
-          agent: agent,
-          program?: program != nil,
-          search?: Request.offers_search?(offered, authority, capabilities),
-          authority: authority,
-          crew: crew(ctx, roster, offered, soul?),
-          requests: requests(ctx, thread),
-          where: Aqua.Prompt.where(ctx, thread)
-        )
-
       spec = %__MODULE__{
         ctx: ctx,
         guest: Context.enter_guest(ctx),
@@ -159,8 +148,6 @@ defmodule Aqua.Loop.Turn do
         model: model,
         capabilities: capabilities,
         request_cap: request_cap(brain_authority, catalyst),
-        system: prompt.instructions,
-        facts: prompt.facts,
         tools:
           Request.tool_definitions(offered,
             external: external_tools(offered),
@@ -174,7 +161,20 @@ defmodule Aqua.Loop.Turn do
         soul?: soul?
       }
 
-      {:ok, spec}
+      # The briefing is the one the pinned harness says its work needs
+      # (`Aqua.Harness.facts/1`); its words are the prompt's.
+      prompt =
+        Aqua.Prompt.compose(ctx,
+          agent: agent,
+          own_tools?: Aqua.Harness.facts(spec).own_tools?,
+          search?: Request.offers_search?(offered, authority, capabilities),
+          authority: authority,
+          crew: crew(ctx, roster, offered, soul?),
+          requests: requests(ctx, thread),
+          where: Aqua.Prompt.where(ctx, thread)
+        )
+
+      {:ok, %{spec | system: prompt.instructions, facts: prompt.facts}}
     end
   end
 

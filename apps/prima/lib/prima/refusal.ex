@@ -1806,11 +1806,6 @@ defmodule Prima.Refusal do
   defp harness(member, {:silent, minutes}) when is_integer(minutes),
     do: {:timeout, "#{member} said nothing for #{minutes} minutes, so its work here ended."}
 
-  defp harness(member, :write_failed),
-    do:
-      {:unavailable,
-       "#{member} stopped: CYFR could not keep what it said. Send a message to go on."}
-
   defp harness(member, :forgotten),
     do:
       {:conflict,

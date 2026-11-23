@@ -4,8 +4,9 @@
 defmodule Aqua.Loop.ClockTest do
   @moduledoc """
   A turn's active time is read as one value: a reader racing the loop's
-  pauses and resumes never counts a running interval twice, so the time it
-  reads never passes the time that went by.
+  pauses and resumes never counts a running interval twice, nor a pause
+  made while it reads, so the time it reads never passes the time the turn
+  ran.
   """
 
   use ExUnit.Case, async: true
@@ -31,6 +32,25 @@ defmodule Aqua.Loop.ClockTest do
 
     send(reader, :stop)
     assert_receive {:read, :within}, 5_000
+  end
+
+  test "a read never charges a pause that came between its read of the slot and its time" do
+    start = System.monotonic_time(:millisecond)
+    clock = Clock.new(0)
+    banked = :atomics.new(1, signed: true)
+
+    # The time source pauses the turn, which ran `banked` and never since,
+    # and answers a while after the pause.
+    read =
+      Clock.read(clock, fn ->
+        ran = System.monotonic_time(:millisecond) - start
+        Clock.paused(clock, ran)
+        :atomics.put(banked, 1, ran)
+        spin_until(System.monotonic_time(:millisecond) + 20)
+        System.monotonic_time(:millisecond)
+      end)
+
+    assert read <= :atomics.get(banked, 1)
   end
 
   test "a paused clock holds its time, and a running one adds what runs" do

@@ -2177,7 +2177,13 @@ defmodule Aqua.RunnerTest do
            "becomes a step of that turn once it takes its root back",
          %{ctx: ctx, workspace: ws} do
       app = quiet_app!(ctx)
-      run = call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})
+
+      run =
+        call("r1", "execution", %{
+          "action" => "run",
+          "reference" => app <> ":1.0.0",
+          "input" => %{}
+        })
 
       start_supervised!(
         {ScriptedWorker,

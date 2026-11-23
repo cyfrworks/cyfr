@@ -24,7 +24,10 @@ defmodule Aqua.Harness do
   step it already has. `{:end, finish}` ends the turn before it starts.
 
   `facts` are all the engine reads of a harness: a post that arrives skips
-  the calls not yet started when `supersedes?` holds. They belong to the
+  the calls not yet started when `supersedes?` holds, and a harness whose
+  brain has tools of its own, acting in a folder of its own, says its
+  work needs the briefing for them (`own_tools?`, whose words are
+  `Aqua.Prompt.briefing/2`'s). They belong to the
   harness the turn pins, so they are known before `open/1` (`facts/1`), and
   the engine reads no fact it was not given. A launch waits while any call
   of the turn whose run is a child of its root runs, which the rows decide
@@ -52,7 +55,7 @@ defmodule Aqua.Harness do
   @type handle :: pid()
 
   @typedoc "All the engine reads of a harness."
-  @type facts :: %{supersedes?: boolean()}
+  @type facts :: %{supersedes?: boolean(), own_tools?: boolean()}
 
   @typedoc """
   What the engine hands a harness of the turn: its contexts, the turn as

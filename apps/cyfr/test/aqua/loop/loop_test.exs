@@ -94,6 +94,7 @@ defmodule Aqua.LoopTest do
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
+  alias Cyfr.Test.StoreRefusal
   alias Sanctum.Consent.{Bootstrap}
 
   @soul "agent:local.aqua"
@@ -1129,8 +1130,8 @@ defmodule Aqua.LoopTest do
       "is_error" => error?
     }
 
-  test "an outside server's tool the soul is not offered is refused as its result, and one " <>
-         "with a null or a decimal argument is refused before it is decided",
+  test "an outside server's tool the soul is not offered is refused as its result, by its " <>
+         "name before it resolves: one with a null or a decimal argument too",
        %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua search for it")
 
@@ -1151,14 +1152,10 @@ defmodule Aqua.LoopTest do
              {"github:search", nil, "closed", "denied",
               "github__search is not one of the tools this work has"}
 
-    assert {null.dispatch_state, null.outcome, null.error} ==
-             {"closed", "denied",
-              "github__search: the argument q is null; leave it out or give it a value"}
-
-    assert {decimal.dispatch_state, decimal.outcome, decimal.error} ==
-             {"closed", "denied",
-              "github__search: the argument limit is a decimal number; give a whole number, " <>
-                "or the number as text"}
+    for unhanded <- [null, decimal] do
+      assert {unhanded.dispatch_state, unhanded.outcome, unhanded.error} ==
+               {"closed", "denied", "github__search is not one of the tools this work has"}
+    end
   end
 
   test "each call a response records runs as its own row says, though two calls share an id: " <>
@@ -1180,9 +1177,7 @@ defmodule Aqua.LoopTest do
 
     assert Enum.map(Enum.filter(steps, &(&1.kind == "tool")), &{&1.outcome, &1.error}) == [
              {"denied", "github__search is not one of the tools this work has"},
-             {"denied",
-              "github__search: the argument limit is a decimal number; give a whole number, " <>
-                "or the number as text"}
+             {"denied", "github__search is not one of the tools this work has"}
            ]
   end
 
@@ -1278,7 +1273,11 @@ defmodule Aqua.LoopTest do
 
     consent!(ctx, "aqua")
     turn = accept!(ctx, thread, "@aqua list the issues")
-    script!([calls([{"c1", "ghserver__issues.list", %{"q" => "x"}}]), reply("done")])
+
+    script!([
+      calls([{"c1", "ghserver__issues.list", %{"q" => "x"}}]),
+      reply("done")
+    ])
 
     # The tool's definition is known, so the request hands it to the model.
     assert :completed =
@@ -1309,7 +1308,12 @@ defmodule Aqua.LoopTest do
 
     consent!(ctx, "aqua")
     turn = accept!(ctx, thread, "@aqua list the issues")
-    script!([calls([{"c1", "ghserver__issues.list", %{"q" => "x"}}]), reply("done")])
+
+    script!([
+      calls([{"c1", "ghserver__issues.list", %{"q" => "x"}}]),
+      reply("done")
+    ])
+
     assert :completed = Task.await(run(ctx, turn), 60_000)
 
     {:ok, steps} = Tape.steps(ctx, turn)
@@ -2573,8 +2577,13 @@ defmodule Aqua.LoopTest do
 
     launch = fn id ->
       calls([
-        {id, "execution.run",
-         %{"reference" => versioned, "input" => %{}, "connection" => "Supabase 2"}}
+        {id, "execution",
+         %{
+           "action" => "run",
+           "reference" => versioned,
+           "input" => %{},
+           "connection" => "Supabase 2"
+         }}
       ])
     end
 
@@ -2710,8 +2719,13 @@ defmodule Aqua.LoopTest do
        script: [
          calls([
            {"c0", "crew", %{"action" => "list"}},
-           {"c1", "execution.run",
-            %{"reference" => app <> ":1.0.0", "input" => %{}, "connection" => "Work"}}
+           {"c1", "execution",
+            %{
+              "action" => "run",
+              "reference" => app <> ":1.0.0",
+              "input" => %{},
+              "connection" => "Work"
+            }}
          ]),
          reply("not launched")
        ]}
@@ -2779,7 +2793,10 @@ defmodule Aqua.LoopTest do
       {ScriptedWorker,
        ref: [@model, app],
        script: [
-         calls([{"c1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}}]),
+         calls([
+           {"c1", "execution",
+            %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}}
+         ]),
          {:probe, self()},
          app_answer,
          reply("after the launch")
@@ -2929,7 +2946,10 @@ defmodule Aqua.LoopTest do
 
     for room <- [daily, workspace!(ctx)] do
       ScriptedWorker.script([
-        calls([{"c1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}}]),
+        calls([
+          {"c1", "execution",
+           %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}}
+        ]),
         {:probe, self()},
         %{"answered" => true},
         reply("after the launch")
@@ -2974,7 +2994,10 @@ defmodule Aqua.LoopTest do
       {ScriptedWorker,
        ref: [@model, app],
        script: [
-         calls([{"c1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}}]),
+         calls([
+           {"c1", "execution",
+            %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}}
+         ]),
          {:probe, self()},
          reply("never sent")
        ]}
@@ -3013,7 +3036,7 @@ defmodule Aqua.LoopTest do
     turn = accept!(ctx, thread, "@aqua launch the model")
 
     script!([
-      calls([{"c1", "execution.run", %{"reference" => @model, "input" => %{}}}]),
+      calls([{"c1", "execution", %{"action" => "run", "reference" => @model, "input" => %{}}}]),
       reply("not launched")
     ])
 
@@ -3111,6 +3134,21 @@ defmodule Aqua.LoopTest do
       5_000,
       "the handle's row to go with its handler"
     )
+  end
+
+  test "a launch whose result could not be kept ends the loop unwritten, its root never taken " <>
+         "back",
+       %{ctx: ctx, thread: thread} do
+    %{turn: turn, result: result} =
+      launch_through_loop!(ctx, thread, %{"answered" => true}, fn _root_id ->
+        StoreRefusal.refuse_update!("turn_steps", [
+          {"kind", "launch"},
+          {"dispatch_state", "closed"}
+        ])
+      end)
+
+    assert {:unwritten, _} = result
+    assert {:ok, %{status: "paused", paused_reason: "launch"}} = Tape.turn(ctx, turn.id)
   end
 
   test "a launch whose root cannot be taken back stops the turn paused around it, and nothing after it runs",

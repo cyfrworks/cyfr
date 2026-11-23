@@ -45,7 +45,7 @@ defmodule Aqua.Harness.Api do
   alias Aqua.Loop.{Planner, Policy, Request, Turn}
   alias Aqua.{Reader, Tape}
 
-  @facts %{supersedes?: true}
+  @facts %{supersedes?: true, own_tools?: false}
   @max_steps 30
   @retry_delays_ms [2_000, 8_000, 20_000]
   # `{"operation":"chat","params":}` around the request, which is what
@@ -253,14 +253,16 @@ defmodule Aqua.Harness.Api do
           lost(state, kind)
       end
     else
-      # The turn's root is let go around a launch: the round is asked
-      # again once the rows move.
-      {:error, :illegal_transition} -> state
-      {:error, :step_cap} -> refused(state, harness_reason(state, :step_cap))
-      {:error, :superseded} -> lost(state, :ended)
-      {:error, _reason} -> lost(state, :write_failed)
+      {:error, reason} -> unopened(state, reason)
     end
   end
+
+  # A round that did not reach its model's call. The turn's root is let go
+  # around a launch: the round is asked again once the rows move.
+  defp unopened(state, :illegal_transition), do: state
+  defp unopened(state, :step_cap), do: refused(state, harness_reason(state, :step_cap))
+  defp unopened(state, :superseded), do: lost(state, :ended)
+  defp unopened(state, _reason), do: lost(state, :write_failed)
 
   defp ask_model(%__MODULE__{} = state, step, request, retained, retries) do
     case model_call(state, step, request, retained) do
@@ -271,18 +273,27 @@ defmodule Aqua.Harness.Api do
       {:error, :superseded} ->
         lost(state, :ended)
 
+      # The retry's step opens before the failed one closes and before the
+      # delay: the rows show the round's work throughout, so an earlier
+      # done the loop has not yet finished on cannot end the turn under it.
       {:error, %{"type" => type}}
       when type in @recoverable and retries < length(@retry_delays_ms) ->
-        with :ok <- closed(state, step, type),
-             _paused = pause(Enum.at(@retry_delays_ms, retries)),
-             {:ok, again, reopened} <- open_model_step(state, "chat") do
-          ask_model(reopened, again, request, retained, retries + 1)
-        else
-          {:lost, kind} -> lost(state, kind)
-          {:error, :illegal_transition} -> state
-          {:error, :step_cap} -> refused(state, harness_reason(state, :step_cap))
-          {:error, :superseded} -> lost(state, :ended)
-          {:error, _reason} -> lost(state, :write_failed)
+        case open_model_step(state, "chat") do
+          {:ok, again, reopened} ->
+            case closed(state, step, type) do
+              :ok ->
+                pause(reopened, again, Enum.at(@retry_delays_ms, retries))
+                ask_model(reopened, again, request, retained, retries + 1)
+
+              {:lost, kind} ->
+                lost(reopened, kind)
+            end
+
+          {:error, reason} ->
+            case closed(state, step, type) do
+              :ok -> unopened(state, reason)
+              {:lost, kind} -> lost(state, kind)
+            end
         end
 
       # The brain's grant stands but holds no key to use, as the catalyst
@@ -404,10 +415,13 @@ defmodule Aqua.Harness.Api do
     end
   end
 
-  # A pause before a retry, which a Stop ends.
-  defp pause(ms) do
+  # A pause before a retry, with the retry's step open, which a Stop ends:
+  # the step then closes as stopped, as a model's call a Stop ends does.
+  defp pause(%__MODULE__{} = state, step, ms) do
     receive do
-      :stop -> exit(:normal)
+      :stop ->
+        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: "stopped"})
+        exit(:normal)
     after
       ms -> :ok
     end
@@ -451,8 +465,9 @@ defmodule Aqua.Harness.Api do
   defp harness_reason(%__MODULE__{} = state, kind), do: {:harness, state.work.title, kind}
 
   # A write on the turn's path is never dropped (E2): one not kept ends the
-  # harness saying so, and one refused for a moved fence leaves the turn to
-  # whoever took it. A step its own answer closed already stays as it is.
+  # harness, and with it the loop unwritten (`Aqua.Loop`), and one refused
+  # for a moved fence leaves the turn to whoever took it. A step its own
+  # answer closed already stays as it is.
   defp closed(%__MODULE__{} = state, step, error),
     do: kept(Tape.close_step(guest(state), state.turn, step, "error", %{error: error}))
 
@@ -468,7 +483,7 @@ defmodule Aqua.Harness.Api do
   defp then_refused(state, {:lost, kind}, _reason), do: lost(state, kind)
 
   # A flush that did not land is skipped, unless its step's close was not
-  # kept: then the round ends saying so.
+  # kept: then nothing goes on after it.
   defp skipped(state, :ok), do: {:skipped, state}
   defp skipped(_state, {:lost, :ended}), do: {:error, :superseded}
   defp skipped(_state, {:lost, _kind}), do: {:error, :write_failed}
@@ -831,6 +846,9 @@ defmodule Aqua.Harness.Api do
       keep_notes(%{opened | sent_upto: highest_seq(rows)}, step, request)
     else
       {:error, :superseded} = superseded -> superseded
+      {:error, reason} when reason in [:step_cap, :illegal_transition] -> {:skipped, state}
+      # The flush's step was not written: nothing goes on after it.
+      {:error, _unkept} -> {:error, :write_failed}
       _not_flushed -> {:skipped, state}
     end
   end
@@ -884,14 +902,15 @@ defmodule Aqua.Harness.Api do
 
             case await_settled(state, ids) do
               :ok -> {:flushed, state}
-              {:error, _unread} -> {:skipped, state}
+              {:error, _unread} -> {:error, :write_failed}
             end
 
+          # The flush's answer was not kept: nothing goes on after it.
           {:error, :superseded} = superseded ->
             superseded
 
-          {:error, reason} ->
-            skipped(state, closed(state, step, describe(reason)))
+          {:error, _unkept} ->
+            {:error, :write_failed}
         end
 
       {:error, :superseded} = superseded ->
@@ -931,7 +950,10 @@ defmodule Aqua.Harness.Api do
 
     case open_model_step(state, "compaction") do
       {:error, :step_cap} -> {:error, :step_cap}
-      {:error, reason} -> skip_compaction(state, rows, reading, reason)
+      {:error, :superseded} -> {:error, :superseded}
+      {:error, :illegal_transition} = paused -> skip_compaction(state, rows, reading, paused)
+      # The summary's step was not written: nothing goes on after it.
+      {:error, _unkept} -> {:error, :write_failed}
       {:ok, step, state} -> commit_summary(state, rows, reading, boundary, request, step)
     end
   end
@@ -944,19 +966,28 @@ defmodule Aqua.Harness.Api do
            |> Enum.filter(&(&1["type"] == "text"))
            |> Enum.map_join("", & &1["text"]),
          {:ok, summary} <- Planner.summary_text(summary),
-         {:ok, _} <- commit_response(state, step, data, nil, []),
-         {:ok, _} <-
-           Tape.append_compaction(guest(state), state.turn, %{
-             summary: summary,
-             first_kept_seq: boundary.first_kept_seq,
-             summarized_through_seq: boundary.summarized_through_seq,
-             step_id: step.id
-           }),
-         {:ok, projected, reread} <- reprojected(state, reading) do
+         {:kept, {:ok, _}} <- {:kept, commit_response(state, step, data, nil, [])},
+         {:kept, {:ok, _}} <-
+           {:kept,
+            Tape.append_compaction(guest(state), state.turn, %{
+              summary: summary,
+              first_kept_seq: boundary.first_kept_seq,
+              summarized_through_seq: boundary.summarized_through_seq,
+              step_id: step.id
+            })},
+         {:kept, {:ok, projected, reread}} <- {:kept, reprojected(state, reading)} do
       {:ok, %{state | observed: nil}, projected, reread}
     else
       {:error, :superseded} ->
         {:error, :superseded}
+
+      # The summary's answer, its row or the rows read after them were not
+      # kept: nothing goes on after them.
+      {:kept, {:error, :superseded}} ->
+        {:error, :superseded}
+
+      {:kept, {:error, _unkept}} ->
+        {:error, :write_failed}
 
       other ->
         # The summary request answered nothing the turn can commit; a step

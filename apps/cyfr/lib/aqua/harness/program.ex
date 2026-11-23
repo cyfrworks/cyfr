@@ -144,7 +144,7 @@ defmodule Aqua.Harness.Program do
   # All the engine reads of this harness (`Aqua.Harness`): its process is
   # not the root's child, so a launch need not wait for it, and a post
   # written while it works is delivered, never a reason to skip a call.
-  @facts %{supersedes?: false}
+  @facts %{supersedes?: false, own_tools?: true}
   # The most bytes a fresh session's context takes on its post's line, as
   # the line's JSON measures them, escapes included: the newest posts that
   # fit. A post a sender writes is at most 32 KiB, at most six times that

@@ -72,11 +72,13 @@ defmodule Aqua.Loop.CatalogReadThreadsTest do
 
       script!([
         calls([
-          {"c1", "system.status", %{}},
-          {"c2", "component.list", %{}},
-          {"c3", "aqua.list", %{}}
+          {"c1", "system", %{"action" => "status"}},
+          {"c2", "component", %{"action" => "list"}},
+          {"c3", "aqua", %{"action" => "list"}}
         ]),
-        calls([{"c4", "notes.keep", %{"name" => "status", "content" => "all well"}}]),
+        calls([
+          {"c4", "notes", %{"action" => "keep", "name" => "status", "content" => "all well"}}
+        ]),
         reply("kept")
       ])
 
@@ -147,9 +149,13 @@ defmodule Aqua.Loop.CatalogReadThreadsTest do
 
       script!([
         calls([
-          {"c1", "component.inspect", %{"reference" => "reagent:local.loop-root:1.0.0"}}
+          {"c1", "component",
+           %{"action" => "inspect", "reference" => "reagent:local.loop-root:1.0.0"}}
         ]),
-        calls([{"c2", "notes.keep", %{"name" => "dependency-info", "content" => remote_reason}}]),
+        calls([
+          {"c2", "notes",
+           %{"action" => "keep", "name" => "dependency-info", "content" => remote_reason}}
+        ]),
         reply("kept")
       ])
 
@@ -189,7 +195,7 @@ defmodule Aqua.Loop.CatalogReadThreadsTest do
         action = unquote(action)
         args = unquote(Macro.escape(args))
         soul!(ctx, %{"tools_add" => ["registry.#{action}"]})
-        script!([calls([{"c1", "registry.#{action}", args}]), reply("done")])
+        script!([calls([{"c1", "registry", Map.put(args, "action", action)}]), reply("done")])
 
         # The call is made: no push token is held here, so the registry is
         # never reached and the handler answers the refusal.

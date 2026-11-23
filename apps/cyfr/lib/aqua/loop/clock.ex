@@ -33,13 +33,20 @@ defmodule Aqua.Loop.Clock do
     clock
   end
 
-  @doc "The turn's active time now, from one read."
-  @spec read(t()) :: non_neg_integer()
-  def read(clock) do
+  @doc """
+  The turn's active time now, from one read of the slot. `now` is the
+  time source, the monotonic clock in milliseconds unless given.
+
+  The time is taken before the slot is read: a pause made between the
+  two can only make the read count less than the turn ran, never more.
+  """
+  @spec read(t(), (-> integer())) :: non_neg_integer()
+  def read(clock, now \\ &now/0) do
+    at = now.()
     value = :atomics.get(clock, 1)
 
     if Integer.mod(value, 2) == 1,
-      do: now() - div(value - 1, 2),
+      do: at - div(value - 1, 2),
       else: div(value, 2)
   end
 

@@ -832,7 +832,7 @@ defmodule Aqua.Loop do
         harness_ended(state, harness_reason(state, {:start_failed, :unstarted}))
 
       {:error, _unread} ->
-        harness_ended(state, harness_reason(state, :write_failed))
+        unkept(state)
     end
   end
 
@@ -860,9 +860,20 @@ defmodule Aqua.Loop do
     end
   end
 
+  # The store did not keep a write of the turn's, or did not answer a read
+  # of it, the fence unmoved: the loop writes nothing more, neither a line
+  # nor an end, and returns unwritten (`conclude/2`), which the runner
+  # settles as a loop that died, whose recovery takes up what is open.
+  defp unkept(%State{} = state),
+    do: {:halt, {:failed, :write_failed}, %{state | unkept: :unkept}}
+
   # How the harness's work ended (`t:Aqua.Harness.finish/0`), whenever it
   # ends, at its open too. A start not yet taken closes with the end: as
-  # started for work done, with the end's sentence for any other.
+  # started for work done, with the end's sentence for any other. A
+  # harness the store did not answer ends unwritten, as the loop does.
+  defp harness_end(%State{} = state, {:lost, {:harness, _member, :write_failed}}),
+    do: unkept(state)
+
   defp harness_end(%State{} = state, :done) do
     case admission(state) do
       {:ok, %{dispatch_state: "dispatched"} = start} ->
@@ -1176,9 +1187,29 @@ defmodule Aqua.Loop do
   # the response is skipped with the turn.
   defp decide(_state, _item, {_runnable, _state_acc, setup} = acc) when setup != nil, do: acc
 
+  # An ask names a tool its harness was handed, by the whole name it asked
+  # by, or it is refused before anything else reads it: before it resolves,
+  # so an unhanded ask that would not resolve is refused as unhanded too.
+  defp decide(_state, %{step: step} = item, {runnable, state, setup} = acc) do
+    name = Map.get(item, :asked)
+
+    if unhanded?(state, step, name) do
+      close(
+        state,
+        step,
+        resolved(item),
+        {:error, {:denied, "#{name} is not one of the tools this work has"}}
+      )
+
+      {runnable, state, setup}
+    else
+      decide_handed(state, item, acc)
+    end
+  end
+
   # A restricted turn runs replay-safe reads and nothing else — before the
   # policy can say otherwise.
-  defp decide(
+  defp decide_handed(
          %State{restricted?: true},
          %{step: step, call: {:ok, %Call{} = call}} = item,
          {_runnable, state, _setup} = acc
@@ -1200,7 +1231,10 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp decide(_state, item, acc), do: decide_open(item, acc)
+  defp decide_handed(_state, item, acc), do: decide_open(item, acc)
+
+  defp resolved(%{call: {:ok, %Call{} = call}}), do: call
+  defp resolved(_item), do: nil
 
   # A call refused as it resolved never ran: it closes denied, as the
   # policy closes a call it refuses, in the refusal's sentence, and a page
@@ -1215,9 +1249,6 @@ defmodule Aqua.Loop do
       cond do
         refusal = flush_refusal(step, call) ->
           {:deny, refusal}
-
-        not_offered?(state, step, call) ->
-          {:deny, "#{call.model_name} is not one of the tools this work has"}
 
         true ->
           Policy.decide(call, state.spec.offered, place(state, step))
@@ -1480,28 +1511,17 @@ defmodule Aqua.Loop do
 
   defp admission?(_state, _step), do: false
 
-  # An ask is decided only if it names one of the tools the engine handed
-  # its harness at its open (`work.tools`), whatever the harness was
-  # started with: checked each time it is decided, before the policy. A
-  # page's call is no ask, and the admission is the harness's own start.
-  defp not_offered?(%State{spec: spec} = state, %{purpose: purpose} = step, %Call{} = call)
-       when purpose != "page" do
-    not admission?(state, step) and
-      not Enum.any?(spec.tools, &(&1["name"] == asked_as(call.model_name)))
+  # An ask is decided only if the whole name it asked by is one of the
+  # tools the engine handed its harness at its open (`work.tools`),
+  # whatever the harness was started with: checked each time it is decided,
+  # first. A page's call is no ask, the admission is the harness's own
+  # start, and a call whose row names nothing is answered as it resolves.
+  defp unhanded?(%State{spec: spec} = state, %{purpose: purpose} = step, name)
+       when purpose != "page" and is_binary(name) do
+    not admission?(state, step) and not Enum.any?(spec.tools, &(&1["name"] == name))
   end
 
-  defp not_offered?(_state, _step, _call), do: false
-
-  # The tool an ask names, by the name the harness asked by and before any
-  # resolution: an outside server's by its whole name, every other by the
-  # tool before its action, whose definition carries its actions
-  # (`Aqua.Loop.Request.tool_definitions/2`). A name another resolves to is
-  # never one the harness was handed.
-  defp asked_as(name) when is_binary(name) do
-    if String.contains?(name, "__"), do: name, else: name |> String.split(".", parts: 2) |> hd()
-  end
-
-  defp asked_as(_name), do: nil
+  defp unhanded?(_state, _step, _name), do: false
 
   # An ask of a note flush's step (`Aqua.Harness.Api`) runs `notes.keep`
   # alone, a note this large at most: a rule of the asking step's purpose.
@@ -1961,7 +1981,7 @@ defmodule Aqua.Loop do
   defp close_launch(state, step, call, {:ok, id, result}) do
     text = Jason.encode!(result, pretty: true)
 
-    _ =
+    closed =
       Tape.close_step(guest(state), state.turn, step, "ok", %{
         result:
           result_row(step, "ok", {:ok, output(result)}, text, %{
@@ -1973,7 +1993,7 @@ defmodule Aqua.Loop do
         threads: launched_threads(state, step, id, result)
       })
 
-    state
+    {closed, state}
   end
 
   defp close_launch(state, step, call, {:refused, reason}),
@@ -1986,14 +2006,15 @@ defmodule Aqua.Loop do
   # for a page's answer. A page's call of a component that is not granted
   # asks the person for the grant, as a model's asks with request_setup.
   defp failed_launch(state, step, call, reason, threads) do
-    close(state, step, call, {:error, {:launch, reason}}, threads)
+    closed = close(state, step, call, {:error, {:launch, reason}}, threads)
 
-    with "page" <- step.purpose,
+    with {:ok, _closed} <- closed,
+         "page" <- step.purpose,
          %Call{target: ref} <- call,
          %Prima.Refusal{class: :consent_required} <- Sanctum.Refusals.classify(reason),
          do: announce(state, :consent_required, %{ref: ref, user_id: ctx(state).user_id})
 
-    state
+    {closed, state}
   end
 
   # What the launched component answered, which a page's call is handed
@@ -2045,7 +2066,15 @@ defmodule Aqua.Loop do
   # slot. The runner continues the paused turn from its rows.
   # The fence is announced again once the root is back, so the runner
   # records a page's call it held while the turn was paused around the
-  # launch.
+  # launch. A launch's result the store did not keep takes nothing back:
+  # the loop ends unwritten, the turn paused around the launch.
+  defp resumed({{:ok, _closed}, %State{} = state}), do: resumed(state)
+
+  defp resumed({{:error, taken}, %State{} = state}) when taken in @taken,
+    do: {:halt, :cancelled, %{state | unkept: :taken}}
+
+  defp resumed({{:error, _unkept}, %State{} = state}), do: unkept(state)
+
   defp resumed(%State{} = state) do
     case resume_root(state, 0) do
       {:ok, state} ->
@@ -2153,7 +2182,7 @@ defmodule Aqua.Loop do
       # A harness waits on the answer to what it asked, so a failed read
       # of that is never read as nothing asked.
       {:error, _unread} ->
-        harness_ended(state, harness_reason(state, :write_failed))
+        unkept(state)
     end
   end
 
@@ -2173,7 +2202,7 @@ defmodule Aqua.Loop do
        for(
          %{kind: kind, dispatch_state: "proposed"} = step <- steps,
          kind not in ["model", "input"],
-         do: %{step: step, call: recall(state, step)}
+         do: item(state, step)
        )}
     end
   end
@@ -2255,7 +2284,7 @@ defmodule Aqua.Loop do
 
         open != [] ->
           [first | others] = open
-          rest = Enum.map(others, &%{item: %{step: &1, call: recall(state, &1)}, task: nil})
+          rest = Enum.map(others, &%{item: item(state, &1), task: nil})
           stop_uncertain(state, first, "the turn was interrupted", rest)
 
         steered?(state) ->
@@ -2300,30 +2329,40 @@ defmodule Aqua.Loop do
       for %{dispatch_state: "proposed", kind: kind} = step <- steps,
           kind not in ["model", "input"],
           step.purpose != "page" do
-        %{step: step, call: recall(state, step)}
+        item(state, step)
       end
     else
       _ -> []
     end
   end
 
-  # The call a proposed step was recorded for, from its tool_call row.
-  defp recall(%State{} = state, %{message_id: message_id}) when is_binary(message_id) do
+  # A proposed step as the loop decides it: the step, the name its call
+  # was asked by and what that name resolves to.
+  defp item(%State{} = state, step) do
+    {name, call} = asked(state, step)
+    %{step: step, asked: name, call: call}
+  end
+
+  defp recall(%State{} = state, step), do: state |> asked(step) |> elem(1)
+
+  # The call a proposed step was recorded for, from its tool_call row: the
+  # name it was asked by, and the call that name resolves to.
+  defp asked(%State{} = state, %{message_id: message_id}) when is_binary(message_id) do
     case Tape.message(guest(state), message_id) do
-      {:ok, row} -> call_of(row)
-      _ -> {:error, "the call's row is gone"}
+      {:ok, row} ->
+        payload = Tape.payload(row)
+
+        {payload["name"],
+         Binding.resolve(payload["name"] || "", payload["arguments"] || %{},
+           tool_call_id: payload["tool_call_id"]
+         )}
+
+      _ ->
+        {nil, {:error, "the call's row is gone"}}
     end
   end
 
-  defp recall(_state, _step), do: {:error, "the step names no call"}
-
-  defp call_of(row) do
-    payload = Tape.payload(row)
-
-    Binding.resolve(payload["name"] || "", payload["arguments"] || %{},
-      tool_call_id: payload["tool_call_id"]
-    )
-  end
+  defp asked(_state, _step), do: {nil, {:error, "the step names no call"}}
 
   # ---------------------------------------------------------------------------
   # Helpers

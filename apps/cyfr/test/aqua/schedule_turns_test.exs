@@ -845,7 +845,11 @@ defmodule Aqua.ScheduleTurnsTest do
         {ScriptedWorker,
          ref: [@model, app],
          script: [
-           call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}),
+           call("r1", "execution", %{
+             "action" => "run",
+             "reference" => app <> ":1.0.0",
+             "input" => %{}
+           }),
            %{"answered" => true},
            reply("ran it")
          ]}
@@ -893,7 +897,11 @@ defmodule Aqua.ScheduleTurnsTest do
         {ScriptedWorker,
          ref: [@model, app],
          script: [
-           call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}),
+           call("r1", "execution", %{
+             "action" => "run",
+             "reference" => app <> ":1.0.0",
+             "input" => %{}
+           }),
            reply("It is not granted.")
          ]}
       )
