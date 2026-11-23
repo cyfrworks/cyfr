@@ -743,10 +743,15 @@ defmodule Locus.Keeper do
     Kernel.spawn(fn -> :gen_tcp.send(conn, frames) end)
   end
 
+  # A read joined to the part of a frame the last left, copied only when
+  # one was left: a read that starts on a frame is parsed where it is.
+  defp joined("", data), do: data
+  defp joined(rest, data), do: rest <> data
+
   # A relay carries the command's stdout and stderr; a frame on any other
   # stream, or one the codec refuses, is its fault.
   defp on_frames(s, data) do
-    case KeeperProtocol.parse_frames(s.frames <> data) do
+    case KeeperProtocol.parse_frames(joined(s.frames, data)) do
       {:ok, frames, rest} -> each_frame(%{s | frames: rest}, frames)
       {:error, _reason} -> relay_fault(s)
     end
@@ -2431,7 +2436,7 @@ defmodule Locus.Keeper do
   defp on_held_frames(state, ref, conn, data) do
     entry = state.requests[ref]
 
-    case KeeperProtocol.parse_frames(entry.frames <> data) do
+    case KeeperProtocol.parse_frames(joined(entry.frames, data)) do
       {:ok, frames, rest} -> held_frames(state, ref, conn, %{entry | frames: rest}, frames)
       {:error, _reason} -> relay_fault(state, ref, conn)
     end

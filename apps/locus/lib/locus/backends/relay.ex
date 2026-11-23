@@ -121,8 +121,10 @@ defmodule Locus.Backends.Relay do
   @doc "Bytes of a run's stdout: every line they complete is buffered."
   @spec stdout(t(), binary()) :: {:ok, t()} | {:error, :line_too_long}
   def stdout(%__MODULE__{mode: :run} = relay, data) when is_binary(data) do
-    [partial | complete] =
-      (relay.partial <> data) |> :binary.split("\n", [:global]) |> Enum.reverse()
+    # Only the part line left by the last write is joined, to its rest:
+    # every other line is read where it came, never copied.
+    [first | rest] = :binary.split(data, "\n", [:global])
+    [partial | complete] = Enum.reverse([joined(relay.partial, first) | rest])
 
     if Enum.any?([partial | complete], &(byte_size(&1) > relay.max_line_bytes)) do
       {:error, :line_too_long}
@@ -133,6 +135,9 @@ defmodule Locus.Backends.Relay do
       {:ok, relay}
     end
   end
+
+  defp joined("", first), do: first
+  defp joined(partial, first), do: partial <> first
 
   @doc "The part of a line with no newline yet, made a line of its own."
   @spec flush(t()) :: t()
