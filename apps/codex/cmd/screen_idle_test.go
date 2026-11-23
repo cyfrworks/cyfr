@@ -398,7 +398,7 @@ func startScreen(t *testing.T) *runningScreen {
 	s := &runningScreen{t: t, ended: make(chan error, 1), done: make(chan struct{}), address: address}
 	go func() {
 		defer close(s.done)
-		s.ended <- runScreenShell(ctx, listen)
+		s.ended <- runScreenShell(ctx, listen, chromeBrowser)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -551,7 +551,7 @@ func TestScreenShellHelper(t *testing.T) {
 		t.Skip("run by TestScreenShell_AKilledShellLeavesNoChildBehind")
 	}
 	listen, _ := ownListener()
-	_ = runScreenShell(context.Background(), listen)
+	_ = runScreenShell(context.Background(), listen, chromeBrowser)
 }
 
 // A shell killed outright leaves no keyboard, suspend watch or Chrome
@@ -629,7 +629,7 @@ func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
 	defer cancel()
 	listen, address := ownListener()
 	ended := make(chan error, 1)
-	go func() { ended <- runScreenShell(ctx, listen) }()
+	go func() { ended <- runScreenShell(ctx, listen, chromeBrowser) }()
 	for {
 		if raw, err := os.ReadFile(chromed); err == nil && strings.HasSuffix(string(raw), "\n") {
 			if !strings.Contains(string(raw), "--host-resolver-rules=MAP localhost 127.0.0.1") {
