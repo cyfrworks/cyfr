@@ -124,6 +124,7 @@ await build({
     },
     icon: path.join(stage, "icon.png"),
     linux: {executableName: "CYFR", category: "Network", maintainer: "CYFR Works Inc.",
+      synopsis: "CYFR in a window of its own",
       vendor: "CYFR Works Inc.", desktop: {entry: {Name: "CYFR"}}},
     deb: {packageName: "cyfr-desktop",
       depends: ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1",

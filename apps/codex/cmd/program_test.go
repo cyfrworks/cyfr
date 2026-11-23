@@ -412,7 +412,151 @@ func fakeBrew(t *testing.T, installed, upgradeTo string) string {
 // the cyfr brew links into its prefix, once brew reports the release
 // installed; brew left on another release hands nothing over. A --version
 // other than the tap's release, the newest one, is refused before brew
-// runs, naming the install script.
+// standInDpkg puts a dpkg-query in the stand-in machine's one PATH
+// folder, on a system whose language is German: it names owned's package
+// for each of its paths, says no package installed any other, or,
+// failing, fails as a damaged database does. As dpkg does, it says its
+// words in German, a diversion's line and "no path found" among them,
+// unless LC_ALL is C; a package's line is the same in every language.
+func standInDpkg(t *testing.T, owned map[string]string, failing bool) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("the package records are asked on Linux alone")
+	}
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	script := "#!/bin/sh\n[ \"$1\" = --search ] && [ \"$2\" = -- ] || exit 9\n" +
+		"if [ \"$LC_ALL\" = C ]; then diverted='diversion by other from'; none='no path found matching pattern'\n" +
+		"else diverted='Umleitung durch other von'; none='kein Pfad gefunden, der auf Muster passt:'; fi\n"
+	if failing {
+		script += "echo 'dpkg-query: error: parsing file /var/lib/dpkg/status' >&2\nexit 2\n"
+	} else {
+		script += "case \"$3\" in\n"
+		for path, pkg := range owned {
+			script += fmt.Sprintf("'%s') echo \"$diverted: %s\"; echo '%s: %s' ;;\n", path, path, pkg, path)
+		}
+		script += "*) echo \"dpkg-query: $none $3\" >&2; exit 1 ;;\nesac\n"
+	}
+	if err := os.WriteFile(filepath.Join(os.Getenv("PATH"), "dpkg-query"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A cyfr the package records name as a package's is never rewritten,
+// reached by its own path or by a link, whether or not the app beside it
+// is whole, and the refusal names the second command exactly: that
+// program by its own path, with --version where it was asked. A file named
+// like the app's code beside a cyfr no package installed decides nothing.
+func TestUpdateLeavesAPackagesProgramToThePackage(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		byLink  bool
+		options updateOptions
+	}{
+		{"its own path, the app's code gone", false, updateOptions{}},
+		{"a link to it, the newest release", true, updateOptions{}},
+		{"a link to it, an exact release", true, updateOptions{version: "1.2.0"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newProgramScenario(t, "1.0.0", "1.1.0")
+			standInDpkg(t, map[string]string{s.self: "cyfr-desktop"}, false)
+			if c.byLink {
+				link := filepath.Join(t.TempDir(), "cyfr")
+				if err := os.Symlink(s.self, link); err != nil {
+					t.Fatal(err)
+				}
+				selfExecutable = func() (string, error) { return link, nil }
+			}
+			target, again := "1.1.0", s.self+" update"
+			if c.options.version != "" {
+				target, again = c.options.version, again+" --version "+c.options.version
+			}
+			_, err := s.run(c.options)
+			want := "This cyfr, " + s.self + ", belongs to the package cyfr-desktop, so nothing was changed: install the package of release " + target + " from " + releasesPage + "/tag/" + target + ", then run '" + again + "' to update CYFR here"
+			if err == nil || err.Error() != want {
+				t.Errorf("cyfr update answered %v, want %q", err, want)
+			}
+			if len(s.fetched) != 0 || len(s.handed) != 0 || read(t, s.self) != "old cyfr" {
+				t.Errorf("the package's cyfr was fetched %v, handed over %v or changed", s.fetched, s.handed)
+			}
+		})
+	}
+}
+
+// A cyfr no package installed is updated, a file named like the app's
+// code beside it or not, and so is one on a system with no package
+// records to ask; one whose records cannot answer changes nothing.
+func TestUpdateAsksThePackageRecordsAlone(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		dpkg     string // "none", "says no" or "fails"
+		appAsar  bool
+		replaced bool
+	}{
+		{"an install script's, an app.asar beside it", "says no", true, true},
+		{"an install script's, no package records", "none", false, true},
+		{"package records that fail", "fails", true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newProgramScenario(t, "1.0.0", "1.1.0")
+			switch c.dpkg {
+			case "says no":
+				standInDpkg(t, nil, false)
+			case "fails":
+				standInDpkg(t, nil, true)
+			}
+			if c.appAsar {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(s.self), "app.asar"), []byte("the app"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := s.run(updateOptions{})
+			if c.replaced {
+				if err != nil || read(t, s.self) != "new cyfr 1.1.0" || len(s.handed) != 1 {
+					t.Errorf("cyfr update answered %v, handed over %v, the program holds %q", err, s.handed, read(t, s.self))
+				}
+				return
+			}
+			if err == nil || !strings.HasPrefix(err.Error(), "cyfr update could not ask this system's package records whether a package installed "+s.self+" (") ||
+				!strings.HasSuffix(err.Error(), "); nothing was changed") || len(s.fetched) != 0 || read(t, s.self) != "old cyfr" {
+				t.Errorf("cyfr update answered %v, fetched %v, the program holds %q", err, s.fetched, read(t, s.self))
+			}
+		})
+	}
+}
+
+// The two steps the package's refusal names: with the newer package
+// installed, cyfr update run again finds the program current and goes on
+// to the stack in the directory.
+func TestUpdateAgainFromTheNewerPackageGoesOnToTheStack(t *testing.T) {
+	s := newProgramScenario(t, "1.0.0", "1.1.0")
+	standInDpkg(t, map[string]string{s.self: "cyfr-desktop"}, false)
+	savedManifest := fetchManifest
+	t.Cleanup(func() { fetchManifest = savedManifest })
+	reached := errors.New("the stack's update began")
+	var asked []string
+	fetchManifest = func(_ context.Context, v string) (*release.Manifest, error) {
+		asked = append(asked, v)
+		return nil, reached
+	}
+	if err := os.WriteFile("docker-compose.yml", []byte("services: {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "then run '"+s.self+" update' to update CYFR here") || len(asked) != 0 {
+		t.Fatalf("the first cyfr update answered %v and asked the stack's releases %v", err, asked)
+	}
+	// The newer package installed.
+	version.Version = "1.1.0"
+	out, err := s.run(updateOptions{})
+	if err == nil || !strings.Contains(err.Error(), reached.Error()) || !slices.Equal(asked, []string{"1.1.0"}) ||
+		!strings.Contains(out, "cyfr 1.1.0 is the newest release.") {
+		t.Fatalf("cyfr update again answered %v, asking %v:\n%s", err, asked, out)
+	}
+	if len(s.fetched) != 0 || len(s.handed) != 0 || read(t, s.self) != "old cyfr" {
+		t.Errorf("the package's cyfr was fetched %v, handed over %v or changed", s.fetched, s.handed)
+	}
+}
+
 func TestUpdateThroughHomebrew(t *testing.T) {
 	brewLog := func(dir string) string { return strings.TrimSpace(read(t, filepath.Join(dir, "log"))) }
 	restore := caskInstalled

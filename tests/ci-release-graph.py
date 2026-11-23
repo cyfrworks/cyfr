@@ -14,7 +14,11 @@
 # writes release.json with the schema fingerprint its merged cyfr image
 # answers, checks it and signs it before GoReleaser attaches both, has every
 # command line binary checked before it is archived
-# (scripts/ci/release-binary-check.sh), and grants each job only what it needs. The build, and the
+# (scripts/ci/release-binary-check.sh), builds, installs and smokes the
+# CYFR app's Linux package on each architecture's runner with nothing to
+# publish with, hands both to the CLI release by exact name to be summed
+# and attached, lets neither the merge nor that release go without them,
+# and grants each job only what it needs. The build, and the
 # publication test in test.yml's static job, first switch the runner's
 # Docker daemon to the containerd image store, which alone can load an
 # image carrying its attestation.
@@ -112,6 +116,10 @@ def check_graph(wf):
         missing = [n for n in needs_of(job) if n not in jobs]
         if missing:
             return f"{j} needs {missing}, which are not jobs"
+    # A cycle of needs is a workflow GitHub never runs.
+    for j in jobs:
+        if j in ancestors(j):
+            return f"{j} needs itself through its needs, so the workflow never runs"
     for j in jobs:
         if j in verify:
             continue
@@ -210,6 +218,47 @@ SIGN_RUN = (
     '"$RUNNER_TEMP/release/release.json"'
 )
 MANIFEST_DIR_ENV = {"RELEASE_MANIFEST_DIR": "${{ runner.temp }}/release"}
+# The CYFR app's Linux package: a job of its own, held to exactly these
+# steps in this order, so that what is published is what was installed and
+# smoked, built as the release builds cyfr and from no cache.
+PACKAGE_JOB = "linux-package"
+PACKAGE_ARCHES = ("amd64", "arm64")
+PACKAGE_MATRIX = [
+    {"arch": "amd64", "runner": "ubuntu-24.04"},
+    {"arch": "arm64", "runner": "ubuntu-24.04-arm"},
+]
+PACKAGE_STEPS = [
+    ("actions/checkout", {"fetch-depth": 0, "persist-credentials": False}),
+    ("actions/setup-go", {"go-version-file": "apps/codex/go.mod", "cache": False}),
+    ("actions/setup-node", {"node-version": 24, "package-manager-cache": False}),
+    ("run", 'mkdir -p "$RUNNER_TEMP/cyfr"'),
+    ("goreleaser/goreleaser-action", None),
+    ("run", """set -euo pipefail
+cd apps/codex/desktop
+npm ci --ignore-scripts --no-audit --no-fund
+node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version "$GITHUB_REF_NAME" --arch "$ARCH" --out "$RUNNER_TEMP/package"
+"""),
+    ("run", 'bash tests/desktop-proof/native/linux.sh "$RUNNER_TEMP/package/cyfr-desktop_${GITHUB_REF_NAME}_linux_${ARCH}.deb"'),
+    ("run", """set -euo pipefail
+installed=$(/usr/bin/cyfr --version)
+if [ "${installed%%$'\\n'*}" != "cyfr version $GITHUB_REF_NAME" ]; then
+echo "::error::the package's cyfr says [$installed], not cyfr version $GITHUB_REF_NAME"
+exit 1
+fi
+"""),
+    ("actions/upload-artifact", {
+        "name": "cyfr-desktop-linux-${{ matrix.arch }}",
+        "path": "${{ runner.temp }}/package/cyfr-desktop_${{ github.ref_name }}_linux_${{ matrix.arch }}.deb",
+        "if-no-files-found": "error",
+        "retention-days": 1,
+    }),
+]
+PACKAGE_BUILD_ARGS = "build --single-target --clean --output ${{ runner.temp }}/cyfr/cyfr"
+PACKAGE_DOWNLOADS = {f"cyfr-desktop-linux-{a}": "${{ runner.temp }}/packages" for a in PACKAGE_ARCHES}
+PACKAGES_DIR_ENV = {"RELEASE_PACKAGES_DIR": "${{ runner.temp }}/packages"}
+PACKAGE_GLOBS = [
+    "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_linux_%s.deb" % a for a in PACKAGE_ARCHES
+]
 # The release's written note, the annotated tag's message beneath its
 # subject (scripts/release.sh writes it from --notes): the version job
 # refuses a tag that carries none, and the release job writes it beside
@@ -473,6 +522,14 @@ def check_merge(wf, build):
     return None, name
 
 
+def release_jobs(wf):
+    """The CLI release: GoReleaser's job that is not the package's."""
+    return [
+        k for k, job in wf["jobs"].items()
+        if k != PACKAGE_JOB and steps_using(job, "goreleaser/goreleaser-action")
+    ]
+
+
 def check_permissions(wf, build, merge):
     jobs = wf["jobs"]
     if wf.get("permissions") != {"contents": "read"}:
@@ -482,7 +539,7 @@ def check_permissions(wf, build, merge):
     want = {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"}
     if jobs[merge].get("permissions") != want:
         return f"the merge's permissions are {jobs[merge].get('permissions')}"
-    release = [k for k, job in jobs.items() if steps_using(job, "goreleaser/goreleaser-action")]
+    release = release_jobs(wf)
     if len(release) != 1:
         return f"not one CLI release job: {release}"
     granted = jobs[release[0]].get("permissions") or {}
@@ -737,14 +794,14 @@ def check_release_manifest(wf, merge, release):
     downloads = [i for i, s in enumerate(steps) if str(s.get("uses", "")).split("@")[0] == "actions/download-artifact"]
     got = {steps[i].get("with", {}).get("name"): steps[i].get("with", {}).get("path") for i in downloads}
     if (
-        len(downloads) != 2
-        or got != MERGED_DOWNLOADS
+        len(downloads) != len(MERGED_DOWNLOADS) + len(PACKAGE_DOWNLOADS)
+        or got != {**MERGED_DOWNLOADS, **PACKAGE_DOWNLOADS}
         or any(
             set(steps[i]) - {"name", "uses", "with"} or set(steps[i].get("with", {})) != {"name", "path"}
             for i in downloads
         )
     ):
-        return "the CLI release does not download the two merged digests by exact name"
+        return "the CLI release does not download the two merged digests and the two Linux packages by exact name"
 
     def only(predicate, what):
         at = [i for i, s in enumerate(steps) if predicate(s)]
@@ -789,6 +846,47 @@ def check_release_manifest(wf, merge, release):
     env = steps[goreleaser].get("env") or {}
     if {k: env.get(k) for k in MANIFEST_DIR_ENV} != MANIFEST_DIR_ENV:
         return f"GoReleaser's RELEASE_MANIFEST_DIR is {env.get('RELEASE_MANIFEST_DIR')!r}, not {MANIFEST_DIR_ENV}"
+    if {k: env.get(k) for k in PACKAGES_DIR_ENV} != PACKAGES_DIR_ENV:
+        return f"GoReleaser's RELEASE_PACKAGES_DIR is {env.get('RELEASE_PACKAGES_DIR')!r}, not {PACKAGES_DIR_ENV}"
+    return None
+
+
+def check_linux_package(wf, merge, release):
+    jobs = wf["jobs"]
+    job = jobs.get(PACKAGE_JOB)
+    if job is None:
+        return f"no {PACKAGE_JOB} job builds the CYFR app's Linux package"
+    if TAG_JOB not in needs_of(job):
+        return "the Linux package does not need the tag check"
+    for name in (merge, release):
+        if PACKAGE_JOB not in needs_of(jobs[name]):
+            return f"{name} does not need the Linux package"
+    if job.get("permissions") != {"contents": "read"}:
+        return f"the Linux package's permissions are {job.get('permissions')}, not contents read alone"
+    if "secrets." in json.dumps(job) or "github.token" in json.dumps(job):
+        return "the Linux package's job reads a secret"
+    if job.get("env") != {"ARCH": "${{ matrix.arch }}"}:
+        return f"the Linux package's environment is {job.get('env')}"
+    if job.get("strategy", {}).get("matrix") != {"include": PACKAGE_MATRIX} or job.get("runs-on") != "${{ matrix.runner }}":
+        return "the Linux package is not built on each architecture's own runner"
+    steps = job.get("steps", [])
+    if len(steps) != len(PACKAGE_STEPS):
+        return f"the Linux package's job has {len(steps)} steps, not {len(PACKAGE_STEPS)}"
+    for step, (kind, want) in zip(steps, PACKAGE_STEPS):
+        if kind == "run":
+            if set(step) - {"name", "run"} or run_lines(step) != run_lines({"run": want}):
+                return f"the Linux package's job runs {step!r}, not {want!r}"
+            continue
+        if set(step) - {"name", "uses", "with"} or str(step.get("uses", "")).split("@")[0] != kind:
+            return f"the Linux package's job has {step!r}, not {kind}"
+        if want is None:
+            # The release's own GoReleaser, at its version, in its workdir.
+            theirs = next(s for s in jobs[release]["steps"] if str(s.get("uses", "")).startswith(kind))
+            if step["uses"] != theirs["uses"]:
+                return "the Linux package's cyfr is built by another GoReleaser action than the release's"
+            want = {**theirs.get("with", {}), "args": PACKAGE_BUILD_ARGS}
+        if step.get("with") != want:
+            return f"the Linux package's {kind} takes {step.get('with')}, not {want}"
     return None
 
 
@@ -912,6 +1010,13 @@ def check_goreleaser(config):
     manifest = sorted(g for g in globs if "release.json" in g)
     if manifest != sorted(MANIFEST_GLOBS):
         return f".goreleaser.yml's release attaches {manifest} for the manifest, not exactly {MANIFEST_GLOBS}"
+    packages = sorted(g for g in globs if "cyfr-desktop" in g or "RELEASE_PACKAGES_DIR" in g)
+    if packages != sorted(PACKAGE_GLOBS):
+        return f".goreleaser.yml's release attaches {packages} for the app, not exactly {PACKAGE_GLOBS}"
+    # What is attached and fetched by its checksum is in the signed manifest.
+    summed = sorted(str(e.get("glob")) for e in (config.get("checksum") or {}).get("extra_files") or [])
+    if summed != sorted([SCAFFOLD_GLOB] + PACKAGE_GLOBS):
+        return f".goreleaser.yml's checksums sum {summed}, not exactly the scaffold and {PACKAGE_GLOBS}"
     # checksums.txt is signed into the protobuf bundle sigstore-go reads:
     # cosign 2 writes its legacy bundle without --new-bundle-format, which
     # `cyfr init` and `cyfr update` refuse.
@@ -2140,9 +2245,12 @@ def check_shape(wf):
     reason = check_permissions(wf, build, merge)
     if reason:
         return reason
-    release = next(k for k, job in wf["jobs"].items() if steps_using(job, "goreleaser/goreleaser-action"))
+    release = release_jobs(wf)[0]
     return (
         check_trigger(wf)
+        # Read before the tag check, which runs its cases for every mutant
+        # that reaches it.
+        or check_linux_package(wf, merge, release)
         or check_tag(wf, build, release)
         or check_merged_digest(wf, merge)
         or check_release_manifest(wf, merge, release)
@@ -2759,7 +2867,97 @@ def replace_glob(old, new):
     return mutate
 
 
+def package_step(wf, action):
+    return next(s for s in wf["jobs"][PACKAGE_JOB]["steps"] if action in str(s.get("uses", "")) + str(s.get("run", "")))
+
+
+def package_change(action, change):
+    def mutate(wf):
+        change(package_step(wf, action))
+
+    return mutate
+
+
+def package_replace(action, old, new):
+    def mutate(wf):
+        step = package_step(wf, action)
+        step["run"] = step["run"].replace(old, new)
+
+    return mutate
+
+
+def package_need_dropped(job):
+    def mutate(wf):
+        wf["jobs"][job]["needs"].remove(PACKAGE_JOB)
+
+    return mutate
+
+
+def package_arm64_emulated(wf):
+    wf["jobs"][PACKAGE_JOB]["strategy"]["matrix"]["include"][1]["runner"] = "ubuntu-24.04"
+
+
+def package_amd64_alone(wf):
+    wf["jobs"][PACKAGE_JOB]["strategy"]["matrix"]["include"].pop()
+
+
+def package_uploaded_before_smoke(wf):
+    steps = wf["jobs"][PACKAGE_JOB]["steps"]
+    upload = steps.pop()
+    steps.insert(steps.index(package_step(wf, "linux.sh")), upload)
+
+
+def package_not_smoked(wf):
+    wf["jobs"][PACKAGE_JOB]["steps"].remove(package_step(wf, "linux.sh"))
+
+
+def package_identity_unchecked(wf):
+    wf["jobs"][PACKAGE_JOB]["steps"].remove(package_step(wf, "/usr/bin/cyfr --version"))
+
+
+def package_cached(wf):
+    wf["jobs"][PACKAGE_JOB]["steps"].insert(3, {"uses": "actions/cache@x", "with": {"path": "~/.cache/electron", "key": "electron"}})
+
+
+def packages_by_pattern(wf):
+    steps = [s for s in release_steps(wf) if not str(s.get("with", {}).get("name", "")).startswith("cyfr-desktop-linux-")]
+    at = next(i for i, s in enumerate(steps) if is_scaffold(s))
+    steps.insert(at, {"uses": "actions/download-artifact@x",
+                      "with": {"pattern": "cyfr-desktop-*", "path": "${{ runner.temp }}/packages"}})
+    wf["jobs"]["release"]["steps"] = steps
+
+
+def one_package_download(wf):
+    release_steps(wf).remove(release_step(wf, lambda s: s.get("with", {}).get("name") == "cyfr-desktop-linux-arm64"))
+
+
+def package_into_the_checkout(wf):
+    release_step(wf, lambda s: s.get("with", {}).get("name") == "cyfr-desktop-linux-amd64")["with"]["path"] = "apps/codex/packages"
+
+
+def packages_after_goreleaser(wf):
+    steps = release_steps(wf)
+    moved = release_step(wf, lambda s: s.get("with", {}).get("name") == "cyfr-desktop-linux-arm64")
+    steps.remove(moved)
+    steps.insert(steps.index(release_step(wf, is_goreleaser)) + 1, moved)
+
+
+def no_packages_dir_env(wf):
+    del release_step(wf, is_goreleaser)["env"]["RELEASE_PACKAGES_DIR"]
+
+
+def drop_summed(glob):
+    def mutate(config):
+        config["checksum"]["extra_files"].remove({"glob": glob})
+
+    return mutate
+
+
 GORELEASER_MUTANTS = [
+    ("a package not attached", drop_glob(PACKAGE_GLOBS[1])),
+    ("a package attached and not summed", drop_summed(PACKAGE_GLOBS[1])),
+    ("the packages attached by a wildcard", replace_glob(PACKAGE_GLOBS[0], "{{ .Env.RELEASE_PACKAGES_DIR }}/*.deb")),
+    ("the scaffold not summed", drop_summed(SCAFFOLD_GLOB)),
     ("the changelog disabled", lambda c: c.update(changelog={"disable": True})),
     ("the changelog disabled by a template", lambda c: c.update(changelog={"disable": "{{ true }}"})),
     ("release.json not attached", drop_glob(MANIFEST_GLOBS[0])),
@@ -2785,6 +2983,37 @@ GORELEASER_MUTANTS = [
 
 
 MUTANTS = [
+    ("no Linux package job", lambda wf: wf["jobs"].pop(PACKAGE_JOB)),
+    ("the Linux package needing the merge that needs it", lambda wf: wf["jobs"][PACKAGE_JOB]["needs"].append("merge")),
+    ("the merge without the Linux package", package_need_dropped("merge")),
+    ("the CLI release without the Linux package", package_need_dropped("release")),
+    ("the tag check dropped from the Linux package's needs", tag_need_dropped(PACKAGE_JOB)),
+    ("a check dropped from the Linux package's needs", lambda wf: wf["jobs"][PACKAGE_JOB]["needs"].remove("codex-ci")),
+    ("contents: write on the Linux package", lambda wf: wf["jobs"][PACKAGE_JOB]["permissions"].update(contents="write")),
+    ("a secret in the Linux package's job", lambda wf: wf["jobs"][PACKAGE_JOB]["env"].update(T="${{ secrets.GITHUB_TOKEN }}")),
+    ("a secret on the Linux package's GoReleaser", package_change("goreleaser-action", lambda s: s.update(env={"T": "${{ secrets.X }}"}))),
+    ("the checkout's credential kept for the package's build", package_change("actions/checkout", lambda s: s["with"].pop("persist-credentials"))),
+    ("arm64 built on amd64's runner", package_arm64_emulated),
+    ("the Linux package on amd64 alone", package_amd64_alone),
+    ("the package's Go from a cache", package_change("actions/setup-go", lambda s: s["with"].pop("cache"))),
+    ("the package's npm from a cache", package_change("actions/setup-node", lambda s: s["with"].pop("package-manager-cache"))),
+    ("a cache in the package's job", package_cached),
+    ("the package's cyfr built as a snapshot", package_change("goreleaser-action", lambda s: s["with"].update(args=PACKAGE_BUILD_ARGS + " --snapshot"))),
+    ("the package's cyfr by another GoReleaser", package_change("goreleaser-action", lambda s: s["with"].update(version="latest"))),
+    ("the package's version fixed", package_replace("build.mjs", '"$GITHUB_REF_NAME"', "0.0.0-ci")),
+    ("the package's install scripts run", package_replace("build.mjs", " --ignore-scripts", "")),
+    ("the package not smoked", package_not_smoked),
+    ("the package's smoke with an if:", package_change("linux.sh", lambda s: s.update({"if": "runner.arch == 'X64'"}))),
+    ("the installed cyfr's version unchecked", package_identity_unchecked),
+    ("a wrong installed cyfr that passes", package_replace("/usr/bin/cyfr --version", "exit 1", "exit 0")),
+    ("the package uploaded before its smoke", package_uploaded_before_smoke),
+    ("the package uploaded by a wildcard", package_change("upload-artifact", lambda s: s["with"].update(path="${{ runner.temp }}/package/*.deb"))),
+    ("a package upload that may be empty", package_change("upload-artifact", lambda s: s["with"].update({"if-no-files-found": "warn"}))),
+    ("the packages downloaded by pattern", packages_by_pattern),
+    ("one package downloaded", one_package_download),
+    ("a package downloaded into the checkout", package_into_the_checkout),
+    ("a package downloaded after GoReleaser", packages_after_goreleaser),
+    ("no RELEASE_PACKAGES_DIR on GoReleaser", no_packages_dir_env),
     ("a check dropped from the build's needs", drop_need),
     ("the merge runs always()", merge_always),
     ("continue-on-error on the build job", build_continues),

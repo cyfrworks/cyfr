@@ -269,6 +269,12 @@ same worktree refuses, naming the run that holds it.
   names what the smoke leaves to the real-CYFR proofs and to a person at
   the machine.
 
+  On Linux that install and smoke are `tests/desktop-proof/native/linux.sh`,
+  which Release's `linux-package` job runs too, on the package the tag
+  publishes. A tag whose package fails publishes no release, no
+  checksums and no image tag; the images job may already have pushed
+  the images by digest, which no tag names.
+
   Codex CI's `screen-idle` job runs `tests/desktop-proof/screen/idle.sh`:
   the device screen's idle watch under Ubuntu 26.04's labwc, beside a
   real Chrome whose page, and whose sandboxed frame, plays a video

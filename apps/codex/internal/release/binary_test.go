@@ -12,11 +12,14 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/root"
+	"gopkg.in/yaml.v3"
 )
 
 func tarGz(t *testing.T, name string, body []byte) []byte {
@@ -81,17 +84,20 @@ func newBinaryRelease(t *testing.T, version string) *binaryRelease {
 	r.assets[ArchiveName(version, "linux", "amd64")] = tarGz(t, "cyfr", []byte("cyfr linux "+version))
 	r.assets[ArchiveName(version, "windows", "arm64")] = zipped(t, "cyfr.exe", []byte("cyfr windows "+version))
 	r.assets[ArchiveName(version, "darwin", "arm64")] = tarGz(t, "other", []byte("no cyfr here"))
+	for _, goarch := range []string{"amd64", "arm64"} {
+		r.assets[PackageName(version, goarch)] = []byte("the app's package " + goarch + " " + version)
+	}
 	r.signChecksums(t, Identity(version), Issuer)
 	return r
 }
 
-// signChecksums writes checksums.txt over every archive and signs it under
+// signChecksums writes checksums.txt over every archive and package and signs it under
 // identity and issuer.
 func (r *binaryRelease) signChecksums(t *testing.T, identity, issuer string) {
 	t.Helper()
 	var lines []string
 	for name, data := range r.assets {
-		if strings.HasPrefix(name, "cyfr_") {
+		if strings.HasPrefix(name, "cyfr_") || strings.HasPrefix(name, "cyfr-desktop_") {
 			lines = append(lines, fmt.Sprintf("%x  %s", sha256.Sum256(data), name))
 		}
 	}
@@ -112,12 +118,12 @@ func (r *binaryRelease) serve(t *testing.T) {
 		files["/"+r.version+"/"+name] = data
 	}
 	srv, _ := serveRelease(t, files)
-	savedChecksums, savedBinary, savedTrust := checksumsURLTemplate, binaryURLTemplate, TrustMaterial
+	savedChecksums, savedDownload, savedTrust := checksumsURLTemplate, downloadURLTemplate, TrustMaterial
 	t.Cleanup(func() {
-		checksumsURLTemplate, binaryURLTemplate, TrustMaterial = savedChecksums, savedBinary, savedTrust
+		checksumsURLTemplate, downloadURLTemplate, TrustMaterial = savedChecksums, savedDownload, savedTrust
 	})
 	checksumsURLTemplate = srv.URL + "/%s/checksums.txt"
-	binaryURLTemplate = srv.URL + "/%s/%s"
+	downloadURLTemplate = srv.URL + "/%s/%s"
 	TrustMaterial = func(context.Context) (root.TrustedMaterial, error) { return r.trusted, nil }
 }
 
@@ -214,5 +220,119 @@ func TestFetchBinaryRefusesWhatDoesNotVerify(t *testing.T) {
 	r.serve(t)
 	if got, err := FetchBinary(context.Background(), "0.9.0", "linux", "amd64"); err == nil || got != nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("FetchBinary without a bundle = %d bytes, %v; want a 404 refusal", len(got), err)
+	}
+}
+
+// The package a signed checksums.txt names answers its own bytes, on
+// either architecture, for a release and a pre-release alike.
+func TestFetchPackageAnswersTheVerifiedPackage(t *testing.T) {
+	for _, version := range []string{"0.9.0", "0.9.0-rc.1"} {
+		r := newBinaryRelease(t, version)
+		r.serve(t)
+		for _, goarch := range []string{"amd64", "arm64"} {
+			got, err := FetchPackage(context.Background(), version, goarch)
+			if err != nil {
+				t.Fatalf("FetchPackage %s %s: %v", version, goarch, err)
+			}
+			if want := "the app's package " + goarch + " " + version; string(got) != want {
+				t.Errorf("FetchPackage %s %s answered %q, want %q", version, goarch, got, want)
+			}
+		}
+	}
+}
+
+// An unsigned, wrong or missing package is refused, and none of it answered.
+func TestFetchPackageRefusesUnsignedWrongOrMissing(t *testing.T) {
+	const version = "0.9.0"
+	amd, arm := PackageName(version, "amd64"), PackageName(version, "arm64")
+	cases := []struct {
+		name       string
+		asked      string
+		unverified bool
+		edit       func(t *testing.T, r *binaryRelease)
+	}{
+		{"changed after signing", version, true, func(t *testing.T, r *binaryRelease) {
+			r.assets[amd] = []byte("attacker")
+		}},
+		{"the other architecture's package", version, true, func(t *testing.T, r *binaryRelease) {
+			r.assets[amd] = r.assets[arm]
+		}},
+		{"checksums.txt changed after signing", version, true, func(t *testing.T, r *binaryRelease) {
+			r.assets[amd] = []byte("attacker")
+			r.assets["checksums.txt"] = []byte(fmt.Sprintf("%x  %s\n", sha256.Sum256(r.assets[amd]), amd))
+		}},
+		{"signed by another workflow", version, true, func(t *testing.T, r *binaryRelease) {
+			r.signChecksums(t, "https://github.com/cyfrworks/cyfr/.github/workflows/test.yml@refs/tags/0.9.0", Issuer)
+		}},
+		{"signed for another tag", version, true, func(t *testing.T, r *binaryRelease) {
+			r.signChecksums(t, Identity("0.8.0"), Issuer)
+		}},
+		{"a bundle that is not a bundle", version, true, func(t *testing.T, r *binaryRelease) {
+			r.assets["checksums.txt"+BundleSuffix] = []byte("not a bundle")
+		}},
+		{"a release with no package", version, true, func(t *testing.T, r *binaryRelease) {
+			delete(r.assets, amd)
+			r.signChecksums(t, Identity(version), Issuer)
+		}},
+		{"not a release version", "0.9", true, func(*testing.T, *binaryRelease) {}},
+		{"unsigned", version, false, func(t *testing.T, r *binaryRelease) {
+			delete(r.assets, "checksums.txt"+BundleSuffix)
+		}},
+		{"named and missing", version, false, func(t *testing.T, r *binaryRelease) {
+			delete(r.assets, amd)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newBinaryRelease(t, version)
+			c.edit(t, r)
+			r.serve(t)
+			got, err := FetchPackage(context.Background(), c.asked, "amd64")
+			if got != nil {
+				t.Errorf("FetchPackage answered %d bytes", len(got))
+			}
+			switch {
+			case err == nil:
+				t.Error("FetchPackage refused nothing")
+			case c.unverified && !errors.Is(err, ErrUnverified):
+				t.Errorf("FetchPackage = %v, want ErrUnverified", err)
+			case !c.unverified && !strings.Contains(err.Error(), "404"):
+				t.Errorf("FetchPackage = %v, want a 404 refusal", err)
+			}
+		})
+	}
+}
+
+// The release sums, and attaches, exactly the packages FetchPackage asks
+// for by name.
+func TestTheReleaseShipsTheNamesFetchPackageAsks(t *testing.T) {
+	raw, err := os.ReadFile("../../.goreleaser.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type files struct {
+		Extra []struct {
+			Glob string `yaml:"glob"`
+		} `yaml:"extra_files"`
+	}
+	var config struct {
+		Checksum files `yaml:"checksum"`
+		Release  files `yaml:"release"`
+	}
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	const version = "0.9.0-rc.1"
+	want := []string{PackageName(version, "amd64"), PackageName(version, "arm64")}
+	for where, list := range map[string]files{"checksum": config.Checksum, "release": config.Release} {
+		var got []string
+		for _, f := range list.Extra {
+			if name, ok := strings.CutPrefix(f.Glob, "{{ .Env.RELEASE_PACKAGES_DIR }}/"); ok {
+				got = append(got, strings.ReplaceAll(name, "{{ .Version }}", version))
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf(".goreleaser.yml's %s names the packages %q, want %q", where, got, want)
+		}
 	}
 }
