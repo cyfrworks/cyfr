@@ -24,7 +24,7 @@ const COMPANY = "This CYFR requires company sign-in. Open its address in a brows
 const PASSKEY = HOME + "/login"
 const UNCLEARED = "The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."
 const UNFORGOTTEN = "The app locked, and could not clear the sign-in it kept on this computer. To clear it, press Connect to another CYFR, which clears it first."
-const OPEN = {home: HOME, next: "/"}
+const OPEN = {cyfr: HOME, next: "/"}
 // The passkey road, as main says it in the chooser's address.
 const ROAD = "#token=t&road=passkey"
 
@@ -120,7 +120,7 @@ test("on the passkey road the chooser stays with both ways on and the way to ano
 })
 
 test("the passkey's way on goes nowhere when its press is not answered with a way on", async () => {
-  for (const said of [{home: HOME, error: "It did not answer."}, {error: "CYFR locked. Connect again."}]) {
+  for (const said of [{cyfr: HOME, error: "It did not answer."}, {error: "CYFR locked. Connect again."}]) {
     const {$, went} = await chooser("", OPEN, said, ROAD)
     $("passkey").onclick()
     await settled()
@@ -153,13 +153,13 @@ test("a chooser told that the CYFR did not answer names it and offers it again",
 })
 
 test("Try again loads nothing until a Connect at that CYFR answered with a way on", async () => {
-  const local = {home: "http://localhost:4000", next: "/"}
-  for (const said of [{home: local.home, error: "The CYFR in /srv/cyfr does not answer."}, {error: "CYFR locked. Connect again."}]) {
+  const local = {cyfr: "http://localhost:4000", next: "/"}
+  for (const said of [{cyfr: local.cyfr, error: "The CYFR in /srv/cyfr does not answer."}, {error: "CYFR locked. Connect again."}]) {
     const {$, went} = await chooser("", local, said, ROAD + "&notice=unanswered")
     $("again").onclick()
     await settled()
     assert.deepEqual([went.byItself, went.pressed], [[], []], said.error)
-    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: local.home}]])
+    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: local.cyfr}]])
     assert.equal($("notice").textContent, said.error)
     assert.deepEqual([$("road").hidden, $("again").hidden, $("words").hidden], [false, false, false], "every way on stays")
   }
@@ -187,7 +187,7 @@ test("a reload and the history keep the road main said, and the address keeps no
 })
 
 test("as the app starts on the passkey road the CYFR remembered connects by itself, and main opens it", async () => {
-  const {$, went} = await chooser("", {home: HOME, resume: HOME}, OPEN, ROAD)
+  const {$, went} = await chooser("", {cyfr: HOME, resume: HOME}, OPEN, ROAD)
   await settled()
   assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME}]])
   assert.deepEqual([went.byItself, went.pressed], [[], []], "the window is main's to send to the root")
@@ -195,13 +195,13 @@ test("as the app starts on the passkey road the CYFR remembered connects by itse
 })
 
 test("on the six-word road a CYFR remembered waits for Connect", async () => {
-  const {$, went} = await chooser("", {home: HOME, resume: HOME}, OPEN)
+  const {$, went} = await chooser("", {cyfr: HOME, resume: HOME}, OPEN)
   assert.deepEqual(went.asked, [])
   assert.deepEqual([$("choose").hidden, $("address").value], [false, HOME])
 })
 
 test("a Connect the person makes on the passkey road leaves the opening to main", async () => {
-  const {$, went} = await chooser("", {home: HOME}, OPEN, ROAD)
+  const {$, went} = await chooser("", {cyfr: HOME}, OPEN, ROAD)
   assert.deepEqual(went.asked, [], "nothing by itself")
   $("connect").fire("submit")
   await settled()
@@ -209,7 +209,7 @@ test("a Connect the person makes on the passkey road leaves the opening to main"
 })
 
 test("a Connect main cleared the storage under keeps the run token", async () => {
-  const {$, went} = await chooser("", {home: HOME}, {error: "It did not answer."}, ROAD)
+  const {$, went} = await chooser("", {cyfr: HOME}, {error: "It did not answer."}, ROAD)
   $("connect").fire("submit")
   await settled()
   assert.equal(went.stored.get("token"), "t", "put back for a reload")
@@ -219,7 +219,7 @@ test("a Connect main cleared the storage under keeps the run token", async () =>
 })
 
 test("with a notice to show the chooser connects nothing by itself", async () => {
-  const {went} = await chooser("company", {home: HOME, resume: HOME}, OPEN, ROAD + "&notice=company")
+  const {went} = await chooser("company", {cyfr: HOME, resume: HOME}, OPEN, ROAD + "&notice=company")
   assert.deepEqual(went.asked, [])
   assert.deepEqual(went.byItself, [])
 })
@@ -244,7 +244,7 @@ test("with no CYFR open a notice shows on Connect, and a Connect the person make
 
 test("an answer to a Connect whose clear failed says the sentence on the form and goes nowhere", async () => {
   for (const hash of ["#token=t", ROAD]) {
-    const {$, went} = await chooser("", {home: HOME}, {home: HOME, notice: "uncleared"}, hash)
+    const {$, went} = await chooser("", {cyfr: HOME}, {cyfr: HOME, notice: "uncleared"}, hash)
     $("connect").fire("submit")
     await settled()
     assert.equal($("notice").textContent, UNCLEARED, hash)

@@ -268,6 +268,23 @@ func TestAHomeReadyForAnotherCYFROpensNothing(t *testing.T) {
 	}
 }
 
+// The chooser's answers and requests name a CYFR by the field its script
+// reads and sends, cyfr: the page and the service are one exchange.
+func TestTheChooserAndTheServiceNameACYFRAlike(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	a.directory.Store("https://accounts.example.com")
+	w := a.request(context.Background(), "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"}, nil)
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil || raw["cyfr"] != "https://cyfr.example.com" {
+		t.Fatalf("answered %s", w.Body)
+	}
+	for _, read := range []string{"a.cyfr", "{cyfr:asked.cyfr,"} {
+		if !strings.Contains(bootstrapScript, read) {
+			t.Fatalf("the chooser's script does not use %q", read)
+		}
+	}
+}
+
 // Another directory than cyfr.run is shown whole and approved once before
 // anything contacts it; a run that finds the one approved goes on at
 // once, and a CYFR that names another asks again.
@@ -287,10 +304,10 @@ func TestAnotherDirectoryIsApprovedBeforeAnythingContactsIt(t *testing.T) {
 	if got.Confirm != custom || got.Home != "https://cyfr.example.com" || got.Next != "" {
 		t.Fatalf("answered %+v", got)
 	}
-	if got := a.post(t, "/bootstrap/approve", map[string]string{"home": "https://cyfr.example.com", "directory": "https://cyfr.run"}); got.Error == "" {
+	if got := a.post(t, "/bootstrap/approve", map[string]string{"cyfr": "https://cyfr.example.com", "directory": "https://cyfr.run"}); got.Error == "" {
 		t.Fatalf("another directory than the one shown was approved: %+v", got)
 	}
-	if got := a.post(t, "/bootstrap/approve", map[string]string{"home": "https://cyfr.example.com", "directory": custom}); got.Error == "" {
+	if got := a.post(t, "/bootstrap/approve", map[string]string{"cyfr": "https://cyfr.example.com", "directory": custom}); got.Error == "" {
 		t.Fatalf("an approval was taken twice: %+v", got)
 	}
 	a.quiet(t)
@@ -299,7 +316,7 @@ func TestAnotherDirectoryIsApprovedBeforeAnythingContactsIt(t *testing.T) {
 	}
 
 	a.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
-	done := a.connect(t, "/bootstrap/approve", map[string]string{"home": "https://cyfr.example.com", "directory": custom})
+	done := a.connect(t, "/bootstrap/approve", map[string]string{"cyfr": "https://cyfr.example.com", "directory": custom})
 	if m := a.next(t); m.Type != TypeHome || m.Account != service.URL {
 		t.Fatalf("main heard %+v", m)
 	}
@@ -428,7 +445,7 @@ func TestALockBeforeTheFirstConnectionErasesTheKeyAndTheProof(t *testing.T) {
 	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"}); got.Confirm != accounts.URL() {
 		t.Fatalf("answered %+v", got)
 	}
-	done := a.connect(t, "/bootstrap/approve", map[string]string{"home": "https://cyfr.example.com", "directory": accounts.URL()})
+	done := a.connect(t, "/bootstrap/approve", map[string]string{"cyfr": "https://cyfr.example.com", "directory": accounts.URL()})
 	a.next(t)
 	a.ready("https://cyfr.example.com")
 	answered(t, done)
@@ -549,7 +566,7 @@ func TestAnApprovalEndsWhenTheCYFRNamesTheDefault(t *testing.T) {
 	first := newApp(t, dir, offline())
 	first.directory.Store(custom)
 	first.post(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
-	done := first.connect(t, "/bootstrap/approve", map[string]string{"home": "https://cyfr.example.com", "directory": custom})
+	done := first.connect(t, "/bootstrap/approve", map[string]string{"cyfr": "https://cyfr.example.com", "directory": custom})
 	first.next(t)
 	first.ready("https://cyfr.example.com")
 	answered(t, done)

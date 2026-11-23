@@ -7,14 +7,14 @@ let asked=null;
 function say(t){$("notice").textContent=t||""}
 function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
 function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.next&&(passkey||told));$("confirm").hidden=!asked;$("choose").hidden=!!asked||stay;$("road").hidden=!stay;
-if(asked){$("home").textContent=a.home;$("service").textContent=a.confirm}
-if(stay){$("open").textContent=a.home;$("passkey").hidden=$("either").hidden=$("another").hidden=!passkey;$("again").hidden=!passkey||!main.told.includes("unanswered");$("passkey").onclick=()=>onward(a.home,a.home+"/login");$("again").onclick=()=>onward(a.home,"/bootstrap/again");$("words").onclick=()=>location.assign(a.next)}
+if(asked){$("named").textContent=a.cyfr;$("service").textContent=a.confirm}
+if(stay){$("open").textContent=a.cyfr;$("passkey").hidden=$("either").hidden=$("another").hidden=!passkey;$("again").hidden=!passkey||!main.told.includes("unanswered");$("passkey").onclick=()=>onward(a.cyfr,a.cyfr+"/login");$("again").onclick=()=>onward(a.cyfr,"/bootstrap/again");$("words").onclick=()=>location.assign(a.next)}
 else if(a.next)location.replace(a.next)}
 function connected(a){if(!(passkey&&a.next))show(a,notices[a.notice])}
-function onward(home,to){say("Connecting\u2026");post("/bootstrap/connect",{address:home}).then(a=>a.next?location.assign(to):say(a.error))}
+function onward(at,to){say("Connecting\u2026");post("/bootstrap/connect",{address:at}).then(a=>a.next?location.assign(to):say(a.error))}
 function connect(address){say("Connecting\u2026");post("/bootstrap/connect",{address}).then(connected)}
-post("/bootstrap/state",{}).then(a=>{if(a.home)$("address").value=a.home;const told=main.told.map(n=>notices[n]).filter(Boolean).join(" ").replace("{CYFR}",a.home||"");show(a,told);if(passkey&&a.resume&&!told)connect(a.resume)});
+post("/bootstrap/state",{}).then(a=>{if(a.cyfr)$("address").value=a.cyfr;const told=main.told.map(n=>notices[n]).filter(Boolean).join(" ").replace("{CYFR}",a.cyfr||"");show(a,told);if(passkey&&a.resume&&!told)connect(a.resume)});
 $("connect").addEventListener("submit",e=>{e.preventDefault();connect($("address").value)});
 $("another").addEventListener("click",()=>location.assign("/bootstrap/another"));
-$("approve").addEventListener("click",()=>{say("Connecting\u2026");post("/bootstrap/approve",{home:asked.home,directory:asked.confirm}).then(connected)});
+$("approve").addEventListener("click",()=>{say("Connecting\u2026");post("/bootstrap/approve",{cyfr:asked.cyfr,directory:asked.confirm}).then(connected)});
 $("decline").addEventListener("click",()=>{show({});say("Nothing was sent to that account service.")});

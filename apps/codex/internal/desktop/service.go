@@ -274,7 +274,7 @@ func (s *Service) finish() {
 type request struct {
 	Token     string `json:"token"`
 	Address   string `json:"address,omitempty"`
-	Home      string `json:"home,omitempty"`
+	Home      string `json:"cyfr,omitempty"`
 	Directory string `json:"directory,omitempty"`
 }
 
@@ -287,7 +287,7 @@ type request struct {
 // Notice names a sentence of the chooser's own, the one main's notices
 // name.
 type answer struct {
-	Home    string `json:"home,omitempty"`
+	Home    string `json:"cyfr,omitempty"`
 	Confirm string `json:"confirm,omitempty"`
 	Next    string `json:"next,omitempty"`
 	Resume  string `json:"resume,omitempty"`
