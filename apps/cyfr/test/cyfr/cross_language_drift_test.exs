@@ -664,13 +664,15 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
        ~w(max_line_bytes valid invalid)},
       {"apps/prima/test/prima/runner_control_test.exs",
-       ~w(version max_line_bytes max_input_bytes max_open valid invalid)}
+       ~w(version max_line_bytes max_input_bytes max_open valid invalid)},
+      {"tests/locus-runtime-image/namespace_test.py", ~w(valid)}
     ],
     "runner_relay.json" => [
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
        ~w(attempt initial_credit exchange refusals)},
       {"apps/prima/test/prima/runner_relay_test.exs",
-       ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)},
+      {"tests/locus-runtime-image/namespace_test.py", ~w(exchange)}
     ],
     "sign_in.json" => [
       {"apps/codex/desktop/test/main.test.mjs", ~w(home requests)},

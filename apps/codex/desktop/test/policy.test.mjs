@@ -8,7 +8,7 @@ import {test} from "node:test"
 import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 import {
   LOOPBACK, SWITCHES, accountLoad, contentNavigation, contentOpen, documentHeaders, grants, homeMessage, printed, readHop,
-  relyingParty, unlistedSwitch
+  relyingParty, screenProject, unlistedSwitch
 } from "../src/policy.js"
 
 const processes = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
@@ -184,8 +184,9 @@ test("the account window's document frames nothing, keeping its own policies, wh
   }
 })
 
-test("the app takes its route's switches and refuses every other switch", () => {
-  assert.deepEqual(SWITCHES, ["proxy-server", "host-resolver-rules"])
+test("the app takes its route's switches and the screen's project, and refuses every other switch", () => {
+  assert.deepEqual(SWITCHES, ["proxy-server", "host-resolver-rules", "screen-project"])
+  assert.equal(unlistedSwitch(["--screen-project=/home/ana/cyfr"], "linux"), null)
   assert.equal(unlistedSwitch([], "linux"), null)
   assert.equal(unlistedSwitch(["--proxy-server=socks5://127.0.0.1:1055", "--host-resolver-rules=MAP * ~NOTFOUND"], "linux"), null)
   assert.equal(unlistedSwitch(["https://cyfr.example.com"], "linux"), null, "an address is no switch")
@@ -201,6 +202,15 @@ test("the app takes its route's switches and refuses every other switch", () => 
     assert.equal(unlistedSwitch(args, platform), name, args.join(" "))
   }
   assert.equal(unlistedSwitch(["--", "--no-sandbox"], "linux"), null, "after --, no switch")
+})
+
+test("only --screen-project makes the app a screen, and only for a project it names explicitly", () => {
+  assert.equal(screenProject(false, "", "linux"), "", "no switch, no screen")
+  assert.equal(screenProject(true, "/home/ana/cyfr", "linux"), "/home/ana/cyfr")
+  for (const value of ["", "cyfr", "./cyfr", "~/cyfr", "/home/ana/../bob/cyfr", "/home/ana/./cyfr"]) {
+    assert.equal(screenProject(true, value, "linux"), null, `--screen-project=${value}`)
+  }
+  for (const platform of ["darwin", "win32"]) assert.equal(screenProject(true, "/home/ana/cyfr", platform), null, platform)
 })
 
 test("home names a CYFR and an https account service", () => {

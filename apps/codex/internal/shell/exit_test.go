@@ -183,6 +183,8 @@ func TestExit_LocksInEveryState(t *testing.T) {
 			if inFlight == nil && s.making != nil {
 				recovery = s.making.key
 			}
+			// Nothing here takes the shell: a row in flight holds it, and the
+			// exit's lock must cut that work, its gate never let through.
 			wasOpen, restarts, notice := s.Unlocked(), b.restarts.Load(), s.shown.Load().view.Notice
 			s.genMu.Lock()
 			began := s.gen
@@ -205,9 +207,10 @@ func TestExit_LocksInEveryState(t *testing.T) {
 				t.Fatal("the recovery key is still in memory")
 			}
 			if !wasOpen {
-				// Restarting the browser from its own exit would never end.
-				if b.restarts.Load() != restarts || (inFlight == nil && s.notice != notice) {
-					t.Fatalf("a locked device's exit restarted the browser or took its sentence: %q", s.notice)
+				// A locked device's exit hides once, as every lock does, and
+				// keeps its sentence.
+				if b.restarts.Load() != restarts+1 || (inFlight == nil && s.notice != notice) {
+					t.Fatalf("a locked device's exit hid %d times (want 1) or took its sentence: %q", b.restarts.Load()-restarts, s.notice)
 				}
 				return
 			}

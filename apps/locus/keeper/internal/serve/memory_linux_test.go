@@ -86,6 +86,7 @@ func TestASpawnAskingForABoundIsRefusedWhereNoneCanBeEnforced(t *testing.T) {
 		log:     logx.NewWriter(os.Stderr, "cyfr-locus", false),
 		pools:   map[string]*pool.Pool{spec.Name: pool.New(spec)},
 		spawns:  map[string]*spawn{},
+		places:  map[string]*place{"41": {whose: protocol.Whose{Kind: protocol.KindRun}}},
 		channel: os.NewFile(uintptr(fds[0]), "channel"),
 	}
 	defer s.channel.Close()
@@ -198,37 +199,45 @@ func TestAnExitForAnotherReasonIsNotAMemoryEnd(t *testing.T) {
 	}
 }
 
-func (k *keeper) measure(t *testing.T, spawnID string) map[string]any {
+func (k *keeper) measure(t *testing.T, place string) map[string]any {
 	t.Helper()
-	id := "measure-" + spawnID
-	k.s.handle(&protocol.Request{V: protocol.Version, Type: protocol.TypeMeasure, ID: id, SpawnID: spawnID})
+	id := "measure-" + place
+	k.s.handle(parsed(t, `{"v":3,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
 	m := k.reply(t)
 	if _, named := m["spawn_id"]; named || m["id"] != id {
-		t.Fatalf("measuring %s answered %v", spawnID, m)
+		t.Fatalf("measuring %s answered %v", place, m)
 	}
 	return m
 }
 
-// A spawn the keeper does not hold, and one whose group cannot be read, are
-// refused a reading under the measure's own id, and neither is a zero. It
-// needs no root.
-func TestASpawnWithoutAReadingIsUnmeasured(t *testing.T) {
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
-	if err != nil {
-		t.Fatal(err)
+// measuredAtLeast reads every spawn's group, as the reader does each second,
+// and measures the place until it answers at least least bytes: the kernel
+// folds memory.stat's counts in batches.
+func (k *keeper) measuredAtLeast(t *testing.T, place string, least float64) map[string]any {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		k.s.read()()
+		m := k.measure(t, place)
+		if bytes, ok := m["bytes"].(float64); ok && m["type"] == protocol.TypeMeasured && bytes >= least {
+			return m
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("measuring %s answered %v, never %.0f bytes", place, m, least)
+		}
 	}
-	ours, theirs := os.NewFile(uintptr(fds[0]), "channel"), os.NewFile(uintptr(fds[1]), "client-channel")
-	t.Cleanup(func() { ours.Close(); theirs.Close() })
-	unreadable := &spawn{id: strings.Repeat("a", 32), group: &cgroup.Group{}}
-	k := &keeper{
-		s: &server{
-			log:     logx.NewWriter(os.Stderr, "cyfr-locus", false),
-			spawns:  map[string]*spawn{unreadable.id: unreadable},
-			channel: ours,
-		},
-		channel: protocol.NewLineReader(theirs),
+}
+
+// A place the keeper does not hold, and one whose spawn's group cannot be
+// read, are refused a reading under the measure's own id, and neither is a
+// zero. It needs no root.
+func TestAPlaceWithoutAReadingIsUnmeasured(t *testing.T) {
+	k, _ := placesKeeper(t)
+	if placed := k.place(t, "unread", protocol.KindRun); placed["type"] != protocol.TypePlaced {
+		t.Fatalf("place: %v", placed)
 	}
-	for _, id := range []string{unreadable.id, strings.Repeat("b", 32)} {
+	k.spawnedIn(t, "unread", &spawn{id: strings.Repeat("a", 32), group: &cgroup.Group{}})
+	k.s.read()()
+	for _, id := range []string{"unread", "absent"} {
 		m := k.measure(t, id)
 		if _, zero := m["bytes"]; zero || m["type"] != protocol.TypeError || m["code"] != protocol.CodeUnmeasured {
 			t.Fatalf("%s without a reading answered %v", id, m)
@@ -253,6 +262,7 @@ func TestTwoSpawnsOfOneUIDAreMeasuredApartWithTheirTmpfs(t *testing.T) {
 	file := fmt.Sprintf("/dev/shm/cyfr-measured-%d", os.Getpid())
 	t.Cleanup(func() { _ = os.Remove(file) })
 
+	// Each spawn's place is its request's id.
 	idle, idleConn := k.spawnKept(t, "48", "echo ready; exec sleep 60", path, uid)
 	writer, writerConn := k.spawnKept(t, "49", "head -c 25165824 /dev/zero > "+file+" && echo ready; exec sleep 60", path, uid)
 	for _, rc := range []*relayConn{idleConn, writerConn} {
@@ -260,28 +270,18 @@ func TestTwoSpawnsOfOneUIDAreMeasuredApartWithTheirTmpfs(t *testing.T) {
 	}
 
 	used := map[string]float64{}
-	for id, least := range map[string]float64{idle: 1, writer: 24 * mib} {
-		// The kernel folds memory.stat's counts in batches.
-		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-			m := k.measure(t, id)
-			if bytes, ok := m["bytes"].(float64); ok && m["type"] == protocol.TypeMeasured && bytes >= least {
-				used[id] = bytes
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("measuring %s answered %v, never %.0f bytes", id, m, least)
-			}
-		}
+	for place, least := range map[string]float64{"48": 1, "49": 24 * mib} {
+		used[place] = k.measuredAtLeast(t, place, least)["bytes"].(float64)
 	}
-	if used[idle] >= 16*mib || used[writer] < 24*mib || used[writer] >= 40*mib {
-		t.Fatalf("the idle spawn uses %.0f bytes and the one that wrote 24 MiB of tmpfs %.0f", used[idle], used[writer])
+	if used["48"] >= 16*mib || used["49"] < 24*mib || used["49"] >= 40*mib {
+		t.Fatalf("the idle spawn uses %.0f bytes and the one that wrote 24 MiB of tmpfs %.0f", used["48"], used["49"])
 	}
 
 	k.release(t, idle)
 	k.release(t, writer)
 	k.replies(t, idle, writer)
-	if m := k.measure(t, writer); m["code"] != protocol.CodeUnmeasured {
-		t.Fatalf("a retired spawn was measured %v", m)
+	if m := k.measure(t, "49"); m["code"] != protocol.CodeUnmeasured {
+		t.Fatalf("a retired spawn's place was measured %v", m)
 	}
 }
 
@@ -327,9 +327,10 @@ func TestAFileReaderIsNotChargedItsCacheAndATmpfsWriterIsChargedItsPages(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
-		k.s.mu.Lock()
-		k.s.spawns[id] = &spawn{id: id, group: group}
-		k.s.mu.Unlock()
+		if placed := k.place(t, id, protocol.KindProgram); placed["type"] != protocol.TypePlaced {
+			t.Fatalf("place %s: %v", id, placed)
+		}
+		k.spawnedIn(t, id, &spawn{id: id, group: group})
 		t.Cleanup(func() {
 			k.s.mu.Lock()
 			delete(k.s.spawns, id)
@@ -361,6 +362,7 @@ func TestAFileReaderIsNotChargedItsCacheAndATmpfsWriterIsChargedItsPages(t *test
 		}
 		// Time to be taken as hot by a reclaim that ages what is mapped.
 		time.Sleep(time.Second)
+		k.s.read()()
 		m := k.measure(t, id)
 		bytes, ok := m["bytes"].(float64)
 		if !ok {

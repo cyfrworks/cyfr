@@ -29,8 +29,9 @@ on:
       - 'docker-entrypoint.sh'
       - 'tests/fixtures/**'
       # desktop-native runs the installed CYFR app's home-free smoke,
-      # tests/desktop-proof/native/smoke.sh, and screen-idle the screen's
-      # idle check, tests/desktop-proof/screen/idle.sh.
+      # tests/desktop-proof/native/smoke.sh, and the app as the box's
+      # screen, tests/desktop-proof/screen/app.sh; screen-idle the
+      # screen's idle check, tests/desktop-proof/screen/idle.sh.
       - 'tests/desktop-proof/**'
       # The app bundles the account pages' sign-in reader
       # (apps/codex/desktop/src/policy.js).
@@ -345,6 +346,12 @@ jobs:
       - name: Install and smoke the app (Linux)
         if: runner.os == 'Linux'
         run: bash tests/desktop-proof/native/linux.sh apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb
+
+      # The app as the box's screen, under Ubuntu 26.04's labwc in a
+      # container (tests/desktop-proof/screen/app.sh).
+      - name: The app as the box's screen (Linux)
+        if: runner.os == 'Linux'
+        run: bash tests/desktop-proof/screen/app.sh apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb
 
       - name: Install the app (macOS)
         if: runner.os == 'macOS'

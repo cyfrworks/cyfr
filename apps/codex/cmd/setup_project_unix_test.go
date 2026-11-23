@@ -1203,7 +1203,7 @@ func setUpFromTheApp(t *testing.T, svc *desktop.Service, folder string) appSetup
 // Try again then sets up the next folder picked.
 func TestTheAppsSetUpAndStartSetsUpTheFolderPicked(t *testing.T) {
 	p := newWorkProject(t)
-	svc := newDesktopService(t.Context(), t.TempDir(), func(desktop.Message) error { return nil })
+	svc := newDesktopService(t.Context(), t.TempDir(), func(desktop.Message) {})
 	t.Cleanup(svc.End)
 	home := t.TempDir()
 	t.Setenv("HOME", home)

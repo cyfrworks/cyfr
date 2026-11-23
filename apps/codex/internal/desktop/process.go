@@ -13,9 +13,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/signal"
 	"regexp"
 	"slices"
 	"sync"
+	"syscall"
 )
 
 // Version is the one version of the messages: every message carries it,
@@ -41,6 +43,10 @@ const (
 	// if any, as home names one: main's lock waits for it, and main keeps
 	// to that CYFR, or none, from then on.
 	TypeLocked = "locked"
+	// Ending says the box's screen shell is ending: its last lock says it
+	// in place of locked, and the shell says nothing after it. main closes
+	// its windows at once and ends, opening nothing more for it.
+	TypeEnding = "ending"
 )
 
 // The messages the app's main process sends cyfr.
@@ -70,6 +76,7 @@ var fields = map[string]struct{ required, optional []string }{
 	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "road"}},
 	TypeOpened:       {required: []string{"home"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
+	TypeEnding:       {},
 	TypeHomeReady:    {required: []string{"home", "attempt"}},
 	TypeHomeFailed:   {required: []string{"home", "attempt"}},
 	TypeLock:         {},
@@ -221,27 +228,74 @@ func (m Message) object() (map[string]any, error) {
 	return o, nil
 }
 
-// Writer sends cyfr's messages to main, one line each, whole.
+// Writer sends cyfr's messages to main, one line each, whole, in the
+// order they were given, by one writer of its own: Queue gives it a line
+// and returns at once, so nothing that tells main waits on main reading
+// its pipe. Once a write fails (main has gone, or its pipe ended), every
+// later line is dropped and gone is called, once: what made the writer
+// ends, as the app it talks to has.
 type Writer struct {
-	mu sync.Mutex
-	w  io.Writer
+	w    io.Writer
+	gone func()
+
+	mu     sync.Mutex
+	queue  [][]byte
+	failed bool
+	wake   chan struct{}
 }
 
-// NewWriter writes to w, main's end of the private pipe.
-func NewWriter(w io.Writer) *Writer { return &Writer{w: w} }
+// NewWriter writes to w, main's end of the private pipe, calling gone (nil
+// calls nothing) at the first write that fails. A write to a pipe main
+// closed is an error then, not the end of this process: SIGPIPE is
+// ignored, so a lock goes on to end its sessions at the CYFR when main
+// has gone.
+func NewWriter(w io.Writer, gone func()) *Writer {
+	signal.Ignore(syscall.SIGPIPE)
+	wr := &Writer{w: w, gone: gone, wake: make(chan struct{}, 1)}
+	go wr.write()
+	return wr
+}
 
-// Send writes m as one line.
-func (w *Writer) Send(m Message) error {
-	o, err := m.object()
-	if err != nil {
-		return err
-	}
-	line, err := json.Marshal(o)
+// Queue gives m to be written after every line given before it and
+// returns at once; it refuses what is not one of cyfr's messages.
+func (w *Writer) Queue(m Message) error {
+	line, err := encode(m)
 	if err != nil {
 		return err
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	_, err = w.w.Write(append(line, '\n'))
-	return err
+	w.queue = append(w.queue, line)
+	w.mu.Unlock()
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// write writes what was given, in order, for as long as the process runs.
+func (w *Writer) write() {
+	for range w.wake {
+		w.mu.Lock()
+		lines := w.queue
+		w.queue = nil
+		w.mu.Unlock()
+		for _, line := range lines {
+			if !w.failed {
+				_, err := w.w.Write(append(line, '\n'))
+				if w.failed = err != nil; w.failed && w.gone != nil {
+					w.gone()
+				}
+			}
+		}
+	}
+}
+
+// encode is m as one line, refused where it is not one of cyfr's messages.
+func encode(m Message) ([]byte, error) {
+	o, err := m.object()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(o)
 }

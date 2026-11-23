@@ -59,10 +59,18 @@ defmodule Locus.Runtime.WorkerService do
   The attempts an ended report would have named lapse on their leases,
   and the service logs each runner whose report it ended. A `start` none
   of which reached the runner it was given ran nothing, and is sent once
-  more, to another runner (`Locus.Runtime.RunnerProcess.assign/5`). A
-  `start` no runner can be found for answers `{:error, :unavailable}`,
-  and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
-  with the keeper's account of why; the listener refuses either `503`,
+  more, to another runner (`Locus.Runtime.RunnerProcess.assign/6`). A
+  `start` has one deadline, five seconds from its call, read once as the
+  call is made: every wait inside it, each assign and the one more, ends
+  by then, and once it has passed no runner is taken and nothing of its
+  work is sent, and it answers `{:error, :unavailable}`. Its caller waits
+  past the deadline for that answer, so nothing is sent after the caller
+  was answered. A runner whose assign went unanswered, or was answered
+  past the deadline, is retired, since whose its place is cannot be
+  known. A `start` no runner can be found for answers `{:error,
+  :unavailable}`, and while the keeper refuses runners `{:error,
+  {:unavailable, sentence}}` with the keeper's account of why; the
+  listener refuses either `503`,
   the second naming the sentence. The pool may hand out a runner whose
   clean completion it has read and sent here but the service has not yet
   read: that assignment is forgotten then, as its completion would forget
@@ -135,6 +143,11 @@ defmodule Locus.Runtime.WorkerService do
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @remembered 10_000
   @max_report_attempts Prima.WorkerWire.max_report_attempts()
+  # The bound of a start, and the room past it for the service's answer:
+  # a runner's handle answers an assign by the deadline, or half a second
+  # past it is failed (`Locus.Runtime.RunnerProcess`).
+  @start_ms 5_000
+  @answer_ms 1_000
 
   @doc false
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -142,7 +155,13 @@ defmodule Locus.Runtime.WorkerService do
   @impl Prima.WorkerAPI
   def start(token, input, sealed_keys)
       when is_binary(token) and is_binary(input) and is_binary(sealed_keys) do
-    GenServer.call(__MODULE__, {:start, token, input, sealed_keys, Subtree.caller()})
+    deadline = System.monotonic_time(:millisecond) + @start_ms
+
+    GenServer.call(
+      __MODULE__,
+      {:start, token, input, sealed_keys, Subtree.caller(), deadline},
+      @start_ms + @answer_ms
+    )
   end
 
   @impl Prima.WorkerAPI
@@ -189,7 +208,7 @@ defmodule Locus.Runtime.WorkerService do
   end
 
   @impl true
-  def handle_call({:start, token, input, sealed_keys, caller}, _from, state) do
+  def handle_call({:start, token, input, sealed_keys, caller, deadline}, _from, state) do
     with {:ok, assignment} <- Assignment.read(token),
          true <- assignment.service == state.service and assignment.boot == state.boot,
          true <- Prima.Digest.sha256(input) == assignment.input_digest,
@@ -199,7 +218,7 @@ defmodule Locus.Runtime.WorkerService do
            attempt ==
              assignment |> Map.take(@attempt_fields) |> Map.put(:service, state.service),
          {:ok, %{} = _decoded} <- Jason.decode(input) do
-      start_pooled(state, token, assignment, input, keys, caller)
+      start_pooled(state, token, assignment, input, keys, caller, deadline)
     else
       _refused -> {:reply, {:error, :malformed}, state}
     end
@@ -313,8 +332,8 @@ defmodule Locus.Runtime.WorkerService do
     status
     |> Map.update(:state, nil, &Map.delete(&1, :credentials))
     |> Map.replace_lazy(:message, fn
-      {:start, _token, _input, _sealed_keys, caller} ->
-        {:start, :redacted, :redacted, :redacted, caller}
+      {:start, _token, _input, _sealed_keys, caller, deadline} ->
+        {:start, :redacted, :redacted, :redacted, caller, deadline}
 
       message ->
         message
@@ -343,17 +362,17 @@ defmodule Locus.Runtime.WorkerService do
   # Starting
   # ---------------------------------------------------------------------------
 
-  defp start_pooled(state, token, assignment, input, keys, caller, resend? \\ true) do
+  defp start_pooled(state, token, assignment, input, keys, caller, deadline, resend? \\ true) do
     execution_id = assignment.execution_id
 
     if Map.has_key?(state.executions, execution_id) do
       {:reply, {:error, :malformed}, state}
     else
-      case RunnerPool.take(RunnerPool, assignment.athanor_id, execution_id) do
+      case take(assignment, deadline) do
         {:ok, pid, runner} ->
           state = completed_unread(state, pid, runner, execution_id)
 
-          case assign(state, pid, token, input, keys) do
+          case assign(state, pid, token, input, keys, deadline) do
             :ok ->
               Process.monitor(pid)
               {started, state} = next_seq(state)
@@ -390,7 +409,7 @@ defmodule Locus.Runtime.WorkerService do
               )
 
               :ok = RunnerPool.taint(RunnerPool, pid, 0)
-              start_pooled(state, token, assignment, input, keys, caller, false)
+              start_pooled(state, token, assignment, input, keys, caller, deadline, false)
 
             {:error, reason} ->
               Logger.error(
@@ -412,6 +431,13 @@ defmodule Locus.Runtime.WorkerService do
           {:reply, {:error, :unavailable}, state}
       end
     end
+  end
+
+  # A runner for the start while its deadline has not passed.
+  defp take(assignment, deadline) do
+    if System.monotonic_time(:millisecond) < deadline,
+      do: RunnerPool.take(RunnerPool, assignment.athanor_id, assignment.execution_id),
+      else: {:error, :past_deadline}
   end
 
   # A runner the service still holds an assignment on has completed it
@@ -481,8 +507,8 @@ defmodule Locus.Runtime.WorkerService do
   # The assign as the protocol spells it, the runner's relay bound to its
   # attempt first; a value the protocol refuses (the input past its bound)
   # is the caller's, and refuses the start.
-  defp assign(state, pid, token, input, keys) do
-    RunnerProcess.assign(pid, token, input, keys, state.credentials.host_url)
+  defp assign(state, pid, token, input, keys, deadline) do
+    RunnerProcess.assign(pid, token, input, keys, state.credentials.host_url, deadline)
   rescue
     ArgumentError -> {:error, :malformed}
   end

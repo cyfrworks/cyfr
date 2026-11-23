@@ -194,9 +194,10 @@ func TestEverySpawnSetsItsEgressBeforeItStartsAndClearsItWhenRetired(t *testing.
 	}
 }
 
-// A spawn whose egress the guard does not confirm is refused, its uid
-// back in the pool; one whose hosts resolve to nothing is refused before
-// the guard is asked anything.
+// A spawn whose egress the guard does not confirm is refused under the
+// spawn id its uid was taken for, and released, its uid back in the pool;
+// one whose hosts resolve to nothing is refused before the guard is asked
+// anything.
 func TestASpawnTheGuardDoesNotConfirmIsRefused(t *testing.T) {
 	k := boundedKeeper(t)
 	g := &recordingGuard{fail: true}
@@ -205,39 +206,30 @@ func TestASpawnTheGuardDoesNotConfirmIsRefused(t *testing.T) {
 
 	req := spawnRequest(t, k.attach, "3", "sleep 60", map[string]string{}, false, 64<<20)
 	req.Hosts = []string{"api.example.com"}
-	k.s.handleSpawn(req)
-	if r := k.reply(t); r["type"] != protocol.TypeError || r["code"] != protocol.CodeGuardUnavailable || r["id"] != "3" {
-		t.Fatalf("answered %v", r)
-	}
+	k.handleSpawn(t, req)
+	k.expect(t, protocol.NewReleased(k.refusedMade(t, "3", protocol.CodeGuardUnavailable)))
 	unresolved := spawnRequest(t, k.attach, "4", "sleep 60", map[string]string{}, false, 64<<20)
 	unresolved.Hosts = []string{"absent.example.com"}
 	asked := len(g.taken())
-	k.s.handleSpawn(unresolved)
+	k.handleSpawn(t, unresolved)
 	if r := k.reply(t); r["type"] != protocol.TypeError || r["code"] != protocol.CodeHostsUnresolved || r["id"] != "4" {
 		t.Fatalf("answered %v", r)
 	}
 	if len(g.taken()) != asked {
 		t.Fatal("the guard was asked about a spawn whose hosts resolve to nothing")
 	}
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		k.s.mu.Lock()
-		st := k.s.pools["runner"].Stats()
-		k.s.mu.Unlock()
-		if st.Free == st.Size {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the refused spawn's uid is not back in the pool: %+v", st)
-		}
-		time.Sleep(20 * time.Millisecond)
+	k.s.mu.Lock()
+	st := k.s.pools["runner"].Stats()
+	k.s.mu.Unlock()
+	if st.Free != st.Size || st.Quarantined != 0 {
+		t.Fatalf("the refused spawn's uid is not back in the pool once it was released: %+v", st)
 	}
 }
 
 // started has the keeper start req and answers its spawn id and uid.
 func (k *keeper) started(t *testing.T, req *protocol.Request) (string, int) {
 	t.Helper()
-	k.s.handleSpawn(req)
+	k.handleSpawn(t, req)
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned || spawned["id"] != req.ID {
 		t.Fatalf("spawn %s answered %v", req.ID, spawned)
@@ -264,7 +256,7 @@ func TestAPooledAdmissionTheGuardDidNotConfirmIsCleared(t *testing.T) {
 	k.s.guard = g
 	req := spawnRequest(t, k.attach, "p", "sleep 60", map[string]string{}, false, 64<<20)
 	req.Hosts = []string{"api.example.com"}
-	k.s.handleSpawn(req)
+	k.handleSpawn(t, req)
 	if r := k.reply(t); r["code"] != protocol.CodeGuardUnavailable {
 		t.Fatalf("answered %v", r)
 	}
@@ -284,7 +276,7 @@ func TestAKeptAdmissionTheGuardDidNotConfirmIsCleared(t *testing.T) {
 	}
 	req := keptRequest(t, k.attach, "k", "sleep 60", path, testKeptFirst, nil)
 	req.Hosts = []string{"api.example.com"}
-	k.s.handleSpawn(req)
+	k.handleSpawn(t, req)
 	if r := k.reply(t); r["code"] != protocol.CodeGuardUnavailable {
 		t.Fatalf("answered %v", r)
 	}

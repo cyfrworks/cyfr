@@ -3,24 +3,20 @@
 
 //go:build linux
 
-// Command cyfr-browser drives Aqua's browser: a headless Chrome with its
-// profile in a kept home. It is the command of a `driven` program row,
+// Command cyfr-browser drives Aqua's browser: Chromium's headless shell
+// with its profile in a kept home. It is the command of a `driven` program row,
 // which the backends service runs on a pseudo-terminal under the home's
 // uid; its one host, Opus.Browser, speaks framed messages to it over that
 // terminal's bytes, and it speaks the Chrome DevTools Protocol to Chrome
 // over Chrome's debugging pipe, which never leaves the box. No debugging
 // port is ever opened.
 //
-//	cyfr-browser [--chrome PATH | --source URL --storage URL] [--net-log PATH] [--chunk BYTES] [--keep-ms MS]
+//	cyfr-browser [--chrome PATH] [--net-log PATH] [--chunk BYTES] [--keep-ms MS]
 //
-// Chrome is not in the image: the driver fetches it into the kept home
-// and starts the one there (fetch.go), the version Chrome for Testing's
-// list names, from Google's storage; --source and --storage name another
-// list and storage, which only tests pass. --chrome starts the Chrome at
-// PATH and fetches nothing. --net-log has Chrome log its network to PATH,
-// which only tests pass. A home
-// that holds no Chrome and cannot fetch one says hello with the error
-// that the browser could not be downloaded.
+// It starts the image's Chromium headless shell, Debian's, by its
+// absolute path (Dockerfile.locus), and fetches nothing; --chrome starts
+// the Chrome at PATH instead. --net-log has Chrome log its network to PATH, which only
+// tests pass.
 //
 // The framing and its messages are defined in
 // tests/fixtures/browser_frames.json (its "comment"). The driver puts its
@@ -65,6 +61,10 @@ import (
 const (
 	defaultChunk  = 49152
 	defaultKeepMS = 120000
+	// chromium is the image's Chromium headless shell: the browser engine
+	// with no sign-in, sync, component updater or session restore of its
+	// own, which the full browser has and reaches Google for at start.
+	chromium = "/usr/lib/chromium/chromium-headless-shell"
 	// startWait bounds Chrome's first answer.
 	startWait = 30 * time.Second
 	// closeWait bounds Chrome's own shutdown before it is killed.
@@ -79,19 +79,23 @@ func main() {
 
 func run(args []string) int {
 	flags := flag.NewFlagSet("cyfr-browser", flag.ContinueOnError)
-	chrome := flags.String("chrome", "", "Chrome's binary, started in place of the home's, fetching nothing")
-	source := flags.String("source", defaultSource, "the list naming the current stable's version")
-	storage := flags.String("storage", defaultStorage, "the storage Chrome for Testing's archives are fetched from")
+	chrome := flags.String("chrome", chromium, "Chrome's binary")
 	chunk := flags.Int("chunk", defaultChunk, "bytes of response text one res frame carries")
 	keepMS := flags.Int64("keep-ms", defaultKeepMS, "milliseconds an unacknowledged response is kept")
 	netLog := flags.String("net-log", "", "a file Chrome logs its network to")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 || *chunk < 1 || *chunk > maxChunk || *keepMS < 1 || *source == "" || *storage == "" {
-		fmt.Fprintf(os.Stderr, "usage: cyfr-browser [--chrome PATH | --source URL --storage URL] [--chunk 1-%d] [--keep-ms MS]\n", maxChunk)
+	if flags.NArg() != 0 || *chunk < 1 || *chunk > maxChunk || *keepMS < 1 || *chrome == "" {
+		fmt.Fprintf(os.Stderr, "usage: cyfr-browser [--chrome PATH] [--net-log PATH] [--chunk 1-%d] [--keep-ms MS]\n", maxChunk)
 		return 2
 	}
+	// The end is taken before anything is announced: a TERM that comes
+	// while Chrome starts, or just after the hello, is held until the
+	// serve loop takes it, and Chrome is then closed and the bye said.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, unix.SIGTERM, unix.SIGHUP)
+	defer signal.Stop(stop)
 	if err := makeRaw(int(os.Stdin.Fd())); err != nil {
 		fmt.Fprintln(os.Stderr, "cyfr-browser: its terminal:", err)
 		return 1
@@ -99,35 +103,33 @@ func run(args []string) int {
 	s := newSlot(os.Stdout, *chunk, time.Duration(*keepMS)*time.Millisecond)
 	hello := helloMessage{T: "hello", V: 1, Chunk: *chunk, KeepMS: *keepMS}
 	b := newBrowser()
-	path, release, err := chromePath(*chrome, *source, *storage)
-	if err != nil {
-		switch {
-		case errors.Is(err, errNotDownloaded), errors.Is(err, errStillDownloading):
-			hello.Error = err.Error()
-		default:
-			hello.Error = "The browser could not start: " + err.Error() + "."
-		}
-		_ = s.write(hello)
-		return 1
-	}
-	defer release()
-	var logging []string
-	if *netLog != "" {
-		logging = []string{"--log-net-log=" + *netLog, "--net-log-capture-mode=Default"}
-	}
-	chromium, err := startChrome(path, b, logging)
+	home, err := browserHome()
 	if err != nil {
 		hello.Error = "The browser could not start: " + err.Error() + "."
 		_ = s.write(hello)
 		return 1
 	}
-	defer chromium.close()
-	if err := s.write(hello); err != nil {
+	removeLeftovers(home, os.Stderr)
+	var logging []string
+	if *netLog != "" {
+		logging = []string{"--log-net-log=" + *netLog, "--net-log-capture-mode=Default"}
+	}
+	running, err := startChrome(*chrome, home, b, logging)
+	if err != nil {
+		hello.Error = "The browser could not start: " + err.Error() + "."
+		_ = s.write(hello)
 		return 1
 	}
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, unix.SIGTERM, unix.SIGHUP)
-	if err := serve(os.Stdin, s, b, chromium.exited, stop); err != nil {
+	if err := s.write(hello); err != nil {
+		running.close()
+		return 1
+	}
+	err = serve(os.Stdin, s, b, running.exited, stop)
+	// Chrome is gone before the driver says bye, so whatever it writes as
+	// it closes, the profile and a network log, is written by then.
+	running.close()
+	_ = s.write(byeMessage{T: "bye"})
+	if err != nil {
 		if !errors.Is(err, errChromeExited) {
 			fmt.Fprintln(os.Stderr, "cyfr-browser:", err)
 		}
@@ -136,19 +138,9 @@ func run(args []string) int {
 	return 0
 }
 
-// chromePath is the Chrome to start: the one --chrome names, else the
-// home's, fetched first when it holds none, a day has passed or a download
-// waits to be taken up; and the release of the home's lock, which the
-// driver holds until it ends.
-func chromePath(chrome, source, storage string) (string, func(), error) {
-	if chrome != "" {
-		return chrome, func() {}, nil
-	}
-	s, err := newStore(os.Getenv("HOME"), source, storage)
-	if err != nil {
-		return "", nil, err
-	}
-	return s.chrome(context.Background(), os.Stderr)
+// byeMessage is the driver's last message, once its Chrome has exited.
+type byeMessage struct {
+	T string `json:"t"`
 }
 
 // makeRaw sets the terminal on fd as cfmakeraw(3) does: no echo, no line
@@ -203,14 +195,24 @@ var quiet = []string{
 	"--host-resolver-rules=MAP " + reservedHost + " ~NOTFOUND",
 }
 
-// startChrome starts Chrome on its debugging pipe with its profile in
-// $HOME/chrome, reaching nothing by itself (quiet), waits for its first
-// answer, and gives b its pipe; logging is added to its flags.
-func startChrome(path string, b *browser, logging []string) (*chromeProcess, error) {
+// browserHome is the folder the browser keeps its profile in, $HOME, which
+// must name a folder by an absolute path: under any other, nothing is
+// removed and Chrome is not started.
+func browserHome() (string, error) {
 	home := os.Getenv("HOME")
-	if home == "" {
-		return nil, errors.New("HOME names no folder")
+	if !filepath.IsAbs(home) {
+		return "", errors.New("HOME names no folder")
 	}
+	if info, err := os.Stat(home); err != nil || !info.IsDir() {
+		return "", errors.New("HOME names no folder")
+	}
+	return home, nil
+}
+
+// startChrome starts Chrome on its debugging pipe with its profile in
+// home's chrome folder, reaching nothing by itself (quiet), waits for its
+// first answer, and gives b its pipe; logging is added to its flags.
+func startChrome(path, home string, b *browser, logging []string) (*chromeProcess, error) {
 	profile := filepath.Join(home, "chrome")
 	// The host runs one session per person, so a singleton entry in the
 	// profile is a dead Chrome's, and Chrome refuses the profile while it
@@ -237,8 +239,13 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 	// options (no new privileges, and a seccomp profile that denies making
 	// a namespace), so Chrome runs without it, held by the home's uid, the
 	// egress guard, the read-only root and its memory bound.
-	args := append([]string{"--headless", "--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
-		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900"}, quiet...)
+	// The debugging pipe makes Chrome tell its pages navigator.webdriver is
+	// true; AutomationControlled, the one feature behind it, is turned off
+	// so it reads false as a person's browser does. Nothing else a page
+	// reads changes with it.
+	args := append([]string{"--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
+		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900",
+		"--disable-blink-features=AutomationControlled"}, quiet...)
 	cmd := exec.Command(path, append(args, logging...)...)
 	// Chrome runs in its home with its temporary folder named relative to
 	// it (chromeTemp), so the socket that locks its profile has a short path
@@ -271,7 +278,8 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 	p.c = b.c
 	ctx, cancel := context.WithTimeout(context.Background(), startWait)
 	defer cancel()
-	if err := ready(ctx, b.c); err != nil {
+	v, err := ready(ctx, b.c)
+	if err != nil {
 		p.kill()
 		var refused *cdpError
 		switch {
@@ -283,18 +291,23 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 			return nil, fmt.Errorf("Chrome ended (%s)", p.cmd.ProcessState)
 		}
 	}
+	if b.agent, err = ownAgent(ctx, b.c, v.UserAgent); err != nil {
+		p.kill()
+		return nil, fmt.Errorf("Chrome did not say how it names itself (%v)", err)
+	}
 	return p, nil
 }
 
-// ready waits for Chrome's first answer, has it report its targets' ends,
-// and closes any page target it finds, which no window uses: with no
-// startup window there is none.
-func ready(ctx context.Context, c *cdp) error {
-	if err := c.call(ctx, "", "Browser.getVersion", nil, nil); err != nil {
-		return err
+// ready waits for Chrome's first answer, its version, has it report its
+// targets' ends, and closes any page target it finds, which no window
+// uses: with no startup window there is none.
+func ready(ctx context.Context, c *cdp) (version, error) {
+	var v version
+	if err := c.call(ctx, "", "Browser.getVersion", nil, &v); err != nil {
+		return v, err
 	}
 	if err := c.call(ctx, "", "Target.setDiscoverTargets", map[string]any{"discover": true}, nil); err != nil {
-		return err
+		return v, err
 	}
 	var targets struct {
 		TargetInfos []struct {
@@ -303,16 +316,16 @@ func ready(ctx context.Context, c *cdp) error {
 		} `json:"targetInfos"`
 	}
 	if err := c.call(ctx, "", "Target.getTargets", nil, &targets); err != nil {
-		return err
+		return v, err
 	}
 	for _, t := range targets.TargetInfos {
 		if t.Type == "page" {
 			if err := c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": t.TargetID}, nil); err != nil {
-				return err
+				return v, err
 			}
 		}
 	}
-	return nil
+	return v, nil
 }
 
 // chromeTmp is Chrome's temporary folder, relative to the home it runs in.

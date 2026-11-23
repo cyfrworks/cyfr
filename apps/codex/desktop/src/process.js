@@ -17,6 +17,7 @@ const FIELDS = {
   home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver", "road"]},
   opened: {required: ["home"]},
   locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
+  ending: {required: []},
   "home-ready": {required: ["home", "attempt"]},
   "home-failed": {required: ["home", "attempt"]},
   lock: {required: []},
@@ -25,7 +26,7 @@ const FIELDS = {
   "folder-picked": {required: ["path", "epoch", "pick"]}
 }
 
-const FROM_CYFR = ["ready", "home", "opened", "locked"]
+const FROM_CYFR = ["ready", "home", "opened", "locked", "ending"]
 const FROM_MAIN = ["home-ready", "home-failed", "lock", "leave", "shutdown", "folder-picked"]
 
 /**

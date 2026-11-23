@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""Aqua's browser in the backends image: cyfr-browser driving a Chrome it fetches into its kept home, framed over its terminal.
+"""Aqua's browser in the backends image: cyfr-browser driving the image's Chromium headless shell in its kept home, framed over its terminal.
 
 Run as docker-compose.yml's locus-backends service, driven only by requests
 signed as CYFR signs them (harness.py). The browser is a kept program whose
@@ -63,20 +63,40 @@ container starts:
   bytes or files is refused; and over the session nothing left the box, no
   file the driver answered reached Chrome's network stack, and Chrome
   never asked a resolver for the reserved name.
+- What a site reads to tell a browser's kind, in a first window and a
+  later one: navigator.userAgent, userAgentData's brands and full versions
+  and navigator.webdriver on a put page, and the User-Agent and Sec-CH-UA
+  headers of a public request (unless CYFR_TEST_OFFLINE=1) as Chrome's own
+  network log records them. None says Headless: the shell names itself as
+  the Chromium it is, its own brands without HeadlessChrome at its own
+  version, and navigator.webdriver reads false.
+- A browser's start removes the Chrome the driver once fetched into its
+  home and leaves the profile as it was.
+- A cookie a page set three seconds before the browser's session ended
+  is there when the browser starts again, a page of its origin reading it.
+- A driver asked to end before its hello, while its Chrome starts, says
+  hello once Chrome answers, then its bye, and exits 0.
+  Every closed session reads to the driver's bye,
+  its last message once its Chrome has exited, before anything Chrome
+  wrote as it closed, a network log among them, is read.
+- A saved profile that holds a known page does not reopen it, from the
+  network or the cache: one the full Chrome made, whose session holds the
+  page (a fixture below), and one the shell made, ended abruptly with a
+  public page open, whose cache holds it (unless CYFR_TEST_OFFLINE=1).
 - Another program in another kept home, under another uid, cannot read the
   browser's profile, nothing of the browser's uid listens on a TCP port,
   and Chrome runs on its debugging pipe with no debugging port.
 - A driver whose Chrome cannot start says hello with an error and exits 1.
 - Chrome reaches nothing by itself: its own network log over a start with
   nothing asked shows no URL requested, no host resolved and no connection.
-- Its Chrome is fetched as a program fetches itself, and the image holds
-  none: the first start in a fresh home fetches Chrome for Testing's
-  current stable from Google and runs it, published whole in one version
-  folder; a restart reuses it and fetches nothing; with a source that
-  cannot be reached a home that holds no Chrome refuses in one sentence
-  and one that holds a Chrome starts it; a truncated archive is never
-  published; and the home holds one Chrome and its profile well within
-  its 2 GiB bound, with room for a second being staged.
+- The browser is in the image and fetches nothing: the image holds
+  Debian's Chromium headless shell, built for this machine, and under a
+  row whose hosts admit no public host (the stack's own service name
+  alone) the browser's driver says hello and its first window shows a
+  page. A `node` and a `cyfr-stub` put in a kept folder's .local/bin,
+  where a person's installs go: a shell there finds that `node` first and
+  CYFR's own stub, and npm installs there. The home holds the browser's
+  profile well within its 2 GiB bound.
 
 It prints, without gating, Chrome's memory with one, three and six windows
 (the summed PSS of its processes and the session cgroup's memory.current),
@@ -88,13 +108,14 @@ the home's bytes, and, at a phone's width (390 by 844) and at 720p, a
 cast's images a second on a page that changes every frame, their size, and
 the delay from a press to the first image that shows it.
 
-With --first-start it proves one thing alone, for an image of another
-architecture, which the release workflow's arm64 job starts: a first start
-fetches this machine's Chrome, built for its architecture, and a public
-page loads in it.
+With --first-start it proves, for an image of another architecture, which
+locus-arm64.yml and the release workflow's arm64 job start, that the
+browser is in it and a person's tools come first, as above, and that the
+browser's first start loads a public page.
 
-Prerequisites: harness.py's, and the public network, from which the first
-start fetches Chrome. Usage: tests/locus-backends-image/browser.py [--first-start] IMAGE
+Prerequisites: harness.py's, and the public network, for the public pages
+(an open of one is skipped under CYFR_TEST_OFFLINE=1).
+Usage: tests/locus-backends-image/browser.py [--first-start] IMAGE
 """
 
 import base64
@@ -110,7 +131,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    BOUNDS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, PORT, ROOT, Stack, eventually, expect, owner_of, probe,
+    BOUNDS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, PORT, ROOT, SERVICE, Stack, eventually, expect, owner_of, probe,
     require_docker, unb64,
 )
 import imagesuite  # noqa: E402
@@ -144,17 +165,22 @@ OWNER = owner_of("browser")
 # profile lock is a socket in its temporary folder, and a home this long
 # leaves no room for it there unless the driver names that folder short.
 BROWSER_HOME = "mcp_01890000-0000-7000-8000-00000000b005"
-FETCHLESS_HOME, BROKEN_HOME, OTHER_HOME = (f"mcp_browser-{name}" for name in ("fetchless", "broken", "other"))
+BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, TOOLS_HOME, FULL_HOME, COOKIE_HOME, TERM_HOME = (
+    f"mcp_browser-{name}" for name in ("broken", "other", "offline", "tools", "full", "cookie", "term"))
 # The bound Opus.Programs.Definition.browser/1 gives the browser's home.
 HOME_MAX_BYTES = 2 << 30
+BROWSER = {"name": "browser", "command": "cyfr-browser", "env": {}, "home": "kept", "memory_bytes": 1536 << 20,
+           "home_max_bytes": HOME_MAX_BYTES}
+# The image's Chromium headless shell, which the driver starts by its path.
+CHROMIUM = "/usr/lib/chromium/chromium-headless-shell"
+# A row held to the stack's own service name, which the guard admits, reaches no public host: a program under it
+# that fetched anything would fail.
+NO_PUBLIC_HOST = {"hosts": [SERVICE]}
 PROGRAMS = [
-    {"name": "browser", "command": "cyfr-browser", "env": {}, "home": "kept", "memory_bytes": 1536 << 20,
-     "home_max_bytes": HOME_MAX_BYTES},
+    BROWSER,
+    {**BROWSER, "name": "offline-browser", **NO_PUBLIC_HOST},
     probe(home="kept"),
 ]
-# A list no resolver answers for: .invalid never resolves.
-UNREACHABLE = "https://cyfr-browser-source.invalid/LATEST_RELEASE_STABLE"
-NOT_DOWNLOADED = "The browser could not be downloaded; try again in a moment."
 # How long a start with nothing asked is watched for traffic of Chrome's own.
 QUIET_S = 30
 SHORT_KEEP_MS = 3000
@@ -261,9 +287,9 @@ check_frames()
 class Host:
     """Opus.Browser's side of one driver session: framed messages in and out over the terminal's bytes."""
 
-    def __init__(self, stack, c, home, argv=()):
+    def __init__(self, stack, c, home, argv=(), program="browser"):
         self.stack, self.c = stack, c
-        status, opened = c.open(OWNER, "browser", key=home, mode="terminal", argv=list(argv), rows=24, cols=80,
+        status, opened = c.open(OWNER, program, key=home, mode="terminal", argv=list(argv), rows=24, cols=80,
                                 home_id=home)
         expect(status == 200 and opened["status"] == "running", f"the browser opens as a terminal in {home}", opened)
         self.session = opened["session"]
@@ -397,8 +423,16 @@ class Host:
         return self.put(id, win, [("index.html", "text/html", html.encode())], root_of(name))
 
     def close(self):
+        """Closes the session and reads it to its end, the driver's bye: its Chrome has exited, so what Chrome
+        writes as it closes, its profile and a network log, is written."""
         status, closed = self.c.close(OWNER, self.session)
         expect(status == 200, "the browser's session is closed", closed)
+        while not any(m["t"] == "bye" for m in self.inbox):
+            after = self.after
+            self.read()
+            if not self.running and self.after == after and not any(m["t"] == "bye" for m in self.inbox):
+                sys.exit(f"FAIL: the closed session ended without the driver's bye: the driver was ended before "
+                         f"its Chrome: {self.inbox[-5:]}")
 
 
 def ok(answer, what):
@@ -505,15 +539,9 @@ def png_size(data):
 # ————— what the box holds —————
 
 
-def store(home):
-    """Where the driver keeps a home's Chrome."""
-    return f"{KEPT_ROOT}/{home}/cyfr-browser"
-
-
 def is_chrome(cmd):
-    """Whether a command line is a Chrome the driver started from a kept home's versions."""
-    program = cmd.split(" ", 1)[0]
-    return program.startswith(KEPT_ROOT + "/") and "/cyfr-browser/versions/" in program
+    """Whether a command line is the image's Chromium."""
+    return cmd.split(" ", 1)[0] == CHROMIUM
 
 
 def chrome_processes(stack, uid):
@@ -528,26 +556,6 @@ def home_uid(stack, home):
 def as_home(stack, home, script, what):
     """`script` run as the home's own uid, which alone enters it."""
     return imagesuite.read_output(stack.exec(script, user=home_uid(stack, home)), what)
-
-
-def in_store(stack, home):
-    """What a home's store holds, as its uid reads it: its versions with each one's inode, the last check's mtime, and
-    any staging folder or partial download."""
-    listing = as_home(stack, home, (
-        f"cd {store(home)} 2>/dev/null || exit 0; for v in versions/*; do [ -e \"$v\" ] && "
-        f"echo \"version ${{v#versions/}} $(stat -c %i \"$v\") $([ -x \"$v/chrome\" ] && echo runs)\"; done; "
-        f"[ -e checked ] && echo \"checked $(stat -c %Y checked)\"; "
-        f"for d in .staging-* .partial-*; do [ -e \"$d\" ] && echo \"staging $d\"; done; true"), f"{home}'s store")
-    found = {"versions": {}, "checked": None, "staging": []}
-    for line in listing.splitlines():
-        kind, *rest = line.split()
-        if kind == "version":
-            found["versions"][rest[0]] = {"inode": rest[1], "runs": rest[2:] == ["runs"]}
-        elif kind == "checked":
-            found["checked"] = int(rest[0])
-        elif kind == "staging":
-            found["staging"].append(rest[0])
-    return found
 
 
 def home_bytes(stack, home, path=""):
@@ -571,7 +579,7 @@ def memory(stack, uid, driver):
     if current.returncode == 0:
         lines = current.stdout.split("\n")
         parts = dict(line.split() for line in lines[1:] if line.strip())
-        # The file part holds the page cache of the Chrome the first start wrote, which the kernel reclaims first.
+        # The file part holds the page cache of the image's Chromium and the profile, which the kernel reclaims first.
         cgroup = (f"{int(lines[0]) / 2**20:.0f} MiB (anon {int(parts['anon']) / 2**20:.0f}, "
                   f"file {int(parts['file']) / 2**20:.0f})")
     else:
@@ -584,20 +592,6 @@ def memory(stack, uid, driver):
     descriptors = max(int(line.split()[1]) for line in counts if line.strip())
     return (f"PSS {sum(int(k) for k in pss) / 1024:.0f} MiB over {len(pss)} of its {len(pids)} processes, "
             f"cgroup memory.current {cgroup}; the uid's threads {threads}, most descriptors of one process {descriptors}")
-
-
-def truncated_archive():
-    """A chrome build's archive as Chrome for Testing packs it, cut short of its central directory."""
-    import io
-    import zipfile
-    whole = io.BytesIO()
-    with zipfile.ZipFile(whole, "w", zipfile.ZIP_DEFLATED) as z:
-        for platform in ("linux64", "linux-arm64"):
-            info = zipfile.ZipInfo(f"chrome-{platform}/chrome")
-            info.external_attr = 0o100755 << 16
-            z.writestr(info, b"#!/bin/sh\nexit 0\n" + os.urandom(65536))
-    data = whole.getvalue()
-    return data[:len(data) // 2]
 
 
 def net_log(text):
@@ -852,6 +846,94 @@ def net_log_of_pages(text):
     return sorted(left), sorted(urls), sorted(asked), sorted(udp)
 
 
+# A profile the full Chrome made (Chrome for Testing 158.0.8127.36, --headless, set to continue where it left off) that
+# holds https://example.com/?cyfr-restore-fixture in its session, killed with the page open: its Sessions file as that
+# Chrome wrote it, and Preferences reduced to that one setting. Given back on a debugging port, that Chrome reopens
+# the page from it; a .tar.gz, in base64.
+FULL_CHROME_PROFILE = (
+    "H4sIAAAAAAAAA+2VT2vUQBTAX3fpthHFiooKguviQcE0k2ySTfZSD0UQQQp70ktMspN2Id0sSVZbStFjDx568K7fxKtfwoN40Ivi"
+    "N6hvskndpn9WSqtI3y/Mvn8z895MZjaLPHCHYaosxTzgMe/7PIGThiEmY5lk+yVjugGq0WSsxdTMrza1lgF1duKVHMAwSd24Xoc4"
+    "itKj+k2K/6dsNBKeJL2o32hvNGKepFHMnajviF1Jh4NGW93cPPeviyROjcX8/ndGpyBRTiGHuOKto+4/6nvvv9ZSTagbp1DLPs74"
+    "/d/3/nPFUZt607ZM27ZsnemWph0/x4T/f00ztdL7NzWd0f//36DzpNOpopRAqnx691C4LsDFWRS/zVt7zWvjpgT1QjWgwfLITZQv"
+    "eJz2fDd0UtfDz0ncGzh+FIbuIOHdaYwHbphwlDY09HzYnYOHDfu7A52XvW66IgoWJ0SC89XdOiqFehtuFOphSKN8opsKl++jp5qn"
+    "V13TMpnpO5ZndR2d+6bj6brtcGYzy/A4D3RPgtlizZfgapFr5mnwdvODAtNwRUQlmCkij6q1xeoohTDvYVtJ00HSVhS+5q4OQj7v"
+    "R6vKgr8exHL+DZaD3lo6jHle8JsKwFZFrA3gNcrruX+uJGdzuY2thm2rtPBvJfvnmF4bi39///nx1+c1+JHLu1Mj/4OpveOt3N4u"
+    "+cuU63sG+T5Ais8AEmiDgg+HNXBhFT0h6vPgQ4SWAguorUMAMcjYOPZPMSI0Gb09HJXCMLMPzleWFjZRMhuz/4S5CXZ9wvgif7m+"
+    "JWzi+DXBhBZeiQB0lCauTsN75eLqZfQY0MVHxmoZeGiLqJc9Oo7UMKZiTMVxh83vYzTAXxP7Wtn8Ns5l4gxifpHLQM3DfVRxRhkz"
+    "B9gzyKqycFyAfvxYZ2elAI/jsc70qy/L2YURfATYnXPnEERsCnYm7DBBEARBEARBEARBEARBEARBEARBnGF+AduFKJYAKAAA"
+)
+FULL_CHROME_PAGE = "cyfr-restore-fixture"
+
+
+# A page that reads what a site reads of the browser's kind and titles itself with it.
+KIND_PAGE = ("<title>reading</title><script>(async () => { const d = navigator.userAgentData;"
+             " const high = d ? await d.getHighEntropyValues(['fullVersionList']) : null;"
+             " document.title = 'kind ' + JSON.stringify({ua: navigator.userAgent, webdriver: navigator.webdriver,"
+             " brands: d ? d.brands : null, fullVersionList: high ? high.fullVersionList : null}); })();</script>")
+
+
+def request_headers(text, marker):
+    """The User-Agent and Sec-CH-UA headers of each request a Chrome network log shows sent with `marker` in its path."""
+    log = net_log(text)
+    sent = []
+    for event in log.get("events", []):
+        headers = (event.get("params") or {}).get("headers")
+        if isinstance(headers, dict):
+            headers = [f"{name}: {value}" for name, value in headers.items()]
+        if not isinstance(headers, list) or not any(marker in str(h) for h in headers):
+            continue
+        kept = {}
+        for header in headers:
+            name, _, value = str(header).partition(": ")
+            if name.lower() == "user-agent" or name.lower().startswith("sec-ch-ua"):
+                kept[name.lower()] = value
+        if kept:
+            sent.append(kept)
+    return sent
+
+
+def browser_kind(stack, c, uid):
+    """What a site reads to tell a browser's kind, in a first window and a later one: the page's navigator.userAgent,
+    userAgentData's brands and full versions and navigator.webdriver, and a public request's User-Agent and Sec-CH-UA
+    headers as Chrome's own network log records them. None says Headless: the headless shell names itself as the
+    Chromium it is, its own brands without HeadlessChrome at its own version, and navigator.webdriver reads false."""
+    log = f"{KEPT_ROOT}/{BROWSER_HOME}/kind-netlog.json"
+    k = Host(stack, c, BROWSER_HOME, ["--net-log", log])
+    expect("error" not in k.hello(), "a session that logs Chrome's network says hello")
+    offline = os.environ.get("CYFR_TEST_OFFLINE") == "1"
+    ids, seen, read = iter(range(9000, 9100)), [], {}
+    for win in ("thr_kind_first", "thr_kind_later"):
+        ok(k.put_html(next(ids), win, KIND_PAGE, "kind"), f"a page that reads the browser's kind is shown in {win}")
+        read[win] = json.loads(titled(k, win, "kind ", ids, seen))
+        if not offline:
+            ok(k.ask(next(ids), win, "open", {"url": f"https://example.com/?{win}"}), f"a public page opens in {win}")
+    k.close()
+    eventually(lambda: not stack.under_uid(uid), "that session's processes to end")
+    text = as_home(stack, BROWSER_HOME, f"cat {log}", "Chrome's network log")
+    as_home(stack, BROWSER_HOME, f"rm {log}", "the network log removed")
+    sent = {} if offline else {win: request_headers(text, f"?{win}") for win in read}
+    print(f"measure: what a site reads of the browser's kind: {json.dumps({'page': read, 'requests': sent})}",
+          flush=True)
+    if offline:
+        print("skip: a public request's headers need the public network (CYFR_TEST_OFFLINE=1)", flush=True)
+    for win, seen_by_page in read.items():
+        names = [b["brand"] for b in seen_by_page["brands"]]
+        full = dict((b["brand"], b["version"]) for b in seen_by_page["fullVersionList"])
+        expect("Chrome/" in seen_by_page["ua"] and len(names) == 2 and names[1] == "Chromium"
+               and names == [b["brand"] for b in seen_by_page["fullVersionList"]]
+               and seen_by_page["ua"].split("Chrome/")[1].split(" ")[0] == full["Chromium"],
+               f"the page in {win} reads the shell's own brands, its own GREASE and Chromium at its own version, "
+               "without HeadlessChrome", seen_by_page)
+        expect(seen_by_page["webdriver"] is False, f"the page in {win} reads navigator.webdriver false", seen_by_page)
+        expect(offline or sent[win], f"the public request from {win} is in Chrome's network log", sent)
+        expect(offline or all(names[0] in request.get("sec-ch-ua", "") and '"Chromium"' in request["sec-ch-ua"]
+                              for request in sent[win]),
+               f"the public request from {win} carries the same brands in Sec-CH-UA", sent)
+    expect("headless" not in json.dumps([read, sent]).lower(),
+           "no page or request reads Headless in the User-Agent, the client hints or userAgentData, in the first "
+           "window or a later one", [read, sent])
+
+
 def pages(stack, c, uid):
     """Pages put into the Chrome and their calls (C15), in a session that logs Chrome's network."""
     net_log = f"{KEPT_ROOT}/{BROWSER_HOME}/pages-netlog.json"
@@ -1037,26 +1119,113 @@ def pages(stack, c, uid):
           f"which send nothing: {udp}; windows closed {closed}", flush=True)
 
 
-def first_start(stack, c):
-    """A first start fetches this machine's Chrome, built for its architecture, and a public page loads in it."""
+def elf_machine(stack, path):
+    """The ELF machine of the binary at `path`, as two bytes of hex."""
+    return imagesuite.read_output(stack.exec(f"od -An -tx1 -j18 -N2 {path}"), f"{path}'s ELF machine").replace(" ", "").strip()
+
+
+def in_image(stack, c):
+    """The browser is in the image and starts with no public host; what a person installs comes first on a kept
+    program's PATH, and never in place of CYFR's own executables."""
+    machine = imagesuite.read_output(stack.exec("uname -m"), "the box's machine").strip()
+    expect(elf_machine(stack, CHROMIUM) == ELF_MACHINE.get(machine),
+           f"the image holds Debian's Chromium headless shell, built for this box's {machine}", CHROMIUM)
+
+    # The browser's first window, under a row that reaches no public host.
     started = time.monotonic()
+    b = Host(stack, c, OFFLINE_HOME, program="offline-browser")
+    hello = b.hello()
+    expect("error" not in hello, "the browser's driver starts the image's Chromium with no public host and says hello",
+           hello)
+    print(f"measure: the browser's first start said hello in {time.monotonic() - started:.1f} s", flush=True)
+    shown = ok(b.put_html(1, "thr_first", PROBE_PAGE), "the first window shows a page")
+    expect(shown["title"] == "Probe page", "the first window answers the page's title", shown)
+    b.close()
+    eventually(lambda: not stack.under_uid(int(home_uid(stack, OFFLINE_HOME))),
+               "the offline browser's processes to end with its session")
+
+    # What a person installs in the folder comes first in a shell, and never in CYFR's place.
+    # The probe starts first, on the image's node, and stays: what is put in the folder below is found after.
+    tool = c.mcp(OWNER, "probe", key="installs", home_id=TOOLS_HOME)
+    tool.list_tools()
+    uid = int(home_uid(stack, TOOLS_HOME))
+    home = f"{KEPT_ROOT}/{TOOLS_HOME}"
+    as_home(stack, TOOLS_HOME,
+            f"mkdir -p {home}/.local/bin && for t in node cyfr-stub; do "
+            f"printf '#!/bin/sh\\nexit 3\\n' > {home}/.local/bin/$t && chmod 0755 {home}/.local/bin/$t; done",
+            "a node and a cyfr-stub put in the folder's .local/bin")
+    status, ran = tool.call("run", {"argv": ["sh", "-c", "command -v node; command -v cyfr-stub; "
+                                                         "echo $NPM_CONFIG_PREFIX; echo $XDG_BIN_HOME"]})
+    found = json.loads(ran["result"]["content"][0]["text"])["stdout"].split()
+    expect(found == [f"{home}/.local/bin/node", "/opt/cyfr/bin/cyfr-stub", f"{home}/.local", f"{home}/.local/bin"],
+           "a shell in the folder finds the person's node first and CYFR's own stub, and npm installs there",
+           found)
+    c.close(OWNER, tool.session)
+    eventually(lambda: not stack.under_uid(uid), "the folder's processes to end")
+
+
+# A page that sets a cookie that lasts a day, as a site's sign-in does, and one that titles itself with the cookies
+# its origin holds. The guard holds a kept uid off the box's own addresses and every private one, so no site of the
+# suite's own can stand in the stack: the pages are put, under the reserved origin.
+SET_COOKIE_PAGE = ("<title>setting</title><script>document.cookie = 'cyfr=kept; Max-Age=86400; Path=/; Secure';"
+                   " document.title = 'cookie ' + document.cookie</script>")
+COOKIE_PAGE = "<title>reading</title><script>document.title = 'cookie ' + (document.cookie || 'none')</script>"
+
+
+def kept_cookie(stack, c):
+    """A cookie a page set three seconds before the browser's session ended is there when the browser starts again,
+    as a sign-in made just before the end is kept: the end lets the driver close Chrome, which writes the cookie to
+    its profile, where Chrome by itself writes it only within about 30 s. A close, the idle close and a row's change
+    end a kept session through one path at the keeper, its leader first, so this close stands for all three."""
+    first = Host(stack, c, COOKIE_HOME)
+    expect("error" not in first.hello(), "a browser in a home of its own says hello")
+    shown = ok(first.put_html(1, "thr_cookie", SET_COOKIE_PAGE, "sign-in"), "a page that sets a cookie is shown")
+    expect(shown["title"] == "cookie cyfr=kept", "the page set its cookie", shown)
+    time.sleep(3)  # sleep-ok: the session ends seconds after the cookie is set, before Chrome writes it by itself
+    first.close()
+    again = Host(stack, c, COOKIE_HOME)
+    expect("error" not in again.hello(), "the browser starts again in the same home")
+    shown = ok(again.put_html(1, "thr_cookie", COOKIE_PAGE, "signed-in"), "a page of the same origin is shown")
+    expect(shown["title"] == "cookie cyfr=kept",
+           "the browser started again holds the cookie a page set three seconds before the last session ended",
+           shown)
+    again.close()
+
+
+def ended_before_ready(stack, c):
+    """A driver asked to end before its hello, while its Chrome starts, ends as one asked later does: it says hello
+    once Chrome answers, then closes Chrome and says bye, and exits 0. Its end is taken before it announces it is
+    ready, so a TERM that comes then, or just after the hello, is never the default end. The TERM is sent from the
+    box, as the home's uid, the moment Chrome's first process runs: the driver then waits on Chrome's first answer,
+    which takes far longer, so the TERM lands before the hello."""
+    made = Host(stack, c, TERM_HOME)
+    expect("error" not in made.hello(), "a home for a driver asked to end early is made")
+    made.close()
+    uid = home_uid(stack, TERM_HOME)
+    home = f"{KEPT_ROOT}/{TERM_HOME}"
+    watcher = (f"until pgrep -u {uid} -f '^{CHROMIUM}' >/dev/null; do :; done\n"
+               f"kill -TERM $(pgrep -u {uid} -x cyfr-browser) && echo sent > {home}/term-sent\n")
+    as_home(stack, TERM_HOME, f"echo {base64.b64encode(watcher.encode()).decode()} | base64 -d > {home}/watch.sh",
+            "the watcher written")
+    stack.exec(f"timeout 60 sh {home}/watch.sh >/dev/null 2>&1 &", user=uid)
+    early = Host(stack, c, TERM_HOME)
+    hello = early.hello()
+    expect("error" not in hello, "a driver asked to end as Chrome starts still says hello once Chrome answers", hello)
+    expect(as_home(stack, TERM_HOME, f"cat {home}/term-sent", "the TERM sent").strip() == "sent",
+           "the TERM was sent to the driver as its Chrome started")
+    early.take(lambda m: m["t"] == "bye", "the bye of a driver asked to end before its hello")
+    eventually(lambda: (early.read(1_000), not early.running)[1], "the driver to end")
+    expect(early.exit_code == 0, "a driver asked to end before its hello exits 0", early.exit_code)
+
+
+def first_start(stack, c):
+    """The browser's first start loads a public page."""
     b = Host(stack, c, BROWSER_HOME)
     hello = b.hello()
-    first_start_s = time.monotonic() - started
-    expect("error" not in hello, "the first start fetches Chrome and says hello", hello)
-    fetched = in_store(stack, BROWSER_HOME)
-    expect(len(fetched["versions"]) == 1 and all(v["runs"] for v in fetched["versions"].values()),
-           "one Chrome is published whole in the home", fetched)
-    version = next(iter(fetched["versions"]))
-    machine = imagesuite.read_output(stack.exec("uname -m"), "the box's machine").strip()
-    elf = as_home(stack, BROWSER_HOME, f"od -An -tx1 -j18 -N2 {store(BROWSER_HOME)}/versions/{version}/chrome",
-                  "the Chrome's ELF machine").replace(" ", "").strip()
-    expect(ELF_MACHINE.get(machine) == elf, f"the fetched Chrome is built for this box's {machine}", [machine, elf])
+    expect("error" not in hello, "the browser's first start says hello", hello)
     opened = ok(b.ask(1, "thr_first", "open", {"url": "https://example.com/"}), "a public page opens")
     expect(opened == {"url": "https://example.com/", "title": "Example Domain"}, "it loads, with its address and title",
            opened)
-    print(f"measure: the first start fetched Chrome {version} for {machine} and said hello in {first_start_s:.1f} s",
-          flush=True)
     b.close()
 
 
@@ -1076,27 +1245,23 @@ def main():
         status, answer, _ = c.sync(OWNER, PROGRAMS)
         expect(status == 200, "an owner of the browser and a probe, both kept, is synced", answer)
         _renewed[0] = time.monotonic()
+        # ————— the browser in the image, and a person's tools first —————
+        in_image(stack, c)
         if only_first_start:
-            first_start(stack, c)
+            if os.environ.get("CYFR_TEST_OFFLINE") == "1":
+                print("skip: an open of a public page needs the public network (CYFR_TEST_OFFLINE=1)", flush=True)
+            else:
+                first_start(stack, c)
             return
 
-        # ————— the first exchange, on the Chrome the first start fetches —————
-        in_image = imagesuite.read_word(stack.exec(
-            "for p in /usr/lib/chromium /usr/bin/chromium /opt/google/chrome /usr/bin/google-chrome; do "
-            "[ -e $p ] && { echo present; exit 0; }; done; echo absent"), ("present", "absent"), "a Chrome in the image")
-        expect(in_image == "absent", "the image holds no Chrome", in_image)
-        started = time.monotonic()
+        kept_cookie(stack, c)
+        ended_before_ready(stack, c)
+
+        # ————— the first exchange —————
         b = Host(stack, c, BROWSER_HOME)
         hello = b.hello()
-        first_start_s = time.monotonic() - started
         expect(hello == {"t": "hello", "v": 1, "chunk": 49152, "keep_ms": 120000},
                "the driver says hello once Chrome answers, with its chunk and keep", hello)
-        fetched = in_store(stack, BROWSER_HOME)
-        expect(len(fetched["versions"]) == 1 and all(v["runs"] for v in fetched["versions"].values())
-               and fetched["checked"] is not None and not fetched["staging"],
-               "the first start fetched one Chrome into the home, published whole, and runs it", fetched)
-        version = next(iter(fetched["versions"]))
-        print(f"measure: the first start fetched Chrome {version} and said hello in {first_start_s:.1f} s", flush=True)
         html = megabyte_page()
         started = time.monotonic()
         shown = ok(b.put_html(1, "thr_big", html, "long"), "a page of about a megabyte of html is put")
@@ -1412,16 +1577,11 @@ def main():
         eventually(lambda: not stack.under_uid(uid), "the browser's processes to end with its session")
 
         pages(stack, c, uid)
+        browser_kind(stack, c, uid)
 
-        expect(not [p for p in chrome_processes(stack, uid) if version not in p["cmd"]],
-               "the Chrome that ran is the one the home holds", version)
-
-        # ————— a short keep, on a restart that fetches nothing —————
+        # ————— a short keep —————
         s = Host(stack, c, BROWSER_HOME, ["--keep-ms", str(SHORT_KEEP_MS)])
         expect(s.hello()["keep_ms"] == SHORT_KEEP_MS, "a driver started with --keep-ms says so")
-        expect(in_store(stack, BROWSER_HOME) == fetched,
-               "a restart reuses the home's Chrome: the same version folder, no check of the list, nothing staged",
-               [fetched, in_store(stack, BROWSER_HOME)])
         s.send_put(1, "thr_short", [("index.html", "text/html", PROBE_PAGE.encode())], root_of("page"))
         first = s.take(lambda m: m["t"] == "res" and m["id"] == 1, "the unacknowledged response")
         s.send({"t": "again", "id": 1, "seq": 0})
@@ -1438,40 +1598,64 @@ def main():
         eventually(lambda: not stack.under_uid(uid), "the short keep's processes to end with its session")
 
         # ————— a profile with open pages starts empty —————
-        # A Chrome that ends abruptly with a page open, as a crash or its memory bound leaves a profile, in a profile
-        # set to continue where it left off: a later start loads nothing on its own account, so no session it
-        # writes holds that page.
+        # A saved profile that holds a known page, as a crash or its memory bound leaves one: a later start, logging
+        # Chrome's network, asks nothing of that page, from the network or its cache, so nothing of the profile's last
+        # session is reopened. First a profile the full Chrome made, which main's browser kept, whose session holds
+        # the page; then one the shell made, ended abruptly with a public page open, whose cache holds it.
+        def reopened(home, page):
+            """What a start in `home` asks of `page`, read from Chrome's network log over its first seconds."""
+            home_owner = int(home_uid(stack, home))
+            restore_log = f"{KEPT_ROOT}/{home}/restore-netlog.json"
+            again = Host(stack, c, home, ["--net-log", restore_log])
+            expect("error" not in again.hello(), f"the profile in {home} that holds a page starts")
+            time.sleep(5)  # sleep-ok: a reopened page would load within these seconds of the start
+            again.close()
+            eventually(lambda: not stack.under_uid(home_owner), "the later session's processes to end")
+            log_text = as_home(stack, home, f"cat {restore_log}", "the later start's network log")
+            as_home(stack, home, f"rm {restore_log}", "the network log removed")
+            return [entry for entry in net_log_leaving(log_text) if page in entry[1]]
+
+        made = Host(stack, c, FULL_HOME)
+        expect("error" not in made.hello(), "a home for the full Chrome's profile is made")
+        made.close()
+        eventually(lambda: not stack.under_uid(int(home_uid(stack, FULL_HOME))), "its first session's processes to end")
+        profile_dir = f"{KEPT_ROOT}/{FULL_HOME}/chrome"
+        as_home(stack, FULL_HOME, f"rm -rf {profile_dir} && mkdir {profile_dir} && echo {FULL_CHROME_PROFILE} | "
+                                  f"base64 -d | tar xzf - -C {profile_dir}", "the full Chrome's profile put in its home")
+        holds = as_home(stack, FULL_HOME, f"grep -a -l -r {FULL_CHROME_PAGE} {profile_dir}/Default/Sessions || true",
+                        "the profile's sessions that hold the page").split()
+        expect(holds, "the full Chrome's profile holds the page in its session", holds)
+        # Beside it, what the driver's fetch wrote before the image carried the browser: the fetched Chrome's
+        # folder, with a version, the last check, the lock and a partial download.
+        fetched = f"{KEPT_ROOT}/{FULL_HOME}/cyfr-browser"
+        as_home(stack, FULL_HOME, f"mkdir -p {fetched}/versions/131.0.6778.85 && head -c 1048576 /dev/zero > "
+                                  f"{fetched}/versions/131.0.6778.85/chrome && touch {fetched}/checked {fetched}/.lock "
+                                  f"{fetched}/.partial-132.0.6834.83.zip", "a fetched Chrome put in the home")
+        sessions = f"sha256sum {profile_dir}/Default/Sessions/*"
+        before = as_home(stack, FULL_HOME, sessions, "the profile's sessions")
+        asked = reopened(FULL_HOME, FULL_CHROME_PAGE)
+        expect(asked == [], "a start from the full Chrome's profile reopens none of its last session's pages", asked)
+        left = as_home(stack, FULL_HOME, f"[ -e {fetched} ] && echo present || echo absent", "the fetched Chrome").strip()
+        expect(left == "absent", "the start removed the Chrome the driver once fetched", left)
+        expect(as_home(stack, FULL_HOME, sessions, "the profile's sessions") == before,
+               "and left the profile's session as it was", [before])
+
         if os.environ.get("CYFR_TEST_OFFLINE") == "1":
-            print("skip: a profile's last session needs a public page to hold (CYFR_TEST_OFFLINE=1)", flush=True)
+            print("skip: a profile's last page needs a public page to hold (CYFR_TEST_OFFLINE=1)", flush=True)
         else:
             token = f"cyfr-restore-{os.urandom(6).hex()}"
-            profile_dir = f"{KEPT_ROOT}/{BROWSER_HOME}/chrome/Default"
-            sessions = lambda: set(as_home(stack, BROWSER_HOME, f"ls {profile_dir}/Sessions 2>/dev/null; true",
-                                           "the profile's sessions").split())
-            holding = lambda names: [n for n in names if as_home(
-                stack, BROWSER_HOME, f"grep -a -c {token} {profile_dir}/Sessions/{n} || true", "a session's pages").strip() != "0"]
-            as_home(stack, BROWSER_HOME,
-                    f"cd {profile_dir} && if grep -q '\"session\":{{' Preferences; "
-                    f"then sed -i 's/\"session\":{{/\"session\":{{\"restore_on_startup\":1,/' Preferences; "
-                    f"else sed -i 's/^{{/{{\"session\":{{\"restore_on_startup\":1}},/' Preferences; fi",
-                    "the profile set to continue where it left off")
             r = Host(stack, c, BROWSER_HOME)
             expect("error" not in r.hello(), "a session that will end with a page open starts")
             ok(r.ask(1, "thr_restore", "open", {"url": f"https://example.com/?{token}"}), "a page is open")
-            eventually(lambda: holding(sessions()), "the profile's session to hold the open page", 30)
             main_pids = [p["pid"] for p in chrome_processes(stack, uid) if "--type=" not in p["cmd"]]
             as_home(stack, BROWSER_HOME, f"kill -9 {' '.join(map(str, main_pids))}", "Chrome ended abruptly")
             eventually(lambda: (r.read(1_000), not r.running)[1], "the driver to end with its Chrome")
             eventually(lambda: not stack.under_uid(uid), "that session's processes to end")
-            before = sessions()
-            expect(holding(before), "the profile's last session holds the open page", sorted(before))
-            again = Host(stack, c, BROWSER_HOME)
-            expect("error" not in again.hello(), "the profile with an open page starts")
-            time.sleep(5)
-            written = sessions() - before
-            expect(not holding(written), "a later start reopens none of the last session's pages", sorted(written))
-            again.close()
-            eventually(lambda: not stack.under_uid(uid), "the later session's processes to end")
+            cached = as_home(stack, BROWSER_HOME, f"grep -a -l -r {token} {KEPT_ROOT}/{BROWSER_HOME}/chrome || true",
+                             "the profile's files that hold the page").split()
+            expect(any("/Cache" in path for path in cached), "the shell's profile holds the page in its cache", cached)
+            asked = reopened(BROWSER_HOME, token)
+            expect(asked == [], "a later start reopens none of the last session's pages, from its cache neither", asked)
 
         # ————— it reaches nothing by itself —————
         # Chrome's own network log over a start with nothing asked of it: no request leaves.
@@ -1488,56 +1672,12 @@ def main():
         as_home(stack, BROWSER_HOME, f"rm {net_log}", "the network log removed")
         print(f"measure: Chrome's network log over {QUIET_S} s of a start with nothing asked: no request", flush=True)
 
-        # ————— its Chrome, fetched —————
-        # A day after the last check, with a list that cannot be reached: the home's Chrome starts.
-        as_home(stack, BROWSER_HOME, f"touch -d '2 days ago' {store(BROWSER_HOME)}/checked",
-                "the last check made two days old")
-        before = in_store(stack, BROWSER_HOME)
-        u = Host(stack, c, BROWSER_HOME, ["--source", UNREACHABLE])
-        expect("error" not in u.hello(), "with its list unreachable, a home that holds a Chrome says hello")
-        shown = ok(u.put_html(1, "thr_unreachable", PROBE_PAGE), "and its Chrome shows a page")
-        expect(shown["title"] == "Probe page", "the page answers its title", shown)
-        after = in_store(stack, BROWSER_HOME)
-        expect(after["versions"] == before["versions"] and not after["staging"]
-               and after["checked"] > before["checked"],
-               "the list was asked, did not answer, and the Chrome in the home started unchanged", [before, after])
-        u.close()
-        eventually(lambda: not stack.under_uid(uid), "that session's processes to end")
-
-        # The home holds its Chrome and its profile, with room for a second Chrome and its archive being staged.
+        # The home holds the profile, well within its bound.
         used = home_bytes(stack, BROWSER_HOME)
-        chrome_bytes = home_bytes(stack, BROWSER_HOME, f"/cyfr-browser/versions/{version}")
         report = c.program(OWNER, "browser")
-        expect(not report["over_cap"] and used + 2 * chrome_bytes < HOME_MAX_BYTES,
-               "the home holds one Chrome and its profile within its bound, with room for a second being staged",
-               [used, chrome_bytes, HOME_MAX_BYTES, report])
-        print(f"measure: the home holds {used / 1e6:.0f} MB, its Chrome {chrome_bytes / 1e6:.0f} MB, "
-              f"of a {HOME_MAX_BYTES >> 20} MiB bound", flush=True)
-
-        # A fresh home whose list cannot be reached: one sentence, and nothing kept.
-        f = Host(stack, c, FETCHLESS_HOME, ["--source", UNREACHABLE])
-        said = f.hello()
-        expect(said.get("error") == NOT_DOWNLOADED, "a home with no Chrome and no list says it could not be downloaded",
-               said)
-        eventually(lambda: (f.read(1_000), not f.running)[1], "the refusing driver's session to end")
-        expect(f.exit_code == 1 and not in_store(stack, FETCHLESS_HOME)["versions"]
-               and not in_store(stack, FETCHLESS_HOME)["staging"], "it exits 1 and the home holds no Chrome",
-               [f.exit_code, in_store(stack, FETCHLESS_HOME)])
-
-        # The same home, offered a truncated archive where the storage would hold it: never published.
-        archive = base64.b64encode(truncated_archive()).decode()
-        source = f"{KEPT_ROOT}/{FETCHLESS_HOME}/source"
-        as_home(stack, FETCHLESS_HOME,
-                f"mkdir {source} && printf 999.0.0.1 > {source}/LATEST_RELEASE_STABLE && for p in linux64 linux-arm64; do "
-                f"mkdir -p {source}/999.0.0.1/$p && echo {archive} | base64 -d > {source}/999.0.0.1/$p/chrome-$p.zip; done",
-                "the truncated archive and its list written")
-        t = Host(stack, c, FETCHLESS_HOME, ["--source", f"file://{source}/LATEST_RELEASE_STABLE",
-                                            "--storage", f"file://{source}"])
-        said = t.hello()
-        expect(said.get("error") == NOT_DOWNLOADED, "a truncated archive is not a Chrome: the same sentence", said)
-        eventually(lambda: (t.read(1_000), not t.running)[1], "that driver's session to end")
-        kept = in_store(stack, FETCHLESS_HOME)
-        expect(not kept["versions"] and not kept["staging"], "and nothing of it is published or left staged", kept)
+        expect(not report["over_cap"] and used < HOME_MAX_BYTES // 2,
+               "the home holds the profile well within its bound", [used, HOME_MAX_BYTES, report])
+        print(f"measure: the home holds {used / 1e6:.0f} MB of a {HOME_MAX_BYTES >> 20} MiB bound", flush=True)
 
         # ————— a Chrome that cannot start —————
         broken = Host(stack, c, BROKEN_HOME, ["--chrome", "/nonexistent/chromium"])

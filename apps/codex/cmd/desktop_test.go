@@ -47,6 +47,34 @@ func ownListener() (listen func() (net.Listener, error), address func() string) 
 	return listen, address
 }
 
+// A message to main that cannot be written ends desktop-serve: with main's
+// end of the pipe closed, the write of ready fails, the serve returns,
+// saying why, and nothing is served on its port afterwards.
+func TestDesktopServeEndsWhenAWriteToMainFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	inR, inW := io.Pipe()
+	t.Cleanup(func() { inW.Close() })
+	outR, outW := io.Pipe()
+	outR.Close()
+	listen, address := ownListener()
+	ended := make(chan error, 1)
+	go func() { ended <- runDesktopServe(context.Background(), listen, inR, outW) }()
+	select {
+	case err := <-ended:
+		if err == nil || !strings.Contains(err.Error(), "could not be written") {
+			t.Fatalf("desktop-serve ended with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("desktop-serve went on serving after a write to main failed")
+	}
+	if c, err := net.DialTimeout("tcp", address(), time.Second); err == nil {
+		c.Close()
+		t.Fatal("its port is still served")
+	}
+}
+
 // The app's cyfr binds the shell's listener before it says ready with the
 // chooser's address and its run token, holds it alone, and ends when main
 // says shutdown, locking and saying no lock of it.

@@ -4,6 +4,7 @@
 package desktop
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,12 +52,11 @@ func newApp(t *testing.T, dir string, client *http.Client) *app {
 		Record:      filepath.Join(dir, "holder.json"),
 		Client:      client,
 		DisplayName: "laptop",
-		Send: func(m Message) error {
+		Tell: func(m Message) {
 			if m.Type == TypeHome {
 				a.proposed.Store(m.Attempt)
 			}
 			a.sent <- m
-			return nil
 		},
 		Discover: func(_ context.Context, _ *http.Client, home string) (account.Discovered, error) {
 			a.discovered.Add(1)
@@ -798,37 +798,6 @@ func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
 	}
 }
 
-// The device's pages are served only once main was told the CYFR opened:
-// a write of opened that failed opens nothing, and the next Connect goes
-// on as if this one never ran.
-func TestAFailedWriteOfOpenedServesNoDevicePage(t *testing.T) {
-	a := newApp(t, t.TempDir(), offline())
-	send := a.Send
-	a.Send = func(m Message) error {
-		if m.Type == TypeOpened {
-			return errors.New("main's pipe is gone")
-		}
-		return send(m)
-	}
-	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
-	a.next(t)
-	a.ready("https://cyfr.example.com")
-	if got := answered(t, done); got.Next != "" || got.Error == "" {
-		t.Fatalf("a Connect whose opened was not written answered %+v", got)
-	}
-	if w := a.get("/"); w.Code != http.StatusSeeOther {
-		t.Fatal("the device's pages were served though main was never told")
-	}
-	a.Send = send
-	again := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
-	a.next(t)
-	a.ready("https://cyfr.example.com")
-	if got := answered(t, again); got.Next != "/" {
-		t.Fatalf("the next Connect answered %+v", got)
-	}
-	a.opened(t, "https://cyfr.example.com")
-}
-
 // Every locked names the CYFR cyfr holds committed, as home named it, and
 // none before one is committed: main keeps to what it names.
 func TestLockedNamesTheCommittedCYFR(t *testing.T) {
@@ -1488,6 +1457,50 @@ func TestHomeFailedEndsItsAttemptAloneAndIsNoLock(t *testing.T) {
 	}
 }
 
+// Nothing is written to main while holding what a lock needs: with main's
+// pipe never read, and every message given to it through the writer's
+// queue, as desktop-serve gives them (cmd's runDesktopServe), a lock
+// returns within its bound while a Connect's proposal waits for main, and
+// once main was told the CYFR opened.
+func TestALockWaitsOnNoProposalOrOpenedMainHasNotRead(t *testing.T) {
+	for _, at := range []string{"the proposal", "opened"} {
+		t.Run(at, func(t *testing.T) {
+			a := newApp(t, t.TempDir(), offline())
+			read, write := io.Pipe()
+			t.Cleanup(func() { read.Close() })
+			to := NewWriter(write, nil)
+			heard := a.Tell
+			a.Tell = func(m Message) {
+				heard(m)
+				_ = to.Queue(m)
+			}
+			done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+			if m := a.next(t); m.Type != TypeHome {
+				t.Fatalf("main was proposed %+v", m)
+			}
+			if at == "opened" {
+				// Main's answer waits on nothing of the test's: a write held
+				// under the service's mutex shows as no answer to the Connect.
+				go a.ready("https://cyfr.example.com")
+				if got := answered(t, done); got.Next != "/" {
+					t.Fatalf("Connect answered %+v", got)
+				}
+				a.opened(t, "https://cyfr.example.com")
+			}
+			locked := make(chan struct{})
+			go func() {
+				defer close(locked)
+				a.Lock("Locked.")
+			}()
+			select {
+			case <-locked:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the lock waited on main")
+			}
+		})
+	}
+}
+
 // Everything begun for a folder's CYFR ends as the app lets go of it: a
 // reading the app made and did not select at once, the CYFR selected as
 // the app leaves it (main's leave) or ends, and none before.
@@ -1511,6 +1524,22 @@ func TestTheAppEndsWhatAFolderBeganAsItLetsGo(t *testing.T) {
 				mu.Unlock()
 				return l, err
 			}
+			// The lock's hide, the first act after locked, finds the CYFR's
+			// Work not yet ended: the lock's one entry runs before the let-go.
+			var endedAtHide atomic.Int32
+			adapt := a.Shell
+			a.Shell = func(c *shell.Config) {
+				adapt(c)
+				hide := c.Restart
+				c.Restart = func() {
+					mu.Lock()
+					if works[len(works)-1].Context().Err() != nil {
+						endedAtHide.Add(1)
+					}
+					mu.Unlock()
+					hide()
+				}
+			}
 			a.post(t, "/bootstrap/state", map[string]string{})
 			a.openedFolder(t)
 			mu.Lock()
@@ -1531,6 +1560,9 @@ func TestTheAppEndsWhatAFolderBeganAsItLetsGo(t *testing.T) {
 			letGo(a)
 			if selected.Context().Err() == nil {
 				t.Fatal("the CYFR the app let go of was not ended")
+			}
+			if n := endedAtHide.Load(); n != 0 {
+				t.Fatalf("%d hides found the CYFR's Work ended already: the let-go ran before the lock", n)
 			}
 		})
 	}
@@ -1694,8 +1726,17 @@ func TestOnlyTheChoosersPageWaitsForAPick(t *testing.T) {
 func TestMainsFolderPickedNamesTheFolder(t *testing.T) {
 	a := newApp(t, t.TempDir(), nil)
 	a.Folder = "/home/ada/cyfr"
-	if err := a.Run(strings.NewReader(`{"version":1,"type":"folder-picked","path":"/home/ada/elsewhere","epoch":0,"pick":0}` + "\n")); err != nil {
+	// Main's pipe stays open: its end ends the service.
+	in, main := io.Pipe()
+	ran := make(chan error, 1)
+	go func() { ran <- a.Run(in) }()
+	t.Cleanup(func() { main.Close(); <-ran })
+	wait := a.awaitFolder(context.Background(), 0, nil)
+	if _, err := io.WriteString(main, `{"version":1,"type":"folder-picked","path":"/home/ada/elsewhere","epoch":0,"pick":0}`+"\n"); err != nil {
 		t.Fatal(err)
+	}
+	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
+		t.Fatalf("the pick answered %+v", got)
 	}
 	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
 		t.Fatalf("the chooser was shown %+v", got)
@@ -1763,6 +1804,56 @@ func driveSetup(a *app) *settingUp {
 		}
 	}
 	return d
+}
+
+// The service's end ends both of the chooser's unbounded waits, a pick's
+// and a setup's next step, and an ended service offers no setup's state.
+// A setup in flight is a person's run: the service's end does not stop
+// it; cyfr's exit after it ends the run's stdin, which part B's work
+// stops at, never killed (tests/setup-proof/app.sh, its quit row).
+func TestTheServicesEndEndsTheChoosersWaitsAndLeavesASetupRunning(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	a.Folder = "/home/ada/cyfr"
+	d := driveSetup(a)
+	started := a.post(t, "/bootstrap/start", map[string]string{})
+	setupCtx := <-d.ctxs
+	pick := a.awaitFolder(context.Background(), 0, nil)
+	step := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		raw, _ := json.Marshal(map[string]any{"token": a.Token, "seen": started.Setup.Seq})
+		r := httptest.NewRequest(http.MethodPost, "http://"+shell.Listen+"/bootstrap/setup", strings.NewReader(string(raw)))
+		r.Host = shell.Listen
+		r.Header.Set("Origin", shell.Origin)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, r)
+		step <- w
+	}()
+	if !waiting(pick) || !waiting(step) {
+		t.Fatal("a wait answered before anything happened")
+	}
+	a.End()
+	if got := folderAnswer(t, pick); got.Error == "" || got.Folder != "" {
+		t.Fatalf("the pick's wait answered %+v at the service's end", got)
+	}
+	select {
+	case w := <-step:
+		var got answer
+		if json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Error == "" || got.Setup != nil {
+			t.Fatalf("the setup's wait answered %d %s at the service's end", w.Code, w.Body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the setup's wait outlived the service")
+	}
+	for _, path := range []string{"/bootstrap/state", "/bootstrap/setup"} {
+		if w := a.request(context.Background(), path, map[string]string{}, nil); w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "steps") {
+			t.Fatalf("the ended service answered %s %d %s", path, w.Code, w.Body)
+		}
+	}
+	if setupCtx.Err() != nil {
+		t.Fatal("the service's end stopped the person's setup")
+	}
+	d.ends <- nil
 }
 
 // setupAfter is the setup's state once it changed past seen, within 5 s.
@@ -2257,5 +2348,148 @@ func TestEveryRequestAndMessageThatActsIsRefusedWhenStale(t *testing.T) {
 		before, record := a.post(t, "/bootstrap/state", map[string]string{}), a.record(t)
 		a.answered(localAddress, 7, ready)
 		unchanged(t, a, before, record, runs, fmt.Sprintf("an answer (ready %v) to no proposal", ready))
+	}
+}
+
+// A write to main that fails ends the service, the app being gone: with
+// main's pipe closed after it read the proposal, before opened is written,
+// the service ends once that write fails, and serves nothing afterwards,
+// neither the device's pages nor the chooser.
+func TestAWriteToMainThatFailsEndsTheService(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	read, write := io.Pipe()
+	to := NewWriter(write, a.End)
+	heard := a.Tell
+	a.Tell = func(m Message) {
+		heard(m)
+		_ = to.Queue(m)
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	if m := a.next(t); m.Type != TypeHome {
+		t.Fatalf("main was proposed %+v", m)
+	}
+	if _, err := bufio.NewReader(read).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	read.Close()
+	a.ready("https://cyfr.example.com")
+	answered(t, done)
+	a.opened(t, "https://cyfr.example.com")
+	deadline := time.Now().Add(5 * time.Second)
+	for a.get("/").Code != http.StatusServiceUnavailable && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond) // sleep-ok: polls the writer's own goroutine, bounded
+	}
+	if w := a.get("/"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("after the write of opened failed the device's pages answered %d", w.Code)
+	}
+	if w := a.get("/bootstrap/"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("after the write of opened failed the chooser answered %d", w.Code)
+	}
+}
+
+// A lock tells main locked without waiting for main to take it: with main
+// reading nothing, the lock returns all the same.
+func TestALockTellsMainWithoutWaiting(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	told := make(chan Message, 1)
+	a.Tell = func(m Message) { told <- m }
+	locked := make(chan struct{})
+	go func() {
+		defer close(locked)
+		a.Lock("Locked.")
+	}()
+	select {
+	case <-locked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the lock waited for main")
+	}
+	if m := <-told; m.Type != TypeLocked {
+		t.Fatalf("main was told %+v", m)
+	}
+}
+
+// folderWork is the app with the folder remembered, every reading of it
+// under the one Work returned.
+func folderWork(t *testing.T) (*app, *shell.Work) {
+	t.Helper()
+	var running atomic.Bool
+	running.Store(true)
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	work := shell.NewWork(t.Context())
+	read := a.Local
+	a.Local = func(project string) (Local, error) {
+		l, err := read(project)
+		l.Work = work
+		return l, err
+	}
+	return a, work
+}
+
+// A folder's Work has its holder with no gap: the service holds it by the
+// time main is told opened, under the same hold of its mutex that
+// publishes the pages, so the End a failed write of opened makes ends it,
+// and nothing attaches it after that End.
+func TestAFailedOpenedWriteEndsTheFolderWork(t *testing.T) {
+	a, work := folderWork(t)
+	r, w := io.Pipe()
+	t.Cleanup(func() { r.Close(); w.Close() })
+	ended := make(chan struct{})
+	to := NewWriter(w, func() {
+		a.End()
+		close(ended)
+	})
+	var heldAtOpened atomic.Bool
+	tell := a.Tell
+	a.Tell = func(m Message) {
+		tell(m)
+		if m.Type == TypeOpened {
+			// Told under the service's mutex, which guards here.
+			heldAtOpened.Store(a.here != nil && a.here.Work == work)
+		}
+		if err := to.Queue(m); err != nil {
+			t.Error(err)
+		}
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": localAddress})
+	if _, err := bufio.NewReader(r).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	a.next(t)
+	r.Close()
+	a.ready(localAddress)
+	answered(t, done)
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the failed write of opened did not end the service")
+	}
+	if !heldAtOpened.Load() {
+		t.Fatal("main was told opened before the service held the folder's Work")
+	}
+	if work.Context().Err() == nil {
+		t.Fatal("the failed write's End left the folder's Work alive")
+	}
+}
+
+// A lock that lets go of the folder ends its Work on every way out: a hide
+// that panics still ends it.
+func TestLeavingEndsTheFolderWorkThoughTheHidePanics(t *testing.T) {
+	a, work := folderWork(t)
+	adapt := a.Shell
+	a.Shell = func(c *shell.Config) {
+		adapt(c)
+		c.Restart = func() { panic("hide interrupted") }
+	}
+	a.openedFolder(t)
+	func() {
+		defer func() {
+			if recover() != "hide interrupted" {
+				t.Error("the hide did not panic")
+			}
+		}()
+		a.lock("", true)
+	}()
+	if work.Context().Err() == nil {
+		t.Fatal("the folder's Work outlived the panicking lock that let go of it")
 	}
 }

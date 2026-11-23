@@ -4,14 +4,19 @@
 package desktop
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type processVectors struct {
@@ -58,11 +63,15 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 			attempt, _ := o["attempt"].(float64)
 			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
 				Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), Road: str(o, "road")}
-			var out bytes.Buffer
-			if err := NewWriter(&out).Send(m); err != nil {
+			read, write := io.Pipe()
+			t.Cleanup(func() { read.Close() })
+			if err := NewWriter(write, nil).Queue(m); err != nil {
 				t.Fatal(err)
 			}
-			line := out.String()
+			line, err := bufio.NewReader(read).ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
 			if strings.Count(line, "\n") != 1 || !strings.HasSuffix(line, "\n") {
 				t.Fatalf("not one line: %q", line)
 			}
@@ -128,14 +137,88 @@ func TestCyfrRefusesEachRefusedLine(t *testing.T) {
 // cyfr sends only its own messages, each whole.
 func TestCyfrSendsNothingMainSends(t *testing.T) {
 	for _, typ := range append([]string{"unlock"}, fromMain...) {
-		if err := NewWriter(&bytes.Buffer{}).Send(Message{Type: typ, Home: "https://x"}); err == nil {
+		if err := NewWriter(io.Discard, nil).Queue(Message{Type: typ, Home: "https://x"}); err == nil {
 			t.Errorf("sent %s", typ)
 		}
 	}
-	if err := NewWriter(&bytes.Buffer{}).Send(Message{Type: TypeHome, Home: "https://x", Account: "https://y"}); err == nil {
+	if err := NewWriter(io.Discard, nil).Queue(Message{Type: TypeHome, Home: "https://x", Account: "https://y"}); err == nil {
 		t.Error("sent home without its attempt")
 	}
-	if err := NewWriter(&bytes.Buffer{}).Send(Message{Type: TypeHome, Home: "https://x", Attempt: 1}); err == nil {
+	if err := NewWriter(io.Discard, nil).Queue(Message{Type: TypeHome, Home: "https://x", Attempt: 1}); err == nil {
 		t.Error("sent home without its account service")
+	}
+}
+
+// The writer keeps the order its lines were given in, and Queue returns
+// while main reads nothing.
+func TestWriter_QueueWaitsOnNoPeerAndKeepsTheOrder(t *testing.T) {
+	read, write := io.Pipe()
+	to := NewWriter(write, nil)
+	// The writer holds this line, which main does not read.
+	_ = to.Queue(Message{Type: TypeReady, URL: "http://127.0.0.1:7340/"})
+	queued := make(chan struct{})
+	go func() {
+		defer close(queued)
+		for range 3 {
+			_ = to.Queue(Message{Type: TypeLocked})
+		}
+	}()
+	select {
+	case <-queued:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Queue waited for main to read")
+	}
+	_ = to.Queue(Message{Type: TypeOpened, Home: "https://x.example"})
+	lines := bufio.NewScanner(read)
+	var types []string
+	for len(types) < 5 && lines.Scan() {
+		var m map[string]any
+		if err := json.Unmarshal(lines.Bytes(), &m); err != nil {
+			t.Fatal(err)
+		}
+		types = append(types, m["type"].(string))
+	}
+	if strings.Join(types, " ") != "ready locked locked locked opened" {
+		t.Fatalf("main read %v", types)
+	}
+}
+
+// TestWriterHelper writes to its standard output after main closed it,
+// for TestWriter_AClosedPipeIsAnErrorNotTheEnd.
+func TestWriterHelper(t *testing.T) {
+	if os.Getenv("CYFR_WRITER_HELPER") == "" {
+		t.Skip("run by TestWriter_AClosedPipeIsAnErrorNotTheEnd")
+	}
+	to := NewWriter(os.Stdout, nil)
+	// sleep-ok: the parent closes its end of the pipe meanwhile
+	time.Sleep(500 * time.Millisecond)
+	_ = to.Queue(Message{Type: TypeLocked})
+	// The write fails on the closed pipe; with SIGPIPE taken it ends this
+	// process first.
+	_, err := os.Stdout.Write([]byte("\n"))
+	fmt.Fprintf(os.Stderr, "written: %v\n", err)
+	// What the test binary reports after this test (its coverage, under
+	// -cover) goes where the parent reads, not to the pipe it closed.
+	os.Stdout = os.Stderr
+}
+
+// A write to a pipe main closed is an error the process lives on after,
+// never a SIGPIPE that ends it before a lock ends its sessions.
+func TestWriter_AClosedPipeIsAnErrorNotTheEnd(t *testing.T) {
+	helper := exec.Command(os.Args[0], "-test.run=^TestWriterHelper$")
+	helper.Env = append(os.Environ(), "CYFR_WRITER_HELPER=1")
+	out, err := helper.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var said strings.Builder
+	helper.Stderr = &said
+	if err := helper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	out.Close()
+	err = helper.Wait()
+	if err != nil || !strings.Contains(said.String(), "written: ") || strings.Contains(said.String(), "written: <nil>") {
+		t.Fatalf("the helper ended with %v, saying:\n%s", err, said.String())
 	}
 }

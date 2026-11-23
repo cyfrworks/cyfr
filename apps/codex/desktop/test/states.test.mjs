@@ -303,6 +303,33 @@ test("cyfr's loss ends main from any state, closing first, and signs nobody out"
   assert.deepEqual(run([...open, {type: "gone", why: "x"}, {type: "quit"}]).effects.at(-1), {quit: true}, "but quitting, which goes")
 })
 
+test("the screen shell's ending closes at once and quits, settling no lock, so nothing opens after it", () => {
+  const screen = (events) => {
+    let st = initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr")
+    const effects = []
+    for (const e of events) {
+      const next = step(st, e)
+      st = next.state
+      effects.push(...next.do)
+    }
+    return {s: st, effects}
+  }
+  const LOOP = {type: "ready", url: "http://127.0.0.1:7340/"}
+  const LOCAL = "http://localhost:4000"
+  const mine = (attempt) => ({type: "home", message: {type: "home", home: LOCAL, account: LOCAL, attempt}})
+  const shown = [LOOP, mine(1), taken, {type: "opened", home: LOCAL}]
+  const ending = {type: "ending", message: {type: "ending"}}
+  for (const [name, before] of Object.entries({"open": shown, "locking, the forget still running": [...shown, locked()],
+    "locking, its proposal wanted": [...shown, locked(), mine(2)], "taking": [LOOP, mine(1)], "at the device's page": [LOOP]})) {
+    const {s, effects} = screen([...before, ending])
+    const last = effects.slice(-2)
+    assert.equal(s.name, "ended", name)
+    assert.deepEqual(last, [{close: true}, {say: "cyfr ended: the screen shell is ending", quit: true}], name)
+    const after = screen([...before, ending, forgot, taken, mine(3), locked(), {type: "gone", why: "it exited (0)"}])
+    assert.deepEqual(after.effects.slice(effects.length), [], `${name}: nothing after the ending`)
+  }
+})
+
 test("quitting closes and quits, from any state, and signs nobody out", () => {
   for (const before of [[ready], proposed, open, [...open, company]]) {
     const {kinds} = run([...before, {type: "quit"}], true)
@@ -525,6 +552,28 @@ test("an act is no redirect, and is begun by the top frame's own document that o
   }
 })
 
+test("on the box's screen none of the chooser's acts is offered or accepted, from any page of it", () => {
+  const SCREEN_PAGE = "http://127.0.0.1:7340/"
+  const screen = (events) => {
+    let s = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr")
+    for (const e of [{type: "ready", url: SCREEN_PAGE}, ...events]) s = step(s, e).state
+    return s
+  }
+  const states = {"the shell's page": screen([]), "a CYFR open": screen([home(), taken, {type: "opened", home: HOME}])}
+  for (const [where, s] of Object.entries(states)) {
+    for (const act of ["pick", "external", "another", "again"]) {
+      for (const {name, event, acted} of PRESSES[act]) {
+        for (const by of [SCREEN_PAGE, CHOOSER_DOC, atWays]) {
+          const r = step(s, {...event, by, showing: by})
+          assert.ok(!acted(r), `${where}: ${name} from ${by} acted`)
+          assert.equal(r.allow, false, `${where}: ${name} from ${by} loaded`)
+          assert.ok(!r.do.some((e) => e.pick || e.external || e.root || e.forget), `${where}: ${name} from ${by}: ${JSON.stringify(r.do)}`)
+        }
+      }
+    }
+  }
+})
+
 // The chooser's Change…, pressed on the chooser with no CYFR open.
 const change = navigate({url: PICK, showing: CHOOSER_DOC, by: CHOOSER_DOC})
 const picked = (id, path) => ({type: "picked", id, path})
@@ -602,4 +651,152 @@ test("the chooser's links open in the person's browser: Docker's pages, as the v
     assert.equal(r.allow, false, url)
     assert.deepEqual(r.do, [], url)
   }
+})
+
+// The box's screen and its shell agree from any order of their messages
+// (cmd/screen_app.go is the shell's side, modelled here as it is written):
+// from nothing said, the shell's first message is ready, with its proposal
+// of its CYFR as attempt 1 in the same step (one hold of its mutex); it
+// answers opened to the current attempt's home-ready alone and once, and
+// on every lock after ready, its own or main's, says locked naming no CYFR
+// and proposes again as the next attempt, while a lock before ready says
+// nothing (the page ready names says it). Every order of the shell's
+// ready, of delivering either side's messages, of the takes and clears
+// ending (in the order they were asked, as app.js chains them), and of up
+// to two locks of the shell's own, a keyboard that ends (before ready or
+// after it) and one lost page of main's (every state they reach, each
+// walked once), ends with main keeping to the CYFR on the device's own
+// page: never stranded keeping to none, never ended. The shell's own end,
+// at any point, is its last lock, saying ending and nothing after it, and
+// then its exit reaching main, in either order with what is still on the
+// way: main ends showing nothing, and opens no window once it read ending.
+test("the screen ends on its CYFR whatever the order of its messages", () => {
+  const LOOP = "http://127.0.0.1:7340/"
+  const CYFR = "http://localhost:4000"
+  const initialWorld = (endable) => ({
+    main: initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr"),
+    shell: {ready: false, attempt: 0, answered: false, locks: 2, keyboard: 1, gone: false, ending: false, exited: false, endable},
+    toMain: [],
+    toShell: [], pending: [], showing: "", lost: 1, trace: [],
+    // The chooser's moves that reach main (the setup's answers are the
+    // page's and cyfr's, never main's, and main reads no folder-picked):
+    // Change… pressed on what the screen shows, and a dialog's result, each
+    // once, at any point, after main ended too.
+    presses: 1, results: 1
+  })
+  const clone = (w) => structuredClone(w)
+  const propose = (w) => {
+    w.shell.attempt++
+    w.shell.answered = false
+    w.toMain.push({type: "home", message: {type: "home", home: CYFR, account: CYFR, attempt: w.shell.attempt}})
+  }
+  const hide = (w) => {
+    if (!w.shell.ready || w.shell.ending) return
+    w.shell.attempt++
+    w.shell.answered = false
+    w.toMain.push({type: "locked", message: {type: "locked"}},
+      {type: "home", message: {type: "home", home: CYFR, account: CYFR, attempt: w.shell.attempt}})
+  }
+  const carry = (w, next) => {
+    w.main = next.state
+    for (const effect of next.do) {
+      if (effect.send) w.toShell.push({type: effect.send.type, ...(effect.send.fields ?? {})})
+      if (effect.take) w.pending.push({type: "taken", taken: true})
+      if (effect.forget) w.pending.push({type: "forgot", cleared: true})
+      if (effect.chooser) w.showing = w.main.readyURL
+      if ((effect.chooser || effect.root) && w.endingRead) w.openedForEnding = true
+      if (effect.close) w.showing = ""
+      if (effect.end || effect.quit) w.ended = JSON.stringify(effect)
+      if (effect.pick || effect.external || effect.send?.type === "folder-picked") w.picked = JSON.stringify(effect)
+    }
+  }
+  const chooserMoves = (w, out) => {
+    if (w.presses > 0) {
+      out.push(["Change… is pressed", (x) => {
+        x.presses--
+        const shown = x.showing || LOOP
+        carry(x, step(x.main, {type: "navigate", window: "content", url: LOOP + "bootstrap/pick?epoch=0&pick=0", target: "top", asker: "top",
+          showing: shown, by: shown}))
+      }])
+    }
+    if (w.results > 0) out.push(["a dialog's result arrives", (x) => { x.results--; carry(x, step(x.main, {type: "picked", id: 1, path: "/home/a"})) }])
+  }
+  const moves = (w) => {
+    const out = []
+    chooserMoves(w, out)
+    if (w.ended || w.shell.gone) return out
+    if (w.toMain.length) {
+      out.push(["to main", (x) => {
+        const m = x.toMain.shift()
+        if (m.type === "ending") x.endingRead = true
+        carry(x, step(x.main, m.type === "ready" ? m : m.type === "opened" ? m : {type: m.type, message: m.message}))
+      }])
+    }
+    if (w.toShell.length) {
+      out.push(["to the shell", (x) => {
+        const m = x.toShell.shift()
+        if (x.shell.ending) return
+        if (m.type === "home-ready" && m.attempt === x.shell.attempt && !x.shell.answered) {
+          x.shell.answered = true
+          x.toMain.push({type: "opened", home: CYFR})
+        }
+        if (m.type === "home-failed" && m.attempt === x.shell.attempt) x.shell.gone = true
+        if (m.type === "lock" || m.type === "leave") hide(x)
+      }])
+    }
+    if (w.pending.length) out.push(["a take or clear ends", (x) => carry(x, step(x.main, x.pending.shift()))])
+    if (!w.shell.ready) {
+      out.push(["the shell says ready", (x) => {
+        x.shell.ready = true
+        x.toMain.push({type: "ready", url: LOOP})
+        propose(x)
+      }])
+    }
+    if (w.shell.endable && !w.shell.ending) {
+      out.push(["the shell ends", (x) => {
+        // Its last lock: ending in place of locked, and nothing after it.
+        x.shell.ending = true
+        if (x.shell.ready) x.toMain.push({type: "ending", message: {type: "ending"}})
+      }])
+    } else if (w.shell.ending && !w.shell.exited) {
+      out.push(["cyfr's exit reaches main", (x) => { x.shell.exited = true; carry(x, step(x.main, {type: "gone", why: "it exited (0)"})) }])
+    }
+    if (w.shell.locks > 0 && !w.shell.ending) out.push(["the shell locks", (x) => { x.shell.locks--; hide(x) }])
+    if (w.shell.keyboard > 0 && !w.shell.ending) out.push(["the keyboard ends", (x) => { x.shell.keyboard--; hide(x) }])
+    if (w.lost > 0 && w.main.name !== "starting") out.push(["main's page is lost", (x) => { x.lost--; carry(x, step(x.main, {type: "lost"})) }])
+    return out
+  }
+  const seen = new Set()
+  let ends = 0
+  let endings = 0
+  const walk = (w) => {
+    const key = JSON.stringify({...w, trace: undefined})
+    if (seen.has(key)) return
+    seen.add(key)
+    const next = moves(w)
+    if (next.length === 0) {
+      ends++
+      assert.ok(!w.picked, `the screen asked for or answered a pick (${w.picked}) after ${w.trace.join(" > ")}`)
+      if (w.shell.ending) {
+        assert.ok(!w.openedForEnding, `a window opened once main read the shell's ending, after ${w.trace.join(" > ")}`)
+        assert.ok(w.ended && w.showing === "", `it ended ${w.main.name} showing "${w.showing}" after ${w.trace.join(" > ")}`)
+        endings++
+        return
+      }
+      assert.ok(!w.ended && !w.shell.gone, `it ended (${w.ended ?? "the shell gone"}) after ${w.trace.join(" > ")}`)
+      assert.ok(w.main.name === "open" && w.main.home === CYFR && w.showing === LOOP,
+        `it ended ${w.main.name} keeping to "${w.main.home}" showing "${w.showing}" after ${w.trace.join(" > ")}`)
+      return
+    }
+    for (const [name, move] of next) {
+      const x = clone(w)
+      x.trace.push(name)
+      move(x)
+      walk(x)
+    }
+  }
+  walk(initialWorld(false))
+  assert.ok(ends > 0 && endings === 0 && seen.size > 500, `only ${seen.size} states were walked`)
+  walk(initialWorld(true))
+  assert.ok(endings > 0, "no walk ended with the shell's end")
 })

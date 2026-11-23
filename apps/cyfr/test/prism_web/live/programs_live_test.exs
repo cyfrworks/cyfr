@@ -1218,7 +1218,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "aqua-browser")
     assert Opus.Programs.Definition.browser?(row)
-    # Its folder holds a Chrome, a second being fetched beside it, and the profile.
+    # Its folder holds the profile; the Chromium it runs is the image's.
     assert row.home_max_bytes == 2 * 1024 * 1_048_576
     assert open_confirmations(user, athanor) == []
     refute_received {:session, "open", _message, _fields}

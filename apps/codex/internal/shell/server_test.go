@@ -198,7 +198,9 @@ func TestServer_ReadingAPageChangesNothing(t *testing.T) {
 
 // Prism's Lock is a top-level navigation to /lock: a GET from no page of
 // the shell's locks the screen, retires each session it opened and
-// returns to the lock page, and a repeated one is a harmless success.
+// returns to the lock page, and a repeated one is a harmless success: it
+// tells the CYFR nothing more, and hides the screen once more, as every
+// lock does.
 func TestServer_PrismsLockIsANavigationThatLocks(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
@@ -207,8 +209,8 @@ func TestServer_PrismsLockIsANavigationThatLocks(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" || b.shell.Unlocked() || len(home.locked) != 1 {
 		t.Fatalf("GET /lock answered %d %q, unlocked %v, locked %v", w.Code, w.Header().Get("Location"), b.shell.Unlocked(), home.locked)
 	}
-	if w := b.do(http.MethodGet, "/lock", "", nil); w.Code != http.StatusSeeOther || len(home.locked) != 1 || b.restarts.Load() != 1 {
-		t.Fatalf("a repeated GET /lock did more: %d %v", w.Code, home.locked)
+	if w := b.do(http.MethodGet, "/lock", "", nil); w.Code != http.StatusSeeOther || len(home.locked) != 1 || b.restarts.Load() != 2 {
+		t.Fatalf("a repeated GET /lock did more, or did not hide: %d %v, %d hides", w.Code, home.locked, b.restarts.Load())
 	}
 }
 
@@ -621,5 +623,22 @@ func TestServer_APlainReadShowsNoPasskeyRequest(t *testing.T) {
 	}
 	if again := body(b.do(http.MethodGet, "/passkey?ref=pkw_1", "", nil)); !strings.Contains(again, code) {
 		t.Fatalf("the request is no longer drawn for its own reference:\n%s", again)
+	}
+}
+
+// The device's pages, which the box's screen shows as its own, serve none
+// of the chooser's routes (internal/desktop's /bootstrap/): a setup's
+// start, an open, a pick or a Docker check is the chooser's alone, which
+// the screen has none of.
+func TestTheDevicesPagesServeNoneOfTheChoosersRoutes(t *testing.T) {
+	for path := range reads {
+		if strings.HasPrefix(path, "/bootstrap") {
+			t.Errorf("the device's pages read %s", path)
+		}
+	}
+	for path := range actions {
+		if strings.HasPrefix(path, "/bootstrap") {
+			t.Errorf("the device's pages act on %s", path)
+		}
 	}
 }

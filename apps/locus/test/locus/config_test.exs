@@ -377,6 +377,7 @@ defmodule Locus.ConfigTest do
     spawn = %{
       type: :spawn,
       id: "1",
+      place: "pl-1",
       pool: "build",
       argv: ["true"],
       attach: %{path: "/run/a.sock", token: String.duplicate("ab", 32)},

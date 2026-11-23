@@ -188,6 +188,7 @@ func TestMessageBodies(t *testing.T) {
 		"an image": imageMessage{T: "image", ID: 12, Seq: 3,
 			JPEG: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q=="},
 		"uncast": uncastMessage{T: "uncast", ID: 12},
+		"bye":    byeMessage{T: "bye"},
 	} {
 		if got := string(must(json.Marshal(message))); got != bodies[name] {
 			t.Errorf("%s: marshals to %s, want %s", name, got, bodies[name])

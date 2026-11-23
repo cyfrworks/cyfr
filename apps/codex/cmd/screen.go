@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/holder"
 	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
@@ -88,11 +89,20 @@ var screenShellCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runScreenShell(cmd.Context(), shell.ListenLoopback)
+		browse := chromeBrowser
+		if screenForApp {
+			browse = appBrowser(os.Stdin, os.Stdout)
+		}
+		return runScreenShell(cmd.Context(), shell.ListenLoopback, browse)
 	},
 }
 
+// screenForApp is `cyfr screen shell --app`: the CYFR app's main process
+// started this shell, and is its browser (screenApp).
+var screenForApp bool
+
 func init() {
+	screenShellCmd.Flags().BoolVar(&screenForApp, "app", false, "the CYFR app started this shell and shows its pages, talking to it over stdin and stdout")
 	screenCmd.AddCommand(screenOnCmd, screenOffCmd, screenShellCmd)
 	rootCmd.AddCommand(screenCmd)
 }
@@ -339,15 +349,15 @@ const (
 
 // runScreenShell is the screen's session inside labwc: the shell's pages on
 // loopback (listen takes their address), the on-screen keyboard, the
-// watches that lock it (screenWatches) and Chrome on those pages. While
-// those watches are not known to work it runs on locked, its page saying
-// why.
-// Chrome's exit locks in every state, for the proof its page held is gone
-// with it, and starts it again on the shell's page; this process's own end
-// (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
-// the sessions at the home first, then starts Chrome again, so no page of
-// the unlocked session outlives it.
-func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) error {
+// watches that lock it (screenWatches) and the browser browse gives on
+// those pages (screenBrowser), shown once the keyboard and the watches
+// are up (screenWatches.watch). While the keyboard or those watches are
+// not known to work it runs on locked, its page saying why.
+// The browser's end locks; this process's own end (SIGTERM, SIGINT,
+// SIGHUP) locks before it exits. Any lock hides what is on the screen
+// first (the browser's hide), then ends the sessions at the home, so no
+// page of the unlocked session outlives it.
+func runScreenShell(ctx context.Context, listen func() (net.Listener, error), browse func(dir string, l desktop.Local) (screenBrowser, error)) error {
 	_ = holder.HardenProcess()
 	dir, err := os.Getwd()
 	if err != nil {
@@ -361,39 +371,26 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 	if err != nil {
 		return fmt.Errorf("The screen cannot read how CYFR is reached here (%v)", err)
 	}
-	chromeArgs := []string{"--no-first-run", "--no-default-browser-check", "--disable-extensions",
-		"--ozone-platform=wayland", "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome"), "--app=" + shell.Origin + "/"}
-
-	if local.Proxy != "" {
-		chromeArgs = append(chromeArgs, "--proxy-server="+local.Proxy, "--host-resolver-rules="+local.Resolver)
-	} else {
-		chromeArgs = append(chromeArgs, "--host-resolver-rules="+localhostIsIPv4)
-	}
-
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer stop()
-	// A Chrome a killed shell left behind still shows its pages: it ends
-	// before this shell starts its own, on the lock page.
-	profile := "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome")
-	_ = exec.Command("pkill", "-f", "--", profile).Run()
-	// So do a keyboard and a suspend watch a killed shell left, the watch
+	browser, err := browse(dir, local)
+	if err != nil {
+		return err
+	}
+	// A keyboard and a suspend watch a killed shell left, the watch
 	// aimed at that shell's pid.
 	_ = exec.Command("pkill", "-x", "wvkbd-mobintl").Run()
 	_ = exec.Command("pkill", "-f", "--", "^swayidle -d -w -C /dev/null before-sleep kill -USR1 ").Run()
-	chrome := &screenChrome{args: chromeArgs}
 	host, _ := os.Hostname()
 	ln, device, err := screenClaim(listen, dir)
 	if err != nil {
 		return err
 	}
-	// A page shown as the watches were lost gives way to the one that says so.
-	watches := newScreenWatches(screenIdle, func(why string) {
-		if why != "" {
-			chrome.restart()
-		}
-	})
+	// A watch lost locks, and the lock hides the page shown then, which
+	// gives way to the one that says why (shell.Shell.Lock).
+	watches := newScreenWatches(screenIdle, nil)
 	cfg := local.Shell
-	cfg.DisplayName, cfg.Restart = host, chrome.restart
+	cfg.DisplayName, cfg.Restart = host, browser.hide
 	cfg.Record = filepath.Join(device, "holder.json")
 	cfg.Clients = shell.ClientFile(filepath.Join(device, "client.json"))
 	cfg.Unwatched = watches.Unwatched
@@ -419,15 +416,6 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 	served := make(chan error, 1)
 	go func() { served <- srv.ServeOn(ctx, ln) }()
 
-	keyboard := screenChild(exec.Command("wvkbd-mobintl"))
-	_ = keyboard.Start()
-	defer func() {
-		if keyboard.Process != nil {
-			_ = keyboard.Process.Kill()
-			_ = keyboard.Wait()
-		}
-	}()
-
 	watches.lock = func(why string) { sh.Lock(why) }
 	watching, stopWatching := context.WithCancel(ctx)
 	kept := make(chan struct{})
@@ -447,32 +435,19 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error)) er
 
 	browsing, stopBrowsing := context.WithCancel(ctx)
 	defer stopBrowsing()
-	browser := make(chan error, 1)
-	go func() {
-		for browsing.Err() == nil {
-			if err := chrome.run(browsing); err != nil {
-				browser <- err
-				return
-			}
-			if browsing.Err() == nil {
-				sh.Lock("Locked because the browser closed.")
-			}
-			select {
-			case <-browsing.Done():
-			case <-time.After(time.Second):
-			}
-		}
-	}()
+	shown := make(chan error, 1)
+	go func() { shown <- browser.show(browsing, sh.Lock) }()
 
 	var ended error
 	select {
 	case <-ctx.Done():
 	case ended = <-served:
-	case err := <-browser:
-		ended = fmt.Errorf("Chrome did not start (%v)", err)
+	case ended = <-shown:
 	case err := <-moved:
 		ended = fmt.Errorf("The screen starts again on this folder's settings (%v)", err)
 	}
+	// The last lock hides as the screen's end, after which nothing shows.
+	browser.end()
 	sh.Lock("")
 	stopBrowsing()
 	return ended
@@ -501,6 +476,29 @@ func screenClaim(listen func() (net.Listener, error), dir string) (net.Listener,
 // the screen never runs: the screen runs on Ubuntu alone.
 const sigUSR1 = syscall.Signal(10)
 
+// chromeBrowser is Chrome as the screen's browser, on the shell's pages
+// in dir's profile, by l's route.
+func chromeBrowser(dir string, l desktop.Local) (screenBrowser, error) {
+	profile := "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome")
+	args := []string{"--no-first-run", "--no-default-browser-check", "--disable-extensions",
+		"--ozone-platform=wayland", profile, "--app=" + shell.Origin + "/"}
+	if l.Proxy != "" {
+		args = append(args, "--proxy-server="+l.Proxy, "--host-resolver-rules="+l.Resolver)
+	} else {
+		args = append(args, "--host-resolver-rules="+localhostIsIPv4)
+	}
+	// A Chrome a killed shell left behind still shows its pages: it ends
+	// before this shell starts its own, on the lock page.
+	_ = exec.Command("pkill", "-f", "--", profile).Run()
+	return &screenChrome{args: args}, nil
+}
+
+// appBrowser is the CYFR app as the screen's browser, its messages read
+// from in and written to out.
+func appBrowser(in io.Reader, out io.Writer) func(string, desktop.Local) (screenBrowser, error) {
+	return func(_ string, l desktop.Local) (screenBrowser, error) { return newScreenApp(in, out, l) }
+}
+
 // screenChrome is the one Chrome the screen runs.
 type screenChrome struct {
 	args []string
@@ -524,8 +522,30 @@ func (c *screenChrome) run(ctx context.Context) error {
 	return nil
 }
 
-// restart ends Chrome, whose loop starts it again on the lock page.
-func (c *screenChrome) restart() {
+// show runs Chrome on the shell's pages, again a second after each exit,
+// which locks: the proof its page held is gone with it.
+func (c *screenChrome) show(ctx context.Context, lock func(string)) error {
+	for ctx.Err() == nil {
+		if err := c.run(ctx); err != nil {
+			return fmt.Errorf("Chrome did not start (%v)", err)
+		}
+		if ctx.Err() == nil {
+			lock("Locked because the browser closed.")
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+		}
+	}
+	return nil
+}
+
+// end changes nothing: Chrome's loop ends with the show's context, and
+// the last hide ends Chrome.
+func (c *screenChrome) end() {}
+
+// hide ends Chrome, whose loop starts it again on the lock page.
+func (c *screenChrome) hide() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.proc != nil {

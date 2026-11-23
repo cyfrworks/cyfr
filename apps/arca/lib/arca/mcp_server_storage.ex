@@ -53,7 +53,7 @@ defmodule Arca.McpServerStorage do
   # The brains' drivers, each a command's first word (`driver/1`), by its
   # name or by the path the box installs it at (`Dockerfile.locus`).
   @drivers ~w(cyfr-claude-code cyfr-codex)
-  @driver_dir "/usr/local/bin"
+  @driver_dir "/opt/cyfr/bin"
 
   # A program's settings, which `update/4` writes as named (nil clears one).
   @program_columns [
@@ -88,7 +88,7 @@ defmodule Arca.McpServerStorage do
   The driver a program row's command names as its first word, one of the
   brains' drivers built into the box beside the harness each drives
   (`Dockerfile.locus`), by its name or by the path the box installs it
-  at (`/usr/local/bin/cyfr-codex` is `cyfr-codex`), or nil: a bare
+  at (`/opt/cyfr/bin/cyfr-codex` is `cyfr-codex`), or nil: a bare
   harness, another program, a tool server, no command. The one answer
   to which driver a row runs: the holder (`Opus.Brain`) and a brain's
   status (`Aqua.Models`) read it. What a kept row's folder holds of a

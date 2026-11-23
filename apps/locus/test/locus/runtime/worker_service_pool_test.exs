@@ -26,7 +26,10 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   relay gone, or going as the assign arrived, its handle gone, its channel
   closed before the write) is sent once more, to another runner, and the
   service lives through each. One that may have reached its runner is not,
-  and the service lives through that too.
+  and the service lives through that too. A start whose first runner's
+  keeper leaves its assign unanswered goes to another within its deadline,
+  and past the deadline is unavailable with its work written to neither
+  runner, both retired.
 
   A keeper that refuses every runner makes the status report the
   refusal, with the keeper's reason and the sentence naming what the
@@ -72,7 +75,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       {Locus.Runtime.RunnerPool,
        settings: settings,
        keeper: ScriptedKeeper,
-       keeper_opts: [memory_bytes: @bound],
+       keeper_opts: [memory_bytes: @bound, name: keeper],
        supervisor: Locus.Runtime.RunnerPool.Runners,
        command: %{argv: ["runner"], env: %{"KEEPER" => Atom.to_string(keeper)}}}
     )
@@ -260,6 +263,60 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       assert {503, %{"error" => "unavailable"}} = Task.await(started, 15_000)
       assert Process.whereis(WorkerService) == service
       assert given(context, attempt) == []
+    end
+
+    @tag :capture_log
+    @tag timeout: 30_000
+    test "is given another within its deadline when its keeper leaves the first assign unanswered, and once the deadline passes is unavailable, its work written to neither runner and neither offered again",
+         context do
+      attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+      first = waiting!(context).spec.runner
+      :ok = ScriptedKeeper.assigning(context.keeper, :held)
+      started = Task.async(fn -> post(context, :start, start_args(attempt)) end)
+
+      # The first runner's assign is held past its wait, and the start goes
+      # on to another runner, whose assign is held too.
+      held = fn -> Enum.map(ScriptedKeeper.held_assigns(context.keeper), &elem(&1, 0)) end
+      wait_until(fn -> held.() == [first] end, 5_000, "the first runner's assign held")
+
+      wait_until(
+        fn -> match?([_], held.() -- [first]) end,
+        10_000,
+        "a second runner's assign held"
+      )
+
+      [second] = held.()
+
+      assert {503, %{"error" => "unavailable"}} = Task.await(started, 15_000)
+
+      # The second runner's answer arrives past the start's deadline. The
+      # status is read once the service has done with the start.
+      :ok = ScriptedKeeper.assigning(context.keeper, :answered)
+      :ok = ScriptedKeeper.answer_assigns(context.keeper)
+      {:ok, status} = WorkerService.status()
+      spawns = ScriptedKeeper.spawns(context.keeper)
+
+      written =
+        for runner <- [first, second],
+            do: spawns |> Enum.find(&(&1.spec.runner == runner)) |> ScriptedKeeper.read()
+
+      assert written == ["", ""]
+      assert status.attempts == []
+
+      wait_until(
+        fn ->
+          released = Enum.map(ScriptedKeeper.releases(context.keeper), &elem(&1, 0))
+          Enum.all?([first, second], &(&1 in released))
+        end,
+        5_000,
+        "both runners released"
+      )
+
+      # Neither runner is offered again: the next start runs on a third.
+      later = ScriptedHost.attempt!(context.host, boot: context.boot)
+      assert {200, %{"ok" => true}} = post(context, :start, start_args(later))
+      assert [%{spec: %{runner: third}}] = given(context, later)
+      refute third in [first, second]
     end
 
     @tag :capture_log

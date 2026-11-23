@@ -39,8 +39,11 @@ defmodule Locus.Keeper do
   caller, which reads its frames itself. When the command's leader exits,
   or on `release`, cyfr-locus kills every process of the uid and removes
   everything the uid left, then reports `released`; `run/2` answers only
-  after that report, so no process of a build outlives the call. A
-  deadline passed, a stdout bound exceeded or a cancel
+  after that report, so no process of a build outlives the call. A spawn
+  cyfr-locus refuses after it made it never ran, and `run/2` answers its
+  refusal at that report too, asking for none: one not reported within
+  60 s is logged and still waited for, so the build's slot is held until
+  cyfr-locus has freed its place. A deadline passed, a stdout bound exceeded or a cancel
   (`Locus.Executor.cancel/1`) releases the spawn with no grace. A caller
   that dies has its spawn released at once.
 
@@ -49,7 +52,15 @@ defmodule Locus.Keeper do
   `spawn/2` (`Locus.Launcher`) asks for a spawn in the pool its spec names,
   under the spec's `memory_bytes` and `cpu_quota`, which every spec names,
   and answers its
-  handle once cyfr-locus reports it spawned, or the refusal. The caller
+  handle once cyfr-locus reports it spawned, or the refusal. A spawn
+  refused under its id alone was never made, and is gone. One refused
+  under the spawn id cyfr-locus gave it, after it made it, is answered
+  `{:refused, code, handle}` at once and followed by that spawn id until
+  its `released`, which frees its place and is cyfr-locus's word alone:
+  its owner and its heir hear of its end only then, as of a started
+  spawn's, and no release is asked of it. A run answers its refusal at
+  that `released` ("A run"); a runner's owner hears `{:refused, code,
+  spawn_id}`, then `:released`. The caller
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, each
   stdout and stderr frame, the leader's exit and the uid's retirement,
@@ -58,13 +69,38 @@ defmodule Locus.Keeper do
   whose last frames only the retirement waits for. `send/2` writes stdin
   frames through the connection, holding them until the relay attaches;
   `signal/2` signals the spawn; `release/3` asks for its retirement with
-  a grace; `pool_stats/2` reads a pool; `measure/2` reads what the spawn
-  uses, and a reading not made is an error, never a zero. A relay that has
+  a grace; `pool_stats/2` reads a pool. A relay that has
   not attached within 10 s, or that sends a frame the codec refuses or on a stream
   other than stdout and stderr, has its spawn released with no grace,
   and an owner that dies has its spawn released at once. When the
-  channel closes every spawn is already retired, and every owner hears
-  `:released`.
+  channel closes every owner hears `{:error, :channel_lost}` and no heir
+  hears anything: only cyfr-locus's `released` says a spawn is gone, and
+  what this node followed is settled at the next boot of cyfr-locus,
+  which starts holding none.
+
+  ## Places
+
+  Every spawn names a place (`Prima.KeeperProtocol`, "Places"), made with
+  `place/4` before the work is prepared, under an id its caller minted:
+  this server sends the keeper its kind, athanor and subject, and answers
+  once the keeper has placed it. The place is its owner's, the process named for
+  it: one that dies before a spawn names the place has the place dropped
+  here. So does the process that asked for it where that is not its
+  owner, as a preparation asks for its owner's, when it ends for any
+  reason but `:normal` before a spawn names the place; one that ends
+  `:normal` has finished, and leaves the place to its owner. `drop/2`
+  frees a place no spawn named, `assign/4` gives one another kind, athanor
+  and subject and answers once the keeper has applied it, or at the
+  instant its caller waits until: an assign cyfr-locus has not answered
+  by then is answered `{:launcher_unavailable, :timeout}` and forgotten,
+  its late answer ignored, and one whose instant has passed is not sent.
+  A spawn
+  naming a place takes it from its owner: the keeper frees it when that
+  spawn is released.
+  `measure/2` answers a place's last reading as the keeper read it, whose
+  it is and how old the reading is, and never waits for a read: a reading
+  not made is an error, never a zero. cyfr-locus applies a place, a drop
+  and an assign in the order they are sent.
 
   ## Kept homes
 
@@ -100,7 +136,9 @@ defmodule Locus.Keeper do
   It is answered `{:ok, handle}` as soon as its request is written, with
   no spawn id, uid or pid yet, since a runner is handed out while it is
   still being staged. Its owner then hears `{:spawned, spawn_id, uid,
-  pid}` or `{:refused, code}`, `:attached`, `{:control, bytes}` and
+  pid}`, or `{:refused, code}` for one cyfr-locus made nothing of, or
+  `{:refused, code, spawn_id}` for one it refused after it made it, whose
+  `:released` follows, then `:attached`, `{:control, bytes}` and
   `:control_closed` (once), `{:relay, bytes}` and `:relay_closed` (once),
   `{:stdout, bytes}` and `{:stderr, bytes}`, `{:exited, exit,
   memory}`, `{:error, :relay_protocol}`, `{:error, :channel_lost}`
@@ -159,8 +197,9 @@ defmodule Locus.Keeper do
   its kind alone: the reason an exit carries holds the request, and a
   spawn's request holds its environment.
 
-  When the channel closes, cyfr-locus has already retired every spawn and
-  is exiting; this server stops, and every role it serves with it.
+  When the channel closes, cyfr-locus is exiting: it kills this node, then
+  retires every spawn; this server stops, and every role it serves with
+  it.
   """
 
   use GenServer
@@ -202,6 +241,9 @@ defmodule Locus.Keeper do
   @drain_timeout_ms 5_000
   @channel_send_timeout_ms 30_000
   @pool_timeout_ms 5_000
+  # This server answers an assign by the instant its caller names; the
+  # caller waits this much past it for that answer.
+  @assign_answer_ms 500
   # A relay that stops reading must not hold this server: a write it has
   # not taken within the bound closes its connection.
   @relay_send_timeout_ms 5_000
@@ -289,8 +331,15 @@ defmodule Locus.Keeper do
   @impl Locus.Executor
   def run(command, opts), do: run(__MODULE__, command, opts)
 
+  @impl Locus.Executor
+  def place(id, whose), do: place(__MODULE__, id, whose, self())
+
+  @impl Locus.Executor
+  def drop(place), do: drop(__MODULE__, place)
+
   @doc """
   `run/2` through the client `server`. Beside the executor's options,
+  `:place` names the spawn's place, which the caller made (`place/3`), and
   `:memory_bytes` names the spawn's bound in place of the builder's
   setting; there is no way to ask for none.
   """
@@ -303,7 +352,12 @@ defmodule Locus.Keeper do
   def run(server, %{argv: argv, env: env, stdin: stdin}, opts) do
     memory_bytes = memory_bytes!(opts)
     monitor = Process.monitor(server)
-    bounds = %{memory_bytes: memory_bytes, cpu_quota: Locus.Config.cpu_quota()}
+
+    bounds = %{
+      place: Keyword.fetch!(opts, :place),
+      memory_bytes: memory_bytes,
+      cpu_quota: Locus.Config.cpu_quota()
+    }
 
     try do
       case GenServer.call(server, {:spawn, argv, env, bounds}, @start_timeout_ms) do
@@ -360,14 +414,21 @@ defmodule Locus.Keeper do
   @impl Locus.Launcher
   def spawn(
         server,
-        %{argv: argv, env: env, pool: pool, memory_bytes: memory_bytes, cpu_quota: cpu_quota} =
-          spec
+        %{
+          argv: argv,
+          env: env,
+          place: place,
+          pool: pool,
+          memory_bytes: memory_bytes,
+          cpu_quota: cpu_quota
+        } = spec
       )
       when is_integer(memory_bytes) and memory_bytes > 0 and is_integer(cpu_quota) and
              cpu_quota > 0 do
     ref = make_ref()
 
     opts = %{
+      place: place,
       pool: pool,
       memory_bytes: memory_bytes,
       cpu_quota: cpu_quota,
@@ -466,14 +527,48 @@ defmodule Locus.Keeper do
   end
 
   @doc """
-  What a long-lived spawn uses that cannot be given back, read by
-  cyfr-locus from its cgroup (`t:Prima.KeeperProtocol.reading/0`).
-  A spawn retired or no longer followed is `:unknown_spawn` and a reading
-  cyfr-locus could not make `{:refused, "unmeasured"}`.
+  A new place `id` of `whose`'s kind, and its athanor and subject where it
+  names them, for `owner`: `:ok` once cyfr-locus has placed it ("Places").
   """
   @impl Locus.Launcher
-  def measure(server, %{ref: ref}) do
-    GenServer.call(server, {:measure, ref}, @pool_timeout_ms)
+  def place(server, id, whose, owner) when is_binary(id) and is_map(whose) and is_pid(owner) do
+    GenServer.call(server, {:place, id, whose, owner}, @pool_timeout_ms)
+  catch
+    :exit, reason ->
+      # A place this server may yet make is not left to an owner that
+      # was told it failed.
+      GenServer.cast(server, {:drop, id})
+      {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
+
+  @impl Locus.Launcher
+  def drop(server, place) when is_binary(place), do: GenServer.cast(server, {:drop, place})
+
+  @doc """
+  Give the place `place` `whose`'s kind, and its athanor and subject where
+  it names them: `:ok` once cyfr-locus has applied it, `{:error,
+  {:refused, "bad_request"}}` where it holds no such place ("Places"),
+  `{:error, {:launcher_unavailable, :timeout}}` where it has not answered
+  by `until` (monotonic milliseconds), and `{:error, :unencodable}`,
+  nothing sent, for one the codec refuses.
+  """
+  @impl Locus.Launcher
+  def assign(server, place, whose, until)
+      when is_binary(place) and is_map(whose) and is_integer(until) do
+    wait = max(until - now(), 0)
+    GenServer.call(server, {:assign, place, whose, until}, wait + @assign_answer_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
+
+  @doc """
+  The last reading cyfr-locus took of `place` (`t:Prima.KeeperProtocol.reading/0`),
+  whose the place is and how old the reading is; a place it does not hold
+  or has not read yet is `{:refused, "unmeasured"}`.
+  """
+  @impl Locus.Launcher
+  def measure(server, place) when is_binary(place) do
+    GenServer.call(server, {:measure, place}, @pool_timeout_ms)
   catch
     :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
   end
@@ -583,6 +678,15 @@ defmodule Locus.Keeper do
 
   defp on_keeper(s, {:error, reason}), do: %{s | phase: :done, failure: {:spawn_failed, reason}}
 
+  # Refused after cyfr-locus made it: nothing of it ran, and what was made
+  # is cyfr-locus's until its `released`, which no request asks for.
+  defp on_keeper(s, {:error, code, :release_follows}),
+    do: %{
+      on_keeper(s, {:error, code})
+      | phase: :refused,
+        released_by: now() + @release_timeout_ms
+    }
+
   # Stdin is written from a process of its own, so a command slow to read
   # it never stops this one reading its output.
   defp feed_stdin(conn, stdin) do
@@ -652,6 +756,9 @@ defmodule Locus.Keeper do
   # until the drain bound a missing connection is waited for.
   defp advance(%{phase: :done} = s), do: s
 
+  # A refused spawn never ran, so no relay of it connects.
+  defp advance(%{phase: :refused, released: true} = s), do: %{s | phase: :done}
+
   defp advance(%{released: true, conn: conn, conn_open: false} = s) when conn != nil,
     do: %{s | phase: :done}
 
@@ -674,12 +781,24 @@ defmodule Locus.Keeper do
     max(until - now(), 0)
   end
 
+  defp wait_ms(%{released_by: nil}), do: :infinity
   defp wait_ms(s), do: max(s.released_by - now(), 0)
 
   defp on_wait_expired(%{phase: :running} = s) do
     if s.conn == nil and now() >= s.attach_by and now() < s.deadline,
       do: stop(s, {:spawn_failed, :attach_timeout}),
       else: stop(s, :timeout)
+  end
+
+  # The build's slot is freed only once cyfr-locus says what it made of the
+  # refused spawn is gone, so the wait goes on past the bound.
+  defp on_wait_expired(%{phase: :refused} = s) do
+    Logger.error(
+      "[Locus.Keeper] a refused build's spawn was not reported released within " <>
+        "#{@release_timeout_ms} ms; the build waits for it"
+    )
+
+    %{s | released_by: nil}
   end
 
   defp on_wait_expired(s) do
@@ -736,8 +855,15 @@ defmodule Locus.Keeper do
          conns: %{},
          pools: %{},
          homes: %{},
-         # Each measure in flight by its id: its spawn's ref and its caller.
+         # Each measure in flight by its id: its place and its caller.
          measures: %{},
+         # Each assign in flight by its id, `assign-N` beside every spawn's
+         # `N`, measure's and pool's id: its caller.
+         assigns: %{},
+         # Each place no spawn has named yet, by its id: its owner, the
+         # owner's monitor, the monitor of a caller that is not its owner,
+         # and its caller until cyfr-locus placed it.
+         places: %{},
          # The heir tags fenced while no spawn of them was held: a spawn
          # naming one is refused, so none starts after the fence's answer.
          fences: %{},
@@ -1013,16 +1139,80 @@ defmodule Locus.Keeper do
   def handle_call({:resize, ref, rows, cols}, from, state),
     do: spawn_request(ref, &%{type: :resize, spawn_id: &1, rows: rows, cols: cols}, from, state)
 
-  def handle_call({:measure, ref}, from, state) do
+  def handle_call({:measure, place}, from, state) do
     id = "measure-" <> Integer.to_string(state.next_id + 1)
+    state = %{state | next_id: state.next_id + 1}
 
-    case spawn_request(ref, &%{type: :measure, id: id, spawn_id: &1}, from, state) do
-      {:reply, :ok, state} ->
-        measures = Map.put(state.measures, id, {ref, from})
-        {:noreply, %{state | next_id: state.next_id + 1, measures: measures}}
+    case send_request(state, %{type: :measure, id: id, place: place}) do
+      :ok ->
+        {:noreply, %{state | measures: Map.put(state.measures, id, {place, from})}}
 
-      not_sent ->
-        not_sent
+      {:error, :unencodable} ->
+        {:reply, {:error, :unencodable}, state}
+
+      {:error, reason} ->
+        {:stop, {:shutdown, {:channel_lost, reason}},
+         {:error, {:launcher_unavailable, :channel_lost}}, state}
+    end
+  end
+
+  # A place of an id this client still follows is the caller's error, and
+  # cyfr-locus would refuse it.
+  def handle_call({:place, id, _whose, _owner}, _from, state) when is_map_key(state.places, id),
+    do: {:reply, {:error, {:refused, "bad_request"}}, state}
+
+  def handle_call({:place, id, whose, owner}, {caller, _tag} = from, state) do
+    request = whose |> Map.take([:kind, :athanor, :subject]) |> Map.merge(%{type: :place, id: id})
+
+    case send_request(state, request) do
+      :ok ->
+        place = %{
+          owner: owner,
+          monitor: Process.monitor(owner),
+          caller: caller_monitor(caller, owner),
+          from: from
+        }
+
+        {:noreply, %{state | places: Map.put(state.places, id, place)}}
+
+      {:error, :unencodable} ->
+        {:reply, {:error, :unencodable}, state}
+
+      {:error, reason} ->
+        {:stop, {:shutdown, {:channel_lost, reason}},
+         {:error, {:launcher_unavailable, :channel_lost}}, state}
+    end
+  end
+
+  # An assign is the keeper's to apply, whichever process follows the
+  # place, and is answered once the keeper has applied it, or at `until`,
+  # when it is forgotten: its answer, however late, then reaches no one.
+  # One whose `until` has passed is not sent.
+  def handle_call({:assign, place, whose, until}, from, state) do
+    id = "assign-" <> Integer.to_string(state.next_id + 1)
+    state = %{state | next_id: state.next_id + 1}
+
+    request =
+      whose
+      |> Map.take([:kind, :athanor, :subject])
+      |> Map.merge(%{type: :assign, id: id, place: place})
+
+    sent = if until > now(), do: send_request(state, request), else: :passed
+
+    case sent do
+      :ok ->
+        Process.send_after(self(), {:assign_unanswered, id}, max(until - now(), 0))
+        {:noreply, %{state | assigns: Map.put(state.assigns, id, from)}}
+
+      :passed ->
+        {:reply, {:error, {:launcher_unavailable, :timeout}}, state}
+
+      {:error, :unencodable} ->
+        {:reply, {:error, :unencodable}, state}
+
+      {:error, reason} ->
+        {:stop, {:shutdown, {:channel_lost, reason}},
+         {:error, {:launcher_unavailable, :channel_lost}}, state}
     end
   end
 
@@ -1062,6 +1252,13 @@ defmodule Locus.Keeper do
   end
 
   @impl GenServer
+  def handle_cast({:drop, place}, state) do
+    case Map.pop(state.places, place) do
+      {nil, _places} -> {:noreply, state}
+      {entry, places} -> {:noreply, drop_place(%{state | places: places}, place, entry)}
+    end
+  end
+
   def handle_cast({:release, ref, grace_ms}, state),
     do: {:noreply, release_spawn(state, ref, grace_ms)}
 
@@ -1113,9 +1310,10 @@ defmodule Locus.Keeper do
     end
   end
 
-  # cyfr-locus retires every spawn before its channel closes: a run's
-  # caller and a control spawn's owner hear the channel lost, a long-lived
-  # spawn's owner its release.
+  # cyfr-locus closes its channel as it exits, then kills this node and
+  # retires every spawn: none is gone until it says so, and it will say
+  # nothing more here. Every caller and every owner hears the channel lost,
+  # and no heir is told.
   def handle_info({:channel_closed, reason}, state) do
     Logger.error(
       "[Locus.Keeper] FATAL: the keeper channel closed (#{inspect(reason)}); " <>
@@ -1127,11 +1325,7 @@ defmodule Locus.Keeper do
         %{kind: :handle, from: from} when from != nil ->
           GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
 
-        %{kind: :handle} ->
-          notify(entry, ref, :released)
-          tell_heir(entry)
-
-        _run_or_control ->
+        _followed ->
           notify(entry, ref, {:error, :channel_lost})
       end
     end
@@ -1139,7 +1333,14 @@ defmodule Locus.Keeper do
     for {_id, from} <- state.pools,
         do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
 
-    for {_id, {_ref, from}} <- state.measures,
+    for {_id, {_place, from}} <- state.measures,
+        do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
+
+    for {_id, from} <- state.assigns,
+        do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
+
+    for {_id, %{from: from}} <- state.places,
+        from != nil,
         do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
 
     for {_id, %{pending: pending}} <- state.homes,
@@ -1201,10 +1402,13 @@ defmodule Locus.Keeper do
     end
   end
 
-  def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
+  def handle_info({:assign_unanswered, id}, state),
+    do: {:noreply, assigned(state, id, {:error, {:launcher_unavailable, :timeout}})}
+
+  def handle_info({:DOWN, monitor, :process, _pid, reason}, state) do
     case Enum.find(state.requests, fn {_ref, entry} -> entry.monitor == monitor end) do
       {ref, entry} -> {:noreply, abandon(state, ref, entry)}
-      nil -> {:noreply, state}
+      nil -> {:noreply, places_gone(state, monitor, reason)}
     end
   end
 
@@ -1315,6 +1519,7 @@ defmodule Locus.Keeper do
   defp spawn_handle(ref, argv, env, opts, home, from, owner, state) do
     request =
       %{
+        place: opts.place,
         pool: opts.pool,
         argv: argv,
         env: env,
@@ -1607,6 +1812,7 @@ defmodule Locus.Keeper do
     with {:ok, line} <- encode(request),
          :ok <- send_line(state, line) do
       ref = Map.get(extra, :ref) || make_ref()
+      state = named(state, request.place)
 
       entry = %{
         kind: extra.kind,
@@ -1636,6 +1842,19 @@ defmodule Locus.Keeper do
            ids: Map.put(state.ids, id, ref),
            tokens: Map.put(state.tokens, token, ref)
        }}
+    end
+  end
+
+  # A place a spawn named is that spawn's now: cyfr-locus frees it at the
+  # spawn's release, whoever owned it.
+  defp named(state, place) do
+    case Map.pop(state.places, place) do
+      {nil, _places} ->
+        state
+
+      {entry, places} ->
+        unfollow(entry)
+        %{state | places: places}
     end
   end
 
@@ -1671,16 +1890,43 @@ defmodule Locus.Keeper do
   defp on_reply({:error, id, _spawn_id, code}, state) when is_map_key(state.measures, id),
     do: measured(state, id, {:error, {:refused, code}})
 
+  defp on_reply({:error, id, _spawn_id, code}, state) when is_map_key(state.assigns, id),
+    do: assigned(state, id, {:error, {:refused, code}})
+
+  # A place refused is no place: its caller hears the code.
+  defp on_reply({:error, id, _spawn_id, code}, state) when is_map_key(state.places, id) do
+    {entry, places} = Map.pop(state.places, id)
+    unfollow(entry)
+    if entry.from, do: GenServer.reply(entry.from, {:error, {:refused, code}})
+    %{state | places: places}
+  end
+
+  defp on_reply({:assigned, id}, state), do: assigned(state, id, :ok)
+
+  defp on_reply({:placed, id}, state) do
+    case state.places[id] do
+      %{from: from} = entry when from != nil ->
+        GenServer.reply(from, :ok)
+        %{state | places: Map.put(state.places, id, %{entry | from: nil})}
+
+      _dropped_or_named ->
+        state
+    end
+  end
+
   defp on_reply({:error, id, _spawn_id, code}, state)
        when is_binary(id) and is_map_key(state.homes, id),
        do: home_reply(state, id, {:refused, code})
 
-  defp on_reply({:error, id, _spawn_id, code}, state) when is_binary(id) do
+  defp on_reply({:error, id, spawn_id, code}, state) when is_binary(id) do
     case Map.pop(state.pools, id) do
       {nil, _pools} ->
         with_request(state, state.ids[id], fn ref, entry ->
-          refused(entry, ref, code)
-          drop(state, ref)
+          refused(entry, ref, code, spawn_id && handle(ref, spawn_id, nil, nil))
+
+          if spawn_id,
+            do: made_refused(state, ref, entry, spawn_id),
+            else: forget_request(state, ref)
         end)
 
       {from, pools} ->
@@ -1744,14 +1990,36 @@ defmodule Locus.Keeper do
     entry
   end
 
-  defp refused(%{kind: :run} = entry, ref, code), do: notify(entry, ref, {:error, code})
+  # Where cyfr-locus made the spawn before refusing it, its owner is told
+  # its release follows: a long-lived spawn's caller is answered the handle
+  # it follows on, a run's caller and a runner's owner hear so.
+  defp refused(%{kind: :run} = entry, ref, code, nil), do: notify(entry, ref, {:error, code})
 
-  defp refused(%{kind: :handle, from: from}, _ref, code) when from != nil,
+  defp refused(%{kind: :run} = entry, ref, code, _made),
+    do: notify(entry, ref, {:error, code, :release_follows})
+
+  defp refused(%{kind: :handle, from: from}, _ref, code, nil) when from != nil,
     do: GenServer.reply(from, {:error, {:refused, code}})
 
-  defp refused(%{kind: :control} = entry, ref, code), do: notify(entry, ref, {:refused, code})
+  defp refused(%{kind: :handle, from: from}, _ref, code, made) when from != nil,
+    do: GenServer.reply(from, {:error, {:refused, code, made}})
 
-  defp refused(_entry, _ref, _code), do: :ok
+  defp refused(%{kind: :control} = entry, ref, code, nil),
+    do: notify(entry, ref, {:refused, code})
+
+  defp refused(%{kind: :control} = entry, ref, code, made),
+    do: notify(entry, ref, {:refused, code, made.spawn_id})
+
+  defp refused(_entry, _ref, _code, _made), do: :ok
+
+  # A spawn cyfr-locus refused after it made it is cyfr-locus's until its
+  # `released`: it is followed by its spawn id until then, with nothing
+  # asked of it, since cyfr-locus is retiring it already and an
+  # `unknown_spawn` answer to a request naming it reads as its release.
+  defp made_refused(state, ref, entry, spawn_id) do
+    entry = %{entry | spawn_id: spawn_id, from: nil, release_sent: true}
+    %{put_entry(state, ref, entry) | spawns: Map.put(state.spawns, spawn_id, ref)}
+  end
 
   defp exited(%{kind: :run}, exit, memory), do: {:exited, exit, memory}
 
@@ -1774,13 +2042,73 @@ defmodule Locus.Keeper do
     end
   end
 
-  # A spawn that is gone has no reading, so whoever waits for one hears so.
-  defp unmeasurable(state, ref) do
-    {gone, measures} =
-      Map.split_with(state.measures, fn {_id, {of, _from}} -> of == ref end)
+  # A reply settles the one assign it names; one whose caller stopped
+  # waiting reaches no one.
+  defp assigned(state, id, answer) do
+    case Map.pop(state.assigns, id) do
+      {nil, _assigns} ->
+        state
 
-    for {_id, {_ref, from}} <- gone, do: GenServer.reply(from, {:error, :unknown_spawn})
-    %{state | measures: measures}
+      {from, assigns} ->
+        GenServer.reply(from, answer)
+        %{state | assigns: assigns}
+    end
+  end
+
+  # The caller of a place made for another owner, as a preparation makes
+  # its owner's, is followed from its call until a spawn names the place,
+  # the place is dropped or the caller ends. Its monitor is made as its
+  # call is handled: a caller already dead is DOWN `:noproc` at once, and
+  # one that dies later is DOWN with its reason, which cannot reach this
+  # server before the caller's call, since signals between one pair of
+  # processes are ordered. So a preparation killed with its call still
+  # unread, behind its owner's drop of the same place, which found nothing
+  # to drop, still has the place dropped, and none outlives it.
+  defp caller_monitor(owner, owner), do: nil
+  defp caller_monitor(caller, _owner), do: Process.monitor(caller)
+
+  # Every place no spawn has named yet is dropped when its owner dies, or
+  # when its caller ends for any reason but `:normal`; a caller that ended
+  # `:normal` finished, and leaves the place to its owner.
+  defp places_gone(state, monitor, reason) do
+    {gone, places} =
+      Map.split_with(state.places, fn {_id, entry} ->
+        entry.monitor == monitor or (entry.caller == monitor and reason != :normal)
+      end)
+
+    places =
+      Map.new(places, fn
+        {id, %{caller: ^monitor} = entry} -> {id, %{entry | caller: nil}}
+        other -> other
+      end)
+
+    Enum.reduce(gone, %{state | places: places}, fn {id, entry}, state ->
+      drop_place(state, id, entry)
+    end)
+  end
+
+  defp unfollow(entry) do
+    Process.demonitor(entry.monitor, [:flush])
+    if entry.caller, do: Process.demonitor(entry.caller, [:flush])
+  end
+
+  defp drop_place(state, id, entry) do
+    unfollow(entry)
+    if entry.from, do: GenServer.reply(entry.from, {:error, :dropped})
+
+    case send_request(state, %{type: :drop, place: id}) do
+      {:error, reason} when reason != :unencodable ->
+        Logger.error("[Locus.Keeper] dropping a place: the channel is lost (#{inspect(reason)})")
+
+      _sent ->
+        :ok
+    end
+
+    state
+  end
+
+  defp send_request(state, request) do
+    with {:ok, line} <- encode(request), do: send_line(state, line)
   end
 
   # A run's entry stays until its caller is done, so a relay connection
@@ -1789,8 +2117,6 @@ defmodule Locus.Keeper do
   # delivered its last frames, or its bound passes. A spawn with a control
   # channel is done at the report.
   defp released(state, spawn_id) do
-    state = unmeasurable(state, state.spawns[spawn_id])
-
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
       case entry do
         %{kind: :run} ->
@@ -1801,7 +2127,7 @@ defmodule Locus.Keeper do
               put_entry(state, ref, %{entry | released: true})
               | spawns: Map.delete(state.spawns, spawn_id)
             },
-            else: drop(state, ref)
+            else: forget_request(state, ref)
 
         %{kind: :control} ->
           retired(state, ref, entry)
@@ -1822,7 +2148,7 @@ defmodule Locus.Keeper do
 
   defp retired(state, ref, entry) do
     notify(entry, ref, :released)
-    drop(state, ref)
+    forget_request(state, ref)
   end
 
   # ————— a held relay connection —————
@@ -2009,7 +2335,7 @@ defmodule Locus.Keeper do
 
   # ————— the requests —————
 
-  defp abandon(state, ref, %{released: true}), do: drop(state, ref)
+  defp abandon(state, ref, %{released: true}), do: forget_request(state, ref)
 
   # A spawn whose release was sent already stays followed until its
   # retirement is reported.
@@ -2042,8 +2368,9 @@ defmodule Locus.Keeper do
   defp tell_heir(_entry), do: :ok
 
   # An entry leaves for good only once nothing of its spawn is left (its
-  # retirement reported, or its spawn refused), so its heir hears so here.
-  defp drop(state, ref) do
+  # retirement reported, or its spawn refused before cyfr-locus made it),
+  # so its heir hears so here.
+  defp forget_request(state, ref) do
     {entry, requests} = Map.pop(state.requests, ref)
     tell_heir(entry)
     Process.demonitor(entry.monitor, [:flush])
