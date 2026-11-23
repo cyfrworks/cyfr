@@ -532,9 +532,10 @@ CANDIDATE_DEB=""
 candidate_app_build() {
   [ -z "$CANDIDATE_DEB" ] || return 0
   step "this tree's CYFR app around that cyfr, stamped $INSTALL_VERSION (stand-in for a signed candidate)"
-  proof_fg timeout 600 env TMPDIR="$WORK" node "$ROOT/apps/codex/desktop/scripts/build.mjs" --cyfr "$CANDIDATE_BIN" \
+  # electron-builder reads the package from its working directory.
+  proof_fg timeout 600 env -C "$ROOT/apps/codex/desktop" TMPDIR="$WORK" node scripts/build.mjs --cyfr "$CANDIDATE_BIN" \
     --version "$INSTALL_VERSION" --arch amd64 --out "$WORK/app" >"$OUT/candidate-app.log" 2>&1 ||
-    fail "the candidate app did not build within 600 s ($OUT/candidate-app.log)"
+    fail "the candidate app did not build, within 600 s or at all ($OUT/candidate-app.log)"
   CANDIDATE_DEB="$WORK/app/cyfr-desktop_${INSTALL_VERSION}_linux_amd64.deb"
   [ -f "$CANDIDATE_DEB" ] || fail "the candidate app's package is not at $CANDIDATE_DEB ($OUT/candidate-app.log)"
   STAND_IN="$STAND_IN; the CYFR app's package is this tree's, around that cyfr, installed before cyfr init"
