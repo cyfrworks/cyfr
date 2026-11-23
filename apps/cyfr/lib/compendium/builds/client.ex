@@ -25,7 +25,8 @@ defmodule Compendium.Builds.Client do
   `Prima.BuilderProtocol.max_log_bytes/0` of them as the builder charged
   them; each output line's chunk is kept under its path
   (`Prima.BuilderProtocol.output/2`); and the first result or refusal ends
-  the answer — the client stops reading there. Each line is held to
+  the answer — the client reads nothing after it and closes the
+  connection there. Each line is held to
   `Prima.BuilderProtocol.max_line_size/0` while it streams
   (`Prima.BoundedBody`) and read strictly
   (`Prima.BuilderProtocol.read_line/1`): the builder is another trust

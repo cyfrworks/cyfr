@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.BuilderProtocol, the wire between CYFR's build client and the builder Locus serves: every consumer derives the request key from the service key over the label, reproduces the request's canonical string, MAC and header, reads every line and refusal here to its fields, reads every stream of lines under streams to its outputs and diagnostics or to the error named (a stream that ends in a refusal keeps nothing), refuses every invalid body and line with the error named, and refuses every header under auth_rejected. No terminal line carries diagnostics: a stream's diagnostics are its progress lines, each `stage: message`. File contents under fields and outputs are base64 of the bytes. A synthesize entry names a body to build from the valid one: `files` files of `bytes` zero bytes each in place of its files, a progress message of `message_bytes`, an output line of a chunk of `chunk_bytes` zero bytes, a result naming `files` files (of `size` bytes each where it says), or under streams a stream of `files` empty files or of `bytes` zero bytes in chunks of the most a line carries.",
+  "comment": "The vectors pinning Prima.BuilderProtocol, the wire between CYFR's build client and the builder Locus serves: every consumer derives the request key from the service key over the label, reproduces the request's canonical string, MAC and header, reads every line and refusal here to its fields, reads every stream of lines under streams to its outputs and diagnostics or to the error named, reading nothing after its first terminal line (a stream that ends in a refusal keeps nothing), refuses every invalid body and line with the error named, and refuses every header under auth_rejected. No terminal line carries diagnostics: a stream's diagnostics are its progress lines, each `stage: message`. File contents under fields and outputs are base64 of the bytes. A synthesize entry names a body to build from the valid one: `files` files of `bytes` zero bytes each in place of its files, a progress message of `message_bytes`, an output line of a chunk of `chunk_bytes` zero bytes, a result naming `files` files (of `size` bytes each where it says), or under streams a stream of `files` files of one byte each or of `bytes` zero bytes in chunks of the most a line carries.",
   "version": 2,
   "domain": "cyfr-locus/v1",
   "service": "builds",
@@ -290,8 +290,7 @@
       {
         "diagnostics": [],
         "lines": [
-          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":2}",
           "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
         ],
         "name": "empty_file",
@@ -299,6 +298,52 @@
           "empty.txt": "",
           "index.html": "PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg=="
         }
+      },
+      {
+        "diagnostics": [],
+        "lines": [
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37},{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+        ],
+        "name": "entries_reversed",
+        "outputs": {
+          "assets/app.js": "Y29uc29sZS5sb2coInZlY3RvciIpOwo=",
+          "index.html": "PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg=="
+        }
+      },
+      {
+        "diagnostics": [],
+        "lines": [
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":3,\"type\":\"output\",\"version\":2}"
+        ],
+        "name": "output_after_result",
+        "outputs": {
+          "assets/app.js": "Y29uc29sZS5sb2coInZlY3RvciIpOwo=",
+          "index.html": "PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg=="
+        }
+      },
+      {
+        "error": "empty_chunk",
+        "lines": [
+          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+        ],
+        "name": "empty_chunk"
+      },
+      {
+        "error": "empty_chunk",
+        "lines": [
+          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":2,\"type\":\"output\",\"version\":2}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":3,\"type\":\"output\",\"version\":2}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+        ],
+        "name": "empty_chunk_repeated"
       },
       {
         "error": "out_of_order",
@@ -331,6 +376,14 @@
           "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
         ],
         "name": "result_names_unsent"
+      },
+      {
+        "error": "digest_mismatch",
+        "lines": [
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+        ],
+        "name": "result_names_unsent_empty_of_another_digest"
       },
       {
         "error": "unnamed",

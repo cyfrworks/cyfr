@@ -15,8 +15,9 @@ defmodule Prima.BuilderProtocolTest do
   class round-trips; a header for another Locus service, or under its key,
   never verifies as builds; and header-first verification refuses exactly
   what the one-step verifier refuses; an output's path is bounded on its
-  own bytes; a running digest is the whole file's; and the lines' bounds
-  are the vectors' numbers, derived term by term from the other bounds.
+  own bytes; a file of no bytes is never written as a line; and the
+  lines' bounds are the vectors' numbers, derived term by term from the
+  other bounds.
   """
   use ExUnit.Case, async: true
 
@@ -406,7 +407,7 @@ defmodule Prima.BuilderProtocolTest do
 
   defp synthesized_stream(%{"files" => count}) do
     for seq <- 1..count do
-      {:ok, line} = BuilderProtocol.encode_output("f/#{seq}.bin", seq, "")
+      {:ok, line} = BuilderProtocol.encode_output("f/#{seq}.bin", seq, <<0>>)
       line
     end
   end
@@ -478,7 +479,7 @@ defmodule Prima.BuilderProtocolTest do
         stem <> String.duplicate(~s("), BuilderProtocol.max_output_path_bytes() - byte_size(stem))
 
       assert byte_size(path) == BuilderProtocol.max_output_path_bytes()
-      seq = BuilderProtocol.max_output_bytes() + BuilderProtocol.max_output_files()
+      seq = BuilderProtocol.max_output_bytes()
       chunk = :binary.copy(<<0xFF>>, max_chunk)
       assert {:ok, line} = BuilderProtocol.encode_output(path, seq, chunk)
       assert byte_size(line) + 1 <= BuilderProtocol.max_output_line_bytes()
@@ -490,6 +491,9 @@ defmodule Prima.BuilderProtocolTest do
                BuilderProtocol.encode_output("a.bin", seq + 1, "")
 
       assert {:error, {:invalid_field, "seq"}} = BuilderProtocol.encode_output("a.bin", 0, "")
+
+      # A file of no bytes sends no line: the result names it alone.
+      assert {:error, {:empty_chunk, "a.bin"}} = BuilderProtocol.encode_output("a.bin", 1, "")
 
       # A line past the largest any type may be is refused before it is parsed.
       over = String.duplicate(" ", BuilderProtocol.max_line_size())
@@ -508,9 +512,9 @@ defmodule Prima.BuilderProtocolTest do
       escaped_path = 2 * b["max_output_path_bytes"]
 
       # An output line with an empty path and no bytes at the largest seq,
-      # its newline and its path escaped at most twice over; the chunk is
-      # what base64 fits in the rest.
-      seq = b["max_output_bytes"] + b["max_output_files"]
+      # one line a byte, its newline and its path escaped at most twice
+      # over; the chunk is what base64 fits in the rest.
+      seq = b["max_output_bytes"]
 
       output_envelope =
         @vectors["lines"]["output"]["body"]
@@ -590,20 +594,6 @@ defmodule Prima.BuilderProtocolTest do
       assert {:ok, line} = BuilderProtocol.encode_result(named.(escaped))
       assert {:ok, {:result, %{outputs: [%{path: ^escaped}]}}} = BuilderProtocol.read_line(line)
       assert byte_size(Jason.encode!(escaped)) - 2 <= 2 * max
-    end
-
-    test "a running digest is the whole file's, as a result names it" do
-      bytes = :crypto.strong_rand_bytes(100_000)
-
-      hash =
-        for <<chunk::binary-size(1_000) <- bytes>>, reduce: BuilderProtocol.digest_init() do
-          hash -> BuilderProtocol.digest_update(hash, chunk)
-        end
-
-      assert BuilderProtocol.digest_final(hash) == Prima.Digest.sha256(bytes)
-
-      assert BuilderProtocol.digest_final(BuilderProtocol.digest_init()) ==
-               Prima.Digest.sha256("")
     end
 
     test "a log is its progress lines as a person reads them, in their order" do

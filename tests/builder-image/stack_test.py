@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The builds stack's listings of its container, with docker stubbed.
+"""The builds stack's listings of its container, with docker stubbed, and its reading of an answer.
 
 A failed `docker exec` is no answer about the processes or the home root of
 the container: the listings fail the observation. Docker's refusal that the
 container is not running, or is restarting, is the one exception, and it is
 read from the call.
+
+An answer's lines are read as the wire's vectors say every reader reads
+them: each stream under `lines.streams` of the vectors `stack.WIRE` holds
+reads to its files and log, to its refusal keeping nothing, or fails by the
+error the vector names.
 
 Usage: python3 -I tests/builder-image/stack_test.py
 """
@@ -181,7 +186,7 @@ class ReadAnswer(unittest.TestCase):
 
     def test_a_result_keeps_the_files_its_lines_carried_and_the_log(self):
         progress, terminal = stack.read_answer([
-            PROGRESS, output("a.js", 1, b"one "), output("a.js", 2, b"two"), output("index.html", 3, b""),
+            PROGRESS, output("a.js", 1, b"one "), output("a.js", 2, b"two"),
             result({"a.js": b"one two", "index.html": b""})])
         self.assertEqual(progress, [PROGRESS])
         self.assertEqual(terminal["files"], {"a.js": b"one two", "index.html": b""})
@@ -204,9 +209,44 @@ class ReadAnswer(unittest.TestCase):
                                result({"a": b"xz", "b": b"y"})])
 
     def test_a_result_naming_other_files_or_digests_fails(self):
-        for named in ({"a": b"x", "b": b""}, {"a": b"y"}):
+        for named in ({"a": b"x", "b": b"y"}, {"a": b"y"}):
             with self.assertRaises(SystemExit):
                 stack.read_answer([output("a", 1, b"x"), result(named)])
+
+
+def vector_lines(vector):
+    """A stream's lines: the vector's own, or those it names synthesized as every reader synthesizes them."""
+    if "lines" in vector:
+        return [json.loads(line) for line in vector["lines"]]
+    synthesize = vector["synthesize"]
+    if "files" in synthesize:
+        return [output(f"f/{seq}.bin", seq, b"\0") for seq in range(1, synthesize["files"] + 1)]
+    most = stack.WIRE["bounds"]["max_chunk_bytes"]
+    full = output("big.bin", 1, bytes(most))
+    lines, left = [], synthesize["bytes"]
+    while left:
+        lines.append({**full, "seq": len(lines) + 1} if left >= most else output("big.bin", len(lines) + 1, bytes(left)))
+        left -= min(left, most)
+    return lines
+
+
+class Streams(unittest.TestCase):
+    def test_every_stream_of_the_vectors_reads_as_they_say(self):
+        for vector in stack.WIRE["lines"]["streams"]:
+            with self.subTest(vector["name"]):
+                lines = vector_lines(vector)
+                if "error" in vector:
+                    with self.assertRaises(SystemExit) as caught:
+                        stack.read_answer(lines)
+                    self.assertEqual(getattr(caught.exception, "error", None), vector["error"], caught.exception)
+                    continue
+                _progress, terminal = stack.read_answer(lines)
+                if "refusal" in vector:
+                    self.assertEqual({"class": terminal["class"], "reason": terminal["reason"]}, vector["refusal"])
+                    self.assertNotIn("files", terminal)
+                else:
+                    self.assertEqual(terminal["files"], {path: base64.b64decode(data) for path, data in vector["outputs"].items()})
+                    self.assertEqual(terminal["diagnostics"], vector["diagnostics"])
 
 
 if __name__ == "__main__":

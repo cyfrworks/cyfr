@@ -5,7 +5,8 @@ defmodule Prima.DigestTest do
   @moduledoc """
   A file set's digest depends on its paths and bytes alone: not on the
   order the files arrive in, and never equal for two different sets whose
-  paths and bytes concatenate alike.
+  paths and bytes concatenate alike. A running digest, moved on a chunk at
+  a time, is spelled as the digest of the whole.
   """
 
   use ExUnit.Case, async: true
@@ -25,6 +26,21 @@ defmodule Prima.DigestTest do
     {three, _} = Prima.Digest.file_set(%{"a" => "b", "c" => ""})
 
     assert Enum.uniq([one, two, three]) == [one, two, three]
+  end
+
+  test "a running digest is the whole bytes' digest, and begun over none is the empty bytes'" do
+    bytes = :crypto.strong_rand_bytes(100_000)
+
+    running =
+      for <<chunk::binary-size(1_000) <- bytes>>, reduce: Prima.Digest.sha256_init() do
+        running -> Prima.Digest.sha256_update(running, chunk)
+      end
+
+    assert Prima.Digest.sha256_final(running) == Prima.Digest.sha256(bytes)
+    assert Prima.Digest.sha256_final(Prima.Digest.sha256_init()) == Prima.Digest.sha256("")
+
+    assert Prima.Digest.sha256_stream(for <<chunk::binary-size(1_000) <- bytes>>, do: chunk) ==
+             Prima.Digest.sha256(bytes)
   end
 
   test "a keyed digest is RFC 4231's HMAC-SHA256, spelled as every digest is" do

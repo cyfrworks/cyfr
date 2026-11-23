@@ -35,7 +35,8 @@ defmodule Locus.Builder do
   piece of an output file leaves at once as an output line
   (`Prima.BuilderProtocol.encode_output/3`), handed to `:on_line` and
   taken before the next piece is read, with the file's running digest
-  kept; nothing of a file is held here. Output past a bound is refused as
+  kept; nothing of a file is held here, and a file of no bytes leaves no
+  line, its result naming it alone. Output past a bound is refused as
   `failed` after whatever lines went before it, which the client then
   keeps nothing of, never truncated.
 
@@ -78,8 +79,8 @@ defmodule Locus.Builder do
   ## What a build answers
 
   `{:ok, %{language, target_type, outputs}}` once every output line was
-  taken, where `outputs` names each file sent with its size and digest,
-  in the order sent (a component's are
+  taken, where `outputs` names each file with its size and digest, in the
+  order its archive held them (a component's are
   `Prima.BuilderProtocol.component_wasm/0` and, when the build left one,
   `component_lockfile/0`, a tincture's the files of its `dist/`); or
   `{:error, refusal}`, a `t:Prima.BuilderProtocol.refusal/0`:
@@ -217,7 +218,7 @@ defmodule Locus.Builder do
             announce: String.t()
           }
 
-  @typedoc "A finished build: the files it sent, by path, size and digest, in the order sent."
+  @typedoc "A finished build: its files by path, size and digest, as its archive held them."
   @type built :: BuilderProtocol.result()
 
   @typedoc """
@@ -659,7 +660,7 @@ defmodule Locus.Builder do
             {:ok,
              %{
                stream
-               | file: %{path: path, size: 0, hash: BuilderProtocol.digest_init(), lines: 0}
+               | file: %{path: path, size: 0, hash: Prima.Digest.sha256_init()}
              }}
     end
   end
@@ -667,15 +668,10 @@ defmodule Locus.Builder do
   defp event(%{file: nil} = stream, {:data, _bytes}), do: {:ok, stream}
   defp event(stream, {:data, bytes}), do: send_chunk(stream, bytes)
 
-  # A file of no bytes is one line of none.
-  defp event(%{file: %{lines: 0}} = stream, :file_end) do
-    with {:ok, stream} <- send_chunk(stream, ""), do: event(stream, :file_end)
-  end
-
   defp event(%{file: nil} = stream, :file_end), do: {:ok, stream}
 
   defp event(%{file: file} = stream, :file_end) do
-    sent = %{path: file.path, size: file.size, digest: BuilderProtocol.digest_final(file.hash)}
+    sent = %{path: file.path, size: file.size, digest: Prima.Digest.sha256_final(file.hash)}
     {:ok, %{stream | file: nil, sent: [sent | stream.sent]}}
   end
 
@@ -689,8 +685,7 @@ defmodule Locus.Builder do
       file = %{
         file
         | size: file.size + byte_size(bytes),
-          hash: BuilderProtocol.digest_update(file.hash, bytes),
-          lines: file.lines + 1
+          hash: Prima.Digest.sha256_update(file.hash, bytes)
       }
 
       {:ok, %{stream | file: file, seq: seq, bytes: stream.bytes + byte_size(bytes)}}

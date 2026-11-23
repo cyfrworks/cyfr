@@ -235,6 +235,25 @@ defmodule Compendium.Builds.ClientTest do
       end
     end
 
+    test "ends the answer: the line after it is not read, and the connection is closed at once" do
+      %{"lines" => lines, "outputs" => outputs} =
+        Enum.find(@fixture["lines"]["streams"], &(&1["name"] == "output_after_result"))
+
+      ScriptedBuilder.script([
+        {:stream, [{:bytes, Enum.map(lines, &[&1, "\n"])}, {:hold, self()}]}
+      ])
+
+      # The deadline is a minute away, so a close within seconds is the
+      # reader's own.
+      assert {:ok, built} = build(request(%{target_type: :tincture}), deadline: now() + 60_000)
+
+      assert built.output_files ==
+               Map.new(outputs, fn {path, b64} -> {path, Base.decode64!(b64)} end)
+
+      assert_receive {:scripted_builder, :holding, _handler}, 5_000
+      assert_receive {:scripted_builder, :disconnected}, 5_000
+    end
+
     test "a person reads the build's log as its terminal line carried it before: its progress lines, in order" do
       %{"lines" => lines} = Enum.find(@fixture["lines"]["streams"], &(&1["name"] == "component"))
       ScriptedBuilder.script([{:stream, Enum.map(lines, &{:line, &1})}])

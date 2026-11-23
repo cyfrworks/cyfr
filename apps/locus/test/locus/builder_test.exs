@@ -241,6 +241,34 @@ defmodule Locus.BuilderTest do
       assert {:output, "built"} in progress.()
     end
 
+    test "sends no line for a file of no bytes, which its result names alone, at no bytes" do
+      test = self()
+      {:ok, place} = Builder.place(%{athanor_id: "ath_builder"})
+      script = "mkdir -p dist && : > dist/empty.txt && echo hi > dist/index.html"
+
+      try do
+        {:ok, plan} = Builder.prepare(scripted(script))
+        assert {:ok, result} = Builder.run(plan, place: place, on_line: &send(test, {:line, &1}))
+
+        assert Enum.sort_by(result.outputs, & &1.path) == [
+                 %{path: "empty.txt", size: 0, digest: Prima.Digest.sha256("")},
+                 %{path: "index.html", size: 3, digest: Prima.Digest.sha256("hi\n")}
+               ]
+
+        assert_received {:line, line}
+        assert {:ok, {:output, chunk}} = BuilderProtocol.read_line(line)
+        assert %{path: "index.html", seq: 1, bytes: "hi\n"} = chunk
+        refute_received {:line, _}
+
+        {:ok, outputs} = BuilderProtocol.output(BuilderProtocol.outputs(), chunk)
+
+        assert BuilderProtocol.outputs(outputs, result) ==
+                 {:ok, %{"empty.txt" => "", "index.html" => "hi\n"}}
+      after
+        Builder.drop(place)
+      end
+    end
+
     test "that exits non-zero is failed with its status, its log delivered" do
       {on_progress, progress} = collecting()
 
