@@ -23,19 +23,28 @@ import (
 // reported, as its Accept-Language, and reads it as navigator.languages,
 // and reads the zone in Intl and Date.
 //
-// Chrome's switches miss two things, measured on the image's Chromium 156:
-// Intl's default locale stays en-US on every surface, and a shared
-// worker's navigator.language is en-US. So every target, held at its start
-// (page.go), is told the locale before it runs, and a shared worker the
-// language beside its user agent (agent.go); one Chrome refuses is not let
-// run. Chrome holds a locale override for a renderer process, and a target
-// whose process already holds the driver's, the one it ever sets, is told
-// so: that is the override in effect. A service worker answers no command
-// until it runs (page.go), so it is told after: it sends the language and
-// reads the zone from Chrome's own, but the first of its script reads
-// Chrome's en-US as its navigator.language and Intl's locale; its override
-// refused then is said in the driver's log. Values the person never
-// reported are absent and leave Chrome's own: the image's en-US and UTC.
+// Chrome's switches miss Intl's default locale, which stays en-US on every
+// surface (measured on the image's Chromium 156; Chromium's language packs
+// change nothing). So every target the driver attaches, held at its start
+// (page.go), is told the locale before it runs; one Chrome refuses is not
+// let run. Chrome holds a locale override for a renderer process, and a
+// target whose process already holds the driver's, the one it ever sets,
+// is told so: that is the override in effect, and a dedicated worker or a
+// frame of that process reads it too.
+//
+// Two surfaces the driver cannot hold at their start, so their first reads
+// are Chrome's own. A service worker answers no command until it runs
+// (page.go): it sends the person's language and reads their zone, but its
+// script reads Chrome's en-US as its navigator.language and Intl's locale
+// until it is told the locale once it runs, and that told refused is said
+// in the driver's log. A shared worker attaches to the browser, not to the
+// page that made it, and holding the browser's attachments would hold
+// every window a page opens where no window's attachment sees it: so a
+// shared worker is never attached; it sends the person's language, reads
+// their zone and its process's locale, but reads Chrome's en-US as its
+// navigator.language and navigator.languages, and names itself as the
+// headless shell. Values the person never reported are absent and leave
+// Chrome's own: the image's en-US and UTC.
 type person struct {
 	Locale   string
 	TimeZone string

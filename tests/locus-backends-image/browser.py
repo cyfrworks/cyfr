@@ -74,12 +74,14 @@ container starts:
   version, and navigator.webdriver reads false. Started with its person
   (the vector file's person, ja-JP and Asia/Tokyo), the page, a frame of
   it, a dedicated worker, a worker that worker made and a shared worker,
-  in the first window and the later one, read the person's language as
-  navigator.language and navigator.languages exactly as reported, their
-  zone and locale in Intl, a Date's offset in the zone and how a date is
-  formatted, and each one's public request carries that language as its
-  Accept-Language; an ordinary font and a colour emoji render; a session
-  started with no person reads Chrome's own en-US and UTC.
+  in the first window and the later one, read the person's zone and locale
+  in Intl, a Date's offset in the zone and how a date is formatted, all
+  but the shared worker read the person's language as navigator.language
+  and navigator.languages exactly as reported (the shared worker's, which
+  the driver cannot hold at its start, is measured), and each one's public
+  request carries that language as its Accept-Language; an ordinary font
+  and a colour emoji render; a session started with no person reads
+  Chrome's own en-US and UTC.
 - A browser's start removes the Chrome the driver once fetched into its
   home and leaves the profile as it was.
 - A cookie a page set three seconds before the browser's session ended
@@ -988,10 +990,17 @@ def browser_kind(stack, c, uid):
     for win, seen_by_page in read.items():
         for surface in ("page", "frame", "worker", "nested", "shared"):
             reading = seen_by_page if surface == "page" else seen_by_page[surface]
-            expect(isinstance(reading, dict) and {k: reading.get(k) for k in wanted} == wanted,
-                   f"the {surface} of the page in {win} reads the person's language as navigator.language and "
-                   "navigator.languages, exactly as reported, their zone and locale in Intl, a Date's offset and how "
-                   "it formats a date", [surface, reading, wanted])
+            # A shared worker is never held at its start (person.go): its navigator reads Chrome's own language.
+            asked = {k: v for k, v in wanted.items() if surface != "shared" or k not in ("language", "languages")}
+            expect(isinstance(reading, dict) and {k: reading.get(k) for k in asked} == asked,
+                   f"the {surface} of the page in {win} reads " +
+                   ("" if surface == "shared" else "the person's language as navigator.language and "
+                    "navigator.languages, exactly as reported, ") +
+                   "their zone and locale in Intl, a Date's offset and how it formats a date", [surface, reading, asked])
+            if surface == "shared":
+                print(f"measure: the shared worker of the page in {win} reads navigator.language "
+                      f"{reading.get('language')!r} and navigator.languages {reading.get('languages')!r}, Chrome's own: "
+                      "a shared worker is not held at its start", flush=True)
             marked = [] if offline else request_headers(text, f"?kind-{'dedicated' if surface == 'worker' else surface}-"
                                                               f"{seen_by_page['token']}")
             expect(offline or (marked and all(request.get("accept-language") == PERSON["accept_language"]
