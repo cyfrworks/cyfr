@@ -280,7 +280,7 @@ func TestSetupWithoutDockerWritesNothing(t *testing.T) {
 // asked again at the start: the same refusal, and nothing written.
 func TestSetupAsksDockerAgainAtTheStart(t *testing.T) {
 	s, sess, out := newSetupRun(t)
-	machine.reachable = func() bool { return false }
+	machine.reachable = func(context.Context) bool { return false }
 	if err := sess.Start(); !errors.Is(err, errNoDocker) {
 		t.Fatalf("a start once Docker stopped answered %v", err)
 	}

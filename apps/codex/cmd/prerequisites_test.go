@@ -331,7 +331,7 @@ func desktopStandIn(t *testing.T, system string, installed bool, polls int) (s *
 		}
 	}
 	asked := 0
-	machine.reachable = func() bool { asked++; return asked > polls }
+	machine.reachable = func(context.Context) bool { asked++; return asked > polls }
 	opened = new([]string)
 	savedDesktop, savedPoll, savedLaunch := dockerDesktop, dockerPoll, launchBrowser
 	t.Cleanup(func() { dockerDesktop, dockerPoll, launchBrowser = savedDesktop, savedPoll, savedLaunch })
@@ -432,7 +432,7 @@ func TestInitDockerDesktopWaitEnds(t *testing.T) {
 		desktopStandIn(t, "darwin", true, 1<<30)
 		ctx, cancel := context.WithCancel(context.Background())
 		asked := 0
-		machine.reachable = func() bool {
+		machine.reachable = func(context.Context) bool {
 			if asked++; asked == 3 {
 				cancel()
 			}
@@ -502,7 +502,7 @@ func TestContinuesInATerminalOlderThanTheGroup(t *testing.T) {
 				s.member = []string{"docker"}
 				record := sgStandIn(t, status)
 				t.Chdir(t.TempDir())
-				continued, err := withDockerGroup(subcommand, []string{"--no-pull=true"}, &bytes.Buffer{}, &bytes.Buffer{})
+				continued, err := withDockerGroup(t.Context(), subcommand, []string{"--no-pull=true"}, &bytes.Buffer{}, &bytes.Buffer{})
 				answered := "0"
 				if err != nil {
 					answered = strconv.Itoa(ExitStatus(err))
@@ -541,7 +541,7 @@ func TestNeedsNoContinuation(t *testing.T) {
 				s.member = []string{"docker"}
 				record := sgStandIn(t, "0")
 				set(t, s)
-				if continued, err := withDockerGroup(subcommand, nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
+				if continued, err := withDockerGroup(t.Context(), subcommand, nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
 					t.Fatalf("continued %t, err %v", continued, err)
 				}
 				if _, err := os.Stat(record); err == nil {

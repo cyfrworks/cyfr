@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"cmp"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
@@ -55,7 +56,8 @@ func standInMachine(t *testing.T) *standIn {
 	askInput = strings.NewReader("yes\n")
 	machine.supported = func() bool { return s.supported }
 	machine.arch = func() string { return s.arch }
-	machine.reachable = func() bool { return s.reachable }
+	machine.reachable = func(context.Context) bool { return s.reachable }
+	machine.dockerHere = func(context.Context) (bool, error) { return true, nil }
 	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }
 	machine.running = func() bool { return s.running }
 	machine.displayManager = func() bool { return s.displayManager }

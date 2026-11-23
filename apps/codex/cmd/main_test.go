@@ -54,7 +54,8 @@ func testMachine(system string) machineSeams {
 	return machineSeams{
 		supported:      func() bool { return false },
 		arch:           func() string { return "amd64" },
-		reachable:      func() bool { return true },
+		reachable:      func(context.Context) bool { return true },
+		dockerHere:     func(context.Context) (bool, error) { return true, nil },
 		installed:      func(string) bool { return false },
 		running:        func() bool { return false },
 		groups:         func(string) []string { return nil },
@@ -102,6 +103,11 @@ func TestMain(m *testing.M) {
 		rootCmd.SetArgs(os.Args[1:])
 		_ = rootCmd.Execute()
 		os.Exit(2)
+	}
+	// Begun as setup's work (startWorkProcess), it is that work, never the
+	// suite again.
+	if len(os.Args) > 2 && os.Args[1] == internalCmd.Name() && os.Args[2] == setupProjectCmd.Name() {
+		os.Exit(workStandIn())
 	}
 	// Run as the cyfr process, it is the process main runs (Run), its exit
 	// status the one cyfr exits with, over a fake engine.

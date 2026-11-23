@@ -457,9 +457,9 @@ func TestEveryDockerCallRunsThroughTheEngine(t *testing.T) {
 		// of init's faces run: outside the lock, and a pull changes
 		// nothing of the stack.
 		"initProject": "init's warm pull",
-		// Whether this account reaches Docker, before any project exists;
-		// it changes nothing.
-		"dockerAnswers": "init's look at the machine",
+		// Whether this account reaches Docker and where that Docker runs
+		// containers, before any project exists; it changes nothing.
+		"askDocker": "the look at the machine before a project",
 	}
 	sources, err := filepath.Glob("*.go")
 	if err != nil {

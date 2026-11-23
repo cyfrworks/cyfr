@@ -391,6 +391,7 @@ func newLocalStack(t *testing.T) localStack {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	after := map[string]func(){}
 	answeredHere(s, after)
+	workHere(t)
 	s.answer("context.out", "unix:///var/run/docker.sock\n")
 	s.answer("cyfrps.out", "")
 	s.answer("logs.out", "booting\n"+logNotSetUp)
