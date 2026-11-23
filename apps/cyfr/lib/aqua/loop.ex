@@ -850,11 +850,16 @@ defmodule Aqua.Loop do
 
   # A moved fence wins: the sentence's own write presents the loop's, and
   # one refused so leaves the turn to whoever took it, this loop cancelled.
-  # The sentence is written before the turn's end, and one not kept is an
-  # end that could not be written: its end is then not written either.
+  # Nothing of a turn the engine ends is left proposed or dispatched: what
+  # its harness left open is settled first with its true outcome, as an
+  # abort settles it (`settle_aborted/3`). The sentence is written before
+  # the turn's end, and one not kept, or a settling not kept, is an end that
+  # could not be written: its end is then not written either.
   defp harness_failed(%State{} = state, sentence) do
-    case system_row(state, sentence) do
-      {:ok, _row} -> {:halt, {:failed, sentence}, state}
+    with :ok <- settle_aborted(ctx(state), state.turn, sentence),
+         {:ok, _row} <- system_row(state, sentence) do
+      {:halt, {:failed, sentence}, state}
+    else
       {:error, reason} when reason in @taken -> {:halt, :cancelled, state}
       {:error, _unkept} -> {:halt, {:unwritten, {:failed, sentence}}, state}
     end

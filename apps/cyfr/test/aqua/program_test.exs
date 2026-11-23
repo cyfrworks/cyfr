@@ -4502,6 +4502,7 @@ defmodule Aqua.ProgramTest do
       line = "#{@title} stopped before it finished."
       assert {:failed, ^line} = Task.await(loop, 30_000)
       assert system_lines(ctx, thread, turn) == [line]
+      assert open_steps(ctx, turn) == []
       refute_received {:session, "open", %{"mode" => "run"}, _fields}
       refute_received {:session, "send", _wire, _fields}
     end
@@ -5372,8 +5373,11 @@ defmodule Aqua.ProgramTest do
       Process.exit(harness, :kill)
       assert {:failed, _} = Task.await(loop, 30_000)
       assert outcome(ctx, thread, turn) == expected(:lost, ctx)
-      # The step its killed harness had open stays as the harness left it.
-      assert model_steps(ctx, turn) == [{"chat", "dispatched", nil, nil}]
+      # The step its killed harness had open is closed lost as the turn ends.
+      assert model_steps(ctx, turn) ==
+               [{"chat", "closed", "error", "Aqua stopped before it finished."}]
+
+      assert open_steps(ctx, turn) == []
     end
 
     @tag harness: :program
@@ -5386,6 +5390,30 @@ defmodule Aqua.ProgramTest do
       assert {:failed, _} = Task.await(loop, 30_000)
       assert outcome(ctx, thread, turn) == expected(:lost, ctx)
       assert admitted_once!(ctx, turn) == delivered(:lost)
+      assert open_steps(ctx, turn) == []
+    end
+
+    @tag harness: :program
+    test "a lost program's delivery in flight is settled as its turn ends, nothing of it left " <>
+           "open",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      %{loop: loop} = working!(ctx, thread, row, fake, turn)
+      attendant = attendant!(ctx, turn)
+
+      # A post is handed over and not yet taken when the attendant goes.
+      _steer = steer!(ctx, thread, turn, "and this")
+      assert %{"t" => "post"} = sent()
+      _ = :sys.get_state(attendant)
+      Process.exit(attendant, :kill)
+
+      assert {:failed, _} = Task.await(loop, 30_000)
+      assert open_steps(ctx, turn) == []
+
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert for(%{kind: "input"} = step <- steps, do: step.dispatch_state) ==
+               ["closed", "uncertain"]
     end
 
     @tag harness: :api
@@ -6553,6 +6581,15 @@ defmodule Aqua.ProgramTest do
   defp model_rounds(ctx, turn) do
     {:ok, steps} = Tape.steps(ctx, turn)
     Enum.count(steps, &(&1.kind == "model"))
+  end
+
+  # What of a turn is still proposed or dispatched: nothing, once it ended.
+  defp open_steps(ctx, turn) do
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    for %{dispatch_state: open} = step <- steps,
+        open in ["proposed", "dispatched"],
+        do: {step.kind, step.purpose, step.tool, step.action, open}
   end
 
   # The model's steps of a turn, as its audit reads them: each one's
