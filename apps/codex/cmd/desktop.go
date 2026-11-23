@@ -100,6 +100,10 @@ func newDesktopService(ctx context.Context, device string, send func(desktop.Mes
 		Docker: func(ctx context.Context) desktop.DockerAnswer {
 			return dockerCheck(ctx, shell.NewWork(ctx))
 		},
+		// A setup runs until cyfr ends, whatever the chooser does.
+		Setup: func(_ context.Context, folder string, step func(string)) error {
+			return setUpHere(ctx, shell.NewWork(ctx), folder, step)
+		},
 		Local: func(project string) (desktop.Local, error) {
 			work := shell.NewWork(ctx)
 			l, err := readLocal(work, project, "the CYFR app")

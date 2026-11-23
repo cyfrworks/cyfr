@@ -104,7 +104,7 @@ func countedWork(t *testing.T) *atomic.Int64 {
 // Every way a folder's CYFR is read, and setup's work asked, begins its
 // work while the folder's Work lives and none once it ended: the screen's
 // reading and the app's (Answers), the token's read, a page's request to
-// the CYFR, setup's work asked, and the app's Docker check.
+// the CYFR, setup's work asked, and the app's Docker check and setup.
 func TestNothingBeginsOnceTheFoldersWorkEnded(t *testing.T) {
 	for name, ask := range map[string]func(ctx context.Context, work *shell.Work, l desktop.Local){
 		"a reading": func(ctx context.Context, _ *shell.Work, l desktop.Local) { _ = l.Answers(ctx) },
@@ -123,6 +123,9 @@ func TestNothingBeginsOnceTheFoldersWorkEnded(t *testing.T) {
 		},
 		"the app's Docker check": func(ctx context.Context, work *shell.Work, _ desktop.Local) {
 			_ = dockerCheck(ctx, work)
+		},
+		"the app's setup": func(ctx context.Context, work *shell.Work, _ desktop.Local) {
+			_ = setUpHere(ctx, work, t.TempDir(), nil)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -34,7 +34,7 @@ const ROAD = "#token=t&road=passkey"
 // holds `saved`; the tab holds the run token, as it does once main's first
 // load ran, and cyfr refuses any other.
 async function chooser(notice, state, connected = OPEN, hash = "#token=t" + (notice ? `&notice=${notice}` : ""),
-  {type = "navigate", saved = null, picked = {}, docker = []} = {}) {
+  {type = "navigate", saved = null, picked = {}, docker = [], setup = {}} = {}) {
   const elements = new Map()
   for (const [tag, id] of page.matchAll(/<[a-z0-9]+\b[^>]*\bid="([a-z]+)"[^>]*>/g)) {
     const listeners = {}
@@ -59,7 +59,7 @@ async function chooser(notice, state, connected = OPEN, hash = "#token=t" + (not
       if (path !== "/bootstrap/state") went.asked.push([path, body])
       went.tokens = [...(went.tokens ?? []), token]
       if (path !== "/bootstrap/state") stored.clear() // main cleared the storage while it waited
-      return {ok: true, json: async () => (path === "/bootstrap/state" ? state : path === "/bootstrap/folder" ? picked : path === "/bootstrap/docker" ? docker.shift() : connected)}
+      return {ok: true, json: async () => (path === "/bootstrap/state" ? state : path === "/bootstrap/folder" ? picked : path === "/bootstrap/docker" ? docker.shift() : setup[path] ? setup[path].shift() : connected)}
     }
   })
   await settled()
@@ -399,12 +399,14 @@ test("Set up CYFR on this computer shows its screen and asks whether Docker answ
   assert.deepEqual(went.asked, [["/bootstrap/docker", {}]])
   assert.equal($("docker").textContent, "Docker does not answer this account.")
   assert.deepEqual([$("run").hidden, $("commands").hidden, $("install").hidden, $("check").hidden], [false, false, true, false])
+  assert.equal($("start").hidden, true, "no Set up and start while Docker does not answer")
   assert.equal($("commands").textContent, "sudo apt-get update\nsudo usermod -aG docker ada", "text to copy")
   $("check").fire("click")
   await settled()
   assert.equal(went.asked.length, 2, "Check again asks again")
   assert.equal($("docker").textContent, "Docker answers on this computer.")
   assert.deepEqual([$("run").hidden, $("commands").hidden, $("install").hidden, $("check").hidden], [true, true, true, true])
+  assert.equal($("start").hidden, false, "Set up and start once it does")
   assert.deepEqual(went.pressed, [], "the app goes nowhere and runs nothing")
   $("back").fire("click")
   assert.deepEqual([$("choose").hidden, $("setup").hidden], [false, true])
@@ -427,4 +429,76 @@ test("where Docker is to be installed from its page, the chooser links to it; a 
   $("check").fire("click")
   await settled()
   assert.equal($("docker").textContent, "CYFR locked. Connect again.")
+})
+
+// Set up and start: offered once Docker answers, its progress shown step
+// by step, then the first person's page; its failure in its sentence with
+// Try again; and after a lock, its progress again with nothing opened by
+// itself.
+const SETUP_WORDS = ["Getting CYFR's files", "Writing its settings", "Downloading CYFR", "Starting CYFR"]
+const running = (steps, seq) => ({setup: {folder: "/home/ada/cyfr", steps, seq}})
+const progressOf = ($) => $("progress").textContent.split("\n")
+
+test("Set up and start shows its steps as they begin, then opens the CYFR set up as Connect does", async () => {
+  const setup = {
+    "/bootstrap/start": [running([], 1)],
+    "/bootstrap/setup": [running(["files"], 2), running(["files", "settings", "images", "start"], 5),
+      {setup: {folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}],
+    "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]
+  }
+  const {$, went} = await chooser("", {folder: "/home/ada/cyfr"}, {}, "#token=t", {docker: [{docker: {ready: true}}], setup})
+  $("here").fire("click")
+  await settled()
+  assert.equal($("start").hidden, false, "offered once Docker answers")
+  $("start").fire("click")
+  await settled()
+  assert.deepEqual(went.asked.map(([p]) => p), ["/bootstrap/docker", "/bootstrap/start", "/bootstrap/setup", "/bootstrap/setup",
+    "/bootstrap/setup", "/bootstrap/open"])
+  assert.deepEqual(went.asked.filter(([p]) => p === "/bootstrap/setup").map(([, b]) => b), [{seen: 1}, {seen: 2}, {seen: 5}],
+    "each wait is for the step after the one shown")
+  assert.deepEqual(went.asked.find(([p]) => p === "/bootstrap/start")[1], {}, "the page names no folder")
+  assert.deepEqual(progressOf($), ["Setting up CYFR in /home/ada/cyfr", ...SETUP_WORDS])
+  assert.deepEqual(went.byItself, ["/"], "then the first person's page")
+})
+
+test("a setup that failed says why and offers Try again, which starts it again", async () => {
+  const failed = {setup: {folder: "/home/ada", steps: [], error: "CYFR cannot be set up in /home/ada itself. Nothing was changed", seq: 2}}
+  const setup = {"/bootstrap/start": [running([], 1), running([], 3)], "/bootstrap/setup": [failed, running(["files"], 4), {error: "CYFR locked. Connect again."}]}
+  const {$, went} = await chooser("", {folder: "/home/ada"}, {}, "#token=t", {docker: [{docker: {ready: true}}], setup})
+  $("here").fire("click")
+  await settled()
+  $("start").fire("click")
+  await settled()
+  assert.equal($("notice").textContent, "CYFR cannot be set up in /home/ada itself. Nothing was changed.")
+  assert.deepEqual([$("retry").hidden, $("change").hidden, $("go").hidden], [false, false, true])
+  $("retry").fire("click")
+  await settled()
+  assert.equal(went.asked.filter(([p]) => p === "/bootstrap/start").length, 2)
+  assert.equal($("retry").hidden, true)
+  assert.deepEqual(went.byItself, [], "nothing opened")
+})
+
+test("after a lock the chooser shows the setup's progress again, and once it is done opens nothing by itself", async () => {
+  const done = {setup: {folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}
+  const setup = {"/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}
+  for (const road of ["#token=t", ROAD]) {
+    const {$, went} = await chooser("", {folder: "/home/ada/cyfr", ...running(["files", "settings"], 3), resume: HOME}, {}, road,
+      {setup: {...setup, "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}})
+    assert.deepEqual([$("choose").hidden, $("setup").hidden], [true, false], road)
+    await settled()
+    assert.deepEqual(progressOf($), ["Setting up CYFR in /home/ada/cyfr", ...SETUP_WORDS])
+    assert.equal($("notice").textContent, "CYFR is set up in /home/ada/cyfr and started.")
+    assert.equal($("go").hidden, false, "Open CYFR is offered")
+    assert.deepEqual(went.asked.map(([p]) => p), ["/bootstrap/setup"], `${road}: nothing opened or connected by itself`)
+    assert.deepEqual(went.byItself, [])
+    $("go").fire("click")
+    await settled()
+    assert.deepEqual(went.asked.at(-1), ["/bootstrap/open", {}], "Open CYFR is the press")
+  }
+})
+
+test("the chooser names setup's steps as the setup pages do", () => {
+  const pages = readFileSync(new URL("../../internal/setup/assets/setup.js", import.meta.url), "utf8")
+  const names = (src, pattern) => JSON.parse(JSON.stringify(vm.runInNewContext(`(${pattern.exec(src)[1]})`)))
+  assert.deepEqual(names(script, /const steps=(\{[^}]*\})/), names(pages, /const stepNames = (\{[^}]*\})/))
 })

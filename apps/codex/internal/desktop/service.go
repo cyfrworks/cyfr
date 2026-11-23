@@ -108,6 +108,10 @@ type Service struct {
 	// Docker asks whether Docker answers this account on this computer;
 	// nil asks nothing.
 	Docker func(context.Context) DockerAnswer
+	// Setup sets CYFR up in folder and starts it, saying each step it
+	// begins; its error is the sentence for the person. nil sets up
+	// nothing.
+	Setup func(ctx context.Context, folder string, step func(string)) error
 
 	mu sync.Mutex
 	// epoch counts locks. A chooser request belongs to the epoch it
@@ -142,12 +146,16 @@ type Service struct {
 	// ended is whether cyfr is ending, which main hears as its end and
 	// never as a lock.
 	ended bool
-	// folder is the folder main's last folder-picked named, picks counts
-	// main's answers, and picked is closed and replaced at each answer and
-	// each lock, which a chooser waiting for an answer wakes on.
+	// folder is the folder main's last folder-picked named, and picks
+	// counts main's answers.
 	folder string
 	picks  uint64
-	picked chan struct{}
+	// setting is the setup on this computer begun in this run, if any,
+	// which no lock ends.
+	setting *SetupState
+	// woken is closed and replaced at each pick answered, each step of a
+	// setup and each lock, which a chooser waiting for one wakes on.
+	woken chan struct{}
 }
 
 type selection struct {
@@ -214,6 +222,9 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		"/bootstrap/approve": s.approve,
 		"/bootstrap/folder":  s.awaitFolder,
 		"/bootstrap/docker":  s.docker,
+		"/bootstrap/start":   s.start,
+		"/bootstrap/setup":   s.awaitSetup,
+		"/bootstrap/open":    s.openSetUp,
 	}[r.URL.Path]
 	if !ok || r.Method != http.MethodPost {
 		http.NotFound(w, r)
@@ -239,10 +250,10 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not this app's page", http.StatusForbidden)
 		return
 	}
-	// A pick waits on the person at the system's dialog, unbounded; every
-	// other request is bounded.
+	// A pick waits on the person at the system's dialog, and a setup's
+	// step on Docker, unbounded; every other request is bounded.
 	ctx, cancel := r.Context(), context.CancelFunc(func() {})
-	if r.URL.Path != "/bootstrap/folder" {
+	if r.URL.Path != "/bootstrap/folder" && r.URL.Path != "/bootstrap/setup" {
 		ctx, cancel = context.WithTimeout(ctx, chooserBound)
 	}
 	defer cancel()
@@ -299,6 +310,7 @@ type request struct {
 	Home      string `json:"cyfr,omitempty"`
 	Directory string `json:"directory,omitempty"`
 	Picks     uint64 `json:"picks,omitempty"`
+	Seen      uint64 `json:"seen,omitempty"`
 }
 
 // answer is what the chooser does next: show a sentence, ask to approve a
@@ -313,6 +325,7 @@ type request struct {
 // there.
 type answer struct {
 	Docker  *DockerAnswer `json:"docker,omitempty"`
+	Setup   *SetupState   `json:"setup,omitempty"`
 	Folder  string        `json:"folder,omitempty"`
 	Picks   uint64        `json:"picks,omitempty"`
 	Home    string        `json:"cyfr,omitempty"`
@@ -360,13 +373,14 @@ func (s *Service) state(context.Context, uint64, request) answer {
 	s.mu.Lock()
 	open, began, home := s.pages != nil, s.began, s.committed.Home
 	folder, picks := s.folderNow()
+	setting := s.settingNow()
 	s.mu.Unlock()
 	if open {
 		// The CYFR open, which the record may not name: it keeps another's
 		// client, or a folder, until this CYFR admitted the device.
 		return s.opened(home)
 	}
-	a := answer{Home: c.Home, Folder: folder, Picks: picks}
+	a := answer{Home: c.Home, Folder: folder, Picks: picks, Setup: setting}
 	if !began {
 		a.Resume = c.Home
 	}
@@ -636,12 +650,20 @@ func (s *Service) folderNow() (string, uint64) {
 	return s.folder, s.picks
 }
 
-// wake ends every wait for a pick's answer, under s.mu.
+// wake ends every wait for a pick's answer or a setup's step, under s.mu.
 func (s *Service) wake() {
-	if s.picked != nil {
-		close(s.picked)
+	if s.woken != nil {
+		close(s.woken)
 	}
-	s.picked = make(chan struct{})
+	s.woken = make(chan struct{})
+}
+
+// waitWoken is the channel the next wake closes, under s.mu.
+func (s *Service) waitWoken() chan struct{} {
+	if s.woken == nil {
+		s.woken = make(chan struct{})
+	}
+	return s.woken
 }
 
 // awaitFolder answers the folder once main answered more picks than the
@@ -659,10 +681,7 @@ func (s *Service) awaitFolder(ctx context.Context, epoch uint64, req request) an
 			s.mu.Unlock()
 			return answer{Folder: folder, Picks: picks}
 		}
-		if s.picked == nil {
-			s.picked = make(chan struct{})
-		}
-		woken := s.picked
+		woken := s.waitWoken()
 		s.mu.Unlock()
 		select {
 		case <-woken:
@@ -682,6 +701,117 @@ func (s *Service) FolderPicked(path *string) {
 	}
 	s.picks++
 	s.wake()
+}
+
+// SetupState is the setup on this computer begun in this run: its folder,
+// the steps it began, and its end, Done or the Error sentence. Seq counts
+// its changes.
+type SetupState struct {
+	Folder string   `json:"folder"`
+	Steps  []string `json:"steps"`
+	Done   bool     `json:"done,omitempty"`
+	Error  string   `json:"error,omitempty"`
+	Seq    uint64   `json:"seq"`
+}
+
+// settingNow is a copy of the setup begun, or nil, under s.mu.
+func (s *Service) settingNow() *SetupState {
+	if s.setting == nil {
+		return nil
+	}
+	c := *s.setting
+	c.Steps = append([]string{}, c.Steps...)
+	return &c
+}
+
+// start begins setting CYFR up in the folder shown, the person's press of
+// Set up and start: one at a time, again after one failed. It runs to its
+// end whatever the chooser or a lock does, and opens nothing (openSetUp).
+func (s *Service) start(_ context.Context, epoch uint64, _ request) answer {
+	if s.Setup == nil {
+		return answer{Error: "This app cannot set CYFR up on this computer."}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case s.epoch != epoch:
+		return answer{Error: lockedSentence}
+	case s.setting != nil && s.setting.Error == "" && !s.setting.Done:
+		return answer{Setup: s.settingNow()}
+	}
+	folder, _ := s.folderNow()
+	seq := uint64(1)
+	if s.setting != nil {
+		seq = s.setting.Seq + 1
+	}
+	s.setting = &SetupState{Folder: folder, Steps: []string{}, Seq: seq}
+	run := s.setting
+	s.wake()
+	go func() {
+		err := s.Setup(context.Background(), folder, func(step string) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			run.Steps = append(run.Steps, step)
+			run.Seq++
+			s.wake()
+		})
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err != nil {
+			run.Error = err.Error()
+		} else {
+			run.Done = true
+		}
+		run.Seq++
+		s.wake()
+	}()
+	return answer{Setup: s.settingNow()}
+}
+
+// awaitSetup answers the setup begun once it changed past the chooser's
+// seen, or at once with none begun. A lock ends the wait.
+func (s *Service) awaitSetup(ctx context.Context, epoch uint64, req request) answer {
+	for {
+		s.mu.Lock()
+		if s.epoch != epoch {
+			s.mu.Unlock()
+			return answer{Error: lockedSentence}
+		}
+		if s.setting == nil || s.setting.Seq != req.Seen {
+			a := answer{Setup: s.settingNow()}
+			s.mu.Unlock()
+			return a
+		}
+		woken := s.waitWoken()
+		s.mu.Unlock()
+		select {
+		case <-woken:
+		case <-ctx.Done():
+			return answer{Error: "The app's connection stopped. Quit it and open it again."}
+		}
+	}
+}
+
+// openSetUp opens the CYFR the setup begun set up, once it is done: the
+// person's press, or the chooser that pressed Set up and start, on its
+// end.
+func (s *Service) openSetUp(ctx context.Context, epoch uint64, _ request) answer {
+	run, refused := s.begin(ctx, epoch, "")
+	if refused != nil {
+		return *refused
+	}
+	defer s.finish()
+	s.mu.Lock()
+	setting := s.settingNow()
+	s.mu.Unlock()
+	if setting == nil || !setting.Done || s.Local == nil {
+		return answer{Error: "CYFR is not set up on this computer yet."}
+	}
+	l, err := s.Local(setting.Folder)
+	if err != nil {
+		return answer{Error: fmt.Sprintf("The app cannot read the CYFR in %s (%v).", setting.Folder, err)}
+	}
+	return s.openLocal(run, epoch, setting.Folder, l)
 }
 
 // HomeReady is main's home-ready for an attempt at home: the one waiting,

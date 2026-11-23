@@ -180,6 +180,14 @@ func dockerRemedy() (commands []string, page string) {
 	return nil, dockerEnginePage
 }
 
+// setUpHere is the app's Set up and start: setup's work's run in folder
+// under work, which ends with it, each step it begins said to step.
+func setUpHere(ctx context.Context, work *shell.Work, folder string, step func(string)) error {
+	defer work.End()
+	_, err := setupWork(ctx, work, step, workRun, folder)
+	return err
+}
+
 // dockerCheck is the app's question of Docker, setup's work's probe under
 // work, which ends with the answer.
 func dockerCheck(ctx context.Context, work *shell.Work) desktop.DockerAnswer {

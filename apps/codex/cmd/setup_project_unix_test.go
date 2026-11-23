@@ -8,9 +8,11 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -924,5 +926,65 @@ func TestAWorkThatClosedItsStdoutAndLivesOnIsKilledAtTheBound(t *testing.T) {
 	}
 	if took < workEndsWithin-500*time.Millisecond || took > workEndsWithin+5*time.Second {
 		t.Fatalf("its work ended after %v, not at the bound", took)
+	}
+}
+
+// appSetup is the app's chooser over the folder the person picked: its
+// Set up and start pressed, and the setup it began read to its end.
+type appSetup struct {
+	Folder string   `json:"folder"`
+	Steps  []string `json:"steps"`
+	Done   bool     `json:"done"`
+	Error  string   `json:"error"`
+	Seq    uint64   `json:"seq"`
+}
+
+func setUpFromTheApp(t *testing.T, svc *desktop.Service, folder string) appSetup {
+	t.Helper()
+	svc.FolderPicked(&folder)
+	ask := func(path string, seen uint64) appSetup {
+		raw, _ := json.Marshal(map[string]any{"token": svc.Token, "seen": seen})
+		var got struct {
+			Setup *appSetup
+			Error string
+		}
+		if w := pressed(svc, path, "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Setup == nil {
+			t.Fatalf("%s answered %d %s", path, w.Code, w.Body)
+		}
+		return *got.Setup
+	}
+	s := ask("/bootstrap/start", 0)
+	if s.Folder != folder {
+		t.Fatalf("Set up and start set up %q, not the folder picked %q", s.Folder, folder)
+	}
+	for !s.Done && s.Error == "" {
+		s = ask("/bootstrap/setup", s.Seq)
+	}
+	return s
+}
+
+// The app's Set up and start sets CYFR up in the folder the person picked
+// and starts it, its steps said as they begin; the account's own folder is
+// refused at the start, in setup's sentence, with nothing written, and
+// Try again then sets up the next folder picked.
+func TestTheAppsSetUpAndStartSetsUpTheFolderPicked(t *testing.T) {
+	p := newWorkProject(t)
+	svc := newDesktopService(t.Context(), t.TempDir(), func(desktop.Message) error { return nil })
+	t.Cleanup(svc.End)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	refused := setUpFromTheApp(t, svc, home)
+	if !strings.Contains(refused.Error, "choose a folder inside it") || refused.Done {
+		t.Fatalf("the account's own folder was set up: %+v", refused)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 || p.starts() != 0 {
+		t.Fatalf("the refusal wrote %d entries and made %d starts", len(entries), p.starts())
+	}
+	s := setUpFromTheApp(t, svc, p.project)
+	if !s.Done || !slices.Equal(s.Steps, []string{"files", "settings", "images", "start"}) || p.starts() != 1 {
+		t.Fatalf("Try again answered %+v after %d starts", s, p.starts())
+	}
+	if _, err := os.Stat(filepath.Join(p.project, ".env")); err != nil {
+		t.Fatalf("no .env in the folder picked: %v", err)
 	}
 }

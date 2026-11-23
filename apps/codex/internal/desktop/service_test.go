@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1718,4 +1719,208 @@ func TestTheChooserAsksDockerAtEachCheck(t *testing.T) {
 	if got := answered(t, check); got.Docker != nil || got.Error != lockedSentence {
 		t.Fatalf("a check across a lock answered %+v", got)
 	}
+}
+
+// settingUp is a Setup the test drives: each run's steps and end come from
+// the test, and runs counts the runs begun.
+type settingUp struct {
+	runs  atomic.Int32
+	steps chan string
+	ends  chan error
+	ctxs  chan context.Context
+}
+
+func driveSetup(a *app) *settingUp {
+	d := &settingUp{steps: make(chan string), ends: make(chan error), ctxs: make(chan context.Context, 4)}
+	a.Setup = func(ctx context.Context, _ string, step func(string)) error {
+		d.runs.Add(1)
+		d.ctxs <- ctx
+		for {
+			select {
+			case s := <-d.steps:
+				step(s)
+			case err := <-d.ends:
+				return err
+			}
+		}
+	}
+	return d
+}
+
+// setupAfter is the setup's state once it changed past seen, within 5 s.
+func (a *app) setupAfter(t *testing.T, seen uint64) SetupState {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	raw, _ := json.Marshal(map[string]any{"token": a.Token, "seen": seen})
+	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://"+shell.Listen+"/bootstrap/setup", strings.NewReader(string(raw)))
+	r.Host = shell.Listen
+	r.Header.Set("Origin", shell.Origin)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, r)
+	var got answer
+	if json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Setup == nil {
+		t.Fatalf("the setup answered %d %s", w.Code, w.Body)
+	}
+	return *got.Setup
+}
+
+// Set up and start sets up the folder shown, one at a time: pressed again
+// while one runs it begins none, and again after one failed it begins the
+// next. Its steps and its end reach the chooser as they come.
+func TestSetUpAndStartRunsOneSetupAtATime(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	a.Folder = "/home/ada/cyfr"
+	if got := a.post(t, "/bootstrap/start", map[string]string{}); got.Setup != nil || got.Error == "" {
+		t.Fatalf("an app that cannot set CYFR up here answered %+v", got)
+	}
+	d := driveSetup(a)
+	first := a.post(t, "/bootstrap/start", map[string]string{})
+	if first.Setup == nil || first.Setup.Folder != "/home/ada/cyfr" || len(first.Setup.Steps) != 0 {
+		t.Fatalf("Set up and start answered %+v", first)
+	}
+	<-d.ctxs
+	d.steps <- "files"
+	if s := a.setupAfter(t, first.Setup.Seq); !slices.Equal(s.Steps, []string{"files"}) || s.Done || s.Error != "" {
+		t.Fatalf("the first step answered %+v", s)
+	}
+	if again := a.post(t, "/bootstrap/start", map[string]string{}); again.Setup == nil || !slices.Equal(again.Setup.Steps, []string{"files"}) {
+		t.Fatalf("pressed again while one runs, it answered %+v, not the run in progress", again)
+	}
+	seen := a.setupAfter(t, 0).Seq
+	d.ends <- errors.New("Docker does not answer this account. Nothing was written")
+	failed := a.setupAfter(t, seen)
+	if failed.Error != "Docker does not answer this account. Nothing was written" || failed.Done {
+		t.Fatalf("a failed setup answered %+v", failed)
+	}
+	if got := a.post(t, "/bootstrap/open", map[string]string{}); got.Next != "" || got.Error == "" {
+		t.Fatalf("a failed setup opened: %+v", got)
+	}
+	retry := a.post(t, "/bootstrap/start", map[string]string{})
+	<-d.ctxs
+	if retry.Setup == nil || retry.Setup.Error != "" || len(retry.Setup.Steps) != 0 || retry.Setup.Seq <= failed.Seq || d.runs.Load() != 2 {
+		t.Fatalf("Try again answered %+v after %d runs", retry, d.runs.Load())
+	}
+	d.ends <- nil
+	if s := a.setupAfter(t, retry.Setup.Seq); !s.Done {
+		t.Fatalf("the setup ended %+v", s)
+	}
+	a.quiet(t)
+}
+
+// No lock ends a setup: its run goes on, the chooser shown after the lock
+// shows its progress again, and nothing opens by itself.
+func TestASetupGoesOnThroughALockAndShowsAgain(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	a.Folder = "/home/ada/cyfr"
+	d := driveSetup(a)
+	a.post(t, "/bootstrap/start", map[string]string{})
+	ctx := <-d.ctxs
+	d.steps <- "files"
+	a.Lock("Locked.")
+	if m := a.next(t); m.Type != TypeLocked {
+		t.Fatalf("main heard %+v", m)
+	}
+	d.steps <- "settings"
+	shown := a.post(t, "/bootstrap/state", map[string]string{})
+	if shown.Setup == nil || !slices.Equal(shown.Setup.Steps, []string{"files", "settings"}) || shown.Next != "" {
+		t.Fatalf("the chooser after the lock was shown %+v", shown)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("the lock ended the setup")
+	}
+	d.ends <- nil
+	if s := a.setupAfter(t, shown.Setup.Seq); !s.Done {
+		t.Fatalf("the setup ended %+v", s)
+	}
+	a.quiet(t)
+}
+
+// A lock ends the chooser's wait for the setup's next step.
+func TestALockEndsTheWaitForASetupsStep(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	d := driveSetup(a)
+	started := a.post(t, "/bootstrap/start", map[string]string{})
+	<-d.ctxs
+	raw, _ := json.Marshal(map[string]any{"token": a.Token, "seen": started.Setup.Seq})
+	waited := make(chan answer, 1)
+	go func() {
+		r := httptest.NewRequest(http.MethodPost, "http://"+shell.Listen+"/bootstrap/setup", strings.NewReader(string(raw)))
+		r.Host = shell.Listen
+		r.Header.Set("Origin", shell.Origin)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, r)
+		var got answer
+		_ = json.Unmarshal(w.Body.Bytes(), &got)
+		waited <- got
+	}()
+	select {
+	case got := <-waited:
+		t.Fatalf("the wait answered before anything happened: %+v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	a.Lock("Locked.")
+	if got := answered(t, waited); got.Error != lockedSentence {
+		t.Fatalf("a lock left the wait %+v", got)
+	}
+	d.ends <- nil
+}
+
+// The CYFR set up opens on Open, or on the chooser that pressed Set up and
+// start as it ends, as a folder's CYFR opens: main told home, then opened.
+func TestTheCYFRSetUpOpensOnceDone(t *testing.T) {
+	var running atomic.Bool
+	running.Store(true)
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	a.Folder = localFolder
+	d := driveSetup(a)
+	if got := a.post(t, "/bootstrap/open", map[string]string{}); got.Error == "" {
+		t.Fatalf("nothing set up opened: %+v", got)
+	}
+	a.post(t, "/bootstrap/start", map[string]string{})
+	<-d.ctxs
+	if got := a.post(t, "/bootstrap/open", map[string]string{}); got.Error == "" {
+		t.Fatalf("a setup still running opened: %+v", got)
+	}
+	seen := a.setupAfter(t, 0).Seq
+	d.ends <- nil
+	if s := a.setupAfter(t, seen); !s.Done {
+		t.Fatalf("the setup ended %+v", s)
+	}
+	done := a.connect(t, "/bootstrap/open", map[string]string{})
+	if m := a.next(t); m.Type != TypeHome || m.Home != localAddress {
+		t.Fatalf("main heard %+v", m)
+	}
+	a.ready(localAddress)
+	if got := answered(t, done); got.Next != "/" || got.Home != localAddress {
+		t.Fatalf("Open answered %+v", got)
+	}
+	a.opened(t, localAddress)
+}
+
+// Images take their time to download: the wait for a setup's next step
+// outlives the bound every other chooser request has.
+func TestASetupsStepIsWaitedForUnbounded(t *testing.T) {
+	bound := chooserBound
+	chooserBound = 20 * time.Millisecond
+	t.Cleanup(func() { chooserBound = bound })
+	a := newApp(t, t.TempDir(), nil)
+	d := driveSetup(a)
+	started := a.post(t, "/bootstrap/start", map[string]string{})
+	<-d.ctxs
+	next := make(chan SetupState, 1)
+	go func() { next <- a.setupAfter(t, started.Setup.Seq) }()
+	time.Sleep(100 * time.Millisecond) // past the bound, with no step
+	d.steps <- "images"
+	select {
+	case s := <-next:
+		if !slices.Equal(s.Steps, []string{"images"}) {
+			t.Fatalf("the wait answered %+v", s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait did not answer the step")
+	}
+	d.ends <- nil
 }
