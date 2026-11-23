@@ -96,14 +96,17 @@ defmodule Aqua.ProgramTest do
   # A loop told that its thread moved reads its rows (`Aqua.Loop`): held or
   # killed in that read, it would take the test's one shared connection
   # with it, so it is held only once it sits in one of its own waits, which
-  # read nothing, with nothing to read. A process waiting on the store's
-  # answer waits too, so its status alone says nothing.
+  # read nothing, with nothing that wait takes. A process waiting on the
+  # store's answer waits too, so its status alone says nothing. A call's
+  # wait leaves the harness's notice of an ask or of its end for the next
+  # wait on the harness, so such a notice may wait in the mailbox while the
+  # loop sits in it.
   defp quiet!(pid) do
     Prima.Test.Wait.wait_until(
       fn ->
-        case Process.info(pid, [:current_function, :message_queue_len]) do
+        case Process.info(pid, [:current_function, :messages]) do
           nil -> true
-          [current_function: {Aqua.Loop, wait, _}, message_queue_len: 0] -> wait in @quiet
+          [current_function: {Aqua.Loop, wait, _}, messages: messages] -> quiet?(wait, messages)
           _reading -> false
         end
       end,
@@ -111,6 +114,12 @@ defmodule Aqua.ProgramTest do
       "the loop to wait with nothing to read"
     )
   end
+
+  defp quiet?(wait, messages) when wait in [:awaiting, :collect],
+    do:
+      Enum.all?(messages, &match?({Aqua.Harness, _turn, {kind, _}} when kind in [:ask, :end], &1))
+
+  defp quiet?(wait, messages), do: wait in @quiet and messages == []
 
   # The runner's word to a turn's loop that its thread moved (`Aqua.Runner`),
   # which a loop this test runs by itself has no runner to give: each post
@@ -761,19 +770,20 @@ defmodule Aqua.ProgramTest do
           steer_turn_id: turn.id
         })
 
-      handler = "post-gone-#{System.unique_integer([:positive])}"
+      # As the attendant has read the posts that wait, and before it joins
+      # the one it hands over, the workspace thread is deleted.
+      test = self()
 
-      :ok =
-        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.delete_as_read/4, %{
-          reader: attendant,
-          delete: fn -> {:ok, _} = Tape.delete_thread(ctx, workspace.id) end
-        })
+      after_read!(attendant, &waiting_posts?/1, fn ->
+        {:ok, _} = Tape.delete_thread(ctx, workspace.id)
+        send(test, :deleted_as_read)
+      end)
 
-      on_exit(fn -> :telemetry.detach(handler) end)
       :ok = Tape.announce(ctx, thread.id, :message, joined)
       :ok = :sys.resume(attendant)
 
       assert {:failed, @post_gone} = Task.await(loop, 15_000)
+      assert_received :deleted_as_read
       assert system_lines(ctx, thread, turn) == [@post_gone]
       assert [_first] = inputs(ctx, turn)
       refute_received {:session, "send", _wire, _fields}
@@ -5369,16 +5379,34 @@ defmodule Aqua.ProgramTest do
     ref
   end
 
-  # In the harness's own process, as it has read the posts that wait and
-  # before it joins the one it hands over.
+  # `act` runs once `reader`'s query `read?` holds, in that process and as
+  # that read ends: at once for a read outside a transaction, or else at
+  # the reader's first query after its transaction, its commit or rollback,
+  # so what `act` writes and announces is never inside the reader's
+  # transaction, and nothing else of the reader runs between.
+  defp after_read!(reader, read?, act) do
+    handler = "after-read-#{System.unique_integer([:positive])}"
+    config = %{reader: reader, read?: read?, act: act, handler: handler}
+    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.after_read/4, config)
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
   @doc false
-  def delete_as_read(_event, _measured, meta, %{reader: reader, delete: delete}) do
-    with true <- self() == reader,
-         nil <- Process.get(:deleted_as_read),
-         "messages" <- meta[:source],
-         true <- meta[:query] =~ ~s("carried_by" IS NULL) do
-      Process.put(:deleted_as_read, true)
-      delete.()
+  def after_read(_event, _measured, meta, %{reader: reader} = config) do
+    if self() == reader do
+      armed? = Process.get({:after_read, config.handler}, false) or config.read?.(meta)
+
+      cond do
+        not armed? ->
+          :ok
+
+        Arca.Repo.in_transaction?() ->
+          Process.put({:after_read, config.handler}, true)
+
+        true ->
+          :telemetry.detach(config.handler)
+          config.act.()
+      end
     end
 
     :ok
@@ -6003,34 +6031,20 @@ defmodule Aqua.ProgramTest do
   end
 
   # The next read of the steps fails, once, in `reader`: the table is away
-  # until that process's read of it failed. One inside a transaction is put
-  # back by another process, which waits for the reader's rollback, so the
-  # rollback does not take the table away again.
+  # until that process's read of it failed, and is put back as that read
+  # ends (`after_read!/3`), so a rollback of the reader's transaction does
+  # not take it away again.
   defp fail_read_once!(reader) do
-    handler = "failed-read-#{System.unique_integer([:positive])}"
+    after_read!(reader, &match?(%{result: {:error, _}}, &1), fn ->
+      Arca.Repo.query!("ALTER TABLE turn_steps_away RENAME TO turn_steps")
+    end)
 
-    :ok =
-      :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.read_failed/4, %{
-        reader: reader,
-        handler: handler
-      })
-
-    on_exit(fn -> :telemetry.detach(handler) end)
     Arca.Repo.query!("ALTER TABLE turn_steps RENAME TO turn_steps_away")
   end
 
-  @doc false
-  def read_failed(_event, _measured, %{result: {:error, _}}, %{reader: reader, handler: handler}) do
-    if self() == reader do
-      :telemetry.detach(handler)
-      back = fn -> Arca.Repo.query!("ALTER TABLE turn_steps_away RENAME TO turn_steps") end
-      if Arca.Repo.in_transaction?(), do: spawn(back), else: back.()
-    end
-
-    :ok
-  end
-
-  def read_failed(_event, _measured, _meta, _config), do: :ok
+  # The read of a program turn's posts that wait (`Arca.TurnStorage.brain_owed/2`).
+  defp waiting_posts?(meta),
+    do: meta[:source] == "messages" and meta[:query] =~ ~s("carried_by" IS NULL)
 
   defp owed(ctx) do
     {:ok, records} =
