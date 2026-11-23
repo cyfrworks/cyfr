@@ -28,11 +28,14 @@ async function ask(what) {
 // What the chooser shows, read within 5 s: a read the page does not
 // answer is logged and counts as none, so no wait outlives its bound on a
 // page that stopped answering.
-const shown = (w) => Promise.race([read(w), lib.sleep(5000).then(() => { // sleep-ok: the bound of one read
+const shown = (w) => new Promise((resolve, reject) => {
   const wc = w.webContents
-  lib.log(`no answer in 5 s from the chooser (crashed ${wc.isCrashed()}, loading ${wc.isLoading()}, at ${wc.getURL().split("#")[0]})`)
-  throw new Error("the chooser did not answer within 5 s")
-})])
+  const bound = setTimeout(() => {
+    lib.log(`no answer in 5 s from the chooser (crashed ${wc.isCrashed()}, loading ${wc.isLoading()}, at ${wc.getURL().split("#")[0]})`)
+    reject(new Error("the chooser did not answer within 5 s"))
+  }, 5000)
+  read(w).then(resolve, reject).finally(() => clearTimeout(bound))
+})
 // A launch's steps and the main process's own pace, in its log: each step
 // as it begins, and any second main's loop was held past 1.5 s.
 const step = (what) => lib.log(`step: ${what}`)
