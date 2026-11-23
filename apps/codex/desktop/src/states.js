@@ -48,6 +48,23 @@
 // or after Connect to another CYFR. Where a lock forgot it is
 // `unforgotten`, which speaks of no other CYFR.
 //
+// The box's screen (`screen`, its project; app.js) is the six-word road
+// with no chooser: cyfr's first page is the device's own, at loopback's
+// root, and the content window shows it again wherever the chooser would
+// show, after every lock and after a failed load of the CYFR's. There
+// every lost or failed page ends on that page or in a lock: a page lost,
+// the content's or a confirmation's, and a failed load of the device's own
+// page are each a lock, and so is cyfr's end, after which the app quits,
+// to be started again locked; on a desktop a lost page is shown again and
+// a lost confirmation is closed alone. cyfr proposes its CYFR again after
+// every lock (cmd/screen_app.go), and its locked there names none: a
+// proposal heard while a lock runs is `wanted`, taken once the lock has
+// settled, so whatever order the messages and the takes and clears come
+// in, main ends keeping to that CYFR on the device's page. Its last lock,
+// at its end, says ending in place of locked: main closes at once and
+// ends as at cyfr's end, settling no lock, so whatever is still to arrive
+// (a forget answered, the exit), no window opens for a cyfr that is going.
+//
 // A CYFR's page whose load failed, as the engine reports it, is no lock:
 // the content window shows the chooser saying so (`unanswered`), and
 // nothing is closed or forgotten. That notice is that chooser's alone: a
@@ -111,8 +128,9 @@
 import {LOOPBACK, accountLoad, contentNavigation, contentOpen, homeMessage, parse} from "./policy.js"
 
 /** The state main starts in. */
-export function initial(accountRoad, route = {proxy: "", resolver: ""}) {
-  return {name: "starting", accountRoad, readyURL: "", home: "", account: "", route, returning: null, notices: []}
+export function initial(accountRoad, route = {proxy: "", resolver: ""}, screen = "") {
+  return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", route, returning: null,
+    notices: []}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
@@ -135,7 +153,7 @@ const ANOTHER = LOOPBACK + "/bootstrap/another"
 // Its Try again, the same way: the CYFR open, at its root.
 const AGAIN = LOOPBACK + "/bootstrap/again"
 // The engine's code for a load given up: replaced, stopped or refused.
-const ABORTED = -3
+export const ABORTED = -3
 
 /**
  * Every decision main takes from a navigation as the person pressing
@@ -217,9 +235,11 @@ function settle(s) {
   if (!s.barrier || !s.forgotten) return same(s)
   const m = s.keep
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
-  const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, readyURL: s.readyURL,
+  const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
     home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices}
-  return {state: next, do: [{chooser: s.notices}]}
+  if (!s.wanted) return {state: next, do: [{chooser: s.notices}]}
+  const taken = step(next, {type: "home", message: s.wanted})
+  return {state: taken.state, do: [{chooser: s.notices}, ...taken.do]}
 }
 
 /**
@@ -232,13 +252,14 @@ export function step(s, e) {
   switch (e.type) {
     // ---- cyfr ----
     case "ready":
-      if (s.name !== "starting" || !e.url.startsWith(LOOPBACK + "/bootstrap/#token=")) {
-        return ending(s, {end: "its first page was not the chooser"})
+      if (s.name !== "starting" || (s.screen ? e.url !== LOOPBACK + "/" : !e.url.startsWith(LOOPBACK + "/bootstrap/#token="))) {
+        return ending(s, s.screen ? {quit: true} : {end: "its first page was not the chooser"})
       }
       return {state: {...s, name: "chooser", readyURL: e.url}, do: [{say: "ready"}, {chooser: []}]}
     case "home": {
       const m = e.message
-      if (s.name === "locking") return same(s) // from before the lock
+      // From before the lock; on the screen, the proposal after it.
+      if (s.name === "locking") return s.screen ? same({...s, wanted: m}) : same(s)
       if (!["chooser", "taking", "proposed"].includes(s.name) || !homeMessage(m)) {
         return ending(s, {end: "it named a CYFR this app does not open"})
       }
@@ -265,8 +286,10 @@ export function step(s, e) {
     }
     case "pick-folder":
       return same(s, [{send: {type: "folder-picked", fields: {id: e.id, path: null}}}])
+    case "ending":
+      return step(s, {type: "gone", why: "the screen shell is ending"})
     case "gone":
-      return ending(s, {end: e.why})
+      return ending(s, s.screen ? {say: `cyfr ended: ${e.why}`, quit: true} : {end: e.why})
 
     // ---- the system, the windows, the person ----
     case "forgot": {
@@ -278,7 +301,9 @@ export function step(s, e) {
         [{send: {type: e.cleared ? "leave" : "lock"}}])
     }
     case "lost":
-      return same(s, [{reload: true}])
+      if (!s.screen) return same(s, e.window === "child" ? [] : [{reload: true}])
+      return ["starting", "locking"].includes(s.name) ? same(s)
+        : lock(s, e.window === "child" ? "a confirmation's page was lost" : "the page was lost", "")
     case "quit":
       return ending(s, {quit: true})
     case "second-instance":
@@ -296,6 +321,9 @@ export function step(s, e) {
     case "committed":
       return withdrawn(s)
     case "load-failed":
+      if (s.screen && e.code !== ABORTED && parse(e.url)?.origin === LOOPBACK && !["starting", "locking"].includes(s.name)) {
+        return lock(s, `the device's own page did not load (${e.code})`, "")
+      }
       if (e.code === ABORTED || s.name !== "open" || parse(e.url)?.origin !== s.home) return withdrawn(s)
       return withdrawn(s, [{say: `unanswered: the CYFR's page did not load (${e.code})`}, {back: adding(s.notices, "unanswered")}])
     case "load-ended":

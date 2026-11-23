@@ -28,6 +28,12 @@
 # registered, exited or cannot fire fails the row, as does a page that held
 # nothing.
 #
+# The player is the screen's browser: Chrome, while the box's screen is
+# Chrome. The change that makes the CYFR app the box's screen makes the
+# app's own engine the player here, from the package Codex CI builds; the
+# real five minutes with a video playing are the installed box's
+# (tests/install-screen-proof), on the engine the box runs.
+#
 # The length is three seconds in place of five minutes, which
 # apps/codex/cmd's tests hold to five. The taps are a virtual pointer's
 # (tap.py), real input to labwc: Chrome takes no inhibitor for playback
@@ -49,7 +55,7 @@ if [ "${1:-}" = --inside ]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get -o Acquire::Retries=3 update -qq
   apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
-    labwc swayidle wlrctl dbus procps python3 python3-gi gir1.2-glib-2.0 curl ca-certificates fonts-dejavu-core >/dev/null
+    labwc swayidle wvkbd wlrctl dbus procps python3 python3-gi gir1.2-glib-2.0 curl ca-certificates fonts-dejavu-core >/dev/null
   curl -fsSL --retry 5 --retry-all-errors -o /tmp/chrome.deb \
     https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
   apt-get -o Acquire::Retries=3 install -y -qq /tmp/chrome.deb >/dev/null

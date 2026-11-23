@@ -452,8 +452,10 @@ func TestLock_AnUnlockBegunBeforeItNeverOpensAfterIt(t *testing.T) {
 		<-proof
 		<-locked
 		becomesTrue(t, "no channel stands", func() bool { return standing(home) == 0 })
-		if page := b.page(); b.shell.Unlocked() || b.restarts.Load() != 0 || strings.Contains(page, `class="notice"`) {
-			t.Fatalf("it opened after the lock:\n%s", page)
+		// The lock hid the page the setup handed its proof to, and only
+		// that: a channel it closed would have left its sentence.
+		if page := b.page(); b.shell.Unlocked() || b.restarts.Load() != 1 || strings.Contains(page, `class="notice"`) {
+			t.Fatalf("it opened after the lock, or the lock hid %d times:\n%s", b.restarts.Load(), page)
 		}
 	})
 	t.Run("at the handshake's last step", func(t *testing.T) {
@@ -676,6 +678,38 @@ func TestLock_APageBesideItsTellingIsTheLockPage(t *testing.T) {
 	}
 	g.open()
 	<-locked
+}
+
+// A lock hides what is on the screen before it tells the CYFR: while the
+// CYFR has not answered the lock of a session, the browser was already
+// restarted on the lock page, and the shell says it is locked.
+func TestLock_HidesTheScreenBeforeItTellsTheCYFR(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	setUpAndOpen(t, home, b)
+	g := newGate(t)
+	g.shut()
+	home.mu.Lock()
+	home.answering = func(op string, _ map[string]any) {
+		if op == "session.lock" {
+			_ = g.pass(context.Background())
+		}
+	}
+	home.mu.Unlock()
+	locked := make(chan struct{})
+	go func() {
+		defer close(locked)
+		b.shell.Lock(suspendedHere)
+	}()
+	g.reached(t)
+	if n := b.restarts.Load(); n != 1 || b.shell.Unlocked() {
+		t.Fatalf("while the CYFR is told, the screen was hidden %d times, unlocked %v", n, b.shell.Unlocked())
+	}
+	g.open()
+	<-locked
+	if n := b.restarts.Load(); n != 1 || b.shell.Unlocked() {
+		t.Fatalf("after the lock: hidden %d times, unlocked %v", n, b.shell.Unlocked())
+	}
 }
 
 // A confirmation a lock cut short is told neither as done nor as failed.

@@ -24,6 +24,7 @@ const (
 	watchesStarting = "This screen stays locked until it can tell when to lock."
 	idleUnwatched   = "This screen stays locked because it cannot tell when five minutes pass without touch, key or pointer input."
 	sleepUnwatched  = "This screen stays locked because it cannot tell when this device goes to sleep."
+	keyboardGone    = "This screen stays locked because its on-screen keyboard is not running. It starts the keyboard again."
 )
 
 const (
@@ -46,13 +47,17 @@ const (
 // idle.AnswerWithin, in which the shell itself watched nothing. A sleep
 // locks on the first tick after waking and starts the watches again.
 // Losing either watch locks at once; the page then says which, and the
-// watches are started again for as long as the screen runs.
+// watches are started again for as long as the screen runs. A try that
+// fails as the last one did locks nothing: the screen is locked and says
+// so already, and nothing unlocked it meanwhile, so a box that cannot be
+// watched is not hidden again each second.
 type screenWatches struct {
 	after time.Duration
 	lock  func(why string)
 	// clocks reads the boot clock and the monotonic clock.
 	clocks func() (boot, monotonic time.Duration, err error)
-	// changed hears each change of Unwatched, once it has changed.
+	// changed hears each change of Unwatched, once it has changed; nil
+	// hears none. A loss is shown through its lock (shell.Shell.Lock).
 	changed func(why string)
 
 	mu      sync.Mutex
@@ -75,15 +80,17 @@ func (w *screenWatches) Unwatched() string {
 // Settled is closed once the watches first worked or first failed.
 func (w *screenWatches) Settled() <-chan struct{} { return w.settled }
 
-func (w *screenWatches) set(why string) {
+// set sets Unwatched to why, and answers whether that changed it.
+func (w *screenWatches) set(why string) (changed bool) {
 	w.mu.Lock()
-	changed := w.why != why
+	changed = w.why != why
 	w.why = why
 	w.mu.Unlock()
 	w.settle.Do(func() { close(w.settled) })
 	if changed && w.changed != nil {
 		w.changed(why)
 	}
+	return changed
 }
 
 // unwatched is a watch lost: what the page says, and the cause.
@@ -99,8 +106,23 @@ func (u unwatched) Unwrap() error { return u.cause }
 // an unlock either saw it or is ended by that lock.
 func (w *screenWatches) keep(ctx context.Context) {
 	told := ""
+	var keyboard *screenKeyboard
+	defer func() { keyboard.stop() }()
 	for {
-		err := w.watch(ctx)
+		var err error
+		switch {
+		case keyboard != nil && !keyboard.running():
+			// It ended between two watches: as much a loss as one it ended
+			// in, and it is started again at the next try.
+			keyboard, err = nil, unwatched{keyboardGone, errors.New("the on-screen keyboard ended")}
+		case keyboard == nil:
+			if keyboard, err = startKeyboard(); err != nil {
+				err = unwatched{keyboardGone, err}
+			}
+		}
+		if err == nil {
+			err = w.watch(ctx, keyboard.ended)
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -108,8 +130,9 @@ func (w *screenWatches) keep(ctx context.Context) {
 		if !errors.As(err, &lost) {
 			lost = unwatched{idleUnwatched, err}
 		}
-		w.set(lost.page)
-		w.lock("")
+		if w.set(lost.page) {
+			w.lock("")
+		}
 		if said := lost.Error(); said != told {
 			told = said
 			fmt.Fprintln(os.Stderr, "cyfr screen: "+said)
@@ -128,8 +151,47 @@ func (w *screenWatches) suspended() {
 	w.lock(suspendLocked)
 }
 
-// watch runs both watches until one is not known to work, and says which.
-func (w *screenWatches) watch(ctx context.Context) error {
+// screenKeyboard is the on-screen keyboard, which the watches keep running:
+// ended is closed once it has ended.
+type screenKeyboard struct {
+	cmd   *exec.Cmd
+	ended chan struct{}
+}
+
+func startKeyboard() (*screenKeyboard, error) {
+	k := &screenKeyboard{cmd: screenChild(exec.Command("wvkbd-mobintl")), ended: make(chan struct{})}
+	if err := k.cmd.Start(); err != nil {
+		return nil, fmt.Errorf("the on-screen keyboard did not start: %w", err)
+	}
+	go func() {
+		_ = k.cmd.Wait()
+		close(k.ended)
+	}()
+	return k, nil
+}
+
+func (k *screenKeyboard) running() bool {
+	select {
+	case <-k.ended:
+		return false
+	default:
+		return true
+	}
+}
+
+// stop ends a keyboard that runs, and waits for its end.
+func (k *screenKeyboard) stop() {
+	if k != nil {
+		_ = k.cmd.Process.Kill()
+		<-k.ended
+	}
+}
+
+// watch runs both watches until one is not known to work, or the keyboard
+// (keyboardEnded) ends, and says which. The keyboard is watched as they
+// are: one that does not start or that ends locks the screen, whose page
+// says so, and keep starts it again; a watch lost leaves it running.
+func (w *screenWatches) watch(ctx context.Context, keyboardEnded <-chan struct{}) error {
 	socket, err := idle.Socket()
 	if err != nil {
 		return unwatched{idleUnwatched, err}
@@ -178,6 +240,8 @@ func (w *screenWatches) watch(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-inputEnded:
 			return unwatched{idleUnwatched, err}
+		case <-keyboardEnded:
+			return unwatched{keyboardGone, errors.New("the on-screen keyboard ended")}
 		case <-sleep.exited:
 			return unwatched{sleepUnwatched, sleep.failure("swayidle stopped")}
 		case <-suspending:

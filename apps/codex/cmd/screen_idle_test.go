@@ -93,7 +93,7 @@ func quietScreen() map[string]string {
 		"pkill": "exit 0",
 		// No screen's test asks this machine's Docker.
 		"docker":               "exit 1",
-		"wvkbd-mobintl":        "exec /bin/sleep 30", // sleep-ok: a stand-in child that runs until the shell ends it
+		"wvkbd-mobintl":        "exec /bin/sleep 600", // sleep-ok: a stand-in child that runs until the shell ends it
 		"swayidle":             swayidleHears,
 		"google-chrome-stable": "exec /bin/sleep 30", // sleep-ok: a stand-in child that runs until the shell ends it
 	}
@@ -216,6 +216,37 @@ func TestScreenWatch_RunningWithNoSubscriptionPermitsNoUnlock(t *testing.T) {
 	}
 }
 
+// A try that fails as the last one did locks nothing: the screen is
+// locked and says why already, and every lock hides it (shell.Shell.Lock),
+// so a box that cannot be watched would be hidden again each second.
+// Across three tries a watch that cannot start, and a keyboard that ends
+// each time it starts, lock once.
+func TestScreenWatch_ATryThatFailsAsTheLastLocksNothing(t *testing.T) {
+	for name, c := range map[string]struct {
+		swayidle, keyboard, want string
+	}{
+		"swayidle exiting":     {"exit 42", "", sleepUnwatched},
+		"a keyboard that ends": {swayidleHears, "exit 3", keyboardGone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			screenCompositor(t, idletest.Options{})
+			programs := quietScreen()
+			programs["swayidle"] = c.swayidle
+			if c.keyboard != "" {
+				programs["wvkbd-mobintl"] = c.keyboard
+			}
+			screenPrograms(t, programs)
+			w := startWatches(t, time.Hour)
+			w.becomes(t, c.want)
+			lockedWith(t, w.locks, "")
+			time.Sleep(3*watchesAgain + 500*time.Millisecond) // sleep-ok: three of the shell's own waits before it tries again
+			if n := len(w.locks); n != 0 {
+				t.Fatalf("three more tries that failed alike locked %d more times", n)
+			}
+		})
+	}
+}
+
 // A watch that stops showing that it works is lost, which locks: a
 // compositor that stops answering, and a swayidle that runs on saying
 // nothing.
@@ -270,10 +301,14 @@ said "Got sleep lock: 13"`,
 			w.becomes(t, "")
 			w.becomes(t, sleepUnwatched)
 			lockedWith(t, w.locks, suspendLocked)
-			lockedWith(t, w.locks, "") // the question's deadline
+			// The question's deadline finds the screen locked for it and
+			// saying so already: it locks, and so hides, nothing more.
+			time.Sleep(idle.AnswerWithin + time.Second) // sleep-ok: past the question's own deadline
 			select {
 			case why := <-w.changes:
 				t.Fatalf("it became %q on a lock got and no answer", why)
+			case why := <-w.locks:
+				t.Fatalf("the deadline locked again (%q), the screen locked for it already", why)
 			default:
 			}
 		})
@@ -400,7 +435,7 @@ func startScreen(t *testing.T) *runningScreen {
 	s := &runningScreen{t: t, ended: make(chan error, 1), done: make(chan struct{}), address: address}
 	go func() {
 		defer close(s.done)
-		s.ended <- runScreenShell(ctx, listen)
+		s.ended <- runScreenShell(ctx, listen, chromeBrowser)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -502,6 +537,8 @@ func TestScreenShell_AWatchThatCannotStartShowsWhy(t *testing.T) {
 		"swayidle with a lock and no answer":         {idletest.Options{}, swayidleNeverAnswers, sleepUnwatched},
 		"swayidle exiting":                           {idletest.Options{}, "exit 42", sleepUnwatched},
 		"no swayidle":                                {idletest.Options{}, "", sleepUnwatched},
+		"no keyboard":                                {idletest.Options{}, swayidleHears, keyboardGone},
+		"a keyboard that ends":                       {idletest.Options{}, swayidleHears, keyboardGone},
 	} {
 		t.Run(name, func(t *testing.T) {
 			screenProject(t)
@@ -511,8 +548,14 @@ func TestScreenShell_AWatchThatCannotStartShowsWhy(t *testing.T) {
 			if c.swayidle == "" {
 				delete(programs, "swayidle")
 			}
+			switch name {
+			case "no keyboard":
+				delete(programs, "wvkbd-mobintl")
+			case "a keyboard that ends":
+				programs["wvkbd-mobintl"] = "exit 3"
+			}
 			screenPrograms(t, programs)
-			if c.swayidle == "" {
+			if c.swayidle == "" || name == "no keyboard" {
 				// The stand-ins name their programs whole: this PATH holds
 				// them and no swayidle of the machine's.
 				bin, _, _ := strings.Cut(os.Getenv("PATH"), ":")
@@ -546,6 +589,122 @@ func TestScreenShell_WatchesThatWorkAgainShowThePage(t *testing.T) {
 	s.shows(watchedPage)
 }
 
+// A keyboard that ends locks the screen, whose page says so, and is
+// started again, after which the screen offers its use again.
+func TestScreenShell_AKeyboardThatEndsLocksAndStartsAgain(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	once := filepath.Join(t.TempDir(), "once")
+	// sleep-ok: the second keyboard runs until the shell ends it
+	programs["wvkbd-mobintl"] = "[ -e " + once + " ] && exec /bin/sleep 600\n: >" + once + "\n/bin/sleep 3\nexit 3"
+	screenPrograms(t, programs)
+	s := startScreen(t)
+	s.shows(watchedPage)
+	s.staysLockedSaying(keyboardGone)
+	s.shows(watchedPage)
+}
+
+// A watch lost and found again leaves the keyboard as it ran: it is
+// started once, and again only when it ends itself.
+func TestScreenShell_AWatchLostLeavesTheKeyboardRunning(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	seen := t.TempDir()
+	mended, started := filepath.Join(seen, "mended"), filepath.Join(seen, "started")
+	programs["swayidle"] = "[ -e " + mended + " ] || exit 1\n" + swayidleHears
+	// sleep-ok: a stand-in child that runs until the shell ends it
+	programs["wvkbd-mobintl"] = "echo $$ >>" + started + "\nexec /bin/sleep 600"
+	screenPrograms(t, programs)
+	s := startScreen(t)
+	s.staysLockedSaying(sleepUnwatched)
+	// sleep-ok: two more tries of the watches, each a loss
+	time.Sleep(2*watchesAgain + 200*time.Millisecond)
+	if err := os.WriteFile(mended, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.shows(watchedPage)
+	if raw, _ := os.ReadFile(started); strings.Count(string(raw), "\n") != 1 {
+		t.Fatalf("the keyboard was started %d times", strings.Count(string(raw), "\n"))
+	}
+}
+
+// A keyboard killed after a watch was lost and found again locks the
+// screen all the same, whose page says so, and is started again.
+func TestScreenShell_AKeyboardKilledAfterAWatchLostLocks(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	seen := t.TempDir()
+	mended, started := filepath.Join(seen, "mended"), filepath.Join(seen, "started")
+	programs["swayidle"] = "[ -e " + mended + " ] || exit 1\n" + swayidleHears
+	// sleep-ok: a stand-in child that runs until the shell ends it
+	programs["wvkbd-mobintl"] = "echo $$ >>" + started + "\nexec /bin/sleep 600"
+	screenPrograms(t, programs)
+	s := startScreen(t)
+	s.staysLockedSaying(sleepUnwatched)
+	if err := os.WriteFile(mended, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.shows(watchedPage)
+	raw, _ := os.ReadFile(started)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("the keyboard's pid %q", raw)
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	s.staysLockedSaying(keyboardGone)
+	s.shows(watchedPage)
+}
+
+// A keyboard that ends while the screen cannot be watched, between two
+// tries of its watches, is a loss all the same: the screen says so, and
+// the keyboard is started again.
+func TestScreenShell_AKeyboardEndedBetweenWatchesIsALoss(t *testing.T) {
+	said, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = said
+	t.Cleanup(func() {
+		os.Stderr = stderr
+		said.Close()
+	})
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	started := filepath.Join(t.TempDir(), "started")
+	programs["swayidle"] = "exit 1"
+	// sleep-ok: a stand-in child that runs until the shell ends it
+	programs["wvkbd-mobintl"] = "echo $$ >>" + started + "\nexec /bin/sleep 600"
+	screenPrograms(t, programs)
+	s := startScreen(t)
+	s.staysLockedSaying(sleepUnwatched)
+	raw, _ := os.ReadFile(started)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("the keyboard's pid %q", raw)
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		told, _ := os.ReadFile(said.Name())
+		again, _ := os.ReadFile(started)
+		if strings.Contains(string(told), keyboardGone+" (the on-screen keyboard ended)") && strings.Count(string(again), "\n") == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the keyboard's end was not a loss, or it was not started again:\n%s", told)
+		}
+		time.Sleep(50 * time.Millisecond) // sleep-ok: polls the shell's own account of its watches
+	}
+}
+
 // TestScreenShellHelper runs the screen's shell as a process of its own
 // for TestScreenShell_AKilledShellLeavesNoChildBehind.
 func TestScreenShellHelper(t *testing.T) {
@@ -553,7 +712,7 @@ func TestScreenShellHelper(t *testing.T) {
 		t.Skip("run by TestScreenShell_AKilledShellLeavesNoChildBehind")
 	}
 	listen, _ := ownListener()
-	_ = runScreenShell(context.Background(), listen)
+	_ = runScreenShell(context.Background(), listen, chromeBrowser)
 }
 
 // A shell killed outright leaves no keyboard, suspend watch or Chrome
@@ -631,7 +790,7 @@ func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
 	defer cancel()
 	listen, address := ownListener()
 	ended := make(chan error, 1)
-	go func() { ended <- runScreenShell(ctx, listen) }()
+	go func() { ended <- runScreenShell(ctx, listen, chromeBrowser) }()
 	for {
 		if raw, err := os.ReadFile(chromed); err == nil && strings.HasSuffix(string(raw), "\n") {
 			if !strings.Contains(string(raw), "--host-resolver-rules=MAP localhost 127.0.0.1") {
@@ -664,4 +823,50 @@ func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("the screen kept the CYFR it read before")
 	}
+}
+
+// The screen shell with the app as its browser: once the keyboard and the
+// watches are up it says ready with its own pages' address, then home with
+// the CYFR in its folder; main's home-ready is answered opened; a lock says
+// locked, naming no CYFR, and proposes that one again as the next attempt;
+// the end of main's pipe ends the shell, whose last lock says ending.
+func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
+	screenProject(t)
+	compositor := screenCompositor(t, idletest.Options{})
+	screenPrograms(t, quietScreen())
+	app, in, out := newAppSide(t)
+	listen, _ := ownListener()
+	ended := make(chan error, 1)
+	go func() { ended <- runScreenShell(context.Background(), listen, appBrowser(in, out)) }()
+
+	if ready := app.next("ready"); ready["url"] != shell.Origin+"/" {
+		t.Fatalf("ready named %v", ready["url"])
+	}
+	home := app.next("home")
+	if home["home"] == "" || home["account"] == "" || home["attempt"] != float64(1) {
+		t.Fatalf("home was %v", home)
+	}
+	app.send(`{"version":1,"type":"home-ready","home":"` + home["home"].(string) + `","attempt":1}`)
+	if opened := app.next("opened"); opened["home"] != home["home"] {
+		t.Fatalf("opened named %v, home %v", opened["home"], home["home"])
+	}
+	// The idle watch lost: what is on the screen gives way to the page
+	// that says why, and the CYFR is proposed again as the next attempt.
+	compositor.Stop()
+	if locked := app.next("locked"); locked["home"] != nil || locked["account"] != nil {
+		t.Fatalf("locked named %v", locked)
+	}
+	if again := app.next("home"); again["home"] != home["home"] || again["attempt"] != float64(2) {
+		t.Fatalf("after the lock home was %v", again)
+	}
+	app.reply.Close()
+	select {
+	case err := <-ended:
+		if err != nil {
+			t.Fatalf("the end of main's pipe ended the shell with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the end of main's pipe did not end the shell")
+	}
+	app.next("ending")
 }
