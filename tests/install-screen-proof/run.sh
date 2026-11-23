@@ -611,6 +611,8 @@ screen_confirms() {
   # search, which does.
   guest_chord ctrl shift k || fail "QMP did not send the keys"
   sleep 3
+  printf 'API keys' | guest_keys || fail "QMP did not type"
+  sleep 3
   screen_press 'API Keys' || fail "the screen did not press API Keys ($GUEST_DIR/screen-press.txt)"
   sleep 8
   check "screenshot screen-api-keys.png" guest_screenshot screen-api-keys.png
