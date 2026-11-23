@@ -12,7 +12,9 @@ defmodule Locus.Backends.OwnersTest do
   command's own; a crash's backoff and a program failed until a new
   version; the bound on sessions, the oldest ended one forgotten; the
   memory the box and each athanor admit, reserved before an open's
-  preparation and released once a session's process is gone; idleness
+  preparation and released once a session's process is gone, a spawn the
+  keeper refused after making it among them, at the keeper's release, and
+  held through the loss of the keeper's channel; idleness
   and leases through a driven sweep; kept homes shared by the sessions of
   one entry, held to their bound, reset and retired; renew, release,
   reconcile and status. Sessions run through the test environment's
@@ -45,6 +47,8 @@ defmodule Locus.Backends.OwnersTest do
     # It starts nothing, so it holds nothing to fence or adopt.
     def fence(_server, _tag), do: :none
     def adopt(_server, _ledger, _heir), do: {:ok, []}
+    def place(_server, _id, _whose, _owner), do: :ok
+    def drop(_server, _id), do: :ok
   end
 
   defmodule BeforeSpawn do
@@ -68,6 +72,8 @@ defmodule Locus.Backends.OwnersTest do
     end
 
     def adopt(_server, _ledger, _heir), do: {:ok, []}
+    def place(_server, _id, _whose, _owner), do: :ok
+    def drop(_server, _id), do: :ok
   end
 
   defmodule AdoptionRace do
@@ -98,6 +104,8 @@ defmodule Locus.Backends.OwnersTest do
     end
 
     def fence(_server, _tag), do: :none
+    def place(_server, _id, _whose, _owner), do: :ok
+    def drop(_server, _id), do: :ok
   end
 
   defmodule Stub do
@@ -200,6 +208,38 @@ defmodule Locus.Backends.OwnersTest do
     defdelegate send(handle, data), to: Locus.DirectLauncher
     defdelegate signal(handle, signal), to: Locus.DirectLauncher
     defdelegate resize(handle, rows, cols), to: Locus.DirectLauncher
+    defdelegate place(server, id, whose, owner), to: Locus.DirectLauncher
+    defdelegate drop(server, id), to: Locus.DirectLauncher
+  end
+
+  defmodule Placing do
+    @moduledoc false
+    # The direct launcher, telling the test each place made and dropped and
+    # the place each spawn names; a place is refused while the test's
+    # server says so.
+    import Kernel, except: [send: 2]
+
+    def place(server, id, whose, owner) do
+      Kernel.send(server[:test], {:placed, id, whose, owner})
+      if server[:refuse_place], do: {:error, {:refused, "bad_request"}}, else: :ok
+    end
+
+    def drop(server, id) do
+      Kernel.send(server[:test], {:dropped, id})
+      :ok
+    end
+
+    def spawn(server, spec) do
+      Kernel.send(server[:test], {:spawned_in, spec.place})
+      Locus.DirectLauncher.spawn(server, spec)
+    end
+
+    defdelegate adopt(server, ledger, heir), to: Locus.DirectLauncher
+    defdelegate fence(server, tag), to: Locus.DirectLauncher
+    defdelegate release(server, handle, grace_ms), to: Locus.DirectLauncher
+    defdelegate send(handle, data), to: Locus.DirectLauncher
+    defdelegate signal(handle, signal), to: Locus.DirectLauncher
+    defdelegate resize(handle, rows, cols), to: Locus.DirectLauncher
   end
 
   defmodule KeeperEncoding do
@@ -209,11 +249,13 @@ defmodule Locus.Backends.OwnersTest do
     # and tells the test whether the keeper would take it.
     def adopt(_test, _ledger, _owner), do: {:ok, []}
     def pool_stats(_test, "backends"), do: {:ok, %{size: 4, free: 4, quarantined: 0}}
+    def place(_test, _id, _whose, _owner), do: :ok
+    def drop(_test, _id), do: :ok
 
     def spawn(test, spec) do
       request =
         spec
-        |> Map.take([:argv, :env, :pool, :memory_bytes, :cpu_quota, :pty, :hosts])
+        |> Map.take([:place, :argv, :env, :pool, :memory_bytes, :cpu_quota, :pty, :hosts])
         |> Map.merge(%{
           type: :spawn,
           id: "encoded",
@@ -1448,8 +1490,13 @@ defmodule Locus.Backends.OwnersTest do
         end
       end)
 
-      :sys.suspend(fake)
+      # The keeper is held once the session's place is made, as its pool is
+      # read, so the spawn is the call that waits.
+      set_pool(ctx, {:held, self(), pool(4)})
       opening = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      assert_receive {:pool_read, reader}, 5_000
+      :sys.suspend(fake)
+      send(reader, :answer)
       wait_until(fn -> map_size(:sys.get_state(client).requests) == 1 end, 5_000)
       _result = Task.await(opening, 20_000)
       ledger = :sys.get_state(owners).ledger
@@ -1462,6 +1509,58 @@ defmodule Locus.Backends.OwnersTest do
 
       # The keeper's word, to the spawn's heir, frees it.
       wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
+    end
+
+    @tag timeout: 30_000
+    test "a session whose spawn is refused after the keeper made it keeps its reservation until the keeper's release",
+         ctx do
+      %{name: client, fake: fake} = Locus.Test.FakeKeeper.start_client!()
+
+      owners =
+        start_owners(ctx,
+          memory_budget: 268_435_456,
+          session_opts: [launcher: Locus.Keeper, launcher_server: client]
+        )
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      :ok = Locus.Test.FakeKeeper.mode(fake, {:exec_failed, self()})
+
+      # The refusal answers the open; what the keeper made is still its own.
+      assert {:error, :unavailable} = open(owners, "a", {1, 1}, "b1")
+      assert_receive {:exec_failed, spawn_id}, 5_000
+      assert held_bytes(owners) == 268_435_456
+      assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "two")
+
+      :ok = Locus.Test.FakeKeeper.mode(fake, :normal)
+      :ok = Locus.Test.FakeKeeper.released(fake, spawn_id)
+      wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
+      assert {:ok, _} = open(owners, "a", {1, 1}, "b1", key: "two")
+    end
+
+    @tag timeout: 30_000
+    test "a session keeps its reservation when the keeper's channel is lost: nobody but the keeper says its process is gone",
+         ctx do
+      %{name: client, fake: fake} = Locus.Test.FakeKeeper.start_client!()
+
+      owners =
+        start_owners(ctx,
+          memory_budget: 268_435_456,
+          session_opts: [launcher: Locus.Keeper, launcher_server: client]
+        )
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      assert {:ok, _} = open(owners, "a", {1, 1}, "b1")
+      assert held_bytes(owners) == 268_435_456
+      [session] = Map.keys(:sys.get_state(owners).pids)
+      client_down = Process.monitor(client)
+
+      :ok = Locus.Test.FakeKeeper.close(fake)
+      assert_receive {:DOWN, ^client_down, :process, ^client, {:shutdown, :channel_lost}}, 5_000
+
+      # What the client told before it stopped has reached the session, and
+      # what the session told has reached the table.
+      _ = :sys.get_state(session)
+      assert held_bytes(owners) == 268_435_456
     end
 
     test "a session's bound is released once its process is confirmed gone, not when it is asked to end",
@@ -1602,6 +1701,108 @@ defmodule Locus.Backends.OwnersTest do
     for {_id, %{server: ^server, state: :running} = owner} <- held(owners),
         {id, %{running: true}} <- owner.sessions,
         do: id
+  end
+
+  describe "places" do
+    defp placing(ctx, extra \\ []),
+      do: [
+        launcher: Placing,
+        launcher_server: [kept_root: ctx.root, test: self()] ++ extra,
+        release_timeout_ms: 5_000
+      ]
+
+    test "a session's place is made for the table first, of its kind, athanor and row, named by " <>
+           "its spawn, and dropped once nothing of it is left",
+         ctx do
+      owners = start_owners(ctx, session_opts: placing(ctx))
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      set_pool(ctx, {:held, self(), pool(4)})
+      lifetime = lifetime()
+      opening = Task.async(fn -> open(owners, "a", {1, 1}, "b1", lifetime: lifetime) end)
+
+      first =
+        receive do
+          {:placed, _id, _whose, _owner} = placed -> placed
+          {:pool_read, _reader} -> :pool_read_first
+        after
+          2_000 -> :none
+        end
+
+      assert_receive {:pool_read, reader}, 2_000
+      send(reader, :answer)
+      assert {:ok, %{session: id}} = Task.await(opening, 5_000)
+      assert_received {:spawned_in, spawned_in}
+      refute_received {:dropped, _id}
+
+      named = %{program: "b1", home_id: nil, key: "k", mode: :run, lifetime: lifetime}
+      assert :ok = Owners.close(owners, invoke("a", {1, 1}), named)
+      assert_receive {:dropped, dropped}, 5_000
+
+      assert %{first: first, spawned_in: spawned_in, dropped: dropped} == %{
+               first: {:placed, id, %{kind: "program", athanor: @athanor, subject: "a"}, owners},
+               spawned_in: id,
+               dropped: id
+             }
+    end
+
+    test "a preparation that fails, or dies at its bound, leaves no place and starts nothing",
+         ctx do
+      owners = start_owners(ctx, session_opts: placing(ctx))
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+
+      answers =
+        for pool <- [pool(0), :hang] do
+          set_pool(ctx, pool)
+          answer = open(owners, "a", {1, 1}, "b1")
+          assert_received {:placed, id, _whose, _owner}
+          assert_receive {:dropped, ^id}, 5_000
+          answer
+        end
+
+      refute_received {:spawned_in, _place}
+      assert answers == [{:error, :capacity}, {:error, :unavailable}]
+      assert :sys.get_state(owners).reservations == %{}
+    end
+
+    test "a close that cancels a preparation leaves no place", ctx do
+      owners = start_owners(ctx, session_opts: placing(ctx))
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
+      test = self()
+      Agent.update(ctx.stub, &Map.put(&1, :before_ensure, test))
+      lifetime = lifetime()
+
+      opening =
+        Task.async(fn ->
+          open(owners, "a", {1, 1}, "kept", home_id: @home, lifetime: lifetime)
+        end)
+
+      assert_receive {:placed, id, %{kind: "program"}, ^owners}, 2_000
+      assert_receive {:home_about_to_be_created, worker}, 2_000
+
+      named = %{program: "kept", home_id: @home, key: "k", mode: :run, lifetime: lifetime}
+      closing = Task.async(fn -> Owners.close(owners, invoke("a", {1, 1}), named) end)
+      wait_until(fn -> MapSet.size(:sys.get_state(owners).fences) == 1 end, 5_000)
+      send(worker, :continue_ensure)
+
+      assert %{opened: Task.await(opening, 5_000), closed: Task.await(closing, 10_000)} == %{
+               opened: {:error, :lifetime_over},
+               closed: :ok
+             }
+
+      assert_receive {:dropped, ^id}, 5_000
+      refute_received {:spawned_in, _place}
+    end
+
+    test "a session whose place is refused starts nothing and holds nothing", ctx do
+      owners = start_owners(ctx, session_opts: placing(ctx, refuse_place: true))
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+
+      assert open(owners, "a", {1, 1}, "b1") == {:error, :unavailable}
+      assert_received {:placed, id, _whose, _owner}
+      assert_receive {:dropped, ^id}, 5_000
+      refute_received {:spawned_in, _place}
+      assert :sys.get_state(owners).reservations == %{}
+    end
   end
 
   describe "kept homes" do

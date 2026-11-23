@@ -323,6 +323,9 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 		t.Fatalf("home_make of another home: %v", made)
 	}
 
+	if placed := k.place(t, "newcomer", protocol.KindProgram); placed["type"] != protocol.TypePlaced {
+		t.Fatalf("the newcomer's place answered %v", placed)
+	}
 	go k.s.handleSpawn(keptRequest(t, k.attach, "newcomer", `echo newcomer-started >> "$HOME/log"; sleep 600`, home, uid, nil))
 	if err := os.WriteFile(log+".go", nil, 0o666); err != nil {
 		t.Fatal(err)

@@ -8,15 +8,18 @@ defmodule Locus.Runtime.RunnerPoolTest do
   spawned ahead and refilled; an idle runner reused for its athanor only,
   a fresh one for another; an idle runner retired at its TTL; a clean
   completion to idle, an unclean one, an exit, a closed channel, a closed
-  relay and a kill to tainted, released and gone; a runner its keeper
+  relay and a kill to tainted, released and gone, and a clean completion
+  whose place the keeper did not make warm again to tainted as it is
+  heard, never handed to a take queued right after it; a runner its keeper
   never retires, busy or idle, dropped at the retirement bound and a
   retirement answered, one retired in time left alone by the bound's
   timer; every busy runner offered a
   `cancel_child`; a frame from a runner already ended ignored; a keeper
   that refuses runners leaving none in the pool, tainted or otherwise,
   with the pool backing off, refusing a take with the keeper's account
-  and filling again once a runner starts; and the keeper's loss ending
-  every runner.
+  and filling again once a runner starts, and a runner it refused after
+  making it held in its place among those ahead until its release; and
+  the keeper's loss ending every runner.
   """
 
   use ExUnit.Case, async: true
@@ -35,6 +38,8 @@ defmodule Locus.Runtime.RunnerPoolTest do
   defp start_pool!(keeper, overrides) do
     {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
     {keeper_opts, overrides} = Keyword.pop(overrides, :keeper_opts, [])
+    # The scripted keeper keeps the runners' places under its name.
+    keeper_opts = Keyword.put_new(keeper_opts, :name, keeper)
     {pool_opts, overrides} = Keyword.split(overrides, [:retire_bound_ms])
     settings = Map.merge(defaults, Map.new(overrides))
     supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
@@ -59,13 +64,16 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   defp counts(pool), do: RunnerPool.status(pool).runners
 
-  # An assign as the service sends one, of an attempt a scripted host
-  # minted, so the runner's relay binds to it: the handle's answer and the
-  # assignment's token.
-  defp assign(pid) do
-    attempt = ScriptedHost.attempt!(ScriptedHost.start!())
+  # A start's deadline far enough off for an answer that comes at once.
+  defp soon, do: System.monotonic_time(:millisecond) + 5_000
 
-    {RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @host_url),
+  # An assign as the service sends one, of an attempt of `athanor` a
+  # scripted host minted, so the runner's relay binds to it: the handle's
+  # answer and the assignment's token.
+  defp assign(pid, athanor \\ "ath_test") do
+    attempt = ScriptedHost.attempt!(ScriptedHost.start!(), athanor_id: athanor)
+
+    {RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @host_url, soon()),
      attempt.assignment}
   end
 
@@ -166,7 +174,8 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     serve!(pool)
     wait_until(fn -> counts(pool).fresh == 3 end)
-    assert length(spawns(keeper)) == 3
+    # A runner counts fresh while it spawns: it places itself first.
+    wait_until(fn -> length(spawns(keeper)) == 3 end)
 
     for spawn <- spawns(keeper) do
       assert %{
@@ -220,6 +229,202 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, other, other_id} = RunnerPool.take(pool, "ath_b", "exec_3")
     assert other != pid and other_id != id
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 1, tainted: 0} end)
+  end
+
+  # Whose each place the keeper holds is, by its id.
+  defp whose(keeper),
+    do: Map.new(ScriptedKeeper.places(keeper), fn {id, place} -> {id, place.whose} end)
+
+  test "a runner's place is warm until its work, run for the work's athanor once its assign is answered, " <>
+         "warm again at a clean end before the pool hears it, run at its reuse, and freed once it is released",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 1)
+    serve!(pool)
+    wait_until(fn -> length(spawns(keeper)) == 1 end)
+    [fresh] = spawns(keeper)
+    fresh_place = whose(keeper)[fresh.spec.runner]
+
+    {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    spawn = spawn_of(keeper, pid)
+    assert {:ok, _token} = assign(pid, "ath_a")
+    taken = whose(keeper)[spawn.spec.runner]
+    complete(spawn, "exec_1", true)
+    assert_receive {RunnerPool, ^pid, {:complete, "exec_1", true}}
+    at_rest = whose(keeper)[id]
+    wait_until(fn -> counts(pool).idle == 1 end)
+
+    assert {:ok, ^pid, ^id} = RunnerPool.take(pool, "ath_a", "exec_2")
+    assert {:ok, _token} = assign(pid, "ath_a")
+    reused = whose(keeper)[id]
+    assert :ok = RunnerPool.taint(pool, pid, 0)
+    assert_receive {RunnerPool, ^pid, {:gone, _reason}}, 5_000
+    wait_until(fn -> not Map.has_key?(ScriptedKeeper.places(keeper), id) end)
+
+    assert %{
+             fresh: fresh_place,
+             place: spawn.spec.runner,
+             taken: taken,
+             at_rest: at_rest,
+             reused: reused
+           } == %{
+             fresh: %{kind: "warm"},
+             place: id,
+             taken: %{kind: "run", athanor: "ath_a"},
+             at_rest: %{kind: "warm", athanor: "ath_a"},
+             reused: %{kind: "run", athanor: "ath_a"}
+           }
+  end
+
+  # The take is in at the runner and the keeper: the runner answers after
+  # what the take sent it, and the keeper after what that sent it.
+  defp taken!(keeper, pid) do
+    _info = RunnerProcess.info(pid)
+    _places = ScriptedKeeper.places(keeper)
+    :ok
+  end
+
+  test "a clean completion whose place the keeper does not make warm again ends its runner as the pool hears it: a take queued right after it never gets that runner",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 1)
+    serve!(pool)
+    {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    spawn = spawn_of(keeper, pid)
+    assert {:ok, _token} = assign(pid, "ath_a")
+    :ok = ScriptedKeeper.assigning(keeper, {:refused, :unknown_place})
+
+    # What the runner tells of its completion waits in the suspended pool,
+    # and a take is queued right behind the first of it.
+    :ok = :sys.suspend(pool)
+    complete(spawn, "exec_1", true)
+    _info = RunnerProcess.info(pid)
+    taking = Task.async(fn -> RunnerPool.take(pool, "ath_a", "exec_2") end)
+
+    wait_until(
+      fn ->
+        {:messages, messages} = Process.info(pool, :messages)
+        Enum.any?(messages, &match?({:"$gen_call", _from, {:take, "ath_a", "exec_2"}}, &1))
+      end,
+      5_000,
+      "the take queued at the pool"
+    )
+
+    :ok = take_right_after_first(pool, pid)
+    :ok = :sys.resume(pool)
+
+    assert_receive {RunnerPool, ^pid, {:complete, "exec_1", true}}, 5_000
+    assert {:ok, other, _other_id} = Task.await(taking)
+    refute other == pid
+  end
+
+  # The suspended pool's mailbox, from inside the pool: the first of what
+  # `runner` told it, then every other message (the take queued behind),
+  # then the rest of what `runner` told.
+  defp take_right_after_first(pool, runner) do
+    :sys.replace_state(pool, fn state ->
+      {[first | rest], others} =
+        Enum.split_with(mailbox([]), &match?({RunnerProcess, ^runner, _event}, &1))
+
+      Enum.each([first | others] ++ rest, &send(self(), &1))
+      state
+    end)
+
+    :ok
+  end
+
+  defp mailbox(messages) do
+    receive do
+      message -> mailbox([message | messages])
+    after
+      0 -> Enum.reverse(messages)
+    end
+  end
+
+  test "a runner's work is written only once the keeper has answered the assign of its place",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 1)
+    serve!(pool)
+    {:ok, pid, id} = RunnerPool.take(pool, "family@example", "exec_1")
+    spawn = spawn_of(keeper, pid)
+    :ok = taken!(keeper, pid)
+    attempt = ScriptedHost.attempt!(ScriptedHost.start!(), athanor_id: "family@example")
+    :ok = ScriptedKeeper.assigning(keeper, :held)
+
+    assigning =
+      Task.async(fn ->
+        RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @host_url, soon())
+      end)
+
+    wait_until(
+      fn -> ScriptedKeeper.held_assigns(keeper) != [] end,
+      5_000,
+      "the keeper to hold the runner's assign"
+    )
+
+    held = %{
+      written: ScriptedKeeper.read(spawn),
+      held: ScriptedKeeper.held_assigns(keeper),
+      whose: whose(keeper)[id]
+    }
+
+    :ok = ScriptedKeeper.answer_assigns(keeper)
+    assert :ok = Task.await(assigning)
+    token = attempt.assignment
+
+    assert held == %{
+             written: "",
+             held: [{id, %{kind: "run", athanor: "family@example"}}],
+             whose: %{kind: "warm"}
+           }
+
+    assert {:ok, %{type: :assign, assignment: ^token}} =
+             RunnerControl.decode(ScriptedKeeper.read(spawn))
+
+    assert whose(keeper)[id] == %{kind: "run", athanor: "family@example"}
+  end
+
+  test "a refused assign sends the runner none of its work, and its caller hears the refusal",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 1)
+    serve!(pool)
+    {:ok, pid, id} = RunnerPool.take(pool, "family@example", "exec_1")
+    spawn = spawn_of(keeper, pid)
+    :ok = taken!(keeper, pid)
+    :ok = ScriptedKeeper.assigning(keeper, {:refused, :unknown_place})
+
+    assert {{:error, {:unsent, {:assign, :unknown_place}}}, _token} =
+             assign(pid, "family@example")
+
+    assert %{written: ScriptedKeeper.read(spawn), whose: whose(keeper)[id]} ==
+             %{written: "", whose: %{kind: "warm"}}
+  end
+
+  test "a runner whose process dies before it spawns, or that is refused, leaves no place",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 0)
+    serve!(pool)
+
+    # Held at the keeper as it places itself, the runner's process dies.
+    :ok = :sys.suspend(keeper)
+    {:ok, dying, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+
+    wait_until(fn ->
+      {:message_queue_len, waiting} = Process.info(Process.whereis(keeper), :message_queue_len)
+      waiting > 0
+    end)
+
+    Process.exit(dying, :kill)
+    assert_receive {RunnerPool, ^dying, {:gone, _reason}}, 5_000
+    :ok = :sys.resume(keeper)
+    wait_until(fn -> ScriptedKeeper.places(keeper) == %{} end)
+
+    :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
+    {:ok, refused, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
+    assert_receive {RunnerPool, ^refused, {:gone, {:refused, :memory_unavailable}}}
+
+    assert %{places: ScriptedKeeper.places(keeper), spawned: Enum.count(spawns(keeper))} == %{
+             places: %{},
+             spawned: 0
+           }
   end
 
   test "an idle runner is retired at its TTL and the pool refills", %{keeper: keeper} do
@@ -593,6 +798,50 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
       assert {:error, {:refused, %{reason: "memory_unavailable"}}} =
                RunnerPool.take(pool, "ath_a", "exec_2")
+    end
+
+    test "a runner refused after the keeper made it keeps its place among the runners ahead until the keeper's release: none is started in its stead, and a take goes to another",
+         %{keeper: keeper} do
+      pool = start_pool!(keeper, pool_size: 1)
+      serve!(pool)
+      # Attached, not still spawning, so the keeper's refusals below are
+      # never ended by its start.
+      wait_until(fn -> match?([%{state: :fresh}], Runners.runners(pool)) end)
+
+      # The runner spawned behind the one taken is refused once the keeper
+      # made it, its place still the keeper's.
+      :ok = ScriptedKeeper.refuse(keeper, {:made, :exec_failed})
+      {:ok, first, first_id} = RunnerPool.take(pool, "ath_a", "exec_1")
+      wait_until(fn -> RunnerPool.status(pool).refusal != nil end)
+      [held_id] = Map.keys(ScriptedKeeper.places(keeper)) -- [first_id]
+
+      # The keeper would start a runner now, and the pool's wait after the
+      # refusal runs out: the held runner's place is not the pool's to fill.
+      :ok = ScriptedKeeper.refuse(keeper, nil)
+
+      wait_until(
+        fn -> not :sys.get_state(pool).refill_scheduled end,
+        5_000,
+        "the pool's wait after the refusal to run out"
+      )
+
+      assert %{
+               runners: Enum.sort(for r <- Runners.runners(pool), do: {r.id, r.state}),
+               spawned: length(spawns(keeper))
+             } == %{runners: Enum.sort([{first_id, :busy}, {held_id, :refused}]), spawned: 1}
+
+      complete(spawn_of(keeper, first), "exec_1", true)
+      assert_receive {RunnerPool, ^first, {:complete, "exec_1", true}}
+      assert {:ok, ^first, ^first_id} = RunnerPool.take(pool, "ath_a", "exec_2")
+
+      assert {:error, {:refused, %{reason: "exec_failed"}}} =
+               RunnerPool.take(pool, "ath_b", "exec_3")
+
+      # The keeper's release frees the place, and the pool fills it.
+      :ok = ScriptedKeeper.release_made(keeper)
+      wait_until(fn -> counts(pool).fresh == 1 end, 5_000)
+      refute Enum.any?(Runners.runners(pool), &(&1.id == held_id))
+      assert %{refusal: nil} = RunnerPool.status(pool)
     end
   end
 

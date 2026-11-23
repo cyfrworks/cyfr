@@ -12,21 +12,26 @@ defmodule Locus.Runtime.RunnerProcess do
   keeper's messages reach it, and tells its owner what happens as
   `{Locus.Runtime.RunnerProcess, pid, event}`: `:ready` once the channel is
   attached, `{:message, message}` for each frame the runner sends
-  (`complete` or `exit`; a frame the runner may not send, or a line that
-  is not one, is `{:error, {:protocol, reason}}`), `:closed` once the
+  (`complete` or `exit`; a clean `complete` whose place the keeper did not
+  make warm again is `{:message, complete, {:error, {:assign, reason}}}`;
+  a frame the runner may not send, or a line that is not one, is
+  `{:error, {:protocol, reason}}`), `:closed` once the
   runner's end of the channel is closed, `{:exited, how}` once its
   process ended and, for an attached runner, after its channel closed or
   a bound passed, `:released` once the keeper has retired it,
   `{:refused, reason}` when the keeper refused the spawn, so no process of
-  the runner ever ran and nothing is left to release, and
-  `{:error, reason}` for a later failure of the keeper's. A message the service
-  sends (`send_message/2`) is written at once, or held until the channel
-  attaches. `release/2` asks the keeper to end the runner; when this
-  process itself is stopped, the runner is released with no grace.
+  the runner ever ran and nothing is left to release,
+  `{:refused, reason, :release_follows}` when it refused it after making
+  something of it, which it frees by itself, unasked, its `:released`
+  following, and `{:error, reason}` for a later failure of the keeper's.
+  A message the service sends (`send_message/2`) is written at once, or
+  held until the channel attaches. `release/2` asks the keeper to end the
+  runner; when this process itself is stopped, the runner is released
+  with no grace.
 
   When the runner attaches, this process starts the service's end of its
   relay (`Locus.Runtime.Relay`), linked, and hands it every relay byte the keeper
-  carries; the relay writes back through the keeper itself. `assign/5`
+  carries; the relay writes back through the keeper itself. `assign/6`
   binds the relay to the attempt it assigns, from the assignment and the
   opened keys, before the `assign` is written (or, before the runner
   attaches, once the relay starts), so the runner's first host call finds
@@ -34,6 +39,25 @@ defmodule Locus.Runtime.RunnerProcess do
   is `{:error, {:relay, reason}}`: the pool retires the runner, as for any
   failure. One whose runner's end of the stream ended is heard as the
   runner's own end.
+
+  Before its spawn this process makes the runner's place, named by the
+  runner's id, `warm` and no athanor's (`c:Locus.Runtime.Keeper.place/3`):
+  this process is the place's owner, so a runner that never spawned leaves
+  none behind it, and one the keeper refused to place is `{:refused,
+  reason}`, nothing of it having run. This process assigns the place
+  itself (`c:Locus.Runtime.Keeper.assign/4`), so every assign of a runner
+  is made in the order of its work, each waiting for the keeper's answer
+  three seconds at most: `assign/6` makes it `run` of the work's
+  athanor (its keys' `attempt.athanor_id`) before it binds the relay or
+  holds or writes anything of the work, waits for that no later than its
+  start's deadline, and answers `{:error, {:unsent, {:assign, reason}}}`,
+  nothing of the work held or written, where the keeper does not apply it
+  in that time, and `{:error, {:unsent, :past_deadline}}` where it applied
+  it but the deadline has passed; a clean `complete` read from the runner
+  makes it `warm` again, still that athanor's, before the owner hears the
+  `complete`, and one the keeper does not apply is heard with it as
+  `{:message, complete, {:error, {:assign, reason}}}`, the completion and
+  the end of a runner no longer one to reuse in one event.
 
   Guest data never crosses here: control bytes are frames, and the
   runner's own log lines, which the keeper relays, are logged under the
@@ -58,15 +82,27 @@ defmodule Locus.Runtime.RunnerProcess do
   # How long the process's end is held for its control stream to close.
   @control_drain_ms 1_000
 
+  # The longest an assign of the runner's place waits for the keeper's
+  # answer, so a start whose first runner's keeper does not answer has
+  # time left to go to another (`Locus.Runtime.WorkerService`).
+  @assign_wait_ms 3_000
+
+  # This process answers an assign by its start's deadline; the caller
+  # waits this much past it for that answer.
+  @assign_answer_ms 500
+
   @doc false
   def child_spec(opts) do
     %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
   end
 
-  @doc "Start a handle. Options: `:id`, `:keeper`, `:spec` (`t:Locus.Runtime.Keeper.spec/0`), `:owner`."
+  @doc """
+  Start a handle. Options: `:id`, `:keeper`, `:keeper_opts` (the keeper's
+  options, default none), `:spec` (`t:Locus.Runtime.Keeper.spec/0`), `:owner`.
+  """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc "Send `message`, a `cancel_child`, to the runner; an `assign` is `assign/5`'s."
+  @doc "Send `message`, a `cancel_child`, to the runner; an `assign` is `assign/6`'s."
   @spec send_message(pid(), RunnerControl.message()) :: :ok | {:error, term()}
   def send_message(pid, %{type: :cancel_child} = message) do
     line = message |> RunnerControl.encode() |> IO.iodata_to_binary()
@@ -77,20 +113,32 @@ defmodule Locus.Runtime.RunnerProcess do
   Assign the runner the attempt `token` names: bind its relay to the
   attempt (`Locus.Runtime.Relay.bind/2`, `host_url` being where its calls go when
   the assignment names no address), then send the `assign` with `input`
-  and the opened `keys`. `{:error, {:unsent, reason}}` when nothing of it
+  and the opened `keys`, and nothing of it once `deadline` (monotonic
+  milliseconds) has passed. `{:error, {:unsent, reason}}` when nothing of it
   reached the runner, so it may be sent to another; any other error may
   follow a write. Raises for an `assign` the protocol refuses.
   """
-  @spec assign(pid(), String.t(), String.t(), Prima.WorkerAuth.attempt_keys(), String.t()) ::
-          :ok | {:error, term()}
-  def assign(pid, token, input, keys, host_url)
-      when is_binary(token) and is_binary(input) and is_binary(host_url) do
+  @spec assign(
+          pid(),
+          String.t(),
+          String.t(),
+          Prima.WorkerAuth.attempt_keys(),
+          String.t(),
+          integer()
+        ) :: :ok | {:error, term()}
+  def assign(pid, token, input, keys, host_url, deadline)
+      when is_binary(token) and is_binary(input) and is_binary(host_url) and
+             is_integer(deadline) do
     line =
       %{type: :assign, assignment: token, input: input, keys: keys}
       |> RunnerControl.encode()
       |> IO.iodata_to_binary()
 
-    GenServer.call(pid, {:assign, line, %{assignment: token, keys: keys, host_url: host_url}})
+    GenServer.call(
+      pid,
+      {:assign, line, %{assignment: token, keys: keys, host_url: host_url}, deadline},
+      max(deadline - now(), 0) + @assign_answer_ms
+    )
   catch
     # An exit's reason carries the call, the attempt's keys among it.
     :exit, {:noproc, _call} -> {:error, {:unsent, :gone}}
@@ -114,11 +162,14 @@ defmodule Locus.Runtime.RunnerProcess do
      %{
        id: Keyword.fetch!(opts, :id),
        keeper: Keyword.fetch!(opts, :keeper),
+       keeper_opts: Keyword.get(opts, :keeper_opts, []),
        spec: Keyword.fetch!(opts, :spec),
        owner: Keyword.fetch!(opts, :owner),
        channel: nil,
        relay: nil,
        binding: nil,
+       # The athanor of the work last assigned, whose its place stays at rest.
+       athanor: nil,
        os_pid: nil,
        attached: false,
        pending: [],
@@ -131,10 +182,10 @@ defmodule Locus.Runtime.RunnerProcess do
 
   @impl true
   def handle_continue(:spawn, state) do
-    case state.keeper.spawn(state.spec) do
-      {:ok, channel, events} ->
-        {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
-
+    with :ok <- state.keeper.place(state.spec.runner, %{kind: "warm"}, state.keeper_opts),
+         {:ok, channel, events} <- state.keeper.spawn(state.spec) do
+      {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
+    else
       {:error, reason} ->
         notify(state, {:refused, reason})
         {:noreply, state}
@@ -148,16 +199,29 @@ defmodule Locus.Runtime.RunnerProcess do
   def handle_call({:send, line}, _from, state),
     do: {:reply, :ok, %{state | pending: [state.pending, line]}}
 
-  def handle_call({:assign, line, binding}, _from, %{relay: nil, attached: false} = state),
-    do: {:reply, :ok, %{state | binding: binding, pending: [state.pending, line]}}
+  def handle_call(
+        {:assign, _line, _binding, _deadline},
+        _from,
+        %{relay: nil, attached: true} = state
+      ),
+      do: {:reply, {:error, {:unsent, {:relay, :closed}}}, state}
 
-  def handle_call({:assign, _line, _binding}, _from, %{relay: nil} = state),
-    do: {:reply, {:error, {:unsent, {:relay, :closed}}}, state}
+  # The place is the work's athanor's run before anything of the work is
+  # bound, held or written, and nothing of the work is once the start's
+  # deadline has passed.
+  def handle_call({:assign, line, binding, deadline}, _from, state) do
+    athanor = binding.keys.attempt.athanor_id
+    whose = %{kind: "run", athanor: athanor}
+    until = min(now() + @assign_wait_ms, deadline)
 
-  def handle_call({:assign, line, binding}, _from, state) do
-    case bind(state.relay, binding) do
-      :ok -> {:reply, written(state.keeper.send(state.channel, line)), state}
-      {:error, reason} -> {:reply, {:error, {:unsent, {:relay, reason}}}, state}
+    case state.keeper.assign(state.spec.runner, whose, until, state.keeper_opts) do
+      :ok ->
+        if now() < deadline,
+          do: assigned(%{state | athanor: athanor}, line, binding),
+          else: {:reply, {:error, {:unsent, :past_deadline}}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, {:unsent, {:assign, reason}}}, state}
     end
   end
 
@@ -228,8 +292,8 @@ defmodule Locus.Runtime.RunnerProcess do
       {:message, {:send, line}} ->
         {:message, {:send, {:redacted, byte_size(line)}}}
 
-      {:message, {:assign, line, _binding}} ->
-        {:message, {:assign, {:redacted, byte_size(line)}, :redacted}}
+      {:message, {:assign, line, _binding, deadline}} ->
+        {:message, {:assign, {:redacted, byte_size(line)}, :redacted, deadline}}
 
       {:log, _log} ->
         {:log, []}
@@ -312,6 +376,13 @@ defmodule Locus.Runtime.RunnerProcess do
     state
   end
 
+  # The keeper frees what it made of a spawn it refused without being
+  # asked: nothing of it is released from here.
+  defp on_event({:refused, reason, :release_follows}, state) do
+    notify(state, {:refused, reason, :release_follows})
+    %{state | released: true}
+  end
+
   defp on_event({:error, reason}, state) do
     notify(state, {:error, reason})
     state
@@ -327,7 +398,7 @@ defmodule Locus.Runtime.RunnerProcess do
         case RunnerControl.decode(line) do
           {:ok, %{type: type} = message} ->
             if RunnerControl.sender(type) == :runner,
-              do: notify(state, {:message, message}),
+              do: heard(state, message),
               else: notify(state, {:error, {:protocol, {:not_a_runner_frame, type}}})
 
           {:error, reason} ->
@@ -342,6 +413,34 @@ defmodule Locus.Runtime.RunnerProcess do
 
       [_partial] ->
         state
+    end
+  end
+
+  # A clean completion puts the place back at rest, still the athanor's,
+  # before the owner hears it, so the next work's assign follows it. One
+  # the keeper does not apply is heard with the completion, in one event,
+  # so the owner never offers the runner between the two.
+  defp heard(%{athanor: athanor} = state, %{type: :complete, clean: true} = message)
+       when athanor != nil do
+    whose = %{kind: "warm", athanor: athanor}
+
+    case state.keeper.assign(state.spec.runner, whose, now() + @assign_wait_ms, state.keeper_opts) do
+      :ok -> notify(state, {:message, message})
+      {:error, reason} -> notify(state, {:message, message, {:error, {:assign, reason}}})
+    end
+  end
+
+  defp heard(state, message), do: notify(state, {:message, message})
+
+  # Held until the runner attaches, or written once its relay is bound to
+  # the attempt.
+  defp assigned(%{relay: nil} = state, line, binding),
+    do: {:reply, :ok, %{state | binding: binding, pending: [state.pending, line]}}
+
+  defp assigned(state, line, binding) do
+    case bind(state.relay, binding) do
+      :ok -> {:reply, written(state.keeper.send(state.channel, line)), state}
+      {:error, reason} -> {:reply, {:error, {:unsent, {:relay, reason}}}, state}
     end
   end
 
@@ -392,4 +491,6 @@ defmodule Locus.Runtime.RunnerProcess do
   defp flush_exited(state), do: state
 
   defp notify(state, event), do: send(state.owner, {__MODULE__, self(), event})
+
+  defp now, do: System.monotonic_time(:millisecond)
 end

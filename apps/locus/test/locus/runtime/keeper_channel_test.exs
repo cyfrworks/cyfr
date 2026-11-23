@@ -5,12 +5,16 @@ defmodule Locus.Runtime.KeeperChannelTest do
   @moduledoc """
   The runtime's adapter (`Locus.Runtime.Keeper.Channel`) over the node's
   one client of `cyfr-locus` (`Locus.Keeper`), against a scripted keeper
-  on a socket the test holds the keeper's end of: a runner's handle asks
-  for a spawn in the `runner` pool with a control channel and the
+  on a socket the test holds the keeper's end of: a runner's handle
+  makes the runner's place, named by its id, then asks for a spawn in
+  that place, in the `runner` pool with a control channel and the
   runner's explicit environment; the relay attaches with its token, is
   sent the zero-length frame that opens the relay stream (5), and carries
   the control channel as stream 4, a line split across frames either way;
-  an assign binds the runner's relay to its attempt before it is written;
+  an assign makes the runner's place its work's athanor's run, answered by
+  the keeper, before it binds the runner's relay to its attempt and is
+  written, and a clean completion makes it warm again before the handle's
+  owner hears it;
   the keeper's `exited` and `released` reach the handle; a release carries
   its grace, and a second asks for nothing more; the pool's stats are
   asked and answered; the channel's loss reaches every handle and ends
@@ -85,9 +89,25 @@ defmodule Locus.Runtime.KeeperChannelTest do
     {:ok, keeper: keeper, name: name, client: client, dir: dir}
   end
 
-  defp start_handle!(name, id \\ "runner_1") do
+  # A runner's handle, which makes the runner's place before its spawn.
+  defp start_handle!(keeper, name, id \\ "runner_1") do
     spec = %{runner: id, argv: ["/app/bin/locus", "start"], env: @spec_env, server: name}
-    start_supervised!({RunnerProcess, id: id, keeper: Channel, spec: spec, owner: self()})
+
+    handle =
+      start_supervised!(
+        {RunnerProcess,
+         id: id, keeper: Channel, keeper_opts: [server: name], spec: spec, owner: self()}
+      )
+
+    placed!(keeper, id)
+    handle
+  end
+
+  # The place `id` the client asks for, a runner's at rest, answered as
+  # cyfr-locus answers it.
+  defp placed!(keeper, id) do
+    assert %{"v" => 3, "type" => "place", "id" => ^id, "kind" => "warm"} = request(keeper)
+    reply(keeper, %{v: 3, type: "placed", id: id})
   end
 
   # The next line the client sent the keeper.
@@ -103,6 +123,22 @@ defmodule Locus.Runtime.KeeperChannelTest do
   end
 
   defp reply(keeper, message), do: :ok = :socket.send(keeper, [Jason.encode!(message), ?\n])
+
+  # The assign of the runner's place the client asks for, `kind` of
+  # `athanor`'s under an id of its own, answered as cyfr-locus answers it.
+  defp assigned!(keeper, kind, athanor, place \\ "runner_1") do
+    assert %{"type" => "assign", "id" => id} = asked = request(keeper)
+
+    assert Map.delete(asked, "id") == %{
+             "v" => 3,
+             "type" => "assign",
+             "place" => place,
+             "kind" => kind,
+             "athanor" => athanor
+           }
+
+    reply(keeper, %{v: 3, type: "assigned", id: id})
+  end
 
   defp attach!(dir, token) do
     {:ok, relay} =
@@ -132,7 +168,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
 
   test "a handle spawns a runner with a control channel and its explicit environment, in the runner pool",
        %{keeper: keeper, name: name, dir: dir} do
-    handle = start_handle!(name)
+    handle = start_handle!(keeper, name)
     {:ok, bound} = Locus.Runtime.Settings.runner_memory_bytes([])
     {:ok, quota} = Locus.Runtime.Settings.runner_cpu_quota([])
 
@@ -142,8 +178,9 @@ defmodule Locus.Runtime.KeeperChannelTest do
              spawned = request(keeper)
 
     assert Map.drop(spawned, ["id", "attach"]) == %{
-             "v" => 2,
+             "v" => 3,
              "type" => "spawn",
+             "place" => "runner_1",
              "pool" => "runner",
              "control" => true,
              "isolation" => "netns",
@@ -158,21 +195,28 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert String.match?(token, ~r/\A[0-9a-f]{64}\z/)
 
     spawn_id = String.duplicate("ab", 16)
-    reply(keeper, %{v: 2, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+    reply(keeper, %{v: 3, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
 
     # The assign is held until the relay attaches, then flushed as frames,
-    # its attempt bound on the runner's relay first.
+    # its attempt bound on the runner's relay first, once the keeper has
+    # made the runner's place its athanor's run.
     input = :binary.copy("x", 150_000)
-    attempt = ScriptedHost.attempt!(ScriptedHost.start!())
+    attempt = ScriptedHost.attempt!(ScriptedHost.start!(), athanor_id: "family@example")
 
-    assert :ok =
-             RunnerProcess.assign(
-               handle,
-               attempt.assignment,
-               input,
-               attempt.keys,
-               "http://127.0.0.1:9"
-             )
+    assigning =
+      Task.async(fn ->
+        RunnerProcess.assign(
+          handle,
+          attempt.assignment,
+          input,
+          attempt.keys,
+          "http://127.0.0.1:9",
+          System.monotonic_time(:millisecond) + 5_000
+        )
+      end)
+
+    assigned!(keeper, "run", "family@example")
+    assert :ok = Task.await(assigning)
 
     refute_received {RunnerProcess, ^handle, :ready}
 
@@ -213,6 +257,10 @@ defmodule Locus.Runtime.KeeperChannelTest do
     refute_receive {RunnerProcess, ^handle, {:message, _}}, 100
     :ok = :gen_tcp.send(relay, frame(@stream_control, tail))
 
+    # Its place is back at rest, still the athanor's, before its owner
+    # hears the completion.
+    assigned!(keeper, "warm", "family@example")
+
     assert_receive {RunnerProcess, ^handle,
                     {:message, %{type: :complete, execution_id: "exec_1", clean: true}}},
                    5_000
@@ -222,7 +270,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
 
     reply(keeper, %{
-      v: 2,
+      v: 3,
       type: "exited",
       spawn_id: spawn_id,
       code: 0,
@@ -231,7 +279,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     })
 
     assert_receive {RunnerProcess, ^handle, {:exited, {:status, 0}}}, 5_000
-    reply(keeper, %{v: 2, type: "released", spawn_id: spawn_id})
+    reply(keeper, %{v: 3, type: "released", spawn_id: spawn_id})
     assert_receive {RunnerProcess, ^handle, :released}, 5_000
     :gen_tcp.close(relay)
   end
@@ -246,11 +294,11 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assign = %{type: :assign, assignment: attempt.assignment, input: "{}", keys: keys}
 
     # The handle holds the assign until its channel attaches.
-    handle = start_handle!(name)
+    handle = start_handle!(keeper, name)
     %{"id" => id} = request(keeper)
 
     reply(keeper, %{
-      v: 2,
+      v: 3,
       type: "spawned",
       id: id,
       spawn_id: String.duplicate("aa", 16),
@@ -258,12 +306,27 @@ defmodule Locus.Runtime.KeeperChannelTest do
       pid: 1
     })
 
-    assert :ok =
-             RunnerProcess.assign(handle, assign.assignment, "{}", keys, "http://127.0.0.1:9")
+    assigning =
+      Task.async(fn ->
+        RunnerProcess.assign(
+          handle,
+          assign.assignment,
+          "{}",
+          keys,
+          "http://127.0.0.1:9",
+          System.monotonic_time(:millisecond) + 5_000
+        )
+      end)
 
+    assigned!(keeper, "run", "ath_test")
+    assert :ok = Task.await(assigning)
     refute_received {RunnerProcess, ^handle, :ready}
 
     # The client holds bytes sent before the relay attached.
+    test = self()
+    placing = Task.async(fn -> Locus.Keeper.place(client, "runner_2", %{kind: "warm"}, test) end)
+    placed!(keeper, "runner_2")
+    assert :ok = Task.await(placing)
     spec = %{runner: "runner_2", argv: ["/app/bin/locus", "start"], env: @spec_env, server: name}
     {:ok, channel, []} = Channel.spawn(spec)
     _ = request(keeper)
@@ -281,20 +344,20 @@ defmodule Locus.Runtime.KeeperChannelTest do
     name: name,
     dir: dir
   } do
-    handle = start_handle!(name)
+    handle = start_handle!(keeper, name)
     %{"id" => id, "attach" => %{"token" => token}} = request(keeper)
     spawn_id = String.duplicate("cd", 16)
-    reply(keeper, %{v: 2, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_102, pid: 4243})
+    reply(keeper, %{v: 3, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_102, pid: 4243})
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 
     RunnerProcess.release(handle, 750)
 
-    assert %{"v" => 2, "type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 750} =
+    assert %{"v" => 3, "type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 750} =
              request(keeper)
 
     reply(keeper, %{
-      v: 2,
+      v: 3,
       type: "exited",
       spawn_id: spawn_id,
       code: nil,
@@ -320,15 +383,17 @@ defmodule Locus.Runtime.KeeperChannelTest do
           server: name
         }
 
+        :ok = Channel.place("runner_2", %{kind: "warm"}, server: name)
         {:ok, channel, []} = Channel.spawn(spec)
         send(test, {:channel, channel})
         Process.sleep(:infinity)
       end)
 
+    placed!(keeper, "runner_2")
     assert_receive {:channel, channel}, 5_000
     %{"id" => id} = request(keeper)
     spawn_id = String.duplicate("12", 16)
-    reply(keeper, %{v: 2, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_104, pid: 4245})
+    reply(keeper, %{v: 3, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_104, pid: 4245})
     :ok = Channel.release(channel, 500)
     assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 500} = request(keeper)
 
@@ -340,7 +405,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert map_size(:sys.get_state(client).requests) == 1
 
     # Its retirement reported, the runner is forgotten.
-    reply(keeper, %{v: 2, type: "released", spawn_id: spawn_id})
+    reply(keeper, %{v: 3, type: "released", spawn_id: spawn_id})
 
     Prima.Test.Wait.wait_until(
       fn -> :sys.get_state(client).requests == %{} end,
@@ -353,11 +418,11 @@ defmodule Locus.Runtime.KeeperChannelTest do
     keeper: keeper,
     name: name
   } do
-    handle = start_handle!(name)
+    handle = start_handle!(keeper, name)
     %{"id" => id} = request(keeper)
     RunnerProcess.release(handle, 0)
     spawn_id = String.duplicate("ef", 16)
-    reply(keeper, %{v: 2, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
+    reply(keeper, %{v: 3, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
     assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 0} = request(keeper)
   end
 
@@ -365,9 +430,9 @@ defmodule Locus.Runtime.KeeperChannelTest do
     keeper: keeper,
     name: name
   } do
-    handle = start_handle!(name)
+    handle = start_handle!(keeper, name)
     %{"id" => id} = request(keeper)
-    reply(keeper, %{v: 2, type: "error", id: id, code: "capacity"})
+    reply(keeper, %{v: 3, type: "error", id: id, code: "capacity"})
     assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
   end
 
@@ -376,7 +441,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     name: name,
     client: client
   } do
-    handle = start_handle!(name)
+    handle = start_handle!(keeper, name)
     _ = request(keeper)
     client = Process.whereis(client)
     ref = Process.monitor(client)
@@ -421,10 +486,10 @@ defmodule Locus.Runtime.KeeperChannelTest do
     exited = Enum.find(@vectors["replies"], &(&1["type"] == "exited" and &1["memory"] == "cap"))
     assert %{"code" => nil, "signal" => "SIGKILL", "spawn_id" => spawn_id} = exited
 
-    handle = start_handle!(name)
+    handle = start_handle!(keeper, name)
     %{"id" => id, "attach" => %{"token" => token}} = sent = request(keeper)
     assert {:ok, sent["memory_bytes"]} == Locus.Runtime.Settings.runner_memory_bytes([])
-    reply(keeper, %{v: 2, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
+    reply(keeper, %{v: 3, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 

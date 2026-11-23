@@ -22,6 +22,11 @@ defmodule Locus.Executor do
   A run ends on every path with everything the command started gone: at
   its exit, at its deadline, when `cancel/1` reaches the process running
   it, and when that process dies.
+
+  Every run names its place (`Locus.Launcher`, "Places"), which its
+  caller made with `c:place/2` before preparing the build and drops with
+  `c:drop/1` however the build ended: a drop frees only a place no run
+  named, and the keeper frees one a run named once the run is gone.
   """
 
   @typedoc "The command: argv, the environment beyond the executor's own variables, and stdin."
@@ -38,6 +43,7 @@ defmodule Locus.Executor do
   - `:on_output` — called with each log line as it arrives
   """
   @type opts :: [
+          place: String.t(),
           timeout_ms: pos_integer(),
           max_stdout_bytes: pos_integer(),
           on_output: (String.t() -> any())
@@ -67,6 +73,12 @@ defmodule Locus.Executor do
           | {:spawn_failed, term()}
 
   @callback run(command(), opts()) :: {:ok, outcome()} | {:error, error()}
+
+  @doc "A new place `id` of `whose` for the calling process."
+  @callback place(String.t(), Locus.Launcher.whose()) :: :ok | {:error, term()}
+
+  @doc "Free the place, unless a run named it."
+  @callback drop(String.t()) :: :ok
 
   @doc """
   The launcher the test build runs builds and long-lived processes through

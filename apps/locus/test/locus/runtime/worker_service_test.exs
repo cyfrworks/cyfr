@@ -78,6 +78,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
       {Locus.Runtime.RunnerPool,
        settings: settings,
        keeper: ScriptedKeeper,
+       keeper_opts: [name: keeper],
        supervisor: Locus.Runtime.RunnerPool.Runners,
        command: %{argv: ["runner"], env: %{"KEEPER" => Atom.to_string(keeper)}}}
     )
@@ -287,13 +288,14 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
     status = %{
       state: %{credentials: :held, executions: %{}},
-      message: {:start, "token-planted-6d1a", "input-planted-0c4e", "keys-planted-93b7", caller},
+      message:
+        {:start, "token-planted-6d1a", "input-planted-0c4e", "keys-planted-93b7", caller, 42},
       reason: :function_clause,
       log: []
     }
 
     reduced = WorkerService.format_status(status)
-    assert reduced.message == {:start, :redacted, :redacted, :redacted, caller}
+    assert reduced.message == {:start, :redacted, :redacted, :redacted, caller, 42}
     assert reduced.state == %{executions: %{}}
     refute inspect(reduced, limit: :infinity, printable_limit: :infinity) =~ "planted"
 
@@ -549,7 +551,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
       assert {:messages,
               [
-                {:"$gen_call", _from, {:start, _token, _input, _sealed, _caller}},
+                {:"$gen_call", _from, {:start, _token, _input, _sealed, _caller, _deadline}},
                 {RunnerPool, _pid, {:complete, ^first_id, true}}
               ]} = Process.info(service, :messages)
 
@@ -661,7 +663,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
       assert {:messages,
               [
-                {:"$gen_call", _from, {:start, _token, _input, _sealed, _caller}},
+                {:"$gen_call", _from, {:start, _token, _input, _sealed, _caller, _deadline}},
                 {RunnerPool, _, {:child, "exec_late_child", "att_late_child"}},
                 {RunnerPool, _, {:complete, ^first_id, true}}
               ]} = Process.info(service, :messages)

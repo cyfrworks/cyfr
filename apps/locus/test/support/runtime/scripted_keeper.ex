@@ -21,9 +21,29 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   `releases/1`. `kill!/1` ends the keeper as a lost channel would: every
   runner's owner hears `{:error, :channel_lost}`. `refuse/2` makes it
   refuse every spawn after the request, as `cyfr-locus` refuses one it
-  cannot bound, until it is told to start runners again, and `refused/1`
+  cannot bound, until it is told to start runners again, or, given
+  `{:made, reason}`, refuse each after making it, as `cyfr-locus` refuses
+  one whose command it could not run: its place stays the spawn's and its
+  owner hears its release only once `release_made/1` frees it. `refused/1`
   counts the spawns it refused. It holds a runner to the `:memory_bytes`
   of the pool's keeper options, or to none.
+
+  It keeps places as cyfr-locus does (`Prima.KeeperProtocol`, "Places"),
+  named by the keeper options' `:name` (options that name no keeper keep
+  none, as a test that reads no places starts a runner with none):
+  `place/3` makes one for the calling process, `assign/4` changes whose it
+  is and answers once it has, refused `bad_request` for a place it does
+  not hold, one whose owner dies before a spawn named it is dropped, a
+  spawn refused before it was made frees the place it named, and a
+  runner's release frees its place once the runner is gone. `places/1`
+  answers every place held, by its id: whose it is and whether a spawn
+  named it. `assigning/2` holds
+  every assign from then on, unapplied and unanswered, until
+  `answer_assigns/1` applies and answers them, or refuses every one with
+  a reason, applying none; `held_assigns/1` lists those held. A held
+  assign whose caller's `until` passes is answered `{:error,
+  {:keeper_unavailable, :timeout}}`, as the keeper's client answers one
+  cyfr-locus left unanswered, and is held no more.
 
   Each runner has a relay stream too: `read_relay/1` answers what the
   service wrote on it and `write_relay/2` makes the runner write on it;
@@ -64,6 +84,46 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def available(_env, _opts), do: :ok
 
   @impl Locus.Runtime.Keeper
+  def place(id, %{kind: _kind} = whose, opts) do
+    case Keyword.fetch(opts, :name) do
+      {:ok, keeper} -> GenServer.call(keeper, {:place, id, whose})
+      :error -> :ok
+    end
+  end
+
+  @impl Locus.Runtime.Keeper
+  def assign(place, %{kind: _kind} = whose, until, opts) when is_integer(until) do
+    wait = max(until - System.monotonic_time(:millisecond), 0)
+
+    case Keyword.fetch(opts, :name) do
+      {:ok, keeper} -> GenServer.call(keeper, {:assign, place, whose, until}, wait + 5_000)
+      :error -> :ok
+    end
+  end
+
+  @doc """
+  How `keeper` answers every assign from now on: `:held`, applying and
+  answering none until `answer_assigns/1`; `{:refused, reason}`, applying
+  none and answering `{:error, reason}`; or `:answered`, as cyfr-locus does.
+  """
+  @spec assigning(atom(), :held | {:refused, term()} | :answered) :: :ok
+  def assigning(keeper, how), do: GenServer.call(keeper, {:assigning, how})
+
+  @doc "Every assign `keeper` holds, oldest first: `{place, whose}`."
+  @spec held_assigns(atom()) :: [{String.t(), map()}]
+  def held_assigns(keeper), do: GenServer.call(keeper, :held_assigns)
+
+  @doc "Apply and answer every assign `keeper` holds, and answer every later one at once."
+  @spec answer_assigns(atom()) :: :ok
+  def answer_assigns(keeper), do: GenServer.call(keeper, :answer_assigns)
+
+  @doc "Every place `keeper` holds, by its id: `%{whose, spawned}`."
+  @spec places(atom()) :: %{
+          String.t() => %{whose: map(), spawned: boolean(), owner: reference()}
+        }
+  def places(keeper), do: GenServer.call(keeper, :places)
+
+  @impl Locus.Runtime.Keeper
   def spawn(%{env: %{"KEEPER" => name}} = spec) do
     keeper = String.to_existing_atom(name)
 
@@ -76,6 +136,12 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       {:refused, ref, reason} ->
         Kernel.send(self(), {__MODULE__, ref, {:refused, reason}})
         {:ok, %{ref: ref, keeper: keeper, runner: nil}, []}
+
+      # Refused once it was made, as cyfr-locus answers one whose command it
+      # could not run: its release follows.
+      {:refused_made, ref, reason} ->
+        Kernel.send(self(), {__MODULE__, ref, {:refused, reason, :release_follows}})
+        {:ok, %{ref: ref, keeper: keeper, runner: nil}, []}
     end
   end
 
@@ -86,9 +152,16 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def refusal(reason),
     do: %{reason: to_string(reason), message: "the scripted keeper refuses (#{reason})"}
 
-  @doc "Refuse every spawn from now on with `reason`, or start runners again with nil."
-  @spec refuse(atom(), atom() | nil) :: :ok
+  @doc """
+  Refuse every spawn from now on with `reason`, or with `reason` once it is
+  made for `{:made, reason}`, or start runners again with nil.
+  """
+  @spec refuse(atom(), atom() | {:made, atom()} | nil) :: :ok
   def refuse(keeper, reason), do: GenServer.call(keeper, {:refuse, reason})
+
+  @doc "Free every spawn refused once it was made: its place, then its owner told `:released`."
+  @spec release_made(atom()) :: :ok
+  def release_made(keeper), do: GenServer.call(keeper, :release_made)
 
   @doc "How many spawns `keeper` refused."
   @spec refused(atom()) :: non_neg_integer()
@@ -271,18 +344,110 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   # ---------------------------------------------------------------------------
 
   @impl GenServer
-  def init(_opts), do: {:ok, %{spawns: [], releases: [], refusing: nil, refused: 0}}
+  def init(_opts) do
+    {:ok,
+     %{
+       spawns: [],
+       releases: [],
+       refusing: nil,
+       refused: 0,
+       places: %{},
+       assigning: :answered,
+       held: [],
+       # Each spawn refused once it was made, until it is freed: its ref,
+       # its owner and its place.
+       made: []
+     }}
+  end
 
   @impl GenServer
-  def handle_call({:spawn, _spec, _owner}, _from, %{refusing: reason} = state)
-      when reason != nil,
-      do: {:reply, {:refused, make_ref(), reason}, %{state | refused: state.refused + 1}}
+  def handle_call({:place, id, _whose}, _from, state) when is_map_key(state.places, id),
+    do: {:reply, {:error, :bad_request}, state}
+
+  def handle_call({:place, id, whose}, {owner, _tag}, state) do
+    place = %{whose: whose, spawned: false, owner: Process.monitor(owner)}
+    {:reply, :ok, %{state | places: Map.put(state.places, id, place)}}
+  end
+
+  def handle_call(:places, _from, state), do: {:reply, state.places, state}
+
+  def handle_call({:assign, place, whose, until}, from, %{assigning: :held} = state) do
+    wait = max(until - System.monotonic_time(:millisecond), 0)
+    Process.send_after(self(), {:unanswered, from}, wait)
+    {:noreply, %{state | held: state.held ++ [{from, place, whose}]}}
+  end
+
+  def handle_call(
+        {:assign, _place, _whose, _until},
+        _from,
+        %{assigning: {:refused, reason}} = state
+      ),
+      do: {:reply, {:error, reason}, state}
+
+  def handle_call({:assign, place, whose, _until}, _from, state) do
+    {answer, state} = assigned(state, place, whose)
+    {:reply, answer, state}
+  end
+
+  def handle_call({:assigning, how}, _from, state), do: {:reply, :ok, %{state | assigning: how}}
+
+  def handle_call(:held_assigns, _from, state),
+    do: {:reply, Enum.map(state.held, fn {_from, place, whose} -> {place, whose} end), state}
+
+  def handle_call(:answer_assigns, _from, state) do
+    state =
+      Enum.reduce(state.held, %{state | held: [], assigning: :answered}, fn {from, place, whose},
+                                                                            state ->
+        {answer, state} = assigned(state, place, whose)
+        GenServer.reply(from, answer)
+        state
+      end)
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:freed, ref}, _from, state) do
+    case Enum.find(state.spawns, &(&1.ref == ref)) do
+      %{spec: %{runner: place}} ->
+        {:reply, :ok, %{state | places: Map.delete(state.places, place)}}
+
+      _other ->
+        {:reply, :ok, state}
+    end
+  end
+
+  # A spawn refused once it was made keeps the place it named until it is
+  # freed.
+  def handle_call({:spawn, spec, owner}, _from, %{refusing: {:made, reason}} = state) do
+    ref = make_ref()
+    made = %{ref: ref, owner: owner, place: spec.runner}
+
+    {:reply, {:refused_made, ref, reason},
+     %{
+       state
+       | refused: state.refused + 1,
+         made: [made | state.made],
+         places: named(state.places, spec.runner)
+     }}
+  end
+
+  # A spawn refused before it was made frees the place it named.
+  def handle_call({:spawn, spec, _owner}, _from, %{refusing: reason} = state)
+      when reason != nil do
+    state = %{state | refused: state.refused + 1, places: Map.delete(state.places, spec.runner)}
+    {:reply, {:refused, make_ref(), reason}, state}
+  end
 
   def handle_call({:spawn, spec, owner}, _from, state) do
     ref = make_ref()
-    {:ok, runner} = GenServer.start_link(__MODULE__.Runner, %{owner: owner, ref: ref})
+    keeper = self()
+
+    {:ok, runner} =
+      GenServer.start_link(__MODULE__.Runner, %{owner: owner, ref: ref, keeper: keeper})
+
     entry = %{ref: ref, spec: spec, runner: runner, owner: owner}
-    {:reply, {:ok, ref, runner}, %{state | spawns: [entry | state.spawns]}}
+    places = named(state.places, spec.runner)
+    {:reply, {:ok, ref, runner}, %{state | spawns: [entry | state.spawns], places: places}}
   end
 
   def handle_call({:refuse, reason}, _from, state), do: {:reply, :ok, %{state | refusing: reason}}
@@ -291,8 +456,18 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def handle_call(:spawns, _from, state), do: {:reply, state.spawns, state}
   def handle_call(:releases, _from, state), do: {:reply, Enum.reverse(state.releases), state}
 
+  def handle_call(:release_made, _from, state) do
+    places =
+      Enum.reduce(state.made, state.places, fn made, places ->
+        Kernel.send(made.owner, {__MODULE__, made.ref, :released})
+        Map.delete(places, made.place)
+      end)
+
+    {:reply, :ok, %{state | made: [], places: places}}
+  end
+
   def handle_call(:channel_lost, _from, state) do
-    for %{owner: owner, ref: ref} <- state.spawns,
+    for %{owner: owner, ref: ref} <- state.spawns ++ state.made,
         do: Kernel.send(owner, {__MODULE__, ref, {:error, :channel_lost}})
 
     {:stop, {:shutdown, :channel_lost}, :ok, state}
@@ -307,6 +482,49 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       entry ->
         Process.send_after(entry.runner, {:released, grace_ms}, grace_ms)
         {:noreply, %{state | releases: [{entry.spec.runner, grace_ms} | state.releases]}}
+    end
+  end
+
+  # An owner gone before a spawn named its place has the place dropped; a
+  # place a spawn named is freed at that spawn's release alone.
+  @impl GenServer
+  def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
+    places =
+      Map.reject(state.places, fn {_id, place} -> place.owner == monitor and not place.spawned end)
+
+    {:noreply, %{state | places: places}}
+  end
+
+  # A held assign whose wait has ended is answered so, as the keeper's
+  # client answers one cyfr-locus left unanswered, and is held no more:
+  # its answer, given later, reaches no one.
+  def handle_info({:unanswered, from}, state) do
+    case List.keytake(state.held, from, 0) do
+      {_held, held} ->
+        GenServer.reply(from, {:error, {:keeper_unavailable, :timeout}})
+        {:noreply, %{state | held: held}}
+
+      nil ->
+        {:noreply, state}
+    end
+  end
+
+  # An assign of a place held changes whose it is; cyfr-locus refuses one
+  # of a place it does not hold.
+  defp assigned(state, place, whose) do
+    case state.places do
+      %{^place => entry} ->
+        {:ok, %{state | places: Map.put(state.places, place, %{entry | whose: whose})}}
+
+      _gone ->
+        {{:error, {:refused, "bad_request"}}, state}
+    end
+  end
+
+  defp named(places, place) do
+    case places do
+      %{^place => entry} -> Map.put(places, place, %{entry | spawned: true})
+      _none -> places
     end
   end
 
@@ -376,8 +594,17 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     defp ended(state, status) do
       notify(state, :control_closed)
       notify(state, {:exited, {:status, status}})
+      freed(state)
       notify(state, :released)
       %{state | ended: true}
+    end
+
+    # The keeper frees the runner's place before its owner hears the release,
+    # as cyfr-locus does; a keeper already gone holds none.
+    defp freed(state) do
+      GenServer.call(state.keeper, {:freed, state.ref})
+    catch
+      :exit, _reason -> :ok
     end
 
     defp notify(%{owner: owner, ref: ref}, event),

@@ -16,7 +16,7 @@ defmodule Locus.Backends.Reservations do
   | `reserved` | an open admitted, its home being made or its pool read | `:started` | `asked` | the table: it started the session's process |
   | | | `:abandoned` | released | the table: its preparation answered and it started no session process, so nothing was asked |
   | `asked` | a session process that may have asked its launcher | `:spawned` | `running` | the launcher, answering the spawn |
-  | `asked`, `running`, `ending` | | `:confirmed` | released | the launcher, through the session (`:vacated`: refused, or released) |
+  | `asked`, `running`, `ending` | | `:confirmed` | released | the launcher, through the session (`:vacated`: refused with nothing made, or released) |
   | `asked`, `running` | a process the launcher may run | `:unfollowed` | `ending` | the table: its session process died, its spawn's answer was lost, or its owner retired |
   | `asked`, `running`, `ending` | | `:heir` | released | the launcher, to the spawn's heir: nothing of it is left |
   | `ending` | a process no session follows | `{:fence, :none}` | released | the launcher's fence: none is held, and none will start |

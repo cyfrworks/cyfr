@@ -84,6 +84,8 @@ defmodule Locus.Backends.ServiceTest do
     # an adoption, at a table's start, finds none held yet.
     def fence(_agent, _tag), do: :pending
     def adopt(_agent, _ledger, _heir), do: {:ok, []}
+    def place(_agent, _id, _whose, _owner), do: :ok
+    def drop(_agent, _id), do: :ok
     def home_ensure(_agent, _id), do: {:ok, 40_001}
     def home_measure(_agent, _id), do: {:ok, 0}
     def home_reset(_agent, _id), do: :ok
