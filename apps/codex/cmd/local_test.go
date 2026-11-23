@@ -32,6 +32,7 @@ import (
 	"github.com/cyfr/codex/internal/account/accounttest"
 	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/disk"
+	"github.com/cyfr/codex/internal/idle"
 	"github.com/cyfr/codex/internal/shell"
 )
 
@@ -61,7 +62,7 @@ type localApp struct {
 func newLocalApp(t *testing.T, project string) *localApp {
 	t.Helper()
 	a := &localApp{t: t, sent: make(chan desktop.Message, 16)}
-	a.Service = newDesktopService(t.TempDir(), func(m desktop.Message) error { a.sent <- m; return nil }, func(m desktop.Message) { a.sent <- m })
+	a.Service = newDesktopService(t.Context(), t.TempDir(), func(m desktop.Message) { a.sent <- m })
 	a.Shell = func(c *shell.Config) {
 		c.Chip = func() bool { return false }
 		c.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }
@@ -391,6 +392,7 @@ func newLocalStack(t *testing.T) localStack {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	after := map[string]func(){}
 	answeredHere(s, after)
+	workHere(t)
 	s.answer("context.out", "unix:///var/run/docker.sock\n")
 	s.answer("cyfrps.out", "")
 	s.answer("logs.out", "booting\n"+logNotSetUp)
@@ -735,7 +737,7 @@ func TestTheSetupTokenIsOnlyForTheAddressRead(t *testing.T) {
 	s := newLocalStack(t)
 	s.env(4100)
 	s.runs("c0ffee", s.project, nil, 4100, 4200)
-	l, err := readLocal(s.project, "the test")
+	l, err := readLocal(shell.NewWork(t.Context()), s.project, "the test")
 	if err != nil || l.Shell.Address != "http://localhost:4100" {
 		t.Fatalf("read %+v, %v", l.Shell.Address, err)
 	}
@@ -920,7 +922,7 @@ func TestAFirstPersonIsAdmittedAtABoxInTailnetAccess(t *testing.T) {
 	here := "127.0.0.1:" + strconv.Itoa(cyfr.port)
 	onlyOnThisComputer(t, here, nil)
 
-	local, err := readLocal(s.project, "screen")
+	local, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +987,7 @@ func TestTheFoldersClientReachesThatCYFRAlone(t *testing.T) {
 	s.env(cyfr.port)
 	s.runs("c0ffee", s.project, nil, cyfr.port)
 	dialled := standInDial(t, "", nil, nil)
-	l, err := readLocal(s.project, "the test")
+	l, err := readLocal(shell.NewWork(t.Context()), s.project, "the test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1024,7 +1026,7 @@ func TestAFoldersOwnAddressTakesNoProxy(t *testing.T) {
 			s.runs("c0ffee", s.project, nil, cyfr.port)
 			here := "127.0.0.1:" + strconv.Itoa(cyfr.port)
 			dialled, proxied := onlyOnThisComputer(t, here, &url.URL{Scheme: "http", Host: "proxy.example:3128"})
-			l, err := readLocal(s.project, "the test")
+			l, err := readLocal(shell.NewWork(t.Context()), s.project, "the test")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1056,7 +1058,7 @@ func TestNoAnswerSaysNoMoreThanThat(t *testing.T) {
 	port := silent.Addr().(*net.TCPAddr).Port
 	s.env(port)
 	s.runs("c0ffee", s.project, nil, port)
-	local, err := readLocal(s.project, "screen")
+	local, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1073,7 +1075,7 @@ func TestNoAnswerSaysNoMoreThanThat(t *testing.T) {
 func TestAFolderThatCannotBeOpenedBlamesNoDocker(t *testing.T) {
 	s := newLocalStack(t)
 	s.env(4321)
-	local, err := readLocal(s.project, "screen")
+	local, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1203,5 +1205,110 @@ func TestALeaveDuringTheShellsOwnLockLeavesMainOnNone(t *testing.T) {
 	}
 	if m := a.heard(); m.Type != desktop.TypeLocked || m.Home != "" {
 		t.Fatalf("main heard %+v, not a lock naming none", m)
+	}
+}
+
+// A lock waits for no work still starting: the first hello's reading of
+// the setup token holds the shell while it reads, and the launcher holds
+// that reading's start, deaf to its end.
+func TestALockWaitsForNoWorkStarting(t *testing.T) {
+	s := newLocalStack(t)
+	accounts := accounttest.New(t)
+	raw, err := url.Parse(accounts.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cyfr := newListening(t, httputil.NewSingleHostReverseProxy(raw))
+	home := s.envReached(access.ModeTailnet, cyfr.port)
+	accounts.ServedAt(home)
+	cyfr.admitting = home
+	s.runs("c0ffee", s.project, nil, cyfr.port)
+	onlyOnThisComputer(t, "127.0.0.1:"+strconv.Itoa(cyfr.port), nil)
+
+	started, release := make(chan struct{}), make(chan struct{})
+	letGo := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(letGo)
+	normal := startWork
+	startWork = func(ctx context.Context, args []string) (workBegin, error) {
+		if args[0] == workToken {
+			close(started)
+			<-release
+			return nil, errors.New("the test's launcher let go")
+		}
+		return normal(ctx, args)
+	}
+	l, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := l.Shell
+	cfg.Chip = func() bool { return false }
+	cfg.Record = filepath.Join(t.TempDir(), "holder.json")
+	sh, err := shell.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &shell.Server{Shell: sh}
+	post := func(path string, fields url.Values) string {
+		return pressed(h, path, "application/x-www-form-urlencoded", fields.Encode()).Body.String()
+	}
+	drawn := pageCode.FindStringSubmatch(post("/passphrase", nil))
+	if drawn == nil {
+		t.Fatal("no passphrase was drawn")
+	}
+	proof := pageProof.FindStringSubmatch(post("/setup", url.Values{"name": {"alice"}, "secret": {drawn[1]}, "again": {drawn[1]}}))
+	if proof == nil {
+		t.Fatal("setup reached no recovery code")
+	}
+	saved := make(chan struct{})
+	go func() {
+		defer close(saved)
+		post("/saved", url.Values{"proof": {proof[1]}})
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the setup token's work never started")
+	}
+	locked := make(chan struct{})
+	go func() {
+		sh.Lock("")
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(idle.AnswerWithin):
+		letGo()
+		t.Fatal("the lock waited for the work to start")
+	}
+	letGo()
+	<-saved
+}
+
+// Where only a new login gives this process the docker group, a reading
+// of a folder that is set up says so, as a cause waiting does not cure.
+func TestAReadingOfAFolderSaysToLogInAgain(t *testing.T) {
+	s := newLocalStack(t)
+	s.env(4321)
+	s.answer("cyfrps.exit", "1")
+	savedMachine, savedSg := machine, sgProgram
+	t.Cleanup(func() { machine, sgProgram = savedMachine, savedSg })
+	machine.system = func() string { return "linux" }
+	machine.groups = func(_ context.Context, account string) []string {
+		if account != "" {
+			return []string{dockerGroup}
+		}
+		return nil
+	}
+	sgProgram = filepath.Join(t.TempDir(), "no-sg")
+	l, err := readLocal(shell.NewWork(t.Context()), s.project, "screen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = l.Answers(t.Context())
+	var unbound *shell.Unbound
+	want := loginAgain + ". Nothing was sent to the CYFR in " + s.project + "."
+	if !errors.As(err, &unbound) || unbound.Sentence != want || !unbound.Lasting {
+		t.Fatalf("the folder's reading said %#v, want %q, lasting", err, want)
 	}
 }

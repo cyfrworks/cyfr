@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/cyfr/codex/internal/release"
+	"github.com/cyfr/codex/internal/shell"
 	"github.com/cyfr/codex/internal/version"
 )
 
@@ -374,11 +375,11 @@ func TestInitScreenRefusals(t *testing.T) {
 		stubLauncher(t, true, nil)
 		// In the sudo group at the question, out of it by the screen step.
 		groups := machine.groups
-		machine.groups = func(account string) []string {
+		machine.groups = func(ctx context.Context, account string) []string {
 			if account != "" && fileExists(".env") {
 				return s.member
 			}
-			return groups(account)
+			return groups(ctx, account)
 		}
 		askInput = strings.NewReader("1\n")
 		var out bytes.Buffer
@@ -614,7 +615,7 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		local, err := readLocal(dir, "screen")
+		local, err := readLocal(shell.NewWork(t.Context()), dir, "screen")
 		if err != nil {
 			t.Fatal(err)
 		}

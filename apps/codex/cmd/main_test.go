@@ -54,10 +54,11 @@ func testMachine(system string) machineSeams {
 	return machineSeams{
 		supported:      func() bool { return false },
 		arch:           func() string { return "amd64" },
-		reachable:      func() bool { return true },
+		reachable:      func(context.Context) bool { return true },
+		dockerHere:     func(context.Context) (bool, error) { return true, nil },
 		installed:      func(string) string { return "" },
 		running:        func() bool { return false },
-		groups:         func(string) []string { return nil },
+		groups:         func(context.Context, string) []string { return nil },
 		displayManager: func() bool { return false },
 		screenService:  func() (bool, bool) { return false, false },
 		system:         func() string { return system },
@@ -87,6 +88,14 @@ func TestMain(m *testing.M) {
 	// and every run of this binary as cyfr, stands on testMachine unless
 	// it stands in for a machine of its own (standInMachine).
 	machine = testMachine(cmp.Or(os.Getenv(testSystem), "linux"))
+	keepStandInControls()
+	// Under the race detector every program this binary begins sleeps a
+	// second at its exit (GORACE atexit_sleep_ms) for reports that come
+	// late; setup's work's stderr goes to no test, and the suite begins
+	// hundreds of them. A race found still sets the exit status.
+	if os.Getenv("GORACE") == "" {
+		os.Setenv("GORACE", "atexit_sleep_ms=0")
+	}
 	if status, ok := runStandIn(); ok {
 		os.Exit(status)
 	}
@@ -102,6 +111,11 @@ func TestMain(m *testing.M) {
 		rootCmd.SetArgs(os.Args[1:])
 		_ = rootCmd.Execute()
 		os.Exit(2)
+	}
+	// Begun as setup's work (startWorkProcess), it is that work, never the
+	// suite again.
+	if len(os.Args) > 2 && os.Args[1] == internalCmd.Name() && os.Args[2] == setupProjectCmd.Name() {
+		os.Exit(workStandIn())
 	}
 	// Run as the cyfr process, it is the process main runs (Run), its exit
 	// status the one cyfr exits with, over a fake engine.

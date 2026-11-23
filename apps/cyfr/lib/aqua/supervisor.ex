@@ -46,15 +46,11 @@ defmodule Aqua.Supervisor do
         # acceptance cut short rolls back whole, and the next tick asks
         # again.
         Supervisor.child_spec(Aqua.Nudge, shutdown: 5_000),
-        # The attendants of turns on programs (`Aqua.Program`), one per
-        # turn while a loop holds it, started on demand: before the loops, so a loop
-        # stops before the attendant it is told by. The registry and the
-        # supervisor whose children register in it restart together. An
-        # attendant's end ends the session it attends (`Opus.Brain`).
-        group(Aqua.ProgramTree, [
-          {Registry, keys: :unique, name: Aqua.Program.Registry},
-          {DynamicSupervisor, name: Aqua.Program.Sessions, strategy: :one_for_one}
-        ]),
+        # The harnesses of turns on programs (`Aqua.Harness.Program`), one
+        # per turn while a loop holds it, started on demand: before the
+        # loops, so a loop stops before the harness it is told by. A
+        # harness's end ends the session it attends (`Opus.Brain`).
+        {DynamicSupervisor, name: Aqua.Harness.Sessions, strategy: :one_for_one},
         # The loop worker's 5 s is its stop, which holds no work in flight;
         # the task supervisor's 30 s the longest loop step it lets finish.
         group(Aqua.WorkerTree, [

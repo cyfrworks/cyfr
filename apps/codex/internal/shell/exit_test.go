@@ -183,12 +183,9 @@ func TestExit_LocksInEveryState(t *testing.T) {
 			if inFlight == nil && s.making != nil {
 				recovery = s.making.key
 			}
+			// Nothing here takes the shell: a row in flight holds it, and the
+			// exit's lock must cut that work, its gate never let through.
 			wasOpen, restarts, notice := s.Unlocked(), b.restarts.Load(), s.shown.Load().view.Notice
-			// What a person at the screen could see or use there, which a
-			// lock hides first (lock).
-			s.mu.Lock()
-			shown := s.passphrase != "" || s.making != nil || s.proof != nil
-			s.mu.Unlock()
 			s.genMu.Lock()
 			began := s.gen
 			s.genMu.Unlock()
@@ -210,14 +207,10 @@ func TestExit_LocksInEveryState(t *testing.T) {
 				t.Fatal("the recovery key is still in memory")
 			}
 			if !wasOpen {
-				// A locked device's exit hides only what was on its screen,
-				// and keeps its sentence.
-				hides := int32(0)
-				if shown {
-					hides = 1
-				}
-				if b.restarts.Load() != restarts+hides || (inFlight == nil && s.notice != notice) {
-					t.Fatalf("a locked device's exit hid %d times (want %d) or took its sentence: %q", b.restarts.Load()-restarts, hides, s.notice)
+				// A locked device's exit hides once, as every lock does, and
+				// keeps its sentence.
+				if b.restarts.Load() != restarts+1 || (inFlight == nil && s.notice != notice) {
+					t.Fatalf("a locked device's exit hid %d times (want 1) or took its sentence: %q", b.restarts.Load()-restarts, s.notice)
 				}
 				return
 			}

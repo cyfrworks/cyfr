@@ -331,7 +331,7 @@ func desktopStandIn(t *testing.T, system string, installed bool, polls int) (s *
 		}
 	}
 	asked := 0
-	machine.reachable = func() bool { asked++; return asked > polls }
+	machine.reachable = func(context.Context) bool { asked++; return asked > polls }
 	opened = new([]string)
 	savedDesktop, savedPoll, savedLaunch := dockerDesktop, dockerPoll, launchBrowser
 	t.Cleanup(func() { dockerDesktop, dockerPoll, launchBrowser = savedDesktop, savedPoll, savedLaunch })
@@ -432,7 +432,7 @@ func TestInitDockerDesktopWaitEnds(t *testing.T) {
 		desktopStandIn(t, "darwin", true, 1<<30)
 		ctx, cancel := context.WithCancel(context.Background())
 		asked := 0
-		machine.reachable = func() bool {
+		machine.reachable = func(context.Context) bool {
 			if asked++; asked == 3 {
 				cancel()
 			}
@@ -481,6 +481,61 @@ func TestInitInstallFails(t *testing.T) {
 	}
 }
 
+// Where there is no sg, which is also newgrp, as on Ubuntu 26.04 without
+// util-linux-extra, init advises neither: it says what gives the account
+// the group, a new login.
+func TestInitSaysLogInAgainWhereThereIsNoNewgrp(t *testing.T) {
+	inGroup := func(s *standIn) { s.member = []string{dockerGroup} }
+	for name, c := range map[string]struct {
+		set func(*standIn)
+		// stale is whether the account was in the docker group before
+		// init: then nothing is installed, with a terminal or without.
+		stale bool
+	}{
+		"installed before": {func(s *standIn) { inGroup(s); s.installed, s.running = dockerPackages, true }, true},
+		"installed before, with no terminal": {func(s *standIn) {
+			inGroup(s)
+			s.installed, s.running = dockerPackages, true
+			askTerminal = func() bool { return false }
+		}, true},
+		"in the group, Docker not installed": {inGroup, true},
+		"in the group, with no terminal":     {func(s *standIn) { inGroup(s); askTerminal = func() bool { return false } }, true},
+		"installed by init":                  {func(*standIn) {}, false},
+		"added to its groups":                {func(s *standIn) { s.installed, s.running = dockerPackages, true }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := standInMachine(t)
+			c.set(s)
+			sgProgram = filepath.Join(t.TempDir(), "sg")
+			t.Chdir(t.TempDir())
+			continued, _, err := prepare(t)
+			const want = "Docker does not answer this account until you log out and in again. Then run `cyfr init` again"
+			if !continued || err == nil || err.Error() != want {
+				t.Fatalf("continued %t, init said %v, want %q", continued, err, want)
+			}
+			if c.stale && (s.applied != nil || s.authenticated != 0) {
+				t.Fatalf("init installed %v, asked sudo %d times, before it said so", s.applied, s.authenticated)
+			}
+			nothingWritten(t)
+		})
+	}
+}
+
+// A Docker whose endpoint is another computer's is no missing login,
+// though this process lacks the docker group its account is in: init does
+// not say to log in again.
+func TestInitSaysNoLoginForADockerElsewhere(t *testing.T) {
+	s := standInMachine(t)
+	s.member, s.installed, s.running = []string{dockerGroup}, dockerPackages, true
+	machine.dockerHere = func(context.Context) (bool, error) { return false, nil }
+	askTerminal = func() bool { return false }
+	sgProgram = filepath.Join(t.TempDir(), "sg")
+	t.Chdir(t.TempDir())
+	if _, _, err := prepare(t); err != nil && strings.Contains(err.Error(), loginAgain) {
+		t.Fatalf("init said %v", err)
+	}
+}
+
 // A continued init's status is init's.
 func TestInitAnswersTheContinuationsStatus(t *testing.T) {
 	s := standInMachine(t)
@@ -502,7 +557,7 @@ func TestContinuesInATerminalOlderThanTheGroup(t *testing.T) {
 				s.member = []string{"docker"}
 				record := sgStandIn(t, status)
 				t.Chdir(t.TempDir())
-				continued, err := withDockerGroup(subcommand, []string{"--no-pull=true"}, &bytes.Buffer{}, &bytes.Buffer{})
+				continued, err := withDockerGroup(t.Context(), subcommand, []string{"--no-pull=true"}, &bytes.Buffer{}, &bytes.Buffer{})
 				answered := "0"
 				if err != nil {
 					answered = strconv.Itoa(ExitStatus(err))
@@ -541,7 +596,7 @@ func TestNeedsNoContinuation(t *testing.T) {
 				s.member = []string{"docker"}
 				record := sgStandIn(t, "0")
 				set(t, s)
-				if continued, err := withDockerGroup(subcommand, nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
+				if continued, err := withDockerGroup(t.Context(), subcommand, nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
 					t.Fatalf("continued %t, err %v", continued, err)
 				}
 				if _, err := os.Stat(record); err == nil {

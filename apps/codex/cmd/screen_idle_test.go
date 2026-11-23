@@ -45,6 +45,8 @@ func screenPrograms(t *testing.T, scripts map[string]string) {
 		}
 	}
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	// The folder's readings are setup's work's, and reach this docker too.
+	workSeesDocker(t, t.TempDir())
 }
 
 // swayidleSays begins a stand-in swayidle: said speaks as swayidle 1.9
@@ -90,9 +92,9 @@ func quietScreen() map[string]string {
 	return map[string]string{
 		"pkill": "exit 0",
 		// No screen's test asks this machine's Docker.
-		"docker":               "exit 1",
-		"wvkbd-mobintl":        "exec /bin/sleep 600", // sleep-ok: a stand-in child that runs until the shell ends it
-		"swayidle":             swayidleHears,
+		"docker":        "exit 1",
+		"wvkbd-mobintl": "exec /bin/sleep 600", // sleep-ok: a stand-in child that runs until the shell ends it
+		"swayidle":      swayidleHears,
 	}
 }
 
@@ -213,6 +215,37 @@ func TestScreenWatch_RunningWithNoSubscriptionPermitsNoUnlock(t *testing.T) {
 	}
 }
 
+// A try that fails as the last one did locks nothing: the screen is
+// locked and says why already, and every lock hides it (shell.Shell.Lock),
+// so a box that cannot be watched would be hidden again each second.
+// Across three tries a watch that cannot start, and a keyboard that ends
+// each time it starts, lock once.
+func TestScreenWatch_ATryThatFailsAsTheLastLocksNothing(t *testing.T) {
+	for name, c := range map[string]struct {
+		swayidle, keyboard, want string
+	}{
+		"swayidle exiting":     {"exit 42", "", sleepUnwatched},
+		"a keyboard that ends": {swayidleHears, "exit 3", keyboardGone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			screenCompositor(t, idletest.Options{})
+			programs := quietScreen()
+			programs["swayidle"] = c.swayidle
+			if c.keyboard != "" {
+				programs["wvkbd-mobintl"] = c.keyboard
+			}
+			screenPrograms(t, programs)
+			w := startWatches(t, time.Hour)
+			w.becomes(t, c.want)
+			lockedWith(t, w.locks, "")
+			time.Sleep(3*watchesAgain + 500*time.Millisecond) // sleep-ok: three of the shell's own waits before it tries again
+			if n := len(w.locks); n != 0 {
+				t.Fatalf("three more tries that failed alike locked %d more times", n)
+			}
+		})
+	}
+}
+
 // A watch that stops showing that it works is lost, which locks: a
 // compositor that stops answering, and a swayidle that runs on saying
 // nothing.
@@ -267,10 +300,14 @@ said "Got sleep lock: 13"`,
 			w.becomes(t, "")
 			w.becomes(t, sleepUnwatched)
 			lockedWith(t, w.locks, suspendLocked)
-			lockedWith(t, w.locks, "") // the question's deadline
+			// The question's deadline finds the screen locked for it and
+			// saying so already: it locks, and so hides, nothing more.
+			time.Sleep(idle.AnswerWithin + time.Second) // sleep-ok: past the question's own deadline
 			select {
 			case why := <-w.changes:
 				t.Fatalf("it became %q on a lock got and no answer", why)
+			case why := <-w.locks:
+				t.Fatalf("the deadline locked again (%q), the screen locked for it already", why)
 			default:
 			}
 		})
@@ -784,7 +821,7 @@ func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
 // watches are up it says ready with its own pages' address, then home with
 // the CYFR in its folder; main's home-ready is answered opened; a lock says
 // locked, naming no CYFR, and proposes that one again as the next attempt;
-// the end of main's pipe ends the shell.
+// the end of main's pipe ends the shell, whose last lock says ending.
 func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
 	screenProject(t)
 	compositor := screenCompositor(t, idletest.Options{})
@@ -823,4 +860,5 @@ func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the end of main's pipe did not end the shell")
 	}
+	app.next("ending")
 }

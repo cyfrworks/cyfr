@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/desktop"
+	"github.com/cyfr/codex/internal/shell"
 )
 
 // appSide is the CYFR app's main process as the screen shell's browser
@@ -85,7 +86,7 @@ func (a *appSide) send(line string) {
 // told: a lock never waits on main.
 func TestScreenApp_HideWaitsOnNothing(t *testing.T) {
 	_, unread := io.Pipe()
-	a := &screenApp{to: desktop.NewWriter(unread), home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
+	a := &screenApp{to: desktop.NewWriter(unread, nil), home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
 	hidden := make(chan struct{})
 	go func() {
 		for range 3 {
@@ -147,6 +148,48 @@ func (l *lineSink) said(t *testing.T, n int) []string {
 	}
 }
 
+// A message to main that cannot be written ends the screen's show, the
+// app being gone, though main's pipe to the shell stays open.
+func TestScreenApp_AWriteToMainThatFailsEndsTheShow(t *testing.T) {
+	stay, held := io.Pipe()
+	t.Cleanup(func() { held.Close() })
+	read, write := io.Pipe()
+	read.Close()
+	a, err := newScreenApp(stay, write, desktop.Local{Shell: shell.Config{Address: "http://localhost:4000", Directory: "http://localhost:4000"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := make(chan error, 1)
+	go func() { shown <- a.show(func(string) {}) }()
+	select {
+	case err := <-shown:
+		if err == nil || !strings.Contains(err.Error(), "could not be written") {
+			t.Fatalf("show ended with %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("show went on after a write to main failed")
+	}
+}
+
+// Nothing is said to main before ready, and ready is always first: locks
+// before it (a keyboard that did not start, a watch not yet known to work)
+// say nothing, since the page ready names is the lock page saying why,
+// and ready comes with its proposal as attempt 1.
+func TestScreenApp_ReadyIsTheFirstMessage(t *testing.T) {
+	sink := &lineSink{}
+	a := &screenApp{in: strings.NewReader(""), to: desktop.NewWriter(sink, nil),
+		home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
+	a.hide()
+	a.hide()
+	if err := a.show(func(string) { a.hide() }); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{desktop.TypeReady, "home 1"}
+	if said := sink.said(t, len(want)+1); strings.Join(said, ", ") != strings.Join(want, ", ") {
+		t.Fatalf("the shell said %v, want %v", said, want)
+	}
+}
+
 // What main says, and what the shell says back: ready and home as attempt
 // 1; opened for the current attempt's home-ready alone, once; a lock's
 // locked naming no CYFR, then home again as the next attempt; a stale
@@ -185,10 +228,11 @@ func TestScreenApp_WhatMainSays(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			sink := &lineSink{}
-			a := &screenApp{in: strings.NewReader(strings.Join(c.lines, "\n")), to: desktop.NewWriter(sink),
+			a := &screenApp{in: strings.NewReader(strings.Join(c.lines, "\n")), to: desktop.NewWriter(sink, nil),
 				home: desktop.Message{Type: desktop.TypeHome, Home: home, Account: "https://cyfr.run"}}
 			var locks []string
-			err := a.show(func(why string) bool { locks = append(locks, why); return false })
+			// The shell's lock hides, every time, through the app (Restart).
+			err := a.show(func(why string) { locks = append(locks, why); a.hide() })
 			if (err != nil) != c.refused || strings.Join(locks, "|") != strings.Join(c.locks, "|") {
 				t.Fatalf("show answered %v, locking %q", err, locks)
 			}
@@ -197,5 +241,44 @@ func TestScreenApp_WhatMainSays(t *testing.T) {
 				t.Fatalf("the shell said %v, want %v", said, want)
 			}
 		})
+	}
+}
+
+// The shell's end: its last lock says ending in place of locked and
+// proposes nothing, and the shell says nothing after it, neither a second
+// ending nor an opened for an answer still on its way; a shell ending
+// before it showed anything says nothing at all.
+func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
+	home := desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}
+	in, answer := io.Pipe()
+	sink := &lineSink{}
+	a := &screenApp{in: in, to: desktop.NewWriter(sink, nil), home: home}
+	shown := make(chan error, 1)
+	go func() { shown <- a.show(func(string) { a.hide() }) }()
+	sink.said(t, 2)
+	a.end()
+	a.hide()
+	a.hide()
+	if _, err := io.WriteString(answer, `{"version":1,"type":"home-ready","home":"http://localhost:4000","attempt":1}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	answer.Close()
+	if err := <-shown; err != nil {
+		t.Fatal(err)
+	}
+	want := []string{desktop.TypeReady, "home 1", desktop.TypeEnding}
+	if said := sink.said(t, len(want)+1); strings.Join(said, ", ") != strings.Join(want, ", ") {
+		t.Fatalf("the shell said %v, want %v", said, want)
+	}
+
+	early := &lineSink{}
+	b := &screenApp{in: strings.NewReader(""), to: desktop.NewWriter(early, nil), home: home}
+	b.end()
+	b.hide()
+	if err := b.show(func(string) { b.hide() }); err != nil {
+		t.Fatal(err)
+	}
+	if said := early.said(t, 1); len(said) != 0 {
+		t.Fatalf("a shell ending before it showed anything said %v", said)
 	}
 }

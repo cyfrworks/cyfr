@@ -25,7 +25,7 @@ import {BrowserWindow, Menu, app, dialog, session} from "electron"
 import {keptStorage} from "./owner.js"
 import {lines, readFromCyfr, toCyfr} from "./process.js"
 import {LOCALHOST_IS_IPV4, accountLoad, documentHeaders, grants, printed, readHop, relyingParty, screenProject, unlistedSwitch} from "./policy.js"
-import {initial, kept, step} from "./states.js"
+import {ABORTED, initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
 // How long the app's end waits for a clear, a take or a flush under way.
@@ -264,7 +264,12 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     ses.setDisplayMediaRequestHandler((_request, callback) => callback({}))
   }
 
-  function window(ses, options = {}) {
+  // Every window the app makes is made here, and has two ends for its page,
+  // which endsOf names for the window (ends): `failed`, a load of its top
+  // frame that failed, with the engine's code and the address, and `lost`,
+  // its page's process gone. A confirmation window the engine made for a
+  // page gets the same two (confirmationEnds).
+  function window(ses, options, endsOf) {
     const w = new BrowserWindow({
       width: 1280, height: 860, show: false, title: "CYFR", autoHideMenuBar: true, ...(screen ? {frame: false} : {}), ...options,
       webPreferences: {...SECURE, session: ses}
@@ -274,7 +279,35 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       w.show()
     })
     w.webContents.on("will-attach-webview", (event) => event.preventDefault())
+    ends(w, endsOf(w))
     return w
+  }
+
+  // The engine takes no load from inside its report of a loss, nor a
+  // window's close from inside its report of a failed load (closing).
+  function ends(w, {failed, lost}) {
+    w.webContents.on("did-fail-load", (_event, code, _why, url, isMainFrame) => {
+      if (isMainFrame) failed(code, url)
+    })
+    w.webContents.on("render-process-gone", () => setImmediate(lost))
+  }
+  function closing(end) {
+    return (code) => {
+      if (code !== ABORTED) setImmediate(end)
+    }
+  }
+
+  // A confirmation window's two ends are one: its page failed (a refused
+  // or replaced load, ABORTED, is none) or lost, it is closed, and main
+  // hears it: on the screen that locks; on a desktop the person is back on
+  // the CYFR's page, the window's parent.
+  function confirmationEnds(w) {
+    const end = () => {
+      if (w.isDestroyed()) return
+      w.destroy()
+      on({type: "lost", window: "child"})
+    }
+    return {failed: closing(end), lost: end}
   }
 
   // A window of the content's own (`which`: the content window or a
@@ -282,7 +315,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // confirmation window's first load is of the address the window handler
   // opened it for (`first`), which that handler decided: the engine names
   // some frame of the opener as its initiator, not reliably the top one.
-  function confine(contents, which, lost, first = null) {
+  function confine(contents, which, first = null) {
     const ask = (event, redirect = false) => {
       const opening = first !== null && event.isMainFrame && event.url === first
       if (event.isMainFrame) first = null
@@ -297,20 +330,20 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       if (!event.isMainFrame) ask(event)
     })
     contents.setWindowOpenHandler(() => ({action: "deny"}))
-    // The engine takes no load from inside its report of the loss.
-    contents.on("render-process-gone", () => setImmediate(lost))
   }
 
   function openContent(address) {
     if (!accountRoad) generation++
     contentSession = session.fromPartition(accountRoad ? CONTENT_PARTITION : `cyfr-${process.pid}-${generation}`)
     guard(contentSession, "content")
-    const w = window(contentSession)
+    // Its ends come after it is made, when heard is.
+    const w = window(contentSession, {}, () => ({failed: (code, url) => heard({type: "load-failed", code, url}), lost: () => heard({type: "lost"})}))
+    const heard = (event) => {
+      if (content === w) on(event)
+    }
     content = w
     const contents = w.webContents
-    confine(contents, "content", () => {
-      if (content === w) on({type: "lost"})
-    })
+    confine(contents, "content")
     // The window handler opens only the device's two loopback confirmation
     // routes and the confirmation hop (step's open-window). Electron does
     // not say which frame asked; Prism's own frame rules refuse every frame
@@ -329,23 +362,15 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       opening = null
       children.add(opened)
       opened.on("closed", () => children.delete(opened))
-      confine(opened.webContents, "child", () => {
-        opened.destroy()
-        on({type: "lost", window: "child"})
-      }, first)
+      ends(opened, confirmationEnds(opened))
+      confine(opened.webContents, "child", first)
     })
-    const heard = (event) => {
-      if (content === w) on(event)
-    }
     contents.on("did-start-navigation", (details) => {
       if (details.isMainFrame) heard({type: "started", url: details.url, sameDocument: details.isSameDocument})
     })
     contents.on("did-navigate", () => heard({type: "committed"}))
     contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
       if (isMainFrame) heard({type: "landed", url})
-    })
-    contents.on("did-fail-load", (_event, code, _why, url, isMainFrame) => {
-      if (isMainFrame) heard({type: "load-failed", code, url})
     })
     w.on("closed", () => {
       if (content === w) {
@@ -358,7 +383,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   function openAccount(address) {
     const ses = session.fromPartition(ACCOUNT_PARTITION)
-    const w = window(ses, {width: 560, height: 760, parent: content ?? undefined})
+    // Its page failed or lost, the hop ends, which closes it.
+    const w = window(ses, {width: 560, height: 760, parent: content ?? undefined}, (w) => {
+      const gone = () => {
+        if (accountWindow === w) endHop()
+      }
+      return {failed: closing(gone), lost: gone}
+    })
     accountWindow = w
     const contents = w.webContents
     const ask = (event, redirect = false) => {
@@ -373,9 +404,6 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       if (!event.isMainFrame) ask(event)
     })
     contents.setWindowOpenHandler(() => ({action: "deny"}))
-    contents.on("render-process-gone", () => setImmediate(() => {
-      if (accountWindow === w) endHop()
-    }))
     w.on("closed", () => {
       if (accountWindow === w) {
         accountWindow = null
@@ -388,7 +416,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function message(text) {
     const ses = session.fromPartition(`cyfr-message-${process.pid}`)
     guard(ses, "content")
-    const w = window(ses, {width: 560, height: 320})
+    // Its page failed or lost, the app ends as at the window's close.
+    const quit = () => on({type: "quit"})
+    const w = window(ses, {width: 560, height: 320}, () => ({failed: closing(quit), lost: quit}))
     const block = (event) => event.preventDefault()
     w.webContents.on("will-navigate", block)
     w.webContents.on("will-redirect", block)
@@ -420,16 +450,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   }
 
   function openConfirmation(url) {
-    const w = new BrowserWindow({
-      width: 520, height: 640, parent: content, autoHideMenuBar: true, show: true,
-      webPreferences: {...SECURE, session: contentSession}
-    })
+    const w = window(contentSession, {width: 520, height: 640, parent: content, show: true}, confirmationEnds)
     children.add(w)
     w.on("closed", () => children.delete(w))
-    confine(w.webContents, "child", () => {
-      w.destroy()
-      on({type: "lost", window: "child"})
-    })
+    confine(w.webContents, "child")
     w.loadURL(url)
   }
 

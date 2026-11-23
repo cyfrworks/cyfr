@@ -42,6 +42,10 @@ const (
 	// if any, as home names one: main's lock waits for it, and main keeps
 	// to that CYFR, or none, from then on.
 	TypeLocked = "locked"
+	// Ending says the box's screen shell is ending: its last lock says it
+	// in place of locked, and the shell says nothing after it. main closes
+	// its windows at once and ends, opening nothing more for it.
+	TypeEnding = "ending"
 	// PickFolder asks main for a folder (reserved: nothing sends it yet).
 	TypePickFolder = "pick-folder"
 )
@@ -67,6 +71,7 @@ var fields = map[string]struct{ required, optional []string }{
 	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver"}},
 	TypeOpened:       {required: []string{"home"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
+	TypeEnding:       {},
 	TypePickFolder:   {required: []string{"id", "suggested"}},
 	TypeHomeReady:    {required: []string{"home", "attempt"}},
 	TypeHomeFailed:   {required: []string{"home", "attempt"}},
@@ -194,67 +199,48 @@ func (m Message) object() (map[string]any, error) {
 }
 
 // Writer sends cyfr's messages to main, one line each, whole, in the
-// order they were given, by one writer of its own: Send waits for its
-// line to be written, Queue does not. Once a write fails (main has gone,
-// or its pipe ended), every later line fails with that error.
+// order they were given, by one writer of its own: Queue gives it a line
+// and returns at once, so nothing that tells main waits on main reading
+// its pipe. Once a write fails (main has gone, or its pipe ended), every
+// later line is dropped and gone is called, once: what made the writer
+// ends, as the app it talks to has.
 type Writer struct {
-	w io.Writer
+	w    io.Writer
+	gone func()
 
 	mu     sync.Mutex
-	queue  []queued
-	failed error
+	queue  [][]byte
+	failed bool
 	wake   chan struct{}
 }
 
-// queued is a line to write, and where its result goes (nil for none).
-type queued struct {
-	line []byte
-	done chan error
-}
-
-// NewWriter writes to w, main's end of the private pipe. A write to a pipe
-// main closed is an error then, not the end of this process: SIGPIPE is
+// NewWriter writes to w, main's end of the private pipe, calling gone (nil
+// calls nothing) at the first write that fails. A write to a pipe main
+// closed is an error then, not the end of this process: SIGPIPE is
 // ignored, so a lock goes on to end its sessions at the CYFR when main
 // has gone.
-func NewWriter(w io.Writer) *Writer {
+func NewWriter(w io.Writer, gone func()) *Writer {
 	signal.Ignore(syscall.SIGPIPE)
-	wr := &Writer{w: w, wake: make(chan struct{}, 1)}
+	wr := &Writer{w: w, gone: gone, wake: make(chan struct{}, 1)}
 	go wr.write()
 	return wr
 }
 
-// Send writes m as one line, after every line given before it, and
-// answers whether it was written.
-func (w *Writer) Send(m Message) error {
-	line, err := encode(m)
-	if err != nil {
-		return err
-	}
-	done := make(chan error, 1)
-	w.give(queued{line, done})
-	return <-done
-}
-
 // Queue gives m to be written after every line given before it and
-// returns at once: a lock tells main through it, so no lock waits on main
-// reading its pipe.
+// returns at once; it refuses what is not one of cyfr's messages.
 func (w *Writer) Queue(m Message) error {
 	line, err := encode(m)
 	if err != nil {
 		return err
 	}
-	w.give(queued{line: line})
-	return nil
-}
-
-func (w *Writer) give(q queued) {
 	w.mu.Lock()
-	w.queue = append(w.queue, q)
+	w.queue = append(w.queue, line)
 	w.mu.Unlock()
 	select {
 	case w.wake <- struct{}{}:
 	default:
 	}
+	return nil
 }
 
 // write writes what was given, in order, for as long as the process runs.
@@ -264,15 +250,12 @@ func (w *Writer) write() {
 		lines := w.queue
 		w.queue = nil
 		w.mu.Unlock()
-		for _, q := range lines {
-			err := w.failed
-			if err == nil {
-				if _, err = w.w.Write(append(q.line, '\n')); err != nil {
-					w.failed = err
+		for _, line := range lines {
+			if !w.failed {
+				_, err := w.w.Write(append(line, '\n'))
+				if w.failed = err != nil; w.failed && w.gone != nil {
+					w.gone()
 				}
-			}
-			if q.done != nil {
-				q.done <- err
 			}
 		}
 	}

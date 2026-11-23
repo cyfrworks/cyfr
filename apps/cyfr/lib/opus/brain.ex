@@ -6,7 +6,7 @@ defmodule Opus.Brain do
   The holder of a program used as a brain: one session of a brain's
   driver (`apps/locus/keeper/cmd/cyfr-claude-code`, `cmd/cyfr-codex`) for
   one thread, held for one turn's work and closed by its attendant as
-  that ends (`Aqua.Program`). A thread keeps one native
+  that ends (`Aqua.Harness.Program`). A thread keeps one native
   session (`brain_session`) whichever agent its turns address, so one
   holder runs per thread. The driver runs beside the harness in its
   program row's box and speaks the harness's own protocol to it; this

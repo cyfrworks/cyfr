@@ -41,7 +41,8 @@ var desktopServeCmd = &cobra.Command{
 // runDesktopServe takes the shell's listener through listen, for this
 // process alone, says ready to main with the chooser's address, then
 // serves until main sends
-// shutdown, its pipe ends, or it sends a line that is not its message.
+// shutdown, its pipe ends, a message to it cannot be written, or it sends
+// a line that is not its message.
 // Every end locks the device first, saying nothing to main
 // (desktop.Service.End): an end signs nobody out.
 func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), in io.Reader, out io.Writer) error {
@@ -54,8 +55,10 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 	if err != nil {
 		return fmt.Errorf("another program holds %s: close the app using port 7340, then open CYFR again (%v)", shell.Listen, err)
 	}
-	to := desktop.NewWriter(out)
-	svc := newDesktopService(dir, to.Send, func(m desktop.Message) { _ = to.Queue(m) })
+	// A write to main that fails ends the service: the app is gone.
+	gone := make(chan struct{})
+	to := desktop.NewWriter(out, func() { close(gone) })
+	svc := newDesktopService(ctx, dir, func(m desktop.Message) { _ = to.Queue(m) })
 	hs := &http.Server{Handler: svc, ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- hs.Serve(ln) }()
@@ -64,7 +67,7 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 		defer cancel()
 		_ = hs.Shutdown(sctx)
 	}()
-	if err := to.Send(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
+	if err := to.Queue(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
 		return err
 	}
 	ran := make(chan error, 1)
@@ -78,6 +81,9 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 			return nil
 		}
 		return err
+	case <-gone:
+		svc.End()
+		return errors.New("the CYFR app has gone: a message to it could not be written")
 	case <-ctx.Done():
 		svc.End()
 		return nil
@@ -85,9 +91,8 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 }
 
 // newDesktopService is what desktop-serve serves over this user's device
-// folder, saying to main through send and, where it may wait on nothing,
-// tell.
-func newDesktopService(device string, send func(desktop.Message) error, tell func(desktop.Message)) *desktop.Service {
+// folder until ctx ends, saying to main through tell, which waits on nothing.
+func newDesktopService(ctx context.Context, device string, tell func(desktop.Message)) *desktop.Service {
 	host, _ := os.Hostname()
 	return &desktop.Service{
 		Token:       desktop.NewToken(),
@@ -95,13 +100,22 @@ func newDesktopService(device string, send func(desktop.Message) error, tell fun
 		Record:      filepath.Join(device, "holder.json"),
 		Client:      &http.Client{},
 		DisplayName: host,
-		Send:        send,
 		Tell:        tell,
 		Local: func(project string) (desktop.Local, error) {
-			l, err := readLocal(project, "the CYFR app")
+			// The reading holds work from here: its caller once it is
+			// returned, and this function until then, a panic too.
+			work := shell.NewWork(ctx)
+			returned := false
+			defer func() {
+				if !returned {
+					work.End()
+				}
+			}()
+			l, err := readLocal(work, project, "the CYFR app")
 			if err != nil {
 				return desktop.Local{}, engineFailure(err)
 			}
+			returned = true
 			return l, nil
 		},
 	}

@@ -198,7 +198,9 @@ func TestServer_ReadingAPageChangesNothing(t *testing.T) {
 
 // Prism's Lock is a top-level navigation to /lock: a GET from no page of
 // the shell's locks the screen, retires each session it opened and
-// returns to the lock page, and a repeated one is a harmless success.
+// returns to the lock page, and a repeated one is a harmless success: it
+// tells the CYFR nothing more, and hides the screen once more, as every
+// lock does.
 func TestServer_PrismsLockIsANavigationThatLocks(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
@@ -207,8 +209,8 @@ func TestServer_PrismsLockIsANavigationThatLocks(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" || b.shell.Unlocked() || len(home.locked) != 1 {
 		t.Fatalf("GET /lock answered %d %q, unlocked %v, locked %v", w.Code, w.Header().Get("Location"), b.shell.Unlocked(), home.locked)
 	}
-	if w := b.do(http.MethodGet, "/lock", "", nil); w.Code != http.StatusSeeOther || len(home.locked) != 1 || b.restarts.Load() != 1 {
-		t.Fatalf("a repeated GET /lock did more: %d %v", w.Code, home.locked)
+	if w := b.do(http.MethodGet, "/lock", "", nil); w.Code != http.StatusSeeOther || len(home.locked) != 1 || b.restarts.Load() != 2 {
+		t.Fatalf("a repeated GET /lock did more, or did not hide: %d %v, %d hides", w.Code, home.locked, b.restarts.Load())
 	}
 }
 

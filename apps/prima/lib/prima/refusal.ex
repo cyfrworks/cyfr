@@ -752,7 +752,7 @@ defmodule Prima.Refusal do
        "#{member} could not start: this CYFR has no room for another running program. Stop " <>
          "work in another thread or wait for it to end, then send your message again."}
 
-  # How a turn's work on a harness ends short of done (`Aqua.Program`): the
+  # How a turn's work on a harness ends short of done (`Aqua.Harness.Program`): the
   # kind is a name, and carries what its sentence names.
   defp row({:harness, member, kind}) when is_binary(member), do: harness(member, kind)
 

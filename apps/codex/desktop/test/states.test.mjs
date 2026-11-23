@@ -291,6 +291,33 @@ test("cyfr's loss ends main from any state, closing first, and signs nobody out"
   assert.deepEqual(run([...open, {type: "gone", why: "x"}, {type: "quit"}]).effects.at(-1), {quit: true}, "but quitting, which goes")
 })
 
+test("the screen shell's ending closes at once and quits, settling no lock, so nothing opens after it", () => {
+  const screen = (events) => {
+    let st = initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr")
+    const effects = []
+    for (const e of events) {
+      const next = step(st, e)
+      st = next.state
+      effects.push(...next.do)
+    }
+    return {s: st, effects}
+  }
+  const LOOP = {type: "ready", url: "http://127.0.0.1:7340/"}
+  const LOCAL = "http://localhost:4000"
+  const mine = (attempt) => ({type: "home", message: {type: "home", home: LOCAL, account: LOCAL, attempt}})
+  const shown = [LOOP, mine(1), taken, {type: "opened", home: LOCAL}]
+  const ending = {type: "ending", message: {type: "ending"}}
+  for (const [name, before] of Object.entries({"open": shown, "locking, the forget still running": [...shown, locked()],
+    "locking, its proposal wanted": [...shown, locked(), mine(2)], "taking": [LOOP, mine(1)], "at the device's page": [LOOP]})) {
+    const {s, effects} = screen([...before, ending])
+    const last = effects.slice(-2)
+    assert.equal(s.name, "ended", name)
+    assert.deepEqual(last, [{close: true}, {say: "cyfr ended: the screen shell is ending", quit: true}], name)
+    const after = screen([...before, ending, forgot, taken, mine(3), locked(), {type: "gone", why: "it exited (0)"}])
+    assert.deepEqual(after.effects.slice(effects.length), [], `${name}: nothing after the ending`)
+  }
+})
+
 test("quitting closes and quits, from any state, and signs nobody out", () => {
   for (const before of [[ready], proposed, open, [...open, company]]) {
     const {kinds} = run([...before, {type: "quit"}], true)
@@ -505,25 +532,38 @@ test("an act is no redirect, and is begun by the top frame's own document that o
 
 // The box's screen and its shell agree from any order of their messages
 // (cmd/screen_app.go is the shell's side, modelled here as it is written):
-// the shell says ready and proposes its CYFR as attempt 1, answers opened
-// to the current attempt's home-ready alone and once, and on every lock,
-// its own or main's, says locked naming no CYFR and proposes again as the
-// next attempt. Every order of delivering either side's messages, of the
-// takes and clears ending (in the order they were asked, as app.js chains
-// them), and of up to two locks of the shell's own and one lost page of
-// main's (every state they reach, each walked once), ends with main keeping to the CYFR on the device's own page:
-// never stranded keeping to none, never ended.
+// from nothing said, the shell's first message is ready, with its proposal
+// of its CYFR as attempt 1 in the same step (one hold of its mutex); it
+// answers opened to the current attempt's home-ready alone and once, and
+// on every lock after ready, its own or main's, says locked naming no CYFR
+// and proposes again as the next attempt, while a lock before ready says
+// nothing (the page ready names says it). Every order of the shell's
+// ready, of delivering either side's messages, of the takes and clears
+// ending (in the order they were asked, as app.js chains them), and of up
+// to two locks of the shell's own, a keyboard that ends (before ready or
+// after it) and one lost page of main's (every state they reach, each
+// walked once), ends with main keeping to the CYFR on the device's own
+// page: never stranded keeping to none, never ended. The shell's own end,
+// at any point, is its last lock, saying ending and nothing after it, and
+// then its exit reaching main, in either order with what is still on the
+// way: main ends showing nothing, and opens no window once it read ending.
 test("the screen ends on its CYFR whatever the order of its messages", () => {
   const LOOP = "http://127.0.0.1:7340/"
   const CYFR = "http://localhost:4000"
-  const initialWorld = () => ({
+  const initialWorld = (endable) => ({
     main: initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr"),
-    shell: {attempt: 1, answered: false, locks: 2, gone: false},
-    toMain: [{type: "ready", url: LOOP}, {type: "home", message: {type: "home", home: CYFR, account: CYFR, attempt: 1}}],
+    shell: {ready: false, attempt: 0, answered: false, locks: 2, keyboard: 1, gone: false, ending: false, exited: false, endable},
+    toMain: [],
     toShell: [], pending: [], showing: "", lost: 1, trace: []
   })
   const clone = (w) => structuredClone(w)
+  const propose = (w) => {
+    w.shell.attempt++
+    w.shell.answered = false
+    w.toMain.push({type: "home", message: {type: "home", home: CYFR, account: CYFR, attempt: w.shell.attempt}})
+  }
   const hide = (w) => {
+    if (!w.shell.ready || w.shell.ending) return
     w.shell.attempt++
     w.shell.answered = false
     w.toMain.push({type: "locked", message: {type: "locked"}},
@@ -536,6 +576,7 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
       if (effect.take) w.pending.push({type: "taken", taken: true})
       if (effect.forget) w.pending.push({type: "forgot", cleared: true})
       if (effect.chooser) w.showing = w.main.readyURL
+      if ((effect.chooser || effect.root) && w.endingRead) w.openedForEnding = true
       if (effect.close) w.showing = ""
       if (effect.end || effect.quit) w.ended = JSON.stringify(effect)
     }
@@ -546,12 +587,14 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
     if (w.toMain.length) {
       out.push(["to main", (x) => {
         const m = x.toMain.shift()
+        if (m.type === "ending") x.endingRead = true
         carry(x, step(x.main, m.type === "ready" ? m : m.type === "opened" ? m : {type: m.type, message: m.message}))
       }])
     }
     if (w.toShell.length) {
       out.push(["to the shell", (x) => {
         const m = x.toShell.shift()
+        if (x.shell.ending) return
         if (m.type === "home-ready" && m.attempt === x.shell.attempt && !x.shell.answered) {
           x.shell.answered = true
           x.toMain.push({type: "opened", home: CYFR})
@@ -561,12 +604,30 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
       }])
     }
     if (w.pending.length) out.push(["a take or clear ends", (x) => carry(x, step(x.main, x.pending.shift()))])
-    if (w.shell.locks > 0) out.push(["the shell locks", (x) => { x.shell.locks--; hide(x) }])
+    if (!w.shell.ready) {
+      out.push(["the shell says ready", (x) => {
+        x.shell.ready = true
+        x.toMain.push({type: "ready", url: LOOP})
+        propose(x)
+      }])
+    }
+    if (w.shell.endable && !w.shell.ending) {
+      out.push(["the shell ends", (x) => {
+        // Its last lock: ending in place of locked, and nothing after it.
+        x.shell.ending = true
+        if (x.shell.ready) x.toMain.push({type: "ending", message: {type: "ending"}})
+      }])
+    } else if (w.shell.ending && !w.shell.exited) {
+      out.push(["cyfr's exit reaches main", (x) => { x.shell.exited = true; carry(x, step(x.main, {type: "gone", why: "it exited (0)"})) }])
+    }
+    if (w.shell.locks > 0 && !w.shell.ending) out.push(["the shell locks", (x) => { x.shell.locks--; hide(x) }])
+    if (w.shell.keyboard > 0 && !w.shell.ending) out.push(["the keyboard ends", (x) => { x.shell.keyboard--; hide(x) }])
     if (w.lost > 0 && w.main.name !== "starting") out.push(["main's page is lost", (x) => { x.lost--; carry(x, step(x.main, {type: "lost"})) }])
     return out
   }
   const seen = new Set()
   let ends = 0
+  let endings = 0
   const walk = (w) => {
     const key = JSON.stringify({...w, trace: undefined})
     if (seen.has(key)) return
@@ -574,6 +635,12 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
     const next = moves(w)
     if (next.length === 0) {
       ends++
+      if (w.shell.ending) {
+        assert.ok(!w.openedForEnding, `a window opened once main read the shell's ending, after ${w.trace.join(" > ")}`)
+        assert.ok(w.ended && w.showing === "", `it ended ${w.main.name} showing "${w.showing}" after ${w.trace.join(" > ")}`)
+        endings++
+        return
+      }
       assert.ok(!w.ended && !w.shell.gone, `it ended (${w.ended ?? "the shell gone"}) after ${w.trace.join(" > ")}`)
       assert.ok(w.main.name === "open" && w.main.home === CYFR && w.showing === LOOP,
         `it ended ${w.main.name} keeping to "${w.main.home}" showing "${w.showing}" after ${w.trace.join(" > ")}`)
@@ -586,6 +653,8 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
       walk(x)
     }
   }
-  walk(initialWorld())
-  assert.ok(ends > 0 && seen.size > 500, `only ${seen.size} states were walked`)
+  walk(initialWorld(false))
+  assert.ok(ends > 0 && endings === 0 && seen.size > 500, `only ${seen.size} states were walked`)
+  walk(initialWorld(true))
+  assert.ok(endings > 0, "no walk ended with the shell's end")
 })

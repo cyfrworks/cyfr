@@ -145,15 +145,33 @@ defmodule Locus.Backends.OwnersTest do
       end
     end
 
-    def home_list(agent), do: Locus.DirectLauncher.home_list(root(agent))
+    def home_list(agent) do
+      held(agent, :home_list)
+      Locus.DirectLauncher.home_list(root(agent))
+    end
+
     def home_reset(agent, id), do: home_change(agent, :home_reset, id)
     def home_retire(agent, id), do: home_change(agent, :home_retire, id)
 
     # A change the test answers stands for one the keeper refused.
     defp home_change(agent, op, id) do
+      held(agent, op)
+
       case Agent.get(agent, &Map.get(&1, :home_change)) do
         nil -> apply(Locus.DirectLauncher, op, [root(agent), id])
         answer -> answer
+      end
+    end
+
+    # A list or a change the test holds waits here, told to the test, until
+    # it says go: a launcher slow to answer.
+    defp held(agent, op) do
+      if test = Agent.get(agent, &Map.get(&1, :home_held)) do
+        send(test, {:home_held, op, self()})
+
+        receive do
+          :go -> :ok
+        end
       end
     end
 
@@ -1791,6 +1809,63 @@ defmodule Locus.Backends.OwnersTest do
                     unknown: []
                   }},
                runs: [id]
+             }
+    end
+
+    test "a held retire and list hold no renewal: B renewed, a sweep past B's earlier lease, " <>
+           "B's session running, and another change of the home conflict",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("kept", @idle, home: :kept)])
+      assert {:ok, _} = sync(owners, "b", {1, 1}, idle_programs(1))
+      assert {:ok, %{session: id}} = open(owners, "b", {1, 1}, "b1")
+      test = self()
+      Agent.update(ctx.stub, &Map.put(&1, :home_held, test))
+
+      retire = %{type: :home, op: :retire, athanor: @athanor, home_id: @home}
+      retiring = Task.async(fn -> control(owners, 1, retire) end)
+      assert_receive {:home_held, :home_retire, retire_held}, 2_000
+      listing = Task.async(fn -> control(owners, 1, %{type: :homes}) end)
+
+      list_held =
+        receive do
+          {:home_held, :home_list, pid} -> pid
+        after
+          2_000 -> :waits
+        end
+
+      again = at_once(fn -> control(owners, 1, %{retire | op: :reset}) end)
+
+      # Inside B's lease, then past the one it had.
+      advance(ctx, 20_000)
+      renew = %{type: :renew, lease_ms: 30_000, owners: [%{athanor: @athanor, server: "b", e: 1}]}
+      renewed = at_once(fn -> control(owners, 1, renew) end)
+      advance(ctx, 11_000)
+      :ok = Owners.sweep(owners)
+      runs = running_in(owners, "b")
+
+      send(retire_held, :go)
+      if is_pid(list_held), do: send(list_held, :go)
+
+      assert %{
+               list_held: is_pid(list_held),
+               again: again,
+               renewed: renewed,
+               runs: runs,
+               retired: Task.await(retiring, 5_000),
+               listed: Task.await(listing, 5_000)
+             } == %{
+               list_held: true,
+               again: {:error, :conflict},
+               renewed:
+                 {:ok,
+                  %{
+                    renewed: [%{athanor: @athanor, server: "b", e: 1, state: :running}],
+                    unknown: []
+                  }},
+               runs: [id],
+               retired: {:ok, %{home_id: @home, state: :absent}},
+               listed: {:ok, %{homes: []}}
              }
     end
 

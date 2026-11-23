@@ -84,39 +84,57 @@ const Origin = "http://" + Listen
 // recovery code's POST.
 type Server struct {
 	Shell *Shell
-	// Reachable is whether the home answers now, set for a box's screen.
-	// It is part of what the shell knows, so no page waits for it: each
-	// shows what the last reading of it said,
-	// "starting" until one said yes, and starts the next (read).
-	Reachable func() bool
+	// Reachable is nil once the home answers now, and otherwise why not,
+	// set for a box's screen. It is part of what the shell knows, so no
+	// page waits for it: each shows what the last reading of it said,
+	// "starting" until one said yes, or the sentence of a refusal waiting
+	// does not cure (Unbound.Lasting), and starts the next (read) under
+	// Work, whose end ends it.
+	Reachable func(context.Context) error
+	// Work is everything the pages begin for the CYFR of a folder on this
+	// computer: each request's context ends with it, and each reading
+	// begins under it. ServeOn makes one from its ctx where it is nil.
+	Work *Work
 
 	lastMu sync.Mutex
-	// answered is what the last finished reading said, and reading
-	// whether one is in flight, the one at a time.
+	// answered is what the last finished reading said, lasting its
+	// lasting refusal's sentence, and reading whether one is in flight,
+	// the one at a time.
 	answered, reading bool
+	lasting           string
 }
 
 // read starts the next reading, unless one is in flight, and answers what
 // the last one said. A page that makes an account has the account
 // service's terms read in it first, so that a first form shows them.
-func (srv *Server) read(page Page) (answered bool) {
+func (srv *Server) read(page Page) (answered bool, lasting string) {
 	srv.lastMu.Lock()
 	defer srv.lastMu.Unlock()
-	if !srv.reading {
-		srv.reading = true
-		go func() {
-			if page == PageSetup || page == PageEnroll {
-				ctx, cancel := context.WithTimeout(context.Background(), termsWithin)
-				srv.Shell.readTerms(ctx)
-				cancel()
-			}
-			now := srv.Reachable()
-			srv.lastMu.Lock()
-			srv.answered, srv.reading = now, false
-			srv.lastMu.Unlock()
-		}()
+	if srv.reading {
+		return srv.answered, srv.lasting
 	}
-	return srv.answered
+	work := srv.Work.Context()
+	reading := func() {
+		if page == PageSetup || page == PageEnroll {
+			ctx, cancel := context.WithTimeout(work, termsWithin)
+			srv.Shell.readTerms(ctx)
+			cancel()
+		}
+		err := srv.Reachable(work)
+		var unbound *Unbound
+		why := ""
+		if errors.As(err, &unbound) && unbound.Lasting {
+			why = unbound.Sentence
+		}
+		srv.lastMu.Lock()
+		srv.answered, srv.lasting, srv.reading = err == nil, why, false
+		srv.lastMu.Unlock()
+	}
+	// After the Work ended no reading begins, and the pages show the last.
+	if srv.Work.Start(work, func() error { go reading(); return nil }) == nil {
+		srv.reading = true
+	}
+	return srv.answered, srv.lasting
 }
 
 // termsWithin bounds one reading of the account service's terms.
@@ -155,6 +173,11 @@ func (srv *Server) homeOrigin() string {
 // ServeHTTP admits a request by its Host, method and Origin, then serves
 // its page.
 func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if srv.Work != nil {
+		ctx, stop := srv.Work.Join(r.Context())
+		defer stop()
+		r = r.WithContext(ctx)
+	}
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	// same-origin, not no-referrer: under no-referrer Chrome sends the
@@ -500,6 +523,9 @@ func (srv *Server) pageLocked(w http.ResponseWriter, why string) {
 type pageData struct {
 	View
 	Waiting bool
+	// Lasting is why the home cannot answer until the person acts, said
+	// in place of "starting".
+	Lasting string
 	// Unwatched is why the device may not be unlocked now.
 	Unwatched string
 	Answer    string
@@ -524,7 +550,11 @@ func (srv *Server) page(w http.ResponseWriter, d pageData) {
 	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && !v.Drawn)
 	d.Unwatched = srv.Shell.cfg.Unwatched()
 	if srv.Reachable != nil && (v.Page == PageSetup || v.Page == PageEnroll || v.Page == PageLocked) {
-		d.Waiting = !srv.read(v.Page) && v.Page != PageEnroll
+		answered, lasting := srv.read(v.Page)
+		d.Waiting = !answered && v.Page != PageEnroll
+		if d.Waiting {
+			d.Lasting = lasting
+		}
 	}
 	d.Warn = warnings(v.Storage)
 	if srv.Shell.cfg.Warning != "" {
@@ -685,11 +715,17 @@ func ListenAt(address string) (net.Listener, error) {
 	return (&net.ListenConfig{Control: exclusiveAddress}).Listen(context.Background(), "tcp4", address)
 }
 
-// ServeOn serves the pages on ln, the shell's listener, until ctx ends.
+// ServeOn serves the pages on ln, the shell's listener, until ctx ends,
+// which ends their Work (one of its own where Work is nil) before the
+// listener closes.
 func (srv *Server) ServeOn(ctx context.Context, ln net.Listener) error {
+	if srv.Work == nil {
+		srv.Work = NewWork(ctx)
+	}
 	hs := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
+		srv.Work.End()
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = hs.Shutdown(sctx)

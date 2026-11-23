@@ -101,7 +101,7 @@ defmodule Cyfr.Test.ScriptedBackends do
              spent: MapSet.new(),
              closed: MapSet.new(),
              tools: %{},
-             hold: MapSet.new(),
+             hold: [],
              pool: 32,
              stderr_bytes: 0,
              homes: MapSet.new(),
@@ -375,8 +375,8 @@ defmodule Cyfr.Test.ScriptedBackends do
 
     settled =
       state.owners == %{} and state.releases == %{} and state.claims == %{} and
-        state.releasing == %{} and state.inflight == nil and :queue.is_empty(state.urgent) and
-        :queue.is_empty(state.queue)
+        state.releasing == %{} and state.inflight == nil and state.beside == %{} and
+        :queue.is_empty(state.urgent) and :queue.is_empty(state.queue)
 
     cond do
       settled ->
@@ -402,12 +402,14 @@ defmodule Cyfr.Test.ScriptedBackends do
   @doc """
   Hold the next message of `type` until the test sends `:go` to the pid it
   reports, or 5 s pass; `hold(fake, type, ms)` holds it up to `ms`, past a
-  caller's own timeout.
+  caller's own timeout. Each call holds one more message: three calls hold
+  the next three. A held control message is answered under the boot that
+  took it, as a service answers what it took before it restarted.
   """
   def hold(fake, type, ms \\ 5_000)
 
   def hold(%{agent: agent}, type, ms),
-    do: Agent.update(agent, &%{&1 | hold: MapSet.put(&1.hold, {type, ms})})
+    do: Agent.update(agent, &%{&1 | hold: &1.hold ++ [{type, ms}]})
 
   # ————— control —————
 
@@ -440,6 +442,8 @@ defmodule Cyfr.Test.ScriptedBackends do
         Agent.update(agent, &%{&1 | hwm: {fields.generation, fields.seq}})
         lapse_expired(agent)
         send(st.test, {:control, message["type"], message, fields})
+        # Its answer names the boot that took it, however long it is held.
+        conn = assign(conn, :boot, st.boot)
         held(agent, message["type"])
 
         case pop_refusal(agent, message["type"]) do
@@ -453,14 +457,19 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp held(agent, type) do
-    st = Agent.get(agent, & &1)
+    {held, st} =
+      Agent.get_and_update(agent, fn st ->
+        case Enum.find(st.hold, &match?({^type, _ms}, &1)) do
+          nil -> {{nil, st}, st}
+          held -> {{held, st}, %{st | hold: List.delete(st.hold, held)}}
+        end
+      end)
 
-    case Enum.find(st.hold, &match?({^type, _ms}, &1)) do
+    case held do
       nil ->
         :ok
 
-      {^type, ms} = held ->
-        Agent.update(agent, &%{&1 | hold: MapSet.delete(&1.hold, held)})
+      {^type, ms} ->
         send(st.test, {:held, type, self()})
 
         receive do
@@ -1188,7 +1197,7 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   defp answer(conn, st, status, body) when is_binary(body) do
     conn
-    |> put_resp_header(LocusBackends.boot_header(), st.boot)
+    |> put_resp_header(LocusBackends.boot_header(), conn.assigns[:boot] || st.boot)
     |> put_resp_content_type("application/json")
     |> resp(status, body)
   end

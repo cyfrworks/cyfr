@@ -25,6 +25,9 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{if .Unwatched}}
 <h1>CYFR cannot be unlocked now</h1>
 <p id="unwatched" role="alert">{{.Unwatched}}</p>
+{{else if .Lasting}}
+<h1>CYFR cannot be reached from here</h1>
+<p>{{.Lasting}}</p>
 {{else if .Waiting}}
 <h1>CYFR is starting</h1>
 <p>This device opens CYFR once it answers. If it does not, run <code>cyfr up</code> in CYFR's directory; Ctrl+Alt+F2 opens a terminal.</p>

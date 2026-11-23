@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -71,7 +72,7 @@ func startHungScreen(t *testing.T, edit ...func(*holder.Record)) *hungScreen {
 	h.compositor = screenCompositor(t, idletest.Options{})
 	programs := quietScreen()
 	// sleep-ok: stand-ins that run until what started them ends them
-	programs["docker"] = "echo asked >>" + h.asked + "\nexec /bin/sleep 100"
+	programs["docker"] = "echo asked $$ >>" + h.asked + "\nexec /bin/sleep 100"
 	screenPrograms(t, programs)
 	h.runningScreen = startScreen(t)
 	return h
@@ -280,3 +281,65 @@ const onlyThatPage = "Only the page this device's PIN or passphrase was typed on
 
 // mainLocks is main's lock, as the app sends it when it lost its page.
 const mainLocks = `{"version":1,"type":"lock"}`
+
+// Where only a new login gives the screen's setup's work the docker group,
+// the screen's page says so in place of "CYFR is starting", which is for a
+// CYFR that may yet answer.
+func TestScreenShell_SaysToLogInAgainWhereThatIsWhatIsMissing(t *testing.T) {
+	screenProject(t)
+	t.Setenv(workStaleGroup, "1")
+	_ = screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	// This computer's own Docker, whose socket refuses a process without
+	// the docker group.
+	programs["docker"] = `[ "$1" = context ] && echo unix:///var/run/docker.sock && exit 0
+echo "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock" >&2
+exit 1`
+	screenPrograms(t, programs)
+	s := startScreen(t)
+	s.shows(loginAgain)
+	resp, err := s.ask(http.MethodGet, "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if page := html.UnescapeString(string(raw)); strings.Contains(page, "CYFR is starting") {
+		t.Fatalf("the page says CYFR is starting:\n%s", page)
+	}
+}
+
+// A screen that ends while its context lives on, main's pipe ending,
+// ends the reading it began too: the Docker call that holds it is gone at
+// once, not at the reading's own bound.
+func TestScreenShell_AScreenThatEndsEndsItsReadings(t *testing.T) {
+	h := startHungScreen(t)
+	h.shows(watchedPage)
+	h.until("the page's reading reached Docker", func() bool { return h.timesAsked() > 0 })
+	h.app.reply.Close()
+	select {
+	case err := <-h.ended:
+		if err != nil {
+			t.Fatalf("the screen ended with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the screen did not end")
+	}
+	ended := time.Now()
+	// The Docker calls this screen's readings made, by pid, and no other
+	// program's on this computer.
+	h.until("the Docker call the reading held to end", func() bool {
+		raw, _ := os.ReadFile(h.asked)
+		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			if f := strings.Fields(line); len(f) == 2 {
+				if pid, err := strconv.Atoi(f[1]); err == nil && !gone(pid) {
+					return false
+				}
+			}
+		}
+		return true
+	})
+	if took := time.Since(ended); took > 3*time.Second {
+		t.Fatalf("the reading's Docker call ended %v after the screen", took)
+	}
+}

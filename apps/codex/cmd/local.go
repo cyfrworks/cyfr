@@ -43,6 +43,12 @@ import (
 // setup token goes only on a connection to the one container whose log
 // was read for it. A retained address therefore never receives what was
 // read for another.
+//
+// Each reading made as a connection opens, or as the setup token is asked
+// for, and Docker's word of it are made together in setup's work (look,
+// setup_project.go), the one place this device asks Docker: that process
+// has the docker group and Docker Desktop's docker where this one lacks
+// them, and none of this one's settings.
 
 // The engine's route to a CYFR with tailnet access from the computer it
 // runs on, for CYFR's own pages alone: its SOCKS5 proxy on loopback, the
@@ -64,9 +70,25 @@ const directoryVar = "CYFR_DIRECTORY_URL"
 // localBound is what a connection to a folder's CYFR is bound to: what a
 // reading names of it.
 type localBound struct {
-	mode, address, directory string
-	// port is the one its cyfr container publishes on loopback.
-	port int
+	Mode      string `json:"mode"`
+	Address   string `json:"address"`
+	Directory string `json:"directory"`
+	// Port is the one its cyfr container publishes on loopback.
+	Port int `json:"port"`
+}
+
+// folderLook is what setup's work answers of a folder: one reading, and
+// Docker's word of it, the container serving or why nothing is sent.
+type folderLook struct {
+	Bound     localBound       `json:"bound"`
+	Container access.Published `json:"container"`
+	Refused   string           `json:"refused,omitempty"`
+	// Lasting is a refusal waiting does not cure: only a new login gives
+	// this account's processes the docker group.
+	Lasting bool `json:"lasting,omitempty"`
+	// Token is the setup token, from that same reading and container,
+	// where it may be offered (lookForToken).
+	Token string `json:"token,omitempty"`
 }
 
 type localReading struct {
@@ -88,10 +110,10 @@ func readFolder(dir string) (localReading, error) {
 	}
 	return localReading{
 		localBound: localBound{
-			mode:      head.Mode,
-			address:   address,
-			directory: cmp.Or(strings.TrimSpace(values[directoryVar]), account.DefaultDirectory),
-			port:      head.Port,
+			Mode:      head.Mode,
+			Address:   address,
+			Directory: cmp.Or(strings.TrimSpace(values[directoryVar]), account.DefaultDirectory),
+			Port:      head.Port,
 		},
 		token: strings.TrimSpace(values[setupTokenVar]),
 	}, nil
@@ -104,6 +126,12 @@ type localFolder struct {
 	// name is the opened address's host and port, loopback where its
 	// container publishes it on this computer.
 	name, loopback string
+
+	// work is everything begun for this CYFR here, and begin begins
+	// setup's work for a reading under it, as the program's settings were
+	// when the folder was opened (preparer).
+	work  *shell.Work
+	begin func(context.Context, []string) (*workProcess, error)
 }
 
 // dialTCP makes a connection once a localFolder allows it. A test stands
@@ -119,30 +147,41 @@ var computersProxy = http.ProxyFromEnvironment
 // Docker's word again.
 const localDialWithin = 20 * time.Second
 
-// readLocal is the CYFR set up in dir, as the screen and the CYFR app open
-// it: one reading (readFolder), with no call to Docker and nothing
-// started, and the client bound to it. holder names the caller in the
-// stack's lock while it reads whether setup is open.
-func readLocal(dir, holder string) (desktop.Local, error) {
+// openFolder is the CYFR set up in dir as one reading of it opens it,
+// everything begun for it begun under work.
+func openFolder(work *shell.Work, dir, holder string) (*localFolder, localReading, error) {
 	read, err := readFolder(dir)
 	if err != nil {
-		return desktop.Local{}, err
+		return nil, read, err
 	}
-	at, err := url.Parse(read.address)
+	at, err := url.Parse(read.Address)
+	if err != nil {
+		return nil, read, err
+	}
+	return &localFolder{dir: dir, holder: holder, opened: read.localBound,
+		name: hostPort(at), loopback: net.JoinHostPort("127.0.0.1", strconv.Itoa(read.Port)),
+		work: work, begin: beginUnder(work, preparer())}, read, nil
+}
+
+// readLocal is the CYFR set up in dir, as the screen and the CYFR app open
+// it: one reading (readFolder), with no call to Docker and nothing
+// started, and the client bound to it, which asks Docker through setup's
+// work alone, begun under work. holder names the caller in the stack's
+// lock while it reads whether setup is open.
+func readLocal(work *shell.Work, dir, holder string) (desktop.Local, error) {
+	f, read, err := openFolder(work, dir, holder)
 	if err != nil {
 		return desktop.Local{}, err
 	}
-	f := &localFolder{dir: dir, holder: holder, opened: read.localBound,
-		name: hostPort(at), loopback: net.JoinHostPort("127.0.0.1", strconv.Itoa(read.port))}
 	client := &http.Client{Transport: f.transport(nil)}
-	var l desktop.Local
-	if read.mode == access.ModeTailnet {
+	l := desktop.Local{Work: work}
+	if read.Mode == access.ModeTailnet {
 		l.Proxy, l.Resolver = localProxy, localResolver
 	}
 	l.Shell = shell.Config{
-		Address:    read.address,
+		Address:    read.Address,
 		Client:     client,
-		Directory:  read.directory,
+		Directory:  read.Directory,
 		DataDir:    filepath.Join(dir, "data"),
 		SetupToken: f.setupToken,
 	}
@@ -163,6 +202,15 @@ func (f *localFolder) transport(named *access.Published) http.RoundTripper {
 		// No connection is kept, so that each request's is bound.
 		bound: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				// net/http dials on past its request's end, for a request
+				// that may come; this dial is its request's alone, so it
+				// ends with that request (sentBy).
+				if r, ok := ctx.Value(sentBy{}).(context.Context); ok {
+					var stop context.CancelFunc
+					ctx, stop = context.WithCancel(ctx)
+					defer context.AfterFunc(r, stop)()
+					defer stop()
+				}
 				return f.dial(ctx, named)
 			},
 			DisableKeepAlives: true,
@@ -176,6 +224,10 @@ func (f *localFolder) transport(named *access.Published) http.RoundTripper {
 	}
 }
 
+// sentBy keys the context of the request a bound connection is dialled
+// for.
+type sentBy struct{}
+
 type folderTransport struct {
 	f                *localFolder
 	bound, elsewhere http.RoundTripper
@@ -183,7 +235,7 @@ type folderTransport struct {
 
 func (t *folderTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if hostPort(r.URL) == t.f.name {
-		sent := r.Clone(r.Context())
+		sent := r.Clone(context.WithValue(r.Context(), sentBy{}, r.Context()))
 		sent.URL.Scheme, sent.URL.Host = "http", t.f.loopback
 		sent.Host = cmp.Or(r.Host, r.URL.Host)
 		resp, err := t.bound.RoundTrip(sent)
@@ -210,26 +262,22 @@ func (t *folderTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 func (f *localFolder) dial(ctx context.Context, named *access.Published) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, localDialWithin)
 	defer cancel()
-	now, err := f.read()
-	if err != nil {
-		return nil, err
-	}
-	before, err := f.serving(ctx, now.localBound)
+	before, err := f.look(ctx, workLook, f.dir)
 	if err != nil {
 		return nil, err
 	}
 	if named == nil {
-		named = &before
+		named = &before.Container
 	}
-	if before != *named {
+	if before.Container != *named {
 		return nil, f.replaced()
 	}
 	conn, err := dialTCP(ctx, "tcp", f.loopback)
 	if err != nil {
 		return nil, err
 	}
-	after, err := f.serving(ctx, now.localBound)
-	if err == nil && after != *named {
+	after, err := f.look(ctx, workLook, f.dir)
+	if err == nil && after.Container != *named {
 		err = f.replaced()
 	}
 	if err != nil {
@@ -239,39 +287,147 @@ func (f *localFolder) dial(ctx context.Context, named *access.Published) (net.Co
 	return conn, nil
 }
 
-// read is the folder read now, refused unless it names the CYFR opened.
-func (f *localFolder) read() (localReading, error) {
-	now, err := readFolder(f.dir)
-	if err != nil {
-		return localReading{}, &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s can no longer be read (%v), so nothing was sent to it.", f.dir, engineFailure(err))}
-	}
-	if now.localBound != f.opened {
-		return localReading{}, &shell.Unbound{Moved: true, Sentence: fmt.Sprintf(
+// look has setup's work read the folder now, refused unless that reading
+// names the CYFR opened and Docker's word of it names the container
+// serving.
+func (f *localFolder) look(ctx context.Context, args ...string) (folderLook, error) {
+	ctx, stop := f.work.Join(ctx)
+	defer stop()
+	end, err := workBegunBy(ctx, f.begin, nil, args...)
+	var failed workFailure
+	switch {
+	case errors.As(err, &failed):
+		return folderLook{}, &shell.Unbound{Sentence: failed.sentence}
+	case err != nil:
+		return folderLook{}, &shell.Unbound{Sentence: unread(f.dir, err)}
+	case end.Look == nil:
+		return folderLook{}, &shell.Unbound{Sentence: unread(f.dir, errNoReading)}
+	case end.Look.Bound != f.opened:
+		return folderLook{}, &shell.Unbound{Moved: true, Sentence: fmt.Sprintf(
 			"The settings of the CYFR in %s changed after it was opened here, so nothing was sent to it. Quit CYFR and open it again.", f.dir)}
+	case end.Look.Refused != "":
+		return folderLook{}, &shell.Unbound{Sentence: end.Look.Refused, Lasting: end.Look.Lasting}
+	case end.Look.Container.ID == "":
+		return folderLook{}, &shell.Unbound{Sentence: unread(f.dir, errNoReading)}
 	}
-	return now, nil
+	return *end.Look, nil
 }
 
-func (f *localFolder) stopped() error {
-	return &shell.Unbound{Sentence: fmt.Sprintf("Docker shows no CYFR of %s running at %s. Run cyfr up in that folder, then try again.", f.dir, f.loopback)}
-}
+var errNoReading = errors.New("setup's work named no container")
 
 func (f *localFolder) replaced() error {
 	return &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s started again while this device was connecting, so nothing was sent to it. Try again.", f.dir)}
 }
 
-// serving is Docker's word for what serves at on this computer: the
-// folder's cyfr container, running and publishing the port on loopback.
-// Only a Docker on this computer can say that. Nothing is started and no
-// lock is taken.
-func (f *localFolder) serving(ctx context.Context, at localBound) (access.Published, error) {
-	unsaid := func(why error) error {
-		return &shell.Unbound{Sentence: fmt.Sprintf("Docker could not say whether the CYFR in %s is running (%v), so nothing was sent to it. Check Docker, then try again.", f.dir, why)}
+// setupToken is the setup token for a first hello and the one transport
+// it may be sent by, or "": what one reading in setup's work offers
+// (lookForToken), only where that reading names the CYFR opened. The
+// transport connects to that reading's container alone, by its id and
+// start, so the token reaches no other.
+func (f *localFolder) setupToken(ctx context.Context) (string, http.RoundTripper) {
+	ctx, cancel := context.WithTimeout(ctx, localDialWithin)
+	defer cancel()
+	look, err := f.look(ctx, workToken, f.dir, f.holder)
+	if err != nil || look.Token == "" {
+		return "", nil
 	}
-	var none access.Published
-	e, err := openEngine(f.dir)
+	return look.Token, f.transport(&look.Container)
+}
+
+// loginMissing is Docker refusing a process that lacks the docker group
+// its account is in, which only a new login gives it.
+type loginMissing struct{ sentence string }
+
+func (l loginMissing) Error() string { return l.sentence }
+
+func notRunning(dir string, port int) string {
+	return fmt.Sprintf("Docker shows no CYFR of %s running at %s. Run cyfr up in that folder, then try again.", dir, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+}
+
+// unread is a reading of dir that never came back from setup's work,
+// which is all this process saw: whether Docker was asked, it cannot say.
+func unread(dir string, why error) string {
+	if errors.Is(why, context.Canceled) || errors.Is(why, context.DeadlineExceeded) || errors.Is(why, shell.ErrEnded) {
+		why = errors.New("it was ended before it answered")
+	}
+	return fmt.Sprintf("The CYFR in %s could not be read here (%v), so nothing was sent to it. Try again.", dir, why)
+}
+
+func dockerUnsaid(dir string, why error) string {
+	return fmt.Sprintf("Docker could not say whether the CYFR in %s is running (%v), so nothing was sent to it. Check Docker, then try again.", dir, why)
+}
+
+// ---- in setup's work
+
+// lookInFolder is one reading of dir and Docker's word of it. Nothing is
+// started and no lock is taken.
+func lookInFolder(ctx context.Context, dir string) (*folderLook, error) {
+	read, err := readFolder(dir)
 	if err != nil {
-		return none, &shell.Unbound{Sentence: fmt.Sprintf("The CYFR in %s could not be opened here (%v), so Docker was not asked and nothing was sent to it. Correct that, then try again.", f.dir, engineFailure(err))}
+		return nil, fmt.Errorf("The CYFR in %s can no longer be read (%w), so nothing was sent to it.", dir, engineFailure(err))
+	}
+	return lookedAt(ctx, dir, read), nil
+}
+
+func lookedAt(ctx context.Context, dir string, read localReading) *folderLook {
+	look := &folderLook{Bound: read.localBound}
+	container, err := servingIn(ctx, dir, read.Port)
+	if err != nil {
+		var login loginMissing
+		look.Refused, look.Lasting = err.Error(), errors.As(err, &login)
+		return look
+	}
+	look.Container = container
+	return look
+}
+
+// lookForToken is lookInFolder under the stack's lock, holder its name
+// there, with the setup token where that one reading may offer it: that
+// same container's log since its start says no one is set up. The log is
+// a reason to offer the token and no more. It is a snapshot, and can lag
+// an admission that has committed: the CYFR decides again in its own
+// transaction. The lock is taken without waiting: held by a command
+// changing the stack, or with anything unread, no token is offered and
+// the door decides. .env keeps the token after setup, so it is never
+// offered for being there.
+func lookForToken(ctx context.Context, dir, holder string) (*folderLook, error) {
+	e, err := openEngine(dir)
+	if err != nil {
+		return nil, engineFailure(err)
+	}
+	unlock, err := e.Lock(holder)
+	if err != nil {
+		return nil, engineFailure(err)
+	}
+	defer unlock()
+	read, err := readFolder(dir)
+	if err != nil {
+		return nil, engineFailure(err)
+	}
+	look := lookedAt(ctx, dir, read)
+	if look.Refused != "" || read.token == "" {
+		return look, nil
+	}
+	res, err := e.Docker().Run(ctx, access.Call{
+		Args:     []string{"logs", "--since", look.Container.Started, look.Container.ID},
+		Deadline: composeRunTimeout,
+	})
+	if err == nil && res.ExitCode == 0 && setUpIn(res) == setUpNone {
+		look.Token = read.token
+	}
+	return look, nil
+}
+
+// servingIn is Docker's word for what serves dir's CYFR at port on this
+// computer: the folder's cyfr container, running and publishing the port
+// on loopback. Only a Docker on this computer can say that. Its error is
+// the sentence a person reads.
+func servingIn(ctx context.Context, dir string, port int) (access.Published, error) {
+	unsaid := func(why error) error { return errors.New(dockerUnsaid(dir, why)) }
+	var none access.Published
+	e, err := openEngine(dir)
+	if err != nil {
+		return none, fmt.Errorf("The CYFR in %s could not be opened here (%v), so Docker was not asked and nothing was sent to it. Correct that, then try again.", dir, engineFailure(err))
 	}
 	docker := e.Docker()
 	here, err := access.DockerIsHere(ctx, docker)
@@ -281,53 +437,29 @@ func (f *localFolder) serving(ctx context.Context, at localBound) (access.Publis
 	if !here {
 		return none, unsaid(errors.New("this Docker runs containers on another computer"))
 	}
-	c, ok, err := access.PublishedBy(ctx, docker, f.dir, "cyfr", at.port)
+	c, ok, err := access.PublishedBy(ctx, docker, dir, "cyfr", port)
 	switch {
+	case err != nil && refusedHere(ctx, err):
+		// This computer's own Docker refused this process, which lacks the
+		// docker group its account is in: setup's work without sg, which
+		// only a new login cures.
+		return none, loginMissing{fmt.Sprintf("%s. Nothing was sent to the CYFR in %s.", loginAgain, dir)}
 	case err != nil:
 		return none, unsaid(err)
 	case !ok:
-		return none, f.stopped()
+		return none, errors.New(notRunning(dir, port))
 	}
 	return c, nil
 }
 
-// setupToken is the setup token for a first hello and the one transport
-// it may be sent by, or "". It is one reading under the stack's lock: the
-// .env that still names the CYFR opened, that CYFR's container, and that
-// same container's log since its start saying no one is set up. The
-// transport connects to that container alone, by its id and start, so the
-// token reaches no other. The log is a reason to offer the token and no
-// more. It is a snapshot, and can lag an admission that has committed:
-// the CYFR decides again in its own transaction. The lock is taken
-// without waiting: held by a command changing the stack, or with anything
-// unread, no token is offered and the door decides. .env keeps the token
-// after setup, so it is never offered for being there.
-func (f *localFolder) setupToken(ctx context.Context) (string, http.RoundTripper) {
-	e, err := openEngine(f.dir)
-	if err != nil {
-		return "", nil
-	}
-	unlock, err := e.Lock(f.holder)
-	if err != nil {
-		return "", nil
-	}
-	defer unlock()
-	now, err := f.read()
-	if err != nil || now.token == "" {
-		return "", nil
-	}
-	container, err := f.serving(ctx, now.localBound)
-	if err != nil {
-		return "", nil
-	}
-	res, err := e.Docker().Run(ctx, access.Call{
-		Args:     []string{"logs", "--since", container.Started, container.ID},
-		Deadline: composeRunTimeout,
-	})
-	if err != nil || res.ExitCode != 0 || setUpIn(res) != setUpNone {
-		return "", nil
-	}
-	return now.token, f.transport(&container)
+// refusedHere is whether err, a Docker command's on this computer's own
+// Docker, is that Docker refusing this process while it lacks the docker
+// group its account is in: the command ran to its exit (not its deadline,
+// nor ctx's), and only a new login gives the group, as setup's work came
+// without sg.
+func refusedHere(ctx context.Context, err error) bool {
+	var failed *access.DockerFailed
+	return errors.As(err, &failed) && ctx.Err() == nil && olderThanGroup(ctx)
 }
 
 // answers is nil once the folder's CYFR answers on this computer over a
@@ -335,7 +467,7 @@ func (f *localFolder) setupToken(ctx context.Context) (string, http.RoundTripper
 func (f *localFolder) answers(ctx context.Context, client *http.Client) error {
 	ctx, cancel := context.WithTimeout(ctx, localDialWithin)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.opened.address+"/", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.opened.Address+"/", nil)
 	if err != nil {
 		return err
 	}
