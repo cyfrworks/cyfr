@@ -36,7 +36,7 @@ const Listen = "127.0.0.1:7340"
 // Origin is the shell's own pages' origin.
 const Origin = "http://" + Listen
 
-// Server serves the shell's pages to this box's Chrome.
+// Server serves the shell's pages to this box's screen, the CYFR app.
 //
 // Every request must name the listener exactly as its Host (a DNS
 // rebinding names another), and every POST must come from the shell's own
@@ -180,7 +180,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
-	// same-origin, not no-referrer: under no-referrer Chrome sends the
+	// same-origin, not no-referrer: under no-referrer the engine sends the
 	// pages' own form POSTs with Origin: null, which the shell refuses; under
 	// same-origin no referrer reaches the home, the ticket's redirect
 	// included, and the pages' POSTs keep their Origin.
@@ -249,7 +249,7 @@ var reads = map[string]func(srv *Server, w http.ResponseWriter, r *http.Request)
 		srv.page(w, pageData{View: v, Reveal: true})
 	},
 	// Prism's Lock is a top-level navigation here, not a form post, since a
-	// form from an https Prism to this plain-http loopback meets Chrome's
+	// form from an https Prism to this plain-http loopback meets the engine's
 	// insecure-form interstitial. Locking is the one GET that changes
 	// anything: it is the safe direction, it ends only the sessions this
 	// screen opened, and repeating it is a harmless success.
