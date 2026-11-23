@@ -2,7 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 // The CYFR app's main process: it starts cyfr desktop-serve (or, as the
-// box's screen, cyfr screen shell --app), owns every
+// box's screen, cyfr screen shell), owns every
 // window the app has, and holds each to its rules (policy.js).
 //
 // What main does is decided in one place, states.js: every event, from
@@ -475,7 +475,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   function startCyfr() {
     child = screen
-      ? spawn(cyfr, ["screen", "shell", "--app"], {cwd: screen, stdio: ["pipe", "pipe", "pipe"]})
+      ? spawn(cyfr, ["screen", "shell"], {cwd: screen, stdio: ["pipe", "pipe", "pipe"]})
       : spawn(cyfr, ["desktop-serve"], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true})
     send = (type, fields) => {
       if (child.stdin.writable) child.stdin.write(toCyfr(type, fields))

@@ -426,7 +426,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	// gives way to the one that says why (shell.Shell.Lock).
 	watches := newScreenWatches(screenIdle, nil)
 	cfg := local.Shell
-	cfg.DisplayName, cfg.Restart = host, browser.hide
+	cfg.DisplayName, cfg.Restart, cfg.Warning = host, browser.hide, releaseApart(dir, version.Version)
 	cfg.Record = filepath.Join(device, "holder.json")
 	cfg.Clients = shell.ClientFile(filepath.Join(device, "client.json"))
 	cfg.Unwatched = watches.Unwatched
@@ -482,6 +482,43 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	}
 	sh.Lock("")
 	return ended
+}
+
+// releaseApart is what the screen's page says where the app's cyfr, which
+// runs this shell (release ours), is another release than the CYFR the
+// folder runs: `cyfr update` moves the folder and the program that ran it,
+// and the app only as `cyfr screen on` installs it again. "" where they
+// agree, or where either is no release.
+func releaseApart(dir, ours string) string {
+	running := folderRelease(dir)
+	if !release.IsVersion(ours) || running == "" || running == ours {
+		return ""
+	}
+	return fmt.Sprintf("This screen's CYFR app is release %s and the CYFR here runs release %s, so the screen may not work as it should. Run `cyfr screen on` in %s to bring the app to release %s.", ours, running, dir, running)
+}
+
+// folderRelease is the release the compose file in dir runs CYFR at: the
+// one tag its cyfr images share where it is a release version, else "".
+func folderRelease(dir string) string {
+	for _, name := range access.ComposeMainFiles {
+		path := filepath.Join(dir, name)
+		if !fileExists(path) {
+			continue
+		}
+		found := ""
+		for _, image := range imagesFromCompose(path, []string{buildsProfile, access.ModePublic, access.ModeTailnet}) {
+			repository, tag, _ := splitImageReference(image)
+			if normalizeRepository(repository) != release.RepoCyfr {
+				continue
+			}
+			if !release.IsVersion(tag) || found != "" && tag != found {
+				return ""
+			}
+			found = tag
+		}
+		return found
+	}
+	return ""
 }
 
 // screenClaim takes the shell's listener, then selects the CYFR in dir in

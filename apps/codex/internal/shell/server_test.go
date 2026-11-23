@@ -623,3 +623,19 @@ func TestServer_APlainReadShowsNoPasskeyRequest(t *testing.T) {
 		t.Fatalf("the request is no longer drawn for its own reference:\n%s", again)
 	}
 }
+
+// A device's warning (Config.Warning) is on its pages, the lock page
+// among them, beside the storage's.
+func TestTheDevicesWarningIsOnItsPages(t *testing.T) {
+	const warning = "This screen's CYFR app is release 0.6.0 and the CYFR here runs release 0.6.1."
+	home := newFakeHome(t)
+	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), func(c *Config) { c.Warning = warning })
+	if page := b.page(); !strings.Contains(page, `<p class="warn">`+warning+`</p>`) {
+		t.Fatalf("the setup page lacks the warning:\n%s", page)
+	}
+	setUpAndOpen(t, home, b)
+	b.shell.Lock("")
+	if page := b.page(); !strings.Contains(page, "CYFR is locked") || !strings.Contains(page, warning) {
+		t.Fatalf("the lock page lacks the warning:\n%s", page)
+	}
+}

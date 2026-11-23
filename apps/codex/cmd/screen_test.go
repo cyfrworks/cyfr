@@ -657,3 +657,28 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 		t.Error("setup read as open under a lock another command holds")
 	}
 }
+
+// The screen's page says where the app's cyfr, which runs the shell, is
+// another release than the CYFR the folder runs, naming the command that
+// brings the app to it; it says nothing where they agree or where either
+// is no release.
+func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
+	dir := t.TempDir()
+	compose := func(tag string) {
+		body := "services:\n  cyfr:\n    image: ghcr.io/cyfrworks/cyfr:" + tag + "\n  locus-runtime:\n    image: ghcr.io/cyfrworks/cyfr-locus:" + tag + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct{ folder, ours, want string }{
+		{"0.6.0@sha256:" + strings.Repeat("a", 64), "0.6.0", ""},
+		{"0.6.1@sha256:" + strings.Repeat("a", 64), "0.6.0", "This screen's CYFR app is release 0.6.0 and the CYFR here runs release 0.6.1, so the screen may not work as it should. Run `cyfr screen on` in " + dir + " to bring the app to release 0.6.1."},
+		{"latest", "0.6.0", ""},
+		{"0.6.1", "dev", ""},
+	} {
+		compose(c.folder)
+		if got := releaseApart(dir, c.ours); got != c.want {
+			t.Errorf("the folder at %s, the app at %s: %q, want %q", c.folder, c.ours, got, c.want)
+		}
+	}
+}

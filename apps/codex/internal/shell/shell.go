@@ -88,6 +88,10 @@ type Config struct {
 	// it may not be unlocked now, or "" while what would lock it is known
 	// to work. While it says why, nothing unlocks and the pages show that.
 	Unwatched func() string
+	// Warning is one sentence the device's pages show among their warnings,
+	// or "": something its own program knows may keep it from working as
+	// it should (cmd's screen: the app's release beside the CYFR's).
+	Warning string
 	// DisplayName is the name the CYFR lists this device by.
 	DisplayName string
 	// Detect reads the disks; disk.Detect unless a test replaces it.

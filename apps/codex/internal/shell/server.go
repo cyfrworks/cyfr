@@ -527,6 +527,9 @@ func (srv *Server) page(w http.ResponseWriter, d pageData) {
 		d.Waiting = !srv.read(v.Page) && v.Page != PageEnroll
 	}
 	d.Warn = warnings(v.Storage)
+	if srv.Shell.cfg.Warning != "" {
+		d.Warn = append(d.Warn, srv.Shell.cfg.Warning)
+	}
 	qr := v.RecoveryCode
 	if v.Page == PageEnroll {
 		qr = v.AddURL
