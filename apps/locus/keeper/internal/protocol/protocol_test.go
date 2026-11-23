@@ -318,6 +318,7 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 	built := []any{
 		NewSpawned("7", "00112233445566778899aabbccddeeff", 20007, 41),
 		NewError("8", "", CodeCapacity),
+		NewError("8", "00112233445566778899aabbccddeeff", CodeExecFailed),
 		NewError("", "00112233445566778899aabbccddeeff", CodeUnknownSpawn),
 		NewExited("00112233445566778899aabbccddeeff", &code, nil, nil),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, nil),

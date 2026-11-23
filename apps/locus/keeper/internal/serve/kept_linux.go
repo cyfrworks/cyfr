@@ -125,17 +125,17 @@ func (s *server) keptHome(path string, uid *uint64) (int, error) {
 // uid's egress at the guard under it: every session of the home shares the
 // uid, so the uid reaches what its latest spawn resolved. It answers as
 // startSpawn does.
-func (s *server) startKeptSpawn(req *protocol.Request, reach egress) string {
+func (s *server) startKeptSpawn(req *protocol.Request, reach egress) (*spawn, string) {
 	uid, err := s.keptHome(req.HomePath, req.HomeUID)
 	if err != nil {
 		s.log.Warn("spawn %s refused: %v", req.ID, err)
-		return protocol.CodeBadRequest
+		return nil, protocol.CodeBadRequest
 	}
 	s.mu.Lock()
 	_, known := s.pools[req.Pool]
 	s.mu.Unlock()
 	if !known {
-		return protocol.CodeUnknownPool
+		return nil, protocol.CodeUnknownPool
 	}
 	acct := KeptAccount(uid)
 	lock := s.keptLock(uid)
@@ -159,31 +159,31 @@ func (s *server) startKeptSpawn(req *protocol.Request, reach egress) string {
 		}
 		if busy {
 			s.log.Warn("spawn %s refused: kept uid %d is quarantined or live under another home", req.ID, uid)
-			return protocol.CodeUIDBusy
+			return nil, protocol.CodeUIDBusy
 		}
 		select {
 		case <-retiring:
 		case <-time.After(time.Until(deadline)):
 			s.log.Warn("spawn %s refused: kept uid %d is still retiring", req.ID, uid)
-			return protocol.CodeUIDBusy
+			return nil, protocol.CodeUIDBusy
 		}
 	}
 	if err := home.CheckKeptHome(req.HomePath, uid); err != nil {
 		lock.Unlock()
 		s.log.Warn("spawn %s refused: the kept home of uid %d is not made: %v", req.ID, uid, err)
-		return protocol.CodeBadRequest
+		return nil, protocol.CodeBadRequest
 	}
 	if max := req.HomeMaxBytes; max != nil {
 		bytes, err := s.measureHome(acct, req.HomePath)
 		if err != nil {
 			lock.Unlock()
 			s.log.Error("spawn %s: measuring the kept home of uid %d: %v", req.ID, uid, err)
-			return protocol.CodeInternal
+			return nil, protocol.CodeInternal
 		}
 		if bytes >= *max {
 			lock.Unlock()
 			s.log.Warn("spawn %s refused: the kept home of uid %d holds %d bytes, at or over its bound %d", req.ID, uid, bytes, *max)
-			return protocol.CodeHomeOverCap
+			return nil, protocol.CodeHomeOverCap
 		}
 	}
 	if err := s.setEgress(uid, reach); err != nil {
@@ -199,7 +199,7 @@ func (s *server) startKeptSpawn(req *protocol.Request, reach egress) string {
 		}
 		lock.Unlock()
 		s.log.Error("spawn %s on kept uid %d refused: its egress was not set at the guard: %v", req.ID, uid, err)
-		return protocol.CodeGuardUnavailable
+		return nil, protocol.CodeGuardUnavailable
 	}
 	s.mu.Lock()
 	s.keptMaps()
@@ -208,17 +208,11 @@ func (s *server) startKeptSpawn(req *protocol.Request, reach egress) string {
 	s.mu.Unlock()
 	lock.Unlock()
 
-	sp := &spawn{kept: true, account: acct, home: req.HomePath, retired: make(chan struct{})}
+	sp := &spawn{id: randomHex(16), kept: true, account: acct, home: req.HomePath, retired: make(chan struct{})}
 	s.madeIn(req.Place, sp)
-	if sp.id, err = randomHex(16); err != nil {
-		s.log.Error("spawn %s: %v", req.ID, err)
-		s.retire(sp, 0, false)
-		return protocol.CodeInternal
-	}
 	if code, err := s.launch(sp, req); err != nil {
 		s.log.Error("spawn %s on kept uid %d: %v", req.ID, uid, err)
-		s.retire(sp, 0, false)
-		return code
+		return sp, code
 	}
 	s.mu.Lock()
 	s.spawns[sp.id] = sp
@@ -226,7 +220,7 @@ func (s *server) startKeptSpawn(req *protocol.Request, reach egress) string {
 	s.log.Info("spawn %s: kept uid %d, leader pid %d", sp.id, uid, sp.leader.pid)
 	s.send(protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
 	go s.watchLeader(sp)
-	return ""
+	return sp, ""
 }
 
 // endInOrder ends a kept spawn's group in dependency order by deadline:
@@ -321,7 +315,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			}
 
 			if notify {
-				s.reportExitBeforeRemoval(sp)
+				s.reportExit(sp)
 			}
 			removed := s.removeSpawnGroup(sp)
 			s.mu.Lock()

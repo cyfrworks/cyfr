@@ -25,7 +25,7 @@
 //	{"v":3,"type":"placed","id":…}
 //	{"v":3,"type":"assigned","id":…}
 //	{"v":3,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
-//	{"v":3,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request)
+//	{"v":3,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
 //	{"v":3,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
 //	{"v":3,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
 //	{"v":3,"type":"released","spawn_id":…}
@@ -49,22 +49,25 @@
 // answered under that id alone, `assigned` once applied, or refused as
 // CodeBadRequest where the keeper holds no such place. A `spawn` names its
 // place, which no other spawn may name: one naming a place the keeper does
-// not hold, or one another spawn named, is refused as CodeBadRequest. A
-// spawn refused before the keeper began making it frees its place before
-// the refusal is sent; one refused after, as one whose command could not
-// be executed, frees it when its retirement has removed its group, as a
-// spawn that started frees it at its `released`. A group that cannot be
-// removed keeps its place, read and measured, and its removal is retried
-// once a second: only its success frees the place and, for a spawn that
-// started, sends its `released`.
+// not hold, or one another spawn named, is refused as CodeBadRequest. Only
+// the keeper frees a place a spawn named: a spawn refused before the keeper
+// made anything of it is refused under its `id` alone and frees its place
+// before the refusal is sent, and every other place is free at its spawn's
+// `released`. A spawn refused after the keeper made it, as one whose
+// command could not be executed, is refused under its `id` and the
+// `spawn_id` the keeper gave it, and gets no `exited` and one `released`
+// under that `spawn_id` once its cleanup is done and its place freed. A
+// group that cannot be removed keeps its place, read and measured, and its
+// removal is retried once a second: only its success frees the place and
+// sends its `released`.
 //
 // `exited` is sent at most once and always before `released`: when a spawn's
 // leader process is reaped or, where retirement's bounded wait for that ran
 // out and the counters hold a kill for memory, then, with SIGKILL. A leader
 // retirement stopped waiting for with no such kill has none. `released` is
 // sent once, when the spawn's uid has been retired and its group removed,
-// whether retirement followed a `release` or the leader's exit, and no exit
-// follows it.
+// whether retirement followed a `release`, the leader's exit or the spawn's
+// refusal, and no exit follows it.
 //
 // A spawn's `env` is the whole environment block its command receives
 // beside the variables the stage sets itself (PATH, HOME, USER, LOGNAME and
@@ -967,7 +970,9 @@ func NewSpawned(id, spawnID string, uid, pid int) Spawned {
 }
 
 // ErrorReply refuses the request named by ID (place, assign, spawn, pool,
-// home, measure) or SpawnID (signal, resize, release).
+// home, measure) or SpawnID (signal, resize, release). A spawn refused once
+// the keeper made it carries both: SpawnID is then the id its `released`
+// carries.
 type ErrorReply struct {
 	V       int    `json:"v"`
 	Type    string `json:"type"`
