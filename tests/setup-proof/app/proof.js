@@ -25,7 +25,24 @@ async function ask(what) {
   await waitFor(() => existsSync(path.join(FIXTURE, `done-${what}`)), `app.sh to ${what}`, 120_000)
 }
 
-const shown = (w) => js(w.webContents, `(() => {
+// What the chooser shows, read within 5 s: a read the page does not
+// answer is logged and counts as none, so no wait outlives its bound on a
+// page that stopped answering.
+const shown = (w) => Promise.race([read(w), lib.sleep(5000).then(() => { // sleep-ok: the bound of one read
+  const wc = w.webContents
+  lib.log(`no answer in 5 s from the chooser (crashed ${wc.isCrashed()}, loading ${wc.isLoading()}, at ${wc.getURL().split("#")[0]})`)
+  throw new Error("the chooser did not answer within 5 s")
+})])
+// A launch's steps and the main process's own pace, in its log: each step
+// as it begins, and any second main's loop was held past 1.5 s.
+const step = (what) => lib.log(`step: ${what}`)
+let beat = Date.now()
+setInterval(() => {
+  const now = Date.now()
+  if (now - beat > 1500) lib.log(`main's loop was held ${now - beat} ms`)
+  beat = now
+}, 1000).unref()
+const read = (w) => js(w.webContents, `(() => {
   const $ = (i) => document.querySelector("#" + i)
   return {docker: $("docker").textContent, commands: $("commands").hidden ? "" : $("commands").textContent,
     start: !$("start").hidden, folder: $("folder").textContent, progress: $("progress").hidden ? [] : $("progress").textContent.split("\\n"),
@@ -95,10 +112,16 @@ lib.run("setup", {
     await answered(w)
     await pick(w)
     const before = envHash()
+    step("Set up and start pressed")
     await press(w, "start")
-    await waitFor(async () => (await shown(w)).progress.length > 0 || null, "the setup's progress")
+    const first = await waitFor(async () => {
+      const s = await shown(w)
+      return s.progress.length > 0 ? s : null
+    }, "the setup's progress")
+    step(`the progress shown: ${JSON.stringify(first.progress.slice(1))}`)
     // The renderer lost mid-run: on a desktop nothing locks with no CYFR
     // open, so this is the one way a chooser is shown anew during a run.
+    step("the renderer crashed")
     w.webContents.forcefullyCrashRenderer()
     await judged("reshown", "the chooser shown again mid-run shows the setup's progress while its start is held, and once it is released and done offers Open CYFR, opening nothing by itself",
       async () => {
@@ -112,6 +135,7 @@ lib.run("setup", {
           const held = readFileSync("/tmp/docker-calls", "utf8").split("\n").some((l) => / up( |$)/.test(l)) && !existsSync("/tmp/up-go")
           return held && s?.progress.join("|") === `Setting up CYFR in ${FOLDER}|Starting CYFR…` ? s : null
         }, "the progress on the page shown again, with the start held")
+        step("the start released")
         writeFileSync("/tmp/up-go", "")
         const done = await waitFor(async () => {
           const s = await shown(c)

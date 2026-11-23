@@ -77,6 +77,7 @@ cleanup() {
   # it is stopped would otherwise never end for whoever reads that output.
   [ -z "${ANSWERER:-}" ] || kill "$ANSWERER" 2>/dev/null || true
   if [ -n "$CLIENT_ID" ]; then
+    timeout 30 docker exec "$CLIENT_ID" cat /tmp/docker-times >"$OUT/docker-calls.txt" 2>/dev/null || true
     timeout 60 docker rm -f "$CLIENT_ID" >/dev/null 2>&1 || left="$left the client container $CLIENT_ID;"
   fi
   for s in ${SCRUBS:-}; do kill "$s" 2>/dev/null || true; done
@@ -136,8 +137,11 @@ node "$ROOT/tests/desktop-proof/pack.mjs" "$ROOT/tests/setup-proof/app/proof.js"
 cat >"$W/fixture/wrap-docker" <<'WRAP'
 #!/bin/sh
 # Each call is logged; a pull is held until /tmp/pull-go, and says so if it
-# is released rather than ended; a start is held until /tmp/up-go.
+# is released rather than ended; a start is held until /tmp/up-go. Each
+# call is also timed in /tmp/docker-times, which the run keeps (its
+# arguments are paths and names alone).
 echo "$*" >>/tmp/docker-calls
+echo "$(date -u +%H:%M:%S.%3N) $*" >>/tmp/docker-times
 case " $* " in
   *" pull "*) while [ ! -e /tmp/pull-go ]; do sleep 0.2; done; echo "released $*" >>/tmp/docker-calls; exit 1;;
   *" up "*) while [ ! -e /tmp/up-go ]; do sleep 0.2; done;;
@@ -161,7 +165,7 @@ useradd -m -u $(id -u) proof; usermod -aG docker proof
 install -m 0644 $W/fixture/proof.asar /opt/cyfr/resources/app.asar
 mkdir -p /opt/wrap
 install -m 755 $W/fixture/wrap-docker /opt/wrap/docker
-: >/tmp/docker-calls; chmod 666 /tmp/docker-calls"
+: >/tmp/docker-calls; : >/tmp/docker-times; chmod 666 /tmp/docker-calls /tmp/docker-times"
 PG=$(docker exec "$CLIENT_ID" id -g proof)
 echo "client: $(docker exec "$CLIENT_ID" sh -c '. /etc/os-release; echo $PRETTY_NAME'), the app's account in the docker group ($GID), its process launched without it"
 
