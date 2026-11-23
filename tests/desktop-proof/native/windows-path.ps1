@@ -22,11 +22,19 @@ $ErrorActionPreference = "Stop"
 
 $resources = [IO.Path]::GetFullPath((Join-Path $AppDir "resources")).TrimEnd("\")
 $user = [Environment]::GetEnvironmentVariable("Path", "User")
-$same = { param($entry) try { [IO.Path]::GetFullPath($entry).TrimEnd("\") -ieq $resources } catch { $false } }
+# An entry is the folder's when it says it, or resolves to it; one that
+# cannot be resolved is compared as it is written, never taken as another's.
+$same = { param($entry)
+  if ($entry.TrimEnd("\") -ieq $resources) { return $true }
+  try { [IO.Path]::GetFullPath($entry).TrimEnd("\") -ieq $resources } catch { $false } }
 $entries = @(($user ?? "") -split ";" | Where-Object { $_ -and (& $same $_) })
 # A new terminal's PATH: the system's, then this account's.
 $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + $user
-$found = Get-Command cyfr -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+# Only "no such command" reads as absent; any other failure of the lookup
+# is a failure.
+$found = Get-Command cyfr -CommandType Application -ErrorAction SilentlyContinue -ErrorVariable lookup | Select-Object -First 1
+$failed = @($lookup | Where-Object { $_.FullyQualifiedErrorId -notlike "CommandNotFoundException*" })
+if ($failed.Count) { throw "looking cyfr up failed: $($failed[0])" }
 
 if ($Mode -eq "installed") {
   if ($entries.Count -ne 1) { throw "this account's PATH holds $($entries.Count) entries for $resources, not one: $user" }

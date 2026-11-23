@@ -2,10 +2,13 @@
 // Copyright 2026 CYFR Works Inc.
 
 import assert from "node:assert/strict"
+import {mkdtempSync, readFileSync, rmSync} from "node:fs"
+import {tmpdir} from "node:os"
+import path from "node:path"
 import {test} from "node:test"
 
 import {Refused} from "../scripts/check-package.mjs"
-import {APPLE, REHEARSAL, checkProfile, entitlements, ignoring, kindOf, signingInputs, tool, webauthnGroup, within} from "../scripts/mac-sign.mjs"
+import {APPLE, REHEARSAL, checkProfile, entitlements, ignoring, kindOf, signingInputs, tool, webauthnGroup} from "../scripts/mac-sign.mjs"
 
 const team = "AB12CD34EF"
 const der = Buffer.from([0x30, 0x82, 0x01, 0x00]).toString("base64")
@@ -126,12 +129,20 @@ test("each signed file is the kind its place makes it", () => {
 })
 
 // Each step that could wait on a person, or on Apple, ends in a sentence
-// within its bound instead of holding the release's job to its limit.
-test("a tool or a build that does not answer in its bound is refused, saying so", async () => {
-  assert.throws(() => tool("sleep", ["5"], 1), (e) => e instanceof Refused && e.message === "sleep 5 did not answer in 1 seconds")
+// within its bound, and what it started ends with it.
+test("a tool that outlives its bound is refused, and everything it started is stopped", {skip: process.platform === "win32"}, (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "cyfr-bound-"))
+  t.after(() => rmSync(dir, {recursive: true, force: true}))
+  const pid = path.join(dir, "pid")
+  const started = Date.now()
+  assert.throws(() => tool("sh", ["-c", `sleep 30 & echo $! > ${pid}; wait`], 1),
+    (e) => e instanceof Refused && e.message === "sh -c did not answer in 1 seconds")
+  assert.ok(Date.now() - started < 10000, "the bound held")
+  const grandchild = Number(readFileSync(pid, "utf8"))
+  assert.throws(() => process.kill(grandchild, 0), {code: "ESRCH"}, "the tool's own child was stopped with it")
   assert.equal(tool("true", []).ok, true)
-  await assert.rejects(within(new Promise(() => {}), 0.001, "the notary"), (e) => e instanceof Refused && e.message === "the notary did not finish in 0.001 minutes")
-  assert.equal(await within(Promise.resolve("done"), 1, "the build"), "done")
+  assert.deepEqual(tool("sh", ["-c", "echo said; exit 3"]), {ok: false, status: 3, out: "said\n", err: ""})
+  assert.throws(() => tool("cyfr-no-such-tool", []), (e) => e instanceof Refused && /could not be run/.test(e.message))
 })
 
 // Electron's signing skips the cyfr the recipe signed first, and what

@@ -11,7 +11,8 @@
 // APPLE_SIGNING_IDENTITY names it, APPLE_TEAM_ID is its team), embeds
 // APPLE_PROVISIONING_PROFILE (a base64 Developer ID .provisionprofile),
 // which authorises the app's WebAuthn keychain group TEAM.run.cyfr.desktop.webauthn,
-// and notarises with APPLE_ID and its app-specific APPLE_PASSWORD. A
+// and is to notarise with APPLE_ID and its app-specific APPLE_PASSWORD
+// (notarize below, refused until that is settled). A
 // rehearsal (--rehearse) takes the same inputs under CYFR_REHEARSAL_*
 // names, for a self-made identity and profile, notarises nothing, and is
 // refused when any APPLE_* input is in its environment, so one build never
@@ -37,7 +38,7 @@
 
 import {spawnSync} from "node:child_process"
 import {createHash} from "node:crypto"
-import {lstatSync, mkdtempSync, openSync, readFileSync, readSync, closeSync, readdirSync, rmSync, writeFileSync} from "node:fs"
+import {closeSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, writeFileSync} from "node:fs"
 import {createRequire} from "node:module"
 import {tmpdir} from "node:os"
 import path from "node:path"
@@ -186,36 +187,45 @@ export function signer(files, verified, signed) {
   }
 }
 
+// A tool's bound: the tool runs as the leader of a process group of its
+// own, and when it has not ended in SECONDS the whole group is killed, so
+// nothing it started outlives its bound. Exit 142 says the bound ran out.
+const BOUND = `
+my $seconds = shift @ARGV;
+my $pid = fork;
+die "cannot fork\\n" unless defined $pid;
+if ($pid == 0) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV; exit 127 }
+setpgrp($pid, $pid);
+local $SIG{ALRM} = sub { kill "KILL", -$pid; waitpid($pid, 0); exit 142 };
+alarm $seconds;
+waitpid($pid, 0);
+alarm 0;
+kill "KILL", -$pid;
+exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+`
+
 /**
- * Run a macOS tool that could wait on a person (a keychain's prompt, a
- * mounted image, Apple's servers): {ok, out, err}, or Refused when it has
- * not answered in `seconds`.
+ * Run a tool that could wait on a person (a keychain's prompt, a mounted
+ * image, Apple's servers) within `seconds`: {ok, out, err}, its output as
+ * the tool gave it, for reading; Refused when the bound ran out, the tool
+ * and everything it started then killed. `options` may give its standard
+ * input (`input`) and environment (`env`).
  */
-export function tool(cmd, args, seconds = 120) {
-  const r = spawnSync(cmd, args, {encoding: "utf8", timeout: seconds * 1000, killSignal: "SIGKILL"})
-  if (r.error?.code === "ETIMEDOUT") throw new Refused(`${cmd} ${args[0]} did not answer in ${seconds} seconds`)
+export function tool(cmd, args, seconds = 120, {input, env} = {}) {
+  const r = spawnSync("perl", ["-e", BOUND, String(seconds), cmd, ...args],
+    {encoding: "utf8", input, env, maxBuffer: 64 * 1024 * 1024})
   if (r.error) throw r.error
-  return {ok: r.status === 0, out: r.stdout, err: r.stderr}
+  if (r.status === 142) throw new Refused(`${cmd} ${args[0] ?? ""} did not answer in ${seconds} seconds`.replace(/ +$/, ""))
+  if (r.status === 127 && !r.stdout && !r.stderr) throw new Refused(`${cmd} could not be run`)
+  return {ok: r.status === 0, status: r.status, out: r.stdout, err: r.stderr}
 }
 
-// A tool's run that must succeed, or Refused saying `what`.
-function must(cmd, args, what, seconds) {
-  const r = tool(cmd, args, seconds)
-  if (!r.ok) throw new Refused(`${what}: ${(r.err || r.out).trim()}`)
+// A tool's run that must succeed, or Refused saying `what` and the tool's
+// own words, which the refusal hides as it hides every input.
+export function must(cmd, args, what, seconds, options) {
+  const r = tool(cmd, args, seconds, options)
+  if (!r.ok) throw new Refused(`${what}: ${(r.err || r.out || `exit ${r.status}`).trim()}`)
   return r
-}
-
-/**
- * The promise `work`, or Refused saying `what` when it has not settled in
- * `minutes`: electron-builder's build and Apple's notary run in this
- * process, where a timer is their bound.
- */
-export function within(work, minutes, what) {
-  let timer
-  const bound = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Refused(`${what} did not finish in ${minutes} minutes`)), minutes * 60000)
-  })
-  return Promise.race([work, bound]).finally(() => clearTimeout(timer))
 }
 
 /** The decoded property list of a provisioning profile's bytes (macOS). */
@@ -223,56 +233,93 @@ export function decodeProfile(bytes) {
   const dir = mkdtempSync(path.join(tmpdir(), "cyfr-profile-"))
   try {
     writeFileSync(path.join(dir, "p"), bytes)
-    return plist.parse(must("security", ["cms", "-D", "-i", path.join(dir, "p")], "the provisioning profile does not decode").out)
+    const shown = must("security", ["cms", "-D", "-i", path.join(dir, "p")], "the provisioning profile does not decode").out
+    try {
+      return plist.parse(shown)
+    } catch {
+      throw new Refused("the provisioning profile does not decode to a property list")
+    }
   } finally {
     rmSync(dir, {recursive: true, force: true})
   }
 }
 
-const MACHO = new Set(["feedface", "feedfacf", "cefaedfe", "cffaedfe", "cafebabe", "bebafeca"])
-function isMachO(file) {
+// Every Mach-O header there is: thin 32- and 64-bit and fat 32- and 64-bit,
+// each in both byte orders.
+const MACHO = new Set(["feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"])
+// The data a signed Electron app holds, by kind: Electron's resources
+// (.pak, .dat, .bin, .asar, .icns, .json, .nib, .plist, PkgInfo), and a
+// signature's own files.
+const DATA = /\.(pak|dat|bin|asar|icns|json|nib|plist)$/
+const DATA_NAMES = new Set(["PkgInfo", "embedded.provisionprofile"])
+
+function head(file) {
   const fd = openSync(file, "r")
   try {
-    const head = Buffer.alloc(4)
-    return readSync(fd, head, 0, 4, 0) === 4 && MACHO.has(head.toString("hex"))
+    const bytes = Buffer.alloc(4)
+    return readSync(fd, bytes, 0, 4, 0) === 4 ? bytes.toString("hex") : ""
   } finally {
     closeSync(fd)
   }
 }
 
-/** The app, its nested bundles and Mach-O files, inner first; no link is followed. */
-export function signedCode(app) {
-  const out = []
+/**
+ * Every file of the app at `app`, each of a kind: {code, data, links}.
+ * Code is every Mach-O file, its bundles (.app, .framework) and the app,
+ * inner first; data is a file of a kind DATA names, or a signature's
+ * _CodeSignature/CodeResources; a link is one whose target stays inside
+ * the app. Anything else is refused, so no file passes by default.
+ */
+export function classify(app) {
+  const root = realpathSync(app)
+  const out = {code: [], data: [], links: []}
   const walk = (at) => {
     for (const name of readdirSync(at)) {
       const p = path.join(at, name)
       const st = lstatSync(p)
-      if (st.isSymbolicLink()) continue
-      if (st.isDirectory()) {
+      const shown = path.relative(path.dirname(app), p)
+      if (st.isSymbolicLink()) {
+        let target
+        try { target = realpathSync(p) } catch { throw new Refused(`${shown} is a link to nothing`) }
+        const inside = path.relative(root, target)
+        if (inside.startsWith("..") || path.isAbsolute(inside)) throw new Refused(`${shown} is a link out of the app`)
+        out.links.push(p)
+      } else if (st.isDirectory()) {
         walk(p)
-        if (/\.(app|framework)$/.test(name)) out.push(p)
-      } else if (isMachO(p)) out.push(p)
+        if (/\.(app|framework)$/.test(name)) out.code.push(p)
+      } else if (!st.isFile()) {
+        throw new Refused(`${shown} is neither a file, a folder nor a link`)
+      } else if (MACHO.has(head(p))) {
+        out.code.push(p)
+      } else if (DATA.test(name) || DATA_NAMES.has(name) || (name === "CodeResources" && path.basename(at) === "_CodeSignature")) {
+        out.data.push(p)
+      } else {
+        throw new Refused(`${shown} is of no kind a signed CYFR.app holds`)
+      }
     }
   }
   walk(app)
-  out.push(app)
+  out.code.push(app)
   return out
 }
+
+/** The app's code, inner first: classify(app).code. */
+export const signedCode = (app) => classify(app).code
 
 const codesign = (args) => tool("codesign", args)
 const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex")
 
-
 /**
- * Check a signed CYFR.app at `app`: it embeds the supplied profile, which
- * checkProfile passes for the team and group and which lists the app's
- * signing certificate; each signature verifies strictly, is by that
- * certificate, hardened and timestamped, with exactly its kind's
- * entitlements; the bundled cyfr is the one the build signed, whose
- * SHA-256 is `helper`.
- * Throws Refused naming the first difference.
+ * Check a signed CYFR.app at `app`: every file is of a known kind; it
+ * embeds the supplied profile, which checkProfile passes for the team and
+ * group and which lists the app's signing certificate; each signature
+ * verifies strictly, is by that certificate, hardened and timestamped,
+ * with exactly its kind's entitlements as read; the bundled cyfr is the
+ * one the build signed, whose SHA-256 is `helper`. Throws Refused naming
+ * the first difference.
  */
 export function checkApp(app, {helper, team, group, profile}) {
+  const code = signedCode(app)
   must("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], "CYFR.app's signature does not verify")
   const embedded = path.join(app, "Contents", "embedded.provisionprofile")
   let bytes
@@ -288,13 +335,13 @@ export function checkApp(app, {helper, team, group, profile}) {
     const signer = (file) => {
       const prefix = path.join(dir, `c${read++}.`)
       must("codesign", ["-d", `--extract-certificates=${prefix}`, file], `${path.basename(file)}'s certificate was not read`)
-      return readFileSync(`${prefix}0`)
+      try { return readFileSync(`${prefix}0`) } catch { throw new Refused(`${path.basename(file)} carries no certificate`) }
     }
     const leaf = signer(app)
     if (!(decoded.DeveloperCertificates ?? []).some((c) => Buffer.from(c).equals(leaf))) {
       throw new Refused("the provisioning profile does not list CYFR.app's signing certificate")
     }
-    for (const file of signedCode(app)) checkSignature(app, file, leaf, signer, want)
+    for (const file of code) checkSignature(app, file, leaf, signer, want)
     if (!helper) throw new Refused("the build did not sign the bundled cyfr")
     if (sha256(path.join(app, "Contents", "Resources", "cyfr")) !== helper) {
       throw new Refused("CYFR.app/Contents/Resources/cyfr is not the cyfr the build signed")
@@ -306,7 +353,9 @@ export function checkApp(app, {helper, team, group, profile}) {
 
 // One signed file of the app: signed by the app's certificate (`leaf`;
 // `signer` reads a file's), hardened, timestamped, with exactly the
-// entitlements of its kind.
+// entitlements of its kind. An entitlement read that failed or that is not
+// a property list refuses the app; only a read that succeeded with nothing
+// to say means none.
 function checkSignature(app, file, leaf, signer, want) {
   const name = path.relative(path.dirname(app), file)
   const shown = codesign(["-d", "--verbose=2", file])
@@ -315,7 +364,16 @@ function checkSignature(app, file, leaf, signer, want) {
   if (!/^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime[^)]*\)/m.test(shown.err)) throw new Refused(`${name} lacks the hardened runtime`)
   if (!/^Timestamp=/m.test(shown.err)) throw new Refused(`${name} has no secure timestamp`)
   const listed = codesign(["-d", "--entitlements", "-", "--xml", file])
-  const got = listed.out.trim() ? plist.parse(listed.out) : {}
+  if (!listed.ok) throw new Refused(`${name}'s entitlements were not read (exit ${listed.status})`)
+  let got = {}
+  if (listed.out.trim()) {
+    try {
+      got = plist.parse(listed.out)
+    } catch {
+      got = null
+    }
+    if (!got || typeof got !== "object" || Array.isArray(got)) throw new Refused(`${name}'s entitlements are not a property list`)
+  }
   if (JSON.stringify(sorted(got)) !== JSON.stringify(sorted(want[kindOf(app, file)]))) {
     throw new Refused(`${name} has entitlements other than its own`)
   }
@@ -330,7 +388,8 @@ function sorted(value) {
 /**
  * Check the built DMG (or the app) at `file`: signed, and its CYFR.app as
  * checkApp checks it; unless `rehearsed`, both notarised with the ticket
- * stapled and accepted by Gatekeeper. Throws Refused.
+ * stapled and accepted by Gatekeeper. The image is detached again, and a
+ * detach that failed refuses too. Throws Refused.
  */
 export function checkDmg(file, expect, {rehearsed = false} = {}) {
   const release = (app) => {
@@ -347,18 +406,26 @@ export function checkDmg(file, expect, {rehearsed = false} = {}) {
   }
   const mount = mkdtempSync(path.join(tmpdir(), "cyfr-dmg-"))
   must("hdiutil", ["attach", "-nobrowse", "-readonly", "-mountpoint", mount, file], "the DMG does not mount", 300)
+  let failed = null
   try {
     release(path.join(mount, "CYFR.app"))
-  } finally {
-    tool("hdiutil", ["detach", mount], 120)
-    rmSync(mount, {recursive: true, force: true})
+  } catch (e) {
+    failed = e
   }
+  const detached = tool("hdiutil", ["detach", mount], 120)
+  if (detached.ok) rmSync(mount, {recursive: true, force: true})
+  if (failed) throw failed
+  if (!detached.ok) throw new Refused(`the DMG stays mounted at ${mount}: ${(detached.err || detached.out).trim()}`)
 }
 
-/** Notarise the signed DMG at `dmg` and staple its ticket. */
-export async function notarizeDmg(dmg, inputs) {
-  const {notarize} = need("@electron/notarize")
-  await notarize({appPath: dmg, appleId: inputs.appleId, appleIdPassword: inputs.applePassword, teamId: inputs.team})
+/**
+ * Notarise the signed app or DMG at `file` and staple its ticket. Refused
+ * until the way Apple's notary takes the account's password without a
+ * command line is settled: notarytool documents only --password and its
+ * own prompt for it.
+ */
+export function notarize(file) {
+  throw new Refused(`${path.basename(file)} was not notarised: how the notary takes the account's credentials is not settled`)
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
