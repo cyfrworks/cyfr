@@ -756,7 +756,8 @@ defmodule Locus.Runtime.HostClient do
   as it completes, and nothing more is read until `sink` answers: `:ok`
   reads on, and `:halt` stops and closes the connection. Any other `200`
   answer is CYFR's refusal, read whole within
-  `Prima.HostAPI.max_answer_bytes/0` and handed over once. The chunk
+  `Prima.HostAPI.max_answer_bytes/0` and handed over once, and a `sink`
+  that halts it halts the answer as it halts a frame. The chunk
   frames' body bytes (`Prima.WorkerAuth.frame_body_bytes/1`) are bounded
   by `max_response_size`, and every wait by `deadline`, in milliseconds
   since the epoch.
@@ -933,8 +934,10 @@ defmodule Locus.Runtime.HostClient do
   end
 
   defp on_attached_done(state, {:answered, 200, false}) do
-    _ = state.sink.({:refusal, state.header, state.buffer})
-    :ok
+    case state.sink.({:refusal, state.header, state.buffer}) do
+      :ok -> :ok
+      :halt -> :halted
+    end
   end
 
   defp on_attached_done(_state, {:answered, _status, _frames?}), do: {:error, "lost"}
@@ -970,11 +973,19 @@ defmodule Locus.Runtime.HostClient do
   the bound keeps its status, with none of its body: the status is what a
   refusal says. The worker service posts every host call with it, its
   runners' as their relay hands them over and its own.
+
+  `:room`, a function of the bytes an answer may hold, is asked once, as
+  the answer's first piece is read and before it is kept, for the whole
+  answer: the length it declares, or the answer bound when it declares
+  none or more. `:ok` keeps it; `:full` stops the read and closes the
+  connection, and the answer is then one that did not arrive, as an
+  answer past the bound is. An answer with no body asks for nothing.
   """
-  @spec post_call(String.t(), atom(), String.t(), binary()) ::
-          {:ok, 100..599, binary()} | :error
-  def post_call(host_url, op, header, body)
-      when is_binary(host_url) and is_binary(header) and is_binary(body) do
+  @spec post_call(String.t(), atom(), String.t(), binary(), [
+          {:room, (pos_integer() -> :ok | :full)}
+        ]) :: {:ok, 100..599, binary()} | :error
+  def post_call(host_url, op, header, body, opts \\ [])
+      when is_binary(host_url) and is_binary(header) and is_binary(body) and is_list(opts) do
     max = HostAPI.max_answer_bytes()
 
     request = [
@@ -988,19 +999,63 @@ defmodule Locus.Runtime.HostClient do
       redirect: false,
       compressed: false,
       decode_body: false,
-      into: BoundedBody.collector(max)
+      into: collector(max, Keyword.get(opts, :room))
     ]
 
     case Req.request(request) do
       {:ok, %Req.Response{status: status} = response} ->
-        case BoundedBody.read(response, max) do
-          {:ok, raw} -> {:ok, status, raw}
-          {:error, {:response_too_large, _seen, _max}} when status != 200 -> {:ok, status, ""}
-          {:error, {:response_too_large, _seen, _max}} -> :error
+        case {Req.Response.get_private(response, :room), BoundedBody.read(response, max)} do
+          {:full, _read} when status != 200 ->
+            {:ok, status, ""}
+
+          {:full, _read} ->
+            :error
+
+          {_room, {:ok, raw}} ->
+            {:ok, status, raw}
+
+          {_room, {:error, {:response_too_large, _seen, _max}}} when status != 200 ->
+            {:ok, status, ""}
+
+          {_room, {:error, {:response_too_large, _seen, _max}}} ->
+            :error
         end
 
       _ ->
         :error
+    end
+  end
+
+  defp collector(max, nil), do: BoundedBody.collector(max)
+
+  # The room is asked for the whole answer at once, never piece by piece:
+  # answers that each held part of the room while waiting for the rest
+  # could hold all of it, and none would finish.
+  defp collector(max, room) when is_function(room, 1) do
+    collect = BoundedBody.collector(max)
+
+    fn {:data, data}, {req, resp} ->
+      case Req.Response.get_private(resp, :room) do
+        :ok ->
+          collect.({:data, data}, {req, resp})
+
+        nil ->
+          case room.(declared(resp, max)) do
+            :ok -> collect.({:data, data}, {req, Req.Response.put_private(resp, :room, :ok)})
+            :full -> {:halt, {req, Req.Response.put_private(resp, :room, :full)}}
+          end
+      end
+    end
+  end
+
+  # The most an answer may hold: the length it declares, or the answer
+  # bound, past which nothing of it is kept.
+  defp declared(resp, max) do
+    with [length] <- Req.Response.get_header(resp, "content-length"),
+         {bytes, ""} when bytes in 1..max//1 <- Integer.parse(length) do
+      bytes
+    else
+      _ -> max
     end
   end
 

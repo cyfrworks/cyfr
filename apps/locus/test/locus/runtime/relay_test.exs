@@ -67,7 +67,7 @@ defmodule Locus.Runtime.RelayTest do
     {:ok, host: host}
   end
 
-  defp attempt!(host, opts \\ []) do
+  def attempt!(host, opts \\ []) do
     edge = Keyword.get(opts, :edge, EdgeFixtures.edge(domains: ["api.test"], methods: ["GET"]))
     limits = Keyword.get(opts, :limits, EdgeFixtures.limits())
 
@@ -78,7 +78,7 @@ defmodule Locus.Runtime.RelayTest do
     )
   end
 
-  defp upstream! do
+  def upstream! do
     server =
       start_supervised!(
         {Bandit, plug: {Upstream, self()}, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
@@ -160,7 +160,7 @@ defmodule Locus.Runtime.RelayTest do
   # A fetch's events to its end, and why it ended; each chunk is granted
   # back as it is read, as a runner's handlers grant it, unless `grant` is
   # false: a runner that reads nothing.
-  defp events(endpoint, ref, grant \\ true, acc \\ []) do
+  def events(endpoint, ref, grant \\ true, acc \\ []) do
     receive do
       {Endpoint, ^ref, {:end, error}} ->
         {Enum.reverse(acc), error}
@@ -175,7 +175,7 @@ defmodule Locus.Runtime.RelayTest do
     end
   end
 
-  defp body_of(events) do
+  def body_of(events) do
     Enum.map_join(events, fn
       {:head, _status, _headers, body} -> body
       {:chunk, body} -> body
@@ -946,7 +946,7 @@ defmodule Locus.Runtime.RelayTest do
 
   describe "attached fetches" do
     # A guest's request naming a connection, as the runner's handler builds it.
-    defp attached(url \\ "http://api.test/v1/x", opts \\ []) do
+    def attached(url \\ "http://api.test/v1/x", opts \\ []) do
       %AttachedRequest{
         call_id: AttachedRequest.call_id(:crypto.strong_rand_bytes(16)),
         connection: "api_key",
@@ -958,7 +958,7 @@ defmodule Locus.Runtime.RelayTest do
       }
     end
 
-    defp attached_fetch(attempt, request) do
+    def attached_fetch(attempt, request) do
       Endpoint.attached_fetch(attempt.endpoint, attempt.attempt, request, %{
         call: attempt.keys.call,
         seal: attempt.keys.seal
@@ -1224,6 +1224,119 @@ defmodule Locus.Runtime.RelayTest do
     end
   end
 
+  test "a frame is written a chunk at a time at most, and the runner reads it whole", %{
+    host: host
+  } do
+    answer = String.duplicate("a", 600_000)
+    ScriptedHost.script(host, "tool_call", {:ok, answer})
+    attempt = attempt!(host)
+    relay = service_end!(host, attempt)
+    runner = RunnerRelay.new(:runner, attempt.attempt)
+    args = %{"name" => "t", "args" => %{}, "guest_fn" => "call"}
+    {bytes, runner} = frame_bytes(runner, signed_call(attempt, :tool_call, args))
+    Locus.Runtime.Relay.deliver(relay, bytes)
+
+    read = fn read, parts ->
+      assert_receive {:to_runner, part}, 10_000
+      parts = parts ++ [part]
+
+      case RunnerRelay.decode(runner, Enum.join(parts)) do
+        {:ok, [], _rest, _channel} -> read.(read, parts)
+        {:ok, frames, "", _channel} -> {parts, frames}
+      end
+    end
+
+    {parts, [%{kind: :host_answer, status: 200, body: body}]} = read.(read, [])
+    assert byte_size(body) > 262_144
+    assert Enum.all?(parts, &(byte_size(&1) <= 262_144)), inspect(Enum.map(parts, &byte_size/1))
+  end
+
+  test "a frame of a body holds no more beside it than the runtime's count asks for it" do
+    # The longest the channel carries: an attempt id of 256 characters,
+    # each one escaped in a frame, and sequence numbers of 16 digits.
+    attempt = String.duplicate(~s("), 256)
+    far = 9_007_199_254_740_980
+    runner = %{RunnerRelay.new(:runner, attempt) | sent: far}
+    service = %{RunnerRelay.new(:service, attempt) | received: far, sent: far}
+    call_id = fn -> AttachedRequest.call_id(:crypto.strong_rand_bytes(16)) end
+
+    attached = %{
+      kind: :fetch,
+      attempt: attempt,
+      connection: "api_key",
+      purpose: "fetch",
+      method: "GET",
+      url: "https://api.test/x",
+      headers: [],
+      body: ""
+    }
+
+    {sent, _runner} =
+      Enum.map_reduce(
+        [
+          %{kind: :host_call, attempt: attempt, op: :renew, header: "v1 x", body: "b"},
+          %{
+            kind: :fetch,
+            attempt: attempt,
+            pin: "pin_x",
+            method: "GET",
+            path: "/",
+            headers: [],
+            body: ""
+          },
+          Map.put(attached, :call_id, call_id.()),
+          Map.put(attached, :call_id, call_id.())
+        ],
+        runner,
+        &frame_bytes(&2, &1)
+      )
+
+    assert {:ok, [_call, _fetch, _attached, _refused], "", service} =
+             RunnerRelay.decode(service, Enum.join(sent))
+
+    header = String.duplicate("x", WorkerAuth.max_host_call_header_bytes())
+    body = :crypto.strong_rand_bytes(262_144)
+    frame = :crypto.strong_rand_bytes(WorkerAuth.max_frame_bytes())
+
+    # A fetch's head comes before its body, and is not counted.
+    {_head, service} =
+      frame_bytes(service, %{
+        kind: :fetch_chunk,
+        attempt: attempt,
+        re: far + 1,
+        status: 200,
+        headers: [],
+        body: ""
+      })
+
+    written =
+      [
+        {%{kind: :host_answer, attempt: attempt, re: far, status: 599, body: body}, body, 0},
+        {%{
+           kind: :fetch_chunk,
+           attempt: attempt,
+           re: far + 1,
+           status: nil,
+           headers: nil,
+           body: body
+         }, body, 0},
+        {%{kind: :attached_frame, attempt: attempt, re: far + 2, frame: frame}, frame, 0},
+        {%{kind: :attached_refusal, attempt: attempt, re: far + 3, header: header, body: body},
+         body, 2 * byte_size(header)}
+      ]
+      |> Enum.map_reduce(service, fn {frame, held, over}, service ->
+        {bytes, service} = frame_bytes(service, frame)
+        asked = Locus.Runtime.Relay.held(byte_size(held), 1) - byte_size(held) + over
+        {{frame.kind, byte_size(bytes), asked}, service}
+      end)
+      |> elem(0)
+
+    for {kind, bytes, asked} <- written do
+      assert bytes <= asked,
+             "a #{kind} frame of #{bytes} bytes, #{asked} asked for beside its body"
+    end
+  end
+
   defp iv, do: :crypto.strong_rand_bytes(12)
 
   # A sealed value with one bit of its tag changed.
@@ -1249,7 +1362,7 @@ defmodule Locus.Runtime.RelayTest do
 
   # An upstream answering one request with `size` bytes, telling the test
   # when its connection is closed under it.
-  defp big_upstream!(size) do
+  def big_upstream!(size) do
     {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
     {:ok, port} = :inet.port(listen)
     test = self()
@@ -1282,7 +1395,7 @@ defmodule Locus.Runtime.RelayTest do
   end
 
   # Read a fetch to its end, granting back each chunk as it is read.
-  defp read_granting(endpoint, ref, total) do
+  def read_granting(endpoint, ref, total) do
     receive do
       {Endpoint, ^ref, {:head, 200, _headers, body}} ->
         Endpoint.credit(endpoint, ref, byte_size(body))
@@ -1296,6 +1409,379 @@ defmodule Locus.Runtime.RelayTest do
         total
     after
       10_000 -> flunk("the fetch stalled after #{total} bytes")
+    end
+  end
+end
+
+defmodule Locus.Runtime.RelayCountTest do
+  @moduledoc """
+  What a runner's relay holds to answer or send its runner is counted
+  under the runtime's count (`Locus.Output.server(:runtime)`), which these
+  tests fill or read whole, so they run alone. A pinned fetch's piece and
+  an attached fetch's frame are asked for before they are handed on and
+  given back once written; a host call's answer is asked for whole as its
+  reading begins and freed once written. No room by the deadline ends a fetch `timeout`
+  with nothing of the piece or frame handed on, and makes a host call's
+  answer one that did not arrive, under the call's retry class. A worker
+  or a poster killed while it holds frees what it held. Once the relay
+  says a piece or an answer is written it holds none of it.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Prima.Test.Wait
+
+  alias Prima.{Assignment, WorkerAuth}
+  alias Locus.Runtime.{Egress, HostClient, Relay, RelayTest}
+  alias Locus.Runtime.Relay.Runner, as: Endpoint
+  alias Locus.Runtime.Test.{EdgeFixtures, ScriptedHost, ScriptedKeeper}
+
+  @count Locus.Output.server(:runtime)
+
+  setup do
+    host = ScriptedHost.start!()
+    ScriptedHost.pins(host, %{"api.test" => "127.0.0.1"})
+    {:ok, host: host}
+  end
+
+  defp answering, do: Locus.Output.held(@count).answering
+
+  # The whole bound, held by the test: nothing else holds any of it.
+  defp fill! do
+    assert %{answering: 0, waiting: 0} = Locus.Output.held(@count)
+    bound = Locus.Output.bounds().runtime.answering
+
+    assert {:ok, grant} =
+             Locus.Output.reserve(@count, bound, System.monotonic_time(:millisecond) + 5_000)
+
+    grant
+  end
+
+  # The processes beside the relay that hold what it is given: its posters
+  # and its fetches' workers, linked to it.
+  defp holders(relay) do
+    {:links, links} = Process.info(relay, :links)
+    {:parent, parent} = Process.info(relay, :parent)
+    links -- [parent]
+  end
+
+  # The bytes of the host's sealed answer `answer` to one of `attempt`'s
+  # calls, as the scripted host seals it: a seal's length is its
+  # plaintext's, whatever call it is sealed to.
+  defp sealed_bytes(attempt, answer) do
+    {:ok, assignment} = Assignment.read(attempt.assignment)
+
+    fields =
+      Map.merge(attempt.keys.attempt, %{
+        boot: attempt.boot,
+        runner: attempt.runner,
+        member: assignment.member,
+        ts: System.system_time(:millisecond),
+        nonce: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+      })
+
+    json = Jason.encode!(ScriptedHost.encode(answer))
+    {:ok, sealed} = WorkerAuth.seal_call(attempt.keys.seal, :answer, fields, json)
+    byte_size(sealed)
+  end
+
+  # Whether the relay holds a binary of `bytes` or more.
+  defp holds?(relay, bytes) do
+    {:binary, binaries} = Process.info(relay, :binary)
+    Enum.any?(binaries, fn {_id, size, _refs} -> size >= bytes end)
+  end
+
+  # `attempt` routed through a relay joined in this VM, as
+  # `ScriptedKeeper.relayed!/2` routes one, whose service end holds its
+  # first write of `gate` bytes or more as a keeper's write that has not
+  # returned: the test hears `{:writing, relay, bytes}` and lets it go
+  # with `:go`.
+  defp gated!(attempt, gate) do
+    test = self()
+    {:ok, assignment} = Assignment.read(attempt.assignment)
+    forwarder = spawn_link(fn -> forward(nil) end)
+    endpoint = start_supervised!({Endpoint, relay: {:peer, forwarder}}, id: make_ref())
+
+    write = fn data ->
+      bytes = IO.iodata_to_binary(data)
+
+      if byte_size(bytes) >= gate and Process.get({__MODULE__, :gated}) == nil do
+        Process.put({__MODULE__, :gated}, true)
+        send(test, {:writing, self(), bytes})
+
+        receive do
+          :go -> :ok
+        end
+      end
+
+      send(endpoint, {:relay_in, bytes})
+      :ok
+    end
+
+    relay = start_supervised!({Relay, runner: attempt.runner, write: write}, id: make_ref())
+    send(forwarder, {:to, relay})
+
+    :ok =
+      Relay.bind(relay, %{
+        assignment: attempt.assignment,
+        keys: attempt.keys,
+        host_url: assignment.host_url || "http://127.0.0.1:9"
+      })
+
+    :ok = Endpoint.bind(endpoint, attempt.attempt)
+
+    client =
+      HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
+        member: assignment.member,
+        relay: endpoint
+      })
+
+    Map.merge(attempt, %{client: client, relay: relay, endpoint: endpoint})
+  end
+
+  defp forward(nil) do
+    receive do
+      {:to, relay} -> forward(relay)
+    end
+  end
+
+  defp forward(relay) do
+    receive do
+      {:relay_in, data} ->
+        Relay.deliver(relay, data)
+        forward(relay)
+    end
+  end
+
+  defp pinned_fetch!(attempt, port, path) do
+    assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}#{path}")
+
+    assert {:ok, ref} =
+             Endpoint.fetch(
+               attempt.endpoint,
+               attempt.attempt,
+               pinned.target.id,
+               "GET",
+               path,
+               [],
+               ""
+             )
+
+    ref
+  end
+
+  describe "a pinned fetch's piece" do
+    test "waits for room, and none by the deadline ends the fetch timeout with nothing of it handed on",
+         %{host: host} do
+      port = RelayTest.upstream!()
+      attempt = RelayTest.attempt!(host, timeout_ms: 1_500) |> ScriptedKeeper.relayed!()
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/body")
+      full = fill!()
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/body",
+                 [],
+                 ""
+               )
+
+      assert {[{:head, 200, _headers, ""}], "timeout"} = RelayTest.events(attempt.endpoint, ref)
+
+      Locus.Output.return(full)
+
+      wait_until(fn ->
+        Locus.Output.held(@count) |> Map.take([:answering, :waiting]) == %{
+          answering: 0,
+          waiting: 0
+        }
+      end)
+    end
+
+    test "is counted until the relay has written it, then given back, and the relay keeps none of it",
+         %{host: host} do
+      size = 3 * 262_144 + 12_345
+      {port, _server} = RelayTest.big_upstream!(size)
+
+      attempt =
+        RelayTest.attempt!(host, limits: EdgeFixtures.limits(max_response_size: 2 * size))
+        |> gated!(65_536)
+
+      baseline = answering()
+      ref = pinned_fetch!(attempt, port, "/big")
+
+      assert_receive {:writing, relay, base64}, 10_000
+      assert answering() > baseline
+      assert answering() - baseline >= Relay.held(byte_size(Base.decode64!(base64)), 1)
+
+      send(relay, :go)
+      assert RelayTest.read_granting(attempt.endpoint, ref, 0) == size
+      wait_until(fn -> answering() == baseline end)
+      refute holds?(relay, 65_536)
+    end
+
+    test "held by a worker killed while it waits is freed", %{host: host} do
+      size = 3 * 262_144
+      {port, _server} = RelayTest.big_upstream!(size)
+
+      attempt =
+        RelayTest.attempt!(host, limits: EdgeFixtures.limits(max_response_size: 2 * size))
+        |> gated!(65_536)
+
+      baseline = answering()
+      ref = pinned_fetch!(attempt, port, "/big")
+
+      assert_receive {:writing, relay, _base64}, 10_000
+      assert answering() > baseline
+      assert [worker] = holders(relay)
+      Process.exit(worker, :kill)
+      wait_until(fn -> answering() == baseline end)
+
+      send(relay, :go)
+      assert {_events, "fetch_failed"} = RelayTest.events(attempt.endpoint, ref)
+    end
+  end
+
+  describe "an attached fetch's frame" do
+    test "waits for room, and none by the deadline ends the fetch timeout with nothing of it handed on",
+         %{host: host} do
+      attempt = RelayTest.attempt!(host, timeout_ms: 1_500) |> ScriptedKeeper.relayed!()
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}, {:chunk, "x"}, :end]}
+      )
+
+      full = fill!()
+      assert {:ok, ref} = RelayTest.attached_fetch(attempt, RelayTest.attached())
+      assert {[], "timeout"} = RelayTest.events(attempt.endpoint, ref)
+
+      Locus.Output.return(full)
+
+      wait_until(fn ->
+        Locus.Output.held(@count) |> Map.take([:answering, :waiting]) == %{
+          answering: 0,
+          waiting: 0
+        }
+      end)
+    end
+
+    test "is counted until the relay has written it, then given back, and the relay keeps none of it",
+         %{host: host} do
+      piece = String.duplicate("z", WorkerAuth.max_chunk_bytes())
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}, {:chunk, piece}, {:chunk, piece}, :end]}
+      )
+
+      attempt = RelayTest.attempt!(host) |> gated!(40_000)
+      baseline = answering()
+      assert {:ok, ref} = RelayTest.attached_fetch(attempt, RelayTest.attached())
+
+      assert_receive {:writing, relay, base64}, 10_000
+      assert answering() > baseline
+      assert answering() - baseline == Relay.held(byte_size(Base.decode64!(base64)), 1)
+
+      send(relay, :go)
+      assert {events, nil} = RelayTest.events(attempt.endpoint, ref)
+      assert RelayTest.body_of(events) == piece <> piece
+      wait_until(fn -> answering() == baseline end)
+      refute holds?(relay, 40_000)
+    end
+  end
+
+  describe "a host call's answer" do
+    test "waits for room, whole, as its reading begins, and none by the call's own deadline is an answer that did not arrive, under the call's retry class",
+         %{host: host} do
+      attempt = RelayTest.attempt!(host) |> ScriptedKeeper.relayed!()
+      full = fill!()
+
+      never = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+      idempotent = Task.async(fn -> HostClient.renew(attempt.client, [attempt.attempt]) end)
+
+      # A call whose effect may have happened is never asked again.
+      assert {:error, {:uncertain, _sentence}} =
+               Task.await(never, Prima.HostAPI.request_timeout_ms(:tool_call) + 10_000)
+
+      assert [_once] = ScriptedHost.requests(host, "tool_call")
+
+      # An idempotent one is asked once more, and answered once there is
+      # room: the count stays full until it has been asked again.
+      wait_until(fn -> length(ScriptedHost.requests(host, "renew")) == 2 end, 10_000)
+      Locus.Output.return(full)
+
+      assert {:ok, _renewals} =
+               Task.await(idempotent, Prima.HostAPI.request_timeout_ms(:renew) + 10_000)
+
+      assert [_first, _second] = ScriptedHost.requests(host, "renew")
+    end
+
+    test "is counted until the relay has written it, then freed as its poster exits, and the relay keeps none of it",
+         %{host: host} do
+      answer = String.duplicate("a", 600_000)
+      ScriptedHost.script(host, "tool_call", {:ok, answer})
+      attempt = RelayTest.attempt!(host) |> gated!(65_536)
+      baseline = answering()
+      call = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+
+      assert_receive {:writing, relay, _base64}, 10_000
+      assert answering() > baseline
+      assert answering() - baseline == Relay.held(sealed_bytes(attempt, {:ok, answer}), 1)
+      assert [poster] = holders(relay)
+      monitor = Process.monitor(poster)
+
+      send(relay, :go)
+      assert {:ok, ^answer} = Task.await(call)
+      assert_receive {:DOWN, ^monitor, :process, ^poster, :normal}, 5_000
+      wait_until(fn -> answering() == baseline end)
+      refute holds?(relay, 65_536)
+    end
+
+    test "held by a poster killed while it waits is freed, and the answer it handed over still reaches the runner",
+         %{host: host} do
+      answer = String.duplicate("a", 600_000)
+      ScriptedHost.script(host, "tool_call", {:ok, answer})
+      attempt = RelayTest.attempt!(host) |> gated!(65_536)
+      baseline = answering()
+      call = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+
+      assert_receive {:writing, relay, _base64}, 10_000
+      assert answering() > baseline
+      assert [poster] = holders(relay)
+      Process.exit(poster, :kill)
+      wait_until(fn -> answering() == baseline end)
+
+      send(relay, :go)
+      assert {:ok, ^answer} = Task.await(call)
+    end
+
+    test "answers asking together for several times the count are each answered once, one after another",
+         %{host: host} do
+      # Each answer, sealed, is most of the largest a host call's may be:
+      # the count holds one of them at a time.
+      answer = String.duplicate("a", 3_300_000)
+      ScriptedHost.script(host, "tool_call", {:ok, answer})
+      attempt = RelayTest.attempt!(host) |> ScriptedKeeper.relayed!()
+
+      calls =
+        for _n <- 1..6,
+            do: Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+
+      for call <- calls, do: assert({:ok, ^answer} = Task.await(call, 30_000))
+      assert length(ScriptedHost.requests(host, "tool_call")) == 6
+
+      wait_until(fn ->
+        Locus.Output.held(@count) |> Map.take([:answering, :waiting]) == %{
+          answering: 0,
+          waiting: 0
+        }
+      end)
     end
   end
 end
