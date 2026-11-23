@@ -493,7 +493,7 @@ func TestUninstallSaysWhatIsGoneWhenAStepFails(t *testing.T) {
 
 // Its root steps take the machine's one order. An account outside the sudo
 // and admin groups is refused before anything is shown or asked, with the
-// screen's and the link's commands as one sudo line for whoever
+// screen's, the app's and the link's commands as one sudo line for whoever
 // administers the machine; a refused password, asked after the question
 // and before the stack stops, changes nothing; an accepted one comes after
 // the sentence, once, before every root command. The sentence names Ubuntu
@@ -503,14 +503,14 @@ func TestUninstallChecksTheAccountAndThePasswordFirst(t *testing.T) {
 	t.Run("outside the groups", func(t *testing.T) {
 		s := newUninstallScenario(t)
 		screenInstalled = func() bool { return true }
-		s.notAdministrator = true
+		s.notAdministrator, s.app = true, true
 		before := listing(t, s.dir)
 		out, err := s.run(true)
 		if err == nil || err.Error() != "Nothing was changed. Run `cyfr uninstall` again once they have" {
 			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
 		}
 		want := "Your account, " + currentAccount(t) + ", is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:\n" +
-			"  sudo sh -c " + shellQuote([]string{strings.Join(append(slices.Clone(screenOffCommands), linkRemoval()), " &&\n    ")}) + "\n"
+			"  sudo sh -c " + shellQuote([]string{strings.Join(append(slices.Clone(screenOffCommands), appRemoval, linkRemoval()), " &&\n    ")}) + "\n"
 		if out != want {
 			t.Errorf("cyfr uninstall printed:\n%s\nwant:\n%s", out, want)
 		}
