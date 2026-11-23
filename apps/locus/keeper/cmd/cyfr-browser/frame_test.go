@@ -59,16 +59,21 @@ type frameVectors struct {
 	} `json:"input"`
 	Person struct {
 		Accept []struct {
-			Name           string   `json:"name"`
-			Person         person   `json:"person"`
-			Argv           []string `json:"argv"`
-			AcceptLanguage string   `json:"accept_language"`
-			Languages      []string `json:"languages"`
+			Name      string            `json:"name"`
+			Person    map[string]string `json:"person"`
+			Argv      []string          `json:"argv"`
+			Switches  []string          `json:"switches"`
+			TZ        string            `json:"tz"`
+			Languages []string          `json:"languages"`
 		} `json:"accept"`
 		Refuse []struct {
 			Name   string          `json:"name"`
 			Person json.RawMessage `json:"person"`
 		} `json:"refuse"`
+		RefuseValues []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"refuse_values"`
 	} `json:"person"`
 }
 
@@ -284,12 +289,14 @@ func TestInputVectors(t *testing.T) {
 }
 
 // The driver is started with its person as the vectors spell it: each
-// accepted argv reads as its person, whose Accept-Language and languages
-// are the vectors'; no argument is Chrome's own; and each refused person
-// is refused, so the driver does not start.
+// accepted argv reads as its person, who gives Chrome the vectors'
+// switches, its process the vectors' TZ, and its pages exactly the
+// language reported, nothing added; no argument is Chrome's own; and each
+// refused person and refused value is refused, so the driver does not
+// start and Chrome never judges it.
 func TestPersonVectors(t *testing.T) {
 	v := loadFrameVectors(t)
-	if len(v.Person.Accept) == 0 || len(v.Person.Refuse) == 0 {
+	if len(v.Person.Accept) == 0 || len(v.Person.Refuse) == 0 || len(v.Person.RefuseValues) == 0 {
 		t.Fatal("the vectors hold no person")
 	}
 	for _, c := range v.Person.Accept {
@@ -301,16 +308,28 @@ func TestPersonVectors(t *testing.T) {
 			value = c.Argv[1]
 		}
 		got, err := readPerson(value)
-		if err != nil || got != c.Person {
-			t.Errorf("%s: %q read as %+v (%v), want %+v", c.Name, value, got, err, c.Person)
+		if err != nil || got != (person{Locale: c.Person["locale"], TimeZone: c.Person["time_zone"]}) {
+			t.Errorf("%s: %q read as %+v (%v), want %v", c.Name, value, got, err, c.Person)
 		}
-		if languages := got.languages(); !slices.Equal(languages, c.Languages) && !(languages == nil && len(c.Languages) == 0) {
-			t.Errorf("%s: languages %q, want %q", c.Name, languages, c.Languages)
+		tz := ""
+		if env := got.env(); len(env) == 1 {
+			tz = strings.TrimPrefix(env[0], "TZ=")
+		}
+		if switches := got.switches(); !slices.Equal(switches, c.Switches) && !(switches == nil && len(c.Switches) == 0) || tz != c.TZ {
+			t.Errorf("%s: Chrome is given %q and TZ %q, want %q and %q", c.Name, switches, tz, c.Switches, c.TZ)
+		}
+		if languages := []string{got.Locale}; got.Locale != "" && !slices.Equal(languages, c.Languages) {
+			t.Errorf("%s: the languages read %q, want %q", c.Name, languages, c.Languages)
 		}
 	}
 	for _, c := range v.Person.Refuse {
 		if got, err := readPerson(string(c.Person)); err == nil {
 			t.Errorf("%s: %s was read as %+v", c.Name, c.Person, got)
+		}
+	}
+	for _, c := range v.Person.RefuseValues {
+		if got, err := readPerson(c.Value); err == nil {
+			t.Errorf("%s: %q was read as %+v", c.Name, c.Value, got)
 		}
 	}
 }

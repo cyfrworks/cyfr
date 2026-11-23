@@ -427,6 +427,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(start max_to_host max_to_driver max_response put encode decode messages person)},
       {"apps/cyfr/test/opus/browser/input_test.exs", ~w(input input_in_flight)},
       {"apps/cyfr/test/opus/browser_test.exs", ~w(plain_entry messages person)},
+      {"apps/cyfr/test/aqua/reading_test.exs", ~w(person)},
       {"apps/cyfr/assets/test/workspace_stream/stream.test.mjs", ~w(input input_in_flight)},
       {"apps/locus/keeper/cmd/cyfr-browser/frame_test.go",
        ~w(start max_to_host max_to_driver max_response input_in_flight put call messages encode decode input person)},

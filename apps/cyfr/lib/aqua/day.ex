@@ -7,11 +7,12 @@ defmodule Aqua.Day do
 
   The day is the person's own: the date now in their time zone, which the
   browser reports when the shell connects and the shell stores as
-  `time_zone` in their preferences when it differs from what is stored
-  (`Sanctum.Tenancy.Users.put_prefs/2`, `PrismWeb.ShellLive`). `UTC` until
-  one arrives, and for a stored zone the zone database does not know.
-  `today/1` reads that preference for the day, and `stored_zone/1` for
-  Aqua's browser, which reads pages in it (`Aqua.BrowserSetting.start/1`).
+  `time_zone` in their preferences, with their language, when either
+  differs from what is stored (`Aqua.Reading`, `PrismWeb.ShellLive`). `UTC`
+  until one arrives, and for a stored zone the zone database does not
+  know. `today/1` reads that preference for the day, and `stored_zone/1`
+  for Aqua's browser, which reads pages in it
+  (`Aqua.BrowserSetting.start/1`).
 
   The current daily thread is the one whose `day` is that date, made if
   none exists (`Arca.ThreadStorage.daily/2`); nothing else about the day is
@@ -27,12 +28,13 @@ defmodule Aqua.Day do
   Elixir knows UTC alone, and a zone's date cannot be read without its
   rules, which change with the clocks; a schedule fires while no browser is
   open. So the day is read with the `tz` package's database (Apache-2.0),
-  handed to the calendar call as its argument. This module is its one
-  user: the node's own `:time_zone_database` is not set, so nothing else
-  in CYFR reads zones by accident. Its data is what the package compiled
-  in; none of its updaters is started, so nothing fetches zone data at run
-  time. A zone it does not know is refused where the shell writes it
-  (`put_zone/2`), and one stored that it cannot resolve reads as UTC.
+  handed to the calendar call as its argument. This module and the one
+  definition of a zone (`Opus.Browser.zone?/1`) are its users: the node's
+  own `:time_zone_database` is not set, so nothing else in CYFR reads
+  zones by accident. Its data is what the package compiled in; none of its
+  updaters is started, so nothing fetches zone data at run time. A zone it
+  does not know is refused where the shell writes it (`Aqua.Reading`), and
+  one stored that it cannot resolve reads as UTC.
   """
 
   alias Sanctum.Context
@@ -45,14 +47,11 @@ defmodule Aqua.Day do
   def default_zone, do: @utc
 
   @doc """
-  Whether `zone` is a zone the day can be read in: a name of the zone
-  database's, in the grammar the browser's report is held to
-  (`Prima.TinctureWire.time_zone?/1`).
+  Whether `zone` is a zone the day can be read in: CYFR's one definition
+  of a zone, which Aqua's browser holds too (`Opus.Browser.zone?/1`).
   """
   @spec zone?(term()) :: boolean()
-  def zone?(zone) do
-    Prima.TinctureWire.time_zone?(zone) and match?({:ok, _}, now_in(zone))
-  end
+  defdelegate zone?(zone), to: Opus.Browser
 
   @doc """
   The zone stored in `prefs`, a person's preferences, when the day can be
@@ -84,27 +83,6 @@ defmodule Aqua.Day do
   def current(%Context{} = ctx),
     do: Arca.ThreadStorage.daily(Context.actor(ctx), today(ctx))
 
-  @doc """
-  Store `zone` as the person's when it is a zone the day can be read in
-  and differs from the stored one. The preference is read fresh and only
-  its own key is patched, so the person's other preferences stand. An
-  unknown zone stores nothing.
-  """
-  @spec put_zone(String.t(), term()) :: :ok | {:error, term()}
-  def put_zone(user_id, zone) when is_binary(user_id) do
-    if zone?(zone), do: keep_zone(user_id, zone), else: {:error, :invalid_zone}
-  end
-
-  defp keep_zone(user_id, zone) do
-    with {:ok, user} <- Users.get(user_id) do
-      if Users.prefs(user)["time_zone"] == zone do
-        :ok
-      else
-        with {:ok, _user} <- Users.put_prefs(user, %{"time_zone" => zone}), do: :ok
-      end
-    end
-  end
-
   defp zone_of(user_id) when is_binary(user_id) do
     with {:ok, user} <- Users.get(user_id),
          zone when is_binary(zone) <- Users.prefs(user)["time_zone"] do
@@ -116,6 +94,5 @@ defmodule Aqua.Day do
 
   defp zone_of(_no_person), do: @utc
 
-  defp now_in(zone) when is_binary(zone), do: DateTime.now(zone, Tz.TimeZoneDatabase)
-  defp now_in(_zone), do: {:error, :time_zone_not_found}
+  defp now_in(zone), do: DateTime.now(zone, Tz.TimeZoneDatabase)
 end

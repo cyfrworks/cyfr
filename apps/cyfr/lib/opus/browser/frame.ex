@@ -38,13 +38,46 @@ defmodule Opus.Browser.Frame do
   """
   @type person :: %{optional(String.t()) => String.t()}
 
+  @max_language 35
+
+  @doc """
+  Whether `tag` is a language the browser may read pages in, the one
+  definition CYFR holds a person's language to where it is stored and
+  where the driver's argument is built (the vectors' `person`, which the
+  driver holds to the same): a well-formed tag, a primary subtag of 2 or
+  3 letters, then subtags of 1 to 8 letters and digits joined by hyphens,
+  a one-character subtag never last, at most 35 bytes.
+  """
+  @spec language?(term()) :: boolean()
+  def language?(tag) when is_binary(tag) and byte_size(tag) <= @max_language do
+    [primary | rest] = String.split(tag, "-")
+
+    Regex.match?(~r/\A[A-Za-z]{2,3}\z/, primary) and
+      Enum.all?(rest, &Regex.match?(~r/\A[A-Za-z0-9]{1,8}\z/, &1)) and
+      (rest == [] or byte_size(List.last(rest)) > 1)
+  end
+
+  def language?(_tag), do: false
+
+  @doc """
+  Whether `zone` is a time zone the browser may read pages in, and a
+  person's day may be read in, the one definition of a zone CYFR holds:
+  one the zone database (`tz`) has, in the grammar the browser's report is
+  held to (`Prima.TinctureWire.time_zone?/1`). Chrome would read a zone it
+  does not know as UTC, so the driver holds a zone to its own database too.
+  """
+  @spec zone?(term()) :: boolean()
+  def zone?(zone),
+    do:
+      Prima.TinctureWire.time_zone?(zone) and
+        match?({:ok, _}, DateTime.now(zone, Tz.TimeZoneDatabase))
+
   @doc """
   The driver's arguments for `person`, a map of `"locale"` and
   `"time_zone"` (the vectors' `person`): none with neither, else
   `--person` and the two as one JSON object; `:invalid_person` for a key
-  besides the two or a value out of the grammar CYFR holds the browser's
-  report to (`Prima.TinctureWire.locale?/1`, `time_zone?/1`), so nothing
-  out of it reaches Chrome.
+  besides the two or a value `language?/1` or `zone?/1` refuses, so
+  nothing out of them reaches the driver.
   """
   @spec start_args(person()) :: {:ok, [String.t()]} | {:error, :invalid_person}
   def start_args(person) when person == %{}, do: {:ok, []}
@@ -52,8 +85,8 @@ defmodule Opus.Browser.Frame do
   def start_args(%{} = person) do
     valid? =
       Enum.all?(person, fn
-        {"locale", tag} -> Prima.TinctureWire.locale?(tag)
-        {"time_zone", zone} -> Prima.TinctureWire.time_zone?(zone)
+        {"locale", tag} -> language?(tag)
+        {"time_zone", zone} -> zone?(zone)
         _other -> false
       end)
 

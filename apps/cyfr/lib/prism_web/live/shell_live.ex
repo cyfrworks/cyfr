@@ -477,13 +477,11 @@ defmodule PrismWeb.ShellLive do
         params = get_connect_params(socket) || %{}
 
         # The browser's zone reads the person's day (`Aqua.Day`), and with
-        # its language, the pages Aqua's browser shows (`Aqua.Language`):
-        # each kept when it reads and differs from the stored one. A refused
-        # one leaves the stored one standing.
-        if Prima.PersonId.person?(ctx.user_id) do
-          Aqua.put_time_zone(ctx.user_id, params["time_zone"])
-          Aqua.put_locale(ctx.user_id, params["locale"])
-        end
+        # its language, the pages Aqua's browser shows: one write of both,
+        # each kept when it reads and differs from the stored one
+        # (`Aqua.Reading`). A refused one leaves the stored one standing.
+        if Prima.PersonId.person?(ctx.user_id),
+          do: Aqua.put_reading(ctx.user_id, Map.take(params, ["time_zone", "locale"]))
 
         socket
         |> assign(:covered, covered_at?(params["_path"]))

@@ -183,20 +183,12 @@ defmodule Aqua do
   defdelegate thread_state(thread_id, athanor_id), to: Aqua.Runner, as: :state
 
   @doc """
-  Keep `zone`, the time zone the person's browser reported, as theirs when
-  the day can be read in it and it differs from the stored one
-  (`Aqua.Day.put_zone/2`).
+  Keep the person's browser's report of their time zone and language, a
+  map that may hold `"time_zone"` and `"locale"`, as theirs, in one write
+  of what reads and differs (`Aqua.Reading.put/2`).
   """
-  @spec put_time_zone(String.t(), term()) :: :ok | {:error, term()}
-  defdelegate put_time_zone(user_id, zone), to: Aqua.Day, as: :put_zone
-
-  @doc """
-  Keep `locale`, the language the person's browser reported, as theirs
-  when it is a language tag and differs from the stored one
-  (`Aqua.Language.put/2`).
-  """
-  @spec put_locale(String.t(), term()) :: :ok | {:error, term()}
-  defdelegate put_locale(user_id, locale), to: Aqua.Language, as: :put
+  @spec put_reading(String.t(), map()) :: :ok | {:error, term()}
+  defdelegate put_reading(user_id, report), to: Aqua.Reading, as: :put
 
   @doc """
   The date now in the person's own time zone (`Aqua.Day.today/1`): which

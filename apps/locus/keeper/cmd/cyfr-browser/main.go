@@ -250,13 +250,18 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 	args := append([]string{"--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
 		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900",
 		"--disable-blink-features=AutomationControlled"}, quiet...)
+	args = append(args, b.person.switches()...)
 	cmd := exec.Command(path, append(args, logging...)...)
 	// Chrome runs in its home with its temporary folder named relative to
 	// it (chromeTemp), so the socket that locks its profile has a short path
 	// whatever the home's.
 	cmd.Dir = home
-	cmd.Env = append(without(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "TMPDIR"),
+	// The person's zone is Chrome's process's TZ, and only Chrome's: the
+	// driver's own environment, which a row of the browser never sets, holds
+	// none (person.go).
+	cmd.Env = append(without(without(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "TMPDIR"), "TZ"),
 		"DBUS_SESSION_BUS_ADDRESS=disabled:", "TMPDIR="+chromeTmp)
+	cmd.Env = append(cmd.Env, b.person.env()...)
 	// Chrome reads its commands on fd 3 and writes its answers on fd 4. Its
 	// standard streams are the null device, so nothing it prints reaches
 	// the terminal. A process group of its own keeps the terminal's hangup
@@ -298,13 +303,6 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 	if b.agent, err = ownAgent(ctx, b.c, v.UserAgent); err != nil {
 		p.kill()
 		return nil, fmt.Errorf("Chrome did not say how it names itself (%v)", err)
-	}
-	if err := b.person.check(ctx, b.c); err != nil {
-		p.kill()
-		return nil, fmt.Errorf("Chrome refused the person's language or time zone (%v)", err)
-	}
-	if languages := b.person.languages(); languages != nil {
-		b.agent["acceptLanguage"] = strings.Join(languages, ",")
 	}
 	return p, nil
 }

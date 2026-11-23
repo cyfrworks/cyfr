@@ -72,12 +72,14 @@ container starts:
   network log records them. None says Headless: the shell names itself as
   the Chromium it is, its own brands without HeadlessChrome at its own
   version, and navigator.webdriver reads false. Started with its person
-  (the vector file's person), the page and its dedicated worker read the
-  person's time zone, a Date's offset in it, their locale and language as
-  navigator.language and navigator.languages, the public request carries
-  that language as its Accept-Language, and an ordinary font and a colour
-  emoji render; a session started with no person reads Chrome's own
-  en-US and UTC.
+  (the vector file's person, ja-JP and Asia/Tokyo), the page, a frame of
+  it, a dedicated worker, a worker that worker made and a shared worker,
+  in the first window and the later one, read the person's language as
+  navigator.language and navigator.languages exactly as reported, their
+  zone and locale in Intl, a Date's offset in the zone and how a date is
+  formatted, and each one's public request carries that language as its
+  Accept-Language; an ordinary font and a colour emoji render; a session
+  started with no person reads Chrome's own en-US and UTC.
 - A browser's start removes the Chrome the driver once fetched into its
   home and leaves the profile as it was.
 - A cookie a page set three seconds before the browser's session ended
@@ -875,29 +877,45 @@ FULL_CHROME_PAGE = "cyfr-restore-fixture"
 
 
 # A page that reads what a site reads of the browser's kind and titles itself with it.
-# A page that reads what a site reads of the browser: its kind; its language and time zone, its own and a dedicated
-# worker's; and whether an ordinary font and a colour emoji render, each against a face no font has.
-KIND_PAGE = ("<title>reading</title><script>(async () => { const d = navigator.userAgentData;"
-             " const high = d ? await d.getHighEntropyValues(['fullVersionList']) : null;"
-             " const width = font => { const x = document.createElement('canvas').getContext('2d');"
-             " x.font = '32px ' + font; return x.measureText('Hamburgefonstiv 0123').width };"
-             " const coloured = () => { const c = document.createElement('canvas'); c.width = c.height = 48;"
-             " const x = c.getContext('2d'); x.font = '32px \"Noto Color Emoji\"'; x.textBaseline = 'top';"
-             " x.fillText('\\u{1F600}', 0, 0); const p = x.getImageData(0, 0, 48, 48).data;"
-             " for (let i = 0; i < p.length; i += 4) if (p[i + 3] > 0 && (Math.abs(p[i] - p[i + 1]) > 40"
-             " || Math.abs(p[i + 1] - p[i + 2]) > 40)) return true; return false };"
-             " const read = 'postMessage({language: navigator.language, languages: navigator.languages,"
-             " timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone})';"
-             " const worker = await new Promise(r => { const w = new Worker(URL.createObjectURL(new Blob([read],"
-             " {type: 'text/javascript'}))); w.onmessage = e => r(e.data); w.onerror = () => r('error') });"
-             " document.title = 'kind ' + JSON.stringify({ua: navigator.userAgent, webdriver: navigator.webdriver,"
-             " brands: d ? d.brands : null, fullVersionList: high ? high.fullVersionList : null,"
-             " timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,"
-             " locale: Intl.DateTimeFormat().resolvedOptions().locale,"
-             " offset: new Date(Date.UTC(2026, 0, 15, 12)).getTimezoneOffset(),"
-             " language: navigator.language, languages: navigator.languages, worker,"
-             " dejavu: width('\"DejaVu Sans\", monospace') !== width('\"No Such Face\", monospace'),"
-             " emoji: coloured()}); })();</script>")
+# A page that reads what a site reads of the browser: its kind; on each surface, the page, a frame of it, a dedicated
+# worker, a worker that worker made, and a shared worker, the language as navigator.language and navigator.languages,
+# Intl's zone and locale, a Date's offset and how it formats a date, each surface sending a public request marked
+# kind-<surface>-<token> whose headers Chrome's network log shows, when it is shown as the put named kind, the one a
+# session that may reach the public network shows; and whether an ordinary font and a colour emoji
+# render, each against a face no font has. A service worker is not among them: a put page's registration is refused.
+KIND_PAGE = r"""<title>reading</title><body><script>(async () => {
+const token = Math.random().toString(36).slice(2);
+const READ = `({language: navigator.language, languages: [...navigator.languages],
+  timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: Intl.DateTimeFormat().resolvedOptions().locale,
+  date: new Date(Date.UTC(2026, 0, 15, 12)).toLocaleString(), offset: new Date(Date.UTC(2026, 0, 15, 12)).getTimezoneOffset()})`;
+const send = surface => location.pathname.endsWith('/local/kind') ?
+  `fetch('https://example.com/?kind-${surface}-${token}', {mode: 'no-cors'}).catch(() => {});` : '';
+const blob = source => URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
+const bounded = p => Promise.race([p, new Promise(r => setTimeout(() => r('timeout'), 8000))]);
+const nested = send('nested') + `postMessage(${READ})`;
+const dedicated = send('dedicated') + `const n = new Worker(${JSON.stringify(blob(nested))});
+  n.onmessage = e => postMessage({own: ${READ}, nested: e.data}); n.onerror = () => postMessage({own: ${READ}, nested: 'error'})`;
+const sharedSource = `onconnect = e => { ${send('shared')} e.ports[0].postMessage(${READ}) }`;
+const worker = await bounded(new Promise(r => { const w = new Worker(blob(dedicated)); w.onmessage = e => r(e.data); w.onerror = () => r('error') }));
+const shared = await bounded(new Promise(r => { const w = new SharedWorker(blob(sharedSource)); w.port.onmessage = e => r(e.data); w.onerror = () => r('error') }));
+const frame = await bounded(new Promise(r => {
+  addEventListener('message', function on(e) { if (e.data && e.data.frame) { removeEventListener('message', on); r(e.data.frame) } });
+  const f = document.createElement('iframe'); f.srcdoc = `<script>${send('frame')} parent.postMessage({frame: ${READ}}, '*')<\/script>`;
+  document.body.append(f) }));
+eval(send('page'));
+const width = font => { const x = document.createElement('canvas').getContext('2d'); x.font = '32px ' + font;
+  return x.measureText('Hamburgefonstiv 0123').width };
+const coloured = () => { const c = document.createElement('canvas'); c.width = c.height = 48; const x = c.getContext('2d');
+  x.font = '32px "Noto Color Emoji"'; x.textBaseline = 'top'; x.fillText('\u{1F600}', 0, 0);
+  const p = x.getImageData(0, 0, 48, 48).data;
+  for (let i = 0; i < p.length; i += 4) if (p[i + 3] > 0 && (Math.abs(p[i] - p[i + 1]) > 40 || Math.abs(p[i + 1] - p[i + 2]) > 40)) return true;
+  return false };
+const d = navigator.userAgentData; const high = d ? await d.getHighEntropyValues(['fullVersionList']) : null;
+document.title = 'kind ' + JSON.stringify(Object.assign(eval(READ), {ua: navigator.userAgent, webdriver: navigator.webdriver,
+  brands: d ? d.brands : null, fullVersionList: high ? high.fullVersionList : null, token,
+  frame, worker: worker && worker.own, nested: worker && worker.nested, shared,
+  dejavu: width('"DejaVu Sans", monospace') !== width('"No Such Face", monospace'), emoji: coloured()}));
+})();</script>"""
 
 
 def request_headers(text, marker):
@@ -921,8 +939,10 @@ def request_headers(text, marker):
     return sent
 
 
-# Asia/Tokyo, the vectors' person's zone, is nine hours ahead of UTC all year: getTimezoneOffset reads -540.
+# Asia/Tokyo, the vectors' person's zone, is nine hours ahead of UTC all year: getTimezoneOffset reads -540, and noon
+# UTC on 15 January 2026 formats in ja-JP as Tokyo's nine in the evening.
 PERSON_OFFSET = -540
+PERSON_DATE = "2026/1/15 21:00:00"
 
 
 def browser_kind(stack, c, uid):
@@ -962,17 +982,22 @@ def browser_kind(stack, c, uid):
         expect(offline or all(names[0] in request.get("sec-ch-ua", "") and '"Chromium"' in request["sec-ch-ua"]
                               for request in sent[win]),
                f"the public request from {win} carries the same brands in Sec-CH-UA", sent)
-    person = PERSON["person"]
+    person, tag = PERSON["person"], PERSON["person"]["locale"]
+    wanted = {"language": tag, "languages": PERSON["languages"], "timeZone": person["time_zone"], "locale": tag,
+              "date": PERSON_DATE, "offset": PERSON_OFFSET}
     for win, seen_by_page in read.items():
-        expect(seen_by_page["timeZone"] == person["time_zone"] and seen_by_page["offset"] == PERSON_OFFSET
-               and seen_by_page["locale"] == person["locale"],
-               f"the page in {win} reads the person's time zone, a Date's offset in it and their locale", seen_by_page)
-        expect(seen_by_page["language"] == PERSON["languages"][0] and seen_by_page["languages"] == PERSON["languages"],
-               f"the page in {win} reads the person's language as navigator.language and navigator.languages",
-               seen_by_page)
-        expect(isinstance(seen_by_page["worker"], dict) and seen_by_page["worker"]["languages"] == PERSON["languages"]
-               and seen_by_page["worker"]["timeZone"] == person["time_zone"],
-               f"a dedicated worker of the page in {win} reads the same language and time zone", seen_by_page)
+        for surface in ("page", "frame", "worker", "nested", "shared"):
+            reading = seen_by_page if surface == "page" else seen_by_page[surface]
+            expect(isinstance(reading, dict) and {k: reading.get(k) for k in wanted} == wanted,
+                   f"the {surface} of the page in {win} reads the person's language as navigator.language and "
+                   "navigator.languages, exactly as reported, their zone and locale in Intl, a Date's offset and how "
+                   "it formats a date", [surface, reading, wanted])
+            marked = [] if offline else request_headers(text, f"?kind-{'dedicated' if surface == 'worker' else surface}-"
+                                                              f"{seen_by_page['token']}")
+            expect(offline or (marked and all(request.get("accept-language") == PERSON["accept_language"]
+                                              for request in marked)),
+                   f"the public request of the {surface} of the page in {win} carries the person's language, exactly "
+                   "as reported, as its Accept-Language", [surface, marked])
         expect(seen_by_page["dejavu"] is True and seen_by_page["emoji"] is True,
                f"the page in {win} renders an ordinary font and a colour emoji", seen_by_page)
         expect(offline or all(request.get("accept-language") == PERSON["accept_language"] for request in sent[win]),
@@ -1040,7 +1065,8 @@ def pages(stack, c, uid):
     ok(p.put_html(next(ids), "thr_own", KIND_PAGE, "own"), "a page that reads the browser's language is put")
     own = json.loads(titled(p, "thr_own", "kind ", ids, seen))
     expect(own["language"] == "en-US" and own["languages"] == ["en-US"] and own["timeZone"] in ("UTC", "Etc/UTC")
-           and own["offset"] == 0, "with no person, the page reads Chrome's own language and UTC", own)
+           and own["offset"] == 0 and own["locale"] == "en-US",
+           "with no person, the page reads Chrome's own language, its locale in Intl and UTC", own)
 
     # A page of one file loads the same way.
     shown = ok(p.put_html(next(ids), "thr_one", ONE_PAGE, "one"), "a page of one file is put")

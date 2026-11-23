@@ -290,6 +290,14 @@ defmodule Opus.Browser do
   """
   @type start :: (-> {:ok, Frame.person()} | term())
 
+  @doc "Whether `tag` is a language the browser may read pages in (`Opus.Browser.Frame.language?/1`)."
+  @spec language?(term()) :: boolean()
+  defdelegate language?(tag), to: Frame
+
+  @doc "Whether `zone` is a time zone the browser may read pages in (`Opus.Browser.Frame.zone?/1`)."
+  @spec zone?(term()) :: boolean()
+  defdelegate zone?(zone), to: Frame
+
   @doc """
   Run `op` (`ops/0`) with `args` in the window of the caller's thread:
   the caller is a turn as `Opus.Programs.turn/2` names one, proved here.

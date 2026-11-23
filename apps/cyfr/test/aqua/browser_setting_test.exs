@@ -62,10 +62,10 @@ defmodule Aqua.BrowserSettingTest do
     # A person who has never opened a screen: Chrome's own.
     assert {:ok, %{}} == BrowserSetting.start(ctx)
 
-    assert :ok = Aqua.put_locale(ctx.user_id, "de-DE")
+    assert :ok = Aqua.put_reading(ctx.user_id, %{"locale" => "de-DE"})
     assert {:ok, %{"locale" => "de-DE"}} == BrowserSetting.start(ctx)
 
-    assert :ok = Aqua.put_time_zone(ctx.user_id, "Asia/Kolkata")
+    assert :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => "Asia/Kolkata"})
 
     assert {:ok, %{"locale" => "de-DE", "time_zone" => "Asia/Kolkata"}} ==
              BrowserSetting.start(ctx)
@@ -109,14 +109,16 @@ defmodule Aqua.BrowserSettingTest do
 
   # Every writer of the preferences takes the one locked read and write
   # (`Sanctum.Tenancy.Users.put_prefs/2`), the zone the daily thread is read
-  # in among them (`Aqua.put_time_zone/2`).
+  # in among them (`Aqua.put_reading/2`).
   test "a zone write and a browser-setting write made in the same instant both land", %{ctx: ctx} do
     for round <- 1..20 do
       on = rem(round, 2) == 0
       zone = if on, do: "Europe/Lisbon", else: "Asia/Tokyo"
 
       writers = [
-        Task.async(fn -> receive(do: (:go -> Aqua.put_time_zone(ctx.user_id, zone))) end),
+        Task.async(fn ->
+          receive(do: (:go -> Aqua.put_reading(ctx.user_id, %{"time_zone" => zone})))
+        end),
         Task.async(fn -> receive(do: (:go -> BrowserSetting.put(ctx, on))) end)
       ]
 

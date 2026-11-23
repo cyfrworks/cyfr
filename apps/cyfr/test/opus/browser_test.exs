@@ -643,8 +643,8 @@ defmodule Opus.BrowserTest do
       [%{"person" => %{"locale" => locale, "time_zone" => zone}, "argv" => argv} | _] =
         (@vectors |> File.read!() |> Jason.decode!())["person"]["accept"]
 
-      assert :ok = Aqua.put_locale(ctx.user_id, locale)
-      assert :ok = Aqua.put_time_zone(ctx.user_id, zone)
+      assert :ok = Aqua.put_reading(ctx.user_id, %{"locale" => locale})
+      assert :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => zone})
       {_turn, lineage} = turn!(ctx, origin: :schedule)
 
       assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})

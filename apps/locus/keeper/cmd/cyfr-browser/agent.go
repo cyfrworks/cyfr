@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 )
 
@@ -184,19 +185,28 @@ func ownAgent(ctx context.Context, c *cdp, userAgent string) (map[string]any, er
 }
 
 // name tells the target of session, of kind (a target type), to name
-// itself by the browser's agent, and its language with it: a worker
-// through its network, every other target through its emulation, which
-// its navigator reads too, and which takes the person's time zone and
-// locale as well (person.go).
+// itself by the browser's agent: a worker through its network, every
+// other target through its emulation, which its navigator reads too; a
+// shared worker its person's language with it, which Chrome's own switches
+// do not give it; and every target its person's locale (person.go).
 func (b *browser) name(ctx context.Context, session, kind string) error {
 	if b.agent == nil {
 		return nil
 	}
+	method, agent := "Emulation.setUserAgentOverride", b.agent
 	if strings.HasSuffix(kind, "worker") {
-		return b.c.call(ctx, session, "Network.setUserAgentOverride", b.agent, nil)
+		method = "Network.setUserAgentOverride"
 	}
-	if err := b.c.call(ctx, session, "Emulation.setUserAgentOverride", b.agent, nil); err != nil {
+	if err := b.c.call(ctx, session, method, agent, nil); err != nil {
 		return err
+	}
+	// A shared worker's navigator reads its emulation, not its network.
+	if kind == "shared_worker" && b.person.Locale != "" {
+		agent = maps.Clone(b.agent)
+		agent["acceptLanguage"] = b.person.Locale
+		if err := b.c.call(ctx, session, "Emulation.setUserAgentOverride", agent, nil); err != nil {
+			return err
+		}
 	}
 	return b.person.placeIn(ctx, b.c, session)
 }
