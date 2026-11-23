@@ -78,6 +78,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
       {Locus.Runtime.RunnerPool,
        settings: settings,
        keeper: ScriptedKeeper,
+       keeper_opts: [name: keeper],
        supervisor: Locus.Runtime.RunnerPool.Runners,
        command: %{argv: ["runner"], env: %{"KEEPER" => Atom.to_string(keeper)}}}
     )

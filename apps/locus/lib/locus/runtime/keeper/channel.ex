@@ -129,22 +129,14 @@ defmodule Locus.Runtime.Keeper.Channel do
     :ok
   end
 
-  @impl Locus.Runtime.Keeper
-  def drop(place, opts) when is_list(opts) do
-    with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
-         do: Locus.Keeper.drop(client, place)
-
-    :ok
-  end
-
   # A spec may name the adapter to use (`:server`), as a test does; the
   # pool's runners use the registered one.
   @impl Locus.Runtime.Keeper
-  def spawn(%{runner: runner, place: place, argv: argv, env: env} = spec) do
+  def spawn(%{runner: runner, argv: argv, env: env} = spec) do
     adapter = Map.get(spec, :server, __MODULE__)
 
     request = %{
-      place: place,
+      place: runner,
       argv: argv,
       env: env,
       pool: @pool,

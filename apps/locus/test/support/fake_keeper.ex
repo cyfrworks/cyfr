@@ -318,23 +318,15 @@ defmodule Locus.Test.FakeKeeper do
   end
 
   # A spawn names a place held and unnamed, or is refused with nothing done.
-  defp handle_request(%{"type" => "spawn", "id" => id, "place" => place}, state)
-       when not is_map_key(state.places, place) or
-              :erlang.map_get(place, state.places).spawn != nil do
-    send(self(), {:send, %{type: "error", id: id, code: "bad_request"}})
-    state
-  end
+  defp handle_request(%{"type" => "spawn", "id" => id, "place" => place} = request, state) do
+    case state.places do
+      %{^place => %{spawn: nil}} ->
+        spawn_in_place(request, state)
 
-  defp handle_request(%{"type" => "spawn", "id" => id} = request, %{mode: mode} = state)
-       when mode in [
-              :capacity,
-              :memory_unavailable,
-              :home_over_cap,
-              :hosts_unresolved,
-              :guard_unavailable
-            ] do
-    send(self(), {:send, %{type: "error", id: id, code: Atom.to_string(mode)}})
-    %{state | places: Map.delete(state.places, request["place"])}
+      _absent_or_named ->
+        send(self(), {:send, %{type: "error", id: id, code: "bad_request"}})
+        state
+    end
   end
 
   defp handle_request(%{"type" => "home_" <> _, "id" => id}, %{mode: :home_refused} = state) do
@@ -379,19 +371,19 @@ defmodule Locus.Test.FakeKeeper do
 
   defp handle_request(%{"type" => "measure"}, %{mode: :measure_held} = state), do: state
 
-  defp handle_request(
-         %{"type" => "measure", "id" => id, "place" => place},
-         %{mode: {:measured, reading}} = state
-       )
-       when is_map_key(state.places, place) and
-              :erlang.map_get(place, state.places).spawn != nil do
-    whose = state.places[place].whose
-    send(self(), {:send, %{type: "measured", id: id} |> Map.merge(whose) |> Map.merge(reading)})
-    state
-  end
+  # A place a spawn named has a reading in the `{:measured, reading}` mode;
+  # any other is unmeasured.
+  defp handle_request(%{"type" => "measure", "id" => id, "place" => place}, state) do
+    reply =
+      case {state.mode, state.places} do
+        {{:measured, reading}, %{^place => %{spawn: spawn, whose: whose}}} when spawn != nil ->
+          %{type: "measured", id: id} |> Map.merge(whose) |> Map.merge(reading)
 
-  defp handle_request(%{"type" => "measure", "id" => id}, state) do
-    send(self(), {:send, %{type: "error", id: id, code: "unmeasured"}})
+        _unmeasured ->
+          %{type: "error", id: id, code: "unmeasured"}
+      end
+
+    send(self(), {:send, reply})
     state
   end
 
@@ -424,7 +416,24 @@ defmodule Locus.Test.FakeKeeper do
     signal(state, spawn_id, "TERM")
   end
 
-  defp handle_request(%{"type" => "spawn"} = request, state) do
+  defp handle_request(%{"type" => "release", "spawn_id" => spawn_id}, state),
+    do: signal(state, spawn_id, "KILL")
+
+  defp handle_request(_request, state), do: state
+
+  defp spawn_in_place(%{"id" => id} = request, %{mode: mode} = state)
+       when mode in [
+              :capacity,
+              :memory_unavailable,
+              :home_over_cap,
+              :hosts_unresolved,
+              :guard_unavailable
+            ] do
+    send(self(), {:send, %{type: "error", id: id, code: Atom.to_string(mode)}})
+    %{state | places: Map.delete(state.places, request["place"])}
+  end
+
+  defp spawn_in_place(request, state) do
     spawn_id = 16 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)
 
     send(
@@ -439,11 +448,6 @@ defmodule Locus.Test.FakeKeeper do
     places = Map.update!(state.places, place, &%{&1 | spawn: spawn_id})
     %{state | spawns: Map.put(state.spawns, spawn_id, nil), places: places}
   end
-
-  defp handle_request(%{"type" => "release", "spawn_id" => spawn_id}, state),
-    do: signal(state, spawn_id, "KILL")
-
-  defp handle_request(_request, state), do: state
 
   # Whose a place or an assign says the place is, as a measured reply names it.
   defp whose(request), do: Map.take(request, ["kind", "athanor", "subject"])

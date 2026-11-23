@@ -1211,21 +1211,18 @@ defmodule Locus.DirectLauncher.Runner do
   @impl Locus.Runtime.Keeper
   def available(false = _inherited?, _opts), do: :ok
 
+  def available(true = _inherited?, _opts) do
+    {:error,
+     "a keeper channel was inherited (#{Locus.Keeper.channel_env()}); only cyfr-locus may " <>
+       "start runners here"}
+  end
+
   # No keeper holds a place here: a runner's is an id, and nothing changes it.
   @impl Locus.Runtime.Keeper
   def place(id, %{kind: _kind} = whose, _opts), do: DirectLauncher.place([], id, whose, self())
 
   @impl Locus.Runtime.Keeper
   def assign(place, %{kind: _kind}, _opts) when is_binary(place), do: :ok
-
-  @impl Locus.Runtime.Keeper
-  def drop(place, _opts) when is_binary(place), do: :ok
-
-  def available(true = _inherited?, _opts) do
-    {:error,
-     "a keeper channel was inherited (#{Locus.Keeper.channel_env()}); only cyfr-locus may " <>
-       "start runners here"}
-  end
 
   @impl Locus.Runtime.Keeper
   def spawn(%{argv: argv, env: env}) do

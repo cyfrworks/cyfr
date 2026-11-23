@@ -35,6 +35,15 @@ defmodule Locus.Runtime.RunnerProcess do
   failure. One whose runner's end of the stream ended is heard as the
   runner's own end.
 
+  Before its spawn this process makes the runner's place, named by the
+  runner's id, `warm` and no athanor's (`c:Locus.Runtime.Keeper.place/3`):
+  this process is the place's owner, so a runner that never spawned leaves
+  none behind it, and one the keeper refused to place is `{:refused,
+  reason}`, nothing of it having run. `place_as/2` gives the place another
+  kind and athanor once this process has made it: the pool says so as it
+  gives the runner work, before the work is sent, and as the runner comes
+  back to rest.
+
   Guest data never crosses here: control bytes are frames, and the
   runner's own log lines, which the keeper relays, are logged under the
   runner's id. An `assign` carries the attempt's opened keys, so its
@@ -63,7 +72,10 @@ defmodule Locus.Runtime.RunnerProcess do
     %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
   end
 
-  @doc "Start a handle. Options: `:id`, `:keeper`, `:spec` (`t:Locus.Runtime.Keeper.spec/0`), `:owner`."
+  @doc """
+  Start a handle. Options: `:id`, `:keeper`, `:keeper_opts` (the keeper's
+  options, default none), `:spec` (`t:Locus.Runtime.Keeper.spec/0`), `:owner`.
+  """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @doc "Send `message`, a `cancel_child`, to the runner; an `assign` is `assign/5`'s."
@@ -97,6 +109,10 @@ defmodule Locus.Runtime.RunnerProcess do
     :exit, _reason -> {:error, :handle_failed}
   end
 
+  @doc "Give the runner's place `whose`'s kind and athanor, after this process made it."
+  @spec place_as(pid(), Locus.Launcher.whose()) :: :ok
+  def place_as(pid, %{kind: _kind} = whose), do: GenServer.cast(pid, {:place_as, whose})
+
   @doc "End the runner: a term signal, `grace_ms` to report, then the kill."
   @spec release(pid(), non_neg_integer()) :: :ok
   def release(pid, grace_ms) when is_integer(grace_ms) and grace_ms >= 0,
@@ -114,6 +130,7 @@ defmodule Locus.Runtime.RunnerProcess do
      %{
        id: Keyword.fetch!(opts, :id),
        keeper: Keyword.fetch!(opts, :keeper),
+       keeper_opts: Keyword.get(opts, :keeper_opts, []),
        spec: Keyword.fetch!(opts, :spec),
        owner: Keyword.fetch!(opts, :owner),
        channel: nil,
@@ -131,10 +148,10 @@ defmodule Locus.Runtime.RunnerProcess do
 
   @impl true
   def handle_continue(:spawn, state) do
-    case state.keeper.spawn(state.spec) do
-      {:ok, channel, events} ->
-        {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
-
+    with :ok <- state.keeper.place(state.spec.runner, %{kind: "warm"}, state.keeper_opts),
+         {:ok, channel, events} <- state.keeper.spawn(state.spec) do
+      {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
+    else
       {:error, reason} ->
         notify(state, {:refused, reason})
         {:noreply, state}
@@ -165,6 +182,11 @@ defmodule Locus.Runtime.RunnerProcess do
 
   @impl true
   def handle_cast({:release, grace_ms}, state), do: {:noreply, release_runner(state, grace_ms)}
+
+  def handle_cast({:place_as, whose}, state) do
+    :ok = state.keeper.assign(state.spec.runner, whose, state.keeper_opts)
+    {:noreply, state}
+  end
 
   # The relay stopped. One that closed the channel, or failed, retires a
   # runner still running. One whose runner's end of the stream ended is the

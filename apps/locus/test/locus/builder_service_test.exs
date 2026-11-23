@@ -11,7 +11,8 @@ defmodule Locus.BuilderServiceTest do
   spawned: a header that does not verify (before any of the body is read),
   a replayed nonce, a body past the bound or other than the one signed, a
   route that is none, another version, a deadline already passed, a missing
-  toolchain, a cap reached. After it, the answer is lines: a result, or the
+  toolchain, a cap reached; one refused once its place was made (by its
+  sources or its toolchain) leaves no place. After it, the answer is lines: a result, or the
   refusal the build ended with, its diagnostics bounded. A deadline reached
   mid-build ends the build's process group; a client that leaves ends its
   build within a bound and its slot goes back; the keeper's memory answers
@@ -112,6 +113,14 @@ defmodule Locus.BuilderServiceTest do
   end
 
   defp spawns(fake), do: Enum.filter(FakeKeeper.requests(fake), &(&1["type"] == "spawn"))
+  defp request_types(fake), do: Enum.map(FakeKeeper.requests(fake), & &1["type"])
+
+  # A build refused once its place was made: the place was dropped, and
+  # nothing was spawned in it.
+  defp unplaced!(fake) do
+    wait_until(fn -> request_types(fake) == ["place", "drop"] end, 5_000)
+    assert FakeKeeper.places(fake) == %{}
+  end
 
   describe "health" do
     test "answers without a key: the release and every language's toolchain", %{port: port} do
@@ -373,14 +382,14 @@ defmodule Locus.BuilderServiceTest do
     test "a deadline already passed", ctx do
       request = Wire.request("true", %{deadline: System.system_time(:millisecond)})
       assert {{:timeout, 0}, []} = refused(ctx.port, request)
-      assert spawns(ctx.fake) == []
+      assert FakeKeeper.requests(ctx.fake) == []
     end
 
     test "sources that make no build of their language", ctx do
       request = Wire.request("true", %{sources: %{"src/main.jsx" => "export default 1"}})
       assert {{:malformed, sentence}, []} = refused(ctx.port, request)
       assert sentence =~ "package.json"
-      assert spawns(ctx.fake) == []
+      unplaced!(ctx.fake)
     end
 
     test "a toolchain this machine lacks", ctx do
@@ -391,7 +400,7 @@ defmodule Locus.BuilderServiceTest do
       assert {{:unavailable, "the javascript toolchain is not installed in this image"}, []} =
                refused(ctx.port, Wire.request("true"))
 
-      assert spawns(ctx.fake) == []
+      unplaced!(ctx.fake)
     end
   end
 
@@ -579,6 +588,27 @@ defmodule Locus.BuilderServiceTest do
       wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 
+    test "a build's place is made for its athanor before it is prepared, named by its spawn, " <>
+           "and freed once the build is gone",
+         %{port: port} do
+      fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: nil}})
+      request = Wire.request("true")
+
+      assert {200, _lines} = Wire.build(port, request)
+      wait_until(fn -> FakeKeeper.places(fake) == %{} end, 10_000)
+      [placed, spawned] = FakeKeeper.requests(fake)
+
+      assert %{
+               placed: Map.take(placed, ~w(type kind athanor)),
+               named: spawned["place"],
+               spawned: spawned["type"]
+             } == %{
+               placed: %{"type" => "place", "kind" => "build", "athanor" => request.athanor_id},
+               named: placed["id"],
+               spawned: "spawn"
+             }
+    end
+
     test "a build killed for any other reason is failed with its signal", %{port: port} do
       _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: nil}})
 
@@ -622,9 +652,11 @@ defmodule Locus.BuilderServiceTest do
       assert sentence =~ "writable-cgroups=true"
       assert sentence =~ "runs none"
 
-      # It asked for the bound, and ran nothing when it could not have it.
+      # It asked for the bound, in the build's place, and ran nothing when
+      # it could not have it; the refused spawn freed the place.
       assert [%{"memory_bytes" => 268_435_456}] = spawns(fake)
-      assert FakeKeeper.requests(fake) == spawns(fake)
+      assert request_types(fake) == ["place", "spawn"]
+      assert FakeKeeper.places(fake) == %{}
       wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 

@@ -26,11 +26,13 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   of the pool's keeper options, or to none.
 
   It keeps places as cyfr-locus does (`Prima.KeeperProtocol`, "Places"),
-  named by the pool's keeper options' `:name`: `place/3` makes one,
-  `assign/3` changes whose it is, `drop/2` frees one no spawn named, a
-  refused spawn frees the place it named, and a runner's release frees
-  its place once the runner is gone. `places/1` answers every place held,
-  by its id: whose it is and whether a spawn named it.
+  named by the keeper options' `:name` (options that name no keeper keep
+  none, as a test that reads no places starts a runner with none):
+  `place/3` makes one for the calling process, `assign/3` changes whose it is, one whose owner dies
+  before a spawn named it is dropped, a refused spawn frees the place it
+  named, and a runner's release frees its place once the runner is gone.
+  `places/1` answers every place held, by its id: whose it is and whether
+  a spawn named it.
 
   Each runner has a relay stream too: `read_relay/1` answers what the
   service wrote on it and `write_relay/2` makes the runner write on it;
@@ -71,18 +73,25 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def available(_env, _opts), do: :ok
 
   @impl Locus.Runtime.Keeper
-  def place(id, %{kind: _kind} = whose, opts),
-    do: GenServer.call(Keyword.fetch!(opts, :name), {:place, id, whose})
+  def place(id, %{kind: _kind} = whose, opts) do
+    case Keyword.fetch(opts, :name) do
+      {:ok, keeper} -> GenServer.call(keeper, {:place, id, whose})
+      :error -> :ok
+    end
+  end
 
   @impl Locus.Runtime.Keeper
-  def assign(place, %{kind: _kind} = whose, opts),
-    do: GenServer.cast(Keyword.fetch!(opts, :name), {:assign, place, whose})
+  def assign(place, %{kind: _kind} = whose, opts) do
+    with {:ok, keeper} <- Keyword.fetch(opts, :name),
+         do: GenServer.cast(keeper, {:assign, place, whose})
 
-  @impl Locus.Runtime.Keeper
-  def drop(place, opts), do: GenServer.cast(Keyword.fetch!(opts, :name), {:drop, place})
+    :ok
+  end
 
   @doc "Every place `keeper` holds, by its id: `%{whose, spawned}`."
-  @spec places(atom()) :: %{String.t() => %{whose: map(), spawned: boolean()}}
+  @spec places(atom()) :: %{
+          String.t() => %{whose: map(), spawned: boolean(), owner: reference()}
+        }
   def places(keeper), do: GenServer.call(keeper, :places)
 
   @impl Locus.Runtime.Keeper
@@ -300,15 +309,16 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def handle_call({:place, id, _whose}, _from, state) when is_map_key(state.places, id),
     do: {:reply, {:error, :bad_request}, state}
 
-  def handle_call({:place, id, whose}, _from, state),
-    do:
-      {:reply, :ok, %{state | places: Map.put(state.places, id, %{whose: whose, spawned: false})}}
+  def handle_call({:place, id, whose}, {owner, _tag}, state) do
+    place = %{whose: whose, spawned: false, owner: Process.monitor(owner)}
+    {:reply, :ok, %{state | places: Map.put(state.places, id, place)}}
+  end
 
   def handle_call(:places, _from, state), do: {:reply, state.places, state}
 
   def handle_call({:freed, ref}, _from, state) do
     case Enum.find(state.spawns, &(&1.ref == ref)) do
-      %{spec: %{place: place}} ->
+      %{spec: %{runner: place}} ->
         {:reply, :ok, %{state | places: Map.delete(state.places, place)}}
 
       _other ->
@@ -319,7 +329,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   # A refused spawn frees the place it named.
   def handle_call({:spawn, spec, _owner}, _from, %{refusing: reason} = state)
       when reason != nil do
-    state = %{state | refused: state.refused + 1, places: Map.delete(state.places, spec[:place])}
+    state = %{state | refused: state.refused + 1, places: Map.delete(state.places, spec.runner)}
     {:reply, {:refused, make_ref(), reason}, state}
   end
 
@@ -331,7 +341,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       GenServer.start_link(__MODULE__.Runner, %{owner: owner, ref: ref, keeper: keeper})
 
     entry = %{ref: ref, spec: spec, runner: runner, owner: owner}
-    places = named(state.places, spec[:place])
+    places = named(state.places, spec.runner)
     {:reply, {:ok, ref, runner}, %{state | spawns: [entry | state.spawns], places: places}}
   end
 
@@ -359,17 +369,6 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     end
   end
 
-  # A place a spawn named is freed at that spawn's release alone.
-  def handle_cast({:drop, place}, state) do
-    case state.places do
-      %{^place => %{spawned: false}} ->
-        {:noreply, %{state | places: Map.delete(state.places, place)}}
-
-      _named_or_gone ->
-        {:noreply, state}
-    end
-  end
-
   def handle_cast({:release, ref, grace_ms}, state) do
     case Enum.find(state.spawns, &(&1.ref == ref)) do
       nil ->
@@ -379,6 +378,16 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
         Process.send_after(entry.runner, {:released, grace_ms}, grace_ms)
         {:noreply, %{state | releases: [{entry.spec.runner, grace_ms} | state.releases]}}
     end
+  end
+
+  # An owner gone before a spawn named its place has the place dropped; a
+  # place a spawn named is freed at that spawn's release alone.
+  @impl GenServer
+  def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
+    places =
+      Map.reject(state.places, fn {_id, place} -> place.owner == monitor and not place.spawned end)
+
+    {:noreply, %{state | places: places}}
   end
 
   defp named(places, place) do

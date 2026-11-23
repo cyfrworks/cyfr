@@ -32,14 +32,12 @@ defmodule Locus.Runtime.RunnerPool do
   `cancel_child/2` every busy runner; one that does not run the child
   ignores it.
 
-  Every runner runs in a place of its keeper's (`c:Locus.Runtime.Keeper.place/3`),
-  named by the runner's id, which the pool makes before it starts the runner: `warm` and no
-  athanor's while the runner is fresh, `run` for the athanor from the
-  take that gives it work, before the work is sent, and `warm`, still that
-  athanor's, while it is idle. A runner that leaves the pool has its place
-  dropped, which frees one no spawn named, as when its process died before
-  it spawned; the keeper frees one a spawn named once the runner is
-  released.
+  Every runner runs in a place of its keeper's named by the runner's id,
+  which the runner's process makes before it spawns
+  (`Locus.Runtime.RunnerProcess`): `warm` and no athanor's while the runner
+  is fresh, `run` for the athanor from the take that gives it work, told
+  before the work is sent, and `warm`, still that athanor's, while it is
+  idle. The pool never waits on the keeper for a place.
 
   A tainted runner leaves the pool once the keeper reports it retired
   or, failing that, at the retirement bound; its handle is stopped then.
@@ -185,7 +183,7 @@ defmodule Locus.Runtime.RunnerPool do
             idle_timer: nil
         }
 
-        assign(state, entry, :run)
+        place_as(pid, entry, "run")
         state = put_runner(state, pid, entry)
         {:reply, {:ok, pid, entry.id}, refill(state)}
 
@@ -196,7 +194,7 @@ defmodule Locus.Runtime.RunnerPool do
         case spawn_runner(state) do
           {:ok, pid, entry} ->
             entry = %{entry | state: :busy, athanor: athanor, execution_id: execution_id}
-            assign(state, entry, :run)
+            place_as(pid, entry, "run")
             {:reply, {:ok, pid, entry.id}, refill(put_runner(state, pid, entry))}
 
           {:error, reason} ->
@@ -348,7 +346,7 @@ defmodule Locus.Runtime.RunnerPool do
       message.clean ->
         timer = make_ref()
         Process.send_after(self(), {:idle_expired, pid, timer}, state.settings.idle_ttl_ms)
-        assign(state, entry, :warm)
+        place_as(pid, entry, "warm")
         put_runner(state, pid, %{entry | state: :idle, idle_timer: timer})
 
       true ->
@@ -464,44 +462,14 @@ defmodule Locus.Runtime.RunnerPool do
   end
 
   # The runner's place, given work or back at rest for the athanor it ran for.
-  defp assign(state, entry, :run),
-    do:
-      state.keeper.assign(entry.place, %{kind: "run", athanor: entry.athanor}, state.keeper_opts)
+  defp place_as(pid, entry, kind),
+    do: RunnerProcess.place_as(pid, %{kind: kind, athanor: entry.athanor})
 
-  defp assign(state, entry, :warm),
-    do:
-      state.keeper.assign(entry.place, %{kind: "warm", athanor: entry.athanor}, state.keeper_opts)
-
-  # A runner leaving the pool: its place is dropped, which frees it only if
-  # no spawn named it.
-  defp forget(state, pid) do
-    case Map.pop(state.runners, pid) do
-      {nil, _runners} ->
-        state
-
-      {entry, runners} ->
-        state.keeper.drop(entry.place, state.keeper_opts)
-        %{state | runners: runners}
-    end
-  end
+  defp forget(state, pid), do: %{state | runners: Map.delete(state.runners, pid)}
 
   defp spawn_runner(%{service: service} = state) do
     id = Prima.UUID7.generate_id("runner")
 
-    case state.keeper.place(id, %{kind: "warm"}, state.keeper_opts) do
-      :ok ->
-        spawn_runner(state, service, id, id)
-
-      {:error, reason} ->
-        Logger.error(
-          "[Locus.Runtime.RunnerPool] a runner's place was not made: #{inspect(reason)}"
-        )
-
-        {:error, {:spawn_failed, reason}}
-    end
-  end
-
-  defp spawn_runner(state, service, id, place) do
     env =
       Map.merge(
         state.command.env,
@@ -513,11 +481,16 @@ defmodule Locus.Runtime.RunnerPool do
         })
       )
 
-    spec = %{runner: id, place: place, argv: state.command.argv, env: env}
+    spec = %{runner: id, argv: state.command.argv, env: env}
 
     case DynamicSupervisor.start_child(
            state.supervisor,
-           {RunnerProcess, id: id, keeper: state.keeper, spec: spec, owner: self()}
+           {RunnerProcess,
+            id: id,
+            keeper: state.keeper,
+            keeper_opts: state.keeper_opts,
+            spec: spec,
+            owner: self()}
          ) do
       {:ok, pid} ->
         Process.monitor(pid)
@@ -525,7 +498,6 @@ defmodule Locus.Runtime.RunnerPool do
         {:ok, pid,
          %{
            id: id,
-           place: place,
            state: :spawning,
            athanor: nil,
            execution_id: nil,
@@ -538,7 +510,6 @@ defmodule Locus.Runtime.RunnerPool do
           "[Locus.Runtime.RunnerPool] a runner could not be started: #{inspect(reason)}"
         )
 
-        state.keeper.drop(place, state.keeper_opts)
         {:error, {:spawn_failed, reason}}
     end
   end

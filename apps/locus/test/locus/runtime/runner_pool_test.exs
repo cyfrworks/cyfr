@@ -35,6 +35,8 @@ defmodule Locus.Runtime.RunnerPoolTest do
   defp start_pool!(keeper, overrides) do
     {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
     {keeper_opts, overrides} = Keyword.pop(overrides, :keeper_opts, [])
+    # The scripted keeper keeps the runners' places under its name.
+    keeper_opts = Keyword.put_new(keeper_opts, :name, keeper)
     {pool_opts, overrides} = Keyword.split(overrides, [:retire_bound_ms])
     settings = Map.merge(defaults, Map.new(overrides))
     supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
@@ -220,6 +222,75 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, other, other_id} = RunnerPool.take(pool, "ath_b", "exec_3")
     assert other != pid and other_id != id
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 1, tainted: 0} end)
+  end
+
+  # Whose each place the keeper holds is, by its id.
+  defp whose(keeper),
+    do: Map.new(ScriptedKeeper.places(keeper), fn {id, place} -> {id, place.whose} end)
+
+  test "a runner's place is warm until its take, run for the athanor before the work is sent, " <>
+         "warm again at a clean end, run at its reuse, and freed once it is released",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 1)
+    serve!(pool)
+    wait_until(fn -> counts(pool).fresh == 1 end)
+    [fresh] = spawns(keeper)
+    fresh_place = whose(keeper)[fresh.spec.runner]
+
+    {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    spawn = spawn_of(keeper, pid)
+    assert {:ok, _token} = assign(pid)
+    # The work reached the runner: its place was the athanor's run by then.
+    wait_until(fn -> ScriptedKeeper.read(spawn) != "" end)
+    taken = whose(keeper)[spawn.spec.runner]
+    complete(spawn, "exec_1", true)
+    assert_receive {RunnerPool, ^pid, {:complete, "exec_1", true}}
+    wait_until(fn -> counts(pool).idle == 1 end)
+    wait_until(fn -> whose(keeper)[id] != %{kind: "run", athanor: "ath_a"} end)
+    at_rest = whose(keeper)[id]
+
+    assert {:ok, ^pid, ^id} = RunnerPool.take(pool, "ath_a", "exec_2")
+    wait_until(fn -> whose(keeper)[id] == %{kind: "run", athanor: "ath_a"} end)
+    assert :ok = RunnerPool.taint(pool, pid, 0)
+    assert_receive {RunnerPool, ^pid, {:gone, _reason}}, 5_000
+    wait_until(fn -> not Map.has_key?(ScriptedKeeper.places(keeper), id) end)
+
+    assert %{fresh: fresh_place, place: spawn.spec.runner, taken: taken, at_rest: at_rest} == %{
+             fresh: %{kind: "warm"},
+             place: id,
+             taken: %{kind: "run", athanor: "ath_a"},
+             at_rest: %{kind: "warm", athanor: "ath_a"}
+           }
+  end
+
+  test "a runner refused, or whose process dies before it spawns, leaves no place",
+       %{keeper: keeper} do
+    :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
+    pool = start_pool!(keeper, pool_size: 0)
+    serve!(pool)
+    {:ok, refused, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    assert_receive {RunnerPool, ^refused, {:gone, {:refused, :memory_unavailable}}}
+    after_refusal = ScriptedKeeper.places(keeper)
+    :ok = ScriptedKeeper.refuse(keeper, nil)
+
+    # Held at the keeper as it places itself, the runner's process dies.
+    :ok = :sys.suspend(keeper)
+    {:ok, dying, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
+
+    wait_until(fn ->
+      {:message_queue_len, waiting} = Process.info(Process.whereis(keeper), :message_queue_len)
+      waiting > 0
+    end)
+
+    Process.exit(dying, :kill)
+    assert_receive {RunnerPool, ^dying, {:gone, _reason}}, 5_000
+    :ok = :sys.resume(keeper)
+    wait_until(fn -> ScriptedKeeper.places(keeper) == %{} end)
+
+    assert %{after_refusal: after_refusal, spawned: Enum.count(spawns(keeper))} == %{
+             after_refusal: %{},
+             spawned: 0
+           }
   end
 
   test "an idle runner is retired at its TTL and the pool refills", %{keeper: keeper} do

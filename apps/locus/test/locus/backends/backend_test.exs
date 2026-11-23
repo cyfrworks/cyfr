@@ -14,9 +14,11 @@ defmodule Locus.Backends.BackendTest do
   as they are, and an owner's secret masked though the process writes it
   in two parts, or stops part way through it. Against `Locus.Test.FakeKeeper` through
   `Locus.Keeper`: the spawn a session asks for is in the pool `backends`,
-  with its argv, its environment and its memory bound, its use is the
-  keeper's reading or unknown, and what memory ended it reaches its
-  owners before its settlement, also after a close was asked.
+  with its place, its argv, its environment and its memory bound, its
+  use is read by its place, as the keeper last read it or unmeasured,
+  and a measure the keeper holds delays none of the session's traffic,
+  and what memory ended it reaches its owners before its settlement,
+  also after a close was asked.
   """
 
   use ExUnit.Case, async: false
@@ -35,9 +37,16 @@ defmodule Locus.Backends.BackendTest do
   end
 
   defp start_session(supervisor, command, opts \\ []) do
+    place = "pl-" <> Integer.to_string(System.unique_integer([:positive]))
+
+    # The keeper's client spawns only in a place it placed.
+    if Keyword.get(opts, :launcher) == Locus.Keeper,
+      do: :ok = Locus.Keeper.place(opts[:launcher_server], place, %{kind: "program"}, self())
+
     spec =
       Map.merge(
         %{
+          place: place,
           argv: ["/bin/sh", "-c", command],
           env: %{"PROBE_TOKEN" => @token},
           pool: "backends",
@@ -296,11 +305,11 @@ defmodule Locus.Backends.BackendTest do
     refute whole =~ binary_part(first, 0, 4)
   end
 
-  test "a launcher with no reading leaves a session's use unknown, never zero", %{
-    supervisor: supervisor
-  } do
+  test "a launcher with no reading of a session's place leaves its use unmeasured, never zero",
+       %{supervisor: supervisor} do
     session = start_session(supervisor, "exec cat")
-    assert Backend.measure(session) == :unknown
+    %{spec: %{place: place}} = :sys.get_state(session)
+    assert Locus.DirectLauncher.measure([], place) == {:error, {:refused, "unmeasured"}}
 
     assert :ok = Backend.stop(session, 0)
     assert_receive {Backend, ^session, {:ended, ended}}, 10_000
@@ -312,7 +321,13 @@ defmodule Locus.Backends.BackendTest do
       owner: @owner,
       session: "ss_" <> String.duplicate("1", 32),
       program: "probe",
-      spec: %{argv: ["/bin/sh", "-c", "exec cat"], env: %{}, pool: "backends", memory_bytes: 1},
+      spec: %{
+        place: "pl-delayed",
+        argv: ["/bin/sh", "-c", "exec cat"],
+        env: %{},
+        pool: "backends",
+        memory_bytes: 1
+      },
       launcher: Locus.DirectLauncher,
       notify: self(),
       delay_ms: 300
@@ -355,6 +370,7 @@ defmodule Locus.Backends.BackendTest do
         )
 
       [spawn] = Enum.filter(FakeKeeper.requests(fake), &(&1["type"] == "spawn"))
+      assert spawn["place"] == :sys.get_state(session).spec.place
       assert spawn["pool"] == "backends"
       assert spawn["argv"] == argv
       assert spawn["env"] == env
@@ -388,13 +404,14 @@ defmodule Locus.Backends.BackendTest do
       end
     end
 
-    test "a session that dies while its use is read, and one already gone, is unknown to its caller",
+    test "a measure the keeper holds delays none of the session's traffic",
          %{supervisor: supervisor, fake: fake, keeper: keeper} do
       session =
         start_session(supervisor, "exec cat", launcher: Locus.Keeper, launcher_server: keeper)
 
+      %{spec: %{place: place}} = :sys.get_state(session)
       :ok = FakeKeeper.mode(fake, :measure_held)
-      reading = Task.async(fn -> answer(fn -> Backend.measure(session) end) end)
+      reading = Task.async(fn -> Locus.Keeper.measure(keeper, place) end)
 
       wait_until(
         fn -> Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "measure")) end,
@@ -402,9 +419,12 @@ defmodule Locus.Backends.BackendTest do
         "the measurement to be pending"
       )
 
-      Process.exit(session, :kill)
-      assert Task.await(reading, 5_000) == :unknown
-      assert answer(fn -> Backend.measure(session) end) == :unknown
+      assert :running = Backend.send_lines(session, ["held"])
+      assert read(session, 0, 1) == ["held"]
+      assert Task.yield(reading, 0) == nil
+
+      Task.shutdown(reading, :brutal_kill)
+      assert :ok = Backend.stop(session, 0)
     end
 
     test "a memory cause heard after a close was asked is kept for its settlement",
@@ -426,22 +446,25 @@ defmodule Locus.Backends.BackendTest do
       end
     end
 
-    test "its use is the keeper's reading, and one not made is unknown, never zero",
+    test "its use is the keeper's reading of its place, and one not made is unmeasured, never zero",
          %{supervisor: supervisor, fake: fake, keeper: keeper} do
       session =
         start_session(supervisor, "exec cat", launcher: Locus.Keeper, launcher_server: keeper)
 
-      assert Backend.measure(session) == :unknown
+      %{spec: %{place: place}} = :sys.get_state(session)
+      assert Locus.Keeper.measure(keeper, place) == {:error, {:refused, "unmeasured"}}
 
       for lesser <- [false, true] do
-        reading = %{bytes: 268_435_456, lesser: lesser}
+        reading = %{bytes: 268_435_456, lesser: lesser, age_ms: 300}
         :ok = FakeKeeper.mode(fake, {:measured, reading})
-        assert Backend.measure(session) == {:ok, reading}
+
+        assert Locus.Keeper.measure(keeper, place) ==
+                 {:ok, Map.merge(reading, %{kind: "program", athanor: nil, subject: nil})}
       end
 
-      :ok = FakeKeeper.mode(fake, :normal)
       assert :ok = Backend.stop(session, 0)
-      assert Backend.measure(session) == :unknown
+      assert_receive {Backend, ^session, :vacated}, 10_000
+      assert Locus.Keeper.measure(keeper, place) == {:error, {:refused, "unmeasured"}}
     end
   end
 end
