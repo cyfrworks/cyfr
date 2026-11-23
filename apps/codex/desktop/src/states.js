@@ -48,6 +48,13 @@
 // or after Connect to another CYFR. Where a lock forgot it is
 // `unforgotten`, which speaks of no other CYFR.
 //
+// The box's screen (`screen`, its project; app.js) is the six-word road
+// with no chooser: cyfr's first page is the device's own, at loopback's
+// root, and the content window shows it again wherever the chooser would
+// show, after every lock and after a failed load. A page lost there is a
+// lock, and so is cyfr's end, after which the app quits, to be started
+// again locked; on a desktop a lost page is shown again.
+//
 // A CYFR's page whose load failed, as the engine reports it, is no lock:
 // the content window shows the chooser saying so (`unanswered`), and
 // nothing is closed or forgotten. That notice is that chooser's alone: a
@@ -111,8 +118,9 @@
 import {LOOPBACK, accountLoad, contentNavigation, contentOpen, homeMessage, parse} from "./policy.js"
 
 /** The state main starts in. */
-export function initial(accountRoad, route = {proxy: "", resolver: ""}) {
-  return {name: "starting", accountRoad, readyURL: "", home: "", account: "", route, returning: null, notices: []}
+export function initial(accountRoad, route = {proxy: "", resolver: ""}, screen = "") {
+  return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", route, returning: null,
+    notices: []}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
@@ -217,7 +225,7 @@ function settle(s) {
   if (!s.barrier || !s.forgotten) return same(s)
   const m = s.keep
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
-  const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, readyURL: s.readyURL,
+  const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
     home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices}
   return {state: next, do: [{chooser: s.notices}]}
 }
@@ -232,8 +240,8 @@ export function step(s, e) {
   switch (e.type) {
     // ---- cyfr ----
     case "ready":
-      if (s.name !== "starting" || !e.url.startsWith(LOOPBACK + "/bootstrap/#token=")) {
-        return ending(s, {end: "its first page was not the chooser"})
+      if (s.name !== "starting" || (s.screen ? e.url !== LOOPBACK + "/" : !e.url.startsWith(LOOPBACK + "/bootstrap/#token="))) {
+        return ending(s, s.screen ? {quit: true} : {end: "its first page was not the chooser"})
       }
       return {state: {...s, name: "chooser", readyURL: e.url}, do: [{say: "ready"}, {chooser: []}]}
     case "home": {
@@ -266,7 +274,7 @@ export function step(s, e) {
     case "pick-folder":
       return same(s, [{send: {type: "folder-picked", fields: {id: e.id, path: null}}}])
     case "gone":
-      return ending(s, {end: e.why})
+      return ending(s, s.screen ? {say: `cyfr ended: ${e.why}`, quit: true} : {end: e.why})
 
     // ---- the system, the windows, the person ----
     case "forgot": {
@@ -278,7 +286,8 @@ export function step(s, e) {
         [{send: {type: e.cleared ? "leave" : "lock"}}])
     }
     case "lost":
-      return same(s, [{reload: true}])
+      if (!s.screen) return same(s, [{reload: true}])
+      return ["starting", "locking"].includes(s.name) ? same(s) : lock(s, "the page was lost", "")
     case "quit":
       return ending(s, {quit: true})
     case "second-instance":

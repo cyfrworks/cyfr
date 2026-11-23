@@ -54,6 +54,8 @@ function reset({relaunch = false} = {}) {
   world.app.removeAllListeners()
   world.powerMonitor.removeAllListeners()
   world.quit = false
+  world.menus = []
+  world.spawnedIn = []
 }
 
 class Contents extends EventEmitter {
@@ -82,6 +84,8 @@ class BrowserWindow extends EventEmitter {
     super()
     this.id = world.windows.length + 1
     this.webContents = new Contents(this, options.webPreferences.session)
+    this.options = options
+    this.maximized = false
     this.destroyed = false
     world.windows.push(this)
   }
@@ -125,6 +129,7 @@ class BrowserWindow extends EventEmitter {
   isDestroyed() { return this.destroyed }
   isMinimized() { return false }
   show() {}
+  maximize() { this.maximized = true }
   restore() {}
   focus() {}
 }
@@ -167,7 +172,8 @@ function fromPartition(partition) {
 }
 
 world.app = Object.assign(new EventEmitter(), {
-  commandLine: {getSwitchValue: () => "", hasSwitch: () => false, appendSwitch: (...a) => world.switches.push(a)},
+  commandLine: {getSwitchValue: (name) => name === "screen-project" ? world.screen ?? "" : "",
+    hasSwitch: (name) => name === "screen-project" && world.screen !== undefined, appendSwitch: (...a) => world.switches.push(a)},
   enableSandbox() {}, requestSingleInstanceLock: () => true, configureWebAuthn() {},
   relaunch(options) { world.relaunched = options },
   whenReady: () => Promise.resolve(),
@@ -215,11 +221,13 @@ function request({url}) {
 
 mock.module("electron", {exports: {
   BrowserWindow, app: world.app, dialog: {showMessageBox: async () => ({response: 0})},
+  Menu: {setApplicationMenu: (menu) => world.menus.push(menu)},
   powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request}
 }})
 let child = null
-mock.module("node:child_process", {exports: {spawn: (_program, args) => {
+mock.module("node:child_process", {exports: {spawn: (_program, args, options) => {
   world.spawned.push(args)
+  world.spawnedIn.push(options.cwd ?? null)
   return (child = cyfr())
 }}})
 const {startApp} = await import("../src/app.js")
@@ -1326,3 +1334,102 @@ test("started on a route main keeps that route's rules alone", async () => {
     world.app.commandLine.getSwitchValue = bare
   }
 })
+
+// ---- the box's screen ----
+
+const SCREEN = "/home/ana/cyfr"
+const SHELL_PAGE = "http://127.0.0.1:7340/"
+
+// The app started as the box's screen for SCREEN (or `project`), on
+// whatever road the platform would give, its shell said ready.
+async function screenStarted(project = SCREEN) {
+  reset()
+  world.screen = project
+  world.exited = undefined
+  const said = []
+  try {
+    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: (line) => said.push(line)})
+    await settled()
+    if (world.exited === undefined) {
+      child.say({type: "ready", url: SHELL_PAGE})
+      await settled()
+    }
+  } finally {
+    world.screen = undefined
+  }
+  return said
+}
+
+test("as the box's screen the app runs the screen shell in that project, in one frameless maximized window with no menu", async () => {
+  await screenStarted()
+  assert.deepEqual(world.spawned, [["screen", "shell", "--app"]])
+  assert.deepEqual(world.spawnedIn, [SCREEN])
+  assert.deepEqual(world.menus, [null], "no menu")
+  const w = content()
+  assert.equal(w.webContents.url, SHELL_PAGE, "the shell's own page, no chooser")
+  assert.equal(w.options.frame, false)
+  w.emit("ready-to-show")
+  assert.ok(w.maximized)
+  assert.ok(!world.sessions.has(CONTENT), "nothing kept on disk")
+})
+
+test("only an explicit project makes the app a screen; another switch value is refused", async () => {
+  await started(true)
+  assert.deepEqual(world.spawned, [["desktop-serve"]], "no switch, no screen")
+  for (const value of ["", "cyfr", "/home/ana/../cyfr"]) {
+    const said = await screenStarted(value)
+    assert.equal(world.exited, 2, value)
+    assert.deepEqual(world.spawned, [], value)
+    assert.ok(said.some((l) => l.startsWith("refused: --screen-project")), value)
+  }
+  world.exited = undefined
+})
+
+test("the screen's first page is the shell's own: a chooser there ends the app", async () => {
+  reset()
+  world.screen = SCREEN
+  startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: () => {}})
+  world.screen = undefined
+  await settled()
+  child.say({type: "ready", url: READY})
+  await settled()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(content(), undefined)
+  assert.ok(world.quit, "the app quits")
+  assert.ok(child.heard.some((m) => m.type === "shutdown"), "cyfr is shut down")
+})
+
+test("a lock on the screen hides the page at once and shows the shell's page again, in a new session", async () => {
+  await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  const before = content()
+  const session = before.webContents.session
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  assert.ok(before.destroyed, "hidden as locked is heard")
+  await settled()
+  await settled()
+  const after = content()
+  assert.equal(after.webContents.url, SHELL_PAGE)
+  assert.notEqual(after.webContents.session, session)
+})
+
+test("on the screen a lost page locks, a failed load shows the shell's page, and cyfr's end quits with no message", async () => {
+  await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  fails(content(), HOME + "/", -106)
+  await settled()
+  await settled()
+  assert.equal(content().webContents.url, SHELL_PAGE, "the shell's page, from which Open CYFR tries again")
+  content().webContents.emit("render-process-gone", {}, {reason: "crashed"})
+  await settled()
+  await settled()
+  assert.ok(child.heard.some((m) => m.type === "lock"), "a lost page locks")
+  child.emit("exit", 1, null)
+  await settled()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(live().length, 0, "no message window")
+  assert.ok(world.quit, "the app quits, to be started again locked")
+})
+

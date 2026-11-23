@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// The CYFR app's main process: it starts cyfr desktop-serve, owns every
+// The CYFR app's main process: it starts cyfr desktop-serve (or, as the
+// box's screen, cyfr screen shell --app), owns every
 // window the app has, and holds each to its rules (policy.js).
 //
 // What main does is decided in one place, states.js: every event, from
@@ -19,11 +20,11 @@
 import {spawn} from "node:child_process"
 import path from "node:path"
 
-import {BrowserWindow, app, dialog, session} from "electron"
+import {BrowserWindow, Menu, app, dialog, session} from "electron"
 
 import {keptStorage} from "./owner.js"
 import {lines, readFromCyfr, toCyfr} from "./process.js"
-import {LOCALHOST_IS_IPV4, accountLoad, documentHeaders, grants, printed, readHop, relyingParty, unlistedSwitch} from "./policy.js"
+import {LOCALHOST_IS_IPV4, accountLoad, documentHeaders, grants, printed, readHop, relyingParty, screenProject, unlistedSwitch} from "./policy.js"
 import {initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
@@ -100,6 +101,17 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     app.exit(2)
     return
   }
+  // The box's screen (cmd/screen_app.go): one frameless, maximized window
+  // with no menu, the six-word road's memory-only storage and no chooser,
+  // shown by the screen shell cyfr runs in that project's folder.
+  const screen = screenProject(app.commandLine.hasSwitch("screen-project"), app.commandLine.getSwitchValue("screen-project"),
+    process.platform)
+  if (screen === null) {
+    say("refused: --screen-project names no project: give its absolute path, on Linux")
+    app.exit(2)
+    return
+  }
+  accountRoad = accountRoad && !screen
   app.enableSandbox()
   if (!app.requestSingleInstanceLock()) {
     say("another CYFR app runs for this account: it is shown instead")
@@ -113,7 +125,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   }
   // Not a route of a CYFR's, so not part of the one main was started on.
   if (!route.resolver) app.commandLine.appendSwitch("host-resolver-rules", LOCALHOST_IS_IPV4)
-  let state = initial(accountRoad, route)
+  let state = initial(accountRoad, route, screen)
   let child = null
   let content = null // the one content window
   const children = new Set() // its confirmation windows
@@ -233,8 +245,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   // The chooser's address: cyfr's own, with the road this app offers,
   // which is main's alone to say, and what main has to tell.
-  const chooserAddress = (notices) =>
-    state.readyURL + (accountRoad ? "&road=passkey" : "") + (notices.length ? `&notice=${notices.join(",")}` : "")
+  const chooserAddress = (notices) => screen ? state.readyURL
+    : state.readyURL + (accountRoad ? "&road=passkey" : "") + (notices.length ? `&notice=${notices.join(",")}` : "")
 
   const discard = (ses) => Promise.resolve(ses?.clearStorageData()).then(() => true, () => true)
 
@@ -254,10 +266,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   function window(ses, options = {}) {
     const w = new BrowserWindow({
-      width: 1280, height: 860, show: false, title: "CYFR", autoHideMenuBar: true, ...options,
+      width: 1280, height: 860, show: false, title: "CYFR", autoHideMenuBar: true, ...(screen ? {frame: false} : {}), ...options,
       webPreferences: {...SECURE, session: ses}
     })
-    w.once("ready-to-show", () => w.show())
+    w.once("ready-to-show", () => {
+      if (screen) w.maximize()
+      w.show()
+    })
     w.webContents.on("will-attach-webview", (event) => event.preventDefault())
     return w
   }
@@ -453,7 +468,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   let quitting = false
 
   function startCyfr() {
-    child = spawn(cyfr, ["desktop-serve"], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true})
+    child = screen
+      ? spawn(cyfr, ["screen", "shell", "--app"], {cwd: screen, stdio: ["pipe", "pipe", "pipe"]})
+      : spawn(cyfr, ["desktop-serve"], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true})
     send = (type, fields) => {
       if (child.stdin.writable) child.stdin.write(toCyfr(type, fields))
     }
@@ -515,6 +532,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   })
 
   app.whenReady().then(() => {
+    // No menu: its accelerators would close the window or cover the
+    // on-screen keyboard (full screen).
+    if (screen) Menu.setApplicationMenu(null)
     const account = session.fromPartition(ACCOUNT_PARTITION)
     guard(account, "account")
     account.on("select-webauthn-account", chooseAccount)

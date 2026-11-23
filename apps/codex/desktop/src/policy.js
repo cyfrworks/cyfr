@@ -203,13 +203,26 @@ export function documentHeaders(kind, resourceType, headers, {pageGone = false} 
 
 /**
  * The switches the app takes on its command line: the selected CYFR's
- * route, which main relaunches itself with. They move where traffic goes
- * and nothing more: the origin checks and certificate validation still
- * decide what loads. The engine takes every other switch, from opening a
- * debugging port to trusting any certificate, so the app refuses them
- * all.
+ * route, which main relaunches itself with, and the box's screen's
+ * project (screenProject). The route moves where traffic goes and nothing
+ * more: the origin checks and certificate validation still decide what
+ * loads. The engine takes every other switch, from opening a debugging
+ * port to trusting any certificate, so the app refuses them all.
  */
-export const SWITCHES = ["proxy-server", "host-resolver-rules"]
+export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project"]
+
+/**
+ * The project the app is the box's screen for, as `--screen-project`
+ * names it (`present`, and its `value`): "" for no screen, null for a
+ * switch that names no project explicitly, which the app refuses. Only
+ * this switch makes the app a screen, and only for an absolute path with
+ * nothing to resolve, on Linux, where the screen runs.
+ */
+export function screenProject(present, value, platform) {
+  if (!present) return ""
+  if (platform !== "linux" || !value.startsWith("/") || value.split("/").some((p) => p === "." || p === "..")) return null
+  return value
+}
 
 /**
  * The engine's resolver rule unless main was started on a route:
