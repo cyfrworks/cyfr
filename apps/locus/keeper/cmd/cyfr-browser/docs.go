@@ -37,36 +37,31 @@ import (
 // to a page that is gone; and a worker's request made while a show loads
 // waits for that show's commit or end.
 //
-// A page's call goes up for the put of the document that made it, by the
-// same names, and for no other. A call carries a person's action, so it is
-// stricter than a file: one that names no document is refused, as is one
-// made with any origin but the reserved one, by its Origin header, which
-// Chrome sets as the caller acts (a sandboxed frame's is null) and no
-// script can set; one whose document is no longer its frame's document;
-// and one whose document belongs to a put that is not the window's.
+// A page's call goes up when it is made with the reserved origin, by its
+// Origin header, which Chrome sets as the caller acts (a sandboxed frame's
+// is null) and no script can set; names a document, its loader; that
+// document is its frame's document now; and that document's put is the
+// window's. Anything else is refused: its fetch fails as a network error,
+// and the host never hears of it. A call carries a person's action, so it
+// is stricter than a file, and it waits for one thing only: its own
+// report, when its pause came first. Chrome sends a document's report from
+// the page's process after that document's commit and its frames'
+// attachments, on the same session, and each session's events are taken
+// in the order Chrome sent them (the image's Chromium 156 showed it over
+// 900 navigations within one put, by link, reload and form, each new
+// document and its frame calling as they started): so when a call's report
+// is taken, its document's commit and its frame's attachment have been,
+// and one not yet known is refused, not waited for.
 //
-// A call is decided when its report is taken, not its pause. Chrome sends
-// a document's report from the page's process after that document's
-// commit, on the same session, and each session's events are taken in the
-// order Chrome sent them, a main frame's commit (committed) and a frame's
-// (frameCommitted) as they come: so the commit of a call's document has
-// always been taken when the call is decided, whether the document is of
-// another put or of the same put the window shows. (The image's Chromium
-// 156 showed it over 900 navigations within one put, by link, reload and
-// form, each new document and its frame calling as they started.) The wait
-// for a shown put's commit, below, is for an order Chrome does not send: a
-// report taken before its document's commit is held for that commit, so
-// it never goes up for the earlier put, and then goes up once, with the
-// generation the commit began (calls.take); if the show ends with no
-// commit, the call is refused: its fetch fails as a network error, and the
-// host never hears of it.
-//
-// A request waits only for what names it: its loader's report, its
+// A file's request waits only for what names it: its loader's report, its
 // frame's attachment, or a show's commit or end. A report is kept until its
 // request pauses, whatever became of its document's put, so a pause that
 // comes late is refused, not held; at most maxReports are kept, the oldest
 // forgotten first. At most maxWaiting wait in a window; one past that is
-// refused, which the driver's log says once for the window.
+// refused, which the driver's log says once for the window. A request
+// whose report was forgotten past maxReports waits for a report that will
+// not come, a call's among them: it holds one of the maxWaiting places
+// until its session ends.
 const (
 	maxWaiting = 256
 	// maxReports bounds the reports kept for requests not yet paused.
@@ -211,7 +206,7 @@ func (w *window) place(r *waiter) (*put, bool) {
 }
 
 // placeCall answers the put call r goes up for, nil for none, and false
-// while what names its document, or that document's commit, has not come.
+// while its report has not come.
 func (w *window) placeCall(r *waiter) (*put, bool) {
 	d := &w.docs
 	if r.network == "" || header(r.call.paused.Request.Headers, "Origin") != reservedOrigin {
@@ -225,21 +220,13 @@ func (w *window) placeCall(r *waiter) (*put, bool) {
 		delete(d.reports, r.network)
 		r.loader, r.named = loader, true
 	}
-	if r.loader == "" {
+	if r.loader == "" || d.current[r.frame] != r.loader {
 		return nil, true
 	}
-	p, ok := w.putOf(r.loader)
-	switch {
-	case !ok:
-		return nil, false
-	case p == nil:
-		return nil, true
-	case p != w.put:
-		return nil, false
-	case d.current[r.frame] != r.loader:
-		return nil, true
+	if p, ok := w.putOf(r.loader); ok && p != nil && p == w.put {
+		return p, true
 	}
-	return p, true
+	return nil, true
 }
 
 // header is the value of the header name in headers, by any case.

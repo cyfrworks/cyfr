@@ -232,7 +232,15 @@ func (f *pageChrome) pauseLeavingOut(session, address, frame, body string) strin
 // origin is paused and commits once the driver answers it, a fulfilment
 // with its document and a failure with Chrome's error page, and answers
 // its request id; any other commits at once, and answers "".
-func (f *pageChrome) link(session, address string) string {
+func (f *pageChrome) link(session, address string) string { return f.linkWith(session, address, false) }
+
+// linkLate navigates as link does, but a navigation of the reserved origin
+// the driver answers commits only when the test commits it.
+func (f *pageChrome) linkLate(session, address string) string {
+	return f.linkWith(session, address, true)
+}
+
+func (f *pageChrome) linkWith(session, address string, late bool) string {
 	main := "M" + strings.TrimPrefix(session, "S")
 	f.mu.Lock()
 	f.paused++
@@ -242,7 +250,7 @@ func (f *pageChrome) link(session, address string) string {
 		f.commit(session, address, "L"+id)
 		return ""
 	}
-	f.navs[id] = navigation{session: session, url: address, link: true, loads: true}
+	f.navs[id] = navigation{session: session, url: address, link: true, loads: true, late: late}
 	f.open[id] = true
 	f.mu.Unlock()
 	f.write(map[string]any{"method": "Fetch.requestPaused", "sessionId": session, "params": map[string]any{
@@ -507,6 +515,7 @@ func (f *pageChrome) serve(commands io.Reader) {
 			}
 			reply(map[string]any{})
 			switch {
+			case isNav && nav.link && nav.late:
 			case isNav && nav.link:
 				if m.Method == "Fetch.failRequest" {
 					f.commit(nav.session, "chrome-error://chromewebdata/", "L"+p.RequestID)
@@ -1707,10 +1716,17 @@ func callFrom(r *pageRig, loader string, before bool) string {
 }
 
 // A call goes up for the put of the document that made it, as Chrome names
-// that document, once, and for no other: the shown document's call made
-// before its commit is taken waits for that commit; the earlier
-// document's call known only after the commit, a call that names no
-// document, and one whose show fails are refused and never go up.
+// that document, once, and for no other. Its document's commit is taken
+// before its report on the page's session, as Chrome sends them; a call
+// paused and reported before that commit, of a later put's document or of
+// the same put's next page, is refused, as are the earlier document's call
+// known only after the commit and a call that names no document.
+//
+// Chrome does not send a call's report before its document's commit: the
+// image's Chromium 156 reported none of 1,809 calls first, over 900
+// navigations within one put by link, reload and form, each new document
+// and its frame calling as they started. These orders are forced here
+// only to show what the driver does if they came.
 func TestACallGoesUpForTheDocumentThatMadeIt(t *testing.T) {
 	isCall := func(m map[string]any) bool { return m["t"] == "call" }
 	refused := func(t *testing.T, r *pageRig, id, what string) {
@@ -1720,22 +1736,37 @@ func TestACallGoesUpForTheDocumentThatMadeIt(t *testing.T) {
 		}
 		r.h.quiet(isCall, what+" went up")
 	}
-	t.Run("the shown document's call before its commit", func(t *testing.T) {
+	t.Run("a later put's document's call before its commit", func(t *testing.T) {
 		r, _, b, shown := twoPuts(t, 5*time.Second)
 		defer r.close()
-		id := callFrom(r, b, true)
-		r.h.quiet(isCall, "the shown document's call went up before its commit")
+		refused(t, r, callFrom(r, b, true), "the shown document's call before its commit")
 		r.f.commit("S1", reservedOrigin+testRoot, b)
-		if m := r.h.take(isCall, "the shown document's call"); !jsonEqual(m, `{"t":"call","id":1,"win":"thr_01","put":2,"op":"invoke","body":"eyJmcm9tIjoicGFnZSJ9"}`) {
-			t.Errorf("the shown document's call went up as %v", m)
-		}
-		r.h.quiet(isCall, "the shown document's call went up twice")
-		r.h.send(map[string]any{"t": "answer", "id": 1, "status": 200, "body": "{}"})
-		if a := r.f.answer(id); a.status != 200 {
-			t.Errorf("the shown document's call was answered %+v", a)
-		}
 		if err := <-shown; err != nil {
 			t.Errorf("the put answered %v", err)
+		}
+		r.f.pause("S1", "POST", callPath, "M1", true, `{"from":"page"}`)
+		if m := r.h.take(isCall, "the committed document's call"); !jsonEqual(m, `{"t":"call","id":1,"win":"thr_01","put":2,"op":"invoke","body":"eyJmcm9tIjoicGFnZSJ9"}`) {
+			t.Errorf("the committed document's call went up as %v", m)
+		}
+		r.h.quiet(isCall, "a call went up twice")
+	})
+	t.Run("the same put's next page's call before its commit", func(t *testing.T) {
+		r := newPageRig(t)
+		defer r.close()
+		site := append([]siteFile{{"two.html", "text/html", "<title>Two</title>"}}, testSite...)
+		if got := r.h.put(1, "thr_01", testRoot, "index.html", site, 64); got["ok"] == nil {
+			t.Fatal(got)
+		}
+		r.f.navigated()
+		link := r.f.linkLate("S1", reservedOrigin+testRoot+"/two.html")
+		if a := r.f.answer(link); a.status != 200 {
+			t.Fatalf("a link to another page of the put was answered %+v", a)
+		}
+		refused(t, r, callFrom(r, "L"+link, true), "the next page's call before its commit")
+		r.f.commit("S1", reservedOrigin+testRoot+"/two.html", "L"+link)
+		callFrom(r, "L"+link, true)
+		if m := r.h.take(isCall, "the next page's call after its commit"); m["put"] != float64(1) {
+			t.Errorf("the next page's call went up as %v", m)
 		}
 	})
 	t.Run("the earlier document's call reported after the commit", func(t *testing.T) {
@@ -1755,47 +1786,44 @@ func TestACallGoesUpForTheDocumentThatMadeIt(t *testing.T) {
 		refused(t, r, r.f.pauseFrom("S1", "Fetch", "POST", callPath, "M1", false, `{}`, "", true), "a worker's call")
 		refused(t, r, callFrom(r, "", true), "a call whose report names no document")
 	})
-	t.Run("the shown document's call, its show failing", func(t *testing.T) {
-		r, _, b, shown := twoPuts(t, time.Second)
-		defer r.close()
-		id := callFrom(r, b, true)
-		if err := <-shown; err == nil {
-			t.Error("a show whose entry never committed answered no error")
-		}
-		refused(t, r, id, "the call of a show that failed")
-	})
 }
 
-// Calls wait within the window's bound: one past it is refused, and those
-// that waited go up once each when their document's commit is taken.
+// A call waits for its own report alone, within the window's bound: one
+// past it is refused, and those that waited go up once each when their
+// reports come.
 func TestWaitingCallsAreBounded(t *testing.T) {
-	r, _, b, shown := twoPuts(t, 5*time.Second)
+	r := newPageRig(t)
 	defer r.close()
+	if got := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); got["ok"] == nil {
+		t.Fatal(got)
+	}
+	loader := "L" + r.f.navigated().request
 	log := &lockedLog{}
 	r.b.log = log
 	isCall := func(m map[string]any) bool { return m["t"] == "call" }
+	var waited []string
 	for range maxWaiting {
-		callFrom(r, b, true)
+		waited = append(waited, callFrom(r, loader, false))
 	}
-	if a := r.f.answer(callFrom(r, b, true)); a.method != "Fetch.failRequest" {
+	if a := r.f.answer(callFrom(r, loader, false)); a.method != "Fetch.failRequest" {
 		t.Fatalf("a call past the bound was answered %+v", a)
 	}
 	if lines := strings.Count(log.String(), "\n"); lines != 1 {
 		t.Errorf("the driver's log said %q of the bound, want one line", log.String())
 	}
-	r.f.commit("S1", reservedOrigin+testRoot, b)
+	r.h.quiet(isCall, "a call went up before its report")
+	for _, id := range waited {
+		r.f.report("S1", id, "POST", callPath, loader)
+	}
 	seen := map[float64]bool{}
 	for range maxWaiting {
 		m := r.h.take(isCall, "a call that waited")
-		if m["put"] != float64(2) || seen[m["id"].(float64)] {
+		if m["put"] != float64(1) || seen[m["id"].(float64)] {
 			t.Fatalf("a call that waited went up as %v", m)
 		}
 		seen[m["id"].(float64)] = true
 	}
 	r.h.quiet(isCall, "a call went up twice")
-	if err := <-shown; err != nil {
-		t.Errorf("the put answered %v", err)
-	}
 }
 
 // A call goes up only while the document that made it is its frame's
@@ -1864,8 +1892,8 @@ func TestALatePauseOfAReportedRequestIsRefused(t *testing.T) {
 
 // A call to a call's path with a query is a call, its report and its pause
 // read alike; a call whose Content-Length is past the bound is 413 before
-// its body is read; and a call of the first put's document made before
-// its commit is taken waits for it, as a later put's does.
+// its body is read; and a call of the first put's document goes up once
+// its commit is taken, and is refused before, as a later put's is.
 func TestACallsPathLengthAndFirstShow(t *testing.T) {
 	isCall := func(m map[string]any) bool { return m["t"] == "call" }
 	t.Run("a call with a query", func(t *testing.T) {
@@ -1908,13 +1936,17 @@ func TestACallsPathLengthAndFirstShow(t *testing.T) {
 		r.f.mu.Lock()
 		r.f.callerOrigin["M1"] = reservedOrigin
 		r.f.mu.Unlock()
-		callFrom(r, loader, true)
+		// An order Chrome does not send (TestACallGoesUpForTheDocumentThatMadeIt):
+		// it is refused.
+		if a := r.f.answer(callFrom(r, loader, true)); a.method != "Fetch.failRequest" {
+			t.Errorf("the first put's call before its commit was answered %+v", a)
+		}
 		r.h.quiet(isCall, "the first put's call went up before its commit")
 		r.f.commit("S1", reservedOrigin+testRoot, loader)
-		if m := r.h.take(isCall, "the first put's call"); m["put"] != float64(1) {
+		callFrom(r, loader, true)
+		if m := r.h.take(isCall, "the first put's call after its commit"); m["put"] != float64(1) {
 			t.Errorf("the first put's call went up as %v", m)
 		}
-		r.h.quiet(isCall, "the first put's call went up twice")
 	})
 }
 
