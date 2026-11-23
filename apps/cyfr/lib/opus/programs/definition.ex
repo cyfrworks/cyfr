@@ -91,7 +91,7 @@ defmodule Opus.Programs.Definition do
 
   def entry_names(_definition), do: []
 
-  # The command runs as `bash -c command` (Locus.Backends.Owners), so a
+  # The command runs as `/bin/sh -c command` (Locus.Backends.Backend), so a
   # vault-bound name the shell expands puts the disclosed value in a child's
   # argv, which every process on the backends service can read. The forms
   # that compute a value at run time can expand any name. A

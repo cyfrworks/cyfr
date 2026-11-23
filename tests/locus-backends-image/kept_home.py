@@ -25,13 +25,6 @@ requests signed as CYFR signs them (harness.py):
   `home_over_cap` until a reset, which leaves it empty under its uid.
 - Retiring a home (its program row deleted) ends its sessions and every
   process of its uid and removes its folder.
-- A row whose command is one program has that program lead its session,
-  read from the kernel for every row CYFR ships (the browser's driver and
-  each brain's driver): the session's leader is the driver's own process,
-  not a shell. A pipeline runs whole with bash in front; a list hands
-  bash's place to its last program; a leading assignment reaches its
-  program; echo reads a backslash escape and a word in braces stays as
-  written, as under sh.
 - A terminal runs the program's command with the open's argv (a sign-in's
   words, `login`) on a pseudo-terminal of the open's size in its kept home,
   told the wire's terminal type in `TERM`: a run message to it is refused,
@@ -44,7 +37,6 @@ Prerequisites: harness.py's. Usage: tests/locus-backends-image/kept_home.py IMAG
 
 import json
 import os
-import re
 import sys
 import time
 
@@ -52,7 +44,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, RELEASE_USER, ROOT, STATUSES, VERSION, WIRE, Stack,
+    KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, RELEASE_USER, STATUSES, VERSION, WIRE, Stack,
     eventually, expect, owner_of, probe, require_docker, unb64,
 )
 import imagesuite  # noqa: E402
@@ -79,80 +71,6 @@ PROGRAMS = [
     probe("capped", home="kept", home_max_bytes=CAP),
     {"name": "signin", "command": SIGN_IN, "env": {}, "home": "kept"},
 ]
-
-
-# An owner of the rows CYFR ships, by their commands, and of commands of other forms, each a row of its own.
-LEADERS = owner_of("leaders")
-
-
-def shipped_commands():
-    """The command of every row CYFR ships, read from their one definition (Opus.Programs.Definition): the browser's
-    driver, and each program brain's driver before its harness."""
-    with open(os.path.join(ROOT, "apps", "cyfr", "lib", "opus", "programs", "definition.ex"), encoding="utf-8") as f:
-        text = f.read()
-    browser = re.findall(r'^  @browser_command "([^"]+)"$', text, re.M)
-    brains = re.findall(r'^      command: "([^"]+)"$', text, re.M)
-    expect(len(browser) == 1 and len(brains) == 2, "the definition names the browser's command and two brains'",
-           [browser, brains])
-    return browser + brains
-
-
-# Commands of the forms a person may write, each with the lines it prints and the command line of the process that
-# leads its session: a pipeline keeps a shell in front, its parts its children; a list hands the shell's place to
-# its last program once the parts before it have run; a leading assignment reaches the program, which leads; echo
-# reads a backslash escape, and a word in braces stays as it is written.
-FORMS = [
-    ("pipeline", "{ echo first; echo 'a\\tb' {a,b}; sleep 600; } | cat", ["first", "a\tb {a,b}"], "/bin/bash "),
-    ("list", "echo first && sleep 600", ["first"], "sleep 600"),
-    ("assignment", "GREETING=kept node -e 'console.log(process.env.GREETING); setInterval(() => {}, 60000)'",
-     ["kept"], "node -e "),
-]
-
-
-def leader_of(stack, home, starts):
-    """The process leading the one session in `home`, the one whose session is its own, once a process of the
-    home's uid whose command line begins with `starts` runs: its command line."""
-    uid = int(imagesuite.read_output(stack.exec(f"stat -c %u {KEPT_ROOT}/{home}"), f"{home}'s owner").strip())
-    eventually(lambda: any(p["cmd"].startswith(starts) for p in stack.under_uid(uid)),
-               f"a process beginning {starts!r} in {home}", 60)
-    leaders = [p["cmd"] for p in stack.under_uid(uid) if p["pid"] == p["sid"]]
-    expect(len(leaders) == 1, f"one process leads the session in {home}", leaders)
-    return leaders[0]
-
-
-def leaders(stack, c):
-    """A row whose command is one program has that program lead its session, the one the keeper's TERM reaches
-    first: every row CYFR ships, read from the kernel. A command of another form runs whole, as it did under sh."""
-    commands = shipped_commands()
-    rows = [{"name": f"shipped-{n}", "command": command, "env": {}, "home": "kept"}
-            for n, command in enumerate(commands)]
-    rows += [{"name": name, "command": command, "env": {}, "home": "kept"} for name, command, _lines, _leads in FORMS]
-    status, answer, _ = c.sync(LEADERS, rows)
-    expect(status == 200, "an owner of the shipped rows and of commands of other forms is synced", answer)
-    sessions = []
-    for n, command in enumerate(commands):
-        home = f"mcp_leader-shipped-{n}"
-        # The browser's driver takes its terminal raw; a brain's driver speaks its wire in a run session.
-        terminal = {"mode": "terminal", "rows": 24, "cols": 80} if command == "cyfr-browser" else {}
-        status, opened = c.open(LEADERS, f"shipped-{n}", key=home, home_id=home, **terminal)
-        expect(status == 200 and opened["status"] == "running", f"the shipped row {command!r} opens", opened)
-        sessions.append(opened["session"])
-        driver = command.split(" ", 1)[0]
-        leads = leader_of(stack, home, driver)
-        expect(leads.split(" ", 1)[0] == driver,
-               f"the session of the shipped row {command!r} is led by its driver's own process, not a shell", leads)
-    for name, command, lines, leads in FORMS:
-        home = f"mcp_leader-{name}"
-        status, opened = c.open(LEADERS, name, key=home, home_id=home)
-        expect(status == 200 and opened["status"] == "running", f"the {name} command opens", opened)
-        sessions.append(opened["session"])
-        printed, _seq, _running = c.lines_until(LEADERS, opened["session"], lambda got: len(got) >= len(lines))
-        expect(printed == lines, f"the {name} command runs whole, as it did under sh",
-               printed)
-        led = leader_of(stack, home, leads)
-        expect(led.startswith(leads), f"the {name} command's session is led by {leads.strip()!r}", led)
-    for session in sessions:
-        c.close(LEADERS, session)
 
 
 def refusal(code):
@@ -197,9 +115,6 @@ def main():
         status, answer, _ = c.sync(NEIGHBOUR, [probe()])
         expect(status == 200, "a neighbour with a scratch program is synced", answer)
         pool = c.hello()[1]["pool"]
-
-        # ————— who leads a session —————
-        leaders(stack, c)
 
         # ————— a home of its own, under a uid of its own —————
         a = whoami(c, OWNER, key="a", home_id=SHARED)

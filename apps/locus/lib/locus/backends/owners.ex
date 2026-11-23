@@ -1450,28 +1450,12 @@ defmodule Locus.Backends.Owners do
   # arguments as its own, `"$@"` (the administrator allowed the program;
   # its arguments shape only what runs inside its box), a terminal's on a
   # pseudo-terminal of the open's size, told the terminal type unless its
-  # environment names one. The shell is bash because bash hands its place to
-  # a command that is one program, so that program leads its session and is
-  # the one the keeper's TERM reaches first, free to end what it started
-  # (Debian's sh, dash, stays in front of it, dies on the TERM, and its
-  # children are then asked together); in a list the last program takes
-  # bash's place once the parts before it have run, and a pipeline keeps
-  # bash in front, as it kept sh. xpg_echo and +B keep two behaviours as sh
-  # had them: echo reads backslash escapes, and a word in braces is not
-  # expanded.
+  # environment names one.
   defp spec(state, owner, program, ask, session_id) do
     env = Map.fetch!(owner.env, program.name)
 
     %{
-      argv: [
-        "/bin/bash",
-        "-O",
-        "xpg_echo",
-        "+B",
-        "-c",
-        program.command <> " \"$@\"",
-        "sh" | ask.argv
-      ],
+      argv: ["/bin/sh", "-c", program.command <> " \"$@\"", "sh" | ask.argv],
       env: if(ask.size, do: Map.put_new(env, "TERM", LocusBackends.terminal_type()), else: env),
       pool: @pool,
       memory_bytes: ask.memory_bytes,
