@@ -69,13 +69,13 @@ func fill() int {
 	}
 }
 
-// spawner starts a spawn of `/bin/sh -c script` and answers its spawn id
+// start starts a spawn of `/bin/sh -c script` and answers its spawn id
 // and its relay.
-type spawner func(id, script string) (string, *relayConn)
+type start func(id, script string) (string, *relayConn)
 
 // eachSpawn runs check on a keeper of its own for a pooled spawn and for a
 // kept one, whose retirements end their relays apart.
-func eachSpawn(t *testing.T, check func(t *testing.T, k *keeper, spawn spawner)) {
+func eachSpawn(t *testing.T, check func(t *testing.T, k *keeper, spawn start)) {
 	t.Run("pooled", func(t *testing.T) {
 		k := boundedKeeper(t)
 		check(t, k, func(id, script string) (string, *relayConn) {
@@ -159,7 +159,7 @@ func (r *slowReader) Read(p []byte) (int, error) {
 // `released` comes only once the relay has handed the reader's socket its
 // last byte.
 func TestASlowReaderTakesEveryByteAfterItsLeaderExits(t *testing.T) {
-	eachSpawn(t, func(t *testing.T, k *keeper, spawn spawner) {
+	eachSpawn(t, func(t *testing.T, k *keeper, spawn start) {
 		spawnID, rc := spawn("slow", "exec "+k.s.self+" fill")
 		if exited := within(t, k.nextReply(), 20*time.Second, "exit"); exited["type"] != protocol.TypeExited || exited["spawn_id"] != spawnID || exited["code"] != float64(0) {
 			t.Fatalf("the writer's exit: %v", exited)
@@ -246,7 +246,7 @@ func TestASlowReaderTakesEveryByteAfterItsLeaderExits(t *testing.T) {
 // bytes for it holds the retirement, whatever time passes.
 func TestAReaderThatClosesItsConnectionCutsTheRelay(t *testing.T) {
 	t.Run("leader running", func(t *testing.T) {
-		eachSpawn(t, func(t *testing.T, k *keeper, spawn spawner) {
+		eachSpawn(t, func(t *testing.T, k *keeper, spawn start) {
 			// The leader outlives its stdout's reader: a failed write
 			// leaves it running.
 			spawnID, rc := spawn("cut", `trap '' PIPE; while :; do cat /dev/zero; sleep 1; done`)
@@ -264,7 +264,7 @@ func TestAReaderThatClosesItsConnectionCutsTheRelay(t *testing.T) {
 		})
 	})
 	t.Run("leader exited", func(t *testing.T) {
-		eachSpawn(t, func(t *testing.T, k *keeper, spawn spawner) {
+		eachSpawn(t, func(t *testing.T, k *keeper, spawn start) {
 			spawnID, rc := spawn("cut", "exec "+k.s.self+" fill")
 			if exited := within(t, k.nextReply(), 20*time.Second, "exit"); exited["type"] != protocol.TypeExited || exited["spawn_id"] != spawnID || exited["code"] != float64(0) {
 				t.Fatalf("the writer's exit: %v", exited)
