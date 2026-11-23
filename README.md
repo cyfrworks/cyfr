@@ -1298,8 +1298,10 @@ download against it:
 # GitHub Attestation of the checksums (just needs gh CLI)
 gh attestation verify checksums.txt --owner cyfrworks
 
-# Each download beside checksums.txt, against it
-sha256sum --check --ignore-missing checksums.txt
+# The file you install, beside checksums.txt, against its own line there:
+# this fails unless checksums.txt lists exactly that file and it matches
+FILE=cyfr-desktop_0.9.0_linux_amd64.deb
+awk -v f="$FILE" '$2 == f' checksums.txt | sha256sum --check --strict
 
 # Full Sigstore verification (maximum rigor): the release workflow at the
 # tag of the version you downloaded, as install.sh and cyfr update verify it

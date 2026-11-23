@@ -116,6 +116,10 @@ def check_graph(wf):
         missing = [n for n in needs_of(job) if n not in jobs]
         if missing:
             return f"{j} needs {missing}, which are not jobs"
+    # A cycle of needs is a workflow GitHub never runs.
+    for j in jobs:
+        if j in ancestors(j):
+            return f"{j} needs itself through its needs, so the workflow never runs"
     for j in jobs:
         if j in verify:
             continue
@@ -2980,6 +2984,7 @@ GORELEASER_MUTANTS = [
 
 MUTANTS = [
     ("no Linux package job", lambda wf: wf["jobs"].pop(PACKAGE_JOB)),
+    ("the Linux package needing the merge that needs it", lambda wf: wf["jobs"][PACKAGE_JOB]["needs"].append("merge")),
     ("the merge without the Linux package", package_need_dropped("merge")),
     ("the CLI release without the Linux package", package_need_dropped("release")),
     ("the tag check dropped from the Linux package's needs", tag_need_dropped(PACKAGE_JOB)),
