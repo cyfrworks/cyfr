@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
 )
@@ -61,9 +62,12 @@ type workMessage struct {
 	Type string `json:"type"`
 	Step string `json:"step,omitempty"`
 	// Ready is probe's answer, Sentence why it is not or why the work
-	// failed.
+	// failed, and Commands or Page what would make Docker answer here
+	// (dockerRemedy).
 	Ready    bool        `json:"ready,omitempty"`
 	Sentence string      `json:"sentence,omitempty"`
+	Commands []string    `json:"commands,omitempty"`
+	Page     string      `json:"page,omitempty"`
 	Look     *folderLook `json:"look,omitempty"`
 }
 
@@ -109,7 +113,11 @@ func runSetupWork(ctx context.Context, in io.Reader, out io.Writer, args []strin
 	var err error
 	switch args[0] {
 	case workProbe:
-		end.Ready, end.Sentence = dockerReady(ctx)
+		var fixable bool
+		end.Ready, end.Sentence, fixable = dockerReady(ctx)
+		if fixable {
+			end.Commands, end.Page = dockerRemedy()
+		}
 	case workLook:
 		end.Look, err = lookInFolder(ctx, args[1])
 	case workToken:
@@ -131,26 +139,56 @@ func runSetupWork(ctx context.Context, in io.Reader, out io.Writer, args []strin
 // only this computer's own Docker refusing work still older than the
 // docker group is cured by a new login, since that work had no sg to come
 // through (an optional package on Ubuntu 26.04). A cancel ends a docker
-// that hangs.
-func dockerReady(ctx context.Context) (bool, string) {
+// that hangs. fixable is whether installing or starting Docker here, or
+// giving this account its group, is what is missing (dockerRemedy).
+func dockerReady(ctx context.Context) (ready bool, why string, fixable bool) {
 	switch here, err := machine.dockerHere(ctx); {
 	case ctx.Err() != nil:
-		return false, "Docker was not waited for"
+		return false, "Docker was not waited for", false
 	case err != nil:
-		return false, "Docker did not say where it runs containers"
+		return false, "Docker did not say where it runs containers", true
 	case !here:
-		return false, "Docker here runs containers on another computer, so CYFR cannot be set up on this one with it"
+		return false, "Docker here runs containers on another computer, so CYFR cannot be set up on this one with it", false
 	}
 	answers := machine.reachable(ctx)
 	switch {
 	case ctx.Err() != nil:
-		return false, "Docker was not waited for"
+		return false, "Docker was not waited for", false
 	case !answers && olderThanGroup(ctx):
-		return false, loginAgain
+		return false, loginAgain, false
 	case !answers:
-		return false, "Docker does not answer this account"
+		return false, "Docker does not answer this account", true
 	}
-	return true, ""
+	return true, "", false
+}
+
+// dockerRemedy is what makes Docker answer this account here, for a person
+// to do: on Ubuntu 26.04 the commands to run as root, as cyfr init runs
+// them (requirementCommands); on macOS and Windows Docker Desktop's page;
+// on any other Linux Docker's own page on installing it. The app shows
+// them and runs none.
+func dockerRemedy() (commands []string, page string) {
+	switch system := machine.system(); {
+	case system == "darwin" || system == "windows":
+		return nil, dockerDesktopPage
+	case machine.supported():
+		if account, err := user.Current(); err == nil {
+			return requirementCommands(account.Username), ""
+		}
+		return nil, ""
+	}
+	return nil, dockerEnginePage
+}
+
+// dockerCheck is the app's question of Docker, setup's work's probe under
+// work, which ends with the answer.
+func dockerCheck(ctx context.Context, work *shell.Work) desktop.DockerAnswer {
+	defer work.End()
+	m, err := setupWork(ctx, work, nil, workProbe)
+	if err != nil {
+		return desktop.DockerAnswer{Sentence: "Docker was not asked (" + err.Error() + ")"}
+	}
+	return desktop.DockerAnswer{Ready: m.Ready, Sentence: m.Sentence, Commands: m.Commands, Page: m.Page}
 }
 
 var errSetupCancelled = errors.New("Setup was stopped before CYFR was started")
@@ -168,7 +206,7 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 	if err := setupFolder(dir); err != nil {
 		return err
 	}
-	ready, why := dockerReady(ctx)
+	ready, why, _ := dockerReady(ctx)
 	if ctx.Err() != nil {
 		return errSetupCancelled
 	}

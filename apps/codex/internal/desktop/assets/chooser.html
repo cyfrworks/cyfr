@@ -3,9 +3,18 @@
 <h1>Connect to a CYFR</h1>
 <form id="connect"><label>Its address<input id="address" autocomplete="url" placeholder="https://cyfr.example.com" autofocus required></label>
 <button>Connect</button></form>
-<h2>Or set up CYFR on this computer</h2>
+<button id="here" class="quiet">Or set up CYFR on this computer</button>
+</section>
+<section id="setup" hidden>
+<h1>Set up CYFR on this computer</h1>
 <p>In the folder <span class="code" id="folder"></span></p>
 <button id="change" class="quiet">Change…</button>
+<p id="docker" role="status"></p>
+<p id="run" hidden>Run these in a terminal, then press Check again:</p>
+<pre class="code" id="commands" hidden></pre>
+<p id="install" hidden>Install Docker from <a id="page">Docker's page</a>, start it, then press Check again.</p>
+<button id="check" class="quiet" hidden>Check again</button>
+<button id="back" class="quiet">Connect to a CYFR instead</button>
 </section>
 <section id="road" hidden>
 <h1>Sign in to the CYFR at <span class="code" id="open"></span></h1>

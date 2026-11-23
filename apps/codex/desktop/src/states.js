@@ -113,6 +113,7 @@
 //   confirmation {url}       open a confirmation's answer in a window of
 //                            the content's session
 //   show                     bring the content window forward
+//   external {url}           open url in the person's browser
 //   pick {id}                ask the system for a folder in a dialog of
 //                            the content window; answers picked with id
 //   say {line}
@@ -155,6 +156,13 @@ const ANOTHER = LOOPBACK + "/bootstrap/another"
 const AGAIN = LOOPBACK + "/bootstrap/again"
 // Its Change…, the same way: a folder of the system's dialog.
 const PICK = LOOPBACK + "/bootstrap/pick"
+
+/**
+ * The pages the chooser may link to, Docker's own on installing it, each
+ * opened in the person's browser and never in the app's window
+ * (tests/fixtures/desktop-process.json external_pages).
+ */
+export const EXTERNAL = ["https://www.docker.com/products/docker-desktop/", "https://docs.docker.com/engine/install/"]
 // The engine's code for a load given up: replaced, stopped or refused.
 const ABORTED = -3
 
@@ -180,6 +188,10 @@ export const ACTS = {
     to: (_, e) => e.url === PICK,
     then: (s) => s.picking ? {state: s, allow: false, do: []}
       : {state: {...s, picks: s.picks + 1, picking: s.picks + 1}, allow: false, do: [{pick: {id: s.picks + 1}}]}},
+  // Docker's page on installing it, linked from the chooser.
+  external: {window: "content", by: (_, url) => atChooser(url),
+    to: (_, e) => EXTERNAL.includes(e.url),
+    then: (s, e) => ({state: s, allow: false, do: [{external: {url: e.url}}]})},
   // A way on from the chooser: the passkey's, or this computer's key's.
   onward: {window: "content", by: (_, url) => atChooser(url),
     to: (s, e) => contentNavigation(e, kept(s)) === "allow",

@@ -1682,3 +1682,40 @@ func TestMainsFolderPickedNamesTheFolder(t *testing.T) {
 		t.Fatalf("the chooser was shown %+v", got)
 	}
 }
+
+// The chooser's Docker check is cyfr's question, asked at each press, and
+// its answer is what Docker said: a lock meanwhile answers locked.
+func TestTheChooserAsksDockerAtEachCheck(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	if got := a.post(t, "/bootstrap/docker", map[string]string{}); got.Docker != nil || got.Error == "" {
+		t.Fatalf("an app that cannot set CYFR up here answered %+v", got)
+	}
+	var asked atomic.Int32
+	answers := []DockerAnswer{
+		{Sentence: "Docker does not answer this account", Commands: []string{"apt-get update"}},
+		{Ready: true},
+	}
+	a.Docker = func(context.Context) DockerAnswer { return answers[asked.Add(1)-1] }
+	if got := a.post(t, "/bootstrap/docker", map[string]string{}); got.Docker == nil || got.Docker.Ready ||
+		got.Docker.Sentence != answers[0].Sentence || len(got.Docker.Commands) != 1 {
+		t.Fatalf("the first check answered %+v", got)
+	}
+	if got := a.post(t, "/bootstrap/docker", map[string]string{}); got.Docker == nil || !got.Docker.Ready {
+		t.Fatalf("Check again answered %+v", got)
+	}
+	if n := asked.Load(); n != 2 {
+		t.Fatalf("Docker was asked %d times for two checks", n)
+	}
+	held, entered := make(chan struct{}), make(chan struct{})
+	a.Docker = func(context.Context) DockerAnswer { close(entered); <-held; return DockerAnswer{Ready: true} }
+	check := a.connect(t, "/bootstrap/docker", map[string]string{})
+	<-entered
+	a.Lock("Locked.")
+	if m := a.next(t); m.Type != TypeLocked {
+		t.Fatalf("main heard %+v", m)
+	}
+	close(held)
+	if got := answered(t, check); got.Docker != nil || got.Error != lockedSentence {
+		t.Fatalf("a check across a lock answered %+v", got)
+	}
+}

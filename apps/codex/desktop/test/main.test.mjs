@@ -52,6 +52,7 @@ function reset({relaunch = false} = {}) {
   world.wholeDocument = false
   world.refuseLoad = false
   world.dialogs = []
+  world.opened = []
   world.app.removeAllListeners()
   world.powerMonitor.removeAllListeners()
   world.quit = false
@@ -218,7 +219,8 @@ mock.module("electron", {exports: {
   BrowserWindow, app: world.app, dialog: {showMessageBox: async () => ({response: 0}),
     // The system's folder dialog, open until the test answers it.
     showOpenDialog: (parent, options) => new Promise((answer) => world.dialogs.push({parent, options, answer}))},
-  powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request}
+  powerMonitor: world.powerMonitor, session: {fromPartition}, net: {request},
+  shell: {openExternal: async (url) => { world.opened.push(url) }}
 }})
 let child = null
 mock.module("node:child_process", {exports: {spawn: (_program, args) => {
@@ -1384,4 +1386,21 @@ test("a lock, or the chooser leaving, answers the pick with none at once, and th
     await settled()
     assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null}], `${name}: the late folder is dropped`)
   }
+})
+
+test("Docker's page, linked from the chooser, opens in the person's browser and never in the app's window", async () => {
+  for (const page of ["https://www.docker.com/products/docker-desktop/", "https://docs.docker.com/engine/install/"]) {
+    await started(false)
+    const w = content()
+    assert.ok(navigate(w, page).prevented, "the window does not go there")
+    await settled()
+    assert.deepEqual(world.opened, [page])
+    assert.equal(content(), w)
+    assert.deepEqual(world.loads, [], "nothing of it loads in the app")
+  }
+  await started(false)
+  assert.ok(navigate(content(), "https://www.docker.com/").prevented)
+  assert.ok(redirected(content(), "https://docs.docker.com/engine/install/").prevented)
+  await settled()
+  assert.deepEqual(world.opened, [], "any other page, or a redirect, opens nothing")
 })

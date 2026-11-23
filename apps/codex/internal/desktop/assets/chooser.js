@@ -6,6 +6,9 @@ const notices={company:"This CYFR requires company sign-in. Open its address in 
 let asked=null,picks=0;
 function say(t){$("notice").textContent=t||""}
 function folder(a){if(a.folder){$("folder").textContent=a.folder;picks=a.picks||0}}
+function checked(a){const d=a.docker||{},fix=d.commands||[];$("docker").textContent=!a.docker?a.error:d.ready?"Docker answers on this computer.":d.sentence+".";
+$("commands").textContent=fix.map(c=>"sudo "+c).join("\n");$("run").hidden=$("commands").hidden=!fix.length;if(d.page)$("page").href=d.page;$("install").hidden=!d.page;$("check").hidden=!!d.ready}
+function check(){$("docker").textContent="Checking whether Docker answers\u2026";$("run").hidden=$("commands").hidden=$("install").hidden=$("check").hidden=true;post("/bootstrap/docker",{}).then(checked)}
 function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
 function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.next&&(passkey||told));$("confirm").hidden=!asked;$("choose").hidden=!!asked||stay;$("road").hidden=!stay;
 if(asked){$("named").textContent=a.cyfr;$("service").textContent=a.confirm}
@@ -16,6 +19,9 @@ function onward(at,to){say("Connecting\u2026");post("/bootstrap/connect",{addres
 function connect(address){say("Connecting\u2026");post("/bootstrap/connect",{address}).then(connected)}
 post("/bootstrap/state",{}).then(a=>{if(a.cyfr)$("address").value=a.cyfr;folder(a);const told=main.told.map(n=>notices[n]).filter(Boolean).join(" ").replace("{CYFR}",a.cyfr||"");show(a,told);if(passkey&&a.resume&&!told)connect(a.resume)});
 $("connect").addEventListener("submit",e=>{e.preventDefault();connect($("address").value)});
+$("here").addEventListener("click",()=>{say("");$("choose").hidden=true;$("setup").hidden=false;check()});
+$("check").addEventListener("click",check);
+$("back").addEventListener("click",()=>{$("setup").hidden=true;$("choose").hidden=false});
 $("change").addEventListener("click",()=>{post("/bootstrap/folder",{picks}).then(a=>a.error?say(a.error):folder(a));location.assign("/bootstrap/pick")});
 $("another").addEventListener("click",()=>location.assign("/bootstrap/another"));
 $("approve").addEventListener("click",()=>{say("Connecting\u2026");post("/bootstrap/approve",{cyfr:asked.cyfr,directory:asked.confirm}).then(connected)});

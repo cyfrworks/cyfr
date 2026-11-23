@@ -20,7 +20,7 @@ import {spawn} from "node:child_process"
 import os from "node:os"
 import path from "node:path"
 
-import {BrowserWindow, app, dialog, session} from "electron"
+import {BrowserWindow, app, dialog, session, shell} from "electron"
 
 import {keptStorage} from "./owner.js"
 import {lines, readFromCyfr, toCyfr} from "./process.js"
@@ -200,6 +200,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.reload && content) content.webContents.reload()
     if (effect.confirmation && content) openConfirmation(effect.confirmation.url)
     if (effect.pick) pickFolder(effect.pick.id)
+    if (effect.external) shell.openExternal(effect.external.url).catch(() => say("the person's browser did not open"))
     if (effect.show && content && !content.isDestroyed()) {
       if (content.isMinimized()) content.restore()
       content.focus()

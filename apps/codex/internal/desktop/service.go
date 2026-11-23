@@ -105,6 +105,9 @@ type Service struct {
 	// Folder is where CYFR is set up on this computer until the person
 	// picks another (FolderPicked): ~/cyfr.
 	Folder string
+	// Docker asks whether Docker answers this account on this computer;
+	// nil asks nothing.
+	Docker func(context.Context) DockerAnswer
 
 	mu sync.Mutex
 	// epoch counts locks. A chooser request belongs to the epoch it
@@ -210,6 +213,7 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		"/bootstrap/connect": s.connect,
 		"/bootstrap/approve": s.approve,
 		"/bootstrap/folder":  s.awaitFolder,
+		"/bootstrap/docker":  s.docker,
 	}[r.URL.Path]
 	if !ok || r.Method != http.MethodPost {
 		http.NotFound(w, r)
@@ -305,16 +309,42 @@ type request struct {
 // on the passkey road connects by itself; a folder's is never Resume.
 // Notice names a sentence of the chooser's own, the one main's notices
 // name. Folder is where CYFR would be set up on this computer, after
-// Picks of main's answers to a pick.
+// Picks of main's answers to a pick, and Docker whether Docker answers
+// there.
 type answer struct {
-	Folder  string `json:"folder,omitempty"`
-	Picks   uint64 `json:"picks,omitempty"`
-	Home    string `json:"cyfr,omitempty"`
-	Confirm string `json:"confirm,omitempty"`
-	Next    string `json:"next,omitempty"`
-	Resume  string `json:"resume,omitempty"`
-	Notice  string `json:"notice,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Docker  *DockerAnswer `json:"docker,omitempty"`
+	Folder  string        `json:"folder,omitempty"`
+	Picks   uint64        `json:"picks,omitempty"`
+	Home    string        `json:"cyfr,omitempty"`
+	Confirm string        `json:"confirm,omitempty"`
+	Next    string        `json:"next,omitempty"`
+	Resume  string        `json:"resume,omitempty"`
+	Notice  string        `json:"notice,omitempty"`
+	Error   string        `json:"error,omitempty"`
+}
+
+// DockerAnswer is whether Docker answers this account on this computer,
+// and, where it does not, the sentence why and what would make it: the
+// commands to run as root, or the page a person installs it from. The app
+// runs none of them.
+type DockerAnswer struct {
+	Ready    bool     `json:"ready,omitempty"`
+	Sentence string   `json:"sentence,omitempty"`
+	Commands []string `json:"commands,omitempty"`
+	Page     string   `json:"page,omitempty"`
+}
+
+// docker is the chooser's question of Docker, asked again at each Check
+// again; a lock meanwhile answers locked.
+func (s *Service) docker(ctx context.Context, epoch uint64, _ request) answer {
+	if s.Docker == nil {
+		return answer{Error: "This app cannot set CYFR up on this computer."}
+	}
+	d := s.Docker(ctx)
+	if !s.live(epoch) {
+		return answer{Error: lockedSentence}
+	}
+	return answer{Docker: &d}
 }
 
 // opened is the answer for the CYFR open at home.

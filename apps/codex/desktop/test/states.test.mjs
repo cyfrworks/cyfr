@@ -7,7 +7,9 @@
 import assert from "node:assert/strict"
 import {test} from "node:test"
 
-import {ACTS, initial, step} from "../src/states.js"
+import {readFileSync} from "node:fs"
+
+import {ACTS, EXTERNAL, initial, step} from "../src/states.js"
 
 const READY = "http://127.0.0.1:7340/bootstrap/#token=dG9rZW4"
 const HOME = "https://cyfr.example.com"
@@ -450,7 +452,11 @@ const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"
 const AGAIN = CHOOSER_DOC + "again"
 const SIGN_IN = ACCOUNT + "/account/sign#x"
 const PICK = CHOOSER_DOC + "pick"
+const DOCKER_PAGE = "https://docs.docker.com/engine/install/"
 const PRESSES = {
+  external: [
+    {name: "Docker's page", event: navigate({url: DOCKER_PAGE, showing: atWays}),
+      acted: (r) => r.do.some((e) => e.external?.url === DOCKER_PAGE)}],
   pick: [
     {name: "Change…", event: navigate({url: PICK, showing: atWays}),
       acted: (r) => r.do.some((e) => e.pick) && r.state.picking > 0}],
@@ -487,7 +493,7 @@ test("an act is no redirect, and is begun by the top frame's own document that o
     "the chooser's path at the CYFR": HOME + "/bootstrap/", "the chooser's path on another port": "http://127.0.0.1:7341/bootstrap/",
     "the CYFR's host on another port": HOME + ":9443/login", "the account's path on another port": ACCOUNT + ":9443/account/sign",
     none: ""}
-  const offers = {pick: ["chooser", "the chooser with its road"], again: ["chooser", "the chooser with its road"], another: ["chooser", "the chooser with its road"], onward: ["chooser", "the chooser with its road"],
+  const offers = {external: ["chooser", "the chooser with its road"], pick: ["chooser", "the chooser with its road"], again: ["chooser", "the chooser with its road"], another: ["chooser", "the chooser with its road"], onward: ["chooser", "the chooser with its road"],
     hop: ["the CYFR's page", "the chooser's path at the CYFR"], answer: ["the account's page"]}
   for (const [act, rows] of Object.entries(PRESSES)) {
     for (const {name, event, acted} of rows) {
@@ -557,4 +563,19 @@ test("the chooser leaving, a lock, Connect to another CYFR and an end answer the
   assert.ok(said.findIndex((e) => e.send?.type === "folder-picked") < said.findIndex((e) => e.close), "answered before the content closes")
   assert.deepEqual(answers(run([ready, change, {type: "landed", url: CHOOSER_DOC + "#x"}, {type: "started", url: HOME}]).effects), [],
     "a fragment, or a navigation that has not committed, leaves the pick")
+})
+
+test("the chooser's links open in the person's browser: Docker's pages, as the vectors name them, and none other", () => {
+  const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
+  assert.deepEqual(EXTERNAL, vectors["external_pages"])
+  const s = run([ready]).s
+  for (const url of EXTERNAL) {
+    assert.deepEqual(step(s, navigate({url, showing: CHOOSER_DOC, by: CHOOSER_DOC})), {state: s, allow: false, do: [{external: {url}}]})
+  }
+  for (const url of ["https://www.docker.com/", "https://docs.docker.com/engine/install/ubuntu/", "https://evil.example/",
+    "http://docs.docker.com/engine/install/", DOCKER_PAGE + "#x"]) {
+    const r = step(s, navigate({url, showing: CHOOSER_DOC, by: CHOOSER_DOC}))
+    assert.equal(r.allow, false, url)
+    assert.deepEqual(r.do, [], url)
+  }
 })

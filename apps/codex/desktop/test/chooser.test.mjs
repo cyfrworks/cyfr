@@ -34,7 +34,7 @@ const ROAD = "#token=t&road=passkey"
 // holds `saved`; the tab holds the run token, as it does once main's first
 // load ran, and cyfr refuses any other.
 async function chooser(notice, state, connected = OPEN, hash = "#token=t" + (notice ? `&notice=${notice}` : ""),
-  {type = "navigate", saved = null, picked = {}} = {}) {
+  {type = "navigate", saved = null, picked = {}, docker = []} = {}) {
   const elements = new Map()
   for (const [tag, id] of page.matchAll(/<[a-z0-9]+\b[^>]*\bid="([a-z]+)"[^>]*>/g)) {
     const listeners = {}
@@ -59,7 +59,7 @@ async function chooser(notice, state, connected = OPEN, hash = "#token=t" + (not
       if (path !== "/bootstrap/state") went.asked.push([path, body])
       went.tokens = [...(went.tokens ?? []), token]
       if (path !== "/bootstrap/state") stored.clear() // main cleared the storage while it waited
-      return {ok: true, json: async () => (path === "/bootstrap/state" ? state : path === "/bootstrap/folder" ? picked : connected)}
+      return {ok: true, json: async () => (path === "/bootstrap/state" ? state : path === "/bootstrap/folder" ? picked : path === "/bootstrap/docker" ? docker.shift() : connected)}
     }
   })
   await settled()
@@ -381,4 +381,50 @@ test("the chooser never names a folder, and says why a pick went unanswered", as
   assert.equal($("folder").textContent, "/home/ada/cyfr")
   assert.equal($("notice").textContent, "CYFR locked. Connect again.")
   for (const [, body] of went.asked) assert.ok(!JSON.stringify(body).includes("/home/ada"), JSON.stringify(body))
+})
+
+// The Docker check: shown once the person chose to set up here, asked of
+// cyfr at that press and at each Check again, its commands text to copy
+// and its page a link.
+test("Set up CYFR on this computer shows its screen and asks whether Docker answers; Check again asks again", async () => {
+  const docker = [{docker: {sentence: "Docker does not answer this account", commands: ["apt-get update", "usermod -aG docker ada"]}},
+    {docker: {ready: true}}]
+  const {$, went} = await chooser("", {folder: "/home/ada/cyfr"}, {}, "#token=t", {docker})
+  assert.deepEqual([$("choose").hidden, $("setup").hidden], [false, true], "the first screen offers it")
+  assert.deepEqual(went.asked, [], "nothing asks Docker before the press")
+  $("here").fire("click")
+  assert.deepEqual([$("choose").hidden, $("setup").hidden], [true, false])
+  assert.equal($("docker").textContent, "Checking whether Docker answers\u2026")
+  await settled()
+  assert.deepEqual(went.asked, [["/bootstrap/docker", {}]])
+  assert.equal($("docker").textContent, "Docker does not answer this account.")
+  assert.deepEqual([$("run").hidden, $("commands").hidden, $("install").hidden, $("check").hidden], [false, false, true, false])
+  assert.equal($("commands").textContent, "sudo apt-get update\nsudo usermod -aG docker ada", "text to copy")
+  $("check").fire("click")
+  await settled()
+  assert.equal(went.asked.length, 2, "Check again asks again")
+  assert.equal($("docker").textContent, "Docker answers on this computer.")
+  assert.deepEqual([$("run").hidden, $("commands").hidden, $("install").hidden, $("check").hidden], [true, true, true, true])
+  assert.deepEqual(went.pressed, [], "the app goes nowhere and runs nothing")
+  $("back").fire("click")
+  assert.deepEqual([$("choose").hidden, $("setup").hidden], [false, true])
+})
+
+test("where Docker is to be installed from its page, the chooser links to it; a Docker elsewhere or a login missing is its sentence alone", async () => {
+  const page = "https://www.docker.com/products/docker-desktop/"
+  const docker = [{docker: {sentence: "Docker did not say where it runs containers", page}},
+    {docker: {sentence: "Docker does not answer this account until you log out and in again"}},
+    {error: "CYFR locked. Connect again."}]
+  const {$} = await chooser("", {folder: "/home/ada/cyfr"}, {}, "#token=t", {docker})
+  $("here").fire("click")
+  await settled()
+  assert.equal($("page").href, page)
+  assert.deepEqual([$("install").hidden, $("commands").hidden], [false, true])
+  $("check").fire("click")
+  await settled()
+  assert.equal($("docker").textContent, "Docker does not answer this account until you log out and in again.")
+  assert.deepEqual([$("install").hidden, $("commands").hidden, $("check").hidden], [true, true, false])
+  $("check").fire("click")
+  await settled()
+  assert.equal($("docker").textContent, "CYFR locked. Connect again.")
 })

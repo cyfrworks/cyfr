@@ -313,6 +313,9 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 // macOS and Windows.
 const dockerDesktopPage = "https://www.docker.com/products/docker-desktop/"
 
+// dockerEnginePage is Docker's own page on installing it on Linux.
+const dockerEnginePage = "https://docs.docker.com/engine/install/"
+
 // dockerDesktop is where Docker Desktop is installed on system, and the
 // folder of the docker program it carries. A test stands in for it.
 var dockerDesktop = func(system string) (app, bin string) {

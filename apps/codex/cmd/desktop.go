@@ -97,6 +97,9 @@ func newDesktopService(ctx context.Context, device string, send func(desktop.Mes
 		DisplayName: host,
 		Send:        send,
 		Folder:      filepath.Join(home, "cyfr"),
+		Docker: func(ctx context.Context) desktop.DockerAnswer {
+			return dockerCheck(ctx, shell.NewWork(ctx))
+		},
 		Local: func(project string) (desktop.Local, error) {
 			work := shell.NewWork(ctx)
 			l, err := readLocal(work, project, "the CYFR app")

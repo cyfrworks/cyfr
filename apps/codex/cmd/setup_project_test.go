@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -410,9 +411,83 @@ func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 			}
 			return c.account
 		}
-		ready, why := dockerReady(t.Context())
+		ready, why, fixable := dockerReady(t.Context())
 		if ready || strings.Contains(why, "log out and in again") != c.login || strings.Contains(why, "another computer") != c.elsewhere {
 			t.Errorf("%+v: ready %v, %q", c, ready, why)
+		}
+		if fixable != (!c.login && !c.elsewhere) {
+			t.Errorf("%+v: %q offers a remedy: %v", c, why, fixable)
+		}
+	}
+}
+
+// The probe's answer names what makes Docker answer here, only where
+// installing, starting or joining is what is missing: the commands on
+// Ubuntu 26.04, Docker Desktop's page on macOS and Windows, Docker's own
+// page on any other Linux; none for a Docker elsewhere, a login missing,
+// or a Docker that answers.
+func TestTheProbeNamesWhatMakesDockerAnswerHere(t *testing.T) {
+	saved := machine
+	t.Cleanup(func() { machine = saved })
+	machine.installed = func(string) bool { return false }
+	machine.running = func() bool { return false }
+	machine.groups = func(context.Context, string) []string { return nil }
+	for _, c := range []struct {
+		name, system  string
+		supported     bool
+		here, answers bool
+		hereErr       error
+		commands      bool
+		page          string
+	}{
+		{"Ubuntu 26.04 without Docker", "linux", true, true, false, nil, true, ""},
+		{"Ubuntu 26.04, Docker not installed", "linux", true, false, false, errors.New("no docker"), true, ""},
+		{"another Linux", "linux", false, true, false, nil, false, dockerEnginePage},
+		{"macOS", "darwin", false, true, false, nil, false, dockerDesktopPage},
+		{"Windows", "windows", false, false, false, errors.New("no docker"), false, dockerDesktopPage},
+		{"a Docker elsewhere", "darwin", false, false, false, nil, false, ""},
+		{"a Docker that answers", "linux", true, true, true, nil, false, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			machine.system = func() string { return c.system }
+			machine.supported = func() bool { return c.supported }
+			machine.dockerHere = func(context.Context) (bool, error) { return c.here, c.hereErr }
+			machine.reachable = func(context.Context) bool { return c.answers }
+			var out bytes.Buffer
+			// The end of its stdin is the work's cancel: held open.
+			in, held := io.Pipe()
+			defer held.Close()
+			_ = runSetupWork(t.Context(), in, &out, []string{workProbe})
+			var m workMessage
+			if err := json.Unmarshal(out.Bytes(), &m); err != nil {
+				t.Fatalf("the probe said %q", out.String())
+			}
+			if m.Type != workDone || m.Ready != c.answers || (len(m.Commands) > 0) != c.commands || m.Page != c.page {
+				t.Fatalf("the probe answered %+v", m)
+			}
+			if c.commands && !slices.Contains(m.Commands, "systemctl enable --now docker") {
+				t.Fatalf("the commands are %q", m.Commands)
+			}
+		})
+	}
+}
+
+// Every page the probe can name is one main opens in the person's
+// browser (tests/fixtures/desktop-process.json external_pages).
+func TestEveryPageTheProbeNamesIsOneMainOpens(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "desktop-process.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Pages []string `json:"external_pages"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range []string{dockerDesktopPage, dockerEnginePage} {
+		if !slices.Contains(v.Pages, page) {
+			t.Errorf("main does not open %s", page)
 		}
 	}
 }
