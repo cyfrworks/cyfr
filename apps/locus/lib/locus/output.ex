@@ -18,17 +18,21 @@ defmodule Locus.Output do
 
   A holder (a backends session) names its whole unread holding with
   `hold/2` after every change of it. Past the role's unread bound, the
-  holder holding most of those not already dropping is asked to drop its
-  oldest: the caller itself is answered `{:drop_to, bytes}` and holds again
-  once it has; any other is sent `{Locus.Output, :over}` and holds again
-  when it reads it, at its next message turn. No holder waits on another,
-  so the count may sit over its bound while a holder told to drop has not
-  yet held again: each such holder owes the excess it was assigned, at
-  most the one increment of the hold that passed the bound, and is not
-  assigned another until it holds again. The count therefore passes its
-  bound by at most the sum of what the holders told and not yet heard from
-  owe: at most one per-hold increment for each of them, until each one's
-  next hold.
+  holder holding most of those not already dropping is given a target, its
+  holding less the excess, and asked to drop its oldest to it: the caller
+  itself is answered `{:drop_to, target}` and holds again once it has; any
+  other is sent `{Locus.Output, :over}` and holds again when it reads it,
+  at its next message turn. A holder with a target that holds above it,
+  for whatever reason it holds, is answered `{:drop_to, target}` in its own
+  call: what it owes stays its own and passes to no one, and its target
+  goes only once it holds at or below it. No holder waits on another, so
+  the count may sit over its bound while a holder told to drop has not yet
+  held again: each such holder owes the excess it was assigned, at most
+  the one increment of the hold that passed the bound, and is assigned no
+  other while it owes. The count therefore passes its bound by at most the
+  sum of what the holders told and not yet heard from owe: at most one
+  per-hold increment for each of them, each until that holder's next
+  hold.
 
   ## Answering
 
@@ -180,10 +184,11 @@ defmodule Locus.Output do
     {:ok,
      %{
        bounds: bounds,
-       # Each holder's unread bytes, the excess each holder told to drop
-       # owes until it holds again, and their total.
+       # Each holder's unread bytes and their total, and the target each
+       # holder told to drop owes down to: what it owes is what it holds
+       # above it.
        unread: %{},
-       owed: %{},
+       targets: %{},
        unread_total: 0,
        # Each grant by its ref: its holder and its bytes.
        grants: %{},
@@ -198,13 +203,19 @@ defmodule Locus.Output do
 
   @impl GenServer
   def handle_call({:hold, bytes}, {pid, _tag}, state) do
-    state =
-      state
-      |> put_unread(pid, bytes)
-      |> Map.update!(:owed, &Map.delete(&1, pid))
-      |> watch(pid)
+    state = state |> put_unread(pid, bytes) |> watch(pid)
 
-    {reply, state} = over(state, pid)
+    {reply, state} =
+      case state.targets do
+        # A holder told to drop that holds above its target drops to it
+        # now, in its own call: its debt is never anyone else's.
+        %{^pid => target} when bytes > target ->
+          {{:drop_to, target}, state}
+
+        _paid_or_none ->
+          over(%{state | targets: Map.delete(state.targets, pid)}, pid)
+      end
+
     {:reply, reply, state |> forget_if_idle(pid) |> peak()}
   end
 
@@ -224,8 +235,8 @@ defmodule Locus.Output do
      %{
        unread: state.unread_total,
        answering: state.answering_total,
-       owed: state.owed |> Map.values() |> Enum.sum(),
-       owing: map_size(state.owed),
+       owed: owed(state),
+       owing: map_size(state.targets),
        waiting: map_size(state.waiters),
        unread_peak: state.peaks.unread,
        answering_peak: state.peaks.answering
@@ -300,7 +311,7 @@ defmodule Locus.Output do
   def handle_info({:DOWN, _monitor, :process, pid, _reason}, state) do
     state = %{state | monitors: Map.delete(state.monitors, pid)}
     state = put_unread(state, pid, 0)
-    state = %{state | owed: Map.delete(state.owed, pid)}
+    state = %{state | targets: Map.delete(state.targets, pid)}
 
     held = for {ref, {^pid, _bytes}} <- state.grants, do: ref
     state = Enum.reduce(held, state, &release(&2, &1))
@@ -341,22 +352,24 @@ defmodule Locus.Output do
   end
 
   # Past the bound, beyond what the holders told already owe, the holder
-  # holding most of those owing nothing is assigned the excess. The caller
-  # owes nothing (its hold cleared what it owed), so one always is.
+  # holding most of those with no target is given one, its holding less
+  # the excess. The caller has none (it paid what it owed, or never owed),
+  # so one always is.
   defp over(%{bounds: %{unread: nil}} = state, _caller), do: {:ok, state}
 
   defp over(state, caller) do
-    owed = state.owed |> Map.values() |> Enum.sum()
-    excess = state.unread_total - owed - state.bounds.unread
+    excess = state.unread_total - owed(state) - state.bounds.unread
 
-    eligible = Enum.reject(state.unread, fn {pid, _bytes} -> is_map_key(state.owed, pid) end)
+    eligible =
+      Enum.reject(state.unread, fn {pid, _bytes} -> is_map_key(state.targets, pid) end)
 
     if excess > 0 and eligible != [] do
       {most, bytes} = Enum.max_by(eligible, fn {pid, bytes} -> {bytes, pid == caller} end)
-      state = %{state | owed: Map.put(state.owed, most, excess)}
+      target = max(bytes - excess, 0)
+      state = %{state | targets: Map.put(state.targets, most, target)}
 
       if most == caller do
-        {{:drop_to, max(bytes - excess, 0)}, state}
+        {{:drop_to, target}, state}
       else
         send(most, {__MODULE__, :over})
         {:ok, state}
@@ -364,6 +377,13 @@ defmodule Locus.Output do
     else
       {:ok, state}
     end
+  end
+
+  # What the holders told to drop owe: each what it holds above its target.
+  defp owed(state) do
+    Enum.reduce(state.targets, 0, fn {pid, target}, owed ->
+      owed + max(Map.get(state.unread, pid, 0) - target, 0)
+    end)
   end
 
   # ————— answering —————
@@ -418,7 +438,7 @@ defmodule Locus.Output do
 
   defp forget_if_idle(state, pid) do
     holds? =
-      is_map_key(state.unread, pid) or is_map_key(state.owed, pid) or
+      is_map_key(state.unread, pid) or is_map_key(state.targets, pid) or
         Enum.any?(state.grants, fn {_ref, {holder, _bytes}} -> holder == pid end) or
         Enum.any?(state.waiters, fn {_ref, waiter} -> waiter.pid == pid end)
 

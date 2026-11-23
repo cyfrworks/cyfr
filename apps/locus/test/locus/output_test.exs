@@ -176,6 +176,36 @@ defmodule Locus.OutputTest do
       assert peak <= bound + length(holders) * increment
     end
 
+    test "a holder told to drop that holds again without dropping still owes, " <>
+           "and is told in its own call: its debt passes to no one" do
+      output = start(%{unread: 100 * @kib, answering: @kib})
+      [a, b, c, d] = for _ <- 1..4, do: holder(output)
+
+      assert hold(a, 41 * @kib) == :ok
+      assert hold(b, 39 * @kib) == :ok
+      assert hold(c, 20 * @kib) == :ok
+
+      # C's increment passes the bound: A holds most and is told.
+      assert hold(c, 25 * @kib) == :ok
+      assert_receive {^a, :over}
+      assert_held(output, owed: 5 * @kib, owing: 1)
+
+      # The others' readers take theirs; D grows past what A holds, within
+      # the bound.
+      assert hold(b, 0) == :ok
+      assert hold(c, 0) == :ok
+      assert hold(d, 64 * @kib) == :ok
+
+      # A holds more before it read that it was told: it still owes, now
+      # its own increment too, and drops in its own call; D is told nothing.
+      assert hold(a, 42 * @kib) == {:drop_to, 36 * @kib}
+      refute_received {^d, :over}
+      assert_held(output, owed: 6 * @kib, owing: 1)
+
+      assert hold(a, 36 * @kib) == :ok
+      assert_held(output, unread: 100 * @kib, owed: 0, owing: 0)
+    end
+
     test "a holder that dies holds nothing more, and owes nothing" do
       output = start(%{unread: 100 * @kib, answering: @kib})
       [a, b] = [holder(output), holder(output)]
