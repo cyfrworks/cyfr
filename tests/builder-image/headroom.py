@@ -15,21 +15,25 @@ without being over its own.
 The service never holds a build's output whole: it reads the build's
 archive a relay frame at a time and sends each piece on as an output line
 before it reads the next, and what it holds of a build's output is
-counted to the builds role's bound (`Locus.Output`, 8 MiB). So the largest
+counted to the builds role's bound (`Locus.Output`). So the largest
 result the wire allows (`Prima.BuilderProtocol.max_output_bytes/0`)
-raises the service's memory by no more than that bound's worth, with its
-sockets' buffers and the allocator's slack beside it, while a reader
-takes it. This measures it, in one container, the kernel's own high-water
-marks read after each step:
+raises the service's memory by no more than its allowance, `allowance/0`,
+computed from the role table as stack.py reads it (`Prima.LocusRoles`,
+`Locus.Output`'s table): the factor of resident bytes to a byte held times
+the bound and the build's keeper read, and the kernel's queues of the
+build's relay and of the answer's connection, while a reader takes it.
+This measures it, in one container, the kernel's own high-water marks read
+after each step:
 
 - idle, once the service answers health;
 - one build answering a largest result;
 - as many builds as the service runs at once, each holding memory close to
   its bound until it ends and each answering a largest result, together.
 
-It prints every figure and fails unless every build answered its result
-intact, one largest result raised the `keeper` group's peak over idle by
-less than SERVICE_RISE, each build's group stayed within its bound while
+It prints every figure, the allowance beside the rise, and fails unless
+every build answered its result intact, one largest result raised the
+`keeper` group's peak over idle by no more than its allowance, each build's
+group stayed within its bound while
 coming close to it, the kernel killed nothing for the container's limit,
 and the `keeper` group's peak fits in what the container's limit leaves
 beside the concurrent builds' bounds. The limit, the bound and the concurrency are
@@ -52,7 +56,9 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from stack import RELEASE_BIN, RELEASE_USER, WIRE, Stack, brief, expect, output_bytes, tincture  # noqa: E402
+from stack import (  # noqa: E402
+    RELEASE, RELEASE_BIN, RELEASE_USER, ROLE, WIRE, Stack, brief, expect, output_bytes, tincture,
+)
 # stack puts tests/, which holds the shared plumbing, on the path.
 import imagesuite  # noqa: E402
 
@@ -61,11 +67,9 @@ MIB = 1 << 20
 LARGEST = WIRE["bounds"]["max_output_bytes"] - 4096
 # How close to its bound a holding build must have come for the pair to count.
 CLOSE = 0.85
-# The most one largest result may raise the service's group over idle: the
-# builds bound's 8 MiB of output, the reading and writing sockets' buffers
-# (a few MiB each at most) and the allocator's slack. A service that held
-# the result whole took several times the result itself.
-SERVICE_RISE = 48 * MIB
+# The builds role's own memory and the release's shared figures
+# (Prima.LocusRoles).
+MEMORY, SHARED = ROLE["memory"], RELEASE["memory"]
 # The settings docker-compose.yml interpolates, which the service never sees.
 COMPOSE_SETTINGS = {"LOCUS_BUILDS_MEMORY_LIMIT", "LOCUS_BUILDS_CPU_LIMIT"}
 
@@ -82,6 +86,19 @@ while :; do
   sleep 0.1
 done
 """
+
+
+def allowance():
+    """What one largest result may raise the service's group by over idle.
+
+    The factor of resident bytes to a byte held times what the service
+    counts and the one keeper read its build's spawn holds, at most its
+    copies at once; beside them the kernel's queue of the build's relay and
+    the send queue of the connection the result is answered on. A service
+    that held the result whole took several times the result itself.
+    """
+    held = MEMORY["answering"] + SHARED["keeper_read_bytes"] * SHARED["keeper_read_copies"]
+    return int(SHARED["byte_cost"] * held) + SHARED["relay_queue_bytes"] + SHARED["socket_queue_bytes"]
 
 
 def largest(hold_mib):
@@ -191,10 +208,14 @@ def main(image, settings):
         expect(status == 200 and len(output_bytes(answer, "blob.bin") or b"") == LARGEST,
                f"one build answers a largest result, {mib(LARGEST)}, intact", brief(answer))
         single = int(read(stack, "keeper/memory.peak"))
-        print(f"one largest result: the keeper group's peak {mib(single)}, {mib(single - idle)} over idle")
-        expect(single - idle < SERVICE_RISE,
-               f"one largest result raises the service's memory by less than {mib(SERVICE_RISE)}, "
-               "since the service never holds it whole", {"idle": idle, "peak": single})
+        allowed = allowance()
+        print(f"one largest result: the keeper group's peak {mib(single)}, {mib(single - idle)} over idle "
+              f"({single - idle} bytes) of the {allowed} allowed: {SHARED['byte_cost']} x ({MEMORY['answering']} "
+              f"answering + {SHARED['keeper_read_copies']} x {SHARED['keeper_read_bytes']} keeper read) + "
+              f"{SHARED['relay_queue_bytes']} relay queue + {SHARED['socket_queue_bytes']} send queue")
+        expect(single - idle <= allowed,
+               f"one largest result raises the service's memory by no more than {mib(allowed)}, "
+               "since the service never holds it whole", {"idle": idle, "peak": single, "allowance": allowed})
 
         # What a holding build may hold beside its output, its home's pages
         # and the rest of its tree, and stay within its bound.

@@ -21,13 +21,16 @@ signed as CYFR signs them (harness.py):
 
 And the service's own memory has a bound, in a service started afresh:
 
-- As many sessions as it admits, up to 32, open silent, and the group it
-  runs in (the keeper's, `keeper`) peaks at its idle figure. Then all but
-  one write 8 MiB of lines each that nobody reads, while one is read as it
-  comes. The service keeps 64 MiB unread over every session and answers 26
-  MiB at once (`Locus.Output`), and P1 measured a buffered byte costing the
-  group 2.3 to 2.8 bytes, so the group's peak stays within its idle peak and
-  (64 + 26) MiB x 2.8, 252 MiB. The kernel kills nothing in the container,
+- As many sessions as it admits, up to its pool's uids, open silent, and
+  the group it runs in (the keeper's, `keeper`) peaks at its idle figure.
+  Then all but one write 8 MiB of lines each that nobody reads, while one
+  is read as it comes. The group's peak stays within its idle peak and the
+  allowance `allowance/1` computes from the role table as harness.py reads
+  it (`Prima.LocusRoles`, `Locus.Output`'s table): the factor of
+  resident bytes to a byte held times what the service counts, its unread
+  and answering bounds, and the keeper reads its sessions' spawns hold, and
+  the kernel's queue of each spawn's relay; the suite prints the peak beside
+  the allowance whether it holds or not. The kernel kills nothing in the container,
   every session runs on, the service answers health and renewals
   throughout, the session read as it comes loses no line, and each unread
   session kept its newest lines, whole and in order, its oldest dropped and
@@ -45,7 +48,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    Stack, eventually, expect, health, owner_of, probe, require_docker, wait_healthy,
+    POOL_FIRST, POOL_LAST, RELEASE, ROLE, Stack, eventually, expect, health, owner_of, probe, require_docker,
+    wait_healthy,
 )
 import imagesuite  # noqa: E402
 
@@ -55,13 +59,12 @@ ROW_BOUND = 96 * 1024 * 1024
 HOG, SIBLING, OWN = owner_of("hog"), owner_of("sibling"), owner_of("own")
 
 MIB = 1024 * 1024
-# The backends role's bounds (Locus.Output.bounds/0): what the service keeps
-# unread over every session, and what it answers at once.
-UNREAD_BOUND = 64 * MIB
-ANSWERING_BOUND = 26 * MIB
-# What a byte the service buffers cost its group, at most, by P1's measure.
-BYTE_COST = 2.8
-ALLOWANCE = int((UNREAD_BOUND + ANSWERING_BOUND) * BYTE_COST)
+# The backends role's own memory and the release's shared figures
+# (Prima.LocusRoles): what the service keeps unread over every session and
+# answers at once, and what each spawn holds beside them.
+MEMORY, SHARED = ROLE["memory"], RELEASE["memory"]
+UNREAD_BOUND = MEMORY["unread"]
+ANSWERING_BOUND = MEMORY["answering"]
 # A flood's line: 992 bytes and its newline, which the service charges 1,024
 # with its framing, so 8,192 of them leave a session's 8 MiB unread.
 FLOOD_TEXT = 992
@@ -69,9 +72,22 @@ FLOOD_LINES = 8192
 LINE_CHARGE = FLOOD_TEXT + 32
 # The most sessions the service runs at once: its pool's uids. An owner
 # holds at most 16 (Prima.LocusBackends.max_sessions/0), so two hold them.
-SESSIONS = 32
+SESSIONS = POOL_LAST - POOL_FIRST + 1
 FLOODED = [owner_of("flood-a"), owner_of("flood-b")]
 ROUND = 64
+
+
+def allowance(spawns):
+    """What the flood may raise the service's group by, over its idle peak, with `spawns` sessions open.
+
+    The factor of resident bytes to a byte held times what the service counts
+    (its unread and answering bounds) and the one keeper read each spawn
+    holds, at most its copies at once; and beside them the kernel's queue of
+    each spawn's relay. No session writes stderr or an unfinished line, and
+    what the service writes its sessions is a line at a time.
+    """
+    held = UNREAD_BOUND + ANSWERING_BOUND + spawns * SHARED["keeper_read_bytes"] * SHARED["keeper_read_copies"]
+    return int(SHARED["byte_cost"] * held) + spawns * SHARED["relay_queue_bytes"]
 
 
 def cgroup_limit(stack, pid):
@@ -259,8 +275,10 @@ def bounds_the_service(stack):
 
         beam = [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]]
         idle = group_memory(stack)
+        allowed = allowance(len(floods) + 1)
         print(f"idle with {len(floods) + 1} silent sessions: the keeper group holds {idle['current'] // MIB} MiB, "
-              f"its peak {idle['peak'] // MIB} MiB; the bound is that peak and {ALLOWANCE // MIB} MiB")
+              f"its peak {idle['peak'] // MIB} MiB; the bound is that peak and {allowed // MIB} MiB "
+              f"({allowed} bytes)")
 
         for owner, session in floods:
             status, answer = c.send(owner, session, ["go"])
@@ -305,14 +323,17 @@ def bounds_the_service(stack):
     print(f"{len(floods)} unread sessions of {FLOOD_LINES * LINE_CHARGE // MIB} MiB: they keep {unread // MIB} MiB "
           f"together, {sum(d for d, _k in reads)} lines dropped; the keeper group holds "
           f"{after_flood['current'] // MIB} MiB, its peak {after_flood['peak'] // MIB} MiB "
-          f"({(after_flood['peak'] - idle['peak']) // MIB} MiB past idle); keeper events {after_flood['events']}, "
+          f"({(after_flood['peak'] - idle['peak']) // MIB} MiB past idle, {after_flood['peak'] - idle['peak']} bytes, "
+          f"of the {allowed} allowed: {SHARED['byte_cost']} x ({UNREAD_BOUND} unread + {ANSWERING_BOUND} answering + "
+          f"{len(floods) + 1} x {SHARED['keeper_read_copies']} x {SHARED['keeper_read_bytes']} keeper reads) + "
+          f"{len(floods) + 1} x {SHARED['relay_queue_bytes']} relay queues); keeper events {after_flood['events']}, "
           f"container events {container}; {answering.asked} health asks, {rounds + 1} rounds read as they came")
 
     expect(rounds >= 8, f"the session read as it comes answered every line of its {rounds + 1} rounds, in order")
     expect(all(dropped > 0 for dropped, _kept in reads), "every unread session dropped its oldest", reads)
-    expect(after_flood["peak"] <= idle["peak"] + ALLOWANCE,
-           f"the keeper group's peak stays within its idle peak and {ALLOWANCE // MIB} MiB",
-           {"idle_peak": idle["peak"], "peak": after_flood["peak"], "allowance": ALLOWANCE})
+    expect(after_flood["peak"] <= idle["peak"] + allowed,
+           f"the keeper group's peak stays within its idle peak and {allowed // MIB} MiB",
+           {"idle_peak": idle["peak"], "peak": after_flood["peak"], "allowance": allowed})
     expect(imagesuite.no_kills(after_flood["events"]) and imagesuite.no_kills(container),
            "the kernel killed nothing in the container", {"keeper": after_flood["events"], "container": container})
     expect(beam and [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]] == beam,

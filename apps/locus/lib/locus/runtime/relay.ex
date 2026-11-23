@@ -115,13 +115,22 @@ defmodule Locus.Runtime.Relay do
   its base64 a chunk at a time, so no copy of the whole frame is made and
   the keeper's socket queues at most a chunk of it once a write returned.
 
-    * A pinned fetch's piece is asked for by the fetch's worker, by the
-      attempt's deadline, before it is handed on, and given back once
-      this process says every byte of it was written. No room by the
-      deadline ends the fetch `timeout`, nothing of the piece handed on.
-    * An attached fetch's frame, and CYFR's refusal, are asked for by the
-      poster's sink the same way; no room halts the answer, and the fetch
-      ends `timeout`.
+    * A pinned fetch's head, its headers as this process filters them,
+      and each piece of its body are asked for by the fetch's worker, by
+      the attempt's deadline, before they are handed on, and given back
+      once this process says every byte of them was written. No room by
+      the deadline ends the fetch `timeout`, nothing of the head or piece
+      handed on.
+    * An attached fetch's frame is asked for by the poster's sink the
+      same way, and CYFR's refusal by its poster as its reading begins,
+      whole, by the length it declares
+      (`Locus.Runtime.HostClient.attached_fetch/3`), and freed as the
+      poster exits once this process has written it; no room halts the
+      answer, and the fetch ends `timeout`.
+    * The service's own calls for a fetch, its `take_rate` and its
+      `egress_pin`, ask for their answers under the same count as their
+      reading begins and give them back once they are read and decoded
+      (`Locus.Runtime.HostClient`).
     * A host call's answer is asked for by its poster, whole, by the
       length it declares, as its reading begins, by the call's own
       timeout (`Prima.HostAPI.request_timeout_ms/1`): never piece by
@@ -138,9 +147,11 @@ defmodule Locus.Runtime.Relay do
   answer was written, or kills a fetch's worker, so the count freed is
   memory gone. A holder holds the piece its connection last handed it
   while it asks for it: it reads at most that one piece ahead of the
-  count. A fetch's head and the service's own calls' answers (`take_rate`,
-  its own `egress_pin`, an attached fetch's refusal as it is read) are
-  not counted.
+  count, one transport read of at most 64 KiB for a pinned fetch
+  (`Locus.Runtime.Egress.connect_options/3`), and a pinned fetch's worker
+  holds the answer's head as the HTTP client read it, at most its
+  header list's bound, while it filters it. What else a role holds is
+  `Locus.Output`'s table.
 
   Keys, headers, bodies and URLs are never logged, and no status or crash
   report shows more of them than their size.
@@ -251,8 +262,9 @@ defmodule Locus.Runtime.Relay do
   @spec held(non_neg_integer(), pos_integer()) :: non_neg_integer()
   def held(0, _frames), do: 0
 
-  def held(bytes, frames) when is_integer(bytes) and bytes > 0 and frames > 0,
-    do: bytes + 4 * div(bytes + 2, 3) + frames * @envelope_bytes
+  def held(bytes, frames)
+      when is_integer(bytes) and bytes > 0 and is_integer(frames) and frames > 0,
+      do: bytes + 4 * div(bytes + 2, 3) + frames * @envelope_bytes
 
   # ---------------------------------------------------------------------------
   # Server
@@ -910,30 +922,44 @@ defmodule Locus.Runtime.Relay do
   # comes back one event at a time, each asked for under the runtime's
   # count by the attempt's deadline and then waiting until the relay has
   # written it under the runner's credit; no room by the deadline halts
-  # the answer. The wait for the relay's word is the relay's to end: it
-  # kills the poster at the deadline, which closes its connection.
+  # the answer. CYFR's refusal is asked for as its reading begins, whole,
+  # with the frame it is written in (`:room`), and the poster holds it
+  # until the relay has written it, then exits, which frees it. The wait
+  # for the relay's word is the relay's to end: it kills the poster at the
+  # deadline, which closes its connection.
   defp start_attached(state, re, bound, request) do
     relay = self()
     client = rate_client(state, bound)
     deadline = bound.deadline
 
-    sink = fn event ->
-      case reserve(attached_held(event), by(deadline)) do
-        {:ok, grant} ->
-          send(relay, {:attached_event, re, event})
-
-          receive do
-            {:fetch_sent, ^re} ->
-              return(grant)
-              :ok
-          end
-
-        :full ->
-          :halt
+    room = fn bytes ->
+      case reserve(refusal_held(bytes), by(deadline)) do
+        {:ok, _grant} -> :ok
+        :full -> :full
       end
     end
 
-    options = %{sink: sink, max_response_size: bound.limits.max_response_size, deadline: deadline}
+    sink = fn
+      {:refusal, _header, _body} = event ->
+        handed(relay, re, event)
+
+      {:frame, frame} = event ->
+        case reserve(held(byte_size(frame), 1), by(deadline)) do
+          {:ok, grant} ->
+            handed(relay, re, event)
+            return(grant)
+
+          :full ->
+            :halt
+        end
+    end
+
+    options = %{
+      sink: sink,
+      room: room,
+      max_response_size: bound.limits.max_response_size,
+      deadline: deadline
+    }
 
     worker =
       spawn_link(fn ->
@@ -953,13 +979,18 @@ defmodule Locus.Runtime.Relay do
     }
   end
 
-  # An attached event is one frame of its own: a frame of CYFR's answer, or
-  # its refusal, whose signed header the frame carries too, at most twice
-  # its length once escaped.
-  defp attached_held({:frame, frame}), do: held(byte_size(frame), 1)
+  defp handed(relay, re, event) do
+    send(relay, {:attached_event, re, event})
 
-  defp attached_held({:refusal, header, body}),
-    do: held(byte_size(body), 1) + 2 * byte_size(header)
+    receive do
+      {:fetch_sent, ^re} -> :ok
+    end
+  end
+
+  # CYFR's refusal of `bytes` is one frame of its own, which carries the
+  # signed header too, at most twice its length once escaped.
+  defp refusal_held(bytes),
+    do: held(bytes, 1) + 2 * WorkerAuth.max_host_call_header_bytes()
 
   # How the poster's answer ends the fetch: nil for an answer relayed
   # whole; `timeout` for a sink stopped at the deadline.
@@ -1047,11 +1078,14 @@ defmodule Locus.Runtime.Relay do
       Process.put({__MODULE__, :bytes}, 0)
 
       into = fn {:data, data}, {req, resp} ->
-        head_once(relay, re, resp)
         bytes = Process.get({__MODULE__, :bytes}) + byte_size(data)
         Process.put({__MODULE__, :bytes}, bytes)
 
         cond do
+          not headed?(relay, re, resp, bound) ->
+            Process.put({__MODULE__, :error}, "timeout")
+            {:halt, {req, resp}}
+
           bytes > max_bytes ->
             Process.put({__MODULE__, :error}, "response_too_large")
             {:halt, {req, resp}}
@@ -1079,8 +1113,10 @@ defmodule Locus.Runtime.Relay do
 
       case Req.request(opts) do
         {:ok, resp} ->
-          head_once(relay, re, resp)
-          Process.get({__MODULE__, :error})
+          case Process.get({__MODULE__, :error}) do
+            nil -> if headed?(relay, re, resp, bound), do: nil, else: "timeout"
+            error -> error
+          end
 
         # The connect and the wait for the answer time out alike; the
         # connect's own report says which.
@@ -1123,11 +1159,45 @@ defmodule Locus.Runtime.Relay do
 
   def connect_stopped(_event, _measurements, _metadata, _config), do: :ok
 
-  defp head_once(relay, re, resp) do
-    unless Process.get({__MODULE__, :headed}) do
-      Process.put({__MODULE__, :headed}, true)
-      send(relay, {:fetch_head, re, resp.status, response_headers(resp.headers)})
+  # The answer's head is handed on once, before its first piece, as a
+  # piece is: asked for by the attempt's deadline, then given back once the
+  # relay says it was written. No room by the deadline is a head not
+  # handed on.
+  defp headed?(relay, re, resp, bound) do
+    Process.get({__MODULE__, :headed}) == true or hand_head(relay, re, resp, bound)
+  end
+
+  defp hand_head(relay, re, resp, bound) do
+    headers = response_headers(resp.headers)
+
+    case reserve(head_held(headers), by(bound.deadline)) do
+      {:ok, grant} ->
+        send(relay, {:fetch_head, re, resp.status, headers})
+
+        receive do
+          {:fetch_sent, ^re} ->
+            :erlang.garbage_collect()
+            return(grant)
+        end
+
+        Process.put({__MODULE__, :headed}, true)
+        true
+
+      :full ->
+        false
     end
+  end
+
+  # What the service holds of a head it hands on: the headers as filtered,
+  # and the frame's JSON of them, each name and value at most twice over
+  # once escaped, with each pair's punctuation, and the frame's envelope.
+  defp head_held(headers) do
+    bytes =
+      Enum.reduce(headers, 0, fn {name, value}, sum ->
+        sum + byte_size(name) + byte_size(value)
+      end)
+
+    3 * bytes + 8 * length(headers) + @envelope_bytes
   end
 
   # A piece is asked for, by the attempt's deadline, before it is handed
@@ -1189,12 +1259,12 @@ defmodule Locus.Runtime.Relay do
 
     case encode(state, chunk) do
       {:ok, state} ->
-        {:noreply, state}
+        {:noreply, tell(state, fetch.worker, {:fetch_sent, re})}
 
       # Headers the codec refuses whole are sent as none.
       {:error, :unencodable} ->
         case encode(state, %{chunk | headers: []}) do
-          {:ok, state} -> {:noreply, state}
+          {:ok, state} -> {:noreply, tell(state, fetch.worker, {:fetch_sent, re})}
           {:error, reason} -> stop_write(state, reason)
         end
 

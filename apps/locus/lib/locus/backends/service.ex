@@ -39,6 +39,11 @@ defmodule Locus.Backends.Service do
      check its sequence again there (`stale_control`); its answer is
      encoded as `encode_answer/2` encodes it, and a status answer past
      `max_status_answer_bytes/0` is refused whole as `status_too_large`.
+     A status first asks the backends role's answering count
+     (`Locus.Output`) for that bound, before anything of it is collected,
+     within as long as a `recv` waits (`max_recv_wait_ms/0`), and is
+     refused `unavailable` when no room came by then; the request gives
+     the room back once its answer, or its refusal, is written.
 
   ## A session message, in order
 
@@ -148,6 +153,9 @@ defmodule Locus.Backends.Service do
 
   defp owners(%Plug.Conn{assigns: %{service_opts: opts}}), do: Keyword.get(opts, :owners, Owners)
 
+  defp output(%Plug.Conn{assigns: %{service_opts: opts}}),
+    do: Keyword.get_lazy(opts, :output, fn -> Locus.Output.server(:backends) end)
+
   defp key(%Plug.Conn{assigns: %{service_opts: opts}}) do
     case Keyword.get_lazy(opts, :key, &Locus.Config.backends_key/0) do
       key when byte_size(key) == 32 -> {:ok, key}
@@ -197,8 +205,17 @@ defmodule Locus.Backends.Service do
          {:ok, body, conn} <- body(conn, LocusBackends.max_control_bytes()),
          :ok <- hashed(conn, :control, body_hash, body),
          {:ok, message} <- readable(conn, LocusBackends.read_control(body)),
-         :ok <- named_lifetime(conn, message, fields.boot, boot),
-         {:ok, answer} <- applied(conn, fields, message, open_env(key, fields, message, boot)) do
+         :ok <- named_lifetime(conn, message, fields.boot, boot) do
+      roomed(conn, message, fn ->
+        applied_answer(conn, fields, message, open_env(key, fields, message, boot))
+      end)
+    else
+      {:refused, conn, refusal} -> refuse(conn, refusal)
+    end
+  end
+
+  defp applied_answer(conn, fields, message, open_env) do
+    with {:ok, answer} <- applied(conn, fields, message, open_env) do
       case LocusBackends.encode_answer(message.type, answer) do
         {:ok, text} ->
           answer(conn, 200, text)
@@ -214,6 +231,27 @@ defmodule Locus.Backends.Service do
       {:refused, conn, refusal} -> refuse(conn, refusal)
     end
   end
+
+  # A status's answer is asked for whole, at its bound, before the owners
+  # collect any of it, and held by this request until the answer or its
+  # refusal is written.
+  defp roomed(conn, %{type: :status}, answer) do
+    by = System.monotonic_time(:millisecond) + LocusBackends.max_recv_wait_ms()
+
+    case Locus.Output.reserve(output(conn), LocusBackends.max_status_answer_bytes(), by) do
+      {:ok, grant} ->
+        try do
+          answer.()
+        after
+          Locus.Output.return(grant)
+        end
+
+      :full ->
+        refuse(conn, :unavailable)
+    end
+  end
+
+  defp roomed(_conn, _message, answer), do: answer.()
 
   defp known(_conn, {:ok, key}), do: {:ok, key}
   defp known(conn, :error), do: {:refused, closing(conn), :unauthorized}

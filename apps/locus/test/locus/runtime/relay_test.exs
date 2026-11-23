@@ -1286,10 +1286,11 @@ defmodule Locus.Runtime.RelayCountTest do
   @moduledoc """
   What a runner's relay holds to answer or send its runner is counted
   under the runtime's count (`Locus.Output.server(:runtime)`), which these
-  tests fill or read whole, so they run alone. A pinned fetch's piece and
-  an attached fetch's frame are asked for before they are handed on and
-  given back once written; a host call's answer is asked for whole as its
-  reading begins and freed once written. No room by the deadline ends a fetch `timeout`
+  tests fill or read whole, so they run alone. A pinned fetch's head and
+  piece and an attached fetch's frame are asked for before they are handed
+  on and given back once written; a host call's answer is asked for whole
+  as its reading begins and freed once written, and the service's own
+  call's once it is read. No room by the deadline ends a fetch `timeout`
   with nothing of the piece or frame handed on, and makes a host call's
   answer one that did not arrive, under the call's retry class. A worker
   or a poster killed while it holds frees what it held. Once the relay
@@ -1317,13 +1318,18 @@ defmodule Locus.Runtime.RelayCountTest do
 
   defp answering, do: Locus.Output.held(@count).answering
 
-  # The whole bound, held by the test: nothing else holds any of it.
-  defp fill! do
+  # The whole bound but `room`, held by the test: nothing else holds any
+  # of it.
+  defp fill!(room \\ 0) do
     assert %{answering: 0, waiting: 0} = Locus.Output.held(@count)
     bound = Locus.Output.bounds().runtime.answering
 
     assert {:ok, grant} =
-             Locus.Output.reserve(@count, bound, System.monotonic_time(:millisecond) + 5_000)
+             Locus.Output.reserve(
+               @count,
+               bound - room,
+               System.monotonic_time(:millisecond) + 5_000
+             )
 
     grant
   end
@@ -1444,21 +1450,19 @@ defmodule Locus.Runtime.RelayCountTest do
   describe "a pinned fetch's piece" do
     test "waits for room, and none by the deadline ends the fetch timeout with nothing of it handed on",
          %{host: host} do
-      port = upstream!()
-      attempt = attempt!(host, timeout_ms: 1_500) |> ScriptedKeeper.relayed!()
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/body")
-      full = fill!()
+      size = 262_144
+      {port, _server} = big_upstream!(size)
 
-      assert {:ok, ref} =
-               Endpoint.fetch(
-                 attempt.endpoint,
-                 attempt.attempt,
-                 pinned.target.id,
-                 "GET",
-                 "/body",
-                 [],
-                 ""
-               )
+      attempt =
+        attempt!(host,
+          timeout_ms: 1_500,
+          limits: EdgeFixtures.limits(max_response_size: 2 * size)
+        )
+        |> ScriptedKeeper.relayed!()
+
+      # Room for the calls' answers and the head, and none for a piece.
+      full = fill!(8_192)
+      ref = pinned_fetch!(attempt, port, "/big")
 
       assert {[{:head, 200, _headers, ""}], "timeout"} = events(attempt.endpoint, ref)
 
@@ -1479,7 +1483,7 @@ defmodule Locus.Runtime.RelayCountTest do
 
       attempt =
         attempt!(host, limits: EdgeFixtures.limits(max_response_size: 2 * size))
-        |> gated!(65_536)
+        |> gated!(16_384)
 
       baseline = answering()
       ref = pinned_fetch!(attempt, port, "/big")
@@ -1491,7 +1495,7 @@ defmodule Locus.Runtime.RelayCountTest do
       send(relay, :go)
       assert read_granting(attempt.endpoint, ref, 0) == size
       wait_until(fn -> answering() == baseline end)
-      refute holds?(relay, 65_536)
+      refute holds?(relay, 16_384)
     end
 
     test "held by a worker killed while it waits is freed", %{host: host} do
@@ -1500,7 +1504,7 @@ defmodule Locus.Runtime.RelayCountTest do
 
       attempt =
         attempt!(host, limits: EdgeFixtures.limits(max_response_size: 2 * size))
-        |> gated!(65_536)
+        |> gated!(16_384)
 
       baseline = answering()
       ref = pinned_fetch!(attempt, port, "/big")
@@ -1513,6 +1517,59 @@ defmodule Locus.Runtime.RelayCountTest do
 
       send(relay, :go)
       assert {_events, "fetch_failed"} = events(attempt.endpoint, ref)
+    end
+  end
+
+  describe "a pinned fetch's head" do
+    test "waits for room before it is handed on, and none by the deadline ends the fetch timeout with no head handed on",
+         %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host, timeout_ms: 1_500) |> ScriptedKeeper.relayed!()
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/wide-head")
+
+      # Room for the calls' small answers, and none for the head.
+      held = fill!(65_536)
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/wide-head",
+                 [],
+                 ""
+               )
+
+      assert {[], "timeout"} = events(attempt.endpoint, ref)
+
+      Locus.Output.return(held)
+
+      wait_until(fn ->
+        Locus.Output.held(@count) |> Map.take([:answering, :waiting]) == %{
+          answering: 0,
+          waiting: 0
+        }
+      end)
+    end
+  end
+
+  describe "the service's own calls' answers" do
+    test "wait for room, whole, as their reading begins, and are freed once read", %{host: host} do
+      attempt = attempt!(host)
+      full = fill!()
+
+      rate = Task.async(fn -> HostClient.take_rate(attempt.client, "http:own") end)
+      wait_until(fn -> Locus.Output.held(@count).waiting == 1 end)
+      Locus.Output.return(full)
+      assert :ok = Task.await(rate, 10_000)
+
+      wait_until(fn ->
+        Locus.Output.held(@count) |> Map.take([:answering, :waiting]) == %{
+          answering: 0,
+          waiting: 0
+        }
+      end)
     end
   end
 

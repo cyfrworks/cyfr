@@ -44,19 +44,126 @@ defmodule Locus.Output do
   than the bound is `:full` at once. The grant is the asker's; `give/2`
   moves it to the process the bytes are handed to, and `return/1` is its
   holder's word that they are gone.
+
+  ## What each role holds
+
+  A role's memory has a bound when every byte its service holds for a
+  caller is counted here, or is of a kind capped in size and in how many
+  there are at once. Each kind below names its cap, its number at once
+  and where each comes from. The numbers the image suites' allowances
+  read are the role table's (`Prima.LocusRoles`, `memory`), and so are the
+  counted bounds, which `bounds/0` answers.
+
+  Counted:
+
+    * **Unread** (backends): 64 MiB over every session's buffered output
+      (`Locus.Backends.Backend`, "Unread").
+    * **Answering**: backends 26 MiB, runtime 16, builds 8, the pool's
+      share for what each service holds. The backends role counts each
+      `recv` or `output` answer, and a status's answer at its bound, 1 MiB
+      (`Prima.LocusBackends.max_status_answer_bytes/0`), from before the
+      owners collect it to its write (`Locus.Backends.Service`); the
+      builds role a build's reads and lines; the runtime each host call's
+      answer, fetch head, piece and attached frame it hands a runner,
+      CYFR's refusal of an attached fetch from its first piece, and the
+      answers of its own calls (`take_rate`, its own `egress_pin`,
+      `runner_exited`) at twice what they declare until they are decoded
+      (`Locus.Runtime.Relay`, `Locus.Runtime.HostClient`).
+
+  Not counted, each capped in size and in number:
+
+    * **A held keeper connection's read**, every role: one read at a
+      time, re-armed on its owner's word, of at most 65,541 bytes (a
+      frame's 64 KiB payload and its 5-byte header,
+      `Prima.KeeperProtocol`), held at most three times over at once (the
+      socket's data, the frames parsed from it, its owner's join): 196,623
+      bytes a spawn. Spawns at once are at most the role's pool uids
+      (`Prima.LocusRoles`): runtime 8, 1,572,984 bytes; builds 16,
+      3,145,968; backends 32, 6,291,936.
+    * **A held keeper connection's writes**, every role: its writer
+      sends a call's frames one at a time, each send waiting while the
+      socket driver's queue is past gen_tcp's high watermark (8,192
+      bytes), and answers its caller once the last send returned, so the
+      driver queues at most one frame and the watermark, 73,733 bytes, one
+      a spawn: runtime 589,864 bytes, builds 1,179,728, backends
+      2,359,456. What waits to be written beyond it is the callers' own,
+      one call each, within their request's bound.
+    * **A relay connection's kernel queue**, every role: the relay's unix
+      socket send buffer, 212,992 bytes (Linux's `net.core.wmem_default`),
+      one a spawn: runtime 1,703,936 bytes, builds 3,407,872, backends
+      6,815,744.
+    * **The piece a runtime holder reads ahead of the count**, the
+      runtime: each poster, fetch and own call holds the piece its
+      connection last handed it while it asks for room, one transport
+      read of at most 64 KiB (`Locus.Runtime.Egress.transport_opts/0`).
+      Holders at once: 64 calls and 16 fetches a runner (the relay's
+      bounds), each fetch with at most one own call at a time, so 96 a
+      runner, 768 over 8 runners: 48 MiB.
+    * **An attached fetch's unfinished frame**, the runtime: what is read
+      of a frame not yet whole, under one frame, 65,541 bytes
+      (`Prima.WorkerAuth.max_frame_bytes/0` and its header), 16 a runner,
+      128 at once: 8 MiB.
+    * **A pinned fetch's head as the HTTP client read it**, the runtime,
+      held while the fetch's worker filters and hands it on: at most the
+      client's header list bound, 256 KiB (Mint's default
+      `max_header_list_size`, which the request's connect options cannot
+      set), 128 at once: 32 MiB.
+    * **A runner's relay frame as it is assembled**, the runtime: what the
+      relay has read of a frame not yet whole, at most
+      `Prima.RunnerRelay`'s 8 MiB frame bound, one a runner, 8 at once:
+      64 MiB.
+    * **A runner's host call body**, the runtime, as its poster sends it:
+      at most `Prima.HostAPI.max_body_bytes/0`, 1 MiB, 64 a runner, 512 at
+      once: 512 MiB.
+    * **A backends session's unfinished line**: at most
+      `Prima.LocusBackends.max_line_bytes/0`, 1 MiB, one a running
+      session. Running sessions are at most the pool's 32 uids for scratch
+      programs, and the kept programs' sessions besides, each admitted by
+      its memory reservation (`Locus.Backends.Owners`, "Admission by
+      memory").
+    * **A backends session's stderr tail**: at most
+      `Prima.LocusBackends.stderr_tail_bytes/0` and its slack, 69,632
+      bytes, one a session its owner holds, running or ended, at most
+      `Prima.LocusBackends.max_sessions/0` (16) an owner. Nothing in the
+      service bounds the owners CYFR syncs to it.
+    * **A request body as a listener reads it**, every role: at most the
+      route's bound (the runtime's 1 MiB, a backends session's 16 MiB),
+      one a connection. Nothing caps a listener's connections but
+      ThousandIsland's default of 16,384 an acceptor.
+    * **A TCP connection's send queue**, every listener: what the kernel
+      holds of an answer once its write returned, at most Linux's default
+      `net.ipv4.tcp_wmem` ceiling, 4,194,304 bytes, one a connection.
+    * **A relay process of cyfr-locus's**: fixed buffers, part of the
+      service's idle figure.
+    * **The runtime VM's freed segments**: the allocator keeps up to ten
+      freed multiblock carriers cached for reuse (`+MMmcs`), each at most
+      the base64 of the largest answer's frame, 6,990,508 bytes: 69,905,080
+      bytes, held on whatever the count holds.
+
+  ## Resident memory
+
+  A held byte costs its service more than a byte. The backends image under
+  memory pressure measured a buffered byte costing the service's group 2.3
+  to 2.8 bytes, and its flood of unread sessions, read one keeper frame at
+  a time, 157 MiB over idle for 63 MiB counted: 2.5. The VM makes resident
+  memory that multiple of what is held: a refc binary a process has let go
+  stays resident until that process's next collection, and its binary
+  virtual heap lets such garbage reach about the live amount before one; a
+  collection copies the live heap, so it is briefly twice; and the
+  allocator keeps freed carriers mapped. So
+  each image proof allows its service's group the factor, 2.8
+  (`byte_cost`), times the counted bounds and the uncounted kinds its case
+  fills, and the kernel's queues it fills, and prints what it measured
+  beside that.
   """
 
   use GenServer
 
-  @mib 1_048_576
-
-  # 2.9's numbers. The unread bound is the backends service's alone; every
-  # role bounds what it is answering.
-  @bounds %{
-    backends: %{unread: 64 * @mib, answering: 26 * @mib},
-    runtime: %{unread: nil, answering: 16 * @mib},
-    builds: %{unread: nil, answering: 8 * @mib}
-  }
+  # Each role's counted bounds, the role table's (`Prima.LocusRoles`).
+  @bounds Map.new(
+            Prima.LocusRoles.roles(),
+            &{&1.name, Map.take(&1.memory, [:unread, :answering])}
+          )
 
   @servers %{
     backends: Locus.Output.Backends,

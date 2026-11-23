@@ -8,7 +8,9 @@ the values that were read are the control. A group's memory is its current
 and peak bytes and its two kill counters, each read or failed. The flood
 program waits for its line, then writes exactly its lines. What an unread
 session kept is its newest lines, whole and in order, or nothing yet; and a
-round of the session read as it comes fails on a drop.
+round of the session read as it comes fails on a drop. The flood's
+allowance is the role table's factor times what the service counts and its
+spawns' keeper reads, and their relays' queues.
 
 Usage: python3 -I tests/locus-backends-image/memory_test.py
 """
@@ -148,6 +150,20 @@ class ReadRound(unittest.TestCase):
     def test_a_drop_fails_it(self):
         with self.assertRaises(SystemExit):
             memory.read_round(Reading(per=10, dropped=1), {}, "s", 0, 0)
+
+
+class Allowance(unittest.TestCase):
+    """The flood's allowance is the role table's: the factor times the counted bounds and each spawn's keeper read, and each spawn's relay queue."""
+
+    def test_with_no_spawn_it_is_the_factor_times_the_counted_bounds(self):
+        shared, own = memory.RELEASE["memory"], memory.ROLE["memory"]
+        self.assertEqual(memory.allowance(0), int(shared["byte_cost"] * (own["unread"] + own["answering"])))
+
+    def test_each_spawn_adds_its_keeper_read_at_the_factor_and_its_relay_queue(self):
+        shared = memory.RELEASE["memory"]
+        per_spawn = shared["byte_cost"] * shared["keeper_read_bytes"] * shared["keeper_read_copies"]
+        added = memory.allowance(memory.SESSIONS) - memory.allowance(0)
+        self.assertAlmostEqual(added, memory.SESSIONS * (per_spawn + shared["relay_queue_bytes"]), delta=1)
 
 
 if __name__ == "__main__":
