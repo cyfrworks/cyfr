@@ -39,8 +39,8 @@ type Local struct {
 	// it is not opened, in a sentence for the person. Asking starts
 	// nothing.
 	Answers func(context.Context) error
-	// End has that CYFR's readings start nothing from now on, once
-	// whatever opened it ends; it returns once none is starting.
+	// End ends that CYFR's readings, starting and running, once whatever
+	// opened it ends, and returns at once; none starts after it.
 	End func()
 }
 
