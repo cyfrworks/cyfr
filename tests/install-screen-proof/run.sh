@@ -244,19 +244,21 @@ screen_back() {
   sleep 25
 }
 
-# Reboots the guest and waits for its SSH, the cyfr.run guard's counters
-# read first, as a boot clears them.
+# Reboots the guest and waits for its SSH on the next boot, its boot id
+# another (an old boot still shutting down answers SSH too), the cyfr.run
+# guard's counters read first, as a boot clears them.
 REBOOTS=0
 guest_reboot() {
-  local closes
+  local closes boot now
   REBOOTS=$((REBOOTS + 1))
   cyfr_run_guarded "before-reboot-$REBOOTS" final
+  boot=$(guest_ssh 'cat /proc/sys/kernel/random/boot_id') || fail "the guest's boot id was not read"
   guest_root 'systemd-run --on-active=2 systemctl reboot' || fail "the guest was not rebooted ($GUEST_DIR/root.txt)"
   sleep 15
   budget 300 || fail "the case's deadline came before the guest came back"
   closes=$((SECONDS + BUDGET))
-  until guest_ssh true 2>/dev/null; do
-    [ "$SECONDS" -lt "$closes" ] || fail "the guest's SSH did not come back within $BUDGET s"
+  until now=$(guest_ssh 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null) && [ -n "$now" ] && [ "$now" != "$boot" ]; do
+    [ "$SECONDS" -lt "$closes" ] || fail "the guest did not come back on a new boot within $BUDGET s"
     sleep 2
   done
   observe_start
