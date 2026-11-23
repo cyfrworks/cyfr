@@ -1463,7 +1463,15 @@ defmodule Locus.Backends.Owners do
     env = Map.fetch!(owner.env, program.name)
 
     %{
-      argv: ["/bin/bash", "-O", "xpg_echo", "+B", "-c", program.command <> " \"$@\"", "sh" | ask.argv],
+      argv: [
+        "/bin/bash",
+        "-O",
+        "xpg_echo",
+        "+B",
+        "-c",
+        program.command <> " \"$@\"",
+        "sh" | ask.argv
+      ],
       env: if(ask.size, do: Map.put_new(env, "TERM", LocusBackends.terminal_type()), else: env),
       pool: @pool,
       memory_bytes: ask.memory_bytes,

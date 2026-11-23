@@ -746,7 +746,9 @@ defmodule Locus.Backends.OwnersTest do
            "TERM is kept",
          ctx do
       owners = start_owners(ctx)
-      say = ~s(printf '[%s]\\n' "${TERM-none}"; read x)
+      # What the program's environment holds: bash, which runs the command,
+      # sets a TERM of its own when none is given but does not export it.
+      say = ~s{printf '[%s]\\n' "$(printenv TERM || echo none)"; read x}
 
       assert {:ok, _} =
                sync(owners, "a", {1, 1}, [
