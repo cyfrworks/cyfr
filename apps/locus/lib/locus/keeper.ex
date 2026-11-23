@@ -506,7 +506,11 @@ defmodule Locus.Keeper do
   def place(server, id, whose, owner) when is_binary(id) and is_map(whose) and is_pid(owner) do
     GenServer.call(server, {:place, id, whose, owner}, @pool_timeout_ms)
   catch
-    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+    :exit, reason ->
+      # A place this server may yet make is not left to an owner that
+      # was told it failed.
+      GenServer.cast(server, {:drop, id})
+      {:error, {:launcher_unavailable, exit_kind(reason)}}
   end
 
   @impl Locus.Launcher

@@ -1190,6 +1190,33 @@ defmodule Locus.KeeperTest do
       assert FakeKeeper.places(fake) == %{}
     end
 
+    test "a place whose call timed out is dropped, though its owner lives", %{
+      name: name,
+      fake: fake
+    } do
+      # The keeper reads nothing until the call has given up.
+      :ok = :sys.suspend(fake)
+
+      assert {:error, {:launcher_unavailable, :timeout}} =
+               Keeper.place(name, "pl-1", %{kind: "build"}, self())
+
+      :ok = :sys.resume(fake)
+      wait_until(fn -> requests(fake, "drop") != [] end, 5_000, "the drop to reach the keeper")
+
+      assert %{
+               requests: Enum.filter(FakeKeeper.requests(fake), &(&1["type"] in ~w(place drop))),
+               places: FakeKeeper.places(fake),
+               again: Keeper.place(name, "pl-1", %{kind: "build"}, self())
+             } == %{
+               requests: [
+                 %{"v" => 3, "type" => "place", "id" => "pl-1", "kind" => "build"},
+                 %{"v" => 3, "type" => "drop", "place" => "pl-1"}
+               ],
+               places: %{},
+               again: :ok
+             }
+    end
+
     test "a place a spawn named is the spawn's: its owner's death drops nothing, and the spawn's release frees it",
          %{name: name, fake: fake} do
       owner = spawn(fn -> Process.sleep(:infinity) end)
