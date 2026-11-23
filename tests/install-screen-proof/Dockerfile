@@ -2,8 +2,9 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The install-and-screen proof's VM host: QEMU/KVM, qemu-img, the cloud
-# image tools and swtpm, the guest's simulated TPM, all from Ubuntu, so
-# the verification host installs none of them.
+# image tools, swtpm, the guest's simulated TPM, and tesseract with
+# Python's imaging, which read the guest's display (guest/screen.py), all
+# from Ubuntu, so the verification host installs none of them.
 # tests/install-screen-proof/prepare.sh builds it, outside the queue, as
 # cyfr-install-screen:in-<h>, a hash of this file and guest/, which
 # every worktree at those inputs shares. Its guest/ scripts are what the
@@ -25,10 +26,13 @@ RUN apt-get update \
     openssh-client \
     openssl \
     python3 \
+    python3-pil \
     qemu-system-x86 \
     qemu-utils \
     seabios \
     swtpm \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     ubuntu-cloudimage-keyring \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /case /disk /seed /run/proof \

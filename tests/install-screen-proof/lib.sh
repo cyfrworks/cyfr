@@ -17,9 +17,10 @@
 # tree's cyfr, server image and seed/aqua; per guest cyfr_run_guard, which
 # keeps it from cyfr.run, candidate_server_load, account_settings and
 # account_service, the box's own account service. On the screen:
-# guest_chord and screen_find drive its Chrome as a keyboard does, and
-# profile_cookie, screen_cookie and cookie_answer read the session cookie
-# Chrome holds and ask the home what it opens.
+# guest_chord types on its keyboard, screen_press and screen_tap press what
+# its display shows and screen_shows reads it (guest/screen.py), and
+# observe_start, screen_cookie and cookie_answer read the session cookie
+# the app sends CYFR and ask the home what it opens.
 #
 # They read PROOF_PREFIX, VOLUME, WORK, OUT, HERE and ROOT, which run.sh
 # sets, and set IMAGE, and GUEST and GUEST_DIR for the guest under way. A
@@ -687,47 +688,48 @@ guest_root_out() {
   { cat "$WORK/password"; printf '\n'; } | guest_ssh_in "sudo -S -k -p '' sh -c $(printf '%q' "$1")" 2>>"$GUEST_DIR/root.txt"
 }
 
-# What the screen's Chrome holds, read by box.py in the guest
-# (tests/install-screen-proof/box.py), which box_helpers copies in.
-SCREEN_PROFILE='~/cyfr/.cyfr/screen/chrome'
+# box_helpers copies box.py into the guest (tests/install-screen-proof/
+# box.py) and gives root its own copy, which observe_start runs: as root,
+# a unit of its own recording each request head the guest's loopback
+# carries to CYFR and to the screen's shell in OBSERVED, root's alone,
+# from each boot on. The record holds the screen's session cookies and
+# never leaves the guest; the evidence holds their digests.
+OBSERVED=/root/proof-observe.jsonl
 box_helpers() {
   guest_copy_in "$HERE/box.py" box.py || fail "box.py was not copied into the guest"
+  guest_root 'install -m 0700 /home/proof/box.py /root/box.py' || fail "box.py was not given to root ($GUEST_DIR/root.txt)"
+  observe_start
+}
+observe_start() {
+  guest_root "systemctl reset-failed proof-observe 2>/dev/null; systemd-run --unit=proof-observe --collect python3 -I /root/box.py observe $OBSERVED" ||
+    fail "the request heads are not observed ($GUEST_DIR/root.txt)"
 }
 
-# profile_cookie NAME: the session cookie the screen's Chrome profile holds
-# for the home now, kept in the guest's ~/proof-cookies/NAME.header, mode
-# 600, and never in the evidence, which records its digest in
-# GUEST_DIR/cookies.txt, as COOKIE_DIGEST[NAME] holds it.
+# screen_cookie NAME: the session cookie the screen last sent CYFR, once it
+# is one no earlier capture held, kept in the guest's
+# ~/proof-cookies/NAME.header, mode 600, and never in the evidence, which
+# records its digest in GUEST_DIR/cookies.txt, as COOKIE_DIGEST[NAME]
+# holds it; answers 1 within 90 s without one, holding none.
 declare -A COOKIE_DIGEST=()
-profile_cookie() {
-  local digest
-  unset "COOKIE_DIGEST[$1]"
-  digest=$(guest_ssh "umask 077 && mkdir -p ~/proof-cookies && rm -f ~/proof-cookies/$1.header &&
-    value=\$(python3 -I ~/box.py cookie $SCREEN_PROFILE localhost _cyfr_key) &&
-    printf 'Cookie: _cyfr_key=%s\n' \"\$value\" >~/proof-cookies/$1.header &&
-    printf %s \"\$value\" | sha256sum | cut -c 1-16" 2>>"$GUEST_DIR/cookies.err") || return 1
-  [ -n "$digest" ] || return 1
-  COOKIE_DIGEST[$1]=$digest
-  printf '%s %s\n' "$1" "$digest" >>"$GUEST_DIR/cookies.txt"
-}
-
-# screen_cookie NAME: profile_cookie NAME once the profile holds a cookie
-# no earlier capture held, as Chrome writes its cookies to disk within
-# 30 s of a change; answers 1 within 90 s without one, holding none.
 COOKIE_SEEN=""
 screen_cookie() {
-  local closes
+  local closes digest
+  unset "COOKIE_DIGEST[$1]"
   budget 90 || return 1
   closes=$((SECONDS + BUDGET))
   while :; do
-    if profile_cookie "$1"; then
-      case "$COOKIE_SEEN " in
-        *" ${COOKIE_DIGEST[$1]} "*) ;;
-        *) COOKIE_SEEN="$COOKIE_SEEN ${COOKIE_DIGEST[$1]}"; return 0 ;;
-      esac
-    fi
+    digest=$(guest_root_out "install -d -m 700 -o proof -g proof /home/proof/proof-cookies &&
+      python3 -I /root/box.py header $OBSERVED 0 /home/proof/proof-cookies/$1.header &&
+      chown proof:proof /home/proof/proof-cookies/$1.header")
+    case "$COOKIE_SEEN " in
+      *" $digest "*) ;;
+      *) if [ -n "$digest" ]; then
+           COOKIE_SEEN="$COOKIE_SEEN $digest" COOKIE_DIGEST[$1]=$digest
+           printf '%s %s\n' "$1" "$digest" >>"$GUEST_DIR/cookies.txt"
+           return 0
+         fi ;;
+    esac
     if [ "$SECONDS" -ge "$closes" ]; then
-      unset "COOKIE_DIGEST[$1]"
       guest_ssh "rm -f ~/proof-cookies/$1.header" || true
       return 1
     fi
@@ -772,63 +774,38 @@ guest_chord() {
   guest_qmp send-key "{\"keys\": [$keys]}" >/dev/null
 }
 
-# screen_find TEXT [last]: Chrome's find bar on the page in front, at the
-# first match of TEXT (with last, its last), then closed, which gives the
-# keyboard's focus to the link or button holding that match, as a person
-# reaching it by the keyboard does. Enter then presses it. Answers 1 when
-# the display shows no match, that display then kept as
-# GUEST_DIR/screen-find-missed.ppm; each count is a line of
-# GUEST_DIR/screen-find.txt.
-screen_find() {
-  local found=1
-  screen_dump before &&
-    guest_chord ctrl f && sleep 1 &&
-    printf '%s' "$1" | guest_keys && sleep 2 &&
-    { [ "${2:-}" != last ] || guest_chord shift ret; } && sleep 1 &&
-    { ! screen_match "$1" || found=0; guest_chord esc; } && sleep 1 &&
-    [ "$found" = 0 ]
-}
+# The screen as a person at the box meets it (guest/screen.py): what its
+# display shows, read by tesseract on a screendump, and presses of the
+# guest's USB tablet there.
+screen_read() { proof_fg timeout 180 docker exec "$GUEST" python3 /proof/screen.py "$PROOF_QMP_SOCKET" "$@"; }
 
-# screen_dump NAME: the guest's display as GUEST_DIR/screen-find-NAME.ppm.
-screen_dump() {
-  guest_qmp screendump "{\"filename\": \"/tmp/screen-find-$1.ppm\", \"format\": \"ppm\"}" >/dev/null &&
-    docker cp "$GUEST:/tmp/screen-find-$1.ppm" "$GUEST_DIR/screen-find-$1.ppm" >/dev/null 2>&1
-}
-
-# screen_match TEXT: whether the display shows the match the find bar
-# stands on, against the display screen_dump before took. Chrome paints
-# that one match in its own orange, rgb(255, 150, 50), so the find put
-# there the pixels that are that orange now and were not before; orange of
-# the page's own is in both and counts for nothing. 30 pixels is less than
-# the smallest word's highlight and more than a stray pixel. The match
-# must be on the display: one scrolled out of view counts as none. A page
-# that moves orange of its own between the two dumps would count as a
-# match; nothing CYFR draws is that orange.
-screen_match() {
-  local before="$GUEST_DIR/screen-find-before.ppm" after="$GUEST_DIR/screen-find-after.ppm" count
-  screen_dump after || return 1
-  count=$(python3 -I -c '
-import sys
-def pixels(path):
-    data = open(path, "rb").read()
-    at = 0
-    for _ in range(4):
-        while not data[at:at + 1].isspace():
-            at += 1
-        at += 1
-    data = data[at:]
-    return zip(data[0::3], data[1::3], data[2::3])
-orange = (255, 150, 50)
-print(sum(1 for was, now in zip(pixels(sys.argv[1]), pixels(sys.argv[2])) if now == orange != was))' "$before" "$after") || return 1
-  printf '%s %s\n' "$count" "$1" >>"$GUEST_DIR/screen-find.txt"
-  rm -f "$before"
-  if [ "$count" -ge 30 ]; then
-    rm -f "$after"
+# screen_press TEXT [last]: TEXT pressed where the display shows it; each
+# press, and each miss with the words read then, is a line of
+# GUEST_DIR/screen-press.txt.
+screen_press() {
+  local at
+  if at=$(screen_read press "$@" 2>>"$GUEST_DIR/screen-press.txt"); then
+    printf '%s pressed %s at %s\n' "$(date -u +%T)" "$1" "$at" >>"$GUEST_DIR/screen-press.txt"
     return 0
   fi
-  mv "$after" "$GUEST_DIR/screen-find-missed.ppm"
+  { printf '%s missed %s; the display read:\n' "$(date -u +%T)" "$1"; screen_read words; } >>"$GUEST_DIR/screen-press.txt" 2>&1
   return 1
 }
+
+# screen_shows TEXT SECONDS: whether the display shows TEXT within SECONDS.
+screen_shows() {
+  local closes
+  budget "$2" || return 1
+  closes=$((SECONDS + BUDGET))
+  until screen_read shows "$1"; do
+    [ "$SECONDS" -lt "$closes" ] || return 1
+    sleep 2
+  done
+}
+
+# screen_tap CHARACTERS: CHARACTERS tapped on the on-screen keyboard's
+# keys, read from the display, a newline its Enter.
+screen_tap() { screen_read tap "$1" 2>>"$GUEST_DIR/screen-press.txt"; }
 
 # The boot's journal and apt's history, read once nothing else is to be
 # observed: reading the system journal takes root, so this is the run's
