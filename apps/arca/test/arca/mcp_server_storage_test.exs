@@ -709,14 +709,14 @@ defmodule Arca.McpServerStorageTest do
 
       for {command, driver} <- [
             {"cyfr-codex npx -y @openai/codex@0.167.0", "cyfr-codex"},
-            {"/usr/local/bin/cyfr-codex npx -y @openai/codex@0.167.0", "cyfr-codex"},
+            {"/opt/cyfr/bin/cyfr-codex npx -y @openai/codex@0.167.0", "cyfr-codex"},
             {"cyfr-claude-code npx -y @anthropic-ai/claude-code", "cyfr-claude-code"},
-            {"/usr/local/bin/cyfr-claude-code npx -y @anthropic-ai/claude-code",
+            {"/opt/cyfr/bin/cyfr-claude-code npx -y @anthropic-ai/claude-code",
              "cyfr-claude-code"},
             {"npx -y @openai/codex@0.167.0", nil},
             {"/opt/cyfr-codex npx -y @openai/codex@0.167.0", nil},
             {"./cyfr-codex npx", nil},
-            {"/usr/local/bin/cyfr-codexx npx", nil},
+            {"/opt/cyfr/bin/cyfr-codexx npx", nil},
             {"", nil}
           ] do
         assert McpServerStorage.driver(row.(command)) == driver, command

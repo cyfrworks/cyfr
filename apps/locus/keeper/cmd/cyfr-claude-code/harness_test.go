@@ -87,6 +87,26 @@ func TestAnEmptyListOfTheHarnessesToolsStartsItWithNone(t *testing.T) {
 	}
 }
 
+// CYFR's stub reaches the harness by its absolute path in the image, so no
+// command of that name a person's project or PATH holds is run in its
+// place: npx puts a project's own package binaries first.
+func TestTheStubIsGivenByItsPath(t *testing.T) {
+	var line struct {
+		Request struct {
+			Servers map[string]struct {
+				Command string   `json:"command"`
+				Args    []string `json:"args"`
+			} `json:"servers"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(setToolsLine("cyfr-tools-1", []string{"{}"}), &line); err != nil {
+		t.Fatal(err)
+	}
+	if got := line.Request.Servers["cyfr"].Command; got != "/opt/cyfr/bin/cyfr-stub" {
+		t.Fatalf("the harness is given the stub as %q", got)
+	}
+}
+
 // A work with no tools of CYFR's sets no server, so the harness keeps no
 // stub of an earlier work's tools.
 func TestAWorkWithNoToolsSetsNoServer(t *testing.T) {
