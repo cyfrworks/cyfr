@@ -82,7 +82,9 @@ type uninstallScenario struct {
 	notUbuntu, noTerminal bool
 	// adminGroup is the administrators\' group the account is in, sudo
 	// unless a test names admin, a Mac\'s.
-	adminGroup    string
+	adminGroup string
+	// app is the CYFR app's package installed on this machine.
+	app           bool
 	authErr       error
 	authenticated int
 	compose       []byte
@@ -127,6 +129,12 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 		machine = savedMachine
 		openEngine, askTerminal, askInput = savedOpen, savedTerminal, savedInput
 	})
+	machine.installed = func(pkg string) string {
+		if s.app && pkg == appPackage {
+			return "0.6.0"
+		}
+		return ""
+	}
 	machine.groups = func(string) []string {
 		if s.notAdministrator {
 			return []string{"users"}
@@ -156,7 +164,7 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 		switch {
 		case c == shellQuote([]string{"rm", "-f", "--", s.link}):
 			return os.Remove(s.link)
-		case slices.Contains(screenOffCommands, c):
+		case slices.Contains(screenOffCommands, c), c == appRemoval:
 			return nil
 		}
 		t.Fatalf("sudo was handed %q, which no step of the uninstall runs", c)
@@ -613,7 +621,7 @@ func TestUninstallRefusesWhatIsNotACYFR(t *testing.T) {
 // and tty1's login prompt last.
 var screenGivenBack = []string{
 	"{ systemctl disable --now cyfr-screen || true; }",
-	"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
+	"rm -f " + screenUnit,
 	"systemctl daemon-reload",
 	"systemctl enable --now getty@tty1",
 }
@@ -649,9 +657,11 @@ func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T)
 // A cyfr the package records name as a package's never removes itself,
 // reached by its own path or by a link, the app beside it whole or not:
 // the uninstall removes what it owns, the link in /usr/local/bin among it,
-// and leaves the program, naming the package's tool. Where the records
-// cannot answer it stays too, saying why; a file named like the app's
-// code beside a cyfr no package installed decides nothing.
+// and leaves the program, naming the package's tool, and the CYFR app's
+// package, which may be its own. Where the records cannot answer both stay
+// too, saying why; a file named like the app's code beside a cyfr no
+// package installed decides nothing, and that cyfr removes the app's
+// package, saying so first.
 func TestUninstallLeavesAPackagesProgramToThePackage(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -666,6 +676,7 @@ func TestUninstallLeavesAPackagesProgramToThePackage(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newUninstallScenario(t)
+			s.app = true
 			switch c.dpkg {
 			case "owns":
 				standInDpkg(t, map[string]string{s.self: "cyfr-desktop"}, false)
@@ -711,6 +722,11 @@ func TestUninstallLeavesAPackagesProgramToThePackage(t *testing.T) {
 			}
 			if _, err := os.Lstat(s.link); err == nil {
 				t.Error("the link cyfr owns stays")
+			}
+			removes := c.dpkg == "says no"
+			if slices.Contains(s.root, appRemoval) != removes || strings.Contains(out, "  the CYFR app, the package cyfr-desktop\n") != removes ||
+				strings.Contains(out, "Removed the CYFR app.\n") != removes {
+				t.Errorf("the app's package removed: %v, want %v; sudo ran %q:\n%s", slices.Contains(s.root, appRemoval), removes, s.root, out)
 			}
 		})
 	}

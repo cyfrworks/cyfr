@@ -8,6 +8,9 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -17,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/version"
 )
 
@@ -34,6 +37,9 @@ func screenProject(t *testing.T) *standIn {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
+	// The CYFR app of this cyfr's version is installed, unless a test
+	// says otherwise, so screen on fetches nothing.
+	s.installed = []string{appPackage + "=" + version.Version}
 	for name, body := range map[string]string{"docker-compose.yml": "services: {}\n", ".env": "CYFR_ACCESS=local\nCYFR_PORT=4321\nCYFR_SETUP_TOKEN=the-token\n"} {
 		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -47,8 +53,6 @@ func screenCommandsIn(dir string, tail ...string) []string {
 	account, _ := user.Current()
 	return append([]string{
 		"{ ! getent group tss >/dev/null || usermod -aG tss " + shellQuote([]string{account.Username}) + "; }",
-		"install -m 0644 " + files + "/52cyfr-screen " + screenAptLine,
-		"install -D -m 0644 " + files + "/cyfr-screen-policy.json " + screenPolicy,
 		"install -m 0644 " + files + "/cyfr-screen.service " + screenUnit,
 		"systemctl daemon-reload",
 		"systemctl disable getty@tty1",
@@ -56,13 +60,49 @@ func screenCommandsIn(dir string, tail ...string) []string {
 	}, tail...)
 }
 
+// appCommands are the commands that install the CYFR app's package
+// fetched into dir, whose sha256 is sum: root's copy of it, checked, is
+// what apt installs.
+func appCommands(dir, sum string) []string {
+	return []string{
+		"d=$(mktemp -d)",
+		`chmod 0755 "$d"`,
+		"install -m 0644 " + shellQuote([]string{filepath.Join(dir, screenAppFile)}) + ` "$d/cyfr-desktop.deb"`,
+		"echo '" + sum + `  '"$d/cyfr-desktop.deb" | sha256sum --check --strict --quiet`,
+		`apt-get install -y "$d/cyfr-desktop.deb"`,
+		`rm -rf "$d"`,
+	}
+}
+
+// fetchesTheApp stands in for the release of version, its package for
+// this machine being body; it answers how many fetches there were.
+func fetchesTheApp(t *testing.T, release string, body []byte, err error) *int {
+	t.Helper()
+	savedVersion, savedFetch := version.Version, fetchAppPackage
+	t.Cleanup(func() { version.Version, fetchAppPackage = savedVersion, savedFetch })
+	version.Version = release
+	fetched := new(int)
+	fetchAppPackage = func(_ context.Context, v, arch string) ([]byte, error) {
+		*fetched++
+		if v != release || arch != "amd64" {
+			t.Errorf("fetched the app of %s for %s", v, arch)
+		}
+		return body, err
+	}
+	return fetched
+}
+
 // `cyfr screen on` shows the plain commands, asks once and runs them
 // through one sudo, starting nothing, then forgets the login and says what
-// is next; Chrome's download says what it fetches and shows curl's
-// progress bar; packages it has are not installed again, and with none to
-// install it reads no package lists.
+// is next. Where the machine lacks the CYFR app of this cyfr's release it
+// fetches its package first, checked against the release's signed
+// checksums, says so, and the commands install root's copy of it once
+// checked against that sum; the file is gone after. Packages it has are not
+// installed again, and with none to install it reads no package lists.
 func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	s := screenProject(t)
+	s.installed = []string{appPackage + "=0.5.0"}
+	fetched := fetchesTheApp(t, "0.6.0", []byte("the app"), nil)
 	askInput = strings.NewReader("yes\n")
 	dir, _ := os.Getwd()
 	var out bytes.Buffer
@@ -72,17 +112,19 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	if err := screenOnCmd.RunE(screenOnCmd, nil); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
-	want := append([]string{
+	sum := sha256.Sum256([]byte("the app"))
+	want := append(append([]string{
 		"apt-get update",
 		"apt-get install -y --no-install-recommends labwc wvkbd swayidle",
-		"deb=$(mktemp --suffix=.deb)",
-		"echo 'Downloading Chrome from Google (about 110 MB)'",
-		`curl -fL --progress-bar -o "$deb" ` + chromeDeb,
-		`apt-get install -y "$deb"`,
-		`rm -f "$deb"`,
-	}, screenCommandsIn(dir)...)
+	}, appCommands(dir, hex.EncodeToString(sum[:]))...), screenCommandsIn(dir)...)
 	if len(s.applied) != 1 || !slices.Equal(s.applied[0], want) {
 		t.Fatalf("applied %q, want one %q", s.applied, want)
+	}
+	if *fetched != 1 || !strings.HasPrefix(out.String(), "Downloading the CYFR app, release 0.6.0 for amd64, and checking it against the release's signed checksums.\n") {
+		t.Errorf("fetched %d times, saying:\n%s", *fetched, out.String())
+	}
+	if fileExists(screenAppFile) {
+		t.Error("the fetched package stayed in the project")
 	}
 	if s.forgotten != 1 {
 		t.Errorf("sudo's login was forgotten %d times", s.forgotten)
@@ -97,13 +139,51 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 
 	s.applied = nil
-	s.installed = []string{"labwc", "wvkbd", "swayidle", "google-chrome-stable"}
+	s.installed = []string{"labwc", "wvkbd", "swayidle", appPackage + "=0.6.0"}
 	askInput = strings.NewReader("yes\n")
 	if err := screenOn(context.Background(), true, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(s.applied[0], screenCommandsIn(dir)) {
-		t.Errorf("applied %q", s.applied)
+	if !slices.Equal(s.applied[0], screenCommandsIn(dir)) || *fetched != 1 {
+		t.Errorf("applied %q, fetched %d times", s.applied, *fetched)
+	}
+}
+
+// The app's package is fetched only from a release: one that fails its
+// check is refused before anything is asked, written or installed, and
+// leaves the project as it was; a development build with no app installed
+// at it is refused before anything is fetched.
+func TestScreenOnInstallsOnlyAVerifiedApp(t *testing.T) {
+	for name, c := range map[string]struct {
+		release string
+		err     error
+		want    string
+	}{
+		"a package that fails its check": {"0.6.0", fmt.Errorf("%w: cyfr-desktop_0.6.0_linux_amd64.deb does not match the release's signed checksums.txt", release.ErrUnverified),
+			"The CYFR app could not be downloaded, so nothing was installed"},
+		"a development build": {"dev", nil, "This cyfr is a development build (dev), so there is no release of the CYFR app to download for it"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := screenProject(t)
+			s.installed = nil
+			fetched := fetchesTheApp(t, c.release, []byte("the app"), c.err)
+			askInput = strings.NewReader("yes\n")
+			before := listing(t, ".")
+			var out bytes.Buffer
+			err := screenOn(context.Background(), true, &out)
+			if err == nil || !strings.Contains(err.Error(), c.want) || s.applied != nil {
+				t.Fatalf("screen on answered %v, applied %q:\n%s", err, s.applied, out.String())
+			}
+			if after := listing(t, "."); !maps.Equal(before, after) {
+				t.Errorf("the project changed:\nbefore %v\nafter  %v", before, after)
+			}
+			if c.release == "dev" && *fetched != 0 {
+				t.Error("a development build fetched a release's app")
+			}
+			if strings.Contains(out.String(), "(yes/no)") {
+				t.Errorf("it asked before refusing:\n%s", out.String())
+			}
+		})
 	}
 }
 
@@ -333,7 +413,7 @@ func TestScreenOnDeclinedOrFailed(t *testing.T) {
 	}
 }
 
-// The files name this program, the account and the directory; the token
+// The files name the account and the directory; the token
 // stays in .env, which the shell reads itself; and the unit runs the
 // session, which runs the launcher, both of which can run.
 func TestScreenFilesAreFilledIn(t *testing.T) {
@@ -341,9 +421,8 @@ func TestScreenFilesAreFilledIn(t *testing.T) {
 	if err := writeScreenFiles("/home/alice/cyfr", "alice"); err != nil {
 		t.Fatal(err)
 	}
-	self, _ := os.Executable()
 	launcher := read(t, filepath.Join(screenDir, "launcher.sh"))
-	if !strings.Contains(launcher, "\n    "+self+" screen shell\n") || strings.Contains(launcher, "@") {
+	if !strings.Contains(launcher, "\n    XDG_SESSION_TYPE=wayland /opt/cyfr/CYFR --screen-project=/home/alice/cyfr\n") || strings.Contains(launcher, "@") {
 		t.Errorf("launcher:\n%s", launcher)
 	}
 	session := read(t, filepath.Join(screenDir, "session.sh"))
@@ -520,40 +599,6 @@ func TestInitEndsWithoutTheScreenWhenItsInstallFails(t *testing.T) {
 	}
 	if want := "\n\n" + localEnding("http://localhost:4000") + setupLinkLine(t, "http://localhost:4000"); !strings.HasSuffix(out.String(), want) {
 		t.Errorf("init printed:\n%s\nwant it to end on:\n%s", out.String(), want)
-	}
-}
-
-// After a change of address, `cyfr access` rewrites the files of a screen
-// the project has for the new head, so the screen opens the new address
-// with no `cyfr screen on`, and a project with no screen gets none.
-func TestAccessRewritesTheScreensFiles(t *testing.T) {
-	for _, screen := range []bool{true, false} {
-		standInMachine(t)
-		s := newAccessProject(t)
-		dir, err := filepath.EvalSymlinks(".")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Chdir(dir)
-		s.addressChanges = []string{"Every browser signs in again."}
-		if screen {
-			if err := writeScreenFiles(dir, "alice"); err != nil {
-				t.Fatal(err)
-			}
-		}
-		var out bytes.Buffer
-		if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, &out); err != nil {
-			t.Fatalf("cyfr access public: %v\n%s", err, out.String())
-		}
-		if !screen {
-			if fileExists(screenDir) {
-				t.Errorf("cyfr access wrote %s into a project with no screen", screenDir)
-			}
-			continue
-		}
-		if launcher := read(t, filepath.Join(screenDir, "launcher.sh")); !strings.Contains(launcher, " screen shell\n") {
-			t.Errorf("the launcher was not rewritten:\n%s", launcher)
-		}
 	}
 }
 

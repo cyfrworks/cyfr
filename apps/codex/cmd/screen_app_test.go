@@ -6,7 +6,6 @@ package cmd
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"strconv"
@@ -57,6 +56,22 @@ func (a *appSide) next(want string) map[string]any {
 		a.t.Fatalf("the shell never said %s", want)
 	}
 	return nil
+}
+
+// until skips what the shell says until a message of type want.
+func (a *appSide) until(want string) map[string]any {
+	a.t.Helper()
+	for deadline := time.After(10 * time.Second); ; {
+		select {
+		case m := <-a.said:
+			if m["type"] == want {
+				return m
+			}
+		case <-deadline:
+			a.t.Fatalf("the shell never said %s", want)
+			return nil
+		}
+	}
 }
 
 func (a *appSide) send(line string) {
@@ -173,7 +188,7 @@ func TestScreenApp_WhatMainSays(t *testing.T) {
 			a := &screenApp{in: strings.NewReader(strings.Join(c.lines, "\n")), to: desktop.NewWriter(sink),
 				home: desktop.Message{Type: desktop.TypeHome, Home: home, Account: "https://cyfr.run"}}
 			var locks []string
-			err := a.show(context.Background(), func(why string) bool { locks = append(locks, why); return false })
+			err := a.show(func(why string) bool { locks = append(locks, why); return false })
 			if (err != nil) != c.refused || strings.Join(locks, "|") != strings.Join(c.locks, "|") {
 				t.Fatalf("show answered %v, locking %q", err, locks)
 			}

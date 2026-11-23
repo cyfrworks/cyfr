@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/codex/internal/version"
 )
 
 // standIn is a machine for prepareMachine, a fresh Ubuntu 26.04 unless a
@@ -46,7 +48,10 @@ func standInMachine(t *testing.T) *standIn {
 			t.Fatalf("%s is reachable at %s: no test of the machine may run it", program, found)
 		}
 	}
-	s := &standIn{supported: true, arch: "amd64", system: "linux", administrator: []string{"sudo"}}
+	// The CYFR app of this cyfr's version is installed, unless a test says
+	// otherwise, so `cyfr screen on` fetches nothing.
+	s := &standIn{supported: true, arch: "amd64", system: "linux", administrator: []string{"sudo"},
+		installed: []string{appPackage + "=" + version.Version}}
 	saved, savedTerminal, savedInput, savedSg := machine, askTerminal, askInput, sgProgram
 	t.Cleanup(func() { machine, askTerminal, askInput, sgProgram = saved, savedTerminal, savedInput, savedSg })
 	// No test reaches the real sg, which would run this test binary again.
@@ -56,7 +61,18 @@ func standInMachine(t *testing.T) *standIn {
 	machine.supported = func() bool { return s.supported }
 	machine.arch = func() string { return s.arch }
 	machine.reachable = func() bool { return s.reachable }
-	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }
+	// An entry pkg=version holds pkg at that version, and pkg alone at 1.
+	machine.installed = func(pkg string) string {
+		for _, entry := range s.installed {
+			if name, at, versioned := strings.Cut(entry, "="); name == pkg {
+				if versioned {
+					return at
+				}
+				return "1"
+			}
+		}
+		return ""
+	}
 	machine.running = func() bool { return s.running }
 	machine.displayManager = func() bool { return s.displayManager }
 	machine.system = func() string { return s.system }

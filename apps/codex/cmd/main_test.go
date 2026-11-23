@@ -55,7 +55,7 @@ func testMachine(system string) machineSeams {
 		supported:      func() bool { return false },
 		arch:           func() string { return "amd64" },
 		reachable:      func() bool { return true },
-		installed:      func(string) bool { return false },
+		installed:      func(string) string { return "" },
 		running:        func() bool { return false },
 		groups:         func(string) []string { return nil },
 		displayManager: func() bool { return false },

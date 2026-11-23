@@ -4,9 +4,12 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -105,6 +108,53 @@ func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 			}
 			if got, _ := os.ReadFile(filepath.Join(bin, "logger.ran")); string(got) != c.logged {
 				t.Errorf("logger ran as %q, want %q", got, c.logged)
+			}
+		})
+	}
+}
+
+// Root installs only the package cyfr checked: the commands copy the
+// account's file where the account cannot write and check the copy
+// against the sum the release's signed checksums named before apt is
+// handed it, so a file changed after the fetch is never installed. Run
+// here as written, as this account, with apt-get a stand-in.
+func TestScreenOnInstallsOnlyThePackageItChecked(t *testing.T) {
+	for name, swapped := range map[string]bool{"the package fetched": false, "a package put in its place": true} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, screenDir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256([]byte("the app"))
+			body := "the app"
+			if swapped {
+				body = "another program"
+			}
+			if err := os.WriteFile(filepath.Join(dir, screenAppFile), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			bin, handed := t.TempDir(), filepath.Join(t.TempDir(), "handed")
+			if err := os.WriteFile(filepath.Join(bin, "apt-get"), []byte("#!/bin/sh\ncat \"$3\" >"+handed+"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			commands := screenCommands(dir, "alice", hex.EncodeToString(sum[:]))
+			from := slices.Index(commands, "d=$(mktemp -d)")
+			to := slices.Index(commands, `rm -rf "$d"`)
+			if from < 0 || to < from {
+				t.Fatalf("the commands hold no install of the app: %q", commands)
+			}
+			sh := exec.Command("sh", "-c", strings.Join(commands[from:to+1], " && "))
+			sh.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+			said, err := sh.CombinedOutput()
+			got, _ := os.ReadFile(handed)
+			if swapped {
+				if err == nil || got != nil {
+					t.Fatalf("a package put in the fetched one's place was handed to apt (%v, %q):\n%s", err, got, said)
+				}
+				return
+			}
+			if err != nil || string(got) != "the app" {
+				t.Fatalf("the package fetched was not installed (%v, %q):\n%s", err, got, said)
 			}
 		})
 	}
