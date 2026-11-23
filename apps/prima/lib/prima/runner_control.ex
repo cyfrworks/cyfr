@@ -232,6 +232,16 @@ defmodule Prima.RunnerControl do
   @spec max_open() :: pos_integer()
   def max_open, do: @max_open
 
+  @doc """
+  The grammar of an athanor's id on every Locus wire: this channel's
+  `keys.attempt.athanor_id`, a build request's `athanor_id`
+  (`Prima.BuilderProtocol`) and a place's `athanor` (`Prima.KeeperProtocol`),
+  1 to 256 bytes of printable ASCII without spaces, as every identifier of
+  this channel.
+  """
+  @spec athanor_id_pattern() :: Regex.t()
+  def athanor_id_pattern, do: @id
+
   @doc "The message types, in the order the module documents them."
   @spec types() :: [type()]
   def types, do: Enum.map(@messages, fn {type, _name, _sender, _fields} -> type end)

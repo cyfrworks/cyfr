@@ -588,11 +588,11 @@ defmodule Locus.BuilderServiceTest do
       wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 
-    test "a build's place is made for its athanor before it is prepared, named by its spawn, " <>
-           "and freed once the build is gone",
+    test "a build's place is made for its athanor, of any id the other Locus wires take, " <>
+           "before it is prepared, named by its spawn, and freed once the build is gone",
          %{port: port} do
       fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: nil}})
-      request = Wire.request("true")
+      request = Wire.request("true", %{athanor_id: "family@example"})
 
       assert {200, _lines} = Wire.build(port, request)
       wait_until(fn -> FakeKeeper.places(fake) == %{} end, 10_000)

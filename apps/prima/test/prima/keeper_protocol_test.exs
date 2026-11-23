@@ -125,6 +125,8 @@ defmodule Prima.KeeperProtocolTest do
     "assign without a kind" => "kind",
     "assign of an unknown kind" => "kind",
     "assign without a place" => "place",
+    "assign without an id" => "id",
+    "place of an athanor past 256 characters" => "athanor",
     "spawn without a place" => "place",
     "spawn of a malformed place" => "place",
     "resize without rows" => "rows",
@@ -487,7 +489,7 @@ defmodule Prima.KeeperProtocolTest do
       end
 
       assert @vectors["replies"] |> Enum.map(& &1["type"]) |> Enum.uniq() |> Enum.sort() ==
-               ~w(error exited measured placed pool released spawned)
+               ~w(assigned error exited measured placed pool released spawned)
     end
 
     test "every home reply decodes to its typed shape, and the over-cap refusal as an error" do
@@ -517,6 +519,7 @@ defmodule Prima.KeeperProtocolTest do
     do: {:exited, r["spawn_id"], {:signal, r["signal"]}, memory(r["memory"])}
 
   defp expected_reply(%{"type" => "placed"} = r), do: {:placed, r["id"]}
+  defp expected_reply(%{"type" => "assigned"} = r), do: {:assigned, r["id"]}
 
   defp expected_reply(%{"type" => "measured"} = r) do
     {:measured, r["id"],
@@ -900,6 +903,43 @@ defmodule Prima.KeeperProtocolTest do
       assert decode.(%{"bytes" => -1}) == {:error, {:invalid_field, "bytes"}}
       assert decode.(%{"bytes" => nil}) == {:error, {:wrong_type, "bytes"}}
       assert decode.(%{}) == {:error, {:missing_field, "bytes"}}
+    end
+
+    test "an athanor is of the grammar every Locus wire gives an athanor's id, and a subject of the id grammar" do
+      measured = fn athanor ->
+        %{"v" => 3, "type" => "measured", "id" => "25", "kind" => "build"}
+        |> Map.merge(%{"athanor" => athanor, "bytes" => 1, "lesser" => false, "age_ms" => 3})
+        |> Jason.encode!()
+        |> KeeperProtocol.decode_reply()
+      end
+
+      requests = fn athanor ->
+        [
+          %{type: :place, id: "pl-1", kind: "build", athanor: athanor},
+          %{type: :assign, id: "as-1", place: "pl-1", kind: "run", athanor: athanor}
+        ]
+      end
+
+      for athanor <- ["family@example", String.duplicate("a", 256)] do
+        assert Regex.match?(RunnerControl.athanor_id_pattern(), athanor)
+        assert {:ok, {:measured, "25", %{athanor: ^athanor}}} = measured.(athanor)
+
+        for request <- requests.(athanor),
+            do: assert(Jason.decode!(line(request))["athanor"] == athanor)
+      end
+
+      for athanor <- ["family of mine", "famille-é", String.duplicate("a", 257)] do
+        refute Regex.match?(RunnerControl.athanor_id_pattern(), athanor)
+        assert measured.(athanor) == {:error, {:invalid_field, "athanor"}}
+
+        for request <- requests.(athanor),
+            do: assert(String.starts_with?(refused(request), "athanor "))
+      end
+
+      assert String.starts_with?(
+               refused(%{type: :place, id: "pl-1", kind: "program", subject: "family@example"}),
+               "subject "
+             )
     end
 
     test "an error names its request by id, spawn id, both or neither" do

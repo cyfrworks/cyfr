@@ -11,7 +11,10 @@ defmodule Locus.Runtime.KeeperChannelTest do
   runner's explicit environment; the relay attaches with its token, is
   sent the zero-length frame that opens the relay stream (5), and carries
   the control channel as stream 4, a line split across frames either way;
-  an assign binds the runner's relay to its attempt before it is written;
+  an assign makes the runner's place its work's athanor's run, answered by
+  the keeper, before it binds the runner's relay to its attempt and is
+  written, and a clean completion makes it warm again before the handle's
+  owner hears it;
   the keeper's `exited` and `released` reach the handle; a release carries
   its grace, and a second asks for nothing more; the pool's stats are
   asked and answered; the channel's loss reaches every handle and ends
@@ -121,6 +124,22 @@ defmodule Locus.Runtime.KeeperChannelTest do
 
   defp reply(keeper, message), do: :ok = :socket.send(keeper, [Jason.encode!(message), ?\n])
 
+  # The assign of the runner's place the client asks for, `kind` of
+  # `athanor`'s under an id of its own, answered as cyfr-locus answers it.
+  defp assigned!(keeper, kind, athanor, place \\ "runner_1") do
+    assert %{"type" => "assign", "id" => id} = asked = request(keeper)
+
+    assert Map.delete(asked, "id") == %{
+             "v" => 3,
+             "type" => "assign",
+             "place" => place,
+             "kind" => kind,
+             "athanor" => athanor
+           }
+
+    reply(keeper, %{v: 3, type: "assigned", id: id})
+  end
+
   defp attach!(dir, token) do
     {:ok, relay} =
       :gen_tcp.connect({:local, Path.join(dir, "attach.sock")}, 0, [:binary, active: false])
@@ -179,18 +198,24 @@ defmodule Locus.Runtime.KeeperChannelTest do
     reply(keeper, %{v: 3, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
 
     # The assign is held until the relay attaches, then flushed as frames,
-    # its attempt bound on the runner's relay first.
+    # its attempt bound on the runner's relay first, once the keeper has
+    # made the runner's place its athanor's run.
     input = :binary.copy("x", 150_000)
-    attempt = ScriptedHost.attempt!(ScriptedHost.start!())
+    attempt = ScriptedHost.attempt!(ScriptedHost.start!(), athanor_id: "family@example")
 
-    assert :ok =
-             RunnerProcess.assign(
-               handle,
-               attempt.assignment,
-               input,
-               attempt.keys,
-               "http://127.0.0.1:9"
-             )
+    assigning =
+      Task.async(fn ->
+        RunnerProcess.assign(
+          handle,
+          attempt.assignment,
+          input,
+          attempt.keys,
+          "http://127.0.0.1:9"
+        )
+      end)
+
+    assigned!(keeper, "run", "family@example")
+    assert :ok = Task.await(assigning)
 
     refute_received {RunnerProcess, ^handle, :ready}
 
@@ -230,6 +255,10 @@ defmodule Locus.Runtime.KeeperChannelTest do
 
     refute_receive {RunnerProcess, ^handle, {:message, _}}, 100
     :ok = :gen_tcp.send(relay, frame(@stream_control, tail))
+
+    # Its place is back at rest, still the athanor's, before its owner
+    # hears the completion.
+    assigned!(keeper, "warm", "family@example")
 
     assert_receive {RunnerProcess, ^handle,
                     {:message, %{type: :complete, execution_id: "exec_1", clean: true}}},
@@ -276,9 +305,13 @@ defmodule Locus.Runtime.KeeperChannelTest do
       pid: 1
     })
 
-    assert :ok =
-             RunnerProcess.assign(handle, assign.assignment, "{}", keys, "http://127.0.0.1:9")
+    assigning =
+      Task.async(fn ->
+        RunnerProcess.assign(handle, assign.assignment, "{}", keys, "http://127.0.0.1:9")
+      end)
 
+    assigned!(keeper, "run", "ath_test")
+    assert :ok = Task.await(assigning)
     refute_received {RunnerProcess, ^handle, :ready}
 
     # The client holds bytes sent before the relay attached.

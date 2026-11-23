@@ -124,9 +124,11 @@ defmodule Locus.Runtime.Keeper.Channel do
   @impl Locus.Runtime.Keeper
   def assign(place, whose, opts) when is_list(opts) do
     with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
-         do: Locus.Keeper.assign(client, place, whose)
-
-    :ok
+         :ok <- Locus.Keeper.assign(client, place, whose) do
+      :ok
+    else
+      {:error, reason} -> {:error, failure(reason)}
+    end
   end
 
   # A spec may name the adapter to use (`:server`), as a test does; the

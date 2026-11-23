@@ -222,7 +222,7 @@ defmodule Locus.Builder do
   athanor, under an id of its own. `{:error, refusal}` where no executor
   can make one.
   """
-  @spec place(%{athanor_id: String.t()}) ::
+  @spec place(%{required(:athanor_id) => String.t(), optional(atom()) => term()}) ::
           {:ok, String.t()} | {:error, BuilderProtocol.refusal()}
   def place(%{athanor_id: athanor_id}) do
     place = "build-" <> Prima.Hex.short()

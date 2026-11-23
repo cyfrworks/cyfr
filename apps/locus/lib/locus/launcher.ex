@@ -58,10 +58,12 @@ defmodule Locus.Launcher do
   Every process runs in a place (`Prima.KeeperProtocol`, "Places") made
   before its work is prepared: `c:place/4` makes one under an id its
   caller minted, of a kind, and an athanor and a subject where it has
-  them, for an owner, whose death
-  before a spawn names the place drops it; `c:drop/2` frees one no spawn
+  them, for an owner, whose death before a spawn names the place drops
+  it, as does the end, for any reason but `:normal`, of a caller that
+  asked for it for another owner; `c:drop/2` frees one no spawn
   named, after a preparation that failed or a waiter that left;
-  `c:assign/3` gives one another kind, athanor and subject. A spec names
+  `c:assign/3` gives one another kind, athanor and subject, answering once
+  the keeper has applied it. A spec names
   its place, which its spawn takes: the place is free once nothing of
   the process is left. `c:measure/2` answers a place's last reading, whose
   the place is and how old the reading is, or an error where none is
@@ -207,8 +209,9 @@ defmodule Locus.Launcher do
   @doc "Free the place no spawn named."
   @callback drop(GenServer.server() | keyword(), String.t()) :: :ok
 
-  @doc "Give the place another kind, athanor and subject."
-  @callback assign(GenServer.server() | keyword(), String.t(), whose()) :: :ok
+  @doc "Give the place another kind, athanor and subject: `:ok` once the keeper has applied it."
+  @callback assign(GenServer.server() | keyword(), String.t(), whose()) ::
+              :ok | {:error, error()}
 
   @doc "The place's last reading and whose it is; an error where none is known, never a zero."
   @callback measure(GenServer.server() | keyword(), String.t()) ::

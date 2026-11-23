@@ -11,7 +11,9 @@ defmodule Locus.KeeperVectorsTest do
 
   Every spawn names the vectors' place, made before it with their `place`
   request, byte for byte, and answered with their `placed`; a place the
-  keeper refuses is its caller's refusal. A measure is the vectors'
+  keeper refuses is its caller's refusal. An assign is the vectors'
+  request naming its place under an id of its own, answered with their
+  `assigned` or the keeper's refusal. A measure is the vectors'
   request naming its place, answered with the reading, whose the place is
   and its age; a reply settles only the measure it names, never a later
   caller's or one that stopped waiting, and the release of the place's
@@ -61,6 +63,7 @@ defmodule Locus.KeeperVectorsTest do
   # vectors gain fails here until a test hears it.
   @reply_categories [
     {"placed", nil},
+    {"assigned", nil},
     {"error", "bad_request"},
     {"spawned", nil},
     {"error", "capacity"},
@@ -428,6 +431,17 @@ defmodule Locus.KeeperVectorsTest do
               lesser: true,
               age_ms: 0
             }}},
+          # An athanor of any id the other Locus wires take.
+          {reply(v, "measured", &(&1["athanor"] == "family@example")),
+           {:ok,
+            %{
+              kind: "build",
+              athanor: "family@example",
+              subject: nil,
+              bytes: 1_048_576,
+              lesser: false,
+              age_ms: 3
+            }}},
           {reply(v, "error", &(&1["code"] == "unmeasured")), {:error, {:refused, "unmeasured"}}}
         ] do
       task = Task.async(fn -> Keeper.measure(name, vector["place"]) end)
@@ -440,7 +454,7 @@ defmodule Locus.KeeperVectorsTest do
 
   test "a reply settles only the measurement it answers, however late or out of order it comes",
        %{v: v, peer: peer, name: name} do
-    reading = reply(v, "measured")
+    reading = reply(v, "measured", &(&1["kind"] == "program"))
 
     read =
       %{kind: "program", athanor: reading["athanor"], subject: reading["subject"]}
@@ -483,6 +497,35 @@ defmodule Locus.KeeperVectorsTest do
 
     assert {Task.await(third, 5_000), Task.await(fourth, 5_000)} ==
              {{:ok, Map.put(read, :bytes, 12_288)}, {:ok, Map.put(read, :bytes, 16_384)}}
+  end
+
+  test "an assign is the vectors' request naming its place under an id of its own, answered once applied or refused",
+       %{v: v, peer: peer, name: name} do
+    vector = Enum.find(v["valid_requests"], &(&1["type"] == "assign" and &1["kind"] == "run"))
+    whose = %{kind: vector["kind"], athanor: vector["athanor"]}
+
+    for {answer, read} <- [
+          {reply(v, "assigned"), :ok},
+          {reply(v, "error", &(&1["code"] == "bad_request")), {:error, {:refused, "bad_request"}}}
+        ] do
+      task = Task.async(fn -> Keeper.assign(name, vector["place"], whose) end)
+      asked = next_request(peer)
+      assert asked == %{vector | "id" => asked["id"]}
+      send_reply(peer, answering(asked, answer))
+      assert Task.await(task, 5_000) == read
+    end
+  end
+
+  test "an assign waiting when the channel is lost is answered so", %{peer: peer, name: name} do
+    log =
+      capture_log(fn ->
+        task = Task.async(fn -> Keeper.assign(name, "pl-1", %{kind: "run"}) end)
+        assert %{"type" => "assign", "place" => "pl-1"} = next_request(peer)
+        :ok = :socket.close(peer)
+        assert Task.await(task, 5_000) == {:error, {:launcher_unavailable, :channel_lost}}
+      end)
+
+    assert log =~ "the keeper channel closed"
   end
 
   test "a measure is settled by its own reply alone: the release of the place's spawn settles none",
@@ -663,8 +706,16 @@ defmodule Locus.KeeperVectorsTest do
           assert_receive {Keeper, ^ref, {:spawned, ^spawn_id, ^uid, ^pid} = event}, 5_000
           assert Locus.Runtime.Keeper.event(event) == {:spawned, pid}
 
+        # An assign's answer reaches the process that asked for it, and no
+        # runner's owner.
+        %{"type" => "assigned"} ->
+          task = Task.async(fn -> Keeper.assign(name, "pl-1", %{kind: "run"}) end)
+          assert %{"type" => "assign", "place" => "pl-1"} = asked = next_request(peer)
+          send_reply(peer, answering(asked, vector))
+          assert Task.await(task, 5_000) == :ok
+
         # A runner is not measured: its owner hears nothing of a reading.
-        %{"id" => "25"} ->
+        %{"type" => "measured"} ->
           {%{ref: ref}, _request, spawned} = spawned_runner!(v, peer, name)
           send_reply(peer, vector)
           send_reply(peer, %{reply(v, "released") | "spawn_id" => spawned["spawn_id"]})
