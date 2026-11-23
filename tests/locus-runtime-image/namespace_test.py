@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The namespace suite's kill of a runner, with docker stubbed, and its measure step's client and verdict.
+"""The namespace suite's kill of a runner, with docker stubbed, and its measure step's client, service and verdict.
 
 A runner's keeper group counts as removed only on a probe whose successful
 exec says so. A failed exec is no answer, whatever its status, and it fails
 the kill. The measure step's client speaks keeper protocol 3 to a keeper
-that answers as cyfr-locus does, and its verdict refuses a place read under
-another owner, a reading answered only after `released`, and a reading of a
-place after `released`.
+that answers as cyfr-locus does, beside a stand-in for this machine's
+marks, and its verdict refuses a refused assign, a place read under
+another owner, a reading at the work taken before the work held its memory
+or not holding it, a reading answered only after `released`, and a reading
+of a place after `released`. The service's frames reproduce the control
+and relay vectors, and the work's verdict refuses an unclean `complete`
+and an emit not held for the client.
 
 Usage: python3 -I tests/locus-runtime-image/namespace_test.py
 """
@@ -17,6 +21,8 @@ import os
 import socket
 import subprocess
 import sys
+import shutil
+import tempfile
 import threading
 import unittest
 from unittest import mock
@@ -118,14 +124,18 @@ class RunnerFacts(unittest.TestCase):
 SPAWN_ID = "ab" * 16
 
 
-def keeper(sock, requests):
+def keeper(sock, requests, marks):
     """A keeper on the client's channel, answering as cyfr-locus does: a place `placed`, a spawn `spawned`, an assign
-    nothing; a measure `unmeasured` until the place's first reading, which the first measure finds missing, then the
-    reading under the place's owner of the moment; a measure sent with a release is answered before `exited` and
+    `assigned` under its id; a measure `unmeasured` until the place's first reading, which the first measure finds
+    missing, then the reading under the place's owner of the moment, 64 MiB more while the work holds its memory (from
+    the mark `holding` to `complete` in `marks`); a measure sent with a release is answered before `exited` and
     `released`, and one after is `unmeasured`. Every request is kept in `requests`."""
 
     def send(reply):
         sock.sendall(json.dumps(reply, separators=(",", ":")).encode() + b"\n")
+
+    def holding():
+        return os.path.exists(os.path.join(marks, "holding")) and not os.path.exists(os.path.join(marks, "complete"))
 
     owner, measures, releasing, free = None, 0, False, False
     for line in sock.makefile("rb"):
@@ -138,6 +148,7 @@ def keeper(sock, requests):
             send({"v": 3, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": UID, "pid": 4242})
         elif request["type"] == "assign":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
+            send({"v": 3, "type": "assigned", "id": request["id"]})
         elif request["type"] == "release":
             releasing = True
         elif request["type"] == "measure":
@@ -145,11 +156,20 @@ def keeper(sock, requests):
             if free or measures == 1:
                 send({"v": 3, "type": "error", "id": request["id"], "code": "unmeasured"})
             else:
-                send({"v": 3, "type": "measured", "id": request["id"], **owner, "bytes": 180 << 20, "lesser": False, "age_ms": 412})
+                send({"v": 3, "type": "measured", "id": request["id"], **owner, "bytes": (180 << 20) + (64 << 20) * holding(),
+                      "lesser": False, "age_ms": 412})
             if releasing:
                 send({"v": 3, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGTERM", "memory": None})
                 send({"v": 3, "type": "released", "spawn_id": SPAWN_ID})
                 releasing, free = False, True
+
+
+def service_marks(marks):
+    """This machine's marks as serve_work and the plane leave them: `holding` once the client marks `assigned`, then
+    `complete` once it marks `measured`."""
+    for theirs, ours in (("assigned", "holding"), ("measured", "complete")):
+        stack.wait_until(lambda: os.path.exists(os.path.join(marks, theirs)), 20, f"the client's mark {theirs}")
+        open(os.path.join(marks, ours), "w").close()
 
 
 class PlacesClient(unittest.TestCase):
@@ -157,20 +177,25 @@ class PlacesClient(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        marks = tempfile.mkdtemp(prefix="cyfr-marks-")
         parent, child = socket.socketpair()
-        script = namespace.places_client({"LANG": "C.UTF-8", **namespace.RUNNER_ENV})
+        script = namespace.places_client({"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, marks=marks)
         process = subprocess.Popen(["/bin/sh", "-c", f"exec 3<&{child.fileno()}\n{script}"], pass_fds=(child.fileno(),),
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         child.close()
         cls.requests = []
-        serving = threading.Thread(target=keeper, args=(parent, cls.requests), daemon=True)
+        serving = threading.Thread(target=keeper, args=(parent, cls.requests, marks), daemon=True)
         serving.start()
+        marking = threading.Thread(target=service_marks, args=(marks,), daemon=True)
+        marking.start()
         try:
             cls.stdout, cls.stderr = process.communicate(timeout=30)
         finally:
             process.kill()
             serving.join(5)
+            marking.join(5)
             parent.close()
+            shutil.rmtree(marks, ignore_errors=True)
         cls.returncode = process.returncode
         cls.read = namespace.transcript(cls.stdout)
 
@@ -193,8 +218,8 @@ class PlacesClient(unittest.TestCase):
         place = namespace.RUNNER
         assign = {"v": 3, "type": "assign", "place": place, "athanor": namespace.ATHANOR}
         self.assertEqual([r["type"] for r in self.requests],
-                         ["place", "spawn", "measure", "measure", "assign", "measure", "assign", "measure", "assign", "measure",
-                          "release", "measure", "measure"])
+                         ["place", "spawn", "measure", "measure", "assign", "measure", "measure", "assign", "measure", "assign",
+                          "measure", "release", "measure", "measure"])
         self.assertEqual(self.requests[0], {"v": 3, "type": "place", "id": place, "kind": "warm"})
         spawn = self.requests[1]
         self.assertEqual({key: spawn[key] for key in ("v", "id", "place", "pool", "argv", "env", "memory_bytes", "control", "isolation")},
@@ -202,15 +227,36 @@ class PlacesClient(unittest.TestCase):
                           "env": {"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, "memory_bytes": namespace.RUNNER_MEMORY_BYTES,
                           "control": True, "isolation": stack.ROLE["isolation"]})
         self.assertEqual([r for r in self.requests if r["type"] == "assign"],
-                         [{**assign, "kind": "run"}, {**assign, "kind": "warm"}, {**assign, "kind": "run"}])
-        self.assertEqual(self.requests[10], {"v": 3, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": namespace.RELEASE_GRACE_MS})
-        self.assertEqual([r["id"] for r in self.requests if r["type"] == "measure"], [f"m{n}" for n in range(1, 8)])
+                         [{**assign, "id": "as1", "kind": "run"}, {**assign, "id": "as2", "kind": "warm"},
+                          {**assign, "id": "as3", "kind": "run"}])
+        self.assertEqual(self.requests[11], {"v": 3, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": namespace.RELEASE_GRACE_MS})
+        self.assertEqual([r["id"] for r in self.requests if r["type"] == "measure"], [f"m{n}" for n in range(1, 9)])
         self.assertTrue(all(r["place"] == place for r in self.requests if r["type"] == "measure"))
 
     def test_a_runner_read_under_each_owner_and_free_only_after_released_passes(self):
         self.assertEqual([step for step, _ in self.read],
-                         ["placed", "spawned", "fresh", "fresh", "assigned", "warm", "reused", "release", "release", "release", "after"])
+                         ["placed", "spawned", "fresh", "fresh", "assigned.assign", "assigned", "working", "warm.assign", "warm",
+                          "reused.assign", "reused", "release", "release", "release", "after"])
         self.judge(self.read)
+
+    def test_a_refused_assign_fails(self):
+        self.fails(self.edited("warm.assign", lambda got: [{"v": 3, "type": "error", "id": got[0]["id"], "code": "bad_request"}]),
+                   "before warm, the keeper applied the assign")
+
+    def test_a_reading_at_the_work_under_nobody_or_another_fails(self):
+        for edit in ({"kind": "warm"}, {"athanor": "ath_other"}):
+            self.fails(self.edited("working", lambda got: [{**reply, **edit} for reply in got]), f"at the work of {namespace.ATHANOR}")
+        self.fails(self.edited("working", lambda got: [{k: v for k, v in reply.items() if k != "athanor"} for reply in got]),
+                   f"at the work of {namespace.ATHANOR}")
+
+    def test_a_reading_at_the_work_taken_before_it_held_its_memory_fails(self):
+        self.fails(self.edited("working", lambda got: [{**reply, "age_ms": namespace.SETTLE_MS} for reply in got]),
+                   "the reading at the work was taken while")
+
+    def test_a_reading_at_the_work_without_its_memory_fails(self):
+        before = dict(self.read)["assigned"]["bytes"]
+        self.fails(self.edited("working", lambda got: [{**reply, "bytes": before} for reply in got]),
+                   "the reading at the work was taken while")
 
     def test_a_reading_under_another_owner_fails(self):
         self.fails(self.edited("assigned", lambda got: [{**reply, "athanor": "ath_other"} for reply in got]),
@@ -233,6 +279,62 @@ class PlacesClient(unittest.TestCase):
                                                       "athanor": namespace.ATHANOR, "bytes": 1 << 20, "lesser": False,
                                                       "age_ms": 9}]),
                    "the runner's place is free")
+
+
+with open(os.path.join(stack.ROOT, "tests", "fixtures", "runner_control.json")) as f:
+    CONTROL = json.load(f)
+with open(os.path.join(stack.ROOT, "tests", "fixtures", "runner_relay.json")) as f:
+    RELAY = json.load(f)
+
+
+class ServiceFrames(unittest.TestCase):
+    """What serve_work writes and reads reproduces the vectors of Prima.RunnerControl and Prima.RunnerRelay."""
+
+    def test_the_assign_is_the_vectors_line(self):
+        vector = CONTROL["valid"][0]
+        message = vector["message"]
+        keys = message["keys"]
+        attempt = {**keys["attempt"], "call_key": bytes.fromhex(keys["call"]), "seal_key": bytes.fromhex(keys["seal"])}
+        self.assertEqual(namespace.control_assign(message["assignment"], message["input"], namespace.opened_keys(attempt)),
+                         vector["line"].encode() + b"\n")
+
+    def test_a_host_answer_is_the_vectors_frame_and_a_host_call_reads_whole(self):
+        call, answer = (json.loads(RELAY["exchange"][n]["json"]) for n in (0, 1))
+        self.assertEqual(namespace.relay_frame(answer)[4:], RELAY["exchange"][1]["json"].encode())
+        sent = namespace.relay_frame(call) + namespace.relay_frame(answer)
+        self.assertEqual(namespace.relay_frames(sent[:-1]), ([call], sent[len(namespace.relay_frame(call)):-1]))
+        self.assertEqual(namespace.relay_frames(sent), ([call, answer], b""))
+
+
+class Work(unittest.TestCase):
+    """The work's verdict on what this machine served and the plane's calls."""
+
+    ATTEMPT = {"execution_id": "exec_measured"}
+
+    def served(self, clean=True):
+        complete = {"v": 1, "type": "complete", "execution_id": self.ATTEMPT["execution_id"], "clean": clean}
+        return {"relay": list(namespace.WORK_CALLS), "control": [json.dumps(complete, separators=(",", ":"))], "stderr": b""}
+
+    def calls(self, let=True):
+        calls = [{"op": op, "answered": "ok", "runner": namespace.RUNNER, "args": {}} for op in namespace.WORK_CALLS]
+        calls[2]["events"], calls[3]["events"] = namespace.WORK_EVENTS
+        if let:
+            calls[3]["let"] = True
+        calls[4]["args"] = {"outcome": {"output": {"status": 200, "data": {"held": namespace.HOG_BYTES}}}}
+        return calls
+
+    def test_work_run_whole_and_completed_clean_passes(self):
+        namespace.judge_work(self.served(), self.calls(), self.ATTEMPT)
+
+    def test_an_unclean_complete_fails(self):
+        with self.assertRaises(SystemExit) as failed:
+            namespace.judge_work(self.served(clean=False), self.calls(), self.ATTEMPT)
+        self.assertIn("complete and clean", str(failed.exception.code).splitlines()[0])
+
+    def test_an_emit_not_held_for_the_client_fails(self):
+        with self.assertRaises(SystemExit) as failed:
+            namespace.judge_work(self.served(), self.calls(let=False), self.ATTEMPT)
+        self.assertIn("was held until the client had read it", str(failed.exception.code).splitlines()[0])
 
 
 if __name__ == "__main__":
