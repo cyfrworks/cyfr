@@ -114,8 +114,8 @@ test("the stapled ticket is data directly under Contents, and only where a real 
   for (const elsewhere of ["CodeResources", "Contents/Resources/CodeResources", "Contents/MacOS/CodeResources"]) {
     const r = rig(t)
     r.put(elsewhere, "a notarisation ticket")
-    await assert.rejects(() => r.check(), refused(new RegExp(`^CYFR\\.app/${elsewhere.replace(/\./g, "\\.")} is of no kind a signed CYFR\\.app holds$`)),
-      elsewhere)
+    await assert.rejects(() => r.check(),
+      (e) => e instanceof Refused && e.message === `CYFR.app/${elsewhere} is of no kind a signed CYFR.app holds`, elsewhere)
   }
   const runs = rig(t)
   runs.put("Contents/CodeResources", "a notarisation ticket", 0o755)
