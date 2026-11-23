@@ -179,7 +179,7 @@ class PlacesClient(unittest.TestCase):
     def setUpClass(cls):
         marks = tempfile.mkdtemp(prefix="cyfr-marks-")
         parent, child = socket.socketpair()
-        script = namespace.places_client({"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, marks=marks)
+        script = namespace.places_client({"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, marks=marks, client_marks=marks)
         process = subprocess.Popen(["/bin/sh", "-c", f"exec 3<&{child.fileno()}\n{script}"], pass_fds=(child.fileno(),),
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         child.close()

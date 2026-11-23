@@ -287,10 +287,12 @@ class Attach:
 
     MOUNT = "/run/cyfr-attach"
 
-    def __init__(self):
+    def __init__(self, client_marks=None):
         self.dir = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "cyfr-attach-")
-        # The client, under its own uid, leaves its marks here (`mark`).
-        os.chmod(self.dir, 0o777)
+        # This machine leaves its marks for the client here (`mark`); the client leaves its own in `client_marks`
+        # (`ClientMarks`): cyfr-locus refuses to start with a mount a pooled uid could write.
+        os.chmod(self.dir, 0o755)
+        self.client_marks = client_marks or self.dir
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(os.path.join(self.dir, "a.sock"))
         os.chmod(os.path.join(self.dir, "a.sock"), 0o777)
@@ -359,7 +361,7 @@ class Attach:
         open(os.path.join(self.dir, name), "w").close()
 
     def marked(self, name):
-        return os.path.exists(os.path.join(self.dir, name))
+        return os.path.exists(os.path.join(self.client_marks, name))
 
     def close(self):
         self.server.close()
@@ -504,7 +506,7 @@ assign() {
   done
   return 1
 }
-mark() { : > "$marks/$1"; }
+mark() { : > "$own_marks/$1"; }
 marked() {
   tries=0
   until [ -e "$marks/$1" ]; do
@@ -548,7 +550,31 @@ def assigns():
     return sent
 
 
-def places_client(env, marks=Attach.MOUNT):
+class ClientMarks:
+    """Where the client leaves its marks for this machine: a directory mounted at MOUNT, the service user's and
+    writable by it alone, as cyfr-locus requires of every mount, which a root container of the image makes so."""
+
+    MOUNT = "/run/cyfr-marks"
+
+    def __init__(self, image):
+        self.image = image
+        self.dir = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "cyfr-marks-")
+        self._as_root(f"chown {SERVICE_UID}:{SERVICE_UID} /m && chmod 0755 /m")
+
+    def _as_root(self, script):
+        run("docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-marks-{os.getpid()}-{secrets.token_hex(4)}"),
+            "--user", "0", "-v", f"{self.dir}:/m", "--entrypoint", "/bin/sh", self.image, "-c", script)
+
+    @property
+    def mount(self):
+        return f"{self.dir}:{self.MOUNT}"
+
+    def close(self):
+        self._as_root("rm -rf /m/*")
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def places_client(env, marks=Attach.MOUNT, client_marks=ClientMarks.MOUNT):
     """The measure step's client: the runner placed warm, spawned with `env` in its place, read under each owner, released and read again.
 
     Before `working` it marks `assigned`, for this machine to send the runner its work, and waits for this machine's
@@ -558,6 +584,7 @@ def places_client(env, marks=Attach.MOUNT):
         "place": RUNNER,
         "grace": str(RELEASE_GRACE_MS),
         "marks": marks,
+        "own_marks": client_marks,
         "placing": place_line(RUNNER),
         "spawning": spawn_line("1", RUNNER_ARGV, env=env, control=True, attach=f"{Attach.MOUNT}/a.sock", place=RUNNER,
                                memory_bytes=RUNNER_MEMORY_BYTES),
@@ -780,16 +807,18 @@ def held_until_measured(plane, attach):
 def test_measure(image):
     env = runner_env(image)
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
-    attach = Attach()
+    client_marks = ClientMarks(image)
+    attach = Attach(client_marks.dir)
     attempt = plane.mint(RUNNER_ENV["RUNTIME_BOOT_ID"], "catalyst", HOG_REF, wasm(HOG), {}, ATHANOR, WORK_TIMEOUT_MS)
     plane.script("push_deltas", held_until_measured(plane, attach), attempt["execution_id"])
     serving = threading.Thread(target=serve_work, args=(attach, plane, attempt), daemon=True)
     serving.start()
     try:
-        ran = keeper_run(image, places_client(env), timeout=180, mounts=[attach.mount])
+        ran = keeper_run(image, places_client(env), timeout=180, mounts=[attach.mount, client_marks.mount])
         serving.join(60)
     finally:
         attach.close()
+        client_marks.close()
         plane.stop()
     read = transcript(ran.stdout)
     served = attach.result or {}
