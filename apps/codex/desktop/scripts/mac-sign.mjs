@@ -159,7 +159,8 @@ export function writeEntitlements(dir, team, group) {
  */
 export function ignoring(ignore, helper) {
   const skipped = [ignore ?? []].flat()
-  return (file) => file === helper ||
+  const signed = path.resolve(helper)
+  return (file) => path.resolve(file) === signed ||
     skipped.some((it) => (typeof it === "function" ? it(file) : file.match(it) !== null))
 }
 
@@ -338,7 +339,7 @@ export function checkDmg(file, expect, {rehearsed = false} = {}) {
     must("xcrun", ["stapler", "validate", app], "CYFR.app has no stapled notarisation")
     must("spctl", ["--assess", "--type", "execute", app], "Gatekeeper refuses CYFR.app")
   }
-  if (file.endsWith(".app")) return release(file)
+  if (path.extname(file) === ".app") return release(file)
   must("codesign", ["--verify", "--strict", file], "the DMG's signature does not verify")
   if (!rehearsed) {
     must("xcrun", ["stapler", "validate", file], "the DMG has no stapled notarisation")

@@ -149,4 +149,7 @@ test("Electron's signing skips the signed cyfr and what electron-builder skips",
     if (given) assert.equal(skip(`${app}/Contents/Library/x.kext`), true)
   }
   assert.equal(ignoring(/\.kext$/, helper)(`${app}/a.kext`), true)
+  // However either path is spelled.
+  assert.equal(ignoring(undefined, "/out//mac-arm64/CYFR.app/Contents/Resources/cyfr")(helper), true)
+  assert.equal(ignoring(undefined, helper)("/out/mac-arm64//CYFR.app/Contents/./Resources/cyfr"), true)
 })
