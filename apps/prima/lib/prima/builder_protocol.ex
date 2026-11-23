@@ -27,11 +27,13 @@ defmodule Prima.BuilderProtocol do
   A build's answer is a stream of newline-delimited JSON lines
   (`encode_progress/2`, `encode_output/3`, `read_line/1`): progress lines
   as the build runs and output lines as its files leave it, then exactly
-  one terminal line, a result or a refusal. Every line, with its newline,
-  is at most `max_line_size/0`, and each type is held to its own bound
-  besides. The builder charges its progress lines, as encoded with their
-  newlines, to `max_log_bytes/0`; a reader that keeps them as the build's
-  log keeps at most that. No terminal line carries the log: the progress
+  one terminal line, a result or a refusal. The terminal line ends the
+  answer: a reader reads nothing after it and closes the connection there.
+  Every line, with its newline, is at most `max_line_size/0`, and each
+  type is held to its own bound besides. The builder charges its progress
+  lines, as encoded with their newlines, to `max_log_bytes/0`; a reader
+  that keeps them as the build's log keeps at most that. No terminal line
+  carries the log: the progress
   lines are the build's diagnostics, each `stage: message`
   (`diagnostic/2`). A refusal the builder can make before the build starts
   — malformed, unauthorized, protocol mismatch, capacity, unavailable — is
@@ -64,19 +66,23 @@ defmodule Prima.BuilderProtocol do
 
   A build's files leave it as output lines, `{version, type: "output",
   path, seq, bytes}`: `bytes` is base64 of a chunk of the file at `path`
-  of at most `max_chunk_bytes/0` bytes, and the line with its newline is
-  at most `max_output_line_bytes/0`. `seq` numbers the answer's output
-  lines 1, 2, 3 in order; a file's lines are consecutive and a path once
-  left never comes back; a file of no bytes is one line whose `bytes` is
-  empty. At most `max_output_files/0` paths and `max_output_bytes/0` bytes
-  in all, each path at most `max_output_path_bytes/0` bytes, safe
+  of at least one byte and at most `max_chunk_bytes/0`, and the line with
+  its newline is at most `max_output_line_bytes/0`. `seq` numbers the
+  answer's output lines 1, 2, 3 in order; a file's lines are consecutive
+  and a path once left never comes back; a file of no bytes sends no line.
+  At most `max_output_files/0` paths and `max_output_bytes/0` bytes in
+  all, each path at most `max_output_path_bytes/0` bytes, safe
   (`Prima.PathSafety`) and with no control character.
 
   `{version, type: "result", language, target_type, outputs}` ends a
-  build that made its files: `outputs` names each path sent, in the order
-  sent, with its `size` and its `digest`, the `Prima.Digest.sha256/1` of
-  its bytes in order, and no other; the line is at most
-  `max_result_line_bytes/0`. A component build's outputs are
+  build that made its files: `outputs` names each of its files once, with
+  its `size` and its `digest`, the `Prima.Digest.sha256/1` of its bytes in
+  order. It names every path the output lines sent, at the size and digest
+  of the bytes they carried, and any other only as a file of no bytes, of
+  size 0 and the digest of no bytes, which is how such a file is carried;
+  a path of more bytes that no line sent is `unsent`. `outputs` is read as
+  a set: its order is not the lines' and means nothing. The line is at
+  most `max_result_line_bytes/0`. A component build's outputs are
   `component_wasm/0` and, when the build left one, `component_lockfile/0`;
   a tincture's are its files. The builder is another trust domain: the
   reader holds the lines to these rules as they arrive (`outputs/0`,
@@ -154,6 +160,8 @@ defmodule Prima.BuilderProtocol do
   # A path's control characters: C0 and DEL, each six bytes once escaped.
   @control_bytes Enum.map(Enum.concat(0x00..0x1F, [0x7F]), &<<&1>>)
 
+  @no_bytes_digest Prima.Digest.sha256("")
+
   @component_wasm "component.wasm"
   @component_lockfile "Cargo.lock"
 
@@ -205,8 +213,8 @@ defmodule Prima.BuilderProtocol do
 
   # The bounds of a line, derived from the encoder itself (see
   # `max_chunk_bytes/0` and `max_result_line_bytes/0`). The most output
-  # lines an answer can hold: one a byte, and one for each empty file.
-  @max_seq @max_output_bytes + @max_output_files
+  # lines an answer can hold: one a byte.
+  @max_seq @max_output_bytes
   # An output line with an empty path and no bytes, at the largest seq,
   # with its newline; its path escapes to at most two bytes a byte, since
   # it holds no control character.
@@ -226,7 +234,7 @@ defmodule Prima.BuilderProtocol do
   @result_entry_bytes %{
                         "path" => "",
                         "size" => @max_output_bytes,
-                        "digest" => Prima.Digest.sha256("")
+                        "digest" => @no_bytes_digest
                       }
                       |> Jason.encode!()
                       |> byte_size()
@@ -277,21 +285,28 @@ defmodule Prima.BuilderProtocol do
   @typedoc "One file a result names: its path, its size and the digest of its bytes."
   @type output :: %{path: String.t(), size: non_neg_integer(), digest: String.t()}
 
-  @typedoc "A finished build: its files, in the order they were sent."
+  @typedoc "A finished build: its files, each named once, in no order a reader reads."
   @type result :: %{language: language(), target_type: target_type(), outputs: [output()]}
 
-  @typedoc "One chunk of a file, the `seq`th output line of its answer."
+  @typedoc "One chunk of a file, of at least one byte, the `seq`th output line of its answer."
   @type chunk :: %{path: String.t(), seq: pos_integer(), bytes: binary()}
 
   @typedoc """
   The output lines read so far, held to the stream's rules (`output/2`):
-  the files whole, their sizes and running digests, by path in order.
+  the files whole, their sizes and running digests, by path, and the path
+  the last line named.
   """
   @opaque outputs :: %{
             seq: non_neg_integer(),
             bytes: non_neg_integer(),
-            order: [String.t()],
-            files: %{String.t() => %{chunks: iodata(), size: non_neg_integer(), hash: term()}}
+            current: String.t() | nil,
+            files: %{
+              String.t() => %{
+                chunks: iodata(),
+                size: non_neg_integer(),
+                hash: Prima.Digest.sha256_state()
+              }
+            }
           }
 
   @typedoc "What one toolchain reports on a health answer."
@@ -325,9 +340,10 @@ defmodule Prima.BuilderProtocol do
   (or none); a field the shape does not have, lacks or does not accept
   (named by its path, `sources[2].path`); a language and type not built
   together; a bound passed (what, the size seen, the bound); a path named
-  twice or unsafe; a stream of output lines that breaks its rules: a line
-  out of its order, a path come back to, a result that names other paths
-  than those sent (`:unsent` for one never sent, `:unnamed` for one sent
+  twice or unsafe; an output line of no bytes (`:empty_chunk`, by its
+  path); a stream of output lines that breaks its rules: a line out of its
+  order, a path come back to, a result that names other paths than those
+  sent (`:unsent` for one of more bytes never sent, `:unnamed` for one sent
   and not named) or another size or digest than theirs.
   """
   @type read_error ::
@@ -342,6 +358,7 @@ defmodule Prima.BuilderProtocol do
           | {:too_many, :sources | :outputs, non_neg_integer(), pos_integer()}
           | {:duplicate_path, String.t()}
           | {:unsafe_path, String.t()}
+          | {:empty_chunk, String.t()}
           | {:out_of_order, pos_integer(), pos_integer()}
           | {:path_revisited, String.t()}
           | {:unsent, String.t()}
@@ -466,7 +483,7 @@ defmodule Prima.BuilderProtocol do
   fits an output line at its longest, which is the line with its newline,
   its path escaped to two bytes a byte (a path holds no control character,
   and `"` or `\\` is the most any byte of it grows), and the largest `seq`
-  an answer can reach, one line a byte and one for each empty file.
+  an answer can reach, one line a byte.
   """
   @spec max_chunk_bytes() :: pos_integer()
   def max_chunk_bytes, do: @max_chunk_bytes
@@ -688,7 +705,8 @@ defmodule Prima.BuilderProtocol do
     with :ok <- output_path(path, ""),
          {:ok, path} <- safe_path(path, ""),
          :ok <- seq_bound(seq),
-         :ok <- chunk_bound(byte_size(bytes)) do
+         :ok <- chunk_bound(byte_size(bytes)),
+         :ok <- some_bytes(path, bytes) do
       {:ok,
        Jason.encode!(%{
          "version" => @version,
@@ -793,7 +811,8 @@ defmodule Prima.BuilderProtocol do
          :ok <- output_path(wire["path"], ""),
          {:ok, path} <- safe_path(wire["path"], ""),
          {:ok, seq} <- seq_field(wire),
-         {:ok, bytes} <- chunk_field(wire) do
+         {:ok, bytes} <- chunk_field(wire),
+         :ok <- some_bytes(path, bytes) do
       {:ok, {:output, %{path: path, seq: seq, bytes: bytes}}}
     end
   end
@@ -837,7 +856,7 @@ defmodule Prima.BuilderProtocol do
 
   @doc "No output line read yet."
   @spec outputs() :: outputs()
-  def outputs, do: %{seq: 0, bytes: 0, order: [], files: %{}}
+  def outputs, do: %{seq: 0, bytes: 0, current: nil, files: %{}}
 
   @doc """
   An output line read after those before it: the next `seq`, of the path
@@ -847,18 +866,17 @@ defmodule Prima.BuilderProtocol do
   """
   @spec output(outputs(), chunk()) :: {:ok, outputs()} | {:error, read_error()}
   def output(%{} = state, %{path: path, seq: seq, bytes: bytes}) do
-    current = List.first(state.order)
-    count = length(state.order)
+    count = map_size(state.files)
     total = state.bytes + byte_size(bytes)
 
     cond do
       seq != state.seq + 1 ->
         {:error, {:out_of_order, seq, state.seq + 1}}
 
-      path != current and is_map_key(state.files, path) ->
+      path != state.current and is_map_key(state.files, path) ->
         {:error, {:path_revisited, path}}
 
-      path != current and count >= @max_output_files ->
+      path != state.current and count >= @max_output_files ->
         {:error, {:too_many, :outputs, count + 1, @max_output_files}}
 
       total > @max_output_bytes ->
@@ -866,51 +884,45 @@ defmodule Prima.BuilderProtocol do
 
       true ->
         file =
-          Map.get(state.files, path, %{chunks: [], size: 0, hash: digest_init()})
+          Map.get(state.files, path, %{chunks: [], size: 0, hash: Prima.Digest.sha256_init()})
 
         file = %{
           file
           | chunks: [file.chunks, bytes],
             size: file.size + byte_size(bytes),
-            hash: digest_update(file.hash, bytes)
+            hash: Prima.Digest.sha256_update(file.hash, bytes)
         }
 
         {:ok,
-         %{
-           state
-           | seq: seq,
-             bytes: total,
-             order: if(path == current, do: state.order, else: [path | state.order]),
-             files: Map.put(state.files, path, file)
-         }}
+         %{state | seq: seq, bytes: total, current: path, files: Map.put(state.files, path, file)}}
     end
   end
 
   @doc """
   The files a result names, whole, by path: only when it names every path
-  the output lines sent and no other, each at the size and digest of the
-  bytes they carried.
+  the output lines sent, each at the size and digest of the bytes they
+  carried, and any other as a file of no bytes, which it answers empty.
   """
   @spec outputs(outputs(), result()) :: {:ok, %{String.t() => binary()}} | {:error, read_error()}
   def outputs(%{} = state, %{outputs: named}) when is_list(named) do
-    names = Enum.map(named, & &1.path)
-
-    with :ok <- all_sent(names, state.files),
-         :ok <- all_named(Enum.reverse(state.order), names),
+    with :ok <- all_sent(named, state.files),
+         :ok <- all_named(state.files, Enum.map(named, & &1.path)),
          :ok <- each_matches(named, state.files) do
-      {:ok, Map.new(state.files, fn {path, file} -> {path, IO.iodata_to_binary(file.chunks)} end)}
+      {:ok, Map.new(named, fn %{path: path} -> {path, kept(state.files, path)} end)}
     end
   end
 
-  defp all_sent(names, files) do
-    case Enum.find(names, &(not is_map_key(files, &1))) do
+  # A path no line sent is a file of no bytes, so a size above 0 is a file
+  # whose lines never came.
+  defp all_sent(named, files) do
+    case Enum.find(named, &(&1.size > 0 and not is_map_key(files, &1.path))) do
       nil -> :ok
-      path -> {:error, {:unsent, path}}
+      %{path: path} -> {:error, {:unsent, path}}
     end
   end
 
-  defp all_named(sent, names) do
-    case Enum.find(sent, &(&1 not in names)) do
+  defp all_named(files, names) do
+    case Enum.find(Map.keys(files), &(&1 not in names)) do
       nil -> :ok
       path -> {:error, {:unnamed, path}}
     end
@@ -918,31 +930,26 @@ defmodule Prima.BuilderProtocol do
 
   defp each_matches(named, files) do
     Enum.reduce_while(named, :ok, fn %{path: path, size: size, digest: digest}, :ok ->
-      file = Map.fetch!(files, path)
+      {sent_size, sent_digest} =
+        case files do
+          %{^path => file} -> {file.size, Prima.Digest.sha256_final(file.hash)}
+          %{} -> {0, @no_bytes_digest}
+        end
 
       cond do
-        file.size != size -> {:halt, {:error, {:size_mismatch, path}}}
-        digest_final(file.hash) != digest -> {:halt, {:error, {:digest_mismatch, path}}}
+        sent_size != size -> {:halt, {:error, {:size_mismatch, path}}}
+        sent_digest != digest -> {:halt, {:error, {:digest_mismatch, path}}}
         true -> {:cont, :ok}
       end
     end)
   end
 
-  @doc """
-  A file's running digest, begun: `digest_update/2` moves it on with each
-  chunk in order, and `digest_final/1` spells it as a result names it, the
-  `Prima.Digest.sha256/1` of the whole.
-  """
-  @spec digest_init() :: term()
-  def digest_init, do: :crypto.hash_init(:sha256)
-
-  @doc "A running digest moved on by the next chunk."
-  @spec digest_update(term(), binary()) :: term()
-  def digest_update(hash, bytes) when is_binary(bytes), do: :crypto.hash_update(hash, bytes)
-
-  @doc "A running digest as a result names it."
-  @spec digest_final(term()) :: String.t()
-  def digest_final(hash), do: "sha256:" <> Base.encode16(:crypto.hash_final(hash), case: :lower)
+  defp kept(files, path) do
+    case files do
+      %{^path => file} -> IO.iodata_to_binary(file.chunks)
+      %{} -> ""
+    end
+  end
 
   defp toolchains_field(%{} = wire) do
     with :ok <- exact(wire, Enum.map(@languages, &Atom.to_string/1), "toolchains.") do
@@ -1078,6 +1085,7 @@ defmodule Prima.BuilderProtocol do
 
   def describe({:duplicate_path, path}), do: "#{path} is named twice"
   def describe({:unsafe_path, path}), do: "#{path} is not a safe relative path"
+  def describe({:empty_chunk, path}), do: "an output line of #{path} carries no bytes"
 
   def describe({:out_of_order, seq, expected}),
     do: "output line #{seq} came where line #{expected} was due"
@@ -1356,6 +1364,10 @@ defmodule Prima.BuilderProtocol do
   end
 
   defp chunk_field(_wire), do: {:error, {:invalid_field, "bytes"}}
+
+  # A file of no bytes sends no line: its result names it alone.
+  defp some_bytes(path, ""), do: {:error, {:empty_chunk, path}}
+  defp some_bytes(_path, _bytes), do: :ok
 
   # A result's outputs: one to `max_output_files` entries, each path once,
   # their sizes within `max_output_bytes` together.

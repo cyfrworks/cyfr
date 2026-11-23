@@ -46,7 +46,8 @@ defmodule Cyfr.Test.ScriptedBuilder do
         progress line for each of `result.diagnostics`, each file of
         `result.outputs` (`%{path => bytes}`, in path order) as output
         lines of at most `Prima.BuilderProtocol.max_chunk_bytes/0` bytes
-        each, then the result naming each file's size and digest
+        each, a file of no bytes as none, then the result naming each
+        file's size and digest
       - `{:refusal, refusal, diagnostics}` — a progress line for each
         diagnostic, then the refusal's line
     A diagnostic is a log line as a person reads it, `stage: message`
@@ -324,7 +325,7 @@ defmodule Cyfr.Test.ScriptedBuilder do
     end
 
     # A build's files as output lines, in path order, each chunk within the
-    # bound, then its result.
+    # bound and a file of no bytes as no line, then its result.
     defp build_lines(%{language: language, target_type: type, outputs: outputs}) do
       {lines, _seq} =
         outputs
@@ -356,6 +357,7 @@ defmodule Cyfr.Test.ScriptedBuilder do
       [lines, result, "\n"]
     end
 
+    defp chunks("", _max), do: []
     defp chunks(bytes, max) when byte_size(bytes) <= max, do: [bytes]
 
     defp chunks(bytes, max) do

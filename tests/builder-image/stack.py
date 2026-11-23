@@ -27,10 +27,14 @@ module is loaded, before any container starts, and
 `python3 tests/builder-image/stack.py` runs it alone. An answer is read as a
 client reads it (`read_answer`): its progress lines are the build's log,
 each `stage: message`; its output lines carry the files in order, held to
-the wire's rules (each line the next `seq`, a file's lines together, a path
-never come back to); and only a result that names exactly the files sent,
-each at the size and digest of its bytes, keeps them. A refusal keeps
-nothing of the lines before it.
+the wire's rules (each line the next `seq` and of at least one byte, a
+file's lines together, a path never come back to, the wire's bounds on
+files and bytes); and only a result that names every file sent, each at
+the size and digest of its bytes, and any other only as a file of no
+bytes, keeps them. The first result or refusal ends the answer: nothing
+after it is read, and a refusal keeps nothing of the lines before it. A
+line that breaks a rule fails the suite as a `WireError`, named by the
+wire's error.
 
 The command runner, the teardown on a signal and the part of the Stack that
 does not depend on the service come from tests/imagesuite.py.
@@ -97,6 +101,8 @@ LABEL = WIRE["label"]
 AUTH_HEADER = WIRE["auth_header"]
 ROUTES = WIRE["routes"]
 STATUSES = WIRE["statuses"]
+BOUNDS = WIRE["bounds"]
+TERMINAL = ("result", "refusal")
 
 
 def expect(condition, message, detail=None):
@@ -320,8 +326,6 @@ class Stack(imagesuite.Stack):
         }).encode()
         header = auth_header(request_key(key or self.key), int(time.time() * 1000), secrets.token_urlsafe(16), body)
         status, lines = self.post(ROUTES["build"], body, {AUTH_HEADER: header})
-        if not lines or lines[-1].get("type") not in ("result", "refusal"):
-            raise ConnectionError(f"HTTP {status}: the answer ended without a terminal line after {len(lines)} lines")
         progress, terminal = read_answer(lines)
         return status, progress, terminal
 
@@ -398,43 +402,81 @@ def tincture(build_script, files=None):
     return sources
 
 
+class WireError(SystemExit):
+    """An answer that breaks the wire's rules: it fails the suite as `sys.exit` does, and `error` names the wire's error."""
+
+    def __init__(self, error, message):
+        super().__init__(f"FAIL: {message}")
+        self.error = error
+
+
 def read_answer(lines):
     """An answer's lines as a client keeps them: (its progress lines, its terminal line).
 
-    The terminal line is given the build's log as `diagnostics` and, for a
-    result, the files the output lines carried as `files`, once checked
-    against what the result names; a line out of the wire's order, or a
-    result naming other files, sizes or digests, fails the suite.
+    The lines are read up to the first result or refusal, and none after
+    it. The terminal line is given the build's log as `diagnostics` and,
+    for a result, the files it names as `files`: those the output lines
+    carried, once checked against what the result names, and empty for a
+    file of no bytes, which only the result names. A line that breaks the
+    wire's rules raises a `WireError`; lines with no terminal line are an
+    answer that broke off.
     """
-    progress, files, order, seq = [], {}, [], 0
-    for line in lines[:-1]:
+    progress, files, current, seq, total = [], {}, None, 0, 0
+    for line in lines:
+        if line.get("type") in TERMINAL:
+            break
         if line.get("type") == "progress":
             progress.append(line)
-        elif line.get("type") == "output":
-            seq += 1
-            path = line["path"]
-            if line["seq"] != seq:
-                sys.exit(f"FAIL: output line {line['seq']} came where line {seq} was due")
-            if order and path != order[-1] and path in files:
-                sys.exit(f"FAIL: {path} was sent again after another file")
-            if not order or path != order[-1]:
-                order.append(path)
-                files[path] = bytearray()
-            files[path] += base64.b64decode(line["bytes"])
-        else:
+            continue
+        if line.get("type") != "output":
             sys.exit(f"FAIL: a {line.get('type')} line came before the terminal line")
-    terminal = dict(lines[-1])
+        seq += 1
+        path, data = line["path"], base64.b64decode(line["bytes"])
+        if not data:
+            raise WireError("empty_chunk", f"an output line of {path} carries no bytes")
+        if line["seq"] != seq:
+            raise WireError("out_of_order", f"output line {line['seq']} came where line {seq} was due")
+        if path != current:
+            if path in files:
+                raise WireError("path_revisited", f"{path} was sent again after another file")
+            if len(files) >= BOUNDS["max_output_files"]:
+                raise WireError("too_many", f"the output lines name more than {BOUNDS['max_output_files']} files")
+            current, files[path] = path, bytearray()
+        total += len(data)
+        if total > BOUNDS["max_output_bytes"]:
+            raise WireError("too_large", f"the output lines total {total} bytes; at most {BOUNDS['max_output_bytes']} are read")
+        files[path] += data
+    else:
+        raise ConnectionError(f"the answer ended without a terminal line after {len(lines)} lines")
+    terminal = dict(line)
     terminal["diagnostics"] = [f"{line['stage']}: {line['message']}" for line in progress]
     if terminal.get("type") == "result":
-        named = {output["path"]: output for output in terminal["outputs"]}
-        if set(named) != set(files):
-            sys.exit(f"FAIL: the result names {sorted(named)}, the output lines sent {sorted(files)}")
-        for path, data in files.items():
-            digest = "sha256:" + hashlib.sha256(data).hexdigest()
-            if named[path]["size"] != len(data) or named[path]["digest"] != digest:
-                sys.exit(f"FAIL: the result names {named[path]} for {path}, whose bytes are {len(data)} of {digest}")
-        terminal["files"] = {path: bytes(data) for path, data in files.items()}
+        terminal["files"] = named_files(terminal["outputs"], files)
     return progress, terminal
+
+
+def named_files(outputs, files):
+    """The files a result names, by path: every file the output lines sent, at its size and digest, and any other
+    as a file of no bytes."""
+    named = {}
+    for output in outputs:
+        if output["path"] in named:
+            raise WireError("duplicate_path", f"the result names {output['path']} twice")
+        named[output["path"]] = output
+    unsent = next((path for path, output in named.items() if output["size"] > 0 and path not in files), None)
+    if unsent:
+        raise WireError("unsent", f"the result names {unsent}, which no output line sent")
+    unnamed = next((path for path in files if path not in named), None)
+    if unnamed:
+        raise WireError("unnamed", f"{unnamed} was sent and the result does not name it")
+    kept = {path: bytes(files.get(path, b"")) for path in named}
+    for path, output in named.items():
+        digest = "sha256:" + hashlib.sha256(kept[path]).hexdigest()
+        if output["size"] != len(kept[path]):
+            raise WireError("size_mismatch", f"the result names {output} for {path}, whose bytes are {len(kept[path])}")
+        if output["digest"] != digest:
+            raise WireError("digest_mismatch", f"the result names {output} for {path}, whose bytes are of {digest}")
+    return kept
 
 
 def output_bytes(answer, name):
