@@ -404,6 +404,7 @@ type server struct {
 	// closed at the end); a retirement that cannot finish quarantines it
 	// (keptQuarantined, naming its home) until the sweeper's retry does.
 	keptLive        map[int]int
+	keptEnding      map[int]int // a kept uid's released spawns still ending in order (retireKept)
 	keptOps         map[int]*sync.Mutex
 	keptHomes       map[int]string
 	keptRetiring    map[int]chan struct{}

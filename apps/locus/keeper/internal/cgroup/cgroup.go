@@ -494,19 +494,29 @@ func (g *Group) Signal(sig syscall.Signal) error {
 	return nil
 }
 
-// Kill ends every process in the group: sig to each, grace for them to
-// exit, then the kernel's group kill (cgroup.kill) until the group is empty
-// or the bound passes. It reports whether the group is empty.
+// Kill ends every process in the group within grace (KillBy).
 func (g *Group) Kill(grace time.Duration) bool {
+	return g.KillBy(time.Now().Add(grace))
+}
+
+// KillBy ends every process in the group by deadline: SIGTERM to each when
+// the deadline has not passed, waits for them to exit until that instant,
+// never past it, then the kernel's group kill (cgroup.kill), so the kill is
+// sent within one poll of the deadline, until the group is empty or the
+// bound passes. It reports whether the group is empty.
+func (g *Group) KillBy(deadline time.Time) bool {
 	empty := func() bool {
 		pids, err := g.Procs()
 		return err == nil && len(pids) == 0
 	}
-	if grace > 0 {
+	if time.Now().Before(deadline) {
 		_ = g.Signal(syscall.SIGTERM)
-		deadline := time.Now().Add(grace)
-		for !empty() && time.Now().Before(deadline) {
-			time.Sleep(removeInterval)
+		for !empty() {
+			left := time.Until(deadline)
+			if left <= 0 {
+				break
+			}
+			time.Sleep(min(removeInterval, left))
 		}
 	}
 	for attempt := 0; attempt < removeAttempts; attempt++ {
