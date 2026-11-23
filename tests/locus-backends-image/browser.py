@@ -50,7 +50,8 @@ container starts:
   answers are the page's; a page that calls as it starts, before its load,
   sends a call naming its put, on its window's first put and on the put
   that replaces it; a frame of the reserved origin inside the page
-  calls, and a frame of another origin (data:) does not; a socket and an
+  calls, and a frame of another origin (data:) and a sandboxed frame of
+  a put's file, which calls as an opaque origin, do not; a socket and an
   event stream fail and the page goes on; a service worker's registration
   is refused; a dedicated worker is delivered its window's files and makes
   no call, nor does a shared worker; a page of one file loads the same
@@ -102,8 +103,8 @@ It prints, without gating, Chrome's memory with one, three and six windows
 (the summed PSS of its processes and the session cgroup's memory.current),
 the time and frame count of the megabyte read, puts of one, eight and
 thirty-two MiB handed over the session and the time their largest file is
-answered whole in, what a shared worker and srcdoc and sandboxed frames
-saw, the first start's time and
+answered whole in, what a shared worker and a srcdoc frame saw, the first
+start's time and
 the home's bytes, and, at a phone's width (390 by 844) and at 720p, a
 cast's images a second on a page that changes every frame, their size, and
 the delay from a press to the first image that shows it.
@@ -980,9 +981,11 @@ def pages(stack, c, uid):
            and out["worker"]["post"] == "rejected TypeError" and "worker" not in senders,
            "proof: a dedicated worker is delivered its window's files and makes no call", out)
     expect("shared" not in senders, "a shared worker makes no call", [seen, out])
+    expect("sandboxed" not in senders and out["sandboxed"] == "rejected TypeError",
+           "a call from a sandboxed frame of a put's file, which calls as an opaque origin, is not passed up, and fails",
+           [seen, out])
     print(f"measure: a shared worker saw {json.dumps(out['shared'])}; a srcdoc frame's call "
-          f"{'was' if 'srcdoc' in senders else 'was not'} passed up ({out['srcdoc']}); a sandboxed frame of a put file's "
-          f"{'was' if 'sandboxed' in senders else 'was not'} ({out['sandboxed']})", flush=True)
+          f"{'was' if 'srcdoc' in senders else 'was not'} passed up ({out['srcdoc']})", flush=True)
 
     # A page of one file loads the same way.
     shown = ok(p.put_html(next(ids), "thr_one", ONE_PAGE, "one"), "a page of one file is put")

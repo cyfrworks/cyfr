@@ -5,7 +5,10 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // A request for a file of a window's put is answered from the put of the
 // document that made it, as Chrome names that document, and from no other.
@@ -37,18 +40,21 @@ import "fmt"
 // A page's call goes up for the put of the document that made it, by the
 // same names, and for no other. A call carries a person's action, so it is
 // stricter than a file: one that names no document is refused, as is one
-// whose document is not of the reserved origin, by the origin Chrome
-// reports with that document's commit, or belongs to a put that is not the
-// window's. A call of the document being shown, made before its commit is
-// taken, waits for that commit and then goes up once, with the generation
-// the commit began (calls.take); if the show ends with no commit, the call
-// is refused: its fetch fails as a network error, and the host never hears
-// of it.
+// made with any origin but the reserved one, by its Origin header, which
+// Chrome sets as the caller acts (a sandboxed frame's is null) and no
+// script can set; one whose document is no longer its frame's document;
+// and one whose document belongs to a put that is not the window's. A call
+// of the document being shown, made before its commit is taken, waits for
+// that commit and then goes up once, with the generation the commit began
+// (calls.take); if the show ends with no commit, the call is refused: its
+// fetch fails as a network error, and the host never hears of it.
 //
 // A request waits only for what names it: its loader's report, its
-// frame's attachment, or a show's commit or end. At most maxWaiting wait
-// in a window; one past that is refused, which the driver's log says once
-// for the window.
+// frame's attachment, or a show's commit or end. A report is kept until its
+// request pauses, whatever became of its document's put, so a pause that
+// comes late is refused, not held; at most maxReports are kept, the oldest
+// forgotten first. At most maxWaiting wait in a window; one past that is
+// refused, which the driver's log says once for the window.
 const (
 	maxWaiting = 256
 	// maxReports bounds the reports kept for requests not yet paused.
@@ -63,10 +69,9 @@ type documents struct {
 	// that made the document.
 	puts map[string]*put
 	// owners holds, by frame, the loader of the document the frame was
-	// attached in; current, by frame, the loader of its document now;
-	// frames, by loader, the frame a frame's document is in; and origins,
-	// by loader, the security origin Chrome reported with its commit.
-	owners, current, frames, origins map[string]string
+	// attached in; current, by frame, the loader of its document now; and
+	// frames, by loader, the frame a frame's document is in.
+	owners, current, frames map[string]string
 	// reports holds the loader of each request reported before its pause,
 	// by network id, the oldest first in order.
 	reports map[string]string
@@ -106,8 +111,8 @@ type answered struct {
 
 func (d *documents) init() {
 	if d.puts == nil {
-		d.puts, d.owners, d.current, d.frames, d.origins, d.reports = map[string]*put{}, map[string]string{},
-			map[string]string{}, map[string]string{}, map[string]string{}, map[string]string{}
+		d.puts, d.owners, d.current, d.frames, d.reports = map[string]*put{}, map[string]string{},
+			map[string]string{}, map[string]string{}, map[string]string{}
 	}
 }
 
@@ -197,7 +202,7 @@ func (w *window) place(r *waiter) (*put, bool) {
 // while what names its document, or that document's commit, has not come.
 func (w *window) placeCall(r *waiter) (*put, bool) {
 	d := &w.docs
-	if r.network == "" {
+	if r.network == "" || header(r.call.paused.Request.Headers, "Origin") != reservedOrigin {
 		return nil, true
 	}
 	if !r.named {
@@ -219,10 +224,20 @@ func (w *window) placeCall(r *waiter) (*put, bool) {
 		return nil, true
 	case p != w.put:
 		return nil, false
-	case d.origins[r.loader] != reservedOrigin:
+	case d.current[r.frame] != r.loader:
 		return nil, true
 	}
 	return p, true
+}
+
+// header is the value of the header name in headers, by any case.
+func header(headers map[string]string, name string) string {
+	for key, value := range headers {
+		if strings.EqualFold(key, name) {
+			return value
+		}
+	}
+	return ""
 }
 
 // settle takes every waiting request whose put is now known.
@@ -241,19 +256,15 @@ func (w *window) settle() []answered {
 	return done
 }
 
-// prune forgets the documents of puts that can no longer be answered, and
-// the reports of their requests, after a commit or a show's end.
+// prune forgets the documents of puts that can no longer be answered,
+// after a commit or a show's end; their requests' reports stay until the
+// requests pause.
 func (w *window) prune() {
 	d := &w.docs
 	d.init()
 	for loader, p := range d.puts {
 		if w.usable(p) == nil {
 			delete(d.puts, loader)
-		}
-	}
-	for loader := range d.origins {
-		if p, ok := w.putOf(loader); ok && p == nil {
-			delete(d.origins, loader)
 		}
 	}
 	for loader := range d.frames {
@@ -267,12 +278,6 @@ func (w *window) prune() {
 			delete(d.current, frame)
 		}
 	}
-	for network, loader := range d.reports {
-		if p, ok := w.putOf(loader); loader != "" && ok && p == nil {
-			delete(d.reports, network)
-		}
-	}
-	w.compactReports()
 }
 
 // compactReports keeps the order of the reports to those still held.
@@ -324,13 +329,12 @@ func (b *browser) frameAttached(w *window, frame, parent string) {
 }
 
 // frameCommitted takes the document frame, a frame inside w's main frame,
-// committed under loader with origin.
-func (b *browser) frameCommitted(w *window, frame, loader, origin string) {
+// committed under loader.
+func (b *browser) frameCommitted(w *window, frame, loader string) {
 	w.mu.Lock()
 	w.docs.init()
 	w.docs.current[frame] = loader
 	w.docs.frames[loader] = frame
-	w.docs.origins[loader] = origin
 	done := w.settle()
 	w.mu.Unlock()
 	b.answerAll(w, done)
@@ -347,7 +351,6 @@ func (b *browser) frameGone(w *window, frame string) {
 	for loader, in := range d.frames {
 		if in == frame {
 			delete(d.frames, loader)
-			delete(d.origins, loader)
 		}
 	}
 	done := w.settle()

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -55,8 +56,9 @@ type pageChrome struct {
 	// window's session (agent.go).
 	refuseChildNaming bool
 	// loaders holds each frame's document's loader, which a request it
-	// makes is reported with.
-	loaders map[string]string
+	// makes is reported with; callerOrigin, the Origin a frame's caller
+	// sends when it is not the frame's document's, as a sandboxed frame's.
+	loaders, callerOrigin map[string]string
 }
 
 type navigation struct {
@@ -91,7 +93,8 @@ type pageAnswer struct {
 func newPageChrome(t *testing.T, commands io.Reader, answers io.Writer) *pageChrome {
 	f := &pageChrome{t: t, w: answers, origins: map[string]map[string][2]string{}, address: map[string]string{},
 		navs: map[string]navigation{}, open: map[string]bool{}, answers: make(chan pageAnswer, 64), runs: make(chan string, 16),
-		left: map[string]string{}, fails: map[string]navFail{}, loaders: map[string]string{}}
+		left: map[string]string{}, fails: map[string]navFail{}, loaders: map[string]string{},
+		callerOrigin: map[string]string{}}
 	go f.serve(commands)
 	return f
 }
@@ -122,15 +125,53 @@ func (f *pageChrome) pauseAs(session, resourceType, method, address, frame strin
 
 // pauseFrom pauses a request as pauseAs does, made by the document of
 // loader: reported before its pause when before is set, else when the
-// test reports it.
+// test reports it. A POST carries its frame's origin as its Origin, or
+// the one a test gave the frame's caller (callerOrigin).
 func (f *pageChrome) pauseFrom(session, resourceType, method, address, frame string, network bool, body, loader string,
 	before bool) string {
+	id := f.newRequest()
+	headers := map[string]string{}
+	if method == "POST" {
+		headers = f.callerHeaders(session, frame)
+	}
+	if network && before {
+		f.report(session, id, method, address, loader)
+	}
+	f.pauseWith(id, session, resourceType, method, address, frame, headers, network, body)
+	return id
+}
+
+// callerHeaders are the headers a POST of frame's caller carries: its
+// Origin, its frame's origin or the one a test gave its caller.
+func (f *pageChrome) callerHeaders(session, frame string) map[string]string {
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	origin, given := f.callerOrigin[frame]
+	if !given {
+		origin = f.origins[session][frame][1]
+	}
+	if origin == "" {
+		return map[string]string{}
+	}
+	return map[string]string{"Origin": origin}
+}
+
+// newRequest names a request to pause, which a test may report before it
+// pauses it.
+func (f *pageChrome) newRequest() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.paused++
 	id := fmt.Sprintf("interception-%d", f.paused)
 	f.open[id] = true
-	f.mu.Unlock()
-	request := map[string]any{"url": address, "method": method, "headers": map[string]string{}}
+	return id
+}
+
+// pauseWith pauses request id of resourceType on session, of the frame it
+// names, with headers, and with a network id when network is set.
+func (f *pageChrome) pauseWith(id, session, resourceType, method, address, frame string, headers map[string]string,
+	network bool, body string) {
+	request := map[string]any{"url": address, "method": method, "headers": headers}
 	if body != "" {
 		request["hasPostData"] = true
 		request["postData"] = body
@@ -139,12 +180,8 @@ func (f *pageChrome) pauseFrom(session, resourceType, method, address, frame str
 	params := map[string]any{"requestId": id, "request": request, "frameId": frame, "resourceType": resourceType}
 	if network {
 		params["networkId"] = "net-" + id
-		if before {
-			f.report(session, id, method, address, loader)
-		}
 	}
 	f.write(map[string]any{"method": "Fetch.requestPaused", "sessionId": session, "params": params})
-	return id
 }
 
 // report reports paused request id as made by the document of loader, as
@@ -185,7 +222,7 @@ func (f *pageChrome) pauseLeavingOut(session, address, frame, body string) strin
 	f.mu.Unlock()
 	f.report(session, id, "POST", address, loader)
 	f.write(map[string]any{"method": "Fetch.requestPaused", "sessionId": session, "params": map[string]any{
-		"requestId": id, "request": map[string]any{"url": address, "method": "POST", "headers": map[string]string{},
+		"requestId": id, "request": map[string]any{"url": address, "method": "POST", "headers": f.callerHeaders(session, frame),
 			"hasPostData": true}, "frameId": frame, "resourceType": "Fetch", "networkId": "net-" + id}})
 	return id
 }
@@ -1759,4 +1796,144 @@ func TestWaitingCallsAreBounded(t *testing.T) {
 	if err := <-shown; err != nil {
 		t.Errorf("the put answered %v", err)
 	}
+}
+
+// A call goes up only while the document that made it is its frame's
+// document now: the earlier document's call of a main frame that went on
+// to another page of the same put, or of a frame that went away and came
+// back, is refused, its report before its pause or after.
+func TestACallGoesUpOnlyWhileItsDocumentStands(t *testing.T) {
+	isCall := func(m map[string]any) bool { return m["t"] == "call" }
+	site := append([]siteFile{{"two.html", "text/html", "<title>Two</title>"}}, testSite...)
+	for _, before := range []bool{true, false} {
+		t.Run(fmt.Sprintf("reported before its pause %v", before), func(t *testing.T) {
+			r := newPageRig(t)
+			defer r.close()
+			if got := r.h.put(1, "thr_01", testRoot, "index.html", site, 64); got["ok"] == nil {
+				t.Fatal(got)
+			}
+			first := "L" + r.f.navigated().request
+			if a := r.f.answer(r.f.link("S1", reservedOrigin+testRoot+"/two.html")); a.status != 200 {
+				t.Fatalf("a link to another page of the put was answered %+v", a)
+			}
+			id := callFrom(r, first, before)
+			if !before {
+				r.f.report("S1", id, "POST", callPath, first)
+			}
+			if a := r.f.answer(id); a.method != "Fetch.failRequest" {
+				t.Errorf("the call of the page the main frame left was answered %+v", a)
+			}
+			r.f.frame("S1", "F2", "M1", reservedOrigin)
+			r.f.mu.Lock()
+			left := r.f.loaders["F2"]
+			r.f.mu.Unlock()
+			r.f.frame("S1", "F2", "M1", "https://example.com")
+			r.f.frame("S1", "F2", "M1", reservedOrigin)
+			id = r.f.pauseFrom("S1", "Fetch", "POST", callPath, "F2", true, `{}`, left, before)
+			if !before {
+				r.f.report("S1", id, "POST", callPath, left)
+			}
+			if a := r.f.answer(id); a.method != "Fetch.failRequest" {
+				t.Errorf("the call of the document a frame left and came back from was answered %+v", a)
+			}
+			r.h.quiet(isCall, "a departed document's call went up")
+		})
+	}
+}
+
+// A request whose report came before its document's put was replaced is
+// refused when it pauses after, a file's and a call's, never left waiting.
+func TestALatePauseOfAReportedRequestIsRefused(t *testing.T) {
+	r, a, b, shown := twoPuts(t, 5*time.Second)
+	defer r.close()
+	call, file := r.f.newRequest(), r.f.newRequest()
+	r.f.report("S1", call, "POST", callPath, a)
+	r.f.report("S1", file, "GET", sameFile, a)
+	r.f.commit("S1", reservedOrigin+testRoot, b)
+	if err := <-shown; err != nil {
+		t.Fatalf("the put answered %v", err)
+	}
+	r.f.pauseWith(call, "S1", "Fetch", "POST", callPath, "M1", map[string]string{"Origin": reservedOrigin}, true, `{}`)
+	r.f.pauseWith(file, "S1", "Fetch", "GET", sameFile, "M1", map[string]string{}, true, "")
+	for _, id := range []string{call, file} {
+		if got := r.f.answer(id); got.method != "Fetch.failRequest" {
+			t.Errorf("the replaced document's request %s was answered %+v", id, got)
+		}
+	}
+}
+
+// A call to a call's path with a query is a call, its report and its pause
+// read alike; a call whose Content-Length is past the bound is 413 before
+// its body is read; and a call of the first put's document made before
+// its commit is taken waits for it, as a later put's does.
+func TestACallsPathLengthAndFirstShow(t *testing.T) {
+	isCall := func(m map[string]any) bool { return m["t"] == "call" }
+	t.Run("a call with a query", func(t *testing.T) {
+		r := newPageRig(t)
+		defer r.close()
+		if got := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); got["ok"] == nil {
+			t.Fatal(got)
+		}
+		r.f.navigated()
+		r.f.pause("S1", "POST", callPath+"?from=query", "M1", true, `{}`)
+		if m := r.h.take(isCall, "a call with a query"); m["put"] != float64(1) {
+			t.Errorf("a call with a query went up as %v", m)
+		}
+	})
+	t.Run("a Content-Length past the bound", func(t *testing.T) {
+		r := newPageRig(t)
+		defer r.close()
+		if got := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); got["ok"] == nil {
+			t.Fatal(got)
+		}
+		r.f.navigated()
+		r.f.mu.Lock()
+		loader := r.f.loaders["M1"]
+		r.f.mu.Unlock()
+		id := r.f.newRequest()
+		r.f.report("S1", id, "POST", callPath, loader)
+		r.f.pauseWith(id, "S1", "Fetch", "POST", callPath, "M1", map[string]string{"Origin": reservedOrigin,
+			"Content-Length": strconv.Itoa(maxCallBody + 1)}, true, `{}`)
+		if a := r.f.answer(id); a.status != 413 {
+			t.Errorf("a call whose Content-Length is past the bound was answered %+v", a)
+		}
+		r.h.quiet(isCall, "a call past the bound went up")
+	})
+	t.Run("the first put's call before its commit", func(t *testing.T) {
+		r := newPageRig(t)
+		defer r.close()
+		r.f.fail(reservedOrigin+testRoot, navFail{hangs: true, late: true})
+		r.h.sendPut(1, "thr_01", testRoot, "index.html", testSite, 64)
+		loader := "L" + r.f.navigated().request
+		r.f.mu.Lock()
+		r.f.callerOrigin["M1"] = reservedOrigin
+		r.f.mu.Unlock()
+		callFrom(r, loader, true)
+		r.h.quiet(isCall, "the first put's call went up before its commit")
+		r.f.commit("S1", reservedOrigin+testRoot, loader)
+		if m := r.h.take(isCall, "the first put's call"); m["put"] != float64(1) {
+			t.Errorf("the first put's call went up as %v", m)
+		}
+		r.h.quiet(isCall, "the first put's call went up twice")
+	})
+}
+
+// A call is admitted by the origin it is made with, its Origin header,
+// which a script cannot set: a sandboxed frame of a put's file calls as an
+// opaque origin, and its call is refused.
+func TestASandboxedFramesCallIsRefused(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	if got := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); got["ok"] == nil {
+		t.Fatal(got)
+	}
+	r.f.navigated()
+	r.f.frame("S1", "F6", "M1", reservedOrigin)
+	r.f.mu.Lock()
+	r.f.callerOrigin["F6"] = "null"
+	r.f.mu.Unlock()
+	if a := r.f.answer(r.f.pause("S1", "POST", callPath, "F6", true, `{}`)); a.method != "Fetch.failRequest" {
+		t.Errorf("a sandboxed frame's call was answered %+v", a)
+	}
+	r.h.quiet(func(m map[string]any) bool { return m["t"] == "call" }, "a sandboxed frame's call went up")
 }

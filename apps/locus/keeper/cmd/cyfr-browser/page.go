@@ -263,14 +263,12 @@ func (b *browser) show(ctx context.Context, w *window, p *put) (shown any, err e
 	return b.where(ctx, w)
 }
 
-// committed takes the document w's main frame committed under loader with
-// origin: the put whose file answered its navigation stands, and none
-// other.
-func (b *browser) committed(w *window, loader, origin string) {
+// committed takes the document w's main frame committed under loader: the
+// put whose file answered its navigation stands, and none other.
+func (b *browser) committed(w *window, loader string) {
 	w.mu.Lock()
 	w.docs.init()
 	w.docs.current[w.frame] = loader
-	w.docs.origins[loader] = origin
 	p := w.docs.puts[loader]
 	w.mu.Unlock()
 	b.replace(w, p)
@@ -303,27 +301,25 @@ func (w *window) current() (*put, int64) {
 	return w.put, w.gen
 }
 
-// serving answers the put the main frame's navigation is answered from,
-// and w's generation; for any other request, w's put, which a window with
-// none answers nothing for. A GET navigation of the main frame takes the
-// put being shown when that holds the file, else w's put, and is recorded
-// by its network id as that put's document: Chrome commits the document
-// under a loader of that id.
-func (w *window) serving(navigation bool, network, path string) (*put, int64) {
+// serving answers the put the main frame's GET navigation to path is
+// answered from: the put being shown when that holds the file, else w's
+// put. It is recorded by the navigation's network id as that put's
+// document: Chrome commits the document under a loader of that id.
+func (w *window) serving(network, path string) *put {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	pt := w.put
-	if navigation && w.next != nil && w.next.lookup(path) != nil {
+	if w.next != nil && w.next.lookup(path) != nil {
 		pt = w.next
 	}
 	if pt != nil && pt.failed {
-		return nil, w.gen
+		return nil
 	}
-	if navigation && pt != nil && network != "" && pt.lookup(path) != nil {
+	if pt != nil && network != "" && pt.lookup(path) != nil {
 		w.docs.init()
 		w.docs.puts[network] = pt
 	}
-	return pt, w.gen
+	return pt
 }
 
 // answerFile answers a request for a file from p: the file, 404 when p
@@ -390,10 +386,14 @@ func requestReport(params json.RawMessage) (sentRequest, bool) {
 	case "GET", "HEAD":
 		return r, true
 	case "POST":
-		return r, callOps[strings.TrimPrefix(r.Request.URL, reservedOrigin)] != ""
+		u, err := url.Parse(r.Request.URL)
+		return r, err == nil && callOf(u) != ""
 	}
 	return r, false
 }
+
+// callOf is the op a POST to u calls, or "" for a path that is no call's.
+func callOf(u *url.URL) string { return callOps[u.Path] }
 
 // interceptOn turns on what a session of a window's frames needs before
 // it loads anything: its frame events, its network's request ids, which
@@ -471,17 +471,16 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 		case "Page.frameNavigated":
 			var navigated struct {
 				Frame struct {
-					ID             string `json:"id"`
-					ParentID       string `json:"parentId"`
-					LoaderID       string `json:"loaderId"`
-					SecurityOrigin string `json:"securityOrigin"`
+					ID       string `json:"id"`
+					ParentID string `json:"parentId"`
+					LoaderID string `json:"loaderId"`
 				} `json:"frame"`
 			}
 			if json.Unmarshal(ev.params, &navigated) == nil {
 				if navigated.Frame.ParentID == "" && kind == sessionPage {
-					b.committed(w, navigated.Frame.LoaderID, navigated.Frame.SecurityOrigin)
+					b.committed(w, navigated.Frame.LoaderID)
 				} else {
-					b.frameCommitted(w, navigated.Frame.ID, navigated.Frame.LoaderID, navigated.Frame.SecurityOrigin)
+					b.frameCommitted(w, navigated.Frame.ID, navigated.Frame.LoaderID)
 					b.pages <- pageEvent{session: session, frame: navigated.Frame.ID}
 				}
 			}
@@ -560,10 +559,11 @@ func (b *browser) refused(ctx context.Context, w *window, session, kind string) 
 type pausedRequest struct {
 	RequestID string `json:"requestId"`
 	Request   struct {
-		URL             string `json:"url"`
-		Method          string `json:"method"`
-		PostData        string `json:"postData"`
-		HasPostData     bool   `json:"hasPostData"`
+		URL             string            `json:"url"`
+		Method          string            `json:"method"`
+		Headers         map[string]string `json:"headers"`
+		PostData        string            `json:"postData"`
+		HasPostData     bool              `json:"hasPostData"`
 		PostDataEntries []struct {
 			Bytes *string `json:"bytes"`
 		} `json:"postDataEntries"`
@@ -595,32 +595,26 @@ func (b *browser) paused(w *window, session, kind string, params json.RawMessage
 		return
 	}
 	navigation := kind == sessionPage && p.ResourceType == "Document" && p.Request.Method == "GET" && p.FrameID == w.frame
-	if (p.Request.Method == "GET" || p.Request.Method == "HEAD") && !navigation {
+	switch op := callOf(u); {
+	case navigation:
+		go b.answerFile(waiter{session: session, request: p.RequestID, path: u.Path}, w.serving(p.NetworkID, u.Path))
+	case p.Request.Method == "GET" || p.Request.Method == "HEAD":
 		b.hold(w, waiter{session: session, request: p.RequestID, path: u.Path, head: p.Request.Method == "HEAD",
 			navigation: p.ResourceType == "Document", network: p.NetworkID, frame: p.FrameID})
-		return
-	}
-	pt, _ := w.serving(navigation, p.NetworkID, u.Path)
-	if pt == nil {
-		go b.failPaused(session, p.RequestID)
-		return
-	}
-	switch p.Request.Method {
-	case "GET":
-		go b.answerFile(waiter{session: session, request: p.RequestID, path: u.Path}, pt)
-		return
-	case "POST":
+	case p.Request.Method == "POST" && op != "" && callTypes[p.ResourceType]:
+		if length, err := strconv.ParseInt(header(p.Request.Headers, "Content-Length"), 10, 64); err == nil && length > maxCallBody {
+			go b.answerPaused(session, p.RequestID, 413, nil, nil)
+			return
+		}
+		b.hold(w, waiter{session: session, request: p.RequestID, path: u.Path, network: p.NetworkID, frame: p.FrameID,
+			call: &callArgs{op: op, paused: p}})
 	default:
-		go b.answerPaused(session, p.RequestID, 404, nil, nil)
-		return
+		if pt, _ := w.current(); pt == nil {
+			go b.failPaused(session, p.RequestID)
+		} else {
+			go b.answerPaused(session, p.RequestID, 404, nil, nil)
+		}
 	}
-	op := callOps[u.Path]
-	if op == "" || !callTypes[p.ResourceType] {
-		go b.answerPaused(session, p.RequestID, 404, nil, nil)
-		return
-	}
-	b.hold(w, waiter{session: session, request: p.RequestID, path: u.Path, network: p.NetworkID, frame: p.FrameID,
-		call: &callArgs{op: op, paused: p}})
 }
 
 // postBody is a paused POST's body, from the bytes the pause carries, else
