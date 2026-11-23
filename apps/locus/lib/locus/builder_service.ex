@@ -45,9 +45,14 @@ defmodule Locus.BuilderService do
   6. **The deadline.** The build's budget is the time to the request's
      deadline or `Locus.Config.timeout_ms/0`, whichever is less; a
      deadline already passed is refused `timeout` with nothing run.
-  7. **The build itself** is checked and packed (`Locus.Builder.prepare/1`):
-     `malformed` for sources that make no build, `unavailable` for a
-     missing toolchain or keeper.
+  7. **The build itself** has its place made, a `build` of its athanor
+     (`Locus.Builder.place/1`), and is then checked and packed
+     (`Locus.Builder.prepare/1`): `malformed` for sources that make no
+     build, `unavailable` for a missing toolchain or keeper. The place is
+     this request's: it is dropped however the request ends, which frees
+     it unless the build's run named it, and cyfr-locus frees that one once
+     the run is gone; a request whose process dies has it dropped by the
+     keeper's client.
   8. **The slot.** One of `Locus.BuildSlots` is taken for the request's
      `athanor_id`, never waited for: `capacity` names the total cap or the
      athanor's, whichever refused.
@@ -152,16 +157,35 @@ defmodule Locus.BuilderService do
          :ok <- verify_body(conn, body_hash, body),
          {:ok, request} <- readable(BuilderProtocol.read_request(body), conn),
          {:ok, budget_ms} <- budget(conn, request, now),
-         {:ok, plan} <- prepared(conn, request),
+         {:ok, place} <- placed(conn, request) do
+      try do
+        placed_build(conn, request, place, budget_ms)
+      after
+        Locus.Builder.drop(place)
+      end
+    else
+      {:refused, conn, refusal} -> refuse(conn, refusal)
+      {:over_bound, conn, refusal, max} -> conn |> refuse(refusal) |> Locus.Listener.drain(max)
+    end
+  end
+
+  defp placed_build(conn, request, place, budget_ms) do
+    with {:ok, plan} <- prepared(conn, request),
          {:ok, slot} <- slot(conn, request) do
       try do
-        stream(conn, plan, budget_ms)
+        stream(conn, plan, place, budget_ms)
       after
         Prima.Slots.release(@slots, slot)
       end
     else
       {:refused, conn, refusal} -> refuse(conn, refusal)
-      {:over_bound, conn, refusal, max} -> conn |> refuse(refusal) |> Locus.Listener.drain(max)
+    end
+  end
+
+  defp placed(conn, request) do
+    case Locus.Builder.place(request) do
+      {:ok, place} -> {:ok, place}
+      {:error, refusal} -> {:refused, conn, refusal}
     end
   end
 
@@ -268,7 +292,7 @@ defmodule Locus.BuilderService do
 
   # ————— the stream —————
 
-  defp stream(conn, plan, budget_ms) do
+  defp stream(conn, plan, place, budget_ms) do
     conn =
       conn
       |> put_resp_content_type(@content_type)
@@ -293,7 +317,8 @@ defmodule Locus.BuilderService do
       spawn_link(fn ->
         send(
           service,
-          {ref, :done, Locus.Builder.run(plan, timeout_ms: budget_ms, on_progress: on_progress)}
+          {ref, :done,
+           Locus.Builder.run(plan, place: place, timeout_ms: budget_ms, on_progress: on_progress)}
         )
       end)
 

@@ -20,8 +20,9 @@ defmodule Locus.Test.FakeKeeper do
     line and the leader is reported ended as `exited` says (`:code`,
     `:signal`, `:memory`), killed at its bound or the container's among
     them, in any pool
-  - `{:measured, reading}`: a `measure` of any spawn is answered `reading`
-    (`:bytes`, `:lesser`)
+  - `{:measured, reading}`: a `measure` of a place a spawn named is
+    answered with whose the place is and `reading` (`:bytes`, `:lesser`,
+    `:age_ms`)
   - `:measure_held`: a `measure` is never answered
   - `{:exit_closed, exited}`: a long-lived command runs until it is ended,
     and its leader is then reported as `exited` says, as one the kernel
@@ -52,8 +53,14 @@ defmodule Locus.Test.FakeKeeper do
   as the command writes them, until the command exits. A `signal` request
   signals its process group; a `release` with a grace sends it a term
   signal and the kill once the grace passes. A `pool` request is answered
-  with a pool of four uids, three free and none quarantined. A `measure` is
-  refused `unmeasured` outside its mode, since nothing here has a group. A
+  with a pool of four uids, three free and none quarantined. It keeps
+  places as cyfr-locus does (`Prima.KeeperProtocol`, "Places"; `places/1`
+  lists them): a `place` of a new id is `placed` and of a held one
+  refused `bad_request`, a `drop` frees one no spawn named, an `assign`
+  changes whose one is, a spawn naming no held place or one another spawn
+  named is refused `bad_request`, a refused spawn frees its place, and a
+  `released` frees its spawn's. A `measure` is refused `unmeasured`
+  outside its mode, since nothing here has a group. A
   home request acts on its path as the test's own user: `home_make` makes
   the folder 0700, `home_measure` answers the bytes of the files under it, and
   `home_retire` removes it. A spawn's kept-home and `pty` members are
@@ -157,6 +164,9 @@ defmodule Locus.Test.FakeKeeper do
   @doc "Every command directory the fake's relays made, oldest first; each is removed when its relay ends."
   def command_dirs(fake), do: GenServer.call(fake, :command_dirs)
 
+  @doc "Every place the fake holds, by its id: `%{whose, spawn}`, `spawn` the spawn id that named it or nil."
+  def places(fake), do: GenServer.call(fake, :places)
+
   @doc "The spawn ids whose command the fake runs or has run, as an OS process it can signal."
   def running(fake), do: GenServer.call(fake, :running)
 
@@ -178,6 +188,7 @@ defmodule Locus.Test.FakeKeeper do
        sent: [],
        command_dirs: [],
        spawns: %{},
+       places: %{},
        next: 0
      }}
   end
@@ -196,6 +207,7 @@ defmodule Locus.Test.FakeKeeper do
   @impl true
   def handle_call({:mode, mode}, _from, state), do: {:reply, :ok, %{state | mode: mode}}
   def handle_call(:requests, _from, state), do: {:reply, Enum.reverse(state.requests), state}
+  def handle_call(:places, _from, state), do: {:reply, state.places, state}
 
   def handle_call({:release_make, request}, _from, state),
     do: {:reply, :ok, handle_request(request, %{state | mode: :normal})}
@@ -268,15 +280,52 @@ defmodule Locus.Test.FakeKeeper do
       %{type: "exited", spawn_id: spawn_id} ->
         %{state | exits: [spawn_id | state.exits], sent: [:exited | state.sent]}
 
-      %{type: "released"} ->
-        %{state | sent: [:released | state.sent]}
+      %{type: "released", spawn_id: spawn_id} ->
+        places = Map.reject(state.places, fn {_id, place} -> place.spawn == spawn_id end)
+        %{state | sent: [:released | state.sent], places: places}
 
       _other ->
         state
     end
   end
 
-  defp handle_request(%{"type" => "spawn", "id" => id}, %{mode: mode} = state)
+  defp handle_request(%{"type" => "place", "id" => id}, state)
+       when is_map_key(state.places, id) do
+    send(self(), {:send, %{type: "error", id: id, code: "bad_request"}})
+    state
+  end
+
+  defp handle_request(%{"type" => "place", "id" => id} = request, state) do
+    send(self(), {:send, %{type: "placed", id: id}})
+    %{state | places: Map.put(state.places, id, %{whose: whose(request), spawn: nil})}
+  end
+
+  defp handle_request(%{"type" => "drop", "place" => id}, state) do
+    case state.places do
+      %{^id => %{spawn: nil}} -> %{state | places: Map.delete(state.places, id)}
+      _named_or_gone -> state
+    end
+  end
+
+  defp handle_request(%{"type" => "assign", "place" => id} = request, state) do
+    case state.places do
+      %{^id => place} ->
+        %{state | places: Map.put(state.places, id, %{place | whose: whose(request)})}
+
+      _gone ->
+        state
+    end
+  end
+
+  # A spawn names a place held and unnamed, or is refused with nothing done.
+  defp handle_request(%{"type" => "spawn", "id" => id, "place" => place}, state)
+       when not is_map_key(state.places, place) or
+              :erlang.map_get(place, state.places).spawn != nil do
+    send(self(), {:send, %{type: "error", id: id, code: "bad_request"}})
+    state
+  end
+
+  defp handle_request(%{"type" => "spawn", "id" => id} = request, %{mode: mode} = state)
        when mode in [
               :capacity,
               :memory_unavailable,
@@ -285,7 +334,7 @@ defmodule Locus.Test.FakeKeeper do
               :guard_unavailable
             ] do
     send(self(), {:send, %{type: "error", id: id, code: Atom.to_string(mode)}})
-    state
+    %{state | places: Map.delete(state.places, request["place"])}
   end
 
   defp handle_request(%{"type" => "home_" <> _, "id" => id}, %{mode: :home_refused} = state) do
@@ -331,10 +380,13 @@ defmodule Locus.Test.FakeKeeper do
   defp handle_request(%{"type" => "measure"}, %{mode: :measure_held} = state), do: state
 
   defp handle_request(
-         %{"type" => "measure", "id" => id},
+         %{"type" => "measure", "id" => id, "place" => place},
          %{mode: {:measured, reading}} = state
-       ) do
-    send(self(), {:send, Map.merge(%{type: "measured", id: id}, reading)})
+       )
+       when is_map_key(state.places, place) and
+              :erlang.map_get(place, state.places).spawn != nil do
+    whose = state.places[place].whose
+    send(self(), {:send, %{type: "measured", id: id} |> Map.merge(whose) |> Map.merge(reading)})
     state
   end
 
@@ -383,13 +435,18 @@ defmodule Locus.Test.FakeKeeper do
     fake = self()
     mode = state.mode
     spawn(fn -> relay(fake, spawn_id, request, mode) end)
-    %{state | spawns: Map.put(state.spawns, spawn_id, nil)}
+    place = request["place"]
+    places = Map.update!(state.places, place, &%{&1 | spawn: spawn_id})
+    %{state | spawns: Map.put(state.spawns, spawn_id, nil), places: places}
   end
 
   defp handle_request(%{"type" => "release", "spawn_id" => spawn_id}, state),
     do: signal(state, spawn_id, "KILL")
 
   defp handle_request(_request, state), do: state
+
+  # Whose a place or an assign says the place is, as a measured reply names it.
+  defp whose(request), do: Map.take(request, ["kind", "athanor", "subject"])
 
   defp measured(path) do
     path

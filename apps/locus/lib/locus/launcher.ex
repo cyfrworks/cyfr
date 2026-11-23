@@ -53,9 +53,19 @@ defmodule Locus.Launcher do
   `c:resize/3` sets its terminal's size;
   `c:release/3` ends it, a term signal first and the kill of everything it
   started once `grace_ms` pass, and answers at once, the `:released` event
-  following once nothing of it is left. `c:measure/2` answers what
-  it uses that cannot be given back, or an error where that is not known:
-  no reading is ever a zero.
+  following once nothing of it is left.
+
+  Every process runs in a place (`Prima.KeeperProtocol`, "Places") made
+  before its work is prepared: `c:place/4` makes one under an id its
+  caller minted, of a kind, and an athanor and a subject where it has
+  them, for an owner, whose death
+  before a spawn names the place drops it; `c:drop/2` frees one no spawn
+  named, after a preparation that failed or a waiter that left;
+  `c:assign/3` gives one another kind, athanor and subject. A spec names
+  its place, which its spawn takes: the place is free once nothing of
+  the process is left. `c:measure/2` answers a place's last reading, whose
+  the place is and how old the reading is, or an error where none is
+  known: no reading is ever a zero, and no caller waits for a read.
   `c:pool_stats/2` answers the pool's size, its free uids and its
   quarantined ones.
 
@@ -74,8 +84,15 @@ defmodule Locus.Launcher do
   unisolated launcher alone otherwise.
   """
 
+  @typedoc "Whose a place is: its kind, and its athanor and subject where it has them."
+  @type whose :: %{
+          required(:kind) => Prima.KeeperProtocol.kind(),
+          optional(:athanor) => String.t(),
+          optional(:subject) => String.t()
+        }
+
   @typedoc """
-  What a process is started with: the memory and the CPU it is bounded
+  What a process is started with: its place, the memory and the CPU it is bounded
   by, which every process has, `control` where it has a control channel, `isolation`
   where its pool isolates it, a program's kept `home` with its bound and
   `pty`, and `hosts`, the only hosts it may reach where its row names them.
@@ -83,6 +100,7 @@ defmodule Locus.Launcher do
   @type spec :: %{
           required(:argv) => [String.t(), ...],
           required(:env) => %{optional(String.t()) => String.t()},
+          required(:place) => String.t(),
           required(:pool) => String.t(),
           required(:memory_bytes) => pos_integer(),
           required(:cpu_quota) => pos_integer(),
@@ -182,8 +200,18 @@ defmodule Locus.Launcher do
   @doc "End the process: a term signal, `grace_ms`, then the kill; `:released` follows."
   @callback release(GenServer.server() | keyword(), handle(), non_neg_integer()) :: :ok
 
-  @doc "What the process uses that cannot be given back; an error where that is not known, never a zero."
-  @callback measure(GenServer.server() | keyword(), handle()) ::
+  @doc "A new place `id` of `whose` for the process `owner`."
+  @callback place(GenServer.server() | keyword(), String.t(), whose(), pid()) ::
+              :ok | {:error, error() | :dropped | :unencodable}
+
+  @doc "Free the place no spawn named."
+  @callback drop(GenServer.server() | keyword(), String.t()) :: :ok
+
+  @doc "Give the place another kind, athanor and subject."
+  @callback assign(GenServer.server() | keyword(), String.t(), whose()) :: :ok
+
+  @doc "The place's last reading and whose it is; an error where none is known, never a zero."
+  @callback measure(GenServer.server() | keyword(), String.t()) ::
               {:ok, Prima.KeeperProtocol.reading()} | {:error, error()}
 
   @doc "The uids of `pool`."

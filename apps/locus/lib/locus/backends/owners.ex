@@ -103,6 +103,20 @@ defmodule Locus.Backends.Owners do
   process the table adopted. Past the bound, or before the table has
   adopted, it is `unavailable` and the reservation stays.
 
+  ## Places
+
+  Every session runs in a place (`Locus.Launcher`, "Places") named by its
+  session id: a `program`'s, or a `terminal`'s for a terminal session, of
+  the owner's athanor and row. The table makes it as the first step of
+  the open's preparation, before the home is made or the pool read, and
+  for itself, and the session's spawn names it. A preparation that fails,
+  is held back or is answered while the table no longer follows it, and a
+  session that never spawns, leave nothing of the place: whenever a
+  session's reservation is released, the table drops its place, which
+  frees one no spawn named, and cyfr-locus frees one a spawn named when
+  that spawn is released. A session whose place was not made is
+  `unavailable` and starts nothing.
+
   ## Admission by memory
 
   Every session reserves its memory bound (the program's `memory_bytes`,
@@ -1128,6 +1142,7 @@ defmodule Locus.Backends.Owners do
       tag = heir_tag(state, owner, ask.session, ask)
       state = %{state | reservations: Reservations.reserve(state.reservations, tag)}
       %{launcher: launcher, launcher_server: server} = state
+      place = place_of(state, owner, ask)
 
       case program.home do
         :kept ->
@@ -1136,13 +1151,17 @@ defmodule Locus.Backends.Owners do
 
           {_ref, state} =
             run(state, {:open, [from], ask}, @home_timeout_ms * 2, fn ->
-              kept_ready(launcher, server, message.home_id, cap)
+              with :ok <- place.(), do: kept_ready(launcher, server, message.home_id, cap)
             end)
 
           {:noreply, state}
 
         :scratch ->
-          {_ref, state} = read_pool(state, {:open, [from], ask})
+          {_ref, state} =
+            run(state, {:open, [from], ask}, state.pool_timeout_ms, fn ->
+              with :ok <- place.(), do: launcher.pool_stats(server, @pool)
+            end)
+
           {:noreply, state}
       end
     else
@@ -1165,6 +1184,23 @@ defmodule Locus.Backends.Owners do
 
       {:error, code} ->
         {:reply, {:error, code}, state}
+    end
+  end
+
+  # The session's place, made before anything of its preparation under the
+  # session's id, for this table: a program's or a terminal's of the row.
+  # Its reservation's release drops it (`reservation/3`).
+  defp place_of(state, owner, ask) do
+    {launcher, server} = session_launcher(state)
+    table = self()
+    kind = if ask.mode == :terminal, do: "terminal", else: "program"
+    whose = %{kind: kind, athanor: owner.athanor, subject: owner.server}
+
+    fn ->
+      case launcher.place(server, ask.session, whose, table) do
+        :ok -> :ok
+        {:error, reason} -> {:unplaced, reason}
+      end
     end
   end
 
@@ -1349,7 +1385,10 @@ defmodule Locus.Backends.Owners do
   end
 
   # A scratch session's uid of the pool, claimed in this step; a kept
-  # session's home ready under its bound.
+  # session's home ready under its bound. A session whose place was not
+  # made starts nothing.
+  defp claimed(_state, _program, _ask, {:unplaced, _reason}), do: {:error, :unavailable}
+
   defp claimed(state, %{home: :scratch}, _ask, result) do
     case pool(result) do
       {:ok, pool} ->
@@ -1455,6 +1494,7 @@ defmodule Locus.Backends.Owners do
     env = Map.fetch!(owner.env, program.name)
 
     %{
+      place: session_id,
       argv: ["/bin/sh", "-c", program.command <> " \"$@\"", "sh" | ask.argv],
       env: if(ask.size, do: Map.put_new(env, "TERM", LocusBackends.terminal_type()), else: env),
       pool: @pool,
@@ -1818,10 +1858,27 @@ defmodule Locus.Backends.Owners do
 
   # Every change to what a session holds goes through its reservation's
   # lifecycle (`Reservations`).
+  # A reservation released has nothing of its session left: its place is
+  # dropped, which frees it where no spawn named it (a preparation that
+  # failed or was held, a session that never spawned) and is nothing where
+  # one did, which cyfr-locus freed at the spawn's release.
   defp reservation(state, key, event) do
+    held? = Map.has_key?(state.reservations, key)
     reservations = Reservations.event(state.reservations, key, event)
     state = %{state | reservations: reservations}
-    if Map.has_key?(reservations, key), do: state, else: wake(state)
+
+    cond do
+      Map.has_key?(reservations, key) ->
+        state
+
+      held? ->
+        {launcher, server} = session_launcher(state)
+        launcher.drop(server, elem(key, 1))
+        wake(state)
+
+      true ->
+        wake(state)
+    end
   end
 
   # A reservation this table no longer follows is an ending, fenced at once.

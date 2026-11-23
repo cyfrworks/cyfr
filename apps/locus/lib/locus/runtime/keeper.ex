@@ -44,6 +44,16 @@ defmodule Locus.Runtime.Keeper do
   holds, then the group kill. `c:memory_bytes/1` is the bound every
   runner runs under, nil for a keeper that applies none.
 
+  Every runner runs in a place (`Locus.Launcher`, `Prima.KeeperProtocol`
+  "Places") the pool makes before it starts the runner, under the
+  runner's id (`c:place/3`, for
+  the calling process): a fresh runner's is `warm` and no athanor's, the
+  pool assigns it `run` for an athanor before the runner is given work
+  and `warm` again, still that athanor's, when it completes cleanly
+  (`c:assign/3`), and drops it when the runner's process is gone
+  (`c:drop/2`), which frees nothing a spawn named: the keeper frees that
+  place when the runner is released.
+
   The keeper's own process, one per pool (`c:child_spec/1`), holds what
   its runners share: the client they spawn through and their bound
   (Channel), or the janitor that ends every runner it started when the
@@ -51,8 +61,13 @@ defmodule Locus.Runtime.Keeper do
   restarted with it.
   """
 
-  @typedoc "What a runner is started with: its id, its argv and the environment beside the keeper's own."
-  @type spec :: %{runner: String.t(), argv: [String.t()], env: %{String.t() => String.t()}}
+  @typedoc "What a runner is started with: its id, its place, its argv and the environment beside the keeper's own."
+  @type spec :: %{
+          runner: String.t(),
+          place: String.t(),
+          argv: [String.t()],
+          env: %{String.t() => String.t()}
+        }
 
   @typedoc "A keeper's handle on one runner, kept by the process that spawned it."
   @type channel :: term()
@@ -87,6 +102,15 @@ defmodule Locus.Runtime.Keeper do
   (the pool's keeper options).
   """
   @callback available(inherited? :: boolean(), keyword()) :: :ok | {:error, term()}
+
+  @doc "A new place `id` of `whose` for the calling process, from the pool's keeper options."
+  @callback place(String.t(), Locus.Launcher.whose(), keyword()) :: :ok | {:error, term()}
+
+  @doc "Give the place another kind, athanor and subject."
+  @callback assign(String.t(), Locus.Launcher.whose(), keyword()) :: :ok
+
+  @doc "Free the place, unless a runner's spawn named it."
+  @callback drop(String.t(), keyword()) :: :ok
 
   @doc "Start a runner for `spec` from the calling process, answering its channel and the events already known."
   @callback spawn(spec()) :: {:ok, channel(), [event()]} | {:error, term()}

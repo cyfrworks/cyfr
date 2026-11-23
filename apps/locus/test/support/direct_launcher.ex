@@ -105,6 +105,12 @@ defmodule Locus.DirectLauncher do
   @probe_spawn_id String.duplicate("0", 32)
 
   @impl Locus.Executor
+  def place(id, whose), do: place([], id, whose, self())
+
+  @impl Locus.Executor
+  def drop(place), do: drop([], place)
+
+  @impl Locus.Executor
   def run(%{argv: argv, env: env, stdin: stdin}, opts) do
     root = Path.join(System.tmp_dir!(), "locus_build_#{Prima.Hex.short()}")
     home = Path.join(root, "home")
@@ -308,9 +314,20 @@ defmodule Locus.DirectLauncher do
   @impl Locus.Launcher
   def pool_stats(_opts, pool) when is_binary(pool), do: {:ok, %{size: 1, free: 1, quarantined: 0}}
 
-  # A process here has no group of its own, so what it uses is not known.
+  # A place here is an id and nothing else: no keeper holds it, so a drop
+  # and an assign have nothing to change, and a process here has no group
+  # of its own, so what it uses is not known.
   @impl Locus.Launcher
-  def measure(_opts, _handle), do: {:error, {:refused, "unmeasured"}}
+  def place(_opts, id, %{kind: _kind}, owner) when is_binary(id) and is_pid(owner), do: :ok
+
+  @impl Locus.Launcher
+  def drop(_opts, place) when is_binary(place), do: :ok
+
+  @impl Locus.Launcher
+  def assign(_opts, place, %{kind: _kind}) when is_binary(place), do: :ok
+
+  @impl Locus.Launcher
+  def measure(_opts, place) when is_binary(place), do: {:error, {:refused, "unmeasured"}}
 
   # ————— heirs, fences and adoption —————
 
@@ -1193,6 +1210,16 @@ defmodule Locus.DirectLauncher.Runner do
 
   @impl Locus.Runtime.Keeper
   def available(false = _inherited?, _opts), do: :ok
+
+  # No keeper holds a place here: a runner's is an id, and nothing changes it.
+  @impl Locus.Runtime.Keeper
+  def place(id, %{kind: _kind} = whose, _opts), do: DirectLauncher.place([], id, whose, self())
+
+  @impl Locus.Runtime.Keeper
+  def assign(place, %{kind: _kind}, _opts) when is_binary(place), do: :ok
+
+  @impl Locus.Runtime.Keeper
+  def drop(place, _opts) when is_binary(place), do: :ok
 
   def available(true = _inherited?, _opts) do
     {:error,

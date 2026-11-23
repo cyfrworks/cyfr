@@ -109,13 +109,42 @@ defmodule Locus.Runtime.Keeper.Channel do
        "not the socket it names)"}
   end
 
+  # The keeper options may name the adapter to use (`:server`), as a test
+  # does; the pool's runners use the registered one.
+  @impl Locus.Runtime.Keeper
+  def place(id, whose, opts) when is_list(opts) do
+    with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
+         :ok <- Locus.Keeper.place(client, id, whose, self()) do
+      :ok
+    else
+      {:error, reason} -> {:error, failure(reason)}
+    end
+  end
+
+  @impl Locus.Runtime.Keeper
+  def assign(place, whose, opts) when is_list(opts) do
+    with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
+         do: Locus.Keeper.assign(client, place, whose)
+
+    :ok
+  end
+
+  @impl Locus.Runtime.Keeper
+  def drop(place, opts) when is_list(opts) do
+    with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
+         do: Locus.Keeper.drop(client, place)
+
+    :ok
+  end
+
   # A spec may name the adapter to use (`:server`), as a test does; the
   # pool's runners use the registered one.
   @impl Locus.Runtime.Keeper
-  def spawn(%{runner: runner, argv: argv, env: env} = spec) do
+  def spawn(%{runner: runner, place: place, argv: argv, env: env} = spec) do
     adapter = Map.get(spec, :server, __MODULE__)
 
     request = %{
+      place: place,
       argv: argv,
       env: env,
       pool: @pool,

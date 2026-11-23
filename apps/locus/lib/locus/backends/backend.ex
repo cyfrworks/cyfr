@@ -43,12 +43,9 @@ defmodule Locus.Backends.Backend do
 
   ## Its use
 
-  `measure/1` answers what the session's process uses that cannot be
-  given back, as its launcher reads it, until nothing of it is left: its
-  `bytes`, and `lesser` where the kernel could count only part of its own
-  memory (`t:Prima.KeeperProtocol.reading/0`). With no process, a
-  reading that failed, or a session that is gone or goes while it is read,
-  its use is `:unknown`, never zero.
+  Its process runs in the place its spec names, which the owner table made
+  for it (`Locus.Backends.Owners`, "Places"): what it uses is read there,
+  by the keeper, and never asked of this process.
 
   ## Masking
 
@@ -172,14 +169,6 @@ defmodule Locus.Backends.Backend do
         }
   def status(server, timeout), do: GenServer.call(server, :status, timeout)
 
-  @doc "What the session's process uses, or `:unknown`: never a zero for a reading not made."
-  @spec measure(GenServer.server()) :: {:ok, Prima.KeeperProtocol.reading()} | :unknown
-  def measure(server) do
-    GenServer.call(server, :measure, @call_margin_ms)
-  catch
-    :exit, _reason -> :unknown
-  end
-
   @doc "End the session and answer once nothing of its process is left, or its bound passes."
   @spec stop(GenServer.server(), non_neg_integer()) :: :ok
   def stop(server, grace_ms),
@@ -291,16 +280,6 @@ defmodule Locus.Backends.Backend do
          ),
        stderr_bytes: Relay.stderr_bytes(state.relay)
      }, state}
-  end
-
-  def handle_call(:measure, _from, %{handle: nil} = state), do: {:reply, :unknown, state}
-
-  # A reading is no use of the session: its idle period runs on.
-  def handle_call(:measure, _from, state) do
-    case state.launcher.measure(state.launcher_server, state.handle) do
-      {:ok, _reading} = answer -> {:reply, answer, state}
-      {:error, _reason} -> {:reply, :unknown, state}
-    end
   end
 
   def handle_call({:stop, grace_ms}, from, state) do
