@@ -89,6 +89,13 @@ func TestMain(m *testing.M) {
 	// it stands in for a machine of its own (standInMachine).
 	machine = testMachine(cmp.Or(os.Getenv(testSystem), "linux"))
 	keepStandInControls()
+	// Under the race detector every program this binary begins sleeps a
+	// second at its exit (GORACE atexit_sleep_ms) for reports that come
+	// late; setup's work's stderr goes to no test, and the suite begins
+	// hundreds of them. A race found still sets the exit status.
+	if os.Getenv("GORACE") == "" {
+		os.Setenv("GORACE", "atexit_sleep_ms=0")
+	}
 	if status, ok := runStandIn(); ok {
 		os.Exit(status)
 	}

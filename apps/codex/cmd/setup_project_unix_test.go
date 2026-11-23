@@ -465,6 +465,38 @@ func TestSetupsWorkOutlivesWhoAskedDuringAStart(t *testing.T) {
 	}
 }
 
+// A run, setup a person started, is never ended for its caller going: past
+// the bound a reading's work is killed at, its start goes on and finishes.
+func TestARunOutlivesTheBoundOfAReading(t *testing.T) {
+	p := newWorkProject(t)
+	p.answer("up.block", "")
+	ctx, cancel := context.WithCancel(t.Context())
+	ran := make(chan error, 1)
+	go func() {
+		_, err := p.run(ctx, p.project)
+		ran <- err
+	}()
+	pid := p.blocked("up")
+	cancel()
+	// sleep-ok: past the bound a reading's work is killed at, where a run must still run
+	time.Sleep(workEndsWithin + time.Second)
+	if syscall.Kill(pid, 0) != nil {
+		t.Fatal("the run's start was ended with its caller")
+	}
+	p.answer("up.release", "")
+	select {
+	case err := <-ran:
+		if err != nil {
+			t.Fatalf("the run answered %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the run never finished")
+	}
+	if p.starts() != 1 {
+		t.Fatalf("the start did not finish: %v", p.log())
+	}
+}
+
 // What the launcher's environment says of a CYFR reaches neither the
 // folder's .env nor Docker.
 func TestSetupsWorkTakesNoSettingFromTheLauncher(t *testing.T) {
@@ -717,9 +749,14 @@ func gone(pid int) bool {
 // bound, with everything in its process group, once the reading's caller
 // went: a lock or the end of its folder (End).
 func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
-	for name, end := range map[string]func(cancel func(), l desktop.Local){
-		"its caller went":  func(cancel func(), _ desktop.Local) { cancel() },
-		"its folder ended": func(_ func(), l desktop.Local) { l.End() },
+	for name, c := range map[string]struct {
+		end func(cancel func(), l desktop.Local)
+		// late is whether the work starts only once its caller went.
+		late bool
+	}{
+		"its caller went":     {end: func(cancel func(), _ desktop.Local) { cancel() }},
+		"its folder ended":    {end: func(_ func(), l desktop.Local) { l.End() }},
+		"its start came late": {end: func(cancel func(), _ desktop.Local) { cancel() }, late: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			deaf := t.TempDir()
@@ -727,6 +764,15 @@ func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
 			saved := startWork
 			t.Cleanup(func() { startWork = saved })
 			startWork = nil
+			entered := make(chan struct{}, 1)
+			if c.late {
+				launch := starter()
+				startWork = func(ctx context.Context, args []string) (*workProcess, error) {
+					entered <- struct{}{}
+					<-ctx.Done()
+					return launch(context.WithoutCancel(ctx), args)
+				}
+			}
 			l, err := readLocal(setUpFolder(t), "the test")
 			if err != nil {
 				t.Fatal(err)
@@ -735,6 +781,10 @@ func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
 			defer cancel()
 			read := make(chan error, 1)
 			go func() { read <- l.Answers(ctx) }()
+			if c.late {
+				<-entered
+				c.end(cancel, l)
+			}
 			var pids []int
 			for deadline := time.Now().Add(10 * time.Second); len(pids) < 2; {
 				if time.Now().After(deadline) {
@@ -750,7 +800,9 @@ func TestAReadingsWorkDeafToItsEndIsGoneWithinTheBound(t *testing.T) {
 				time.Sleep(20 * time.Millisecond) // sleep-ok: polls an observable condition
 			}
 			ended := time.Now()
-			end(cancel, l)
+			if !c.late {
+				c.end(cancel, l)
+			}
 			select {
 			case <-read:
 			case <-time.After(5 * time.Second):

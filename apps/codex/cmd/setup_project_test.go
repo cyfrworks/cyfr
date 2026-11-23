@@ -72,7 +72,7 @@ func workSeesDocker(t *testing.T, dir string) {
 func keepStandInControls() {
 	keeps := workKeeps
 	workKeeps = func(name string) bool {
-		return keeps(name) || name == "FAKE_DOCKER_DIR" || strings.HasPrefix(name, "CYFR_CMD_TEST_")
+		return keeps(name) || name == "FAKE_DOCKER_DIR" || name == "GORACE" || strings.HasPrefix(name, "CYFR_CMD_TEST_")
 	}
 }
 
