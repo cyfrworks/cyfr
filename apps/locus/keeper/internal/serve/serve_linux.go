@@ -159,6 +159,7 @@ func Main(args []string) int {
 		roots:    roots,
 		pools:    map[string]*pool.Pool{},
 		spawns:   map[string]*spawn{},
+		places:   map[string]*place{},
 		waiters:  map[int]*child{},
 		keptLive: map[int]int{},
 		keptOps:  map[int]*sync.Mutex{},
@@ -356,6 +357,11 @@ type spawn struct {
 	relay   *child
 	// group is the spawn's memory-bounded cgroup, nil until it is created.
 	group *cgroup.Group
+	// place is the id of the place the spawn named, set in the step the
+	// spawn is held in spawns; the retirement that removes it from spawns
+	// frees the place in that same step, so no measure answers a place whose
+	// spawn is gone, and a refused spawn's retirement frees none.
+	place string
 	// pty is the keeper's own descriptor of the master of the spawn's
 	// pseudo-terminal, which a `resize` sets the size through; nil for a
 	// spawn without one. s.mu guards it once the spawn is in spawns, and
@@ -388,11 +394,12 @@ type server struct {
 	// (--guard); nil for a keeper without one, whose spawns name no hosts.
 	guard egressGuard
 
-	// mu guards pools, spawns and waiters, and is held across every fork,
-	// reap and signal, so a pid is never signalled after it was reaped.
+	// mu guards pools, spawns, places and waiters, and is held across every
+	// fork, reap and signal, so a pid is never signalled after it was reaped.
 	mu      sync.Mutex
 	pools   map[string]*pool.Pool
 	spawns  map[string]*spawn
+	places  map[string]*place
 	waiters map[int]*child
 	// keptLive counts the live spawns of each kept home's uid; keptOps
 	// holds each such uid's lock, which a spawn's start, the uid's full
@@ -459,6 +466,9 @@ func (s *server) run() int {
 		close(lost)
 	}()
 	go s.sweeper()
+	reading := make(chan struct{})
+	defer close(reading)
+	go s.reader(reading)
 
 loop:
 	for {
@@ -593,7 +603,16 @@ func (s *server) serveChannel() {
 			s.send(rerr.Reply())
 			continue
 		}
-		go s.handle(req)
+		// A place, a drop and an assign are applied here, before the next
+		// line is read, in the order the client sent them: a spawn finds the
+		// place sent before it, and a drop or an assign what came before it.
+		// Every other request runs on a goroutine of its own.
+		switch req.Type {
+		case protocol.TypePlace, protocol.TypeDrop, protocol.TypeAssign:
+			s.handle(req)
+		default:
+			go s.handle(req)
+		}
 	}
 }
 
@@ -614,6 +633,12 @@ func (s *server) send(reply any) {
 
 func (s *server) handle(req *protocol.Request) {
 	switch req.Type {
+	case protocol.TypePlace:
+		s.handlePlace(req)
+	case protocol.TypeDrop:
+		s.handleDrop(req)
+	case protocol.TypeAssign:
+		s.handleAssign(req)
 	case protocol.TypeSpawn:
 		s.handleSpawn(req)
 	case protocol.TypeSignal:
@@ -644,28 +669,6 @@ func (s *server) handlePool(req *protocol.Request) {
 		return
 	}
 	s.send(protocol.NewPoolReply(req.ID, req.Pool, st.Size, st.Free, st.Quarantined))
-}
-
-// handleMeasure answers what a spawn's group uses. The reading is taken
-// under mu: a pooled spawn's group is named by its uid, which no other spawn
-// is given until mu has seen this one gone.
-func (s *server) handleMeasure(req *protocol.Request) {
-	var used cgroup.Use
-	var err error
-	s.mu.Lock()
-	sp := s.spawns[req.SpawnID]
-	if sp != nil {
-		used, err = sp.group.Used()
-	}
-	s.mu.Unlock()
-	if err != nil {
-		s.log.Error("measure %s: spawn %s: reading its memory use: %v", req.ID, req.SpawnID, err)
-	}
-	if sp == nil || err != nil {
-		s.send(protocol.NewError(req.ID, "", protocol.CodeUnmeasured))
-		return
-	}
-	s.send(protocol.NewMeasured(req.ID, used.Bytes, used.Lesser))
 }
 
 func (s *server) handleSignal(req *protocol.Request) {
@@ -747,10 +750,30 @@ func (s *server) poolSpec(name string) (pool.Spec, bool) {
 	return pool.Spec{}, false
 }
 
+// handleSpawn claims the place a spawn names before anything else is done,
+// and starts the spawn in it. One naming a place the keeper does not hold,
+// or one another spawn named, is refused. Every other refusal frees the
+// place before it is sent, so the client may place that id again.
 func (s *server) handleSpawn(req *protocol.Request) {
 	if s.closing.Load() {
 		return
 	}
+	if !s.claimPlace(req.Place) {
+		s.log.Warn("spawn %s refused: the keeper holds no place %s, or another spawn named it", req.ID, req.Place)
+		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+		return
+	}
+	if code := s.startSpawn(req); code != "" {
+		s.mu.Lock()
+		delete(s.places, req.Place)
+		s.mu.Unlock()
+		s.send(protocol.NewError(req.ID, "", code))
+	}
+}
+
+// startSpawn starts the spawn req asks for in the place it claimed, and
+// answers the code it is refused with, or "" once it is spawned.
+func (s *server) startSpawn(req *protocol.Request) string {
 	// A spawn is isolated exactly when its pool is: a client never takes a
 	// command for isolated that is not, nor starts one unisolated from a
 	// pool that isolates every spawn.
@@ -760,30 +783,25 @@ func (s *server) handleSpawn(req *protocol.Request) {
 		} else {
 			s.log.Warn("spawn %s refused: it asks for isolation, which pool %s does not give", req.ID, req.Pool)
 		}
-		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
-		return
+		return protocol.CodeBadRequest
 	}
 	// A kept home and a pseudo-terminal are a program's, whose pool shares
 	// the keeper's namespaces.
 	if req.Isolation != "" && (req.HomeMode == protocol.HomeKept || req.Pty != nil) {
 		s.log.Warn("spawn %s refused: an isolated spawn takes no kept home and no pty", req.ID)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
-		return
+		return protocol.CodeBadRequest
 	}
 	if s.memory == nil {
 		s.log.Warn("spawn %s refused: its memory and CPU bounds are unavailable here", req.ID)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeMemoryUnavailable))
-		return
+		return protocol.CodeMemoryUnavailable
 	}
 	reach, code, err := s.spawnEgress(req)
 	if err != nil {
 		s.log.Warn("spawn %s refused: %v", req.ID, err)
-		s.send(protocol.NewError(req.ID, "", code))
-		return
+		return code
 	}
 	if req.HomeMode == protocol.HomeKept {
-		s.handleKeptSpawn(req, reach)
-		return
+		return s.startKeptSpawn(req, reach)
 	}
 	s.mu.Lock()
 	p := s.pools[req.Pool]
@@ -802,11 +820,9 @@ func (s *server) handleSpawn(req *protocol.Request) {
 	s.mu.Unlock()
 	switch {
 	case p == nil:
-		s.send(protocol.NewError(req.ID, "", protocol.CodeUnknownPool))
-		return
+		return protocol.CodeUnknownPool
 	case !ok:
-		s.send(protocol.NewError(req.ID, "", protocol.CodeCapacity))
-		return
+		return protocol.CodeCapacity
 	}
 
 	sp := &spawn{pool: p, account: s.accounts[uid], retired: make(chan struct{})}
@@ -819,29 +835,28 @@ func (s *server) handleSpawn(req *protocol.Request) {
 	if err != nil {
 		s.log.Error("spawn %s: %v", req.ID, err)
 		s.retire(sp, 0, false)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
-		return
+		return protocol.CodeInternal
 	}
 
 	if err := s.setEgress(uid, reach); err != nil {
 		s.log.Error("spawn %s on uid %d refused: its egress was not set at the guard: %v", req.ID, uid, err)
 		s.retire(sp, 0, false)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeGuardUnavailable))
-		return
+		return protocol.CodeGuardUnavailable
 	}
 	if code, err := s.launch(sp, req); err != nil {
 		s.log.Error("spawn %s on uid %d: %v", req.ID, uid, err)
 		s.retire(sp, 0, false)
-		s.send(protocol.NewError(req.ID, "", code))
-		return
+		return code
 	}
 
 	s.mu.Lock()
+	sp.place = req.Place
 	s.spawns[sp.id] = sp
 	s.mu.Unlock()
 	s.log.Info("spawn %s: uid %d, leader pid %d", sp.id, uid, sp.leader.pid)
 	s.send(protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
 	go s.watchLeader(sp)
+	return ""
 }
 
 // launch starts the stage as the spawn's uid, waits until it has executed
@@ -1206,6 +1221,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				_ = sp.pool.Quarantine(uid)
 			}
 			delete(s.spawns, sp.id)
+			delete(s.places, sp.place)
 			sp.closePty()
 			s.mu.Unlock()
 

@@ -115,25 +115,24 @@ func (s *server) keptHome(path string, uid *uint64) (int, error) {
 	return id, s.cfg.Kept.Validate(path, id)
 }
 
-// handleKeptSpawn starts a spawn in a made kept home, under the home's own
+// startKeptSpawn starts a spawn in a made kept home, under the home's own
 // uid and no uid of a pool, refused as CodeHomeOverCap when the home already
 // holds its home_max_bytes. Its start holds the uid's lock, so it never
 // starts during the uid's full retirement or a home request, and sets the
 // uid's egress at the guard under it: every session of the home shares the
-// uid, so the uid reaches what its latest spawn resolved.
-func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
+// uid, so the uid reaches what its latest spawn resolved. It answers as
+// startSpawn does.
+func (s *server) startKeptSpawn(req *protocol.Request, reach egress) string {
 	uid, err := s.keptHome(req.HomePath, req.HomeUID)
 	if err != nil {
 		s.log.Warn("spawn %s refused: %v", req.ID, err)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
-		return
+		return protocol.CodeBadRequest
 	}
 	s.mu.Lock()
 	_, known := s.pools[req.Pool]
 	s.mu.Unlock()
 	if !known {
-		s.send(protocol.NewError(req.ID, "", protocol.CodeUnknownPool))
-		return
+		return protocol.CodeUnknownPool
 	}
 	acct := KeptAccount(uid)
 	lock := s.keptLock(uid)
@@ -157,36 +156,31 @@ func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 		}
 		if busy {
 			s.log.Warn("spawn %s refused: kept uid %d is quarantined or live under another home", req.ID, uid)
-			s.send(protocol.NewError(req.ID, "", protocol.CodeUIDBusy))
-			return
+			return protocol.CodeUIDBusy
 		}
 		select {
 		case <-retiring:
 		case <-time.After(time.Until(deadline)):
 			s.log.Warn("spawn %s refused: kept uid %d is still retiring", req.ID, uid)
-			s.send(protocol.NewError(req.ID, "", protocol.CodeUIDBusy))
-			return
+			return protocol.CodeUIDBusy
 		}
 	}
 	if err := home.CheckKeptHome(req.HomePath, uid); err != nil {
 		lock.Unlock()
 		s.log.Warn("spawn %s refused: the kept home of uid %d is not made: %v", req.ID, uid, err)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
-		return
+		return protocol.CodeBadRequest
 	}
 	if max := req.HomeMaxBytes; max != nil {
 		bytes, err := s.measureHome(acct, req.HomePath)
 		if err != nil {
 			lock.Unlock()
 			s.log.Error("spawn %s: measuring the kept home of uid %d: %v", req.ID, uid, err)
-			s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
-			return
+			return protocol.CodeInternal
 		}
 		if bytes >= *max {
 			lock.Unlock()
 			s.log.Warn("spawn %s refused: the kept home of uid %d holds %d bytes, at or over its bound %d", req.ID, uid, bytes, *max)
-			s.send(protocol.NewError(req.ID, "", protocol.CodeHomeOverCap))
-			return
+			return protocol.CodeHomeOverCap
 		}
 	}
 	if err := s.setEgress(uid, reach); err != nil {
@@ -202,8 +196,7 @@ func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 		}
 		lock.Unlock()
 		s.log.Error("spawn %s on kept uid %d refused: its egress was not set at the guard: %v", req.ID, uid, err)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeGuardUnavailable))
-		return
+		return protocol.CodeGuardUnavailable
 	}
 	s.mu.Lock()
 	s.keptMaps()
@@ -216,21 +209,21 @@ func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 	if sp.id, err = randomHex(16); err != nil {
 		s.log.Error("spawn %s: %v", req.ID, err)
 		s.retire(sp, 0, false)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
-		return
+		return protocol.CodeInternal
 	}
 	if code, err := s.launch(sp, req); err != nil {
 		s.log.Error("spawn %s on kept uid %d: %v", req.ID, uid, err)
 		s.retire(sp, 0, false)
-		s.send(protocol.NewError(req.ID, "", code))
-		return
+		return code
 	}
 	s.mu.Lock()
+	sp.place = req.Place
 	s.spawns[sp.id] = sp
 	s.mu.Unlock()
 	s.log.Info("spawn %s: kept uid %d, leader pid %d", sp.id, uid, sp.leader.pid)
 	s.send(protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
 	go s.watchLeader(sp)
+	return ""
 }
 
 // retireKept ends a kept spawn once: the processes of its own group, which
@@ -300,6 +293,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			}
 			s.mu.Lock()
 			delete(s.spawns, sp.id)
+			delete(s.places, sp.place)
 			sp.closePty()
 			s.mu.Unlock()
 			s.log.Info("spawn %s: kept uid %d retired", sp.id, uid)
