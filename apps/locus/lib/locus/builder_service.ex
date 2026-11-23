@@ -45,8 +45,12 @@ defmodule Locus.BuilderService do
   5. **The request.** Read strictly (`read_request/1`): another version is
      `protocol_mismatch`, anything else that does not read is `malformed`.
   6. **The deadline.** The build's budget is the time to the request's
-     deadline or `Locus.Config.timeout_ms/0`, whichever is less; a
-     deadline already passed is refused `timeout` with nothing run.
+     deadline or `Locus.Config.timeout_ms/0`, whichever is less, and its
+     deadline is the instant that budget ends, fixed as the request
+     arrives: every layer of the build ends by that one instant, so what
+     the request spends before its build runs (its place, its
+     preparation, its wait for room) is spent from its budget. A deadline
+     already passed is refused `timeout` with nothing run.
   7. **The build itself** has its place made, a `build` of its athanor
      (`Locus.Builder.place/1`), and is then checked and packed
      (`Locus.Builder.prepare/1`): `malformed` for sources that make no
@@ -77,13 +81,14 @@ defmodule Locus.BuilderService do
   does not read holds the build where it is and nothing piles up here.
   What the two hold of a build's output is counted in the builds role's
   count (`Locus.Output`) as one grant a build, `Locus.Builder.held_bytes/0`,
-  taken before the build runs, waiting in arrival order within the build's
-  budget (a build given no room by then is answered `timeout`), and
-  returned only once the terminal line was taken or could not be, or when
-  the build's process dies. Each write is bounded by the time left to the
-  build's deadline, and the terminal line's by #{@terminal_ms} ms past it,
-  so the connection's process always answers, and the build, the reader
-  of its relay, takes nothing past its deadline.
+  taken before the build runs, waiting in arrival order until the build's
+  deadline (a build given no room by then is answered `timeout`, and one
+  cancelled meanwhile leaves the wait at once), and returned only once the
+  terminal line was taken or could not be, or when the build's process
+  dies. Each write is bounded by the time left to the build's deadline,
+  and the terminal line's by #{@terminal_ms} ms past it, so the
+  connection's process always answers, and the build, the reader of its
+  relay, takes nothing past its deadline.
 
   ## How a build ends, and what is given back
 
@@ -98,10 +103,10 @@ defmodule Locus.BuilderService do
     whether its peer closed (Bandit leaves a request's socket passive, so a
     close is seen only by asking), and a line that cannot be written, or
     not within the time left, says the same. The build is cancelled
-    (`Locus.Executor.cancel/1`), which closes its relay and ends its
-    processes with no grace; the service waits up to #{@cancel_ms} ms for
-    that, kills the build process if it has not ended, and releases the
-    slot. Nothing more is written.
+    (`Locus.Executor.cancel/1`), which takes it out of its wait for room,
+    or closes its relay and ends its processes with no grace; the service
+    waits up to #{@cancel_ms} ms for that, kills the build process if it
+    has not ended, and releases the slot. Nothing more is written.
   - **The connection's process killed** (the listener stopping, a crash):
     the link ends the build process, whose executor's own watch ends the
     build (the keeper's client releases a dead caller's spawn, the direct
@@ -136,7 +141,7 @@ defmodule Locus.BuilderService do
   match _ do
     case {conn.method, BuilderProtocol.operation(conn.request_path)} do
       {"POST", {:ok, :build}} ->
-        build(conn, Locus.Listener.now(conn))
+        build(conn, Locus.Listener.now(conn), now())
 
       {"POST", {:ok, :health}} ->
         health(conn)
@@ -169,7 +174,7 @@ defmodule Locus.BuilderService do
 
   # ————— a build, up to its slot —————
 
-  defp build(conn, now) do
+  defp build(conn, now, arrived) do
     with {:ok, key} <- request_key(conn),
          {:ok, header} <- header(conn),
          {:ok, auth, body_hash} <- verify_header(conn, key, header, now),
@@ -177,10 +182,10 @@ defmodule Locus.BuilderService do
          {:ok, body, conn} <- read(conn, BuilderProtocol.max_request_bytes()),
          :ok <- verify_body(conn, body_hash, body),
          {:ok, request} <- readable(BuilderProtocol.read_request(body), conn),
-         {:ok, budget_ms} <- budget(conn, request, now),
+         {:ok, time} <- budget(conn, request, now, arrived),
          {:ok, place} <- placed(conn, request) do
       try do
-        placed_build(conn, request, place, budget_ms)
+        placed_build(conn, request, place, time)
       after
         Locus.Builder.drop(place)
       end
@@ -190,11 +195,11 @@ defmodule Locus.BuilderService do
     end
   end
 
-  defp placed_build(conn, request, place, budget_ms) do
+  defp placed_build(conn, request, place, time) do
     with {:ok, plan} <- prepared(conn, request),
          {:ok, slot} <- slot(conn, request) do
       try do
-        stream(conn, plan, place, budget_ms)
+        stream(conn, plan, place, time)
       after
         Prima.Slots.release(@slots, slot)
       end
@@ -281,10 +286,16 @@ defmodule Locus.BuilderService do
   defp readable({:error, error}, conn), do: {:refused, conn, BuilderProtocol.refusal_for(error)}
   defp readable(read, _conn), do: read
 
-  defp budget(conn, %{deadline: deadline}, now) do
+  # The budget is read against the request's clock as the request
+  # arrived, and its deadline fixed on this node's monotonic clock as of
+  # that same instant.
+  defp budget(conn, %{deadline: deadline}, now, arrived) do
     case min(deadline - now, Locus.Config.timeout_ms()) do
-      budget_ms when budget_ms > 0 -> {:ok, budget_ms}
-      _passed -> {:refused, conn, {:timeout, 0}}
+      budget_ms when budget_ms > 0 ->
+        {:ok, %{budget_ms: budget_ms, deadline: arrived + budget_ms}}
+
+      _passed ->
+        {:refused, conn, {:timeout, 0}}
     end
   end
 
@@ -313,7 +324,7 @@ defmodule Locus.BuilderService do
 
   # ————— the stream —————
 
-  defp stream(conn, plan, place, budget_ms) do
+  defp stream(conn, plan, place, time) do
     conn =
       conn
       |> put_resp_content_type(@content_type)
@@ -325,7 +336,6 @@ defmodule Locus.BuilderService do
 
     service = self()
     ref = make_ref()
-    deadline = now() + budget_ms
 
     build =
       spawn_link(fn ->
@@ -334,26 +344,29 @@ defmodule Locus.BuilderService do
           ref: ref,
           plan: plan,
           place: place,
-          budget_ms: budget_ms,
-          deadline: deadline
+          budget_ms: time.budget_ms,
+          deadline: time.deadline
         })
       end)
 
     :ok = write_bound(conn, :send_timeout_close)
-    follow(conn, %{ref: ref, build: build, monitor: Process.monitor(build), deadline: deadline})
+
+    follow(conn, %{
+      ref: ref,
+      build: build,
+      monitor: Process.monitor(build),
+      deadline: time.deadline
+    })
   end
 
   # The build's own process: its grant, its run, and its terminal line,
   # each line handed to the connection's process and taken before the next.
   defp build(%{service: service, ref: ref} = b) do
     {grant, result} =
-      case Locus.Output.reserve(
-             Locus.Output.server(:builds),
-             Locus.Builder.held_bytes(),
-             b.deadline
-           ) do
+      case room(b) do
         {:ok, grant} -> {grant, run(b)}
         :full -> {nil, {:error, {:timeout, b.budget_ms}}}
+        :cancelled -> {nil, {:error, :cancelled}}
       end
 
     with line when is_binary(line) <- terminal(result), do: hand(b, line, :terminal)
@@ -362,6 +375,27 @@ defmodule Locus.BuilderService do
     # is gone.
     if grant, do: Locus.Output.return(grant)
     send(service, {ref, :done})
+  end
+
+  # Room in the builds count, waited for until the build's deadline. A
+  # cancel, its client gone, leaves the wait at once; it and the deadline
+  # each withdraw the ask, so a grant that comes after goes back.
+  defp room(b) do
+    count = Locus.Output.server(:builds)
+    ask = Locus.Output.ask(count, Locus.Builder.held_bytes(), b.deadline)
+
+    receive do
+      {Locus.Output, ^ask, answer} ->
+        answer
+
+      {Locus.Executor, :cancel} ->
+        Locus.Output.cancel(count, ask)
+        :cancelled
+    after
+      max(b.deadline - now(), 0) ->
+        Locus.Output.cancel(count, ask)
+        :full
+    end
   end
 
   defp run(b) do
@@ -378,7 +412,8 @@ defmodule Locus.BuilderService do
 
     Locus.Builder.run(b.plan,
       place: b.place,
-      timeout_ms: b.budget_ms,
+      deadline: b.deadline,
+      budget_ms: b.budget_ms,
       on_progress: on_progress,
       on_line: &hand(b, &1, :running)
     )

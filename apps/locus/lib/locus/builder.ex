@@ -90,7 +90,7 @@ defmodule Locus.Builder do
   | `malformed` | the sources do not make a build of that language |
   | `unavailable` | the toolchain, the Cargo seed or cyfr-locus is missing, or cyfr-locus cannot bound the build's memory |
   | `capacity` | no pooled uid is free |
-  | `timeout` | the build passed `:timeout_ms` and was ended |
+  | `timeout` | the build passed its `:deadline` and was ended |
   | `memory` | the build was ended for memory: at its bound, at a limit above it, or at one of the two where the kernel does not say which |
   | `failed` | the build exited non-zero or by a signal, or its output was refused |
 
@@ -286,9 +286,13 @@ defmodule Locus.Builder do
   ## Options
 
   - `:place` — the place `place/1` made for the build, which its run names.
-  - `:timeout_ms` — the build's budget, `Locus.Config.timeout_ms/0` unless
-    given. Past it every process the build started is killed and the
-    answer is the `timeout` refusal naming it.
+  - `:budget_ms` — the build's budget, which its `timeout` refusal names:
+    `Locus.Config.timeout_ms/0` unless given.
+  - `:deadline` — the instant, in monotonic milliseconds, the build ends
+    by, which its caller fixed once (the builds service as the request
+    arrived), `:budget_ms` from the call unless given. Past it every
+    process the build started is killed and the answer is the `timeout`
+    refusal.
   - `:on_progress` — a `t:on_progress/0`.
   - `:on_line` — a `t:on_line/0`, handed each output line.
 
@@ -297,12 +301,17 @@ defmodule Locus.Builder do
   """
   @spec run(plan(),
           place: String.t(),
-          timeout_ms: pos_integer(),
+          deadline: integer(),
+          budget_ms: pos_integer(),
           on_progress: on_progress(),
           on_line: on_line()
         ) :: {:ok, built()} | {:error, BuilderProtocol.refusal() | :cancelled}
   def run(%{language: language, target_type: target_type} = plan, opts \\ []) do
-    timeout_ms = Keyword.get_lazy(opts, :timeout_ms, &Locus.Config.timeout_ms/0)
+    budget_ms = Keyword.get_lazy(opts, :budget_ms, &Locus.Config.timeout_ms/0)
+
+    deadline =
+      Keyword.get_lazy(opts, :deadline, fn -> System.monotonic_time(:millisecond) + budget_ms end)
+
     on_progress = Keyword.get(opts, :on_progress, fn _stage, _message -> :ok end)
     on_line = Keyword.get(opts, :on_line, fn _line -> :ok end)
     place = Keyword.fetch!(opts, :place)
@@ -310,7 +319,8 @@ defmodule Locus.Builder do
     with :ok <- said(on_progress.(:preparing, "Preparing source files...")),
          {:ok, executor} <- executor(),
          :ok <- said(on_progress.(:compiling, plan.announce)),
-         {:ok, stream} <- execute(executor, plan, place, timeout_ms, on_progress, on_line),
+         {:ok, stream} <-
+           execute(executor, plan, place, {deadline, budget_ms}, on_progress, on_line),
          {:ok, outputs} <- outputs(plan, stream, on_progress) do
       {:ok, %{language: language, target_type: target_type, outputs: outputs}}
     end
@@ -531,12 +541,12 @@ defmodule Locus.Builder do
   # ============================================================================
 
   # Runs the build's script and reads its output archive as it arrives.
-  defp execute(executor, plan, place, timeout_ms, on_progress, on_line) do
+  defp execute(executor, plan, place, {deadline, budget_ms}, on_progress, on_line) do
     command = %{argv: plan.argv, env: toolchain_env(), stdin: plan.archive}
 
     opts = [
       place: place,
-      timeout_ms: timeout_ms,
+      deadline: deadline,
       max_stdout_bytes: @max_output_archive_bytes,
       on_stdout: {stream(plan, on_progress, on_line), &take/2},
       on_output: &on_progress.(:output, &1)
@@ -550,7 +560,7 @@ defmodule Locus.Builder do
         {:error, {:failed, exit}}
 
       {:error, :timeout} ->
-        {:error, {:timeout, timeout_ms}}
+        {:error, {:timeout, budget_ms}}
 
       {:error, :cancelled} ->
         {:error, :cancelled}

@@ -157,10 +157,18 @@ defmodule Locus.Output do
       wait ->
         # A count that did not answer by then is down or wedged: nothing
         # is taken as granted, and a late grant goes back.
-        GenServer.cast(server, {:cancel, ref})
+        cancel(server, ref)
         :full
     end
   end
+
+  @doc """
+  The asker's word that it wants no answer to its `ask/3` of `ref`: an ask
+  still waiting leaves the queue, and a grant made for it, received or
+  not, goes back.
+  """
+  @spec cancel(GenServer.server(), reference()) :: :ok
+  def cancel(server, ref) when is_reference(ref), do: GenServer.cast(server, {:cancel, ref})
 
   @doc "Move a grant to `pid`, the process the bytes are handed to."
   @spec give(grant(), pid()) :: :ok

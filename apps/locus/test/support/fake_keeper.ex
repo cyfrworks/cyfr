@@ -43,6 +43,13 @@ defmodule Locus.Test.FakeKeeper do
     the token, reads the stdin the client sends and drops it, and sends
     the command's output. In every other mode a build's relay dials first
     and the command reads the stdin the client sends.
+  - `{:dial_after_release, test}` — a build's command is never run: its
+    relay dials only once the client has asked for the spawn's release,
+    then reads until the client closes its connection, telling `test`
+    `{:fake_relay, :closed, ms}`, the milliseconds it was open, or
+    `{:fake_relay, :held_open, ms}` once 3 s pass first, when it closes it
+    itself; only then is the leader reported killed and the spawn
+    released, as cyfr-locus reports `released` only once the relay ended.
   - `{:exec_failed, test}` — every spawn is refused with `exec_failed` under
     the spawn id the fake gave it, as cyfr-locus refuses one whose command
     it could not run after it made the spawn: the spawn's place stays the
@@ -539,6 +546,28 @@ defmodule Locus.Test.FakeKeeper do
     finish(conn, [frames(@stream_stderr, stderr), frames(@stream_stdout, stdout)])
   end
 
+  defp relay(fake, spawn_id, %{"pool" => "build"} = request, {:dial_after_release, test}, _dir) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        fake
+        |> GenServer.call(:requests)
+        |> Enum.any?(&(&1["type"] == "release" and &1["spawn_id"] == spawn_id))
+      end,
+      5_000,
+      "the client to ask for the release"
+    )
+
+    conn = dial(fake, request)
+    dialed = System.monotonic_time(:millisecond)
+    ended = until_closed(conn, dialed + 3_000)
+    send(test, {:fake_relay, ended, System.monotonic_time(:millisecond) - dialed})
+    :gen_tcp.close(conn)
+
+    killed = %{type: "exited", spawn_id: spawn_id, code: nil, signal: "SIGKILL", memory: nil}
+    :ok = GenServer.call(fake, {:send, killed})
+    :ok = GenServer.call(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+  end
+
   defp relay(fake, spawn_id, request, mode, dir) do
     input = Path.join(dir, "stdin")
     output = Path.join(dir, "stdout")
@@ -777,6 +806,16 @@ defmodule Locus.Test.FakeKeeper do
       n ->
         {:ok, payload} = :gen_tcp.recv(conn, n, 5_000)
         read_stdin(conn, [payload | acc])
+    end
+  end
+
+  # Whatever the client sends is read and dropped until it closes the
+  # connection, or until `by`.
+  defp until_closed(conn, by) do
+    case :gen_tcp.recv(conn, 0, max(by - System.monotonic_time(:millisecond), 0)) do
+      {:ok, _bytes} -> until_closed(conn, by)
+      {:error, :timeout} -> :held_open
+      {:error, _closed} -> :closed
     end
   end
 

@@ -139,7 +139,7 @@ defmodule Locus.DirectLauncher do
 
   defp launch(argv, env, paths, opts) do
     on_output = Keyword.get(opts, :on_output, fn _line -> :ok end)
-    deadline = System.monotonic_time(:millisecond) + Keyword.fetch!(opts, :timeout_ms)
+    deadline = Keyword.fetch!(opts, :deadline)
 
     port =
       Port.open({:spawn_executable, "/bin/sh"}, [

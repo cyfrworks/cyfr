@@ -51,8 +51,9 @@ defmodule Locus.Executor do
   @type on_stdout :: {term(), (binary(), term() -> {:ok, term()} | {:error, term()})}
 
   @typedoc """
-  - `:timeout_ms` — the deadline for the whole run; past it everything the
-    command started is killed and the answer is `{:error, :timeout}`
+  - `:deadline` — the instant, in monotonic milliseconds, the whole run
+    ends by, as its caller fixed it; past it everything the command
+    started is killed and the answer is `{:error, :timeout}`
   - `:max_stdout_bytes` — the most stdout counted; past it everything is
     killed and the answer is `{:error, {:output_too_large, max}}`
   - `:on_stdout` — a fold over the pieces of stdout as they arrive, the
@@ -62,7 +63,7 @@ defmodule Locus.Executor do
   """
   @type opts :: [
           place: String.t(),
-          timeout_ms: pos_integer(),
+          deadline: integer(),
           max_stdout_bytes: pos_integer(),
           on_stdout: on_stdout(),
           on_output: (String.t() -> taken())

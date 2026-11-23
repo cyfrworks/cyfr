@@ -107,6 +107,15 @@ defmodule Locus.BuilderTest do
      fn -> Agent.get(lines, &Enum.reverse/1) end}
   end
 
+  # The `{:line, line}` messages in the mailbox, oldest first.
+  defp lines_received do
+    receive do
+      {:line, line} -> [line | lines_received()]
+    after
+      0 -> []
+    end
+  end
+
   describe "toolchains" do
     test "each of the wire's languages reports whether its toolchain is here" do
       toolchains = Builder.available_toolchains()
@@ -333,14 +342,19 @@ defmodule Locus.BuilderTest do
 
       assert Enum.any?(progress.(), fn {_stage, message} -> message =~ "outputs total" end)
 
-      # The small file left; nothing of the big one did.
-      assert_received {:line, line}
-      assert {:ok, {:output, %{path: "a"}}} = BuilderProtocol.read_line(line)
-      refute_received {:line, _}
+      # Nothing of the big one left, in whichever order tar wrote the two:
+      # every line that did is the small one's.
+      paths =
+        for line <- lines_received() do
+          assert {:ok, {:output, %{path: path}}} = BuilderProtocol.read_line(line)
+          path
+        end
+
+      assert Enum.all?(paths, &(&1 == "a")), "lines of #{inspect(Enum.uniq(paths))} left"
     end
 
     test "past its budget is a timeout naming the budget" do
-      assert {:error, {:timeout, 1_500}} = build(scripted("sleep 60"), timeout_ms: 1_500)
+      assert {:error, {:timeout, 1_500}} = build(scripted("sleep 60"), budget_ms: 1_500)
     end
 
     test "installs from its lockfile alone, and one out of step with its manifest is failed" do
