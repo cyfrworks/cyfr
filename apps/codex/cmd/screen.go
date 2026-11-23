@@ -351,8 +351,8 @@ const (
 // loopback (listen takes their address), the on-screen keyboard, the
 // watches that lock it (screenWatches) and the browser browse gives on
 // those pages (screenBrowser), shown once the keyboard and the watches
-// are up. While those watches are not known to work it runs on locked,
-// its page saying why.
+// are up (screenWatches.watch). While the keyboard or those watches are
+// not known to work it runs on locked, its page saying why.
 // The browser's end locks; this process's own end (SIGTERM, SIGINT,
 // SIGHUP) locks before it exits. Any lock hides what is on the screen
 // first (the browser's hide), then ends the sessions at the home, so no
@@ -382,12 +382,9 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 	if err != nil {
 		return err
 	}
-	// A page shown as the watches were lost gives way to the one that says so.
-	watches := newScreenWatches(screenIdle, func(why string) {
-		if why != "" {
-			browser.hide()
-		}
-	})
+	// A watch lost locks, and the lock hides the page shown then, which
+	// gives way to the one that says why (shell.Shell.Lock).
+	watches := newScreenWatches(screenIdle, nil)
 	cfg := local.Shell
 	cfg.DisplayName, cfg.Restart = host, browser.hide
 	cfg.Record = filepath.Join(device, "holder.json")
@@ -414,15 +411,6 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 	}}
 	served := make(chan error, 1)
 	go func() { served <- srv.ServeOn(ctx, ln) }()
-
-	keyboard := screenChild(exec.Command("wvkbd-mobintl"))
-	_ = keyboard.Start()
-	defer func() {
-		if keyboard.Process != nil {
-			_ = keyboard.Process.Kill()
-			_ = keyboard.Wait()
-		}
-	}()
 
 	watches.lock = func(why string) { sh.Lock(why) }
 	watching, stopWatching := context.WithCancel(ctx)

@@ -91,7 +91,7 @@ func quietScreen() map[string]string {
 		"pkill": "exit 0",
 		// No screen's test asks this machine's Docker.
 		"docker":               "exit 1",
-		"wvkbd-mobintl":        "exec /bin/sleep 30", // sleep-ok: a stand-in child that runs until the shell ends it
+		"wvkbd-mobintl":        "exec /bin/sleep 600", // sleep-ok: a stand-in child that runs until the shell ends it
 		"swayidle":             swayidleHears,
 		"google-chrome-stable": "exec /bin/sleep 30", // sleep-ok: a stand-in child that runs until the shell ends it
 	}
@@ -500,6 +500,8 @@ func TestScreenShell_AWatchThatCannotStartShowsWhy(t *testing.T) {
 		"swayidle with a lock and no answer":         {idletest.Options{}, swayidleNeverAnswers, sleepUnwatched},
 		"swayidle exiting":                           {idletest.Options{}, "exit 42", sleepUnwatched},
 		"no swayidle":                                {idletest.Options{}, "", sleepUnwatched},
+		"no keyboard":                                {idletest.Options{}, swayidleHears, keyboardGone},
+		"a keyboard that ends":                       {idletest.Options{}, swayidleHears, keyboardGone},
 	} {
 		t.Run(name, func(t *testing.T) {
 			screenProject(t)
@@ -509,8 +511,14 @@ func TestScreenShell_AWatchThatCannotStartShowsWhy(t *testing.T) {
 			if c.swayidle == "" {
 				delete(programs, "swayidle")
 			}
+			switch name {
+			case "no keyboard":
+				delete(programs, "wvkbd-mobintl")
+			case "a keyboard that ends":
+				programs["wvkbd-mobintl"] = "exit 3"
+			}
 			screenPrograms(t, programs)
-			if c.swayidle == "" {
+			if c.swayidle == "" || name == "no keyboard" {
 				// The stand-ins name their programs whole: this PATH holds
 				// them and no swayidle of the machine's.
 				bin, _, _ := strings.Cut(os.Getenv("PATH"), ":")
@@ -541,6 +549,22 @@ func TestScreenShell_WatchesThatWorkAgainShowThePage(t *testing.T) {
 	if err := os.WriteFile(mended, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	s.shows(watchedPage)
+}
+
+// A keyboard that ends locks the screen, whose page says so, and is
+// started again, after which the screen offers its use again.
+func TestScreenShell_AKeyboardThatEndsLocksAndStartsAgain(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	once := filepath.Join(t.TempDir(), "once")
+	// sleep-ok: the second keyboard runs until the shell ends it
+	programs["wvkbd-mobintl"] = "[ -e " + once + " ] && exec /bin/sleep 600\n: >" + once + "\n/bin/sleep 3\nexit 3"
+	screenPrograms(t, programs)
+	s := startScreen(t)
+	s.shows(watchedPage)
+	s.staysLockedSaying(keyboardGone)
 	s.shows(watchedPage)
 }
 
@@ -661,5 +685,50 @@ func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("the screen kept the CYFR it read before")
+	}
+}
+
+// The screen shell with the app as its browser: once the keyboard and the
+// watches are up it says ready with its own pages' address, then home with
+// the CYFR in its folder; main's home-ready is answered opened; a lock says
+// locked, naming no CYFR, and proposes that one again as the next attempt;
+// the end of main's pipe ends the shell.
+func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
+	screenProject(t)
+	compositor := screenCompositor(t, idletest.Options{})
+	screenPrograms(t, quietScreen())
+	app, in, out := newAppSide(t)
+	listen, _ := ownListener()
+	ended := make(chan error, 1)
+	go func() { ended <- runScreenShell(context.Background(), listen, appBrowser(in, out)) }()
+
+	if ready := app.next("ready"); ready["url"] != shell.Origin+"/" {
+		t.Fatalf("ready named %v", ready["url"])
+	}
+	home := app.next("home")
+	if home["home"] == "" || home["account"] == "" || home["attempt"] != float64(1) {
+		t.Fatalf("home was %v", home)
+	}
+	app.send(`{"version":1,"type":"home-ready","home":"` + home["home"].(string) + `","attempt":1}`)
+	if opened := app.next("opened"); opened["home"] != home["home"] {
+		t.Fatalf("opened named %v, home %v", opened["home"], home["home"])
+	}
+	// The idle watch lost: what is on the screen gives way to the page
+	// that says why, and the CYFR is proposed again as the next attempt.
+	compositor.Stop()
+	if locked := app.next("locked"); locked["home"] != nil || locked["account"] != nil {
+		t.Fatalf("locked named %v", locked)
+	}
+	if again := app.next("home"); again["home"] != home["home"] || again["attempt"] != float64(2) {
+		t.Fatalf("after the lock home was %v", again)
+	}
+	app.reply.Close()
+	select {
+	case err := <-ended:
+		if err != nil {
+			t.Fatalf("the end of main's pipe ended the shell with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the end of main's pipe did not end the shell")
 	}
 }

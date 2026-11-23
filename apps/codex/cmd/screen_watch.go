@@ -24,6 +24,7 @@ const (
 	watchesStarting = "This screen stays locked until it can tell when to lock."
 	idleUnwatched   = "This screen stays locked because it cannot tell when five minutes pass without touch, key or pointer input."
 	sleepUnwatched  = "This screen stays locked because it cannot tell when this device goes to sleep."
+	keyboardGone    = "This screen stays locked because its on-screen keyboard is not running. It starts the keyboard again."
 )
 
 const (
@@ -52,7 +53,8 @@ type screenWatches struct {
 	lock  func(why string)
 	// clocks reads the boot clock and the monotonic clock.
 	clocks func() (boot, monotonic time.Duration, err error)
-	// changed hears each change of Unwatched, once it has changed.
+	// changed hears each change of Unwatched, once it has changed; nil
+	// hears none. A loss is shown through its lock (shell.Shell.Lock).
 	changed func(why string)
 
 	mu      sync.Mutex
@@ -128,8 +130,21 @@ func (w *screenWatches) suspended() {
 	w.lock(suspendLocked)
 }
 
-// watch runs both watches until one is not known to work, and says which.
+// watch runs the on-screen keyboard, first, and both watches until one of
+// the three is not known to work, and says which. The keyboard is watched
+// as they are: one that does not start or that ends locks the screen,
+// whose page says so, and it is started again with them.
 func (w *screenWatches) watch(ctx context.Context) error {
+	keyboard := screenChild(exec.Command("wvkbd-mobintl"))
+	if err := keyboard.Start(); err != nil {
+		return unwatched{keyboardGone, fmt.Errorf("the on-screen keyboard did not start: %w", err)}
+	}
+	keyboardEnded := make(chan error, 1)
+	go func() { keyboardEnded <- keyboard.Wait() }()
+	defer func() {
+		_ = keyboard.Process.Kill()
+		<-keyboardEnded
+	}()
 	socket, err := idle.Socket()
 	if err != nil {
 		return unwatched{idleUnwatched, err}
@@ -178,6 +193,9 @@ func (w *screenWatches) watch(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-inputEnded:
 			return unwatched{idleUnwatched, err}
+		case err := <-keyboardEnded:
+			keyboardEnded <- err
+			return unwatched{keyboardGone, fmt.Errorf("the on-screen keyboard ended (%v)", err)}
 		case <-sleep.exited:
 			return unwatched{sleepUnwatched, sleep.failure("swayidle stopped")}
 		case <-suspending:

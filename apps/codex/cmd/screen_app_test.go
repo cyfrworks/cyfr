@@ -5,16 +5,17 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cyfr/codex/internal/desktop"
-	"github.com/cyfr/codex/internal/idle/idletest"
-	"github.com/cyfr/codex/internal/shell"
 )
 
 // appSide is the CYFR app's main process as the screen shell's browser
@@ -65,53 +66,11 @@ func (a *appSide) send(line string) {
 	}
 }
 
-// The screen shell with the app as its browser: once the keyboard and the
-// watches are up it says ready with its own pages' address, then home with
-// the CYFR in its folder; main's home-ready is answered opened; a lock says
-// locked, naming that CYFR; the end of main's pipe ends the shell.
-func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
-	screenProject(t)
-	compositor := screenCompositor(t, idletest.Options{})
-	screenPrograms(t, quietScreen())
-	app, in, out := newAppSide(t)
-	listen, _ := ownListener()
-	ended := make(chan error, 1)
-	go func() { ended <- runScreenShell(context.Background(), listen, appBrowser(in, out)) }()
-
-	if ready := app.next("ready"); ready["url"] != shell.Origin+"/" {
-		t.Fatalf("ready named %v", ready["url"])
-	}
-	home := app.next("home")
-	if home["home"] == "" || home["account"] == "" || home["attempt"] != float64(1) {
-		t.Fatalf("home was %v", home)
-	}
-	app.send(`{"version":1,"type":"home-ready","home":"` + home["home"].(string) + `","attempt":1}`)
-	if opened := app.next("opened"); opened["home"] != home["home"] {
-		t.Fatalf("opened named %v, home %v", opened["home"], home["home"])
-	}
-	// The idle watch lost: what is on the screen gives way to the page
-	// that says why.
-	compositor.Stop()
-	if locked := app.next("locked"); locked["home"] != home["home"] || locked["account"] != home["account"] {
-		t.Fatalf("locked was %v, home %v", locked, home)
-	}
-	app.reply.Close()
-	select {
-	case err := <-ended:
-		if err != nil {
-			t.Fatalf("the end of main's pipe ended the shell with %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the end of main's pipe did not end the shell")
-	}
-}
-
 // The app's hide returns at once, whether or not main reads what it is
 // told: a lock never waits on main.
 func TestScreenApp_HideWaitsOnNothing(t *testing.T) {
 	_, unread := io.Pipe()
-	a := &screenApp{to: desktop.NewWriter(unread), wake: make(chan struct{}, 1), home: desktop.Message{Home: "http://localhost:4000", Account: "https://cyfr.run"}}
-	go a.write()
+	a := &screenApp{to: desktop.NewWriter(unread), home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
 	hidden := make(chan struct{})
 	go func() {
 		for range 3 {
@@ -126,39 +85,98 @@ func TestScreenApp_HideWaitsOnNothing(t *testing.T) {
 	}
 }
 
-// main's lock and leave lock the shell, its shutdown and the end of its
-// pipe end it, and a line that is not main's message ends it refused.
+// lineSink is main's end of the pipe, read whole once written.
+type lineSink struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lineSink) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+// said is what the shell wrote, once it has written n lines, each as
+// "type" or "type attempt".
+func (l *lineSink) said(t *testing.T, n int) []string {
+	t.Helper()
+	var said []string
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		l.mu.Lock()
+		lines := strings.Split(strings.TrimSuffix(l.b.String(), "\n"), "\n")
+		l.mu.Unlock()
+		said = said[:0]
+		for _, line := range lines {
+			var m struct {
+				Type    string `json:"type"`
+				Attempt uint64 `json:"attempt"`
+				Home    string `json:"home"`
+			}
+			if line == "" || json.Unmarshal([]byte(line), &m) != nil {
+				continue
+			}
+			w := m.Type
+			if m.Attempt > 0 {
+				w += " " + strconv.FormatUint(m.Attempt, 10)
+			}
+			if m.Type == desktop.TypeLocked && m.Home != "" {
+				w += " naming " + m.Home
+			}
+			said = append(said, w)
+		}
+		if len(said) >= n || time.Now().After(deadline) {
+			return said
+		}
+		time.Sleep(10 * time.Millisecond) // sleep-ok: polls the writer's own goroutine
+	}
+}
+
+// What main says, and what the shell says back: ready and home as attempt
+// 1; opened for the current attempt's home-ready alone, once; a lock's
+// locked naming no CYFR, then home again as the next attempt; a stale
+// home-ready or home-failed changes nothing, and leave is a lock that
+// leaves no CYFR named; the current attempt's home-failed ends the shell;
+// main's shutdown and the end of its pipe end it; a line that is not
+// main's message ends it refused.
 func TestScreenApp_WhatMainSays(t *testing.T) {
+	const home = "http://localhost:4000"
+	ready := func(n int) string {
+		return `{"version":1,"type":"home-ready","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
+	}
+	failed := func(n int) string {
+		return `{"version":1,"type":"home-failed","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
+	}
+	const lock, leave = `{"version":1,"type":"lock"}`, `{"version":1,"type":"leave"}`
 	for name, c := range map[string]struct {
 		lines   []string
 		locks   []string
+		said    []string
 		refused bool
 	}{
-		"lock":           {lines: []string{`{"version":1,"type":"lock"}`}, locks: []string{"Locked."}},
-		"leave":          {lines: []string{`{"version":1,"type":"leave"}`}, locks: []string{"Locked."}},
-		"shutdown":       {lines: []string{`{"version":1,"type":"shutdown"}`, `{"version":1,"type":"lock"}`}},
+		"opened once": {lines: []string{ready(1), ready(1)}, said: []string{"opened"}},
+		"a lock proposes again": {lines: []string{ready(1), lock, ready(1), failed(1), ready(2)}, locks: []string{"Locked."},
+			said: []string{"opened", "locked", "home 2", "opened"}},
+		"leave names no CYFR": {lines: []string{leave, ready(1), ready(2)}, locks: []string{"Locked."},
+			said: []string{"locked", "home 2", "opened"}},
+		"another CYFR's home-ready": {lines: []string{`{"version":1,"type":"home-ready","home":"https://other.example","attempt":1}`}},
+		"the current home-failed": {lines: []string{lock, failed(2), lock}, locks: []string{"Locked."},
+			said: []string{"locked", "home 2"}, refused: true},
+		"shutdown":       {lines: []string{`{"version":1,"type":"shutdown"}`, lock}},
 		"the pipe's end": {},
 		"not a message":  {lines: []string{`{"version":1,"type":"unlock"}`}, refused: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			a := &screenApp{in: strings.NewReader(strings.Join(c.lines, "\n")), to: desktop.NewWriter(io.Discard),
-				wake: make(chan struct{}, 1)}
+			sink := &lineSink{}
+			a := &screenApp{in: strings.NewReader(strings.Join(c.lines, "\n")), to: desktop.NewWriter(sink),
+				home: desktop.Message{Type: desktop.TypeHome, Home: home, Account: "https://cyfr.run"}}
 			var locks []string
 			err := a.show(context.Background(), func(why string) bool { locks = append(locks, why); return false })
 			if (err != nil) != c.refused || strings.Join(locks, "|") != strings.Join(c.locks, "|") {
 				t.Fatalf("show answered %v, locking %q", err, locks)
 			}
-			// After ready and home, a lock that closed nothing says locked
-			// all the same, as no hide did.
-			var said []string
-			for _, m := range a.queue {
-				said = append(said, m.Type)
-			}
-			want := []string{desktop.TypeReady, desktop.TypeHome}
-			for range c.locks {
-				want = append(want, desktop.TypeLocked)
-			}
-			if strings.Join(said, " ") != strings.Join(want, " ") {
+			want := append([]string{desktop.TypeReady, "home 1"}, c.said...)
+			if said := sink.said(t, len(want)); strings.Join(said, ", ") != strings.Join(want, ", ") {
 				t.Fatalf("the shell said %v, want %v", said, want)
 			}
 		})
