@@ -6,6 +6,7 @@
 package serve
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/cyfr/locus/keeper/internal/cgroup"
+	"github.com/cyfr/locus/keeper/internal/logx"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
@@ -169,7 +171,7 @@ func termReached(t *testing.T, log string, pid int) bool {
 // channel that carries whether the group was empty when it returned.
 func ending(k *keeper, group *cgroup.Group, leader *child) chan bool {
 	ended := make(chan bool, 1)
-	go func() { ended <- k.s.endInOrder("t", group, leader, time.Now().Add(endGrace)) }()
+	go func() { ended <- k.s.endInOrder("t", testPoolFirst, group, leader, time.Now().Add(endGrace)) }()
 	return ended
 }
 
@@ -237,7 +239,7 @@ func TestALeaderThatIgnoresTheEndIsKilledAtTheGracesEnd(t *testing.T) {
 		 while :; do sleep 0.05; done`)
 	logged(t, log, "child-ready", "leader-ready")
 	started := time.Now()
-	if !k.s.endInOrder("t", group, leader, started.Add(endGrace)) {
+	if !k.s.endInOrder("t", testPoolFirst, group, leader, started.Add(endGrace)) {
 		t.Fatal("the group outlived its end")
 	}
 	if took := time.Since(started); took < endGrace || took > endGrace+time.Second {
@@ -343,27 +345,34 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: newcomer, GraceMs: &zero})
 }
 
-// marker is a second child of the leader, started once the program's child
-// runs, that writes "marker-got-term" when TERM reaches it and ends. Cgroup
-// v2 lists a group's processes in the order they joined it, a fork adding
-// the child at the end of its css_set's task list, so the marker, forked
-// last, comes after the program and the program's child in cgroup.procs, and
-// any pass that signals the group by that list has signalled both before
-// it: its word proves such a pass is over.
-const marker = `while ! grep -q child-ready "$L"; do sleep 0.01; done
-		 perl -e '$SIG{TERM} = sub { open my $f, ">>", $ARGV[0]; print $f "marker-got-term\n"; close $f; exit 0 };
-		          open my $f, ">>", $ARGV[0]; print $f "marker-ready\n"; close $f; sleep 1 while 1' "$L" &`
+// waitingFor makes the end's wait for the leader's children say when it
+// begins: poll is first asked once the pass that sends those children TERM
+// is over.
+func waitingFor(t *testing.T) chan struct{} {
+	t.Helper()
+	waiting := make(chan struct{})
+	var once sync.Once
+	poll = func(fds []unix.PollFd, timeout int) (int, error) {
+		once.Do(func() { close(waiting) })
+		return unix.Poll(fds, timeout)
+	}
+	t.Cleanup(func() { poll = unix.Poll })
+	return waiting
+}
 
 // A shell-like leader, as the backends service's /bin/sh -c in front of a
 // program is, that exits at once on TERM, around a program that ends its
 // own child when asked: once the leader has exited the program alone is
-// asked, and its child has no TERM pending while the program holds its
-// TERM, read once the marker, the leader's other child, has had its TERM;
-// the child ends as the program told it. On TERM to the rest of the group
-// at once after the leader, however that pass is paused between the program
-// and its child, the marker's TERM comes after the child's, so the child's
-// is pending when the test reads it.
+// asked, and the keeper waits for it with no TERM pending on its child; the
+// child ends as the program told it. The test rests on two events and no
+// order: the keeper entering its wait for the leader's children, which
+// comes only after its pass over them is done, and TERM pending on the
+// program's child, read from the kernel. The first, with the child's TERM
+// not pending then, passes; the second fails. On TERM to the rest of the
+// group at once after the leader, the keeper never waits for the leader's
+// children and the child's TERM comes, however that pass is paused.
 func TestTheProgramTheLeaderStartedIsAskedBeforeItsOwnChildren(t *testing.T) {
+	waiting := waitingFor(t)
 	k := boundedKeeper(t)
 	program := filepath.Join(t.TempDir(), "program.sh")
 	if err := os.WriteFile(program, []byte(`L="$1"; `+blockingChild("0")+` &
@@ -375,17 +384,29 @@ func TestTheProgramTheLeaderStartedIsAskedBeforeItsOwnChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 	leader, group, log := endingGroup(t, k, testPoolFirst, `sh `+program+` "$L" &
-		 `+marker+`
 		 trap 'echo leader-exits >> "$L"; exit 0' TERM
-		 while ! grep -q marker-ready "$L"; do sleep 0.01; done
 		 echo leader-ready >> "$L"
 		 while :; do sleep 0.05; done`)
-	child := childPID(t, logged(t, log, "child-ready", "program-ready", "marker-ready", "leader-ready"))
+	child := childPID(t, logged(t, log, "child-ready", "program-ready", "leader-ready"))
 	ended := ending(k, group, leader)
-	logged(t, log, "leader-exits", "program-got-term", "marker-got-term")
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(time.Millisecond) {
+		select {
+		case <-waiting:
+		default:
+			if termReached(t, log, child) {
+				t.Fatal("TERM reached the program's child before the keeper waited for the program")
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the keeper never waited for the leader's children")
+			}
+			continue
+		}
+		break
+	}
 	if termReached(t, log, child) {
 		t.Fatal("TERM reached the program's child while the program was still ending")
 	}
+	logged(t, log, "leader-exits", "program-got-term")
 	if err := os.WriteFile(log+".go", nil, 0o666); err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +432,7 @@ func TestAProgramThatIgnoresTheEndIsKilledAtTheGracesEnd(t *testing.T) {
 		 while :; do sleep 0.05; done`)
 	logged(t, log, "program-ready", "leader-ready")
 	started := time.Now()
-	if !k.s.endInOrder("t", group, leader, started.Add(endGrace)) {
+	if !k.s.endInOrder("t", testPoolFirst, group, leader, started.Add(endGrace)) {
 		t.Fatal("the group outlived its end")
 	}
 	if took := time.Since(started); took < endGrace || took > endGrace+time.Second {
@@ -466,7 +487,7 @@ func TestAPidTheLeadersChildNoLongerHoldsIsNeverSignalled(t *testing.T) {
 		 echo leader-ready >> "$L"
 		 while :; do sleep 0.05; done`)
 	logged(t, log, "leader-ready")
-	if !k.s.endInOrder("t", withStranger{group, stranger.pid}, leader, time.Now().Add(endGrace)) {
+	if !k.s.endInOrder("t", testPoolFirst, withStranger{group, stranger.pid}, leader, time.Now().Add(endGrace)) {
 		t.Fatal("the group outlived its end")
 	}
 	if termReached(t, strangerLog, stranger.pid) {
@@ -477,11 +498,12 @@ func TestAPidTheLeadersChildNoLongerHoldsIsNeverSignalled(t *testing.T) {
 		 echo leader-ready >> "$L"
 		 while :; do wait; sleep 0.05; done`)
 	logged(t, log, "leader-ready")
-	held, unheld := k.s.leaderChildren(group, leader, time.Now().Add(endGrace))
-	if len(held) != 1 || unheld != 0 {
-		t.Fatalf("the leader's one child is held by %d pidfds, %d not held", len(held), unheld)
+	children := k.s.leaderChildren(testPoolFirst, group, leader, time.Now().Add(endGrace))
+	if len(children.fds) != 1 || children.why != "" {
+		t.Fatalf("the leader's one child is held by %d pidfds (%q)", len(children.fds), children.why)
 	}
-	defer releaseHeld(held)
+	held := children.fds
+	defer releaseHeld(testPoolFirst, held)
 	if err := unix.PidfdSendSignal(held[0], unix.SIGKILL, nil, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +567,7 @@ func TestAScanNeverHoldsTheLockNorSignalsPastTheDeadline(t *testing.T) {
 	t.Cleanup(func() { resumed.Do(func() { close(scan.resume) }) })
 	deadline := time.Now().Add(endGrace)
 	ended := make(chan bool, 1)
-	go func() { ended <- k.s.endInOrder("t", scan, leader, deadline) }()
+	go func() { ended <- k.s.endInOrder("t", testPoolFirst, scan, leader, deadline) }()
 	<-scan.entered
 
 	released := make(chan map[string]any, 1)
@@ -568,15 +590,25 @@ func TestAScanNeverHoldsTheLockNorSignalsPastTheDeadline(t *testing.T) {
 		t.Fatal("another spawn's release was not served while the scan ran")
 	}
 
-	// The deadline is what this test is about: the scan is let go once it has passed.
-	for time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond) // sleep-ok: waiting for the end's own deadline to pass
+	// The end does not wait for the scan past its deadline: the group's kill
+	// comes while the scan is still held, and the scan is let go after it.
+	select {
+	case <-scan.killed:
+	case <-time.After(endGrace + 20*time.Second):
+		t.Fatal("the group's kill waited for a scan held past the deadline")
 	}
-	resumed.Do(func() { close(scan.resume) })
-	<-scan.killed
+	if time.Now().Before(deadline) {
+		t.Fatal("the group's kill came before the deadline")
+	}
 	if !<-ended {
 		t.Fatal("the end reported its group not empty")
 	}
+	resumed.Do(func() { close(scan.resume) })
+	eventually(t, "the held scan's pidfds to be let go", func() bool {
+		budget.Lock()
+		defer budget.Unlock()
+		return budget.total == 0
+	})
 	if termReached(t, log, leader.pid) {
 		t.Fatal("TERM reached the leader past the deadline")
 	}
@@ -601,13 +633,13 @@ func TestAWaitThatCannotPollStillWaitsForTheChildsExit(t *testing.T) {
 	}
 	probing := make(chan struct{})
 	var probed sync.Once
-	probe = func(fd int) bool {
+	probe = func(fd int) error {
 		probed.Do(func() { close(probing) })
-		return unix.PidfdSendSignal(fd, 0, nil, 0) == nil
+		return unix.PidfdSendSignal(fd, 0, nil, 0)
 	}
 	t.Cleanup(func() {
 		poll = unix.Poll
-		probe = func(fd int) bool { return unix.PidfdSendSignal(fd, 0, nil, 0) == nil }
+		probe = func(fd int) error { return unix.PidfdSendSignal(fd, 0, nil, 0) }
 	})
 	k := boundedKeeper(t)
 	program := filepath.Join(t.TempDir(), "program.sh")
@@ -626,7 +658,9 @@ func TestAWaitThatCannotPollStillWaitsForTheChildsExit(t *testing.T) {
 	child := childPID(t, logged(t, log, "child-ready", "program-ready", "leader-ready"))
 	killed := make(chan struct{})
 	ended := make(chan bool, 1)
-	go func() { ended <- k.s.endInOrder("t", killRecorded{group, killed}, leader, time.Now().Add(endGrace)) }()
+	go func() {
+		ended <- k.s.endInOrder("t", testPoolFirst, killRecorded{group, killed}, leader, time.Now().Add(endGrace))
+	}()
 	logged(t, log, "program-got-term")
 	<-failed
 	select {
@@ -657,4 +691,150 @@ type killRecorded struct {
 func (g killRecorded) KillBy(deadline time.Time) bool {
 	close(g.killed)
 	return g.Group.KillBy(deadline)
+}
+
+// eventually waits until done holds, a bounded condition check.
+func eventually(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); !done(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+// lockedLog is the keeper's log written where a test reads it.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+// lines are the log's lines that hold text.
+func (l *lockedLog) lines(text string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var found []string
+	for _, line := range strings.Split(l.buf.String(), "\n") {
+		if strings.Contains(line, text) {
+			found = append(found, line)
+		}
+	}
+	return found
+}
+
+// logTo has the keeper log to a lockedLog.
+func logTo(k *keeper) *lockedLog {
+	l := &lockedLog{}
+	k.s.log = logx.NewWriter(l, "cyfr-locus", false)
+	return l
+}
+
+// unlisted is a group whose listing fails, and whose kill records that it ran.
+type unlisted struct {
+	*cgroup.Group
+	killed chan struct{}
+}
+
+func (g unlisted) Procs() ([]int, error) { return nil, errors.New("cgroup.procs: unreadable") }
+
+func (g unlisted) KillBy(deadline time.Time) bool {
+	close(g.killed)
+	return g.Group.KillBy(deadline)
+}
+
+// reapedInScan is a group whose listing ends only once its leader has been
+// killed and reaped, as a leader that ends during the scan is.
+type reapedInScan struct {
+	*cgroup.Group
+	k      *keeper
+	leader *child
+}
+
+func (g reapedInScan) Procs() ([]int, error) {
+	pids, err := g.Group.Procs()
+	g.k.s.signalChild(g.leader, syscall.SIGKILL)
+	<-g.leader.done
+	return pids, err
+}
+
+// Every path on which the children's level of a running leader's end is
+// skipped or incomplete says so once on the keeper's log for the spawn,
+// with why: the group could not be listed; children could not be held
+// (here past the bound of one end); the leader was reaped during the scan.
+// A leader already reaped as the end begins says nothing.
+func TestAnEndThatCannotHoldTheLeadersChildrenSaysSoOnce(t *testing.T) {
+	k := boundedKeeper(t)
+	log := logTo(k)
+	// The leader forks nothing once it runs, so its children are those the
+	// test started.
+	idle := `exec perl -e '$SIG{TERM} = sub { exit 0 }; open my $f, ">>", $ARGV[0]; print $f "leader-ready\n"; close $f; sleep 1 while 1' "$L"`
+
+	leader, group, file := endingGroup(t, k, testPoolFirst, idle)
+	logged(t, file, "leader-ready")
+	killed := make(chan struct{})
+	k.s.endInOrder("listed", testPoolFirst, unlisted{group, killed}, leader, time.Now().Add(endGrace))
+	if got := log.lines("spawn listed:"); len(got) != 1 || !strings.Contains(got[0], "its group could not be listed") {
+		t.Fatalf("an end whose group could not be listed logged %q", got)
+	}
+
+	many := strings.Repeat("sleep 600 &\n", endHeld+2)
+	leader, group, file = endingGroup(t, k, testPoolFirst, many+idle)
+	logged(t, file, "leader-ready")
+	k.s.endInOrder("many", testPoolFirst, group, leader, time.Now().Add(endGrace))
+	if got := log.lines("spawn many:"); len(got) != 1 || !strings.Contains(got[0], "2 of its leader's children could not be held") {
+		t.Fatalf("an end that could hold %d of its leader's %d children logged %q", endHeld, endHeld+2, got)
+	}
+
+	leader, group, file = endingGroup(t, k, testPoolFirst, `sleep 600 &
+		 `+idle)
+	logged(t, file, "leader-ready")
+	k.s.endInOrder("reaped", testPoolFirst, reapedInScan{group, k, leader}, leader, time.Now().Add(endGrace))
+	if got := log.lines("spawn reaped:"); len(got) != 1 || !strings.Contains(got[0], "its leader was reaped during the scan") {
+		t.Fatalf("an end whose leader was reaped during its scan logged %q", got)
+	}
+
+	leader, group, file = endingGroup(t, k, testPoolFirst, `sleep 600 &
+		 `+idle)
+	logged(t, file, "leader-ready")
+	k.s.signalChild(leader, syscall.SIGKILL)
+	<-leader.done
+	k.s.endInOrder("gone", testPoolFirst, group, leader, time.Now().Add(endGrace))
+	if got := log.lines("spawn gone:"); len(got) != 0 {
+		t.Fatalf("an end whose leader was reaped before it began logged %q", got)
+	}
+}
+
+// A probe that answers anything but ESRCH keeps the wait for the leader's
+// children: with every poll failing and every probe answering EPERM, the
+// group's kill comes at the deadline, not before, while the program is held.
+func TestAProbeErrorThatIsNotTheEndKeepsTheWait(t *testing.T) {
+	poll = func([]unix.PollFd, int) (int, error) { return -1, unix.EINVAL }
+	probe = func(int) error { return unix.EPERM }
+	t.Cleanup(func() {
+		poll = unix.Poll
+		probe = func(fd int) error { return unix.PidfdSendSignal(fd, 0, nil, 0) }
+	})
+	k := boundedKeeper(t)
+	leader, group, log := endingGroup(t, k, testPoolFirst, `perl -e '$SIG{TERM} = sub { open my $f, ">>", $ARGV[0]; print $f "program-got-term\n"; close $f };
+		          open my $f, ">>", $ARGV[0]; print $f "program-ready\n"; close $f; sleep 1 while 1' "$L" &
+		 trap 'exit 0' TERM
+		 echo leader-ready >> "$L"
+		 while :; do sleep 0.05; done`)
+	logged(t, log, "program-ready", "leader-ready")
+	killed := make(chan struct{})
+	deadline := time.Now().Add(endGrace)
+	ended := make(chan bool, 1)
+	go func() { ended <- k.s.endInOrder("t", testPoolFirst, killRecorded{group, killed}, leader, deadline) }()
+	logged(t, log, "program-got-term")
+	<-killed
+	if time.Now().Before(deadline) {
+		t.Fatal("a probe error that was not ESRCH ended the wait before the deadline")
+	}
+	<-ended
 }
