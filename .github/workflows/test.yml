@@ -1601,15 +1601,16 @@ jobs:
         run: python3 tests/locus-backends-image/kept_home.py cyfr-locus:backends
 
       # Aqua's browser: cyfr-browser on a terminal in a kept home, driving
-      # the Chrome it fetches there from Google on the runner (the image
-      # holds none) over its debugging pipe, framed as
-      # tests/fixtures/browser_frames.json says: a megabyte read whole in
+      # the image's Chromium headless shell over its debugging pipe, framed
+      # as tests/fixtures/browser_frames.json says: a megabyte read whole in
       # acknowledged chunks, no output past an unacknowledged chunk, a forced
       # tail asked again and a short keep answered gone, each operation once,
-      # a profile another kept uid cannot read and no TCP listener; a restart
-      # that fetches nothing, an unreachable list with and without a Chrome,
-      # a truncated archive never published and the home's bound. It prints
-      # Chrome's memory with one, three and six windows and the first start's time.
+      # a profile another kept uid cannot read and no TCP listener, and the
+      # home's bound. First the pinned programs: the shell and Codex in the
+      # image, nothing of Codex's codex-resources, the browser's first window
+      # and Codex's listing with no public host, and a person's node and
+      # cyfr-stub never in CYFR's place. It prints Chrome's memory with one,
+      # three and six windows and the first start's time.
       - name: Aqua's browser
         run: python3 tests/locus-backends-image/browser.py cyfr-locus:backends
 
