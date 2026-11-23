@@ -144,8 +144,11 @@ defmodule Locus.Output do
 
   A held byte costs its service more than a byte. The backends image under
   memory pressure measured a buffered byte costing the service's group 2.3
-  to 2.8 bytes, and its flood of unread sessions, read one keeper frame at
-  a time, 157 MiB over idle for 63 MiB counted: 2.5. The VM makes resident
+  to 2.8 bytes; main's image suites carry no such factor. Its flood of 31
+  unread sessions, each read one keeper read at a time, raised the group
+  166 MiB over idle for 63 MiB counted on four processors, as a CI runner
+  has (2.6), and 208 to 227 MiB on sixteen (3.3 to 3.6), since the
+  allocator keeps carriers for each scheduler. The VM makes resident
   memory that multiple of what is held: a refc binary a process has let go
   stays resident until that process's next collection, and its binary
   virtual heap lets such garbage reach about the live amount before one; a
