@@ -410,7 +410,8 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 }
 
 // attachChild sets up a target that attached to one of w's sessions,
-// held until it runs: a frame of another process is intercepted as the
+// held until it runs and named as every target is (agent.go): a frame of
+// another process is intercepted as the
 // window's frames are; a dedicated worker needs nothing, since its
 // requests are paused on its frame's session; every other target's
 // requests for the reserved origin are failed. Its session is served from
@@ -419,6 +420,11 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 func (b *browser) attachChild(w *window, session, kind string) {
 	ctx, cancel := context.WithTimeout(context.Background(), opWait)
 	defer cancel()
+	// A service worker answers its network's commands only once it runs,
+	// so it is named after it is let run; every other target before.
+	if kind != "service_worker" {
+		_ = b.name(ctx, session, kind)
+	}
 	switch kind {
 	case "worker":
 	case "iframe":
@@ -429,6 +435,9 @@ func (b *browser) attachChild(w *window, session, kind string) {
 		_ = b.c.call(ctx, session, "Fetch.enable", fetchPatterns, nil)
 	}
 	_ = b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil)
+	if kind == "service_worker" {
+		_ = b.name(ctx, session, kind)
+	}
 }
 
 type pausedRequest struct {

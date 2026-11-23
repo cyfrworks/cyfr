@@ -65,6 +65,9 @@ type browser struct {
 	windows map[string]*window
 	// pages carries the windows' calls, and their ends, to the serve loop.
 	pages chan pageEvent
+	// agent is how every target names itself (agent.go), set once Chrome
+	// has answered its version and before any window is made.
+	agent map[string]any
 }
 
 // window is one Chrome page target and its flattened session. Its name is
@@ -351,6 +354,9 @@ func (b *browser) attach(ctx context.Context, w *window, target string) error {
 	}
 	session := attached.SessionID
 	go b.serveSession(w, session, sessionPage, b.c.watch(session, intercepted))
+	if err := b.name(ctx, session, "page"); err != nil {
+		return err
+	}
 	if err := b.interceptOn(ctx, session); err != nil {
 		return err
 	}

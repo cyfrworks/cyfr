@@ -63,6 +63,12 @@ container starts:
   bytes or files is refused; and over the session nothing left the box, no
   file the driver answered reached Chrome's network stack, and Chrome
   never asked a resolver for the reserved name.
+- What a site reads to tell a browser's kind, in a first window and a
+  later one: navigator.userAgent, userAgentData's brands and full versions
+  and navigator.webdriver on a put page, and the User-Agent and Sec-CH-UA
+  headers of a public request (unless CYFR_TEST_OFFLINE=1) as Chrome's own
+  network log records them. None says Headless: the shell names itself as
+  the Chromium it is, at its own version.
 - Another program in another kept home, under another uid, cannot read the
   browser's profile, nothing of the browser's uid listens on a TCP port,
   and Chrome runs on its debugging pipe with no debugging port.
@@ -829,6 +835,68 @@ def net_log_of_pages(text):
     return sorted(left), sorted(urls), sorted(asked), sorted(udp)
 
 
+# A page that reads what a site reads of the browser's kind and titles itself with it.
+KIND_PAGE = ("<title>reading</title><script>(async () => { const d = navigator.userAgentData;"
+             " const high = d ? await d.getHighEntropyValues(['fullVersionList']) : null;"
+             " document.title = 'kind ' + JSON.stringify({ua: navigator.userAgent, webdriver: navigator.webdriver,"
+             " brands: d ? d.brands : null, fullVersionList: high ? high.fullVersionList : null}); })();</script>")
+
+
+def request_headers(text, marker):
+    """The User-Agent and Sec-CH-UA headers of each request a Chrome network log shows sent with `marker` in its path."""
+    log = net_log(text)
+    sent = []
+    for event in log.get("events", []):
+        headers = (event.get("params") or {}).get("headers")
+        if isinstance(headers, dict):
+            headers = [f"{name}: {value}" for name, value in headers.items()]
+        if not isinstance(headers, list) or not any(marker in str(h) for h in headers):
+            continue
+        kept = {}
+        for header in headers:
+            name, _, value = str(header).partition(": ")
+            if name.lower() == "user-agent" or name.lower().startswith("sec-ch-ua"):
+                kept[name.lower()] = value
+        if kept:
+            sent.append(kept)
+    return sent
+
+
+def browser_kind(stack, c, uid):
+    """What a site reads to tell a browser's kind, in a first window and a later one: the page's navigator.userAgent,
+    userAgentData's brands and full versions and navigator.webdriver, and a public request's User-Agent and Sec-CH-UA
+    headers as Chrome's own network log records them. None says Headless: the headless shell names itself as the
+    Chromium it is, its own version."""
+    log = f"{KEPT_ROOT}/{BROWSER_HOME}/kind-netlog.json"
+    k = Host(stack, c, BROWSER_HOME, ["--net-log", log])
+    expect("error" not in k.hello(), "a session that logs Chrome's network says hello")
+    offline = os.environ.get("CYFR_TEST_OFFLINE") == "1"
+    ids, seen, read = iter(range(9000, 9100)), [], {}
+    for win in ("thr_kind_first", "thr_kind_later"):
+        ok(k.put_html(next(ids), win, KIND_PAGE, "kind"), f"a page that reads the browser's kind is shown in {win}")
+        read[win] = json.loads(titled(k, win, "kind ", ids, seen))
+        if not offline:
+            ok(k.ask(next(ids), win, "open", {"url": f"https://example.com/?{win}"}), f"a public page opens in {win}")
+    k.close()
+    eventually(lambda: not stack.under_uid(uid), "that session's processes to end")
+    text = as_home(stack, BROWSER_HOME, f"cat {log}", "Chrome's network log")
+    as_home(stack, BROWSER_HOME, f"rm {log}", "the network log removed")
+    sent = {} if offline else {win: request_headers(text, f"?{win}") for win in read}
+    print(f"measure: what a site reads of the browser's kind: {json.dumps({'page': read, 'requests': sent})}",
+          flush=True)
+    if offline:
+        print("skip: a public request's headers need the public network (CYFR_TEST_OFFLINE=1)", flush=True)
+    for win, seen_by_page in read.items():
+        expect("Chrome/" in seen_by_page["ua"] and [b["brand"] for b in seen_by_page["brands"]] == ["Chromium"]
+               and seen_by_page["ua"].split("Chrome/")[1].split(" ")[0]
+               == seen_by_page["fullVersionList"][0]["version"],
+               f"the page in {win} reads the Chromium the browser is, at its own version", seen_by_page)
+        expect(offline or sent[win], f"the public request from {win} is in Chrome's network log", sent)
+    expect("headless" not in json.dumps([read, sent]).lower(),
+           "no page or request reads Headless in the User-Agent, the client hints or userAgentData, in the first "
+           "window or a later one", [read, sent])
+
+
 def pages(stack, c, uid):
     """Pages put into the Chrome and their calls (C15), in a session that logs Chrome's network."""
     net_log = f"{KEPT_ROOT}/{BROWSER_HOME}/pages-netlog.json"
@@ -1455,6 +1523,7 @@ def main():
         eventually(lambda: not stack.under_uid(uid), "the browser's processes to end with its session")
 
         pages(stack, c, uid)
+        browser_kind(stack, c, uid)
 
         # ————— a short keep —————
         s = Host(stack, c, BROWSER_HOME, ["--keep-ms", str(SHORT_KEEP_MS)])

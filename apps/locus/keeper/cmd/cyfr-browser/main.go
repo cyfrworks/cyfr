@@ -51,6 +51,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -242,7 +243,8 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 	p.c = b.c
 	ctx, cancel := context.WithTimeout(context.Background(), startWait)
 	defer cancel()
-	if err := ready(ctx, b.c); err != nil {
+	v, err := ready(ctx, b.c)
+	if err != nil {
 		p.kill()
 		var refused *cdpError
 		switch {
@@ -254,18 +256,20 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 			return nil, fmt.Errorf("Chrome ended (%s)", p.cmd.ProcessState)
 		}
 	}
+	b.agent = agentOf(v, runtime.GOARCH)
 	return p, nil
 }
 
-// ready waits for Chrome's first answer, has it report its targets' ends,
-// and closes any page target it finds, which no window uses: with no
-// startup window there is none.
-func ready(ctx context.Context, c *cdp) error {
-	if err := c.call(ctx, "", "Browser.getVersion", nil, nil); err != nil {
-		return err
+// ready waits for Chrome's first answer, its version, has it report its
+// targets' ends, and closes any page target it finds, which no window
+// uses: with no startup window there is none.
+func ready(ctx context.Context, c *cdp) (version, error) {
+	var v version
+	if err := c.call(ctx, "", "Browser.getVersion", nil, &v); err != nil {
+		return v, err
 	}
 	if err := c.call(ctx, "", "Target.setDiscoverTargets", map[string]any{"discover": true}, nil); err != nil {
-		return err
+		return v, err
 	}
 	var targets struct {
 		TargetInfos []struct {
@@ -274,16 +278,16 @@ func ready(ctx context.Context, c *cdp) error {
 		} `json:"targetInfos"`
 	}
 	if err := c.call(ctx, "", "Target.getTargets", nil, &targets); err != nil {
-		return err
+		return v, err
 	}
 	for _, t := range targets.TargetInfos {
 		if t.Type == "page" {
 			if err := c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": t.TargetID}, nil); err != nil {
-				return err
+				return v, err
 			}
 		}
 	}
-	return nil
+	return v, nil
 }
 
 // chromeTmp is Chrome's temporary folder, relative to the home it runs in.
