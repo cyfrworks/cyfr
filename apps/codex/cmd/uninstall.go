@@ -33,11 +33,11 @@ var uninstallCmd = &cobra.Command{
 
 cyfr uninstall shows what it removes and what it leaves, then asks once (--yes answers; with no terminal and no --yes it removes nothing; answered no, it removes nothing and exits 0). It stops the stack as cyfr down does, then removes:
 - the stack's networks and the images its compose file names (one another container still uses stays, and is said);
-- this machine's screen service, when 'cyfr screen on' installed it, giving the screen back to its login prompt, and the link to this program in /usr/local/bin, both as root through sudo;
+- this machine's screen service, when 'cyfr screen on' installed it, giving the screen back to its login prompt, the CYFR app (the package cyfr-desktop), wherever the system's package records hold it and this program is not the app's own, and the link to this program in /usr/local/bin, each as root through sudo;
 - this program, by the path it runs from. A Homebrew install is left to 'brew uninstall --cask cyfr', and a cyfr a package of the system's installed, the CYFR app's among them, to the system's package tool.
 The program or its link stays when this directory holds it, or holds what it resolves to.
 
-CYFR never asks for, reads or keeps a password. When the screen service or the link is to go, an account outside the sudo and admin groups is refused before anything is shown or asked, with those commands as one sudo line for whoever administers the machine. Otherwise, after the question and before the stack stops, CYFR says whose password sudo will ask for, when it will ask, and sudo asks in its own prompt; a refused password changes nothing, and so does a sudo that needs a password with no terminal to ask at.
+CYFR never asks for, reads or keeps a password. When the screen service, the app or the link is to go, an account outside the sudo and admin groups is refused before anything is shown or asked, with those commands as one sudo line for whoever administers the machine. Otherwise, after the question and before the stack stops, CYFR says whose password sudo will ask for, when it will ask, and sudo asks in its own prompt; a refused password changes nothing, and so does a sudo that needs a password with no terminal to ask at.
 
 It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes, this program's settings files in ~/.cyfr and this machine's device key. It ends by naming each by its path, and the command that removes the volumes.
 
@@ -80,6 +80,10 @@ type uninstallPlan struct {
 	images  []string
 	screen  bool
 	cask    bool
+	// app is whether the CYFR app's package goes: dpkg holds it, and the
+	// package records say this program is none of a package's, so the
+	// removal never takes this program with it.
+	app bool
 	// packaged is the program's path where a package installed it, owner
 	// that package, or where the package records cannot tell (doubt, why),
 	// and then it stays (packageOf).
@@ -126,16 +130,21 @@ func readUninstallPlan() (*uninstallPlan, error) {
 	}
 	if !p.cask {
 		if self, err := selfExecutable(); err == nil {
+			owner, perr := packageOf(self)
 			if removable(self) {
 				// A doubt never removes.
-				if owner, err := packageOf(self); err != nil {
-					p.packaged, p.doubt = self, err.Error()
+				if perr != nil {
+					p.packaged, p.doubt = self, perr.Error()
 				} else if owner != "" {
 					p.packaged, p.owner = self, owner
 				} else {
 					p.self = self
 				}
 			}
+			// A program that is a package's, or may be, never removes the
+			// app's package, which may be its own: that is the system's
+			// package tool's to do, as this program is.
+			p.app = perr == nil && owner == "" && machine.installed(appPackage) != ""
 			real, err := filepath.EvalSymlinks(self)
 			if target, lerr := filepath.EvalSymlinks(usrLocalLink); err == nil && lerr == nil && target == real && usrLocalLink != self {
 				p.link = removable(usrLocalLink)
@@ -180,6 +189,9 @@ func (p *uninstallPlan) show(out io.Writer) {
 	fmt.Fprintln(out, stack)
 	if p.screen {
 		fmt.Fprintln(out, "  this machine's screen service, which gives the screen back to its login prompt")
+	}
+	if p.app {
+		fmt.Fprintln(out, "  the CYFR app, the package "+appPackage)
 	}
 	if p.self != "" {
 		program := "  this program, " + p.self
@@ -260,17 +272,23 @@ func runUninstall(ctx context.Context, out io.Writer, yes bool) error {
 }
 
 // rootCommands are the uninstall's commands as root, in the order it runs
-// them: the screen service's, then the link's removal.
+// them: the screen service's, the app's, then the link's removal.
 func (p *uninstallPlan) rootCommands() []string {
 	var commands []string
 	if p.screen {
 		commands = append(commands, screenOffCommands...)
+	}
+	if p.app {
+		commands = append(commands, appRemoval)
 	}
 	if p.link {
 		commands = append(commands, linkRemoval())
 	}
 	return commands
 }
+
+// appRemoval is the root command that removes the CYFR app's package.
+const appRemoval = "apt-get remove -y " + appPackage
 
 // linkRemoval is the root command that removes the link onto PATH.
 func linkRemoval() string { return shellQuote([]string{"rm", "-f", "--", usrLocalLink}) }
@@ -335,8 +353,8 @@ func (r *uninstallRun) failed(step string, err error) error {
 }
 
 // run removes, in order: the stack's containers, stopped as cyfr down
-// stops them, under the lock it keeps; the screen service and the link
-// onto PATH as root; the networks and images; and the program. The plan
+// stops them, under the lock it keeps; the screen service, the CYFR app
+// and the link onto PATH as root; the networks and images; and the program. The plan
 // holds nothing the project folder holds or holds the target of.
 func (r *uninstallRun) run(ctx context.Context) error {
 	p := r.p
@@ -353,6 +371,12 @@ func (r *uninstallRun) run(ctx context.Context) error {
 			}
 		}
 		r.done("the screen service")
+	}
+	if p.app {
+		if err := machine.apply([]string{appRemoval}); err != nil {
+			return r.failed("removing the CYFR app ("+appRemoval+")", err)
+		}
+		r.done("the CYFR app")
 	}
 	if p.link {
 		if err := machine.apply([]string{linkRemoval()}); err != nil {

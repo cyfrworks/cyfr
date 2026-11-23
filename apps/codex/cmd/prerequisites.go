@@ -33,8 +33,9 @@ type machineSeams struct {
 	arch func() string
 	// reachable is whether Docker answers this process.
 	reachable func() bool
-	// installed is whether dpkg holds the package installed.
-	installed func(pkg string) bool
+	// installed is the version at which dpkg holds the package installed,
+	// "" when it does not.
+	installed func(pkg string) string
 	// running is whether the Docker service runs.
 	running func() bool
 	// groups lists the groups of account, or of this process when account
@@ -71,9 +72,13 @@ var machine = machineSeams{
 	},
 	arch:      func() string { return runtime.GOARCH },
 	reachable: dockerAnswers,
-	installed: func(pkg string) bool {
-		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status}", pkg).Output()
-		return err == nil && string(out) == "installed"
+	installed: func(pkg string) string {
+		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status} ${Version}", pkg).Output()
+		status, at, _ := strings.Cut(string(out), " ")
+		if err != nil || status != "installed" {
+			return ""
+		}
+		return at
 	},
 	running: func() bool { return exec.Command("systemctl", "is-active", "--quiet", "docker").Run() == nil },
 	displayManager: func() bool {
@@ -191,7 +196,7 @@ func dockerAnswers() bool { return exec.Command("docker", "info").Run() == nil }
 // lacks of Docker, each only if needed.
 func requirementCommands(account string) []string {
 	var commands []string
-	missing := slices.DeleteFunc(slices.Clone(dockerPackages), machine.installed)
+	missing := slices.DeleteFunc(slices.Clone(dockerPackages), func(pkg string) bool { return machine.installed(pkg) != "" })
 	if len(missing) > 0 {
 		commands = append(commands, "apt-get update", "apt-get install -y --no-install-recommends "+strings.Join(missing, " "))
 	}

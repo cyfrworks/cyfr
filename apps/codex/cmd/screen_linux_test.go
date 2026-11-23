@@ -23,7 +23,7 @@ import (
 // standard error, and exits 1, so the service shows it failed.
 func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 	const stays = "echo $$ >\"$BIN/compositor\"\nexec sleep 60"
-	const refused = "-t cyfr-screen -p user.err loginctl could not end the screen's login session, so its processes, Chrome among them, still run\n"
+	const refused = "-t cyfr-screen -p user.err loginctl could not end the screen's login session, so its processes, the CYFR app among them, still run\n"
 	for _, c := range []struct {
 		name, compositor, loginctl string
 		stop                       bool

@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,21 +15,8 @@ import (
 	"github.com/cyfr/codex/internal/shell"
 )
 
-// screenBrowser is what shows the screen shell's pages: Chrome, which the
-// shell starts, or the CYFR app, which started the shell.
-type screenBrowser interface {
-	// show shows the shell's pages until ctx ends or the browser has
-	// ended for good, locking the shell through lock (shell.Shell.Lock)
-	// where the browser asks it to or ended: an error where it could not
-	// show them.
-	show(ctx context.Context, lock func(why string) (hid bool)) error
-	// hide hides what is on the screen and shows the lock page
-	// (shell.Config.Restart). It returns at once, waiting on nothing.
-	hide()
-}
-
 // screenApp is the CYFR app as the screen's browser: its main process
-// started `cyfr screen shell --app` in the screen's folder and talks to it
+// started `cyfr screen shell` in the screen's folder and talks to it
 // over its stdin and stdout, in the messages of internal/desktop. The
 // shell says ready with its own pages' address once the keyboard and the
 // watches are up, then proposes home, the CYFR in the folder and the route
@@ -93,7 +79,7 @@ func (a *screenApp) hide() {
 // locking the shell through lock (shell.Shell.Lock) where main asks it
 // to: an error where main could not keep to the CYFR or said what is not
 // a message.
-func (a *screenApp) show(_ context.Context, lock func(why string) (hid bool)) error {
+func (a *screenApp) show(lock func(why string) (hid bool)) error {
 	a.mu.Lock()
 	_ = a.to.Queue(desktop.Message{Type: desktop.TypeReady, URL: shell.Origin + "/"})
 	a.propose()
