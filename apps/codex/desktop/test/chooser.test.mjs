@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// The chooser cyfr serves (internal/desktop/bootstrap.go): its own script,
+// The chooser cyfr serves (internal/desktop/assets): its own script,
 // run over the elements its own page has. It stays while it has a notice to
 // show, with its way on, and moves on by itself only when it has none. On
 // the passkey road it opens the CYFR remembered by itself, and otherwise
@@ -14,10 +14,10 @@ import vm from "node:vm"
 
 import {initial, step} from "../src/states.js"
 
-const source = readFileSync(new URL("../../internal/desktop/bootstrap.go", import.meta.url), "utf8")
-const script = /bootstrapScript = `([^`]*)`/.exec(source)?.[1]
-const page = /const bootstrapPage = `([\s\S]*)/.exec(source)?.[1]
-assert.ok(script && page, "bootstrap.go's script and page")
+const asset = (name) => readFileSync(new URL(`../../internal/desktop/assets/${name}`, import.meta.url), "utf8")
+const script = asset("chooser.js")
+const page = asset("chooser.html")
+assert.ok(script && page, "the chooser's script and page")
 
 const HOME = "https://cyfr.example.com"
 const COMPANY = "This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet."

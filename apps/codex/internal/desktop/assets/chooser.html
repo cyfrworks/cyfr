@@ -1,0 +1,24 @@
+<main>
+<section id="choose">
+<h1>Connect to a CYFR</h1>
+<form id="connect"><label>Its address<input id="address" autocomplete="url" placeholder="https://cyfr.example.com" autofocus required></label>
+<button>Connect</button></form>
+<p>Setting up CYFR on this computer comes in the next version of this app.</p>
+</section>
+<section id="road" hidden>
+<h1>Sign in to the CYFR at <span class="code" id="open"></span></h1>
+<button id="again" hidden>Try again</button>
+<button id="passkey">Sign in with your passkey</button>
+<p id="either">No passkey on this computer, or you would rather not use one? Use this computer's own key, opened with its PIN or six-word passphrase.</p>
+<button id="words" class="quiet">Use this computer's key</button>
+<button id="another" class="quiet" hidden>Connect to another CYFR</button>
+</section>
+<section id="confirm" hidden>
+<h1>Check the account service</h1>
+<p>The CYFR at <b class="code" id="home"></b> signs you in at the account service</p>
+<p class="code" id="service"></p>
+<p>That is not cyfr.run. Go on only if you expected this address.</p>
+<button id="approve">Go on</button><button id="decline" class="quiet">Cancel</button>
+</section>
+<p id="notice" role="status"></p>
+</main>
