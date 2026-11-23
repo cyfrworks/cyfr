@@ -110,6 +110,12 @@ defmodule Opus.Programs.BoxRemovalTest do
     end
   end
 
+  # The processes the controller watches.
+  defp monitored(controller) do
+    {:monitors, monitors} = Process.info(controller, :monitors)
+    for {:process, pid} <- monitors, is_pid(pid), do: pid
+  end
+
   defp flush_control do
     receive do
       {:control, _type, _message, _fields} -> flush_control()
@@ -235,6 +241,122 @@ defmodule Opus.Programs.BoxRemovalTest do
                greeted_again: false
              }
     end
+  end
+
+  test "a retire asked after the box greeted a new boot is sent under it, and the old boot's " <>
+         "late reply answers only the retire it was sent for",
+       %{ctx: ctx, fake: fake, controller: controller} do
+    held_owner(ctx, "survivor")
+    await_idle(controller)
+    Scripted.hold(fake, "home", 30_000)
+    retire = fn -> Programs.home(ctx.athanor_id, "vlt_twice", :retire) end
+    first = Task.async(retire)
+    held = held_message("home")
+
+    Scripted.restart(fake, "bb_second")
+    send(controller, :tick)
+    assert_receive {:control, "hello", _hello, %{boot: "-"}}, 2_000
+    assert_receive {:control, "sync", _sync, %{boot: "bb_second"}}, 2_000
+    await_lane(controller)
+
+    second = Task.async(retire)
+
+    waiters = fn ->
+      length(:sys.get_state(controller).homes[{ctx.athanor_id, "vlt_twice"}].waiters)
+    end
+
+    Prima.Test.Wait.wait_until(fn -> waiters.() == 2 end, 3_000)
+    if is_pid(held), do: send(held, :go)
+
+    sent_to_second =
+      receive do
+        {:control, "home", %{"op" => "retire", "home_id" => "vlt_twice"}, %{boot: "bb_second"}} ->
+          true
+      after
+        2_000 -> false
+      end
+
+    assert %{
+             first: Task.await(first, 15_000),
+             second: Task.await(second, 15_000),
+             sent_to_second: sent_to_second,
+             homes: await_idle(controller).homes
+           } == %{first: :ok, second: :ok, sent_to_second: true, homes: %{}}
+  end
+
+  test "a home call whose process is killed is answered as refused, and the box runs on and " <>
+         "renews",
+       %{ctx: ctx, fake: fake, controller: controller} do
+    {row, _grant} = held_owner(ctx, "survivor")
+    await_idle(controller)
+    before = monitored(controller)
+    Scripted.hold(fake, "home", 30_000)
+
+    call =
+      Task.async(fn ->
+        try do
+          Programs.home(ctx.athanor_id, "vlt_killed", :reset)
+        catch
+          :exit, reason -> {:exit, reason}
+        end
+      end)
+
+    held = held_message("home")
+    [work] = monitored(controller) -- before
+    Process.exit(work, :kill)
+    answer = Task.await(call, 15_000)
+    if is_pid(held), do: send(held, :go)
+
+    running = Process.alive?(controller)
+    if running, do: send(controller, :tick)
+
+    renewed =
+      receive do
+        {:control, "renew", %{"owners" => [%{"server" => server}]}, _fields} -> server
+      after
+        2_000 -> :none
+      end
+
+    assert %{answer: answer, running: running, renewed: renewed} == %{
+             answer: {:error, :backends_unavailable},
+             running: true,
+             renewed: row.id
+           }
+  end
+
+  test "one homes' list is out at a time: a second caller's list is sent once the first is " <>
+         "answered",
+       %{fake: fake, controller: controller} do
+    Scripted.hold(fake, "homes", 30_000)
+    first = Task.async(fn -> Programs.homes() end)
+    assert_receive {:control, "homes", _message, _fields}, 2_000
+    held = held_message("homes")
+    second = Task.async(fn -> Programs.homes() end)
+
+    beside =
+      receive do
+        {:control, "homes", _message, _fields} -> true
+      after
+        1_000 -> false
+      end
+
+    if is_pid(held), do: send(held, :go)
+
+    after_first =
+      receive do
+        {:control, "homes", _message, _fields} -> true
+      after
+        2_000 -> false
+      end
+
+    assert %{
+             beside: beside,
+             after_first: after_first,
+             first: Task.await(first, 15_000),
+             second: Task.await(second, 15_000)
+           } == %{beside: false, after_first: true, first: {:ok, []}, second: {:ok, []}}
+
+    await_idle(controller)
   end
 
   test "a second reset beside a first reads the busy sentence at the provider, and the first " <>

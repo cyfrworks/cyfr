@@ -54,12 +54,15 @@ defmodule Opus.Programs.Box do
   a sequence number that only grows. Every answer is read strictly at the
   same version. A `home` and a `homes`, whose work on the service may take
   minutes, are the exception: each is sent once nothing else is out, and
-  then waits beside the one call, one at a time for each home, so a slow
-  removal holds no renewal. A message sent after one of them may reach the
-  service first, which then refuses it `stale_control`, applying nothing:
-  it is sent again under a new sequence. Its answer settles its own caller
-  alone, and tells the box of the service's boot only while the box still
-  speaks to the boot it was sent to. Lease maintenance — `renew`,
+  then waits beside the one call in a process the box monitors, one at a
+  time for each home and one list at a time, so a slow removal holds no
+  renewal. A message sent after one of them may reach the service first,
+  which then refuses it `stale_control`, applying nothing: it is sent again
+  under a new sequence. Its answer settles the callers that waited when it
+  was sent, and no one else: one that asked later is sent a message of its
+  own. It tells the box of the service's boot only while the box still
+  speaks to the boot it was sent to, and a process of it that dies answers
+  its callers as refused. Lease maintenance — `renew`,
   `release` and `home`, with `hello` and `reconcile` ahead of them — is
   sent before any `sync` or `status` still waiting:
 
@@ -85,7 +88,7 @@ defmodule Opus.Programs.Box do
     * `home`, resetting or retiring one kept home (`home/4`); a retire that
       does not land is retried on every tick until it does. A reset of a
       home whose earlier change is not yet answered is refused `:conflict`
-      at once, and a retire joins it;
+      at once, and a retire asked meanwhile is sent once that is answered;
     * `status` for `mcp_servers.get`, naming one owner, refused as
       `{:error, :too_many_owners}` or `{:error, :status_too_large}` past the
       wire's bounds, never cut.
@@ -302,8 +305,10 @@ defmodule Opus.Programs.Box do
       urgent: :queue.new(),
       queue: :queue.new(),
       # The `home` and `homes` calls out beside the one in flight
-      # ("Messages"): task ref => {job, spec}.
-      beside: %{}
+      # ("Messages"), each a monitored process: pid => {job, spec, monitor};
+      # and those waiting for the homes' list.
+      beside: %{},
+      listing: []
     ]
   end
 
@@ -563,7 +568,7 @@ defmodule Opus.Programs.Box do
   end
 
   def handle_call(:homes, from, state) do
-    {:noreply, state |> enqueue({:homes, from}) |> dispatch()}
+    {:noreply, %{state | listing: [from | state.listing]} |> enqueue({:homes}) |> dispatch()}
   end
 
   def handle_call({:home, athanor, home_id, op}, from, state) do
@@ -673,15 +678,17 @@ defmodule Opus.Programs.Box do
       else: {:noreply, session_opened(state, ref, {:error, :backends_unavailable})}
   end
 
-  def handle_info({ref, result}, state) when is_map_key(state.beside, ref) do
-    Process.demonitor(ref, [:flush])
-    {{job, spec}, beside} = Map.pop(state.beside, ref)
+  def handle_info({:beside_done, pid, result}, state) when is_map_key(state.beside, pid) do
+    {{job, spec, monitor}, beside} = Map.pop(state.beside, pid)
+    Process.demonitor(monitor, [:flush])
     {:noreply, %{state | beside: beside} |> settle_beside(job, spec, result) |> dispatch()}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state)
-      when is_map_key(state.beside, ref) do
-    {{job, spec}, beside} = Map.pop(state.beside, ref)
+  # A call's process that died before it answered: its callers are answered
+  # as refused, and the box runs on.
+  def handle_info({:DOWN, _monitor, :process, pid, reason}, state)
+      when is_map_key(state.beside, pid) do
+    {{job, spec, _monitor}, beside} = Map.pop(state.beside, pid)
     result = {:error, {:crashed, reason}}
     {:noreply, %{state | beside: beside} |> settle_beside(job, spec, result) |> dispatch()}
   end
@@ -1010,7 +1017,7 @@ defmodule Opus.Programs.Box do
 
   defp lane({:sync, _key}), do: :queue
   defp lane({:status, _key, _from}), do: :queue
-  defp lane({:homes, _from}), do: :queue
+  defp lane({:homes}), do: :queue
   defp lane(_job), do: :urgent
 
   defp enqueue(state, job) do
@@ -1081,11 +1088,13 @@ defmodule Opus.Programs.Box do
               {:send, spec} ->
                 # The keys reach the task through its closure only.
                 keys = %{control: state.control_key, seal: state.seal_key}
-                task = Task.async(fn -> perform(spec, keys) end)
 
-                if beside?(job),
-                  do: dispatch(%{state | beside: Map.put(state.beside, task.ref, {job, spec})}),
-                  else: %{state | inflight: {task.ref, job, spec}}
+                if beside?(job) do
+                  state |> send_beside(job, spec, keys) |> dispatch()
+                else
+                  task = Task.async(fn -> perform(spec, keys) end)
+                  %{state | inflight: {task.ref, job, spec}}
+                end
             end
         end
     end
@@ -1097,7 +1106,19 @@ defmodule Opus.Programs.Box do
   # one call the box waits on ("Messages").
   defp beside?(job), do: elem(job, 0) in [:home, :homes]
 
-  defp out_beside?(state, job), do: Enum.any?(state.beside, &match?({_ref, {^job, _spec}}, &1))
+  defp out_beside?(state, job),
+    do: Enum.any?(state.beside, &match?({_pid, {^job, _spec, _monitor}}, &1))
+
+  # Monitored and never linked, as a close's process is: one that dies
+  # answers its callers as refused and takes nothing else down.
+  defp send_beside(state, job, spec, keys) do
+    box = self()
+
+    {pid, monitor} =
+      spawn_monitor(fn -> send(box, {:beside_done, self(), perform(spec, keys)}) end)
+
+    %{state | beside: Map.put(state.beside, pid, {job, spec, monitor})}
+  end
 
   defp refuse(state, {:sync, key}, reason) do
     case state.owners[key] do
@@ -1126,9 +1147,9 @@ defmodule Opus.Programs.Box do
     state
   end
 
-  defp refuse(state, {:homes, from}, reason) do
-    GenServer.reply(from, {:error, reason})
-    state
+  defp refuse(state, {:homes}, reason) do
+    Enum.each(state.listing, &GenServer.reply(&1, {:error, reason}))
+    %{state | listing: []}
   end
 
   defp refuse(state, _job, _reason), do: state
@@ -1252,14 +1273,17 @@ defmodule Opus.Programs.Box do
       nil ->
         :skip
 
-      %{op: op} ->
+      %{op: op, waiters: waiters} ->
         body = %{type: :home, op: op, athanor: athanor, home_id: home_id}
-        {:send, state |> base_spec(:home) |> Map.merge(%{body: body, home: hkey, op: op})}
+        spec = Map.merge(base_spec(state, :home), %{body: body, home: hkey, op: op})
+        {:send, Map.put(spec, :waiters, waiters)}
     end
   end
 
-  defp prepare({:homes, _from}, state),
-    do: {:send, state |> base_spec(:homes) |> Map.put(:body, %{type: :homes})}
+  defp prepare({:homes}, state) do
+    spec = Map.put(base_spec(state, :homes), :body, %{type: :homes})
+    {:send, Map.put(spec, :waiters, state.listing)}
+  end
 
   defp prepare({:status, {athanor, server}, from}, state) do
     if LocusBackends.max_status_owners() < 1 do
@@ -1837,32 +1861,48 @@ defmodule Opus.Programs.Box do
     reply_release_waiters(state, Map.keys(spec.releases))
   end
 
-  # A home message the service answered is done, unless a later one for the
-  # same home arrived meanwhile and asked for more.
+  # A home message the service answered settles the callers that waited
+  # when it was sent, and no one else: a caller that asked later, or a
+  # retire that took over a reset, is sent a message of its own.
   defp settle_job(state, {:home, hkey}, spec, {:http, 200, _boot, %{home_id: _, state: _}}) do
     case state.homes[hkey] do
-      %{op: op, waiters: waiters} when op == spec.op ->
-        Enum.each(waiters, &GenServer.reply(&1, :ok))
-        %{state | homes: Map.delete(state.homes, hkey)}
+      nil ->
+        state
 
-      _later ->
-        enqueue(state, {:home, hkey})
+      %{op: op, waiters: waiters} = pending ->
+        Enum.each(spec.waiters, &GenServer.reply(&1, :ok))
+
+        case waiters -- spec.waiters do
+          [] when op == spec.op ->
+            %{state | homes: Map.delete(state.homes, hkey)}
+
+          rest ->
+            homes = Map.put(state.homes, hkey, %{pending | waiters: rest})
+            enqueue(%{state | homes: homes}, {:home, hkey})
+        end
     end
   end
 
-  defp settle_job(state, {:home, hkey}, _spec, result) do
+  defp settle_job(state, {:home, hkey}, spec, result) do
     log_failure("home", result)
-    home_failed(state, hkey, refusal(result))
+    home_failed(state, hkey, refusal(result), spec.waiters)
   end
 
-  defp settle_job(state, {:homes, from}, _spec, {:http, 200, _boot, %{homes: homes}}) do
-    GenServer.reply(from, {:ok, homes})
-    state
-  end
+  # The homes' list, the same way: one out at a time, answering those that
+  # waited when it was sent; a later caller's is sent next.
+  defp settle_job(state, {:homes}, spec, result) do
+    answer =
+      case result do
+        {:http, 200, _boot, %{homes: homes}} -> {:ok, homes}
+        _failed -> {:error, refusal(result)}
+      end
 
-  defp settle_job(state, {:homes, from}, _spec, result) do
-    GenServer.reply(from, {:error, refusal(result)})
-    state
+    Enum.each(spec.waiters, &GenServer.reply(&1, answer))
+
+    case state.listing -- spec.waiters do
+      [] -> %{state | listing: []}
+      rest -> enqueue(%{state | listing: rest}, {:homes})
+    end
   end
 
   defp settle_job(state, {:status, key, from}, _spec, {:http, 200, _boot, %{owners: owners}}) do
@@ -1879,19 +1919,28 @@ defmodule Opus.Programs.Box do
   # A reset that failed is answered as failed and forgotten: the person asks
   # again. A retire is answered too, but stays pending and is sent again on
   # every tick until the service acknowledges it, since its entry is gone and
-  # nothing would ask again.
-  defp home_failed(state, hkey, reason) do
+  # nothing would ask again. Only the callers `sent` names are answered (all,
+  # for a message never sent); one that asked later is sent its own.
+  defp home_failed(state, hkey, reason, sent \\ nil) do
     case state.homes[hkey] do
       nil ->
         state
 
-      %{op: :retire, waiters: waiters} = pending ->
-        Enum.each(waiters, &GenServer.reply(&1, {:error, reason}))
-        %{state | homes: Map.put(state.homes, hkey, %{pending | waiters: []})}
+      %{op: op, waiters: waiters} = pending ->
+        sent = sent || waiters
+        Enum.each(sent, &GenServer.reply(&1, {:error, reason}))
 
-      %{waiters: waiters} ->
-        Enum.each(waiters, &GenServer.reply(&1, {:error, reason}))
-        %{state | homes: Map.delete(state.homes, hkey)}
+        case waiters -- sent do
+          [] when op == :retire ->
+            %{state | homes: Map.put(state.homes, hkey, %{pending | waiters: []})}
+
+          [] ->
+            %{state | homes: Map.delete(state.homes, hkey)}
+
+          rest ->
+            homes = Map.put(state.homes, hkey, %{pending | waiters: rest})
+            enqueue(%{state | homes: homes}, {:home, hkey})
+        end
     end
   end
 
