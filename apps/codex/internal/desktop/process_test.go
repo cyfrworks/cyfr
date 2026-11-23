@@ -65,7 +65,7 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 				Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), ID: str(o, "id"), Suggested: str(o, "suggested")}
 			read, write := io.Pipe()
 			t.Cleanup(func() { read.Close() })
-			if err := NewWriter(write).Queue(m); err != nil {
+			if err := NewWriter(write, nil).Queue(m); err != nil {
 				t.Fatal(err)
 			}
 			line, err := bufio.NewReader(read).ReadString('\n')
@@ -137,14 +137,14 @@ func TestCyfrRefusesEachRefusedLine(t *testing.T) {
 // cyfr sends only its own messages, each whole.
 func TestCyfrSendsNothingMainSends(t *testing.T) {
 	for _, typ := range append([]string{"unlock"}, fromMain...) {
-		if err := NewWriter(io.Discard).Queue(Message{Type: typ, Home: "https://x"}); err == nil {
+		if err := NewWriter(io.Discard, nil).Queue(Message{Type: typ, Home: "https://x"}); err == nil {
 			t.Errorf("sent %s", typ)
 		}
 	}
-	if err := NewWriter(io.Discard).Queue(Message{Type: TypeHome, Home: "https://x", Account: "https://y"}); err == nil {
+	if err := NewWriter(io.Discard, nil).Queue(Message{Type: TypeHome, Home: "https://x", Account: "https://y"}); err == nil {
 		t.Error("sent home without its attempt")
 	}
-	if err := NewWriter(io.Discard).Queue(Message{Type: TypeHome, Home: "https://x", Attempt: 1}); err == nil {
+	if err := NewWriter(io.Discard, nil).Queue(Message{Type: TypeHome, Home: "https://x", Attempt: 1}); err == nil {
 		t.Error("sent home without its account service")
 	}
 }
@@ -153,7 +153,7 @@ func TestCyfrSendsNothingMainSends(t *testing.T) {
 // while main reads nothing.
 func TestWriter_QueueWaitsOnNoPeerAndKeepsTheOrder(t *testing.T) {
 	read, write := io.Pipe()
-	to := NewWriter(write)
+	to := NewWriter(write, nil)
 	// The writer holds this line, which main does not read.
 	_ = to.Queue(Message{Type: TypeReady, URL: "http://127.0.0.1:7340/"})
 	queued := make(chan struct{})
@@ -189,7 +189,7 @@ func TestWriterHelper(t *testing.T) {
 	if os.Getenv("CYFR_WRITER_HELPER") == "" {
 		t.Skip("run by TestWriter_AClosedPipeIsAnErrorNotTheEnd")
 	}
-	to := NewWriter(os.Stdout)
+	to := NewWriter(os.Stdout, nil)
 	// sleep-ok: the parent closes its end of the pipe meanwhile
 	time.Sleep(500 * time.Millisecond)
 	_ = to.Queue(Message{Type: TypeLocked})

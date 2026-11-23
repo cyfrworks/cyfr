@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -53,6 +54,10 @@ type screenApp struct {
 	to   *desktop.Writer
 	home desktop.Message
 
+	// gone is closed at the first message to main that could not be
+	// written: the app has gone, and show ends.
+	gone chan struct{}
+
 	mu sync.Mutex
 	// ready is whether ready was said; attempt is the current proposal's,
 	// and answered whether main's home-ready for it was answered opened.
@@ -70,7 +75,8 @@ func newScreenApp(in io.Reader, out io.Writer, l desktop.Local) (*screenApp, err
 		return nil, fmt.Errorf("The CYFR here names %s as its account service. The app takes an https address, "+
 			"or a plain http one only at a CYFR's own address on this computer", l.Shell.Directory)
 	}
-	return &screenApp{in: in, to: desktop.NewWriter(out),
+	gone := make(chan struct{})
+	return &screenApp{in: in, to: desktop.NewWriter(out, func() { close(gone) }), gone: gone,
 		home: desktop.Message{Type: desktop.TypeHome, Home: l.Shell.Address, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver}}, nil
 }
 
@@ -98,20 +104,40 @@ func (a *screenApp) hide() {
 }
 
 // show tells main the shell's pages and proposes the CYFR, then reads
-// main's messages until main shuts the shell down or its pipe ends,
-// locking the shell through lock (shell.Shell.Lock) where main asks it
-// to: an error where main could not keep to the CYFR or said what is not
-// a message.
+// main's messages until main shuts the shell down, its pipe ends or a
+// message to it could not be written, locking the shell through lock
+// (shell.Shell.Lock) where main asks it to: an error where main could not
+// keep to the CYFR, has gone, or said what is not a message.
 func (a *screenApp) show(_ context.Context, lock func(why string)) error {
 	a.mu.Lock()
 	_ = a.to.Queue(desktop.Message{Type: desktop.TypeReady, URL: shell.Origin + "/"})
 	a.ready = true
 	a.propose()
 	a.mu.Unlock()
-	lines := bufio.NewScanner(a.in)
-	lines.Buffer(make([]byte, 0, 4096), desktop.MaxLine+1)
-	for lines.Scan() {
-		m, err := desktop.ReadFromMain(lines.Bytes())
+	lines, read, stop := make(chan []byte), make(chan error, 1), make(chan struct{})
+	defer close(stop)
+	go func() {
+		s := bufio.NewScanner(a.in)
+		s.Buffer(make([]byte, 0, 4096), desktop.MaxLine+1)
+		for s.Scan() {
+			select {
+			case lines <- bytes.Clone(s.Bytes()):
+			case <-stop:
+				return
+			}
+		}
+		read <- s.Err()
+	}()
+	for {
+		var line []byte
+		select {
+		case <-a.gone:
+			return errors.New("the CYFR app has gone: a message to it could not be written")
+		case err := <-read:
+			return err
+		case line = <-lines:
+		}
+		m, err := desktop.ReadFromMain(line)
 		if err != nil {
 			return err
 		}
@@ -137,5 +163,4 @@ func (a *screenApp) show(_ context.Context, lock func(why string)) error {
 			return nil
 		}
 	}
-	return lines.Err()
 }

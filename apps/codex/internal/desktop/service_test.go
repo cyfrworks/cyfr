@@ -4,6 +4,7 @@
 package desktop
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1432,7 +1433,7 @@ func TestALockWaitsOnNoProposalOrOpenedMainHasNotRead(t *testing.T) {
 			a := newApp(t, t.TempDir(), offline())
 			read, write := io.Pipe()
 			t.Cleanup(func() { read.Close() })
-			to := NewWriter(write)
+			to := NewWriter(write, nil)
 			heard := a.Tell
 			a.Tell = func(m Message) {
 				heard(m)
@@ -1488,6 +1489,22 @@ func TestTheAppEndsWhatAFolderBeganAsItLetsGo(t *testing.T) {
 				mu.Unlock()
 				return l, err
 			}
+			// The lock's hide, the first act after locked, finds the CYFR's
+			// Work not yet ended: the lock's one entry runs before the let-go.
+			var endedAtHide atomic.Int32
+			adapt := a.Shell
+			a.Shell = func(c *shell.Config) {
+				adapt(c)
+				hide := c.Restart
+				c.Restart = func() {
+					mu.Lock()
+					if works[len(works)-1].Context().Err() != nil {
+						endedAtHide.Add(1)
+					}
+					mu.Unlock()
+					hide()
+				}
+			}
 			a.post(t, "/bootstrap/state", map[string]string{})
 			a.openedFolder(t)
 			mu.Lock()
@@ -1509,7 +1526,46 @@ func TestTheAppEndsWhatAFolderBeganAsItLetsGo(t *testing.T) {
 			if selected.Context().Err() == nil {
 				t.Fatal("the CYFR the app let go of was not ended")
 			}
+			if n := endedAtHide.Load(); n != 0 {
+				t.Fatalf("%d hides found the CYFR's Work ended already: the let-go ran before the lock", n)
+			}
 		})
+	}
+}
+
+// A write to main that fails ends the service, the app being gone: with
+// main's pipe closed after it read the proposal, before opened is written,
+// the service ends once that write fails, and serves nothing afterwards,
+// neither the device's pages nor the chooser.
+func TestAWriteToMainThatFailsEndsTheService(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	read, write := io.Pipe()
+	to := NewWriter(write, a.End)
+	heard := a.Tell
+	a.Tell = func(m Message) {
+		heard(m)
+		_ = to.Queue(m)
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
+	if m := a.next(t); m.Type != TypeHome {
+		t.Fatalf("main was proposed %+v", m)
+	}
+	if _, err := bufio.NewReader(read).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	read.Close()
+	a.ready("https://cyfr.example.com")
+	answered(t, done)
+	a.opened(t, "https://cyfr.example.com")
+	deadline := time.Now().Add(5 * time.Second)
+	for a.get("/").Code != http.StatusServiceUnavailable && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond) // sleep-ok: polls the writer's own goroutine, bounded
+	}
+	if w := a.get("/"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("after the write of opened failed the device's pages answered %d", w.Code)
+	}
+	if w := a.get("/bootstrap/"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("after the write of opened failed the chooser answered %d", w.Code)
 	}
 }
 

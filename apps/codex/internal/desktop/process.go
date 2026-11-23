@@ -197,9 +197,11 @@ func (m Message) object() (map[string]any, error) {
 // order they were given, by one writer of its own: Queue gives it a line
 // and returns at once, so nothing that tells main waits on main reading
 // its pipe. Once a write fails (main has gone, or its pipe ended), every
-// later line is dropped: main's end is heard on its own pipe to cyfr.
+// later line is dropped and gone is called, once: what made the writer
+// ends, as the app it talks to has.
 type Writer struct {
-	w io.Writer
+	w    io.Writer
+	gone func()
 
 	mu     sync.Mutex
 	queue  [][]byte
@@ -207,13 +209,14 @@ type Writer struct {
 	wake   chan struct{}
 }
 
-// NewWriter writes to w, main's end of the private pipe. A write to a pipe
-// main closed is an error then, not the end of this process: SIGPIPE is
+// NewWriter writes to w, main's end of the private pipe, calling gone (nil
+// calls nothing) at the first write that fails. A write to a pipe main
+// closed is an error then, not the end of this process: SIGPIPE is
 // ignored, so a lock goes on to end its sessions at the CYFR when main
 // has gone.
-func NewWriter(w io.Writer) *Writer {
+func NewWriter(w io.Writer, gone func()) *Writer {
 	signal.Ignore(syscall.SIGPIPE)
-	wr := &Writer{w: w, wake: make(chan struct{}, 1)}
+	wr := &Writer{w: w, gone: gone, wake: make(chan struct{}, 1)}
 	go wr.write()
 	return wr
 }
@@ -245,7 +248,9 @@ func (w *Writer) write() {
 		for _, line := range lines {
 			if !w.failed {
 				_, err := w.w.Write(append(line, '\n'))
-				w.failed = err != nil
+				if w.failed = err != nil; w.failed && w.gone != nil {
+					w.gone()
+				}
 			}
 		}
 	}

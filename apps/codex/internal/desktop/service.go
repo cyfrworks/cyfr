@@ -161,7 +161,15 @@ func (s *Service) ReadyURL() string { return shell.Origin + "/bootstrap/#token="
 // ServeHTTP serves the chooser under /bootstrap/ and, once a CYFR is
 // selected, the device's pages; before that every other address goes to
 // the chooser.
+// Once the service has ended (End) it serves nothing.
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	ended := s.ended
+	s.mu.Unlock()
+	if ended {
+		http.Error(w, "This CYFR app has ended.", http.StatusServiceUnavailable)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/bootstrap/") {
 		s.bootstrap(w, r)
 		return
