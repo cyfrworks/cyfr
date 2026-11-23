@@ -58,6 +58,9 @@ func (s *server) keptMaps() {
 	if s.keptRetiring == nil {
 		s.keptRetiring = map[int]chan struct{}{}
 	}
+	if s.keptEnding == nil {
+		s.keptEnding = map[int]int{}
+	}
 	if s.keptQuarantined == nil {
 		s.keptQuarantined = map[int]string{}
 	}
@@ -237,14 +240,12 @@ func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 // TERM to the leader alone, which has until then to end what it started;
 // once the keeper has reaped it, TERM to whatever of the group is left, so
 // a child its leader did not tell is still asked; at the deadline the
-// group's kill (cgroup.Group.Kill), however far it got. The leader is
-// signalled through signalChild, which holds the reaper's lock, so a pid
-// already reaped and given to another process is never signalled. Kill
-// takes a duration and starts its own clock: it is given what is left of
-// the deadline at its call, and since its waits poll every 20 ms it kills
-// within about two of them of the deadline. It reports whether the group
-// is empty.
-func (s *server) endInOrder(group interface{ Kill(time.Duration) bool }, leader *child, deadline time.Time) bool {
+// group's kill (cgroup.Group.KillBy), which waits for the group until the
+// same deadline, never past it, and kills within one poll of it. The
+// leader is signalled through signalChild, which holds the reaper's lock,
+// so a pid already reaped and given to another process is never signalled.
+// It reports whether the group is empty.
+func (s *server) endInOrder(group interface{ KillBy(time.Time) bool }, leader *child, deadline time.Time) bool {
 	if leader != nil && time.Now().Before(deadline) {
 		s.signalChild(leader, unix.SIGTERM)
 		timer := time.NewTimer(time.Until(deadline))
@@ -254,7 +255,7 @@ func (s *server) endInOrder(group interface{ Kill(time.Duration) bool }, leader 
 		}
 		timer.Stop()
 	}
-	return group.Kill(max(time.Until(deadline), 0))
+	return group.KillBy(deadline)
 }
 
 // retireKept ends a kept spawn once: the processes of its own group, which
@@ -265,6 +266,19 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 	sp.retireOnce.Do(func() {
 		uid := sp.account.UID
 		deadline := time.Now().Add(grace)
+		// The spawn is no longer live but ending, and the uid is retiring
+		// from this moment when this spawn was its last live one: no
+		// home_make and no other spawn takes it until every process of it
+		// is gone, however a child of the spawn hides from its group's kill.
+		s.mu.Lock()
+		s.keptMaps()
+		s.keptLive[uid]--
+		s.keptEnding[uid]++
+		if s.keptLive[uid] <= 0 {
+			delete(s.keptLive, uid)
+			s.keptRetiring[uid] = make(chan struct{})
+		}
+		s.mu.Unlock()
 		go func() {
 			defer close(sp.retired)
 			if sp.group != nil && !s.endInOrder(sp.group, sp.leader, deadline) {
@@ -277,21 +291,16 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 					s.signalChild(sp.relay, unix.SIGKILL)
 				}
 			}
-			// The spawn is live until its own group has ended, so the uid's
-			// full retirement, which kills every process of it at once, waits
-			// for every spawn of it to end its own in order. The uid is
-			// retiring from this moment when this spawn was its last: no
-			// home_make and no other spawn takes it until every process of it
-			// is gone, however a child of the spawn hid from its group's kill.
+			// The uid's full retirement, which kills every process of it at
+			// once, runs once it is retiring and no spawn of it is still
+			// ending, so no session of it is cut short while it closes: the
+			// spawn whose end returns last runs it.
 			s.mu.Lock()
-			s.keptMaps()
-			s.keptLive[uid]--
-			last := s.keptLive[uid] <= 0
-			var done chan struct{}
-			if last {
-				delete(s.keptLive, uid)
-				done = make(chan struct{})
-				s.keptRetiring[uid] = done
+			s.keptEnding[uid]--
+			done := s.keptRetiring[uid]
+			last := done != nil && s.keptEnding[uid] <= 0
+			if s.keptEnding[uid] <= 0 {
+				delete(s.keptEnding, uid)
 			}
 			s.mu.Unlock()
 			if last {

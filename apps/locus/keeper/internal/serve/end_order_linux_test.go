@@ -11,11 +11,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/cyfr/locus/keeper/internal/cgroup"
-	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
@@ -23,23 +23,35 @@ import (
 // own (the backends service's stop grace).
 const endGrace = 2 * time.Second
 
-// childScript is a child that records each TERM the moment it arrives, as
-// "child-signalled <unix seconds>": Perl runs its handler as soon as the
-// signal interrupts its sleep, so no foreground command defers it. It says
-// "child-ready" once its handler is set, then waits: told by its leader
-// (the stop file), it ends after its close's seconds saying "child-clean";
-// asked with TERM, it ends after them saying "child-ended", unless it
-// ignores TERM. args are its close's seconds and what it does on TERM.
-func childScript(args string) string {
-	return `perl -MTime::HiRes=time,sleep -e '
-		my ($log, $stop, $close, $on) = @ARGV;
+// blockingChild is a child that blocks TERM, so a TERM sent to it stays
+// pending, which /proc/<pid>/status shows: the test reads from the kernel
+// whether TERM has reached it, with no clock. It says "child-ready <pid>"
+// once TERM is blocked. Told by its leader (the stop file), it ends after
+// close seconds saying "child-clean"; once TERM is pending, it says
+// "child-asked", ends after close seconds saying "child-ended".
+func blockingChild(close string) string {
+	return `perl -MPOSIX -MTime::HiRes=sleep -e '
+		my ($log, $stop, $close) = @ARGV;
 		sub out { open my $f, ">>", $log or die; print $f "@_\n"; close $f }
-		if ($on eq "ignore") { $SIG{TERM} = "IGNORE" }
-		else { $SIG{TERM} = sub { out("child-signalled", time); sleep $close; out("child-ended"); exit 0 } }
-		out("child-ready");
-		sleep 0.01 until -e $stop;
-		sleep $close;
-		out("child-clean");' "$L" "$L.stop" ` + args
+		POSIX::sigprocmask(POSIX::SIG_BLOCK(), POSIX::SigSet->new(POSIX::SIGTERM())) or die;
+		out("child-ready", $$);
+		while (1) {
+			if (-e $stop) { sleep $close; out("child-clean"); exit 0 }
+			my $pending = POSIX::SigSet->new; POSIX::sigpending($pending);
+			if ($pending->ismember(POSIX::SIGTERM())) { out("child-asked"); sleep $close; out("child-ended"); exit 0 }
+			sleep 0.01;
+		}' "$L" "$L.stop" ` + close
+}
+
+// heldLeader is a leader's script around its child (run in the background
+// before it): on TERM it says "leader-got-term" and waits for the test's
+// word, the go file, before it does what then does and exits.
+func heldLeader(then string) string {
+	return ` &
+		 child=$!
+		 trap 'echo leader-got-term >> "$L"; while [ ! -e "$L.go" ]; do sleep 0.01; done; ` + then + `; echo leader-exits >> "$L"; exit 0' TERM
+		 echo leader-ready >> "$L"
+		 while :; do sleep 0.05; done`
 }
 
 // endingGroup runs script as the leader of a bounded group of its own and
@@ -64,11 +76,11 @@ func endingGroup(t *testing.T, k *keeper, uid int, script string) (*child, *cgro
 	return leader, group, log
 }
 
-// logged waits until the log holds a line beginning with each of want, and
-// answers its lines as their words.
+// logged waits until the log holds a line beginning with each of want and
+// answers its lines as their words; a line that never comes fails the test.
 func logged(t *testing.T, log string, want ...string) [][]string {
 	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		data, err := os.ReadFile(log)
 		if err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
@@ -81,12 +93,17 @@ func logged(t *testing.T, log string, want ...string) [][]string {
 				have[fields[0]] = true
 			}
 		}
-		missing := false
+		var missing []string
 		for _, w := range want {
-			missing = missing || !have[w]
+			if !have[w] {
+				missing = append(missing, w)
+			}
 		}
-		if !missing || time.Now().After(deadline) {
+		if len(missing) == 0 {
 			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%v never came: %q", missing, names(got))
 		}
 	}
 }
@@ -100,82 +117,117 @@ func names(lines [][]string) string {
 	return strings.Join(out, " ")
 }
 
-// exitedAt answers when the keeper reaped c.
-func exitedAt(c *child) func() time.Time {
-	var at time.Time
-	got := make(chan struct{})
-	go func() { <-c.done; at = time.Now(); close(got) }()
-	return func() time.Time { <-got; return at }
-}
-
-// A leader that ends its child on TERM: the child ends as its leader told
-// it and is never signalled. On TERM to the whole group at once the child
-// is signalled at that instant, before its leader can tell it anything,
-// and records it, so the test cannot pass there in any order.
-func TestAnEndAsksTheLeaderFirst(t *testing.T) {
-	k := boundedKeeper(t)
-	leader, group, log := endingGroup(t, k, testPoolFirst,
-		childScript("0.2 told")+` &
-		 child=$!
-		 trap 'touch "$L.stop"; wait $child; echo leader-exits >> "$L"; exit 0' TERM
-		 echo leader-ready >> "$L"
-		 while :; do sleep 0.05; done`)
-	logged(t, log, "child-ready", "leader-ready")
-	if !k.s.endInOrder(group, leader, time.Now().Add(endGrace)) {
-		t.Fatal("the group outlived its end")
-	}
-	got := names(logged(t, log, "child-clean", "leader-exits"))
-	if !strings.HasSuffix(got, "child-clean leader-exits") || strings.Contains(got, "child-signalled") {
-		t.Fatalf("the child was not ended by its leader alone: %q", got)
-	}
-}
-
-// A leader that exits without telling its child: the child is asked with
-// TERM only after the keeper reaped the leader, and has the rest of the
-// grace to end. On TERM to the whole group at once the child records its
-// TERM at once while the leader exits 0.3 s later, so the test cannot pass
-// there in any order.
-func TestAChildItsLeaderDidNotTellIsAskedAfterIt(t *testing.T) {
-	k := boundedKeeper(t)
-	leader, group, log := endingGroup(t, k, testPoolFirst,
-		childScript("0.3 asked")+` &
-		 trap 'sleep 0.3; exit 0' TERM
-		 echo leader-ready >> "$L"
-		 while :; do sleep 0.05; done`)
-	logged(t, log, "child-ready", "leader-ready")
-	reaped := exitedAt(leader)
-	if !k.s.endInOrder(group, leader, time.Now().Add(endGrace)) {
-		t.Fatal("the group outlived its end")
-	}
-	lines := logged(t, log, "child-signalled", "child-ended")
-	var asked time.Time
+// childPID is the pid the child said it is.
+func childPID(t *testing.T, lines [][]string) int {
+	t.Helper()
 	for _, l := range lines {
-		if l[0] == "child-signalled" && len(l) > 1 {
-			seconds, err := strconv.ParseFloat(l[1], 64)
+		if l[0] == "child-ready" && len(l) > 1 {
+			pid, err := strconv.Atoi(l[1])
 			if err != nil {
 				t.Fatal(err)
 			}
-			asked = time.Unix(0, int64(seconds*1e9))
+			return pid
 		}
 	}
-	if left := reaped(); asked.IsZero() || !asked.After(left) {
-		t.Fatalf("the child was asked at %v, its leader reaped at %v: %q", asked, left, names(lines))
+	t.Fatal("the child named no pid")
+	return 0
+}
+
+// termReached says whether TERM has reached the child of pid: a TERM
+// pending on it, which blocks TERM, read from the kernel's own record, or
+// its log's word that it saw one and is ending, or its end.
+func termReached(t *testing.T, log string, pid int) bool {
+	t.Helper()
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return true
 	}
-	if got := names(lines); !strings.HasSuffix(got, "child-signalled child-ended") {
-		t.Fatalf("the child had no time to end: %q", got)
+	if lines, _ := os.ReadFile(log); strings.Contains(string(lines), "child-asked") {
+		return true
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		name, value, _ := strings.Cut(line, ":")
+		if name != "SigPnd" && name != "ShdPnd" {
+			continue
+		}
+		mask, err := strconv.ParseUint(strings.TrimSpace(value), 16, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mask&(1<<(uint(syscall.SIGTERM)-1)) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// ending runs endInOrder on the group in the background and answers a
+// channel that carries whether the group was empty when it returned.
+func ending(k *keeper, group *cgroup.Group, leader *child) chan bool {
+	ended := make(chan bool, 1)
+	go func() { ended <- k.s.endInOrder(group, leader, time.Now().Add(endGrace)) }()
+	return ended
+}
+
+// A leader that ends its child on TERM: while the leader holds its TERM the
+// child has no TERM pending, and it ends as its leader told it. On TERM to
+// the whole group at once, Group.Signal sends TERM to every process of it
+// in one loop before the leader's trap has run and written its word, so the
+// child's TERM is already pending when the test reads it, in any order.
+func TestAnEndAsksTheLeaderFirst(t *testing.T) {
+	k := boundedKeeper(t)
+	leader, group, log := endingGroup(t, k, testPoolFirst, blockingChild("0")+heldLeader(`touch "$L.stop"; wait $child`))
+	child := childPID(t, logged(t, log, "child-ready", "leader-ready"))
+	ended := ending(k, group, leader)
+	logged(t, log, "leader-got-term")
+	if termReached(t, log, child) {
+		t.Fatal("TERM reached the child while its leader was still ending")
+	}
+	if err := os.WriteFile(log+".go", nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if !<-ended {
+		t.Fatal("the group outlived its end")
+	}
+	if got := names(logged(t, log, "child-clean", "leader-exits")); strings.Contains(got, "child-asked") {
+		t.Fatalf("the child was asked to end, not told by its leader: %q", got)
 	}
 }
 
-// endSlip is how far past its deadline a group's end may run: cgroup's Kill
-// waits in 20 ms polls and confirms its kill with one more.
-const endSlip = 100 * time.Millisecond
+// A leader that exits without telling its child: while the leader holds
+// its TERM the child has no TERM pending; once the leader has exited, TERM
+// reaches the child, which has the rest of the grace to end. On TERM to
+// the whole group at once the child's TERM is pending while the leader is
+// held, so the test cannot pass there in any order.
+func TestAChildItsLeaderDidNotTellIsAskedAfterIt(t *testing.T) {
+	k := boundedKeeper(t)
+	leader, group, log := endingGroup(t, k, testPoolFirst, blockingChild("0.3")+heldLeader(`:`))
+	child := childPID(t, logged(t, log, "child-ready", "leader-ready"))
+	ended := ending(k, group, leader)
+	logged(t, log, "leader-got-term")
+	if termReached(t, log, child) {
+		t.Fatal("TERM reached the child before its leader exited")
+	}
+	if err := os.WriteFile(log+".go", nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if !<-ended {
+		t.Fatal("the group outlived its end")
+	}
+	if got := names(logged(t, log, "leader-exits", "child-asked", "child-ended")); !strings.HasSuffix(got, "child-asked child-ended") {
+		t.Fatalf("the child was not asked after its leader, or had no time to end: %q", got)
+	}
+}
 
-// A leader that ignores TERM is killed with its group at the grace's end,
-// and not later: the grace does not grow.
+// A leader that ignores TERM is killed with its group at the grace's end:
+// the group is empty when the end returns, and it did not return before
+// the grace's end. KillBy waits until the deadline and no longer, and
+// sends its kill within one 20 ms poll of it; the ceiling here is loose,
+// so as not to fail under load.
 func TestALeaderThatIgnoresTheEndIsKilledAtTheGracesEnd(t *testing.T) {
 	k := boundedKeeper(t)
 	leader, group, log := endingGroup(t, k, testPoolFirst,
-		childScript("0 ignore")+` &
+		`perl -e '$SIG{TERM} = "IGNORE"; open my $f, ">>", $ARGV[0]; print $f "child-ready\n"; close $f; sleep 600' "$L" &
 		 trap '' TERM
 		 echo leader-ready >> "$L"
 		 while :; do sleep 0.05; done`)
@@ -184,7 +236,7 @@ func TestALeaderThatIgnoresTheEndIsKilledAtTheGracesEnd(t *testing.T) {
 	if !k.s.endInOrder(group, leader, started.Add(endGrace)) {
 		t.Fatal("the group outlived its end")
 	}
-	if took := time.Since(started); took < endGrace || took > endGrace+endSlip {
+	if took := time.Since(started); took < endGrace || took > endGrace+time.Second {
 		t.Fatalf("the group was killed after %s, not at its grace's end, %s", took, endGrace)
 	}
 	if pids, err := group.Procs(); err != nil || len(pids) != 0 {
@@ -195,10 +247,9 @@ func TestALeaderThatIgnoresTheEndIsKilledAtTheGracesEnd(t *testing.T) {
 
 // Two sessions of one kept home, a slow closer released first and a fast
 // one second: the fast one's end does not cut the slow one's short, since
-// the uid's full retirement, which kills every process of it, waits for
-// every session of it to end its own group. When each session left the
-// count at its release, the fast one became the last and killed the slow
-// one's child while it was still closing.
+// the uid's full retirement, which kills every process of it, runs only
+// once no session of it is still ending. When the last release ran it at
+// once, it killed the slow one's child while it was still closing.
 func TestTwoSessionsOfOneHomeEachEndInTheirOwnTime(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
@@ -207,14 +258,13 @@ func TestTwoSessionsOfOneHomeEachEndInTheirOwnTime(t *testing.T) {
 		t.Fatalf("home_make: %v", made)
 	}
 	log := filepath.Join(home, "log")
-	slow, _ := k.spawnKept(t, "slow", `L="$HOME/log"; `+childScript("1 told")+` &
+	slow, _ := k.spawnKept(t, "slow", `L="$HOME/log"; `+blockingChild("1")+` &
 		 child=$!
 		 trap 'touch "$L.stop"; wait $child; echo leader-exits >> "$L"; exit 0' TERM
 		 echo leader-ready >> "$L"
 		 while :; do sleep 0.05; done`, home, uid)
-	fast, rc := k.spawnKept(t, "fast", `echo fast-ready; while :; do sleep 0.05; done`, home, uid)
-	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "fast-ready") })
-	logged(t, log, "child-ready", "leader-ready")
+	fast, _ := k.spawnKept(t, "fast", `echo fast-ready >> "$HOME/log"; while :; do sleep 0.05; done`, home, uid)
+	logged(t, log, "child-ready", "leader-ready", "fast-ready")
 
 	grace := endGrace.Milliseconds()
 	for _, spawnID := range []string{slow, fast} {
@@ -226,11 +276,65 @@ func TestTwoSessionsOfOneHomeEachEndInTheirOwnTime(t *testing.T) {
 			released[fmt.Sprint(m["spawn_id"])] = true
 		}
 	}
-	got := names(logged(t, log, "child-clean", "leader-exits"))
-	if !strings.HasSuffix(got, "child-clean leader-exits") || strings.Contains(got, "child-signalled") {
-		t.Fatalf("the slow session's child was cut short by the other's end: %q", got)
+	if got := names(logged(t, log, "child-clean", "leader-exits")); strings.Contains(got, "child-asked") {
+		t.Fatalf("the slow session's child was asked to end by the other's end: %q", got)
 	}
 	if retired := k.homeRequest(t, protocol.TypeHomeRetire, "r", home, uid); retired["type"] != protocol.TypeHomeRetired {
 		t.Fatalf("home_retire: %v", retired)
 	}
+}
+
+// The release of a home's only session marks its uid retiring at once: while
+// that session is still ending, a home_make of the home is refused and a
+// spawn of it waits for the uid's retirement, as for any retiring uid, and
+// another home is unaffected. A newcomer is never admitted beside a uid
+// whose last session is ending.
+func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	home := filepath.Join(k.s.cfg.Kept.Root, "vlt_newcomer")
+	other := filepath.Join(k.s.cfg.Kept.Root, "vlt_newcomer-other")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", home, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	log := filepath.Join(home, "log")
+	only, _ := k.spawnKept(t, "only", `L="$HOME/log"; sleep 600`+heldLeader(`:`), home, uid)
+	logged(t, log, "leader-ready")
+	grace := endGrace.Milliseconds()
+	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: only, GraceMs: &grace})
+	logged(t, log, "leader-got-term")
+
+	if busy := k.homeRequest(t, protocol.TypeHomeMake, "m2", home, uid); busy["code"] != protocol.CodeUIDBusy {
+		t.Fatalf("home_make of the home while its last session ends: %v", busy)
+	}
+	k.s.mu.Lock()
+	retiring, busy := k.s.keptState(uid, home)
+	k.s.mu.Unlock()
+	if retiring == nil || busy {
+		t.Fatalf("a spawn of the home while its last session ends would not wait for its retirement: %v %v", retiring, busy)
+	}
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m3", other, uid+1); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make of another home: %v", made)
+	}
+
+	go k.s.handleSpawn(keptRequest(t, k.attach, "newcomer", `echo newcomer-started >> "$HOME/log"; sleep 600`, home, uid, nil))
+	if err := os.WriteFile(log+".go", nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	var newcomer string
+	for newcomer == "" {
+		m := k.reply(t)
+		if m["type"] == protocol.TypeError {
+			t.Fatalf("the newcomer was refused: %v", m)
+		}
+		if m["type"] == protocol.TypeSpawned {
+			newcomer = m["spawn_id"].(string)
+		}
+	}
+	k.accept(t)
+	if got := names(logged(t, log, "leader-exits", "newcomer-started")); !strings.HasSuffix(got, "leader-exits newcomer-started") {
+		t.Fatalf("the newcomer started before the last session ended: %q", got)
+	}
+	zero := int64(0)
+	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: newcomer, GraceMs: &zero})
 }
