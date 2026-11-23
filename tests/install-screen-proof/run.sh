@@ -503,7 +503,9 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
 # hidden first, Chrome ended within 5 s of the press, though telling CYFR
 # and closing the connection take 10 s; the session still ends, within a
 # minute, at the home. Timed from the press, on this machine's clock,
-# polling the guest's Chrome over SSH (a poll's time aside).
+# polling the guest's Chrome over SSH (a poll's time aside): only an answer
+# that the one Chrome found before the press has ended counts as its end,
+# so a lookup that found none, or a poll that failed, fails the row.
 screen_hides_first() {
   local ports old pressed gone took
   step "Prism's Lock with CYFR silent: the screen is hidden first"
@@ -511,6 +513,7 @@ screen_hides_first() {
   ports=$(guest_root_out "ss -tnpH state established '( dport = :4000 )' | grep '\"cyfr\",' | awk '{print \$3}' | sed 's/.*://'" | tr '\n' ' ')
   check "the shell holds its connection to CYFR (local ports $ports)" test -n "${ports// /}"
   old=$(guest_ssh 'ps -u proof -o pid=,args= | grep -- "-[-]app=http://127.0.0.1:7340/" | grep -v -- "--type=" | awk "{print \$1}"')
+  check "the screen's one Chrome is found before the press (${old:-none})" sh -c 'case $1 in "" | *[!0-9]*) exit 1 ;; esac' sh "$old"
   guest_root "for p in $ports; do for c in INPUT OUTPUT; do for d in sport dport; do
       iptables -w -I \$c -p tcp --\$d \$p -m comment --comment cyfr-proof-silent -j DROP || exit 1
     done; done; done" || fail "the shell's connection was not silenced ($GUEST_DIR/root.txt)"
@@ -519,7 +522,9 @@ screen_hides_first() {
   printf '\n' | guest_keys || fail "QMP did not press Prism's Lock"
   gone=""
   while [ -z "$gone" ] && [ $(($(date +%s%3N) - pressed)) -lt 30000 ]; do
-    guest_ssh "kill -0 $old 2>/dev/null" || gone=$(date +%s%3N)
+    case $(guest_ssh "if kill -0 $old 2>/dev/null; then echo alive; else echo ended; fi" 2>/dev/null) in
+      ended) gone=$(date +%s%3N) ;;
+    esac
   done
   took=$((${gone:-$(date +%s%3N)} - pressed))
   echo "the Chrome screen hid $took ms after the press, CYFR silent" >>"$GUEST_DIR/timing.txt"

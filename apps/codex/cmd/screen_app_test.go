@@ -157,6 +157,8 @@ func TestScreenApp_WhatMainSays(t *testing.T) {
 		"opened once": {lines: []string{ready(1), ready(1)}, said: []string{"opened"}},
 		"a lock proposes again": {lines: []string{ready(1), lock, ready(1), failed(1), ready(2)}, locks: []string{"Locked."},
 			said: []string{"opened", "locked", "home 2", "opened"}},
+		"a stale home-ready": {lines: []string{lock, ready(1)}, locks: []string{"Locked."},
+			said: []string{"locked", "home 2"}},
 		"leave names no CYFR": {lines: []string{leave, ready(1), ready(2)}, locks: []string{"Locked."},
 			said: []string{"locked", "home 2", "opened"}},
 		"another CYFR's home-ready": {lines: []string{`{"version":1,"type":"home-ready","home":"https://other.example","attempt":1}`}},

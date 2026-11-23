@@ -12,14 +12,17 @@
 # screen shell's own. Each check prints one PASS or FAIL line:
 #
 #   the app runs the screen shell in that folder and shows its page,
-#   with the keyboard up as the window appears; the page is painted, and
-#   the window covers the output; a watch lost hides the
-#   page and shows the shell's page again (the app sits under the shell's
-#   watches); cyfr killed ends the app, and the launcher's next start is
-#   locked again; the app killed ends its cyfr within 5 s, and the next
-#   start is locked too,
-#   with one screen shell running; a --screen-project that names no
-#   project explicitly is refused.
+#   with the keyboard shown below it as the window appears; the page is
+#   painted, and the window covers the output above the keyboard; a watch
+#   lost closes the window that was shown, timed from the loss, and a new
+#   one shows the shell's page (the app sits under the shell's watches);
+#   the keyboard killed locks the screen in the same way and is shown
+#   again; cyfr killed ends the app, which says why, and the launcher's
+#   next start is locked again; the app killed ends its cyfr within 5 s,
+#   and the next start is locked too, with one screen shell running; a
+#   --screen-project that names no project explicitly is refused.
+# Windows are told apart by labwc's own list of them (toplevels.py), and
+# the keyboard is seen on the output's picture, not as a process.
 #
 # What it leaves: a tap typing and the five minutes with a video playing
 # need a CYFR that answers, and are the installed box's
@@ -82,8 +85,22 @@ if [ "${1:-}" = --session ]; then
   starts() { grep -c '^CYFR: ready$' "$OUT/app.log" 2>/dev/null || echo 0; }
   started() { [ "$(starts)" -ge "$1" ]; }
   window() { wlrctl toplevel find title:CYFR; }
-  keyboard() { pgrep -u proof -x wvkbd-mobintl >/dev/null; }
   shells() { pgrep -u proof -c -f -- '^/opt/cyfr/resources/cyfr screen shell --app$'; }
+  # The windows labwc shows now, by its handles, and whether one closed.
+  shown() { awk '$1 == "open" { w[$2] = 1 } $1 == "closed" { delete w[$2] } END { for (h in w) print h }' "$OUT/toplevels"; }
+  closedAt() { awk -v h="$1" '$1 == "closed" && $2 == h { print $3; exit }' "$OUT/toplevels"; }
+  closed() { [ -n "$(closedAt "$1")" ]; }
+  newer() { awk -v h="$1" '$1 == "open" && $2 > h { found = 1 } END { exit !found }' "$OUT/toplevels"; }
+  lines() { grep -c "$1" "$OUT/app.log" 2>/dev/null || echo 0; }
+  # A lock the shell made: the window shown closes, timed from SINCE (this
+  # machine's clock), and a newer window shows the shell's page, painted.
+  hidden() {
+    local was=$1 since=$2 at
+    within 20 closed "$was" || return 1
+    at=$(closedAt "$was")
+    python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$at" "$since" >"$OUT/took"
+    within 30 newer "$was" && within 30 painted
+  }
   # The output's picture: the page's background (#0b1418) at both top
   # corners, so the window covers the output's whole width, and more than
   # one colour above the keyboard, so the page is painted. Whether the
@@ -104,11 +121,28 @@ colours = {px(x, y) for y in range(0, h // 2, 7) for x in range(0, w, 7)}
 sys.exit(0 if corners and len(colours) > 2 else 1)
 PY
   }
+  # The keyboard as the output shows it: the bottom of the output is not
+  # the page's but the keyboard's, the window maximized above it, in more
+  # than two colours. A keyboard process that shows no surface fails.
+  keyboard() {
+    grim -t ppm "$OUT/keyboard.ppm" 2>/dev/null && python3 -I - "$OUT/keyboard.ppm" <<'PY'
+import sys
+data = open(sys.argv[1], "rb").read()
+head, rest = data.split(b"\n", 3)[:3], data.split(b"\n", 3)[3]
+w, h = map(int, head[1].split())
+px = lambda x, y: tuple(rest[(y * w + x) * 3:(y * w + x) * 3 + 3])
+band = [px(x, y) for y in range(h - 60, h - 2, 3) for x in range(0, w, 5)]
+page = (11, 20, 24)
+sys.exit(0 if sum(p != page for p in band) > 0.9 * len(band) and len(set(band)) > 2 else 1)
+PY
+  }
 
   # An output larger than the app's own window (1280x860), so only a
   # window made to cover it does.
   wlr-randr --output HEADLESS-1 --custom-mode 1600x900 >>"$OUT/randr.log" 2>&1 ||
     { verdict FAIL "the output's size was not set: $(tr '\n' ' ' <"$OUT/randr.log")"; finish; }
+
+  python3 -I /fixture/toplevels.py >"$OUT/toplevels" 2>"$OUT/toplevels.err" &
 
   # The stand-in for the screen's launcher: the app again whenever it ends.
   (while [ ! -e "$OUT/stop" ]; do
@@ -123,26 +157,41 @@ PY
     verdict FAIL "the app never showed the screen's page: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
     finish
   fi
-  if keyboard; then verdict PASS "the keyboard is up as the window appears"; else verdict FAIL "no keyboard as the window appeared"; fi
+  if within 10 keyboard; then verdict PASS "the keyboard is shown below the window as it appears"; else verdict FAIL "no keyboard shown as the window appeared"; fi
   if within 30 painted; then
     verdict PASS "the page is painted, and the window covers the output"
   else
     verdict FAIL "the page is not painted, or the window does not cover the output"
   fi
 
-  # A watch lost: the shell hides what is on the screen, and the app shows
-  # the shell's page again, in a new window.
-  before=$(grep -c 'locked: the device locked' "$OUT/app.log")
+  # A watch lost: the shell hides what is on the screen, so the window shown
+  # closes, and the app shows the shell's page again in a new one.
+  was=$(shown | head -n 1)
+  since=$(date +%s.%N)
   pkill -u proof -x swayidle
-  if within 20 sh -c "[ \$(grep -c 'locked: the device locked' '$OUT/app.log') -gt $before ]" && within 30 window && within 30 painted; then
-    verdict PASS "a watch lost hides the page, and the shell's page shows again"
+  if [ -n "$was" ] && hidden "$was" "$since"; then
+    verdict PASS "a watch lost closes the window shown $(cat "$OUT/took") ms after the loss, and a new one shows the shell's page"
+    echo "watch lost to window closed: $(cat "$OUT/took") ms" >>"$OUT/timing"
   else
-    verdict FAIL "a watch lost did not hide the page: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
+    verdict FAIL "a watch lost did not close the window shown (${was:-none}): $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
+  fi
+
+  # The keyboard killed: watched as the watches are, it locks the screen in
+  # the same way and is shown again.
+  within 30 keyboard
+  was=$(shown | head -n 1)
+  since=$(date +%s.%N)
+  pkill -u proof -x wvkbd-mobintl
+  if [ -n "$was" ] && hidden "$was" "$since" && within 30 keyboard; then
+    verdict PASS "the keyboard killed closes the window shown $(cat "$OUT/took") ms after, and the keyboard is shown again"
+  else
+    verdict FAIL "the keyboard killed did not lock the screen, or it was not shown again (${was:-none})"
   fi
 
   pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell --app$'
   if within 30 grep -q '^ended' "$OUT/launches" && within 60 started 2 && within 30 window; then
-    verdict PASS "cyfr killed ends the app, and the next start shows the locked screen again"
+    why=$(grep -m 1 '^CYFR: cyfr ended: ' "$OUT/app.log" | cut -c 7-)
+    verdict PASS "cyfr killed ends the app ($(head -n 1 "$OUT/launches"); it said: ${why:-nothing}), and the next start shows the locked screen again"
   else
     verdict FAIL "cyfr killed did not end the app, or it did not start again: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
   fi
@@ -189,7 +238,7 @@ trap 'exit 143' TERM
 
 mkdir "$WORK/fixture" || exit 1
 cp "$DEB" "$WORK/fixture/app.deb" &&
-  cp "$HERE/app.sh" "$HERE/login1.py" "$HERE/login1.conf" "$ROOT/apps/codex/cmd/screen/rc.xml" "$ROOT/apps/codex/cmd/screen/menu.xml" "$WORK/fixture/" || exit 1
+  cp "$HERE/app.sh" "$HERE/toplevels.py" "$HERE/login1.py" "$HERE/login1.conf" "$ROOT/apps/codex/cmd/screen/rc.xml" "$ROOT/apps/codex/cmd/screen/menu.xml" "$WORK/fixture/" || exit 1
 chmod 755 "$WORK" "$WORK/fixture"
 chmod 644 "$WORK"/fixture/*
 
