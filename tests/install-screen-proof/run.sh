@@ -187,6 +187,26 @@ screen_unlock() {
   sleep 15
 }
 
+# A tap types: on the locked screen the person taps on the on-screen
+# keyboard's keys, read off the display (guest/screen.py tap), digits
+# alone, which read reliably. With a chip the PIN tapped, then Enter,
+# unlocks. Without one, six digits tapped are refused as no PIN or
+# passphrase of this device, which shows they reached the page; then the
+# passphrase is typed on the guest's keyboard.
+screen_tap_unlock() {
+  step "a tap types: the PIN tapped on the screen's keyboard"
+  check "the screen shows its lock page to take the PIN" screen_ready
+  if [ "$GUEST_TPM" = swtpm ]; then
+    check "the PIN and Enter are tapped on the keyboard's keys" screen_tap "$SECRET"$'\n'
+  else
+    check "six digits and Enter are tapped on the keyboard's keys" screen_tap $'123456\n'
+    check "the page refused them as no PIN or passphrase of this device" \
+      screen_shows "That is not this device's PIN or passphrase" 15
+    printf '%s\n' "$SECRET" | guest_keys || fail "QMP did not type"
+  fi
+  sleep 15
+}
+
 # Whether labwc runs on tty1 and the CYFR app beside it as the screen,
 # with its one screen shell, within two minutes; the record is
 # GUEST_DIR/screen.txt.
@@ -470,7 +490,7 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
     sleep 5
     check "screenshot screen-wrong-pin.png" guest_screenshot screen-wrong-pin.png
   fi
-  screen_unlock
+  screen_tap_unlock
   check "screenshot screen-unlocked.png" guest_screenshot screen-unlocked.png
   check "the unlock reached Prism, the shell's page no longer shown" sh -c '! cmp -s "$1" "$2"' sh "$GUEST_DIR/screen-unlocked.png" "$GUEST_DIR/screen-locked.png"
   check "the screen sends CYFR the new unlock's session cookie" screen_cookie unlocked
