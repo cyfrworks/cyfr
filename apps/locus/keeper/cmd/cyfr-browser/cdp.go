@@ -305,18 +305,6 @@ func (w *watch) drain() []cdpEvent {
 	return events
 }
 
-// queued says whether an event the watch holds, not yet taken, matches.
-func (w *watch) queued(match func(cdpEvent) bool) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, event := range w.events {
-		if match(event) {
-			return true
-		}
-	}
-	return false
-}
-
 // next answers the next matching event, the error that ended the
 // session, or ctx's error.
 func (w *watch) next(ctx context.Context) (cdpEvent, error) {

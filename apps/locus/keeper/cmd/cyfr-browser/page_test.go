@@ -44,8 +44,6 @@ type pageChrome struct {
 	// keeps those a test has not taken yet.
 	answers chan pageAnswer
 	held    []pageAnswer
-	// beforeTree runs before a frame tree is answered.
-	beforeTree func(session string)
 	// left holds the bodies a pause left out, by network id.
 	left map[string]string
 	runs chan string
@@ -167,7 +165,8 @@ func (f *pageChrome) frameDocument(parentSession, session, frame, parent string)
 	f.mu.Unlock()
 	f.event(parentSession, "Page.frameAttached", map[string]any{"frameId": frame, "parentFrameId": parent})
 	f.event(session, "Page.frameNavigated", map[string]any{"frame": map[string]any{
-		"id": frame, "parentId": parent, "loaderId": loader, "url": reservedOrigin + "/"}, "type": "Navigation"})
+		"id": frame, "parentId": parent, "loaderId": loader, "url": reservedOrigin + "/",
+		"securityOrigin": reservedOrigin}, "type": "Navigation"})
 	return loader
 }
 
@@ -182,7 +181,9 @@ func (f *pageChrome) pauseLeavingOut(session, address, frame, body string) strin
 	if body != "" {
 		f.left["net-"+id] = body
 	}
+	loader := f.loaders[frame]
 	f.mu.Unlock()
+	f.report(session, id, "POST", address, loader)
 	f.write(map[string]any{"method": "Fetch.requestPaused", "sessionId": session, "params": map[string]any{
 		"requestId": id, "request": map[string]any{"url": address, "method": "POST", "headers": map[string]string{},
 			"hasPostData": true}, "frameId": frame, "resourceType": "Fetch", "networkId": "net-" + id}})
@@ -220,8 +221,9 @@ func (f *pageChrome) fail(address string, how navFail) {
 	f.fails[address] = how
 }
 
-// frame sets a frame of session, with its parent and origin; a frame new
-// inside its parent is reported attached, as the page's process does.
+// frame sets a frame of session, with its parent and origin. A frame
+// inside another commits a document of that origin, reported as the
+// page's process does, after the frame's attachment when it is new.
 func (f *pageChrome) frame(session, id, parent, origin string) {
 	f.mu.Lock()
 	if f.origins[session] == nil {
@@ -229,10 +231,20 @@ func (f *pageChrome) frame(session, id, parent, origin string) {
 	}
 	_, known := f.origins[session][id]
 	f.origins[session][id] = [2]string{parent, origin}
+	f.paused++
+	loader := fmt.Sprintf("Lframe-%d", f.paused)
+	if parent != "" {
+		f.loaders[id] = loader
+	}
 	f.mu.Unlock()
-	if parent != "" && !known {
+	if parent == "" {
+		return
+	}
+	if !known {
 		f.event(session, "Page.frameAttached", map[string]any{"frameId": id, "parentFrameId": parent})
 	}
+	f.event(session, "Page.frameNavigated", map[string]any{"frame": map[string]any{
+		"id": id, "parentId": parent, "loaderId": loader, "url": origin + "/", "securityOrigin": origin}, "type": "Navigation"})
 }
 
 // attach attaches a target of kind to session, waiting for its debugger,
@@ -379,12 +391,6 @@ func (f *pageChrome) serve(commands io.Reader) {
 			reply(map[string]any{})
 			f.runs <- m.SessionID
 		case "Page.getFrameTree":
-			f.mu.Lock()
-			before := f.beforeTree
-			f.mu.Unlock()
-			if before != nil {
-				before(m.SessionID)
-			}
 			reply(map[string]any{"frameTree": f.tree(m.SessionID)})
 		case "Network.getRequestPostData":
 			var q struct {
@@ -1059,10 +1065,11 @@ func TestCallsArePassedUpOnlyFromThePutsDocuments(t *testing.T) {
 	r.h.quiet(isCall, "a window with no put made a call")
 }
 
-// A navigation of the requesting frame that Chrome reports before the
-// frame tree it answers makes no call: the tree may be the next
-// document's.
-func TestACallWhoseFrameNavigatedBeforeItsTreeIsRefused(t *testing.T) {
+// A call carries its own document's origin, as Chrome reported it with
+// that document's commit, not its frame's next document's: a call of a
+// frame's opaque document, named only after the frame committed a
+// document of the reserved origin, makes no call.
+func TestACallCarriesItsOwnDocumentsOrigin(t *testing.T) {
 	r := newPageRig(t)
 	defer r.close()
 	if shown := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); shown["ok"] == nil {
@@ -1071,14 +1078,13 @@ func TestACallWhoseFrameNavigatedBeforeItsTreeIsRefused(t *testing.T) {
 	r.f.navigated()
 	r.f.frame("S1", "F2", "M1", "://")
 	r.f.mu.Lock()
-	r.f.beforeTree = func(session string) {
-		r.f.frame(session, "F2", "M1", reservedOrigin)
-		r.f.event(session, "Page.frameNavigated", map[string]any{"frame": map[string]any{
-			"id": "F2", "parentId": "M1", "url": reservedOrigin + testRoot + "/app.js", "securityOrigin": reservedOrigin}})
-	}
+	opaque := r.f.loaders["F2"]
 	r.f.mu.Unlock()
-	if a := r.f.answer(r.f.pause("S1", "POST", reservedOrigin+"/_f/v1/invoke", "F2", true, `{}`)); a.method != "Fetch.failRequest" {
-		t.Fatalf("a call whose frame navigated before its tree was answered %+v", a)
+	id := r.f.pauseFrom("S1", "Fetch", "POST", callPath, "F2", true, `{}`, opaque, false)
+	r.f.frame("S1", "F2", "M1", reservedOrigin)
+	r.f.report("S1", id, "POST", callPath, opaque)
+	if a := r.f.answer(id); a.method != "Fetch.failRequest" {
+		t.Fatalf("a call of an opaque document whose frame went on to the reserved origin was answered %+v", a)
 	}
 	r.h.quiet(func(m map[string]any) bool { return m["t"] == "call" }, "the call went up")
 }
@@ -1124,12 +1130,13 @@ func TestCallsEndWithTheirDocument(t *testing.T) {
 	ended(request, id, "its frame gone", false)
 
 	// An answered call is no longer held: its frame's end ends nothing.
-	request, id = call("F2")
+	r.f.frame("S1", "F5", "M1", reservedOrigin)
+	request, id = call("F5")
 	r.h.send(map[string]any{"t": "answer", "id": id, "status": 200, "body": "{}"})
 	if a := r.f.answer(request); a.status != 200 {
 		t.Fatalf("the call was answered %+v", a)
 	}
-	r.f.event("S1", "Page.frameDetached", map[string]any{"frameId": "F2", "reason": "remove"})
+	r.f.event("S1", "Page.frameDetached", map[string]any{"frameId": "F5", "reason": "remove"})
 	r.h.quiet(func(m map[string]any) bool { return m["t"] == "callend" }, "an answered call was ended")
 
 	r.f.frame("S1", "F3", "M1", reservedOrigin)
@@ -1649,6 +1656,106 @@ func TestWaitingRequestsAreBounded(t *testing.T) {
 			t.Fatalf("a request that waited was answered %d %q", a.status, a.body)
 		}
 	}
+	if err := <-shown; err != nil {
+		t.Errorf("the put answered %v", err)
+	}
+}
+
+const callPath = reservedOrigin + "/_f/v1/invoke"
+
+// callFrom pauses a script's call on the main frame as the document of
+// loader made it, reported before its pause when before is set.
+func callFrom(r *pageRig, loader string, before bool) string {
+	return r.f.pauseFrom("S1", "Fetch", "POST", callPath, "M1", true, `{"from":"page"}`, loader, before)
+}
+
+// A call goes up for the put of the document that made it, as Chrome names
+// that document, once, and for no other: the shown document's call made
+// before its commit is taken waits for that commit; the earlier
+// document's call known only after the commit, a call that names no
+// document, and one whose show fails are refused and never go up.
+func TestACallGoesUpForTheDocumentThatMadeIt(t *testing.T) {
+	isCall := func(m map[string]any) bool { return m["t"] == "call" }
+	refused := func(t *testing.T, r *pageRig, id, what string) {
+		t.Helper()
+		if a := r.f.answer(id); a.method != "Fetch.failRequest" {
+			t.Errorf("%s was answered %+v, not refused", what, a)
+		}
+		r.h.quiet(isCall, what+" went up")
+	}
+	t.Run("the shown document's call before its commit", func(t *testing.T) {
+		r, _, b, shown := twoPuts(t, 5*time.Second)
+		defer r.close()
+		id := callFrom(r, b, true)
+		r.h.quiet(isCall, "the shown document's call went up before its commit")
+		r.f.commit("S1", reservedOrigin+testRoot, b)
+		if m := r.h.take(isCall, "the shown document's call"); !jsonEqual(m, `{"t":"call","id":1,"win":"thr_01","put":2,"op":"invoke","body":"eyJmcm9tIjoicGFnZSJ9"}`) {
+			t.Errorf("the shown document's call went up as %v", m)
+		}
+		r.h.quiet(isCall, "the shown document's call went up twice")
+		r.h.send(map[string]any{"t": "answer", "id": 1, "status": 200, "body": "{}"})
+		if a := r.f.answer(id); a.status != 200 {
+			t.Errorf("the shown document's call was answered %+v", a)
+		}
+		if err := <-shown; err != nil {
+			t.Errorf("the put answered %v", err)
+		}
+	})
+	t.Run("the earlier document's call reported after the commit", func(t *testing.T) {
+		r, a, b, shown := twoPuts(t, 5*time.Second)
+		defer r.close()
+		id := callFrom(r, a, false)
+		r.f.commit("S1", reservedOrigin+testRoot, b)
+		if err := <-shown; err != nil {
+			t.Errorf("the put answered %v", err)
+		}
+		r.f.report("S1", id, "POST", callPath, a)
+		refused(t, r, id, "the earlier document's call across the commit")
+	})
+	t.Run("a call that names no document", func(t *testing.T) {
+		r, _, _, _ := twoPuts(t, 5*time.Second)
+		defer r.close()
+		refused(t, r, r.f.pauseFrom("S1", "Fetch", "POST", callPath, "M1", false, `{}`, "", true), "a worker's call")
+		refused(t, r, callFrom(r, "", true), "a call whose report names no document")
+	})
+	t.Run("the shown document's call, its show failing", func(t *testing.T) {
+		r, _, b, shown := twoPuts(t, time.Second)
+		defer r.close()
+		id := callFrom(r, b, true)
+		if err := <-shown; err == nil {
+			t.Error("a show whose entry never committed answered no error")
+		}
+		refused(t, r, id, "the call of a show that failed")
+	})
+}
+
+// Calls wait within the window's bound: one past it is refused, and those
+// that waited go up once each when their document's commit is taken.
+func TestWaitingCallsAreBounded(t *testing.T) {
+	r, _, b, shown := twoPuts(t, 5*time.Second)
+	defer r.close()
+	log := &lockedLog{}
+	r.b.log = log
+	isCall := func(m map[string]any) bool { return m["t"] == "call" }
+	for range maxWaiting {
+		callFrom(r, b, true)
+	}
+	if a := r.f.answer(callFrom(r, b, true)); a.method != "Fetch.failRequest" {
+		t.Fatalf("a call past the bound was answered %+v", a)
+	}
+	if lines := strings.Count(log.String(), "\n"); lines != 1 {
+		t.Errorf("the driver's log said %q of the bound, want one line", log.String())
+	}
+	r.f.commit("S1", reservedOrigin+testRoot, b)
+	seen := map[float64]bool{}
+	for range maxWaiting {
+		m := r.h.take(isCall, "a call that waited")
+		if m["put"] != float64(2) || seen[m["id"].(float64)] {
+			t.Fatalf("a call that waited went up as %v", m)
+		}
+		seen[m["id"].(float64)] = true
+	}
+	r.h.quiet(isCall, "a call went up twice")
 	if err := <-shown; err != nil {
 		t.Errorf("the put answered %v", err)
 	}
