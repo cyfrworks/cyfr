@@ -4,8 +4,9 @@
 // The private messages between this main process and the cyfr it starts
 // (tests/fixtures/desktop-process.json): one JSON object a line, each with
 // version 1, its type and exactly its type's fields: text, but for attempt,
-// the proposal's number, a whole one from 1, and folder-picked's path, a
-// folder spelled from a root (absolute) or null.
+// the proposal's number, a whole one from 1, folder-picked's path, a
+// folder spelled from a root (absolute) or null, and its epoch and pick,
+// whole numbers from 0, the chooser's own as it asked for the pick.
 
 export const VERSION = 1
 
@@ -21,7 +22,7 @@ const FIELDS = {
   lock: {required: []},
   leave: {required: []},
   shutdown: {required: []},
-  "folder-picked": {required: ["path"]}
+  "folder-picked": {required: ["path", "epoch", "pick"]}
 }
 
 const FROM_CYFR = ["ready", "home", "opened", "locked"]
@@ -81,6 +82,7 @@ export function toCyfr(type, fields = {}) {
   for (const key of required) {
     if (!Object.hasOwn(fields, key)) throw new Error(`${type} needs ${key}`)
     if (key === "path" && fields.path !== null && !absolute(fields.path)) throw new Error(`${type} names no absolute folder`)
+    if ((key === "epoch" || key === "pick") && !(Number.isSafeInteger(fields[key]) && fields[key] >= 0)) throw new Error(`${type} needs ${key} as a whole number`)
     m[key] = fields[key]
   }
   return JSON.stringify(m) + "\n"

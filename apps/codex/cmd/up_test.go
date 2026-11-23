@@ -189,7 +189,7 @@ func TestUpSaysHowTheFirstPersonIsSetUp(t *testing.T) {
 			if out.String() != want {
 				t.Errorf("cyfr up printed\n%s\nwant\n%s", out.String(), want)
 			}
-			selection := strings.Join(composePrefixArgs(s.project, head), " ") + " "
+			selection := strings.Join(composePrefixArgs(access.ProjectName(s.project), head), " ") + " "
 			calls := []string{"ENGINE lock up", "ENGINE resume", "ENGINE check-stack", "ENGINE start up", selection + "up -d", selection + "ps -q cyfr"}
 			if c.container {
 				calls = append(calls, "inspect --format {{.State.StartedAt}} c0ffee",

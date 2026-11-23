@@ -65,9 +65,10 @@
 // `picking` is the pick of a folder main has asked the system for (the
 // chooser's Change…), numbered, or 0: one at a time, and each answered to
 // cyfr once with folder-picked, the folder the dialog gave or none where
-// the person cancelled. A document committing in the content window, a
-// lock and an end answer it at once with none, and a dialog's result for
-// any other pick than the one outstanding is dropped.
+// the person cancelled, with the chooser's epoch and pick its address
+// named (`pickFor`). A document committing in the content window, a lock
+// and an end answer it at once with none, and a dialog's result for any
+// other pick than the one outstanding is dropped.
 //
 // `notices` is what main has to tell and the person has not yet gone on
 // from: every lock adds to it and carries it, and the chooser shows it and
@@ -123,7 +124,7 @@ import {absolute} from "./process.js"
 
 /** The state main starts in. */
 export function initial(accountRoad, route = {proxy: "", resolver: ""}) {
-  return {name: "starting", accountRoad, readyURL: "", home: "", account: "", route, returning: null, notices: [], picks: 0, picking: 0}
+  return {name: "starting", accountRoad, readyURL: "", home: "", account: "", route, returning: null, notices: [], picks: 0, picking: 0, pickFor: null}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
@@ -134,7 +135,7 @@ export const kept = (s) => s.name === "open"
 // The pick outstanding, if any, answered with none: the state without it
 // and the answer.
 const unpicked = (s) => s.picking
-  ? [{...s, picking: 0}, [{send: {type: "folder-picked", fields: {path: null}}}]]
+  ? [{...s, picking: 0, pickFor: null}, [{send: {type: "folder-picked", fields: {path: null, ...s.pickFor}}}]]
   : [s, []]
 
 // Into ended, the way every end goes: close, then `last`.
@@ -154,8 +155,16 @@ const atChooser = (url) => {
 const ANOTHER = LOOPBACK + "/bootstrap/another"
 // Its Try again, the same way: the CYFR open, at its root.
 const AGAIN = LOOPBACK + "/bootstrap/again"
-// Its Change…, the same way: a folder of the system's dialog.
-const PICK = LOOPBACK + "/bootstrap/pick"
+// Its Change…, the same way: a folder of the system's dialog, for the
+// pick the chooser shows, named in its address as the epoch it was shown
+// in and the picks answered before it, which the answer carries back.
+function pickAsked(url) {
+  const u = parse(url)
+  if (!u || u.origin !== LOOPBACK || u.pathname !== "/bootstrap/pick" || u.hash) return null
+  const q = u.searchParams, whole = (v) => /^(0|[1-9][0-9]{0,15})$/.test(v ?? "") && Number(v) <= Number.MAX_SAFE_INTEGER
+  if ([...q.keys()].length !== 2 || !whole(q.get("epoch")) || !whole(q.get("pick"))) return null
+  return {epoch: Number(q.get("epoch")), pick: Number(q.get("pick"))}
+}
 
 /**
  * The pages the chooser may link to, Docker's own on installing it, each
@@ -185,9 +194,9 @@ export const ACTS = {
   // Change…, the folder CYFR is set up in on this computer, on the
   // chooser: the system's dialog, one at a time.
   pick: {window: "content", by: (_, url) => atChooser(url),
-    to: (_, e) => e.url === PICK,
-    then: (s) => s.picking ? {state: s, allow: false, do: []}
-      : {state: {...s, picks: s.picks + 1, picking: s.picks + 1}, allow: false, do: [{pick: {id: s.picks + 1}}]}},
+    to: (_, e) => pickAsked(e.url) !== null,
+    then: (s, e) => s.picking ? {state: s, allow: false, do: []}
+      : {state: {...s, picks: s.picks + 1, picking: s.picks + 1, pickFor: pickAsked(e.url)}, allow: false, do: [{pick: {id: s.picks + 1}}]}},
   // Docker's page on installing it, linked from the chooser.
   external: {window: "content", by: (_, url) => atChooser(url),
     to: (_, e) => EXTERNAL.includes(e.url),
@@ -260,7 +269,7 @@ function settle(s) {
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, readyURL: s.readyURL,
     home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices,
-    picks: s.picks, picking: 0}
+    picks: s.picks, picking: 0, pickFor: null}
   return {state: next, do: [{chooser: s.notices}]}
 }
 
@@ -328,7 +337,8 @@ export function step(s, e) {
     // The system's dialog answered pick `id`: the folder, or null.
     case "picked":
       if (!s.picking || e.id !== s.picking) return same(s)
-      return same({...s, picking: 0}, [{send: {type: "folder-picked", fields: {path: absolute(e.path) ? e.path : null}}}])
+      return same({...s, picking: 0, pickFor: null},
+        [{send: {type: "folder-picked", fields: {path: absolute(e.path) ? e.path : null, ...s.pickFor}}}])
 
     // The content window's top frame, as the engine reports it, read for
     // the answer on its way there (`returning`) alone.

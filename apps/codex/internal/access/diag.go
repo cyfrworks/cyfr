@@ -53,11 +53,12 @@ var diagnoses = []struct {
 	}},
 }
 
-// The daemon's two refusals of a call, as docker writes them, and their
+// The daemon's refusals of a call, as docker writes them, and their
 // words.
 var (
 	unreachableForm = regexp.MustCompile(`(?m)^(?:Cannot connect to the Docker daemon at .+\. Is the docker daemon running\?|failed to connect to the docker API at .+; check if the path is correct and if the daemon is running: .+)$`)
 	deniedForm      = regexp.MustCompile(`(?m)^permission denied while trying to connect to the (?:Docker daemon socket|docker API) at .+$`)
+	daemonForm      = regexp.MustCompile(`(?m)^Error response from daemon: (.+)$`)
 )
 
 const (
@@ -65,17 +66,40 @@ const (
 	deniedSaid      = "this user may not use the Docker daemon"
 )
 
-// DaemonRefusal is what docker's stderr says of the daemon, in the fixed
-// words above, and whether it is the daemon's socket refusing this user;
-// nothing where it says neither.
-func DaemonRefusal(stderr []byte) (said string, denied bool) {
+// DockerRefusal is the kind of refusal docker's stderr says a call met.
+type DockerRefusal int
+
+const (
+	// RefusalUnsaid is a stderr that says none of the kinds below.
+	RefusalUnsaid DockerRefusal = iota
+	// RefusalDenied is the daemon's socket or API refusing this user.
+	RefusalDenied
+	// RefusalUnreachable is no daemon answering where docker asked.
+	RefusalUnreachable
+	// RefusalDaemon is the daemon answering with an error of its own,
+	// a client's API version it does not take among them.
+	RefusalDaemon
+)
+
+// ReadDockerRefusal is the kind of refusal docker's stderr says and its
+// words: the fixed words above for a denial or no daemon, the daemon's
+// own for its error, and the first line said otherwise, or none.
+func ReadDockerRefusal(stderr []byte) (DockerRefusal, string) {
 	switch {
 	case deniedForm.Match(stderr):
-		return deniedSaid, true
+		return RefusalDenied, deniedSaid
 	case unreachableForm.Match(stderr):
-		return unreachableSaid, false
+		return RefusalUnreachable, unreachableSaid
 	}
-	return "", false
+	if m := daemonForm.FindSubmatch(stderr); m != nil {
+		return RefusalDaemon, strings.TrimSpace(string(m[1]))
+	}
+	for _, line := range strings.Split(string(stderr), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return RefusalUnsaid, line
+		}
+	}
+	return RefusalUnsaid, ""
 }
 
 // ipForm is an address as Docker writes it in a port binding, an IPv6

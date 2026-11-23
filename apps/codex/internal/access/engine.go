@@ -95,7 +95,18 @@ func Open(projectDir string, d Docker) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("access: %w", err)
 	}
-	e := &Engine{dir: dir, project: projectName(dir), files: map[string]materialized{}}
+	return OpenAs(dir, projectName(dir), d)
+}
+
+// OpenAs is Open of the project named project in dir, an absolute path:
+// every file it writes and every docker call's working directory is dir
+// as given, resolved by no one again, and compose's project is project,
+// whatever dir's own name.
+func OpenAs(dir, project string, d Docker) (*Engine, error) {
+	if !filepath.IsAbs(dir) {
+		return nil, fmt.Errorf("access: %s is not an absolute path", dir)
+	}
+	e := &Engine{dir: dir, project: project, files: map[string]materialized{}}
 	if e.project == "" {
 		return nil, e.redactor().err(fmt.Errorf("access: %s has no name docker compose can take as its project's", dir))
 	}

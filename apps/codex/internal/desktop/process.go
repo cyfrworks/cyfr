@@ -56,8 +56,10 @@ const (
 	TypeShutdown = "shutdown"
 	// FolderPicked is main's answer to the person's pick of a folder (the
 	// chooser's Change…): the folder, absolute, or none where the person
-	// cancelled or the pick ended unanswered. Main sends one for each pick
-	// and none otherwise; the page that asked never names a folder.
+	// cancelled or the pick ended unanswered, with the epoch and the pick
+	// the chooser asked it for, as its address named them. Main sends one
+	// for each pick and none otherwise; the page that asked never names a
+	// folder.
 	TypeFolderPicked = "folder-picked"
 )
 
@@ -73,7 +75,7 @@ var fields = map[string]struct{ required, optional []string }{
 	TypeLock:         {},
 	TypeLeave:        {},
 	TypeShutdown:     {},
-	TypeFolderPicked: {required: []string{"path"}},
+	TypeFolderPicked: {required: []string{"path", "epoch", "pick"}},
 }
 
 var fromMain = []string{TypeHomeReady, TypeHomeFailed, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked}
@@ -93,7 +95,16 @@ type Message struct {
 	// either road: one just set up, whose first person is made there.
 	Road string
 	Path *string
+	// Epoch and Pick are what the chooser showed as it asked for the pick
+	// a folder-picked answers: the time since a lock, and the picks
+	// answered before it. cyfr takes only the answer to the pick asked
+	// for now.
+	Epoch, Pick uint64
 }
+
+// maxWhole is the largest whole number both sides read exactly, a
+// JavaScript number's.
+const maxWhole = 1<<53 - 1
 
 // RoadDevice is home's road for a CYFR that opens at the device's pages.
 const RoadDevice = "device"
@@ -152,6 +163,16 @@ func ReadFromMain(line []byte) (Message, error) {
 		}
 		if f == "attempt" {
 			if json.Unmarshal(raw, &msg.Attempt) != nil || msg.Attempt == 0 {
+				return Message{}, refuse("fields")
+			}
+			continue
+		}
+		if f == "epoch" || f == "pick" {
+			n := &msg.Epoch
+			if f == "pick" {
+				n = &msg.Pick
+			}
+			if json.Unmarshal(raw, n) != nil || *n > maxWhole {
 				return Message{}, refuse("fields")
 			}
 			continue

@@ -462,8 +462,8 @@ func refusedHere(ctx context.Context, err error) bool {
 	if !errors.As(err, &failed) || ctx.Err() != nil || !olderThanGroup(ctx) {
 		return false
 	}
-	_, denied := machine.refusal(ctx)
-	return denied
+	why, _ := dockerSentence(seeDocker(ctx, true))
+	return why == loginAgain
 }
 
 // answers is nil once the folder's CYFR answers on this computer over a

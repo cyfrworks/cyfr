@@ -1334,7 +1334,8 @@ test("started on a route main keeps that route's rules alone", async () => {
 
 // ---- the folder CYFR is set up in on this computer ----
 
-const PICK = "http://127.0.0.1:7340/bootstrap/pick"
+// Change…, as the chooser shown in epoch 1 asks for its pick 0.
+const PICK = "http://127.0.0.1:7340/bootstrap/pick?epoch=1&pick=0"
 const folders = () => child.heard.filter((m) => m.type === "folder-picked")
 
 test("Change… opens the system's folder dialog over the content window, never loads, and cyfr hears the folder once", async () => {
@@ -1350,11 +1351,11 @@ test("Change… opens the system's folder dialog over the content window, never 
     assert.equal(world.dialogs.length, 1, "one pick at a time")
     world.dialogs[0].answer({canceled: false, filePaths: ["/home/ada/elsewhere"]})
     await settled()
-    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: "/home/ada/elsewhere"}])
+    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: "/home/ada/elsewhere", epoch: 1, pick: 0}])
     navigate(w, PICK)
     world.dialogs[1].answer({canceled: true, filePaths: []})
     await settled()
-    assert.deepEqual(folders().at(-1), {version: 1, type: "folder-picked", path: null}, "cancelled")
+    assert.deepEqual(folders().at(-1), {version: 1, type: "folder-picked", path: null, epoch: 1, pick: 0}, "cancelled")
     assert.equal(content(), w, "the chooser stands")
     assert.deepEqual(world.fetched, [])
   }
@@ -1381,10 +1382,10 @@ test("a lock, or the chooser leaving, answers the pick with none at once, and th
     await started(false)
     navigate(content(), PICK)
     await end(content())
-    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null}], name)
+    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null, epoch: 1, pick: 0}], name)
     world.dialogs[0].answer({canceled: false, filePaths: ["/home/ada/elsewhere"]})
     await settled()
-    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null}], `${name}: the late folder is dropped`)
+    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null, epoch: 1, pick: 0}], `${name}: the late folder is dropped`)
   }
 })
 

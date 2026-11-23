@@ -47,6 +47,14 @@ const (
 	noDaemon     = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n"
 )
 
+// refusedWith is the machine's refusal seam where docker wrote stderr.
+func refusedWith(stderr string) func(context.Context) (access.DockerRefusal, string, bool) {
+	return func(context.Context) (access.DockerRefusal, string, bool) {
+		kind, said := access.ReadDockerRefusal([]byte(stderr))
+		return kind, said, false
+	}
+}
+
 // standInMachine stands s in for the machine until t ends. It fails at
 // once unless no sh, rm, sudo or docker can be found: PATH is one empty
 // folder of the test's, where a test puts its own stand-ins (fakeSudo).
@@ -68,11 +76,11 @@ func standInMachine(t *testing.T) *standIn {
 	machine.supported = func() bool { return s.supported }
 	machine.arch = func() string { return s.arch }
 	machine.reachable = func(context.Context) bool { return s.reachable }
-	machine.refusal = func(context.Context) (string, bool) {
+	machine.refusal = func(ctx context.Context) (access.DockerRefusal, string, bool) {
 		if s.reachable {
-			return "", false
+			return access.RefusalUnsaid, "", false
 		}
-		return access.DaemonRefusal([]byte(s.refused))
+		return refusedWith(s.refused)(ctx)
 	}
 	machine.dockerHere = func(context.Context) (bool, error) { return true, nil }
 	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }

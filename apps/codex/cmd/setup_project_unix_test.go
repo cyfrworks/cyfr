@@ -33,6 +33,7 @@ import (
 // It logs each call, keeps the environment its info was asked in, waits
 // for <key>.release where <key>.block is, and answers <key>.out and
 // <key>.exit: key is the subcommand, up for a compose up and cyfrps for ps.
+// A compose config is held at config.block, and answered as compose.
 const workDocker = `#!/bin/sh
 d="$FAKE_DOCKER_DIR"
 printf '%s\n' "$*" >>"$d/log"
@@ -40,11 +41,18 @@ k="$1"
 case " $* " in " compose "*" up "*) k=up ;; esac
 [ "$k" = ps ] && k=cyfrps
 [ "$k" = info ] && env >"$d/environ"
-if [ -f "$d/$k.block" ]; then
-  printf '%s\n' "$$" >"$d/$k.pid"
-  while [ ! -f "$d/$k.release" ]; do sleep 0.02; done
-  : >"$d/$k.ended"
+printf '%s %s\n' "$1" "$(pwd -P)" >>"$d/cwd"
+h=$k
+case " $* " in " compose "*" config "*) h=config ;; esac
+if [ -f "$d/$h.block" ]; then
+  printf '%s\n' "$$" >"$d/$h.pid"
+  while [ ! -f "$d/$h.release" ]; do sleep 0.02; done
+  : >"$d/$h.ended"
 fi
+# The stack's containers, where stack.out says them.
+case " $* " in *"label=com.docker.compose.project="*) [ -f "$d/stack.out" ] && exec cat "$d/stack.out" ;; esac
+# Under the real engine, the real Compose resolves the configuration.
+[ "$h" = config ] && [ -n "$CYFR_CMD_TEST_REAL_DOCKER" ] && exec "$CYFR_CMD_TEST_REAL_DOCKER" "$@"
 [ -f "$d/$k.out" ] && cat "$d/$k.out"
 [ -f "$d/$k.exit" ] && exit "$(cat "$d/$k.exit")"
 exit 0
@@ -397,6 +405,110 @@ func TestSetupsWorkWritesOnlyInTheFolderItEntered(t *testing.T) {
 				t.Fatal("the folder entered has no setup token")
 			}
 		})
+	}
+}
+
+// The run's start, through the real engine and the real Compose, is in
+// the folder the work entered: a link repointed once Compose began to
+// read the configuration leads nothing there, and the project keeps the
+// name it was chosen by.
+func TestSetupsStartRunsInTheFolderItEnteredThroughTheRealEngine(t *testing.T) {
+	requireCompose(t)
+	real, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("no docker")
+	}
+	p := newWorkProject(t)
+	t.Setenv(workRealEngine, real)
+	other := t.TempDir()
+	chosen := filepath.Join(t.TempDir(), "chosen")
+	if err := os.Symlink(p.project, chosen); err != nil {
+		t.Fatal(err)
+	}
+	var stack strings.Builder
+	for _, service := range []string{"cyfr", "locus-backends", "locus-backends-guard", "locus-builds", "locus-builds-guard", "locus-runtime"} {
+		fmt.Fprintf(&stack, `{"name":"chosen-%s-1","service":%q,"state":"running"}`+"\n", service, service)
+	}
+	p.answer("stack.out", stack.String())
+	p.answer("inspect.out", `{"Status":"running","ExitCode":0,"Health":{"Status":"healthy"}}`)
+	p.answer("config.block", "")
+	ended := make(chan error, 1)
+	go func() {
+		_, err := p.run(t.Context(), chosen)
+		ended <- err
+	}()
+	p.blocked("config")
+	next := chosen + ".next"
+	if err := os.Symlink(other, next); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, chosen); err != nil {
+		t.Fatal(err)
+	}
+	p.answer("config.release", "")
+	select {
+	case err = <-ended:
+	case <-time.After(60 * time.Second):
+		t.Fatalf("setup did not end: %q", p.log())
+	}
+	if entries, readErr := os.ReadDir(other); readErr != nil || len(entries) != 0 {
+		t.Fatalf("the start wrote %v where the link led afterwards (%v); it answered %v", entries, readErr, err)
+	}
+	if err != nil || p.count("compose -p chosen ") == 0 {
+		t.Fatalf("the start answered %v, its calls %q", err, p.log())
+	}
+	// Every call from the folder's entry on, the check of Docker before
+	// it aside, ran in the folder entered.
+	raw, _ := os.ReadFile(filepath.Join(p.fake, "cwd"))
+	real, _ = filepath.EvalSymlinks(p.project)
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if call, dir, _ := strings.Cut(line, " "); call != "context" && call != "info" && dir != real {
+			t.Fatalf("docker %s ran in %s, not the folder entered %s", call, dir, real)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(p.project, ".cyfr")); statErr != nil {
+		t.Fatalf("nothing of the start is in the folder entered (%v)", statErr)
+	}
+}
+
+// A daemon's own error, its client's API version refused, is said in its
+// words through the machine's real asking, and offers no installation.
+func TestADaemonsOwnErrorOffersNoInstallation(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nprintf '%s\\n' 'Error response from daemon: client API version is too new' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	saved := machine
+	t.Cleanup(func() { machine = saved })
+	machine.reachable, machine.refusal = realMachine.reachable, realMachine.refusal
+	if ready, why, fixable := dockerReady(t.Context()); ready || fixable || why != "Docker's daemon refused this account: client API version is too new" {
+		t.Fatalf("ready %v, %q, offers a remedy %v", ready, why, fixable)
+	}
+}
+
+// With no sg, a stale group over a Docker whose endpoint is another
+// computer's, refused there, is no missing login.
+func TestNoSgOverAnotherComputersDockerIsNoMissingLogin(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nprintf '%s\\n' 'permission denied while trying to connect to the docker API at tcp://192.0.2.1:2375' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	saved, savedSg := machine, sgProgram
+	t.Cleanup(func() { machine, sgProgram = saved, savedSg })
+	sgProgram = filepath.Join(t.TempDir(), "no-sg")
+	machine.reachable, machine.refusal = realMachine.reachable, realMachine.refusal
+	machine.dockerHere = func(context.Context) (bool, error) { return false, nil }
+	machine.groups = func(_ context.Context, account string) []string {
+		if account != "" {
+			return []string{dockerGroup}
+		}
+		return nil
+	}
+	_, err := continueWithGroup(t.Context(), "init", nil, "ada", io.Discard, io.Discard)
+	if err == nil || strings.Contains(err.Error(), loginAgain) || !strings.Contains(err.Error(), "another computer") {
+		t.Fatalf("continuing with the group said %v", err)
 	}
 }
 
@@ -1040,17 +1152,25 @@ type appSetup struct {
 
 func setUpFromTheApp(t *testing.T, svc *desktop.Service, folder string) appSetup {
 	t.Helper()
-	svc.FolderPicked(&folder)
 	// The press says what the page shows: the time since the last lock,
-	// the pick and the setup there, as the state answered them.
+	// the pick and the setup there, as the state answered them; main
+	// answers the pick the page asked for.
 	raw, _ := json.Marshal(map[string]any{"token": svc.Token})
 	var shown struct {
 		Epoch, Picks uint64
 		Folder       string
 		Setup        *struct{ Run uint64 }
 	}
-	if w := pressed(svc, "/bootstrap/state", "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &shown) != nil || shown.Folder != folder {
-		t.Fatalf("/bootstrap/state answered %d %s", w.Code, w.Body)
+	read := func() {
+		t.Helper()
+		if w := pressed(svc, "/bootstrap/state", "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &shown) != nil {
+			t.Fatalf("/bootstrap/state answered %d %s", w.Code, w.Body)
+		}
+	}
+	read()
+	svc.FolderPicked(desktop.Message{Type: desktop.TypeFolderPicked, Path: &folder, Epoch: shown.Epoch, Pick: shown.Picks})
+	if read(); shown.Folder != folder {
+		t.Fatalf("the chooser shows %s, not the folder picked %s", shown.Folder, folder)
 	}
 	press := map[string]any{"token": svc.Token, "epoch": shown.Epoch, "picks": shown.Picks}
 	if shown.Setup != nil {

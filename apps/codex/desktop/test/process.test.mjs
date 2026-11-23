@@ -45,14 +45,21 @@ test("main sends nothing cyfr sends", () => {
 })
 
 // The folders cyfr refuses in a folder-picked, which main writes none of.
-test("main names no folder cyfr refuses, and every folder cyfr reads", () => {
+test("main names no folder or pick cyfr refuses, and every folder cyfr reads", () => {
   const object = (line) => { try { return JSON.parse(line) } catch { return null } }
-  const refused = vectors["refused"].filter((r) => r.to === "go").map((r) => object(r.line))
-    .filter((m) => m?.type === "folder-picked" && Object.keys(m).length === 3 && Object.hasOwn(m, "path"))
+  const whole = (n) => Number.isSafeInteger(n) && n >= 0
+  const picks = vectors["refused"].filter((r) => r.to === "go").map((r) => object(r.line))
+    .filter((m) => m?.type === "folder-picked" && Object.keys(m).length === 5 && ["path", "epoch", "pick"].every((k) => Object.hasOwn(m, k)))
+  const refused = picks.filter((m) => whole(m.epoch) && whole(m.pick))
   assert.ok(refused.length >= 5)
-  for (const {path} of refused) {
+  for (const {path, epoch, pick} of refused) {
     assert.equal(absolute(path), false, JSON.stringify(path))
-    assert.throws(() => toCyfr("folder-picked", {path}), JSON.stringify(path))
+    assert.throws(() => toCyfr("folder-picked", {path, epoch, pick}), JSON.stringify(path))
+  }
+  const misnumbered = picks.filter((m) => !whole(m.epoch) || !whole(m.pick))
+  assert.ok(misnumbered.length >= 3)
+  for (const {path, epoch, pick} of misnumbered) {
+    assert.throws(() => toCyfr("folder-picked", {path, epoch, pick}), JSON.stringify({epoch, pick}))
   }
   const read = vectors["main_to_go"].filter(({message}) => message.type === "folder-picked" && message.path !== null)
   assert.ok(read.length >= 3)

@@ -142,30 +142,8 @@ func runSetupWork(ctx context.Context, in io.Reader, out io.Writer, args []strin
 // that hangs. fixable is whether installing or starting Docker here, or
 // giving this account its group, is what is missing (dockerRemedy).
 func dockerReady(ctx context.Context) (ready bool, why string, fixable bool) {
-	switch here, err := machine.dockerHere(ctx); {
-	case ctx.Err() != nil:
-		return false, "Docker was not waited for", false
-	case err != nil:
-		return false, "Docker did not say where it runs containers", true
-	case !here:
-		return false, "Docker here runs containers on another computer, so CYFR cannot be set up on this one with it", false
-	}
-	if machine.reachable(ctx) {
-		return true, "", false
-	}
-	// Only the socket itself refusing this process, observed, with a
-	// membership newer than the process, is cured by a new login; the
-	// daemon's own refusal says itself.
-	said, denied := machine.refusal(ctx)
-	switch {
-	case ctx.Err() != nil:
-		return false, "Docker was not waited for", false
-	case denied && olderThanGroup(ctx):
-		return false, loginAgain, false
-	case said != "":
-		return false, "Docker does not answer this account: " + said, true
-	}
-	return false, "Docker does not answer this account", true
+	why, fixable = dockerSentence(seeDocker(ctx, olderThanGroup(ctx)))
+	return why == "", why, fixable
 }
 
 // dockerRemedy is what makes Docker answer this account here, for a person
@@ -229,6 +207,7 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 	if err := setupFolder(dir); err != nil {
 		return err
 	}
+	project := access.ProjectName(dir)
 	ready, why, _ := dockerReady(ctx)
 	if ctx.Err() != nil {
 		return errSetupCancelled
@@ -243,16 +222,15 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 		return fmt.Errorf("CYFR cannot use the folder %s (%v). Nothing was changed", dir, err)
 	}
 	// The folder is the directory entered here, once: the refusal is
-	// decided on it, and every write goes to it by the working directory,
-	// whatever its name leads to afterwards. The check above, by the name,
-	// only answered early.
-	if err := refuseOwnFolder(".", dir); err != nil {
-		return err
+	// decided on it, and from here on the only path anything is given is
+	// the one the system answers for it now (entered), never the name it
+	// was chosen by, which a link can lead elsewhere afterwards. The check
+	// above, by the name, only answered early.
+	entered, err := enteredPath()
+	if err != nil {
+		return fmt.Errorf("CYFR cannot use the folder %s (%v). Nothing was changed", dir, err)
 	}
-	// The working directory keeps the name it was chosen by, through a
-	// link too (os.Getwd): compose names the project after it, and what
-	// opens the folder later looks for the project by that name.
-	if err := os.Setenv("PWD", dir); err != nil {
+	if err := refuseOwnFolder(entered, dir); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(setupLockFile), 0o700); err != nil {
@@ -273,7 +251,7 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 		// init's printing is for a terminal, and its setup link for no
 		// pipe or log. What it warned is said if it wrote no .env.
 		var warned bytes.Buffer
-		err := initProject(ctx, initOptions{}, step, io.Discard, &warned)
+		err := initProject(ctx, initOptions{project: project}, step, io.Discard, &warned)
 		switch {
 		case err != nil && ctx.Err() != nil:
 			return errSetupCancelled
@@ -291,7 +269,27 @@ func setupProject(ctx context.Context, dir string, step func(string)) error {
 		return errSetupCancelled
 	}
 	step(setupStepStart)
-	return runUp(context.WithoutCancel(ctx), io.Discard)
+	// Compose names the project after the folder as it was chosen, through
+	// a link too: what opens the folder later looks for it by that name.
+	e, err := openEngineAs(entered, project)
+	if err != nil {
+		return engineFailure(err)
+	}
+	return upWith(context.WithoutCancel(ctx), e, io.Discard)
+}
+
+// enteredPath is the working directory as the system names it now, with
+// no link in it, and the one every path of the process is from then: the
+// environment's PWD, which names it as chosen, is that path too.
+func enteredPath() (string, error) {
+	if err := os.Unsetenv("PWD"); err != nil {
+		return "", err
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return dir, os.Setenv("PWD", dir)
 }
 
 // setupFolder refuses a folder no CYFR is set up in, writing nothing.

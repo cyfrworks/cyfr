@@ -461,7 +461,9 @@ test("a second launch shows the content window, and nothing once ended", () => {
 const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"
 const AGAIN = CHOOSER_DOC + "again"
 const SIGN_IN = ACCOUNT + "/account/sign#x"
-const PICK = CHOOSER_DOC + "pick"
+// The chooser's Change…, naming the epoch it was shown in and the picks
+// answered before it.
+const PICK = CHOOSER_DOC + "pick?epoch=3&pick=2"
 const DOCKER_PAGE = "https://docs.docker.com/engine/install/"
 const PRESSES = {
   external: [
@@ -527,26 +529,38 @@ test("an act is no redirect, and is begun by the top frame's own document that o
 const change = navigate({url: PICK, showing: CHOOSER_DOC, by: CHOOSER_DOC})
 const picked = (id, path) => ({type: "picked", id, path})
 const answers = (effects) => effects.filter((e) => e.send?.type === "folder-picked").map((e) => e.send.fields)
+// The answer to the pick PICK names.
+const of = (path, epoch = 3, pick = 2) => ({path, epoch, pick})
 
 test("Change… asks the system once, never loads, and cyfr hears the folder it gave, or none", () => {
   for (const road of [false, true]) {
     const asked = run([ready, change], road)
     assert.deepEqual(asked.effects.at(-1), {pick: {id: 1}})
     assert.equal(step(run([ready], road).s, change).allow, false, "its address never loads")
-    assert.deepEqual(answers(run([ready, change, picked(1, "/home/ada/elsewhere")], road).effects), [{path: "/home/ada/elsewhere"}])
-    assert.deepEqual(answers(run([ready, change, picked(1, "C:\\Users\\ada\\cyfr")], road).effects), [{path: "C:\\Users\\ada\\cyfr"}])
-    assert.deepEqual(answers(run([ready, change, picked(1, null)], road).effects), [{path: null}], "cancelled")
-    assert.deepEqual(answers(run([ready, change, picked(1, "elsewhere")], road).effects), [{path: null}], "a folder from no root is none")
-    const twice = run([ready, change, picked(1, "/a"), change, picked(2, "/b")], road)
-    assert.deepEqual(answers(twice.effects), [{path: "/a"}, {path: "/b"}], "each pick is its own")
+    assert.deepEqual(answers(run([ready, change, picked(1, "/home/ada/elsewhere")], road).effects), [of("/home/ada/elsewhere")])
+    assert.deepEqual(answers(run([ready, change, picked(1, "C:\\Users\\ada\\cyfr")], road).effects), [of("C:\\Users\\ada\\cyfr")])
+    assert.deepEqual(answers(run([ready, change, picked(1, null)], road).effects), [of(null)], "cancelled")
+    assert.deepEqual(answers(run([ready, change, picked(1, "elsewhere")], road).effects), [of(null)], "a folder from no root is none")
+    const next = navigate({url: CHOOSER_DOC + "pick?epoch=3&pick=3", showing: CHOOSER_DOC, by: CHOOSER_DOC})
+    const twice = run([ready, change, picked(1, "/a"), next, picked(2, "/b")], road)
+    assert.deepEqual(answers(twice.effects), [of("/a"), of("/b", 3, 3)], "each pick is its own, with what the chooser named for it")
     assert.deepEqual(twice.effects.filter((e) => e.pick), [{pick: {id: 1}}, {pick: {id: 2}}])
+  }
+})
+
+test("Change… is a pick only at the chooser's own address for it, naming its epoch and pick as whole numbers and nothing else", () => {
+  for (const tail of ["pick", "pick?epoch=3", "pick?pick=2", "pick?epoch=3&pick=2&x=1", "pick?epoch=-1&pick=2", "pick?epoch=3&pick=02",
+    "pick?epoch=3&pick=2.5", "pick?epoch=3&pick=9007199254740992", "pick?epoch=3&pick=2#x", "pick/?epoch=3&pick=2", "pick?epoch=3&epoch=4&pick=2"]) {
+    const r = step(run([ready]).s, navigate({url: CHOOSER_DOC + tail, showing: CHOOSER_DOC, by: CHOOSER_DOC}))
+    assert.ok(!r.do.some((e) => e.pick) && r.state.picking === 0, tail)
+    assert.equal(r.allow, false, `${tail} never loads`)
   }
 })
 
 test("one pick at a time: Change… again while the dialog is open asks nothing, and a result for another pick is dropped", () => {
   const again = run([ready, change, change])
   assert.deepEqual(again.effects.filter((e) => e.pick), [{pick: {id: 1}}])
-  assert.deepEqual(answers(run([ready, change, change, picked(1, "/a"), picked(1, "/b")]).effects), [{path: "/a"}], "answered once")
+  assert.deepEqual(answers(run([ready, change, change, picked(1, "/a"), picked(1, "/b")]).effects), [of("/a")], "answered once")
   assert.deepEqual(answers(run([ready, change, picked(2, "/a")]).effects), [], "a result for no pick asked")
   assert.deepEqual(answers(run([ready, picked(1, "/a")]).effects), [], "a result with nothing asked")
 })
@@ -563,12 +577,12 @@ test("the chooser leaving, a lock, Connect to another CYFR and an end answer the
   for (const [name, events] of Object.entries(ends)) {
     for (const road of [false, true]) {
       const r = run([ready, change, ...events, picked(1, "/home/ada/elsewhere")], road)
-      assert.deepEqual(answers(r.effects), [{path: null}], `${name}: answered with none, once`)
+      assert.deepEqual(answers(r.effects), [of(null)], `${name}: answered with none, once`)
       assert.equal(r.s.picking, 0, name)
     }
   }
   const leaving = run([...open, change, another, picked(1, "/a")], true)
-  assert.deepEqual(answers(leaving.effects), [{path: null}], "Connect to another CYFR")
+  assert.deepEqual(answers(leaving.effects), [of(null)], "Connect to another CYFR")
   const said = run([ready, change, locked()]).effects
   assert.ok(said.findIndex((e) => e.send?.type === "folder-picked") < said.findIndex((e) => e.close), "answered before the content closes")
   assert.deepEqual(answers(run([ready, change, {type: "landed", url: CHOOSER_DOC + "#x"}, {type: "started", url: HOME}]).effects), [],

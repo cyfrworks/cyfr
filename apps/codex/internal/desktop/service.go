@@ -241,12 +241,13 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not this app's page", http.StatusForbidden)
 		return
 	}
-	if route.acts {
+	if route.carries != 0 {
 		// A request that acts belongs to the time since the last lock that
 		// the page was shown in, which it says: one from before a lock,
 		// however late it arrives, acts in none.
 		epoch = req.Epoch
 	}
+	req.carries = route.carries
 	// A pick waits on the person at the system's dialog, and a setup's
 	// step on Docker, unbounded; every other request is bounded.
 	ctx, cancel := r.Context(), context.CancelFunc(func() {})
@@ -254,26 +255,94 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel = context.WithTimeout(ctx, chooserBound)
 	}
 	defer cancel()
+	a := route.act(s, ctx, epoch, req)
+	if a.Folder != "" {
+		a.Found = s.found(a.Folder)
+	}
 	h.Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(route.act(s, ctx, epoch, req))
+	_ = json.NewEncoder(w).Encode(a)
+}
+
+// found is whether a CYFR is set up in folder already, as the app reads a
+// folder (Local), asking Docker nothing.
+func (s *Service) found(folder string) bool {
+	if s.Local == nil {
+		return false
+	}
+	l, err := s.Local(folder)
+	if err != nil {
+		return false
+	}
+	l.end()
+	return true
 }
 
 // chooserRoutes is every request of the chooser's: what answers it, and
-// whether it acts, changing what the app holds or does. One that acts
-// carries the epoch the page was shown in, and acts only while that epoch
-// runs.
+// what of the page's it carries where it acts, changing what the app
+// holds or does. One that acts is refused, changing nothing, unless all it
+// carries is still so (stale).
 var chooserRoutes = map[string]struct {
-	act  func(*Service, context.Context, uint64, request) answer
-	acts bool
+	act     func(*Service, context.Context, uint64, request) answer
+	carries generation
 }{
-	"/bootstrap/state":   {(*Service).state, false},
-	"/bootstrap/connect": {(*Service).connect, true},
-	"/bootstrap/approve": {(*Service).approve, true},
-	"/bootstrap/folder":  {(*Service).awaitFolder, false},
-	"/bootstrap/docker":  {(*Service).docker, false},
-	"/bootstrap/start":   {(*Service).start, true},
-	"/bootstrap/setup":   {(*Service).awaitSetup, false},
-	"/bootstrap/open":    {(*Service).openSetUp, true},
+	"/bootstrap/state":   {(*Service).state, 0},
+	"/bootstrap/connect": {(*Service).connect, carriesEpoch},
+	"/bootstrap/approve": {(*Service).approve, carriesEpoch},
+	"/bootstrap/folder":  {(*Service).awaitFolder, 0},
+	"/bootstrap/docker":  {(*Service).docker, 0},
+	"/bootstrap/start":   {(*Service).start, carriesEpoch | carriesPicks | carriesRun},
+	"/bootstrap/setup":   {(*Service).awaitSetup, 0},
+	"/bootstrap/open":    {(*Service).openFolder, carriesEpoch | carriesPicks | carriesRun},
+}
+
+// mainCarries is what each message of main's that answers something
+// carries of what it answers, as chooserRoutes says it of a request: the
+// folder-picked answer to the pick the chooser asked for, home-ready and
+// home-failed to the proposal waiting. A lock, a leave and a shutdown
+// answer nothing, and always act.
+var mainCarries = map[string]generation{
+	TypeFolderPicked: carriesEpoch | carriesPicks,
+	TypeHomeReady:    carriesAttempt,
+	TypeHomeFailed:   carriesAttempt,
+}
+
+// generation names what a request or message carries of what it was
+// issued under: the epoch its page was shown in, the picks answered
+// before it, the setup it showed, or the proposal it answers.
+type generation uint8
+
+const (
+	carriesEpoch generation = 1 << iota
+	carriesPicks
+	carriesRun
+	carriesAttempt
+)
+
+// stale is why what req carries of what its page showed is no longer so,
+// under s.mu, or nil while all of it is: the one rule every request and
+// message that acts is refused by, before it changes anything. What it
+// answers is what is so now, for the page to show.
+func (s *Service) stale(req request) *answer {
+	folder, picks := s.folderNow()
+	var run uint64
+	if s.setting != nil {
+		run = s.setting.Run
+	}
+	now := answer{Folder: folder, Picks: picks, Setup: s.settingNow()}
+	switch {
+	case req.carries&carriesEpoch != 0 && req.Epoch != s.epoch:
+		return &answer{Error: lockedSentence}
+	case req.carries&carriesPicks != 0 && req.Picks != picks:
+		now.Error = "The folder changed to " + folder + ". Check it, then press again."
+		return &now
+	case req.carries&carriesRun != 0 && req.Run != run:
+		// A setup begun since the page was shown: what it shows now.
+		return &now
+	case req.carries&carriesAttempt != 0 && (s.ready == nil || s.pages != nil || req.Attempt != s.current || req.Home != s.selecting):
+		// An answer to a proposal that is not the one waiting.
+		return &answer{}
+	}
+	return nil
 }
 
 // chooserBound bounds each chooser request but a pick's wait.
@@ -286,15 +355,17 @@ const (
 	busySentence    = "This app is connecting already. Wait for it to finish."
 )
 
-// begin takes the one Connect a time for a request of epoch at home, or
-// answers why not: with a CYFR open, only that CYFR's own home is taken.
+// begin takes the one Connect a time for req at home, or answers why not,
+// changing nothing: what req carries is no longer so (stale), or with a
+// CYFR open, only that CYFR's own home is taken.
 // run ends at the next lock, and finish must follow.
-func (s *Service) begin(ctx context.Context, epoch uint64, home string) (context.Context, *answer) {
+func (s *Service) begin(ctx context.Context, req request, home string) (context.Context, *answer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if a := s.stale(req); a != nil {
+		return nil, a
+	}
 	switch {
-	case s.epoch != epoch:
-		return nil, &answer{Error: lockedSentence}
 	case s.connecting:
 		return nil, &answer{Error: busySentence}
 	case s.pages != nil && home != s.committed.Home:
@@ -331,6 +402,11 @@ type request struct {
 	Directory string `json:"directory,omitempty"`
 	Picks     uint64 `json:"picks,omitempty"`
 	Seen      uint64 `json:"seen,omitempty"`
+	// Attempt is a main's answer's proposal (mainCarries), never a
+	// chooser's.
+	Attempt uint64 `json:"-"`
+	// carries is what of the above its route carries (chooserRoutes).
+	carries generation
 }
 
 // answer is what the chooser does next: show a sentence, ask to approve a
@@ -341,14 +417,15 @@ type request struct {
 // on the passkey road connects by itself; a folder's is never Resume.
 // Notice names a sentence of the chooser's own, the one main's notices
 // name. Folder is where CYFR would be set up on this computer, after
-// Picks of main's answers to a pick, and Docker whether Docker answers
-// there.
+// Picks of main's answers to a pick, Found whether a CYFR is set up there
+// already, and Docker whether Docker answers there.
 type answer struct {
 	Epoch   uint64        `json:"epoch,omitempty"`
 	Docker  *DockerAnswer `json:"docker,omitempty"`
 	Setup   *SetupState   `json:"setup,omitempty"`
 	Folder  string        `json:"folder,omitempty"`
 	Picks   uint64        `json:"picks,omitempty"`
+	Found   bool          `json:"found,omitempty"`
 	Home    string        `json:"cyfr,omitempty"`
 	Confirm string        `json:"confirm,omitempty"`
 	Next    string        `json:"next,omitempty"`
@@ -443,7 +520,7 @@ func homeOf(address string) (string, bool) {
 
 func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer {
 	home, ok := homeOf(req.Address)
-	run, refused := s.begin(ctx, epoch, home)
+	run, refused := s.begin(ctx, req, home)
 	if refused != nil {
 		return *refused
 	}
@@ -453,7 +530,7 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	}
 	project, l, remembered := s.remembered()
 	if remembered && l.Shell.Address == home {
-		return s.openLocal(run, epoch, project, l, "")
+		return s.openLocal(run, epoch, project, l)
 	}
 	l.end()
 	if !ok {
@@ -501,7 +578,7 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 }
 
 func (s *Service) approve(ctx context.Context, epoch uint64, req request) answer {
-	run, refused := s.begin(ctx, epoch, "")
+	run, refused := s.begin(ctx, req, "")
 	if refused != nil {
 		return *refused
 	}
@@ -560,8 +637,12 @@ func (s *Service) remembered() (string, Local, bool) {
 }
 
 // openLocal selects the CYFR l, set up in project on this computer, with
-// the account service its own settings name, on road (home's).
-func (s *Service) openLocal(run context.Context, epoch uint64, project string, l Local, road string) answer {
+// the account service its own settings name: every open of a folder's
+// CYFR, whichever press or start led to it. Its road is decided here, from
+// what the folder's reading says: while no one is set up there (its
+// setup token is offered), it opens at the device's pages on every
+// system, where its first person is made.
+func (s *Service) openLocal(run context.Context, epoch uint64, project string, l Local) answer {
 	home := l.Shell.Address
 	found, ok := account.ServiceOf(home, l.Shell.Directory)
 	if !ok {
@@ -579,6 +660,12 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 	if err != nil {
 		l.end()
 		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
+	}
+	road := ""
+	if l.Shell.SetupToken != nil {
+		if token, _ := l.Shell.SetupToken(run); token != "" {
+			road = RoadDevice
+		}
 	}
 	a := s.selectHome(run, epoch, sel, l.Shell, l.Work,
 		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver, Road: road})
@@ -649,7 +736,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	if s.epoch != epoch {
 		return answer{Error: lockedSentence}
 	}
-	if err := sel.Commit(); err != nil {
+	if _, err := sel.Commit(); err != nil {
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
 	// The device's pages are served only once main was told home opened:
@@ -719,13 +806,18 @@ func (s *Service) awaitFolder(ctx context.Context, epoch uint64, req request) an
 	}
 }
 
-// FolderPicked is main's folder-picked: the folder the person picked, or
-// nil for none, which leaves the folder as it was.
-func (s *Service) FolderPicked(path *string) {
+// FolderPicked is main's folder-picked m: the folder the person picked,
+// or nil for none, which leaves the folder as it was. It answers the pick
+// the chooser asked for now alone: one from before a lock, or one answered
+// already, changes nothing (stale).
+func (s *Service) FolderPicked(m Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if path != nil {
-		s.folder = *path
+	if s.stale(request{Epoch: m.Epoch, Picks: m.Pick, carries: mainCarries[TypeFolderPicked]}) != nil {
+		return
+	}
+	if m.Path != nil {
+		s.folder = *m.Path
 	}
 	s.picks++
 	s.wake()
@@ -739,8 +831,11 @@ type SetupState struct {
 	Folder string   `json:"folder"`
 	Steps  []string `json:"steps"`
 	Done   bool     `json:"done,omitempty"`
-	Error  string   `json:"error,omitempty"`
-	Seq    uint64   `json:"seq"`
+	// Unrecorded is, for a setup done whose folder the client record could
+	// not take, since it keeps another CYFR, the sentence that says so.
+	Unrecorded string `json:"unrecorded,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Seq        uint64 `json:"seq"`
 }
 
 // settingNow is a copy of the setup begun, or nil, under s.mu.
@@ -755,37 +850,28 @@ func (s *Service) settingNow() *SetupState {
 
 // start begins setting CYFR up in the folder the page shows, the person's
 // press of Set up and start: one at a time, again after one failed, and
-// only while the page shows the folder main picked last and the setup
-// there is now; otherwise it answers what is now. It runs to its end
-// whatever the chooser or a lock does, remembers the folder as it ends,
-// and opens nothing (openSetUp).
-func (s *Service) start(_ context.Context, epoch uint64, req request) answer {
+// only while all the page showed is so (stale); otherwise it answers what
+// is now, and a press again for a setup running or done does nothing. It
+// runs to its end whatever the chooser or a lock does, records the folder
+// as it ends (remember), and opens nothing (openFolder).
+func (s *Service) start(_ context.Context, _ uint64, req request) answer {
 	if s.Setup == nil {
 		return answer{Error: "This app cannot set CYFR up on this computer."}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	folder, picks := s.folderNow()
-	var run uint64
-	if s.setting != nil {
-		run = s.setting.Run
+	if a := s.stale(req); a != nil {
+		return *a
 	}
-	switch {
-	case s.epoch != epoch:
-		return answer{Error: lockedSentence}
-	case req.Picks != picks:
-		return answer{Folder: folder, Picks: picks, Setup: s.settingNow(),
-			Error: "The folder changed to " + folder + ". Check it, then press Set up and start again."}
-	case req.Run != run || s.setting != nil && s.setting.Error == "":
-		// Pressed for a setup that is not the one now, or again for one
-		// running or done: nothing more to do.
+	folder, picks := s.folderNow()
+	if s.setting != nil && s.setting.Error == "" {
 		return answer{Folder: folder, Picks: picks, Setup: s.settingNow()}
 	}
-	seq := uint64(1)
+	seq, run := uint64(1), uint64(1)
 	if s.setting != nil {
-		seq = s.setting.Seq + 1
+		seq, run = s.setting.Seq+1, s.setting.Run+1
 	}
-	s.setting = &SetupState{Run: run + 1, Folder: folder, Steps: []string{}, Seq: seq}
+	s.setting = &SetupState{Run: run, Folder: folder, Steps: []string{}, Seq: seq}
 	cur := s.setting
 	s.wake()
 	go func() {
@@ -796,17 +882,19 @@ func (s *Service) start(_ context.Context, epoch uint64, req request) answer {
 			cur.Seq++
 			s.wake()
 		})
-		// The folder set up is remembered as the setup ends, before
-		// anything can start the app again: the chooser then offers it.
+		// The folder set up is recorded as the setup ends, before anything
+		// can start the app again: the chooser then offers it. Where the
+		// record keeps another CYFR, the setup says so.
+		var unrecorded string
 		if err == nil {
-			err = s.remember(folder)
+			unrecorded, err = s.remember(folder)
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if err != nil {
 			cur.Error = err.Error()
 		} else {
-			cur.Done = true
+			cur.Done, cur.Unrecorded = true, unrecorded
 		}
 		cur.Seq++
 		s.wake()
@@ -838,41 +926,58 @@ func (s *Service) awaitSetup(ctx context.Context, epoch uint64, req request) ans
 	}
 }
 
-// remember makes folder the CYFR the client record selects, as opening it
-// does (shell.Selection).
-func (s *Service) remember(folder string) error {
+// remember records folder as the CYFR the client record selects, as
+// opening it does (shell.Selection), and answers, where the record keeps
+// another CYFR and so recorded nothing, the sentence that says so. The one
+// record holds one CYFR until a list replaces it (the switcher).
+func (s *Service) remember(folder string) (string, error) {
 	sel, err := s.Clients.SelectLocal(folder)
+	recorded := false
 	if err == nil {
-		err = sel.Commit()
+		recorded, err = sel.Commit()
 	}
 	if err != nil {
-		return fmt.Errorf("CYFR is set up in %s, but this computer could not remember it (%v)", folder, err)
+		return "", fmt.Errorf("CYFR is set up in %s, but this computer could not remember it (%v)", folder, err)
 	}
-	return nil
+	if recorded {
+		return "", nil
+	}
+	c, err := s.Clients.Load()
+	kept := "another CYFR"
+	switch {
+	case err == nil && c.Home != "":
+		kept = c.Home
+	case err == nil && c.Project != "":
+		kept = "the CYFR in " + c.Project
+	}
+	return fmt.Sprintf("This app still remembers %s: to open this one later, choose %s under Or set up CYFR on this computer, then press Open CYFR.", kept, folder), nil
 }
 
-// openSetUp opens the CYFR the setup the page shows set up, once it is
-// done: the person's press, or the chooser that pressed Set up and start,
-// on its end.
-func (s *Service) openSetUp(ctx context.Context, epoch uint64, req request) answer {
-	run, refused := s.begin(ctx, epoch, "")
+// openFolder opens the CYFR set up in the folder the page shows, the
+// person's press of Open CYFR, or the chooser that pressed Set up and
+// start, at its end: only while all the page showed is so (stale), and
+// never while a setup there is still running.
+func (s *Service) openFolder(ctx context.Context, epoch uint64, req request) answer {
+	run, refused := s.begin(ctx, req, "")
 	if refused != nil {
 		return *refused
 	}
 	defer s.finish()
 	s.mu.Lock()
+	folder, _ := s.folderNow()
 	setting := s.settingNow()
 	s.mu.Unlock()
-	if setting == nil || !setting.Done || setting.Run != req.Run || s.Local == nil {
-		return answer{Setup: setting, Error: "CYFR is not set up on this computer yet."}
+	if setting != nil && setting.Folder == folder && !setting.Done && setting.Error == "" {
+		return answer{Setup: setting, Error: "CYFR is still being set up here."}
 	}
-	l, err := s.Local(setting.Folder)
+	if s.Local == nil {
+		return answer{Error: "CYFR is not set up in " + folder + "."}
+	}
+	l, err := s.Local(folder)
 	if err != nil {
-		return answer{Error: fmt.Sprintf("The app cannot read the CYFR in %s (%v).", setting.Folder, err)}
+		return answer{Error: fmt.Sprintf("The app cannot read the CYFR in %s (%v).", folder, err)}
 	}
-	// Its first person is made at the device's pages, on either road,
-	// until the passkey's way makes one.
-	return s.openLocal(run, epoch, setting.Folder, l, RoadDevice)
+	return s.openLocal(run, epoch, folder, l)
 }
 
 // HomeReady is main's home-ready for an attempt at home: the one waiting,
@@ -886,11 +991,16 @@ func (s *Service) HomeFailed(home string, attempt uint64) { s.answered(home, att
 func (s *Service) answered(home string, attempt uint64, ready bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ready != nil && s.pages == nil && attempt == s.current && home == s.selecting {
-		select {
-		case s.ready <- ready:
-		default:
-		}
+	answers := TypeHomeFailed
+	if ready {
+		answers = TypeHomeReady
+	}
+	if s.stale(request{Home: home, Attempt: attempt, carries: mainCarries[answers]}) != nil {
+		return
+	}
+	select {
+	case s.ready <- ready:
+	default:
 	}
 }
 
@@ -978,7 +1088,7 @@ func (s *Service) Run(in io.Reader) error {
 			s.End()
 			return nil
 		case TypeFolderPicked:
-			s.FolderPicked(m.Path)
+			s.FolderPicked(m)
 		}
 	}
 	s.End()

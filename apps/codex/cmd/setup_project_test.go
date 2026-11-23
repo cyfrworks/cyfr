@@ -46,7 +46,13 @@ func workStandIn() int {
 		}
 		sgProgram = filepath.Join(os.TempDir(), "no-sg-here")
 	}
+	real := openEngineAs
 	installFakeEngine(nil)
+	if os.Getenv(workRealEngine) != "" {
+		// The run's start through the real engine, over the docker on
+		// PATH.
+		openEngineAs = real
+	}
 	if os.Getenv("FAKE_DOCKER_DIR") == "" {
 		os.Setenv("PATH", "")
 		machine.reachable = func(context.Context) bool { return false }
@@ -59,6 +65,10 @@ func workStandIn() int {
 const (
 	workDeaf       = "CYFR_CMD_TEST_DEAF_WORK"
 	workStaleGroup = "CYFR_CMD_TEST_STALE_GROUP"
+	// workRealEngine names the real docker whose Compose resolves the
+	// folder's configuration, for a run whose start goes through the real
+	// engine (workDocker hands it compose config).
+	workRealEngine = "CYFR_CMD_TEST_REAL_DOCKER"
 )
 
 // workSeesDocker has setup's work, a process of its own, reach the docker
@@ -445,7 +455,7 @@ func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 			}
 			return c.account
 		}
-		machine.refusal = func(context.Context) (string, bool) { return access.DaemonRefusal([]byte(c.refused)) }
+		machine.refusal = refusedWith(c.refused)
 		ready, why, fixable := dockerReady(t.Context())
 		if ready || strings.Contains(why, "log out and in again") != c.login || strings.Contains(why, "another computer") != c.elsewhere {
 			t.Errorf("%+v: ready %v, %q", c, ready, why)
@@ -455,6 +465,46 @@ func TestDockerReadySaysWhenALoginIsWhatIsMissing(t *testing.T) {
 		}
 		if fixable != (!c.login && !c.elsewhere) {
 			t.Errorf("%+v: %q offers a remedy: %v", c, why, fixable)
+		}
+	}
+}
+
+// The one Docker sentence names the cause asking Docker saw, and offers
+// what installs, starts or joins Docker only where that is what is
+// missing: a new login only for this computer's own socket refusing a
+// process older than the account's group.
+func TestTheDockerSentenceNamesOnlyWhatWasSeen(t *testing.T) {
+	denied := func(text string) dockerSeen {
+		kind, said := access.ReadDockerRefusal([]byte(text))
+		return dockerSeen{here: true, refusal: kind, said: said}
+	}
+	stale := func(s dockerSeen) dockerSeen { s.stale = true; return s }
+	elsewhere := func(s dockerSeen) dockerSeen { s.here = false; return s }
+	const tcpDenied = "permission denied while trying to connect to the docker API at tcp://192.0.2.1:2375\n"
+	for _, c := range []struct {
+		name    string
+		seen    dockerSeen
+		why     string
+		fixable bool
+	}{
+		{"socket refused, the group newer than the process", stale(denied(socketDenied)), loginAgain, false},
+		{"socket refused, the group the process's own", denied(socketDenied),
+			"Docker does not answer this account: this user may not use the Docker daemon", true},
+		{"refused over TCP, the group newer than the process", elsewhere(stale(denied(tcpDenied))),
+			"Docker here runs containers on another computer, so CYFR cannot be set up on this one with it", false},
+		{"no daemon, the group newer than the process", stale(denied(noDaemon)),
+			"Docker does not answer this account: the Docker daemon is not reachable", true},
+		{"the client's API version refused", stale(denied("Error response from daemon: client version 1.52 is too new. Maximum supported API version is 1.47\n")),
+			"Docker's daemon refused this account: client version 1.52 is too new. Maximum supported API version is 1.47", false},
+		{"Docker absent", dockerSeen{hereErr: errors.New("exec: docker: not found"), absent: true}, "Docker is not installed here", true},
+		{"any other words", denied("context \"gone\" does not exist\n"), "Docker does not answer this account: context \"gone\" does not exist", false},
+		{"nothing said", denied(""), "Docker does not answer this account", true},
+		{"where it runs unread", dockerSeen{hereErr: errors.New("exit status 1")}, "Docker did not say where it runs containers", true},
+		{"given up on", dockerSeen{cancelled: true, here: true}, "Docker was not waited for", false},
+		{"answering", dockerSeen{here: true, answers: true}, "", false},
+	} {
+		if why, fixable := dockerSentence(c.seen); why != c.why || fixable != c.fixable {
+			t.Errorf("%s: said %q, offers a remedy %v; want %q, %v", c.name, why, fixable, c.why, c.fixable)
 		}
 	}
 }
@@ -470,7 +520,7 @@ func TestTheProbeNamesWhatMakesDockerAnswerHere(t *testing.T) {
 	machine.installed = func(string) bool { return false }
 	machine.running = func() bool { return false }
 	machine.groups = func(context.Context, string) []string { return nil }
-	machine.refusal = func(context.Context) (string, bool) { return access.DaemonRefusal([]byte(noDaemon)) }
+	machine.refusal = refusedWith(noDaemon)
 	for _, c := range []struct {
 		name, system  string
 		supported     bool
