@@ -2014,10 +2014,11 @@ func (s *Shell) watch(ch *Channel, g *generation) {
 		return
 	}
 	err := ch.Err()
+	s.lock(s.sentence(err))
+	// The changed record is written once the screen is hidden (lock).
 	if errors.Is(err, ErrRevoked) {
 		s.forget()
 	}
-	s.lock(s.sentence(err))
 }
 
 // errNoProof is a request for a ticket without the current proof.
@@ -2105,16 +2106,15 @@ func (s *Shell) reserve(ctx context.Context) (string, error) {
 // action, and once it returns none begun before it changes or opens
 // anything. What takes no context is finished first: a key made or opened
 // under a passphrase (Argon2id, two of them in a setup) or by the chip.
-// closed is whether this lock closed a channel, and so restarted the
-// pages. Unlocked cannot say it: another lock may have closed it.
-func (s *Shell) Lock(why string) (closed bool) {
+// Every lock is one of this and watch's, and both are lock. hid is whether
+// this lock hid the screen (Config.Restart): it had something on it to
+// hide.
+func (s *Shell) Lock(why string) (hid bool) {
 	locked, _ := s.end(nil)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer locked()
-	closed = s.ch != nil
-	s.lock(why)
-	return closed
+	return s.lock(why)
 }
 
 // errLocked is an action's end by a lock, and why a lock's own close ended
@@ -2194,30 +2194,38 @@ func (s *Shell) take(ctx context.Context) (held context.Context, give func(), ok
 // action, it may not.
 func (s *Shell) current() bool { return s.mu.by != nil && s.mu.by.live() }
 
-// lock shows the lock page and hides what is on the screen (Restart),
-// then submits each held session's lock proof, closes the channel and
-// erases the key and every secret the shell held, an account's recovery
-// key among them, in that order. What is on the screen is what a person at
-// it can see and use, so it goes first; a session without its channel
-// lasts a minute at most, and is ended a moment later anyway. Restart
-// returns at once, so the hide waits for nothing and nothing waits on it;
-// the CYFR is told within 5 s.
-func (s *Shell) lock(why string) {
+// lock is every lock's one entry, and its first two acts are, in order:
+// locked, in memory alone (the shell says locked, and a page drawn from
+// here is the lock page), and the hide (Restart), where the screen shows
+// anything a person at it could see or use: an open channel's pages, a
+// setup's passphrase, an account's recovery code or any page a typed
+// secret handed a proof to, or a page that must now say why the screen
+// cannot be unlocked (Config.Unwatched). Only then does anything else
+// happen: each held session's lock proof is submitted, the channel closed
+// and the key and every secret the shell held erased, an account's
+// recovery key among them, in that order; a revoked channel's record is
+// written after (watch). What is on the screen is what a person at it can
+// see and use, so it goes first; a session without its channel lasts a
+// minute at most, and is ended a moment later anyway. Restart returns at
+// once, waiting on no peer, so the hide waits for nothing and nothing
+// waits on it; the CYFR is told within 5 s. hid is whether it hid.
+func (s *Shell) lock(why string) (hid bool) {
+	ch := s.ch
+	hid = ch != nil || s.passphrase != "" || s.making != nil || s.proof != nil || s.cfg.Unwatched() != ""
+	s.ch, s.confirm, s.passkey = nil, nil, nil
+	s.open.Store(false)
+	if ch != nil && why != "" {
+		s.notice = why
+	}
+	s.publish()
+	if hid {
+		s.cfg.Restart()
+	}
 	if s.renewal != nil {
 		s.renewal.Stop()
 		s.renewal = nil
 	}
-	ch := s.ch
 	if ch != nil {
-		// A page drawn while the CYFR is told is the lock page already,
-		// and the shell says locked from here.
-		s.ch, s.confirm, s.passkey = nil, nil, nil
-		s.open.Store(false)
-		if why != "" {
-			s.notice = why
-		}
-		s.publish()
-		s.cfg.Restart()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		for _, proof := range s.locks {
 			_, _ = ch.Call(ctx, "session.lock", map[string]any{"proof": proof})
@@ -2233,6 +2241,7 @@ func (s *Shell) lock(why string) {
 	}
 	clear(s.proof)
 	s.key, s.locks, s.making, s.confirm, s.passkey, s.passphrase, s.proof = nil, nil, nil, nil, nil, "", nil
+	return hid
 }
 
 // Unlocked is whether the channel stands: false from the moment a lock

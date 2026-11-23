@@ -448,8 +448,10 @@ func TestLock_AnUnlockBegunBeforeItNeverOpensAfterIt(t *testing.T) {
 		<-proof
 		<-locked
 		becomesTrue(t, "no channel stands", func() bool { return standing(home) == 0 })
-		if page := b.page(); b.shell.Unlocked() || b.restarts.Load() != 0 || strings.Contains(page, `class="notice"`) {
-			t.Fatalf("it opened after the lock:\n%s", page)
+		// The lock hid the page the setup handed its proof to, and only
+		// that: a channel it closed would have left its sentence.
+		if page := b.page(); b.shell.Unlocked() || b.restarts.Load() != 1 || strings.Contains(page, `class="notice"`) {
+			t.Fatalf("it opened after the lock, or the lock hid %d times:\n%s", b.restarts.Load(), page)
 		}
 	})
 	t.Run("at the handshake's last step", func(t *testing.T) {

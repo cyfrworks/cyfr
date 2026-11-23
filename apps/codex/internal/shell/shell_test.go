@@ -715,6 +715,8 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "it was removed, CYFR does not admit your account") {
 		t.Fatal("an ended standing did not lock the box")
 	}
+	// The record is written once the screen is hidden, as the lock ends.
+	b.shell.Lock("")
 	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
 		t.Fatalf("the client kept %+v", c)
 	}
