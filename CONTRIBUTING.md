@@ -275,6 +275,14 @@ same worktree refuses, naming the run that holds it.
   checksums and no image tag; the images job may already have pushed
   the images by digest, which no tag names.
 
+  On Linux the same job runs `tests/desktop-proof/screen/app.sh` on the
+  package: the app as the box's screen (`--screen-project`) under Ubuntu
+  26.04's labwc in a container, beside the screen's keyboard and watches,
+  with no CYFR: its page painted in one frameless window that covers the
+  output, a watch lost hiding it, `cyfr` or the app killed and started
+  again locked, a project not named explicitly refused. It needs Docker
+  and binds no port of the machine.
+
   Codex CI's `screen-idle` job runs `tests/desktop-proof/screen/idle.sh`:
   the device screen's idle watch under Ubuntu 26.04's labwc, beside a
   real Chrome whose page, and whose sandboxed frame, plays a video
