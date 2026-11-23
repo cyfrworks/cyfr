@@ -16,7 +16,12 @@ defmodule Locus.Backends.Owners do
 
   `control/4` applies one control message at a time, in the order they
   arrive, each only if its `(generation, seq)` is above every one applied
-  before (`fresh/2` is the same check, made before a body is read):
+  before (`fresh/2` is the same check, made before a body is read). A
+  `home` or `homes` is applied in that order too, but its work, up to the
+  stop grace and the launcher's bound on a home's change, runs in a
+  process of its own: the next message is applied at once, and the call
+  is answered when that work is done. So a slow removal holds nobody
+  else's renewal.
 
   | Message | Rule |
   |---|---|
@@ -29,7 +34,7 @@ defmodule Locus.Backends.Owners do
   | `release` | each owner at or below `(g, e)` retired |
   | `reconcile` | each owner not at exactly `g` and its kept `e` retired |
   | `status` | each named owner present, its programs as their sessions report them |
-  | `home` while an open prepares in it | `conflict`, nothing changed |
+  | `home` while an open prepares in it, or while a change of it runs | `conflict`, nothing changed |
   | `home` | every session of the home among the athanor's owners ended, then the home reset or retired; `conflict` if a launcher's request will still make it |
 
   A sync starts nothing: it is answered on admission with every program
@@ -606,6 +611,10 @@ defmodule Locus.Backends.Owners do
 
             {:wait, ref, state} ->
               %{state | busy: ref}
+
+            # Work that answers its caller itself, the turn given back.
+            {:started, state} ->
+              next_control(state)
           end
         else
           GenServer.reply(from, {:error, :stale_control})
@@ -734,21 +743,23 @@ defmodule Locus.Backends.Owners do
   defp apply_control(state, from, _fields, %{type: :homes}, _open_env) do
     %{launcher: launcher, launcher_server: server} = state
 
-    {ref, state} =
+    {_ref, state} =
       run(state, {:homes, from}, @home_timeout_ms, fn -> home_list(launcher, server) end)
 
-    {:wait, ref, state}
+    {:started, state}
   end
 
-  # A home still being prepared is neither reset nor retired, and the turn is
-  # not held for it: it is `conflict`, the home busy rather than the service
+  # A home still being prepared or already being changed is neither reset nor
+  # retired again: it is `conflict`, the home busy rather than the service
   # down. The controller sends a retire again until it is acknowledged, and
   # a reset is asked again.
   defp apply_control(state, from, _fields, %{type: :home} = message, _open_env) do
-    if preparing_in?(state, message.home_id),
+    if preparing_in?(state, message.home_id) or changing?(state, message.home_id),
       do: {:reply, {:error, :conflict}, state},
       else: change_home(state, from, message)
   end
+
+  defp changing?(state, home_id), do: match?(%{busy: true}, state.homes[home_id])
 
   defp preparing_in?(state, home_id) do
     Enum.any?(state.pending, fn {_ref, entry} ->
@@ -769,7 +780,7 @@ defmodule Locus.Backends.Owners do
     state = %{state | homes: Map.put(state.homes, message.home_id, %{home | busy: true})}
     %{launcher: launcher, launcher_server: server, stop_grace_ms: grace_ms} = state
 
-    {ref, state} =
+    {_ref, state} =
       run(state, {:home, from, message}, @home_timeout_ms + grace_ms + 30_000, fn ->
         stop_all(pids, nil, grace_ms)
 
@@ -779,7 +790,7 @@ defmodule Locus.Backends.Owners do
         end
       end)
 
-    {:wait, ref, state}
+    {:started, state}
   end
 
   defp compare(version, owner, definition) do
@@ -902,7 +913,7 @@ defmodule Locus.Backends.Owners do
       end
 
     GenServer.reply(from, reply)
-    control_done(%{state | homes: homes})
+    %{state | homes: homes}
   end
 
   defp continue(state, {:open, froms, ask}, result), do: opened(state, froms, ask, result)
@@ -928,7 +939,7 @@ defmodule Locus.Backends.Owners do
       end
 
     GenServer.reply(from, reply)
-    control_done(state)
+    state
   end
 
   defp continue(state, {:present, running}, {:ok, ids}) when is_list(ids) do

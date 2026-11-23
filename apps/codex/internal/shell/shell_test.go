@@ -127,7 +127,7 @@ func newBoxAt(t *testing.T, home *fakeHome, dir, directory string, edit ...func(
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.shell, b.srv = sh, &Server{Shell: sh}
+	b.shell, b.srv = sh, &Server{Shell: sh, Work: NewWork(t.Context())}
 	t.Cleanup(func() { sh.Lock("") })
 	return b
 }

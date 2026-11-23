@@ -5,6 +5,7 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"html"
 	"io"
 	"net/http"
@@ -229,9 +230,12 @@ func TestRender_NoPageWaitsForAReading(t *testing.T) {
 			g.shut()
 			var answers atomic.Bool
 			answers.Store(true)
-			b.srv.Reachable = func() bool {
+			b.srv.Reachable = func(context.Context) error {
 				_ = g.pass(context.Background())
-				return answers.Load()
+				if answers.Load() {
+					return nil
+				}
+				return errors.New("no answer yet")
 			}
 			var page string
 			returns(t, "the first page", func() { page = b.aloud() })
@@ -265,7 +269,7 @@ func TestRender_OneReadingAtATime(t *testing.T) {
 	b, _ := neverConnected(t, home)
 	g := newGate(t)
 	g.shut()
-	b.srv.Reachable = func() bool { return g.pass(context.Background()) == nil }
+	b.srv.Reachable = func(context.Context) error { return g.pass(context.Background()) }
 	returns(t, "many pages", func() {
 		var all sync.WaitGroup
 		for range 25 {
@@ -291,7 +295,7 @@ func TestRender_TheTermsAreReadBesideThePage(t *testing.T) {
 	home.accounts.Policy = &account.Policy{Version: "2026-10", URL: "https://cyfr.example/terms"}
 	g := newGate(t)
 	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), gated(g, func(r *http.Request) bool { return !theDial(r) }))
-	b.srv.Reachable = func() bool { return true }
+	b.srv.Reachable = func(context.Context) error { return nil }
 	g.shut()
 	var page string
 	returns(t, "the setup page", func() { page = b.aloud() })
@@ -318,7 +322,7 @@ func TestRender_ALockWaitsForNoTermsReading(t *testing.T) {
 	home := newFakeHome(t)
 	g := newGate(t)
 	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), gated(g, func(r *http.Request) bool { return !theDial(r) }))
-	b.srv.Reachable = func() bool { return true }
+	b.srv.Reachable = func(context.Context) error { return nil }
 	makeDeaf(b.shell)
 	g.shut()
 	b.aloud()

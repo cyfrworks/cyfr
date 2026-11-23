@@ -90,9 +90,20 @@ func noAnswer(ctx context.Context, what string, res Result, err error) error {
 	case ctx.Err() != nil, failed && call.Deadline:
 		return fmt.Errorf("docker %s was ended before it answered", what)
 	case failed, err == nil:
-		return fmt.Errorf("docker %s failed with exit status %d", what, res.ExitCode)
+		return &DockerFailed{What: what, ExitCode: res.ExitCode}
 	}
 	return fmt.Errorf("docker %s gave no answer: %w", what, err)
+}
+
+// DockerFailed is a Docker command that ran to its own exit, not 0: its
+// answer, a refusal among them, before any deadline.
+type DockerFailed struct {
+	What     string
+	ExitCode int
+}
+
+func (f *DockerFailed) Error() string {
+	return fmt.Sprintf("docker %s failed with exit status %d", f.What, f.ExitCode)
 }
 
 // DockerIsHere is whether the Docker that calls reach runs its containers

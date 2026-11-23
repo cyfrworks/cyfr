@@ -363,7 +363,11 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 	if err != nil {
 		return err
 	}
-	local, err := readLocal(dir, "screen")
+	// Everything the screen begins for its CYFR ends as it returns, and as
+	// its pages stop (shell.Server.ServeOn).
+	work := shell.NewWork(ctx)
+	defer work.End()
+	local, err := readLocal(work, dir, "screen")
 	if err != nil {
 		return fmt.Errorf("The screen cannot read how CYFR is reached here (%v)", err)
 	}
@@ -398,7 +402,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 	// A folder naming another CYFR than the one this shell opened ends it:
 	// the launcher starts it again on the reading made then.
 	moved := make(chan error, 1)
-	srv := &shell.Server{Shell: sh, Reachable: func() bool {
+	srv := &shell.Server{Shell: sh, Work: work, Reachable: func(ctx context.Context) error {
 		err := local.Answers(ctx)
 		var unbound *shell.Unbound
 		if errors.As(err, &unbound) && unbound.Moved {
@@ -407,7 +411,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 			default:
 			}
 		}
-		return err == nil
+		return err
 	}}
 	served := make(chan error, 1)
 	go func() { served <- srv.ServeOn(ctx, ln) }()

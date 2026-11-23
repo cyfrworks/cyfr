@@ -632,11 +632,6 @@ defmodule Aqua.Tape do
         Map.put_new(attrs, :fence, turn.fence)
       )
 
-  @doc "The recovery prompts a program turn owes (`Arca.TurnStorage.brain_notices/2`)."
-  @spec brain_notices(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
-  def brain_notices(%Context{} = ctx, turn),
-    do: TurnStorage.brain_notices(Sanctum.Context.actor(ctx), turn.id)
-
   @doc "The deliveries a resuming start names as pending (`Arca.TurnStorage.brain_pending/2`)."
   @spec brain_pending(Context.t(), turn()) :: {:ok, [String.t()]} | {:error, term()}
   def brain_pending(%Context{} = ctx, turn),
@@ -670,10 +665,11 @@ defmodule Aqua.Tape do
   def brain_posts(%Context{} = ctx, turn),
     do: TurnStorage.brain_posts(Sanctum.Context.actor(ctx), turn.id)
 
-  @doc "The results a program turn owes its brain (`Arca.TurnStorage.brain_results/2`)."
-  @spec brain_results(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
-  def brain_results(%Context{} = ctx, turn),
-    do: TurnStorage.brain_results(Sanctum.Context.actor(ctx), turn.id)
+  @doc "What a program turn owes its brain next, from one view (`Arca.TurnStorage.brain_owed/2`)."
+  @spec brain_owed(Context.t(), turn()) ::
+          {:ok, :none | {:notice | :answer | :post, map()}} | {:error, term()}
+  def brain_owed(%Context{} = ctx, turn),
+    do: TurnStorage.brain_owed(Sanctum.Context.actor(ctx), turn.id)
 
   @doc """
   Mark a dispatched step whose effect cannot be known, under the turn's

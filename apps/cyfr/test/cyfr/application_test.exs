@@ -292,7 +292,7 @@ defmodule Cyfr.ApplicationTest do
                Aqua.ScheduleTurns,
                Aqua.Crew,
                Aqua.Nudge,
-               Aqua.ProgramTree,
+               Aqua.Harness.Sessions,
                Aqua.WorkerTree,
                Aqua.RunnerTree,
                Aqua.PageCalls,

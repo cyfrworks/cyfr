@@ -127,7 +127,7 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 		machine = savedMachine
 		openEngine, askTerminal, askInput = savedOpen, savedTerminal, savedInput
 	})
-	machine.groups = func(string) []string {
+	machine.groups = func(context.Context, string) []string {
 		if s.notAdministrator {
 			return []string{"users"}
 		}
