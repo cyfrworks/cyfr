@@ -221,8 +221,10 @@ SERVICE_BOUND = 16 * 1024 * 1024
 # later check returns them (`+MMmcs`, ten by default), each at most the
 # base64 of the largest answer's frame, which is the largest binary the
 # service makes for a runner (Prima.HostAPI.max_answer_bytes/0, 5 MiB).
+# That is ten segments of 6,990,508 bytes, 69,905,080 bytes or 66.7 MiB.
 # Measured at 42 to 58 MiB more than idle with the count, and 116 to 124
-# MiB without it, under this burst.
+# MiB without it, under this burst. Holding the group closer to the count
+# needs the release's VM flags, a later slice.
 SERVICE_SLACK = 10 * 4 * -(-5 * 1024 * 1024 // 3)
 # The service-bound case's burst: the children of one formula, in its
 # runner, each answered at once for its artifact with REFUSAL_BYTES, most
