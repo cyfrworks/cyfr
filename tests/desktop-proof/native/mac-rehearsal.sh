@@ -29,7 +29,9 @@
 #
 # Usage: bash tests/desktop-proof/native/mac-rehearsal.sh CYFR ARCH
 # CYFR is the cyfr the package carries, ARCH amd64 or arm64. It runs on a
-# disposable macOS runner alone (GITHUB_ACTIONS=true): it trusts its
+# disposable macOS runner of GitHub's alone (GITHUB_ACTIONS=true and
+# RUNNER_ENVIRONMENT=github-hosted, which GitHub sets on its own runners
+# and on no person's Mac) and refuses anywhere else first: it trusts its
 # identity in the System keychain with sudo and leaves that trust to the
 # runner's end, as taking it away asks for a person's authorisation, which
 # nobody gives there. Each command that could wait on a person has a bound
@@ -37,10 +39,17 @@
 # apps/codex/desktop's packages must be installed.
 set -uo pipefail
 
+# It trusts a certificate of its own making for code signing and leaves
+# that trust behind, so it runs where the machine is thrown away after the
+# job: on GitHub's own runners, and of those on macOS.
+if [ "${GITHUB_ACTIONS:-}" != true ] || [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ]; then
+  echo "rehearsal: refused: it trusts a certificate of its own making and leaves the trust behind, so it runs on a GitHub-hosted runner alone" >&2
+  exit 64
+fi
+[ "$(uname -s)" = Darwin ] || { echo "rehearsal: refused: it rehearses the Mac package, on macOS alone" >&2; exit 64; }
 CYFR=${1:-}
 ARCH=${2:-}
 [ -x "$CYFR" ] && [ -n "$ARCH" ] || { echo "usage: bash $0 CYFR ARCH" >&2; exit 64; }
-[ "$(uname -s)" = Darwin ] && [ "${GITHUB_ACTIONS:-}" = true ] || { echo "rehearsal: a disposable macOS runner alone" >&2; exit 64; }
 CYFR=$(cd "$(dirname "$CYFR")" && pwd)/$(basename "$CYFR")
 DESKTOP=$(cd "$(dirname "$0")/../../../apps/codex/desktop" && pwd)
 
