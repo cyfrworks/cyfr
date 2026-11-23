@@ -1453,3 +1453,25 @@ func TestHomeFailedEndsItsAttemptAloneAndIsNoLock(t *testing.T) {
 		t.Fatalf("the next Connect answered %+v", got)
 	}
 }
+
+// A lock tells main locked without waiting for main to take it: with main
+// reading nothing, the lock returns all the same.
+func TestALockTellsMainWithoutWaiting(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	a.Send = func(Message) error { select {} }
+	told := make(chan Message, 1)
+	a.Tell = func(m Message) { told <- m }
+	locked := make(chan struct{})
+	go func() {
+		defer close(locked)
+		a.Lock("Locked.")
+	}()
+	select {
+	case <-locked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the lock waited for main")
+	}
+	if m := <-told; m.Type != TypeLocked {
+		t.Fatalf("main was told %+v", m)
+	}
+}
