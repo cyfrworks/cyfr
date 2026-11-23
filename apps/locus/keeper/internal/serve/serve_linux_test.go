@@ -235,6 +235,7 @@ func newKeeperOf(t *testing.T, isolated bool) *keeper {
 		roots:    residue.Roots{Dirs: []string{base}},
 		pools:    map[string]*pool.Pool{spec.Name: pool.New(spec)},
 		spawns:   map[string]*spawn{},
+		places:   map[string]*place{},
 		waiters:  map[int]*child{},
 		keptLive: map[int]int{},
 		keptOps:  map[int]*sync.Mutex{},
@@ -302,11 +303,11 @@ func (k *keeper) spawn(t *testing.T, id, script string, env map[string]string, c
 }
 
 // spawnRequest is the parsed request for a spawn of `/bin/sh -c script`
-// with the given memory bound.
+// with the given memory bound, in the place of its own id.
 func spawnRequest(t *testing.T, attach, id, script string, env map[string]string, control bool, memoryBytes uint64) *protocol.Request {
 	t.Helper()
 	message := map[string]any{
-		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "pool": "runner",
+		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "place": id, "pool": "runner",
 		"argv": []string{"/bin/sh", "-c", script}, "env": env, "control": control,
 		"memory_bytes": memoryBytes, "cpu_quota": protocol.CPUPeriod,
 		"attach": map[string]string{"path": attach, "token": testToken},
@@ -329,7 +330,7 @@ func (k *keeper) spawnBounded(t *testing.T, id, script string, env map[string]st
 	if k.isolated {
 		req.Isolation = protocol.IsolationNetns
 	}
-	k.s.handleSpawn(req)
+	k.handleSpawn(t, req)
 
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned || spawned["id"] != id {
@@ -354,6 +355,33 @@ func (k *keeper) spawnBounded(t *testing.T, id, script string, env map[string]st
 		t.Fatalf("attach frame %d %q %v", stream, payload, err)
 	}
 	return spawned["spawn_id"].(string), uid, rc
+}
+
+// parsed is the request line parses to.
+func parsed(t *testing.T, line string) *protocol.Request {
+	t.Helper()
+	req, rerr := protocol.ParseRequest([]byte(line))
+	if rerr != nil {
+		t.Fatal(rerr.Detail)
+	}
+	return req
+}
+
+// place has the keeper hold a place of id for kind, and answers its reply.
+func (k *keeper) place(t *testing.T, id, kind string) map[string]any {
+	t.Helper()
+	k.s.handle(parsed(t, `{"v":3,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
+	return k.reply(t)
+}
+
+// handleSpawn places the place req names and then asks for the spawn, as a
+// client does once its preparation is done.
+func (k *keeper) handleSpawn(t *testing.T, req *protocol.Request) {
+	t.Helper()
+	if placed := k.place(t, req.Place, protocol.KindRun); placed["type"] != protocol.TypePlaced || placed["id"] != req.Place {
+		t.Fatalf("place %s answered %v", req.Place, placed)
+	}
+	k.s.handleSpawn(req)
 }
 
 func (k *keeper) release(t *testing.T, spawnID string) {
@@ -573,6 +601,7 @@ func TestIsolationMustMatchThePool(t *testing.T) {
 			log:     logx.NewWriter(io.Discard, "cyfr-locus", false),
 			pools:   map[string]*pool.Pool{spec.Name: pool.New(spec)},
 			spawns:  map[string]*spawn{},
+			places:  map[string]*place{"9": {whose: protocol.Whose{Kind: protocol.KindRun}}},
 			waiters: map[int]*child{},
 			channel: ours,
 		}
@@ -649,7 +678,7 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := theirs.Write([]byte(`{"v":2,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
+	if _, err := theirs.Write([]byte(`{"v":3,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	lr := protocol.NewLineReader(theirs)
@@ -706,7 +735,7 @@ func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
 		channel: ours,
 	}
 	resize := func(spawnID string) *protocol.Request {
-		req, rerr := protocol.ParseRequest([]byte(`{"v":2,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+		req, rerr := protocol.ParseRequest([]byte(`{"v":3,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 		if rerr != nil {
 			t.Fatal(rerr.Detail)
 		}
