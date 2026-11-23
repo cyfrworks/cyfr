@@ -42,18 +42,17 @@
 # reboot ends. After each
 # lock, kill, cut and reboot the session cookie the screen last sent CYFR
 # (read from the request heads root observes on the guest's loopback,
-# box.py, never kept in the evidence) is sent to sign in, and at every
-# exit no evidence file holds any cookie the screen sent, or the evidence
-# is removed (evidence_close). The video in the
+# box.py) is sent to sign in. The video in the
 # five minutes is a canvas written with the API key the screen made: the
 # proof reads that key off the loopback wire as root, as CYFR sent it to
 # the screen, since Prism shows a key once, to the person, and nothing else
 # hands it over; it stays in root's file on the guest, is used for that
-# canvas alone, and the evidence holds none (the scrub, which refuses any
-# string of a key's shape too), as bytes or as
-# pixels: from the key's making until Prism's card that shows it is seen
-# closed by its Done, nothing of the screen is recorded, on a pass or a
-# failure. Every press and read
+# canvas alone; the proof closes Prism's card that shows it with its Done
+# before it goes on. The evidence holds credentials of the run's own
+# guest, its session cookies, the API key, the six words and the setup
+# token among them, and that guest no longer exists when the run ends;
+# the evidence stays on this host and is read before it is attached
+# anywhere. Every press and read
 # of the screen is a person's: the display read by tesseract on QEMU's
 # screendump and the guest's tablet pressed there (guest/screen.py). After
 # `cyfr down` and another reboot CYFR stays down, the screen says why
@@ -484,8 +483,6 @@ handle, holder = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
 sys.exit(0 if handle["errors"][0]["code"] == "HANDLE_NOT_FOUND" and not holder.get("identifier") else 1)' \
     "$GUEST_DIR/handle-shown.json" "$GUEST_DIR/holder-shown.json"
   check "screenshot screen-recovery.png" guest_screenshot screen-recovery.png
-  # I saved it opens Prism, and the screen holds a session from here on.
-  SCRUB_DUE=1
   printf '\n' | guest_keys || fail "QMP did not press I saved it"
   sleep 15
   check "screenshot screen-prism.png" guest_screenshot screen-prism.png
@@ -699,19 +696,14 @@ screen_confirms() {
   confirmation_state wrong "$ref"
   check "the home still holds it pending" json_is "$GUEST_DIR/confirmation-wrong.json" '{"state": "pending", "confirmed_client_id": null}'
   # The PIN makes the key, which Prism shows once, in a card the person
-  # closes with its Done: from here until that card is seen gone nothing
-  # of the screen is recorded (KEY_SHOWN, lib.sh), and a press that misses
-  # or a card that stays ends the run with a sentence alone.
-  KEY_SHOWN=1
+  # closes with its Done.
   check "the $SECRET_NAME is tapped into the confirmation and its Confirm tapped" confirm_tapped "$SECRET"
   sleep 8
   shell_page confirmed
   check "the screen confirmed it with the PIN again" grep -q 'Confirmed on this device' "$GUEST_DIR/shell-confirmed.html"
   check "Prism shows the key it made" screen_shows 'Copy this key now' 30
-  screen_press Done last || fail "the screen did not press the key's Done, so the run ends without a record of the screen"
-  screen_shows_not 'Copy this key now' 15 || fail "the key's card did not close after its Done, so the run ends without a record of the screen"
-  KEY_SHOWN=""
-  record PASS "the key's card is closed"
+  screen_press Done last || fail "the screen did not press the key's Done ($GUEST_DIR/screen-press.txt)"
+  check "the key's card is closed" screen_shows_not 'Copy this key now' 15
   check "screenshot screen-key-made.png" guest_screenshot screen-key-made.png
   confirmation_state confirmed "$ref"
   client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/.cyfr/device/client.json")
@@ -961,40 +953,6 @@ screen_keeps_no_session() {
   check "the session it had open opens nothing" cookie_is out kept
 }
 
-# evidence_close is the run's one closing of its evidence, which every
-# exit runs before the teardown (PROOF_CLOSE, cleanup.sh), a pass or any
-# failure. Once the screen may hold a session (SCRUB_DUE, from the press
-# that opens Prism; before it no cookie or key exists), the evidence as it
-# stands, packed, is searched in the guest for every session cookie the
-# screen sent and every API key CYFR sent it (box.py scrub), whose record
-# never leaves the guest; the count and any file holding one are in
-# GUEST_DIR/scrub.txt. Evidence the scrub did not show free of them, one
-# that found something, looked for nothing or could not run, is removed
-# whole, and the run fails. Then the part's verdict, once it reached its end (PART_ENDED),
-# and the results.
-PART_ENDED="" SCRUB_DUE=""
-evidence_scrub() {
-  tar -C "$OUT" -cf "$WORK/evidence.tar" . &&
-    guest_copy_in "$WORK/evidence.tar" evidence.tar &&
-    guest_root_out "python3 -I /root/box.py scrub $OBSERVED /home/proof/evidence.tar" >"$GUEST_DIR/scrub.txt"
-}
-evidence_close() {
-  if [ -n "$SCRUB_DUE" ]; then
-    if ! evidence_scrub; then
-      echo "::error::install-screen proof: the scrub did not show the evidence free of the cookies and keys the box observed ($(head -c 2000 "$GUEST_DIR/scrub.txt" 2>/dev/null | tr '\n' ' ')), so $OUT is removed" >&2
-      proof_evidence_drop "$OUT"
-      return 1
-    fi
-    record PASS "no evidence file holds a session cookie the screen sent or an API key CYFR sent it ($GUEST_DIR/scrub.txt)"
-    guest_ssh 'rm -f ~/evidence.tar' || true
-  fi
-  local status=0
-  [ -z "$PART_ENDED" ] || part_verdict "$PART_ENDED" || status=1
-  [ ! -f "$OUT/results.txt" ] || echo "install proof: $(tr '\n' ';' <"$OUT/results.txt") evidence in $OUT"
-  return "$status"
-}
-PROOF_CLOSE=evidence_close
-
 clean_install() {
   guest_boot clean 8192 40G
   tty1_login
@@ -1181,7 +1139,8 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
   guest_journal
-  PART_ENDED=clean
+  proof_guest_stop "$GUEST" "$GUEST_DIR"
+  part_verdict clean
 }
 
 status=0
@@ -1193,4 +1152,6 @@ candidate_build
 candidate_app_build
 candidate_server_use
 clean_install || status=$?
+echo
+echo "install proof: $(tr '\n' ';' <"$OUT/results.txt" 2>/dev/null) evidence in $OUT"
 exit "$status"

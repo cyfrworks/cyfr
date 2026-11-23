@@ -65,7 +65,7 @@ handoff	janitor-test	1	900	-	scripts/janitor.sh,scripts/image.sh,scripts/lib/run
 handoff	release-boot-names-test	-	600	-	tests/release-boot/**	bash tests/release-boot/names-test.sh
 handoff	imagesuite-test	1	600	-	tests/imagesuite.py,tests/imagesuite_test.py	python3 -I tests/imagesuite_test.py
 handoff	registry-stand-in-test	-	600	-	tests/registry-stand-in/**	python3 -I tests/registry-stand-in/standin_test.py
-handoff	install-screen-box-test	-	600	-	tests/install-screen-proof/box.py,tests/install-screen-proof/box_test.py	python3 -I tests/install-screen-proof/box_test.py
+handoff	install-screen-stored-test	-	600	-	tests/install-screen-proof/box.py,tests/install-screen-proof/box_test.py	python3 -I tests/install-screen-proof/box_test.py
 handoff	runtime-image-checks	-	600	-	tests/locus-runtime-image/**	python3 -I tests/locus-runtime-image/canary_test.py && python3 -I tests/locus-runtime-image/worker_auth.py --self-check
 handoff	backends-image-check	-	600	-	tests/locus-backends-image/**	python3 -I tests/locus-backends-image/harness.py --self-check
 handoff	compose-proof-tests	-	900	-	tests/compose-proof/**,docker-compose.yml	bash tests/compose-proof/cleanup-test.sh && bash tests/compose-proof/predicates-test.sh

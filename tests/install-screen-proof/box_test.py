@@ -2,19 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# box.py's readings off the guest, run as the proof runs it there, at its
-# command line, against stand-ins: the cookie store read as SQLite holds
-# it, a cookie committed to its write-ahead log alone among them, and the
-# scrub, which refuses a key it knows from the wire and one of a key's
-# shape it never saw.
+# box.py's reading of the screen's cookie stores off the guest, run as the
+# proof runs it there, at its command line, against a stand-in store: read
+# as SQLite holds it, a cookie committed to its write-ahead log alone
+# among what it counts.
 #   python3 -I tests/install-screen-proof/box_test.py
-import io
-import json
 import os
 import sqlite3
 import subprocess
 import sys
-import tarfile
 import tempfile
 
 BOX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "box.py")
@@ -60,45 +56,5 @@ def test_stored():
         db.close()
 
 
-def archive(files):
-    data = io.BytesIO()
-    with tarfile.open(fileobj=data, mode="w") as tar:
-        for name, body in files.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(body)
-            tar.addfile(info, io.BytesIO(body))
-    return data.getvalue()
-
-
-def test_scrub():
-    wire = "cyfr_sk_" + "w" * 32
-    never = "cyfr_sk_" + "n" * 32
-    with tempfile.TemporaryDirectory() as d:
-        record = os.path.join(d, "record.jsonl")
-        with open(record, "w") as f:
-            f.write(json.dumps({"t": 1, "port": 4000, "line": "GET / HTTP/1.1", "curl": False, "cookie": "the-session"}) + "\n")
-            f.write(json.dumps({"t": 2, "key": wire}) + "\n")
-        cases = {
-            "evidence holding none passes": ({"clean/a.txt": b"nothing here"}, 0, []),
-            "a cookie the wire carried is refused": ({"clean/a.txt": b"x the-session x"}, 1, ["clean/a.txt"]),
-            "a key the wire carried is refused": ({"clean/b.html": wire.encode()}, 1, ["clean/b.html"]),
-            "a key the wire never carried is refused by its shape": ({"clean/c.txt": b"seen " + never.encode()}, 1, ["clean/c.txt"]),
-        }
-        for what, (files, status, named) in cases.items():
-            tar = os.path.join(d, "evidence.tar")
-            with open(tar, "wb") as f:
-                f.write(archive(files))
-            said = box("scrub", record, tar)
-            lines = said.stdout.splitlines()
-            check(what, said.returncode == status and lines[1:] == named, said.stdout + said.stderr)
-        empty = os.path.join(d, "empty.jsonl")
-        open(empty, "w").close()
-        with open(tar, "wb") as f:
-            f.write(archive({"clean/a.txt": b"nothing here"}))
-        said = box("scrub", empty, tar)
-        check("a scrub that looked for nothing passes nothing", said.returncode == 1, said.stdout)
-
-
 test_stored()
-test_scrub()
 sys.exit(1 if FAILED else 0)

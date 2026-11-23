@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/http"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -243,6 +244,53 @@ func TestScreenOnDownloadsNothingBeforeTheYes(t *testing.T) {
 	sum := sha256.Sum256([]byte("the app"))
 	if !strings.Contains(out.String(), "\n  "+appCommand(dir, hex.EncodeToString(sum[:]))+"\n") {
 		t.Errorf("the commands shown do not install the package the checksums name:\n%s", out.String())
+	}
+}
+
+// The checksum read before the question writes nothing on the machine:
+// the release's verifier keeps its trust in memory. From a home that starts
+// empty, with the release's checksums answered and everything else
+// offline, so that the real verifier cannot reach its trust root, screen
+// on refuses before it asks, and the home is still empty.
+func TestScreenOnReadsTheChecksumWritingNothing(t *testing.T) {
+	s := screenProject(t)
+	s.installed, s.app = nil, ""
+	saved := version.Version
+	t.Cleanup(func() { version.Version = saved })
+	version.Version = "0.6.0"
+	savedTransport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = savedTransport })
+	http.DefaultTransport = roundTripper(func(r *http.Request) (*http.Response, error) {
+		body := ""
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/checksums.txt"):
+			body = strings.Repeat("a", 64) + "  cyfr-desktop_0.6.0_linux_amd64.deb\n"
+		case strings.HasSuffix(r.URL.Path, "/checksums.txt"+release.BundleSuffix):
+			body = "{}"
+		default:
+			return nil, errors.New("offline")
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+	home := os.Getenv("HOME")
+	if held, _ := os.ReadDir(home); len(held) != 0 {
+		t.Fatalf("the home holds %v before", held)
+	}
+	askInput = strings.NewReader("no\n")
+	var out bytes.Buffer
+	err := screenOn(context.Background(), true, &out)
+	if err == nil || !strings.Contains(err.Error(), "The signed checksums of release 0.6.0 could not be read") || strings.Contains(out.String(), "(yes/no)") {
+		t.Fatalf("screen on answered %v:\n%s", err, out.String())
+	}
+	var held []string
+	_ = filepath.WalkDir(home, func(path string, _ os.DirEntry, _ error) error {
+		if path != home {
+			held = append(held, path)
+		}
+		return nil
+	})
+	if held != nil {
+		t.Errorf("the checksum read wrote into the home: %v", held)
 	}
 }
 

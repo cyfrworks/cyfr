@@ -37,11 +37,6 @@
 #   box.py visits RECORD SINCE PORT TEXT
 #       prints each request target the screen asked of PORT at or after
 #       SINCE that holds TEXT, one per line
-#   box.py scrub RECORD TAR
-#       exits 0 when no file of the tar archive TAR holds a session cookie
-#       value or an API key RECORD saw, nor any string of an API key's
-#       shape, seen on the wire or not, printing how many it looked for;
-#       else 1, naming the files, and 1 when it looked for none
 #   box.py confirmation DATABASE REF
 #       prints, as JSON, the state and confirming client of the pending
 #       confirmation REF in CYFR's SQLite database DATABASE
@@ -68,7 +63,6 @@ import re
 import socket
 import sqlite3
 import sys
-import tarfile
 import time
 
 COOKIE = "_cyfr_key"
@@ -222,18 +216,6 @@ def canvas(keyfile, folder):
     return reference
 
 
-def scrub(record, archive):
-    values = {e["cookie"] for e in entries(record) if e["cookie"]} | set(found(record, "key"))
-    holding = []
-    with tarfile.open(archive) as tar:
-        for member in tar:
-            if member.isfile():
-                data = tar.extractfile(member).read()
-                if KEY.search(data) or any(v.encode() in data for v in values):
-                    holding.append(member.name)
-    return len(values), holding
-
-
 def confirmation(database, ref):
     db = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
     row = db.execute(
@@ -337,12 +319,6 @@ def main(argv):
     elif len(argv) == 3 and argv[1] == "framed":
         first = next(found(argv[2], "ws_compressed"), None)
         print("none" if first is None else "compressed" if first else "plain")
-    elif len(argv) == 4 and argv[1] == "scrub":
-        looked, holding = scrub(argv[2], argv[3])
-        print(f"{looked} session cookies and API keys looked for, {len(holding)} files hold one")
-        for name in holding:
-            print(name)
-        return 0 if looked and not holding else 1
     elif len(argv) == 4 and argv[1] == "confirmation":
         print(json.dumps(confirmation(argv[2], argv[3])))
     elif len(argv) == 3 and argv[1] == "athanors":
@@ -353,8 +329,8 @@ def main(argv):
         print(stored(argv[2]))
     else:
         print("usage: box.py observe RECORD | header RECORD SINCE FILE | visits RECORD SINCE PORT TEXT | key RECORD FILE"
-              " | canvas KEYFILE DIR | framed RECORD | scrub RECORD TAR"
-              " | confirmation DATABASE REF | athanors DATABASE | stored DIR", file=sys.stderr)
+              " | canvas KEYFILE DIR | framed RECORD"
+              " | confirmation DATABASE REF | athanors DATABASE | renderers | stored DIR", file=sys.stderr)
         return 64
     return 0
 

@@ -24,6 +24,7 @@ import (
 	"github.com/cyfr/codex/internal/holder"
 	"github.com/cyfr/codex/internal/idle"
 	"github.com/cyfr/codex/internal/idle/idletest"
+	"github.com/cyfr/codex/internal/version"
 )
 
 // hungScreen is a screen whose key is on an account and whose Docker never
@@ -341,5 +342,69 @@ func TestScreenShell_AScreenThatEndsEndsItsReadings(t *testing.T) {
 	})
 	if took := time.Since(ended); took > 3*time.Second {
 		t.Fatalf("the reading's Docker call ended %v after the screen", took)
+	}
+}
+
+// The screen's warning is read as each page is drawn: one shell on one
+// listener, its CYFR answering and its folder set to the app's release,
+// draws its lock page with no warning; once only the folder's release
+// changes, as a `cyfr update` at the same address leaves it, the next
+// lock page from that listener names the folder's release.
+func TestScreenShell_TheNextLockPageNamesTheFolderUpdatedAtItsAddress(t *testing.T) {
+	screenProject(t)
+	saved := version.Version
+	t.Cleanup(func() { version.Version = saved })
+	version.Version = "0.6.0"
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := func(tag string) {
+		if err := os.WriteFile("docker-compose.yml", []byte("services:\n  cyfr:\n    image: ghcr.io/cyfrworks/cyfr:"+tag+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compose("0.6.0")
+	accounts := accounttest.New(t)
+	at, err := url.Parse(accounts.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := "http://localhost:" + at.Port()
+	env := "CYFR_ACCESS=local\nCYFR_PORT=" + at.Port() + "\nCYFR_SETUP_TOKEN=the-token\nCYFR_DIRECTORY_URL=" + home + "\n"
+	if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	accounts.ServedAt(home)
+	container, err := json.Marshal(map[string]any{"id": "c0ffee", "running": true, "started": "t1", "dir": dir,
+		"ports": map[string]any{at.Port() + "/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": at.Port()}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &hungScreen{}
+	h.compositor = screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	programs["docker"] = "case \"$1\" in\ncontext) echo unix:///var/run/docker.sock;;\nps) echo c0ffee;;\ninspect) echo '" + string(container) + "';;\nesac"
+	screenPrograms(t, programs)
+	h.runningScreen = startScreen(t)
+	h.shows(`action="/passphrase"`)
+	drawn := pageCode.FindStringSubmatch(h.posted("/passphrase", url.Values{}))
+	if drawn == nil {
+		t.Fatal("no passphrase was drawn")
+	}
+	proof := pageProof.FindStringSubmatch(h.posted("/setup", url.Values{"name": {"ada"}, "secret": {drawn[1]}, "again": {drawn[1]}}))
+	if proof == nil {
+		t.Fatal("setup reached no recovery code")
+	}
+	h.posted("/saved", url.Values{"proof": {proof[1]}})
+	h.app.send(mainLocks)
+	h.app.until("locked")
+	const named = "is set to release 0.6.1"
+	if page := h.posted("/", nil); !strings.Contains(page, "CYFR is locked") || strings.Contains(page, "is set to release") {
+		t.Fatalf("the lock page, the releases agreeing:\n%s", page)
+	}
+	compose("0.6.1")
+	if page := h.posted("/", nil); !strings.Contains(page, "CYFR is locked") || !strings.Contains(page, named) {
+		t.Fatalf("the next lock page does not name the folder's release:\n%s", page)
 	}
 }
