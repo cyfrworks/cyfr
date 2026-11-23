@@ -596,6 +596,9 @@ screen_video() {
   screen_press proof-video last || fail "the screen did not press the canvas's result ($GUEST_DIR/screen-press.txt)"
   check "Prism offers it among the desktops to choose" screen_shows 'Choose your desktop' 15
   screen_press proof-video || fail "the screen did not choose the canvas ($GUEST_DIR/screen-press.txt)"
+  # A canvas runs once the person grants it.
+  check "Prism asks the person to grant it" screen_shows 'Grant proof-video' 15
+  screen_press Grant last || fail "the screen did not press Grant ($GUEST_DIR/screen-press.txt)"
   sleep 8
   check "screenshot screen-video.png" guest_screenshot screen-video.png
   check "Prism shows the canvas, its Play to tap" screen_shows Play 30
