@@ -139,7 +139,7 @@ defmodule Locus.Archive do
     if take == left,
       do:
         step(
-          ended(reader, pad, regular?),
+          %{reader | at: {:pad, pad}},
           rest,
           if(regular?, do: [:file_end | events], else: events)
         ),
@@ -193,11 +193,8 @@ defmodule Locus.Archive do
 
   # An entry of no bytes ends at its header; any other once its bytes are
   # read, then its padding is skipped.
-  defp data(reader, 0, _pad, true), do: %{reader | at: :header}
-  defp data(reader, 0, _pad, false), do: %{reader | at: :header}
+  defp data(reader, 0, _pad, _regular?), do: %{reader | at: :header}
   defp data(reader, size, pad, regular?), do: %{reader | at: {:data, size, pad, regular?}}
-
-  defp ended(reader, pad, _regular?), do: %{reader | at: {:pad, pad}}
 
   defp safe?(name),
     do:
