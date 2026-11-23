@@ -246,11 +246,13 @@ function head(file) {
 /**
  * Every file of the app at `app`, each of a kind: {code, data, links}.
  * Code is every Mach-O file, its bundles (.app, .framework) and the app,
- * inner first; data is a file of a kind DATA names, or a signature's
- * _CodeSignature/CodeResources; a link is one whose target stays inside
- * the app. Anything else is refused, so no file passes by default.
+ * inner first; data is a file of a kind DATA names, a signature's
+ * _CodeSignature/CodeResources, or, when `stapled`, the notarisation's
+ * ticket, which stapler writes as Contents/CodeResources directly under the
+ * app; a link is one whose target stays inside the app. Anything else is
+ * refused, so no file passes by default.
  */
-export function classify(app) {
+export function classify(app, {stapled = false} = {}) {
   const root = realpathSync(app)
   const out = {code: [], data: [], links: []}
   // Every file of no kind, so one refusal names them all.
@@ -273,7 +275,8 @@ export function classify(app) {
         unknown.push(`${shown} is neither a file, a folder nor a link`)
       } else if (MACHO.has(head(p))) {
         out.code.push(p)
-      } else if (DATA.test(name) || DATA_NAMES.has(name) || (name === "CodeResources" && path.basename(at) === "_CodeSignature")) {
+      } else if (DATA.test(name) || DATA_NAMES.has(name) || (name === "CodeResources" && path.basename(at) === "_CodeSignature") ||
+        (stapled && name === "CodeResources" && path.relative(app, at) === "Contents")) {
         // Data cannot run: whatever can is code, and the app holds no code
         // but Mach-O.
         if ((st.mode & 0o111) !== 0) unknown.push(`${shown} can run, so it is code, and it is no Mach-O`)
@@ -290,9 +293,6 @@ export function classify(app) {
   return out
 }
 
-/** The app's code, inner first: classify(app).code. */
-export const signedCode = (app) => classify(app).code
-
 const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex")
 
 /**
@@ -301,11 +301,12 @@ const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest(
  * group and which lists the app's signing certificate; each signature
  * verifies strictly, is by that certificate, hardened and timestamped,
  * with exactly its kind's entitlements as read; the bundled cyfr is the
- * one the build signed, whose SHA-256 is `helper`. Throws Refused naming
- * the first difference.
+ * one the build signed, whose SHA-256 is `helper`. Unless `rehearsed`, the
+ * app may hold its stapled ticket; a rehearsal staples nothing. Throws
+ * Refused naming the first difference.
  */
-export async function checkApp(app, {helper, team, group, profile}) {
-  const code = signedCode(app)
+export async function checkApp(app, {helper, team, group, profile}, {rehearsed = false} = {}) {
+  const code = classify(app, {stapled: !rehearsed}).code
   await run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], {what: "CYFR.app's signature does not verify"})
   const embedded = path.join(app, "Contents", "embedded.provisionprofile")
   let bytes
@@ -374,7 +375,7 @@ function sorted(value) {
  */
 export async function checkDmg(file, expect, {rehearsed = false} = {}) {
   const release = async (app) => {
-    await checkApp(app, expect)
+    await checkApp(app, expect, {rehearsed})
     if (rehearsed) return
     await run("xcrun", ["stapler", "validate", app], {what: "CYFR.app has no stapled notarisation"})
     await run("spctl", ["--assess", "--type", "execute", app], {what: "Gatekeeper refuses CYFR.app"})

@@ -83,11 +83,11 @@ exit 1
   writeFileSync(path.join(bin, "security"), `#!/bin/sh\ncat ${path.join(dir, "profile.xml")}\n`)
   for (const f of ["codesign", "security"]) chmodSync(path.join(bin, f), 0o755)
   const helper = createHash("sha256").update(Buffer.concat([thin64, Buffer.from("cyfr")])).digest("hex")
-  const check = async () => {
+  const check = async ({rehearsed} = {}) => {
     const before = process.env.PATH
     process.env.PATH = `${bin}:${before}`
     try {
-      await checkApp(app, {helper, team, group, profile})
+      await checkApp(app, {helper, team, group, profile}, {rehearsed})
     } finally {
       process.env.PATH = before
     }
@@ -101,6 +101,25 @@ test("a signed app whose every file is of a known kind passes", async (t) => {
   const r = rig(t)
   symlinkSync("Contents/Info.plist", path.join(r.app, "Info.plist"))
   await r.check()
+})
+
+// stapler writes a notarised app's ticket as Contents/CodeResources; it is
+// data there alone, and only in a check of a real build.
+test("the stapled ticket is data directly under Contents, and only where a real build stapled it", async (t) => {
+  const stapled = rig(t)
+  stapled.put("Contents/CodeResources", "a notarisation ticket")
+  await stapled.check()
+  await assert.rejects(() => stapled.check({rehearsed: true}),
+    refused(/^CYFR\.app\/Contents\/CodeResources is of no kind a signed CYFR\.app holds$/))
+  for (const elsewhere of ["CodeResources", "Contents/Resources/CodeResources", "Contents/MacOS/CodeResources"]) {
+    const r = rig(t)
+    r.put(elsewhere, "a notarisation ticket")
+    await assert.rejects(() => r.check(), refused(new RegExp(`^CYFR\\.app/${elsewhere.replace(/\./g, "\\.")} is of no kind a signed CYFR\\.app holds$`)),
+      elsewhere)
+  }
+  const runs = rig(t)
+  runs.put("Contents/CodeResources", "a notarisation ticket", 0o755)
+  await assert.rejects(() => runs.check(), refused(/^CYFR\.app\/Contents\/CodeResources can run, so it is code, and it is no Mach-O$/))
 })
 
 test("an entitlement read that failed, or that is not a property list, refuses the app", async (t) => {
