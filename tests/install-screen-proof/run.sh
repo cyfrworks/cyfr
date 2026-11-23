@@ -43,7 +43,9 @@
 # proof reads that key off the loopback wire as root, as CYFR sent it to
 # the screen, since Prism shows a key once, to the person, and nothing else
 # hands it over; it stays in root's file on the guest, is used for that
-# canvas alone, and the evidence holds none (the scrub). Every press and read
+# canvas alone, and the evidence holds none (the scrub), as bytes or as
+# pixels: no screenshot is taken while Prism's card shows the key, which
+# the proof closes with its Done first. Every press and read
 # of the screen is a person's: the display read by tesseract on QEMU's
 # screendump and the guest's tablet pressed there (guest/screen.py). After
 # `cyfr down` and another reboot CYFR stays down, the screen says why
@@ -489,10 +491,10 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/.cyfr/device/client.json'
   check "the screen sends CYFR the session cookie Prism opened with" screen_cookie prism
   check "the home serves that cookie on a page that needs a session" cookie_is in prism
-  guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/open" >"$GUEST_DIR/open-forged.txt" 2>&1
-  check "a local program naming the shell's Host and Origin is sent back to the page, with no ticket" grep -qx '303 http://127.0.0.1:7340/' "$GUEST_DIR/open-forged.txt"
 
   screen_confirms
+  guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/open" >"$GUEST_DIR/open-forged.txt" 2>&1
+  check "a local program naming the shell's Host and Origin is sent back to the page, with no ticket" grep -qx '303 http://127.0.0.1:7340/' "$GUEST_DIR/open-forged.txt"
   screen_video
 
   step "five minutes without input lock the screen, a video started by a tap playing"
@@ -636,11 +638,9 @@ screen_confirms() {
   sleep 6
   check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
   since=$(guest_ssh 'date +%s')
-  # The sheet opens with the keyboard's focus on Confirm on this device,
-  # and Enter presses it; the page it opens shows that it was that link.
-  # Chrome's find bar is not used here: closed, it leaves the focus on the
-  # page's body, not on the match in the sheet.
-  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  # The sheet's Confirm on this device, pressed; the page it opens shows
+  # that it was that link.
+  screen_press 'Confirm on this device' || fail "the screen did not press Prism's Confirm on this device ($GUEST_DIR/screen-press.txt)"
   confirm_page_until confirm-drawn "$since" 60
   check "Confirm on this device opened the screen's own page, which draws the key CYFR is asked to make" \
     sh -c 'grep -q "Confirm on this device" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
@@ -660,14 +660,14 @@ screen_confirms() {
   confirmation_state cancelled "$ref"
   check "the home holds the change still pending, confirmed by no client" \
     json_is "$GUEST_DIR/confirmation-cancelled.json" '{"state": "pending", "confirmed_client_id": null, "proof": null}'
+  # The answered window closes by itself, and Prism, which still asks,
+  # is on the screen again, its Confirm on this device a press away.
+  sleep 6
+  check "screenshot screen-confirm-cancelled.png" guest_screenshot screen-confirm-cancelled.png
 
   step "a wrong PIN, then the PIN again, confirm it on this screen"
-  # Back to Prism's tab, which still asks.
-  guest_chord ctrl 1 || fail "QMP did not send the keys"
-  sleep 2
   since=$(guest_ssh 'date +%s')
-  # Prism's tab keeps its focus on Confirm on this device, as above.
-  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  screen_press 'Confirm on this device' || fail "the screen did not press Prism's Confirm on this device ($GUEST_DIR/screen-press.txt)"
   confirm_page_until confirm-again "$since" 60
   check "Confirm on this device draws it again" grep -q key.create "$GUEST_DIR/shell-confirm-again.html"
   printf '\t000000\n' | guest_keys || fail "QMP did not type"
@@ -681,8 +681,11 @@ screen_confirms() {
   sleep 8
   shell_page confirmed
   check "the screen confirmed it with the PIN again" grep -q 'Confirmed on this device' "$GUEST_DIR/shell-confirmed.html"
-  check "screenshot screen-confirmed.png" guest_screenshot screen-confirmed.png
-  sleep 6
+  # Prism shows the key made, once, in a card the person closes with its
+  # Done: closed before the screen is looked at again (the header).
+  check "Prism shows the key it made" screen_shows 'Copy this key now' 30
+  screen_press Done last || fail "the screen did not press the key's Done ($GUEST_DIR/screen-press.txt)"
+  check "the key's card is closed" screen_shows_not 'Copy this key now' 15
   check "screenshot screen-key-made.png" guest_screenshot screen-key-made.png
   confirmation_state confirmed "$ref"
   client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/.cyfr/device/client.json")
@@ -875,7 +878,7 @@ screen_stop_watched() {
   check "$1: the screen's processes end by themselves within 20 s and none runs for five seconds in a row ($GUEST_DIR/$3)" test "$status" = 0
   [ "$status" = 0 ] || guest_root '
     pkill -KILL -u proof -f "/\.cyfr/screen/launcher\.s[h]"; pkill -KILL -u proof -f "cyfr screen shel[l]"
-    pkill -KILL -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"; pkill -KILL -u proof -f "/opt/google/chrom[e]/"
+    pkill -KILL -u proof -f "^/opt/cyfr/CYF[R]"
     pkill -KILL -u proof -x labwc; pkill -KILL -u proof -x wvkbd-mobintl; pkill -KILL -u proof -x swayidle
     pkill -KILL -u proof -f "^dbus-daemon --nofork --print-addres[s]"; true'
 }

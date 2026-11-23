@@ -23,6 +23,8 @@
 #       when it is not gone within SECONDS
 #   screen.py SOCKET words
 #       prints every word the display shows, with where, for the evidence
+# A display, a QMP or a tesseract that fails exits 2, so that no failed
+# read passes for words not shown.
 # Words are read on the display's grey, on its inverse and on its bright
 # pixels alone, twice its size: light text on dark, dark on light and
 # white on colour alike. A key is a uniform
@@ -242,7 +244,7 @@ def main(argv):
         return 64
     except (OSError, QmpError, ValueError, subprocess.CalledProcessError) as error:
         print(f"screen.py: {error}", file=sys.stderr)
-        return 1
+        return 2
 
 
 if __name__ == "__main__":

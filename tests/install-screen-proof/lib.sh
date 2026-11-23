@@ -823,6 +823,22 @@ screen_shows() {
   done
 }
 
+# screen_shows_not TEXT SECONDS: whether the display stops showing TEXT
+# within SECONDS, as a read that worked found it (screen.py exits 2 on a
+# failed one).
+screen_shows_not() {
+  local closes status
+  budget "$2" || return 1
+  closes=$((SECONDS + BUDGET))
+  while :; do
+    status=0
+    screen_read shows "$1" || status=$?
+    [ "$status" != 1 ] || return 0
+    [ "$status" = 0 ] && [ "$SECONDS" -lt "$closes" ] || return 1
+    sleep 2
+  done
+}
+
 # screen_tap CHARACTERS: CHARACTERS tapped on the on-screen keyboard's
 # keys, read from the display, a newline its Enter.
 screen_tap() { screen_read tap "$1" 2>>"$GUEST_DIR/screen-press.txt"; }
