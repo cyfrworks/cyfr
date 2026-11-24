@@ -43,11 +43,15 @@ type machineSeams struct {
 	// dockerHere is whether the Docker this process reaches runs its
 	// containers on this computer.
 	dockerHere func(ctx context.Context) (bool, error)
+	// appPresent is whether the CYFR app is installed here, whole or left
+	// part way (installedAppPresent).
+	appPresent func() bool
 	// installed is whether dpkg holds the package installed.
 	installed func(pkg string) bool
-	// appRelease is the release of the CYFR app this machine holds: dpkg
-	// holds its package installed for this machine's architecture, and the
-	// app's own cyfr answers its release; "" otherwise.
+	// appRelease is the release of the CYFR app this machine holds, as the
+	// app's own cyfr answers it within 10 s, on Linux only where dpkg holds
+	// its package installed for this machine's architecture; "" where it
+	// answers no version, and where it answers nothing.
 	appRelease func() string
 	// running is whether the Docker service runs.
 	running func() bool
@@ -57,8 +61,10 @@ type machineSeams struct {
 	// displayManager is whether a display manager has the screen.
 	displayManager func() bool
 	// screenService is whether the cyfr-screen service is enabled, and
-	// whether it runs.
-	screenService func() (enabled, active bool)
+	// whether it runs (any state but inactive and failed); err is not nil
+	// when systemctl gave no state for whether it runs (it could not run,
+	// or ran past its bound), active then being no answer.
+	screenService func() (enabled, active bool, err error)
 	// system is the operating system this program runs on.
 	system func() string
 	// passwordless is whether sudo runs any command now without asking for
@@ -109,23 +115,32 @@ var machine = machineSeams{
 	dockerHere: func(ctx context.Context) (bool, error) {
 		return access.DockerIsHere(ctx, dockerProgram{})
 	},
+	appPresent: installedAppPresent,
 	installed: func(pkg string) bool {
 		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status}", pkg).Output()
 		return err == nil && string(out) == "installed"
 	},
 	appRelease: func() string {
-		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status} ${Architecture}", appPackage).Output()
-		if err != nil || string(out) != "installed "+runtime.GOARCH {
+		if runtime.GOOS == "linux" {
+			var out strings.Builder
+			query := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status} ${Architecture}", appPackage)
+			query.Stdout = &out
+			if err := runWithin(10*time.Second, query); err != nil || out.String() != "installed "+runtime.GOARCH {
+				return ""
+			}
+		}
+		path, err := appCyfr()
+		if err != nil {
 			return ""
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, appCyfr, "--version")
+		var said strings.Builder
+		cmd := exec.Command(path, "--version")
 		cmd.Env = append(os.Environ(), "CYFR_NO_UPDATE_CHECK=1")
-		said, err := cmd.Output()
-		first, _, _ := strings.Cut(string(said), "\n")
-		answered, ok := strings.CutPrefix(first, "cyfr version ")
-		if err != nil || !ok {
+		cmd.Stdout = &said
+		err = runWithin(10*time.Second, cmd)
+		first, _, _ := strings.Cut(said.String(), "\n")
+		answered, ok := strings.CutPrefix(strings.TrimRight(first, "\r"), "cyfr version ")
+		if err != nil || !ok || answered == "" {
 			return ""
 		}
 		return answered
@@ -134,9 +149,24 @@ var machine = machineSeams{
 	displayManager: func() bool {
 		return exec.Command("systemctl", "is-active", "--quiet", "display-manager").Run() == nil
 	},
-	screenService: func() (bool, bool) {
-		return exec.Command("systemctl", "is-enabled", "--quiet", "cyfr-screen").Run() == nil,
-			exec.Command("systemctl", "is-active", "--quiet", "cyfr-screen").Run() == nil
+	screenService: func() (bool, bool, error) {
+		enabled := runWithin(10*time.Second, exec.Command("systemctl", "is-enabled", "--quiet", "cyfr-screen")) == nil
+		// systemctl is-active prints the unit's state whatever it is, an
+		// absent unit's included; no state printed is no answer. Every
+		// state but inactive and failed runs: activating is its launcher
+		// between two starts of the app.
+		var said strings.Builder
+		query := exec.Command("systemctl", "is-active", "cyfr-screen")
+		query.Stdout = &said
+		err := runWithin(10*time.Second, query)
+		state := strings.TrimSpace(said.String())
+		if state == "" || errors.Is(err, errOverran) {
+			if err == nil {
+				err = errors.New("it printed no state")
+			}
+			return enabled, false, fmt.Errorf("systemctl is-active cyfr-screen gave no answer (%v)", err)
+		}
+		return enabled, state != "inactive" && state != "failed", nil
 	},
 	groups: func(ctx context.Context, account string) []string {
 		args := []string{"-nG"}

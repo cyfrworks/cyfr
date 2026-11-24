@@ -223,6 +223,18 @@ jobs:
           go test ./cmd/ -race -count=1 -v -run "^(${SETUP_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/setup-tests.log"
           for t in $SETUP_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/setup-tests.log" || { echo "::error::the Windows test $t did not run and pass"; exit 1; }; done
 
+      # cyfr update and uninstall of the installed app on Windows: the MSI's
+      # road, the bundle's cyfr never rewritten alone, the app removed or
+      # named. Each must run and pass here.
+      - name: go test (the app's update and uninstall on Windows ran and passed)
+        shell: bash
+        env:
+          APP_TESTS: TestTheMsiRoadRefusesWhatWindowsInstallerRefuses TestTheMsiRoadStepsAsideForTheInstaller TestUpdateNeverRewritesTheCyfrInsideAnAppsBundle TestUninstallNeverRemovesTheCyfrInsideAnAppsBundle TestUninstallRemovesOrNamesTheInstalledApp
+        run: |
+          set -euo pipefail
+          go test ./cmd/ -race -count=1 -v -run "^(${APP_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/app-tests.log"
+          for t in $APP_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/app-tests.log" || { echo "::error::the Windows test $t did not run and pass"; exit 1; }; done
+
       # cyfr restore's durable write, where a directory handle cannot be
       # flushed: the rename is written through and the write answers no
       # error. It must run and pass here.
@@ -308,11 +320,14 @@ jobs:
     # installed app with no CYFR server and no signing credentials; on
     # macOS the distribution's signing rehearsed with a self-made identity
     # (tests/desktop-proof/native/mac-rehearsal.sh), on Windows the MSI's
-    # cyfr on the person's PATH and off it again after the uninstall.
+    # cyfr on the person's PATH and off it again after the uninstall; then
+    # the installed app's update from one release to the next
+    # (tests/desktop-proof/native/update.sh).
     name: CYFR app (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    # Electron's download and the package's build take most of it.
-    timeout-minutes: 30
+    # Electron's download and the packages' builds, three of them with the
+    # update's two releases, take most of it.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -424,3 +439,16 @@ jobs:
       - name: Rehearse the Mac distribution
         if: runner.os == 'macOS'
         run: bash tests/desktop-proof/native/mac-rehearsal.sh "$RUNNER_TEMP/cyfr/cyfr" ${{ matrix.arch }}
+
+      # The installed app updated from release A to B by its own cyfr, as a
+      # person runs cyfr update (tests/desktop-proof/native/update.sh); last,
+      # as it leaves B installed.
+      - name: The app's update from one release to the next
+        run: |
+          set -euo pipefail
+          bash tests/desktop-proof/native/update.sh build "$RUNNER_TEMP/update-proof" ${{ matrix.arch }}
+          if [ "$RUNNER_OS" = Linux ]; then
+            dbus-run-session -- xvfb-run -a bash tests/desktop-proof/native/update.sh run "$RUNNER_TEMP/update-proof"
+          else
+            bash tests/desktop-proof/native/update.sh run "$RUNNER_TEMP/update-proof"
+          fi

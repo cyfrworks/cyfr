@@ -98,6 +98,7 @@ func standInMachine(t *testing.T) *standIn {
 	machine.dockerHere = func(context.Context) (bool, error) { return true, nil }
 	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }
 	machine.appRelease = func() string { return s.app }
+	machine.appPresent = func() bool { return slices.Contains(s.installed, appPackage) }
 	machine.running = func() bool { return s.running }
 	machine.displayManager = func() bool { return s.displayManager }
 	machine.system = func() string { return s.system }
@@ -248,8 +249,20 @@ func runFakeBrew(dir, args string) int {
 			return 3
 		}
 		fmt.Println("cyfr " + strings.TrimSpace(string(v)))
+	case "info --cask --json=v2 cyfr":
+		to, err := os.ReadFile(filepath.Join(dir, "offers"))
+		sum, serr := os.ReadFile(filepath.Join(dir, "sha256"))
+		if err != nil || serr != nil {
+			return 3
+		}
+		fmt.Printf("{\"formulae\":[],\"casks\":[{\"token\":\"cyfr\",\"version\":%q,\"sha256\":%q}]}\n", strings.TrimSpace(string(to)), strings.TrimSpace(string(sum)))
 	case "list --cask cyfr", "update":
 	case "upgrade --cask cyfr":
+		// Homebrew's own refresh of its taps, between the update's check
+		// of the cask and this upgrade, is off.
+		if os.Getenv("HOMEBREW_NO_AUTO_UPDATE") != "1" {
+			return 9
+		}
 		to, err := os.ReadFile(filepath.Join(dir, "upgrade-to"))
 		if err != nil || os.WriteFile(filepath.Join(dir, "version"), to, 0o644) != nil {
 			return 3

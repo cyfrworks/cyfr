@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -89,6 +90,15 @@ type uninstallPlan struct {
 	// that package, or where the package records cannot tell (doubt, why),
 	// and then it stays (packageOf).
 	packaged, owner, doubt string
+	// bundle is the installed app's bundle on macOS, which the uninstall
+	// removes whole once the app is closed, the cyfr it carries with it;
+	// a cask's is Homebrew's. msi is whether Windows Installer installed
+	// the app, which the uninstall names the removal of. bundled is this
+	// program where it is the cyfr inside an app (appBundleOf), which
+	// goes only with its app, never alone: removed alone, it breaks the
+	// app's signature.
+	bundle, bundled string
+	msi             bool
 	// self and link are the program and its link onto PATH, which the
 	// uninstall removes; inFolder are those of them the project folder
 	// holds, or holds what they resolve to, which stay.
@@ -136,13 +146,18 @@ func readUninstallPlan() (*uninstallPlan, error) {
 	if !p.cask {
 		if self, err := selfExecutable(); err == nil {
 			owner, perr := packageOf(self)
+			real, rerr := filepath.EvalSymlinks(self)
+			inApp := rerr == nil && (appBundleOf(real) != "" || isInstalledAppCyfr(self))
 			if removable(self) {
 				// A doubt never removes.
-				if perr != nil {
+				switch {
+				case perr != nil:
 					p.packaged, p.doubt = self, perr.Error()
-				} else if owner != "" {
+				case owner != "":
 					p.packaged, p.owner = self, owner
-				} else {
+				case inApp:
+					p.bundled = self
+				default:
 					p.self = self
 				}
 			}
@@ -150,8 +165,20 @@ func readUninstallPlan() (*uninstallPlan, error) {
 			// app's package, which may be its own: that is the system's
 			// package tool's to do, as this program is.
 			p.app = perr == nil && owner == "" && machine.installed(appPackage)
-			real, err := filepath.EvalSymlinks(self)
-			if target, lerr := filepath.EvalSymlinks(usrLocalLink); err == nil && lerr == nil && target == real && usrLocalLink != self {
+			carried, cerr := appCyfr()
+			switch {
+			case cerr != nil || !machine.appPresent():
+			case runtime.GOOS == "darwin":
+				if bundle := appBundleOf(carried); bundle != "" && removable(bundle) {
+					p.bundle = bundle
+				}
+			case runtime.GOOS == "windows":
+				p.msi = true
+			}
+			// The link onto PATH goes with what it links: this program, or
+			// the app's own cyfr where the app goes.
+			if target, lerr := filepath.EvalSymlinks(usrLocalLink); rerr == nil && lerr == nil && usrLocalLink != self &&
+				(target == real || (p.bundle != "" && samePath(target, carried))) {
 				p.link = removable(usrLocalLink)
 			}
 		}
@@ -205,6 +232,13 @@ func (p *uninstallPlan) show(out io.Writer) {
 	if p.app {
 		fmt.Fprintln(out, "  the CYFR app, the package "+appPackage)
 	}
+	if p.bundle != "" {
+		if p.bundled != "" && appBundleOf(p.bundled) == p.bundle {
+			fmt.Fprintf(out, "  the CYFR app, %s, once it is closed, and this program inside it\n", p.bundle)
+		} else {
+			fmt.Fprintf(out, "  the CYFR app, %s, once it is closed\n", p.bundle)
+		}
+	}
 	if p.self != "" {
 		program := "  this program, " + p.self
 		if p.link {
@@ -213,6 +247,8 @@ func (p *uninstallPlan) show(out io.Writer) {
 		fmt.Fprintln(out, program)
 	} else if p.packaged != "" && p.link {
 		fmt.Fprintln(out, "  this program's link "+usrLocalLink)
+	} else if p.bundle != "" && p.link {
+		fmt.Fprintln(out, "  the CYFR app's link "+usrLocalLink)
 	}
 	fmt.Fprintln(out, "It leaves, as they are:")
 	fmt.Fprintf(out, "  every file in %s, CYFR's data among them, as cyfr down leaves it\n", p.dir)
@@ -231,6 +267,11 @@ func (p *uninstallPlan) show(out io.Writer) {
 	}
 	if p.cask {
 		fmt.Fprintln(out, "  this program, which Homebrew installed: remove it with 'brew uninstall --cask cyfr'")
+	}
+	if p.msi {
+		fmt.Fprintln(out, "  the CYFR app, which Windows Installer installed, and the cyfr inside it: remove CYFR in Windows' Settings, Apps, Installed apps")
+	} else if p.bundled != "" && p.bundle == "" {
+		fmt.Fprintf(out, "  this program, %s, inside the CYFR app at %s, which goes with the app alone\n", p.bundled, appBundleOf(p.bundled))
 	}
 	if p.owner != "" {
 		fmt.Fprintf(out, "  this program, %s, which the package %s installed: remove it with the system's package tool ('sudo apt remove %s')\n", p.packaged, p.owner, p.owner)
@@ -324,6 +365,11 @@ func (p *uninstallPlan) left(volumes []string) string {
 	if p.device != "" {
 		fmt.Fprintf(&b, "  this account's device key, %s\n", p.device)
 	}
+	if p.msi {
+		b.WriteString("  the CYFR app and the cyfr inside it, which Windows Installer removes: CYFR in Windows' Settings, Apps, Installed apps\n")
+	} else if p.bundled != "" && p.bundle == "" {
+		fmt.Fprintf(&b, "  this program, %s, inside the CYFR app at %s\n", p.bundled, appBundleOf(p.bundled))
+	}
 	if p.owner != "" {
 		fmt.Fprintf(&b, "  this program, %s, with the package %s\n", p.packaged, p.owner)
 	} else if p.packaged != "" {
@@ -371,8 +417,9 @@ func (r *uninstallRun) failed(step string, err error) error {
 }
 
 // run removes, in order: the stack's containers, stopped as cyfr down
-// stops them, under the lock it keeps; the screen service, the CYFR app
-// and the link onto PATH as root; the networks and images; and the program. The plan
+// stops them, under the lock it keeps; the screen service, the CYFR app's
+// package and the link onto PATH as root; on macOS the app's bundle, once
+// the app is closed; the networks and images; and the program. The plan
 // holds nothing the project folder holds or holds the target of.
 func (r *uninstallRun) run(ctx context.Context) error {
 	p := r.p
@@ -401,6 +448,15 @@ func (r *uninstallRun) run(ctx context.Context) error {
 			return r.failed("removing the link "+usrLocalLink, err)
 		}
 		r.done("the link " + usrLocalLink)
+	}
+	if p.bundle != "" {
+		if _, err := quitApp(); err != nil {
+			return r.failed("closing the CYFR app", err)
+		}
+		if err := os.RemoveAll(p.bundle); err != nil {
+			return r.failed("removing the CYFR app "+p.bundle, err)
+		}
+		r.done("the CYFR app")
 	}
 	docker := func(args ...string) (access.Result, error) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uninstallTimeout)

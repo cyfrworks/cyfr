@@ -1067,13 +1067,13 @@ func upWith(ctx context.Context, opened stackEngine, out io.Writer) error {
 // setupNext is how the first person of the CYFR at head, which no one is
 // set up on yet, is set up, said after its start: on this machine's own
 // screen when the cyfr-screen service shows it, a reboot away when it is
-// enabled and has not started; otherwise through the setup link, which a
-// local CYFR on a machine with no display reaches through sshTunnel's
-// line.
+// enabled and has not started or whether it runs went unread; otherwise
+// through the setup link, which a local CYFR on a machine with no display
+// reaches through sshTunnel's line.
 func setupNext(out io.Writer, head access.Head) {
 	values, _ := access.ReadEnvValues(".env")
 	link := hyperlink(out, setupLink(access.Describe(head).Address, values))
-	switch enabled, active := machine.screenService(); {
+	switch enabled, active, _ := machine.screenService(); {
 	case active:
 		fmt.Fprintln(out, "Setup is on this screen (Ctrl+Alt+F1).")
 	case enabled:

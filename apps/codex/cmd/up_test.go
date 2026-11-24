@@ -176,7 +176,7 @@ func TestUpSaysHowTheFirstPersonIsSetUp(t *testing.T) {
 			stubLauncher(t, c.display, nil)
 			saved := machine.screenService
 			t.Cleanup(func() { machine.screenService = saved })
-			machine.screenService = func() (bool, bool) { return c.enabled, c.active }
+			machine.screenService = func() (bool, bool, error) { return c.enabled, c.active, nil }
 			head, err := (&fakeEngine{s: s.engine, dir: s.project}).Head()
 			if err != nil {
 				t.Fatal(err)
