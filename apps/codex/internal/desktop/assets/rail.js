@@ -86,7 +86,7 @@ function boxRow(c) {
   li.append(a)
   return li
 }
-function row(c, name, locked) {
+function row(c, name, quiet) {
   const li = document.createElement("li")
   const a = document.createElement("a")
   a.className = "cyfr" + (c.forgetting ? " gone" : "") + (c.failed ? " failed" : "")
@@ -106,14 +106,16 @@ function row(c, name, locked) {
   a.append(tile, label)
   // Its menu, which main draws: the context key, Shift+F10 or Delete,
   // a press held on a touch screen, or the pointer's other button.
-  // While a box is locked it offers none: cyfr forgets nothing then.
-  const menu = (e) => { e.preventDefault(); if (!locked) go("/rail/menu", c.cyfr) }
+  // On a box it offers none while the box is locked, nor for the CYFR open
+  // (quiet): cyfr forgets neither then. The CYFR open is forgotten from
+  // This box.
+  const menu = (e) => { e.preventDefault(); if (!quiet) go("/rail/menu", c.cyfr) }
   a.addEventListener("contextmenu", menu)
   a.addEventListener("keydown", (e) => {
     if (e.key === "ContextMenu" || e.key === "Delete" || (e.key === "F10" && e.shiftKey)) menu(e)
   })
   let held = 0
-  a.addEventListener("touchstart", () => { held = setTimeout(() => { held = -1; if (!locked) go("/rail/menu", c.cyfr) }, 550) }, {passive: true})
+  a.addEventListener("touchstart", () => { held = setTimeout(() => { held = -1; if (!quiet) go("/rail/menu", c.cyfr) }, 550) }, {passive: true})
   const release = (e) => { if (held === -1) e.preventDefault(); clearTimeout(held); held = 0 }
   a.addEventListener("touchend", release)
   a.addEventListener("touchmove", () => { clearTimeout(held); held = 0 }, {passive: true})
@@ -127,7 +129,7 @@ function show(answer) {
   // called by that address: the folder's name is This box's.
   const cyfrs = answer.cyfrs.filter((c) => !c.box).map((c) => box.some((b) => b.folder && b.folder === c.folder) ? {...c, folder: ""} : c)
   const shown = labels(cyfrs)
-  list.replaceChildren(...box.map(boxRow), ...cyfrs.map((c, i) => row(c, shown[i], !!answer.locked)))
+  list.replaceChildren(...box.map(boxRow), ...cyfrs.map((c, i) => row(c, shown[i], box.length > 0 && (!!answer.locked || !!c.open))))
   // A box sets nothing up: its screen shows its own CYFR.
   document.getElementById("setup").parentElement.hidden = box.length > 0
   said.textContent = answer.error || ""

@@ -172,7 +172,9 @@ if [ "${1:-}" = --session ]; then
   # The output's picture: the rail's background (#071013) at the top left
   # corner and the page's (#0b1418) at the top right, so the window covers
   # the output's whole width with the rail beside the page, and more than
-  # one colour above the keyboard, so the page is painted. Whether the
+  # one colour above the keyboard, so the page is painted; and down the
+  # rail's left, two tiles of its ways' colour (#13232a): This box and
+  # Connect, with no Set up, which a box does not offer. Whether the
   # window has a frame the screen's labwc does not show (no decorations):
   # the app's tests hold it.
   painted() {
@@ -184,8 +186,14 @@ w, h = map(int, head[1].split())
 if (w, h) != (1600, 900):
     sys.exit(1)
 px = lambda x, y: tuple(rest[(y * w + x) * 3:(y * w + x) * 3 + 3])
-page, rail = (11, 20, 24), (7, 16, 19)
+page, rail, way = (11, 20, 24), (7, 16, 19), (19, 35, 42)
 corners = px(4, 4) == rail and px(w - 5, 4) == page
+runs, run = 0, 0
+for y in range(h):
+    run = run + 1 if px(20, y) == way else 0
+    runs += run == 25
+if runs != 2:
+    sys.exit(1)
 colours = {px(x, y) for y in range(0, h // 2, 7) for x in range(0, w, 7)}
 sys.exit(0 if corners and len(colours) > 2 else 1)
 PY
@@ -235,9 +243,9 @@ PY
   fi
   if within 10 keyboard; then verdict PASS "the keyboard is shown below the window as it appears"; else verdict FAIL "no keyboard shown as the window appeared"; fi
   if within 30 painted; then
-    verdict PASS "the page is painted, the rail at its left, and the window covers the output"
+    verdict PASS "the page is painted, the rail at its left offering This box and Connect and no Set up, and the window covers the output"
   else
-    verdict FAIL "the page is not painted, the rail is not at its left, or the window does not cover the output"
+    verdict FAIL "the page is not painted, the rail is not at its left or shows other than This box and Connect at its foot, or the window does not cover the output"
   fi
 
   # A press on the rail at X Y of the output (1600x900), which tap.py

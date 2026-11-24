@@ -324,6 +324,13 @@ test("Forget is a row's menu, which main draws; confirmed, the CYFR open is left
   for (const before of [[ready, home()], [...open, selects(BOB)]]) {
     assert.deepEqual(step(run(before, true).s, {type: "forget-confirmed", home: BOB}).do, [], "not while a proposal or a departure waits")
   }
+  // On the box's screen the CYFR open is forgotten from This box, never
+  // from its own row: nothing is left and nothing sent; another is as on a
+  // desktop.
+  let onBox = initial(false, "/home/ana/cyfr")
+  for (const e of [ready, home(), openedAt(HOME)]) onBox = step(onBox, e).state
+  assert.deepEqual(step(onBox, {type: "forget-confirmed", home: HOME}), {state: onBox, do: []}, "the CYFR open, on the box")
+  assert.deepEqual(step(onBox, {type: "forget-confirmed", home: BOB}).do, [{send: {type: "forget", fields: {home: BOB}}}], "another, on the box")
 })
 
 test("cyfr's erase is carried out, but never of the CYFR open", () => {
@@ -787,10 +794,14 @@ test("the chooser's links open in the person's browser: Docker's pages, as the v
 // once it read ending.
 test("the screen ends on the CYFR its cyfr committed whatever the order of their messages", () => {
   const CYFR = "http://localhost:4000"
-  const initialWorld = (endable) => ({
+  // split models a cyfr whose lock moves its epoch in one step and tells
+  // main in a later one (what review 9900 found): a selection begun between
+  // the two is told before the lock's locked, which names what was
+  // committed at the first step.
+  const initialWorld = (endable, split = false) => ({
     main: initial(false, "/home/alice/cyfr"),
     go: {ready: false, epoch: 0, attempt: 0, proposed: null, committed: "", presses: 2, locks: 2, keyboard: 1,
-      ending: false, exited: false, endable},
+      ending: false, exited: false, endable, split, telling: []},
     toMain: [], toGo: [], pending: [], showing: "", lost: 1, trace: [],
     // Change… pressed on what the screen shows, and a dialog's result, each
     // once, at any point, after main ended too: the box asks for neither.
@@ -801,7 +812,9 @@ test("the screen ends on the CYFR its cyfr committed whatever the order of their
     if (w.go.ending) return
     w.go.epoch++
     w.go.proposed = null
-    w.toMain.push({type: "locked", message: w.go.committed ? {type: "locked", home: w.go.committed, account: CYFR} : {type: "locked"}})
+    const m = {type: "locked", message: w.go.committed ? {type: "locked", home: w.go.committed, account: CYFR} : {type: "locked"}}
+    if (w.go.split) w.go.telling.push(m)
+    else w.toMain.push(m)
   }
   const carry = (w, next) => {
     w.main = next.state
@@ -854,6 +867,7 @@ test("the screen ends on the CYFR its cyfr committed whatever the order of their
       }])
     }
     if (w.pending.length) out.push(["a clear or a teardown ends", (x) => carry(x, step(x.main, x.pending.shift()))])
+    if (w.go.telling.length) out.push(["cyfr tells a lock", (x) => x.toMain.push(x.go.telling.shift())])
     if (!w.go.ready) {
       out.push(["cyfr says ready", (x) => {
         x.go.ready = true
@@ -918,6 +932,10 @@ test("the screen ends on the CYFR its cyfr committed whatever the order of their
   assert.ok(ends > 0 && opened > 0 && endings === 0 && seen.size > 500, `only ${seen.size} states were walked (${opened} open)`)
   walk(initialWorld(true))
   assert.ok(endings > 0, "no walk ended with cyfr's end")
+  // The model tells the split lock apart: some order strands main.
+  seen.clear()
+  assert.throws(() => walk(initialWorld(false, true)), /keeping to "" \(cyfr: "http:\/\/localhost:4000"\)/,
+    "a lock told apart from its epoch's move strands no selection in this model, so it would not see one")
 })
 
 test("ending is the last word of a run: after it main ends, and a left, which the vectors say never follows, changes nothing", () => {

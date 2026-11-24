@@ -465,9 +465,11 @@ function advance(s, e) {
       return settle({...s, forgotten: true, notices: e.cleared ? s.notices : adding(s.notices, "unforgotten")})
     }
     // The person chose Forget in a row's menu and confirmed it: the CYFR
-    // is left first if it is open.
+    // is left first if it is open. On the box's screen the CYFR open is
+    // not forgotten from its own row (cyfr refuses it): from This box.
     case "forget-confirmed":
       if (!railFree(s) || !e.home) return same(s)
+      if (s.screen && s.name === "open" && s.home === e.home) return same(s)
       return s.name === "open" && s.home === e.home ? away(s, {forget: e.home})
         : same(s, [{send: {type: "forget", fields: {home: e.home}}}])
     case "lost":
