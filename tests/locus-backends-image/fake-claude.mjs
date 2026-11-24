@@ -20,8 +20,8 @@
 //   `added`.
 // - The person's own MCP servers, those `$HOME/.claude.json` names under
 //   `mcpServers`, are started at its start unless it was started with
-//   `--strict-mcp-config`, as Claude Code 2.1.323 was measured to start them
-//   (aq-claude-own). `mcp_status` names them with their source, `user`,
+//   `--strict-mcp-config`, as Claude Code 2.1.323 was measured to start
+//   them. `mcp_status` names them with their source, `user`,
 //   beside the driver's, `dynamic`; a server `mcp_set_servers` names
 //   replaces one of theirs of the same name for the process's life; each
 //   ask of an MCP tool names its server (`mcp_server`).
@@ -159,11 +159,11 @@ function stopServers(which = servers) {
 // The person's own start with the process. `mcp_set_servers` and every
 // turn but `theirs` go on without them, as Claude Code 2.1.323 was measured
 // to answer a set and finish a turn beside a server of the person's that
-// never answers (aq-claude-own, co-new-fail). `theirs` waits for all of
+// never answers. `theirs` waits for all of
 // them, the fake's own simplification, which no case's server tests: the
 // real program lists and calls the ones that started. A server the
-// driver's set names replaces theirs of that name, as the records measured
-// (co-new-collide); stopping the replaced one once it has started is the
+// driver's set names replaces theirs of that name, as the records measured;
+// stopping the replaced one once it has started is the
 // fake's own housekeeping, not a measured exit.
 const shadowed = new Set();
 let ownListed = Promise.resolve();

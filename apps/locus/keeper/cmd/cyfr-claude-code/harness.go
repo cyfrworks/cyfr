@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf16"
 
@@ -340,6 +341,60 @@ func errorKind(err string) string {
 	return "provider_error"
 }
 
+// answerWait bounds the harness's answer to a start (its `initialize` and
+// its `mcp_status`) and to a work's `mcp_set_servers`, the answers the
+// driver holds a command for, as listingWait bounds a listing's: 2.1.323
+// answers each within a second (measured), and a start's first fetch of
+// the program is a listing's. A var, so a test can shorten it.
+var answerWait = listingWait
+
+// toolsLateSentence refuses a work whose tools the harness did not start
+// within answerWait.
+func toolsLateSentence() string {
+	return fmt.Sprintf("Claude Code did not start CYFR's tools within %d seconds, so the work was not begun; send it again.", int(answerWait/time.Second))
+}
+
+// unsendableSentence is the driver's words for a turn whose request the
+// API refused for a message of the session's own history: a previous
+// message id it does not take (Claude Code 2.1.323 ended every later turn
+// of such a session so, its request's 400). Nothing the person sent was
+// invalid, and the session cannot go on, so the driver removes it
+// (result): the next message starts a fresh session from the thread's
+// posts.
+const unsendableSentence = "Claude Code's session holds a message its model's API no longer takes, so this session could not go on; nothing you sent was refused. Your next message starts a fresh one from this thread's posts."
+
+// unsendableWords are the API's words, in a failed result's `result`, for
+// that refusal; they are read there alone, never in what the model said.
+const unsendableWords = "diagnostics.previous_message_id"
+
+// refusalSentence is the driver's words for a turn the model refused to
+// answer and kept to (a result whose stop is `refusal`, 2.1.323): no
+// request of the person's was invalid, so it is said as what it is.
+const refusalSentence = "Claude Code's model declined to answer this; rephrase the request, or choose another model."
+
+// limitSentence says a rate limit, and when it lifts when the harness said
+// (rejectedUntil).
+func limitSentence(resets int64) string {
+	return "Claude Code reported a rate limit; " + brainwire.UntilWords(resets) + "."
+}
+
+// rejectedUntil is when a limit lifts by a `rate_limit_event`'s
+// `rate_limit_info`, in the shape T3 Code reads from a subscription's
+// session (ClaudeAdapterV2.ts: `status`, and `resetsAt` in Unix seconds; a
+// key's session sends none, as 2.1.323 sent none on one): its reset while
+// its status is `rejected`, or 0, a limit not reached or one that does not
+// read.
+func rejectedUntil(info json.RawMessage) int64 {
+	var limit struct {
+		Status string  `json:"status"`
+		Resets float64 `json:"resetsAt"`
+	}
+	if json.Unmarshal(info, &limit) != nil || limit.Status != "rejected" || limit.Resets <= 0 {
+		return 0
+	}
+	return int64(limit.Resets)
+}
+
 // errorSentence is the driver's own words for an error of the harness's:
 // the harness's words (a sign-in prompt among them) never leave the box.
 // An account's error says only what the type tells: the account or key
@@ -350,7 +405,7 @@ func errorSentence(kind string) string {
 	case "authentication":
 		return "The account or key Claude Code used was refused; check its sign-in on the program's terminal, or a key in its settings."
 	case "rate_limited":
-		return "Claude Code reported a rate limit; ask again later."
+		return limitSentence(0)
 	case "overloaded":
 		return "Claude Code reported its provider overloaded; ask again later."
 	case "invalid_request":
@@ -380,6 +435,10 @@ type harnessLine struct {
 	RequestID       string          `json:"request_id"`
 	Request         json.RawMessage `json:"request"`
 	Response        json.RawMessage `json:"response"`
+	APIErrorStatus  *int            `json:"api_error_status"`
+	StopReason      string          `json:"stop_reason"`
+	Result          json.RawMessage `json:"result"`
+	RateLimitInfo   json.RawMessage `json:"rate_limit_info"`
 }
 
 // main is a line of the main session, not of a subagent's.

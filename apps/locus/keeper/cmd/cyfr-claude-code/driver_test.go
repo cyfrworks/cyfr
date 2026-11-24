@@ -556,6 +556,54 @@ func TestAnOwnCallItsTurnEndedWithoutIsForgottenWithTheTurn(t *testing.T) {
 	}
 }
 
+// A start the harness does not answer within answerWait ends the driver,
+// saying why on its standard error; a work whose tools it does not start
+// within it is refused in the driver's words, each work at its own bound.
+// Neither waits on the holder's clock alone. It proves the driver's exit
+// and its reason; what the person reads of a start that failed is the
+// holder's.
+func TestAnAnswerTheHarnessDoesNotGiveInTimeEndsTheWait(t *testing.T) {
+	was := answerWait
+	answerWait = 300 * time.Millisecond
+	t.Cleanup(func() { answerWait = was })
+	t.Run("start", func(t *testing.T) {
+		t.Setenv("FAKE_SILENT", "initialize")
+		s := startDriver(t)
+		s.expect("hello")
+		s.send(map[string]any{"t": "start", "gen": 3, "config": map[string]any{}, "system": "be brief"})
+		select {
+		case code := <-s.done:
+			if code != 1 || !strings.Contains(s.stderr.String(), "Claude Code did not answer its start in time") {
+				t.Fatalf("the driver ends with 1, saying why on its standard error: %d %q", code, s.stderr.String())
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("a start the harness never answered went on")
+		}
+	})
+	t.Run("each work's tools", func(t *testing.T) {
+		t.Setenv("FAKE_SILENT", "later tools")
+		s := startDriver(t)
+		startFresh(s, map[string]any{})
+		s.send(map[string]any{"t": "work", "id": "stp_first", "work": "trn_1", "tools": []any{filesTool}})
+		s.send(map[string]any{"t": "work", "id": "stp_second", "work": "trn_1", "tools": []any{filesTool}})
+		if e := s.expect("accepted"); e["id"] != "stp_first" {
+			t.Fatalf("the answered work is accepted: %v", e)
+		}
+		if e := s.expect("refused"); e["id"] != "stp_second" || e["reason"] != toolsLateSentence() {
+			t.Fatalf("the work its harness did not answer is refused at its own bound: %v", e)
+		}
+	})
+	t.Run("tools", func(t *testing.T) {
+		t.Setenv("FAKE_SILENT", "tools")
+		s := startDriver(t)
+		startFresh(s, map[string]any{})
+		s.send(map[string]any{"t": "work", "id": "stp_work", "work": "trn_1", "tools": []any{filesTool}})
+		if e := s.expect("refused"); e["id"] != "stp_work" || e["reason"] != toolsLateSentence() {
+			t.Fatalf("the work is refused in the driver's words: %v", e)
+		}
+	})
+}
+
 func TestAnErrorAnswerIsTheToolsError(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
@@ -628,6 +676,104 @@ func TestTheHarnessesErrorIsTypedInTheDriversWords(t *testing.T) {
 	if errorsSeen != 1 || strings.Contains(s.output(), "HARNESS-WORDS") {
 		t.Fatalf("one error, and none of the harness's words: %d", errorsSeen)
 	}
+}
+
+// A turn the harness ended in its model's error is typed by what its result
+// says, its HTTP status before the message's own type, which 2.1.323 gave
+// a 529 as `server_error`: an overload, a refusal the model kept to, a rate
+// limit, with when it lifts when the harness said so in its
+// `rate_limit_event`. One error each, in the driver's words.
+func TestATurnsErrorIsTypedByWhatItsResultSays(t *testing.T) {
+	for words, want := range map[string][2]string{
+		"overloaded": {"overloaded", "Claude Code reported its provider overloaded; ask again later."},
+		"refusing":   {"invalid_request", refusalSentence},
+		"limited":    {"rate_limited", "Claude Code reported a rate limit; it lifts at 11:16 UTC on 24 November 2026."},
+		"poisoned":   {"invalid_request", unsendableSentence},
+	} {
+		t.Run(words, func(t *testing.T) {
+			s := startDriver(t)
+			startFresh(s, map[string]any{})
+			work(s, "stp_work", []any{})
+			postText(s, "stp_post", words)
+			var errs []string
+			for e := s.next(); e["t"] != "idle"; e = s.next() {
+				if e["t"] == "error" {
+					errs = append(errs, fmt.Sprintf("%v: %v", e["type"], e["message"]))
+				}
+			}
+			if fmt.Sprint(errs) != fmt.Sprintf("[%s: %s]", want[0], want[1]) || strings.Contains(s.output(), "HARNESS-WORDS") {
+				t.Fatalf("one error, %s, in the driver's words: %v", want[0], errs)
+			}
+		})
+	}
+}
+
+// A turn the model's API refused for a message of the session's own
+// history ends that session: the driver says so, removes that session's
+// transcript and no other file, and ends, so the next start of the session
+// answers gone and the thread starts over from its posts. An error of any
+// other kind removes nothing, and the session goes on.
+func TestASessionTheAPIRefusesIsRemovedAndItsNextStartIsGone(t *testing.T) {
+	// refused posts `poisoned` in a new session, after files of others the
+	// driver must leave, and answers the session once its driver ended.
+	refused := func(t *testing.T) (*wireSession, string, []string) {
+		s := startDriver(t)
+		session := startFresh(s, map[string]any{})
+		project := filepath.Join(s.home, ".claude", "projects", "-fake")
+		kept := []string{filepath.Join(project, "0b9d3a1e-5c2f-4e8a-9d61-7a3b2c1d0e4f.jsonl"), filepath.Join(s.home, ".claude", ".credentials.json")}
+		for _, name := range kept {
+			if err := os.WriteFile(name, []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		work(s, "stp_work", []any{})
+		postText(s, "stp_post", "poisoned")
+		var errs []string
+		for e := s.next(); e["t"] != "idle"; e = s.next() {
+			if e["t"] == "error" {
+				errs = append(errs, fmt.Sprint(e["message"]))
+			}
+		}
+		if fmt.Sprint(errs) != "["+unsendableSentence+"]" {
+			t.Fatalf("the turn says the session could not go on: %v", errs)
+		}
+		select {
+		case <-s.done:
+		case <-time.After(20 * time.Second):
+			t.Fatal("the driver of a session that cannot go on did not end")
+		}
+		return s, session, kept
+	}
+	t.Run("the refused session's transcript is removed, and no other file", func(t *testing.T) {
+		s, session, kept := refused(t)
+		if _, err := os.Stat(filepath.Join(s.home, ".claude", "projects", "-fake", session+".jsonl")); !os.IsNotExist(err) {
+			t.Fatalf("the session's transcript is removed: %v", err)
+		}
+		for _, name := range kept {
+			if _, err := os.Stat(name); err != nil {
+				t.Fatalf("another session's transcript and the sign-in stay: %s %v", name, err)
+			}
+		}
+	})
+	t.Run("its next start is gone", func(t *testing.T) {
+		s, session, _ := refused(t)
+		again := startDriverIn(t, s.home)
+		again.expect("hello")
+		again.send(map[string]any{"t": "start", "gen": 4, "session": session, "config": map[string]any{}})
+		again.expect("gone")
+	})
+	t.Run("any other error removes nothing", func(t *testing.T) {
+		s := startDriver(t)
+		session := startFresh(s, map[string]any{})
+		work(s, "stp_work", []any{})
+		postText(s, "stp_post", "overloaded")
+		s.until("idle")
+		postText(s, "stp_again", "hello")
+		s.until("idle")
+		if _, err := os.Stat(filepath.Join(s.home, ".claude", "projects", "-fake", session+".jsonl")); err != nil {
+			t.Fatalf("an error of another kind removes nothing, and the session goes on: %v", err)
+		}
+	})
 }
 
 func TestALateResultNamesNoWork(t *testing.T) {

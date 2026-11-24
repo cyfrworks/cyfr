@@ -27,6 +27,10 @@ import (
 //	read   asks CYFR's `files` and replies quoting the answer's `result` or `error`
 //	own    runs its own Bash after asking, shows its result, then replies
 //	rate   ends with an errored message of the rate limit and an errored result
+//	overloaded, refusing, limited  end as 2.1.323 ended a 529, a refusal the
+//	       model kept to after its one retry, and a 429 after a rejected
+//	       limit (measured): an errored message, typed as the
+//	       harness types it, and an errored result with its status
 //	late   replies, then writes a later result naming no line, as a background end
 //	uncounted  replies with a result that reports no model's usage
 //	partial    replies with a result one of whose models' counts does not read
@@ -52,12 +56,14 @@ import (
 //
 // The person's own servers are those `$HOME/.claude.json` names under
 // `mcpServers`, held unless it was started with `--strict-mcp-config`, as
-// 2.1.323 was measured to hold them (aq-claude-own): `mcp_status` lists
+// 2.1.323 was measured to hold them: `mcp_status` lists
 // them, and a server `mcp_set_servers` names replaces one of theirs of
 // the same name for the process's life. Each ask of an MCP tool names its
 // server, `mcp_server`, by name and source, and its call, `tool_use_id`.
 // FAKE_STATUS answers `mcp_status` with an error (`error`) or a success
-// that lists no servers (`unlisted`).
+// that lists no servers (`unlisted`). FAKE_SILENT leaves `initialize`
+// (`initialize`), every `mcp_set_servers` (`tools`), or every one after
+// the first (`later tools`) unanswered.
 //
 // Started with `--resume` of a session its folder does not hold, it ends
 // as 2.1.318 ended: a result of no turn naming the session, and exit 1,
@@ -196,6 +202,8 @@ func fakeClaude() int {
 	reply = func(uuids []string, text string) { replyWith(uuids, text, modelUsage) }
 	// What initialize asked, for `handed`.
 	var initialized []byte
+	// sets counts the driver's `mcp_set_servers`.
+	sets := 0
 	// The posts each turn is begun from; a turn that waits for the next
 	// post takes it here.
 	work := make(chan [2]string, 16)
@@ -223,6 +231,28 @@ func fakeClaude() int {
 			write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{
 				map[string]any{"type": "tool_result", "tool_use_id": "toolu_own", "content": "FOLDER-CANARY " + fmt.Sprint(decision["behavior"])}}}})
 			reply(uuids, "ran it")
+		case strings.Contains(words, "overloaded"), strings.Contains(words, "refusing"), strings.Contains(words, "limited"), strings.Contains(words, "poisoned"):
+			kind, status, stop := "server_error", any(529), "stop_sequence"
+			said := "API Error: HARNESS-WORDS"
+			switch {
+			case strings.Contains(words, "refusing"):
+				kind, status, stop = "invalid_request", nil, "refusal"
+			case strings.Contains(words, "poisoned"):
+				// As 2.1.323 ended every turn of a session whose history the
+				// API refused (2.1.323, measured): the request's 400 and its words.
+				kind, status = "unknown", 400
+				said = "API Error: 400 messages.3.content.0: diagnostics.previous_message_id: String should match pattern '^msg_' (starts with `msg_`) HARNESS-WORDS"
+			case strings.Contains(words, "limited"):
+				// Its shape as T3 Code reads it from a subscription's session
+				// (ClaudeAdapterV2.ts, isClaudeBlockedAssistantRateLimit): a
+				// key's session sends none, as 2.1.323 sent none on one.
+				write(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1795518975}})
+				kind, status = "rate_limit", 429
+			}
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "error": kind, "message": map[string]any{"id": "msg_err", "stop_reason": stop, "content": []any{
+				map[string]any{"type": "text", "text": said}}}})
+			write(map[string]any{"type": "result", "subtype": "success", "is_error": true, "api_error_status": status, "terminal_reason": "api_error", "stop_reason": stop,
+				"num_turns": 1, "uuid": "result-err", "user_message_uuids": uuids, "result": said, "usage": map[string]any{}})
 		case strings.Contains(words, "rate"):
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "error": "rate_limit", "message": map[string]any{"id": "msg_err", "content": []any{
 				map[string]any{"type": "text", "text": "API Error: please run /login HARNESS-WORDS"}}}})
@@ -360,6 +390,9 @@ func fakeClaude() int {
 				id := message["request_id"]
 				switch request["subtype"] {
 				case "initialize":
+					if os.Getenv("FAKE_SILENT") == "initialize" {
+						break
+					}
 					initialized, _ = json.Marshal(request)
 					answer := map[string]any{
 						"models": []any{
@@ -389,6 +422,10 @@ func fakeClaude() int {
 					}
 					write(map[string]any{"type": "control_response", "response": answer})
 				case "mcp_set_servers":
+					sets++
+					if silent := os.Getenv("FAKE_SILENT"); silent == "tools" || (silent == "later tools" && sets > 1) {
+						break
+					}
 					servers, _ := request["servers"].(map[string]any)
 					serversMu.Lock()
 					dynamic = ""
