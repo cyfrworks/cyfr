@@ -51,6 +51,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -248,7 +249,9 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 	env := append(without(without(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "TMPDIR"), "TZ"),
 		"DBUS_SESSION_BUS_ADDRESS=disabled:", "TMPDIR="+chromeTmp)
 	env = append(env, b.person.env()...)
-	agent, err := ownName(path, home, args, env)
+	reading, cancel := context.WithTimeout(context.Background(), startWait)
+	agent, err := ownName(reading, path, home, args, env, b.log)
+	cancel()
 	if err != nil {
 		return nil, err
 	}
@@ -267,32 +270,40 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 	return p, nil
 }
 
-// ownPrefix begins the name of the throwaway profile ownName reads the
-// shell's name in, in Chrome's temporary folder, where chromeTemp removes
-// one a killed driver left.
-const ownPrefix = "own-name."
+// readingName is the name of the throwaway profile ownName reads the
+// shell's name in, in Chrome's temporary folder: readingPrefix and the
+// digits os.MkdirTemp adds, a name no person's file has. chromeTemp
+// removes a real folder of that name a killed reading left, and nothing
+// else.
+const readingPrefix = "cyfr-browser-reading-"
+
+var readingName = regexp.MustCompile(`\A` + readingPrefix + `[0-9]+\z`)
 
 // ownName runs the shell once, as startChrome runs it, on a throwaway
 // profile in home's Chrome temporary folder and by no name of the
 // driver's, reads how it names itself, its User-Agent and its client
-// hints (ownAgent), closes it and removes the profile, whatever the
-// reading's end; and answers the override every target is given (agentOf).
-// Chrome is started by the switch the override names, which blanks the
-// high-entropy client hints a page reads of the running Chrome (measured on
-// the image's Chromium 156), so they are read before it starts.
-func ownName(path, home string, args, env []string) (map[string]any, error) {
-	profile, err := os.MkdirTemp(filepath.Join(home, chromeTmp), ownPrefix)
+// hints (ownAgent), and answers the override every target is given
+// (agentOf). Chrome is started by the switch the override names, which
+// blanks the high-entropy client hints a page reads of the running Chrome
+// (measured on the image's Chromium 156), so they are read before it
+// starts. The whole reading, its shell's close among it, holds to ctx's
+// deadline, at which the shell is killed; the profile is removed whatever
+// the reading's end, and a removal that fails is said on log.
+func ownName(ctx context.Context, path, home string, args, env []string, log io.Writer) (map[string]any, error) {
+	profile, err := os.MkdirTemp(filepath.Join(home, chromeTmp), readingPrefix)
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(profile)
+	defer func() {
+		if err := os.RemoveAll(profile); err != nil {
+			fmt.Fprintf(log, "cyfr-browser: the profile Chrome's name was read in is not removed: %v\n", err)
+		}
+	}()
 	p, err := launch(path, home, append(args, "--user-data-dir="+profile), env, func(string, json.RawMessage) {})
 	if err != nil {
 		return nil, err
 	}
-	defer p.close()
-	ctx, cancel := context.WithTimeout(context.Background(), startWait)
-	defer cancel()
+	defer p.closeWithin(ctx)
 	v, err := ready(ctx, p)
 	if err != nil {
 		return nil, err
@@ -405,25 +416,30 @@ func readied(ctx context.Context, c *cdp) (version, error) {
 // binds is short however long the home's.
 const chromeTmp = "tmp"
 
-// chromeTemp makes Chrome's temporary folder in home, and removes the
-// lock folders a dead Chrome left there and the throwaway profile a killed
-// reading of the shell's name left (ownName): the host runs one session
-// per person, so none is a live Chrome's.
+// chromeTemp makes Chrome's temporary folder in home, a real folder of
+// the home's and never one it links to, and removes the lock folders a
+// dead Chrome left there and the throwaway profile a killed reading of the
+// shell's name left (ownName): the host runs one session per person, so
+// none is a live Chrome's. Only a real folder of those names is removed,
+// never a file or a link.
 func chromeTemp(home string) error {
 	dir := filepath.Join(home, chromeTmp)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
-	var stale []string
-	for _, pattern := range []string{"org.chromium.Chromium.*", ownPrefix + "*"} {
-		matched, err := filepath.Glob(filepath.Join(dir, pattern))
-		if err != nil {
-			return err
-		}
-		stale = append(stale, matched...)
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		return fmt.Errorf("the home's %s is not a folder of its own", chromeTmp)
 	}
-	for _, path := range stale {
-		if err := os.RemoveAll(path); err != nil {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || !(strings.HasPrefix(name, "org.chromium.Chromium.") || readingName.MatchString(name)) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
 			return err
 		}
 	}
@@ -450,6 +466,22 @@ func (p *chromeProcess) close() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), closeWait)
 	defer cancel()
+	_ = p.c.call(ctx, "", "Browser.close", nil, nil)
+	select {
+	case <-p.exited:
+	case <-ctx.Done():
+		p.kill()
+	}
+}
+
+// closeWithin asks Chrome to close within ctx and kills its process group
+// when it has not by ctx's end.
+func (p *chromeProcess) closeWithin(ctx context.Context) {
+	select {
+	case <-p.exited:
+		return
+	default:
+	}
 	_ = p.c.call(ctx, "", "Browser.close", nil, nil)
 	select {
 	case <-p.exited:

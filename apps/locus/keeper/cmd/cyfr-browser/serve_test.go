@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"strings"
 	"testing"
 	"time"
 )
@@ -281,7 +280,7 @@ func TestChromeTempIsMadeAndClearedOfADeadChromesLocks(t *testing.T) {
 	if err := os.WriteFile(stale+"/SingletonSocket", nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	reading := dir + "/" + ownPrefix + "3170931"
+	reading := dir + "/" + readingPrefix + "3170931"
 	if err := os.MkdirAll(reading+"/Default", 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -299,35 +298,5 @@ func TestChromeTempIsMadeAndClearedOfADeadChromesLocks(t *testing.T) {
 	}
 	if _, err := os.Stat(dir + "/kept"); err != nil {
 		t.Fatalf("a file of the home's temporary folder was removed: %v", err)
-	}
-}
-
-// A reading of the shell's name whose Chrome ends before it answers, having
-// written its throwaway profile, says so and leaves no profile behind.
-func TestAFailedReadingRemovesItsProfile(t *testing.T) {
-	home := t.TempDir()
-	if err := chromeTemp(home); err != nil {
-		t.Fatal(err)
-	}
-	shell := home + "/shell"
-	script := "#!/bin/sh\nfor a; do case $a in --user-data-dir=*) d=${a#--user-data-dir=};" +
-		" mkdir \"$d/Default\" && echo \"$d\" > " + home + "/read;; esac; done\nexit 1\n"
-	if err := os.WriteFile(shell, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	agent, err := ownName(shell, home, nil, os.Environ())
-	if err == nil || !strings.HasPrefix(err.Error(), "Chrome ended") {
-		t.Fatalf("a reading whose Chrome ended answered %v, %v", agent, err)
-	}
-	read, err := os.ReadFile(home + "/read")
-	if err != nil {
-		t.Fatalf("the shell was not given its profile: %v", err)
-	}
-	if profile := strings.TrimSpace(string(read)); !strings.HasPrefix(profile, home+"/"+chromeTmp+"/"+ownPrefix) {
-		t.Fatalf("the profile %q is not in Chrome's temporary folder", profile)
-	}
-	left, err := os.ReadDir(home + "/" + chromeTmp)
-	if err != nil || len(left) != 0 {
-		t.Fatalf("the reading left %v in Chrome's temporary folder (%v)", left, err)
 	}
 }

@@ -72,9 +72,11 @@ const readHints = `navigator.userAgentData.getHighEntropyValues(["architecture",
 
 // agentOf is the override every target is given: the shell's own
 // User-Agent with Chrome in place of HeadlessChrome, and its own client
-// hints with their HeadlessChrome entries taken out.
+// hints with their HeadlessChrome entries taken out. The User-Agent is a
+// name, since Chrome is started by it: not blank, printable ASCII with no
+// control character, and holding the HeadlessChrome product token.
 func agentOf(userAgent string, own hints) (map[string]any, error) {
-	if userAgent == "" || len(own.Brands) == 0 || len(own.FullVersionList) == 0 {
+	if len(own.Brands) == 0 || len(own.FullVersionList) == 0 || !agentName(userAgent) {
 		return nil, errors.New("Chrome named no User-Agent or brands")
 	}
 	without := func(list []brand) []brand {
@@ -108,9 +110,24 @@ func agentOf(userAgent string, own hints) (map[string]any, error) {
 	}, nil
 }
 
+// agentName says whether userAgent is a name agentOf takes.
+func agentName(userAgent string) bool {
+	if strings.TrimSpace(userAgent) == "" || !strings.Contains(userAgent, headless+"/") {
+		return false
+	}
+	for i := 0; i < len(userAgent); i++ {
+		if userAgent[i] < 0x20 || userAgent[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // ownAgent reads the shell's client hints in a target of its own, a blank
 // page of the reserved origin the driver answers itself, so nothing
-// leaves the box, and closes it; and answers the override (agentOf).
+// leaves the box, and answers the override (agentOf). The target is left
+// open: the shell it runs in is the reading's own, which ends with it
+// (ownName).
 func ownAgent(ctx context.Context, c *cdp, userAgent string) (map[string]any, error) {
 	var target struct {
 		TargetID string `json:"targetId"`
@@ -118,9 +135,6 @@ func ownAgent(ctx context.Context, c *cdp, userAgent string) (map[string]any, er
 	if err := c.call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}, &target); err != nil {
 		return nil, err
 	}
-	defer func() {
-		_ = c.call(context.WithoutCancel(ctx), "", "Target.closeTarget", map[string]any{"targetId": target.TargetID}, nil)
-	}()
 	var attached struct {
 		SessionID string `json:"sessionId"`
 	}
