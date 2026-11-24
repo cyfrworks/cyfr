@@ -950,6 +950,42 @@ defmodule Locus.BuilderServiceTest do
       for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end, 10_000)
       wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
     end
+
+    test "a build past its deadline whose client left frees its only slot on cyfr-locus's release, " <>
+           "its last line waiting for no one",
+         %{port: port} do
+      on_exit(fn -> replace_build_slots(Locus.Application.build_slots()) end)
+      restart_build_slots(max: 1, key_max: 1)
+      fake = keeper!(:normal)
+      :ok = FakeKeeper.hold_releases(fake, self())
+      {script, file} = lingering()
+      request = Wire.request(script, %{deadline: System.system_time(:millisecond) + 4_000})
+      body = Wire.body(request)
+
+      conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
+      assert {200, conn} = Wire.status(conn)
+      conn = await_line(conn, {:progress, :output, "running"})
+      os_pids = pids_in(file)
+
+      # The deadline ends the run, which asks cyfr-locus to end the spawn;
+      # then the client leaves, and the cancel's bound passes with the
+      # release still held, each cancel taken by the run.
+      assert_receive {:release_held, _spawn_id}, 10_000
+      Wire.close(conn)
+
+      capture_log(fn ->
+        # sleep-ok: past the service's fixed 15 s bound for a cancelled build to end, which no event marks.
+        Process.sleep(16_000)
+      end)
+
+      :ok = FakeKeeper.carry_releases(fake)
+      for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end, 10_000)
+
+      # The build answers its deadline to no one, and the slot is the next build's.
+      wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
+      assert {200, lines} = Wire.build(port, Wire.request("true"))
+      refute match?({:refusal, {:capacity, _}}, List.last(lines))
+    end
   end
 
   # Reads lines until one is `wanted` (or satisfies it); the answer ending

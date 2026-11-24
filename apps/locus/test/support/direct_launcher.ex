@@ -1261,6 +1261,9 @@ defmodule Locus.DirectLauncher.Runner do
     do: :ok
 
   @impl Locus.Runtime.Keeper
+  def fence(tag, _opts), do: DirectLauncher.fence([], tag)
+
+  @impl Locus.Runtime.Keeper
   def spawn(%{argv: argv, env: env} = runner) do
     spec = %{argv: argv, env: env, pool: "runner", control: true, heir: Map.get(runner, :heir)}
 

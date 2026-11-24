@@ -9,9 +9,11 @@ defmodule Locus.Runtime do
   On a service node that holds the runtime's key, it is one child of
   `Locus.Supervisor`, `Locus.Runtime.Supervisor` (`children/1`), which
   runs the worker service tree (`Locus.Runtime.WorkerService.Tree`: the
-  runner pool with its keeper and the worker service, restarted together,
-  so a restarted service is a new boot that monitors none of the old
-  runners) and the listener CYFR reaches it through. It loads no
+  runner pool with its keeper and the worker service) and the listener
+  CYFR reaches it through. Neither supervisor restarts a child
+  (`Locus.Application.tree_options/0`): the pool holds the account of the
+  runners cyfr-locus holds for it, so its end, or any child's, ends the
+  node. It loads no
   component, and starts no engine.
 
   A runner (`RUNTIME_ROLE=runner`) runs the engine and the runner
@@ -58,13 +60,20 @@ defmodule Locus.Runtime do
     # window.
     :ok = Locus.Runtime.WorkerListener.init_nonces()
 
-    Supervisor.start_link(children(:service, settings),
-      strategy: :one_for_one,
-      name: Locus.Runtime.Supervisor,
-      max_restarts: 10,
-      max_seconds: 60
+    Supervisor.start_link(
+      children(:service, settings),
+      [name: Locus.Runtime.Supervisor] ++ supervisor_options(:service)
     )
   end
+
+  @doc """
+  The options a service node's runtime supervisor is started with beside
+  its name, `:service`'s (`Locus.Runtime.Supervisor`) and `:worker`'s (the
+  worker service tree): the node's (`Locus.Application.tree_options/0`).
+  """
+  @spec supervisor_options(:service | :worker) :: [Supervisor.init_option()]
+  def supervisor_options(supervisor) when supervisor in [:service, :worker],
+    do: Locus.Application.tree_options()
 
   @doc """
   Start a runner's tree, as the application's own supervisor: the runner
@@ -138,9 +147,9 @@ defmodule Locus.Runtime do
   def start_service_tree do
     settings = Locus.Runtime.Settings.pool!()
 
-    Supervisor.start_link(service_tree(settings),
-      strategy: :one_for_all,
-      name: Locus.Runtime.WorkerService.Tree
+    Supervisor.start_link(
+      service_tree(settings),
+      [name: Locus.Runtime.WorkerService.Tree] ++ supervisor_options(:worker)
     )
   end
 

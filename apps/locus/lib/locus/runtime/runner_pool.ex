@@ -51,9 +51,15 @@ defmodule Locus.Runtime.RunnerPool do
   report. The pool is every runner's heir (`Locus.Launcher`), so a runner
   whose handle dies, its owner gone with it, is held the same way: said
   so once, its assignee told `{:gone, {:handle_down, reason}}`, and
-  tainted until its release reaches the pool. A keeper that fails takes
-  the pool with it through their common supervisor, and every busy
-  runner's assignee hears `{:gone, _}` first.
+  tainted until its release reaches the pool, or until the keeper says it
+  holds no spawn of it (`c:Locus.Runtime.Keeper.fence/2`), none having
+  been written and none to be, when it is forgotten. A runner whose spawn
+  went unanswered may yet have been written: its handle is stopped, and
+  it is held as a dead handle's runner is. Every runner held, being
+  ended or refused after it was made, is counted `tainted` in
+  `status/1`. A keeper that fails takes the pool with it through their
+  common supervisor, and every busy runner's assignee hears `{:gone, _}`
+  first.
 
   ## A keeper that refuses runners
 
@@ -63,7 +69,7 @@ defmodule Locus.Runtime.RunnerPool do
   `{:gone, {:refused, reason}}`. One the keeper refused after it made
   something of it (`{:refused, reason, :release_follows}`) is told of the
   same way but stays, `refused`, until the keeper reports it released:
-  never handed out, counted in no state of `status/1` and asked no
+  never handed out, counted `tainted` in `status/1` and asked no
   release, it keeps its place among the runners spawned ahead, so the
   pool starts none in its stead while the keeper still holds its uid and
   place. The pool then refuses until a runner starts again: it spawns
@@ -234,17 +240,27 @@ defmodule Locus.Runtime.RunnerPool do
       Enum.reduce(state.runners, %{fresh: 0, idle: 0, busy: 0, tainted: 0}, fn {_pid, entry},
                                                                                counts ->
         case entry.state do
-          :fresh -> Map.update!(counts, :fresh, &(&1 + 1))
+          :fresh ->
+            Map.update!(counts, :fresh, &(&1 + 1))
+
           # A runner still spawning is counted fresh when a take could be
           # given it (`pick/2`): not while the keeper refuses runners, when
           # it is the pool's next try and no runner the pool holds.
-          :spawning when state.refusal == nil -> Map.update!(counts, :fresh, &(&1 + 1))
-          :spawning -> counts
-          :idle -> Map.update!(counts, :idle, &(&1 + 1))
-          :busy -> Map.update!(counts, :busy, &(&1 + 1))
-          :tainted -> Map.update!(counts, :tainted, &(&1 + 1))
-          :retiring -> counts
-          :refused -> counts
+          :spawning when state.refusal == nil ->
+            Map.update!(counts, :fresh, &(&1 + 1))
+
+          :spawning ->
+            counts
+
+          :idle ->
+            Map.update!(counts, :idle, &(&1 + 1))
+
+          :busy ->
+            Map.update!(counts, :busy, &(&1 + 1))
+
+          # Every runner held until the keeper releases it.
+          held when held in [:tainted, :retiring, :refused] ->
+            Map.update!(counts, :tainted, &(&1 + 1))
         end
       end)
 
@@ -333,9 +349,22 @@ defmodule Locus.Runtime.RunnerPool do
         state = told(state, pid, entry, {:gone, {:handle_down, reason}})
         entry = %{state.runners[pid] | down: true, idle_timer: nil}
         entry = if entry.state == :refused, do: entry, else: %{entry | state: :tainted}
+        fence(state, entry.id)
         {:noreply, refill_later(put_runner(state, pid, entry))}
     end
   end
+
+  # The keeper's account of a dead handle's runner: none of it was or will
+  # be spawned, and it is forgotten, or its release reaches the pool as the
+  # runner's heir. One the keeper did not answer stays held.
+  def handle_info({:fenced, id, :none}, state) do
+    case Enum.find(state.runners, fn {_pid, entry} -> entry.id == id end) do
+      {pid, %{down: true}} -> {:noreply, refill(forget(state, pid))}
+      _held -> {:noreply, state}
+    end
+  end
+
+  def handle_info({:fenced, _id, _pending_or_unanswered}, state), do: {:noreply, state}
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
@@ -357,6 +386,14 @@ defmodule Locus.Runtime.RunnerPool do
   # pool at once, with nothing for the keeper to retire; one it made is the
   # keeper's until its release, and keeps its place among the runners
   # ahead until then. The pool refuses until one starts.
+  # A spawn whose answer never came may still have been written: its
+  # handle is stopped, and the runner held as a dead handle's is.
+  defp on_event({:refused, {:keeper_unavailable, :timeout} = reason}, pid, entry, state) do
+    state = told(state, pid, entry, {:gone, {:refused, reason}})
+    _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
+    refused(state, reason)
+  end
+
   defp on_event({:refused, reason}, pid, entry, state) do
     state = told(state, pid, entry, {:gone, {:refused, reason}})
     _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
@@ -519,6 +556,18 @@ defmodule Locus.Runtime.RunnerPool do
   end
 
   defp forget(state, pid), do: %{state | runners: Map.delete(state.runners, pid)}
+
+  # Asked of the keeper in a process of its own, so the pool never waits
+  # on it; the answer comes as `{:fenced, id, answer}`.
+  defp fence(state, id) do
+    pool = self()
+    %{keeper: keeper, keeper_opts: opts} = state
+
+    {:ok, _asker} =
+      Task.start(fn -> send(pool, {:fenced, id, keeper.fence({__MODULE__, id}, opts)}) end)
+
+    :ok
+  end
 
   defp spawn_runner(%{service: service} = state) do
     id = Prima.UUID7.generate_id("runner")

@@ -128,6 +128,14 @@ defmodule Locus.Runtime.Keeper do
   @callback assign(String.t(), Locus.Launcher.whose(), until :: integer(), keyword()) ::
               :ok | {:error, term()}
 
+  @doc """
+  Whether the keeper holds a runner spawned for the heir tag `tag`, from
+  the pool's keeper options: `:pending` while it does, its release still
+  to reach the heir, or `:none`, every later spawn of the tag then refused
+  so that none starts after the answer (`c:Locus.Launcher.fence/2`).
+  """
+  @callback fence(term(), keyword()) :: :pending | :none | {:error, term()}
+
   @doc "Start a runner for `spec` from the calling process, answering its channel and the events already known."
   @callback spawn(spec()) :: {:ok, channel(), [event()]} | {:error, term()}
 

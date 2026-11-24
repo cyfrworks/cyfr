@@ -132,6 +132,14 @@ defmodule Locus.Runtime.Keeper.Channel do
     end
   end
 
+  @impl Locus.Runtime.Keeper
+  def fence(tag, opts) when is_list(opts) do
+    case client(Keyword.get(opts, :server, __MODULE__)) do
+      {:ok, client, _bound, _cpu_quota} -> Locus.Keeper.fence(client, tag)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # A spec may name the adapter to use (`:server`), as a test does; the
   # pool's runners use the registered one.
   @impl Locus.Runtime.Keeper
