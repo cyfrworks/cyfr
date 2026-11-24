@@ -185,13 +185,37 @@ titled() {
   case "$OS" in
     linux) xdotool search --name "$(printf '%s' "$1" | sed 's/[][\\.*^$+?(){}|]/\\&/g')" >/dev/null 2>&1 ;;
     darwin) osascript -e 'tell application "System Events" to get name of every window of (every process whose name is "CYFR")' 2>/dev/null | grep -qF "$1" ;;
-    windows)
-      powershell.exe -NoProfile -NonInteractive -Command \
-        "Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes; [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { \$_.Current.Name }" |
-        tr -d '\r' | grep -qF "$1" ;;
+    windows) windows_titles | grep -qF "$1" ;;
   esac
 }
 untitled() { ! titled "$1"; }
+
+# Every visible window's title and rectangle on Windows, owned ones such as
+# Update CYFR's among them, which UI Automation lists under their owner.
+windows_titles() {
+  powershell.exe -NoProfile -NonInteractive -Command '
+    Add-Type @"
+using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
+public static class W {
+  [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+  public delegate bool F(IntPtr h, IntPtr p);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(F f, IntPtr p);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+  public static List<string> All() {
+    var all = new List<string>();
+    EnumWindows((h, p) => {
+      var s = new StringBuilder(512);
+      if (IsWindowVisible(h) && GetWindowText(h, s, 512) > 0) { R r; GetWindowRect(h, out r); all.Add(s + " " + r.L + "," + r.T + "," + r.Rt + "," + r.B); }
+      return true;
+    }, IntPtr.Zero);
+    return all;
+  }
+}
+"@
+    [W]::All()' | tr -d '\r'
+}
 
 # What the app's windows are, for a row that failed: each one's title,
 # place and size.
@@ -203,9 +227,7 @@ windows_said() {
         echo "$(xdotool getwindowname "$w") $(xdotool getwindowgeometry "$w" | tr '\n' ' ')"
       done ;;
     darwin) osascript -e 'tell application "System Events" to tell process "CYFR" to get {name, position, size} of every window' 2>&1 ;;
-    windows)
-      powershell.exe -NoProfile -NonInteractive -Command \
-        "Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes; [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { \$_.Current.Name + ' ' + \$_.Current.BoundingRectangle }" | tr -d '\r' ;;
+    windows) windows_titles ;;
   esac
 }
 
