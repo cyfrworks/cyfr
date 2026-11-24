@@ -449,9 +449,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # Ask every MCP server that is on again what it offers.
-  def handle_event("offerings_again", _params, socket),
-    do: {:noreply, ask_offerings(socket)}
+  # Read the servers' rows again and ask every MCP server that is on what
+  # it offers.
+  def handle_event("offerings_again", _params, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      {:noreply,
+       socket |> assign(:servers, mcp_servers(socket.assigns.context)) |> ask_offerings()}
+    end)
+  end
 
   # The person's browser setting, set through the gate as the person:
   # turning it on or off on this page is their own act, which asks
@@ -652,8 +657,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   def handle_async(:brain_options, {:exit, _reason}, socket), do: {:noreply, socket}
 
-  # What the servers offer, as the latest ask read it; an ask that did
-  # not end leaves what was shown, said as asked again on Ask again.
+  # What the servers offer, as the latest ask read it. An ask that
+  # crashed leaves what was shown; with nothing shown yet, each server
+  # reads as one that did not answer, with Ask again.
   def handle_async(:offerings, {:ok, offerings}, socket),
     do: {:noreply, assign(socket, :offerings, offerings)}
 
@@ -748,7 +754,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # The athanor's MCP servers as their rows stand, asking none of them: a
-  # program a person or a brain drives offers no tools.
+  # program a person or a brain drives offers no tools. nil when the rows
+  # cannot be read, which is not an athanor with none.
   defp mcp_servers(ctx) do
     case PrismWeb.Ops.call_tool(ctx, "mcp_servers/list", %{}) do
       {:ok, %{servers: servers}} ->
@@ -757,7 +764,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             do: %{name: name, enabled: server.enabled == true}
 
       {:error, _unread} ->
-        []
+        nil
     end
   end
 
@@ -766,7 +773,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # earlier one's, whichever ends first.
   defp ask_offerings(%{assigns: %{soul: %{"tools" => tools}}} = socket) do
     %{context: ctx, servers: servers} = socket.assigns
-    asked = for %{name: name, enabled: true} <- servers, do: name
+    asked = for %{name: name, enabled: true} <- servers || [], do: name
     start_async(socket, :offerings, fn -> Aqua.offerings(ctx, tools, asked) end)
   end
 
@@ -1687,6 +1694,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         terminal={panel_terminal(@terminal, @soul["name"])}
         browser={@browser}
         groups={shown_groups(assigns)}
+        servers_read={@servers != nil}
         context={@context}
         provenance={@provenance}
         crew={@crew}
@@ -1868,6 +1876,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :terminal, :any, default: nil
   attr :browser, :map, default: nil
   attr :groups, :any, default: {[], []}
+  attr :servers_read, :boolean, default: true
   attr :context, :any, default: nil
   attr :provenance, :map, default: %{}
   attr :crew, :list, default: []
@@ -2399,6 +2408,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         grant={@model_status && elem(@model_status, 0)}
         context={@context}
         provenance={@provenance}
+        servers_read={@servers_read}
       />
     </div>
     """
@@ -2413,12 +2423,19 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :grant, :atom, default: nil
   attr :context, :any, required: true
   attr :provenance, :map, default: %{}
+  attr :servers_read, :boolean, default: true
 
   # What Aqua and every crew member may use: the grant any switch moves,
   # said once, then CYFR's own groups, then the MCP servers'.
   defp may_use(assigns) do
     {own, servers} = assigns.groups
-    assigns = assign(assigns, own: own, servers: servers)
+
+    assigns =
+      assign(assigns,
+        own: own,
+        servers: servers,
+        unread?: not assigns.servers_read
+      )
 
     ~H"""
     <section
@@ -2442,7 +2459,22 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       <div class="space-y-1.5">
         <h5 class="text-xs font-medium text-gray-300">Your MCP servers</h5>
         <p
-          :if={@servers == []}
+          :if={@unread?}
+          data-test="aqua-servers-unread"
+          class="flex flex-wrap items-center gap-2 text-[11px] text-amber-300"
+        >
+          Your MCP servers cannot be read right now.
+          <button
+            type="button"
+            phx-click="offerings_again"
+            phx-target={@myself}
+            class="rounded px-2 py-1 text-blue-400 hover:bg-gray-800 hover:text-blue-300"
+          >
+            Ask again
+          </button>
+        </p>
+        <p
+          :if={@servers == [] and not @unread?}
           data-test="aqua-no-servers"
           class="rounded border border-dashed border-gray-800 px-3 py-2 text-[11px] text-gray-500"
         >
@@ -2505,7 +2537,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp grant_state?(state), do: state in @grant_states
 
   @doc """
-  One group of what Aqua may use (`PrismWeb.AquaLive.Catalog.group/0`): a
+  One group of what Aqua may use (`t:PrismWeb.AquaLive.Catalog.group/0`): a
   disclosure whose summary names the group and how much of it is on, the
   group's switch beside it, which adds or takes off its keys in one
   update (or, given `switch`, sends that switch's own event), and its
@@ -2559,7 +2591,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             <span class="text-xs font-medium text-gray-200">{@group.title}</span>
             <span class={[
               "ml-1 text-[11px] tabular-nums",
-              if(@group.state in [:silent, :gone], do: "text-amber-300", else: "text-gray-500")
+              if(@group.state in [:silent, :gone, :unread],
+                do: "text-amber-300",
+                else: "text-gray-500"
+              )
             ]}>
               {@summary}
             </span>
@@ -2694,7 +2729,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp summary_words(_group, _tools, %{event: "browser_set"}), do: "Aqua's own Chrome"
 
   defp summary_words(%{state: state, entries: entries}, tools, _switch)
-       when state in [:asking, :silent, :off, :gone] do
+       when state in [:asking, :silent, :off, :gone, :unread] do
     on = Enum.count(entries, &(&1.key in tools))
     if on > 0, do: "#{server_state(state)} · #{on} on", else: server_state(state)
   end
@@ -2708,6 +2743,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp server_state(:silent), do: "did not answer"
   defp server_state(:off), do: "turned off"
   defp server_state(:gone), do: "no longer here"
+  defp server_state(:unread), do: "cannot be read now"
 
   # What a server's state means, inside its group; the state itself is
   # said on the group's summary.

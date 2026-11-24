@@ -10,7 +10,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   ## What Aqua may use
 
   One list, the soul's `tools`, shown in groups by what each reaches
-  (`groups/4`): each of CYFR's tool families under its declared title, the
+  (`groups/5`): each of CYFR's tool families under its declared title, the
   browser's among them; Search, the provider's own `native_search`;
   Scrolls, the `aqua.skill_*` keys; and one group for each MCP server of
   the athanor, its tools, then its resources and its prompts, as
@@ -117,14 +117,15 @@ defmodule PrismWeb.AquaLive.Catalog do
   adds or takes off, and for a server's group its state: `:asking` until
   its answer comes, then `:answered` or `:silent`, `:off` while its row is
   turned off and never asked, `:gone` when the athanor holds no server of
-  the name the list does.
+  the name the list does, `:unread` while the athanor's servers cannot be
+  read.
   """
   @type group :: %{
           id: String.t(),
           title: String.t(),
           entries: [entry()],
           keys: [String.t()],
-          state: :asking | :answered | :silent | :off | :gone | nil
+          state: :asking | :answered | :silent | :off | :gone | :unread | nil
         }
 
   @doc """
@@ -148,8 +149,8 @@ defmodule PrismWeb.AquaLive.Catalog do
   The groups of what Aqua may use: CYFR's own, `own` the catalog's
   `[{tool, [{action, kind}]}]` without the browser's own actions, by
   title; then one group for each server of `servers` (`%{name, enabled}`,
-  the athanor's MCP servers) and for each server the list names that the
-  athanor no longer holds, by name. `offerings` is `Aqua.offerings/3`'s
+  the athanor's MCP servers, nil when they cannot be read) and for each
+  server the list names that the athanor no longer holds, by name. `offerings` is `Aqua.offerings/3`'s
   answer, nil while it is asked; `tools` the soul's list.
   """
   @spec groups([{String.t(), list()}], %{String.t() => String.t()}, [map()], map() | nil, [
@@ -212,15 +213,16 @@ defmodule PrismWeb.AquaLive.Catalog do
           do: {server, remote}
 
     on = Enum.group_by(listed, &elem(&1, 0), &elem(&1, 1))
-    held = Map.new(servers, &{&1.name, &1})
+    held = Map.new(servers || [], &{&1.name, &1})
     answers = if offerings, do: Map.new(offerings.listings, &{&1.server_name, &1}), else: %{}
     unhanded = if offerings, do: offerings.unhanded, else: %{}
 
-    names = Enum.uniq(Enum.map(servers, & &1.name) ++ Map.keys(on)) |> Enum.sort()
+    names = Enum.uniq(Enum.map(servers || [], & &1.name) ++ Map.keys(on)) |> Enum.sort()
 
     for name <- names do
       state =
         cond do
+          is_nil(servers) -> :unread
           not Map.has_key?(held, name) -> :gone
           not held[name].enabled -> :off
           is_nil(offerings) -> :asking
