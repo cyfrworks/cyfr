@@ -66,9 +66,9 @@
 # unshare and setns denied (docker-compose.yml's x-locus-role
 # `security_opt: seccomp=./keeper.seccomp.json`,
 # apps/locus/keeper/seccomp/keeper.json shipped beside it); and on a host
-# with AppArmor, under the profile cyfr-locus
-# (apps/codex/internal/apparmor/cyfr-locus, which `cyfr init` and `cyfr
-# update` load), with its system paths unmasked
+# with AppArmor, under this release's profile by its name
+# (apps/codex/internal/apparmor, which `cyfr init` and `cyfr update` load
+# and .env's CYFR_LOCUS_APPARMOR names), with its system paths unmasked
 # (`systempaths=unconfined`). Without any of them, cyfr-locus refuses to
 # start, naming what to check. A runtime container's read-only root
 # carries the build toolchain's files too; its runners still hold no
@@ -336,6 +336,9 @@ RUN ln -s cyfr-acp /opt/cyfr/bin/cyfr-antigravity
 # carries no program.
 COPY --from=keeper /out/cyfr-fetch /opt/cyfr/bin/cyfr-fetch
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
+# The name of the AppArmor profile this release runs under, which the
+# keeper proves at its boot (its stage.ProfileNameFile).
+COPY apps/codex/internal/apparmor/name /etc/cyfr/apparmor-profile
 # The egress guard the builds and backends islands run (docker-compose.yml's
 # locus-builds-guard and locus-backends-guard); iptables, installed above,
 # is its one tool.

@@ -110,6 +110,7 @@ class Stack(imagesuite.Stack):
         return {
             **os.environ,
             "LOCUS_RUNTIME_IMAGE": self.image,
+            "CYFR_LOCUS_APPARMOR": imagesuite.APPARMOR,
             "LOCUS_RUNTIME_SERVICE_ID": SERVICE,
             "LOCUS_RUNTIME_KEY": self.plane.worker_key.hex(),
             "LOCUS_RUNTIME_HOST_API_URL": self.plane.container_url,

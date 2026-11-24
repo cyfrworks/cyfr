@@ -2053,6 +2053,10 @@ jobs:
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
+      # cyfr init offers the Locus profile where the kernel has not loaded
+      # it, and refuses with no terminal to ask at.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       - name: Install dependencies
         run: |
           scripts/ci/retry.sh mix deps.get

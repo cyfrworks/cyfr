@@ -57,12 +57,12 @@ defmodule Cyfr.StackShapeTest do
   }
 
   # Every Locus service runs under the keeper's seccomp profile and, on a
-  # host with AppArmor, the profile cyfr-locus, with its system paths
+  # host with AppArmor, the profile .env names (CYFR_LOCUS_APPARMOR), with its system paths
   # unmasked: every spawn is cloned into a space of its own, which mounts
   # its own /proc.
   @confinement [
     "seccomp=./keeper.seccomp.json",
-    "apparmor=cyfr-locus",
+    "apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}",
     "systempaths=unconfined"
   ]
   @security_opt %{
@@ -1368,8 +1368,8 @@ defmodule Cyfr.StackShapeTest do
       {"the block's list without no-new-privileges:true",
        "\n      - no-new-privileges:true\n      - writable-cgroups=true\n",
        "\n      - writable-cgroups=true\n", every.("security_opt")},
-      {"the block's list without apparmor=cyfr-locus",
-       "\n      - apparmor=cyfr-locus\n      - systempaths=unconfined\n",
+      {"the block's list without its AppArmor profile",
+       "\n      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}\n      - systempaths=unconfined\n",
        "\n      - systempaths=unconfined\n", every.("security_opt")},
       {"locus-backends without its merge", "\n  #{backends.service}:\n    <<: *locus-role\n",
        "\n  #{backends.service}:\n", for(key <- @role_keys, do: {backends.service, key})},
@@ -1461,8 +1461,9 @@ defmodule Cyfr.StackShapeTest do
   # which Docker's default seccomp and AppArmor profiles deny. Every Locus
   # service runs under the keeper's seccomp profile, which the image
   # carries and a scaffolded project holds beside its compose file, where
-  # compose reads it, and under the AppArmor profile cyfr-locus, which cyfr
-  # carries and loads; a project without the one, or a host without the
+  # compose reads it, and under the AppArmor profile .env names, which cyfr
+  # carries, loads and names there, and whose name the image carries for the
+  # keeper to prove; a project without the one, or a host without the
   # other, does not start the service. The image makes the directory a
   # space's files are built under, which the profile lets a space mount.
   test "every Locus service runs under the keeper's seccomp and AppArmor profiles, shipped beside the compose file" do
@@ -1483,6 +1484,7 @@ defmodule Cyfr.StackShapeTest do
 
     dockerfile = read!("Dockerfile.locus")
     assert dockerfile =~ ~r{^COPY apps/locus/keeper/seccomp/keeper\.json /etc/cyfr/keeper\.json$}m
+    assert dockerfile =~ ~r{^COPY apps/codex/internal/apparmor/name /etc/cyfr/apparmor-profile$}m
     assert dockerfile =~ ~r{install -d -m 0755 -o root -g root #{Regex.escape(space_root())}$}m
     profile = read!("apps/codex/internal/apparmor/cyfr-locus")
     assert profile =~ "mount fstype=tmpfs -> #{space_root()}/,"

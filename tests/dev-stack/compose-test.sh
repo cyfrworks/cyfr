@@ -625,14 +625,14 @@ prepare() {
   cp "$stubs/image.sh" "$case_dir/scripts/image.sh"
   cp "$ROOT/docker-compose.yml" "$ROOT/docker-compose.dev.yml" "$ROOT/.env.example" "$case_dir/"
   mkdir -p "$case_dir/apps/codex/internal/apparmor"
-  cp "$ROOT/apps/codex/internal/apparmor/cyfr-locus" "$case_dir/apps/codex/internal/apparmor/"
+  cp "$ROOT/apps/codex/internal/apparmor/cyfr-locus" "$ROOT/apps/codex/internal/apparmor/name" "$case_dir/apps/codex/internal/apparmor/"
   if [ "$4" != none ]; then
     printf '%s' "$3" >"$case_dir/.env"
     chmod "$4" "$case_dir/.env"
     cp -p "$case_dir/.env" "$case_dir/env.before"
   fi
   if [ -n "${5:-}" ]; then mkdir -p "$case_dir/data" && echo "$5" >"$case_dir/data/dev-stack.slot"; fi
-  if [ -n "${STACK_PROFILE:-}" ]; then echo "$STACK_PROFILE" >>"$case_dir/apps/codex/internal/apparmor/cyfr-locus"; fi
+  if [ -n "${STACK_PROFILE:-}" ]; then echo "$STACK_PROFILE" >"$case_dir/apps/codex/internal/apparmor/name"; fi
   case_project="cyfr-dev-$(run_names_seed "$case_dir")"
 }
 
@@ -1559,18 +1559,18 @@ case_unresolved() {
   nothing_left
 }
 # Where AppArmor is on and the machine has not loaded the checkout's
-# profile cyfr-locus, the loop refuses before anything starts, naming the
+# profile by its name, the loop refuses before anything starts, naming the
 # one command that loads it; where AppArmor is off it goes on.
 case_apparmor() {
-  local profile
-  STACK_PROFILE="# a profile this machine has not loaded" stack "$1" apparmor "$complete" 0600 "" STUB_SERVER_STATUS=0
+  local profile name=cyfr-locus-ffffffffffff
+  STACK_PROFILE="$name" stack "$1" apparmor "$complete" 0600 "" STUB_SERVER_STATUS=0
   profile="$case_dir/apps/codex/internal/apparmor/cyfr-locus"
   if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" != Y ]; then
     status_is 0
     return
   fi
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on though the machine has not loaded its AppArmor profile"
-  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: Locus runs under the AppArmor profile cyfr-locus, which this machine has not loaded as this checkout has it, so nothing was started. Run \`sudo sh -c 'install -m 0644 $profile /etc/apparmor.d/cyfr-locus && apparmor_parser -r -W /etc/apparmor.d/cyfr-locus'\`, then run scripts/dev-stack.sh again." ] ||
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: Locus runs under the AppArmor profile $name, which this machine has not loaded, so nothing was started. Run \`sed 's/cyfr-locus-000000000000/$name/g' $profile | sudo sh -c 'cat > /etc/apparmor.d/$name && apparmor_parser -r -W /etc/apparmor.d/$name'\`, then run scripts/dev-stack.sh again." ] ||
     echo "the refusal does not name the command that loads the profile: $(tail -n 1 "$case_dir/err")"
   [ -z "$(calls)" ] || echo "docker was called before the refusal: $(calls)"
 }

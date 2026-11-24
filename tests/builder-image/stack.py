@@ -194,6 +194,7 @@ class Stack(imagesuite.Stack):
         return {
             **os.environ,
             "BUILDER_IMAGE": self.image,
+            "CYFR_LOCUS_APPARMOR": imagesuite.APPARMOR,
             "CANARY_DIR": self.canary_dir,
             "GUARD_TOOLS_DIR": self.guard_tools_dir,
             "NAME_LISTENER_DIR": os.path.join(ROOT, "tests", "locus-backends-image"),

@@ -81,7 +81,7 @@ case "$kind" in
       --cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add KILL \
       --security-opt no-new-privileges:true --security-opt writable-cgroups=true \
       --security-opt "seccomp=$root/apps/locus/keeper/seccomp/keeper.json" \
-      --security-opt apparmor=cyfr-locus --security-opt systempaths=unconfined \
+      --security-opt "apparmor=$(cat "$root/apps/codex/internal/apparmor/name")" --security-opt systempaths=unconfined \
       --read-only --ipc none \
       --tmpfs /var/lib/locus/homes:mode=1733,exec,size=256m \
       --tmpfs /run/locus:uid=10001,gid=10001,mode=0700,size=16m \

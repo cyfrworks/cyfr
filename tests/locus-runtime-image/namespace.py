@@ -122,7 +122,7 @@ from control_plane import ControlPlane  # noqa: E402
 from memory import CHILD_BYTES as HOG_BYTES, HOG, HOG_REF, wasm  # noqa: E402
 from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, RELEASE, ROLE, RUN_DIR, SERVICE, SERVICE_UID,  # noqa: E402
                    SERVICE_USER, Stack, expect, run, wait_until)
-from imagesuite import PROJECT_PREFIX, read_output, read_word, run_name  # noqa: E402
+from imagesuite import APPARMOR, PROJECT_PREFIX, read_output, read_word, run_name  # noqa: E402
 from worker_auth import ATTEMPT_FIELDS  # noqa: E402
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
@@ -212,7 +212,7 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), netwo
             "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
             "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
     if seccomp:
-        args += ["--security-opt", f"seccomp={PROFILE}", "--security-opt", "apparmor=cyfr-locus",
+        args += ["--security-opt", f"seccomp={PROFILE}", "--security-opt", f"apparmor={APPARMOR}",
                  "--security-opt", "systempaths=unconfined"]
     args += ["--entrypoint", "cyfr-locus", image, "serve", *(pool_args or ["--pool", POOL]), "--home-root", HOME_ROOT,
              "--client-user", SERVICE_USER, "--", "/bin/sh", "-c", client_script]

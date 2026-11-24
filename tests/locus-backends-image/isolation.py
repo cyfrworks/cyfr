@@ -125,7 +125,7 @@ def inspect_pid(stack, image, script):
     run("docker", "rm", "--force", name, check=False)
     return run("docker", "run", "--rm", "--name", name, "--pid", f"container:{stack.container}",
                "--network", f"container:{stack.container}", "--cap-add", "SYS_PTRACE",
-               "--security-opt", "apparmor=cyfr-locus", "--entrypoint", "sh", image, "-c", script, check=False)
+               "--security-opt", f"apparmor={imagesuite.APPARMOR}", "--entrypoint", "sh", image, "-c", script, check=False)
 
 
 # A daemon of probe-backend.mjs's spawn_daemon, as its command line reads.
