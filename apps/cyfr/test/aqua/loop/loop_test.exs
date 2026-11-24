@@ -1018,6 +1018,38 @@ defmodule Aqua.LoopTest do
     turn_id
   end
 
+  # The loop's own waits, which read nothing (`Aqua.Loop`).
+  @quiet [:harness_wait, :awaiting, :collect]
+
+  # Waits until the loop sits in one of its own waits with nothing to read:
+  # a process waiting on the store's answer waits too, so its status alone
+  # says nothing.
+  defp idle!(pid) do
+    wait_until(
+      fn ->
+        case Process.info(pid, [:current_function, :message_queue_len]) do
+          nil -> true
+          [current_function: {Aqua.Loop, wait, _}, message_queue_len: 0] -> wait in @quiet
+          _reading -> false
+        end
+      end,
+      10_000,
+      "the loop to wait with nothing to read"
+    )
+  end
+
+  # Waits until a server waits for its next message with none queued.
+  defp serving!(pid) do
+    wait_until(
+      fn ->
+        Process.info(pid, [:current_function, :message_queue_len]) ==
+          [current_function: {:gen_server, :loop, 5}, message_queue_len: 0]
+      end,
+      10_000,
+      "the server to wait with nothing queued"
+    )
+  end
+
   defp ended!(ctx, turn_id) do
     wait_until(
       fn -> ended?(ctx, turn_id) end,
@@ -1905,15 +1937,19 @@ defmodule Aqua.LoopTest do
                  })
       end
 
-      # The runner's death takes its loop down before the loop's harness,
-      # the process blocked in the gap, is killed: a loop that saw its
-      # harness die first would write the harness's lost end as the
-      # runner's stop killed it, mid-write on the test's one shared
-      # connection.
+      # The runner and its loop are killed only once each waits with
+      # nothing to read, and the runner's death takes the loop down before
+      # the loop's harness, the process blocked in the gap, is killed: a
+      # loop that saw its harness die first would write the harness's lost
+      # end as the runner's stop killed it, and one killed in a read or a
+      # write takes the test's one shared connection with it.
+      runner = Aqua.Runner.whereis(thread.id)
       loop = Aqua.Loop.holder(turn_id)
+      idle!(loop)
+      serving!(runner)
       loop_ref = Process.monitor(loop)
       blocked_ref = Process.monitor(blocked)
-      Process.exit(Aqua.Runner.whereis(thread.id), :kill)
+      Process.exit(runner, :kill)
       assert_receive {:DOWN, ^loop_ref, :process, ^loop, _}, 10_000
       Process.exit(blocked, :kill)
       assert_receive {:DOWN, ^blocked_ref, :process, ^blocked, _}, 10_000
