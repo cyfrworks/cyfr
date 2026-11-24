@@ -9,7 +9,7 @@ nothing of a page's insides.
   screen.py press TEXT     presses the middle of TEXT where it is shown
                            first, top to bottom; exits 1 when it is not
   screen.py words LIST     prints the six words of LIST (one word a line,
-                           BIP-0039's English) shown in order on one line,
+                           BIP-0039's English) a line shows and nothing else,
                            the passphrase a box without a chip shows once,
                            as two readings of the output agree on them;
                            exits 1 when they do not
@@ -90,14 +90,14 @@ def places(img, phrase):
 
 
 def passphrase(img, listed):
-    """The six listed words in order on one line that at least two of the
-    readings agree on, or None."""
+    """The line that is six listed words and nothing else, as at least two
+    of the readings agree on it, or None: prose of listed words runs on
+    within its line ("keep this device where only people you trust")."""
     seen = {}
     for ws in lines(img):
         texts = [plain(w[0]) for w in ws]
-        for i in range(len(texts) - 5):
-            if all(t in listed for t in texts[i:i + 6]):
-                seen.setdefault(" ".join(texts[i:i + 6]), set()).add(ws[0][5][0])
+        if len(texts) == 6 and all(t in listed for t in texts):
+            seen.setdefault(" ".join(texts), set()).add(ws[0][5][0])
     agreed = [p for p, readings in seen.items() if len(readings) >= 2]
     return agreed[0] if len(agreed) == 1 else None
 
