@@ -84,11 +84,14 @@ defmodule Aqua.Harness.Program do
   native turns: it is held, its step and id kept, while an answer owed
   meanwhile is written at once and every other post and recovery prompt
   waits behind it, and it is written again as it was once an `idle` ends
-  the native turn, the turn not done while it waits. A session that ends meanwhile gives it
-  back to the posts that wait (`Aqua.Tape.uncarry/3`), so the next start
-  does not name it pending and delivers it anew. A write that may have
-  reached the driver, its answer lost, keeps its step and is never sent
-  again: the session closes and recovery reconciles it.
+  the native turn, the turn not done while it waits. A session that ends
+  meanwhile gives it back to the posts that wait (`Aqua.Tape.uncarry/3`),
+  so the next start does not name it pending and delivers it anew. A
+  restart of CYFR while it is held loses that the program never took it:
+  the next start names it pending, and the turn ends uncertain, the post
+  never written again. A write that may have reached the driver, its
+  answer lost, keeps its step and is never sent again: the session closes
+  and recovery reconciles it.
 
   ## Recovery
 
