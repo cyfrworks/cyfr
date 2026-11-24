@@ -395,7 +395,7 @@ func toolOK(raw json.RawMessage) bool {
 
 // Carried is whether a tool a line carries is one every harness carries
 // whole: its description at most MaxDescription UTF-16 code units, its
-// parameters' properties naming none of uncarried, and at most
+// parameters naming none of uncarried (carriedProperties), and at most
 // MaxStubArgument bytes as the stub's argument. A line may carry a tool
 // past these, which a driver refuses; the holder hands an outside
 // server's tool only when it is carried (Aqua.Loop.Request).
@@ -409,19 +409,31 @@ func Carried(raw json.RawMessage) bool {
 	return err == nil && len(arg) <= MaxStubArgument
 }
 
-// carriedProperties is whether parameters' properties, when they are an
-// object, name none of uncarried.
+// carriedProperties is whether parameters name none of uncarried: among
+// their properties, when an object, nor their required, when a list,
+// since a schema may require an argument it does not declare.
 func carriedProperties(parameters json.RawMessage) bool {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(parameters, &m) != nil {
 		return true
 	}
+	named := map[string]bool{}
 	var properties map[string]json.RawMessage
-	if json.Unmarshal(m["properties"], &properties) != nil {
-		return true
+	if json.Unmarshal(m["properties"], &properties) == nil {
+		for name := range properties {
+			named[name] = true
+		}
+	}
+	var required []any
+	if json.Unmarshal(m["required"], &required) == nil {
+		for _, name := range required {
+			if s, ok := name.(string); ok {
+				named[s] = true
+			}
+		}
 	}
 	for _, name := range uncarried {
-		if _, ok := properties[name]; ok {
+		if named[name] {
 			return false
 		}
 	}

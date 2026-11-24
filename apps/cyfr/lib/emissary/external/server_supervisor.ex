@@ -21,8 +21,12 @@ defmodule Emissary.External.ServerSupervisor do
   next call.
 
   Returns `{:ok, pid}` if started, already running, or restarted. A
-  `driven` program is run by a person or a brain and has no MCP server
-  process: it is refused with a sentence that says so.
+  start that meets a process another start of the name put up meanwhile,
+  serving another configuration, is refused (`{:error,
+  :configuration_moved}`): its caller read a revision that process does
+  not serve, and is never handed it. A `driven` program is run by a person
+  or a brain and has no MCP server process: it is refused with a sentence
+  that says so.
   """
   def ensure_started(config) do
     if config[:mark] == :driven,
@@ -65,8 +69,20 @@ defmodule Emissary.External.ServerSupervisor do
            {Emissary.External.Server, config}
          ) do
       {:ok, pid} -> {:ok, pid}
-      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> standing(pid, config)
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # The process registered under the name when this start tried to: the
+  # caller's own only when it serves the caller's configuration.
+  defp standing(pid, config) do
+    key = {config[:name], Emissary.External.Server.athanor_id!(config)}
+    digest = config_digest(config)
+
+    case Registry.lookup(Emissary.External.ServerRegistry, key) do
+      [{^pid, ^digest}] -> {:ok, pid}
+      _another_configuration -> {:error, :configuration_moved}
     end
   end
 

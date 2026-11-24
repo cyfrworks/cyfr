@@ -633,7 +633,8 @@ defmodule Aqua.Loop do
   # The tools the turn pinned must be those of the release the loaded
   # grant names for its source, Aqua's, as the tree and the brains stand
   # once the file is pinned, and the grant's tool servers exactly those
-  # its outside entries (`server:tool`) name: Aqua's file edited past its
+  # its outside entries (`server:tool`) name, each with exactly the tools
+  # named of it as its patterns: Aqua's file edited past its
   # grant is refused, never run under the old grant, whichever member's
   # turn it is. A crew member's own file is in no grant, so its edit
   # refuses nothing here.
@@ -651,13 +652,17 @@ defmodule Aqua.Loop do
   end
 
   defp granted_servers(%{resources: %{tool_servers: servers}}) when is_list(servers),
-    do: servers |> Enum.map(& &1.server_name) |> Enum.sort()
+    do: servers |> Enum.map(&{&1.server_name, Enum.sort(&1.tool_patterns)}) |> Enum.sort()
 
   defp granted_servers(_none), do: []
 
   defp listed_servers(tools) do
-    for(key <- tools, [server, _tool] <- [String.split(key, ":", parts: 2)], do: server)
-    |> Enum.uniq()
+    pairs =
+      for key <- tools, [server, tool] <- [String.split(key, ":", parts: 2)], do: {server, tool}
+
+    pairs
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.map(fn {server, tools} -> {server, tools |> Enum.uniq() |> Enum.sort()} end)
     |> Enum.sort()
   end
 
@@ -1209,6 +1214,8 @@ defmodule Aqua.Loop do
   # An ask names a tool its harness was handed, by the whole name it asked
   # by, or it is refused before anything else reads it: before it resolves,
   # so an unhanded ask that would not resolve is refused as unhanded too.
+  # The refusal names the tool as the person's list does, by the key an
+  # outside name spells (`Binding.host_name/1`), any other as it was asked.
   defp decide(_state, %{step: step} = item, {runnable, state, setup} = acc) do
     name = Map.get(item, :asked)
 
@@ -1217,7 +1224,7 @@ defmodule Aqua.Loop do
         state,
         step,
         resolved(item),
-        {:error, {:denied, "#{name} is not one of the tools this work has"}}
+        {:error, {:denied, "#{listed_as(name)} is not one of the tools this work has"}}
       )
 
       {runnable, state, setup}
@@ -1251,6 +1258,13 @@ defmodule Aqua.Loop do
   end
 
   defp decide_handed(_state, item, acc), do: decide_open(item, acc)
+
+  defp listed_as(name) do
+    case Binding.host_name(name) do
+      {:ok, key} -> key
+      :error -> name
+    end
+  end
 
   defp resolved(%{call: {:ok, %Call{} = call}}), do: call
   defp resolved(_item), do: nil

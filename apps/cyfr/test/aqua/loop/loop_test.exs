@@ -1200,11 +1200,11 @@ defmodule Aqua.LoopTest do
 
     assert {search.tool, search.action, search.dispatch_state, search.outcome, search.error} ==
              {"github:search", nil, "closed", "denied",
-              "github__search is not one of the tools this work has"}
+              "github:search is not one of the tools this work has"}
 
     for unhanded <- [null, decimal] do
       assert {unhanded.dispatch_state, unhanded.outcome, unhanded.error} ==
-               {"closed", "denied", "github__search is not one of the tools this work has"}
+               {"closed", "denied", "github:search is not one of the tools this work has"}
     end
   end
 
@@ -1226,8 +1226,8 @@ defmodule Aqua.LoopTest do
     {:ok, steps} = Tape.steps(ctx, turn)
 
     assert Enum.map(Enum.filter(steps, &(&1.kind == "tool")), &{&1.outcome, &1.error}) == [
-             {"denied", "github__search is not one of the tools this work has"},
-             {"denied", "github__search is not one of the tools this work has"}
+             {"denied", "github:search is not one of the tools this work has"},
+             {"denied", "github:search is not one of the tools this work has"}
            ]
   end
 

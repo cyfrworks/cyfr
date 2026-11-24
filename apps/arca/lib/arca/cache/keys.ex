@@ -124,6 +124,17 @@ defmodule Arca.Cache.Keys do
   def external_tools(%Prima.Actor{}),
     do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.external_tools/1")
 
+  @doc """
+  The epoch an athanor's external MCP tool map is stored and read under
+  (`Arca.Cache.Epoch`): a change to a server advances it.
+  """
+  def external_tools_epoch(%Prima.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "",
+      do: {:external_tools_epoch, athanor_id}
+
+  def external_tools_epoch(%Prima.Actor{}),
+    do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.external_tools_epoch/1")
+
   @doc "The byte total of an athanor's whole tree, for the storage cap."
   def athanor_usage(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "",

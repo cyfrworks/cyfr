@@ -674,7 +674,8 @@ defmodule Aqua.Loop.Turn do
   grant, and each of its outside entries (`server:tool`) not handed with
   why (`t:Aqua.Loop.Request.unhanded/0`). An outside entry is handed as
   the person's own servers list it now, read under `ctx`, the turn's own
-  context (`Sanctum.Proxy`'s `list_external_tools/1`), when the grant
+  context, asking only the servers its entries name (`Sanctum.Proxy`'s
+  `list_external_tools/2`), when the grant
   covers it under its server's current digest, as the gate decides its
   call (`Prima.Authority.Transition.external_tool_granted?/3`), and every
   harness carries it (`Aqua.Loop.Request.tools/2`). A turn offered none
@@ -700,8 +701,13 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
+  # Only the servers the list names are asked.
   defp listed(ctx, keys, authority) do
-    listing = Map.new(Sanctum.Proxy.impl!().list_external_tools(ctx), &{&1["name"], &1})
+    servers = keys |> Enum.map(&hd(String.split(&1, ":", parts: 2))) |> Enum.uniq()
+
+    listing =
+      Map.new(Sanctum.Proxy.impl!().list_external_tools(ctx, servers), &{&1["name"], &1})
+
     digests = server_digests(ctx)
 
     Enum.reduce(keys, {[], %{}}, fn key, {handed, unhanded} ->

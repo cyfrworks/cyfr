@@ -245,7 +245,8 @@ defmodule Sanctum.Consent.Commit do
   moves while the head is re-issued (a consent conflict), when the
   component's shape moved since the head (`:shape_moved` — plan, preview
   and commit again), when the profile is not an active owner profile, or
-  when the head grants external tool servers, which a grant does not carry
+  when the tool servers it would grant are not exactly the head's, each
+  server by its name, digest and patterns, since no preview shows them
   (`:grant_requires_full_commit`), or when the head's policy fails its
   digest or does not parse (`{:corrupt, {:profile, profile_id}}`).
 
@@ -265,9 +266,10 @@ defmodule Sanctum.Consent.Commit do
          {:ok, profile} <- Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id),
          :ok <- check_grantable_profile(profile),
          {:ok, head} <- Plan.read_head(ctx, profile_id),
-         :ok <- check_no_tool_servers(profile_id, head, profile.source_ref),
+         {:ok, held} <- held_tool_servers(profile_id, head, profile.source_ref),
          decisions = grant_decisions(profile, head, Map.get(params, :bindings, [])),
          {:ok, asked} <- prepare(ctx, decisions),
+         :ok <- check_same_tool_servers(held, asked.tool_servers),
          :ok <- check_expected_revision(params, asked),
          :ok <- check_head_read(head, asked),
          :ok <- check_shape_unmoved(asked, head),
@@ -396,22 +398,36 @@ defmodule Sanctum.Consent.Commit do
   defp row_lifetime(_absent), do: nil
 
   # A tool-server grant lives on the head's ingress edge and is not a
-  # binding; re-issuing the head without it would silently drop it.
+  # binding, and no preview stands before a grant: a reissue grants
+  # exactly the head's servers, each by its name, digest and patterns, or
+  # asks for the full consent. It would otherwise drop a component's, which
+  # its decisions do not name, or add one an agent source's tools name now
+  # (`tool_server_decisions/3`), or bind a server's moved configuration.
   # The head's policy is read as every head's bytes are
   # (`Sanctum.Consent.Loader.head_blob/1`): one whose bytes fail their
   # digest or do not parse is the damaged profile it is, never a grant to
   # re-issue.
-  defp check_no_tool_servers(profile_id, head, source_ref) do
+  defp held_tool_servers(profile_id, head, source_ref) do
     case Sanctum.Consent.Loader.head_blob(head) do
       {:ok, blob} ->
         case Prima.Authority.Blob.ingress(blob, source_ref) do
-          {:ok, %{tool_servers: [_ | _]}} -> {:error, :grant_requires_full_commit}
-          _none -> :ok
+          {:ok, %{tool_servers: servers}} when is_list(servers) -> {:ok, granted_servers(servers)}
+          _none -> {:ok, []}
         end
 
       {:error, _damaged} ->
         {:error, {:corrupt, {:profile, profile_id}}}
     end
+  end
+
+  defp check_same_tool_servers(held, prepared) do
+    if granted_servers(prepared) == held, do: :ok, else: {:error, :grant_requires_full_commit}
+  end
+
+  defp granted_servers(servers) do
+    servers
+    |> Enum.map(&{&1.server_name, &1.server_digest, Enum.sort(&1.tool_patterns)})
+    |> Enum.sort()
   end
 
   defp check_shape_unmoved(prep, head) do
@@ -589,8 +605,8 @@ defmodule Sanctum.Consent.Commit do
          {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published, declared, place),
          {:ok, selections, lent} <-
            prepared_selections(ctx, decisions, published, place, provided),
-         {:ok, requested} <- tool_server_decisions(decisions, source_ref, component),
-         {:ok, tool_servers} <- resolve_tool_servers(ctx, requested),
+         {:ok, requested, narrow} <- tool_server_decisions(decisions, source_ref, component),
+         {:ok, tool_servers} <- resolve_tool_servers(ctx, requested, narrow),
          # Build the blob before digest validation; preview renders these same bytes.
          blob_inputs = %{
            source_ref: source_ref,
@@ -719,17 +735,23 @@ defmodule Sanctum.Consent.Commit do
 
   # An agent source's tool servers are those its own tools name
   # (`Plan.declared_tool_servers/2`), shown and never chosen: decisions
-  # naming any are refused. A component's are the caller's choice.
+  # naming any are refused. Its tools name each tool exactly, so their
+  # patterns are taken whole: one its server does not expose grants
+  # nothing the gate admits, which refuses an unexposed tool's call, and
+  # one the server exposes later moves the server's digest, which the grant
+  # no longer covers. A turn's start holds the grant to those patterns
+  # exactly (`Aqua.Loop`). A component's servers are the caller's choice,
+  # narrowed to what each server's configuration exposes.
   defp tool_server_decisions(decisions, source_ref, component) do
     chosen = Map.get(decisions, :tool_servers) || []
 
     with {:ok, manifest} <- manifest(component, source_ref) do
       case {Plan.declared_tool_servers(source_ref, manifest), chosen} do
         {nil, chosen} ->
-          {:ok, chosen}
+          {:ok, chosen, &narrow_tool_patterns/2}
 
         {declared, []} ->
-          {:ok, declared}
+          {:ok, declared, fn patterns, _config -> {:ok, patterns} end}
 
         {_declared, _chosen} ->
           {:error,
@@ -741,7 +763,7 @@ defmodule Sanctum.Consent.Commit do
 
   # Resolve tool-server digests live during preparation. Include a
   # description baseline when the catalog is reachable.
-  defp resolve_tool_servers(ctx, requested) do
+  defp resolve_tool_servers(ctx, requested, narrow) do
     requested
     |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
       name = Map.get(raw, :server_name)
@@ -751,7 +773,7 @@ defmodule Sanctum.Consent.Commit do
         when is_binary(digest) ->
           # Intersect granted patterns with the server’s configured patterns.
           # Dispatch also rechecks the live configuration.
-          case narrow_tool_patterns(Map.get(raw, :tool_patterns), candidate.tool_patterns) do
+          case narrow.(Map.get(raw, :tool_patterns), candidate.tool_patterns) do
             {:ok, patterns} ->
               grant = %{
                 server_name: candidate.name,

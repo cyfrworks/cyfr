@@ -141,6 +141,13 @@ defmodule Sanctum.Proxy do
   @callback list_external_tools(Context.t()) :: [map()]
 
   @doc """
+  The proxied tools of the caller's athanor's servers named
+  `server_names`, read now, starting and asking no other server: what a
+  turn may hand (`Aqua.Loop.Turn`).
+  """
+  @callback list_external_tools(Context.t(), server_names :: [String.t()]) :: [map()]
+
+  @doc """
   The argument names a proxied call's `c:dispatch/5` never carries to its
   server: the action the gate routed on and the lineage the host stamps.
   A third-party server is told none of them, so a tool whose parameters

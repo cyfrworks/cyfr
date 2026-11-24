@@ -291,6 +291,10 @@ defmodule Opus.Brain do
   @spec carried?(term()) :: boolean()
   def carried?(tool), do: Wire.carried?(tool)
 
+  @doc "The argument names a tool's parameters name (`Opus.Brain.Wire.named_properties/1`)."
+  @spec named_properties(map()) :: [String.t()]
+  def named_properties(parameters), do: Wire.named_properties(parameters)
+
   @doc "The bytes `tools` take of their line (`Opus.Brain.Wire.tools_bytes/1`)."
   @spec tools_bytes([map()]) :: non_neg_integer()
   def tools_bytes(tools), do: Wire.tools_bytes(tools)

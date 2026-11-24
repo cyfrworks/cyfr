@@ -247,18 +247,13 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  # Carried whole by every harness, and naming no property a proxied call
-  # leaves behind: an argument the model gives that its server never
-  # sees.
+  # Carried whole by every harness, and naming no argument a proxied call
+  # leaves behind, declared or required (`Opus.Brain.named_properties/1`):
+  # one the model gives that its server never sees.
   defp carried_whole(%{"parameters" => parameters} = tool) do
     dropped =
-      case parameters do
-        %{"properties" => %{} = properties} ->
-          Enum.any?(Sanctum.Proxy.host_stamped(), &Map.has_key?(properties, &1))
-
-        _ ->
-          false
-      end
+      is_map(parameters) and
+        Enum.any?(Sanctum.Proxy.host_stamped(), &(&1 in Opus.Brain.named_properties(parameters)))
 
     if Opus.Brain.carried?(tool) and not dropped, do: :ok, else: {:error, :uncarried}
   end

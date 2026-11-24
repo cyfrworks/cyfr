@@ -388,7 +388,8 @@ defmodule Cyfr.Boundaries do
           "(`Aqua.Aloud`), and the shared threads on the person's list of threads " <>
           "(`Aqua.ThreadList`). " <>
           "`Sanctum.Proxy` is the port a turn reads the person's own servers' tools " <>
-          "through, under the turn's context (`list_external_tools/1`), and the names " <>
+          "through, under the turn's context, asking only the servers its list names " <>
+          "(`list_external_tools/2`), and the names " <>
           "a proxied call never carries to its server (`host_stamped/0`), which no tool " <>
           "it hands may name; `Sanctum.ToolServerDigest` is the digest a server's grant " <>
           "binds, so a turn hands a server's tool only while the grant covers the " <>

@@ -42,30 +42,39 @@ defmodule Emissary.External.Proxy do
 
   Returns tool definitions with names prefixed as `server_name:tool_name`.
   Called by `Sanctum.Providers.System.handle("tools", ctx, %{"action" => "list"})`.
+  The listing is kept for a while under the athanor's epoch it read
+  before it began (`Arca.Cache.Epoch`), which an invalidation advances
+  (`invalidate_external_tools_cache/1`): a listing whose read began before
+  a server changed answers no read that begins after, whenever it is
+  stored.
   """
   @impl Sanctum.Proxy
   @spec list_external_tools(Context.t()) :: [map()]
   def list_external_tools(%Context{} = ctx) do
-    cache_key = Arca.Cache.Keys.external_tools(Sanctum.Context.actor(ctx))
+    actor = Sanctum.Context.actor(ctx)
+    cache_key = Arca.Cache.Keys.external_tools(actor)
+    epoch = Arca.Cache.Epoch.current(Arca.Cache.Keys.external_tools_epoch(actor))
 
-    case Arca.Cache.get(cache_key) do
+    case Arca.Cache.Epoch.get(cache_key, epoch) do
       {:ok, cached} ->
         cached
 
       :miss ->
-        tools = fetch_external_tools(ctx)
-
-        case Arca.Cache.put(cache_key, tools, @external_tools_cache_ttl) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("[Emissary.External.Proxy] Cache put failed: #{inspect(reason)}")
-        end
-
+        tools = fetch_external_tools(ctx, fn _server -> true end)
+        :ok = Arca.Cache.Epoch.put(cache_key, epoch, tools, @external_tools_cache_ttl)
         tools
     end
   end
+
+  @doc """
+  The tools of the caller's athanor's servers named `server_names`, as
+  `list_external_tools/1` shapes them, read now from each server and kept
+  nowhere: no other server is started or asked.
+  """
+  @impl Sanctum.Proxy
+  @spec list_external_tools(Context.t(), [String.t()]) :: [map()]
+  def list_external_tools(%Context{} = ctx, server_names) when is_list(server_names),
+    do: fetch_external_tools(ctx, &(&1.name in server_names))
 
   @doc """
   The tools a server of the caller's athanor answers with now, from its
@@ -180,15 +189,18 @@ defmodule Emissary.External.Proxy do
   def invalidate_external_tools_cache(%Context{} = ctx) do
     # The consent-matching digest of a server is never cached: it is
     # derived from the row at every read, so a configuration change is
-    # its own invalidation.
-    Arca.Cache.invalidate(Arca.Cache.Keys.external_tools(Sanctum.Context.actor(ctx)))
+    # its own invalidation. The epoch moves first, so a listing read before
+    # it is never stored as an answer to a later read.
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.Cache.Epoch.advance(Arca.Cache.Keys.external_tools_epoch(actor))
+    Arca.Cache.invalidate(Arca.Cache.Keys.external_tools(actor))
   end
 
-  defp fetch_external_tools(%Context{} = ctx) do
+  defp fetch_external_tools(%Context{} = ctx, listed?) do
     case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       {:ok, servers} ->
         servers
-        |> Enum.filter(&(&1.enabled and &1.mark != "driven"))
+        |> Enum.filter(&(&1.enabled and &1.mark != "driven" and listed?.(&1)))
         |> Task.async_stream(
           fn server -> {server, Servers.ensure_started(server, ctx)} end,
           max_concurrency: 10,
@@ -659,6 +671,12 @@ defmodule Emissary.External.Proxy do
         pid
         |> Emissary.External.Server.call_tool(remote_tool, upstream_args(args))
         |> classified()
+
+      # Another configuration's process stands under the name: the call was
+      # admitted for a revision no process serves, so it is refused as a
+      # server whose configuration moved since it was granted.
+      {:error, :configuration_moved} ->
+        {:error, :tool_server_not_granted}
 
       # The start failure's reason may carry the row's configuration, its
       # credentials among them: the log names the server and reports the

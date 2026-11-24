@@ -222,7 +222,8 @@ defmodule Opus.Brain.Wire do
   Whether `tool` is one every harness carries whole: a tool a line
   carries, `{name, description, parameters}` with a name of 1 to 128
   bytes, whose description is at most `max_description/0` UTF-16 code
-  units, whose parameters' `properties` name none of `uncarried/0`, and
+  units, whose parameters name none of `uncarried/0`
+  (`named_properties/1`), and
   that is at most `max_stub_argument/0` bytes as the stub's argument. A
   line may carry a tool past these, which a driver refuses; the turn
   hands an outside server's tool only when it is carried
@@ -234,6 +235,29 @@ defmodule Opus.Brain.Wire do
       tool?(tool) and utf16_units(tool["description"]) <= @max_description and
         carried_properties?(tool["parameters"]) and
         byte_size(stub_argument(tool)) <= @max_stub_argument
+
+  @doc """
+  The argument names a tool's `parameters` name at their top: those its
+  `properties` declare, when an object, and those its `required` lists,
+  when a list, since a schema may require one it does not declare. A call
+  carries each of these as an argument of that name.
+  """
+  @spec named_properties(map()) :: [String.t()]
+  def named_properties(parameters) when is_map(parameters) do
+    declared =
+      case parameters do
+        %{"properties" => %{} = properties} -> Map.keys(properties)
+        _ -> []
+      end
+
+    required =
+      case parameters do
+        %{"required" => required} when is_list(required) -> Enum.filter(required, &is_binary/1)
+        _ -> []
+      end
+
+    Enum.uniq(declared ++ required)
+  end
 
   @doc """
   The stub's argument for `tool`, as the driver writes it (Go's
@@ -378,10 +402,8 @@ defmodule Opus.Brain.Wire do
 
   defp tool?(_tool), do: false
 
-  defp carried_properties?(%{"properties" => %{} = properties}),
-    do: not Enum.any?(@uncarried, &Map.has_key?(properties, &1))
-
-  defp carried_properties?(_parameters), do: true
+  defp carried_properties?(parameters),
+    do: not Enum.any?(@uncarried, &(&1 in named_properties(parameters)))
 
   defp utf16_units(text) do
     case :unicode.characters_to_binary(text, :utf8, :utf16) do
