@@ -276,8 +276,9 @@ async function pairPhase() {
   // untouched.
   const out = await signOutOfPrism(again)
   const bStill = await opens(bCookie, SECOND)
-  row("sign_out_alone", refused(out.after) && bStill.opens && holds(await storageOf(contentStore(SECOND)), "_cyfr_key", B_HOST),
-    "Sign out at A ends A's session alone: B's still opens B", {after: out.after, bStill})
+  const bKept = holds(await storageOf(contentStore(SECOND)), "_cyfr_key", B_HOST)
+  row("sign_out_alone", refused(out.after) && bStill.opens && bKept,
+    "Sign out at A ends A's session alone: B's still opens B", {after: out.after, bStill, bKept})
 
   // A signed in again for the next launch, its session's mark kept.
   answerWith(() => 0)
