@@ -484,7 +484,9 @@ func (d *driver) controlRequest(l harnessLine) error {
 	if !prefixed || request.Server.Name != d.server || request.Server.Source != "dynamic" {
 		// The harness's own tool runs in its box: allowed, and shown by name
 		// only, from its tool_use (assistant) or, named as CYFR's are, from
-		// here, until its result.
+		// here, until its result or its turn's end. One named as CYFR's that
+		// asks nothing, as a tool the person allowed beforehand need not, is
+		// not shown at all.
 		if prefixed && request.ToolUseID != "" {
 			if _, shown := d.own[request.ToolUseID]; !shown {
 				own := ownName(request.ToolName)
@@ -562,6 +564,8 @@ func (d *driver) assistant(l harnessLine) error {
 		// passed on, only its type in the driver's words.
 		kind := errorKind(*l.Error)
 		d.errored = true
+		// The error ends the turn for its holder, and its own tools with it.
+		d.own = map[string]string{}
 		return d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("type", kind).Set("message", errorSentence(kind)))
 	}
 	var text strings.Builder
@@ -616,6 +620,9 @@ func (d *driver) result(l harnessLine) error {
 		return d.c.Emit(brainwire.NewEvent("gone"))
 	}
 	work := d.workOf(l.UserMessageIDs)
+	// The native turn ended: none of its own tools runs any more, those it
+	// gave no result for among them, which Aqua settles at the idle.
+	d.own = map[string]string{}
 	d.results++
 	result := l.UUID
 	if !brainwire.IsID(result) {
@@ -683,6 +690,7 @@ func (d *driver) Ended() error {
 	d.starting = nil
 	d.listing = nil
 	d.server = ""
+	d.own = map[string]string{}
 	d.asks = map[string]heldAsk{}
 	d.awaiting = map[string]string{}
 	if expected {
@@ -700,4 +708,5 @@ func (d *driver) Close() {
 		d.h.Stop()
 		d.h = nil
 	}
+	d.own = map[string]string{}
 }

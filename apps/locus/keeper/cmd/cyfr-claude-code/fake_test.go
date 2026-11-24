@@ -45,6 +45,8 @@ import (
 //	       by FAKE_LATE_SERVER (JSON, `mcp_server` as the ask names it),
 //	       as one that started after its listing, then replies with the
 //	       driver's whole answer
+//	unended makes the same call, allowed, and ends its turn with no result
+//	       for it
 //	noise  writes a line that is no JSON, one of no type the driver
 //	       reads and an event that does not read, then replies
 //
@@ -317,6 +319,14 @@ func fakeClaude() int {
 				map[string]any{"type": "tool_result", "tool_use_id": "toolu_late", "content": "their late server ran"}}}})
 			answer, _ := json.Marshal(decision)
 			reply(uuids, string(answer))
+		case strings.Contains(words, "unended"):
+			var server map[string]any
+			_ = json.Unmarshal([]byte(os.Getenv("FAKE_LATE_SERVER")), &server)
+			tool, input := cyfrs("late"), map[string]any{"query": "theirs"}
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_unended", "content": []any{
+				map[string]any{"type": "tool_use", "id": "toolu_late", "name": tool, "input": input}}}})
+			askOf(tool, input, server, "toolu_late")
+			reply(uuids, "ended with the call unanswered")
 		case strings.Contains(words, "handed"):
 			reply(uuids, string(initialized))
 		case strings.Contains(words, "noise"):
