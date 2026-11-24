@@ -335,8 +335,9 @@ func TestTheLastRecordStaysUntilTheNextUpdate(t *testing.T) {
 }
 
 // Whether an update runs is read from the locks an update holds alone,
-// never from what the record says: a page shown one running is told, by
-// its read that waits, once the lock is let go.
+// never from what the record says: a read begun while one ran answers
+// once its lock is let go, the locks asked again while it waits, and one
+// begun after answers at once.
 func TestAnUpdateRunsWhileItsLockIsHeld(t *testing.T) {
 	saved := runsPoll
 	t.Cleanup(func() { runsPoll = saved })
@@ -351,13 +352,25 @@ func TestAnUpdateRunsWhileItsLockIsHeld(t *testing.T) {
 	if running.Outcome != "CYFR is being updated." {
 		t.Fatalf("the page shows %+v while the lock is held", running)
 	}
-	u.runsLock.Store(false)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	var got updateRead
-	if w := a.readUpdate(ctx, a.ReadToken, running.Seq); w.Body.Len() == 0 || json.Unmarshal(w.Body.Bytes(), &got) != nil ||
-		got.Running || got.Outcome != "Updated to release 0.0.2." {
-		t.Fatalf("with the lock let go the waiting read answered %q", w.Body)
+	read := func(within time.Duration) updateRead {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), within)
+		defer cancel()
+		var got updateRead
+		if w := a.readUpdate(ctx, a.ReadToken, running.Seq); w.Body.Len() == 0 || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+			t.Fatalf("the read answered %q", w.Body)
+		}
+		return got
+	}
+	// The read finds the lock held, so waits; the update lets it go.
+	var asked atomic.Int32
+	a.UpdateRuns = func(string) bool { return asked.Add(1) == 1 }
+	if got := read(2 * time.Second); got.Running || got.Outcome != "Updated to release 0.0.2." || asked.Load() < 2 {
+		t.Fatalf("with the lock let go while it waited, the read answered %+v, the locks asked %d times", got, asked.Load())
+	}
+	a.UpdateRuns = func(string) bool { return false }
+	if got := read(100 * time.Millisecond); got.Running {
+		t.Fatalf("begun with the lock let go, the read answered %+v", got)
 	}
 }
 
