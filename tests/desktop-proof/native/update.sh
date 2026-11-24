@@ -207,6 +207,7 @@ run() {
     sudo sed -i 's/^%sudo\(\s\+\)ALL=(ALL:ALL) ALL$/%sudo\1ALL=(ALL:ALL) NOPASSWD: ALL/' /etc/sudoers && sudo visudo -c >/dev/null
   fi
   if [ "$OS" = linux ] && ! id -nG | tr ' ' '\n' | grep -qx sudo; then
+    command -v sg >/dev/null || sudo apt-get install -y util-linux-extra >/dev/null
     exec sg sudo -c "$(printf '%q ' bash "${BASH_SOURCE[0]}" run "$dir")"
   fi
   if [ "$OS" = linux ] && ! sudo -n -v 2>/dev/null; then
@@ -296,19 +297,29 @@ run() {
 
 # ask ACCOUNT LINE: LINE sent straight to the update service's socket as
 # ACCOUNT, printing the service's first answer, or the connection's
-# refusal.
+# refusal. systemd drops a connection made while the request before it
+# still ends (MaxConnections=1): one dropped is made again, within 10 s.
 ask() {
   sudo -u "$1" python3 -I -c '
-import socket, sys
-s = socket.socket(socket.AF_UNIX)
-try:
-    s.connect("/run/cyfr-update.sock")
-except OSError as e:
-    print("refused at the socket:", e.strerror); sys.exit()
-s.sendall(sys.argv[1].encode() + b"\n")
-for line in s.makefile(errors="replace"):
-    if line.startswith("\x1e"):
-        print(line[1:].strip()); break
+import socket, sys, time
+until = time.monotonic() + 10
+while True:
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect("/run/cyfr-update.sock")
+    except OSError as e:
+        print("refused at the socket:", e.strerror); sys.exit()
+    try:
+        s.sendall(sys.argv[1].encode() + b"\n")
+        for line in s.makefile(errors="replace"):
+            if line.startswith("\x1e"):
+                print(line[1:].strip()); sys.exit()
+    except OSError:
+        pass
+    s.close()
+    if time.monotonic() > until:
+        print("no answer"); sys.exit()
+    time.sleep(0.25)  # sleep-ok: the request before it ending, bounded by until
 ' "$2"
 }
 

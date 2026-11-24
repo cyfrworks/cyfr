@@ -169,7 +169,14 @@ writeFileSync(path.join(stage, "before-remove.sh"), "#!/bin/sh\n" +
 writeFileSync(path.join(stage, "after-remove.tpl"), template("after-remove.tpl") +
   "\nif [ \"$(readlink /usr/bin/cyfr)\" = '/opt/${sanitizedProductName}/resources/cyfr' ]; then rm -f /usr/bin/cyfr; fi\n" +
   `if ${systemd}; then systemctl daemon-reload; fi\n`)
-const unit = (name) => `${path.join(root, "linux", name)}=/usr/lib/systemd/system/${name}`
+// The units are staged root's alone to change, whatever the checkout's
+// modes, as fpm keeps them.
+const unit = (name) => {
+  const file = path.join(stage, name)
+  copyFileSync(path.join(root, "linux", name), file)
+  chmodSync(file, 0o644)
+  return `${file}=/usr/lib/systemd/system/${name}`
+}
 
 await build({
   targets: {linux: Platform.LINUX, darwin: Platform.MAC, windows: Platform.WINDOWS}[os]

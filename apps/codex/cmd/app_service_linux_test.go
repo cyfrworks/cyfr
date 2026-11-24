@@ -283,31 +283,33 @@ func TestTheUpdateServiceUnitsAreTheCodes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		keys := map[string]string{}
+		keys, section := map[string]string{}, ""
 		for _, line := range strings.Split(string(data), "\n") {
-			if k, v, ok := strings.Cut(line, "="); ok && !strings.HasPrefix(line, "#") {
-				keys[k] = v
+			if strings.HasPrefix(line, "[") {
+				section = strings.Trim(line, "[]")
+			} else if k, v, ok := strings.Cut(line, "="); ok && !strings.HasPrefix(line, "#") {
+				keys[section+"."+k] = v
 			}
 		}
 		return keys
 	}
 	socket := read("cyfr-update.socket")
-	for k, v := range map[string]string{"ListenStream": appUpdateSocket, "SocketMode": "0660", "SocketGroup": "sudo", "Accept": "yes", "MaxConnections": "1", "RemoveOnStop": "yes"} {
+	for k, v := range map[string]string{"Socket.ListenStream": appUpdateSocket, "Socket.SocketMode": "0660", "Socket.SocketGroup": "sudo", "Socket.Accept": "yes", "Socket.MaxConnections": "1", "Socket.RemoveOnStop": "yes"} {
 		if socket[k] != v {
 			t.Errorf("cyfr-update.socket has %s=%q, want %q", k, socket[k], v)
 		}
 	}
 	service := read("cyfr-update@.service")
 	carried, _ := installedAppCyfr()
-	for k, v := range map[string]string{"ExecStart": carried + " " + appUpdateServiceArg, "StandardInput": "socket", "StandardOutput": "journal", "KillSignal": "SIGKILL", "ProtectHome": "yes", "PrivateTmp": "yes"} {
+	for k, v := range map[string]string{"Service.ExecStart": carried + " " + appUpdateServiceArg, "Service.StandardInput": "socket", "Service.StandardOutput": "journal", "Service.KillSignal": "SIGKILL", "Service.ProtectHome": "yes", "Service.PrivateTmp": "yes", "Unit.CollectMode": "inactive-or-failed"} {
 		if service[k] != v {
 			t.Errorf("cyfr-update@.service has %s=%q, want %q", k, service[k], v)
 		}
 	}
-	bound, err := strconv.Atoi(service["RuntimeMaxSec"])
+	bound, err := strconv.Atoi(service["Service.RuntimeMaxSec"])
 	need := askWithin + fetchBinaryTimeout + goWithin + appQuitWithin + appReplaceWithin
 	if err != nil || time.Duration(bound)*time.Second < need {
-		t.Errorf("cyfr-update@.service's RuntimeMaxSec is %q, want at least %v", service["RuntimeMaxSec"], need)
+		t.Errorf("cyfr-update@.service's RuntimeMaxSec is %q, want at least %v", service["Service.RuntimeMaxSec"], need)
 	}
 }
 
