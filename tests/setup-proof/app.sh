@@ -416,6 +416,8 @@ fi
 # and starts it with cyfr up there, which the proof asks for mid-launch
 # (stopped); stopped again, its row is pressed (pressed).
 person "$D2" down >"$KEPT/cyfr-down-1.log" 2>&1 || failed "stopped_reopen: cyfr down in the folder failed (its output is kept)"
+answer & ANSWERER=$!
 launch stopped "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"
+kill "$ANSWERER" 2>/dev/null || true
 person "$D2" down >"$KEPT/cyfr-down-2.log" 2>&1 || failed "stopped_press: cyfr down in the folder failed (its output is kept)"
 launch pressed "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"
