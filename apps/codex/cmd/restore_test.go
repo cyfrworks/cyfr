@@ -159,7 +159,7 @@ func newRestoreScenario(t *testing.T, compose []byte, env map[string]string, pre
 	}
 	r := &restoreScenario{updateScenario: s, dir: s.snapshotDir()}
 	var err error
-	if r.env, err = os.ReadFile(filepath.Join(s.project, ".env")); err != nil {
+	if r.env, err = os.ReadFile(filepath.Join(r.dir, ".env")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(s.fake, "docker"), []byte(restoreFakeDocker), 0755); err != nil {
