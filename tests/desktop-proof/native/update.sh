@@ -29,13 +29,35 @@
 #   reopened     the app the update closed is gone and the app opens
 #                again: a new process, whose chooser answers
 #
+# Then A again, and the same update by the app's own window, as a person
+# makes it: a click on the rail's foot, Update CYFR, opens its window, and
+# Return presses its focused button (xdotool on Linux, System Events and
+# CoreGraphics on macOS, user32 and SendKeys on Windows). The newest
+# release is the folder's file latest. A docker that records each call is
+# first on the app's PATH:
+#
+#   window_opened      the rail's foot opens Update CYFR, offering the
+#                      newest release, U
+#   window_unverified  its yes runs the update, which refuses before
+#                      anything closes: the record says U did not verify,
+#                      the same app runs at A and answers, and Update CYFR
+#                      offers U again
+#   window_update      with B the newest, its yes closes the app, which
+#                      opens again at B, a new process, with Update CYFR
+#                      open by itself on the record of the update to B; no
+#                      docker was called
+#   window_record      Close on that window removes the record it showed
+#   window_terminal    (Linux) where sudo would ask for a password, Update
+#                      CYFR offers no yes but the line to run in a terminal,
+#                      the app running on and no update begun
+#
 # It installs software and leaves the app installed, so `run` refuses
 # anywhere but a disposable machine: GitHub's own runner
 # (GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted) or a container
 # (/.dockerenv). There the account administers the machine with sudo and no
 # password (Linux), and 127.0.0.1:7340 is free. On Linux it needs a display
-# and a session bus (dbus-run-session -- xvfb-run -a), curl and the
-# package's dependencies.
+# and a session bus (dbus-run-session -- xvfb-run -a), curl, xdotool and
+# the package's dependencies.
 #
 # Usage: bash tests/desktop-proof/native/update.sh build DIR amd64|arm64
 #        bash tests/desktop-proof/native/update.sh run DIR
@@ -149,6 +171,103 @@ quit_all() {
   return 1
 }
 
+# The record of an update Update CYFR started (cmd/desktop.go): in the
+# device's folder.
+case "$OS" in
+  windows) RECORD="$(cygpath -u "$USERPROFILE")/.cyfr/device/update.log" ;;
+  *) RECORD="$HOME/.cyfr/device/update.log" ;;
+esac
+says() { [ -f "$RECORD" ] && grep -qF "$1" "$RECORD"; }
+
+# Whether a window of the app's has a title holding TEXT.
+titled() {
+  case "$OS" in
+    linux) xdotool search --name 'CYFR' getwindowname %@ 2>/dev/null | grep -qF "$1" ;;
+    darwin) osascript -e 'tell application "System Events" to get name of every window of (every process whose name is "CYFR")' 2>/dev/null | grep -qF "$1" ;;
+    windows)
+      powershell.exe -NoProfile -NonInteractive -Command \
+        "Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes; [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { \$_.Current.Name }" |
+        tr -d '\r' | grep -qF "$1" ;;
+  esac
+}
+untitled() { ! titled "$1"; }
+
+# A click on the rail's foot, Update CYFR: 36 points from the app's
+# window's left, 45 from its content's bottom.
+press_rail_update() {
+  case "$OS" in
+    linux)
+      local W X Y WIDTH HEIGHT SCREEN
+      W=$(xdotool search --name '^CYFR$' | head -1) || return 1
+      eval "$(xdotool getwindowgeometry --shell "$W")"
+      xdotool mousemove --sync $((X + 36)) $((Y + HEIGHT - 45)) click 1 ;;
+    darwin)
+      local at
+      at=$(osascript -e 'tell application "System Events" to tell process "CYFR"
+        set frontmost to true
+        set {x, y} to position of window "CYFR"
+        set {w, h} to size of window "CYFR"
+        return ((x + 36) as text) & " " & ((y + h - 45) as text)
+      end tell') || return 1
+      osascript -l JavaScript -e "ObjC.import('CoreGraphics'); const p = \$.CGPointMake(${at% *}, ${at#* });
+        for (const t of [\$.kCGEventLeftMouseDown, \$.kCGEventLeftMouseUp]) {
+          \$.CGEventPost(\$.kCGHIDEventTap, \$.CGEventCreateMouseEvent(null, t, p, \$.kCGMouseButtonLeft)); delay(0.1) }" ;;
+    windows)
+      powershell.exe -NoProfile -NonInteractive -Command '
+        Add-Type @"
+using System; using System.Runtime.InteropServices;
+public static class U {
+  [StructLayout(LayoutKind.Sequential)] public struct P { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+  [DllImport("user32.dll")] public static extern IntPtr FindWindow(string c, string t);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out R r);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref P p);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
+}
+"@
+        $h = [U]::FindWindow($null, "CYFR"); if ($h -eq [IntPtr]::Zero) { exit 1 }
+        [void][U]::SetForegroundWindow($h); $r = New-Object U+R; [void][U]::GetClientRect($h, [ref]$r)
+        $p = New-Object U+P; $p.X = 36; $p.Y = $r.B - 45; [void][U]::ClientToScreen($h, [ref]$p)
+        [void][U]::SetCursorPos($p.X, $p.Y); Start-Sleep -Milliseconds 100
+        [U]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 50; [U]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)' ;;
+  esac
+}
+
+# A key, Return or Tab, pressed in Update CYFR's window.
+key() {
+  case "$OS" in
+    linux)
+      local W
+      W=$(xdotool search --name '^Update CYFR' | head -1) || return 1
+      xdotool windowfocus --sync "$W" && xdotool key --clearmodifiers "$1" ;;
+    darwin)
+      local code=36
+      [ "$1" = Tab ] && code=48
+      osascript -e "tell application \"System Events\" to tell process \"CYFR\"
+        set frontmost to true
+        perform action \"AXRaise\" of (first window whose name starts with \"Update CYFR\")
+        key code $code
+      end tell" ;;
+    windows)
+      local send='~'
+      [ "$1" = Tab ] && send='{TAB}'
+      powershell.exe -NoProfile -NonInteractive -Command \
+        "\$s = New-Object -ComObject WScript.Shell; if (-not \$s.AppActivate('Update CYFR')) { exit 1 }; Start-Sleep -Milliseconds 300; \$s.SendKeys('$send')" ;;
+  esac
+}
+
+# A release installed whichever is: B's own uninstall first on Windows,
+# whose installer refuses an older release over a newer one.
+reinstall() {
+  if [ "$OS" = windows ] && [ -n "${2:-}" ]; then
+    powershell.exe -NoProfile -NonInteractive -Command \
+      "\$p = Start-Process msiexec.exe -ArgumentList '/x', '\"$(cygpath -w "$2")\"', '/qn', '/norestart' -Wait -PassThru; exit \$p.ExitCode" || return 1
+  fi
+  install_package "$1"
+}
+
 run() {
   local dir arch out status before='' after
   if ! dir=$(cd "$1" && pwd) || ! arch=$(cat "$dir/arch"); then
@@ -225,8 +344,86 @@ run() {
     fail reopened "the app the update closed ($before) $(alive "$before" && echo 'still runs' || echo 'is gone'), and $(running && echo 'one runs' || echo 'none runs') whose chooser $(answers && echo answers || echo 'does not answer')"
   fi
 
+  window "$dir" "$arch"
+
   echo "update: $CHECKS checks, $FAILED failed"
   [ "$FAILED" = 0 ]
+}
+
+# The update by Update CYFR, the app's own window, from A again.
+window() {
+  local dir=$1 arch=$2 before='' after='' docker
+  quit_all
+  if ! reinstall "$dir/$A/cyfr-desktop_${A}_${OS}_$arch.$EXT" "$dir/$B/cyfr-desktop_${B}_${OS}_$arch.$EXT" >"$LOGS/reinstall.log" 2>&1 ||
+    [ "$(release_of)" != "$A" ]; then
+    fail window_opened "A could not be installed again: $(tail -5 "$LOGS/reinstall.log")"
+    return
+  fi
+  rm -f "$RECORD"
+  # A docker that records each call, first on the app's PATH.
+  mkdir -p "$LOGS/bin"
+  docker="$LOGS/docker.log"
+  : >"$docker"
+  if [ "$OS" = windows ]; then
+    printf '@echo %%*>>"%s"\r\n' "$(cygpath -w "$docker")" >"$LOGS/bin/docker.cmd"
+  else
+    printf '#!/bin/sh\necho "$*" >>"%s"\n' "$docker" >"$LOGS/bin/docker"
+    chmod 755 "$LOGS/bin/docker"
+  fi
+  echo "$U" >"$dir/latest"
+  (cd "$LOGS/empty" && PATH="$LOGS/bin:$PATH" "$APP" >"$LOGS/app-window.log" 2>&1 &)
+  if within 60 answers && within 10 running; then
+    before=$(first_pid)
+  fi
+  if [ -n "$before" ] && press_rail_update && within 60 titled "release $U"; then
+    pass window_opened "the rail's foot opened Update CYFR offering $U"
+  else
+    fail window_opened "no Update CYFR offering $U opened: the app's windows say '$(titled x; echo $?)': $(tail -5 "$LOGS/app-window.log")"
+    return
+  fi
+
+  key Return
+  if within 120 says "did not verify" && within 60 titled "release $U" && alive "$before" && answers && [ "$(release_of)" = "$A" ]; then
+    pass window_unverified "the yes refused U before anything closed: the app at $A ($before) runs on, answering, and offers U again"
+  else
+    fail window_unverified "the app $(alive "$before" && echo still || echo 'no longer') runs, its cyfr answers '$(release_of)'; the record: $(tail -5 "$RECORD" 2>/dev/null)"
+  fi
+
+  # Close (Tab from the yes), then B the newest, Update CYFR again.
+  key Tab && key Return
+  within 20 untitled "Update CYFR"
+  echo "$B" >"$dir/latest"
+  if press_rail_update && within 60 titled "release $B" && key Return &&
+    within 60 not_alive "$before" && within 120 running && within 60 answers && [ "$(release_of)" = "$B" ] &&
+    within 60 titled "Update CYFR" && says "Updating the CYFR app to release $B" && says "The CYFR app is release $B." &&
+    [ ! -s "$docker" ]; then
+    after=$(first_pid)
+    pass window_update "the app at $A ($before) closed and opened again at $B ($after), Update CYFR open on the record; no docker call"
+  else
+    fail window_update "the app $(alive "$before" && echo 'still runs' || echo 'is gone'), its cyfr answers '$(release_of)', docker heard '$(cat "$docker")'; the record: $(tail -8 "$RECORD" 2>/dev/null)"
+    return
+  fi
+
+  if key Return && within 20 untitled "Update CYFR" && within 10 eval '[ ! -e "$RECORD" ]'; then
+    pass window_record "Close removed the record it showed"
+  else
+    fail window_record "the record $([ -e "$RECORD" ] && echo stays || echo 'is gone'), Update CYFR $(titled "Update CYFR" && echo 'still shows' || echo closed)"
+  fi
+
+  [ "$OS" = linux ] || return
+  # sudo asks while any rule that matches the account wants a password
+  # (sudo -v); the drop-in's command is no other, so sudo -n removes it.
+  local asks=/etc/sudoers.d/zz-cyfr-update-proof
+  echo "$(id -un) ALL=(ALL) /usr/bin/false" | sudo -n tee "$asks" >/dev/null && sudo -n chmod 0440 "$asks"
+  echo "$U" >"$dir/latest"
+  if sudo -n -v 2>/dev/null; then
+    fail window_terminal "sudo -v still asks this account for no password"
+  elif press_rail_update && within 60 titled "needs a terminal" && alive "$after" && [ ! -e "$RECORD" ]; then
+    pass window_terminal "Update CYFR offers no yes but the line to run in a terminal; the app ($after) runs on, no update begun"
+  else
+    fail window_terminal "the app $(alive "$after" && echo 'runs' || echo 'is gone'), the record $([ -e "$RECORD" ] && echo exists || echo 'is none'): $(tail -5 "$LOGS/app-window.log")"
+  fi
+  sudo -n rm -f "$asks"
 }
 
 case "${1:-}" in

@@ -441,13 +441,15 @@ jobs:
         run: bash tests/desktop-proof/native/mac-rehearsal.sh "$RUNNER_TEMP/cyfr/cyfr" ${{ matrix.arch }}
 
       # The installed app updated from release A to B by its own cyfr, as a
-      # person runs cyfr update (tests/desktop-proof/native/update.sh); last,
-      # as it leaves B installed.
+      # person runs cyfr update, then by Update CYFR in its window, which
+      # xdotool presses on Linux (tests/desktop-proof/native/update.sh);
+      # last, as it leaves B installed.
       - name: The app's update from one release to the next
         run: |
           set -euo pipefail
           bash tests/desktop-proof/native/update.sh build "$RUNNER_TEMP/update-proof" ${{ matrix.arch }}
           if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get install -y --no-install-recommends xdotool >/dev/null
             dbus-run-session -- xvfb-run -a bash tests/desktop-proof/native/update.sh run "$RUNNER_TEMP/update-proof"
           else
             bash tests/desktop-proof/native/update.sh run "$RUNNER_TEMP/update-proof"
