@@ -628,6 +628,7 @@ defmodule Emissary.External.ProxyTest do
       stub = HTTPStub.open()
       test = self()
       {:ok, tools} = Agent.start_link(fn -> [%{"name" => "search", "inputSchema" => %{}}] end)
+      {:ok, gh_held} = Agent.start_link(fn -> true end)
 
       answer = fn conn, body, result ->
         conn
@@ -638,13 +639,24 @@ defmodule Emissary.External.ProxyTest do
         )
       end
 
+      # gh's first listing, the one its first connect asks, is held until
+      # the test lets it go, and answers what gh listed when it was asked.
       HTTPStub.stub(stub, "POST", "/gh", fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         body = Jason.decode!(raw)
+        listed = %{"tools" => Agent.get(tools, & &1)}
 
-        if body["method"] == "server/discover",
-          do: answer.(conn, body, %{"capabilities" => %{"tools" => %{}}}),
-          else: answer.(conn, body, %{"tools" => Agent.get(tools, & &1)})
+        cond do
+          body["method"] == "server/discover" ->
+            answer.(conn, body, %{"capabilities" => %{"tools" => %{}}})
+
+          Agent.get_and_update(gh_held, &{&1, false}) ->
+            send(test, {:holding, :gh, self()})
+            receive do: (:go -> answer.(conn, body, listed))
+
+          true ->
+            answer.(conn, body, listed)
+        end
       end)
 
       HTTPStub.stub(stub, "POST", "/slow", fn conn ->
@@ -654,7 +666,7 @@ defmodule Emissary.External.ProxyTest do
         if body["method"] == "server/discover" do
           answer.(conn, body, %{"capabilities" => %{"tools" => %{}}})
         else
-          send(test, {:holding, self()})
+          send(test, {:holding, :slow, self()})
 
           receive do
             :go -> answer.(conn, body, %{"tools" => [%{"name" => "probe"}]})
@@ -678,21 +690,18 @@ defmodule Emissary.External.ProxyTest do
       on_exit(fn -> Proxy.invalidate_external_tools_cache(ctx) end)
       :ok = Proxy.invalidate_external_tools_cache(ctx)
       listing = Task.async(fn -> Proxy.list_external_tools(ctx) end)
-      assert_receive {:holding, slow}, 10_000
 
-      Prima.Test.Wait.wait_until(
-        fn -> Registry.lookup(Emissary.External.ServerRegistry, {"gh", ctx.athanor_id}) != [] end,
-        10_000,
-        "gh's process to start"
-      )
+      # Both servers are connecting for the listing, which alone asks them.
+      assert_receive {:holding, :gh, gh}, 10_000
+      assert_receive {:holding, :slow, slow}, 10_000
 
-      assert {:ok, [%{"name" => "search"}]} =
-               Emissary.External.Server.get_tools("gh", ctx.athanor_id)
-
-      # gh lists nothing now: it is started again, and the listing's
-      # cache dropped, as a refresh does.
+      # gh answers the listing, and lists nothing now: its process connects
+      # again once it has answered the listing's read, which reached it
+      # first, and the listing's cache is dropped, as a refresh does.
+      send(gh, :go)
       Agent.update(tools, fn _ -> [] end)
-      :ok = Emissary.External.ServerSupervisor.stop("gh", ctx.athanor_id)
+      assert {:ok, :ready} = Emissary.External.Server.reinitialize("gh", ctx.athanor_id)
+      assert {:ok, []} = Emissary.External.Server.get_tools("gh", ctx.athanor_id)
       :ok = Proxy.invalidate_external_tools_cache(ctx)
       send(slow, :go)
 
