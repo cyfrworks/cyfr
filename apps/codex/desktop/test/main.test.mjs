@@ -56,7 +56,7 @@ function reset({relaunch = false} = {}) {
   world.app.removeAllListeners()
   world.powerMonitor.removeAllListeners()
   world.quit = false
-  world.quitHeld = false
+  world.endedSelf = []
   world.menus = []
   world.spawnedIn = []
 }
@@ -185,11 +185,10 @@ world.app = Object.assign(new EventEmitter(), {
     return world.profile
   },
   exit(code) { world.exited = code },
-  // A quit held (quitHeld) never finishes, whatever holds it.
   quit() {
     const event = {prevented: false, preventDefault() { this.prevented = true }}
     world.app.emit("before-quit", event)
-    if (!event.prevented && !world.quitHeld) world.quit = true
+    if (!event.prevented) world.quit = true
   }
 })
 world.powerMonitor = new EventEmitter()
@@ -852,7 +851,6 @@ test("a quit the system begins is never answered from inside the engine's before
 })
 
 const BOUND = 5000
-const QUIT_BOUND = 5000
 
 test("the app's end never waits without end on a clear, a take or a flush, and keeps clear before record", async () => {
   const stuck = () => new Promise(() => {})
@@ -1496,6 +1494,10 @@ const SCREEN = "/home/ana/cyfr"
 const ON_LINUX = {skip: process.platform !== "linux" && "the box's screen runs on Linux alone"}
 const SHELL_PAGE = "http://127.0.0.1:7340/"
 
+// The screen's end by the kernel, recorded: the turn it came in, and what
+// main had done by then.
+const endSelf = () => { world.endedSelf.push({quit: world.quit, exited: world.exited}) }
+
 // The app started as the box's screen for SCREEN (or `project`), on
 // whatever road the platform would give, its shell said ready.
 async function screenStarted(project = SCREEN) {
@@ -1504,7 +1506,7 @@ async function screenStarted(project = SCREEN) {
   world.exited = undefined
   const said = []
   try {
-    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: (line) => said.push(line)})
+    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: (line) => said.push(line), endSelf})
     await settled()
     if (world.exited === undefined) {
       child.say({type: "ready", url: SHELL_PAGE})
@@ -1544,14 +1546,14 @@ test("only an explicit project makes the app a screen; another switch value is r
 test("the screen's first page is the shell's own: a chooser there ends the app", ON_LINUX, async () => {
   reset()
   world.screen = SCREEN
-  startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: () => {}})
+  startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: () => {}, endSelf})
   world.screen = undefined
   await settled()
   child.say({type: "ready", url: READY})
   await settled()
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(content(), undefined)
-  assert.ok(world.quit, "the app quits")
+  assert.equal(world.endedSelf.length, 1, "the app ends itself")
   assert.ok(child.heard.some((m) => m.type === "shutdown"), "cyfr is shut down")
 })
 
@@ -1570,7 +1572,7 @@ test("a lock on the screen hides the page at once and shows the shell's page aga
   assert.notEqual(after.webContents.session, session)
 })
 
-test("on the screen a lost page locks, a failed load shows the shell's page, and cyfr's end quits with no message", ON_LINUX, async () => {
+test("on the screen a lost page locks, a failed load shows the shell's page, and cyfr's end ends the app with no message", ON_LINUX, async () => {
   await screenStarted()
   assert.ok(await opens())
   await give(content())
@@ -1586,35 +1588,34 @@ test("on the screen a lost page locks, a failed load shows the shell's page, and
   await settled()
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(live().length, 0, "no message window")
-  assert.ok(world.quit, "the app quits, to be started again locked")
+  assert.equal(world.endedSelf.length, 1, "the app ends itself, to be started again locked")
 })
 
 
-test("on the screen a quit that does not finish by itself ends by the engine's hard exit within its bound, said", ON_LINUX, async () => {
+test("on the screen cyfr's end ends the app's process in its own turn, after its sentence, with no quit and no exit of the engine's", ON_LINUX, async () => {
   const said = await screenStarted()
   assert.ok(await opens())
   await give(content())
-  // cyfr's end closes every window first, so what holds the quit is no
-  // window of main's.
-  world.quitHeld = true
+  const quits = []
+  world.app.on("before-quit", () => quits.push("before-quit"))
   world.exited = undefined
-  mock.timers.enable({apis: ["setTimeout"]})
-  try {
-    child.say({type: "ending"})
-    await settled()
-    await settled()
-    await settled()
-    assert.ok(said.includes("cyfr ended: the screen shell is ending"), said.join("\n"))
-    assert.equal(world.quit, false, "the quit is held")
-    mock.timers.tick(QUIT_BOUND - 1)
-    assert.equal(world.exited, undefined, "the quit has its bound")
-    mock.timers.tick(1)
-    assert.equal(world.exited, 0, "and no more")
-    assert.ok(said.includes(`the quit did not finish by itself within ${QUIT_BOUND / 1000} s: the app exits`), said.join("\n"))
-  } finally {
-    mock.timers.reset()
-    world.exited = undefined
-  }
+  // The turn the line from cyfr is read in, and nothing after it: the
+  // toolkit's teardown would run in a later one.
+  child.emit("exit", 0, null)
+  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined}], "ended in that turn, no quit or exit asked")
+  assert.deepEqual(said.slice(-2), ["cyfr ended: it exited (0)", "ended: the app's process ends itself, without the toolkit's teardown"])
+  assert.deepEqual(quits, [])
+})
+
+test("on the screen the shell's ending ends the app's process once cyfr is told", ON_LINUX, async () => {
+  const said = await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  child.say({type: "ending"})
+  await settled()
+  assert.equal(world.endedSelf.length, 1)
+  assert.ok(child.heard.some((m) => m.type === "shutdown"), "cyfr is told first")
+  assert.deepEqual(said.slice(-2), ["cyfr ended: the screen shell is ending", "ended: the app's process ends itself, without the toolkit's teardown"])
 })
 
 test("on the screen a failed load of the shell's own page locks, and so does a confirmation lost or failed", ON_LINUX, async () => {

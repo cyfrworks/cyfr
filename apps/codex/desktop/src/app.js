@@ -31,9 +31,6 @@ import {ABORTED, initial, kept, step} from "./states.js"
 const READY_WITHIN_MS = 20_000
 // How long the app's end waits for a clear, a take or a flush under way.
 const END_WAITS_MS = 5000
-// On the screen, how long a quit asked for may take before the app exits
-// all the same.
-const QUIT_WITHIN_MS = 5000
 const ACCOUNT_PARTITION = "persist:cyfr-account"
 const CONTENT_PARTITION = "persist:cyfr-content"
 
@@ -94,7 +91,7 @@ function askerOf(event, contents) {
  * reports what happens, one line a step, for whoever started the app.
  */
 export function startApp({cyfr, accountRoad = process.platform === "darwin" || process.platform === "win32",
-  touchIdGroup = "", say = (line) => print(`CYFR: ${line}`)}) {
+  touchIdGroup = "", say = (line) => print(`CYFR: ${line}`), endSelf = () => process.kill(process.pid, "SIGKILL")}) {
   ownOutput()
   // Every switch but the few the app takes (policy.js SWITCHES) is
   // refused: the engine would open a debugging port, lift the sandbox or
@@ -191,7 +188,24 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       if (child && child.exitCode === null) child.kill()
       message(`CYFR stopped: ${effect.end}. Quit the app and open it again.`)
     }
-    if (effect.quit) {
+    if (effect.quit && screen) {
+      // On the box's screen the app does not quit, it ends, and in this
+      // turn: its end is what lets its launcher start it again, locked,
+      // and the toolkit's teardown of the window just closed runs in the
+      // loop's next turns, where it can hang the main thread (Gtk loading
+      // an icon through glycin) before anything of main's runs again, an
+      // exit of the engine's included. So once cyfr is told, the process
+      // ends itself by the kernel. Nothing of the screen's session is on
+      // disk (accountRoad is never the screen's), and cyfr ends with its
+      // pipe.
+      if (child && child.exitCode === null) {
+        send("shutdown")
+        child.stdin.end()
+      }
+      quitting = true
+      say("ended: the app's process ends itself, without the toolkit's teardown")
+      endSelf()
+    } else if (effect.quit) {
       ending(() => {
         if (child && child.exitCode === null) {
           send("shutdown")
@@ -199,15 +213,6 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         }
         quitting = true
         app.quit()
-        // On the screen the app's end is what lets its launcher start it
-        // again, locked: a quit that does not finish by itself, whatever
-        // holds it open, ends by the engine's hard exit, said.
-        if (screen) {
-          setTimeout(() => {
-            say(`the quit did not finish by itself within ${QUIT_WITHIN_MS / 1000} s: the app exits`)
-            app.exit(0)
-          }, QUIT_WITHIN_MS)
-        }
       })
     }
     if (effect.hop) startHop(effect.hop.url, effect.hop.kind)
