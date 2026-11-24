@@ -376,6 +376,39 @@ run_case "off PATH with no link, it names the path to run" ok \
      case \"\$out\" in *'export PATH'*) exit 1 ;; esac" \
     "cyfr is not on your PATH. Run it as /opt/cyfr-test/cyfr."
 
+# A destination that is, or links into, a cyfr an installer of its own
+# owns is refused before anything is downloaded: the app's bundle, the
+# DEB's /opt/cyfr, Homebrew's Caskroom, the MSI's resources, a package's
+# file the package records name. A file of the person's own, or none, is
+# installed over.
+dests="$fixture/dests"
+mkdir -p "$dests/CYFR.app/Contents/Resources" "$dests/Caskroom/cyfr/1.0.0" "$dests/bin" "$dests/records"
+printf 'app' > "$dests/CYFR.app/Contents/Resources/cyfr"
+printf 'cask' > "$dests/Caskroom/cyfr/1.0.0/cyfr"
+printf 'mine' > "$dests/bin/mine"
+ln -s "$dests/CYFR.app/Contents/Resources/cyfr" "$dests/bin/to-app"
+ln -s "../Caskroom/cyfr/1.0.0/cyfr" "$dests/bin/to-cask"
+ln -s "to-app" "$dests/bin/to-link-to-app"
+ln -s "$dests/bin/mine" "$dests/bin/to-mine"
+printf '#!/bin/sh\n[ "$1 $2 $3" = "--search -- %s" ]\n' "$dests/bin/owned" > "$dests/records/dpkg-query"
+chmod +x "$dests/records/dpkg-query"
+printf 'owned' > "$dests/bin/owned"
+
+for dest in to-app to-cask to-link-to-app; do
+    run_case "a link into an installer's cyfr ($dest) is refused" fail \
+        "refuse_installers_cyfr '$dests/bin/$dest'" \
+        "which its own installer updates. Run 'cyfr update' to update it, or set CYFR_INSTALL_DIR to another folder."
+done
+run_case "a package's cyfr is refused" fail \
+    "PATH='$dests/records:'\"\$PATH\"
+     refuse_installers_cyfr '$dests/bin/owned'" \
+    "which a package of this system's installed"
+for dest in mine to-mine absent; do
+    run_case "a destination of the person's own ($dest) is installed over" ok \
+        "PATH='$dests/records:'\"\$PATH\"
+         refuse_installers_cyfr '$dests/bin/$dest'"
+done
+
 if [ "$failures" -gt 0 ]; then
     printf '\n%s test(s) failed\n' "$failures" >&2
     exit 1
