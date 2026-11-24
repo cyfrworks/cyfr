@@ -517,7 +517,7 @@ func TestTheDockerSentenceNamesOnlyWhatWasSeen(t *testing.T) {
 func TestTheProbeNamesWhatMakesDockerAnswerHere(t *testing.T) {
 	saved := machine
 	t.Cleanup(func() { machine = saved })
-	machine.installed = func(string) string { return "" }
+	machine.installed = func(string) bool { return false }
 	machine.running = func() bool { return false }
 	machine.groups = func(context.Context, string) []string { return nil }
 	machine.refusal = refusedWith(noDaemon)

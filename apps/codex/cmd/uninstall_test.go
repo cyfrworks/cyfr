@@ -129,12 +129,7 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 		machine = savedMachine
 		openEngine, askTerminal, askInput = savedOpen, savedTerminal, savedInput
 	})
-	machine.installed = func(pkg string) string {
-		if s.app && pkg == appPackage {
-			return "0.6.0"
-		}
-		return ""
-	}
+	machine.installed = func(pkg string) bool { return s.app && pkg == appPackage }
 	machine.groups = func(context.Context, string) []string {
 		if s.notAdministrator {
 			return []string{"users"}

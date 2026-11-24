@@ -16,7 +16,9 @@
 #       taps each character, then Enter for a newline, on the on-screen
 #       keyboard's keys, read from the display: a character no key shows
 #       is looked for on the keyboard's next layers, reached by its layer
-#       key, the bottom row's first; exits 1 when one is on no layer
+#       key, the bottom row's first; exits 1 when one is on no layer. A
+#       lowercase letter is the key at its place in its QWERTY row, and a
+#       space the bottom row's long key
 #   screen.py SOCKET hides TEXT SECONDS
 #       presses TEXT and prints the milliseconds until what the display
 #       showed above the keyboard is gone, timed from the press; exits 1
@@ -30,9 +32,12 @@
 # white on colour alike. A key is a uniform
 # grey box in the display's bottom third, its label cropped to its own
 # bright pixels and read alone. Digits, words and Enter read reliably;
-# single letters do not (i, l and j; g and q), so nothing here relies on
-# a letter key, and a digit is tapped only on a layer that shows all ten,
-# a letter key read as a digit apart.
+# single letters do not (i, l and j read as l or |; g as q; y as v; p as
+# d), so a letter is tapped as a person who knows the layout taps it: a
+# row of keys is a QWERTY row where at least half of that row's letters
+# read where QWERTY puts them, and the letter is the key at its own place
+# there. A digit is tapped only on a layer that shows all ten, a letter
+# key read as a digit apart.
 import os
 import subprocess
 import sys
@@ -166,26 +171,89 @@ def middle(box):
 
 
 DIGITS = set("0123456789")
+QWERTY = ("qwertyuiop", "asdfghjkl", "zxcvbnm")
+
+
+def rows(ks):
+    """The keyboard's rows, top to bottom, each its keys left to right; a key
+    found twice, a pixel row apart, is kept once."""
+    out = []
+    for k in sorted(ks, key=lambda k: (k[2], k[1])):
+        for row in out:
+            if abs(row[0][2] - k[2]) <= 8:
+                if not any(abs(o[1] - k[1]) <= 8 for o in row):
+                    row.append(k)
+                break
+        else:
+            out.append([k])
+    return [sorted(row, key=lambda k: k[1]) for row in out]
+
+
+def letter(ks, c):
+    """The key of the lowercase letter c, at its place in the run of keys
+    that reads most of its QWERTY row in order, at least half; None where
+    no run does."""
+    line = next(r for r in QWERTY if c in r)
+    best, read = None, 0
+    for row in rows(ks):
+        for o in range(len(row) - len(line) + 1):
+            run = row[o:o + len(line)]
+            n = sum(plain(k[0]) == want for k, want in zip(run, line))
+            if n > read:
+                best, read = run[line.index(c)], n
+    return best if read * 2 >= len(line) else None
+
+
+def space(ks):
+    """The bottom row's space bar: its longest key, unlabelled and longer
+    than three of its others."""
+    bottom = rows(ks)[-1] if ks else []
+    if not bottom:
+        return None
+    k = max(bottom, key=lambda k: k[3] - k[1])
+    widths = sorted(o[3] - o[1] for o in bottom)
+    return k if not plain(k[0]) and k[3] - k[1] > 3 * widths[len(widths) // 2] else None
+
+
+def board(img, ks):
+    """The keyboard's pixels, a quarter of them."""
+    top = min(k[2] for k in ks)
+    return list(img.crop((0, top, img.width, img.height)).reduce(4).getdata())
 
 
 def tap(qmp, characters):
+    """Each character tapped on its key. The keys are read again only once
+    the keyboard looks otherwise than when they were read, another layer
+    shown: reading them is slow, and they stay where they are."""
+    img = ks = None
     for c in characters:
         label = "enter" if c == "\n" else plain(c)
         for _ in range(4):
-            img = dump(qmp)
-            ks = keys(img)
-            match = [k for k in ks if plain(k[0]) == label]
+            if ks is None:
+                img = dump(qmp)
+                ks = keys(img)
+            if c in "abcdefghijklmnopqrstuvwxyz":
+                match = [k for k in [letter(ks, c)] if k]
+            elif c == " ":
+                match = [k for k in [space(ks)] if k]
+            else:
+                match = [k for k in ks if plain(k[0]) == label]
             if label in DIGITS and {k[0] for k in ks} & DIGITS != DIGITS:
                 match = []
             if match:
                 press(qmp, img, *middle(match[0][1:]))
                 time.sleep(0.25)
+                now = dump(qmp)
+                before, after = board(img, ks), board(now, ks)
+                if sum(a != b for a, b in zip(before, after)) * 20 > len(before):
+                    ks = None
                 break
             bottom = max(k[2] for k in ks) if ks else None
             row = sorted((k for k in ks if k[2] == bottom), key=lambda k: k[1])
             if not row:
                 raise QmpError("the display shows no on-screen keyboard")
             press(qmp, img, *middle(row[0][1:]))
+            ks = None
             time.sleep(0.5)
         else:
             raise QmpError(f"no key of the keyboard's layers shows {c!r}")

@@ -10,6 +10,6 @@
 # .env, which the shell reads itself. The app ends when its shell does,
 # and an app that ends is started again, locked.
 while :; do
-    XDG_SESSION_TYPE=wayland /opt/cyfr/CYFR --screen-project=@DIR@
+    /opt/cyfr/CYFR --screen-project=@DIR@
     sleep 1
 done

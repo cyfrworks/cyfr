@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"maps"
 	"net/url"
 	"os"
@@ -696,18 +697,31 @@ func (p *composePlan) onRelease() bool {
 	return len(p.managed) > 0
 }
 
-// homeRelease answers the release the compose file's cyfr image lines name,
-// the one tag they share when it is a release version, else "".
+// homeRelease answers the release the compose file's managed image lines
+// run CYFR at (sharedRelease).
 func (p *composePlan) homeRelease() string {
+	return sharedRelease(func(yield func(string, string) bool) {
+		for _, line := range p.managed {
+			if !yield(line.repository, line.tag) {
+				return
+			}
+		}
+	})
+}
+
+// sharedRelease is the release a compose file runs CYFR at, given its
+// images as repository and tag: the one tag its cyfr images share where
+// it is a release version, else "".
+func sharedRelease(images iter.Seq2[string, string]) string {
 	found := ""
-	for _, line := range p.managed {
-		if normalizeRepository(line.repository) != release.RepoCyfr {
+	for repository, tag := range images {
+		if normalizeRepository(repository) != release.RepoCyfr {
 			continue
 		}
-		if !release.IsVersion(line.tag) || found != "" && line.tag != found {
+		if !release.IsVersion(tag) || found != "" && tag != found {
 			return ""
 		}
-		found = line.tag
+		found = tag
 	}
 	return found
 }

@@ -14,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cyfr/codex/internal/account"
@@ -627,18 +628,25 @@ func TestServer_APlainReadShowsNoPasskeyRequest(t *testing.T) {
 }
 
 // A device's warning (Config.Warning) is on its pages, the lock page
-// among them, beside the storage's.
+// among them, beside the storage's, as it reads when each page is drawn.
 func TestTheDevicesWarningIsOnItsPages(t *testing.T) {
-	const warning = "This screen's CYFR app is release 0.6.0 and the CYFR here runs release 0.6.1."
+	const warning = "This screen's CYFR app is release 0.6.0 and the CYFR here is set to release 0.6.1."
+	var now atomic.Value
+	now.Store(warning)
 	home := newFakeHome(t)
-	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), func(c *Config) { c.Warning = warning })
+	b := newBoxAt(t, home, t.TempDir(), home.accounts.URL(), func(c *Config) { c.Warning = func() string { return now.Load().(string) } })
 	if page := b.page(); !strings.Contains(page, `<p class="warn">`+warning+`</p>`) {
 		t.Fatalf("the setup page lacks the warning:\n%s", page)
 	}
+	now.Store("")
 	setUpAndOpen(t, home, b)
 	b.shell.Lock("")
+	if page := b.page(); !strings.Contains(page, "CYFR is locked") || strings.Contains(page, warning) {
+		t.Fatalf("the lock page shows a warning no longer read:\n%s", page)
+	}
+	now.Store(warning)
 	if page := b.page(); !strings.Contains(page, "CYFR is locked") || !strings.Contains(page, warning) {
-		t.Fatalf("the lock page lacks the warning:\n%s", page)
+		t.Fatalf("the lock page lacks the warning read as it is drawn:\n%s", page)
 	}
 }
 

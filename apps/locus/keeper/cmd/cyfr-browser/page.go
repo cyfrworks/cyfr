@@ -33,7 +33,9 @@ import (
 // until that frame commits a document that is not one of its files,
 // whoever navigated it, or the window closes; its files and the calls its
 // documents made end together then (replace). A navigation between its
-// own files keeps it.
+// own files keeps it. A request for a file is answered from the put of the
+// document that made it, however Chrome orders it beside that document's
+// commit (docs.go).
 const (
 	reservedHost   = "cyfr.invalid"
 	reservedOrigin = "https://" + reservedHost
@@ -238,10 +240,21 @@ func (b *browser) show(ctx context.Context, w *window, p *put) (shown any, err e
 			p.failed = true
 		}
 		stands := w.put == p
+		// The show ends on its entry's load, which Chrome reports beside
+		// the commit, not after it: a put whose commit is not taken yet
+		// still lands.
+		if err == nil && !stands {
+			w.landed = p
+		}
 		w.mu.Unlock()
 		if err != nil && stands {
 			b.replace(w, nil)
 		}
+		w.mu.Lock()
+		w.prune()
+		done := w.settle()
+		w.mu.Unlock()
+		b.answerFiles(done)
 	}()
 	entry := url.URL{Scheme: "https", Host: reservedHost, Path: p.root}
 	if err = b.navigate(ctx, w, entry.String()); err != nil {
@@ -254,7 +267,9 @@ func (b *browser) show(ctx context.Context, w *window, p *put) (shown any, err e
 // put whose file answered its navigation stands, and none other.
 func (b *browser) committed(w *window, loader string) {
 	w.mu.Lock()
-	p := w.docs[loader]
+	w.docs.init()
+	w.docs.current[w.frame] = loader
+	p := w.docs.puts[loader]
 	w.mu.Unlock()
 	b.replace(w, p)
 }
@@ -262,7 +277,8 @@ func (b *browser) committed(w *window, loader string) {
 // replace makes p, or no put, w's files, and gives up every call w holds:
 // the window's main frame shows another document, or the window has
 // closed. Every end of a window's put and of its calls passes through
-// here; a failed put is never made w's.
+// here; a failed put is never made w's, and the documents of a put that
+// is neither w's nor being shown are forgotten.
 func (b *browser) replace(w *window, p *put) {
 	w.mu.Lock()
 	if p != nil && p.failed {
@@ -270,9 +286,12 @@ func (b *browser) replace(w *window, p *put) {
 	}
 	w.gen++
 	w.put = p
-	w.docs = nil
+	w.landed = nil
+	w.prune()
+	done := w.settle()
 	w.mu.Unlock()
 	b.pages <- pageEvent{win: w}
+	b.answerFiles(done)
 }
 
 // current answers w's put and its generation, which a replace moves on.
@@ -282,11 +301,11 @@ func (w *window) current() (*put, int64) {
 	return w.put, w.gen
 }
 
-// serving answers the put a request for path is answered from, and w's
-// generation. A GET navigation of the main frame takes the put being
-// shown when that holds the file, else w's put, and is recorded by its
-// network id as that put's document: Chrome commits the document under a
-// loader of that id. Every other request takes w's put.
+// serving answers the put the main frame's navigation or a call is
+// answered from, and w's generation. A GET navigation of the main frame
+// takes the put being shown when that holds the file, else w's put, and is
+// recorded by its network id as that put's document: Chrome commits the
+// document under a loader of that id. A call takes w's put.
 func (w *window) serving(navigation bool, network, path string) (*put, int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -298,12 +317,29 @@ func (w *window) serving(navigation bool, network, path string) (*put, int64) {
 		return nil, w.gen
 	}
 	if navigation && pt != nil && network != "" && pt.lookup(path) != nil {
-		if w.docs == nil {
-			w.docs = map[string]*put{}
-		}
-		w.docs[network] = pt
+		w.docs.init()
+		w.docs.puts[network] = pt
 	}
 	return pt, w.gen
+}
+
+// answerFile answers a request for a file from p: the file, 404 when p
+// does not hold it, nothing with no put.
+func (b *browser) answerFile(r fileRequest, p *put) {
+	if p == nil {
+		b.failPaused(r.session, r.request)
+		return
+	}
+	f := p.lookup(r.path)
+	if f == nil {
+		b.answerPaused(r.session, r.request, 404, nil, nil)
+		return
+	}
+	body := f.data
+	if r.head {
+		body = nil
+	}
+	b.answerPaused(r.session, r.request, 200, map[string]string{"Content-Type": f.typ, "Cache-Control": "no-store"}, body)
 }
 
 // Kinds of the sessions a window's requests are paused on: its page's, or
@@ -315,12 +351,38 @@ const (
 	sessionForeign = "foreign"
 )
 
-func intercepted(method string, _ json.RawMessage) bool {
+func intercepted(method string, params json.RawMessage) bool {
 	switch method {
-	case "Fetch.requestPaused", "Target.attachedToTarget", "Target.detachedFromTarget", "Page.frameNavigated", "Page.frameDetached":
+	case "Fetch.requestPaused", "Target.attachedToTarget", "Target.detachedFromTarget", "Page.frameNavigated",
+		"Page.frameAttached", "Page.frameDetached":
 		return true
+	case "Network.requestWillBeSent":
+		_, ok := fileReport(params)
+		return ok
 	}
 	return false
+}
+
+// sentRequest is what Network.requestWillBeSent says of a request.
+type sentRequest struct {
+	RequestID string `json:"requestId"`
+	LoaderID  string `json:"loaderId"`
+	Type      string `json:"type"`
+	Request   struct {
+		URL    string `json:"url"`
+		Method string `json:"method"`
+	} `json:"request"`
+}
+
+// fileReport reads a report of a request that may be paused as a file's
+// (docs.go): a GET or HEAD of the reserved origin that is no navigation.
+func fileReport(params json.RawMessage) (sentRequest, bool) {
+	var r sentRequest
+	if json.Unmarshal(params, &r) != nil || r.RequestID == "" || r.Type == "Document" ||
+		(r.Request.Method != "GET" && r.Request.Method != "HEAD") || !strings.HasPrefix(r.Request.URL, reservedOrigin+"/") {
+		return r, false
+	}
+	return r, true
 }
 
 // interceptOn turns on what a session of a window's frames needs before
@@ -355,6 +417,7 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 		for child := range children {
 			b.c.detach(child)
 		}
+		b.sessionEnded(w, session)
 		b.pages <- pageEvent{session: session}
 	}()
 	for {
@@ -365,6 +428,18 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 		switch ev.method {
 		case "Fetch.requestPaused":
 			b.paused(w, session, kind, events, ev.params)
+		case "Network.requestWillBeSent":
+			if r, ok := fileReport(ev.params); ok {
+				b.reported(w, r.RequestID, r.LoaderID)
+			}
+		case "Page.frameAttached":
+			var attached struct {
+				FrameID       string `json:"frameId"`
+				ParentFrameID string `json:"parentFrameId"`
+			}
+			if json.Unmarshal(ev.params, &attached) == nil && attached.FrameID != "" {
+				b.frameAttached(w, attached.FrameID, attached.ParentFrameID)
+			}
 		case "Target.attachedToTarget":
 			var attached struct {
 				SessionID  string `json:"sessionId"`
@@ -395,6 +470,7 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 				if navigated.Frame.ParentID == "" && kind == sessionPage {
 					b.committed(w, navigated.Frame.LoaderID)
 				} else {
+					b.frameCommitted(w, navigated.Frame.ID, navigated.Frame.LoaderID)
 					b.pages <- pageEvent{session: session, frame: navigated.Frame.ID}
 				}
 			}
@@ -403,6 +479,7 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 				FrameID string `json:"frameId"`
 			}
 			if json.Unmarshal(ev.params, &detached) == nil {
+				b.frameGone(w, detached.FrameID)
 				b.pages <- pageEvent{session: session, frame: detached.FrameID}
 			}
 		}
@@ -491,10 +568,11 @@ type pausedRequest struct {
 // frame it loads into.
 var callTypes = map[string]bool{"Fetch": true, "XHR": true}
 
-// paused answers one request for the reserved origin: a GET or HEAD from
-// the window's files, a call to the host when it is admitted, anything
-// else as nothing is there. A window with no put, and a session that is
-// not one of its frames', is answered nothing.
+// paused answers one request for the reserved origin: the main frame's
+// navigation from the put shown or the window's, a GET or HEAD from the
+// put of the document that made it (docs.go), a call to the host when it
+// is admitted, anything else as nothing is there. A window with no put,
+// and a session that is not one of its frames', is answered nothing.
 func (b *browser) paused(w *window, session, kind string, events *watch, params json.RawMessage) {
 	var p pausedRequest
 	if json.Unmarshal(params, &p) != nil || p.RequestID == "" {
@@ -506,24 +584,19 @@ func (b *browser) paused(w *window, session, kind string, events *watch, params 
 		return
 	}
 	navigation := kind == sessionPage && p.ResourceType == "Document" && p.Request.Method == "GET" && p.FrameID == w.frame
+	if (p.Request.Method == "GET" || p.Request.Method == "HEAD") && !navigation {
+		b.file(w, fileRequest{session: session, request: p.RequestID, path: u.Path, head: p.Request.Method == "HEAD",
+			navigation: p.ResourceType == "Document", network: p.NetworkID, frame: p.FrameID})
+		return
+	}
 	pt, gen := w.serving(navigation, p.NetworkID, u.Path)
 	if pt == nil {
 		go b.failPaused(session, p.RequestID)
 		return
 	}
 	switch p.Request.Method {
-	case "GET", "HEAD":
-		f := pt.lookup(u.Path)
-		if f == nil {
-			go b.answerPaused(session, p.RequestID, 404, nil, nil)
-			return
-		}
-		headers := map[string]string{"Content-Type": f.typ, "Cache-Control": "no-store"}
-		body := f.data
-		if p.Request.Method == "HEAD" {
-			body = nil
-		}
-		go b.answerPaused(session, p.RequestID, 200, headers, body)
+	case "GET":
+		go b.answerFile(fileRequest{session: session, request: p.RequestID, path: u.Path}, pt)
 		return
 	case "POST":
 	default:

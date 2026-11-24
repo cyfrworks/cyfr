@@ -37,10 +37,6 @@
 #   box.py visits RECORD SINCE PORT TEXT
 #       prints each request target the screen asked of PORT at or after
 #       SINCE that holds TEXT, one per line
-#   box.py scrub RECORD TAR
-#       exits 0 when no file of the tar archive TAR holds a session cookie
-#       value or an API key RECORD saw, printing how many it looked for;
-#       else 1, naming the files
 #   box.py confirmation DATABASE REF
 #       prints, as JSON, the state and confirming client of the pending
 #       confirmation REF in CYFR's SQLite database DATABASE
@@ -48,6 +44,18 @@
 #       prints, as JSON, each athanor of CYFR's SQLite database DATABASE
 #       with how its fill ended: when it was provisioned, or the failure
 #       recorded on it
+#   box.py renderers
+#       prints the process id of the screen's CYFR app (its main process,
+#       /opt/cyfr/CYFR --screen-project=...), then of each renderer below it,
+#       on one line
+#   box.py stored DIR
+#       prints how many rows of CYFR's session cookie (by its name, never
+#       its value) the cookie stores (files named Cookies) under DIR hold,
+#       each read as SQLite holds it, its write-ahead log and journal
+#       included, from a copy of the three taken as they stood (the same
+#       bytes twice running), as its engine may hold it open; exits 1 on a
+#       store that does not hold still. The engine keeps a cookie's value
+#       encrypted there, so no search for the value finds it
 import hashlib
 import json
 import os
@@ -55,7 +63,6 @@ import re
 import socket
 import sqlite3
 import sys
-import tarfile
 import time
 
 COOKIE = "_cyfr_key"
@@ -209,18 +216,6 @@ def canvas(keyfile, folder):
     return reference
 
 
-def scrub(record, archive):
-    values = {e["cookie"] for e in entries(record) if e["cookie"]} | set(found(record, "key"))
-    holding = []
-    with tarfile.open(archive) as tar:
-        for member in tar:
-            if member.isfile():
-                data = tar.extractfile(member).read()
-                if any(v.encode() in data for v in values):
-                    holding.append(member.name)
-    return len(values), holding
-
-
 def confirmation(database, ref):
     db = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
     row = db.execute(
@@ -235,6 +230,78 @@ def athanors(database):
     db = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
     rows = db.execute("SELECT id, provisioned_at, provisioning_failure FROM athanors ORDER BY id").fetchall()
     return [{"id": i, "provisioned_at": at, "provisioning_failure": failure} for i, at, failure in rows]
+
+
+def renderers():
+    procs = {}
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            # A process of the engine's may write its title over its
+            # arguments, spaces for their separators, as ps shows them.
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                args = f.read().replace(b"\0", b" ")
+            with open(f"/proc/{pid}/stat") as f:
+                parent = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            continue
+        procs[int(pid)] = (parent, args)
+    apps = [p for p, (_, args) in procs.items() if args.startswith(b"/opt/cyfr/CYFR --screen-project=")]
+    if len(apps) != 1:
+        raise RuntimeError(f"{len(apps)} screen apps run")
+    app = apps[0]
+
+    def below(p):
+        for _ in range(64):
+            p = procs.get(p, (0,))[0]
+            if p == app:
+                return True
+            if p <= 1:
+                return False
+        return False
+    return [app] + sorted(p for p, (_, args) in procs.items() if b" --type=renderer" in args and below(p))
+
+
+STORE = ("Cookies", "Cookies-wal", "Cookies-journal")
+
+
+def store_as_it_stood(root):
+    """The cookie store in root, its write-ahead log and journal with it,
+    read until two reads running are the same bytes."""
+    last = None
+    for _ in range(25):
+        now = {}
+        for name in STORE:
+            try:
+                with open(os.path.join(root, name), "rb") as f:
+                    now[name] = f.read()
+            except FileNotFoundError:
+                pass
+        if now == last:
+            return now
+        last = now
+        time.sleep(0.2)
+    raise RuntimeError(f"the cookie store in {root} did not hold still")
+
+
+def stored(folder):
+    import tempfile
+    count = 0
+    for root, _, files in os.walk(folder):
+        if "Cookies" in files:
+            held = store_as_it_stood(root)
+            with tempfile.TemporaryDirectory() as d:
+                for name, data in held.items():
+                    with open(os.path.join(d, name), "wb") as f:
+                        f.write(data)
+                # Opening the copy reads its log, and rolls back an
+                # unfinished transaction its journal holds, as SQLite
+                # reads the store itself.
+                db = sqlite3.connect(os.path.join(d, "Cookies"))
+                count += db.execute("SELECT count(*) FROM cookies WHERE name = ?", (COOKIE,)).fetchone()[0]
+                db.close()
+    return count
 
 
 def main(argv):
@@ -252,20 +319,18 @@ def main(argv):
     elif len(argv) == 3 and argv[1] == "framed":
         first = next(found(argv[2], "ws_compressed"), None)
         print("none" if first is None else "compressed" if first else "plain")
-    elif len(argv) == 4 and argv[1] == "scrub":
-        looked, holding = scrub(argv[2], argv[3])
-        print(f"{looked} session cookies and API keys looked for, {len(holding)} files hold one")
-        for name in holding:
-            print(name)
-        return 0 if looked and not holding else 1
     elif len(argv) == 4 and argv[1] == "confirmation":
         print(json.dumps(confirmation(argv[2], argv[3])))
     elif len(argv) == 3 and argv[1] == "athanors":
         print(json.dumps(athanors(argv[2])))
+    elif len(argv) == 2 and argv[1] == "renderers":
+        print(" ".join(str(p) for p in renderers()))
+    elif len(argv) == 3 and argv[1] == "stored":
+        print(stored(argv[2]))
     else:
         print("usage: box.py observe RECORD | header RECORD SINCE FILE | visits RECORD SINCE PORT TEXT | key RECORD FILE"
-              " | canvas KEYFILE DIR | framed RECORD | scrub RECORD TAR"
-              " | confirmation DATABASE REF | athanors DATABASE", file=sys.stderr)
+              " | canvas KEYFILE DIR | framed RECORD"
+              " | confirmation DATABASE REF | athanors DATABASE | renderers | stored DIR", file=sys.stderr)
         return 64
     return 0
 

@@ -9,4 +9,4 @@ import {startApp} from "./app.js"
 
 const executable = process.platform === "win32" ? "cyfr.exe" : "cyfr"
 
-startApp({cyfr: path.join(process.resourcesPath, executable), touchIdGroup: __CYFR_TOUCH_ID_GROUP__})
+startApp({cyfr: path.join(process.resourcesPath, executable), touchIdGroup: __CYFR_WEBAUTHN_GROUP__})

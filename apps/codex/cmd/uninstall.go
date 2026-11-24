@@ -144,7 +144,7 @@ func readUninstallPlan() (*uninstallPlan, error) {
 			// A program that is a package's, or may be, never removes the
 			// app's package, which may be its own: that is the system's
 			// package tool's to do, as this program is.
-			p.app = perr == nil && owner == "" && machine.installed(appPackage) != ""
+			p.app = perr == nil && owner == "" && machine.installed(appPackage)
 			real, err := filepath.EvalSymlinks(self)
 			if target, lerr := filepath.EvalSymlinks(usrLocalLink); err == nil && lerr == nil && target == real && usrLocalLink != self {
 				p.link = removable(usrLocalLink)
