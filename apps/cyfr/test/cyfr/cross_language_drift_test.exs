@@ -462,7 +462,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/codex/cmd/setup_project_test.go", ~w(external_pages)},
       {"apps/codex/desktop/test/policy.test.mjs", ~w(account_services)},
       {"apps/codex/desktop/test/process.test.mjs", ~w(version go_to_main main_to_go refused)},
-      {"apps/codex/desktop/test/states.test.mjs", ~w(external_pages)},
+      {"apps/codex/desktop/test/states.test.mjs", ~w(endings external_pages)},
+      {"apps/codex/cmd/screen_app_test.go", ~w(endings)},
       {"apps/codex/internal/account/discover_test.go", ~w(account_services)},
       {"apps/codex/internal/desktop/process_test.go", ~w(version go_to_main main_to_go refused)}
     ],
@@ -588,7 +589,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/builder_protocol_test.exs",
        ~w(version domain service label auth_header window_ms routes statuses bounds languages language_for stages component_wasm component_lockfile key_hex request_key_hex backends_key_hex backends_request_key_hex key_text request health_request lines invalid_requests invalid_lines auth_rejected)},
       {"tests/builder-image/stack.py",
-       ~w(version service label auth_header routes statuses key_hex request_key_hex request)}
+       ~w(version service label auth_header routes statuses key_hex request_key_hex request)},
+      {"tests/builder-image/stack_test.py", ~w(bounds lines)}
     ],
     "locus_roles.json" => [
       {"apps/prima/test/prima/locus_roles_test.exs", ~w(release roles)},
@@ -678,6 +680,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "sign_in.json" => [
       {"apps/codex/desktop/test/main.test.mjs", ~w(home requests)},
       {"apps/codex/desktop/test/policy.test.mjs", ~w(home max_fragment_bytes requests)},
+      {"apps/codex/desktop/test/states.test.mjs", ~w(requests)},
       {"apps/codex/internal/account/wire_test.go",
        ~w(answer_refusals answers keys request_refusals requests)},
       {"apps/cyfr/assets/test/account/pages.test.mjs",

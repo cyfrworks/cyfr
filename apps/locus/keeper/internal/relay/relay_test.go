@@ -509,3 +509,20 @@ func TestRelayRefusesARelayFrameWithoutARelay(t *testing.T) {
 		t.Fatalf("relay ended with %v", err)
 	}
 }
+
+// A relay carries a backend's output a frame at a time for as long as it
+// runs: a frame that allocated would grow the relay's heap with what it
+// carried until its collector ran.
+func TestAFrameIsWrittenWithoutAllocating(t *testing.T) {
+	w := &frameWriter{conn: io.Discard}
+	out := make([]byte, 0, frame.HeaderSize+frame.MaxPayload)
+	payload := make([]byte, frame.MaxPayload)
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := w.send(out, frame.StreamStdout, payload); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("a frame of %d bytes allocated %v times, want none", len(payload), allocs)
+	}
+}

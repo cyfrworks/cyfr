@@ -270,7 +270,7 @@ const CHOOSER = LOOPBACK + "/bootstrap/"
 const at = (url, showing, over = {}) => ({type: "navigate", window: "content", url, target: "top", asker: "top", showing, by: showing, ...over})
 const open = [{type: "ready", url: CHOOSER + "#token=t"},
   {type: "home", message: {type: "home", home: HOME, account: ACCOUNT, attempt: 1}},
-  {type: "taken", taken: true}, {type: "opened", home: HOME}]
+  {type: "taken", taken: true}, {type: "opened", home: HOME, message: {type: "opened", home: HOME, attempt: 1}}]
 const locked = {type: "locked", message: {type: "locked", home: HOME, account: ACCOUNT}}
 
 // Every notice, by name: its words, and what main observed that makes it
@@ -500,18 +500,22 @@ test("after a lock the chooser shows the setup's progress again, and once it is 
   }
 })
 
-test("on the passkey road too the CYFR set up opens at the device's pages, and every request says the time its page was shown in", async () => {
+test("the CYFR set up opens at the device's pages on the six-word road, through main on the passkey road, and every request says the time its page was shown in", async () => {
   const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 2}}
-  const setup = {"/bootstrap/start": [running([], 1)], "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}
-  const {$, went} = await chooser("", {folder: "/home/ada/cyfr", picks: 1, epoch: 4}, {}, ROAD, {docker: [{docker: {ready: true}}], setup})
-  $("here").fire("click")
-  await settled()
-  $("start").fire("click")
-  await settled()
-  assert.deepEqual(went.asked.find(([p]) => p === "/bootstrap/start")[1], {picks: 1, run: 0})
-  assert.deepEqual(went.asked.at(-1), ["/bootstrap/open", {picks: 1, run: 1}])
-  assert.deepEqual(went.byItself, ["/"], "the device's pages, where the first person is made")
-  assert.deepEqual(went.epochs, [0, 4, 4, 4, 4], "the state asked first, then each request in the time it answered")
+  for (const [road, byItself] of [["#token=t", ["/"]], [ROAD, []]]) {
+    const setup = {"/bootstrap/start": [running([], 1)], "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}
+    const {$, went} = await chooser("", {folder: "/home/ada/cyfr", picks: 1, epoch: 4}, {}, road, {docker: [{docker: {ready: true}}], setup})
+    $("here").fire("click")
+    await settled()
+    $("start").fire("click")
+    await settled()
+    assert.deepEqual(went.asked.find(([p]) => p === "/bootstrap/start")[1], {picks: 1, run: 0}, road)
+    assert.deepEqual(went.asked.at(-1), ["/bootstrap/open", {picks: 1, run: 1}], road)
+    // The device's pages make the first person on the six-word road; on
+    // the passkey road main opens the CYFR's setup page itself.
+    assert.deepEqual(went.byItself, byItself, road)
+    assert.deepEqual(went.epochs, [0, 4, 4, 4, 4], "the state asked first, then each request in the time it answered")
+  }
 })
 
 test("a Start refused because the folder changed shows the folder now and its sentence, and the next press is for it", async () => {
@@ -559,11 +563,10 @@ test("a folder set up already offers Open CYFR on the setup screen, and none is 
   }
 })
 
-test("a setup done whose folder the app could not remember says so, beside that it is set up", async () => {
-  const unrecorded = "This app still remembers https://cyfr.example.com: to open this one later, choose /home/ada/cyfr under Or set up CYFR on this computer, then press Open CYFR."
-  const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6, unrecorded}}
+test("a setup done says so, and offers Open CYFR", async () => {
+  const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}
   const {$} = await chooser("", {folder: "/home/ada/cyfr", ...done}, {}, "#token=t", {})
-  assert.equal($("notice").textContent, "CYFR is set up in /home/ada/cyfr and started. " + unrecorded)
+  assert.equal($("notice").textContent, "CYFR is set up in /home/ada/cyfr and started.")
   assert.equal($("go").hidden, false, "Open CYFR is offered")
 })
 

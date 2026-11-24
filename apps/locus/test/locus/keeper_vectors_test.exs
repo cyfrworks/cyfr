@@ -111,13 +111,20 @@ defmodule Locus.KeeperVectorsTest do
     result =
       Keeper.run(name, Map.put(command, :stdin, ""),
         place: "pl-1",
-        timeout_ms: 10_000,
+        deadline: System.monotonic_time(:millisecond) + 10_000,
         max_stdout_bytes: 1_000_000,
+        on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
         on_output: fn line -> Agent.update(lines, &[line | &1]) end
       )
 
-    {result, Agent.get(lines, &Enum.reverse/1)}
+    {stdout(result), Agent.get(lines, &Enum.reverse/1)}
   end
+
+  # A run's stdout as the fold above took it, whole.
+  defp stdout({:ok, %{exit: exit, taken: taken}}),
+    do: {:ok, %{exit: exit, stdout: IO.iodata_to_binary(taken)}}
+
+  defp stdout(result), do: result
 
   # The vectors' place `pl-1`, which their spawns name, made for this
   # process before each spawn: the request is theirs, byte for byte, and
@@ -829,15 +836,18 @@ defmodule Locus.KeeperVectorsTest do
        %{v: v, peer: peer, name: name, client: client} do
     {%{ref: ref} = handle, request, _spawned} = spawned_runner!(v, peer, name)
 
-    # Control bytes sent before the relay attaches wait for it, and are
-    # written as frames of the codec's bound before the relay opens.
+    # Control bytes sent before the relay attaches wait for it, are
+    # written as frames of the codec's bound before the relay opens, and
+    # are answered once written.
     held = :binary.copy("c", KeeperProtocol.max_frame_bytes() + 10)
-    assert :ok = Keeper.send_control(handle, held)
+    sending = Task.async(fn -> Keeper.send_control(handle, held) end)
+    assert Task.yield(sending, 100) == nil
 
     conn = attach(v, :sys.get_state(client).attach_path, request["attach"]["token"])
     assert_receive {Keeper, ^ref, :attached}, 5_000
     held_frames = IO.iodata_to_binary(KeeperProtocol.frames(:control, held))
     assert {:ok, ^held_frames} = :gen_tcp.recv(conn, byte_size(held_frames), 5_000)
+    assert Task.await(sending) == :ok
     opened!(v, conn)
 
     [control_line, control_end] = v["control_frames"]
@@ -854,9 +864,13 @@ defmodule Locus.KeeperVectorsTest do
 
     stdout_payload = payload(stdout)
     control_payload = payload(control_line)
+    # The owner takes each piece, as a runner's process does, and the
+    # client reads the next only then.
     assert_receive {Keeper, ^ref, {:stdout, ^stdout_payload} = event}, 5_000
+    :ok = Keeper.taken(handle)
     assert Locus.Runtime.Keeper.event(event) == {:log, stdout_payload}
     assert_receive {Keeper, ^ref, {:control, ^control_payload}}, 5_000
+    :ok = Keeper.taken(handle)
     assert_receive {Keeper, ^ref, :control_closed}, 5_000
     :gen_tcp.close(conn)
   end
@@ -879,6 +893,7 @@ defmodule Locus.KeeperVectorsTest do
     :ok = :gen_tcp.send(conn, encoded(carried))
     carried_payload = payload(carried)
     assert_receive {Keeper, ^ref, {:relay, ^carried_payload}}, 5_000
+    :ok = Keeper.taken(handle)
 
     # What the service writes is framed on stream 5, from any process; no
     # bytes write nothing.

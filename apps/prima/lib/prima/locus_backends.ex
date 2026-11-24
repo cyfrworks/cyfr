@@ -178,9 +178,17 @@ defmodule Prima.LocusBackends do
   `line_charge_bytes/0` of framing, and at most `max_buffer_lines/0` of
   them: past either the oldest are dropped and counted, and an answer
   says in `dropped` how many between its `after` and its first were
-  dropped. A `recv` or `output` waits up to `max_wait_ms` (at most
-  `max_recv_wait_ms/0`) for one past `after` or the process's end, and is
-  idempotent: a lost answer is replayed by the same `after`. A session
+  dropped. What the service buffers over all its sessions is bounded too,
+  charged alike: past that bound the session holding most drops its
+  oldest, counted the same way, so a session read as it comes keeps
+  everything while the unread ones lose their oldest. A `recv` or
+  `output` waits up to `max_wait_ms` (at most `max_recv_wait_ms/0`) for
+  one past `after` or the process's end, and within the same wait for the
+  service's room to answer them, since what it answers at once is bounded
+  over all its answers too: given no room by the end of the wait, it
+  answers no lines or chunks, with `dropped`, `running` and `exit_code` as
+  they stand, and the same `after` reads them later. It is idempotent: a
+  lost answer is replayed by the same `after`. A session
   whose process ended answers `running: false` on every later `recv` or
   `output`, with `exit_code` when its process exited of its own accord
   with a status (absent for one ended by a signal, by a close, by idle or

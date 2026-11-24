@@ -396,9 +396,10 @@ defmodule Compendium.BuildsTest do
   describe "a build that does not end in a verified result" do
     test "publishes nothing and registers nothing, however it ends", %{ctx: ctx} do
       tampered =
-        ScriptedBuilder.fixture()["invalid_lines"]
-        |> Enum.find(&(&1["name"] == "result_tampered_bytes"))
-        |> Map.fetch!("body")
+        ScriptedBuilder.fixture()["lines"]["streams"]
+        |> Enum.find(&(&1["name"] == "digest_mismatch"))
+        |> Map.fetch!("lines")
+        |> Enum.map(&{:line, &1})
 
       endings = [
         {:refuse, {:capacity, 2}},
@@ -406,7 +407,7 @@ defmodule Compendium.BuildsTest do
         {:stream, [{:progress, :compiling, "…"}]},
         {:stream, [{:progress, :compiling, "…"}, :drop]},
         {:stream, [{:line, "garbage"}, {:result, component()}]},
-        {:stream, [{:line, tampered}]},
+        {:stream, tampered},
         {:stream, [{:result, component(%{"component.wasm" => "not wasm"})}]},
         {:stream, [{:result, %{component() | target_type: :catalyst}}]}
       ]

@@ -16,13 +16,14 @@ import (
 	"os/signal"
 	"regexp"
 	"slices"
+	"strconv"
 	"sync"
 	"syscall"
 )
 
 // Version is the one version of the messages: every message carries it,
 // and a message without it or with another is refused.
-const Version = 1
+const Version = 2
 
 // MaxLine bounds one message line in either direction.
 const MaxLine = 64 << 10
@@ -36,8 +37,9 @@ const (
 	// how to reach it, as a numbered attempt; main answers the attempt it
 	// holds current, home-ready or home-failed, with its number.
 	TypeHome = "home"
-	// Opened says cyfr committed the CYFR home proposed: main holds it as
-	// selected from then on, and until then takes cyfr's next proposal.
+	// Opened says cyfr committed the CYFR home proposed, naming it and its
+	// attempt: main holds it as selected from then on, and until then
+	// takes cyfr's next proposal.
 	TypeOpened = "opened"
 	// Locked says the device locked, naming the CYFR cyfr holds committed,
 	// if any, as home names one: main's lock waits for it, and main keeps
@@ -47,6 +49,10 @@ const (
 	// in place of locked, and the shell says nothing after it. main closes
 	// its windows at once and ends, opening nothing more for it.
 	TypeEnding = "ending"
+	// Left answers main's leave of the same id once cyfr let go of the
+	// CYFR committed, every session of the device's there ended: it is the
+	// one answer that ends a departure, and a locked is none.
+	TypeLeft = "left"
 )
 
 // The messages the app's main process sends cyfr.
@@ -56,8 +62,10 @@ const (
 	// the attempt it numbers opens nothing. It is no lock.
 	TypeHomeFailed = "home-failed"
 	TypeLock       = "lock"
-	// Leave locks and lets go of the CYFR committed: main sends it once it
-	// cleared what it kept of that CYFR, and cyfr's locked then names none.
+	// Leave locks and lets go of the CYFR committed, numbered by main as
+	// one departure of the run: main sends it once it cleared what it kept
+	// of that CYFR, and cyfr answers left with its id, after the locked
+	// its lock says, which then names none.
 	TypeLeave    = "leave"
 	TypeShutdown = "shutdown"
 	// FolderPicked is main's answer to the person's pick of a folder (the
@@ -73,14 +81,15 @@ const (
 // be absent marked optional.
 var fields = map[string]struct{ required, optional []string }{
 	TypeReady:        {required: []string{"url"}},
-	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "road"}},
-	TypeOpened:       {required: []string{"home"}},
+	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "setup"}},
+	TypeOpened:       {required: []string{"home", "attempt"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
 	TypeEnding:       {},
+	TypeLeft:         {required: []string{"id"}},
 	TypeHomeReady:    {required: []string{"home", "attempt"}},
 	TypeHomeFailed:   {required: []string{"home", "attempt"}},
 	TypeLock:         {},
-	TypeLeave:        {},
+	TypeLeave:        {required: []string{"id"}},
 	TypeShutdown:     {},
 	TypeFolderPicked: {required: []string{"path", "epoch", "pick"}},
 }
@@ -89,19 +98,21 @@ var fromMain = []string{TypeHomeReady, TypeHomeFailed, TypeLock, TypeLeave, Type
 
 // Message is one message in either direction. Path is a folder-picked
 // answer's folder, nil when none was picked. Attempt is a proposal's
-// number, from 1.
+// number, from 1, and ID a departure's (leave and left), from 1.
 type Message struct {
 	Type     string
 	URL      string
 	Home     string
 	Account  string
 	Attempt  uint64
+	ID       uint64
 	Proxy    string
 	Resolver string
-	// Road is RoadDevice where the CYFR opens at the device's pages on
-	// either road: one just set up, whose first person is made there.
-	Road string
-	Path *string
+	// Setup is the setup token of a CYFR on this computer that no one is
+	// set up at yet: on the passkey road main opens its setup page with
+	// it, in the address's fragment alone, where the first person is made.
+	Setup string
+	Path  *string
 	// Epoch and Pick are what the chooser showed as it asked for the pick
 	// a folder-picked answers: the time since a lock, and the picks
 	// answered before it. cyfr takes only the answer to the pick asked
@@ -112,9 +123,6 @@ type Message struct {
 // maxWhole is the largest whole number both sides read exactly, a
 // JavaScript number's.
 const maxWhole = 1<<53 - 1
-
-// RoadDevice is home's road for a CYFR that opens at the device's pages.
-const RoadDevice = "device"
 
 // absolute is whether a folder-picked folder is spelled from a root, on
 // any system the app runs on: /, a drive's letter, colon and separator, or
@@ -134,7 +142,7 @@ func (r *Refusal) Is(target error) bool { return target == ErrRefused }
 func refuse(reason string) error { return &Refusal{Reason: reason} }
 
 // ReadFromMain reads one line main sent: a JSON object of exactly its
-// type's fields, version 1, of a type main sends.
+// type's fields, of this Version, of a type main sends.
 func ReadFromMain(line []byte) (Message, error) {
 	if len(line) > MaxLine {
 		return Message{}, refuse("size")
@@ -148,7 +156,7 @@ func ReadFromMain(line []byte) (Message, error) {
 	if !ok {
 		return Message{}, refuse("version")
 	}
-	if string(v) != "1" {
+	if string(v) != strconv.Itoa(Version) {
 		return Message{}, refuse("version")
 	}
 	var typ string
@@ -168,8 +176,12 @@ func ReadFromMain(line []byte) (Message, error) {
 		if f == "path" && string(raw) == "null" {
 			continue
 		}
-		if f == "attempt" {
-			if string(raw) == "null" || json.Unmarshal(raw, &msg.Attempt) != nil || msg.Attempt == 0 || msg.Attempt > maxWhole {
+		if f == "attempt" || f == "id" {
+			n := &msg.Attempt
+			if f == "id" {
+				n = &msg.ID
+			}
+			if string(raw) == "null" || json.Unmarshal(raw, n) != nil || *n == 0 || *n > maxWhole {
 				return Message{}, refuse("fields")
 			}
 			continue
@@ -206,14 +218,18 @@ func (m Message) object() (map[string]any, error) {
 		return nil, fmt.Errorf("cyfr does not send %q", m.Type)
 	}
 	values := map[string]string{"url": m.URL, "home": m.Home, "account": m.Account, "proxy": m.Proxy,
-		"resolver": m.Resolver, "road": m.Road}
+		"resolver": m.Resolver, "setup": m.Setup}
 	o := map[string]any{"version": Version, "type": m.Type}
 	for _, f := range want.required {
-		if f == "attempt" {
-			if m.Attempt == 0 {
+		if f == "attempt" || f == "id" {
+			n := m.Attempt
+			if f == "id" {
+				n = m.ID
+			}
+			if n == 0 {
 				return nil, fmt.Errorf("%s needs %s", m.Type, f)
 			}
-			o[f] = m.Attempt
+			o[f] = n
 			continue
 		}
 		if values[f] == "" {

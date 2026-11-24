@@ -320,14 +320,18 @@ defmodule Locus.Runtime.RunnerProcess do
     %{state | attached: true, pending: []}
   end
 
-  defp on_event({:control, data}, state), do: lines(%{state | buffer: state.buffer <> data})
+  # The runner's bytes are taken here once handled, and its relay's by the
+  # relay's process once it has read them (`Locus.Runtime.Relay`), so the
+  # keeper reads the runner's next bytes only then.
+  defp on_event({:control, data}, state),
+    do: %{state | buffer: state.buffer <> data} |> lines() |> taken()
 
   defp on_event({:relay, data}, %{relay: relay} = state) when relay != nil do
     Locus.Runtime.Relay.deliver(relay, data)
     state
   end
 
-  defp on_event({:relay, _data}, state), do: state
+  defp on_event({:relay, _data}, state), do: taken(state)
 
   defp on_event(:relay_closed, %{relay: relay} = state) when relay != nil do
     Locus.Runtime.Relay.ended(relay)
@@ -338,7 +342,7 @@ defmodule Locus.Runtime.RunnerProcess do
 
   defp on_event({:log, data}, state) do
     Logger.info("[Locus.Runtime.RunnerProcess] runner #{state.id}: #{String.trim_trailing(data)}")
-    state
+    taken(state)
   end
 
   defp on_event(:control_closed, %{closed: false} = state) do
@@ -444,6 +448,11 @@ defmodule Locus.Runtime.RunnerProcess do
     end
   end
 
+  defp taken(state) do
+    :ok = state.keeper.taken(state.channel)
+    state
+  end
+
   # The relay's writes go through the keeper from the relay's own process,
   # on the handle the runner attached with. An assignment made before the
   # runner attached binds it now, before the held `assign` is written.
@@ -454,7 +463,8 @@ defmodule Locus.Runtime.RunnerProcess do
       Locus.Runtime.Relay.start_link(
         runner: state.id,
         write: fn data -> keeper.send_relay(channel, data) end,
-        close: fn -> keeper.close_relay(channel) end
+        close: fn -> keeper.close_relay(channel) end,
+        taken: fn -> keeper.taken(channel) end
       )
 
     case state.binding && Locus.Runtime.Relay.bind(relay, state.binding) do

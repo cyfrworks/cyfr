@@ -278,10 +278,11 @@ defmodule Locus.Runtime.KeeperChannelTest do
       memory: nil
     })
 
+    # Its end is heard once its connection has carried its last frame.
+    :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, {:exited, {:status, 0}}}, 5_000
     reply(keeper, %{v: 3, type: "released", spawn_id: spawn_id})
     assert_receive {RunnerProcess, ^handle, :released}, 5_000
-    :gen_tcp.close(relay)
   end
 
   test "an assign held for a relay that has not attached shows no key in any status", %{
@@ -330,13 +331,21 @@ defmodule Locus.Runtime.KeeperChannelTest do
     spec = %{runner: "runner_2", argv: ["/app/bin/locus", "start"], env: @spec_env, server: name}
     {:ok, channel, []} = Channel.spawn(spec)
     _ = request(keeper)
-    assert :ok = Channel.send(channel, RunnerControl.encode(assign))
+    sending = Task.async(fn -> Channel.send(channel, RunnerControl.encode(assign)) end)
+
+    Prima.Test.Wait.wait_until(fn ->
+      Enum.any?(:sys.get_state(client).requests, fn {_ref, entry} -> entry.pending != [] end)
+    end)
 
     for process <- [handle, name, client], key <- [keys.call, keys.seal] do
       status = :erlang.term_to_binary(:sys.get_status(process))
       assert :binary.match(status, key) == :nomatch
       assert :binary.match(status, Base.encode16(key, case: :lower)) == :nomatch
     end
+
+    # Unwritten, the send is not answered.
+    assert Task.yield(sending, 0) == nil
+    Task.shutdown(sending, :brutal_kill)
   end
 
   test "a release carries its grace, and a signal-ended runner is reported so", %{
@@ -365,9 +374,10 @@ defmodule Locus.Runtime.KeeperChannelTest do
       memory: nil
     })
 
-    assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
+    # Its end follows its connection's.
     :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
+    assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
   end
 
   test "a release is written once, and a runner whose owner is gone is followed until it is retired",
@@ -494,9 +504,9 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 
     reply(keeper, exited)
-    assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
     :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
+    assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
   end
 
   test "the adapter runs only where the channel was inherited, and the direct launcher only where it was not" do

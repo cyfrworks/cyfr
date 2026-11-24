@@ -9,12 +9,17 @@ import {test} from "node:test"
 
 import {readFileSync} from "node:fs"
 
+import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 import {ACTS, EXTERNAL, initial, step} from "../src/states.js"
 
 const READY = "http://127.0.0.1:7340/bootstrap/#token=dG9rZW4"
 const HOME = "https://cyfr.example.com"
 const ACCOUNT = "https://cyfr.run"
 const home = (h = HOME, attempt = 1) => ({type: "home", message: {type: "home", home: h, account: ACCOUNT, attempt}})
+// cyfr's left answering the leave numbered id.
+const leftOf = (id) => ({type: "left", message: {type: "left", id}})
+// cyfr's opened of h, the proposal numbered attempt.
+const openedAt = (h = HOME, attempt = 1) => ({type: "opened", home: h, message: {type: "opened", home: h, attempt}})
 const locked = (h = "") => ({type: "locked", message: h ? {type: "locked", home: h, account: ACCOUNT} : {type: "locked"}})
 
 // The state after events from the start, and every effect on the way.
@@ -33,9 +38,16 @@ const ready = {type: "ready", url: READY}
 // Begun by the document showing, unless `over` says another began it.
 const navigate = (over) => ({type: "navigate", window: "content", url: HOME + "/", target: "top", asker: "top", showing: READY,
   by: over.showing ?? READY, ...over})
-// The account window's top-frame load, begun by the account's own page.
+// A request HOME issued for its own /login, current for an hour: a
+// sign-in's or a confirmation's, at the account page that takes it.
+const REQUESTS = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_in.json", import.meta.url)))["requests"]
+const requestFor = (kind, over = {}) => ({...REQUESTS[kind === "confirmation" ? "confirm" : "sign_in"].request,
+  audience: HOME, return: HOME + "/login", expires_at: Date.now() + 3_600_000, ...over})
+const signed = (kind, over) => `${ACCOUNT}/account/sign#${fragment(requestFor(kind, over))}`
+// The account window's top-frame load, begun by the account's own page,
+// which shows the ceremony's request.
 const accountNavigate = (over) => ({type: "account-navigate", window: "account", target: "top", asker: "top",
-  by: ACCOUNT + "/account/sign#x", ...over})
+  by: signed(over.kind ?? "sign-in"), ...over})
 // The content window's top frame given HOME, as the device's pages open it.
 const given = navigate({})
 // What main locks for: the company page, on either road, and being sent to
@@ -47,7 +59,7 @@ const notForgot = {type: "forgot", cleared: false}
 const taken = {type: "taken", taken: true}
 const notTaken = {type: "taken", taken: false}
 const proposed = [ready, home(), taken]
-const open = [...proposed, {type: "opened", home: HOME}]
+const open = [...proposed, openedAt(HOME)]
 
 test("cyfr's ready shows the chooser; a second ready, or another first page, ends cyfr", () => {
   assert.deepEqual(run([ready]).s.name, "chooser")
@@ -62,9 +74,10 @@ test("a proposal is answered home-ready and replaced by the next until cyfr says
   assert.deepEqual(effects.at(-1), {send: {type: "home-ready", fields: {home: HOME, attempt: 1}}})
   assert.equal(run([...proposed, home("https://bob.example", 2), taken]).s.home, "https://bob.example", "after a failure")
   assert.equal(run(open).s.name, "open")
-  assert.equal(run([...open, home("https://bob.example")]).s.name, "ended", "a proposal after a commit")
-  assert.equal(run([...proposed, {type: "opened", home: "https://bob.example"}]).s.name, "ended")
-  assert.equal(run([ready, {type: "opened", home: HOME}]).s.name, "ended", "opened with nothing proposed")
+  assert.equal(run([...open, home("https://bob.example", 2)]).s.name, "ended", "a proposal after a commit")
+  assert.equal(run([...proposed, openedAt("https://bob.example")]).s.name, "ended")
+  assert.equal(run([...proposed, openedAt(HOME, 2)]).s.name, "ended", "an opened of another attempt")
+  assert.equal(run([ready, openedAt(HOME)]).s.name, "ended", "opened with nothing proposed")
 })
 
 test("a home on another route starts the app again with it, closing first and forgetting nothing", () => {
@@ -132,12 +145,12 @@ test("cyfr's own locked is the device's session ending: forgotten, with nothing 
 test("the lock is a barrier: what cyfr sent before its locked is dropped, and its locked says what main keeps to", () => {
   // What was on the pipe before cyfr read main's lock is dropped: cyfr
   // runs on and main keeps to what it committed.
-  const committed = run([...open, company, home("https://bob.example", 2), {type: "opened", home: HOME}, locked(HOME)])
+  const committed = run([...open, company, home("https://bob.example", 2), openedAt(HOME), locked(HOME)])
   assert.equal(committed.s.name, "open")
   assert.equal(committed.s.home, HOME)
   assert.ok(!committed.kinds.includes("end"))
   assert.deepEqual(committed.effects.at(-1), {chooser: ["company"]})
-  const cancelled = run([...proposed, locked(), home(), {type: "opened", home: HOME}, forgot])
+  const cancelled = run([...proposed, locked(), home(), openedAt(HOME), forgot])
   assert.equal(cancelled.s.name, "chooser")
   assert.equal(cancelled.s.home, "")
   const other = run([...open, company, locked("https://bob.example")])
@@ -192,7 +205,7 @@ test("main keeps to a CYFR only once the kept storage is its own and cyfr opened
     assert.deepEqual(own.do, [{send: {type: "home-ready", fields: {home: HOME, attempt: 1}}}])
     assert.equal(step(own.state, given).allow, false, "nothing of it loads before it is open")
     assert.equal(step(own.state, navigate({target: "frame", asker: "frame-inside"})).allow, false, "nor a frame")
-    assert.equal(step(step(own.state, {type: "opened", home: HOME}).state, given).allow, true)
+    assert.equal(step(step(own.state, openedAt(HOME)).state, given).allow, true)
   }
 })
 
@@ -225,17 +238,21 @@ test("main alone opens a CYFR committed at its root, on the passkey road, and th
   assert.ok(!run(open, false).effects.some((e) => e.root))
   const told = run([...open, company, locked()], true)
   assert.deepEqual(told.s.notices, ["company"])
-  assert.deepEqual(run([...open, company, locked(), home(), taken, {type: "opened", home: HOME}], true).s.notices, [])
+  assert.deepEqual(run([...open, company, locked(), home(HOME, 2), taken, openedAt(HOME, 2)], true).s.notices, [])
 })
 
-test("a CYFR that opens at the device's pages loads none of its own on the passkey road, and the next home without that road does", () => {
-  const device = {type: "home", message: {...home().message, road: "device"}}
-  const opened = run([ready, device, taken, {type: "opened", home: HOME}], true)
+test("a CYFR no one is set up at opens at its setup page on the passkey road, the token held no longer, and the next home without one at its root", () => {
+  const first = {type: "home", message: {...home().message, setup: "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}
+  const opened = run([ready, first, taken, openedAt(HOME)], true)
   assert.equal(opened.s.name, "open")
-  assert.ok(!opened.effects.some((e) => e.root), "no root loaded")
-  assert.equal(step(opened.s, given).allow, true, "the device's pages give the CYFR")
-  const again = run([ready, device, taken, {type: "opened", home: HOME}, locked(), forgot, home(), taken, {type: "opened", home: HOME}], true)
-  assert.deepEqual(again.effects.filter((e) => e.root), [{root: {home: HOME}}], "a home on the passkey road again")
+  assert.deepEqual(opened.effects.filter((e) => e.root), [{root: {home: HOME, setup: "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}], "its setup page")
+  assert.equal(opened.s.setup, "", "main holds the token until it is used, and no longer")
+  assert.ok(!opened.effects.some((e) => e.say?.includes("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")), "nothing said carries it")
+  const again = run([ready, first, taken, openedAt(HOME), locked(), forgot, home(HOME, 2), taken, openedAt(HOME, 2)], true)
+  assert.deepEqual(again.effects.filter((e) => e.root).at(-1), {root: {home: HOME}}, "a home with no token: its root")
+  const sixWords = run([ready, first, taken, openedAt(HOME)], false)
+  assert.ok(!sixWords.effects.some((e) => e.root), "on the six-word road main loads none: the device's pages make the first person")
+  assert.equal(step(sixWords.s, given).allow, true, "the device's pages give the CYFR")
 })
 
 const atWays = "http://127.0.0.1:7340/bootstrap/#road=passkey"
@@ -246,13 +263,33 @@ test("Connect to another CYFR clears first and only then tells cyfr to leave", (
   assert.equal(clearing.s.name, "locking")
   assert.deepEqual(clearing.effects.slice(-2), [{close: true}, {forget: true}])
   assert.ok(!clearing.effects.some((e) => ["leave", "lock"].includes(e.send?.type)), "cyfr is told nothing before the clear")
-  assert.deepEqual(run([...open, another, forgot], true).effects.at(-1), {send: {type: "leave"}})
-  const left = run([...open, another, forgot, locked()], true)
+  assert.deepEqual(run([...open, another, forgot], true).effects.at(-1), {send: {type: "leave", fields: {id: 1}}})
+  const left = run([...open, another, forgot, locked(), leftOf(1)], true)
   assert.equal(left.s.name, "chooser")
   assert.deepEqual(left.effects.at(-1), {chooser: []})
   const own = run([...open, another, locked(HOME), forgot], true)
   assert.equal(own.s.name, "locking", "a lock of cyfr's own meanwhile does not stand for its answer")
-  assert.equal(run([...open, another, locked(HOME), forgot, locked()], true).s.name, "chooser")
+  assert.equal(run([...open, another, locked(HOME), forgot, locked(), leftOf(1)], true).s.name, "chooser")
+})
+
+test("a departure ends at the left of its own id alone, and the next is numbered after it", () => {
+  const waiting = [...open, another, forgot]
+  for (const [what, events] of Object.entries({
+    "the lock's locked": [locked()],
+    "an unasked locked naming the CYFR": [locked(HOME)],
+    "a left of another id": [leftOf(2)],
+    "a left of none": [{type: "left", message: {type: "left"}}],
+  })) {
+    assert.equal(run([...waiting, ...events], true).s.name, "locking", what)
+  }
+  const done = run([...waiting, locked(), leftOf(1)], true)
+  assert.equal(done.s.name, "chooser")
+  assert.deepEqual(run([...waiting, leftOf(1), leftOf(1)], true).s.name, "chooser", "a duplicate left does nothing")
+  assert.equal(run([...open, leftOf(1)], true).s.name, "open", "a left with no departure does nothing")
+  const second = run([...waiting, leftOf(1), home(HOME, 2), taken, openedAt(HOME, 2), another, forgot], true)
+  assert.deepEqual(second.effects.at(-1), {send: {type: "leave", fields: {id: 2}}})
+  assert.equal(run([...waiting, leftOf(1), home(HOME, 2), taken, openedAt(HOME, 2), another, forgot, leftOf(1)], true).s.name, "locking",
+    "the first departure's left, late, ends no second")
 })
 
 test("Connect to another CYFR does not advance past a failed clear", () => {
@@ -317,7 +354,7 @@ test("the screen shell's ending closes at once and quits, settling no lock, so n
   const LOOP = {type: "ready", url: "http://127.0.0.1:7340/"}
   const LOCAL = "http://localhost:4000"
   const mine = (attempt) => ({type: "home", message: {type: "home", home: LOCAL, account: LOCAL, attempt}})
-  const shown = [LOOP, mine(1), taken, {type: "opened", home: LOCAL}]
+  const shown = [LOOP, mine(1), taken, openedAt(LOCAL)]
   const ending = {type: "ending", message: {type: "ending"}}
   for (const [name, before] of Object.entries({"open": shown, "locking, the forget still running": [...shown, locked()],
     "locking, its proposal wanted": [...shown, locked(), mine(2)], "taking": [LOOP, mine(1)], "at the device's page": [LOOP]})) {
@@ -487,7 +524,7 @@ test("a second launch shows the content window, and nothing once ended", () => {
 // follows only a press. An act with no row fails.
 const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"
 const AGAIN = CHOOSER_DOC + "again"
-const SIGN_IN = ACCOUNT + "/account/sign#x"
+const SIGN_IN = signed("sign-in")
 // The chooser's Change…, naming the epoch it was shown in and the picks
 // answered before it.
 const PICK = CHOOSER_DOC + "pick?epoch=3&pick=2"
@@ -541,7 +578,8 @@ test("an act is no redirect, and is begun by the top frame's own document that o
           for (const [whose, by] of Object.entries(documents)) {
             // The engine's shape of a redirect: the first document's frame is
             // still the initiator, and the window still shows it.
-            const r = step(s, {...event, redirect, asker, by})
+            // The account's page shows the request of its ceremony.
+            const r = step(s, {...event, redirect, asker, by: whose === "the account's page" ? signed(event.kind ?? "sign-in") : by})
             const press = !redirect && asker === "top" && offers[act].includes(whose)
             assert.equal(acted(r), press, `${name}: redirect ${redirect}, by ${asker} of ${whose}`)
             if (!press && act !== "onward") assert.equal(r.allow, false, `${name}, refused: ${redirect} ${asker} ${whose}`)
@@ -559,7 +597,7 @@ test("on the box's screen none of the chooser's acts is offered or accepted, fro
     for (const e of [{type: "ready", url: SCREEN_PAGE}, ...events]) s = step(s, e).state
     return s
   }
-  const states = {"the shell's page": screen([]), "a CYFR open": screen([home(), taken, {type: "opened", home: HOME}])}
+  const states = {"the shell's page": screen([]), "a CYFR open": screen([home(), taken, openedAt(HOME)])}
   for (const [where, s] of Object.entries(states)) {
     for (const act of ["pick", "external", "another", "again"]) {
       for (const {name, event, acted} of PRESSES[act]) {
@@ -729,7 +767,7 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
       out.push(["to main", (x) => {
         const m = x.toMain.shift()
         if (m.type === "ending") x.endingRead = true
-        carry(x, step(x.main, m.type === "ready" ? m : m.type === "opened" ? m : {type: m.type, message: m.message}))
+        carry(x, step(x.main, m.type === "ready" ? m : {type: m.type, home: m.home, message: m.message}))
       }])
     }
     if (w.toShell.length) {
@@ -738,7 +776,7 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
         if (x.shell.ending) return
         if (m.type === "home-ready" && m.attempt === x.shell.attempt && !x.shell.answered) {
           x.shell.answered = true
-          x.toMain.push({type: "opened", home: CYFR})
+          x.toMain.push(openedAt(CYFR, x.shell.attempt))
         }
         if (m.type === "home-failed" && m.attempt === x.shell.attempt) x.shell.gone = true
         if (m.type === "lock" || m.type === "leave") hide(x)
@@ -799,4 +837,107 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
   assert.ok(ends > 0 && endings === 0 && seen.size > 500, `only ${seen.size} states were walked`)
   walk(initialWorld(true))
   assert.ok(endings > 0, "no walk ended with the shell's end")
+})
+
+test("ending is the last word of a run: after it main ends, and a left, which the vectors say never follows, changes nothing", () => {
+  const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
+  assert.ok(vectors["endings"].length > 0)
+  for (const {name, from_cyfr: said} of vectors["endings"]) {
+    let s = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr")
+    for (const e of [{type: "ready", url: "http://127.0.0.1:7340/"}, home(), taken, openedAt(HOME)]) s = step(s, e).state
+    const effects = []
+    for (const m of said) {
+      const r = step(s, {type: m.type, message: m})
+      s = r.state
+      effects.push(...r.do)
+    }
+    assert.equal(s.name, "ended", name)
+    assert.ok(effects.some((e) => e.quit), name)
+    const after = step(s, leftOf(7))
+    assert.deepEqual([after.state, after.do], [s, []], name)
+  }
+})
+
+test("every load of a page that takes a request, at any load of the account window, is the one reader's: none with no request, an expired one or another CYFR's", () => {
+  const s = run(open, true).s
+  for (const kind of ["sign-in", "confirmation"]) {
+    const ok = kind === "sign-in" ? `${ACCOUNT}/account/new#name=&request=${fragment(requestFor(kind))}` : signed(kind)
+    assert.deepEqual(step(s, accountNavigate({url: ok, kind})), {state: s, allow: true, do: []}, `${kind}: its own request`)
+    for (const [url, why] of [[ACCOUNT + "/account/new", "no request"], [ACCOUNT + "/account/sign", "no request"],
+      [`${ACCOUNT}/account/new#name=&request=${fragment(requestFor("sign-in", {expires_at: Date.now() - 1}))}`, "expired"],
+      [signed(kind, {expires_at: Date.now() - 1}), "expired"],
+      [`${ACCOUNT}/account/new#name=&request=${fragment(requestFor("sign-in", {audience: "https://bob.example", return: "https://bob.example/login"}))}`, "another CYFR's"],
+      [signed(kind, {audience: "https://bob.example", return: "https://bob.example/login"}), "another CYFR's"]]) {
+      assert.deepEqual(step(s, accountNavigate({url, kind})), {state: s, allow: false, do: [{unhop: true}]}, `${kind}: ${why}: ${url.split("#")[0]}`)
+    }
+  }
+  assert.deepEqual(step(s, accountNavigate({url: signed("sign-in"), kind: null})), {state: s, allow: false, do: [{unhop: true}]},
+    "no ceremony the content window now showing began")
+})
+
+const TOKEN = "ab".repeat(32)
+const withSetup = (attempt = 1, setup = TOKEN) => ({type: "home", message: {...home(HOME, attempt).message, setup}})
+
+test("main holds a setup token for its attempt alone, however that attempt ends", () => {
+  const holding = [ready, withSetup()]
+  assert.equal(run(holding, true).s.setup, TOKEN, "while it is taken")
+  assert.equal(run([...holding, taken], true).s.setup, TOKEN, "while it is proposed")
+  const ends = {
+    opened: [...holding, taken, openedAt(HOME)],
+    "a failed take": [...holding, {type: "taken", taken: false}],
+    "a lock while taken": [...holding, locked()],
+    "a lock while proposed": [...holding, taken, locked()],
+    "cyfr gone": [...holding, taken, {type: "gone", why: "it ended"}],
+    "the screen shell ending": [...holding, {type: "ending"}],
+    "a quit while taken": [...holding, {type: "quit"}],
+    "a quit while proposed": [...holding, taken, {type: "quit"}],
+    "a quit once ended": [...holding, taken, {type: "gone", why: "it ended"}, {type: "quit"}],
+  }
+  for (const [end, events] of Object.entries(ends)) {
+    const {s} = run(events, true)
+    assert.ok(!s.setup, `${end}: no token held (${s.name})`)
+    assert.ok(!JSON.stringify(s).includes(TOKEN), `${end}: nowhere in main's state`)
+  }
+  assert.equal(run([...holding, withSetup(2, "cd".repeat(32))], true).s.setup, "cd".repeat(32), "a newer proposal's replaces it")
+  assert.equal(run([...holding, home(HOME, 2)], true).s.setup, "", "a newer proposal with none ends it")
+})
+
+test("an attempt's number only goes up: a home not above the highest taken changes nothing, after a failed take, a lock or the chooser too", () => {
+  for (const at of [[], [taken]]) {
+    const newer = run([ready, withSetup(2), ...at], true).s
+    for (const older of [withSetup(1, "cd".repeat(32)), home(HOME, 1), withSetup(2, "cd".repeat(32))]) {
+      assert.deepEqual(step(newer, older), {state: newer, do: []}, `${newer.name}: attempt ${older.message.attempt}`)
+    }
+  }
+  const ends = {
+    "a failed take": [ready, withSetup(2), {type: "taken", taken: false}],
+    "a lock and its end": [ready, withSetup(2), taken, openedAt(HOME, 2), locked(), forgot],
+  }
+  for (const [end, events] of Object.entries(ends)) {
+    const back = run(events, true).s
+    for (const older of [withSetup(2, "cd".repeat(32)), withSetup(1, "cd".repeat(32))]) {
+      assert.deepEqual(step(back, older), {state: back, do: []}, `${end}, at ${back.name}: attempt ${older.message.attempt} again`)
+    }
+    assert.equal(step(back, withSetup(3)).state.name, "taking", `${end}: the next attempt is taken`)
+  }
+})
+
+test("on the box's screen a home's setup token is dropped as it arrives, so nothing queued holds one, and an older home never replaces the queued next", () => {
+  const SCREEN = {type: "ready", url: "http://127.0.0.1:7340/"}
+  const onScreen = (events) => {
+    let s = initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr")
+    for (const e of events) s = step(s, e).state
+    return s
+  }
+  assert.ok(!JSON.stringify(onScreen([SCREEN, withSetup(1)])).includes(TOKEN), "taken: no token")
+  const queued = [SCREEN, withSetup(1), taken, openedAt(HOME), locked(HOME), withSetup(3)]
+  const s = onScreen(queued)
+  assert.equal(s.name, "locking")
+  assert.equal(s.wanted.attempt, 3, "the next attempt queued")
+  assert.ok(!JSON.stringify(s).includes(TOKEN), "queued: no token")
+  assert.deepEqual(step(s, withSetup(2, "cd".repeat(32))), {state: s, do: []}, "an older home over the queued next changes nothing")
+  for (const [end, e] of [["quit", {type: "quit"}], ["gone", {type: "gone", why: "it ended"}], ["ending", {type: "ending"}]]) {
+    const after = step(s, e).state
+    assert.ok(!JSON.stringify(after).includes(TOKEN), `${end} with a home queued: no token`)
+  }
 })

@@ -16,7 +16,9 @@ defmodule Locus.BuilderServiceTest do
   refusal the build ended with, its diagnostics bounded. A deadline reached
   mid-build ends the build's process group; a client that leaves ends its
   build within a bound and its slot goes back; the keeper's memory answers
-  are the wire's `memory` and `unavailable`.
+  are the wire's `memory` and `unavailable`. A build that waits for room
+  in the builds count ends by the deadline its request set, and one whose
+  client leaves while it waits ends at once.
   """
 
   # Serves on the application's build slots and, in places, as its keeper.
@@ -36,9 +38,38 @@ defmodule Locus.BuilderServiceTest do
   end
 
   defp refused(port, request_or_body, opts \\ []) do
-    assert {status, [{:refusal, refusal, diagnostics}]} = answer(port, request_or_body, opts)
+    assert {status, [{:refusal, refusal}]} = answer(port, request_or_body, opts)
     assert status == BuilderProtocol.status(refusal)
-    {refusal, diagnostics}
+    refusal
+  end
+
+  # An answer's lines as a client keeps them: its terminal line, the log a
+  # person reads, and the files a result names (nil for no result).
+  defp ended(lines) do
+    {log, outputs, terminal} =
+      Enum.reduce(lines, {[], BuilderProtocol.outputs(), nil}, fn
+        {:progress, stage, message}, {log, outputs, nil} ->
+          {[BuilderProtocol.diagnostic(stage, message) | log], outputs, nil}
+
+        {:output, chunk}, {log, outputs, nil} ->
+          assert {:ok, outputs} = BuilderProtocol.output(outputs, chunk)
+          {log, outputs, nil}
+
+        terminal, {log, outputs, nil} ->
+          {log, outputs, terminal}
+      end)
+
+    files =
+      case terminal do
+        {:result, result} ->
+          assert {:ok, files} = BuilderProtocol.outputs(outputs, result)
+          files
+
+        _other ->
+          nil
+      end
+
+    {terminal, Enum.reverse(log), files}
   end
 
   defp answer(port, %{} = request, opts), do: Wire.build(port, request, opts)
@@ -134,16 +165,16 @@ defmodule Locus.BuilderServiceTest do
     test "refuses another version, a field it does not have and a body past its bound", %{
       port: port
     } do
-      assert {409, [{:refusal, {:protocol_mismatch, 1, 2}, []}]} =
-               Wire.post(port, @health, ~s({"version":2}))
+      assert {409, [{:refusal, {:protocol_mismatch, 2, 1}}]} =
+               Wire.post(port, @health, ~s({"version":1}))
 
-      assert {400, [{:refusal, {:malformed, sentence}, []}]} =
-               Wire.post(port, @health, ~s({"version":1,"verbose":true}))
+      assert {400, [{:refusal, {:malformed, sentence}}]} =
+               Wire.post(port, @health, ~s({"version":2,"verbose":true}))
 
       assert sentence =~ "verbose"
 
-      assert {400, [{:refusal, {:malformed, sentence}, []}]} =
-               Wire.post(port, @health, String.duplicate(" ", 5_000) <> ~s({"version":1}))
+      assert {400, [{:refusal, {:malformed, sentence}}]} =
+               Wire.post(port, @health, String.duplicate(" ", 5_000) <> ~s({"version":2}))
 
       assert sentence =~ "at most 4096"
     end
@@ -161,7 +192,7 @@ defmodule Locus.BuilderServiceTest do
             {"POST", "/build"},
             {"GET", "/"}
           ] do
-        assert {400, [{:refusal, {:malformed, sentence}, []}]} =
+        assert {400, [{:refusal, {:malformed, sentence}}]} =
                  Wire.post(port, path, "", [], method),
                "#{method} #{path}"
 
@@ -185,7 +216,7 @@ defmodule Locus.BuilderServiceTest do
     test "a header under another key, no header, two, and one that is no header", ctx do
       request = Wire.request("true")
 
-      assert {{:unauthorized, :bad_mac}, []} =
+      assert {:unauthorized, :bad_mac} =
                refused(ctx.port, request, key: :binary.copy(<<1>>, 32))
 
       body = Wire.body(request)
@@ -197,7 +228,7 @@ defmodule Locus.BuilderServiceTest do
             {[{"x-cyfr-auth", "Bearer test-builder-token"}], :malformed},
             {[{"authorization", "Bearer test-builder-token"}], :malformed}
           ] do
-        assert {401, [{:refusal, {:unauthorized, ^reason}, []}]} =
+        assert {401, [{:refusal, {:unauthorized, ^reason}}]} =
                  Wire.post(ctx.port, @build, body, headers)
       end
 
@@ -217,7 +248,7 @@ defmodule Locus.BuilderServiceTest do
         ])
 
       assert {401, conn} = Wire.status(conn, 2_000)
-      assert {{:refusal, {:unauthorized, :bad_mac}, []}, conn} = Wire.line(conn, 2_000)
+      assert {{:refusal, {:unauthorized, :bad_mac}}, conn} = Wire.line(conn, 2_000)
       Wire.close(conn)
       assert spawns(ctx.fake) == []
     end
@@ -228,7 +259,7 @@ defmodule Locus.BuilderServiceTest do
       window = BuilderProtocol.window_ms()
 
       for ts <- [now - window - 5_000, now + window + 5_000] do
-        assert {{:unauthorized, :outside_window}, []} = refused(ctx.port, body, ts: ts)
+        assert {:unauthorized, :outside_window} = refused(ctx.port, body, ts: ts)
       end
 
       assert spawns(ctx.fake) == []
@@ -239,18 +270,18 @@ defmodule Locus.BuilderServiceTest do
       request = Wire.request("true", %{deadline: System.system_time(:millisecond) - 1})
       nonce = Wire.nonce()
 
-      assert {{:timeout, 0}, []} = refused(ctx.port, request, nonce: nonce)
-      assert {{:unauthorized, :replayed}, []} = refused(ctx.port, request, nonce: nonce)
-      assert {{:timeout, 0}, []} = refused(ctx.port, request)
+      assert {:timeout, 0} = refused(ctx.port, request, nonce: nonce)
+      assert {:unauthorized, :replayed} = refused(ctx.port, request, nonce: nonce)
+      assert {:timeout, 0} = refused(ctx.port, request)
 
       # A header that did not verify keeps no nonce.
       other = :binary.copy(<<1>>, 32)
       unverified = Wire.nonce()
 
-      assert {{:unauthorized, :bad_mac}, []} =
+      assert {:unauthorized, :bad_mac} =
                refused(ctx.port, request, key: other, nonce: unverified)
 
-      assert {{:timeout, 0}, []} = refused(ctx.port, request, nonce: unverified)
+      assert {:timeout, 0} = refused(ctx.port, request, nonce: unverified)
 
       assert spawns(ctx.fake) == []
     end
@@ -263,7 +294,7 @@ defmodule Locus.BuilderServiceTest do
       assert tampered != body and byte_size(tampered) == byte_size(body)
 
       for sent <- [tampered, body <> " "] do
-        assert {401, [{:refusal, {:unauthorized, :bad_mac}, []}]} =
+        assert {401, [{:refusal, {:unauthorized, :bad_mac}}]} =
                  Wire.post(ctx.port, @build, sent, [{"x-cyfr-auth", Wire.header(body)}])
       end
 
@@ -281,7 +312,7 @@ defmodule Locus.BuilderServiceTest do
         ])
 
       assert {400, conn} = Wire.status(conn, 2_000)
-      assert {{:refusal, {:malformed, sentence}, []}, conn} = Wire.line(conn, 2_000)
+      assert {{:refusal, {:malformed, sentence}}, conn} = Wire.line(conn, 2_000)
       assert sentence == "the request is #{max + 1} bytes; at most #{max} are read"
       Wire.close(conn)
       assert spawns(ctx.fake) == []
@@ -300,7 +331,7 @@ defmodule Locus.BuilderServiceTest do
         ])
 
       assert {400, conn} = Wire.status(conn)
-      assert {{:refusal, {:malformed, sentence}, []}, conn} = Wire.line(conn)
+      assert {{:refusal, {:malformed, sentence}}, conn} = Wire.line(conn)
       assert sentence =~ "runs past #{max} bytes"
       Wire.close(conn)
       assert spawns(ctx.fake) == []
@@ -327,7 +358,7 @@ defmodule Locus.BuilderServiceTest do
       {status, line} = read_answer(socket)
       assert status == 400
 
-      assert {:ok, {:refusal, {:malformed, sentence}, []}} = BuilderProtocol.read_line(line)
+      assert {:ok, {:refusal, {:malformed, sentence}}} = BuilderProtocol.read_line(line)
       assert sentence == "the request runs past #{max} bytes; at most #{max} are read"
 
       # The rest of the chunk and the body's end, written after the refusal
@@ -347,10 +378,10 @@ defmodule Locus.BuilderServiceTest do
     test "a body at another version, or at none, naming both ends", ctx do
       wire = "true" |> Wire.request() |> Wire.body() |> Jason.decode!()
 
-      assert {{:protocol_mismatch, 1, 2}, []} =
-               refused(ctx.port, Jason.encode!(%{wire | "version" => 2}))
+      assert {:protocol_mismatch, 2, 1} =
+               refused(ctx.port, Jason.encode!(%{wire | "version" => 1}))
 
-      assert {{:protocol_mismatch, 1, nil}, []} =
+      assert {:protocol_mismatch, 2, nil} =
                refused(ctx.port, Jason.encode!(Map.delete(wire, "version")))
 
       assert spawns(ctx.fake) == []
@@ -359,12 +390,12 @@ defmodule Locus.BuilderServiceTest do
     test "a body that does not read, in the reader's own sentence", ctx do
       wire = "true" |> Wire.request() |> Wire.body() |> Jason.decode!()
 
-      assert {{:malformed, "the body is not a JSON object"}, []} = refused(ctx.port, "[]")
+      assert {:malformed, "the body is not a JSON object"} = refused(ctx.port, "[]")
 
-      assert {{:malformed, "token is not a field of this message"}, []} =
+      assert {:malformed, "token is not a field of this message"} =
                refused(ctx.port, Jason.encode!(Map.put(wire, "token", "test-builder-token")))
 
-      assert {{:malformed, "a reagent is not built from javascript"}, []} =
+      assert {:malformed, "a reagent is not built from javascript"} =
                refused(ctx.port, Jason.encode!(%{wire | "target_type" => "reagent"}))
 
       # A sentence quoting a path the request named is cut to the wire's
@@ -372,7 +403,7 @@ defmodule Locus.BuilderServiceTest do
       long = String.duplicate("../", 30_000) <> "escape"
       sources = [%{"path" => long, "base64" => Base.encode64("x")}]
 
-      assert {{:malformed, sentence}, []} =
+      assert {:malformed, sentence} =
                refused(ctx.port, Jason.encode!(%{wire | "sources" => sources}))
 
       assert byte_size(sentence) == BuilderProtocol.max_line_bytes()
@@ -381,13 +412,13 @@ defmodule Locus.BuilderServiceTest do
 
     test "a deadline already passed", ctx do
       request = Wire.request("true", %{deadline: System.system_time(:millisecond)})
-      assert {{:timeout, 0}, []} = refused(ctx.port, request)
+      assert {:timeout, 0} = refused(ctx.port, request)
       assert FakeKeeper.requests(ctx.fake) == []
     end
 
     test "sources that make no build of their language", ctx do
       request = Wire.request("true", %{sources: %{"src/main.jsx" => "export default 1"}})
-      assert {{:malformed, sentence}, []} = refused(ctx.port, request)
+      assert {:malformed, sentence} = refused(ctx.port, request)
       assert sentence =~ "package.json"
       unplaced!(ctx.fake)
     end
@@ -397,7 +428,7 @@ defmodule Locus.BuilderServiceTest do
       System.put_env("PATH", "/nonexistent")
       on_exit(fn -> System.put_env("PATH", path) end)
 
-      assert {{:unavailable, "the javascript toolchain is not installed in this image"}, []} =
+      assert {:unavailable, "the javascript toolchain is not installed in this image"} =
                refused(ctx.port, Wire.request("true"))
 
       unplaced!(ctx.fake)
@@ -407,7 +438,7 @@ defmodule Locus.BuilderServiceTest do
   describe "a service that holds no key" do
     test "verifies nothing", %{port: port} do
       Application.delete_env(:locus, :request_key)
-      assert {{:unauthorized, :bad_mac}, []} = refused(port, Wire.request("true"))
+      assert {:unauthorized, :bad_mac} = refused(port, Wire.request("true"))
     end
   end
 
@@ -427,7 +458,7 @@ defmodule Locus.BuilderServiceTest do
       restart_build_slots(max: 2, key_max: 2)
       _holder = hold(["ath_a", "ath_b"])
 
-      assert {{:capacity, 2}, []} = refused(port, Wire.request("true"))
+      assert {:capacity, 2} = refused(port, Wire.request("true"))
       assert %{active: 2, queued: 0} = Slots.status(@slots)
     end
 
@@ -436,20 +467,20 @@ defmodule Locus.BuilderServiceTest do
       restart_build_slots(max: 3, key_max: 1)
       _holder = hold([Wire.athanor()])
 
-      assert {{:capacity, 1}, []} = refused(port, Wire.request("true"))
+      assert {:capacity, 1} = refused(port, Wire.request("true"))
       assert %{active: 1, queued: 0} = Slots.status(@slots)
 
       script = "mkdir dist && echo ok > dist/index.html"
       other = Wire.request(script, %{athanor_id: "ath_another"})
       assert {200, lines} = Wire.build(port, other)
-      assert {:result, %{outputs: %{"index.html" => "ok\n"}}} = List.last(lines)
+      assert {{:result, _}, _log, %{"index.html" => "ok\n"}} = ended(lines)
     end
 
     test "that are down refuse a build as unavailable, never admit it unaccounted", %{port: port} do
       :ok = Supervisor.terminate_child(Locus.Supervisor, @slots)
       assert %{error: :unavailable} = Slots.status(@slots)
 
-      assert {{:unavailable, sentence}, []} = refused(port, Wire.request("true"))
+      assert {:unavailable, sentence} = refused(port, Wire.request("true"))
       assert sentence =~ "build slots"
     end
   end
@@ -457,25 +488,35 @@ defmodule Locus.BuilderServiceTest do
   describe "a build that runs" do
     @describetag :requires_node
 
-    test "streams its progress, then its result, whose diagnostics are the lines streamed", %{
-      port: port
-    } do
+    test "streams its progress and its files, then its result; a person reads the lines streamed, in order",
+         %{port: port} do
       script =
         "mkdir -p dist/assets && echo bundling >&2 && echo hi > dist/index.html && echo js > dist/assets/app.js"
 
       assert {200, lines} = Wire.build(port, Wire.request(script))
-      {progress, [terminal]} = Enum.split(lines, -1)
+      progress = for {:progress, _stage, _message} = line <- lines, do: line
 
       assert [{:progress, :preparing, _}, {:progress, :compiling, _} | output] = progress
       assert Enum.all?(output, &match?({:progress, :output, _}, &1))
       assert {:progress, :output, "bundling"} in output
 
+      # Every line but the last is progress or output, the outputs after
+      # the build's log; no terminal line carries the log again.
+      {terminal, log, files} = ended(lines)
       assert {:result, result} = terminal
       assert result.language == :javascript and result.target_type == :tincture
-      assert result.outputs == %{"index.html" => "hi\n", "assets/app.js" => "js\n"}
+      assert files == %{"index.html" => "hi\n", "assets/app.js" => "js\n"}
+      refute Map.has_key?(result, :diagnostics)
 
-      assert result.diagnostics ==
+      # The log a person reads is the lines the terminal line carried
+      # before: each progress line as `stage: message`, in the order streamed.
+      assert log ==
                Enum.map(progress, fn {:progress, stage, message} -> "#{stage}: #{message}" end)
+
+      assert [
+               "preparing: Preparing source files...",
+               "compiling: Building tincture (npm ci && npm run build)..." | _
+             ] = log
 
       wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
     end
@@ -484,7 +525,7 @@ defmodule Locus.BuilderServiceTest do
       port: port
     } do
       assert {200, lines} = Wire.build(port, Wire.request("echo no such module >&2; exit 7"))
-      assert {:refusal, {:failed, {:status, status}}, diagnostics} = List.last(lines)
+      assert {{:refusal, {:failed, {:status, status}}}, diagnostics, nil} = ended(lines)
       assert status != 0
       assert "output: no such module" in diagnostics
       wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
@@ -495,10 +536,10 @@ defmodule Locus.BuilderServiceTest do
         "yes 'a line of a log that goes on and on and on and on' | head -c 3000000 >&2; exit 3"
 
       assert {200, lines} = Wire.build(port, Wire.request(script))
-      assert {:refusal, {:failed, {:status, _}}, diagnostics} = List.last(lines)
+      assert {{:refusal, {:failed, {:status, _}}}, diagnostics, nil} = ended(lines)
 
       # The log is charged as the progress lines streamed, each encoded with
-      # its newline, and the diagnostics are those lines again.
+      # its newline, and the diagnostics a person reads are those lines.
       kept =
         Enum.reduce(Enum.drop(lines, -1), 0, fn {:progress, stage, message}, bytes ->
           {:ok, line} = BuilderProtocol.encode_progress(stage, message)
@@ -519,7 +560,7 @@ defmodule Locus.BuilderServiceTest do
       script = "mkdir dist && i=0 && while [ $i -le #{max} ]; do : > dist/f$i; i=$((i+1)); done"
 
       assert {200, lines} = Wire.build(port, Wire.request(script))
-      assert {:refusal, {:failed, {:status, 0}}, diagnostics} = List.last(lines)
+      assert {{:refusal, {:failed, {:status, 0}}}, diagnostics, nil} = ended(lines)
       assert "compiling: the build produced more than #{max} files" in diagnostics
     end
 
@@ -531,7 +572,7 @@ defmodule Locus.BuilderServiceTest do
       started = System.monotonic_time(:millisecond)
       assert {200, lines} = Wire.build(port, request)
 
-      assert {:refusal, {:timeout, budget_ms}, diagnostics} = List.last(lines)
+      assert {{:refusal, {:timeout, budget_ms}}, diagnostics, nil} = ended(lines)
       assert budget_ms in 7_000..8_000
       assert "output: running" in diagnostics
       assert System.monotonic_time(:millisecond) - started < 20_000
@@ -562,7 +603,200 @@ defmodule Locus.BuilderServiceTest do
 
       # The slot is there for the next build.
       assert {200, lines} = Wire.build(port, Wire.request("mkdir dist && echo ok > dist/x"))
-      assert {:result, _} = List.last(lines)
+      assert {{:result, _}, _log, %{"x" => "ok\n"}} = ended(lines)
+    end
+  end
+
+  describe "what a build holds" do
+    @describetag :requires_node
+
+    test "a slow reader of a 64 MiB result: the node never holds over its 8 MiB of it", %{
+      port: port
+    } do
+      bound = Locus.Output.bounds().builds.answering
+      size = BuilderProtocol.max_output_bytes() - 4096
+      script = "mkdir dist && head -c #{size} /dev/urandom > dist/blob.bin"
+      body = Wire.body(Wire.request(script))
+      base = held_by_the_node()
+
+      conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
+      assert {200, conn} = Wire.status(conn, 120_000)
+      {lines, peak} = read_slowly(conn, base, [], 0)
+
+      # The node held no more of the build's output than its bound, however
+      # slowly its reader read, and the count says no more than that.
+      assert peak <= bound, "the node held #{peak} bytes of a build's output past #{bound}"
+
+      assert {{:result, _}, _log, %{"blob.bin" => blob}} = ended(lines)
+      assert byte_size(blob) == size
+      wait_until(fn -> builds_held() == 0 end, 10_000, "the build's grant returned")
+    end
+
+    test "a failed exit after chunks gives back what it held; the client keeps nothing", %{
+      port: port
+    } do
+      # A name ustar cannot carry: tar writes the file before it, then fails.
+      long = Enum.map_join(1..2, "/", fn n -> String.duplicate("#{n}", 200) end)
+
+      script =
+        "mkdir -p dist/#{Path.dirname(long)} && head -c 1000000 /dev/zero > dist/a && " <>
+          "echo x > dist/#{long}"
+
+      assert {200, lines} = Wire.build(port, Wire.request(script))
+      assert Enum.any?(lines, &match?({:output, %{path: "a"}}, &1))
+      assert {{:refusal, {:failed, {:status, status}}}, _log, nil} = ended(lines)
+      assert status != 0
+      wait_until(fn -> builds_held() == 0 end, 10_000, "the build's grant returned")
+    end
+
+    test "a reader that stops reading ends the build at its deadline, and its count and slot go back",
+         %{port: port} do
+      script = "mkdir dist && head -c 33554432 /dev/zero > dist/big"
+      deadline = System.system_time(:millisecond) + 20_000
+      body = Wire.body(Wire.request(script, %{deadline: deadline}))
+
+      conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
+      assert {200, conn} = Wire.status(conn, 60_000)
+      conn = await_line(conn, fn line -> match?({:output, _}, line) end)
+
+      # The reader reads no more; past the deadline the build is ended, its
+      # count given back and its slot free, and nothing more is written.
+      wait_until(
+        fn -> System.system_time(:millisecond) > deadline and builds_held() == 0 end,
+        40_000,
+        "the build ended at its deadline and its grant returned"
+      )
+
+      wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
+      Wire.close(conn)
+    end
+
+    test "a reader that leaves gives back the build's count", %{port: port} do
+      script = "mkdir dist && head -c 33554432 /dev/zero > dist/big"
+      body = Wire.body(Wire.request(script))
+
+      conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
+      assert {200, conn} = Wire.status(conn, 60_000)
+      conn = await_line(conn, fn line -> match?({:output, _}, line) end)
+      Wire.close(conn)
+
+      wait_until(fn -> builds_held() == 0 end, 20_000, "the build's grant returned")
+      wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
+    end
+
+    test "a build that waited for room ends at the deadline its request set, its wait spent from its budget",
+         %{port: port} do
+      holder = hold_builds(Locus.Output.bounds().builds.answering)
+      deadline = System.system_time(:millisecond) + 6_000
+      request = Wire.request("sleep 60", %{deadline: deadline})
+      task = Task.async(fn -> Wire.build(port, request) end)
+      wait_until(fn -> builds_waiting() == 1 end, 5_000, "the build waits for room")
+
+      # sleep-ok: the count is held until shortly before the build's deadline, which is the case.
+      Process.sleep(max(deadline - 1_000 - System.system_time(:millisecond), 0))
+      send(holder, :give_back)
+
+      assert {200, lines} = Task.await(task, 30_000)
+      answered = System.system_time(:millisecond)
+      assert {{:refusal, {:timeout, budget_ms}}, _log, nil} = ended(lines)
+      assert budget_ms in 5_000..6_000
+      assert answered < deadline + 2_000, "answered #{answered - deadline} ms past its deadline"
+      wait_until(fn -> builds_held() == 0 end, 10_000, "the build's grant returned")
+    end
+
+    test "a build waiting for room whose client leaves ends at once, and its slot goes back", %{
+      port: port
+    } do
+      _holder = hold_builds(Locus.Output.bounds().builds.answering)
+      body = Wire.body(Wire.request("true"))
+
+      conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
+      assert {200, conn} = Wire.status(conn)
+      wait_until(fn -> builds_waiting() == 1 end, 5_000, "the build waits for room")
+
+      left = System.monotonic_time(:millisecond)
+      Wire.close(conn)
+
+      wait_until(
+        fn ->
+          builds_waiting() == 0 and match?(%{active: 0, holders: []}, Slots.status(@slots))
+        end,
+        20_000,
+        "the build's process gone and its slot back"
+      )
+
+      gone = System.monotonic_time(:millisecond) - left
+      assert gone < 3_000, "the build's process was gone #{gone} ms after its client left"
+    end
+  end
+
+  # What the builds role's count holds now, and how many ask it for room.
+  defp builds_held, do: Locus.Output.held(Locus.Output.server(:builds)).answering
+  defp builds_waiting, do: Locus.Output.held(Locus.Output.server(:builds)).waiting
+
+  # A process holding `bytes` of the builds role's count until it is sent
+  # `:give_back`, or the test ends.
+  defp hold_builds(bytes) do
+    test = self()
+
+    holder =
+      spawn(fn ->
+        Process.monitor(test)
+        by = System.monotonic_time(:millisecond) + 10_000
+        {:ok, grant} = Locus.Output.reserve(Locus.Output.server(:builds), bytes, by)
+        send(test, {:holding, self()})
+
+        receive do
+          :give_back -> Locus.Output.return(grant)
+          {:DOWN, _ref, :process, ^test, _reason} -> :ok
+        end
+      end)
+
+    assert_receive {:holding, ^holder}, 10_000
+    holder
+  end
+
+  # Every binary the node's processes but this test's hold once each has
+  # collected its garbage, each counted once.
+  defp held_by_the_node do
+    test = self()
+
+    for pid <- Process.list(), pid != test, do: :erlang.garbage_collect(pid)
+
+    Process.list()
+    |> Enum.reject(&(&1 == test))
+    |> Enum.flat_map(fn pid ->
+      case Process.info(pid, :binary) do
+        {:binary, binaries} -> binaries
+        nil -> []
+      end
+    end)
+    |> Map.new(fn {id, size, _refs} -> {id, size} end)
+    |> Map.values()
+    |> Enum.sum()
+  end
+
+  # Reads the answer as a slow reader does: every 64 lines it stops for a
+  # while, and what the node then holds past `base` is taken, the most of
+  # it answered beside the lines read.
+  defp read_slowly(conn, base, lines, peak) do
+    peak =
+      if rem(length(lines), 64) == 0 do
+        # sleep-ok: a reader that stops reading for a while is the case.
+        Process.sleep(200)
+        assert builds_held() <= Locus.Output.bounds().builds.answering
+        max(peak, held_by_the_node() - base)
+      else
+        peak
+      end
+
+    case Wire.line(conn, 60_000) do
+      {:eof, conn} ->
+        Wire.close(conn)
+        {Enum.reverse(lines), peak}
+
+      {line, conn} ->
+        read_slowly(conn, base, [line | lines], peak)
     end
   end
 
@@ -580,7 +814,7 @@ defmodule Locus.BuilderServiceTest do
       fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "cap"}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
-      assert {:refusal, {:memory, 268_435_456}, diagnostics} = List.last(lines)
+      assert {{:refusal, {:memory, 268_435_456}}, diagnostics, nil} = ended(lines)
       assert "output: the command's last words" in diagnostics
 
       # The bound it was ended at is the one its spawn asked for.
@@ -613,7 +847,7 @@ defmodule Locus.BuilderServiceTest do
       _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: nil}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
-      assert {:refusal, {:failed, {:signal, "SIGKILL"}}, _diagnostics} = List.last(lines)
+      assert {:refusal, {:failed, {:signal, "SIGKILL"}}} = List.last(lines)
     end
 
     test "a build ended at a limit above its own is a memory end that says CYFR ran out for builds",
@@ -621,7 +855,7 @@ defmodule Locus.BuilderServiceTest do
       _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "machine"}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
-      assert {:refusal, refusal, _diagnostics} = List.last(lines)
+      assert {:refusal, refusal} = List.last(lines)
       assert refusal == {:memory, :machine}
 
       said = Prima.BuilderProtocol.describe_refusal(refusal)
@@ -634,7 +868,7 @@ defmodule Locus.BuilderServiceTest do
       _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "either"}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
-      assert {:refusal, refusal, _diagnostics} = List.last(lines)
+      assert {:refusal, refusal} = List.last(lines)
       assert refusal == {:memory, :either}
 
       said = Prima.BuilderProtocol.describe_refusal(refusal)
@@ -648,7 +882,7 @@ defmodule Locus.BuilderServiceTest do
       fake = keeper!(:memory_unavailable)
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
-      assert {:refusal, {:unavailable, sentence}, _diagnostics} = List.last(lines)
+      assert {:refusal, {:unavailable, sentence}} = List.last(lines)
       assert sentence =~ "writable-cgroups=true"
       assert sentence =~ "runs none"
 
@@ -664,7 +898,7 @@ defmodule Locus.BuilderServiceTest do
       _fake = keeper!(:capacity)
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
-      assert {:refusal, {:capacity, max}, _} = List.last(lines)
+      assert {:refusal, {:capacity, max}} = List.last(lines)
       assert max == Locus.Config.max_concurrent()
     end
 
@@ -677,7 +911,7 @@ defmodule Locus.BuilderServiceTest do
       wait_until(fn -> spawns(fake) != [] end, 10_000)
       :ok = FakeKeeper.close(fake)
 
-      conn = await_line(conn, fn line -> match?({:refusal, {:unavailable, _}, _}, line) end)
+      conn = await_line(conn, fn line -> match?({:refusal, {:unavailable, _}}, line) end)
       Wire.close(conn)
       wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end

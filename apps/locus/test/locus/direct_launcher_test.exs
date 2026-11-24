@@ -35,16 +35,24 @@ defmodule Locus.DirectLauncherTest do
   end
 
   defp run(script, opts \\ []) do
-    DirectLauncher.run(
-      %{
-        argv: ["/bin/sh", "-c", script],
-        env: Keyword.get(opts, :env, %{}),
-        stdin: opts[:stdin] || ""
-      },
-      timeout_ms: Keyword.get(opts, :timeout_ms, 30_000),
+    %{
+      argv: ["/bin/sh", "-c", script],
+      env: Keyword.get(opts, :env, %{}),
+      stdin: opts[:stdin] || ""
+    }
+    |> DirectLauncher.run(
+      deadline: System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout_ms, 30_000),
       max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
+      on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
       on_output: Keyword.get(opts, :on_output, fn _line -> :ok end)
     )
+    |> case do
+      {:ok, %{exit: exit, taken: taken}} ->
+        {:ok, %{exit: exit, stdout: IO.iodata_to_binary(taken)}}
+
+      other ->
+        other
+    end
   end
 
   # A script that starts a child, writes its own pid, the child's and its

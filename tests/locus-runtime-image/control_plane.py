@@ -50,8 +50,9 @@ connections its attached requests may name — and `start`,
 with its dispatch key. `script` sets what an operation answers for one
 execution or for all: a value the runner reads as `{"v": 1, "ok": value}`, a
 refusal, `DROP` (a 500 with no body: an answer that never arrives, which
-the runner's client counts as lost) or a function of the request that
-answers any of those. `stop` closes the listener and the connections its
+the runner's client counts as lost), a `Raw` status and body written as
+given, unsealed, as a listener's refusal is, or a function of the request
+that answers any of those. `stop` closes the listener and the connections its
 clients keep alive, so the next call is refused at the socket, and `serve`
 opens it again on the same port.
 """
@@ -79,6 +80,15 @@ import imagesuite  # noqa: E402
 import worker_auth as auth  # noqa: E402
 
 DROP = object()
+
+
+class Raw:
+    """An answer of `status` and `body` written as given, unsealed: a listener's refusal, whose body CYFR's client reads as
+    no answer of its own."""
+
+    def __init__(self, status, body):
+        self.status = status
+        self.body = body
 LEASE_MS = 60_000
 # The authority every minted assignment carries: `Prima.Authority.zero/0` as
 # `tests/fixtures/worker_auth.json` spells it on the wire.
@@ -339,6 +349,19 @@ class ControlPlane:
             handler.send_response(500)
             handler.send_header("content-length", "0")
             handler.end_headers()
+            return None
+        if isinstance(answer, Raw):
+            entry["answered"] = f"raw {answer.status}"
+            entry["answered_t"] = self.elapsed()
+            try:
+                handler.send_response(answer.status)
+                handler.send_header("content-type", "application/octet-stream")
+                handler.send_header("content-length", str(len(answer.body)))
+                handler.end_headers()
+                handler.wfile.write(answer.body)
+                handler.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError) as error:
+                entry["answered"] = f"unread: {type(error).__name__}"
             return None
         encoded = json.dumps(self.encode(answer), separators=(",", ":")).encode()
         sealed = auth.seal_call(seal_key, "answer", call, encoded).encode()
