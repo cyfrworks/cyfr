@@ -179,7 +179,7 @@ defmodule Aqua.ScheduleTurnsTest do
     thread
   end
 
-  defp zone!(ctx, zone), do: :ok = Aqua.Day.put_zone(ctx.user_id, zone)
+  defp zone!(ctx, zone), do: :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => zone})
 
   # Every thread of the athanor, by id.
   defp threads(ctx), do: ctx |> actor() |> Threads.list() |> Enum.map(& &1.id) |> Enum.sort()

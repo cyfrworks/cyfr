@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"path"
 	"strconv"
@@ -530,7 +531,9 @@ func (b *browser) attachChild(w *window, session, kind string) {
 	}
 	_ = b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil)
 	if kind == "service_worker" {
-		_ = b.name(ctx, session, kind)
+		if err := b.name(ctx, session, kind); err != nil {
+			fmt.Fprintf(b.log, "cyfr-browser: a service worker of window %s was not named once it ran: %v\n", w.name, err)
+		}
 	}
 }
 

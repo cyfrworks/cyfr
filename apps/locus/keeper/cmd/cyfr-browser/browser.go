@@ -68,8 +68,11 @@ type browser struct {
 	// pages carries the windows' calls, and their ends, to the serve loop.
 	pages chan pageEvent
 	// agent is how every target names itself (agent.go), set once Chrome
-	// has answered its version and before any window is made.
-	agent map[string]any
+	// has answered its version and before any window is made; person, the
+	// language and time zone it reads pages in (person.go), set before
+	// Chrome starts.
+	agent  map[string]any
+	person person
 	// log is the driver's log.
 	log io.Writer
 }

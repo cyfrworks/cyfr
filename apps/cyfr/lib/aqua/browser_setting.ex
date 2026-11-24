@@ -60,6 +60,32 @@ defmodule Aqua.BrowserSetting do
     end
   end
 
+  @doc """
+  The check `Opus.Browser` calls before it starts the browser
+  (`t:Opus.Browser.start/0`): the setting read from the store now, and
+  with it on, what the browser is started with of its person, their
+  language and time zone as stored (`Aqua.Reading`, `Aqua.Day`), each
+  absent when none is; `:turned_off` with it off, for a person this
+  server does not hold, and when the store cannot answer.
+  """
+  @spec start(Context.t()) :: {:ok, Opus.Browser.Frame.person()} | :turned_off
+  def start(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
+    with {:ok, user} <- Sanctum.Tenancy.Users.get(user_id),
+         prefs = Sanctum.Tenancy.Users.prefs(user),
+         true <- read(prefs) do
+      person =
+        [{"locale", Aqua.Reading.locale(prefs)}, {"time_zone", Aqua.Day.stored_zone(prefs)}]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new()
+
+      {:ok, person}
+    else
+      _off -> :turned_off
+    end
+  end
+
+  def start(%Context{}), do: :turned_off
+
   defp read(prefs) do
     case Map.fetch(prefs, @key) do
       :error -> @default

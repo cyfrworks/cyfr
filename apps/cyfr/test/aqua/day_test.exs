@@ -92,7 +92,7 @@ defmodule Aqua.DayTest do
 
   test "after a zone change the next send joins the daily thread of the new zone's date, made or used again, and moves nothing made before",
        %{ctx: ctx, user: user, actor: actor} do
-    :ok = Aqua.Day.put_zone(user.id, @west)
+    :ok = Aqua.put_reading(user.id, %{"time_zone" => @west})
     {{west_id, first_message}, west_days} = around(@west, fn -> send!(ctx, "in the west") end)
     {:ok, west} = Threads.get(actor, west_id)
     assert west.day in west_days
@@ -101,7 +101,7 @@ defmodule Aqua.DayTest do
     assert first_message in held
 
     # The zone moves past midnight: the next send is a new date's.
-    :ok = Aqua.Day.put_zone(user.id, @east)
+    :ok = Aqua.put_reading(user.id, %{"time_zone" => @east})
     {{east_id, east_message}, east_days} = around(@east, fn -> send!(ctx, "in the east") end)
     refute east_id == west_id
     {:ok, east} = Threads.get(actor, east_id)
@@ -119,7 +119,7 @@ defmodule Aqua.DayTest do
 
     # Back in the first zone, the send joins the daily thread that exists
     # for that date, unless its midnight passed meanwhile.
-    :ok = Aqua.Day.put_zone(user.id, @west)
+    :ok = Aqua.put_reading(user.id, %{"time_zone" => @west})
     {{again_id, _message}, again_days} = around(@west, fn -> send!(ctx, "west again") end)
     {:ok, again} = Threads.get(actor, again_id)
     assert again.day in again_days
@@ -135,7 +135,7 @@ defmodule Aqua.DayTest do
     user: user,
     actor: actor
   } do
-    :ok = Aqua.Day.put_zone(user.id, @east)
+    :ok = Aqua.put_reading(user.id, %{"time_zone" => @east})
     {:ok, made} = Threads.daily(actor, date_in(@east))
 
     {{joined, _message}, sent_days} = around(@east, fn -> send!(ctx, "kept for the day") end)
@@ -152,7 +152,7 @@ defmodule Aqua.DayTest do
        %{user: user} do
     {:ok, user} = Users.put_prefs(user, %{"theme" => "dark", "mode" => "lite"})
 
-    assert :ok = Aqua.Day.put_zone(user.id, "Europe/Lisbon")
+    assert :ok = Aqua.put_reading(user.id, %{"time_zone" => "Europe/Lisbon"})
 
     assert prefs(user.id) == %{
              "theme" => "dark",
@@ -164,7 +164,7 @@ defmodule Aqua.DayTest do
     # nothing: the prefs are as they were.
     for zone <- [@unknown, "not a zone", "../etc/passwd", "", nil, 42] do
       refute Aqua.Day.zone?(zone)
-      assert {:error, _} = Aqua.Day.put_zone(user.id, zone)
+      assert {:error, _} = Aqua.put_reading(user.id, %{"time_zone" => zone})
 
       assert prefs(user.id) == %{
                "theme" => "dark",
@@ -196,7 +196,7 @@ defmodule Aqua.DayTest do
     assert today in [before, Date.utc_today()]
 
     # A known zone is read in its own date, which the unknown one never is.
-    :ok = Aqua.Day.put_zone(user.id, @east)
+    :ok = Aqua.put_reading(user.id, %{"time_zone" => @east})
     {today, days} = around(@east, fn -> Aqua.Day.today(ctx) end)
     assert today in days
   end
@@ -206,7 +206,7 @@ defmodule Aqua.DayTest do
   # accident.
   @root Path.expand("../../../..", __DIR__)
 
-  test "no source but Aqua.Day names the zone database" do
+  test "no source but Aqua.Day and the one definition of a zone names the zone database" do
     sources =
       (Path.wildcard(Path.join(@root, "apps/*/lib/**/*")) ++
          Path.wildcard(Path.join(@root, "config/**/*")))
@@ -219,9 +219,15 @@ defmodule Aqua.DayTest do
           do: Path.relative_to(path, @root)
 
     # The positive control: the scan reads lib and config, and finds the
-    # one module that names it.
+    # modules that name it: the day, and CYFR's one definition of a zone,
+    # which Aqua's browser holds where its argument is built and Aqua where
+    # the zone is stored (`Opus.Browser.zone?/1`).
     assert "apps/cyfr/lib/aqua/day.ex" in naming
     assert Enum.any?(sources, &String.ends_with?(&1, "config/config.exs"))
-    assert naming == ["apps/cyfr/lib/aqua/day.ex"]
+
+    assert Enum.sort(naming) == [
+             "apps/cyfr/lib/aqua/day.ex",
+             "apps/cyfr/lib/opus/browser/frame.ex"
+           ]
   end
 end
