@@ -107,16 +107,18 @@ defmodule Locus.Output do
       socket send buffer, 212,992 bytes (Linux's `net.core.wmem_default`),
       one a spawn: runtime 1,703,936 bytes, builds 3,407,872, backends
       23,855,104 at the defaults.
-    * **A released spawn's last frames**, every role: what its relay left
-      on its held connection, read to the connection's end and handed to
-      the owner without its word before the release, at most the relay's
-      socket queue and one read, 278,533 bytes, one a spawn being
-      released. From its release asked, or its leader's exit reported, the
-      connection is read without the owner's word, so an owner that does
-      not take cannot hold the release: what the spawn's processes write
-      in that time, until cyfr-locus has killed them (the release's grace,
-      or 2 s past the leader's exit), is bounded by that time and not by a
-      count of bytes.
+    * **An ending spawn's frames**, every role: what a spawn's relay
+      carries between its release being asked, or its leader's exit
+      reported, and the relay's end, while cyfr-locus kills its processes
+      (at the release's grace, or 2 s past the leader's exit), is read on
+      the owner's word, one read at a time, as the held read above; the
+      owner counts and drops as it takes. An owner that owes its word and
+      takes nothing for 5 s loses what the connection has not read, the
+      connection closed, which ends the relay (`Locus.Keeper`). Only once
+      the relay has ended is what it left on the connection read to the
+      end and handed to the owner at once, without its word: at most the
+      relay's socket queue and one read, 278,533 bytes, one a spawn being
+      released.
     * **The piece a runtime holder reads ahead of the count**, the
       runtime: each poster, fetch and own call holds the piece its
       connection last handed it while it asks for room, one transport
@@ -151,11 +153,22 @@ defmodule Locus.Output do
       the defaults.
     * **A request body as a listener reads it**, every role: at most the
       route's bound (the runtime's 1 MiB, a backends session's 16 MiB),
-      one a connection. Nothing caps a listener's connections but
-      ThousandIsland's default of 16,384 an acceptor, 100 acceptors.
+      one a connection, as many as the next row's.
     * **A TCP connection's send queue**, every listener: what the kernel
       holds of an answer once its write returned, at most Linux's default
       `net.ipv4.tcp_wmem` ceiling, 4,194,304 bytes, one a connection.
+      Nothing in Locus caps a listener's connections (ThousandIsland's
+      default is 16,384 an acceptor, 100 acceptors); its callers do. Each
+      CYFR node reaches a listener through one Finch pool, which holds at
+      most 50 HTTP/1 connections to it, Finch's default pool size: each of
+      CYFR's three Locus clients (`Opus.WorkerClient` to the runtime,
+      `Compendium.Builds.Client` to builds, `Sanctum.Egress` to backends
+      for `Opus.Programs`) names `connect_options`, under which Req starts
+      one Finch pool of the default size for each distinct set
+      (`Req.Finch`), and each names one set, the backends client by
+      waiting at least the connect timeout on every request
+      (`Prima.Network.pin/3`). So 50 a CYFR node, 209,715,200 bytes, times
+      the CYFR nodes the operator runs.
     * **A relay process of cyfr-locus's**: fixed buffers, part of the
       service's idle figure.
     * **The runtime VM's freed segments**: the allocator keeps up to ten

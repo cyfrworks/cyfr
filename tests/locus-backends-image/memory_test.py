@@ -6,7 +6,8 @@ A cgroup path or limit that cannot be read is no answer: a failed read fails
 the observation, rather than reading as an empty path or an empty limit, and
 the values that were read are the control. A group's memory is its current
 and peak bytes and its two kill counters, each read or failed. The flood
-program waits for its line, then writes exactly its lines. What an unread
+program waits for its line, then writes exactly its lines; the endless one
+waits for its line, then writes until it is killed, SIGTERM or not. What an unread
 session kept is its newest lines, whole and in order, or nothing yet; and a
 round of the session read as it comes fails on a drop. The flood's
 allowance is the role table's factor times what the service counts and its
@@ -99,6 +100,28 @@ class FloodCommand(unittest.TestCase):
 
     def test_it_stays_once_it_has_written(self):
         self.assertTrue(memory.flood_command(7, 5).endswith("; exec sleep 3600"))
+
+
+class EndlessFloodCommand(unittest.TestCase):
+    def test_it_waits_for_its_line(self):
+        idle = subprocess.run(["/bin/sh", "-c", memory.endless_flood_command(7)], input="", capture_output=True,
+                              text=True, timeout=10)
+        self.assertEqual(idle.stdout, "")
+
+    def test_it_writes_its_lines_past_sigterm_until_it_is_killed(self):
+        flood = subprocess.Popen(["/bin/sh", "-c", memory.endless_flood_command(7)], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE)
+        try:
+            flood.stdin.write(b"go\n")
+            flood.stdin.flush()
+            self.assertEqual(flood.stdout.read(16), b"0000000\n" * 2)
+            flood.terminate()
+            # Past what a pipe holds: written after the signal.
+            self.assertEqual(flood.stdout.read(1 << 20), b"0000000\n" * (1 << 17))
+            self.assertIsNone(flood.poll())
+        finally:
+            flood.kill()
+            flood.wait(timeout=10)
 
 
 def line(seq, text="0" * 4):

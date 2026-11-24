@@ -35,6 +35,13 @@ And the service's own memory has a bound, in a service started afresh:
   throughout, the session read as it comes loses no line, and each unread
   session kept its newest lines, whole and in order, its oldest dropped and
   counted, within the unread bound together.
+- A person stops a program while it floods, deaf to the stop's SIGTERM, so
+  it writes through the stop grace until it is killed: once with its
+  session taking as it comes, once with the session slow, masking every
+  line against many credentials. In a service started afresh each time,
+  the stop is answered, nothing of the program outlives it, the kernel
+  kills nothing, and the keeper group's peak stays within its idle peak and
+  the allowance of one session, printed beside it.
 
 Prerequisites: harness.py's. Usage: tests/locus-backends-image/memory.py IMAGE
 """
@@ -75,6 +82,10 @@ LINE_CHARGE = FLOOD_TEXT + 32
 SESSIONS = POOL_LAST - POOL_FIRST + 1
 FLOODED = [owner_of("flood-a"), owner_of("flood-b")]
 ROUND = 64
+# A program holding this many credentials has each line it writes masked
+# against every one of them, so its session takes its output about twenty
+# times slower than one holding none.
+CREDENTIALS = 200
 
 
 def allowance(spawns):
@@ -171,6 +182,11 @@ def group_memory(stack, group="keeper"):
 def flood_command(text_bytes, lines):
     """A program that waits for one line, then writes `lines` lines of `text_bytes` bytes and stays."""
     return f'read go && yes "$(printf \'%0{text_bytes}d\' 0)" | head -n {lines}; exec sleep 3600'
+
+
+def endless_flood_command(text_bytes):
+    """A program that waits for one line, then writes lines of `text_bytes` bytes until it is killed, deaf to SIGTERM."""
+    return f'trap "" TERM; read go && exec yes "$(printf \'%0{text_bytes}d\' 0)"'
 
 
 def kept(answer, lines, text_bytes):
@@ -342,6 +358,53 @@ def bounds_the_service(stack):
            "the service answers health and renewals throughout", answering.failures[:5])
 
 
+def stops_a_flood(stack, label, env):
+    """A person stops a program while it floods, its session taking as it does with `env`'s values to mask.
+
+    The service's group rises over its idle peak by no more than the
+    allowance of one session.
+    """
+    stack.up()
+    c = stack.controller()
+    expect(c.hello()[0] == 200, "a fresh service is greeted")
+    owner = owner_of("stop")
+    program = {"name": "flood", "command": endless_flood_command(FLOOD_TEXT), "env": env}
+    status, answer, _ = c.sync(owner, [program], lease_ms=60_000)
+    expect(status == 200, f"{owner['athanor']} is synced", answer)
+    status, answer = c.open(owner, "flood", key="flood")
+    expect(status == 200, "the flooding session is open", answer)
+    session = answer["session"]
+    idle = group_memory(stack)
+    allowed = allowance(1)
+    status, answer = c.send(owner, session, ["go"])
+    expect(status == 200 and answer["status"] == "running", "the session starts writing", answer)
+
+    def dropping():
+        status, answer = c.recv(owner, session, 0, 0)
+        expect(status == 200, "the flooding session is answered", status)
+        return answer["dropped"] or None
+
+    eventually(dropping, "the session to take past its bound, dropping its oldest", 60)
+    expect(any(p["cmd"].startswith("yes") for p in stack.pool_processes()),
+           "the program still floods when its stop is asked")
+    status, answer = c.close(owner, session)
+    expect(status == 200 and answer.get("status") == "closed", "the stop is answered", [status, answer])
+    eventually(lambda: not stack.pool_processes(), "nothing of the program to outlive its stop")
+
+    after = group_memory(stack)
+    container = imagesuite.read_counters(stack.exec("cat /sys/fs/cgroup/memory.events"), ("oom", "oom_kill"),
+                                         "the container's memory.events")
+    rise = after["peak"] - idle["peak"]
+    print(f"a stop while the program floods, its session {label}: the keeper group's idle peak "
+          f"{idle['peak'] // MIB} MiB, its peak {after['peak'] // MIB} MiB ({rise // MIB} MiB past idle, {rise} bytes, "
+          f"of the {allowed} allowed for one session); keeper events {after['events']}, container events {container}")
+    expect(rise <= allowed, f"the keeper group's peak stays within its idle peak and {allowed // MIB} MiB",
+           {"idle_peak": idle["peak"], "peak": after["peak"], "allowance": allowed})
+    expect(imagesuite.no_kills(after["events"]) and imagesuite.no_kills(container),
+           "the kernel killed nothing in the container", {"keeper": after["events"], "container": container})
+    wait_healthy(stack.base)
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: memory.py IMAGE")
@@ -350,6 +413,9 @@ def main():
     try:
         bounds_each_program(stack)
         bounds_the_service(stack)
+        stops_a_flood(stack, "taking as it comes", {})
+        stops_a_flood(stack, f"masking {CREDENTIALS} credentials in every line",
+                      {f"TOKEN_{i:03d}": f"credential-{i:03d}-{'k' * 20}" for i in range(CREDENTIALS)})
     finally:
         stack.down()
 

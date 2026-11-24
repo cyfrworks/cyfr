@@ -1175,35 +1175,73 @@ defmodule Locus.KeeperTest do
       assert_receive {Keeper, ^ref, {:stdout, "one"}}, 5_000
 
       # The leader exits while the owner holds its first frame untaken and
-      # the relay still carries the last.
+      # the relay still carries the last: that waits for the owner's word as
+      # any read does, and the exit waits behind it.
       channel_reply(c, %{v: 3, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil})
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:stdout, "two"))
       :ok = :gen_tcp.close(relay)
-
-      assert until_released(ref, &match?({:exited, _, _, _}, &1)) ==
-               [{:stdout, "two"}, {:exited, 0, nil, nil}]
+      refute_receive {Keeper, ^ref, _event}, 500
 
       :ok = Keeper.taken(handle)
+      assert_receive {Keeper, ^ref, {:stdout, "two"}}, 5_000
+      :ok = Keeper.taken(handle)
+      assert until_released(ref, &match?({:exited, _, _, _}, &1)) == [{:exited, 0, nil, nil}]
+
       channel_reply(c, %{v: 3, type: "released", spawn_id: id})
       assert until_released(ref) == [:released]
     end
 
+    # The relay sends `frames` frames of the largest payload from a task of
+    # its own: the task, the payload and their bytes together.
+    defp flooding(relay, frames) do
+      payload = :binary.copy("y", KeeperProtocol.max_frame_bytes())
+      frame = KeeperProtocol.frames(:stdout, payload)
+      sending = Task.async(fn -> Enum.map(1..frames, fn _ -> :gen_tcp.send(relay, frame) end) end)
+      {sending, frames * byte_size(payload)}
+    end
+
+    # Takes each stdout piece `handle`'s owner is told until the relay's
+    # task has sent every frame and its socket has handed the kernel every
+    # byte, as a relay's writes have once it ends: the bytes it took.
+    defp take_while_sending(%{ref: ref} = handle, sending, relay, bytes) do
+      :ok = Keeper.taken(handle)
+
+      sending =
+        case sending && Task.yield(sending, 0) do
+          {:ok, sent} ->
+            assert Enum.all?(sent, &(&1 == :ok))
+            nil
+
+          _sending_or_sent ->
+            sending
+        end
+
+      if sending == nil and :erlang.port_info(relay, :queue_size) == {:queue_size, 0} do
+        bytes
+      else
+        assert_receive {Keeper, ^ref, {:stdout, piece}}, 5_000
+        take_while_sending(handle, sending, relay, bytes + byte_size(piece))
+      end
+    end
+
     @tag timeout: 60_000
-    test "an owner that takes nothing holds no release: from the release on, the connection is read without its word" do
+    test "from the release on, the connection is read on the owner's word until the relay ends, and what it left at once" do
       c = plain_client!()
       {%{ref: ref, spawn_id: id} = handle, relay} = attached_program!(c)
-      payload = :binary.copy("y", KeeperProtocol.max_frame_bytes())
-      frames = 16
-      frame = KeeperProtocol.frames(:stdout, payload)
-      sending = Task.async(fn -> for _ <- 1..frames, do: :ok = :gen_tcp.send(relay, frame) end)
-      assert_receive {Keeper, ^ref, {:stdout, _first}}, 5_000
+      {sending, total} = flooding(relay, 16)
+      assert_receive {Keeper, ^ref, {:stdout, first}}, 5_000
       assert Task.yield(sending, 500) == nil
 
-      # The release is asked: the relay's writes go through untaken, so it
-      # can end, and its end is the keeper's to report.
+      # The release is asked while the relay still writes: the owner, which
+      # took nothing, is told nothing more, and the relay waits behind it.
       :ok = Keeper.release(c.name, handle, 0)
       assert %{"type" => "release", "spawn_id" => ^id} = request(c.peer)
-      Task.await(sending, 10_000)
+      refute_receive {Keeper, ^ref, {:stdout, _piece}}, 1_000
+      assert Task.yield(sending, 0) == nil
+
+      # Taking each piece it is told, the owner lets the relay write the
+      # rest; the relay ends and the keeper reports its end.
+      taken = take_while_sending(handle, sending, relay, byte_size(first))
       :ok = :gen_tcp.close(relay)
 
       channel_reply(c, %{
@@ -1217,10 +1255,55 @@ defmodule Locus.KeeperTest do
 
       channel_reply(c, %{v: 3, type: "released", spawn_id: id})
 
+      # What the relay left is handed over at once, without the owner's
+      # word: at most the table's figure for it, the relay's socket queue
+      # and one read.
       told = until_released(ref)
-      stdout = for {:stdout, piece} <- told, do: piece
-      assert IO.iodata_length(stdout) + byte_size(payload) == frames * byte_size(payload)
+      left = IO.iodata_length(for {:stdout, piece} <- told, do: piece)
+      memory = Prima.LocusRoles.release().memory
+      assert taken + left == total
+      assert left <= memory.relay_queue_bytes + memory.keeper_read_bytes
       assert Enum.take(told, -2) == [{:exited, nil, "SIGKILL", nil}, :released]
+    end
+
+    @tag timeout: 60_000
+    test "an owner that takes nothing for the drain's bound once its spawn's end began loses what its connection had not read, the connection closed" do
+      c = plain_client!()
+      {%{ref: ref, spawn_id: id} = handle, relay} = attached_program!(c)
+      owing_from = System.monotonic_time(:millisecond)
+      {sending, _total} = flooding(relay, 16)
+      assert_receive {Keeper, ^ref, {:stdout, _first}}, 5_000
+
+      # The release is asked and the owner takes nothing: its connection is
+      # closed once it has owed its word for the bound, which fails the
+      # relay's writes, and the log says so.
+      log =
+        capture_log(fn ->
+          :ok = Keeper.release(c.name, handle, 0)
+          assert %{"type" => "release", "spawn_id" => ^id} = request(c.peer)
+          sent = Task.await(sending, 15_000)
+          closed_after = System.monotonic_time(:millisecond) - owing_from
+          assert Enum.any?(sent, &match?({:error, _closed}, &1))
+          assert closed_after >= 5_000
+        end)
+
+      assert log =~ "took nothing of what it was told for 5000 ms after its end began"
+
+      # The owner was told the one read it owes for and nothing past it;
+      # the spawn's end follows at the keeper's word.
+      assert told(ref) == {0, 0}
+
+      channel_reply(c, %{
+        v: 3,
+        type: "exited",
+        spawn_id: id,
+        code: nil,
+        signal: "SIGKILL",
+        memory: nil
+      })
+
+      channel_reply(c, %{v: 3, type: "released", spawn_id: id})
+      assert until_released(ref) == [{:exited, nil, "SIGKILL", nil}, :released]
     end
 
     test "a write whose caller is gone before its writer begins it is not written" do
