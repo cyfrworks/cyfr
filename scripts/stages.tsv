@@ -70,7 +70,7 @@ handoff	install-screen-stored-test	-	600	-	tests/install-screen-proof/box.py,tes
 handoff	runtime-image-checks	-	600	-	tests/locus-runtime-image/**	python3 -I tests/locus-runtime-image/canary_test.py && python3 -I tests/locus-runtime-image/worker_auth.py --self-check
 handoff	backends-image-check	-	600	-	tests/locus-backends-image/**	python3 -I tests/locus-backends-image/harness.py --self-check
 handoff	compose-proof-tests	-	900	-	tests/compose-proof/**,docker-compose.yml	bash tests/compose-proof/cleanup-test.sh && bash tests/compose-proof/predicates-test.sh
-handoff	setup-proof-test	1	600	-	tests/setup-proof/**	bash tests/setup-proof/app-cleanup-test.sh && bash tests/setup-proof/cleanup-test.sh
+handoff	setup-proof-test	1	600	-	tests/setup-proof/**	bash tests/setup-proof/app-cleanup-test.sh
 handoff	tailnet-guard-tests	-	600	-	tests/tailnet-real/**,docker-compose.yml	bash tests/tailnet-real/guard-test.sh && bash tests/tailnet-real/predicates-test.sh
 handoff	dev-stack-test	1	600	dev	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,apps/cyfr/lib/mix/tasks/cyfr.locus.dev_stack.ex,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
 handoff	prebuilt-binaries-test	1	600	-	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh

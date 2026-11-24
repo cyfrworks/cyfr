@@ -1697,9 +1697,9 @@ jobs:
       matrix:
         include:
           - group: a
-            title: the Compose proof's interrupt, restore and restore-person cases, the setup proof and the image's scan
+            title: the Compose proof's interrupt, restore and restore-person cases and the image's scan
             images: [app]
-            cases: [interrupt, restore, restore-person, setup, scan]
+            cases: [interrupt, restore, restore-person, scan]
           - group: b
             title: the Compose proof's modes and shutdown cases
             images: [app]
@@ -1889,26 +1889,6 @@ jobs:
         env:
           COMPOSE_PROOF_SKIP_BUILD: '1'
         run: tests/compose-proof/run.sh --case update-interrupt --locus-image cyfr-locus:backends
-      # The setup proof (tests/setup-proof/run.sh) on the same image:
-      # `cyfr setup`'s pages at the 720×720 handheld in Chromium, through
-      # the browser harness, ask nothing, set up a CYFR reached from this
-      # device and move to its setup link, whose page sends the browser to
-      # the account pages with CYFR's request, and say the next step for a
-      # project whose .env exists.
-      # The setup proof's teardown on a run that fails while its browser
-      # and its cyfr setup run: the browser's container stopped, both
-      # awaited, the scratch gone.
-      - name: The setup proof's teardown
-        if: contains(matrix.cases, 'setup')
-        env:
-          SETUP_PROOF_IMAGE: cyfr:compose-proof
-        run: tests/setup-proof/cleanup-test.sh
-      - name: The setup proof
-        if: contains(matrix.cases, 'setup')
-        env:
-          SETUP_PROOF_SKIP_BUILD: '1'
-          SETUP_PROOF_IMAGE: cyfr:compose-proof
-        run: tests/setup-proof/run.sh
 
       # The app image as this job loaded it, the one push-time build of it,
       # so a finding stops the commit that brought it in rather than a

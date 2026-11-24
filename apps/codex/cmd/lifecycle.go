@@ -551,8 +551,8 @@ func sshTunnel(port int) string {
 }
 
 // initProject is cyfr init in the working directory; step, when set, is
-// told each step it begins (the initStep* names), as the setup pages show
-// them.
+// told each step it begins (the initStep* names), as the app's setup
+// screen shows them.
 func initProject(ctx context.Context, o initOptions, step func(name string), out, errOut io.Writer) error {
 	releaseBuild := version.Version != "dev" && version.Version != ""
 
@@ -966,7 +966,7 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 		if !access.HasComposeFile(".") {
 			return fmt.Errorf("There is no CYFR in this directory, so nothing was started: it holds no compose file (%s). Run 'cyfr up' in CYFR's directory, the one that holds its docker-compose.yml, or 'cyfr init' here to make one", strings.Join(access.ComposeMainFiles, ", "))
 		}
-		if continued, err := withDockerGroup(ctx, "up", continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
+		if continued, err := withDockerGroup(ctx, continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
 			return err
 		}
 		return runUp(ctx, cmd.OutOrStdout())

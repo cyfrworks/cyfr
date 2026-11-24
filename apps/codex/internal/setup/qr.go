@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
+// Package setup holds the QR code the device's pages draw a recovery code
+// or an add-device address with (QRSVG, internal/shell) and, in
+// assets/logo.png, the CYFR app's icon (apps/codex/desktop/scripts/
+// build.mjs), made from Prism's logo (TestLogoIsTheShippedLogoScaled).
 package setup
 
 import (
