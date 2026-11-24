@@ -3,8 +3,8 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The installed CYFR app's update from release A to release B by its own
-# cyfr, as a person runs `cyfr update`, on Linux (the DEB through apt and
-# sudo), macOS (the bundle in /Applications) and Windows (the MSI, for
+# cyfr, as a person runs `cyfr update`, on Linux (the DEB through apt, by
+# the app's update service as root), macOS (the bundle in /Applications) and Windows (the MSI, for
 # this account). Its cyfr is built with the releaseproof tag
 # (apps/codex/cmd/release_proof.go), so the releases are read from a
 # folder: each release's installer by its release name and its
@@ -24,18 +24,33 @@
 #                verify, before anything closes: the same app still runs,
 #                and its cyfr answers A
 #   update       cyfr update --version B, by the app's own cyfr in a folder
-#                that holds no CYFR, ends 0 saying the app is release B
+#                that holds no CYFR, ends 0 saying the app is release B; on
+#                Linux through the app's update service, with a sudo on
+#                PATH that records any run and runs nothing: none is run
 #   answers      the app's own cyfr answers B
 #   reopened     the app the update closed is gone and the app opens
 #                again: a new process, whose chooser answers
+#
+# and on Linux, of the app's update service
+# (apps/codex/cmd/app_service_linux.go):
+#
+#   service      A's package enabled its socket, root's and the sudo
+#                group's alone
+#   forward      asked straight at its socket for B (the release installed)
+#                and for A (an older one), the service refuses each
+#   outsider     an account outside the sudo group is refused at the socket,
+#                and its cyfr update says so and takes the sudo road
+#   removed      the package removed, its socket and units are gone
 #
 # It installs software and leaves the app installed, so `run` refuses
 # anywhere but a disposable machine: GitHub's own runner
 # (GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted) or a container
 # (/.dockerenv). There the account administers the machine with sudo and no
-# password (Linux), and 127.0.0.1:7340 is free. On Linux it needs a display
-# and a session bus (dbus-run-session -- xvfb-run -a), curl and the
-# package's dependencies.
+# password (Linux), and 127.0.0.1:7340 is free. On Linux it needs systemd,
+# a display and a session bus (dbus-run-session -- xvfb-run -a), curl,
+# python3 and the package's dependencies, and DIR outside /home, /root,
+# /tmp and /var/tmp: the service reads the releases there as root, and its
+# unit sees none of those.
 #
 # Usage: bash tests/desktop-proof/native/update.sh build DIR amd64|arm64
 #        bash tests/desktop-proof/native/update.sh run DIR
@@ -185,16 +200,30 @@ run() {
   # group list says, and with no terminal only where sudo -v asks for no
   # password, which sudo-rs asks while any rule that matches the account
   # does: on this disposable machine the sudo group's own rule asks none.
-  if [ "$OS" = linux ] && ! id -nG "$(id -un)" | tr ' ' '\n' | grep -qxE 'sudo|admin'; then
+  # The update service's socket is the sudo group's: the account joins it,
+  # and the run goes on in that group, as a person's session in it does.
+  if [ "$OS" = linux ] && ! id -nG "$(id -un)" | tr ' ' '\n' | grep -qx sudo; then
     sudo usermod -aG sudo "$(id -un)" || { echo "update: this account could not join the sudo group" >&2; exit 1; }
     sudo sed -i 's/^%sudo\(\s\+\)ALL=(ALL:ALL) ALL$/%sudo\1ALL=(ALL:ALL) NOPASSWD: ALL/' /etc/sudoers && sudo visudo -c >/dev/null
+  fi
+  if [ "$OS" = linux ] && ! id -nG | tr ' ' '\n' | grep -qx sudo; then
+    exec sg sudo -c "$(printf '%q ' bash "${BASH_SOURCE[0]}" run "$dir")"
   fi
   if [ "$OS" = linux ] && ! sudo -n -v 2>/dev/null; then
     echo "update: sudo -v asks this account for a password, so cyfr update would refuse with no terminal" >&2
     exit 1
   fi
+  if [ "$OS" = linux ] && [[ "$dir" =~ ^/(home|root|tmp|var/tmp)(/|$) ]]; then
+    echo "update: $dir is where the update service's unit sees nothing: build the releases elsewhere" >&2
+    exit 64
+  fi
   LOGS=$(mktemp -d)
   trap 'quit_all; rm -rf "$LOGS"' EXIT
+  # A sudo that records each run and runs nothing, first on PATH where an
+  # update must not reach sudo.
+  mkdir -p "$LOGS/nosudo"
+  printf '#!/bin/sh\necho "$*" >>%q\nexit 1\n' "$LOGS/sudo-runs" >"$LOGS/nosudo/sudo"
+  chmod 755 "$LOGS/nosudo/sudo"
 
   quit_all
   if install_package "$dir/$A/cyfr-desktop_${A}_${OS}_$arch.$EXT" >"$LOGS/install.log" 2>&1 && [ "$(release_of)" = "$A" ]; then
@@ -203,6 +232,14 @@ run() {
     fail installed "the app's own cyfr answers '$(release_of)', not $A: $(tail -5 "$LOGS/install.log")"
     echo "update: $CHECKS checks, $FAILED failed"
     exit 1
+  fi
+
+  if [ "$OS" = linux ]; then
+    if systemctl is-active --quiet cyfr-update.socket && [ "$(stat -c '%U:%G %a' /run/cyfr-update.sock 2>&1)" = "root:sudo 660" ]; then
+      pass service "the update service's socket listens, root:sudo 660"
+    else
+      fail service "the socket is $(systemctl is-active cyfr-update.socket), $(stat -c '%U:%G %a' /run/cyfr-update.sock 2>&1)"
+    fi
   fi
 
   "$APP" >"$LOGS/app-a.log" 2>&1 &
@@ -225,12 +262,17 @@ run() {
     fail unverified "exit $status, the app $(alive "$before" && echo still || echo no longer) runs, its cyfr answers '$(release_of)': $out"
   fi
 
-  out=$(cd "$LOGS/empty" && "$CARRIED" update --version "$B" --yes 2>&1)
+  if [ "$OS" = linux ]; then
+    out=$(cd "$LOGS/empty" && PATH="$LOGS/nosudo:$PATH" "$CARRIED" update --version "$B" --yes 2>&1)
+  else
+    out=$(cd "$LOGS/empty" && "$CARRIED" update --version "$B" --yes 2>&1)
+  fi
   status=$?
-  if [ "$status" = 0 ] && grep -qF "The CYFR app is release $B." <<<"$out"; then
+  if [ "$status" = 0 ] && grep -qF "The CYFR app is release $B." <<<"$out" &&
+    { [ "$OS" != linux ] || { grep -qF "Asking CYFR's update service" <<<"$out" && [ ! -s "$LOGS/sudo-runs" ]; }; }; then
     pass update "exit 0, the app is release $B"
   else
-    fail update "exit $status: $out"
+    fail update "exit $status, sudo run as '$(cat "$LOGS/sudo-runs" 2>/dev/null)': $out"
   fi
 
   if [ "$(release_of)" = "$B" ]; then
@@ -246,8 +288,59 @@ run() {
     fail reopened "the app the update closed ($before) $(alive "$before" && echo 'still runs' || echo 'is gone'), and $(running && echo 'one runs' || echo 'none runs') whose chooser $(answers && echo answers || echo 'does not answer')"
   fi
 
+  [ "$OS" != linux ] || service_checks
+
   echo "update: $CHECKS checks, $FAILED failed"
   [ "$FAILED" = 0 ]
+}
+
+# ask ACCOUNT LINE: LINE sent straight to the update service's socket as
+# ACCOUNT, printing the service's first answer, or the connection's
+# refusal.
+ask() {
+  sudo -u "$1" python3 -I -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+try:
+    s.connect("/run/cyfr-update.sock")
+except OSError as e:
+    print("refused at the socket:", e.strerror); sys.exit()
+s.sendall(sys.argv[1].encode() + b"\n")
+for line in s.makefile(errors="replace"):
+    if line.startswith("\x1e"):
+        print(line[1:].strip()); break
+' "$2"
+}
+
+service_checks() {
+  local said outsider=cyfr-proof-outsider
+  said="$(ask "$(id -un)" "$B") / $(ask "$(id -un)" "$A")"
+  if [ "$said" = "refused installs only a release newer than the installed CYFR app's $B, and $B is not / refused installs only a release newer than the installed CYFR app's $B, and $A is not" ]; then
+    pass forward "the same release and an older one refused"
+  else
+    fail forward "the service answered: $said"
+  fi
+
+  id "$outsider" >/dev/null 2>&1 || sudo useradd -M -s /usr/sbin/nologin "$outsider"
+  mkdir -p "$LOGS/outsider" && chmod 755 "$LOGS" "$LOGS/outsider"
+  said=$(ask "$outsider" "$U")
+  out=$(cd "$LOGS/outsider" && sudo -u "$outsider" env HOME="$LOGS/outsider" "$CARRIED" update --version "$U" --yes 2>&1)
+  status=$?
+  if [ "$said" = "refused at the socket: Permission denied" ] && [ "$status" != 0 ] &&
+    grep -qF "CYFR's update service serves the sudo group's accounts alone, so the update goes through sudo instead." <<<"$out" &&
+    [ "$(release_of)" = "$B" ]; then
+    pass outsider "refused at the socket; its update says so and takes the sudo road"
+  else
+    fail outsider "the socket answered '$said'; exit $status, the app's cyfr answers '$(release_of)': $out"
+  fi
+
+  quit_all
+  if sudo apt-get remove -y cyfr-desktop >"$LOGS/remove.log" 2>&1 && ! systemctl is-active --quiet cyfr-update.socket &&
+    [ ! -e /run/cyfr-update.sock ] && ! systemctl cat cyfr-update.socket cyfr-update@.service >/dev/null 2>&1; then
+    pass removed "the socket and its units went with the package"
+  else
+    fail removed "the socket is $(systemctl is-active cyfr-update.socket), $(ls -l /run/cyfr-update.sock 2>&1); $(tail -3 "$LOGS/remove.log")"
+  fi
 }
 
 case "${1:-}" in

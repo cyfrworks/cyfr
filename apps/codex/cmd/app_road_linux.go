@@ -14,8 +14,9 @@ import (
 )
 
 // systemAppRoad is Linux's: the system's package tool installs the
-// release's verified DEB.
-func systemAppRoad() appRoad { return debRoad{} }
+// release's verified DEB, through the app's update service where it takes
+// the update, else through sudo (serviceRoad).
+func systemAppRoad() appRoad { return &serviceRoad{} }
 
 // debRoad updates the cyfr-desktop package: apt installs the release's
 // DEB once root has checked its copy against the signed sum (stageApp), as

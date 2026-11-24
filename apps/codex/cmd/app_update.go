@@ -4,11 +4,13 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,26 +84,37 @@ type appRoad interface {
 	finish(out io.Writer, s *staged, confirmed bool) error
 	// closesTheBox is the root commands that stop the box's screen and
 	// start it again, through the same elevation, where the road has one;
-	// nil elsewhere.
+	// empty where the road's replace stops and starts it itself; nil
+	// elsewhere.
 	closesTheBox() (stop, start []string)
 }
 
 // staged is release target's installer fetch verified: file, its sha256
 // sum, in dir, the folder of its own fetch made; a road whose installer
-// fetches for itself (Homebrew) stages no file. kept is what a road's
-// replace kept to go back to, which its finish removes or puts back (the
-// Mac's old app, Windows' cyfr set aside), and swapped whether the Mac's
-// swap was made.
+// fetches for itself (Homebrew) stages no file, and one whose service
+// fetched it holds the service's connection and its answers. kept is
+// what a road's replace kept to go back to, which its finish removes or
+// puts back (the Mac's old app, Windows' cyfr set aside), and swapped
+// whether the Mac's swap was made.
 type staged struct {
 	target, dir, file, sum string
 	kept                   string
 	swapped                bool
+	service                net.Conn
+	answers                *bufio.Reader
 }
 
-// remove removes the folder fetch made.
+// remove removes the folder fetch made and lets the service go: one let
+// go before it was told to install installs nothing.
 func (s *staged) remove() {
-	if s != nil && s.dir != "" {
+	if s == nil {
+		return
+	}
+	if s.dir != "" {
 		_ = os.RemoveAll(s.dir)
+	}
+	if s.service != nil {
+		_ = s.service.Close()
 	}
 }
 
@@ -200,14 +213,14 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 		box = active
 	}
 	ran := false
-	if box {
+	if box && len(stop) > 0 {
 		fmt.Fprintln(out, "Stopping this machine's screen, so its launcher does not start the old CYFR app again while it is replaced...")
 		if err := applyWithin(appQuitWithin, stop); err != nil {
 			// A stop that failed may have stopped it: it is started again.
 			_ = applyWithin(appQuitWithin, start)
 			return fmt.Errorf("The screen could not be stopped (%v); nothing was replaced and the CYFR app is as it was", err)
 		}
-	} else {
+	} else if !box {
 		fmt.Fprintln(out, "Closing the CYFR app...")
 		r, err := quitApp()
 		if err != nil {
@@ -228,7 +241,7 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 	// is not stops the update before the stack, whose next run finishes
 	// it.
 	var reopen string
-	if box {
+	if box && len(start) > 0 {
 		if err := applyWithin(appQuitWithin, start); err != nil {
 			reopen = fmt.Sprintf("the screen could not be started again (%v): start it with 'sudo systemctl start cyfr-screen'", err)
 		}

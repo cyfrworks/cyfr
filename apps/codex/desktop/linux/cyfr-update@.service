@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# One request to the CYFR app's update service, answered by the package's
+# own cyfr as root (apps/codex/cmd/app_service_linux.go). The bound is the
+# fetch, the wait for go, the screen's stop and apt's install together,
+# and at it everything the request started is killed.
+[Unit]
+Description=Update of the CYFR app
+
+[Service]
+ExecStart=/opt/cyfr/resources/cyfr --serve-app-update
+StandardInput=socket
+StandardOutput=journal
+StandardError=journal
+RuntimeMaxSec=1980
+KillSignal=SIGKILL
+TimeoutStopSec=10
+CollectMode=inactive-or-failed
+ProtectHome=yes
+PrivateTmp=yes
