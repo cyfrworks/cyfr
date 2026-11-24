@@ -116,7 +116,7 @@ The order describes dependencies, not a request's path. Codex shares no code wit
 - The `cyfr` binary, speaking MCP to Emissary with an API key alone, its operation catalog generated from the gate's table. It signs no one in and confirms nothing.
 - The machine: its access engine alone owns the deployment file's access settings and the stack's access services (§6.8, §6.9).
 - The device's shell, on the box's screen and in the CYFR app: the one place a protected device's key is unlocked (§9.3).
-- The CYFR app, which shows Prism and keeps each window to the home it opened.
+- The CYFR app, which shows one home at a time beside the list of the homes this computer keeps, keeps each home's browser sign-in in a store of that home's alone, and keeps each view to the home it opened. Only the app's main process changes anything for a press on the list.
 
 ### Locus: where untrusted things run
 
@@ -295,7 +295,7 @@ At sign-in the home mints a request bound to the browser that asked; a key of th
 
 ### 9.3 Devices and fresh confirmation
 
-Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work, a grant and an approval need only the session. Which changes need a fresh confirmation is one table of Sanctum's (`Sanctum.Pairing`), and the deciding home decides each (§5.4). A home admits a device by its first hello over the device channel, verified against the account's log, and issues it a certificate of its own, which no other home reads.
+Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work, a grant and an approval need only the session. Which changes need a fresh confirmation is one table of Sanctum's (`Sanctum.Pairing`), and the deciding home decides each (§5.4). A home admits a device by its first hello over the device channel, verified against the account's log, and issues it a certificate of its own, which no other home reads. One device key, bound to one account at one account directory, is admitted at each home on its own; its shell refuses a home whose account directory is another.
 
 ### 9.4 Communication
 

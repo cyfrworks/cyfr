@@ -569,10 +569,11 @@ export const history = []
 export const decisions = []
 // An address as a row's detail keeps it, scrubbed before it is cut short.
 export const bare = (url) => scrub(url).split("#")[0].slice(0, 120)
-app.on("browser-window-created", (_event, win) => {
-  const wc = win.webContents
+// Every page's, a window's or a view's of the app's one window: the rail
+// and the content are views, which no browser-window-created announces.
+app.on("web-contents-created", (_event, wc) => {
   const id = wc.id
-  log(`window ${id} created${win.getParentWindow() ? ` with parent ${win.getParentWindow().webContents.id}` : ""}`)
+  log(`page ${id} created (${wc.getType()})`)
   wc.on("did-start-navigation", (details) => {
     if (details.isMainFrame) history.push(details.url)
     if (details.isMainFrame) log(`window ${id} starts ${bare(details.url)}`)
