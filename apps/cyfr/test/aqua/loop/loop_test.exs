@@ -1905,8 +1905,18 @@ defmodule Aqua.LoopTest do
                  })
       end
 
+      # The runner's death takes its loop down before the loop's harness,
+      # the process blocked in the gap, is killed: a loop that saw its
+      # harness die first would write the harness's lost end as the
+      # runner's stop killed it, mid-write on the test's one shared
+      # connection.
+      loop = Aqua.Loop.holder(turn_id)
+      loop_ref = Process.monitor(loop)
+      blocked_ref = Process.monitor(blocked)
       Process.exit(Aqua.Runner.whereis(thread.id), :kill)
+      assert_receive {:DOWN, ^loop_ref, :process, ^loop, _}, 10_000
       Process.exit(blocked, :kill)
+      assert_receive {:DOWN, ^blocked_ref, :process, ^blocked, _}, 10_000
       ended = ended!(ctx, turn_id)
       assert ended.status == "completed"
       assert ended.recovery_attempts == 1
