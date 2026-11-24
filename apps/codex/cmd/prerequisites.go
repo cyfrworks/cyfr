@@ -60,9 +60,9 @@ type machineSeams struct {
 	// displayManager is whether a display manager has the screen.
 	displayManager func() bool
 	// screenService is whether the cyfr-screen service is enabled, and
-	// whether it runs; err is not nil when systemctl gave no state for
-	// whether it runs (it could not run, or ran past its bound), active
-	// then being no answer.
+	// whether it runs (any state but inactive and failed); err is not nil
+	// when systemctl gave no state for whether it runs (it could not run,
+	// or ran past its bound), active then being no answer.
 	screenService func() (enabled, active bool, err error)
 	// system is the operating system this program runs on.
 	system func() string
@@ -142,7 +142,9 @@ var machine = machineSeams{
 	screenService: func() (bool, bool, error) {
 		enabled := runWithin(10*time.Second, exec.Command("systemctl", "is-enabled", "--quiet", "cyfr-screen")) == nil
 		// systemctl is-active prints the unit's state whatever it is, an
-		// absent unit's included; no state printed is no answer.
+		// absent unit's included; no state printed is no answer. Every
+		// state but inactive and failed runs: activating is its launcher
+		// between two starts of the app.
 		var said strings.Builder
 		query := exec.Command("systemctl", "is-active", "cyfr-screen")
 		query.Stdout = &said
@@ -154,7 +156,7 @@ var machine = machineSeams{
 			}
 			return enabled, false, fmt.Errorf("systemctl is-active cyfr-screen gave no answer (%v)", err)
 		}
-		return enabled, state == "active", nil
+		return enabled, state != "inactive" && state != "failed", nil
 	},
 	groups: func(ctx context.Context, account string) []string {
 		args := []string{"-nG"}

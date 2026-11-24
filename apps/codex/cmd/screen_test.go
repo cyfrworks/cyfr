@@ -363,15 +363,18 @@ func TestTheMachineHoldsTheAppItsOwnCyfrAnswers(t *testing.T) {
 }
 
 // systemctl printing the screen service's state is an answer, an absent
-// unit's "inactive" among them; a systemctl that prints none, or that
-// cannot be run, gives no answer, which is never taken for a stopped
-// screen.
+// unit's "inactive" among them, and every state but inactive and failed
+// runs; a systemctl that prints none, or that cannot be run, gives no
+// answer, which is never taken for a stopped screen.
 func TestTheMachineTellsAnUnreadScreenFromAStoppedOne(t *testing.T) {
 	for _, c := range []struct {
 		name, systemctl string
 		active, unread  bool
 	}{
 		{"it runs", "echo active", true, false},
+		{"its launcher is between two starts", "echo activating; exit 3", true, false},
+		{"it is stopping", "echo deactivating; exit 3", true, false},
+		{"it failed", "echo failed; exit 3", false, false},
 		{"it is stopped", "echo inactive; exit 3", false, false},
 		{"no such unit", "echo inactive; exit 4", false, false},
 		{"no bus to ask", "echo 'Failed to connect to system scope bus via local transport' >&2; exit 1", false, true},
