@@ -29,7 +29,7 @@ defmodule Locus.Runtime.BootstrapFirstRunTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
 
-    test_path = Path.join(System.tmp_dir!(), "first_run_#{:rand.uniform(1_000_000)}")
+    test_path = Path.join(System.tmp_dir!(), "first_run_#{System.unique_integer([:positive])}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 

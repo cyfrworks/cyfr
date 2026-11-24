@@ -36,7 +36,15 @@ defmodule Sanctum.ProvisioningTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    test_dir = Path.join(System.tmp_dir!(), "cyfr_provisioning_#{:rand.uniform(100_000)}")
+    # A folder no other case of this run has had: the shipped release
+    # digest is cached by seed path for the node's life
+    # (`Compendium.Provenance.shipped_release_digest/1`, a shipped version
+    # being immutable), so a case writing other bytes at a path an earlier
+    # case seeded would read that case's digest. A random draw repeats
+    # across cases under some seeds (972117 gives two cases one folder).
+    test_dir =
+      Path.join(System.tmp_dir!(), "cyfr_provisioning_#{System.unique_integer([:positive])}")
+
     seed_dir = Path.join(test_dir, "seed")
     bundle_dir = Path.join(seed_dir, "components")
     File.mkdir_p!(bundle_dir)
