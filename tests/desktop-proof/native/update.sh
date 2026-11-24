@@ -59,6 +59,26 @@ sum() {
   if [ "$OS" = darwin ]; then shasum -a 256 "$1"; else sha256sum "$1" | tr -d '*'; fi
 }
 
+# The app in the Mac disk image DMG signed ad hoc where it is not signed at
+# all: cyfr update installs only an app whose signature verifies, with the
+# installed app's team (apps/codex/cmd/app_road_darwin.go sameSigner). A
+# build with no identity is signed ad hoc on Apple silicon, as Electron's
+# arm64 engine is, and not at all on Intel.
+signed_ad_hoc() {
+  local dmg=$1 work
+  work=$(mktemp -d)
+  mkdir "$work/mnt" "$work/stage"
+  hdiutil attach -nobrowse -readonly -mountpoint "$work/mnt" "$dmg" >/dev/null
+  cp -R "$work/mnt/CYFR.app" "$work/stage/"
+  hdiutil detach "$work/mnt" >/dev/null
+  if ! codesign --verify "$work/stage/CYFR.app" 2>/dev/null; then
+    codesign --force --deep --sign - "$work/stage/CYFR.app"
+    rm "$dmg"
+    hdiutil create -quiet -volname CYFR -srcfolder "$work/stage" -format UDZO "$dmg"
+  fi
+  rm -rf "$work"
+}
+
 build() {
   local dir=$1 arch=$2 v
   set -e
@@ -72,6 +92,7 @@ build() {
     (cd "$ROOT/apps/codex/desktop" && node scripts/build.mjs --cyfr "$dir/cyfr-$v$EXE" --version "$v" --arch "$arch" --out "$dir/build-$v")
     mv "$dir/build-$v/cyfr-desktop_${v}_${OS}_$arch.$EXT" "$dir/$v/"
     rm -rf "$dir/build-$v"
+    [ "$OS" != darwin ] || signed_ad_hoc "$dir/$v/cyfr-desktop_${v}_${OS}_$arch.$EXT"
     (cd "$dir/$v" && sum "cyfr-desktop_${v}_${OS}_$arch.$EXT" >checksums.txt)
   done
   # U: B's installer under U's name, its checksums naming another sum.
