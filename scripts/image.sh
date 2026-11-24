@@ -20,6 +20,8 @@
 #   - COPY with --chmod=, --chown=, --parents and --link, several sources
 #     and one destination; a COPY --from= line reads no context and is
 #     skipped;
+#   - RUN --mount=type=bind,source=<path>, whose source is read as a COPY
+#     source is; a mount of another type or with from= reads no context;
 #   - a source naming a file gives that file, and one naming a directory,
 #     with or without a trailing slash, every file under it;
 #   - a `*` inside a path segment matches within that segment only
@@ -27,15 +29,18 @@
 # Every other form exits 65 naming the Dockerfile's line: ADD, the JSON
 # array form, a heredoc, a parser directive other than syntax=, a `$` in
 # a source, the glob characters ?, [ and **, a flag not listed above, a
-# source that resolves to no file, and one that holds a submodule.
+# source that resolves to no file, one that holds a submodule, and a
+# bind mount with no source.
 #
 # The hash is the SHA-256 of: for each input path in byte order (the
 # Dockerfile, .dockerignore when the tree has one, and every resolved
 # source) the path and a newline, then its mode, a space, its blob id and
 # a newline; then the Docker daemon's platform (os/arch) and a newline;
 # then each build argument as NAME=value and a newline, sorted by name.
-# The only argument is APT_REFRESH: the UTC date, as CI passes it, or 0
-# with --undated, as a compose or dev build leaves it.
+# The only argument is APT_REFRESH: the UTC date, so a local image takes
+# the archive's fixes once a day (CI passes the archive's key, which
+# scripts/apt-key.sh reads), or 0 with --undated, as a compose or dev
+# build leaves it.
 # .dockerignore's exclusions are not applied to the hash: a spare build is
 # the cheaper error than a hash that misses a file the build reads.
 #
@@ -252,6 +257,19 @@ for line, content in logical:
     instruction = words[0].upper()
     if instruction == "ADD":
         refuse(line, "ADD is not read here")
+    if instruction == "RUN":
+        for flag in words[1:]:
+            if not flag.startswith("--"):
+                break
+            if not flag.startswith("--mount="):
+                continue
+            options = dict(part.split("=", 1) if "=" in part else (part, "") for part in flag[len("--mount="):].split(","))
+            if options.get("type", "bind") != "bind" or "from" in options:
+                continue
+            if "source" not in options:
+                refuse(line, f"the bind mount `{flag}` names no source, and the whole context is not read here")
+            inputs.update(resolve(line, options["source"]))
+        continue
     if instruction != "COPY":
         continue
     rest = content.strip()[len(words[0]):].strip()

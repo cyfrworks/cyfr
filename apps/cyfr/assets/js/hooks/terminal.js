@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// The Programs page's terminal (js/terminal/frame.js) with the vendored
+// A program's terminal (js/terminal/frame.js) with the vendored
 // xterm.js and its fit and web-links addons, each the released file as
 // published, its version in its folder's name and its licence beside it.
 import {Terminal} from "../../vendor/xterm-6.0.0/xterm.mjs"

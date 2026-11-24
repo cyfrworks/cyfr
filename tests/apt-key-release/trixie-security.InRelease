@@ -1,0 +1,49 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA256
+
+Origin: Debian
+Label: Debian-Security
+Suite: stable-security
+Version: 13
+Codename: trixie-security
+Date: Sun, 22 Nov 2026 19:58:57 UTC
+Valid-Until: Sun, 29 Nov 2026 19:58:57 UTC
+Acquire-By-Hash: yes
+Architectures: amd64 arm64 armel armhf i386 ppc64el riscv64 s390x
+Components: updates/main updates/contrib updates/non-free-firmware updates/non-free
+Description: Debian 13 - Security Updates
+SHA256:
+ 68dd031d624f91f9ad05fceea3f8e03c5018c86f698740b55ea485d33942903f   914633 main/binary-all/Packages
+ c3f9d57c37245cdce405c00cd1f811da29b836d198c305f4d5f05ed06d491143   127164 main/binary-all/Packages.xz
+ c5a90f343133fd4fdd4d76c519c982247bf9636999fb1ff683a7a9b196c4c2a6  2249735 main/binary-amd64/Packages
+ 9b641b3080d3f78923cac1b24512399af75d743997174934d733f5cf9b6fabda   309200 main/binary-amd64/Packages.xz
+ 168c12d60da083a6fa25fcdbff13a742d390ce3a24cbc97c369d1a1e13f3ea1f  2287644 main/binary-arm64/Packages
+ a273b5c17495de3d9cd132a1c4336a8aab962975b532ba10f8cfa0cf4c3501f0   310608 main/binary-arm64/Packages.xz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCAAdFiEEsMq5Jm6MOSl5iz7uvebSuSFux6gFAmsDSYIACgkQvebSuSFu
+x6hbtxAAj+k28Z6T09oYlfVHuohx6A5GmWMwkLVsR87dpFkzquvMP5SvslnEUfWZ
+VuGV6Bp3XGmojinaH0wyVvPNICrIvfpwOORivt49z3hIjoZJLeOaLvi4wYThmoOi
+7tXzwy5QdV77uE+Uz0L5qwa9Xh5OKjMeaWslcfYT+jyBf9Gs1Haw6j5hdJ3kgCVS
+nKdDMZWRRvaiWtlFx+8fzSZI1lE475/4vb6bBzzm6kyxTeeHF25uk+CrBQmYunlL
+vQuuSBtHD1KU0fDGonZ5Plv22y0114S2hn9dcEKz6Mioa4rJbhW0VU5eTyt4rAHn
+3oJ5p+Vm2SEyEPnpjVUM3sfX8XAoUHLs+Icc2IMtw8uLcZ+CnfeWInmCZLjFoIqQ
+ndpITJi1wccLL48ycccsAJYSYrp5jZLF/hWrYyuFos4Kbdp+cbLV/mjuWye7E4CJ
+HYaRQNWWTMZ+nk1NZlbouD954Ux8vMs2sa+gOSlgprDsvHsMm6V2oNl0rh3Py6ej
+55bFcAFBgmCNXHLghuh9mT93ltFbi6t/PP9WNgAft3oB6Lw+lCvIATUOIsM9FNaT
+37yibzB3oUSJLsLc4tJu4BorhLphcjFdptI1ID6jYXALFcjZI5WFkyEKkBDEBQ2R
+K4ovbF8gIquWRwUExVxS1LEGtSHGuGvt+WrrRuvf8E3xyh49av6JAjMEAQEIAB0W
+IQSJyHrOpd1rjmpwaICOn4MSBbS6lQUCawNJggAKCRCOn4MSBbS6lbXFD/9rkoFM
+80IHLkRPxT3Y7P0nZu8VHo7qJKMVXUa1sqkCLIkH7JW2yFW07sWzGb+lCukdTBIj
+Aexv3z9h7EqCFfNfVCG47lG5uGeYhq6HMzcy/wY+c7AchNQaVmzAAMbJBzNxQBBx
+6MW6JZYTeE8zRICuAw9IsNVfDZl0cD3Wrg/b6zU4l5d4RQ/Bm6Ngcl3f+nO65GXc
+EXH1QRE0Ce7fgooQtWOacN2BQyzrsrupBMeOPLhQyqvzgFTfSQSzx8X+x7vyMNrz
+zrBitXPMOCCGtVF+aFtjcNlv6HhPYCuVwdiH0sAikDzNs7+NrSyi3KY2oq7mXXrm
+NijV/8aq+ahoSyRLU0d5YPCc3qXXVD9hSxLcFXuiF8nQnYiFUxD3rf4SwdyrakyJ
+rUOsCOeBWz3Wpbr9x4pLu7p3BJeZanQiJLP0FTU+Yc+N1uHLYBFdRNV8FrXssQLW
+GVpIuQ06HtL4Y9tm7cOqQMP41UBLLuxzPMAxhswgRAPsVluWmMr69JtZhiK54UuI
+Ikf1mTDIUDW0oeZnAyRtSC3Me5K9E7W/C2b8R44BDYcbNhw45XNU/Xf6ZGJl+DqN
+rV21kNu2Cguyiz3qh9iWtgSrx/sjaPOY+BDOVWPDdfPXdlVZHWDCL6PFh/0q14F6
+wOJamDYJ9KDDFmKpmUGCnvmOoB8NjiX5j8wMxQ==
+=j3TA
+-----END PGP SIGNATURE-----

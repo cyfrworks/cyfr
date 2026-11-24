@@ -1086,7 +1086,7 @@ defmodule PrismWeb.ProgramsLive do
                 MCP: CYFR offers its tools, named &lt;name&gt;:&lt;tool&gt;
               </option>
               <option value="driven" selected={@prefill["mark"] == "driven"}>
-                driven: a person or a brain runs it, such as a coding harness
+                driven: a person or a crew member runs it, such as a coding harness
               </option>
             </select>
           </div>
@@ -1581,7 +1581,7 @@ defmodule PrismWeb.ProgramsLive do
   defp bytes(_n, fallback), do: fallback
 
   defp endpoint(%{mark: "mcp"}), do: "MCP (backends service)"
-  defp endpoint(%{mark: "driven"}), do: "driven by a person or a brain"
+  defp endpoint(%{mark: "driven"}), do: "driven by a person or a crew member"
   defp endpoint(server), do: server[:url]
 
   defp driven?(%{transport: "program", mark: "driven"}), do: true

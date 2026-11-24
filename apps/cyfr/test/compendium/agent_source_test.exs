@@ -223,6 +223,42 @@ defmodule Compendium.AgentSourceTest do
     refute Map.has_key?(live.graph, "agent:local.explorer")
   end
 
+  # Aqua's tools name its grant's tool servers: each server its list
+  # names, with exactly the tools listed of it, shown on the grant and
+  # chosen by no one, the athanor's other servers never offered.
+  test "the grant's tool servers are those its tools name, each with exactly those tools, and " <>
+         "a grant choosing one is refused",
+       %{ctx: ctx} do
+    for name <- ~w(gh wiki other) do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: name,
+          url: "https://127.0.0.1:9/#{name}"
+        })
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+    end
+
+    write_agent!(ctx, "aqua", &%{&1 | tools: ["gh:search", "gh:issues", "wiki:read" | &1.tools]})
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @soul})
+    assert Enum.map(plan.tool_server_candidates, & &1.name) == ["gh", "wiki"]
+
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, %{ref: @soul, selections: []})
+
+    assert for(
+             %{"kind" => "tool_servers", "values" => server} <- preview.rows,
+             do: {server["name"], server["tool_patterns"]}
+           ) == [{"gh", ["issues", "search"]}, {"wiki", ["read"]}]
+
+    assert {:error, {:invalid_argument, "Aqua's tool servers are those its list of tools " <> _}} =
+             Sanctum.Consent.Commit.preview(ctx, %{
+               ref: @soul,
+               selections: [],
+               tool_servers: [%{server_name: "other"}]
+             })
+  end
+
   test "shipped_row/2 equals the tenant row while the seed's Aqua is unchanged; a member has none",
        %{ctx: ctx} do
     {:ok, tenant} = AgentSource.latest_row(ctx, "aqua")

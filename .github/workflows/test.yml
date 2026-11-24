@@ -510,7 +510,7 @@ jobs:
           bash tests/heavy-check-test.sh
       # The stage table's test reads the workflows through PyYAML, which -I
       # finds only among the system interpreter's packages.
-      - name: The run names, the stage table, the shared images and the janitor
+      - name: The run names, the stage table, the shared images, the archive's key and the janitor
         run: |
           set -euo pipefail
           if ! python3 -I -c 'import yaml' 2>/dev/null; then
@@ -520,6 +520,7 @@ jobs:
           bash tests/run-names-test.sh
           bash tests/stage-test.sh
           bash tests/image-test.sh
+          bash tests/apt-key-test.sh
           bash tests/janitor-test.sh
 
   # The partition runner against a stand-in Mix and a toy umbrella of its

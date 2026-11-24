@@ -87,6 +87,54 @@ defmodule Aqua.Loop.RequestTest do
     assert ext["description"] == "Search"
   end
 
+  test "every tool of CYFR's own is one every harness carries whole" do
+    keys =
+      for tool <- Sanctum.Catalog.list_tools(),
+          action <- Map.keys(Sanctum.Annotations.actions_of(tool)),
+          do: "#{tool["name"]}.#{action}"
+
+    hands =
+      for {tool, %{actions: actions}} <- Aqua.Hands.catalog(),
+          action <- Map.keys(actions),
+          do: "#{tool}.#{action}"
+
+    for tool <- Request.tool_definitions(Aqua.Offered.resolve(keys ++ hands, {:ok, true})) do
+      assert Opus.Brain.carried?(tool), tool["name"]
+    end
+  end
+
+  test "outside tools are handed in key order while the list fits its line, none past the " <>
+         "first that does not, and each other with why" do
+    big = fn n ->
+      %{
+        name: "s:t#{n}",
+        description: "",
+        input_schema: %{"type" => "object", "description" => String.duplicate("y", 120_000)}
+      }
+    end
+
+    entries =
+      [%{name: "s:z", description: "small", input_schema: %{"type" => "object"}}] ++
+        Enum.map(7..1//-1, big) ++
+        [%{name: "s:a__b", description: "", input_schema: %{}}]
+
+    {tools, unhanded} = Request.tools(%{}, external: entries)
+
+    assert for(%{"name" => name} <- tools, String.contains?(name, "__"), do: name) ==
+             for(n <- 1..6, do: "s__t#{n}")
+
+    assert unhanded == %{"s:a__b" => :name, "s:t7" => :past_the_line, "s:z" => :past_the_line}
+    assert Opus.Brain.tools_bytes(tools) <= Opus.Brain.max_tools().bytes
+
+    assert {:ok, _line} =
+             Opus.Brain.Wire.encode(%{
+               "t" => "work",
+               "id" => "w",
+               "work" => "w",
+               "tools" => tools
+             })
+  end
+
   test "a launch's description is the catalog's own, with no word of an approval, and its actions are those offered" do
     execution =
       %{"execution.run" => "offered", "execution.logs" => "offered"}

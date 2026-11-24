@@ -296,7 +296,8 @@ defmodule Opus.Programs.Definition do
   defp check_mark(_mark),
     do:
       invalid(
-        "config.mark must be mcp (CYFR speaks MCP to it) or driven (a person or a brain runs it)"
+        "config.mark must be mcp (CYFR speaks MCP to it) or driven " <>
+          "(a person or a crew member runs it)"
       )
 
   defp check_home(home) when home in ["scratch", "kept"], do: :ok

@@ -491,6 +491,13 @@ defmodule PrismWeb.ProgramsLiveTest do
     end
 
     assert cells.("claude") == [{"home", "kept"}, {"status", "—"}, {"tools", "—"}]
+
+    assert has_element?(
+             view,
+             ~s(tr[phx-value-name="claude"]),
+             "driven by a person or a crew member"
+           )
+
     assert [{"home", "scratch"}, {"status", status}, {"tools", "0"}] = cells.("piped")
     refute status in ["", "—"]
   end
@@ -1279,7 +1286,8 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert has_element?(
              view,
-             ~s(form#add-program select[name="mark"] option[value="driven"][selected])
+             ~s(form#add-program select[name="mark"] option[value="driven"][selected]),
+             "driven: a person or a crew member runs it, such as a coding harness"
            )
 
     # Nothing is made before the person confirms it.
