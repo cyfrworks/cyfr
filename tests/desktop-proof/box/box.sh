@@ -21,9 +21,9 @@
 #
 #   1 locked, x.test pressed on the rail opens its lock page and nothing
 #     else: x.test holds no client and no session of the box's account
-#   2 the box's six words typed there open x.test's Prism by x.test's own
-#     admission: it holds the box's key as an active client and a session
-#     of that key
+#   2 the box's six words typed there open x.test's Prism, its Lock read
+#     in Prism's top bar, by x.test's own admission: it holds the box's
+#     key as an active client and a session of that key
 #   3 Prism's Lock there closes the window shown within the lock's bound
 #     (2 s, labwc's own list of windows, as the screen step's rows), and
 #     x.test holds no session of the box's account any more
@@ -31,8 +31,8 @@
 #     shows: the end of its channel locks the box with no press, the
 #     window shown closing and the lock page shown again
 #   5 x.test stopped, This box pressed on the rail shows This box's lock
-#     page, and the six words open This box's Prism there: This box holds
-#     a session of the box's key again
+#     page, and the six words open This box's Prism there, its Lock read
+#     in its top bar: This box holds a session of the box's key again
 #
 # No idle row: the idle lock reaches the same lock entry Prism's Lock does
 # (internal/desktop.Service.lockStep; TestEveryLockOnABoxIsOneStep moves
@@ -165,7 +165,9 @@ if [ "${1:-}" = --session ]; then
   ms() { python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$1" "$2"; }
   screen() { python3 -I "$FIX/screen.py" "$@" 2>>"$OUT/screen.err"; }
   sees() { screen shows "$1"; }
-  unseen() { ! screen shows "$1"; }
+  # Prism shown: its Lock read in its top bar. A read that fails is no
+  # reading of it.
+  prism() { screen bar "Lock"; }
   # A press of what the output shows, or of the rail at X Y of the output
   # (1600x900; tap.py takes 1280x720), its time kept in $OUT/pressed.
   push() { TAP_AT="$OUT/pressed" screen press "$1" >>"$OUT/presses"; }
@@ -252,10 +254,10 @@ if [ "${1:-}" = --session ]; then
     push "Passphrase" || { failed 2 "x.test's lock page offers no passphrase"; return; }
     typed "$WORDS" && key Return || { failed 2 "wtype did not type"; return; }
     within 60 live x -ge 1 || { failed 2 "x.test holds no session of the box's account: $(cat "$OUT/held-x" 2>/dev/null)"; return; }
-    within 30 unseen "CYFR is locked" || { failed 2 "the lock page still shows"; return; }
+    within 60 prism || { failed 2 "x.test's Prism did not show: its Lock was not read in its top bar"; return; }
     if [ "$(py "$(cat "$OUT/held-x")" 'len(d["clients"]) == 1 and d["clients"][0]["standing"] == "active" and all(s["kid"] == d["clients"][0]["kid"] for s in d["live"])')" = True ]; then
       KID=$(py "$(cat "$OUT/held-x")" 'd["clients"][0]["kid"]')
-      verdict PASS "row 2: the six words open x.test by its own admission: it holds the box's key ($KID) as its one active client and $(py "$(cat "$OUT/held-x")" 'len(d["live"])') session(s) of it"
+      verdict PASS "row 2: the six words open x.test's Prism, its Lock read in its top bar, by x.test's own admission: it holds the box's key ($KID) as its one active client and $(py "$(cat "$OUT/held-x")" 'len(d["live"])') session(s) of it"
     else
       failed 2 "x.test's admission is not the box's key alone: $(cat "$OUT/held-x")"
     fi
@@ -307,8 +309,9 @@ if [ "${1:-}" = --session ]; then
     push "Passphrase" || { failed 5 "This box's lock page offers no passphrase"; return; }
     typed "$WORDS" && key Return || { failed 5 "wtype did not type"; return; }
     within 60 live box -ge 1 || { failed 5 "This box holds no session of the box's account: $(cat "$OUT/held-box" 2>/dev/null)"; return; }
+    within 60 prism || { failed 5 "This box's Prism did not show: its Lock was not read in its top bar"; return; }
     if [ "$(py "$(cat "$OUT/held-box")" 'bool(d["live"]) and (not sys.argv[3] or all(s["kid"] == sys.argv[3] for s in d["live"]))' "${KID:-}")" = True ]; then
-      verdict PASS "row 5: x.test stopped, This box pressed on the rail showed its lock page within $took ms of the press, and the six words opened This box's Prism there: it holds $(py "$(cat "$OUT/held-box")" 'len(d["live"])') session(s) of the box's key"
+      verdict PASS "row 5: x.test stopped, This box pressed on the rail showed its lock page within $took ms of the press, and the six words opened This box's Prism there, its Lock read in its top bar: it holds $(py "$(cat "$OUT/held-box")" 'len(d["live"])') session(s) of the box's key"
     else
       failed 5 "This box's sessions are not of the box's key: $(cat "$OUT/held-box")"
     fi

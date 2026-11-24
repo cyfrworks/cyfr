@@ -6,6 +6,10 @@ on grim's picture of it, and pressed by tap.py's virtual pointer, with
 nothing of a page's insides.
 
   screen.py shows TEXT     exits 0 when TEXT, one or more words, is shown
+  screen.py bar TEXT       exits 0 when TEXT is shown within the output's
+                           top BAR pixels, Prism's top bar, where the
+                           device's pages show nothing: Prism's Lock read
+                           there is Prism shown, not the device's own Lock
   screen.py press TEXT     presses the middle of TEXT where it is shown
                            first, top to bottom; exits 1 when it is not
   screen.py words LIST     prints the six words of LIST (one word a line,
@@ -27,6 +31,8 @@ import tempfile
 from PIL import Image, ImageOps
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Prism's top bar, 48 pixels high at the top of the content.
+BAR = 48
 
 
 def picture():
@@ -113,6 +119,8 @@ def main(argv):
         img = picture()
         if argv[:1] == ["shows"] and len(argv) == 2:
             return 0 if places(img, argv[1]) else 1
+        if argv[:1] == ["bar"] and len(argv) == 2:
+            return 0 if any(y1 <= BAR for _, _, _, y1 in places(img, argv[1])) else 1
         if argv[:1] == ["press"] and len(argv) == 2:
             found = places(img, argv[1])
             if not found:
@@ -132,7 +140,7 @@ def main(argv):
     except (OSError, subprocess.CalledProcessError) as e:
         print(f"screen.py: {e}", file=sys.stderr)
         return 2
-    print("usage: screen.py shows TEXT | press TEXT | words LIST", file=sys.stderr)
+    print("usage: screen.py shows TEXT | bar TEXT | press TEXT | words LIST", file=sys.stderr)
     return 64
 
 
