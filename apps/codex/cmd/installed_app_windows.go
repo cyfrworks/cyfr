@@ -6,7 +6,9 @@
 package cmd
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -25,4 +27,40 @@ func installedAppPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(local, "Programs", "cyfr-desktop", "CYFR.exe"), nil
+}
+
+// installedAppCyfr is the cyfr the MSI installs beside the app, in its
+// resources folder, which the MSI puts on the account's PATH.
+func installedAppCyfr() (string, error) {
+	app, err := installedAppPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(app), "resources", "cyfr.exe"), nil
+}
+
+// installedAppPresent is whether the app's executable is there.
+func installedAppPresent() bool {
+	app, err := installedAppPath()
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(app)
+	return err == nil && !info.IsDir()
+}
+
+// appBundleOf is the folder of the CYFR app holding the file at path, as
+// the MSI lays it out wherever it lies: the file in a resources folder
+// beside the app's CYFR.exe; "" otherwise. A cyfr there is the app's, its
+// installer's to change or remove.
+func appBundleOf(path string) string {
+	dir := filepath.Dir(path)
+	if !strings.EqualFold(filepath.Base(dir), "resources") {
+		return ""
+	}
+	app := filepath.Dir(dir)
+	if info, err := os.Stat(filepath.Join(app, "CYFR.exe")); err != nil || info.IsDir() {
+		return ""
+	}
+	return app
 }

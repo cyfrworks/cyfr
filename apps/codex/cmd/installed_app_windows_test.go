@@ -47,5 +47,8 @@ func TestInstalledAppPathIsTheSystems(t *testing.T) {
 		if strings.HasPrefix(strings.ToLower(got), strings.ToLower(elsewhere)) {
 			t.Errorf("the installed app %q follows LOCALAPPDATA", got)
 		}
+		if cyfr, err := installedAppCyfr(); err != nil || cyfr != filepath.Join(filepath.Dir(want), "resources", "cyfr.exe") {
+			t.Errorf("with LOCALAPPDATA=%s the installed app's cyfr is %q (%v), want resources\\cyfr.exe beside %q", elsewhere, cyfr, err, want)
+		}
 	}
 }

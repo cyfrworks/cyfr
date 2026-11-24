@@ -115,10 +115,11 @@ func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 	}
 }
 
-// Root installs only the package cyfr checked: the commands copy the
-// account's file where the account cannot write and check the copy
-// against the sum the release's signed checksums named before apt is
-// handed it, so a file changed after the fetch is never installed. What
+// Root installs only the package cyfr checked: the commands take the
+// account's file's bytes from a process of the account's (runuser), write
+// them where only root may enter and check them against the sum the
+// release's signed checksums named before apt is handed them, so a file
+// changed after the fetch is never installed. What
 // root staged is gone on every way out, and a copy, a check or an apt
 // that fails, or an interrupt, ends the commands before anything of the
 // screen is installed. Run here as written, as this account, the
@@ -155,6 +156,9 @@ func TestScreenOnInstallsOnlyThePackageItChecked(t *testing.T) {
 				"systemctl": "echo \"systemctl $*\" >>\"$BIN/ran\"",
 				// The service's unit is not written into /etc here.
 				"install": "case \"$4\" in /etc/*) echo 'the unit' >>\"$BIN/ran\"; exit 0 ;; esac\nexec /usr/bin/install \"$@\"",
+				// The account's own process reads the package, here as
+				// this test's account.
+				"runuser": "[ \"$1 $2 $3 $4 $5\" = \"-u alice -- cat --\" ] || exit 9\nexec /bin/cat -- \"$6\"",
 			} {
 				if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
 					t.Fatal(err)
@@ -334,5 +338,74 @@ func TestEndScreenAppWaitsOnNoReader(t *testing.T) {
 	n, err := logged.Read(buf)
 	if err != nil || !strings.Contains(string(buf[:n]), "cyfr-screen[") || !strings.Contains(string(buf[:n]), "was ended from outside") {
 		t.Fatalf("the system's log got %q (%v)", buf[:n], err)
+	}
+}
+
+// Root never opens the account's path: the package's path is a link to a
+// file outside the staging folder that only its owner should read, a FIFO
+// here, which reports any open of it; the account's process (runuser,
+// standing in) hands root the package's bytes without opening it, so any
+// open of the FIFO would be root's. Root writes the bytes into a folder
+// only root may enter, checks them there and hands apt that file.
+func TestStageAppNeverOpensTheAccountsPathAsRoot(t *testing.T) {
+	bin, outside, staged := t.TempDir(), t.TempDir(), t.TempDir()
+	sentinel := filepath.Join(outside, "root-only")
+	if err := syscall.Mkfifo(sentinel, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "cyfr-desktop.deb")
+	if err := os.Symlink(sentinel, path); err != nil {
+		t.Fatal(err)
+	}
+	opened := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// A writer's open that does not wait succeeds only while a
+			// reader has the FIFO open.
+			if f, err := os.OpenFile(sentinel, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+				f.Close()
+				opened <- struct{}{}
+				return
+			}
+			time.Sleep(time.Millisecond) // sleep-ok: the pace of watching a FIFO for a reader
+		}
+	}()
+	for name, body := range map[string]string{
+		"runuser": "[ \"$1 $2 $3 $4 $5 $6\" = \"-u alice -- cat -- " + path + "\" ] || exit 9\nprintf 'the app'",
+		"apt-get": "for last; do :; done\ncat \"$last\" >\"$BIN/handed\"\nstat -c %a \"$(dirname \"$last\")\" >\"$BIN/mode\"\necho \"$*\" >\"$BIN/args\"",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sum := sha256.Sum256([]byte("the app"))
+	sh := exec.Command("/bin/sh", "-c", stageApp(path, hex.EncodeToString(sum[:]), "alice", "--reinstall"))
+	sh.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "BIN="+bin, "TMPDIR="+staged)
+	if said, err := sh.CombinedOutput(); err != nil {
+		t.Fatalf("the command ended with %v:\n%s", err, said)
+	}
+	select {
+	case <-opened:
+		t.Error("root opened the account's path")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := read(t, filepath.Join(bin, "handed")); got != "the app" {
+		t.Errorf("apt was handed %q, want the account's bytes", got)
+	}
+	if got := strings.TrimSpace(read(t, filepath.Join(bin, "mode"))); got != "700" {
+		t.Errorf("root staged the package in a folder of mode %s, want 700", got)
+	}
+	if got := strings.TrimSpace(read(t, filepath.Join(bin, "args"))); !strings.HasPrefix(got, "install -y --reinstall ") {
+		t.Errorf("apt-get was run as %q", got)
+	}
+	if left, _ := os.ReadDir(staged); len(left) != 0 {
+		t.Errorf("root's staging left %v", left)
 	}
 }

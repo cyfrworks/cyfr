@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,16 +30,18 @@ var (
 			return false
 		}
 		// --cask avoids the same-name formula->cask ambiguity.
-		return exec.Command("brew", "list", "--cask", "cyfr").Run() == nil
+		return runWithin(brewReadWithin, brewCommand("list", "--cask", "cyfr")) == nil
 	}
 	// caskBinary is the cyfr a Homebrew cask install links into the
 	// prefix's bin, which outlives the version directory brew upgrades.
 	caskBinary = func() (string, error) {
-		out, err := exec.Command("brew", "--prefix").Output()
-		if err != nil {
+		var out strings.Builder
+		c := brewCommand("--prefix")
+		c.Stdout = &out
+		if err := runWithin(brewReadWithin, c); err != nil {
 			return "", fmt.Errorf("brew --prefix: %w", err)
 		}
-		return filepath.Join(strings.TrimSpace(string(out)), "bin", release.BinaryName(runtime.GOOS)), nil
+		return filepath.Join(strings.TrimSpace(out.String()), "bin", release.BinaryName(runtime.GOOS)), nil
 	}
 	selfExecutable = os.Executable
 	// handOver runs the rest of `cyfr update` as the program at path
@@ -80,23 +83,54 @@ func (h handedOver) Error() string {
 	return fmt.Sprintf("the updated cyfr exited with status %d", h.status)
 }
 
-// updateProgram is `cyfr update`'s program step: it installs the target
-// release when it is to be installed, then hands the rest of the update
-// over to the new program, answering finished once that program has run
-// it (a child, on Windows); on Unix a handover that succeeds never
-// returns. The target is --version's exact release, older or a
-// pre-release included, else release.Latest's (the newest release that is
-// not a pre-release, or while none is published the newest pre-release),
-// installed only when release.IsNewer says it is newer than this one, so
-// an older line's later patch never downgrades and a development build is
-// never replaced. Outside Homebrew nothing is
-// written before the archive verifies, and the program is replaced by a
-// rename, so a failure leaves the running one in place.
+// updateProgram is `cyfr update`'s program step: it brings the installed
+// CYFR app and this program to the target release where they are not
+// there, then hands the rest of the update over to the new program,
+// answering finished once that program has run it (a child, on Windows);
+// on Unix a handover that succeeds never returns. The target is
+// --version's exact release, older or a pre-release included, else
+// release.Latest's (the newest release that is not a pre-release, or while
+// none is published the newest pre-release), taken only when
+// release.IsNewer says it is newer than this program, so an older line's
+// later patch never downgrades and a development build is never replaced.
+//
+// The installed app is updated by its own road whichever cyfr runs this
+// (updateApp): the cyfr inside it is the app's, which only its installer
+// replaces. A standalone cyfr, one an install script or a download put
+// anywhere else, replaces itself as it always has, so the command a person
+// types is never left at the old release in front of the new app. Both
+// downloads are verified before anything changes; a Homebrew cask install
+// is Homebrew's to change, the app with it.
 func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, error) {
 	current := version.Version
 	if o.version != "" && !release.IsVersion(o.version) {
 		return false, fmt.Errorf("--version %q is not a release version (MAJOR.MINOR.PATCH, or with a pre-release, such as 0.6.0 or 0.6.0-alpha.1); nothing was changed", o.version)
 	}
+	self, err := selfExecutable()
+	if err == nil {
+		self, err = filepath.EvalSymlinks(self)
+	}
+	if err != nil {
+		return false, fmt.Errorf("cyfr update could not find its own program file (%v); nothing was changed", err)
+	}
+	// The installed app's road: Homebrew's for a cask install, which
+	// installs the app, else this system's installer's. This program is
+	// the road's own where it is the cyfr the app carries, or the one the
+	// cask links.
+	cask := caskInstalled()
+	road := appRoadHere()
+	if cask {
+		road = caskRoad{exact: o.version != ""}
+	}
+	inApp := isInstalledAppCyfr(self) || (cask && isCaskCyfr(self))
+	appThere := cask || inApp || machine.appPresent()
+	app := ""
+	if appThere {
+		app = machine.appRelease()
+	}
+	// settled says whether the app needs nothing for target.
+	settled := func(target string) bool { return !appThere || app == target }
+
 	target := o.version
 	if target == "" {
 		if !release.IsVersion(current) {
@@ -112,38 +146,77 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 			return false, nil
 		case err != nil:
 			return false, fmt.Errorf("cyfr update could not look up the newest release (%v); nothing was changed", err)
-		case latest == current:
+		case latest == current && settled(latest):
 			fmt.Fprintf(out, "cyfr %s is the newest release.\n", current)
 			return false, nil
-		case !release.IsNewer(latest, current):
+		case latest != current && !release.IsNewer(latest, current):
 			fmt.Fprintf(out, "cyfr %s is newer than the newest release, %s, so it stays.\n", current, latest)
 			return false, nil
 		}
 		target = latest
-	} else if target == current {
+	} else if target == current && settled(target) {
 		fmt.Fprintf(out, "This cyfr is release %s already.\n", current)
 		return false, nil
 	}
-	if release.IsNewer(current, target) {
-		fmt.Fprintf(out, "Installing cyfr %s, older than this cyfr's %s, as --version asks...\n", target, current)
-	} else {
-		fmt.Fprintf(out, "Updating cyfr from %s to %s...\n", current, target)
+	again := "cyfr update"
+	if o.version != "" {
+		again += " --version " + target
+	}
+	if current != target && !inApp {
+		if release.IsNewer(current, target) {
+			fmt.Fprintf(out, "Installing cyfr %s, older than this cyfr's %s, as --version asks...\n", target, current)
+		} else {
+			fmt.Fprintf(out, "Updating cyfr from %s to %s...\n", current, target)
+		}
 	}
 
-	var path string
-	if caskInstalled() {
-		p, err := updateCask(ctx, out, target, o.version != "")
+	unlock, err := lockUpdate()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	// The standalone program's release, verified before the app is
+	// touched; written only once the app is the target's.
+	var binary []byte
+	if !inApp && current != target {
+		b, err := fetchSelf(ctx, out, self, target, o.version != "")
 		if err != nil {
 			return false, err
 		}
-		path = p
-	} else {
-		p, err := replaceSelf(ctx, out, target, o.version != "")
-		if err != nil {
+		binary = b
+	}
+	if !settled(target) {
+		if err := updateApp(ctx, out, road, app, target, again); err != nil {
 			return false, err
 		}
+	}
+	path := self
+	switch {
+	case binary != nil:
+		if err := replaceExecutable(self, binary); err != nil {
+			if appThere {
+				return false, fmt.Errorf("The CYFR app is release %s, but this cyfr, %s, could not be replaced (%v); it is still release %s and your CYFR was not touched. Run 'sudo cyfr update' if its directory is not yours to write", target, self, err, current)
+			}
+			return false, fmt.Errorf("Release %s verified but could not be installed at %s (%v); the program there is unchanged and your CYFR was not touched. Run 'sudo cyfr update' if its directory is not yours to write", target, self, err)
+		}
+		if appThere {
+			fmt.Fprintf(out, "The CYFR app and this cyfr, %s, are release %s.\n", self, target)
+		} else {
+			fmt.Fprintf(out, "cyfr %s is installed at %s.\n", target, self)
+		}
+	case cask && inApp:
+		p, err := caskBinary()
+		if err != nil {
+			return false, fmt.Errorf("brew installed cyfr %s, but cyfr update could not find it (%v); your CYFR was not touched. Run 'cyfr update' again", target, err)
+		}
+		fmt.Fprintf(out, "cyfr %s is installed by Homebrew at %s.\n", target, p)
 		path = p
 	}
+	if current == target {
+		// This program is the target's already: it goes on itself.
+		return false, nil
+	}
+	unlock()
 	if ctx.Err() != nil {
 		return false, fmt.Errorf("cyfr update was interrupted once cyfr %s was installed, before CYFR in this directory was updated; run 'cyfr update' again to update it", target)
 	}
@@ -165,12 +238,25 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 	return true, nil
 }
 
-// installPackage is the instruction that brings a package of CYFR's, pkg,
-// to release target: the one a package's own cyfr cannot follow itself,
-// which `cyfr update` gives for a cyfr a package installed and the screen
-// for an app of another release than its folder's.
-func installPackage(pkg, target string) string {
-	return fmt.Sprintf("install the package %s of release %s from %s/tag/%s", pkg, target, releasesPage, target)
+// isInstalledAppCyfr is whether the program at path, its links resolved,
+// is the cyfr the installed CYFR app carries (appCyfr).
+func isInstalledAppCyfr(path string) bool {
+	carried, err := appCyfr()
+	if err != nil {
+		return false
+	}
+	return samePath(path, carried)
+}
+
+// samePath is whether a and b, their links resolved, are one file's
+// path; one that does not resolve is no path.
+func samePath(a, b string) bool {
+	ra, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false
+	}
+	rb, err := filepath.EvalSymlinks(b)
+	return err == nil && ra == rb
 }
 
 // packageOf is the package of this system's that installed the program at
@@ -195,14 +281,13 @@ func packageOf(path string) (string, error) {
 	case err != nil:
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	var stderr strings.Builder
-	query := exec.CommandContext(ctx, tool, "--search", "--", real)
+	var stdout, stderr strings.Builder
+	query := exec.Command(tool, "--search", "--", real)
 	// The words read below are dpkg's untranslated ones.
 	query.Env = append(os.Environ(), "LC_ALL=C")
-	query.Stderr = &stderr
-	out, err := query.Output()
+	query.Stdout, query.Stderr = &stdout, &stderr
+	err = runWithin(10*time.Second, query)
+	out := stdout.String()
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 1 && strings.Contains(stderr.String(), "no path found matching pattern") {
 		return "", nil
@@ -212,7 +297,7 @@ func packageOf(path string) (string, error) {
 	}
 	// Each line is "package[, package]: path"; a diversion's lines are not
 	// an owner.
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		if owners, ok := strings.CutSuffix(line, ": "+real); ok && owners != "" && !strings.HasPrefix(line, "diversion by ") {
 			return owners, nil
 		}
@@ -220,31 +305,26 @@ func packageOf(path string) (string, error) {
 	return "", fmt.Errorf("dpkg-query --search %s named no package for it", real)
 }
 
-// replaceSelf downloads and verifies release target's binary for this
-// platform and installs it over this program's file, answering the file's
-// path with its links resolved. A cyfr a package installed (packageOf),
-// the one inside the CYFR app's package among them, is refused before any
-// download, and so is one whose package the records cannot tell: replaced
-// alone, the app and its cyfr would be two releases. The refusal names the
-// second command exactly: that program by its own path, and --version as
-// it was asked.
-func replaceSelf(ctx context.Context, out io.Writer, target string, exact bool) (string, error) {
-	self, err := selfExecutable()
-	if err == nil {
-		self, err = filepath.EvalSymlinks(self)
-	}
-	if err != nil {
-		return "", fmt.Errorf("cyfr update could not find its own program file (%v); nothing was changed", err)
+// fetchSelf downloads and verifies release target's binary for this
+// platform, for the standalone program at self (its links resolved),
+// writing nothing. A program a package installed (packageOf), or one
+// whose package the records cannot tell, is refused before any download:
+// its package's tool replaces it. So is a cyfr inside an app's bundle
+// (appBundleOf), which is the app's: rewritten, it would break the
+// bundle's signature.
+func fetchSelf(ctx context.Context, out io.Writer, self, target string, exact bool) ([]byte, error) {
+	if bundle := appBundleOf(self); bundle != "" {
+		return nil, fmt.Errorf("This cyfr, %s, is the one inside the CYFR app at %s, which cyfr update does not rewrite; nothing was changed. Install the CYFR app where its installer puts it, then run 'cyfr update'", self, bundle)
 	}
 	switch owner, err := packageOf(self); {
 	case err != nil:
-		return "", fmt.Errorf("cyfr update could not ask this system's package records whether a package installed %s (%v); nothing was changed", self, err)
+		return nil, fmt.Errorf("cyfr update could not ask this system's package records whether a package installed %s (%v); nothing was changed", self, err)
 	case owner != "":
 		again := self + " update"
 		if exact {
 			again += " --version " + target
 		}
-		return "", fmt.Errorf("This cyfr, %s, belongs to the package %s, so nothing was changed: %s, then run '%s' to update CYFR here", self, owner, installPackage(owner, target), again)
+		return nil, fmt.Errorf("This cyfr, %s, belongs to the package %s, which cyfr update does not change; nothing was changed. Update it with the system's package tool, then run '%s'", self, owner, again)
 	}
 	fmt.Fprintf(out, "Downloading and verifying release %s for %s/%s...\n", target, runtime.GOOS, runtime.GOARCH)
 	fetch, cancel := context.WithTimeout(ctx, fetchBinaryTimeout)
@@ -252,53 +332,133 @@ func replaceSelf(ctx context.Context, out io.Writer, target string, exact bool) 
 	cancel()
 	switch {
 	case errors.Is(err, release.ErrUnverified):
-		return "", fmt.Errorf("Release %s did not verify (%v); %s is unchanged and your CYFR was not touched", target, err, self)
+		return nil, fmt.Errorf("Release %s did not verify (%v); %s is unchanged and your CYFR was not touched", target, err, self)
 	case err != nil:
-		return "", fmt.Errorf("cyfr update could not download release %s (%v); %s is unchanged and your CYFR was not touched. Download it from %s/tag/%s", target, err, self, releasesPage, target)
+		return nil, fmt.Errorf("cyfr update could not download release %s (%v); %s is unchanged and your CYFR was not touched. Download it from %s/tag/%s", target, err, self, releasesPage, target)
 	}
-	if err := replaceExecutable(self, binary); err != nil {
-		return "", fmt.Errorf("Release %s verified but could not be installed at %s (%v); the program there is unchanged and your CYFR was not touched. Run 'sudo cyfr update' if its directory is not yours to write", target, self, err)
-	}
-	fmt.Fprintf(out, "cyfr %s is installed at %s.\n", target, self)
-	return self, nil
+	return binary, nil
 }
 
-// updateCask updates a Homebrew cask install, which installs only the
-// release its tap names: the newest release that is not a pre-release.
-// A --version naming another release is refused, pointing at the install
-// script, which installs any release. The version brew installed is
-// checked before the new program is handed the update.
-func updateCask(ctx context.Context, out io.Writer, target string, exact bool) (string, error) {
-	if exact {
+// caskRoad is a Homebrew cask install's road: brew replaces the app its
+// cask installs, and installs only the release its tap names, the newest
+// one that is not a pre-release, so a --version naming another release is
+// refused, pointing at the install script. Before anything changes the tap
+// is brought up to date and its cask must name the target release and
+// exactly the bytes of the release's macOS installer for this
+// architecture as the release's signed checksums name them; brew then
+// checks what it downloads against that sum.
+type caskRoad struct{ exact bool }
+
+// The bounds of brew's steps: its tap's update and its upgrade, which
+// downloads the app.
+const (
+	brewUpdateWithin  = 10 * time.Minute
+	brewUpgradeWithin = 30 * time.Minute
+)
+
+func (c caskRoad) fetch(ctx context.Context, out io.Writer, _, target string) (*staged, error) {
+	if c.exact {
 		lookup, cancel := context.WithTimeout(ctx, 30*time.Second)
 		latest, err := latestRelease(lookup)
 		cancel()
 		if err != nil || latest != target {
-			return "", fmt.Errorf("This cyfr was installed by Homebrew, which installs only the release its tap names, the newest one that is not a pre-release; nothing was changed. To run release %s, install it with the install script: %s | CYFR_VERSION=%s sh", target, installScript, target)
+			return nil, fmt.Errorf("This cyfr was installed by Homebrew, which installs only the release its tap names, the newest one that is not a pre-release; nothing was changed. To run release %s, install it with the install script: %s | CYFR_VERSION=%s sh", target, installScript, target)
 		}
 	}
-	// brew runs to its end: it shares the terminal's process group, so an
-	// interrupt reaches it as it reaches cyfr, and brew answers it itself.
-	for _, args := range [][]string{{"update"}, {"upgrade", "--cask", "cyfr"}} {
-		c := exec.Command("brew", args...)
-		c.Stdout, c.Stderr = out, os.Stderr
-		if err := c.Run(); err != nil {
-			return "", fmt.Errorf("brew %s failed (%v); your CYFR was not touched", strings.Join(args, " "), err)
-		}
+	if err := brew(out, brewUpdateWithin, "update"); err != nil {
+		return nil, fmt.Errorf("brew update failed (%v); nothing was changed and CYFR runs as it did", err)
+	}
+	version, sum, err := caskOffer()
+	if err != nil {
+		return nil, fmt.Errorf("cyfr update could not read the cyfr cask Homebrew offers (%v); nothing was changed and CYFR runs as it did", err)
+	}
+	if version != target {
+		return nil, fmt.Errorf("Homebrew's tap offers cyfr %s, not %s; nothing was changed and CYFR runs as it did. Try 'brew update-reset' and 'cyfr update' again", version, target)
+	}
+	check, cancel := context.WithTimeout(ctx, fetchBinaryTimeout)
+	want, err := appPackageSum(check, target, "darwin", runtime.GOARCH)
+	cancel()
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("The signed checksums of release %s could not be read for the CYFR app (%v); nothing was changed and CYFR runs as it did", target, err)
+	case sum != want:
+		return nil, fmt.Errorf("Homebrew's cyfr cask names other bytes than release %s's signed installer for this Mac; nothing was changed and CYFR runs as it did", target)
+	}
+	return &staged{target: target, sum: sum}, nil
+}
+
+// elevate takes nothing: Homebrew asks for what it needs itself.
+func (caskRoad) elevate(io.Writer, string) (func(), error) { return func() {}, nil }
+
+func (caskRoad) replace(out io.Writer, s *staged, _ bool) error {
+	if err := brew(out, brewUpgradeWithin, "upgrade", "--cask", "cyfr"); err != nil {
+		return fmt.Errorf("brew upgrade --cask cyfr failed (%w)", err)
 	}
 	// Homebrew can exit successfully without changing the installed version.
 	switch installed := installedCaskVersion(); {
 	case installed == "":
-		return "", errors.New("brew upgraded the cyfr cask, but its version could not be read (brew list --cask --versions cyfr); your CYFR was not touched. Run 'cyfr update' again")
-	case installed != target:
-		return "", fmt.Errorf("brew exited cleanly but the cyfr cask is still %s, not %s; your CYFR was not touched. Try 'brew update-reset' and 'cyfr update' again, or reinstall with 'brew uninstall --cask cyfr && brew install --cask cyfr'", installed, target)
+		return errors.New("brew upgraded the cyfr cask, but its version could not be read (brew list --cask --versions cyfr)")
+	case installed != s.target:
+		return fmt.Errorf("brew exited cleanly but the cyfr cask is still %s, not %s. Try 'brew update-reset', or reinstall with 'brew uninstall --cask cyfr && brew install --cask cyfr'", installed, s.target)
 	}
-	path, err := caskBinary()
-	if err != nil {
-		return "", fmt.Errorf("brew installed cyfr %s, but cyfr update could not find it (%v); your CYFR was not touched. Run 'cyfr update' again", target, err)
+	return nil
+}
+
+// finish keeps nothing: Homebrew's upgrade is its own.
+func (caskRoad) finish(io.Writer, *staged, bool) error { return nil }
+
+func (caskRoad) closesTheBox() ([]string, []string) { return nil, nil }
+
+// brew runs brew with args to its end within its bound, its output this
+// update's.
+func brew(out io.Writer, within time.Duration, args ...string) error {
+	c := brewCommand(args...)
+	c.Stdout, c.Stderr = out, os.Stderr
+	return runWithin(within, c)
+}
+
+// brewCommand is brew with args, Homebrew's own refresh of its taps off:
+// the update refreshes the tap once, itself, before it checks the cask's
+// sum, and nothing refreshes it between that check and the upgrade.
+func brewCommand(args ...string) *exec.Cmd {
+	c := exec.Command("brew", args...)
+	c.Env = append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1")
+	return c
+}
+
+// brewReadWithin bounds a brew call that only reads.
+const brewReadWithin = time.Minute
+
+// isCaskCyfr is whether the program at path is the cyfr the cask links
+// (caskBinary).
+func isCaskCyfr(path string) bool {
+	linked, err := caskBinary()
+	return err == nil && samePath(path, linked)
+}
+
+// caskOffer is the version and the sha256 of the cyfr cask Homebrew's tap
+// offers this Mac, as brew info reads them.
+func caskOffer() (version, sum string, err error) {
+	c := brewCommand("info", "--cask", "--json=v2", "cyfr")
+	var stdout strings.Builder
+	c.Stdout = &stdout
+	if err := runWithin(time.Minute, c); err != nil {
+		return "", "", err
 	}
-	fmt.Fprintf(out, "cyfr %s is installed by Homebrew at %s.\n", target, path)
-	return path, nil
+	var info struct {
+		Casks []struct {
+			Token   string `json:"token"`
+			Version string `json:"version"`
+			Sha256  string `json:"sha256"`
+		} `json:"casks"`
+	}
+	if err := json.Unmarshal([]byte(stdout.String()), &info); err != nil {
+		return "", "", err
+	}
+	if len(info.Casks) != 1 || info.Casks[0].Token != "cyfr" || !release.IsVersion(info.Casks[0].Version) || info.Casks[0].Sha256 == "" {
+		return "", "", errors.New("brew info named no cyfr cask of a release")
+	}
+	return info.Casks[0].Version, strings.ToLower(info.Casks[0].Sha256), nil
 }
 
 // replaceExecutable writes binary beside self, synced and with self's
@@ -339,11 +499,13 @@ func replaceExecutable(self string, binary []byte) error {
 // (e.g. "0.6.0"), or "" if it can't be determined. `brew list --cask
 // --versions cyfr` prints a line like "cyfr 0.6.0".
 func installedCaskVersion() string {
-	out, err := exec.Command("brew", "list", "--cask", "--versions", "cyfr").Output()
-	if err != nil {
+	var out strings.Builder
+	c := brewCommand("list", "--cask", "--versions", "cyfr")
+	c.Stdout = &out
+	if err := runWithin(brewReadWithin, c); err != nil {
 		return ""
 	}
-	fields := strings.Fields(strings.TrimSpace(string(out)))
+	fields := strings.Fields(strings.TrimSpace(out.String()))
 	if len(fields) < 2 {
 		return ""
 	}

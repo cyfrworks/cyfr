@@ -44,10 +44,10 @@ const (
 	screenAppFile = screenDir + "/" + appPackage + ".deb"
 )
 
-// appCyfr is the cyfr inside the CYFR app's package, the one that runs the
-// screen's shell (desktop/scripts/build.mjs); a variable so tests stand in
-// for it.
-var appCyfr = "/opt/cyfr/resources/cyfr"
+// appCyfr is the cyfr inside the installed CYFR app (installedAppCyfr),
+// the one that runs the screen's shell; a variable so tests stand in for
+// it.
+var appCyfr = installedAppCyfr
 
 // appProgram is the CYFR app's own program in its package.
 const appProgram = "/opt/cyfr/CYFR"
@@ -284,7 +284,7 @@ func screenAppSum(ctx context.Context) (string, error) {
 	if !release.IsVersion(version.Version) {
 		return "", fmt.Errorf("This cyfr is a development build (%s), so there is no release of the CYFR app to download for it, and this machine has none installed at it. Install the CYFR app's package built with this cyfr, then run `cyfr screen on` again", version.Version)
 	}
-	sum, err := appPackageSum(ctx, version.Version, machine.arch())
+	sum, err := appPackageSum(ctx, version.Version, "linux", machine.arch())
 	if err != nil {
 		return "", fmt.Errorf("The signed checksums of release %s could not be read for the CYFR app, so nothing was installed (%v). Run `cyfr screen on` again", version.Version, err)
 	}
@@ -315,7 +315,7 @@ func screenFetchApp(ctx context.Context, out io.Writer, sum string) (fetchedApp,
 		}
 	}
 	fmt.Fprintf(out, "Downloading the CYFR app, release %s for %s, and checking it against the release's signed checksums.\n", version.Version, machine.arch())
-	data, err := fetchAppPackage(ctx, version.Version, machine.arch(), sum)
+	data, err := fetchAppPackage(ctx, version.Version, "linux", machine.arch(), sum)
 	if err != nil {
 		return app, fmt.Errorf("The CYFR app could not be downloaded, so nothing was installed (%v). Run `cyfr screen on` again", err)
 	}
@@ -339,10 +339,10 @@ func (a fetchedApp) remove() {
 // screenCommands are the commands `cyfr screen on` runs, the packages'
 // only if needed: app is the sha256 of the CYFR app's package fetched into
 // the project, or "" where the machine has it. The package is the
-// account's file, so root copies it where the account cannot write, and
-// apt installs that copy only once root has checked it against app: a
-// package changed after the fetch is never installed. That copy is
-// stageApp's alone.
+// account's file, so root takes its bytes from a process of the
+// account's and installs them only once it has checked them against app,
+// in a folder only root may enter: a package changed after the fetch is
+// never installed (stageApp).
 func screenCommands(dir, account, app string) []string {
 	base := machine.installed("labwc") && machine.installed("wvkbd") && machine.installed("swayidle")
 	var commands []string
@@ -350,7 +350,7 @@ func screenCommands(dir, account, app string) []string {
 		commands = append(commands, "apt-get update")
 	}
 	if app != "" {
-		commands = append(commands, stageApp(filepath.Join(dir, screenAppFile), app))
+		commands = append(commands, stageApp(filepath.Join(dir, screenAppFile), app, account))
 	}
 	if !base {
 		commands = append(commands, "apt-get install -y --no-install-recommends labwc wvkbd swayidle")
@@ -367,18 +367,25 @@ func screenCommands(dir, account, app string) []string {
 }
 
 // stageApp is the one command that installs the CYFR app's package from
-// the account's file at path, whose sha256 is sum: root's copy in a folder
-// of its own, checked, handed to apt. The folder is that command's alone,
-// a subshell whose exit removes it on every way out, the copy, the check
-// or apt failing, an interrupt, or apt done, so nothing staged outlives
-// it; it runs before anything of the screen is installed, so a failure
-// leaves no part of the screen behind.
-func stageApp(path, sum string) string {
+// the account's file at path, whose sha256 is sum, as root. Root never
+// opens path: a process of account's own (runuser) reads it, with no more
+// than account may, and hands root its bytes, which root writes into a
+// folder of its own that only root may enter (mktemp -d), checks there
+// against sum and hands to apt from there. A link at path to a file only
+// root may read is refused as account would be, and nothing of what it
+// reads is put where another account could see it. The folder is that
+// command's alone, a subshell whose exit removes it on every way out, the
+// read, the check or apt failing, an interrupt, or apt done, so nothing
+// staged outlives it; it runs before anything of the screen is installed,
+// so a failure leaves no part of the screen behind. options are apt-get
+// install's own, before the package (cyfr update's).
+func stageApp(path, sum, account string, options ...string) string {
 	deb := "\"$d/" + appPackage + ".deb\""
-	return "( trap 'rm -rf \"$d\"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0755 \"$d\"" +
-		" && install -m 0644 " + shellQuote([]string{path}) + " " + deb +
+	install := strings.Join(append([]string{"apt-get", "install", "-y"}, options...), " ")
+	return "( trap 'rm -rf \"$d\"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0700 \"$d\"" +
+		" && runuser -u " + shellQuote([]string{account}) + " -- cat -- " + shellQuote([]string{path}) + " > " + deb +
 		" && echo '" + sum + "  '" + deb + " | sha256sum --check --strict --quiet" +
-		" && apt-get install -y " + deb + " )"
+		" && " + install + " " + deb + " )"
 }
 
 // screenOffCommands give this machine's screen back to its login prompt,
@@ -596,18 +603,17 @@ func endScreenApp(program string, ln net.Listener, why error) {
 
 // releaseApart is what the screen's page says where the app's cyfr, which
 // runs this shell (release ours), is another release than the one the
-// folder's compose file is set to, read there and not from a container:
-// `cyfr update` moves the folder and the program that ran it, never the
-// app. The instruction is the one installPackage gives, which brings the
-// app to the folder's release whether the cyfr on PATH is the package's
-// own, whose `cyfr screen on` finds its own release installed, or one of
-// its own. "" where they agree, or where either is no release.
+// folder's compose file is set to, read there and not from a container.
+// The instruction is cyfr update of exactly the folder's release in the
+// folder, which brings the installed app there through the system's
+// package tool and leaves a folder already at it as it is. "" where they
+// agree, or where either is no release.
 func releaseApart(dir, ours string) string {
 	set := folderRelease(dir)
 	if !release.IsVersion(ours) || set == "" || set == ours {
 		return ""
 	}
-	return fmt.Sprintf("This screen's CYFR app is release %s and the CYFR in %s is set to release %s, so the screen may not work as it should. To bring the app to release %s, %s.", ours, dir, set, set, installPackage(appPackage, set))
+	return fmt.Sprintf("This screen's CYFR app is release %s and the CYFR in %s is set to release %s, so the screen may not work as it should. To bring the app to release %s, run 'cyfr update --version %s' in %s.", ours, dir, set, set, set, dir)
 }
 
 // folderRelease is the release the compose file in dir runs CYFR at
