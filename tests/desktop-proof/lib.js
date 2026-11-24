@@ -465,10 +465,10 @@ export const UNANSWERED = `The CYFR at ${HOME} did not answer.`
 
 // A page of the CYFR asked for in `w` while its front takes nothing: what
 // failed, as main said it and as the front saw it, and what the person
-// then has: the chooser, in that same view where the content's storage is
-// memory's (the six-word road) and in a view of its own otherwise (the
-// passkey road, whose view keeps the CYFR's sign-in), and that sign-in,
-// read from the store `w` used.
+// then has: the chooser, in a view of its own, main's load of it, in the
+// same store where the content's storage is memory's (the six-word road)
+// and in a fresh one otherwise (the passkey road, whose view keeps the
+// CYFR's sign-in), and that sign-in, read from the store `w` used.
 export async function unansweredLoad(w) {
   const host = new URL(HOME).hostname
   const page = "/threads"
@@ -503,11 +503,11 @@ export async function unansweredLoad(w) {
   }
   return {...out, opens: !!cookie && (await opens(cookie)).opens}
 }
-// On the six-word road the chooser is in the same view, its storage
-// memory's; on the passkey road in a view of its own, never the store
-// that keeps the sign-in.
+// The chooser is in a view of its own: on the six-word road in the same
+// store, memory's; on the passkey road never the store that keeps the
+// sign-in.
 export const toldUnanswered = (out, again) => out.failed && out.words === UNANSWERED && out.onward && out.again === again &&
-  out.visible && (again ? out.view === "own" && !out.inStore : out.view === "same") && out.same && out.opens &&
+  out.visible && out.view === "own" && out.inStore === !again && out.same && out.opens &&
   out.locks.length === 0 && out.signOuts.length === 0
 
 // The sentence a clear that failed leaves on the chooser.
