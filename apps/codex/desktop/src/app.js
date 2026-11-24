@@ -700,13 +700,16 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   // A departure's teardown: every page closed has gone, and the
   // connections of the sessions they used, live sockets among them, are
-  // closed; then parted, with the departure's id.
+  // closed; then parted, with the departure's id. A teardown whose cyfr has
+  // ended does neither: a fresh run may have opened one of those stores
+  // again, and its pages' connections are its own. The old pages' own
+  // destruction ended their requests and sockets.
   function part(id) {
     const release = ofThisRun()
     const {pages, sessions} = closing
     closing = {pages: [], sessions: new Set()}
     Promise.all(pages)
-      .then(() => Promise.all([...sessions].map((ses) => ses.closeAllConnections())))
+      .then(release(() => Promise.all([...sessions].map((ses) => ses.closeAllConnections()))))
       .then(release(() => on({type: "parted", id})), () => {})
   }
 
@@ -773,9 +776,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // each run.
   function ofThisRun() {
     const run = child
-    return (act) => (...args) => {
-      if (run && child === run) act(...args)
-    }
+    return (act) => (...args) => run && child === run ? act(...args) : undefined
   }
   let readiness = null
   let quitting = false

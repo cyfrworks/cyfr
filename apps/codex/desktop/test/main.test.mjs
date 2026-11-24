@@ -2269,3 +2269,34 @@ test("on macOS and Windows the screen road is refused", {skip: process.platform 
   assert.ok(said.some((l) => l.startsWith("refused: --screen-project")))
   world.exited = undefined
 })
+
+// Its pages' destruction held past the departure's deadline, a teardown
+// whose cyfr was ended goes on after the fresh cyfr opened the same CYFR
+// again: the store is that fresh run's now, and its connections too.
+test("a teardown begun under a cyfr that has ended closes no connection of a store the fresh cyfr opened again", async () => {
+  await signedIn()
+  const old = child
+  world.holdPages = true
+  mock.timers.enable({apis: ["setTimeout"]})
+  try {
+    assert.ok(select(PORT_B).prevented)
+    await turns()
+    assert.ok(world.heldPages.length > 0)
+    assert.deepEqual(world.connections, [])
+    mock.timers.tick(DEPARTURE_MS)
+    await turns()
+    assert.equal(old.killed, "SIGKILL")
+    old.emit("exit", null, "SIGKILL")
+    await turns()
+    world.holdPages = false
+    child.say({type: "ready", url: READY, rail: RAIL})
+    await turns()
+    assert.ok(await opens())
+    assert.equal(content().webContents.session.partition, contentStore(HOME))
+    letPagesGo()
+    await turns(6)
+    assert.ok(!world.connections.includes(contentStore(HOME)), "the old teardown closed the freshly opened partition's connections")
+  } finally {
+    mock.timers.reset()
+  }
+})
