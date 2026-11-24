@@ -16,48 +16,56 @@ import (
 )
 
 func TestParseArgs(t *testing.T) {
-	cfg, err := ParseArgs(strings.Fields("--pool backends:20001-20032 --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
+	cfg, err := ParseArgs(strings.Fields("--pool backends:20001-20032:routed --home-root /var/lib/locus/homes --guard /run/g/guard.sock --client-user locus -- /app/bin/locus start"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Config{
-		Pools:      []pool.Spec{{Name: "backends", First: 20001, Last: 20032}},
+		Pools:      []pool.Spec{{Name: "backends", First: 20001, Last: 20032, Reach: pool.ReachRouted}},
 		HomeRoot:   "/var/lib/locus/homes",
 		ClientUser: "locus",
 		ClientArgv: []string{"/app/bin/locus", "start"},
+		Guard:      "/run/g/guard.sock",
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("config %+v", cfg)
 	}
 
-	two, err := ParseArgs(strings.Fields("--pool a:100-199 --pool b:200-299 --home-root /h --client-user c -- run --flag"))
+	two, err := ParseArgs(strings.Fields("--pool a:100-199:relay --pool b:200-299:relay --home-root /h --client-user c -- run --flag"))
 	if err != nil || len(two.Pools) != 2 || !reflect.DeepEqual(two.ClientArgv, []string{"run", "--flag"}) {
 		t.Fatalf("two pools: %+v %v", two, err)
 	}
 
-	// The locus-runtime service's command line: the runner pool is isolated.
-	isolated, err := ParseArgs(strings.Fields("--pool runner:30101-30108:netns --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
-	if err != nil || !reflect.DeepEqual(isolated.Pools, []pool.Spec{{Name: "runner", First: 30101, Last: 30108, Isolated: true}}) {
-		t.Fatalf("an isolated pool: %+v %v", isolated, err)
+	// The locus-runtime service's command line: the runner pool's spaces
+	// reach nothing but their relays, and the keeper has no guard.
+	relay, err := ParseArgs(strings.Fields("--pool runner:30101-30108:relay --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
+	if err != nil || !reflect.DeepEqual(relay.Pools, []pool.Spec{{Name: "runner", First: 30101, Last: 30108, Reach: pool.ReachRelay}}) {
+		t.Fatalf("a relay pool: %+v %v", relay, err)
 	}
-	if !isolated.Isolating() || cfg.Isolating() {
-		t.Fatal("Isolating does not say whether some pool is isolated")
+	if relay.Routed() || !cfg.Routed() {
+		t.Fatal("Routed does not say whether some pool is routed")
 	}
 }
 
 func TestParseArgsRefusals(t *testing.T) {
 	for _, args := range []string{
 		"--home-root /h --client-user c -- run",
-		"--pool a:100-199 --client-user c -- run",
-		"--pool a:100-199 --home-root h --client-user c -- run",
-		"--pool a:100-199 --home-root /h/ --client-user c -- run",
-		"--pool a:100-199 --home-root /h -- run",
-		"--pool a:100-199 --home-root /h --client-user c --",
-		"--pool a:100-199 --home-root /h --client-user c run",
-		"--pool a:100-199 --pool a:200-299 --home-root /h --client-user c -- run",
-		"--pool a:100-199 --pool b:150-299 --home-root /h --client-user c -- run",
-		"--pool a:0-199 --home-root /h --client-user c -- run",
-		"--pool a:100-199 --home-root /h --client-user c --unknown x -- run",
+		"--pool a:100-199:relay --client-user c -- run",
+		"--pool a:100-199:relay --home-root h --client-user c -- run",
+		"--pool a:100-199:relay --home-root /h/ --client-user c -- run",
+		"--pool a:100-199:relay --home-root /h -- run",
+		"--pool a:100-199:relay --home-root /h --client-user c --",
+		"--pool a:100-199:relay --home-root /h --client-user c run",
+		"--pool a:100-199:relay --pool a:200-299:relay --home-root /h --client-user c -- run",
+		"--pool a:100-199:relay --pool b:150-299:relay --home-root /h --client-user c -- run",
+		"--pool a:0-199:relay --home-root /h --client-user c -- run",
+		"--pool a:100-199:relay --home-root /h --client-user c --unknown x -- run",
+		// A pool with no reach, a routed pool without its guard, a guard
+		// with no routed pool, and kept homes outside a routed keeper.
+		"--pool a:100-199 --home-root /h --client-user c -- run",
+		"--pool a:100-199:routed --home-root /h --client-user c -- run",
+		"--pool a:100-199:relay --home-root /h --guard /g/s --client-user c -- run",
+		"--pool a:100-199:relay --home-root /h --kept-homes /k:400-499 --client-user c -- run",
 	} {
 		if _, err := ParseArgs(strings.Fields(args)); err == nil {
 			t.Errorf("%q accepted", args)
@@ -156,7 +164,7 @@ func TestClientEnvironDescribesTheClientUserAndItsChannel(t *testing.T) {
 }
 
 func TestParseArgsKeptHomes(t *testing.T) {
-	cfg, err := ParseArgs(strings.Fields("--pool backends:20001-20032 --home-root /var/lib/locus/homes --kept-homes /var/lib/locus/kept:40001-49999 --client-user locus -- /app/bin/locus start"))
+	cfg, err := ParseArgs(strings.Fields("--pool backends:20001-20032:routed --home-root /var/lib/locus/homes --kept-homes /var/lib/locus/kept:40001-49999 --guard /run/g/guard.sock --client-user locus -- /app/bin/locus start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +180,7 @@ func TestParseArgsKeptHomes(t *testing.T) {
 		"/var/lib/locus/kept:1-70000",           // too many
 		"/var/lib/locus/kept",                   // no range
 	} {
-		args := "--pool backends:20001-20032 --home-root /var/lib/locus/homes --kept-homes " + kept + " --client-user locus -- run"
+		args := "--pool backends:20001-20032:routed --home-root /var/lib/locus/homes --guard /run/g/guard.sock --kept-homes " + kept + " --client-user locus -- run"
 		if _, err := ParseArgs(strings.Fields(args)); err == nil {
 			t.Errorf("--kept-homes %s accepted", kept)
 		}

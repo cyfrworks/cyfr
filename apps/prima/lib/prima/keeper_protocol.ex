@@ -13,7 +13,7 @@ defmodule Prima.KeeperProtocol do
   ## Lines
 
   A request or a reply is one JSON object on one line, ending in `\\n`,
-  carrying `"v": 3` and a `type`, at most `max_line_bytes/0` bytes before
+  carrying `"v": 4` and a `type`, at most `max_line_bytes/0` bytes before
   its newline. A client sends `place`, `drop`, `assign`, `spawn`,
   `signal`, `resize`, `release`, `measure`, `pool`, `home_make`,
   `home_measure` and `home_retire`; the keeper answers `placed`,
@@ -129,15 +129,16 @@ defmodule Prima.KeeperProtocol do
   ## Hosts
 
   A spawn's `hosts` names the only hosts its command may reach beyond the
-  resolver and the deployment's private hosts (`valid_hosts?/1`), never on
-  an isolated spawn, which reaches nothing; absent keeps the
-  island's public-hosts rule. The keeper resolves the names at the spawn,
-  and only then, and has the island's egress guard admit those addresses
-  for the spawn's uid and refuse it every other public one, or, for a spawn
-  without `hosts`, return the uid to the island's rule, before the command
-  starts. A name that resolves to no address refuses the spawn as
-  `hosts_unresolved`, and a guard that does not confirm (or none) as
-  `guard_unavailable`.
+  resolver and the deployment's private hosts (`valid_hosts?/1`); absent
+  keeps the island's public-hosts rule. A relay pool's spawn, which
+  reaches nothing, is refused one as `bad_request`, a decision of the pool
+  the keeper makes. The keeper resolves the names at the spawn, and only
+  then, and has the island's guard make the spawn's space its own route
+  with exactly those addresses and no other public one, or of the island's
+  rule for a spawn without `hosts`, before the command starts: each space
+  has its own route, so one session's hosts never change another's. A name
+  that resolves to no address refuses the spawn as `hosts_unresolved`, and
+  a route the guard does not confirm as `guard_unavailable`.
 
   ## Frames
 
@@ -149,7 +150,7 @@ defmodule Prima.KeeperProtocol do
   client's own: a stream it never asked for is a relay fault there.
 
   The relay stream, 5, is the exception to that rule's premise: every
-  spawn of an isolated pool has one, the socket on its command's file
+  spawn of a relay pool has one, the socket on its command's file
   descriptor 4 carrying `Prima.RunnerRelay` frames verbatim, asked for or
   not. The keeper sends nothing on it, its end frame included, until the
   client has sent on it first, so a client that never uses the stream
@@ -160,25 +161,25 @@ defmodule Prima.KeeperProtocol do
   keeper had not read when every other stream of the spawn ended opens
   nothing: the attach connection ends.
 
-  ## Isolation
+  ## Spaces
 
-  A spawn's `isolation` is `"netns"`, the only value, or absent. The
-  keeper declares on its command line which of its pools are isolated
-  (`--pool runner:30101-30108:netns`): it starts every spawn of such a
-  pool in a user and network namespace of its own, whose only interface
-  is a loopback left down, and refuses as `bad_request` a spawn of an
-  isolated pool that does not carry `isolation`, and one of any other
-  pool that does, so a client never takes a command for isolated that is
-  not. The namespace maps the spawn's pooled uid and gid to themselves,
-  so the command keeps its uid, its home and its cgroup; it holds no
-  capability in any set and runs with `no_new_privs`. Its relay on file
+  Every spawn runs in a space of its own, a user, network and IPC
+  namespace that maps its uid and gid to themselves, so the command keeps
+  its uid, its home and its cgroup, holds no capability in any set, runs
+  with `no_new_privs` and shares no abstract socket or System V object
+  with anything else. What a space reaches is its pool's, which the keeper
+  declares on its command line (`--pool runner:30101-30108:relay`,
+  `--pool backends:20001-20032:routed`), never a spawn's member: a relay
+  pool's space has its loopback down and no route, so its relay on file
   descriptor 4, carried as stream 5, is its only way to anything beyond
-  its control channel.
+  its control channel; a routed pool's space has its own loopback and the
+  one route its island's guard makes for it, its names answered at
+  127.0.0.11:53 in the space itself.
   """
 
   alias Prima.RunnerControl
 
-  @version 3
+  @version 4
   # The keeper spells these as frame.MaxPayload and protocol.MaxLineBytes;
   # the vectors' `bounds` pin both sides to the same numbers.
   @max_frame_bytes 65_536
@@ -212,7 +213,6 @@ defmodule Prima.KeeperProtocol do
   @max_pty_size 1000
   @home_modes ~w(scratch kept)
   @kinds ~w(warm run build program terminal)
-  @isolations ~w(netns)
   @signals ~w(SIGTERM SIGKILL SIGINT SIGHUP SIGQUIT SIGUSR1 SIGUSR2)
   @reserved_env ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD)
   @reserved_env_prefixes ~w(CYFR_ LOCUS_ KEEPER_)
@@ -257,7 +257,6 @@ defmodule Prima.KeeperProtocol do
          memory_bytes: :required,
          cpu_quota: :required,
          control: :optional,
-         isolation: :optional,
          attach: :required,
          home_mode: :optional,
          home_path: :optional,
@@ -327,7 +326,7 @@ defmodule Prima.KeeperProtocol do
   `drop` carries `place` alone. `spawn` requires `id`, `place`, `pool`, `argv`,
   `memory_bytes`, `cpu_quota` and `attach` (`%{path: path, token: token}`); `env`
   (names to values), `rlimits` (`nofile`, `nproc`, `core`, `fsize`),
-  `control`, `isolation` (`"netns"`), `home_mode` (`"scratch"` or
+  `control`, `home_mode` (`"scratch"` or
   `"kept"`), `home_path`, `home_uid`, `home_max_bytes`, `pty` and `hosts`
   are optional, the home's three carried exactly when `home_mode` is
   `"kept"`, `home_max_bytes` among them optional. A home request carries
@@ -361,7 +360,6 @@ defmodule Prima.KeeperProtocol do
               required(:memory_bytes) => pos_integer(),
               required(:cpu_quota) => pos_integer(),
               optional(:control) => boolean(),
-              optional(:isolation) => String.t(),
               required(:attach) => %{path: String.t(), token: String.t()},
               optional(:home_mode) => String.t(),
               optional(:home_path) => String.t(),
@@ -466,10 +464,6 @@ defmodule Prima.KeeperProtocol do
   @doc "The kinds a place may be."
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
-
-  @doc "The values a spawn's `isolation` may take."
-  @spec isolations() :: [String.t()]
-  def isolations, do: @isolations
 
   @doc "The signals a `signal` request may name."
   @spec signals() :: [String.t()]
@@ -689,7 +683,6 @@ defmodule Prima.KeeperProtocol do
     if type == :spawn do
       check_spec(fields)
       check_home(fields)
-      check_hosts(fields)
     end
 
     line =
@@ -773,9 +766,6 @@ defmodule Prima.KeeperProtocol do
        do: {"cpu_quota", quota}
 
   defp write(:spawn, {:control, control}) when is_boolean(control), do: {"control", control}
-
-  defp write(:spawn, {:isolation, isolation}) when isolation in @isolations,
-    do: {"isolation", isolation}
 
   defp write(:spawn, {:home_mode, mode}) when mode in @home_modes, do: {"home_mode", mode}
   defp write(:spawn, {:home_path, path}), do: {"home_path", home_path!("home_path", path)}
@@ -891,12 +881,6 @@ defmodule Prima.KeeperProtocol do
 
     :ok
   end
-
-  # An isolated spawn reaches nothing, so it names no hosts.
-  defp check_hosts(%{hosts: _hosts, isolation: _isolation}),
-    do: raise(ArgumentError, "hosts is carried only by a spawn that is not isolated")
-
-  defp check_hosts(_fields), do: :ok
 
   # The keeper's bound on a spawn's argv and env together, as it counts it.
   defp check_spec(fields) do

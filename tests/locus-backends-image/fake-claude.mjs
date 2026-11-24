@@ -10,7 +10,7 @@
 //
 // - It refuses to start without the arguments every session takes
 //   (`-p`, stream-json both ways, `--verbose`, partial messages,
-//   `--strict-mcp-config`, `--permission-prompt-tool stdio`). Started with
+//   `--permission-prompt-tool stdio`). Started with
 //   `--resume` of a session its folder does not hold, it ends as 2.1.318
 //   ended: a `result` of no turn naming the session on its stdout, the
 //   same words on its stderr, and exit 1, before it reads a line.
@@ -18,13 +18,22 @@
 //   carries is kept; `mcp_set_servers` starts each stdio server it names
 //   (the image's `cyfr-stub`), lists its tools over MCP and answers
 //   `added`.
+// - The person's own MCP servers, those `$HOME/.claude.json` names under
+//   `mcpServers`, are started at its start unless it was started with
+//   `--strict-mcp-config`, as Claude Code 2.1.323 was measured to start
+//   them. `mcp_status` names them with their source, `user`,
+//   beside the driver's, `dynamic`; a server `mcp_set_servers` names
+//   replaces one of theirs of the same name for the process's life; each
+//   ask of an MCP tool names its server (`mcp_server`).
 // - A user message is a turn: `system/init`, then by the words of its last
 //   text block (a new session's history rides before it): `hello`
 //   asks to run its own `Bash` and replies naming its flags and prompt;
 //   `read` makes an `assistant` `tool_use` of `mcp__cyfr__files`, asks
 //   `can_use_tool` and holds until the driver's `control_response`, calls
 //   the stub with the allow's `updatedInput` and replies with what it
-//   answered; `modes` asks for its own `Write` and `Bash`
+//   answered; `theirs` calls `echo_env` of each server of the person's own
+//   it holds, for `THEIR_SERVER`, asked as that server's, and replies naming
+//   the MCP tools its init listed and what each call answered; `modes` asks for its own `Write` and `Bash`
 //   and replies with its whole command line and the driver's two whole
 //   answers, as JSON. Each reply streams as `stream_event` text deltas, then
 //   the whole `assistant` message, then `result` with usage.
@@ -48,7 +57,7 @@ const flag = (name) => {
   const at = args.indexOf(name);
   return at >= 0 ? args[at + 1] : undefined;
 };
-const BASE = ['-p', '--verbose', '--include-partial-messages', '--strict-mcp-config'];
+const BASE = ['-p', '--verbose', '--include-partial-messages'];
 const PAIRS = [['--input-format', 'stream-json'], ['--output-format', 'stream-json'], ['--permission-prompt-tool', 'stdio']];
 const missing = BASE.filter((a) => !args.includes(a)).concat(PAIRS.filter(([f, v]) => flag(f) !== v).map(([f]) => f));
 if (missing.length) {
@@ -109,12 +118,14 @@ const asks = new Map();
 const wholes = new Map();
 let asked = 0;
 
-// ---- MCP servers set by the driver ----
+// ---- MCP servers: the driver's (`dynamic`) and the person's own ----
 const servers = new Map();
+const own = new Map();
+let ownNames = [];
 
-function startServer(name, config) {
+function startServer(name, config, into = servers) {
   return new Promise((resolve) => {
-    const child = spawn(config.command, config.args || [], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const child = spawn(config.command, config.args || [], { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, ...(config.env || {}) } });
     const server = { child, tools: [], next: 1, waiting: new Map() };
     child.on('error', () => resolve(null));
     readline.createInterface({ input: child.stdout }).on('line', (line) => {
@@ -134,20 +145,51 @@ function startServer(name, config) {
       })
       .then((listed) => {
         server.tools = listed.result.tools;
-        servers.set(name, server);
+        into.set(name, server);
         resolve(server);
       });
   });
 }
 
-function stopServers() {
-  for (const server of servers.values()) server.child.kill('SIGINT');
-  servers.clear();
+function stopServers(which = servers) {
+  for (const server of which.values()) server.child.kill('SIGINT');
+  which.clear();
+}
+
+// The person's own start with the process. `mcp_set_servers` and every
+// turn but `theirs` go on without them, as Claude Code 2.1.323 was measured
+// to answer a set and finish a turn beside a server of the person's that
+// never answers. `theirs` waits for all of
+// them, the fake's own simplification, which no case's server tests: the
+// real program lists and calls the ones that started. A server the
+// driver's set names replaces theirs of that name, as the records measured;
+// stopping the replaced one once it has started is the
+// fake's own housekeeping, not a measured exit.
+const shadowed = new Set();
+let ownListed = Promise.resolve();
+if (!args.includes('--strict-mcp-config')) {
+  let configured = {};
+  try {
+    configured = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')).mcpServers || {};
+  } catch {}
+  ownNames = Object.keys(configured).sort();
+  ownListed = Promise.all(ownNames.map((name) => startServer(name, configured[name], own).then((server) => {
+    if (server && shadowed.has(name)) {
+      server.child.kill('SIGINT');
+      own.delete(name);
+    }
+  })));
 }
 
 async function setServers(requestId, wanted) {
   const removed = [...servers.keys()];
   stopServers();
+  for (const name of Object.keys(wanted)) {
+    shadowed.add(name);
+    own.get(name)?.child.kill('SIGINT');
+    own.delete(name);
+    ownNames = ownNames.filter((n) => n !== name);
+  }
   const added = [];
   const errors = {};
   for (const [name, config] of Object.entries(wanted)) {
@@ -156,13 +198,16 @@ async function setServers(requestId, wanted) {
   out({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response: { added, removed, errors } } });
 }
 
-const mcpTools = () => [...servers.entries()].flatMap(([name, s]) => s.tools.map((t) => `mcp__${name}__${t.name}`));
+const toolsOf = (held) => [...held.entries()].flatMap(([name, s]) => s.tools.map((t) => `mcp__${name}__${t.name}`));
+const mcpTools = () => [...toolsOf(own), ...toolsOf(servers)];
+// The one server the driver set, CYFR's, by its name.
+const dynamicName = () => [...servers.keys()][0];
 
 // ---- A turn ----
-function ask(tool, input) {
+function ask(tool, input, server) {
   const requestId = `ask-${++asked}`;
   const toolUseId = `toolu_fake_${asked}`;
-  out({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: tool, input, tool_use_id: toolUseId, permission_suggestions: [] } });
+  out({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: tool, input, tool_use_id: toolUseId, permission_suggestions: [], ...(server ? { mcp_server: server } : {}) } });
   return new Promise((resolve) => asks.set(requestId, (decision) => resolve({ decision, toolUseId })));
 }
 
@@ -205,11 +250,12 @@ async function turn(message) {
     reply(`Hello from the fake harness: session ${sessionId}, model ${model}, effort ${flag('--effort') || 'unset'}, tools ${flag('--tools') ?? 'all'}, Bash ${ran}, prompt "${appended}".`);
   } else if (words.includes('read')) {
     const input = { action: 'read', path: 'notes.txt' };
-    out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text: 'Reading it.' }, { type: 'tool_use', id: `toolu_fake_${asked + 1}`, name: 'mcp__cyfr__files', input }], usage: { input_tokens: 5, output_tokens: 2 } }, parent_tool_use_id: null, session_id: sessionId });
-    const { decision, toolUseId } = await ask('mcp__cyfr__files', input);
+    const cyfr = dynamicName();
+    out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text: 'Reading it.' }, { type: 'tool_use', id: `toolu_fake_${asked + 1}`, name: `mcp__${cyfr}__files`, input }], usage: { input_tokens: 5, output_tokens: 2 } }, parent_tool_use_id: null, session_id: sessionId });
+    const { decision, toolUseId } = await ask(`mcp__${cyfr}__files`, input, { name: cyfr, source: 'dynamic' });
     let said;
     if (decision.behavior === 'allow') {
-      const called = await servers.get('cyfr').request('tools/call', { name: 'files', arguments: decision.updatedInput, _meta: { 'claudecode/toolUseId': toolUseId } });
+      const called = await servers.get(cyfr).request('tools/call', { name: 'files', arguments: decision.updatedInput, _meta: { 'claudecode/toolUseId': toolUseId } });
       const result = called.result;
       said = result.content.map((b) => b.text).join('');
       out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: said, is_error: result.isError === true }] }, parent_tool_use_id: null, session_id: sessionId });
@@ -218,6 +264,26 @@ async function turn(message) {
       said = `Denied: ${decision.message}`;
     }
     reply(said);
+  } else if (words.includes('theirs')) {
+    // The fake's own wait for every server of theirs (above).
+    await ownListed;
+    const ran = [];
+    for (const name of ownNames) {
+      const server = own.get(name);
+      if (!server) continue;
+      const tool = `mcp__${name}__echo_env`;
+      const input = { name: 'THEIR_SERVER' };
+      out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'tool_use', id: `toolu_fake_${asked + 1}`, name: tool, input }], usage: { input_tokens: 5, output_tokens: 2 } }, parent_tool_use_id: null, session_id: sessionId });
+      const { decision, toolUseId } = await ask(tool, input, { name, source: 'user' });
+      let answered = 'denied';
+      if (decision.behavior === 'allow') {
+        const called = await server.request('tools/call', { name: 'echo_env', arguments: decision.updatedInput });
+        answered = `given ${JSON.stringify(decision.updatedInput)} answered ${JSON.parse(called.result.content[0].text).value}`;
+        out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: answered }] }, parent_tool_use_id: null, session_id: sessionId });
+      }
+      ran.push(`${tool} ${answered}`);
+    }
+    reply(`Tools: ${mcpTools().filter((t) => t.endsWith('__echo_env') || t.endsWith('__files')).sort().join(', ')}. ${ran.join('; ')}.`);
   } else if (words.includes('modes')) {
     const ids = [];
     for (const [tool, input] of [['Write', { file_path: 'made.txt', content: 'x' }], ['Bash', { command: 'touch made.txt' }]]) {
@@ -239,6 +305,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     if (request.subtype === 'initialize') {
       appended = request.appendSystemPrompt || '';
       out({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: { commands: [], agents: [], output_style: 'default', available_output_styles: ['default'], models: MODELS, account: {}, claude_code_version: 'fake', session_state: 'idle' } } });
+    } else if (request.subtype === 'mcp_status') {
+      const listed = [...ownNames.map((name) => ({ name, status: own.has(name) ? 'connected' : 'pending', scope: 'user', source: 'user' })),
+        ...[...servers.keys()].map((name) => ({ name, status: 'connected', scope: 'dynamic', source: 'dynamic' }))];
+      out({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: { mcpServers: listed } } });
     } else if (request.subtype === 'mcp_set_servers') {
       setServers(message.request_id, request.servers || {});
     } else {
@@ -254,5 +324,6 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
 }).on('close', () => turns.then(() => {
   stopServers();
+  stopServers(own);
   process.exit(0);
 }));

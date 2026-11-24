@@ -56,6 +56,9 @@ import (
 // file is empty is refused in Codex's words for it. An injection
 // (`thread/inject_items`) is kept in the thread's rollout, and refused
 // while FAKE_INJECT_FAIL is set or a turn runs.
+// A steer is refused as Codex refuses one it did not take (-32600) while
+// FAKE_STEER_REFUSE is set, and with an error of another code (-32603)
+// while FAKE_STEER_UNKNOWN is.
 const fakeEnv = "CYFR_FAKE_CODEX"
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
@@ -230,6 +233,16 @@ func fakeCodex() int {
 			command["status"], command["aggregatedOutput"] = "completed", "FOLDER-CANARY"
 			notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": command})
 			reply(turn, "ran it")
+		case strings.Contains(words, "limited"):
+			// As Codex 0.169.0 answered a usage limit (measured): its
+			// limits, naming no thread, then the error and the failed turn.
+			notify("account/rateLimits/updated", map[string]any{"rateLimits": map[string]any{"limitId": "codex",
+				"primary":   map[string]any{"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1795518975},
+				"secondary": map[string]any{"usedPercent": 40, "windowDurationMins": 10080, "resetsAt": 1795900000}}})
+			limit := map[string]any{"message": "HARNESS-WORDS You've hit your usage limit. Try again at 11:16 AM.", "codexErrorInfo": "usageLimitExceeded"}
+			notify("error", map[string]any{"threadId": thread.id, "turnId": turn, "willRetry": false, "error": limit})
+			complete(turn, "failed", limit)
+			return
 		case strings.Contains(words, "fail"):
 			harness := "HARNESS-WORDS unexpected status 401 Unauthorized, sign in at https://example.invalid"
 			notify("error", map[string]any{"threadId": thread.id, "turnId": turn, "willRetry": true, "error": map[string]any{"message": harness}})
@@ -437,12 +450,22 @@ func fakeCodex() int {
 				}
 				record(map[string]any{"type": "fake_injected", "items": m.Params["items"]})
 				ok(map[string]any{})
+			case m.Method == "turn/interrupt":
+				// Kept in the rollout, as Codex records an interrupted turn.
+				record(map[string]any{"type": "fake_interrupted", "turnId": str("turnId")})
+				ok(map[string]any{})
 			case m.Method == "turn/steer":
 				thread.Lock()
 				active := thread.active
 				thread.Unlock()
 				if os.Getenv("FAKE_STEER_REFUSE") != "" || active == "" || str("expectedTurnId") != active {
 					fail(-32600, "no active turn to steer")
+					continue
+				}
+				if os.Getenv("FAKE_STEER_UNKNOWN") != "" {
+					// An error of another code: whether Codex took the input
+					// is not said.
+					fail(-32603, "internal error")
 					continue
 				}
 				ok(map[string]any{"turnId": active})

@@ -6,7 +6,8 @@ defmodule Arca.Adapters.LocalTest do
 
   alias Arca.Adapters.Local
 
-  @test_base_path System.tmp_dir!() |> Path.join("arca_test_#{:rand.uniform(100_000)}")
+  @test_base_path System.tmp_dir!()
+                  |> Path.join("arca_test_#{System.unique_integer([:positive])}")
 
   setup do
     # Use a unique temp directory for each test run

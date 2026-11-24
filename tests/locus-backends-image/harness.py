@@ -59,6 +59,7 @@ import hmac
 import json
 import os
 import secrets
+import shutil
 import socket
 import sys
 import time
@@ -869,8 +870,16 @@ def guard_counters(saved):
 
 
 def backend_environ(stack, pid, uid):
-    """The environment of process `pid` as `NAME=value` lines, read as the backend's own uid, which runs the process."""
-    return read_output(stack.exec(f"tr '\\0' '\\n' < /proc/{pid}/environ", user=str(uid)), f"the environment of pid {pid}")
+    """The environment of process `pid`, of uid `uid`, as `NAME=value` lines, read by the observer (`Stack.observe`).
+
+    A program runs in a space of its own, a user namespace its keeper made.
+    Its /proc environ is readable only from inside that space by its own
+    uid, or with CAP_SYS_PTRACE: the same uid outside the space may not
+    read it, and neither may the container's root, which holds no such
+    capability.
+    """
+    return read_output(stack.observe(f"tr '\\0' '\\n' < /proc/{pid}/environ"),
+                       f"the environment of pid {pid}, uid {uid}")
 
 
 def image_user_name(stack, uid):
@@ -937,10 +946,18 @@ def require_docker():
 
 
 class Stack(imagesuite.Stack):
-    def __init__(self, project, image, canary_dir=None, guard_tools_dir=None):
+    def __init__(self, project, image, canary_dir=None, guard_tools_dir=None, names=False):
         super().__init__(project)
+        # With names, the guard's resolver asks the suites' name listener
+        # (compose.names.yml), which starts beside it.
+        self.names = names
         self.image = image
         self.canary_dir = canary_dir or HERE
+        # The service names the keeper's seccomp profile beside the
+        # project's .env, which compose reads from the project directory, as
+        # a scaffolded project holds it.
+        shutil.copyfile(os.path.join(ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json"),
+                        os.path.join(self.project_dir, "keeper.seccomp.json"))
         # The directory first on the guard's PATH: empty, so the guard runs
         # the image's own tools, unless a test gives it one.
         self.guard_tools_dir = guard_tools_dir or imagesuite.temporary_directory("cyfr-guard-tools-", 0o755)
@@ -974,6 +991,8 @@ class Stack(imagesuite.Stack):
 
     def compose(self, *args, check=True, env=None):
         files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.locus-backends.yml")]
+        if self.names:
+            files.append(os.path.join(HERE, "compose.names.yml"))
         return run(
             "docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,
             *[arg for file in files for arg in ("-f", file)], *args,
@@ -987,7 +1006,8 @@ class Stack(imagesuite.Stack):
         """
         self.pool = pool or f"{POOL_FIRST}-{POOL_LAST}"
         self.memory_bytes = memory_bytes
-        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, *([STAND_IN] if stand_in else []))
+        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, *([STAND_IN] if stand_in else []),
+                     *(["name-listener"] if self.names else []))
         self.container = self.compose("ps", "--quiet", SERVICE).stdout.strip()
         self.guard = self.compose("ps", "--quiet", GUARD).stdout.strip()
         expect(self.container and self.guard, f"compose started the {SERVICE} container behind its guard")
@@ -1012,6 +1032,12 @@ class Stack(imagesuite.Stack):
     def guard_logs(self):
         return read_output(self.compose("logs", "--no-color", GUARD, check=False), "the backends guard's log")
 
+    def names_heard(self):
+        """The names the suites' name listener was asked, in order (`Stack(names=True)`)."""
+        text = read_output(self.compose("logs", "--no-color", "--no-log-prefix", "name-listener", check=False),
+                           "the name listener's log")
+        return [line.split(" ", 1)[1].strip() for line in text.splitlines() if line.startswith("heard ")]
+
     def guard_exec(self, script):
         return run("docker", "exec", self.guard, "sh", "-c", script, check=False)
 
@@ -1030,31 +1056,54 @@ class Stack(imagesuite.Stack):
                    "--entrypoint", command[0], self.image, *command[1:], check=False, timeout=60)
 
     def alone(self, suffix, publish=False):
-        """A second instance of the shipped service, started as the project's `suffix` (PROJECT-SUFFIX) in a network namespace of its own on the island's network.
+        """A second instance of the shipped service, started as the project's `suffix` (PROJECT-SUFFIX) behind a guard of its own on the island's network.
 
         `compose run` would put it in the guard's namespace, beside the
-        running service's listener; `docker run` gives it the running
-        container's own configuration (capabilities, security options,
-        read-only root, ipc, init, tmpfs mounts, limit, mounts, environment
-        and entrypoint), read from that container, so the second instance
-        is the shipped service and spells none of it, but for its keeper's
-        `--guard`: no guard stands beside it, so its keeper sets no
-        program's egress and its programs name no hosts. With `publish`,
+        running service's listener; `docker run` gives it, and its guard
+        (PROJECT-SUFFIX-guard), the running containers' own configuration
+        (capabilities, security options, sysctls, read-only root, ipc, init,
+        tmpfs mounts, limit, mounts, environment and entrypoint), read from
+        those containers, so the second instance is the shipped service and
+        spells none of it. Its guard serves its keeper the control on a
+        volume of their own: every program's session runs in a routed
+        space, which no keeper starts without its guard. With `publish`,
         its port is published on the loopback, read with `docker port`.
+        `alone_down(suffix)` removes both and their volumes.
         """
-        info = self.inspect(self.container)
-        host, config = info["HostConfig"], info["Config"]
-        args = ["docker", "run", "--detach", "--name", f"{self.project}-{suffix}", "--network", f"{self.project}_{NETWORK}"]
-        if host.get("Init"):
-            args.append("--init")
+        guard_name = f"{self.project}-{suffix}-guard"
+        run("docker", "rm", "--force", "--volumes", guard_name, check=False)
+        guard = self.inspect(self.guard)
+        args = ["docker", "run", "--detach", "--name", guard_name, "--network", f"{self.project}_{NETWORK}"]
         if publish:
             args += ["--publish", f"127.0.0.1::{PORT}"]
+        args += self.copied(guard, control=False)
+        run(*args)
+        eventually(lambda: self.inspect(guard_name)["State"].get("Health", {}).get("Status") == "healthy",
+                   f"{guard_name} to turn healthy", timeout_s=60)
+        info = self.inspect(self.container)
+        args = ["docker", "run", "--detach", "--name", f"{self.project}-{suffix}", "--network", f"container:{guard_name}"]
+        args += self.copied(info, control=True, guard_name=guard_name)
+        run(*args)
+
+    def copied(self, info, control, guard_name=None):
+        """The `docker run` arguments that give a container `info`'s configuration, its control volume shared with
+        `guard_name`'s where `control` is set, and a fresh volume of its own for every other volume mount."""
+        host, config = info["HostConfig"], info["Config"]
+        args = []
+        if host.get("Init"):
+            args.append("--init")
         for cap in host.get("CapDrop") or []:
             args += ["--cap-drop", cap]
         for cap in host.get("CapAdd") or []:
             args += ["--cap-add", cap]
         for option in host.get("SecurityOpt") or []:
+            # Docker reports a seccomp profile inline, as its JSON; the run
+            # takes it as the file the project holds.
+            if option.startswith("seccomp="):
+                option = f"seccomp={os.path.join(self.project_dir, 'keeper.seccomp.json')}"
             args += ["--security-opt", option]
+        for name, value in (host.get("Sysctls") or {}).items():
+            args += ["--sysctl", f"{name}={value}"]
         if host.get("ReadonlyRootfs"):
             args.append("--read-only")
         if host.get("IpcMode"):
@@ -1065,20 +1114,35 @@ class Stack(imagesuite.Stack):
             args += ["--memory", str(host["Memory"])]
         for bind in host.get("Binds") or []:
             args += ["--volume", bind]
-        # The kept homes' volume: a fresh one of this instance's own, which
-        # Docker fills from the image, so the second instance never shares
-        # the running service's homes.
         for mount in host.get("Mounts") or []:
-            if mount.get("Type") == "volume":
+            if mount.get("Type") != "volume":
+                continue
+            if mount["Target"] == "/run/cyfr-guard-control":
+                # The guard's control: the second guard's own, which its
+                # service mounts read-only, as compose mounts the first.
+                source = f"{guard_name or info['Name'].lstrip('/')}-control"
+                args += ["--mount", f"type=volume,source={source},target={mount['Target']}" + (",readonly" if control else "")]
+            else:
+                # The kept homes' volume: a fresh one of this instance's
+                # own, which Docker fills from the image, so the second
+                # instance never shares the running service's homes.
                 args += ["--mount", f"type=volume,target={mount['Target']}"]
+        # The guard's health is compose's probe, which the image does not
+        # carry; the second service needs none.
+        test = (config.get("Healthcheck") or {}).get("Test") or []
+        if not control and test[:1] in (["CMD"], ["CMD-SHELL"]):
+            args += ["--health-cmd", " ".join(test[1:]), "--health-interval", "1s"]
         for entry in config.get("Env") or []:
             args += ["--env", entry]
         entrypoint = list(config.get("Entrypoint") or [])
-        if "--guard" in entrypoint:
-            at = entrypoint.index("--guard")
-            del entrypoint[at:at + 2]
         args += ["--entrypoint", entrypoint[0], self.image, *entrypoint[1:], *(config.get("Cmd") or [])]
-        run(*args)
+        return args
+
+    def alone_down(self, suffix):
+        """Removes the second instance `suffix` and its guard, with their volumes."""
+        for name in (f"{self.project}-{suffix}", f"{self.project}-{suffix}-guard"):
+            run("docker", "rm", "--force", "--volumes", name, check=False)
+        run("docker", "volume", "rm", "--force", f"{self.project}-{suffix}-guard-control", check=False)
 
     def controller(self, **options):
         return Controller(self.base, self.key, **options)
@@ -1089,6 +1153,11 @@ class Stack(imagesuite.Stack):
     def exec(self, script, user=None, target=None):
         user_args = ["-u", user] if user else []
         return run("docker", "exec", *user_args, target or self.container, "sh", "-c", script, check=False)
+
+    def observe(self, script):
+        """`script` run as root with every capability (`docker exec --privileged`), the observer's alone: the service
+        and its spaces keep the shipped settings."""
+        return run("docker", "exec", "--privileged", "-u", "0", self.container, "sh", "-c", script, check=False)
 
     def processes(self, target=None):
         """Every process in the container: pid, session, uids, capability sets, no_new_privs and command line."""

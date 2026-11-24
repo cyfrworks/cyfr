@@ -4,8 +4,11 @@
 defmodule Compendium.Cascade do
   @moduledoc """
   Revokes profiles and disables webhook and cron registrations (schedules
-  and feeds) when the last version of a component name is removed.
-  Consent history and vault entries remain. A registration whose removal
+  and feeds) when the last version of a component name is removed. The
+  revocation is recorded as the removal's, so the component installed
+  again is granted again (`Sanctum.Consent.Bootstrap`); a grant its person
+  had already revoked keeps their mark and stays revoked. Consent history
+  and vault entries remain. A registration whose removal
   is refused is logged by its id and the reason, and the uninstall still
   completes. Called by registry deletion and pruning; the registry owns
   removal of the component's bytes and row.

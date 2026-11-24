@@ -32,20 +32,17 @@ import (
 // is told so: that is the override in effect, and a dedicated worker or a
 // frame of that process reads it too.
 //
-// Two surfaces the driver cannot hold at their start, so their first reads
-// are Chrome's own. A service worker answers no command until it runs
-// (page.go): it sends the person's language and reads their zone, but its
-// script reads Chrome's en-US as its navigator.language and Intl's locale,
-// and Chrome's own brands and hints (agent.go), until it is told the
-// locale and named once it runs, and that told refused is said in the
-// driver's log. A shared worker attaches to the browser, not to the page
-// that made it, and holding the browser's attachments would hold every
-// window a page opens where no window's attachment sees it: so a shared
-// worker is never attached; it sends the person's language, reads their
-// zone and its process's locale, but reads Chrome's en-US as its
-// navigator.language and navigator.languages, and Chrome's own brands and
-// hints, and its own requests send no Sec-CH-UA. The User-Agent of both
-// is the browser's from their first read.
+// A service worker the driver cannot hold at its start: it answers no
+// command until it runs (page.go). It sends the person's language and
+// reads their zone, but its script reads Chrome's en-US as its
+// navigator.language and Intl's locale, and Chrome's own brands and hints
+// (agent.go), until it is told the locale and named once it runs, and
+// that told refused is said in the driver's log. A shared worker is held
+// at its start by the browser's own attachment (page.go) and told the
+// locale before it runs, but reads Chrome's en-US as its
+// navigator.language and navigator.languages, which the locale does not
+// set, and its own requests send no Sec-CH-UA (both measured). The
+// User-Agent of each is the browser's from its first read.
 // Values the person never reported are absent and leave Chrome's own: the
 // image's en-US and UTC.
 type person struct {

@@ -60,7 +60,7 @@ services:
       - "127.0.0.1:${DEV_STACK_RUNTIME_PORT:?scripts/dev-stack.sh sets it}:4200"
     # The shipped list with the keeper's profile at its tracked path: the
     # scaffold ships it beside docker-compose.yml as keeper.seccomp.json,
-    # which a checkout does not hold.
+    # which a checkout does not hold. Every Locus service takes it.
     security_opt: !override
       - no-new-privileges:true
       - writable-cgroups=true
@@ -70,6 +70,10 @@ services:
     image: ${DEV_STACK_IMAGE}
     pull_policy: never
     container_name: ${DEV_STACK_PROJECT}-locus-backends
+    security_opt: !override
+      - no-new-privileges:true
+      - writable-cgroups=true
+      - seccomp=./apps/locus/keeper/seccomp/keeper.json
 
   # The mix boot reaches the backends service at the guard's fixed address
   # on the island's network, as the shipped cyfr service reaches it on that
@@ -92,6 +96,10 @@ services:
     image: ${DEV_STACK_IMAGE}
     pull_policy: never
     container_name: ${DEV_STACK_PROJECT}-locus-builds
+    security_opt: !override
+      - no-new-privileges:true
+      - writable-cgroups=true
+      - seccomp=./apps/locus/keeper/seccomp/keeper.json
 
   # The builds island as the backends island: the mix boot reaches the
   # builder at its guard's fixed address, and the guard refuses the

@@ -10,74 +10,8 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
-	"strings"
 	"testing"
 )
-
-const (
-	shmTable = `       key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime                   rss                  swap
-    123456          0   600                  4096    12    12      0 20001 20001 20001 20001          0          0 1789432727                     0                     0
-    123457          1   666                  4096    13    13      1     0     0 20001 20001          0          0 1789432727                     0                     0
-    123458          2   600                  4096    14    14      0 20002 20002 20002 20002          0          0 1789432727                     0                     0
-`
-	semTable = `       key      semid perms      nsems   uid   gid  cuid  cgid      otime      ctime
-         0          5   600          1 20001 20001 20001 20001          0 1789432727
-`
-	msgTable = `       key      msqid perms      cbytes       qnum lspid lrpid   uid   gid  cuid  cgid      stime      rtime      ctime
-         0          7   600           0          0     0     0 20002 20002 20001 20001          0          0 1789432727
-`
-)
-
-func TestParseSysvipcFindsObjectsTheUidOwnsOrCreated(t *testing.T) {
-	for _, c := range []struct {
-		kind  string
-		table string
-		want  []IPC
-	}{
-		{"shm", shmTable, []IPC{{"shm", 0}, {"shm", 1}}},
-		{"sem", semTable, []IPC{{"sem", 5}}},
-		{"msg", msgTable, []IPC{{"msg", 7}}},
-		{"shm", strings.SplitN(shmTable, "\n", 2)[0] + "\n", nil},
-	} {
-		got, err := ParseSysvipc(c.kind, []byte(c.table), 20001)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, c.want) {
-			t.Errorf("%s: got %v, want %v", c.kind, got, c.want)
-		}
-	}
-	for name, c := range map[string]struct{ kind, table string }{
-		"unknown table":  {"sock", shmTable},
-		"no uid column":  {"shm", "key shmid perms\n1 2 600\n"},
-		"a short line":   {"sem", "key semid perms nsems uid gid cuid cgid\n0 5 600\n"},
-		"a non-number":   {"sem", "key semid perms nsems uid gid cuid cgid\n0 x 600 1 1 1 1 1\n"},
-		"swapped header": {"msg", strings.Replace(msgTable, "msqid", "semid", 1)},
-	} {
-		if _, err := ParseSysvipc(c.kind, []byte(c.table), 20001); err == nil {
-			t.Errorf("%s: accepted", name)
-		}
-	}
-}
-
-func TestFindIPCReadsEveryTableAndToleratesAKernelWithout(t *testing.T) {
-	dir := realTempDir(t)
-	for kind, table := range map[string]string{"shm": shmTable, "sem": semTable, "msg": msgTable} {
-		if err := os.WriteFile(filepath.Join(dir, kind), []byte(table), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got, err := FindIPC(dir, 20001)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []IPC{{"shm", 0}, {"shm", 1}, {"sem", 5}, {"msg", 7}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	if got, err := FindIPC(filepath.Join(dir, "absent"), 20001); err != nil || got != nil {
-		t.Fatalf("no tables: %v %v", got, err)
-	}
-}
 
 func TestFindReportsTheOutermostEntriesTheUidOwnsAndItsQueues(t *testing.T) {
 	root := realTempDir(t)
@@ -98,7 +32,7 @@ func TestFindReportsTheOutermostEntriesTheUidOwnsAndItsQueues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	found, err := Find(Roots{Dirs: []string{root, filepath.Join(root, "absent")}, Queues: queues}, t.TempDir(), os.Getuid())
+	found, err := Find(Roots{Dirs: []string{root, filepath.Join(root, "absent")}, Queues: queues}, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +42,7 @@ func TestFindReportsTheOutermostEntriesTheUidOwnsAndItsQueues(t *testing.T) {
 		t.Fatalf("found %+v", found)
 	}
 
-	other, err := Find(Roots{Dirs: []string{root}, Queues: queues}, t.TempDir(), os.Getuid()+1)
+	other, err := Find(Roots{Dirs: []string{root}, Queues: queues}, os.Getuid()+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,14 +65,14 @@ func TestFindExceptSkipsAKeptHomeButFindsTheRest(t *testing.T) {
 	// Owned by the uid, the kept root itself would be reported whole; here
 	// it stands for a root another uid owns, so the walk descends into it.
 	home := filepath.Join(root, "kept", "vlt_a")
-	found, err := FindExcept(Roots{Dirs: []string{filepath.Join(root, "kept"), filepath.Join(root, "elsewhere-root")}}, t.TempDir(), os.Getuid(), home)
+	found, err := FindExcept(Roots{Dirs: []string{filepath.Join(root, "kept"), filepath.Join(root, "elsewhere-root")}}, os.Getuid(), home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(found.Paths, []string{filepath.Join(root, "kept", "stray")}) {
 		t.Fatalf("found %+v; the home %s is its uid's and is neither reported nor searched", found, home)
 	}
-	all, err := Find(Roots{Dirs: []string{filepath.Join(root, "kept")}}, t.TempDir(), os.Getuid())
+	all, err := Find(Roots{Dirs: []string{filepath.Join(root, "kept")}}, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +89,7 @@ func TestFindStopsAtItsBounds(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	found, err := Find(Roots{Dirs: []string{root}}, t.TempDir(), os.Getuid())
+	found, err := Find(Roots{Dirs: []string{root}}, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +129,7 @@ func TestFindDescendsIntoDirectoriesOfOthersWithinItsDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	found, err := Find(Roots{Dirs: []string{root}}, t.TempDir(), owner)
+	found, err := Find(Roots{Dirs: []string{root}}, owner)
 	if err != nil {
 		t.Fatal(err)
 	}

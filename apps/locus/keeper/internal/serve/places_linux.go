@@ -248,15 +248,13 @@ func (s *server) retryRemoval(sp *spawn, remove func(*cgroup.Group) error) {
 	if err != nil {
 		return
 	}
-	if r.clean {
-		s.clearEgress(sp.account.UID)
-	}
 	s.mu.Lock()
 	if r.clean {
 		_ = sp.pool.Release(sp.account.UID)
 	}
 	delete(s.spawns, sp.id)
 	delete(s.places, sp.place)
+	delete(s.routing, sp.id)
 	delete(s.unremoved, sp)
 	s.mu.Unlock()
 	s.log.Info("spawn %s: its memory group of uid %d removed on a retry; retired", sp.id, sp.account.UID)

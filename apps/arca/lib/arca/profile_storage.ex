@@ -12,6 +12,11 @@ defmodule Arca.ProfileStorage do
   `Prima.Actor` first and matches it in the head, refusing an actor whose
   athanor is nil or the empty string with `{:error, :no_athanor}` before
   any query. Every read and write is keyed by the owning athanor.
+
+  A revocation names its cause and is written by one verb per cause:
+  `revoke_by_person/2`, for `profile.revoke`, and `revoke_for_source/2`,
+  for the removal of a component's last version. `transition/4` writes no
+  revocation.
   """
 
   import Ecto.Query
@@ -63,10 +68,12 @@ defmodule Arca.ProfileStorage do
   Every move `from` names must be one `Arca.StatusTransitions`'s profile
   table admits, or nothing is read and the answer is
   `{:error, :illegal_transition}`; so it is when the row holds a status
-  outside `from`. A row already `needs_consent` or `revoked` is written so
-  again when `from` names that status, so a retry finishes what an earlier
-  attempt left; `active → active` is refused, since `active` comes only by
+  outside `from`. A row already `needs_consent` is written so again when
+  `from` names that status, so a retry finishes what an earlier attempt
+  left; `active → active` is refused, since `active` comes only by
   re-consent. A row the athanor does not hold is `{:error, :not_found}`.
+  A move to `revoked` is refused with `{:error, :illegal_transition}`: a
+  revocation names its cause (the moduledoc).
   """
   @spec transition(Prima.Actor.t(), String.t(), :any | String.t() | [String.t()], String.t()) ::
           :ok | {:error, :no_athanor | :not_found | :illegal_transition | :database_error}
@@ -74,7 +81,7 @@ defmodule Arca.ProfileStorage do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(to) do
     from = sources(from, to)
 
-    if from != [] and admitted?(from, to) do
+    if to != "revoked" and from != [] and admitted?(from, to) do
       Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.transition", fn ->
         case Arca.Repo.update_all(
                from(p in Profile, where: p.id == ^id and p.status in ^from)
@@ -120,8 +127,40 @@ defmodule Arca.ProfileStorage do
   end
 
   @doc """
+  Revoke a profile as its person does (`profile.revoke`): from any status,
+  recording the person as the cause, in one conditional write. A row
+  already revoked, by a removal or by the person, is the person's
+  revocation after it. A row the athanor does not hold is
+  `{:error, :not_found}`.
+  """
+  @spec revoke_by_person(Prima.Actor.t(), String.t()) ::
+          :ok | {:error, :no_athanor | :not_found | :database_error}
+  def revoke_by_person(%Prima.Actor{athanor_id: athanor_id}, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
+    {:ok, from} = Arca.StatusTransitions.from(:profiles, "revoked")
+
+    Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.revoke_by_person", fn ->
+      case Arca.Repo.update_all(
+             from(p in Profile, where: p.id == ^id and p.status in ^from)
+             |> Arca.QueryHelpers.where_athanor(athanor_id),
+             set: [status: "revoked", revoked_by: "person", updated_at: DateTime.utc_now()]
+           ) do
+        {1, _} -> :ok
+        {0, _} -> {:error, :not_found}
+      end
+    end)
+  end
+
+  def revoke_by_person(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
+  @doc """
   Revoke every profile of a name-level source ref that is not already
-  revoked, within the actor's athanor, in one transaction. Answers the ids
+  revoked, within the actor's athanor, in one conditional write, recording
+  the removal of the component's last version as the cause: this is what
+  that removal does, and nothing else calls it. Only a row not revoked at
+  the write is revoked, so a profile already revoked keeps its cause, a
+  person's revocation committed while the removal runs among them, and a
+  grant its person revoked stays theirs through a removal. Answers the ids
   it revoked. Consent revisions and vault entries are untouched: a revoked
   profile keeps its history.
   """
@@ -130,22 +169,17 @@ defmodule Arca.ProfileStorage do
   def revoke_for_source(%Prima.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.revoke_for_source", fn ->
-      Arca.Repo.transaction(fn ->
-        ids =
-          from(p in Profile,
-            where: p.source_ref == ^source_ref and p.status != "revoked",
-            order_by: p.id,
-            select: p.id
-          )
-          |> Arca.QueryHelpers.where_athanor(athanor_id)
-          |> Arca.Repo.all()
-
-        from(p in Profile, where: p.id in ^ids)
+      {_count, ids} =
+        from(p in Profile,
+          where: p.source_ref == ^source_ref and p.status != "revoked",
+          select: p.id
+        )
         |> Arca.QueryHelpers.where_athanor(athanor_id)
-        |> Arca.Repo.update_all(set: [status: "revoked", updated_at: DateTime.utc_now()])
+        |> Arca.Repo.update_all(
+          set: [status: "revoked", revoked_by: "removal", updated_at: DateTime.utc_now()]
+        )
 
-        ids
-      end)
+      {:ok, Enum.sort(ids)}
     end)
     |> Arca.Data.project()
   end

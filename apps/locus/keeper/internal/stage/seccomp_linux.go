@@ -15,19 +15,19 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// The runner's own seccomp filter. The runtime's container runs under the
+// The space's own seccomp filter. Every Locus container runs under the
 // keeper's profile (apps/locus/keeper/seccomp/keeper.json), which lets a
-// clone make a user and a network namespace because the keeper makes each
-// isolated spawn that way. Without a filter of its own a runner inherits that
-// allowance and could clone a user namespace of its own inside the one it
-// was given, holding every capability there. The stage of an isolated spawn
+// clone make a user, a network and an IPC namespace because the keeper makes
+// each spawn's space that way. Without a filter of its own a spawn inherits
+// that allowance and could clone a user namespace of its own inside the one
+// it was given, holding every capability there. Every spawn's stage
 // therefore installs this filter on itself after it has dropped every
 // capability and set no_new_privs, and before it executes the command; the
 // filter stays with the command across exec and with every thread and
 // process the command starts, and nothing in it can be lifted.
 //
 // The filter refuses, with EPERM, the calls that make or enter a namespace
-// or a mount and the kernel interfaces a runner never uses: unshare, setns,
+// or a mount and the kernel interfaces a space never uses: unshare, setns,
 // mount, umount2, pivot_root, keyctl, add_key, request_key, bpf,
 // userfaultfd, perf_event_open, and a clone whose flags hold any CLONE_NEW*
 // bit. It answers clone3 with ENOSYS, as a kernel without it would, so the
@@ -86,7 +86,7 @@ func nativeSeccompArch() (seccompArch, error) {
 	case "s390x":
 		return seccompArch{audit: unix.AUDIT_ARCH_S390X, cloneFlags: 1, bigEndian: true}, nil
 	default:
-		return seccompArch{}, fmt.Errorf("no runner filter is defined for %s", runtime.GOARCH)
+		return seccompArch{}, fmt.Errorf("no space filter is defined for %s", runtime.GOARCH)
 	}
 }
 
@@ -103,9 +103,9 @@ func nativeSeccompCalls() seccompCalls {
 	}
 }
 
-// runnerFilter is the filter's program for one architecture and its call
+// spaceFilter is the filter's program for one architecture and its call
 // numbers.
-func runnerFilter(arch seccompArch, calls seccompCalls) ([]bpf.RawInstruction, error) {
+func spaceFilter(arch seccompArch, calls seccompCalls) ([]bpf.RawInstruction, error) {
 	eperm := bpf.RetConstant{Val: unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)}
 	program := []bpf.Instruction{
 		bpf.LoadAbsolute{Off: seccompDataArch, Size: 4},
@@ -139,17 +139,17 @@ func runnerFilter(arch seccompArch, calls seccompCalls) ([]bpf.RawInstruction, e
 	return bpf.Assemble(program)
 }
 
-// installRunnerFilter installs the runner's filter on the calling thread,
+// installSpaceFilter installs the space's filter on the calling thread,
 // which must hold no_new_privs and is the thread that executes the command:
 // a filter set with prctl belongs to the thread that sets it, and execve
 // keeps it for the program it starts and everything that program starts. An
 // error means no filter was installed, and the stage executes nothing.
-func installRunnerFilter() error {
+func installSpaceFilter() error {
 	arch, err := nativeSeccompArch()
 	if err != nil {
 		return err
 	}
-	raw, err := runnerFilter(arch, nativeSeccompCalls())
+	raw, err := spaceFilter(arch, nativeSeccompCalls())
 	if err != nil {
 		return fmt.Errorf("assembling the filter: %w", err)
 	}

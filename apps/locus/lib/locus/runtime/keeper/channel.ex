@@ -20,8 +20,8 @@ defmodule Locus.Runtime.Keeper.Channel do
   release's own: the keeper refuses `CYFR_`, `LOCUS_` and `KEEPER_`
   names, and sets `PATH`, `HOME`, `USER`, `LOGNAME` and `TMPDIR` itself),
   and asks for a control channel (`control: true`), carried as stream 4
-  on the runner's relay connection, and for the network namespace of its
-  own (`isolation: "netns"`) whose only way out is its relay
+  on the runner's relay connection. Its pool's spaces are relay spaces
+  (`--pool runner:…:relay`), whose only way out is the relay
   (`Prima.RunnerRelay`), the socket on its fd 4, carried as stream 5. The
   client opens that stream once the runner attaches; `send/2`,
   `send_relay/2` and `close_relay/1` write through the client, and
@@ -80,7 +80,6 @@ defmodule Locus.Runtime.Keeper.Channel do
   require Logger
 
   @pool "runner"
-  @isolation "netns"
 
   # `memory_unavailable` is the keeper's word for any bound it cannot
   # enforce, the memory's or the CPU's.
@@ -144,8 +143,7 @@ defmodule Locus.Runtime.Keeper.Channel do
       argv: argv,
       env: env,
       pool: @pool,
-      control: true,
-      isolation: @isolation
+      control: true
     }
 
     with {:ok, client, bound, cpu_quota} <- client(adapter),

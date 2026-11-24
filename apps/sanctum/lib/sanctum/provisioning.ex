@@ -834,9 +834,9 @@ defmodule Sanctum.Provisioning do
   the attempt's claim. `:ok` when every vouched local source holds one;
   `{:unminted, refs}` names what did not mint and why.
 
-  A skip for "already bootstrapped" or "not vouched" (a member-authored
-  or edited source) is not a provisioning failure: those consent through
-  the walk. An agent whose closure the bundle does not resolve is
+  A skip for "already bootstrapped", "not vouched" (a member-authored
+  or edited source) or "revoked" (a grant its person revoked) is not a
+  provisioning failure: those consent through the walk. An agent whose closure the bundle does not resolve is
   re-minted by a later sync once it does.
   """
   @spec bootstrap_consents(Context.t(), claim()) ::
@@ -875,7 +875,8 @@ defmodule Sanctum.Provisioning do
 
   defp all_minted(%{skipped: skipped}) do
     case Enum.reject(skipped, fn {ref, reason} ->
-           reason in [:already_bootstrapped, :not_vouched] or Prima.AgentRef.agent_ref?(ref)
+           reason in [:already_bootstrapped, :not_vouched, :revoked] or
+             Prima.AgentRef.agent_ref?(ref)
          end) do
       [] -> :ok
       unminted -> {:unminted, unminted}

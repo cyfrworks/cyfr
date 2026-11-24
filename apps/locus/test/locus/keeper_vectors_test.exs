@@ -32,8 +32,8 @@ defmodule Locus.KeeperVectorsTest do
   control or relay frame releases it; and an attach frame of the wrong
   shape is closed.
 
-  A runner's spawn, with a control channel: it is the vectors' bounded,
-  isolated runner spawn with a control channel, byte for byte but for its
+  A runner's spawn, with a control channel: it is the vectors' bounded
+  runner spawn with a control channel, byte for byte but for its
   own id and attach target; every reply the vectors hold reaches its owner
   as the event it means, and the runtime's reading of it
   (`Locus.Runtime.Keeper.event/1`); a reply of the wrong shape, a wrong
@@ -176,7 +176,7 @@ defmodule Locus.KeeperVectorsTest do
     assert line ==
              Jason.encode!(%{vector | "id" => sent["id"], "attach" => sent["attach"]}) <> "\n"
 
-    send_reply(peer, %{v: 3, type: "error", id: sent["id"], code: "capacity"})
+    send_reply(peer, %{v: 4, type: "error", id: sent["id"], code: "capacity"})
     assert {{:error, :capacity}, []} = Task.await(task, 10_000)
   end
 
@@ -633,8 +633,7 @@ defmodule Locus.KeeperVectorsTest do
                pool: "runner",
                memory_bytes: @runner_spawn["memory_bytes"],
                cpu_quota: @runner_spawn["cpu_quota"],
-               control: true,
-               isolation: "netns"
+               control: true
              })
 
     handle
@@ -680,9 +679,10 @@ defmodule Locus.KeeperVectorsTest do
     {peer, client}
   end
 
-  test "a runner's spawn is the vectors' bounded, isolated runner spawn with a control channel, byte for byte",
+  test "a runner's spawn is the vectors' bounded runner spawn with a control channel, byte for byte",
        %{peer: peer, name: name} do
-    assert %{"control" => true, "memory_bytes" => _bound, "isolation" => "netns"} = @runner_spawn
+    assert %{"control" => true, "memory_bytes" => _bound} = @runner_spawn
+    refute Map.has_key?(@runner_spawn, "isolation")
 
     place!(peer, name)
 
@@ -695,8 +695,7 @@ defmodule Locus.KeeperVectorsTest do
                pool: @runner_spawn["pool"],
                memory_bytes: @runner_spawn["memory_bytes"],
                cpu_quota: @runner_spawn["cpu_quota"],
-               control: true,
-               isolation: @runner_spawn["isolation"]
+               control: true
              })
 
     line = next_line(peer)

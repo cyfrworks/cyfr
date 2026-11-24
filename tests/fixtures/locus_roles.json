@@ -1,5 +1,5 @@
 {
-  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role's service shares: the user and uid it runs as, the binary cyfr-locus starts, the root of every spawn's home, the run directory and the size of its tmpfs, the role the image's own entrypoint serves, the network, subnet, dynamic range and fixed address cyfr's endpoint binds its loopback listener to under compose, and the edge network's name, subnet and dynamic range with the fixed addresses of cyfr's proxy listener, Caddy and Tailscale on it. Each role, in the module's order, names its uid pool, the prefix of its pooled users' names, its first and last pooled uid, the isolation of its spawns (null for none), its listener's port, the size of its homes' tmpfs, the compose service, container, network and profile (null for none) that run it, and the egress guard service its service shares a network namespace with (null for none). A role whose programs keep their folders names their root, the compose volume mounted there and the uid range the keeper's --kept-homes flag draws from (kept_root, kept_volume, kept_first_uid, kept_last_uid); every other role names none (null). Each role's memory and the release's are what a role's service holds of its own (Prima.LocusRoles, Locus.Output's table): a role's counted bounds (unread, null for a role that keeps none, and answering) and the runtime's uncounted figures (one pinned fetch's transport read, the larger read a fetch takes with its count's room, the most of a fetch's head the HTTP client reads, the freed segments its VM keeps; null for every other role), and the release's factor of resident bytes to a byte held, one held keeper read and its copies, and the kernel's queues of a relay connection and of a TCP connection's sends, from which each image suite computes its allowance.",
+  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role's service shares: the user and uid it runs as, the binary cyfr-locus starts, the root of every spawn's home, the run directory and the size of its tmpfs, the role the image's own entrypoint serves, the network, subnet, dynamic range and fixed address cyfr's endpoint binds its loopback listener to under compose, and the edge network's name, subnet and dynamic range with the fixed addresses of cyfr's proxy listener, Caddy and Tailscale on it. Each role, in the module's order, names its uid pool, the prefix of its pooled users' names, its first and last pooled uid, the reach of its spawns' spaces (relay or routed, the keeper's --pool suffix), its listener's port, the size of its homes' tmpfs, the compose service, container, network and profile (null for none) that run it, and the egress guard service its service shares a network namespace with (null for none). A role whose programs keep their folders names their root, the compose volume mounted there and the uid range the keeper's --kept-homes flag draws from (kept_root, kept_volume, kept_first_uid, kept_last_uid); every other role names none (null). Each role's memory and the release's are what a role's service holds of its own (Prima.LocusRoles, Locus.Output's table): a role's counted bounds (unread, null for a role that keeps none, and answering) and the runtime's uncounted figures (one pinned fetch's transport read, the larger read a fetch takes with its count's room, the most of a fetch's head the HTTP client reads, the freed segments its VM keeps; null for every other role), and the release's factor of resident bytes to a byte held, one held keeper read and its copies, and the kernel's queues of a relay connection and of a TCP connection's sends, from which each image suite computes its allowance.",
   "release": {
     "user": "locus",
     "uid": 10001,
@@ -33,7 +33,7 @@
       "user_prefix": "locus-runner",
       "first_uid": 30101,
       "last_uid": 30108,
-      "isolation": "netns",
+      "reach": "relay",
       "port": 4200,
       "home_size": "256m",
       "service": "locus-runtime",
@@ -60,7 +60,7 @@
       "user_prefix": "locus-build",
       "first_uid": 30001,
       "last_uid": 30016,
-      "isolation": null,
+      "reach": "routed",
       "port": 4100,
       "home_size": "2g",
       "service": "locus-builds",
@@ -87,7 +87,7 @@
       "user_prefix": "locus-backend",
       "first_uid": 20001,
       "last_uid": 20032,
-      "isolation": null,
+      "reach": "routed",
       "port": 4101,
       "home_size": "2g",
       "service": "locus-backends",
