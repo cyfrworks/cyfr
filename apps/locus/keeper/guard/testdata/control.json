@@ -1,0 +1,49 @@
+{
+  "comment": "The vectors of the control between an island's keeper (guard.Client) and its guard (`cyfr-locus guard-control`), both in package guard: each message is one seqpacket packet holding one JSON object of version 2. The guard greets with `hello`. An `admit` carries the space's network namespace, its UDP and its TCP name socket as SCM_RIGHTS (`descriptors` 3) and names the spawn and its reach: `island`, or `hosts` with 1 to 1024 distinct canonical addresses; a `clear` names the spawn alone and carries none. `requests` are every request the keeper sends, as it sends them, and the guard accepts; `refused` are requests the guard refuses whatever its routes, with how many descriptors came; `answers` are every answer the guard sends and the keeper takes for the request it asked (`asked`, `spawn_id`); `not_answers` are packets the keeper never takes as the answer to that request, so it ends the connection.",
+  "hello": { "v": 2, "type": "hello", "netns": "net:[4026532001]" },
+  "requests": [
+    { "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "island" } },
+    { "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "hosts", "addresses": ["1.2.3.4", "2606:4700::1111"] } },
+    { "descriptors": 0, "message": { "v": 2, "type": "clear", "spawn_id": "00112233445566778899aabbccddeeff" } }
+  ],
+  "refused": [
+    { "why": "another version", "descriptors": 0, "message": { "v": 1, "type": "clear", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "why": "an unknown type", "descriptors": 0, "message": { "v": 2, "type": "open", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "why": "an unknown member", "descriptors": 0, "message": { "v": 2, "type": "clear", "spawn_id": "00112233445566778899aabbccddeeff", "extra": 1 } },
+    { "why": "a uid, which no request names", "descriptors": 0, "message": { "v": 2, "type": "clear", "uid": 20001 } },
+    { "why": "no spawn id", "descriptors": 0, "message": { "v": 2, "type": "clear" } },
+    { "why": "a spawn id of another grammar", "descriptors": 0, "message": { "v": 2, "type": "clear", "spawn_id": "../../etc" } },
+    { "why": "an admit without its descriptors", "descriptors": 0, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "island" } },
+    { "why": "an admit of two descriptors", "descriptors": 2, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "island" } },
+    { "why": "a clear with descriptors", "descriptors": 3, "message": { "v": 2, "type": "clear", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "why": "an admit without a reach", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "why": "an unknown reach", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "all" } },
+    { "why": "an island admit naming addresses", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "island", "addresses": ["1.2.3.4"] } },
+    { "why": "a hosts admit of nothing", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "hosts", "addresses": [] } },
+    { "why": "a hosts admit without a list", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "hosts" } },
+    { "why": "a repeated address", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "hosts", "addresses": ["1.2.3.4", "1.2.3.4"] } },
+    { "why": "a hostname", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "hosts", "addresses": ["example.com"] } },
+    { "why": "a CIDR", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "hosts", "addresses": ["1.2.3.0/24"] } },
+    { "why": "a zone", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "hosts", "addresses": ["fe80::1%eth0"] } },
+    { "why": "a mapped address", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "hosts", "addresses": ["::ffff:1.2.3.4"] } },
+    { "why": "a non-canonical form", "descriptors": 3, "message": { "v": 2, "type": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "hosts", "addresses": ["2606:4700:0::1111"] } },
+    { "why": "a clear naming a reach", "descriptors": 0, "message": { "v": 2, "type": "clear", "spawn_id": "00112233445566778899aabbccddeeff", "reach": "island" } },
+    { "why": "a request naming a namespace", "descriptors": 0, "message": { "v": 2, "type": "clear", "spawn_id": "00112233445566778899aabbccddeeff", "netns": "net:[1]" } },
+    { "why": "a guard's own message", "descriptors": 0, "message": { "v": 2, "type": "admitted", "spawn_id": "00112233445566778899aabbccddeeff" } }
+  ],
+  "answers": [
+    { "asked": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "admitted", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "asked": "clear", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "cleared", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "asked": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "refused", "spawn_id": "00112233445566778899aabbccddeeff", "reason": "this connection already holds a route for the spawn" } },
+    { "asked": "clear", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "refused", "spawn_id": "00112233445566778899aabbccddeeff", "reason": "this connection holds no route for the spawn" } }
+  ],
+  "not_answers": [
+    { "why": "admitted to a clear", "asked": "clear", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "admitted", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "why": "cleared to an admit", "asked": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "cleared", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "why": "another spawn's answer", "asked": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "admitted", "spawn_id": "ffeeddccbbaa99887766554433221100" } },
+    { "why": "a refusal without a reason", "asked": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "refused", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "why": "a refusal naming no spawn", "asked": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "refused", "reason": "not a message object" } },
+    { "why": "a hello", "asked": "admit", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 2, "type": "hello", "netns": "net:[4026532001]" } },
+    { "why": "another version", "asked": "clear", "spawn_id": "00112233445566778899aabbccddeeff", "message": { "v": 1, "type": "cleared", "spawn_id": "00112233445566778899aabbccddeeff" } }
+  ]
+}

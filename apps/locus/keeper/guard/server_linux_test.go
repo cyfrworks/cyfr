@@ -8,184 +8,314 @@ package guard
 import (
 	"errors"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/cyfr/locus/keeper/internal/logx"
 )
 
-// fakeGuard serves the control on a socket of the test's own, recording
-// each run of the guard script its server would make.
-type fakeGuard struct {
-	path string
-	mu   sync.Mutex
-	runs [][]string
-	fail bool
-	// ended receives once each connection's cleanup is done.
+const testSpawn = "00112233445566778899aabbccddeeff"
+
+// fakeMaker records each part of a route the server makes and removes, in
+// order, and fails the parts it is told to.
+type fakeMaker struct {
+	mu    sync.Mutex
+	steps []string
+	fail  map[string]bool
+}
+
+func (f *fakeMaker) step(name string, r *route) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.steps = append(f.steps, name+" "+outerName(r.slot))
+	if f.fail[name] {
+		return errors.New("forced failure")
+	}
+	return nil
+}
+func (f *fakeMaker) pair(r *route) error    { return f.step("pair", r) }
+func (f *fakeMaker) rules(r *route) error   { return f.step("rules", r) }
+func (f *fakeMaker) unpair(r *route) error  { return f.step("unpair", r) }
+func (f *fakeMaker) unrules(r *route) error { return f.step("unrules", r) }
+
+func (f *fakeMaker) taken() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.steps...)
+}
+
+// testServer serves the control on a socket of the test's own, with maker.
+type testServer struct {
+	path  string
+	s     *server
+	maker *fakeMaker
 	ended chan struct{}
 }
 
-func startFake(t *testing.T, netns string) *fakeGuard {
+func startServer(t *testing.T, netns string) *testServer {
 	t.Helper()
-	f := &fakeGuard{path: filepath.Join(t.TempDir(), "guard.sock"), ended: make(chan struct{}, 16)}
-	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: f.path, Net: "unix"})
+	rng, _ := ParseRange("10.213.0.0/16")
+	ts := &testServer{path: filepath.Join(t.TempDir(), "guard.sock"), maker: &fakeMaker{fail: map[string]bool{}}, ended: make(chan struct{}, 16)}
+	ts.s = newServer(logx.New("cyfr-guard-test"), netns, rng, ts.maker)
+	ts.s.onEnd = func() { ts.ended <- struct{}{} }
+	l, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: ts.path, Net: "unixpacket"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
-	s := &server{log: logx.New("cyfr-guard-test"), ranges: []Range{{20001, 20032}, {40001, 49999}}, netns: netns,
-		apply: func(args ...string) error {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			f.runs = append(f.runs, args)
-			if f.fail {
-				return errors.New("forced failure")
-			}
-			return nil
-		},
-		onEnd: func() { f.ended <- struct{}{} }}
 	go func() {
 		for {
 			conn, err := l.AcceptUnix()
 			if err != nil {
 				return
 			}
-			go s.serve(conn)
+			go ts.s.serve(conn)
 		}
 	}()
-	return f
+	return ts
 }
 
-func (f *fakeGuard) taken() [][]string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([][]string(nil), f.runs...)
-}
-
-func TestAdmitAndClear(t *testing.T) {
-	f := startFake(t, "net:[1]")
-	c := NewClient(f.path, "net:[1]")
-	addrs := []netip.Addr{netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("::ffff:5.6.7.8"), netip.MustParseAddr("2606:4700::1111")}
-	if err := c.Admit(40001, addrs); err != nil {
+// descriptors are three of the test's own, standing for a space's: the
+// fake maker never looks at them. Each admit takes fresh ones, as each
+// space's are its own: the names of a route read sockets of its own.
+func descriptors(t *testing.T) (*os.File, *os.File, *os.File) {
+	t.Helper()
+	netns, err := os.Open("/proc/self/ns/net")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Clear(20001); err != nil {
+	udp, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"admit", "40001", "1.2.3.4", "5.6.7.8", "2606:4700::1111"}, {"clear", "20001"}}
-	if got := f.taken(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("the guard ran %v, want %v", got, want)
-	}
-}
-
-func TestRefusals(t *testing.T) {
-	f := startFake(t, "net:[1]")
-	c := NewClient(f.path, "net:[1]")
-	if err := c.Admit(30001, []netip.Addr{netip.MustParseAddr("1.2.3.4")}); err == nil || !strings.Contains(err.Error(), "no spawn's") {
-		t.Fatalf("a uid outside the ranges was not refused: %v", err)
-	}
-	if len(f.taken()) != 0 {
-		t.Fatal("a refused request ran the guard")
-	}
-	f.fail = true
-	if err := c.Clear(40001); err == nil || !strings.Contains(err.Error(), "could not install") {
-		t.Fatalf("a failed change was not refused: %v", err)
-	}
-	f.fail = false
-	if err := c.Clear(40001); err != nil {
-		t.Fatalf("the connection did not survive a refusal: %v", err)
-	}
-	if err := c.Admit(40001, nil); err == nil {
-		t.Fatal("an admit of no address was sent")
-	}
-}
-
-func TestOtherNamespaceIsNoGuard(t *testing.T) {
-	f := startFake(t, "net:[2]")
-	c := NewClient(f.path, "net:[1]")
-	err := c.Clear(40001)
-	if err == nil || !strings.Contains(err.Error(), "recreated") {
-		t.Fatalf("a guard of another namespace was taken: %v", err)
-	}
-	if len(f.taken()) != 0 {
-		t.Fatal("a request reached a guard of another namespace")
-	}
-}
-
-func TestNoGuardIsAnError(t *testing.T) {
-	c := NewClient(filepath.Join(t.TempDir(), "absent.sock"), "net:[1]")
-	if err := c.Clear(40001); err == nil {
-		t.Fatal("a guard that is not there answered")
-	}
-}
-
-// A connection that ends leaves every uid it admitted, and did not clear
-// since, refused every public address.
-func TestLostConnectionRefusesItsUIDs(t *testing.T) {
-	f := startFake(t, "net:[1]")
-	c := NewClient(f.path, "net:[1]")
-	one := []netip.Addr{netip.MustParseAddr("1.2.3.4")}
-	for _, uid := range []int{40002, 40001, 20005} {
-		if err := c.Admit(uid, one); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := c.Clear(20005); err != nil {
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
 		t.Fatal(err)
 	}
-	c.mu.Lock()
-	c.drop()
-	c.mu.Unlock()
-	deadline := time.Now().Add(5 * time.Second)
-	for len(f.taken()) < 6 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	got := f.taken()[4:]
-	if want := [][]string{{"admit", "40001"}, {"admit", "40002"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("after the connection ended the guard ran %v, want %v", got, want)
-	}
-	// The client dials again.
-	if err := c.Clear(40001); err != nil {
-		t.Fatal(err)
-	}
+	u, _ := udp.(*net.UDPConn).File()
+	p, _ := tcp.(*net.TCPListener).File()
+	udp.Close()
+	tcp.Close()
+	t.Cleanup(func() { netns.Close(); u.Close(); p.Close() })
+	return netns, u, p
 }
 
-// A connection that ends refuses only the uids whose latest admission it
-// made: one a newer connection admitted since keeps that admission.
-func TestALostConnectionLeavesANewerConnectionsAdmissions(t *testing.T) {
-	f := startFake(t, "net:[1]")
-	old, newer := NewClient(f.path, "net:[1]"), NewClient(f.path, "net:[1]")
-	one := []netip.Addr{netip.MustParseAddr("1.2.3.4")}
-	for _, uid := range []int{40001, 40002} {
-		if err := old.Admit(uid, one); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := newer.Admit(40001, []netip.Addr{netip.MustParseAddr("5.6.7.8")}); err != nil {
+// raw is a keeper's connection that speaks the control by hand.
+type raw struct{ conn *net.UnixConn }
+
+func dialRaw(t *testing.T, path string) *raw {
+	t.Helper()
+	c, err := net.Dial("unixpacket", path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	old.mu.Lock()
-	old.drop()
-	old.mu.Unlock()
+	t.Cleanup(func() { c.Close() })
+	r := &raw{conn: c.(*net.UnixConn)}
+	if hello := r.read(t); hello.Type != TypeHello {
+		t.Fatalf("no hello: %+v", hello)
+	}
+	return r
+}
+
+func (r *raw) send(t *testing.T, packet []byte, files ...*os.File) Message {
+	t.Helper()
+	fds := make([]int, len(files))
+	for i, f := range files {
+		fds[i] = int(f.Fd())
+	}
+	var rights []byte
+	if len(fds) > 0 {
+		rights = unix.UnixRights(fds...)
+	}
+	if _, _, err := r.conn.WriteMsgUnix(packet, rights, nil); err != nil {
+		t.Fatal(err)
+	}
+	return r.read(t)
+}
+
+func (r *raw) read(t *testing.T) Message {
+	t.Helper()
+	_ = r.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	packet, err := readPacket(r.conn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Decode(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func (ts *testServer) waitEnded(t *testing.T) {
+	t.Helper()
 	select {
-	case <-f.ended:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the ended connection's cleanup did not finish")
-	}
-	got := f.taken()[3:]
-	if want := [][]string{{"admit", "40002"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("after the older connection ended the guard ran %v, want only uid 40002 refused", got)
+	case <-ts.ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the connection's end was not handled")
 	}
 }
 
-// The control's socket is root's alone: its folder 0700 and the socket
-// 0600, as the package says.
+// The guard answers each request of the vectors as its answers say, and
+// refuses each refused one naming what it can of it, making nothing.
+func TestTheGuardAnswersTheVectors(t *testing.T) {
+	v := loadVectors(t)
+	ts := startServer(t, "net:[1]")
+	r := dialRaw(t, ts.path)
+	files := func(n int) []*os.File { return three(t)[:n] }
+	answers := map[string]bool{}
+	for _, a := range v.Answers {
+		answers[string(a.Message)] = true
+	}
+	for i, req := range v.Requests {
+		got := r.send(t, req.Message, files(req.Descriptors)...)
+		out, _ := Encode(got)
+		if got.Type == TypeRefused || got.SpawnID != testSpawn {
+			t.Fatalf("request %d %s answered %s", i, req.Message, out)
+		}
+		if got.Type == TypeAdmitted && i == 0 {
+			// The second admit of the vectors names the same spawn: the
+			// first is cleared so it is answered as a new one.
+			if c := r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+testSpawn+`"}`)); c.Type != TypeCleared {
+				t.Fatalf("clear: %+v", c)
+			}
+		}
+	}
+	for _, ref := range v.Refused {
+		before := len(ts.maker.taken())
+		got := r.send(t, ref.Message, files(ref.Descriptors)...)
+		if got.Type != TypeRefused || got.Reason == "" {
+			t.Errorf("%s answered %+v", ref.Why, got)
+		}
+		if len(ts.maker.taken()) != before {
+			t.Errorf("%s made something: %v", ref.Why, ts.maker.taken()[before:])
+		}
+	}
+	// A second admit of a held spawn, and a clear of a spawn this
+	// connection holds no route of, are the vectors' refusals.
+	admit := []byte(`{"v":2,"type":"admit","spawn_id":"` + testSpawn + `","reach":"island"}`)
+	if got := r.send(t, admit, three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("admit: %+v", got)
+	}
+	for _, c := range []struct {
+		packet []byte
+		files  []*os.File
+	}{{admit, three(t)}, {[]byte(`{"v":2,"type":"clear","spawn_id":"ffeeddccbbaa99887766554433221100"}`), nil}} {
+		got := r.send(t, c.packet, c.files...)
+		if got.SpawnID == "ffeeddccbbaa99887766554433221100" {
+			got.SpawnID = testSpawn
+		}
+		out, _ := Encode(got)
+		var want bool
+		for a := range answers {
+			if sameJSON(t, []byte(a), out) {
+				want = true
+			}
+		}
+		if !want {
+			t.Errorf("%s answered %s, which the vectors do not hold", c.packet, out)
+		}
+	}
+}
+
+// An admit is answered only once its pair and rules are in, a clear only
+// once both are removed, the pair first; every route gets its own slot and
+// a mark never given before, and a withdrawn route's slot is given again.
+func TestARouteIsAdmittedWholeAndClearedWhole(t *testing.T) {
+	ts := startServer(t, "net:[1]")
+	r := dialRaw(t, ts.path)
+	admit := func(id string) Message {
+		return r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
+	}
+	clear := func(id string) Message {
+		return r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+id+`"}`))
+	}
+	a, b := testSpawn, "ffeeddccbbaa99887766554433221100"
+	if got := admit(a); got.Type != TypeAdmitted {
+		t.Fatalf("admit a: %+v", got)
+	}
+	if got := admit(b); got.Type != TypeAdmitted {
+		t.Fatalf("admit b: %+v", got)
+	}
+	if got := clear(a); got.Type != TypeCleared {
+		t.Fatalf("clear a: %+v", got)
+	}
+	if got := admit(a); got.Type != TypeAdmitted {
+		t.Fatalf("admit a again: %+v", got)
+	}
+	want := []string{"pair sp0", "rules sp0", "pair sp1", "rules sp1", "unpair sp0", "unrules sp0", "pair sp0", "rules sp0"}
+	if got := ts.maker.taken(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the routes' steps %v, want %v", got, want)
+	}
+	if ts.s.marks != 3 {
+		t.Fatalf("%d marks given for three routes", ts.s.marks)
+	}
+}
+
+// A route whose making fails is answered refused with nothing of it left
+// and its slot free; one whose removal fails keeps its slot taken.
+func TestARefusedRouteLeavesNothing(t *testing.T) {
+	ts := startServer(t, "net:[1]")
+	r := dialRaw(t, ts.path)
+	ts.maker.fail["rules"] = true
+	got := r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...)
+	if got.Type != TypeRefused || got.SpawnID != testSpawn {
+		t.Fatalf("answered %+v", got)
+	}
+	if steps := ts.maker.taken(); !reflect.DeepEqual(steps, []string{"pair sp0", "rules sp0", "unpair sp0", "unrules sp0"}) {
+		t.Fatalf("steps %v", steps)
+	}
+	ts.maker.fail = map[string]bool{"unrules": true}
+	if got := r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("admit: %+v", got)
+	}
+	if got := r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeRefused {
+		t.Fatalf("a clear whose removal failed answered %+v", got)
+	}
+	ts.s.mu.Lock()
+	taken := ts.s.taken[0]
+	ts.s.mu.Unlock()
+	if !taken {
+		t.Fatal("a slot whose route was not wholly removed was freed")
+	}
+}
+
+// A connection that ends withdraws every route it made and did not clear,
+// the pair of each before its rules, and leaves another connection's.
+func TestALostConnectionWithdrawsItsRoutesAlone(t *testing.T) {
+	ts := startServer(t, "net:[1]")
+	mine, theirs := dialRaw(t, ts.path), dialRaw(t, ts.path)
+	for _, c := range []struct {
+		r  *raw
+		id string
+	}{{mine, testSpawn}, {mine, "11112233445566778899aabbccddeeff"}, {theirs, "ffeeddccbbaa99887766554433221100"}} {
+		if got := c.r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+c.id+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
+			t.Fatalf("admit %s: %+v", c.id, got)
+		}
+	}
+	if got := mine.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"11112233445566778899aabbccddeeff"}`)); got.Type != TypeCleared {
+		t.Fatalf("clear: %+v", got)
+	}
+	before := len(ts.maker.taken())
+	mine.conn.Close()
+	ts.waitEnded(t)
+	if got := ts.maker.taken()[before:]; !reflect.DeepEqual(got, []string{"unpair sp0", "unrules sp0"}) {
+		t.Fatalf("the lost connection's withdrawal: %v", got)
+	}
+	ts.s.mu.Lock()
+	theirsTaken := ts.s.taken[2]
+	ts.s.mu.Unlock()
+	if !theirsTaken {
+		t.Fatal("another connection's route was withdrawn")
+	}
+}
+
 func TestListenMakesARootOnlySocket(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("listening in a folder root owns needs root")
@@ -208,4 +338,21 @@ func TestListenMakesARootOnlySocket(t *testing.T) {
 	if socket.Mode()&os.ModeSocket == 0 || socket.Mode().Perm() != 0o600 || folder.Mode().Perm() != 0o700 {
 		t.Fatalf("the socket is %v and its folder %v, want a socket 0600 in a folder 0700", socket.Mode(), folder.Mode())
 	}
+}
+
+func TestSlotAddressesAreEachSlotsOwnSlash30(t *testing.T) {
+	rng, _ := ParseRange("10.213.0.0/16")
+	for slot, want := range map[int][2]string{0: {"10.213.0.1", "10.213.0.2"}, 1: {"10.213.0.5", "10.213.0.6"}, 64: {"10.213.1.1", "10.213.1.2"}, slots - 1: {"10.213.255.253", "10.213.255.254"}} {
+		g, i := slotAddresses(rng, slot)
+		if g.String() != want[0] || i.String() != want[1] {
+			t.Errorf("slot %d: %s and %s, want %v", slot, g, i, want)
+		}
+	}
+}
+
+// three is a fresh set of descriptors as a slice.
+func three(t *testing.T) []*os.File {
+	t.Helper()
+	netns, udp, tcp := descriptors(t)
+	return []*os.File{netns, udp, tcp}
 }

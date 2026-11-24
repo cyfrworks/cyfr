@@ -30,9 +30,9 @@ const (
 	// from the relay reports that the backend's end is closed; one from the
 	// client closes the backend's reading side.
 	StreamControl byte = 4
-	// StreamRelay carries the bytes of an isolated spawn's relay, the
+	// StreamRelay carries the bytes of a relay space's relay, the
 	// socket on the backend's file descriptor 4 (Prima.RunnerRelay frames),
-	// in both directions; only a spawn of an isolated pool has this
+	// in both directions; only a spawn of a relay pool has this
 	// stream. The relay sends nothing on it, its end frame included, until
 	// the client has sent on it first, so a client that never uses the
 	// stream never receives a frame on it. The client's first frame opens

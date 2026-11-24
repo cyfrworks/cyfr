@@ -8,18 +8,20 @@ package serve
 import (
 	"context"
 	"errors"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
+	"github.com/cyfr/locus/keeper/guard"
 	"github.com/cyfr/locus/keeper/internal/frame"
-	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
@@ -63,291 +65,311 @@ func TestAHostThatResolvesToNothingRefusesTheSpawn(t *testing.T) {
 	}
 }
 
-// A keeper with no guard refuses a spawn that names hosts, before it
-// resolves them, and leaves one that names none as it was.
-func TestASpawnNamingHostsNeedsAGuard(t *testing.T) {
-	fakeResolver(t, map[string][]string{})
-	s := &server{}
-	if e, code, err := s.spawnEgress(&protocol.Request{}); err != nil || code != "" || e.listed {
-		t.Fatalf("a spawn naming no hosts: %+v %q %v", e, code, err)
-	}
-	if _, code, err := s.spawnEgress(&protocol.Request{Hosts: []string{"api.example.com"}}); err == nil || code != protocol.CodeGuardUnavailable {
-		t.Fatalf("a spawn naming hosts without a guard: %q %v", code, err)
-	}
-	if err := s.setEgress(39001, egress{}); err != nil {
-		t.Fatalf("a keeper without a guard set an egress: %v", err)
-	}
+// fakeRouteGuard stands in for the island's guard: it records every admit
+// and clear, checks an admit's descriptors as the guard does, and answers
+// the space's UDP names with "answer:<spawn id>" while the route stands.
+type fakeRouteGuard struct {
+	mu     sync.Mutex
+	conn   uint64
+	calls  []routeCall
+	routes map[string]*os.File
+	// refuse refuses every admit; hold, when set, is waited on inside each
+	// admit before it answers; before runs inside each admit before it
+	// answers, as a connection's end that comes just then would.
+	refuse bool
+	hold   chan struct{}
+	before func(spawnID string)
 }
 
-// recordingGuard records what the keeper asked of it, and when, beside
-// what ran under the uid at that moment.
-type recordingGuard struct {
-	mu    sync.Mutex
-	calls []guardCall
-	fail  bool
-	// failAdmit fails every admit after recording it, as a guard that
-	// applied an admission and lost its confirmation does; clears pass.
-	failAdmit bool
+type routeCall struct {
+	op      string
+	spawnID string
+	reach   string
+	addrs   []netip.Addr
+	conn    uint64
 }
 
-type guardCall struct {
-	op    string
-	uid   int
-	addrs []netip.Addr
-	live  int
+func (g *fakeRouteGuard) Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (guard.Route, error) {
+	g.mu.Lock()
+	g.calls = append(g.calls, routeCall{op: guard.TypeAdmit, spawnID: spawnID, reach: reach, addrs: addrs, conn: g.conn})
+	hold, before, refuse, conn := g.hold, g.before, g.refuse, g.conn
+	g.mu.Unlock()
+	if err := checkSpaceDescriptors(netns, udp, tcp); err != nil {
+		return guard.Route{}, err
+	}
+	if hold != nil {
+		<-hold
+	}
+	if before != nil {
+		before(spawnID)
+	}
+	if refuse {
+		return guard.Route{}, errors.New("refused")
+	}
+	answering, err := dupFile(udp, "names")
+	if err != nil {
+		return guard.Route{}, err
+	}
+	g.mu.Lock()
+	if g.routes == nil {
+		g.routes = map[string]*os.File{}
+	}
+	g.routes[spawnID] = answering
+	g.mu.Unlock()
+	go answerNames(answering, spawnID)
+	return guard.Route{Conn: conn}, nil
 }
 
-func (g *recordingGuard) record(op string, uid int, addrs []netip.Addr) error {
-	c, _ := procfs.ScanUID("/proc", uid, 0)
+func (g *fakeRouteGuard) Clear(spawnID string, r guard.Route) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.calls = append(g.calls, guardCall{op: op, uid: uid, addrs: addrs, live: c.Total()})
-	if g.fail || (g.failAdmit && op == "admit") {
-		return errors.New("forced failure")
+	g.calls = append(g.calls, routeCall{op: guard.TypeClear, spawnID: spawnID, conn: r.Conn})
+	if f := g.routes[spawnID]; f != nil {
+		f.Close()
+		delete(g.routes, spawnID)
 	}
 	return nil
 }
 
-// ops is what the guard was asked for uid, in order.
-func (g *recordingGuard) ops(uid int) []string {
-	var out []string
-	for _, c := range g.taken() {
-		if c.uid == uid {
-			out = append(out, c.op)
-		}
-	}
-	return out
-}
-
-// waitOps waits for the guard to have been asked want for uid.
-func (g *recordingGuard) waitOps(t *testing.T, uid int, want []string) {
-	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for !reflect.DeepEqual(g.ops(uid), want) {
-		if time.Now().After(deadline) {
-			t.Fatalf("uid %d: the guard was asked %v, want %v", uid, g.ops(uid), want)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-func (g *recordingGuard) Admit(uid int, addrs []netip.Addr) error {
-	return g.record("admit", uid, addrs)
-}
-func (g *recordingGuard) Clear(uid int) error { return g.record("clear", uid, nil) }
-
-func (g *recordingGuard) taken() []guardCall {
+func (g *fakeRouteGuard) taken() []routeCall {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return append([]guardCall(nil), g.calls...)
+	return append([]routeCall(nil), g.calls...)
 }
 
-// waitCalls waits for the guard to have been asked n times.
-func (g *recordingGuard) waitCalls(t *testing.T, n int) []guardCall {
+// waitOps waits for the guard to have been asked ops for spawnID, in order.
+func (g *fakeRouteGuard) waitOps(t *testing.T, spawnID string, ops ...string) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
-	for len(g.taken()) < n && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	for {
+		var got []string
+		for _, c := range g.taken() {
+			if c.spawnID == spawnID {
+				got = append(got, c.op)
+			}
+		}
+		if reflect.DeepEqual(got, ops) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("spawn %s: the guard was asked %v, want %v", spawnID, got, ops)
+		}
+		time.Sleep(20 * time.Millisecond) // sleep-ok: a bounded poll of the guard's record
 	}
-	return g.taken()
 }
 
-// A spawn naming hosts has its uid admitted to their addresses before
-// anything runs under it, one naming none has its uid cleared, and each
-// uid is cleared again once its retirement leaves nothing of it.
-func TestEverySpawnSetsItsEgressBeforeItStartsAndClearsItWhenRetired(t *testing.T) {
-	k := boundedKeeper(t)
-	g := &recordingGuard{}
-	k.s.guard = g
-	fakeResolver(t, map[string][]string{"api.example.com": {"203.0.113.7", "2001:db8::7"}})
-
-	req := spawnRequest(t, k.attach, "1", "sleep 60", map[string]string{}, false, 64<<20)
-	req.Hosts = []string{"api.example.com"}
-	listedID, listedUID := k.started(t, req)
-	unlistedID, unlistedUID := k.started(t, spawnRequest(t, k.attach, "2", "sleep 60", map[string]string{}, false, 64<<20))
-
-	calls := g.taken()
-	want := []guardCall{
-		{op: "admit", uid: listedUID, addrs: []netip.Addr{netip.MustParseAddr("203.0.113.7"), netip.MustParseAddr("2001:db8::7")}},
-		{op: "clear", uid: unlistedUID},
+// checkSpaceDescriptors holds an admit's descriptors to what the guard
+// takes: a network namespace that is not the keeper's, and a UDP and a
+// listening TCP socket bound to 127.0.0.11:53 in it.
+func checkSpaceDescriptors(netns, udp, tcp *os.File) error {
+	var own, space unix.Stat_t
+	if err := unix.Stat("/proc/self/ns/net", &own); err != nil {
+		return err
 	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("the guard was asked %+v, want %+v (nothing of either uid running yet)", calls, want)
+	if err := unix.Fstat(int(netns.Fd()), &space); err != nil {
+		return err
 	}
-
-	for _, id := range []string{listedID, unlistedID} {
-		k.release(t, id)
-		for range 2 {
-			k.reply(t)
+	if own.Ino == space.Ino {
+		return errors.New("the namespace is the keeper's own")
+	}
+	for _, f := range []*os.File{udp, tcp} {
+		sa, err := unix.Getsockname(int(f.Fd()))
+		in, ok := sa.(*unix.SockaddrInet4)
+		if err != nil || !ok || in.Port != 53 || in.Addr != [4]byte{127, 0, 0, 11} {
+			return errors.New("a name socket is not bound to 127.0.0.11:53")
 		}
 	}
-	calls = g.waitCalls(t, 4)
-	retired := map[int]bool{}
-	for _, c := range calls[2:] {
-		if c.op != "clear" || c.live != 0 {
-			t.Fatalf("after retirement the guard was asked %+v, want a clear with nothing of the uid left", c)
-		}
-		retired[c.uid] = true
+	if on, err := unix.GetsockoptInt(int(tcp.Fd()), unix.SOL_SOCKET, unix.SO_ACCEPTCONN); err != nil || on != 1 {
+		return errors.New("the TCP name socket is not listening")
 	}
-	if len(calls) != 4 || !retired[listedUID] || !retired[unlistedUID] {
+	return nil
+}
+
+// answerNames answers every datagram on udp with "answer:<spawn id>" until
+// it is closed.
+func answerNames(udp *os.File, spawnID string) {
+	pc, err := net.FilePacketConn(udp)
+	if err != nil {
+		return
+	}
+	defer pc.Close()
+	buf := make([]byte, 512)
+	for {
+		_, from, err := pc.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		_, _ = pc.WriteTo([]byte("answer:"+spawnID), from)
+	}
+}
+
+// A routed space's command starts only once the guard has admitted its
+// route: while the admit waits, nothing of the command has run and the
+// spawn is not answered. Its loopback is its own and up, its names are
+// answered on its own sockets by the guard alone, and its retirement has
+// the guard withdraw that route once its processes are gone.
+func TestARoutedSpaceStartsOnlyAfterItsRouteIsAdmitted(t *testing.T) {
+	k := routedKeeper(t)
+	marker := filepath.Join(filepath.Dir(k.homes), "ran")
+	k.guard.hold = make(chan struct{})
+	script := `touch ` + marker + `; "$TEST_BINARY" ask 127.0.0.11:53; "$TEST_BINARY" own 3000 mine 0; echo done`
+	req := spawnRequest(t, k.attach, "r1", script, map[string]string{"TEST_BINARY": k.s.self}, false, 64<<20)
+	done := make(chan struct{})
+	go func() { k.handleSpawn(t, req); close(done) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(k.guard.taken()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond) // sleep-ok: a bounded poll for the admit to arrive
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the command ran before its route was admitted: %v", err)
+	}
+	close(k.guard.hold)
+	<-done
+	spawned := k.reply(t)
+	if spawned["type"] != protocol.TypeSpawned {
+		t.Fatalf("answered %v", spawned)
+	}
+	spawnID := spawned["spawn_id"].(string)
+	calls := k.guard.taken()
+	if len(calls) != 1 || calls[0].spawnID != spawnID || calls[0].reach != guard.ReachIsland || calls[0].addrs != nil {
 		t.Fatalf("the guard was asked %+v", calls)
 	}
+	rc := k.accept(t)
+	rc.readUntil(t, func() bool { return false })
+	out := string(rc.got[frame.StreamStdout])
+	for _, want := range []string{"ask 127.0.0.11:53: answer:" + spawnID, "own 3000: mine", "done"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the routed space lacks %q:\n%s", want, out)
+		}
+	}
+	k.releasedPair(t, spawnID)
+	k.guard.waitOps(t, spawnID, guard.TypeAdmit, guard.TypeClear)
 }
 
-// A spawn whose egress the guard does not confirm is refused under the
-// spawn id its uid was taken for, and released, its uid back in the pool;
-// one whose hosts resolve to nothing is refused before the guard is asked
-// anything.
-func TestASpawnTheGuardDoesNotConfirmIsRefused(t *testing.T) {
-	k := boundedKeeper(t)
-	g := &recordingGuard{fail: true}
-	k.s.guard = g
+// Two routed spaces at once: each binds the same port on its own loopback
+// and reaches its own listener there, and each has the route of its own
+// start's hosts, whatever the other's.
+func TestEachRoutedSpaceHasItsOwnLoopbackAndHosts(t *testing.T) {
 	fakeResolver(t, map[string][]string{"api.example.com": {"203.0.113.7"}})
+	k := routedKeeper(t)
+	listed := spawnRequest(t, k.attach, "a", `"$TEST_BINARY" own 3000 first 3; echo done`, map[string]string{"TEST_BINARY": k.s.self}, false, 64<<20)
+	listed.Hosts = []string{"api.example.com"}
+	k.handleSpawn(t, listed)
+	first := k.reply(t)
+	k.handleSpawn(t, spawnRequest(t, k.attach, "b", `"$TEST_BINARY" own 3000 second 0; echo done`, map[string]string{"TEST_BINARY": k.s.self}, false, 64<<20))
+	second := k.reply(t)
+	if first["type"] != protocol.TypeSpawned || second["type"] != protocol.TypeSpawned {
+		t.Fatalf("answered %v and %v", first, second)
+	}
+	outs := map[string]bool{}
+	for range 2 {
+		rc := k.accept(t)
+		rc.readUntil(t, func() bool { return false })
+		outs[string(rc.got[frame.StreamStdout])] = true
+	}
+	if !outs["own 3000: first\ndone\n"] || !outs["own 3000: second\ndone\n"] {
+		t.Fatalf("the two spaces' loopbacks: %v", outs)
+	}
+	calls := k.guard.taken()
+	want := map[string]routeCall{
+		first["spawn_id"].(string):  {op: guard.TypeAdmit, spawnID: first["spawn_id"].(string), reach: guard.ReachHosts, addrs: []netip.Addr{netip.MustParseAddr("203.0.113.7")}, conn: 1},
+		second["spawn_id"].(string): {op: guard.TypeAdmit, spawnID: second["spawn_id"].(string), reach: guard.ReachIsland, conn: 1},
+	}
+	if len(calls) < 2 || !reflect.DeepEqual(calls[0], want[calls[0].spawnID]) || !reflect.DeepEqual(calls[1], want[calls[1].spawnID]) {
+		t.Fatalf("the guard was asked %+v, want %+v", calls, want)
+	}
+	for range 4 {
+		k.reply(t)
+	}
+}
 
-	req := spawnRequest(t, k.attach, "3", "sleep 60", map[string]string{}, false, 64<<20)
-	req.Hosts = []string{"api.example.com"}
-	k.handleSpawn(t, req)
-	k.expect(t, protocol.NewReleased(k.refusedMade(t, "3", protocol.CodeGuardUnavailable)))
-	unresolved := spawnRequest(t, k.attach, "4", "sleep 60", map[string]string{}, false, 64<<20)
+// A routed spawn whose route the guard refuses, and one whose admit was
+// answered over a connection that ended as it was answered, are refused
+// under the spawn id the keeper gave them and released: nothing of their
+// command ran, and the place is free at their release alone. One whose
+// hosts resolve to nothing is refused before the guard is asked anything.
+func TestARouteNotAdmittedRefusesTheSpawnAndStartsNothing(t *testing.T) {
+	fakeResolver(t, map[string][]string{})
+	k := routedKeeper(t)
+	marker := filepath.Join(filepath.Dir(k.homes), "ran")
+	script := `touch ` + marker
+	k.guard.refuse = true
+	k.handleSpawn(t, spawnRequest(t, k.attach, "x", script, map[string]string{}, false, 64<<20))
+	k.expect(t, protocol.NewReleased(k.refusedMade(t, "x", protocol.CodeGuardUnavailable)))
+
+	k.guard.mu.Lock()
+	k.guard.refuse = false
+	k.guard.before = func(string) { k.s.guardLost(1) }
+	k.guard.mu.Unlock()
+	k.handleSpawn(t, spawnRequest(t, k.attach, "y", script, map[string]string{}, false, 64<<20))
+	k.expect(t, protocol.NewReleased(k.refusedMade(t, "y", protocol.CodeGuardUnavailable)))
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused route's command ran: %v", err)
+	}
+
+	asked := len(k.guard.taken())
+	unresolved := spawnRequest(t, k.attach, "z", script, map[string]string{}, false, 64<<20)
 	unresolved.Hosts = []string{"absent.example.com"}
-	asked := len(g.taken())
 	k.handleSpawn(t, unresolved)
-	if r := k.reply(t); r["type"] != protocol.TypeError || r["code"] != protocol.CodeHostsUnresolved || r["id"] != "4" {
+	if r := k.reply(t); r["type"] != protocol.TypeError || r["code"] != protocol.CodeHostsUnresolved || r["id"] != "z" {
 		t.Fatalf("answered %v", r)
 	}
-	if len(g.taken()) != asked {
+	if len(k.guard.taken()) != asked {
 		t.Fatal("the guard was asked about a spawn whose hosts resolve to nothing")
 	}
 	k.s.mu.Lock()
 	st := k.s.pools["runner"].Stats()
 	k.s.mu.Unlock()
 	if st.Free != st.Size || st.Quarantined != 0 {
-		t.Fatalf("the refused spawn's uid is not back in the pool once it was released: %+v", st)
+		t.Fatalf("the refused spawns' uids are not back in the pool once released: %+v", st)
 	}
 }
 
-// started has the keeper start req and answers its spawn id and uid.
-func (k *keeper) started(t *testing.T, req *protocol.Request) (string, int) {
-	t.Helper()
-	k.handleSpawn(t, req)
-	spawned := k.reply(t)
-	if spawned["type"] != protocol.TypeSpawned || spawned["id"] != req.ID {
-		t.Fatalf("spawn %s answered %v", req.ID, spawned)
+// The end of the guard's connection kills every space routed over it, at
+// once and before guardLost returns, so the client dials again only after:
+// each ends killed and is released, its route asked of no connection, and a
+// space of a later connection lives on.
+func TestTheGuardsConnectionEndKillsEveryRoutedSpace(t *testing.T) {
+	k := routedKeeper(t)
+	k.handleSpawn(t, spawnRequest(t, k.attach, "a", `echo up; sleep 600`, map[string]string{}, false, 64<<20))
+	a := k.reply(t)["spawn_id"].(string)
+	rcA := k.accept(t)
+	k.guard.mu.Lock()
+	k.guard.conn = 2
+	k.guard.mu.Unlock()
+	k.handleSpawn(t, spawnRequest(t, k.attach, "b", `echo up; sleep 600`, map[string]string{}, false, 64<<20))
+	b := k.reply(t)["spawn_id"].(string)
+	rcB := k.accept(t)
+	for _, rc := range []*relayConn{rcA, rcB} {
+		rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "up\n") })
 	}
-	conn, err := k.ln.Accept()
-	if err != nil {
-		t.Fatal(err)
+	k.s.mu.Lock()
+	group := k.s.spawns[a].group
+	k.s.mu.Unlock()
+	k.s.guardLost(1)
+	// The group is empty, or already removed by the retirement that
+	// followed the kill.
+	if pids, err := group.Procs(); (err != nil && !errors.Is(err, os.ErrNotExist)) || len(pids) != 0 {
+		t.Fatalf("a space routed over the ended connection still runs when guardLost returns: %v %v", pids, err)
 	}
-	t.Cleanup(func() { conn.Close() })
-	uid, err := strconv.Atoi(strconv.FormatFloat(spawned["uid"].(float64), 'f', 0, 64))
-	if err != nil {
-		t.Fatal(err)
+	exited := k.reply(t)
+	if exited["type"] != protocol.TypeExited || exited["spawn_id"] != a || exited["signal"] != "SIGKILL" {
+		t.Fatalf("answered %v", exited)
 	}
-	return spawned["spawn_id"].(string), uid
-}
-
-// An admission the guard may have applied without confirming it is cleared
-// before the spawn is refused: a pooled uid's by its retirement, before the
-// pool gives the uid to another spawn.
-func TestAPooledAdmissionTheGuardDidNotConfirmIsCleared(t *testing.T) {
-	fakeResolver(t, map[string][]string{"api.example.com": {"203.0.113.7"}})
-	k := boundedKeeper(t)
-	g := &recordingGuard{failAdmit: true}
-	k.s.guard = g
-	req := spawnRequest(t, k.attach, "p", "sleep 60", map[string]string{}, false, 64<<20)
-	req.Hosts = []string{"api.example.com"}
-	k.handleSpawn(t, req)
-	if r := k.reply(t); r["code"] != protocol.CodeGuardUnavailable {
-		t.Fatalf("answered %v", r)
+	if released := k.reply(t); released["type"] != protocol.TypeReleased || released["spawn_id"] != a {
+		t.Fatalf("answered %v", released)
 	}
-	g.waitOps(t, testPoolFirst, []string{"admit", "clear"})
-}
-
-// A kept uid's unconfirmed admission is cleared before the refusal is sent,
-// no other session of the uid running.
-func TestAKeptAdmissionTheGuardDidNotConfirmIsCleared(t *testing.T) {
-	fakeResolver(t, map[string][]string{"api.example.com": {"203.0.113.7"}})
-	k := keptKeeper(t)
-	g := &recordingGuard{failAdmit: true}
-	k.s.guard = g
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-unconfirmed")
-	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, testKeptFirst); made["type"] != protocol.TypeHomeMade {
-		t.Fatalf("home_make: %v", made)
-	}
-	req := keptRequest(t, k.attach, "k", "sleep 60", path, testKeptFirst, nil)
-	req.Hosts = []string{"api.example.com"}
-	k.handleSpawn(t, req)
-	if r := k.reply(t); r["code"] != protocol.CodeGuardUnavailable {
-		t.Fatalf("answered %v", r)
-	}
-	if got := g.ops(testKeptFirst); !reflect.DeepEqual(got, []string{"admit", "clear"}) {
-		t.Fatalf("the kept uid's guard was asked %v before the refusal, want an admit and its clear", got)
-	}
-}
-
-// quarantined spawns script under the keeper's uid (kept or pooled), lets
-// it leave a file the uid then cannot remove, and releases it: the uid is
-// quarantined. It answers the uid and the folder to open again.
-func (k *keeper) quarantined(t *testing.T, kept bool) (int, string) {
-	t.Helper()
-	pinned := filepath.Join(k.s.roots.Dirs[0], "pinned")
-	if err := os.Mkdir(pinned, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(pinned, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	script := `echo x > ` + pinned + `/left; echo wrote; sleep 600`
-	var spawnID string
-	var uid int
-	var rc *relayConn
-	if kept {
-		uid = testKeptFirst
-		path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-swept")
-		if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
-			t.Fatalf("home_make: %v", made)
+	for _, c := range k.guard.taken() {
+		if c.op == guard.TypeClear && c.spawnID == a {
+			t.Fatalf("a route of the ended connection was asked of the guard: %+v", c)
 		}
-		spawnID, rc = k.spawnKept(t, "left", script, path, uid)
-	} else {
-		spawnID, uid, rc = k.spawn(t, "left", script, map[string]string{}, false)
 	}
-	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "wrote\n") })
-	if err := os.Chmod(pinned, 0o555); err != nil {
-		t.Fatal(err)
+	k.s.mu.Lock()
+	_, live := k.s.spawns[b]
+	k.s.mu.Unlock()
+	if !live {
+		t.Fatal("a space of a later connection was killed")
 	}
-	k.release(t, spawnID)
-	k.releasedPair(t, spawnID)
-	return uid, pinned
-}
-
-// A uid that left something behind is quarantined with its rules
-// standing; the sweep that finds it clean clears it before the uid is free
-// again.
-func TestAQuarantinedPooledUIDIsClearedWhenItsSweepFindsItClean(t *testing.T) {
-	k := boundedKeeper(t)
-	g := &recordingGuard{}
-	k.s.guard = g
-	assertSweepClears(t, k, g, false)
-}
-
-func TestAQuarantinedKeptUIDIsClearedWhenItsSweepFindsItClean(t *testing.T) {
-	k := keptKeeper(t)
-	g := &recordingGuard{}
-	k.s.guard = g
-	assertSweepClears(t, k, g, true)
-}
-
-func assertSweepClears(t *testing.T, k *keeper, g *recordingGuard, kept bool) {
-	t.Helper()
-	uid, pinned := k.quarantined(t, kept)
-	if got := g.ops(uid); !reflect.DeepEqual(got, []string{"clear"}) {
-		t.Fatalf("a quarantined uid's rules were touched: %v, want only its spawn's clear", got)
-	}
-	if err := os.Chmod(pinned, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	k.s.sweep()
-	if got := g.ops(uid); !reflect.DeepEqual(got, []string{"clear", "clear"}) {
-		t.Fatalf("after the sweep found the uid clean the guard was asked %v, want its clear", got)
-	}
+	k.release(t, b)
+	k.releasedPair(t, b)
 }

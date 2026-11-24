@@ -24,6 +24,7 @@ import (
 
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
+	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
@@ -39,11 +40,15 @@ const (
 	// when the spec says so; the stage moves it to fd 3 once the spec is
 	// read.
 	ControlFD = 5
-	// RelayFD is the backend's end of its relay (Prima.RunnerRelay),
-	// present exactly when the stage runs in a namespace of its own; the
+	// RelayFD is a relay space's end of its relay (Prima.RunnerRelay); the
 	// stage moves it to fd 4. With the control channel it is one of the
 	// only descriptors above 2 the command keeps.
 	RelayFD = 6
+	// RouteFD is a routed space's socket to the keeper, at RelayFD's place
+	// since a space has one of the two: the stage hands its network
+	// namespace and name sockets up over it and waits there for the word
+	// that the guard admitted its route. The command never holds it.
+	RouteFD = 6
 )
 
 // CommandControlFD and CommandRelayFD are the descriptors the executed
@@ -61,37 +66,43 @@ const statusFloor = 10
 const ExitFailed = 127
 
 // ProbeArg, after `stage`, makes the stage the keeper's start-time proof
-// that this host lets it isolate a spawn: it reads a Probe instead of a
-// Spec, becomes the probe's uid and gid, drops every capability set as a
-// spawn's stage does, and exits 0 without executing anything.
+// that this host gives a spawn its space: it reads a Probe instead of a
+// Spec, becomes the probe's uid and gid, for a routed probe brings its
+// loopback up and binds its name sockets as a routed spawn's stage does,
+// drops every capability set, installs the space's filter and exits 0
+// without executing anything.
 const ProbeArg = "probe"
 
 // Probe is what the keeper hands a probing stage over its spec pipe.
 type Probe struct {
-	UID int `json:"uid"`
-	GID int `json:"gid"`
+	UID    int  `json:"uid"`
+	GID    int  `json:"gid"`
+	Routed bool `json:"routed"`
 }
 
 // Main runs `cyfr-locus stage`. It does not return on success.
 //
-// A stage of a pool that shares the keeper's namespaces starts already
-// running as the spawn's uid and gid. A stage of an isolated pool is the
-// keeper's binary in its stage mode, cloned into a user and network
-// namespace of its own and holding, inside that namespace only, SETUID,
-// SETGID and SETPCAP as ambient capabilities and nothing outside it. It is
-// blocked reading its spec from an inherited pipe until the keeper, from
-// the parent side, has written its setgroups (deny), gid_map and uid_map,
-// each mapping the pooled id to itself, and placed it in its cgroup: a
-// process inside a new user namespace cannot map an id its parent could
-// not, nor join a cgroup its owner did not delegate. Only once the spec
-// arrives does it become the pooled uid and gid, drop every set, bounding,
-// inheritable, permitted, effective and ambient, set no_new_privs, install
-// the runner's seccomp filter (seccomp_linux.go) and execute the command,
-// which then holds no capability anywhere, can make no namespace of its own
-// and has no route out of its namespace: the loopback stays down, and a
-// descriptor it inherited, its control channel on fd 3 and its relay on fd
-// 4, is its only way to anything. A filter that cannot be installed refuses
-// the spawn before anything executes.
+// The stage is the keeper's binary in its stage mode, cloned into a user,
+// network and IPC namespace of its own and holding, inside that namespace
+// only, SETUID, SETGID, SETPCAP, NET_ADMIN and NET_BIND_SERVICE as ambient
+// capabilities and nothing outside it. It is blocked reading its spec from
+// an inherited pipe until the keeper, from the parent side, has written
+// its setgroups (deny), gid_map and uid_map, each mapping the pooled id to
+// itself, and placed it in its cgroup: a process inside a new user
+// namespace cannot map an id its parent could not, nor join a cgroup its
+// owner did not delegate. Only once the spec arrives does it become the
+// pooled uid and gid. A routed space's stage then brings its loopback up,
+// binds a UDP and a TCP socket at 127.0.0.11:53, hands its network
+// namespace and both sockets to the keeper over RouteFD, keeping none of
+// them, and waits there for the keeper's word that the guard made its
+// route (route_linux.go); a relay space's loopback stays down. Every stage
+// then drops every set, bounding, inheritable, permitted, effective and
+// ambient, sets no_new_privs, installs the space's seccomp filter
+// (seccomp_linux.go) and executes the command, which then holds no
+// capability anywhere, can make no namespace or mount of its own and
+// reaches only what its space's reach gives it: a relay space's relay on
+// fd 4, or a routed space's route. A filter that cannot be installed
+// refuses the spawn before anything executes.
 func Main() int {
 	// Capabilities and no_new_privs belong to a thread, and execve takes
 	// the credentials of the thread that calls it: the drop, the check and
@@ -135,25 +146,25 @@ func Main() int {
 	if err := spec.Validate(); err != nil {
 		return fail("spec: %v", err)
 	}
-	isolated, err := ownNamespace(spec.UID, spec.GID)
-	if err != nil {
+	if err := ownNamespace(spec.UID, spec.GID); err != nil {
 		return fail("namespace: %v", err)
 	}
-	if isolated {
-		if err := become(spec.UID, spec.GID); err != nil {
-			return fail("credentials: %v", err)
-		}
-	}
-	if err := dropCapabilities(isolated); err != nil {
-		return fail("capabilities: %v", err)
-	}
-	if err := checkCredentials(spec.UID, spec.GID, isolated); err != nil {
+	if err := become(spec.UID, spec.GID); err != nil {
 		return fail("credentials: %v", err)
 	}
-	if isolated {
-		if err := installRunnerFilter(); err != nil {
-			return fail("seccomp: %v", err)
+	if spec.Reach == pool.ReachRouted {
+		if err := handRouteUp(RouteFD); err != nil {
+			return fail("route: %v", err)
 		}
+	}
+	if err := dropCapabilities(); err != nil {
+		return fail("capabilities: %v", err)
+	}
+	if err := checkCredentials(spec.UID, spec.GID); err != nil {
+		return fail("credentials: %v", err)
+	}
+	if err := installSpaceFilter(); err != nil {
+		return fail("seccomp: %v", err)
 	}
 	if err := checkCgroup(spec); err != nil {
 		return fail("cgroup: %v", err)
@@ -174,8 +185,8 @@ func Main() int {
 		return fail("exec: %v", err)
 	}
 	// Every descriptor above the command's is marked close-on-exec; the
-	// control channel's socket is first moved to the command's fd 3 and an
-	// isolated spawn's relay to its fd 4 (Dup3 with no flags leaves the new
+	// control channel's socket is first moved to the command's fd 3 and a
+	// relay space's relay to its fd 4 (Dup3 with no flags leaves the new
 	// descriptor open across exec), so they are the only descriptors above
 	// 2 the command inherits.
 	keep := SpecFD
@@ -185,7 +196,7 @@ func Main() int {
 		}
 		keep = CommandControlFD + 1
 	}
-	if isolated {
+	if spec.Reach == pool.ReachRelay {
 		if err := checkSocket(RelayFD); err != nil {
 			return fail("relay: %v", err)
 		}
@@ -202,9 +213,10 @@ func Main() int {
 }
 
 // probe is the stage's start-time proof for the keeper: the namespace the
-// keeper cloned it into maps the probe's ids, the stage becomes them and
-// drops every capability set, and the check a spawn's stage makes before
-// it executes the command passes.
+// keeper cloned it into maps the probe's ids, the stage becomes them, a
+// routed probe brings its loopback up and binds its two name sockets, and
+// the stage drops every capability set, passes the check a spawn's stage
+// makes before it executes the command and installs the space's filter.
 func probe() error {
 	specFile := os.NewFile(SpecFD, "spec")
 	data, err := io.ReadAll(io.LimitReader(specFile, 4096))
@@ -218,51 +230,52 @@ func probe() error {
 	if err := dec.Decode(&p); err != nil || p.UID <= 0 || p.GID <= 0 {
 		return errors.New("probe: undecodable")
 	}
-	isolated, err := ownNamespace(p.UID, p.GID)
-	if err != nil {
+	if err := ownNamespace(p.UID, p.GID); err != nil {
 		return fmt.Errorf("namespace: %w", err)
-	}
-	if !isolated {
-		return errors.New("namespace: the probe does not run in a user namespace mapping only its ids")
 	}
 	if err := become(p.UID, p.GID); err != nil {
 		return fmt.Errorf("credentials: %w", err)
 	}
-	if err := dropCapabilities(true); err != nil {
+	if p.Routed {
+		udp, tcp, err := nameSockets()
+		if err != nil {
+			return fmt.Errorf("the space's loopback and name sockets: %w", err)
+		}
+		_ = unix.Close(udp)
+		_ = unix.Close(tcp)
+	}
+	if err := dropCapabilities(); err != nil {
 		return fmt.Errorf("capabilities: %w", err)
 	}
-	return checkCredentials(p.UID, p.GID, true)
+	if err := checkCredentials(p.UID, p.GID); err != nil {
+		return err
+	}
+	return installSpaceFilter()
 }
 
-// ownNamespace reports whether the stage runs in a user namespace of its
-// own, as the keeper makes one for an isolated spawn: one whose only
-// mappings are uid to itself and gid to itself, with setgroups denied. A
-// user namespace mapping anything else is the keeper's own (the initial
-// one, or a container's), and any other partial state is refused.
-func ownNamespace(uid, gid int) (bool, error) {
+// ownNamespace refuses to go on unless the stage runs in a user namespace
+// of its own, as the keeper makes one for every spawn: one whose only
+// mappings are uid to itself and gid to itself, with setgroups denied.
+func ownNamespace(uid, gid int) error {
 	uidMap, err := os.ReadFile("/proc/self/uid_map")
 	if err != nil {
-		return false, err
+		return err
 	}
 	gidMap, err := os.ReadFile("/proc/self/gid_map")
 	if err != nil {
-		return false, err
+		return err
 	}
-	ownUID, ownGID := identityOnly(uidMap, uid), identityOnly(gidMap, gid)
-	switch {
-	case !ownUID && !ownGID && len(bytes.TrimSpace(uidMap)) > 0 && len(bytes.TrimSpace(gidMap)) > 0:
-		return false, nil
-	case !ownUID || !ownGID:
-		return false, fmt.Errorf("uid_map %q and gid_map %q are not the spawn's ids mapped to themselves", bytes.TrimSpace(uidMap), bytes.TrimSpace(gidMap))
+	if !identityOnly(uidMap, uid) || !identityOnly(gidMap, gid) {
+		return fmt.Errorf("uid_map %q and gid_map %q are not the spawn's ids mapped to themselves", bytes.TrimSpace(uidMap), bytes.TrimSpace(gidMap))
 	}
 	setgroups, err := os.ReadFile("/proc/self/setgroups")
 	if err != nil {
-		return false, err
+		return err
 	}
 	if string(bytes.TrimSpace(setgroups)) != "deny" {
-		return false, fmt.Errorf("setgroups is %q, not deny", bytes.TrimSpace(setgroups))
+		return fmt.Errorf("setgroups is %q, not deny", bytes.TrimSpace(setgroups))
 	}
-	return true, nil
+	return nil
 }
 
 // identityOnly reports whether an id map file holds exactly one mapping, of
@@ -278,10 +291,9 @@ func identityOnly(idMap []byte, id int) bool {
 }
 
 // become sets every uid and gid of the process to the spawn's, as the stage
-// of an isolated pool does for itself inside its namespace, where it holds
-// SETUID and SETGID. Its supplementary groups are the keeper's, which the
-// keeper cleared before it served an isolated pool, since setgroups is
-// denied here.
+// does for itself inside its namespace, where it holds SETUID and SETGID.
+// Its supplementary groups are the keeper's, which the keeper cleared before
+// it served, since setgroups is denied here.
 func become(uid, gid int) error {
 	if err := syscall.Setresgid(gid, gid, gid); err != nil {
 		return fmt.Errorf("setresgid %d: %w", gid, err)
@@ -292,23 +304,18 @@ func become(uid, gid int) error {
 	return nil
 }
 
-// dropCapabilities empties this thread's capability sets and sets
-// no_new_privs. In a namespace of its own the stage holds SETPCAP there and
-// drops the whole bounding set first; a stage sharing the keeper's
-// namespace holds no SETPCAP, cannot drop a bounding capability, and keeps
-// the keeper's bounding set, which no_new_privs keeps from being raised by
-// anything it executes.
-func dropCapabilities(isolated bool) error {
-	if isolated {
-		for c := 0; c < 64; c++ {
-			err := unix.Prctl(unix.PR_CAPBSET_DROP, uintptr(c), 0, 0, 0)
-			if errors.Is(err, unix.EINVAL) {
-				// Past the kernel's last capability.
-				break
-			}
-			if err != nil {
-				return fmt.Errorf("dropping capability %d from the bounding set: %w", c, err)
-			}
+// dropCapabilities empties this thread's capability sets, the whole
+// bounding set first, which SETPCAP in its own namespace lets it drop, and
+// sets no_new_privs.
+func dropCapabilities() error {
+	for c := 0; c < 64; c++ {
+		err := unix.Prctl(unix.PR_CAPBSET_DROP, uintptr(c), 0, 0, 0)
+		if errors.Is(err, unix.EINVAL) {
+			// Past the kernel's last capability.
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("dropping capability %d from the bounding set: %w", c, err)
 		}
 	}
 	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil {
@@ -327,11 +334,8 @@ func dropCapabilities(isolated bool) error {
 
 // checkCredentials refuses to continue unless this thread is exactly uid
 // and gid with no supplementary groups and no_new_privs set, and holds no
-// inheritable, permitted, effective or ambient capability. In a namespace
-// of its own its bounding set is empty too; sharing the keeper's, it is the
-// keeper's own, which the keeper's start holds to SETUID, SETGID and KILL
-// and which nothing executed under no_new_privs can raise.
-func checkCredentials(uid, gid int, isolated bool) error {
+// capability in any set, the bounding set among them.
+func checkCredentials(uid, gid int) error {
 	ruid, euid, suid := unix.Getresuid()
 	rgid, egid, sgid := unix.Getresgid()
 	if ruid != uid || euid != uid || suid != uid {
@@ -355,11 +359,7 @@ func checkCredentials(uid, gid int, isolated bool) error {
 	if err != nil {
 		return err
 	}
-	bounding := procfs.AnyBounding
-	if isolated {
-		bounding = 0
-	}
-	return procfs.CheckNoCaps(st, bounding)
+	return procfs.CheckNoCaps(st, 0)
 }
 
 // checkSocket refuses a descriptor that is not a stream socket.

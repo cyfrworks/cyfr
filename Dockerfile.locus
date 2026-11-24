@@ -46,21 +46,25 @@
 # `unavailable`, and the runtime starts no runner and logs, both naming the
 # option; none runs unbounded.
 #
-# The runtime's runner pool is isolated (`runner:…:netns`): cyfr-locus
-# clones every runner into a user and network namespace of its own,
-# mapping only the runner's pooled uid and gid, whose loopback stays down,
-# so a runner holds no capability and reaches nothing but the descriptors
-# it inherited. The clone takes no capability of the container's, but two
-# things of the host and the engine: the host allows unprivileged user
-# namespaces (user.max_user_namespaces above 0, and where AppArmor
-# restricts them, kernel.apparmor_restrict_unprivileged_userns), and the
-# container runs under the seccomp profile /etc/cyfr/keeper.json carries,
-# Docker's default with clone allowed to make a user and network namespace
-# and unshare and setns denied (docker-compose.yml's locus-runtime
+# Every spawn runs in a space of its own: cyfr-locus clones it into a user,
+# network and IPC namespace mapping only its pooled uid and gid, so it
+# holds no capability and shares no loopback, abstract socket or System V
+# object with anything else. Each pool names its spaces' reach: the
+# runtime's runners are relay spaces (`runner:…:relay`), whose loopback
+# stays down and whose relay is their one way to anything; builds and
+# backends are routed spaces (`:routed`), each with its own loopback and
+# the one route its island's guard makes for it (`--guard`). The clone
+# takes no capability of the container's, but two things of the host and
+# the engine: the host allows unprivileged user namespaces
+# (user.max_user_namespaces above 0, and where AppArmor restricts them,
+# kernel.apparmor_restrict_unprivileged_userns), and the container runs
+# under the seccomp profile /etc/cyfr/keeper.json carries, Docker's default
+# with clone allowed to make a user, network and IPC namespace and unshare
+# and setns denied (docker-compose.yml's x-locus-role
 # `security_opt: seccomp=./keeper.seccomp.json`,
 # apps/locus/keeper/seccomp/keeper.json shipped beside it), since Docker's
 # own profile denies such a clone. Without either, cyfr-locus refuses to
-# start, naming both. The runtime container's read-only root carries the
+# start, naming both. A runtime container's read-only root carries the
 # build toolchain's files too; its runners still hold no capability, no
 # route and no descriptor but their channel and relay.
 
@@ -360,11 +364,12 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
         "http://localhost:${LOCUS_BUILDS_PORT:-4100}/locus/v1/builds/health" || exit 1
 
 # Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
-# `security_opt: [no-new-privileges, writable-cgroups=true]`, a read-only
-# root, `ipc: none` and the homes and /run/locus tmpfs mounts
-# (docker-compose.yml's locus-builds service). The backends service runs
-# the same image with the backends pool in its place (docker-compose.yml's
-# locus-backends service), and the runtime with the isolated runner pool
-# and the seccomp profile above (docker-compose.yml's locus-runtime
-# service).
-ENTRYPOINT ["cyfr-locus", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+# `security_opt: [no-new-privileges, writable-cgroups=true,
+# seccomp=keeper.json]`, a read-only root, `ipc: none`, the homes and
+# /run/locus tmpfs mounts, and the builds guard's control mounted read-only
+# at /run/cyfr-guard-control, behind that guard (docker-compose.yml's
+# locus-builds service). The backends service runs the same image with the
+# backends pool in its place (docker-compose.yml's locus-backends service),
+# and the runtime with the runner pool and no guard (docker-compose.yml's
+# locus-runtime service).
+ENTRYPOINT ["cyfr-locus", "serve", "--pool", "build:30001-30016:routed", "--home-root", "/var/lib/locus/homes", "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", "locus", "--", "/app/bin/locus", "start"]

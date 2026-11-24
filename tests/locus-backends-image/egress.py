@@ -54,6 +54,7 @@ from harness import (  # noqa: E402
     CONNECT_PROBE, KEPT_FIRST, KEPT_LAST, POOL_FIRST, POOL_LAST, REFUSED, SERVICE, STATUSES, VERSION, Stack,
     eventually, expect, owner_of, probe, require_docker, run,
 )
+from imagesuite import read_output  # noqa: E402
 
 LISTED, OPEN, KEPT, NOWHERE, REUSE = (owner_of(name) for name in ("listed", "open", "kept", "nowhere", "reuse"))
 KEPT_ENTRY = "vlt_egress-kept"
@@ -292,8 +293,8 @@ def main():
         expect(routes(stack), "the kept session's route still stands", routes(stack))
         run("docker", "kill", stack.container)
         eventually(lambda: not routes(stack)
-                   and stack.guard_exec("ls /sys/class/net | grep -q '^sp' && echo held || true").stdout.strip() == ""
-                   and "-N CYFR_GUARD_R" not in stack.guard_exec("iptables -S").stdout,
+                   and not re.search(r"(?m)^sp\d+$", read_output(stack.guard_exec("ls /sys/class/net"), "the guard's links"))
+                   and "-N CYFR_GUARD_R" not in read_output(stack.guard_exec("iptables -S"), "the guard's rules"),
                    "every route made over the lost keeper's connection, its pair, chain and record, to be withdrawn")
         expect(re.search(r"connection \d+ ended; its \d+ routes are withdrawn", stack.guard_logs()),
                "the guard says it withdrew the lost connection's routes", stack.guard_logs()[-2000:])

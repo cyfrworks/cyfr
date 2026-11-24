@@ -17,10 +17,11 @@
 // descriptor 3, is asked for per spawn (`control` in package protocol), so
 // a runner pool is whichever pool such spawns are drawn from.
 //
-// A pool declared isolated (`<name>:<first>-<last>:netns`) starts every
-// spawn in a user and network namespace of its own; the keeper refuses a
-// spawn of it that does not ask for that, and a spawn of any other pool
-// that does (`isolation` in package protocol).
+// Every spawn runs in a space of its own: a user, network and IPC namespace
+// the keeper makes for it. A pool declares the reach of its spaces
+// (`<name>:<first>-<last>:<reach>`): ReachRelay, a runner's, whose one way
+// to anything is its relay, or ReachRouted, a build's or a program's, whose
+// one way out is the route its island's guard makes for it.
 //
 // A Pool is not safe for concurrent use; its owner serializes access.
 package pool
@@ -37,29 +38,38 @@ const MaxSize = 4096
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
-// Isolation is the suffix declaring a pool isolated.
-const Isolation = "netns"
+// A pool's reach.
+const (
+	// ReachRelay is a space with its loopback down and no route: the relay
+	// its spawn inherits is its one way to anything.
+	ReachRelay = "relay"
+	// ReachRouted is a space with its loopback and one route, its island
+	// guard's, and its names answered through that guard.
+	ReachRouted = "routed"
+)
 
-// Spec names a pool, its inclusive uid range and whether its spawns run in
-// a user and network namespace of their own.
+// Spec names a pool, its inclusive uid range and its spaces' reach.
 type Spec struct {
-	Name     string
-	First    int
-	Last     int
-	Isolated bool
+	Name  string
+	First int
+	Last  int
+	Reach string
 }
 
-// ParseSpec parses `<name>:<first>-<last>`, or `<name>:<first>-<last>:netns`
-// for an isolated pool. The range must not include uid 0 and holds at most
-// MaxSize uids.
+// Routed reports whether the pool's spaces are routed.
+func (s Spec) Routed() bool { return s.Reach == ReachRouted }
+
+// ParseSpec parses `<name>:<first>-<last>:<reach>`, the reach ReachRelay or
+// ReachRouted. The range must not include uid 0 and holds at most MaxSize
+// uids.
 func ParseSpec(s string) (Spec, error) {
-	name, rng, ok := strings.Cut(s, ":")
+	name, rest, ok := strings.Cut(s, ":")
 	if !ok {
-		return Spec{}, fmt.Errorf("pool %q: want <name>:<first>-<last>[:%s]", s, Isolation)
+		return Spec{}, fmt.Errorf("pool %q: want <name>:<first>-<last>:<%s|%s>", s, ReachRelay, ReachRouted)
 	}
-	rng, isolation, isolated := strings.Cut(rng, ":")
-	if isolated && isolation != Isolation {
-		return Spec{}, fmt.Errorf("pool %q: the only isolation is %s", s, Isolation)
+	rng, reach, ok := strings.Cut(rest, ":")
+	if !ok || (reach != ReachRelay && reach != ReachRouted) {
+		return Spec{}, fmt.Errorf("pool %q: its reach must be %s or %s", s, ReachRelay, ReachRouted)
 	}
 	if !namePattern.MatchString(name) {
 		return Spec{}, fmt.Errorf("pool %q: name must match %s", s, namePattern)
@@ -82,7 +92,7 @@ func ParseSpec(s string) (Spec, error) {
 	if last-first+1 > MaxSize {
 		return Spec{}, fmt.Errorf("pool %q: more than %d uids", s, MaxSize)
 	}
-	return Spec{Name: name, First: first, Last: last, Isolated: isolated}, nil
+	return Spec{Name: name, First: first, Last: last, Reach: reach}, nil
 }
 
 func parseUID(s string) (int, error) {

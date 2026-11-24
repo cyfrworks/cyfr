@@ -29,18 +29,18 @@ defmodule Prima.LocusRoles do
 
   A role (`roles/0`, in the order runtime, builds, backends) is served
   under cyfr-locus from the uid pool `pool`, whose uids `uids` are named
-  `user_prefix` and a two-digit ordinal, each spawn isolated as `isolation`
-  says (`nil`, or one of `Prima.KeeperProtocol.isolations/0`). Its service
+  `user_prefix` and a two-digit ordinal, each spawn in a space of its own
+  whose reach is `reach` (`reaches/0`, the keeper's `--pool` suffix). Its service
   listens on `port`; compose runs it as the service `service` in the
   container `container`, on the network `network` that only it and CYFR
   join, selected by the profile `profile` where it has one (`nil`: it
-  always starts), with its spawns' homes on a tmpfs of `home_size`. A role
-  whose spawns have a network of the island's own, the builds and backends
-  roles, runs behind the egress guard `guard`: the compose service that
-  holds the island's network namespace and installs the rules every build
-  or backend leaves through (cyfr-guard), which the role's service shares
+  always starts), with its spawns' homes on a tmpfs of `home_size`. A
+  routed role, builds and backends, runs behind the egress guard `guard`:
+  the compose service that holds the island's network namespace, makes
+  each build's or backend's route and installs the rules it leaves
+  through (cyfr-guard), which the role's service shares
   (`network_mode: service:<guard>`) and starts behind; the runtime, whose
-  runners have no network, has none (`nil`).
+  runners reach nothing but their relays, has none (`nil`).
 
   A role whose programs keep their folders, the backends role, names the
   kept folders' root `kept_root`, the compose volume `kept_volume` mounted
@@ -67,14 +67,12 @@ defmodule Prima.LocusRoles do
   queue (`socket_queue_bytes`). What each is, its cap and how many there
   can be at once, is `Locus.Output`'s table ("What each role holds").
 
-  A role whose `isolation` is `nil` spawns into its container's own
-  namespaces, so every spawn of the island shares the island's network
-  namespace and the container's one IPC namespace (compose's
-  `ipc: none`). An abstract unix socket one spawn binds is therefore
-  reachable by its siblings whatever their uid, since the kernel checks
-  no owner on one. A System V object one spawn makes is kept from its
-  siblings by its owner's uid and mode, and retirement removes it with
-  the uid.
+  Every spawn's space is a user, network and IPC namespace of its own, so
+  no spawn shares a loopback, an abstract unix socket or a System V
+  object with another or with its service: a `"relay"` space has its
+  loopback down and no route, a `"routed"` space its own loopback and the
+  one route its guard makes for it. Its processes and files are still its
+  container's, held apart by uid.
 
   `tests/fixtures/locus_roles.json` holds the same table for the image
   suites, which cannot read this module: `Prima.LocusRolesTest` holds the
@@ -82,7 +80,7 @@ defmodule Prima.LocusRoles do
   from it, and the stack's shape test holds every other spelling of a
   role's facts to it: the Locus image's users and entrypoint, compose's
   services and the image suites' overlays, Locus's own pool names,
-  isolation, attach directory and listener ports, and the image suites'
+  reaches, attach directory and listener ports, and the image suites'
   harnesses. A role's key variables are `Locus.Config`'s; the memory bound
   of each spawn and each container's limits are not facts of this table,
   and neither is the rule that a node serving the runtime serves no other
@@ -126,7 +124,7 @@ defmodule Prima.LocusRoles do
           pool: String.t(),
           user_prefix: String.t(),
           uids: Range.t(),
-          isolation: String.t() | nil,
+          reach: String.t(),
           port: :inet.port_number(),
           home_size: String.t(),
           service: String.t(),
@@ -180,7 +178,7 @@ defmodule Prima.LocusRoles do
       pool: "runner",
       user_prefix: "locus-runner",
       uids: 30_101..30_108,
-      isolation: "netns",
+      reach: "relay",
       port: 4200,
       home_size: "256m",
       service: "locus-runtime",
@@ -205,7 +203,7 @@ defmodule Prima.LocusRoles do
       pool: "build",
       user_prefix: "locus-build",
       uids: 30_001..30_016,
-      isolation: nil,
+      reach: "routed",
       port: 4100,
       home_size: "2g",
       service: "locus-builds",
@@ -230,7 +228,7 @@ defmodule Prima.LocusRoles do
       pool: "backends",
       user_prefix: "locus-backend",
       uids: 20_001..20_032,
-      isolation: nil,
+      reach: "routed",
       port: 4101,
       home_size: "2g",
       service: "locus-backends",
@@ -261,6 +259,14 @@ defmodule Prima.LocusRoles do
   @doc "Every role's facts: the runtime's, the builds role's and the backends role's, in that order."
   @spec roles() :: [role(), ...]
   def roles, do: @roles
+
+  @doc """
+  The reaches a role's spaces may have, as the keeper's `--pool
+  <name>:<first>-<last>:<reach>` spells them (its package pool): a relay
+  space's, which reaches nothing but its relay, and a routed space's.
+  """
+  @spec reaches() :: [String.t(), ...]
+  def reaches, do: ~w(relay routed)
 
   @doc "Every role's name, in the order of `roles/0`."
   @spec names() :: [name(), ...]

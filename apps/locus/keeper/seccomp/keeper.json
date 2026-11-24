@@ -643,7 +643,7 @@
 			"args": [
 				{
 					"index": 0,
-					"value": 771883008,
+					"value": 637665280,
 					"op": "SCMP_CMP_MASKED_EQ"
 				}
 			],
@@ -656,7 +656,7 @@
 					"s390x"
 				]
 			},
-			"comment": "cyfr-locus: Docker's rule with CLONE_NEWUSER and CLONE_NEWNET taken out of the mask, so an unprivileged clone may make a user and network namespace (the keeper's isolated spawns) and no other"
+			"comment": "cyfr-locus: Docker's rule with CLONE_NEWUSER, CLONE_NEWNET and CLONE_NEWIPC taken out of the mask, so an unprivileged clone may make a user, network and IPC namespace (the space of every spawn the keeper makes) and no other"
 		},
 		{
 			"names": [
@@ -666,11 +666,11 @@
 			"args": [
 				{
 					"index": 1,
-					"value": 771883008,
+					"value": 637665280,
 					"op": "SCMP_CMP_MASKED_EQ"
 				}
 			],
-			"comment": "cyfr-locus: Docker's rule with CLONE_NEWUSER and CLONE_NEWNET taken out of the mask, so an unprivileged clone may make a user and network namespace (the keeper's isolated spawns) and no other; s390 parameter ordering for clone is different",
+			"comment": "cyfr-locus: Docker's rule with CLONE_NEWUSER, CLONE_NEWNET and CLONE_NEWIPC taken out of the mask, so an unprivileged clone may make a user, network and IPC namespace (the space of every spawn the keeper makes) and no other; s390 parameter ordering for clone is different",
 			"includes": {
 				"arches": [
 					"s390",

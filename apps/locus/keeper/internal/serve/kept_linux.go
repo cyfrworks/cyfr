@@ -97,8 +97,6 @@ func (s *server) sweepKept() {
 		lock.Lock()
 		clean := s.scrub(KeptAccount(uid), 0, nil, path)
 		if clean {
-			// Its rules stood while anything of it remained.
-			s.clearEgress(uid)
 			s.mu.Lock()
 			delete(s.keptQuarantined, uid)
 			s.mu.Unlock()
@@ -123,11 +121,11 @@ func (s *server) keptHome(path string, uid *uint64) (int, error) {
 // startKeptSpawn starts a spawn in a made kept home, under the home's own
 // uid and no uid of a pool, refused as CodeHomeOverCap when the home already
 // holds its home_max_bytes. Its start holds the uid's lock, so it never
-// starts during the uid's full retirement or a home request, and sets the
-// uid's egress at the guard under it: every session of the home shares the
-// uid, so the uid reaches what its latest spawn resolved. It answers as
+// starts during the uid's full retirement or a home request. Every session
+// of the home shares the uid and its files, and each has its own space and
+// route, which reaches what its own start resolved. It answers as
 // startSpawn does.
-func (s *server) startKeptSpawn(req *protocol.Request, reach egress) (*spawn, string) {
+func (s *server) startKeptSpawn(req *protocol.Request, reach string, e egress) (*spawn, string) {
 	uid, err := s.keptHome(req.HomePath, req.HomeUID)
 	if err != nil {
 		s.log.Warn("spawn %s refused: %v", req.ID, err)
@@ -188,21 +186,6 @@ func (s *server) startKeptSpawn(req *protocol.Request, reach egress) (*spawn, st
 			return nil, protocol.CodeHomeOverCap
 		}
 	}
-	if err := s.setEgress(uid, reach); err != nil {
-		// The guard may have applied what it did not confirm: the uid is
-		// cleared when no other session of it runs. One that runs keeps
-		// what the guard holds, which a failed change leaves refused every
-		// public address, since a clear would open that session.
-		s.mu.Lock()
-		siblings := s.keptLive[uid]
-		s.mu.Unlock()
-		if siblings == 0 {
-			s.clearEgress(uid)
-		}
-		lock.Unlock()
-		s.log.Error("spawn %s on kept uid %d refused: its egress was not set at the guard: %v", req.ID, uid, err)
-		return nil, protocol.CodeGuardUnavailable
-	}
 	s.mu.Lock()
 	s.keptMaps()
 	s.keptLive[uid]++
@@ -210,9 +193,9 @@ func (s *server) startKeptSpawn(req *protocol.Request, reach egress) (*spawn, st
 	s.mu.Unlock()
 	lock.Unlock()
 
-	sp := &spawn{id: randomHex(16), kept: true, account: acct, home: req.HomePath, retired: make(chan struct{})}
+	sp := &spawn{id: randomHex(16), kept: true, account: acct, home: req.HomePath, reach: reach, retired: make(chan struct{})}
 	s.madeIn(req.Place, sp)
-	if code, err := s.launch(sp, req); err != nil {
+	if code, err := s.launch(sp, req, e); err != nil {
 		s.log.Error("spawn %s on kept uid %d: %v", req.ID, uid, err)
 		return sp, code
 	}
@@ -538,6 +521,9 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			if sp.group != nil && !s.endInOrder(sp.id, uid, sp.group, sp.leader, deadline) {
 				s.log.Warn("spawn %s: processes of kept uid %d outlived their group's kill", sp.id, uid)
 			}
+			// Its processes are gone, or past their group's kill: its route
+			// carries nothing more.
+			s.withdrawRoute(sp)
 			// The relay ends as a pooled spawn's does (retire): at its
 			// reader's taking the last byte or closing, never cut here.
 			if sp.relay != nil {
@@ -562,9 +548,6 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 				lock := s.keptLock(uid)
 				lock.Lock()
 				clean := s.scrub(sp.account, 0, nil, sp.home)
-				if clean {
-					s.clearEgress(uid)
-				}
 				lock.Unlock()
 				s.mu.Lock()
 				delete(s.keptRetiring, uid)
@@ -647,7 +630,6 @@ func (s *server) handleHome(req *protocol.Request) {
 			s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
 			return
 		}
-		s.clearEgress(uid)
 		s.mu.Lock()
 		s.keptMaps()
 		delete(s.keptQuarantined, uid)
