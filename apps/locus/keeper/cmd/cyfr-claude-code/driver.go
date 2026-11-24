@@ -64,8 +64,8 @@ type driver struct {
 	// errKind is the type of the errored message of the turn under way, and
 	// reached when the limit the harness last said rejected lifts, in Unix
 	// seconds, or 0.
-	errKind string
-	reached int64
+	errKind  string
+	reached  int64
 	own      map[string]string
 	asks     map[string]heldAsk
 	awaiting map[string]string

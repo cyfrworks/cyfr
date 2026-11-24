@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -378,6 +379,27 @@ func TestAUsageLimitSaysWhenItLifts(t *testing.T) {
 	want := "OpenAI Codex reported a usage or rate limit; it lifts at 11:16 UTC on 24 November 2026."
 	if len(errs) != 1 || errs[0]["type"] != "rate_limited" || errs[0]["message"] != want {
 		t.Fatalf("one error, a rate limit's, saying when it lifts: %v", errs)
+	}
+}
+
+// A close during a native turn asks Codex to stop it in its own way,
+// `turn/interrupt` naming the turn, before its input closes, so its
+// rollout keeps the turn as interrupted (0.169.0 answers one at once and
+// ends the turn so, aq-drivers cx-m3).
+func TestACloseDuringATurnInterruptsItFirst(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_first", "trn_1", "slow")
+	s.expect("text")
+	s.end()
+	rollouts, _ := filepath.Glob(filepath.Join(s.home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+session+".jsonl"))
+	if len(rollouts) != 1 {
+		t.Fatalf("the thread has its rollout: %v", rollouts)
+	}
+	kept, _ := os.ReadFile(rollouts[0])
+	if !regexp.MustCompile(`\{"turnId":"[^"]+","type":"fake_interrupted"\}`).Match(kept) {
+		t.Fatalf("the close asked Codex to interrupt the turn under way: %s", kept)
 	}
 }
 

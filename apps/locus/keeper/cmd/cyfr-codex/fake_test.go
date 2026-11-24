@@ -450,6 +450,10 @@ func fakeCodex() int {
 				}
 				record(map[string]any{"type": "fake_injected", "items": m.Params["items"]})
 				ok(map[string]any{})
+			case m.Method == "turn/interrupt":
+				// Kept in the rollout, as Codex records an interrupted turn.
+				record(map[string]any{"type": "fake_interrupted", "turnId": str("turnId")})
+				ok(map[string]any{})
 			case m.Method == "turn/steer":
 				thread.Lock()
 				active := thread.active

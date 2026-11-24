@@ -21,6 +21,9 @@ const (
 	// closeWait bounds the harness's own end after its input closes, before
 	// it is killed.
 	closeWait = 5 * time.Second
+	// termAfter is how long the harness is given to end by itself after
+	// its input closes before it is asked to, with a TERM to its group.
+	termAfter = 2 * time.Second
 )
 
 // Process is one running harness process. Each line of its output arrives
@@ -122,10 +125,15 @@ func (p *Process) WriteUnchecked(line []byte) {
 }
 
 // Stop closes the harness's input and waits for its end, then ends its
-// process group, so a server it started ends with it.
+// process group, so a server it started ends with it. A harness still
+// running termAfter later is asked to end, a TERM to its group (Claude Code
+// 2.1.323 and Codex 0.169.0 each end within a second of one, aq-drivers),
+// and one still running at closeWait is killed. Stop returns only once the
+// harness has ended, whichever way.
 func (p *Process) Stop() {
 	_ = p.stdin.Close()
 	pgid := p.cmd.Process.Pid
+	term := time.After(termAfter)
 	deadline := time.After(closeWait)
 	for {
 		select {
@@ -133,6 +141,8 @@ func (p *Process) Stop() {
 		case <-p.Done:
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 			return
+		case <-term:
+			_ = syscall.Kill(-pgid, syscall.SIGTERM)
 		case <-deadline:
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		}
