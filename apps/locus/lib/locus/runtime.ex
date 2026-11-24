@@ -55,9 +55,8 @@ defmodule Locus.Runtime do
   def start_service do
     settings = Locus.Runtime.Settings.pool!()
     :ok = keeper!(settings)
-    # The nonces the worker listener has seen, owned above this supervisor
-    # so a listener or service restart forgets none within the header
-    # window.
+    # The nonces the worker listener has seen, made before this supervisor
+    # so the listener finds its table from its first request.
     :ok = Locus.Runtime.WorkerListener.init_nonces()
 
     Supervisor.start_link(

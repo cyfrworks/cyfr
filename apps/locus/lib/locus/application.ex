@@ -81,8 +81,8 @@ defmodule Locus.Application do
     keeper? = Locus.Keeper.channel_inherited?()
     :ok = release_logging(roles)
 
-    # The nonces each service has seen, owned by the application so a
-    # listener restart forgets none within the header window.
+    # The nonces each service has seen, made before the tree so each
+    # listener finds its table from its first request.
     :ok = Locus.BuilderService.init_nonces()
     :ok = Locus.Backends.init_nonces()
 
