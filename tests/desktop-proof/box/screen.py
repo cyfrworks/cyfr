@@ -10,8 +10,9 @@ nothing of a page's insides.
                            first, top to bottom; exits 1 when it is not
   screen.py words LIST     prints the six words of LIST (one word a line,
                            BIP-0039's English) shown in order on one line,
-                           the passphrase a box without a chip shows once;
-                           exits 1 when no line shows six
+                           the passphrase a box without a chip shows once,
+                           as two readings of the output agree on them;
+                           exits 1 when they do not
 A picture or a tesseract that fails exits 2, so that no failed read
 passes for words not shown. Words are read on the output's grey, on its
 inverse and on its bright pixels alone, twice its size: the app's light
@@ -89,12 +90,16 @@ def places(img, phrase):
 
 
 def passphrase(img, listed):
+    """The six listed words in order on one line that at least two of the
+    readings agree on, or None."""
+    seen = {}
     for ws in lines(img):
         texts = [plain(w[0]) for w in ws]
         for i in range(len(texts) - 5):
             if all(t in listed for t in texts[i:i + 6]):
-                return " ".join(texts[i:i + 6])
-    return None
+                seen.setdefault(" ".join(texts[i:i + 6]), set()).add(ws[0][5][0])
+    agreed = [p for p, readings in seen.items() if len(readings) >= 2]
+    return agreed[0] if len(agreed) == 1 else None
 
 
 def tap(img, x, y):
